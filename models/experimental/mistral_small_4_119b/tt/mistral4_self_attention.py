@@ -258,12 +258,51 @@ class TtMistral4Attention(LightweightModule):
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+        # High-fidelity config for the flash-MLA attention ops. The previous
+        # (expanded-cache) path called scaled_dot_product_attention with no
+        # compute_kernel_config → SDPA's high-fidelity default; matching that here
+        # (HiFi4 + fp32 accumulation) preserves fine image detail read during
+        # prefill. Attention is a tiny fraction of FLOPs, so the fidelity is cheap.
+        self.attn_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
 
         grid = mesh_device.compute_with_storage_grid_size()
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=grid,
             q_chunk_size=128,
             k_chunk_size=128,
+            exp_approx_mode=False,
+        )
+
+        # Flash-MLA decode reduces over a single (latent) KV head, so every core in
+        # the grid reduces for that one head. The op caps tree-reduction at 64
+        # cores/head (6 rounds); the full device grid yields ~110 cores/head and
+        # fails. Bound the decode grid to ≤ 8×8 = 64 cores.
+        # k_chunk_size must divide the padded cache length (always a multiple of
+        # 32), so use 32 — works for any max_seq_len.
+        # Decode runs single-token, batch=1, over ONE latent KV head. flash-MLA
+        # decode parallelises by splitting the K-sequence across cores and
+        # recombining per-core partial softmaxes — and that cross-core combine is
+        # numerically wrong for this MQA-in-latent-space case: PCC vs a fresh
+        # prefill collapses from 0.9997 (1 core) to ~0.89 (any multi-core grid),
+        # which compounds to garbage over 36 layers. Pinning the decode SDPA to a
+        # single core removes the cross-core reduction entirely → exact.
+        # NOTE: single-core decode attention is fine at low/moderate context but
+        # becomes a bandwidth bottleneck at very long context — revisit if/when the
+        # op's multi-core latent reduction is fixed upstream. (env-overridable for
+        # experiments.)
+        _gx = int(os.environ.get("MLA_GRID_X", "1"))
+        _gy = int(os.environ.get("MLA_GRID_Y", "1"))
+        _kc = int(os.environ.get("MLA_KCHUNK", "32"))
+        self._mla_decode_pc = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(_gx, _gy),
+            q_chunk_size=128,
+            k_chunk_size=_kc,
             exp_approx_mode=False,
         )
 
@@ -274,10 +313,9 @@ class TtMistral4Attention(LightweightModule):
         self._compute_grid = grid
         self._o_proj_prefill_pc_cache: dict = {}
 
-        # Height-sharded input mem configs required by paged_update_cache (the
-        # tensor-indexed, trace-compatible KV-cache write used in decode).
-        self._kv_update_k_mem_cfg = self._build_kv_update_mem_cfg(grid, HEAD_DIM)
-        self._kv_update_v_mem_cfg = self._build_kv_update_mem_cfg(grid, V_HEAD_DIM)
+        # Height-sharded input mem config required by paged_update_cache (the
+        # tensor-indexed, trace-compatible latent-cache write used in decode).
+        self._kvpe_update_mem_cfg = self._build_kv_update_mem_cfg(grid, KV_LORA_RANK + QK_ROPE_HEAD_DIM)
 
         p = layer_prefix + "self_attn."
         _cf = (lambda key: str(cache_dir / key)) if cache_dir is not None else (lambda _: None)
@@ -301,17 +339,9 @@ class TtMistral4Attention(LightweightModule):
             cache_file_name=_cf(p + "q_a_layernorm.weight"),
         )  # [1, 1, Q_LORA_RANK / TILE, TILE]
 
-        self.q_b_proj = _load_weight(
-            state_dict,
-            p + "q_b_proj.weight",
-            transpose=True,
-            dtype=ttnn.bfloat16,
-            mesh_device=mesh_device,
-            transform_fn=_deinterleave_q_b_proj,
-            cache_file_name=_cf(p + "q_b_proj.weight"),
-        )  # [Q_LORA_RANK, N_HEADS * HEAD_DIM]
-
-        # Pre-split q_b_proj into nope/rope sub-weights for decode (avoids 2 slices/step).
+        # Pre-split q_b_proj into nope/rope sub-weights, used by both prefill and
+        # decode. The full q_b_proj is never materialised on device — latent
+        # caching only needs the per-head q_nope/q_rope projections.
         _q_b_scale = state_dict.get((p + "q_b_proj.weight").replace(".weight", ".weight_scale_inv"))
         _q_b = _deinterleave_q_b_proj(
             _torch_for_ttnn_upload(state_dict[p + "q_b_proj.weight"], _q_b_scale).T.contiguous()
@@ -357,40 +387,40 @@ class TtMistral4Attention(LightweightModule):
             cache_file_name=_cf(p + "kv_a_layernorm.weight"),
         )  # [1, 1, KV_LORA_RANK / TILE, TILE]
 
-        self.kv_b_proj = _load_weight(
-            state_dict,
-            p + "kv_b_proj.weight",
-            transpose=True,
-            dtype=ttnn.bfloat16,
-            mesh_device=mesh_device,
-            cache_file_name=_cf(p + "kv_b_proj.weight"),
-        )  # [KV_LORA_RANK, KV_B_PROJ_OUT_TOTAL]
-
-        # Pre-split kv_b_proj into k_nope/v sub-weights for decode (avoids 2 slices/step).
+        # ── MLA absorption weights (latent caching) ────────────────────────
+        # We cache the compressed latent (kvpe = [kv_latent ‖ k_rope]) instead of
+        # expanding it to full per-head K/V. kv_b_proj is folded into the query
+        # and output paths (DeepSeek-MLA "weight absorption"):
+        #   q_score[h]   = q_nope[h]    @ wkv_b1[h]   # K side, [QK_NOPE]→[KV_LORA]
+        #   v_out[h]     = attn_latent[h] @ wkv_b2[h] # V side, [KV_LORA]→[V_HEAD]
+        # wkv_b1/wkv_b2 are the two per-head column-halves of kv_b_proj. The full
+        # kv_b_proj is never materialised on device.
         _kv_b_scale = state_dict.get((p + "kv_b_proj.weight").replace(".weight", ".weight_scale_inv"))
         _kv_b = _torch_for_ttnn_upload(state_dict[p + "kv_b_proj.weight"], _kv_b_scale).T.contiguous()
-        _kv_b3 = _kv_b.reshape(KV_LORA_RANK, N_HEADS, KV_B_PROJ_OUT_PER_HEAD)
-        _k_nope = _kv_b3[:, :, :QK_NOPE_HEAD_DIM].reshape(KV_LORA_RANK, N_HEADS * QK_NOPE_HEAD_DIM).contiguous()
-        _v = _kv_b3[:, :, QK_NOPE_HEAD_DIM:].reshape(KV_LORA_RANK, N_HEADS * V_HEAD_DIM).contiguous()
-        self.k_nope_w = ttnn.as_tensor(
-            _k_nope,
-            dtype=ttnn.bfloat8_b,
+        _kv_b3 = _kv_b.reshape(KV_LORA_RANK, N_HEADS, KV_B_PROJ_OUT_PER_HEAD)  # [latent, head, k_nope|v]
+        # wkv_b1: per-head [QK_NOPE_HEAD_DIM, KV_LORA_RANK]  (q_nope @ wkv_b1 → latent score)
+        _wkv_b1 = _kv_b3[:, :, :QK_NOPE_HEAD_DIM].permute(1, 2, 0).unsqueeze(0).contiguous()
+        # wkv_b2: per-head [KV_LORA_RANK, V_HEAD_DIM]        (attn_latent @ wkv_b2 → v)
+        _wkv_b2 = _kv_b3[:, :, QK_NOPE_HEAD_DIM:].permute(1, 0, 2).unsqueeze(0).contiguous()
+        self.wkv_b1 = ttnn.as_tensor(
+            _wkv_b1,  # [1, N_HEADS, QK_NOPE_HEAD_DIM, KV_LORA_RANK]
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            cache_file_name=_cf(p + "k_nope_w"),
+            cache_file_name=_cf(p + "wkv_b1"),
         )
-        self.v_w = ttnn.as_tensor(
-            _v,
-            dtype=ttnn.bfloat8_b,
+        self.wkv_b2 = ttnn.as_tensor(
+            _wkv_b2,  # [1, N_HEADS, KV_LORA_RANK, V_HEAD_DIM]
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            cache_file_name=_cf(p + "v_w"),
+            cache_file_name=_cf(p + "wkv_b2"),
         )
-        del _kv_b, _kv_b3, _k_nope, _v
+        del _kv_b, _kv_b3, _wkv_b1, _wkv_b2
 
         self.o_proj = _load_weight(
             state_dict,
@@ -570,14 +600,14 @@ class TtMistral4Attention(LightweightModule):
         Args:
             x:        [1, 1, seq_len, HIDDEN_SIZE] replicated on all devices
             cos/sin:  [1, 1, seq_len, QK_ROPE_HEAD_DIM]  (from HF rotary, on device)
-            kv_cache: optional (k_cache, v_cache) — if provided, filled in-place
+            kv_cache: optional (kvpe_cache,) — if provided, latent cache filled in-place
         Returns:
             [1, 1, seq_len, HIDDEN_SIZE] replicated on all devices
         """
         seq_len = x.shape[2]
         reshape_mem = ttnn.L1_MEMORY_CONFIG if self.prefill_l1_reshape else ttnn.DRAM_MEMORY_CONFIG
 
-        # ── Q projection ──────────────────────────────────────────────────
+        # ── Q projection (pre-split q_b → per-head q_nope / q_rope) ─────────
         q_latent = ttnn.linear(
             x,
             self.q_a_proj,
@@ -585,51 +615,59 @@ class TtMistral4Attention(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, 1, seq, Q_LORA_RANK]
+        q_latent = ttnn.rms_norm(q_latent, weight=self.q_a_norm, epsilon=NORM_EPS, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # rms_norm output to L1: small tensor (Q_LORA_RANK ≪ HIDDEN_SIZE) and the
-        # downstream q_b_proj matmul gets an L1 in0 for cheaper reads.
-        q_latent = ttnn.rms_norm(
+        q_nope_flat = ttnn.linear(
             q_latent,
-            weight=self.q_a_norm,
-            epsilon=NORM_EPS,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-
-        q = ttnn.linear(
-            q_latent,
-            self.q_b_proj,
-            compute_kernel_config=self.lofi_compute_kernel_config,
+            self.q_nope_w,
+            compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=reshape_mem,
-        )  # [1, 1, seq, N_HEADS * HEAD_DIM]
+        )  # [1, 1, seq, N_HEADS * QK_NOPE_HEAD_DIM]
+        q_rope_flat = ttnn.linear(
+            q_latent,
+            self.q_rope_w,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=reshape_mem,
+        )  # [1, 1, seq, N_HEADS * QK_ROPE_HEAD_DIM]
         ttnn.deallocate(q_latent)
 
-        q = ttnn.reshape(q, [1, seq_len, self.n_heads, self.head_dim])
-        q = ttnn.transpose(q, 1, 2, memory_config=reshape_mem)
-        # [1, N_HEADS, seq, HEAD_DIM]
-
-        q_nope = ttnn.slice(
-            q, [0, 0, 0, 0], [1, self.n_heads, seq_len, self.qk_nope_head_dim], memory_config=reshape_mem
-        )
-        q_rope = ttnn.slice(
-            q,
-            [0, 0, 0, self.qk_nope_head_dim],
-            [1, self.n_heads, seq_len, self.head_dim],
+        q_nope = ttnn.transpose(
+            ttnn.reshape(q_nope_flat, [1, seq_len, self.n_heads, self.qk_nope_head_dim]),
+            1,
+            2,
             memory_config=reshape_mem,
-        )
-        ttnn.deallocate(q)
+        )  # [1, N_HEADS, seq, QK_NOPE_HEAD_DIM]
+        ttnn.deallocate(q_nope_flat)
+        q_rope = ttnn.transpose(
+            ttnn.reshape(q_rope_flat, [1, seq_len, self.n_heads, self.qk_rope_head_dim]),
+            1,
+            2,
+            memory_config=reshape_mem,
+        )  # [1, N_HEADS, seq, QK_ROPE_HEAD_DIM]
+        ttnn.deallocate(q_rope_flat)
 
         q_rope_rotated = ttnn.experimental.rotary_embedding_hf(
             q_rope, cos, sin, is_decode_mode=False, compute_kernel_config=self.lofi_compute_kernel_config
         )
         ttnn.deallocate(q_rope)
 
-        q_full = ttnn.concat([q_nope, q_rope_rotated], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # Absorb the K side of kv_b: q_nope @ wkv_b1 → latent-space query score.
+        q_score = ttnn.matmul(
+            q_nope,
+            self.wkv_b1,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1, N_HEADS, seq, KV_LORA_RANK]
         ttnn.deallocate(q_nope)
+        q_mla = ttnn.concat([q_score, q_rope_rotated], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(q_score)
         ttnn.deallocate(q_rope_rotated)
-        # q_full: [1, N_HEADS, seq, HEAD_DIM]
+        # q_mla: [1, N_HEADS, seq, KV_LORA_RANK + QK_ROPE_HEAD_DIM]
 
-        # ── KV projection ─────────────────────────────────────────────────
+        # ── KV projection → compressed latent (kvpe), no per-head expansion ─
         kv_combined = ttnn.linear(
             x,
             self.kv_a_proj,
@@ -637,92 +675,53 @@ class TtMistral4Attention(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, 1, seq, KV_A_PROJ_OUT]
-
         kv_latent = ttnn.slice(kv_combined, [0, 0, 0, 0], [1, 1, seq_len, self.kv_lora_rank])
         k_rope_raw = ttnn.slice(kv_combined, [0, 0, 0, self.kv_lora_rank], [1, 1, seq_len, self.kv_a_proj_out])
         ttnn.deallocate(kv_combined)
 
-        # rms_norm output to L1: KV_LORA_RANK ≪ HIDDEN_SIZE, downstream kv_b_proj
-        # matmul reads from L1.
         kv_latent_normed = ttnn.rms_norm(
-            kv_latent,
-            weight=self.kv_a_norm,
-            epsilon=NORM_EPS,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            kv_latent, weight=self.kv_a_norm, epsilon=NORM_EPS, memory_config=ttnn.L1_MEMORY_CONFIG
         )
-        # Keep kv_latent alive; will be reused for kv_b_proj
-
-        kv = ttnn.linear(
-            kv_latent_normed,
-            self.kv_b_proj,
-            compute_kernel_config=self.lofi_compute_kernel_config,
-            dtype=ttnn.bfloat16,
-            memory_config=reshape_mem,
-        )  # [1, 1, seq, KV_B_PROJ_OUT_TOTAL]
         ttnn.deallocate(kv_latent)
-        ttnn.deallocate(kv_latent_normed)
-
-        kv = ttnn.reshape(kv, [1, seq_len, self.n_heads, self.kv_b_per_head])
-        kv = ttnn.transpose(kv, 1, 2, memory_config=reshape_mem)
-        # [1, N_HEADS, seq, KV_B_PER_HEAD=192]
-
-        k_nope = ttnn.slice(
-            kv, [0, 0, 0, 0], [1, self.n_heads, seq_len, self.qk_nope_head_dim], memory_config=reshape_mem
-        )
-        v = ttnn.slice(
-            kv,
-            [0, 0, 0, self.qk_nope_head_dim],
-            [1, self.n_heads, seq_len, self.kv_b_per_head],
-            memory_config=reshape_mem,
-        )
-        ttnn.deallocate(kv)
 
         k_rope_rotated = ttnn.experimental.rotary_embedding_hf(
             k_rope_raw, cos, sin, is_decode_mode=False, compute_kernel_config=self.lofi_compute_kernel_config
-        )
-        # [1, 1, seq, QK_ROPE_HEAD_DIM]
+        )  # [1, 1, seq, QK_ROPE_HEAD_DIM]
         ttnn.deallocate(k_rope_raw)
 
-        # Broadcast k_rope to all heads. ttnn.repeat would untile→repeat→retile
-        # (3 device ops); broadcast_to does it natively on TILE layout in one op.
-        seq_len = k_rope_rotated.shape[-2]
-        k_rope_expanded = ttnn.experimental.broadcast_to(
-            k_rope_rotated,
-            ttnn.Shape([1, self.n_heads, seq_len, self.qk_rope_head_dim]),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )  # [1, N_HEADS, seq, QK_ROPE_HEAD_DIM]
+        kvpe = ttnn.concat([kv_latent_normed, k_rope_rotated], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(kv_latent_normed)
         ttnn.deallocate(k_rope_rotated)
+        # kvpe: [1, 1, seq, KV_LORA_RANK + QK_ROPE_HEAD_DIM]  (single shared KV head)
 
-        k_full = ttnn.concat([k_nope, k_rope_expanded], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(k_nope)
-        ttnn.deallocate(k_rope_expanded)
-        # k_full: [1, N_HEADS, seq, HEAD_DIM]
-
-        # Fill KV cache if provided (prefill with cache)
         if kv_cache is not None:
-            self.fill_kv_cache(k_full, v, kv_cache)
+            self.fill_kv_cache(kvpe, kv_cache)
 
-        # ── Scaled dot-product attention ───────────────────────────────────
-        attn_out = ttnn.transformer.scaled_dot_product_attention(
-            q_full,
-            k_full,
-            v,
+        # ── Flash-MLA prefill over the latent (V = first KV_LORA_RANK dims) ─
+        attn_latent = ttnn.transformer.flash_mla_prefill(
+            q_mla,
+            kvpe,
+            self.kv_lora_rank,  # head_dim_v
             is_causal=True,
             scale=self.scale,
             program_config=self.sdpa_program_config,
+            compute_kernel_config=self.attn_compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )  # [1, N_HEADS, seq, KV_LORA_RANK]
+        ttnn.deallocate(q_mla)
+        ttnn.deallocate(kvpe)
+
+        # Expand the V side of kv_b: attn_latent @ wkv_b2 → per-head value output.
+        attn_out = ttnn.matmul(
+            attn_latent,
+            self.wkv_b2,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )  # [1, N_HEADS, seq, V_HEAD_DIM]
-        ttnn.deallocate(q_full)
-        ttnn.deallocate(k_full)
-        ttnn.deallocate(v)
+        ttnn.deallocate(attn_latent)
 
         # ── Output projection ──────────────────────────────────────────────
-        # attn_out is [1, N_HEADS, seq, V_HEAD_DIM]; transpose to [1, seq, N_HEADS, V_HEAD_DIM]
-        # before reshaping so head features for the same position are contiguous.
-        # NB: tried ttnn.experimental.nlp_concat_heads here — its multicore path
-        # requires sharded input, and with DRAM-interleaved input from SDPA it
-        # falls to a 1-core kernel at ~52 μs (vs ~10 μs for the multicore
-        # transpose+reshape pair). Keep the pair.
         attn_out_t = ttnn.transpose(attn_out, 1, 2, memory_config=reshape_mem)
         ttnn.deallocate(attn_out)
         attn_flat = ttnn.reshape(
@@ -749,42 +748,39 @@ class TtMistral4Attention(LightweightModule):
 
     def allocate_kv_cache(self, max_seq_len: int) -> tuple:
         """
-        Pre-allocate K and V cache tensors on device (zeroed, DRAM, replicated).
+        Pre-allocate the MLA latent cache (zeroed, DRAM, replicated).
 
-        Cache shape: [1, N_HEADS, padded_seq, dim] — batch-first.
-        padded_seq is max_seq_len rounded up to the nearest 32 because
-        scaled_dot_product_attention_decode requires k_chunk_size % 32 == 0,
-        and get_chunk_size(S) can only return a multiple of 32 if S itself is.
+        Latent caching: a single ``kvpe`` cache holds the compressed
+        ``[kv_latent ‖ k_rope]`` shared across all heads — one "KV head" —
+        instead of expanding to full per-head K/V. This is ~25× smaller than the
+        expanded cache and is consumed directly by the flash-MLA attention ops.
+
+        Cache shape: ``[1, 1, padded_seq, KV_LORA_RANK + QK_ROPE_HEAD_DIM]``.
+        padded_seq is max_seq_len rounded up to the nearest 32 (flash-decode
+        k_chunk_size must be a multiple of 32). Returned as a 1-tuple so the
+        ``kv_cache`` plumbing in the decoder layer / text model is unchanged.
         """
         padded_seq = ((max_seq_len + 31) // 32) * 32
-        k_cache = ttnn.as_tensor(
-            torch.zeros(1, self.n_heads, padded_seq, self.head_dim, dtype=torch.bfloat16),
+        kvpe_dim = self.kv_lora_rank + self.qk_rope_head_dim
+        kvpe_cache = ttnn.as_tensor(
+            torch.zeros(1, 1, padded_seq, kvpe_dim, dtype=torch.bfloat16),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        v_cache = ttnn.as_tensor(
-            torch.zeros(1, self.n_heads, padded_seq, self.v_head_dim, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-        )
-        return k_cache, v_cache
+        return (kvpe_cache,)
 
-    def fill_kv_cache(self, k_full: ttnn.Tensor, v: ttnn.Tensor, kv_cache: tuple) -> None:
+    def fill_kv_cache(self, kvpe: ttnn.Tensor, kv_cache: tuple) -> None:
         """
-        Fill KV cache in-place from prefill K/V tensors.
+        Fill the latent cache in-place from the prefill kvpe tensor.
 
-        k_full and v are already [1, N_HEADS, seq, dim] (batch-first),
-        which is exactly what fill_cache_for_user_ expects.
+        kvpe is [1, 1, seq, KV_LORA_RANK + QK_ROPE_HEAD_DIM] (single KV head),
+        exactly what fill_cache_for_user_ expects.
         """
-        k_cache, v_cache = kv_cache
-        ttnn.kv_cache.fill_cache_for_user_(k_cache, k_full, 0)
-        ttnn.kv_cache.fill_cache_for_user_(v_cache, v, 0)
+        (kvpe_cache,) = kv_cache
+        ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, kvpe, 0)
 
     # ------------------------------------------------------------------
     # Decode forward
@@ -805,12 +801,12 @@ class TtMistral4Attention(LightweightModule):
         Args:
             x:           [1, 1, 1, HIDDEN_SIZE] replicated on all devices
             cos/sin:     [1, 1, 1, QK_ROPE_HEAD_DIM] for position current_pos
-            kv_cache:    (k_cache, v_cache) each [1, N_HEADS, max_seq_len, dim] (batch-first)
-            current_pos: cache slot to write the new K/V token into
+            kv_cache:    (kvpe_cache,) — single [1, 1, max_seq_len, KV_LORA_RANK+QK_ROPE_HEAD_DIM] latent cache
+            current_pos: cache slot to write the new latent token into
         Returns:
             [1, 1, 1, HIDDEN_SIZE]
         """
-        k_cache, v_cache = kv_cache
+        (kvpe_cache,) = kv_cache
         _mem = ttnn.L1_MEMORY_CONFIG
 
         # ── Q path (seq_len=1, pre-split weights → no slice) ──────────
@@ -850,12 +846,22 @@ class TtMistral4Attention(LightweightModule):
 
         q_rope_rotated = _apply_rope_ttnn(q_rope, cos, sin, 1, self.n_heads, self.qk_rope_head_dim, _mem)
         ttnn.deallocate(q_rope)
-        q_full = ttnn.concat([q_nope, q_rope_rotated], dim=-1, memory_config=_mem)
-        ttnn.deallocate(q_nope)
-        ttnn.deallocate(q_rope_rotated)
-        # q_full: [1, N_HEADS, 1, HEAD_DIM]
 
-        # ── KV path (seq_len=1, pre-split weights → no slice) ─────────
+        # Absorb the K side of kv_b: q_nope @ wkv_b1 → latent-space query score.
+        q_score = ttnn.matmul(
+            q_nope,
+            self.wkv_b1,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=_mem,
+        )  # [1, N_HEADS, 1, KV_LORA_RANK]
+        ttnn.deallocate(q_nope)
+        q_mla = ttnn.concat([q_score, q_rope_rotated], dim=-1, memory_config=_mem)
+        ttnn.deallocate(q_score)
+        ttnn.deallocate(q_rope_rotated)
+        # q_mla: [1, N_HEADS, 1, KV_LORA_RANK + QK_ROPE_HEAD_DIM]
+
+        # ── KV path → compressed latent (kvpe), no per-head expansion ─
         kv_combined = ttnn.matmul(
             x,
             self.kv_a_proj,
@@ -871,52 +877,20 @@ class TtMistral4Attention(LightweightModule):
         ttnn.deallocate(kv_combined)
 
         kv_latent_normed = ttnn.rms_norm(kv_latent, weight=self.kv_a_norm, epsilon=NORM_EPS, memory_config=_mem)
-
-        k_nope_flat = ttnn.matmul(
-            kv_latent_normed,
-            self.k_nope_w,
-            compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
-            memory_config=_mem,
-            program_config=pcs["k_nope"],
-        )  # [1, 1, 1, N_HEADS * QK_NOPE_HEAD_DIM]
-        v_new_flat = ttnn.matmul(
-            kv_latent_normed,
-            self.v_w,
-            compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
-            memory_config=_mem,
-            program_config=pcs["v"],
-        )  # [1, 1, 1, N_HEADS * V_HEAD_DIM]
         ttnn.deallocate(kv_latent)
-        ttnn.deallocate(kv_latent_normed)
-
-        k_nope = ttnn.reshape(k_nope_flat, [1, self.n_heads, 1, self.qk_nope_head_dim])
-        ttnn.deallocate(k_nope_flat)
-        v_new = ttnn.reshape(v_new_flat, [1, self.n_heads, 1, self.v_head_dim])
-        ttnn.deallocate(v_new_flat)
 
         k_rope_rotated = _apply_rope_ttnn(k_rope_raw, cos, sin, 1, 1, self.qk_rope_head_dim, _mem)
         ttnn.deallocate(k_rope_raw)
-        # MLA shares k_rope across heads. ttnn.repeat requires ROW_MAJOR and emits
-        # Untile→Repeat→Tilize on a TILE input. broadcast_to operates natively on
-        # TILE layout (see bcast_to_device_operation.cpp:38), collapsing the trio
-        # into one op.
-        k_rope_expanded = ttnn.experimental.broadcast_to(
-            k_rope_rotated,
-            ttnn.Shape([1, self.n_heads, 1, self.qk_rope_head_dim]),
-            memory_config=_mem,
-        )
+
+        kvpe = ttnn.concat([kv_latent_normed, k_rope_rotated], dim=-1, memory_config=_mem)
+        ttnn.deallocate(kv_latent_normed)
         ttnn.deallocate(k_rope_rotated)
-        k_full = ttnn.concat([k_nope, k_rope_expanded], dim=-1, memory_config=_mem)
-        ttnn.deallocate(k_nope)
-        ttnn.deallocate(k_rope_expanded)
-        # k_full: [1, N_HEADS, 1, HEAD_DIM],  v_new: [1, N_HEADS, 1, V_HEAD_DIM]
+        # kvpe: [1, 1, 1, KV_LORA_RANK + QK_ROPE_HEAD_DIM]  (single shared KV head)
 
         # ── Ensure an INT32 device position tensor ─────────────────────
-        # Both paged_update_cache (KV write) and SDPA-decode (attend) read the
-        # position from this device tensor rather than a Python int — that is what
-        # lets the whole decode step be captured as a replayable trace later.
+        # Both paged_update_cache (latent write) and flash-MLA-decode (attend) read
+        # the position from this device tensor rather than a Python int — that is
+        # what lets the whole decode step be captured as a replayable trace later.
         # paged_update_cache requires INT32 specifically.
         _free_pos_tensor = False
         if cur_pos_tensor is None:
@@ -930,40 +904,46 @@ class TtMistral4Attention(LightweightModule):
             )
             _free_pos_tensor = True
 
-        # ── Update KV cache at current_pos (tensor-indexed → trace-safe) ─
-        # paged_update_cache wants a [1, 1, N_HEADS, dim] height-sharded input, so
-        # transpose [1, N_HEADS, 1, dim] → [1, 1, N_HEADS, dim] and reshard. The write
-        # (head h → cache[0, h, pos, :]) is identical to update_cache_for_token_.
-        k_upd = ttnn.transpose(k_full, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(k_full)
-        v_upd = ttnn.transpose(v_new, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(v_new)
-        k_upd = ttnn.to_memory_config(k_upd, self._kv_update_k_mem_cfg)
-        v_upd = ttnn.to_memory_config(v_upd, self._kv_update_v_mem_cfg)
-        ttnn.experimental.paged_update_cache(k_cache, k_upd, update_idxs_tensor=cur_pos_tensor)
-        ttnn.experimental.paged_update_cache(v_cache, v_upd, update_idxs_tensor=cur_pos_tensor)
-        ttnn.deallocate(k_upd)
-        ttnn.deallocate(v_upd)
+        # ── Update latent cache at current_pos (tensor-indexed → trace-safe) ─
+        # kvpe is [1, 1, 1, kvpe_dim] (single KV head); height-shard it and write
+        # kvpe → kvpe_cache[0, 0, pos, :].
+        kvpe_upd = ttnn.to_memory_config(kvpe, self._kvpe_update_mem_cfg)
+        ttnn.deallocate(kvpe)
+        ttnn.experimental.paged_update_cache(kvpe_cache, kvpe_upd, update_idxs_tensor=cur_pos_tensor)
+        ttnn.deallocate(kvpe_upd)
 
-        # ── Decode SDPA ────────────────────────────────────────────────
-        # scaled_dot_product_attention_decode requires Q in DRAM (kernel constraint).
-        # q_full is [1, N_HEADS, 1, HEAD_DIM]; transpose dims 1&2 → [1, 1, N_HEADS, HEAD_DIM].
-        q_decode = ttnn.transpose(q_full, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(q_full)
-
-        attn_out = ttnn.transformer.scaled_dot_product_attention_decode(
+        # ── Flash-MLA decode over the latent cache ──────────────────────
+        # q_mla [1, N_HEADS, 1, dh] → [1, 1, N_HEADS, dh] (op wants [1, b, nh, dh]).
+        q_decode = ttnn.transpose(q_mla, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(q_mla)
+        attn_latent = ttnn.transformer.flash_multi_latent_attention_decode(
             q_decode,
-            k_cache,
-            v_cache,
+            kvpe_cache,
+            None,  # V reuses the kvpe cache (first head_dim_v dims)
+            self.kv_lora_rank,  # head_dim_v
             cur_pos_tensor=cur_pos_tensor,
             scale=self.scale,
+            program_config=self._mla_decode_pc,
+            compute_kernel_config=self.attn_compute_kernel_config,
             memory_config=_mem,
-        )  # [1, B=1, NH=N_HEADS, V_HEAD_DIM]
+        )  # [1, 1, N_HEADS, KV_LORA_RANK]
         ttnn.deallocate(q_decode)
         if _free_pos_tensor:
             ttnn.deallocate(cur_pos_tensor)
 
-        # [1, 1, N_HEADS, V_HEAD_DIM] → transpose(1,2) → [1, N_HEADS, 1, V_HEAD_DIM]
+        # Expand the V side of kv_b: attn_latent @ wkv_b2 → per-head value output.
+        # [1, 1, N_HEADS, KV_LORA_RANK] → [1, N_HEADS, 1, KV_LORA_RANK] for batched matmul.
+        attn_latent = ttnn.transpose(attn_latent, 1, 2, memory_config=_mem)
+        attn_out = ttnn.matmul(
+            attn_latent,
+            self.wkv_b2,
+            compute_kernel_config=self.compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            memory_config=_mem,
+        )  # [1, N_HEADS, 1, V_HEAD_DIM]
+        ttnn.deallocate(attn_latent)
+
+        # [1, N_HEADS, 1, V_HEAD_DIM] → transpose(1,2) → [1, 1, N_HEADS, V_HEAD_DIM]
         # → reshape → [1, 1, 1, N_HEADS * V_HEAD_DIM] for o_proj
         attn_out_t = ttnn.transpose(attn_out, 1, 2, memory_config=_mem)
         ttnn.deallocate(attn_out)
