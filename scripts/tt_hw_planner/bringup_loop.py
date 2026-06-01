@@ -1616,6 +1616,9 @@ def autofill_stubs(
                         component_name=comp["name"],
                         model_id=model_id,
                         repo_root=repo_root,
+                        hf_reference=comp.get("hf_reference") or "",
+                        new_shape=comp.get("new_shape") or {},
+                        discovered_submodule_path=comp.get("submodule_path"),
                     )
                 continue
 
@@ -1718,6 +1721,9 @@ def autofill_stubs(
                 component_name=comp["name"],
                 model_id=model_id,
                 repo_root=repo_root,
+                hf_reference=comp.get("hf_reference") or "",
+                new_shape=comp.get("new_shape") or {},
+                discovered_submodule_path=comp.get("submodule_path"),
             )
     return actions
 
@@ -1728,23 +1734,38 @@ def _emit_autofill_smoke_test(
     component_name: str,
     model_id: str,
     repo_root: Path,
+    hf_reference: str = "",
+    new_shape: Optional[dict] = None,
+    discovered_submodule_path: Optional[str] = None,
 ) -> Path:
-    pcc_dir = demo_dir / "tests" / "pcc"
-    pcc_dir.mkdir(parents=True, exist_ok=True)
-    safe = _safe_id(component_name)
-    test_path = pcc_dir / f"test_{safe}.py"
+    """Emit a real PCC test for an autofilled component.
 
-    if test_path.is_file():
-        head = test_path.read_text(errors="ignore")[:600]
-        if "Phase-1 SMOKE test" not in head:
-            return test_path
-    body = _AUTOFILL_SMOKE_TEST_TEMPLATE.format(
+    SMOKE tests removed 2026-06-01 — they were dead weight: gave no
+    graduation signal (filtered out via the ``smoke_tests`` set), the
+    "import + doesn't crash" check they provided is already done by
+    pytest collection, and the SMOKE-to-PCC upgrade machinery had a
+    chicken-and-egg deadlock that blocked graduation indefinitely
+    (caught during Qwen2.5-14B verification — graduation needed
+    non-SMOKE test, SMOKE upgrade needed graduation).
+
+    The function name is kept for callsite stability; it now delegates
+    to ``_emit_pcc_template`` so every component gets a real PCC test
+    from iter 0. Graduation safety is preserved by the brain's
+    ``_stub_uses_torch_wrapper`` AST check: even if a torch-fallback
+    stub's PCC test trivially passes (torch ≡ torch), the brain's
+    ``target_is_ast_native`` gate still refuses to graduate the
+    component until the stub body uses ``ttnn.*`` ops directly.
+    """
+    test_path, _generated, _already = _emit_pcc_template(
+        demo_dir=demo_dir,
         component_name=component_name,
-        component_safe=safe,
         model_id=model_id,
-        stub_import_path=_stub_import_path(demo_dir, safe, repo_root),
+        hf_reference=hf_reference,
+        new_shape=new_shape or {},
+        repo_root=repo_root,
+        overwrite=False,
+        discovered_submodule_path=discovered_submodule_path,
     )
-    test_path.write_text(body)
     return test_path
 
 
