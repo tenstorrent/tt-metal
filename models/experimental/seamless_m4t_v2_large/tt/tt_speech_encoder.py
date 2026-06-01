@@ -22,12 +22,12 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     matmul_program_config,
     pick_largest_height_shard_nhw_cores,
     speech_encoder_matmul_program_config,
-    to_torch_replicated_first_shard,
     width_sharded_to_l1_interleaved,
 )
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
     from_torch_bfloat16_tile,
     mesh_cluster_axis,
+    mesh_mapper,
     get_tp,
 )
 
@@ -117,10 +117,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
         self.speech_encoder_chunk_size = speech_encoder_chunk_size
         self.speech_encoder_left_chunk_num = speech_encoder_left_chunk_num
         self.has_adapter = parameters.adapter is not None
-        # Relative-position index tensors keyed by ``(seq_len, left_max, right_max)``.
+        # Device flat uint32 distance-index tensors ``[1, S*S]`` keyed by
+        # ``(seq_len, left_max, right_max)`` — fed to on-device ``ttnn.embedding``.
         self._rel_pos_idx_cache: dict[Tuple[int, int, int], ttnn.Tensor] = {}
-        # Flat uint32 index on CPU for host-side ``torch.embedding`` (avoids device Embeddings JIT).
-        self._rel_pos_idx_torch_cache: dict[Tuple[int, int, int], torch.Tensor] = {}
         # ``(batch, seq_len)`` already passed through ``pre_warm`` for this forward lifetime.
         self._runtime_warmed: set[Tuple[int, int]] = set()
         # Cache the full embedded position table ``[S, S, head_dim]`` per ``(seq_len, weight_id)``
@@ -1143,19 +1142,32 @@ class TTSeamlessM4Tv2SpeechEncoder:
             accept_sharded_input=accept_sharded_input,
         )
 
-    def _relative_position_index_flat_torch(self, seq_len: int, *, left_max: int, right_max: int) -> torch.Tensor:
-        """CPU flat uint32 distance indices ``[S*S]`` for host ``torch.embedding``."""
+    def _relative_position_index_device(self, seq_len: int, *, left_max: int, right_max: int) -> ttnn.Tensor:
+        """Cached device ``[1, S*S]`` uint32 distance indices for on-device ``ttnn.embedding``.
+
+        The index grid (a clamped ``q - k`` distance) depends only on ``(seq_len, left_max,
+        right_max)``, so it is built once per shape on host (cheap integer arithmetic) and uploaded
+        as a small uint32 tensor — the heavy per-call work (the gather into ``[S, head_dim, S]``)
+        then runs on device.
+        """
         idx_key = (seq_len, left_max, right_max)
-        cached = self._rel_pos_idx_torch_cache.get(idx_key)
+        cached = self._rel_pos_idx_cache.get(idx_key)
         if cached is not None:
             return cached
         r = np.arange(seq_len, dtype=np.int64)
         l = np.arange(seq_len, dtype=np.int64)
-        dist = r[np.newaxis, :] - l[:, np.newaxis]
-        dist = np.clip(dist, -left_max, right_max) + left_max
-        cached = torch.from_numpy(dist.astype(np.int64).reshape(-1))
-        self._rel_pos_idx_torch_cache[idx_key] = cached
-        return cached
+        dist = np.clip(r[np.newaxis, :] - l[:, np.newaxis], -left_max, right_max) + left_max
+        idx_host = torch.from_numpy(dist.astype(np.int32).reshape(1, seq_len * seq_len))
+        idx_dev = ttnn.from_torch(
+            idx_host,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper(self.device),
+        )
+        self._rel_pos_idx_cache[idx_key] = idx_dev
+        return idx_dev
 
     def _relative_embedding_table(
         self,
@@ -1179,21 +1191,24 @@ class TTSeamlessM4Tv2SpeechEncoder:
             return cached_tab
 
         head_dim = self.hidden_size // self.speech_encoder_attention_heads
-        idx_flat = self._relative_position_index_flat_torch(seq_len, left_max=left_max, right_max=right_max)
-        w_cpu = to_torch_replicated_first_shard(distance_weight).to(torch.bfloat16).contiguous()
-        emb_cpu = (
-            torch.nn.functional.embedding(idx_flat, w_cpu)
-            .reshape(seq_len, seq_len, head_dim)
-            .permute(0, 2, 1)
-            .contiguous()
-        )
+        idx_dev = self._relative_position_index_device(seq_len, left_max=left_max, right_max=right_max)
 
         # The table is ``S * head_dim * S * 2 B`` bf16. For long audio (S ≳ 256) this exceeds
-        # L1, so upload straight to DRAM; otherwise stay in L1 for the hot short-seq path.
+        # L1, so build straight into DRAM; otherwise stay in L1 for the hot short-seq path.
         _L1_POS_TAB_LIMIT = 1 * 1024 * 1024
         table_bytes = seq_len * seq_len * head_dim * 2
         upload_mc = ttnn.DRAM_MEMORY_CONFIG if table_bytes > _L1_POS_TAB_LIMIT else ttnn.L1_MEMORY_CONFIG
-        emb = from_torch_bfloat16_tile(self.device, emb_cpu, memory_config=upload_mc)
+
+        # On-device gather: ``ttnn.embedding`` over the flat distance indices yields ``[1, S*S, D]``;
+        # reshape to ``[S, S, D]`` then permute to ``[S, D, S]`` (``pos[s_q, d, s_k]``) for the
+        # relative-logits ``bmm``. Replaces the host ``torch.nn.functional.embedding`` + full-table
+        # ``from_torch`` upload — no host gather and no ``S·D·S`` H2D copy (the table is hundreds of
+        # MB at long audio and was previously re-uploaded for every conformer layer on the uncached path).
+        emb = ttnn.embedding(idx_dev, weight=distance_weight, layout=ttnn.TILE_LAYOUT, memory_config=upload_mc)
+        emb = ttnn.reshape(emb, (seq_len, seq_len, head_dim))
+        emb_t = ttnn.permute(emb, (0, 2, 1), memory_config=upload_mc)
+        ttnn.deallocate(emb)
+        emb = emb_t
 
         # Fold scale into the table when non-trivial (stage 7 / stage 8 compatibility).
         if scale != 1.0:
