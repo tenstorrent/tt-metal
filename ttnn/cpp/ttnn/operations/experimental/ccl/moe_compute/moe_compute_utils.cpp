@@ -54,7 +54,8 @@ ttnn::Tensor permute_to(const ttnn::Tensor& t, std::initializer_list<int64_t> di
     return ttnn::permute(t, ttsl::SmallVector<int64_t>(dims));
 }
 
-ttnn::Tensor slice_basic(const ttnn::Tensor& t, ttsl::SmallVector<int32_t> begins, ttsl::SmallVector<int32_t> ends) {
+ttnn::Tensor slice_basic(
+    const ttnn::Tensor& t, const ttsl::SmallVector<int32_t>& begins, const ttsl::SmallVector<int32_t>& ends) {
     ttsl::SmallVector<int32_t> steps(begins.size(), 1);
     return ttnn::slice(t, begins, ends, steps);
 }

@@ -221,7 +221,7 @@ void bind_moe_compute_utils(nb::module_& mod) {
         Callers own the device → shared-expert mapping and produce the
         pre-arranged ``shared_w*`` tensors.
 
-        Returns ``(output_w0, output_w1, output_w2)``, each the result of
+        Returns ``(output_w0, output_w1, output_w2)`` in TILE_LAYOUT, each the result of
         concatenating routed + shared along dim 1.
         )doc",
         &ttnn::experimental::add_shared_expert_weights,
@@ -238,7 +238,7 @@ void bind_moe_compute_utils(nb::module_& mod) {
         Pack W0/W1 into the interleaved, padded, per-core layout the MoE kernel
         reads. See ``ttnn.experimental.moe_compute_utils`` for the layout
         contract. Output local shape:
-        ``(num_cores, L, E, groups_per_core, K_padded, 4*TILE_SIZE)``.
+        ``(num_cores, L, E, groups_per_core, K_padded, 4*TILE_SIZE)`` in TILE_LAYOUT.
 
         The per-core shard map is derived internally from ``K`` (hidden_size)
         and ``N`` (intermediate_size) via ``get_weight_core_shard_maps``.
@@ -257,7 +257,7 @@ void bind_moe_compute_utils(nb::module_& mod) {
         R"doc(
         Pack W2 into the ring-rotated per-core layout the MoE kernel reads.
         Output local shape:
-        ``(num_cores, L, E, w2_groups_per_core, N_padded, 4*TILE_SIZE)``.
+        ``(num_cores, L, E, w2_groups_per_core, N_padded, 4*TILE_SIZE)`` in TILE_LAYOUT.
 
         The per-core shard maps are derived internally from ``K`` (hidden_size)
         and ``N`` (intermediate_size) via ``get_weight_core_shard_maps``.
