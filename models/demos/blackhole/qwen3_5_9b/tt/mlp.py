@@ -27,6 +27,8 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None) -> MLPWeig
             cache_file_name=(tensor_cache_path / f"mlp.{name}.weight") if tensor_cache_path else None,
         )
 
+    # Gate and up projections use bfloat4_b (halves memory bandwidth for these large matmuls).
+    # Down projection stays at bfloat8_b (on the critical accuracy path).
     return MLPWeights(
         w1=load("gate_proj", ttnn.bfloat4_b),
         w2=load("down_proj", ttnn.bfloat8_b),

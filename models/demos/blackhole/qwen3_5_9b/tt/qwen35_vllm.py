@@ -92,7 +92,7 @@ class TTQwen35ForCausalLM(nn.Module):
 
         Delegates to Qwen35Model.allocate_kv_caches so DeltaNet recurrent/conv state
         buffers are allocated alongside the paged KV caches (required by the trace
-        capture paths in qwen35_model.py).
+        capture paths in model.py).
 
         Args:
             kv_cache_shape: (num_blocks, num_kv_heads, block_size, head_dim)

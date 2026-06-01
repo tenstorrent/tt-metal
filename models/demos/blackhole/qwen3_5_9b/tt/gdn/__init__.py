@@ -55,7 +55,7 @@ class Qwen35GatedDeltaNet:
         self.weights = load_gdn_weights(mesh_device, config, state_dict, tensor_cache_path)
 
         # ---- Runtime state (plain instance attributes, exact same names as before;
-        # poked directly by the trace machinery in qwen35_model.py / qwen35_vllm.py) ----
+        # poked directly by the trace machinery in model.py / qwen35_vllm.py) ----
         self.recurrent_state = None
         # Conv states: ttnn tensors on device [B, kernel_size-1, D]
         self.conv_state_q = None
@@ -104,7 +104,7 @@ class Qwen35GatedDeltaNet:
     def _restore_split_conv_from_fused(self):
         """Copy fused_conv_state slices into existing split_conv_state buffers.
         Preserves device addresses (critical for trace replay).
-        Kept as a method because qwen35_model.py calls it on the instance.
+        Kept as a method because model.py calls it on the instance.
         """
         restore_split_conv_from_fused(self)
 

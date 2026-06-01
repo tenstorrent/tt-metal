@@ -198,8 +198,6 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
 
     def _precompute_fused_weight_taps():
         """Pre-concatenate Q+K+V conv weight taps into fused taps [1, 1, D_total]."""
-        import torch
-
         q_w = ttnn.to_torch(q_conv_weight)  # [D_q, 1, K]
         k_w = ttnn.to_torch(k_conv_weight)  # [D_k, 1, K]
         v_w = ttnn.to_torch(v_conv_weight)  # [D_v, 1, K]
@@ -214,8 +212,6 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
 
     def _precompute_fused_bias_dev():
         """Pre-concatenate Q+K+V conv biases into fused bias [1, 1, D_total]."""
-        import torch
-
         parts = []
         for bias in [q_conv_bias, k_conv_bias, v_conv_bias]:
             if bias is not None:
@@ -229,8 +225,6 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
 
     def _precompute_fused_ab_weight():
         """Pre-concatenate a_proj + b_proj weights into [4096, 64] for fused matmul."""
-        import torch
-
         a_w = ttnn.to_torch(a_proj_weight)  # [4096, 32]
         b_w = ttnn.to_torch(b_proj_weight)  # [4096, 32]
         fused = torch.cat([a_w, b_w], dim=1).contiguous()  # [4096, 64]
@@ -242,8 +236,6 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
         Saves 2 matmul kernel launches per decode step (QKV=1, ab=1, g=1 -> mega=1).
         Output split: [qkv_dim | a_dim | b_dim | g_dim]
         """
-        import torch
-
         if qkv_proj_weight is None:
             return None
         qkv_w = ttnn.to_torch(qkv_proj_weight)  # [4096, 8192]
