@@ -516,6 +516,13 @@ def test_prefill_transformer(
     from models.demos.deepseek_v3_d_p.utils.nd_debug import nd_compare_log, nd_fingerprint
 
     nd_debug = os.getenv("TT_DS_ND_DEBUG", "0").lower() in ("1", "true", "yes")
+    # The per-layer host gather (return_intermediates) accumulates every layer's
+    # full hidden state in host RAM — ~9GB+ for 12 layers x 25600 tokens, which
+    # OOMs (SIGBUS). Gate it behind TT_DS_ND_FULL_INTERMEDIATES (default off).
+    # When off, the cheap per-MoE-layer GLOBAL stage probes inside TtMoe.forward
+    # still fire (they don't need return_intermediates), so determinism at depth
+    # is validated via routed_output GLOBAL fingerprints without the OOM.
+    nd_full = os.getenv("TT_DS_ND_FULL_INTERMEDIATES", "0").lower() in ("1", "true", "yes")
     nd_prev_fp = None
     for i in range(num_iterations):
         logger.info(f"Starting iteration: {i}")
@@ -523,7 +530,7 @@ def test_prefill_transformer(
             tt_tokens,
             tt_kvpe_cache,
             number_of_non_padded_tokens=number_of_non_padded_tokens,
-            return_intermediates=(pcc_validation or nd_debug),
+            return_intermediates=(pcc_validation or (nd_debug and nd_full)),
             read_profiler=False,
             temperature=temperature,
         )
