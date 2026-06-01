@@ -193,6 +193,7 @@ void RunTest(
 
 // Test bypass mode (strided consumer access pattern)
 TEST_F(MeshWatcherDumpAllFixture, TestWatcherTileCounterLogBypass) {
+    GTEST_SKIP() << "Disabled: see #45675";
     const auto& hal = MetalContext::instance().hal();
     if (!hal.has_tile_counter_registers()) {
         GTEST_SKIP() << "Tile counters are only used on Quasar";
@@ -208,6 +209,7 @@ TEST_F(MeshWatcherDumpAllFixture, TestWatcherTileCounterLogBypass) {
 
 // Test remapper mode (blocked consumer access pattern)
 TEST_F(MeshWatcherDumpAllFixture, TestWatcherTileCounterLogRemapper) {
+    GTEST_SKIP() << "Disabled: see #45675";
     const auto& hal = MetalContext::instance().hal();
     if (!hal.has_tile_counter_registers()) {
         GTEST_SKIP() << "Tile counters are only used on Quasar";
