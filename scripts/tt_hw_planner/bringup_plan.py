@@ -15,14 +15,14 @@ from .reuse_registry import lookup_by_concept as _reuse_lookup_by_concept
 
 
 REUSE = "REUSE"
+ADAPT = "ADAPT"
 NEW = "NEW"
-# ADAPT was removed 2026-05-31. Trichotomy collapsed to REUSE / NEW.
-# Keep the symbol as an alias to NEW so any external code that still
-# imports `ADAPT` (e.g. cached overlays from prior runs) keeps
-# importing cleanly — anywhere ADAPT used to mean "needs work" it now
-# means NEW; the registry's old ADAPT entries have been migrated to
-# REUSE.
-ADAPT = NEW
+# ADAPT restored 2026-06-01 with iterate-loop integration. Semantics:
+#   REUSE = tt-module works as-is, trust it (no test, no LLM)
+#   ADAPT = tt-module exists, may need wrapper/config refinement
+#          (working canonical-wrapper stub, iter-0 PCC test,
+#          LLM refines on PCC<0.99 — never rewrites the class)
+#   NEW   = no tt-module exists, LLM writes from scratch
 
 
 @dataclass
@@ -54,11 +54,7 @@ class BringUpPlan:
 
     @property
     def counts(self) -> Dict[str, int]:
-        # ADAPT removed 2026-05-31 — counts dict has REUSE / NEW only.
-        # Any stale "ADAPT" status in legacy bringup_status.json files
-        # gets bucketed under .get default (won't appear here but won't
-        # crash either).
-        out: Dict[str, int] = {REUSE: 0, NEW: 0}
+        out: Dict[str, int] = {REUSE: 0, ADAPT: 0, NEW: 0}
         for c in self.components:
             out[c.status] = out.get(c.status, 0) + 1
         return out
@@ -119,18 +115,18 @@ def _shape(cfg: dict) -> Dict[str, Any]:
 
 
 def _diff_status(new_shape: Dict[str, Any], sibling_shape: Dict[str, Any]) -> str:
-    # ADAPT removed 2026-05-31. When shapes differ from the sibling we
-    # used to tag ADAPT ("light tweak"); now those go straight to NEW
-    # because there's no light-tweak machinery (ADAPT got no stub, no
-    # per-component test). The runtime PCC gate is the source of truth
-    # for whether a REUSE actually works.
+    # ADAPT restored 2026-06-01: when shapes differ from sibling, the
+    # tt-module exists (sibling has one) but needs refinement for this
+    # model's specifics. ADAPT components get a canonical-wrapper stub
+    # + per-component PCC test + LLM refinement (not rewrite). See the
+    # ADAPT description on the constants at the top of this file.
     if not sibling_shape:
         return NEW
     shared_keys = [k for k in new_shape if k in sibling_shape]
     if not shared_keys:
         return NEW
     differ = [k for k in shared_keys if new_shape[k] != sibling_shape[k]]
-    return REUSE if not differ else NEW
+    return REUSE if not differ else ADAPT
 
 
 def _sibling_tt_file(backend: FamilyBackend, repo_root: Path, hint: str) -> Optional[str]:
@@ -526,24 +522,24 @@ def build_bringup_plan(
                 pass
 
     if force_adapt_all:
-        # IMPORTANT: demote to NEW (not ADAPT). The entire downstream
-        # pipeline (autofill_stubs, _emit_pcc_template, candidate_pool,
-        # smoke-to-pcc upgrade, validation breakdown, ...) gates on
-        # status == "NEW" as the iteration trigger. ADAPT means "TT
-        # module exists and works for similar cases" — but here we know
-        # it DOESN'T work (global PCC failed). NEW is the right status
-        # so stubs + per-component PCC tests get generated and the
-        # brain has targets to iterate on. The notes still record the
-        # "was REUSE, demoted because PCC failed" provenance.
+        # Demote to ADAPT (2026-06-01). ADAPT semantics: the canonical
+        # tt-module EXISTS and is wrapped as the per-component stub's
+        # starting point. Iter 0 tests the wrapper as-is and graduates
+        # if PCC ≥ 0.99; only on PCC < 0.99 does the LLM enter, and
+        # then ONLY to refine config/wrapping — never to rewrite the
+        # canonical class. This preserves the tt-module's correctness
+        # for sibling models (Llama, Qwen3) while letting Qwen2-specific
+        # quirks get adapted via small edits.
         promoted = 0
         for _c in comps:
             if _c.status == REUSE:
-                _c.status = NEW
+                _c.status = ADAPT
                 _c.notes = (
-                    f"[force_adapt_all] demoted REUSE -> NEW "
+                    f"[force_adapt_all] demoted REUSE -> ADAPT "
                     f"because global PCC gate failed on this "
-                    f"already-supported model (NEW status triggers "
-                    f"stub + PCC-test generation downstream). {_c.notes}"
+                    f"already-supported model. Iter 0 will run "
+                    f"canonical-wrapper PCC test; LLM refines only "
+                    f"if PCC < 0.99. {_c.notes}"
                 ).strip()
                 promoted += 1
         if promoted:
@@ -552,11 +548,12 @@ def build_bringup_plan(
 
                 logger.info(
                     f"[bringup_plan] force_adapt_all promoted "
-                    f"{promoted} REUSE -> NEW component(s) so Path 1 "
-                    f"per-component iterate has stubs + tests to work on"
+                    f"{promoted} REUSE -> ADAPT component(s); per-component "
+                    f"PCC iterate will run on canonical wrappers, "
+                    f"LLM refines only on PCC < 0.99"
                 )
             except Exception:
-                print(f"  [bringup_plan] force_adapt_all promoted " f"{promoted} REUSE -> NEW component(s)")
+                print(f"  [bringup_plan] force_adapt_all promoted " f"{promoted} REUSE -> ADAPT component(s)")
 
     plan = BringUpPlan(
         new_model_id=new_model_id,

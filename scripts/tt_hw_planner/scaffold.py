@@ -532,8 +532,10 @@ def apply_scaffold(plan: ScaffoldPlan) -> List[str]:
 def _render_bringup_summary(bp: BringUpPlan) -> str:
     counts = bp.counts
     lines: List[str] = []
-    lines.append("  Component status (REUSE/NEW):")
-    lines.append(f"    Summary: {counts.get('REUSE', 0)} REUSE, {counts.get('NEW', 0)} NEW")
+    lines.append("  Component status (REUSE/ADAPT/NEW):")
+    lines.append(
+        f"    Summary: {counts.get('REUSE', 0)} REUSE, " f"{counts.get('ADAPT', 0)} ADAPT, {counts.get('NEW', 0)} NEW"
+    )
     lines.append("")
     name_w = max((len(c.name) for c in bp.components), default=10)
     name_w = min(max(name_w, 10), 26)

@@ -510,8 +510,8 @@ def _summarize_bringup_status(model_id: str) -> Tuple[Dict[str, int], List[Tuple
     from .bringup_loop import find_demo_dir
 
     demo_dir = find_demo_dir(model_id)
-    # ADAPT removed 2026-05-31 — REUSE / NEW only.
-    counts = {"REUSE": 0, "NEW": 0}
+    # ADAPT restored 2026-06-01 with iterate-loop integration.
+    counts = {"REUSE": 0, "ADAPT": 0, "NEW": 0}
     rows: List[Tuple[str, str]] = []
     if demo_dir is None:
         return counts, rows
@@ -658,6 +658,8 @@ def _classify_components(model_id: str) -> Dict[str, List[str]]:
             continue
         if status == "REUSE":
             out["reuse"].append(name)
+        elif status == "ADAPT":
+            out["adapt"].append(name)
         elif status == "NEW":
             safe = _safe_id(name)
             stub_path = demo_dir / "_stubs" / f"{safe}.py"
@@ -1006,9 +1008,9 @@ def _compute_op_split(model_id: str) -> Dict[str, object]:
         stub_path = demo_dir / "_stubs" / f"{safe}.py"
         manifest_path = demo_dir / "_stubs" / f"{safe}.opplan.json"
 
-        # ADAPT removed 2026-05-31 — only REUSE here (and legacy
-        # bringup_status.json with "ADAPT" status falls through to NEW).
-        if status == "REUSE":
+        # REUSE/ADAPT both run on device: REUSE as-is, ADAPT as cloned
+        # tt-module with possible LLM refinements.
+        if status in ("REUSE", "ADAPT"):
             rows.append(
                 {
                     "name": name,
@@ -7843,10 +7845,10 @@ def _cmd_up_core(args) -> int:
 
     banner(f"Step 3/6  LLM gate — does this model need an LLM to finish bring-up?")
     counts, _rows = _summarize_bringup_status(MODEL)
-    # ADAPT removed 2026-05-31 — LLM is needed iff there are NEW
-    # components (REUSE is presumed working, force_adapt_all demotes
-    # any broken REUSE -> NEW on PCC failure).
-    llm_components = counts.get("NEW", 0)
+    # LLM is needed iff there are NEW or ADAPT components.
+    # NEW = write from scratch; ADAPT = refine via iterate loop on PCC<0.99.
+    # REUSE alone needs no LLM (presumed working as-is).
+    llm_components = counts.get("NEW", 0) + counts.get("ADAPT", 0)
     total_components = sum(counts.values())
 
     if total_components == 0:
@@ -7854,7 +7856,7 @@ def _cmd_up_core(args) -> int:
         print()
         print(
             f"  Component classification: {counts.get('REUSE',0)} REUSE, "
-            f"{counts.get('NEW',0)} NEW "
+            f"{counts.get('ADAPT',0)} ADAPT, {counts.get('NEW',0)} NEW "
             f"(total {total_components})"
         )
         print("  Skipping the LLM gate; the loop later will treat this as REUSE-only.")
@@ -7866,7 +7868,7 @@ def _cmd_up_core(args) -> int:
         print()
         print(
             f"  Component classification: {counts.get('REUSE',0)} REUSE, "
-            f"{counts.get('NEW',0)} NEW "
+            f"{counts.get('ADAPT',0)} ADAPT, {counts.get('NEW',0)} NEW "
             f"(total {total_components})"
         )
         print()
@@ -7878,13 +7880,14 @@ def _cmd_up_core(args) -> int:
         print("  ============================================================")
         print(f"  >>>  VERDICT: LLM REQUIRED                                <<<")
         print(
-            f"  >>>  ({llm_components}/{total_components} components need generation: {counts.get('NEW',0)} NEW)  <<<"
+            f"  >>>  ({llm_components}/{total_components} components need LLM: "
+            f"{counts.get('NEW',0)} NEW + {counts.get('ADAPT',0)} ADAPT)  <<<"
         )
         print("  ============================================================")
         print()
         print(
             f"  Component classification: {counts.get('REUSE',0)} REUSE, "
-            f"{counts.get('NEW',0)} NEW "
+            f"{counts.get('ADAPT',0)} ADAPT, {counts.get('NEW',0)} NEW "
             f"(total {total_components})"
         )
         print()

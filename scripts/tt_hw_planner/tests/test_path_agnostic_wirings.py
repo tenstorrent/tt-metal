@@ -257,7 +257,7 @@ def test_wiring_12_scaffold_respects_escalation_bypass() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_wiring_13_escalation_writes_manifest_with_reuse_demoted_to_new() -> None:
+def test_wiring_13_escalation_writes_manifest_with_reuse_demoted_to_adapt() -> None:
     """Pin: when ``force_already_supported=True`` (escalation path),
     ``plan_scaffold``'s LLM/VLM branch must call ``build_bringup_plan``
     with ``force_adapt_all=True`` and emit a ``bringup_status.json``
@@ -270,20 +270,21 @@ def test_wiring_13_escalation_writes_manifest_with_reuse_demoted_to_new() -> Non
 
     The shift is: registry says "REUSE" based on static info, but the
     failed global PCC is runtime evidence the registry is wrong. The
-    force-adapt-all override demotes every REUSE to NEW (ADAPT was
-    removed 2026-05-31 — trichotomy collapsed to dichotomy) so the
-    per-component PCC iterate loop actually verifies each one.
-    Caught 2026-05-31 in the Qwen2.5-14B rewire test."""
+    force-adapt-all override demotes every REUSE to ADAPT (restored
+    2026-06-01 with iterate-loop integration: ADAPT components get a
+    canonical-wrapper stub + per-component PCC test + iter-0 graduate-
+    on-pass + LLM refinement only on PCC < 0.99). The per-component
+    PCC iterate loop verifies each one.
+    Originally caught 2026-05-31 in the Qwen2.5-14B rewire test."""
     plan_src = _read("scripts/tt_hw_planner/bringup_plan.py")
     scaffold_src = _read("scripts/tt_hw_planner/scaffold.py")
 
-    # build_bringup_plan must accept the kwarg (name kept historical
-    # for callsite stability even though demote target is now NEW).
+    # build_bringup_plan must accept the kwarg.
     assert "force_adapt_all: bool = False" in plan_src
-    # And the demotion must actually happen
+    # And the demotion must actually happen.
     assert "if force_adapt_all:" in plan_src
-    # Demote target is NEW (was ADAPT pre-ADAPT-removal).
-    assert "_c.status = NEW" in plan_src
+    # Demote target is ADAPT (restored 2026-06-01).
+    assert "_c.status = ADAPT" in plan_src
 
     # scaffold's LLM/VLM branch must take the fast-path when
     # force_already_supported=True + compat is ALREADY SUPPORTED
@@ -299,40 +300,56 @@ def test_wiring_13_escalation_writes_manifest_with_reuse_demoted_to_new() -> Non
 # ---------------------------------------------------------------------------
 
 
-def test_wiring_14_canonical_import_stub_removes_torch_escape_hatch() -> None:
-    """Pin: when a NEW component has ``tt_reuse_target`` set (which only
-    happens via ``force_adapt_all`` on the escalation path),
-    ``autofill_stubs`` must emit a canonical-import stub instead of the
-    op-synth / torch-fallback scaffold. The canonical-import stub:
+def test_wiring_14_adapt_canonical_wrapper_stub_is_working_not_notimpl() -> None:
+    """Pin: when an ADAPT component has ``tt_reuse_target`` set (set
+    via ``force_adapt_all`` on the escalation path),
+    ``autofill_stubs`` must emit a WORKING canonical-wrapper stub.
 
-      1. Points the LLM at the canonical TT impl in its header.
-      2. Has NotImplementedError bodies in __init__/build/__call__.
+    Post-2026-06-01: the stub is no longer NotImplementedError — it
+    actually imports the canonical class, builds it via tt_transformers
+    helpers (ModelArgs etc.), and delegates __call__. Iter 0 runs the
+    stub as-is and graduates if PCC ≥ 0.99 — only on PCC < 0.99 does
+    the LLM enter, and only to REFINE config/wrapping (never rewrite
+    the canonical class).
+
+    The stub:
+      1. Imports the canonical class from `{tt_reuse_target}`.
+      2. Delegates __call__ to the canonical instance.
       3. Contains NO ``transformers.AutoModel.from_pretrained(...)``,
          NO ``_CANDIDATE_SUBMODULE_PATHS``, NO ``_get_torch_submodule``
          escape hatch.
 
-    Without this, the LLM games the loop by leaving HF AutoModel
-    boilerplate in __call__ — pytest passes via torch == torch on
-    host CPU, but no component ever runs natively on TT device.
-    Caught 2026-05-31 in the Qwen2.5-14B rewire test (every component
-    PCC-passed but 0/5 graduated)."""
+    Without this, the LLM either games the loop with HF AutoModel
+    boilerplate (pre-Option-2) or hits NotImplementedError every iter
+    until it rewrites the class from scratch (Option-2's earlier form).
+    Both modes prevent canonical-impl reuse. Caught 2026-06-01 after
+    the Qwen2.5-14B verification — LLM kept writing from-scratch GQA."""
     from scripts.tt_hw_planner.bringup_loop import _render_canonical_import_stub
 
     stub = _render_canonical_import_stub(
         component_name="attention",
         model_id="Qwen/Qwen2.5-14B-Instruct",
         tt_reuse_target="models/tt_transformers/tt/attention.py",
+        canonical_class="Attention",
     )
 
     # Header points at canonical impl
     assert "models/tt_transformers/tt/attention.py" in stub
-    assert "canonical-import path" in stub
+    assert "canonical-wrapper path" in stub
 
-    # NotImplementedError bodies — no working CPU fallback to game
-    assert stub.count("raise NotImplementedError") >= 3, (
-        "__init__, build, __call__ must all raise NotImplementedError so "
-        "the LLM cannot pass pytest with a torch-fallback wrapper"
+    # WORKING stub — no NotImplementedError in the happy path.
+    # (RuntimeError surfacing on broken ModelArgs / ctor is OK; that's
+    # not NotImplementedError, and it raises with a refinement hint.)
+    assert "raise NotImplementedError" not in stub, (
+        "Post-2026-06-01: canonical-wrapper stub is WORKING from iter 0; "
+        "NotImplementedError was the old design that forced LLM into rewrite"
     )
+
+    # Pre-baked canonical import and delegation
+    assert "from models.tt_transformers.tt.attention import Attention" in stub
+    assert "self._impl = canonical_instance" in stub
+    assert "return self._impl(*args, **kwargs)" in stub
+    assert "ModelArgs(mesh_device=device" in stub  # tt_transformers helper used
 
     # No torch escape hatches in EXECUTABLE code (the docstring
     # mentions these patterns by name as "don't do this", so we strip
@@ -348,11 +365,11 @@ def test_wiring_14_canonical_import_stub_removes_torch_escape_hatch() -> None:
     assert "_get_torch_submodule" not in _exec_only
     assert "HF_MODEL_ID" not in _exec_only
 
-    # Gating: autofill_stubs must check tt_reuse_target before falling
-    # through to op-synth/torch-fallback
+    # Gating: autofill_stubs must check tt_reuse_target + status==ADAPT
     bringup_loop_src = _read("scripts/tt_hw_planner/bringup_loop.py")
     assert "_render_canonical_import_stub" in bringup_loop_src
-    assert "canonical-import:" in bringup_loop_src  # action label
+    assert "canonical-wrapper:" in bringup_loop_src  # action label
+    assert '_comp_status == "ADAPT"' in bringup_loop_src  # gating
 
 
 def test_all_touched_modules_import_cleanly() -> None:

@@ -1019,8 +1019,8 @@ def render_text(result: BringupLoopResult) -> str:
     out.append(f"  Demo folder: {result.demo_dir}")
     cb = result.counts_before
     ca = result.counts_after
-    out.append(f"  Counts before: {cb.get('REUSE', 0)} REUSE / {cb.get('NEW', 0)} NEW")
-    out.append(f"  Counts after:  {ca.get('REUSE', 0)} REUSE / {ca.get('NEW', 0)} NEW")
+    out.append(f"  Counts before: {cb.get('REUSE', 0)} REUSE / {cb.get('ADAPT', 0)} ADAPT / {cb.get('NEW', 0)} NEW")
+    out.append(f"  Counts after:  {ca.get('REUSE', 0)} REUSE / {ca.get('ADAPT', 0)} ADAPT / {ca.get('NEW', 0)} NEW")
     out.append("")
 
     if not result.actions:
@@ -1316,95 +1316,100 @@ def _resolve_torch_submodule_for_autofill(
 _CANONICAL_IMPORT_STUB_TEMPLATE = '''\
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-# >>> MACHINE-GENERATED stub (canonical-import path) <<<
-"""Stub for `{component_name}` of `{model_id}`.
+# >>> MACHINE-GENERATED stub (ADAPT — canonical-wrapper path) <<<
+"""ADAPT-status stub for `{component_name}` of `{model_id}`.
 
-The reuse_registry mapped this component to the canonical TT
-implementation at:
+The reuse_registry mapped this component to the canonical TT impl at:
 
     {tt_reuse_target}
 
-The global PCC gate failed for this model with that mapping
-(via force_adapt_all on the escalation path), so the canonical
-impl needs adaptation for this model's shape constants.
+Status was REUSE; the global PCC gate then failed → force_adapt_all
+demoted to ADAPT. This stub IS the per-component starting point:
+it imports the canonical class and delegates forward to it.
 
-YOUR JOB:
-  1. Import the canonical class(es) from `{tt_reuse_target}` (or
-     a related file in the same package).
-  2. Wire `__init__` / `build` to instantiate it with this model's
-     shape constants (read them from the HF reference's torch_module
-     in `build(device, torch_module)`).
-  3. Wire `__call__` to forward through the canonical impl's
-     forward/__call__, returning ttnn tensors on device.
-
-DO NOT write a torch-fallback wrapper. The loop will reject any
-stub whose `__call__` delegates to a torch.nn.Module on host CPU.
-No `transformers.AutoModel.from_pretrained(...)`, no
-`_get_torch_submodule(...)`, no walking submodule paths.
+ADAPT semantics:
+  Iter 0 (no LLM): run this stub as-is. If per-component PCC >= 0.99,
+    GRADUATE — the canonical impl was already correct for this model.
+  Iter 1+ (LLM only enters if iter 0 PCC < 0.99):
+    LLM REFINES this stub. Allowed edits: change ModelArgs config,
+    adjust constructor args, add small adapter logic in __call__.
+    FORBIDDEN: rewriting the canonical class, replacing the import,
+    writing your own ttnn ops from scratch, delegating to torch.
 """
 from __future__ import annotations
 import torch
 import ttnn
 
-# The canonical TT implementation lives at:
-#   {tt_reuse_target}
-# Import the relevant class(es) directly. Example:
-#   from {tt_reuse_target_module} import <CanonicalClass>
+from {tt_reuse_target_module} import {canonical_import_target}
 
 
 class Tt{component_class_name}:
-    """Adapter wrapping the canonical TT impl with this model's shape constants."""
+    """Adapter that wraps the canonical TT impl from `{tt_reuse_target}`.
 
-    def __init__(self, device, **kwargs) -> None:
-        self._device = device
-        # TODO: instantiate the canonical class from `{tt_reuse_target}` with
-        # this model's shape constants (hidden_size, num_heads, intermediate_size,
-        # eps, etc.). Read them from the HF config or from `torch_module` in `build`.
-        raise NotImplementedError(
-            "Wire the canonical TT impl from `{tt_reuse_target}`. "
-            "Do NOT delegate to torch — the loop rejects CPU fallback."
-        )
+    Delegates __call__ to the canonical instance. The LLM may refine
+    __init__ / build / __call__ here on PCC failure, but MUST keep the
+    canonical class as the underlying implementation.
+    """
+
+    def __init__(self, canonical_instance) -> None:
+        self._impl = canonical_instance
 
     @classmethod
     def build(cls, device, torch_module):
-        # TODO: load weights from torch_module.state_dict() into the canonical
-        # TT class. See sibling tt_transformers/tt/* implementations for the
-        # expected state_dict key mapping.
-        raise NotImplementedError(
-            "Implement weight loading from `torch_module.state_dict()` into the "
-            "canonical TT impl. Do NOT cache torch_module — the goal is native "
-            "ttnn execution on device."
-        )
+        # Pre-wired construction using tt_transformers helpers.
+        # If iter-0 PCC < 0.99, the LLM refines THIS function — usually by
+        # adjusting ModelArgs constructor args for this model's specifics.
+        try:
+            from models.tt_transformers.tt.model_config import ModelArgs
+
+            args = ModelArgs(mesh_device=device, instruct=True)
+        except Exception as _ma_exc:
+            # ModelArgs construction failed — surface for LLM to handle.
+            raise RuntimeError(
+                f"ModelArgs(mesh_device=device) failed for {component_name!r}: "
+                f"{{type(_ma_exc).__name__}}: {{_ma_exc}}. LLM refinement: "
+                f"adjust the ModelArgs constructor args to match this model's "
+                f"config."
+            )
+
+        # Build the canonical instance. The exact constructor signature
+        # varies per class (Attention takes 14 args, MLP takes 11, RMSNorm
+        # different, RotaryEmbedding different). The LLM refines this call
+        # on PCC failure to pass the right args for this model.
+        try:
+            canonical = {canonical_import_target}(
+                mesh_device=device,
+                args=args,
+                state_dict=torch_module.state_dict() if torch_module is not None else None,
+                layer_num=0,
+                dtype=ttnn.bfloat16,
+            )
+        except Exception as _ctor_exc:
+            raise RuntimeError(
+                f"Canonical {{ {canonical_import_target!r} }} constructor failed: "
+                f"{{type(_ctor_exc).__name__}}: {{_ctor_exc}}. LLM refinement: "
+                f"pass the additional required args (tt_ccl, "
+                f"transformation_mats, configuration, etc.). See "
+                f"`{tt_reuse_target}` for the full __init__ signature."
+            )
+
+        return cls(canonical)
 
     def __call__(self, *args, **kwargs):
-        # TODO: forward through the canonical TT impl's __call__/forward,
-        # returning ttnn tensors on device. Inputs are ttnn tensors on device.
-        raise NotImplementedError(
-            "Forward must call the canonical TT impl's __call__ / forward. "
-            "Inputs are ttnn tensors on device; outputs must be ttnn tensors "
-            "on device. Do NOT round-trip through torch."
-        )
+        # Delegate to the canonical impl. LLM may add minor pre/post
+        # processing here (input reshape, output unpack) on PCC failure
+        # — but NEVER replace this delegation with a custom forward.
+        return self._impl(*args, **kwargs)
 
 
-# Module-level `build` — PRIMARY test entry point.
-# The per-component PCC test does:
-#   if hasattr(mod, "build"): return mod.build(device, torch_module)
-# So `build` must be present at module scope, return a callable
-# ``Tt{component_class_name}`` instance, and the test then invokes the
-# instance via __call__(ttnn_input, **kwargs).
+# Module-level `build` — primary test entry point.
 def build(device, torch_module=None):
-    """Test-facing factory: returns a ``Tt{component_class_name}`` instance
-    built from ``torch_module`` (typically the HF reference module captured
-    at scaffold time). The PCC test calls this then invokes the returned
-    instance's __call__ with (ttnn_input, **ttnn_extra_kwargs).
-    """
     return Tt{component_class_name}.build(device, torch_module)
 
 
 # Module-level shim with the component's lowercase slug name. Kept for
-# backward compatibility with the Phase-1 SMOKE test (which uses
-# ``from .._stubs.<slug> import <slug>``). Modern PCC tests find
-# ``build`` first, so this is only consulted when ``build`` is missing.
+# backward compatibility with legacy SMOKE/PCC tests that import the
+# slug directly.
 def {component_name_for_shim}(device, torch_module=None):
     return Tt{component_class_name}.build(device, torch_module)
 '''
@@ -1415,22 +1420,24 @@ def _render_canonical_import_stub(
     component_name: str,
     model_id: str,
     tt_reuse_target: str,
+    canonical_class: Optional[str] = None,
 ) -> str:
-    """Emit a stub whose body raises NotImplementedError and whose header
-    points the LLM at the canonical TT implementation it must adapt.
+    """Emit an ADAPT-status stub: a WORKING canonical-wrapper.
 
-    Used when a component has been demoted REUSE -> NEW via
-    ``force_adapt_all`` on the escalation path (Path 2 PCC-gate failure):
-    the canonical TT impl exists but doesn't quite work for this model's
-    shape constants, so the LLM must IMPORT it and adapt — NOT write a
-    torch-fallback wrapper. By removing the escape hatch (no
-    ``transformers.AutoModel`` bootstrap, no ``_CANDIDATE_SUBMODULE_PATHS``)
-    from the stub itself, the LLM cannot game its way to a torch wrapper:
-    the only way to make pytest pass is to actually wire the canonical impl.
+    The stub imports the canonical TT impl, builds an instance via
+    tt_transformers helpers (ModelArgs etc.), and delegates __call__.
+    Iter 0 runs this stub as-is; if per-component PCC ≥ 0.99 the
+    component graduates immediately. Only on PCC < 0.99 does the LLM
+    enter, and then ONLY to refine ModelArgs / constructor args /
+    small adapter logic — never to rewrite the canonical class.
+
+    ``canonical_class``: the name to import from ``tt_reuse_target``'s
+    module (from the registry's ``tt_class`` field). When unknown,
+    we fall back to the CamelCase form of the component name.
 
     Caller is responsible for gating: only call when
     ``component["tt_reuse_target"]`` is non-empty AND
-    ``component["status"] == "NEW"``."""
+    ``component["status"] == "ADAPT"``."""
     safe = _safe_id(component_name)
     # Derive a CamelCase-ish class name from the component slug.
     # ("decoder_layer" -> "DecoderLayer", "r_m_s_norm" -> "RMSNorm").
@@ -1440,6 +1447,11 @@ def _render_canonical_import_stub(
     if tt_reuse_target_module.endswith(".py"):
         tt_reuse_target_module = tt_reuse_target_module[:-3]
     tt_reuse_target_module = tt_reuse_target_module.replace("/", ".")
+    # The class to import from the canonical module. Registry provides
+    # this via tt_class on the ReuseEntry. When unknown, default to the
+    # component CamelCase (which works for common cases like RMSNorm,
+    # MLP, Attention where the class name matches the component name).
+    canonical_import_target = canonical_class or class_name
     return _CANONICAL_IMPORT_STUB_TEMPLATE.format(
         component_name=component_name,
         # Module-level shim name MUST equal the safe slug — the
@@ -1447,6 +1459,7 @@ def _render_canonical_import_stub(
         # (e.g. ``from .._stubs.r_m_s_norm import r_m_s_norm``).
         component_name_for_shim=safe,
         component_class_name=class_name,
+        canonical_import_target=canonical_import_target,
         model_id=model_id,
         tt_reuse_target=tt_reuse_target,
         tt_reuse_target_module=tt_reuse_target_module,
@@ -1661,14 +1674,25 @@ def autofill_stubs(
         # the existing op-synth/torch-fallback path unchanged.
         _tt_reuse_target = comp.get("tt_reuse_target")
         _wrote_canonical_import = False
-        if _tt_reuse_target and isinstance(_tt_reuse_target, str) and _tt_reuse_target.strip():
+        # Gate on tt_reuse_target presence AND status == ADAPT
+        # (post-2026-06-01: force_adapt_all demotes REUSE -> ADAPT,
+        # not REUSE -> NEW). For cold-start NEW components with no
+        # tt_reuse_target, fall through to the torch-fallback path.
+        _comp_status = comp.get("status", "")
+        if (
+            _tt_reuse_target
+            and isinstance(_tt_reuse_target, str)
+            and _tt_reuse_target.strip()
+            and _comp_status == "ADAPT"
+        ):
             canonical_body = _render_canonical_import_stub(
                 component_name=comp["name"],
                 model_id=model_id,
                 tt_reuse_target=_tt_reuse_target,
+                canonical_class=comp.get("tt_reuse_class"),
             )
             stub_path.write_text(canonical_body)
-            actions.append((comp["name"], f"canonical-import:{_tt_reuse_target}"))
+            actions.append((comp["name"], f"canonical-wrapper:{_tt_reuse_target}"))
             wrote = True
             _wrote_canonical_import = True
             stale_manifest = demo_dir / "_stubs" / f"{safe}.opplan.json"

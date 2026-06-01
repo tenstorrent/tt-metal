@@ -27,15 +27,15 @@ class ReuseEntry:
 
 
 def _effort_to_status(effort: Effort, status: Status) -> str:
-    # ADAPT removed 2026-05-31. Trichotomy REUSE/ADAPT/NEW -> dichotomy
-    # REUSE/NEW. Anything that's SUPPORTED falls back to REUSE
-    # (presumed working; the global PCC gate enforces it and
-    # force_adapt_all demotes to NEW on failure). MISSING is NEW.
+    # ADAPT restored 2026-06-01 with iterate-loop integration.
+    #   MISSING                 -> NEW   (write from scratch)
+    #   SUPPORTED + DROP_IN     -> REUSE (use as-is, no test)
+    #   SUPPORTED + !DROP_IN    -> ADAPT (wrap canonical + refine on PCC fail)
     if status == Status.MISSING:
         return "NEW"
-    if status == Status.SUPPORTED:
+    if effort == Effort.DROP_IN and status == Status.SUPPORTED:
         return "REUSE"
-    return "NEW"
+    return "ADAPT"
 
 
 def _concept_from_block_name(name: str) -> str:
@@ -81,8 +81,8 @@ _HANDWRITTEN_COMPOSITES: List[ReuseEntry] = [
         concept="decoder_layer",
         tt_path="models/tt_transformers/tt/decoder.py",
         tt_class="TransformerBlock",
-        status="REUSE",
-        notes="Composite Attention+MLP+RMSNorm block; tt_transformers TransformerBlock is the template (presumed working — global PCC gate enforces, force_adapt_all demotes to NEW on failure).",
+        status="ADAPT",
+        notes="Composite Attention+MLP+RMSNorm block; tt_transformers TransformerBlock is the template (presumed adaptable — runs canonical, LLM refines via iterate loop if per-component PCC < 0.99).",
     ),
     ReuseEntry(
         model_types=("qwen3", "qwen3_embedding"),
@@ -90,8 +90,8 @@ _HANDWRITTEN_COMPOSITES: List[ReuseEntry] = [
         concept="model_root",
         tt_path="models/tt_transformers/tt/model.py",
         tt_class="Transformer",
-        status="REUSE",
-        notes="Top-level decoder stack; tt_transformers/tt/model.py is the template (presumed working — global PCC gate enforces, force_adapt_all demotes to NEW on failure).",
+        status="ADAPT",
+        notes="Top-level decoder stack; tt_transformers/tt/model.py is the template (presumed adaptable — runs canonical, LLM refines via iterate loop if per-component PCC < 0.99).",
     ),
 ]
 
