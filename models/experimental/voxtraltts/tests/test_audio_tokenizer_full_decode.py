@@ -70,11 +70,21 @@ def test_audio_tokenizer_full_decode_pcc(device, reset_seeds, time_len, pcc):
         pytest.skip(f"CPU reference decode failed: {exc}")
 
     try:
-        latent_tt = tok.latent_from_codes(codes)
+        codes_tt = ttnn.from_torch(
+            codes.to(torch.uint32).contiguous(),
+            device=device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        latent_tt = tok.latent_from_codes_tt(codes_tt)
+        ttnn.deallocate(codes_tt)
         mel_tt = tok.decode_latent_to_mel_b1tc(latent_tt)
         ttnn.deallocate(latent_tt)
-        tt_wav = tok.pretransform_decode_torch(mel_tt)
+        wav_tt = tok.pretransform_decode_tt(mel_tt)
         ttnn.deallocate(mel_tt)
+        tt_wav = ttnn.to_torch(wav_tt).float()
+        ttnn.deallocate(wav_tt)
     except RuntimeError as exc:
         msg = str(exc)
         if "requires the full decoder stack" in msg or "output_proj" in msg or "not loaded" in msg:

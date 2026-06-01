@@ -107,6 +107,7 @@ class VoxtralTTAudioTokenizerInputProj:
         kernel_size: int = 7,
         stride: int = 1,
         causal: bool = True,
+        pad_mode: str = "reflect",
         weight_dtype=ttnn.bfloat16,
         activations_dtype=ttnn.bfloat16,
         output_dtype=ttnn.bfloat16,
@@ -117,6 +118,8 @@ class VoxtralTTAudioTokenizerInputProj:
         self.kernel_size = kernel_size
         self.stride = stride
         self.left_pad = (kernel_size - 1) if causal else 0
+        # Upstream input_proj is a CausalConv1d with the default pad_mode="reflect".
+        self.pad_mode = pad_mode
         self.activations_dtype = activations_dtype
         self.output_dtype = output_dtype
         self.debug_name = "input_proj.conv"
@@ -144,15 +147,21 @@ class VoxtralTTAudioTokenizerInputProj:
         x_rm = ttnn.reshape(x_rm, (b, t, c))
 
         if self.left_pad:
-            pad_shape = (b, self.left_pad, c)
-            pad = ttnn.zeros(
-                pad_shape,
-                dtype=self.activations_dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            x_rm = ttnn.concat([pad, x_rm], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if self.pad_mode == "reflect":
+                x_rm = _reflect_pad_time_rm(
+                    x_rm, pad_left=self.left_pad, pad_right=0, dtype=self.activations_dtype, device=self.device
+                )
+            elif self.pad_mode == "constant":
+                pad = ttnn.zeros(
+                    (b, self.left_pad, c),
+                    dtype=self.activations_dtype,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                x_rm = ttnn.concat([pad, x_rm], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                raise ValueError(f"Unsupported pad_mode={self.pad_mode!r}")
 
         padded_len = t + self.left_pad
 
@@ -367,6 +376,50 @@ def _replicate_pad_time_rm(
     return ttnn.concat(parts, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG) if len(parts) > 1 else x_btc
 
 
+def _reflect_pad_time_rm(
+    x_btc: ttnn.Tensor,
+    *,
+    pad_left: int,
+    pad_right: int,
+    dtype,
+    device,
+) -> ttnn.Tensor:
+    """Time-axis reflect pad on ``[B,T,C]`` RM (matches upstream ``pad1d(..., mode='reflect')``).
+
+    Reflection excludes the edge sample (torch semantics). The short-sequence case (``T <= max_pad``)
+    is handled exactly like upstream: right-extend with zeros, reflect, then trim the extension.
+    """
+    if pad_left == 0 and pad_right == 0:
+        return x_btc
+    b, t, c = (int(x_btc.shape[i]) for i in range(3))
+    max_pad = max(pad_left, pad_right)
+    extra = 0
+    work = x_btc
+    if t <= max_pad:
+        extra = max_pad - t + 1
+        z = ttnn.zeros(
+            (b, extra, c),
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        work = ttnn.concat([x_btc, z], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(z)
+    wt = int(work.shape[1])
+    parts: list[ttnn.Tensor] = []
+    for i in range(pad_left, 0, -1):  # indices pad_left .. 1 (reflect around frame 0)
+        parts.append(ttnn.slice(work, [0, i, 0], [b, i + 1, c]))
+    parts.append(work)
+    for i in range(wt - 2, wt - 2 - pad_right, -1):  # indices wt-2 .. wt-1-pad_right (reflect around last frame)
+        parts.append(ttnn.slice(work, [0, i, 0], [b, i + 1, c]))
+    padded = ttnn.concat(parts, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG) if len(parts) > 1 else work
+    if extra:
+        end = int(padded.shape[1]) - extra
+        padded = ttnn.slice(padded, [0, 0, 0], [b, end, c])
+    return padded
+
+
 def _zero_insert_time_rm(x_btc: ttnn.Tensor, *, stride: int, dtype, device) -> ttnn.Tensor:
     """Insert ``stride - 1`` all-zero frames after each input frame on ``[B,T,C]``."""
     if stride == 1:
@@ -411,6 +464,7 @@ class VoxtralTTAudioTokenizerDecoderCausalConv1d:
         in_channels: int | None = None,
         out_channels: int | None = None,
         output_channel_splits: int = 4,
+        input_channel_splits: int = 1,
         weight_dtype=ttnn.bfloat16,
         activations_dtype=ttnn.bfloat16,
         output_dtype=ttnn.bfloat16,
@@ -422,6 +476,7 @@ class VoxtralTTAudioTokenizerDecoderCausalConv1d:
         self.dilation = dilation
         self.pad_mode = pad_mode
         self.output_channel_splits = output_channel_splits
+        self.input_channel_splits = input_channel_splits
         self.activations_dtype = activations_dtype
         self.output_dtype = output_dtype
         self.debug_name = (
@@ -450,18 +505,79 @@ class VoxtralTTAudioTokenizerDecoderCausalConv1d:
                 f"out_channels={self.out_channels} must divide evenly by output_channel_splits={self.output_channel_splits}"
             )
         self.out_channels_per_split = self.out_channels // self.output_channel_splits
+        if self.in_channels % self.input_channel_splits != 0:
+            raise ValueError(
+                f"in_channels={self.in_channels} must divide evenly by input_channel_splits={self.input_channel_splits}"
+            )
+        self.in_channels_per_split = self.in_channels // self.input_channel_splits
 
         w_dtype = ttnn.float32 if weight_dtype == ttnn.bfloat8_b else weight_dtype
         self.weight_tensors = [
-            ttnn.from_torch(
-                w_host[i * self.out_channels_per_split : (i + 1) * self.out_channels_per_split],
-                dtype=w_dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=None,
-            )
-            for i in range(self.output_channel_splits)
+            [
+                ttnn.from_torch(
+                    w_host[
+                        o * self.out_channels_per_split : (o + 1) * self.out_channels_per_split,
+                        i * self.in_channels_per_split : (i + 1) * self.in_channels_per_split,
+                        :,
+                    ].contiguous(),
+                    dtype=w_dtype,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=None,
+                )
+                for i in range(self.input_channel_splits)
+            ]
+            for o in range(self.output_channel_splits)
         ]
         self.conv_config, self.compute_config = get_audio_tokenizer_conv_configs(device)
+
+    def _conv_summed_over_inputs(self, inp: ttnn.Tensor, input_length: int, b: int, weight_group: list) -> ttnn.Tensor:
+        """One output-channel split: conv each input-channel split and sum (interleaved DRAM out)."""
+        accum = None
+        for in_idx, weight_tensor in enumerate(weight_group):
+            if self.input_channel_splits == 1:
+                x_in = inp
+            else:
+                ic0 = in_idx * self.in_channels_per_split
+                x_in = ttnn.slice(
+                    inp,
+                    [0, 0, ic0],
+                    [b, input_length, ic0 + self.in_channels_per_split],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            out_chunk = ttnn.conv1d(
+                input_tensor=x_in,
+                weight_tensor=weight_tensor,
+                in_channels=self.in_channels_per_split,
+                out_channels=self.out_channels_per_split,
+                device=self.device,
+                bias_tensor=None,
+                kernel_size=self.kernel_size,
+                stride=self.stride,
+                padding=0,
+                batch_size=b,
+                input_length=input_length,
+                conv_config=self.conv_config,
+                compute_config=self.compute_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                groups=1,
+                dtype=self.output_dtype,
+                return_weights_and_bias=False,
+            )
+            if x_in is not inp and x_in.is_allocated():
+                ttnn.deallocate(x_in)
+            if out_chunk.memory_config().is_sharded():
+                out_i = ttnn.sharded_to_interleaved(out_chunk, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(out_chunk)
+            else:
+                out_i = out_chunk
+            if accum is None:
+                accum = out_i
+            else:
+                summed = ttnn.add(accum, out_i, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(accum)
+                ttnn.deallocate(out_i)
+                accum = summed
+        return accum
 
     def padded_sequence_length(self, time_len: int) -> tuple[int, int, int]:
         """``(pad_left, pad_right, padded_len)`` for this conv's causal padding."""
@@ -487,6 +603,10 @@ class VoxtralTTAudioTokenizerDecoderCausalConv1d:
         pl, pr, padded_len = self.padded_sequence_length(t)
         if self.pad_mode == "replicate":
             x_rm = _replicate_pad_time_rm(x_rm, pad_left=pl, pad_right=pr)
+        elif self.pad_mode == "reflect":
+            x_rm = _reflect_pad_time_rm(
+                x_rm, pad_left=pl, pad_right=pr, dtype=self.activations_dtype, device=self.device
+            )
         elif self.pad_mode == "constant":
             if pr != 0:
                 raise NotImplementedError("constant pad with right pad is not implemented")
@@ -525,32 +645,9 @@ class VoxtralTTAudioTokenizerDecoderCausalConv1d:
         out_splits = []
         effective_kernel = (self.kernel_size - 1) * self.dilation + 1
         use_chunking = t_out > self.max_conv_output_chunk
-        for split_idx, weight_tensor in enumerate(self.weight_tensors):
+        for split_idx, weight_group in enumerate(self.weight_tensors):
             if not use_chunking:
-                out_chunk = ttnn.conv1d(
-                    input_tensor=x_rm,
-                    weight_tensor=weight_tensor,
-                    in_channels=self.in_channels,
-                    out_channels=self.out_channels_per_split,
-                    device=self.device,
-                    bias_tensor=None,
-                    kernel_size=self.kernel_size,
-                    stride=self.stride,
-                    padding=0,
-                    batch_size=b,
-                    input_length=padded_len,
-                    conv_config=self.conv_config,
-                    compute_config=self.compute_config,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    groups=1,
-                    dtype=self.output_dtype,
-                    return_weights_and_bias=False,
-                )
-                if out_chunk.memory_config().is_sharded():
-                    out_splits.append(ttnn.sharded_to_interleaved(out_chunk, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-                    ttnn.deallocate(out_chunk)
-                else:
-                    out_splits.append(out_chunk)
+                out_splits.append(self._conv_summed_over_inputs(x_rm, padded_len, b, weight_group))
             else:
                 split_chunks = []
                 for out_start in range(0, t_out, self.max_conv_output_chunk):
@@ -566,7 +663,7 @@ class VoxtralTTAudioTokenizerDecoderCausalConv1d:
                     if _conv_debug_enabled():
                         logger.info(
                             "[voxtraltts][conv1d] {} split {}/{} chunk out=[{}:{}) in=[{}:{}) input_length={} "
-                            "in_channels={} out_channels_per_split={} conv_chunk={} weight_shape={}",
+                            "in_channels={} in_channel_splits={} out_channels_per_split={} conv_chunk={}",
                             self.debug_name,
                             split_idx + 1,
                             self.output_channel_splits,
@@ -576,37 +673,13 @@ class VoxtralTTAudioTokenizerDecoderCausalConv1d:
                             in_end,
                             in_end - in_start,
                             self.in_channels,
+                            self.input_channel_splits,
                             self.out_channels_per_split,
                             _tensor_debug(conv_chunk),
-                            tuple(weight_tensor.shape),
                         )
-                    out_chunk = ttnn.conv1d(
-                        input_tensor=conv_chunk,
-                        weight_tensor=weight_tensor,
-                        in_channels=self.in_channels,
-                        out_channels=self.out_channels_per_split,
-                        device=self.device,
-                        bias_tensor=None,
-                        kernel_size=self.kernel_size,
-                        stride=self.stride,
-                        padding=0,
-                        batch_size=b,
-                        input_length=in_end - in_start,
-                        conv_config=self.conv_config,
-                        compute_config=self.compute_config,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                        groups=1,
-                        dtype=self.output_dtype,
-                        return_weights_and_bias=False,
-                    )
+                    out_chunk = self._conv_summed_over_inputs(conv_chunk, in_end - in_start, b, weight_group)
                     ttnn.deallocate(conv_chunk)
-                    if out_chunk.memory_config().is_sharded():
-                        split_chunks.append(
-                            ttnn.sharded_to_interleaved(out_chunk, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                        )
-                        ttnn.deallocate(out_chunk)
-                    else:
-                        split_chunks.append(out_chunk)
+                    split_chunks.append(out_chunk)
 
                 if len(split_chunks) == 1:
                     out_splits.append(split_chunks[0])
