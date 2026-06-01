@@ -906,16 +906,30 @@ class LTXPipeline:
         """Rescale normalization: x * sqrt(target_dim / source_dim)."""
         return x * math.sqrt(target_dim / source_dim)
 
-    def encode_prompts_device(self, prompts: list[str]) -> list[tuple[torch.Tensor, torch.Tensor | None]]:
-        """Encode prompts using TTNN Gemma encoder + embeddings connectors.
+    def _device_embed_cache_path(self, prompts: list[str]) -> str:
+        """Disk-cache path for on-device prompt embeddings. Separate namespace from the
+        reference cache (different format) — lets a repeated prompt skip the encoder."""
+        cache_dir = os.environ.get("TT_DIT_CACHE_DIR") or os.path.expanduser("~/.cache/tt-dit")
+        embed_cache_dir = os.path.join(cache_dir, "ltx-embeddings")
+        os.makedirs(embed_cache_dir, exist_ok=True)
+        key = hashlib.md5(("device||" + "||".join(prompts)).encode()).hexdigest()
+        return os.path.join(embed_cache_dir, f"{key}.device.pt")
 
-        Matches the reference FeatureExtractorV2 pipeline:
-        1. Gemma forward → collect all 49 hidden states
-        2. Stack as [B, T, D, L] → per-token RMS norm → flatten to [B, T, D*L]
-        3. Rescale → aggregate_embed → connector blocks → final norm
+    def encode_prompts_device(
+        self, prompts: list[str], *, use_cache: bool = True
+    ) -> list[tuple[torch.Tensor, torch.Tensor | None]]:
+        """Encode prompts via the TTNN Gemma encoder + embeddings connectors.
 
-        Returns list of (video_embeds, audio_embeds) tuples per prompt.
+        Gemma forward (49 hidden states) → feature extractor (RMS + aggregate) → connectors.
+        Returns list of (video_embeds, audio_embeds) tuples per prompt. A cache hit returns
+        saved embeddings without running the encoder; ``use_cache=False`` forces a real encode
+        (used by warmup to compile the kernels).
         """
+        cache_path = self._device_embed_cache_path(prompts)
+        if use_cache and os.path.exists(cache_path):
+            logger.info(f"Loading cached device embeddings from {cache_path}")
+            return torch.load(cache_path, weights_only=False)
+
         assert self.gemma_encoder is not None, "Call load_gemma_encoder() first"
 
         results = []
@@ -938,11 +952,9 @@ class LTXPipeline:
             all_hidden_states = self.gemma_encoder(tt_ids, attention_mask=tokens.attention_mask)
 
             if self.video_connector is not None:
-                # Collect the 49 hidden states the reference FeatureExtractorV2 sees. HF
-                # output_hidden_states = [embed, L0_out..L46_out, final_norm(L47)] — i.e. the
-                # LAST entry is post-final-norm, NOT the raw last-layer output. Our encoder
-                # returns [embed, L0_out..L47_out, final_norm], so drop the raw last layer
-                # (index -2) and keep the final-norm state.
+                # The 49 states FeatureExtractorV2 consumes match HF output_hidden_states:
+                # [embed, L0..L46, final_norm] — the last entry is post-final-norm, not the raw
+                # last layer. The encoder emits [embed, L0..L47, final_norm], so drop index -2.
                 hs_list = list(all_hidden_states[:-2]) + [all_hidden_states[-1]]
 
                 # FeatureExtractorV2 (on device): per-token RMS + rescale + dual aggregate_embed
@@ -1034,6 +1046,9 @@ class LTXPipeline:
                 hs_torch = hs_torch * mask
                 results.append((hs_torch, None))
 
+        if use_cache:
+            torch.save(results, cache_path)
+            logger.info(f"Cached device embeddings to {cache_path}")
         return results
 
     def encode_prompts_reference(self, prompts: list[str]) -> list:

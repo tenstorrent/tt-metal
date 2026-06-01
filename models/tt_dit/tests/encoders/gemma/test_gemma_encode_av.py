@@ -113,13 +113,13 @@ def test_encode_prompts_device_vs_reference(*, mesh_device):
     v_ref = ref[0].video_encoding.float()
     a_ref = ref[0].audio_encoding.float()
 
-    # Device embeds. First call compiles + populates the program cache; the
-    # second is warm, so it is the one we time for e2e encode latency.
+    # Device embeds. First call compiles + populates the program cache; the second is warm
+    # and is the one we time. use_cache=False to measure the real encode, not a cache load.
     import time
 
-    pipe.encode_prompts_device([PROMPT])
+    pipe.encode_prompts_device([PROMPT], use_cache=False)
     t0 = time.perf_counter()
-    dev = pipe.encode_prompts_device([PROMPT])
+    dev = pipe.encode_prompts_device([PROMPT], use_cache=False)
     t_warm_ms = (time.perf_counter() - t0) * 1e3
 
     v_dev = torch.as_tensor(dev[0][0]).float()

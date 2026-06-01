@@ -126,6 +126,11 @@ class LTXFastPipeline(LTXAVPipeline):
 
             self._prepare_transformer(0)
 
+        # Warm the encoder last: it coresident-evicts the DiT/VAE, so gen #0 then re-loads the DiT.
+        # use_cache=False forces a real encode so the Gemma/connector kernels actually compile.
+        self._ensure_device_encoder()
+        self.encode_prompts_device(["warmup"], use_cache=False)
+
         logger.info(f"warmup (Fast 2-stage) done in {time.time() - t0:.1f}s")
 
     def _prealloc_trace_io(self, trace_key, *, num_frames, height, width):
@@ -605,17 +610,13 @@ class LTXFastPipeline(LTXAVPipeline):
         total_t0 = time.time()
 
         t0 = time.time()
-        if os.environ.get("LTX_DEVICE_ENCODE") == "1":
-            # On-device Gemma encode (FSDP-sharded; coresident auto-evicts the DiT/VAE).
+        # On-device Gemma encode. Only load the encoder (coresident-evicts DiT/VAE) on a cache
+        # miss — a cached prompt skips the encoder entirely.
+        if not os.path.exists(self._device_embed_cache_path([prompt])):
             self._ensure_device_encoder()
-            enc = self.encode_prompts_device([prompt])
-            v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
-            logger.info(f"Encoding (device): {time.time() - t0:.1f}s")
-        else:
-            results = self.encode_prompts_reference([prompt])
-            v_embeds = results[0].video_encoding.float()
-            a_embeds = results[0].audio_encoding.float()
-            logger.info(f"Encoding: {time.time() - t0:.1f}s")
+        enc = self.encode_prompts_device([prompt])
+        v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
+        logger.info(f"Encoding (device): {time.time() - t0:.1f}s")
 
         # Both Fast stages share variant 0 (no weight swap between stages).
         t0 = time.time()

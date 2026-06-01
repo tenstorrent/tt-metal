@@ -55,10 +55,6 @@ class ConnectorBlock(Module):
         sp = parallel_config.sequence_parallel
         fsdp_mesh_axis = sp.mesh_axis if (sp is not None and sp.factor > 1) else None
 
-        # Norms are parameter-free RMS norms (matching reference ltx_core.utils.rms_norm)
-        # No learnable weight — implemented as function calls in forward()
-
-        # Self-attention (Q, K, V, O projections)
         col_kwargs = {"bias": True, "mesh_device": mesh_device, "mesh_axis": tp_axis}
         if fsdp_mesh_axis is not None:
             col_kwargs["fsdp_mesh_axis"] = fsdp_mesh_axis
@@ -273,8 +269,8 @@ class EmbeddingsConnector(Module):
         self.eps = eps
         self.rmsnorm_cc = _rms_norm_cc(mesh_device)
 
-        # aggregate_embed lives in GemmaFeatureExtractor now (mirrors the reference
-        # FeatureExtractorV2 boundary); this connector consumes the projected features.
+        # aggregate_embed lives in GemmaFeatureExtractor (reference FeatureExtractorV2 boundary);
+        # this connector consumes the projected features.
 
         # Learnable registers (replace padding tokens)
         if num_learnable_registers > 0:
@@ -291,11 +287,7 @@ class EmbeddingsConnector(Module):
             for _ in range(num_blocks)
         )
 
-        # Final norm is parameter-free RMS norm (matching reference)
-
     def _prepare_torch_state(self, state):
-        # aggregate_embed comes from a separate prefix in the checkpoint
-        # (handled by the caller, not here)
         pass
 
     def forward(self, features: ttnn.Tensor) -> ttnn.Tensor:
