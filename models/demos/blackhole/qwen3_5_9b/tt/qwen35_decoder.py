@@ -5,9 +5,10 @@ Dispatches to either Gated DeltaNet (linear attention) or Gated Full Attention
 based on the layer index. Both share the same RMSNorm + residual pattern and MLP.
 """
 import ttnn
+from models.demos.blackhole.qwen3_5_9b.tt.mlp import Qwen35MLP
 from models.demos.blackhole.qwen3_5_9b.tt.qwen35_gated_attention import Qwen35GatedAttention
 from models.demos.blackhole.qwen3_5_9b.tt.qwen35_gated_deltanet import Qwen35GatedDeltaNet
-from models.demos.blackhole.qwen3_5_9b.tt.qwen35_mlp import Qwen35MLP
+from models.demos.blackhole.qwen3_5_9b.utils.substate import substate
 
 
 def rms_norm_ttnn(x, weight, eps=1e-6, memory_config=None):
@@ -64,7 +65,9 @@ class Qwen35TransformerBlock:
         else:
             self.attention = Qwen35GatedDeltaNet(args, state_dict, layer_num, device, weight_cache_path)
 
-        self.feed_forward = Qwen35MLP(args, state_dict, layer_num, device, weight_cache_path)
+        mlp_state = substate(state_dict, f"layers.{layer_num}.mlp")
+        mlp_cache = (weight_cache_path / f"layers.{layer_num}") if weight_cache_path else None
+        self.feed_forward = Qwen35MLP(device, mlp_state, mlp_cache)
 
     def forward(
         self,
