@@ -24,6 +24,7 @@ from ttnn.operations.ccl import MoEActivationFunction
 from ttnn.experimental.moe_compute_utils import (
     auto_output_width_shard_dim,
     get_tilize_drain_core,
+    effective_matmul_ring_size,
     _shard_tiles,
     _w2_shard_tiles,
 )
@@ -315,7 +316,10 @@ def _run_model_test(
         N=model_cfg.N,
         hidden_size=model_cfg.hidden_size,
         output_height_shard_dim=model_cfg.output_height_shard_dim,
-        output_width_shard_dim=auto_output_width_shard_dim(model_cfg.hidden_size),
+        output_width_shard_dim=auto_output_width_shard_dim(
+            model_cfg.hidden_size,
+            matmul_ring_size=effective_matmul_ring_size(mesh_device, bh_ring_size),
+        ),
         dtype=ttnn.bfloat16,
         enable_trace=enable_trace,
         activation_type=activation_type,
@@ -2214,6 +2218,10 @@ def test_auto_output_width_shard_dim():
     assert auto_output_width_shard_dim(5120) == 4  # GLM-4.7: Ht=160
     assert auto_output_width_shard_dim(4096) == 4  # DS V4 Flash: Ht=128
     assert auto_output_width_shard_dim(7168) == 4  # Kimi K2.5: same as DS
+    # Ring-aware: GPT-OSS width=3 at N=12, falls back to 2 at N=8/16
+    assert auto_output_width_shard_dim(2880, matmul_ring_size=12) == 3
+    assert auto_output_width_shard_dim(2880, matmul_ring_size=8) == 2
+    assert auto_output_width_shard_dim(2880, matmul_ring_size=16) == 2
 
 
 def test_shard_tiles_total_always_correct():
