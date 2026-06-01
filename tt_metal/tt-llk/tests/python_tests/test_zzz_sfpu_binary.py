@@ -72,12 +72,6 @@ def test_sfpu_binary_float(
 
     if (
         TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
-        and bcast_dim != LlkBroadcastType.None_
-    ):
-        pytest.skip("Broadcast not supported for SFPU binary on Blackhole")
-
-    if (
-        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
         and formats.input_format == DataFormat.Float16
         and dest_acc == DestAccumulation.No
     ):
@@ -85,18 +79,14 @@ def test_sfpu_binary_float(
             "Float16_a isn't supported for SFPU on Blackhole without being converted to 32-bit intermediate format in dest register"
         )
 
-    if (
-        TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
-        and bcast_dim == LlkBroadcastType.Row
-        and (
-            dest_acc == DestAccumulation.Yes
-            or is_format_combination_outlier(
-                formats.input_format, formats.output_format, dest_acc
-            )
+    if bcast_dim == LlkBroadcastType.Row and (
+        dest_acc == DestAccumulation.Yes
+        or is_format_combination_outlier(
+            formats.input_format, formats.output_format, dest_acc
         )
     ):
         pytest.skip(
-            "Row broadcast with FP32 dest broken on Wormhole: B2D datacopy uses MOVB2D which can't handle FP32 dest format conversion"
+            "Row broadcast with FP32 dest: B2D datacopy uses MOVB2D which can't handle FP32 dest format conversion"
         )
 
     sfpu_binary(

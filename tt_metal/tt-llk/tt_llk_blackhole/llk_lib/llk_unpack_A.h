@@ -144,6 +144,7 @@ inline void _llk_unpack_A_mop_config_(
         constexpr std::uint32_t outerloop = 1;
         constexpr std::uint32_t innerloop = 1;
         ckernel_template tmp(outerloop, innerloop, unpack_srcb_inc_z_0);
+        tmp.set_start_op(unpack_srca_set_dvalid);
         tmp.program();
     }
     else
