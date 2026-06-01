@@ -54,7 +54,12 @@ void kernel_main() {
     // uses mul_tiles / add_tiles directly (no _bcast_rows).
     constexpr uint32_t per_token_weight = get_compile_time_arg_val(20);
     constexpr uint32_t per_token_bias = get_compile_time_arg_val(21);
-    constexpr auto input_args = TensorAccessorArgs<22>();
+    // Streaming low-L1: input_cb is block-sized, so the row is read in two
+    // passes (PRE sum-of-squares, then a POST re-read for x*(1/rms)) in
+    // block_size-tile pushes that compute pops as it consumes. The resident
+    // fast path reads the whole row once. See program_factory.
+    constexpr uint32_t streaming_low_l1 = get_compile_time_arg_val(22);
+    constexpr auto input_args = TensorAccessorArgs<23>();
     constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     constexpr auto transformation_mat_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
@@ -180,17 +185,40 @@ void kernel_main() {
         }
 
         const uint32_t input_tile_idx = tile_row * num_tile_cols;
-        cb_reserve_back(input_cb, num_tile_cols);
-        {
+        if constexpr (streaming_low_l1) {
+            // Stream the row twice in block_size-tile pushes: pass 0 feeds
+            // compute's PRE sum-of-squares, pass 1 feeds the POST x*(1/rms)
+            // re-read. input_cb is block-sized so compute pops each block,
+            // keeping the resident footprint constant in num_tile_cols. The
+            // first pass's barrier also covers the cos/sin reads issued above.
             DeviceZoneScopedN("R_INPUT");
-            uint32_t input_wr_ptr = get_write_ptr(input_cb);
-            for (uint32_t c = 0; c < num_tile_cols; c++) {
-                noc_async_read_tile(input_tile_idx + c, input_accessor, input_wr_ptr);
-                input_wr_ptr += input_tile_bytes;
+            for (uint32_t pass = 0; pass < 2; pass++) {
+                for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                    const uint32_t tiles_in_block =
+                        ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+                    cb_reserve_back(input_cb, tiles_in_block);
+                    uint32_t input_wr_ptr = get_write_ptr(input_cb);
+                    for (uint32_t i = 0; i < tiles_in_block; i++) {
+                        noc_async_read_tile(input_tile_idx + col_tile + i, input_accessor, input_wr_ptr);
+                        input_wr_ptr += input_tile_bytes;
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(input_cb, tiles_in_block);
+                }
             }
-            noc_async_read_barrier();
+        } else {
+            cb_reserve_back(input_cb, num_tile_cols);
+            {
+                DeviceZoneScopedN("R_INPUT");
+                uint32_t input_wr_ptr = get_write_ptr(input_cb);
+                for (uint32_t c = 0; c < num_tile_cols; c++) {
+                    noc_async_read_tile(input_tile_idx + c, input_accessor, input_wr_ptr);
+                    input_wr_ptr += input_tile_bytes;
+                }
+                noc_async_read_barrier();
+            }
+            cb_push_back(input_cb, num_tile_cols);
         }
-        cb_push_back(input_cb, num_tile_cols);
 
         if constexpr (fuse_rope) {
             cb_push_back(rope_cos_cb, rope_tiles_this_row);

@@ -144,6 +144,76 @@ uint32_t force_num_workers() {
     }();
     return v;
 }
+// Streaming low-L1 fallback decision. The fast path keeps a whole tile-row of
+// `input_cb` resident from PRE through POST (one DRAM read). On very wide
+// shards (e.g. Wan TP=2: num_tile_cols=80) the resident input_cb plus the
+// row-sized intermediate/rotated/output CBs overflow L1 (the static-CB cap is
+// 1,572,864 B per core). When that happens we fall back to streaming `input_cb`
+// in block_size chunks for BOTH the PRE sum-of-squares and a POST re-read pass
+// — input_cb then costs O(block_size) instead of O(num_tile_cols), at the price
+// of reading the row twice (≈ composite bandwidth). intermediate/rotated/output
+// stay resident (they fit once input_cb shrinks). The PRE accumulation order is
+// unchanged, so the streamed path is bit-exact with the resident path.
+//
+// WAN_RMSNORM_FORCE_STREAMING overrides the heuristic: "1" forces streaming on
+// (for testing the path on small shapes), "0" forces it off. Read once.
+//
+// The byte estimate below mirrors the big-CB sizes allocated further down and
+// is calibrated against the observed overflow (resident TP=2 allocates
+// ~1,666,432 B). `kFixedOverheadBytes` covers the remaining small CBs (rope,
+// stats, scalars, packed-AG, packet headers).
+uint32_t streaming_force_mode() {
+    static const uint32_t mode = [] {
+        const char* env = std::getenv("WAN_RMSNORM_FORCE_STREAMING");
+        if (env != nullptr) {
+            if (std::strcmp(env, "1") == 0) {
+                return 1u;  // force on
+            }
+            if (std::strcmp(env, "0") == 0) {
+                return 2u;  // force off
+            }
+        }
+        return 0u;  // auto
+    }();
+    return mode;
+}
+bool decide_streaming_low_l1(
+    uint32_t num_tile_cols,
+    uint32_t block_size,
+    uint32_t chunk_size_rows,
+    uint32_t input_tile_bytes,
+    uint32_t intermediate_tile_bytes,
+    uint32_t output_tile_bytes,
+    bool has_weight,
+    bool per_head_norm) {
+    const uint32_t mode = streaming_force_mode();
+    if (mode == 1u) {
+        return true;
+    }
+    if (mode == 2u) {
+        return false;
+    }
+    // per_head_norm uses head-block reduces over small head_dim shards; its L1
+    // profile never overflows and the streamed compute path only handles the
+    // whole-row reduce, so never auto-enable streaming for it.
+    if (per_head_norm) {
+        return false;
+    }
+    const uint32_t padded_row = ((num_tile_cols + block_size - 1u) / block_size) * block_size;
+    const uint64_t input_bytes =
+        static_cast<uint64_t>(input_cb_chunks()) * chunk_size_rows * num_tile_cols * input_tile_bytes;
+    // intermediate_cb + rotated_input_cb (both row-sized, intermediate_tile_bytes).
+    const uint64_t intermediate_bytes = 2ull * padded_row * intermediate_tile_bytes;
+    // output_cb is 2 padded rows.
+    const uint64_t output_bytes = 2ull * padded_row * output_tile_bytes;
+    // Broadcast weight is num_tile_cols bf16 tiles (2048 B). Per-token is larger
+    // but those shapes have small num_tile_cols and don't trigger streaming.
+    const uint64_t weight_bytes = has_weight ? static_cast<uint64_t>(num_tile_cols) * 2048ull : 0ull;
+    constexpr uint64_t kFixedOverheadBytes = 196608ull;      // ~192 KB of small CBs
+    constexpr uint64_t kResidentL1BudgetBytes = 1572864ull;  // static-CB cap per core
+    const uint64_t total = input_bytes + intermediate_bytes + output_bytes + weight_bytes + kFixedOverheadBytes;
+    return total > kResidentL1BudgetBytes;
+}
 uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows) {
     const uint32_t cap = mux_worker_cap();
     if (num_tile_rows < kMuxRowsThreshold) {
@@ -410,6 +480,40 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const uint32_t fp32_tile_size = tt::tile_size(fp32_format);
     const uint32_t bf16_tile_size = tt::tile_size(bf16_format);
 
+    // intermediate/rotated CBs are fp32 when fp32_dest_acc_en (full precision
+    // across post sub-phases), bf16 otherwise. Needed both for the streaming
+    // decision (below) and the CB allocation (further down).
+    const tt::DataFormat intermediate_format = fp32_dest_acc_en ? fp32_format : bf16_format;
+    const uint32_t intermediate_tile_size = tt::tile_size(intermediate_format);
+
+    // Streaming low-L1 fallback: when the resident input_cb + row-sized
+    // intermediate/rotated/output CBs would overflow L1, stream input_cb in
+    // block_size chunks for PRE + a POST re-read pass instead. See
+    // decide_streaming_low_l1() for the budget heuristic.
+    const bool streaming_low_l1 = decide_streaming_low_l1(
+        num_tile_cols,
+        block_size,
+        chunk_size_rows,
+        input_tile_size,
+        intermediate_tile_size,
+        output_tile_size,
+        has_weight,
+        args.per_head_norm);
+    // The streamed compute path handles only the whole-row reduce with one row
+    // resident at a time. These invariants hold for every shape that actually
+    // triggers streaming (wide shards have chunk_size_rows==1 via chunk_h_cap,
+    // and num_tile_cols is a multiple of head_dim_tiles which divides block_size).
+    TT_FATAL(
+        !streaming_low_l1 || chunk_size_rows == 1,
+        "wan_fused_distributed_rmsnorm streaming low-L1 path requires chunk_size_rows==1 (got {})",
+        chunk_size_rows);
+    TT_FATAL(
+        !streaming_low_l1 || (num_tile_cols % block_size == 0),
+        "wan_fused_distributed_rmsnorm streaming low-L1 path requires num_tile_cols ({}) divisible by block_size "
+        "({})",
+        num_tile_cols,
+        block_size);
+
     // ------------------------------------------------------------------------
     // Persistent DRAM stats buffer (Phase 1, TP>1 only).
     //
@@ -485,8 +589,16 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // pairs naturally with this — compute uses absolute indices within the
     // current chunk, and cb_pop_front at end of chunk frees that chunk's slots
     // back to the reader.
+    //
+    // Streaming low-L1: input_cb holds only a handful of block_size-tile blocks
+    // (constant in num_tile_cols). The reader streams the row twice — once for
+    // PRE, once for the POST re-read — and compute pops each block as it goes,
+    // so the CB just needs enough depth for the reader to run a few blocks
+    // ahead of compute within each pass.
     const uint32_t chunk_input_tiles = chunk_size_rows * num_tile_cols;
-    const uint32_t input_cb_tiles = input_cb_chunks() * chunk_input_tiles;
+    constexpr uint32_t kStreamingInputBlocks = 4u;
+    const uint32_t input_cb_tiles =
+        streaming_low_l1 ? (kStreamingInputBlocks * block_size) : (input_cb_chunks() * chunk_input_tiles);
     create_cb(input_cb_id, program, worker_core_set, input_tile_size, input_cb_tiles, input_format);
 
     // per_head_norm produces num_heads_per_device stat tiles per row instead
@@ -569,8 +681,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // bf16 otherwise. With bf16 here, every sub-phase output gets rounded
     // to 8 mantissa bits — composite-vs-fused diverges noticeably when the
     // input distribution has high variance (e.g. matmul-output values).
-    const tt::DataFormat intermediate_format = fp32_dest_acc_en ? fp32_format : bf16_format;
-    const uint32_t intermediate_tile_size = tt::tile_size(intermediate_format);
+    // (intermediate_format / intermediate_tile_size are computed earlier for
+    // the streaming-low-L1 decision.)
     const uint32_t intermediate_cb_tiles = tt::div_up(num_tile_cols, block_size) * block_size;
     create_cb(
         intermediate_cb_id,
@@ -640,6 +752,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(has_bias),
         static_cast<uint32_t>(per_token_weight),
         static_cast<uint32_t>(per_token_bias),
+        static_cast<uint32_t>(streaming_low_l1),
     };
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     if (has_weight) {
@@ -810,6 +923,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(per_token_weight),
         static_cast<uint32_t>(per_token_bias),
         float_to_u32(args.epsilon),  // eps_bits: fp32 scalar for fused +eps in reduce post-op
+        static_cast<uint32_t>(streaming_low_l1),
     };
 
     // Float32 input requires fp32 dest accumulation; otherwise the unpacker
