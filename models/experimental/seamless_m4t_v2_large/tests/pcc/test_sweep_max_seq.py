@@ -19,8 +19,6 @@ from __future__ import annotations
 import pytest
 import torch
 from loguru import logger
-from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask, _prepare_4d_causal_attention_mask
-from transformers.models.seamless_m4t_v2.modeling_seamless_m4t_v2 import create_position_ids_from_input_ids
 
 import ttnn
 
@@ -30,12 +28,19 @@ from models.experimental.seamless_m4t_v2_large.reference.torch_speech_encoder im
     forward_torch_speech_encoder,
     load_pretrained_speech_encoder,
 )
-from models.experimental.seamless_m4t_v2_large.reference.torch_text_decoder import (
-    forward_torch_reference,
-    load_pretrained_text_decoder,
-)
+from models.experimental.seamless_m4t_v2_large.reference.torch_text_decoder import forward_torch_reference
 from models.experimental.seamless_m4t_v2_large.scripts.download_weights import ensure_seamless_m4t_v2_large_weights
-from models.experimental.seamless_m4t_v2_large.tt.common import to_torch_replicated_first_shard
+from models.experimental.seamless_m4t_v2_large.tests.pcc.decoder_pcc_fixtures import (
+    align_case_for_tt_prefill,
+    load_hf_model_and_processor,
+    make_t2tt_decoder_pcc_inputs,
+)
+from models.experimental.seamless_m4t_v2_large.tt.common import (
+    build_causal_with_padding_4d,
+    build_cross_attn_mask_4d,
+    to_torch_replicated_first_shard,
+    tt_position_ids,
+)
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import (
     MESH_DEVICE_PARAMETRIZE_TEXT,
     from_torch_bfloat16_tile,
@@ -124,27 +129,19 @@ def test_sweep_speech_encoder_max_seq(mesh_device, device_params, reset_seeds):
 
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
-def test_sweep_text_decoder_max_seq(mesh_device, device_params, reset_seeds):
-    """Sweep text decoder seq lengths + several seeds to find the joint L1 + PCC ceiling."""
+def test_sweep_text_decoder_max_enc_seq(mesh_device, device_params, reset_seeds):
+    """Sweep T2TT encoder timeline lengths (powers of two) with the production two-token decoder seed."""
     _ = reset_seeds
     _ = device_params
     weights_dir = _weights_dir_or_skip()
 
-    # seq levels to probe — small to large to catch bf16 numerical drift and L1 overflow
-    # separately. seed search: each seed gives a different activation geometry through the 24
-    # decoder layers — some are stable to longer seq than others.
-    sweep = [
-        (32, [0, 1, 2, 3]),
-        (64, [0, 1, 2, 3]),
-        (128, [0, 1, 2, 3]),
-        (256, [0, 1, 2, 3]),
-        (512, [0, 1]),
-        (768, [0, 1]),
-    ]
+    enc_seqs = [32, 64, 128, 256, 512, 768, 1024]
     results = []
 
     with mesh_default_device(mesh_device):
-        decoder, cfg = load_pretrained_text_decoder(weights_dir, dtype=torch.bfloat16)
+        hf_model, processor, _ = load_hf_model_and_processor(weights_dir, dtype=torch.bfloat16)
+        decoder = hf_model.text_decoder
+        cfg = hf_model.config
         params = create_text_decoder_parameters(decoder, device=mesh_device)
         tt_dec = TTSeamlessM4Tv2Decoder(
             mesh_device,
@@ -155,54 +152,53 @@ def test_sweep_text_decoder_max_seq(mesh_device, device_params, reset_seeds):
             hidden_size=cfg.hidden_size,
         )
 
-        for seq, seeds in sweep:
-            for seed in seeds:
+        for enc_seq in enc_seqs:
+            try:
+                case = make_t2tt_decoder_pcc_inputs(hf_model, processor, enc_seq_len=enc_seq)
+                aligned = align_case_for_tt_prefill(case, int(cfg.pad_token_id))
+                batch = int(aligned.input_ids.shape[0])
+                logical_dec = aligned.logical_dec_seq
+                padded_dec = aligned.padded_dec_seq
+
+                ref = forward_torch_reference(
+                    decoder,
+                    aligned.input_ids,
+                    aligned.encoder_hidden_states,
+                    aligned.attention_mask,
+                    aligned.encoder_attention_mask,
+                ).to(torch.bfloat16)
+                ref = ref[:, :logical_dec, :].contiguous()
+
+                input_ids_tt = from_torch_uint32_rm(mesh_device, aligned.input_ids)
+                encoder_tt = from_torch_bfloat16_tile(mesh_device, aligned.encoder_hidden_states)
+                enc_mask_tt = from_torch_uint32_rm(mesh_device, aligned.encoder_attention_mask)
+                pos_tt = tt_position_ids(input_ids_tt, int(cfg.pad_token_id))
+                causal_tt = build_causal_with_padding_4d(None, batch, padded_dec, mesh_device)
+                cross_tt = build_cross_attn_mask_4d(enc_mask_tt, tgt_seq=padded_dec, device=mesh_device)
+
+                out_tt = tt_dec.forward(input_ids_tt, pos_tt, encoder_tt, causal_tt, cross_tt)
+                tt_cpu = (
+                    to_torch_replicated_first_shard(out_tt)
+                    .to(torch.bfloat16)
+                    .reshape(batch, padded_dec, cfg.hidden_size)[:, :logical_dec, :]
+                    .contiguous()
+                )
+                ok, msg = check_with_pcc(ref, tt_cpu, pcc=PCC_THRESHOLD)
+                results.append((enc_seq, "PCC", msg, ok))
+                logger.info(f"[text_decoder sweep] enc_seq={enc_seq}: {msg} -> {'PASS' if ok else 'FAIL'}")
+                ttnn.deallocate(out_tt)
+                for t in (input_ids_tt, encoder_tt, enc_mask_tt, pos_tt, causal_tt, cross_tt):
+                    ttnn.deallocate(t)
+            except Exception as e:
+                results.append((enc_seq, "EXC", str(e)[:100], False))
+                logger.warning(f"[text_decoder sweep] enc_seq={enc_seq}: EXCEPTION {str(e)[:100]} -> FAIL")
                 try:
-                    torch.manual_seed(seed)
-                    batch = 1
-                    enc_seq = seq
-                    input_ids = torch.randint(1, min(cfg.vocab_size - 1, 2**31 - 1), (batch, seq), dtype=torch.int64)
-                    encoder_hidden = torch.randn(batch, enc_seq, cfg.hidden_size, dtype=torch.bfloat16)
-                    attn_mask = torch.ones(batch, seq, dtype=torch.long)
-                    enc_mask = torch.ones(batch, enc_seq, dtype=torch.long)
-                    inputs_embeds = decoder.embed_tokens(input_ids)
-                    causal_mask = _prepare_4d_causal_attention_mask(
-                        attn_mask, (batch, seq), inputs_embeds, past_key_values_length=0
-                    )
-                    cross_mask = _prepare_4d_attention_mask(enc_mask, inputs_embeds.dtype, tgt_len=seq)
-                    position_ids = create_position_ids_from_input_ids(
-                        input_ids, cfg.pad_token_id, past_key_values_length=0
-                    )
-                    ref = forward_torch_reference(decoder, input_ids, encoder_hidden, attn_mask, enc_mask).to(
-                        torch.bfloat16
-                    )
+                    mesh_device.clear_program_cache()
+                except Exception:
+                    pass
 
-                    input_ids_tt = from_torch_uint32_rm(mesh_device, input_ids)
-                    position_ids_tt = from_torch_uint32_rm(mesh_device, position_ids)
-                    encoder_tt = from_torch_bfloat16_tile(mesh_device, encoder_hidden)
-                    causal_tt = from_torch_bfloat16_tile(mesh_device, causal_mask)
-                    cross_tt = from_torch_bfloat16_tile(mesh_device, cross_mask)
-                    out_tt = tt_dec.forward(input_ids_tt, position_ids_tt, encoder_tt, causal_tt, cross_tt)
-                    tt_cpu = (
-                        to_torch_replicated_first_shard(out_tt)
-                        .to(torch.bfloat16)
-                        .reshape(batch, seq, cfg.hidden_size)
-                        .contiguous()
-                    )
-                    ok, msg = check_with_pcc(ref, tt_cpu, pcc=PCC_THRESHOLD)
-                    results.append((seq, seed, "PCC", msg, ok))
-                    logger.info(f"[text_decoder sweep] seq={seq} seed={seed}: {msg} -> {'PASS' if ok else 'FAIL'}")
-                    ttnn.deallocate(out_tt)
-                except Exception as e:
-                    results.append((seq, seed, "EXC", str(e)[:100], False))
-                    logger.warning(f"[text_decoder sweep] seq={seq} seed={seed}: EXCEPTION {str(e)[:100]} -> FAIL")
-                    try:
-                        mesh_device.clear_program_cache()
-                    except Exception:
-                        pass
-
-    print("\n=== Text decoder sweep results ===")
-    print(f"{'seq':>6}  {'seed':>4}  {'status':<6}  {'PCC / error':<60}")
-    for seq, seed, kind, msg, ok in results:
-        print(f"{seq:>6}  {seed:>4}  {'PASS' if ok else 'FAIL':<6}  {msg}")
+    print("\n=== Text decoder sweep results (T2TT enc timeline, dec seed=2) ===")
+    print(f"{'enc_seq':>8}  {'status':<6}  {'PCC / error':<60}")
+    for enc_seq, kind, msg, ok in results:
+        print(f"{enc_seq:>8}  {'PASS' if ok else 'FAIL':<6}  {msg}")
     print("=" * 80)
