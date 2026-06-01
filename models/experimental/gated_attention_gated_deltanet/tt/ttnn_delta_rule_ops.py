@@ -16,6 +16,8 @@ Tensor layout convention (FLA style):
 """
 
 import math
+import os
+
 import ttnn
 
 # Tile size used by TTNN matmul (wormhole)
@@ -264,10 +266,23 @@ def _recurrent_outer_product_program_config(device, K, V):
     # in0_block_w: inner dim in tiles
     in0_block_w = K_tiles_inner
 
-    # per_core_M must divide M_tiles
-    per_core_M = M_tiles
-    while per_core_M > 1 and (M_tiles % per_core_M != 0 or (grid_x * grid_y) < (M_tiles // per_core_M)):
-        per_core_M -= 1
+    # per_core_M must divide M_tiles.
+    # Max-core (QWEN36_DN_OUTER_MAXCORE, default on): the outer product
+    # k_col[B*H,K,1] @ d_row[B*H,1,V] is batched over B*H heads, and TTNN maps
+    # each (M-block, batch) pair to its own core. The default per_core_M=M_tiles
+    # gives 1 M-block → only B*H (=6) cores, leaving the 120-core grid mostly
+    # idle. Picking the SMALLEST per_core_M (most M-blocks) spreads it across
+    # M_tiles*(B*H) cores (e.g. 4*6=24) — same math, more parallelism.
+    if os.environ.get("QWEN36_DN_OUTER_MAXCORE", "1") != "0":
+        per_core_M = 1
+        for cand in range(1, M_tiles + 1):
+            if M_tiles % cand == 0 and (M_tiles // cand) <= grid_x * grid_y:
+                per_core_M = cand
+                break
+    else:
+        per_core_M = M_tiles
+        while per_core_M > 1 and (M_tiles % per_core_M != 0 or (grid_x * grid_y) < (M_tiles // per_core_M)):
+            per_core_M -= 1
     if per_core_M < 1:
         per_core_M = 1
 
