@@ -144,24 +144,15 @@ class LTXAVPipeline(LTXPipeline):
         total_t0 = time.time()
 
         t0 = time.time()
-        if os.environ.get("LTX_DEVICE_ENCODE") == "1":
-            # On-device Gemma encode. Under dynamic_load the encoder is registered
-            # coresident-excluded with the DiT + VAE (see _register_encoder_exclusions),
-            # so loading it auto-evicts the DiT and the later _prepare_transformer(0)
-            # auto-evicts the encoder — no manual deallocation needed. FSDP shards the
-            # encoder weights on the SP axis to further cut per-chip memory.
+        # On-device Gemma encode; coresident-excluded with the DiT/VAE, so loading it auto-evicts
+        # them and _prepare_transformer(0) evicts the encoder back. Only load on a cache miss —
+        # a cached prompt skips the encoder entirely.
+        if not os.path.exists(self._device_embed_cache_path([prompt, neg])):
             self._ensure_device_encoder()
-            enc = self.encode_prompts_device([prompt, neg])
-            v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
-            neg_v, neg_a = enc[1][0].float(), enc[1][1].float()
-            logger.info(f"Encoding (device): {time.time() - t0:.1f}s")
-        else:
-            results = self.encode_prompts_reference([prompt, neg])
-            v_embeds = results[0].video_encoding.float()
-            a_embeds = results[0].audio_encoding.float()
-            neg_v = results[1].video_encoding.float()
-            neg_a = results[1].audio_encoding.float()
-            logger.info(f"Encoding: {time.time() - t0:.1f}s")
+        enc = self.encode_prompts_device([prompt, neg])
+        v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
+        neg_v, neg_a = enc[1][0].float(), enc[1][1].float()
+        logger.info(f"Encoding (device): {time.time() - t0:.1f}s")
 
         self._prepare_transformer(0)
 

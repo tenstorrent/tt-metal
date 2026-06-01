@@ -24,13 +24,16 @@ from ...layers.normalization import RMSNorm
 from ...utils.substate import rename_substate
 
 
-def _rms_norm(x: ttnn.Tensor, eps: float = 1e-6) -> ttnn.Tensor:
-    """Parameter-free RMS normalization matching ltx_core.utils.rms_norm."""
-    # x / sqrt(mean(x^2) + eps)
-    x_sq = ttnn.multiply(x, x)
-    mean_sq = ttnn.mean(x_sq, dim=-1, keepdim=True)
-    rms = ttnn.rsqrt(ttnn.add(mean_sq, eps))
-    return ttnn.multiply(x, rms)
+def _rms_norm_cc(mesh_device) -> ttnn.DeviceComputeKernelConfig:
+    """HiFi4 + fp32 dest-acc compute config for the parameter-free RMS norms (matches the
+    fidelity the DiT norms use; the native kernel's default fidelity costs ~1e-3 PCC)."""
+    return ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
 
 
 class ConnectorBlock(Module):
@@ -52,10 +55,6 @@ class ConnectorBlock(Module):
         sp = parallel_config.sequence_parallel
         fsdp_mesh_axis = sp.mesh_axis if (sp is not None and sp.factor > 1) else None
 
-        # Norms are parameter-free RMS norms (matching reference ltx_core.utils.rms_norm)
-        # No learnable weight — implemented as function calls in forward()
-
-        # Self-attention (Q, K, V, O projections)
         col_kwargs = {"bias": True, "mesh_device": mesh_device, "mesh_axis": tp_axis}
         if fsdp_mesh_axis is not None:
             col_kwargs["fsdp_mesh_axis"] = fsdp_mesh_axis
@@ -70,7 +69,9 @@ class ConnectorBlock(Module):
         self.q_norm = RMSNorm(dim, norm_eps=eps, bias=False, mesh_device=mesh_device)
         self.k_norm = RMSNorm(dim, norm_eps=eps, bias=False, mesh_device=mesh_device)
         # Per-head gated attention: gates = 2*sigmoid(to_gate_logits(x)), applied to attn output.
-        self.to_gate_logits = Linear(dim, num_heads, bias=True, mesh_device=mesh_device)
+        # dtype=float32 routes the matmul through HiFi4 + fp32 dest acc to match the host fp32
+        # baseline (mirrors attention_ltx; the gate is precision-sensitive over 8 blocks).
+        self.to_gate_logits = Linear(dim, num_heads, bias=True, dtype=ttnn.float32, mesh_device=mesh_device)
 
         # Feed-forward (GELU gated)
         self.ff1 = ColParallelLinear(
@@ -99,6 +100,7 @@ class ConnectorBlock(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self.rmsnorm_cc = _rms_norm_cc(mesh_device)
 
     def _prepare_torch_state(self, state):
         rename_substate(state, "attn1.to_q", "to_q")
@@ -112,56 +114,53 @@ class ConnectorBlock(Module):
         rename_substate(state, "attn1.k_norm", "k_norm")
         rename_substate(state, "attn1.to_gate_logits", "to_gate_logits")
 
-    def forward(self, x, rope_cos=None, rope_sin=None):
+        # SPLIT-rotation checkpoint → INTERLEAVED rotary_embedding_llama: permute Q/K
+        # output channels per head so the SPLIT pair (i, i+D/2) lands at adjacent
+        # interleaved slots (2i, 2i+1). q_norm/k_norm share the channel layout. Mirrors
+        # attention_ltx; without it interleaved RoPE on the unpermuted layout gives PCC ~0.09.
+        D = self.head_dim
+        perm = torch.empty(D, dtype=torch.long)
+        perm[0::2] = torch.arange(D // 2)
+        perm[1::2] = torch.arange(D // 2, D)
+
+        def _permute_qk(t: torch.Tensor) -> torch.Tensor:
+            rest = t.shape[1:]
+            return t.reshape(self.num_heads, D, *rest).index_select(1, perm).reshape(self.num_heads * D, *rest)
+
+        for key in ("to_q.weight", "to_q.bias", "to_k.weight", "to_k.bias", "q_norm.weight", "k_norm.weight"):
+            if key in state:
+                state[key] = _permute_qk(state[key])
+
+    def forward(self, x, rope_cos=None, rope_sin=None, trans_mat=None):
         # Self-attention with residual
         residual = x
-        x = _rms_norm(x, self.eps)
+        x = ttnn.experimental.dit_rms_norm_unary_fused(
+            x, weight=None, epsilon=self.eps, compute_kernel_config=self.rmsnorm_cc
+        )
         attn_in = x  # normed input, reused for the per-head gate
         q = self.to_q(x, compute_kernel_config=self.compute_config)
         k = self.to_k(x, compute_kernel_config=self.compute_config)
         v = self.to_v(x, compute_kernel_config=self.compute_config)
 
-        # Apply SPLIT RoPE to Q and K BEFORE head split (the connector config uses
-        # rope_type=split). cos/sin are the reference split-format (B,H,seq,head_dim/2);
-        # use the reference apply_split_rotary_emb so precompute/apply conventions match.
-        # TP all_gather → host RoPE → re-shard. Connector is 1024 tokens so overhead is small.
-        if rope_cos is not None and rope_sin is not None:
-            import sys
+        tp = self.parallel_config.tensor_parallel.factor
+        tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+        apply_rope = rope_cos is not None and rope_sin is not None
 
-            sys.path.insert(0, "LTX-2/packages/ltx-core/src")
-            from ltx_core.model.transformer.rope import apply_split_rotary_emb
-
-            tp = self.parallel_config.tensor_parallel.factor
-            tp_axis = self.parallel_config.tensor_parallel.mesh_axis
+        # Gemma QK-norm over the full inner dim, BEFORE RoPE (raw-weight RMS, matching the
+        # reference torch.nn.RMSNorm). Done on device — the q/k channels and the q_norm/k_norm
+        # weights were permuted at load (SPLIT→INTERLEAVED), so RoPE below is the fast
+        # interleaved rotary_embedding_llama kernel, no host round-trip. QK-norm runs over the
+        # full inner dim, so TP gathers to full then re-shards for the head split.
+        if apply_rope:
             if tp > 1:
                 q = self.ccl_manager.all_gather(q, dim=2, mesh_axis=tp_axis, use_hyperparams=True)
                 k = self.ccl_manager.all_gather(k, dim=2, mesh_axis=tp_axis, use_hyperparams=True)
-
-            q_host = ttnn.to_torch(ttnn.get_device_tensors(q)[0]).float()
-            k_host = ttnn.to_torch(ttnn.get_device_tensors(k)[0]).float()
-
-            # Gemma QK-norm over the full inner dim, BEFORE RoPE (matches reference).
-            qn = ttnn.to_torch(ttnn.get_device_tensors(self.q_norm.weight.data)[0]).float().flatten()
-            kn = ttnn.to_torch(ttnn.get_device_tensors(self.k_norm.weight.data)[0]).float().flatten()
-            q_host = q_host * torch.rsqrt(q_host.pow(2).mean(-1, keepdim=True) + self.eps) * qn
-            k_host = k_host * torch.rsqrt(k_host.pow(2).mean(-1, keepdim=True) + self.eps) * kn
-
-            q_host = apply_split_rotary_emb(q_host, rope_cos.float(), rope_sin.float())
-            k_host = apply_split_rotary_emb(k_host, rope_cos.float(), rope_sin.float())
-
-            q = ttnn.from_torch(
-                q_host.bfloat16(), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-            )
-            k = ttnn.from_torch(
-                k_host.bfloat16(), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-            )
-
-            # Re-shard for TP head split
+            q = self.q_norm(q, compute_kernel_config=self.rmsnorm_cc)
+            k = self.k_norm(k, compute_kernel_config=self.rmsnorm_cc)
             if tp > 1:
                 q = ttnn.mesh_partition(q, dim=2, cluster_axis=tp_axis)
                 k = ttnn.mesh_partition(k, dim=2, cluster_axis=tp_axis)
 
-        tp = self.parallel_config.tensor_parallel.factor
         n_local_heads = self.num_heads // tp
 
         # Split heads
@@ -173,10 +172,14 @@ class ConnectorBlock(Module):
         v = ttnn.reshape(v, (B, S, n_local_heads, self.head_dim))
         v = ttnn.permute(v, (0, 2, 1, 3))
 
-        # Ensure DRAM for SDPA
-        q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
-        k = ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG)
-        v = ttnn.to_memory_config(v, ttnn.DRAM_MEMORY_CONFIG)
+        # Interleaved RoPE on the head-split Q/K (cos/sin/trans_mat prepared by the caller).
+        if apply_rope:
+            q = ttnn.experimental.rotary_embedding_llama(
+                q, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.compute_config
+            )
+            k = ttnn.experimental.rotary_embedding_llama(
+                k, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.compute_config
+            )
 
         grid = self.mesh_device.compute_with_storage_grid_size()
         sdpa_config = ttnn.SDPAProgramConfig(
@@ -205,25 +208,25 @@ class ConnectorBlock(Module):
             )
         attn_out = ttnn.squeeze(attn_out, 0)  # (B, T, H*D), full
 
-        # Per-head gated attention: gates = 2*sigmoid(to_gate_logits(attn_in)).
-        # Computed on host in fp32 (exact; bf16 device gating compounds error).
-        ao = ttnn.to_torch(ttnn.get_device_tensors(attn_out)[0]).float()
-        gin = ttnn.to_torch(ttnn.get_device_tensors(attn_in)[0]).float()
-        # tt_dit Linear stores weight transposed as [in, out] = [dim, H].
-        gw = ttnn.to_torch(ttnn.get_device_tensors(self.to_gate_logits.weight.data)[0]).float()  # (dim, H)
-        gb = ttnn.to_torch(ttnn.get_device_tensors(self.to_gate_logits.bias.data)[0]).float().flatten()  # (H,)
-        gate_logits = gin @ gw + gb  # (B, T, H)
-        gates = 2.0 * torch.sigmoid(gate_logits)  # (B, T, H)
-        b, t, hd = ao.shape
-        ao = (ao.view(b, t, self.num_heads, self.head_dim) * gates.unsqueeze(-1)).view(b, t, hd)
-        attn_out = ttnn.from_torch(ao.bfloat16(), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        # Per-head gated attention: gates = 2*sigmoid(to_gate_logits(attn_in)), each head's
+        # output scaled by its gate. Done on device (matmul accumulates in fp32 via
+        # compute_config); the gate is a smooth scalar in (0,2) so bf16 sigmoid is adequate.
+        # No compute_kernel_config override: the fp32 weight selects HiFi4 (matching attention_ltx).
+        gate_logits = self.to_gate_logits(attn_in)  # (B,T,H)
+        gates = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)  # (B,T,H)
+        b, t = attn_out.shape[0], attn_out.shape[1]
+        ao = ttnn.reshape(attn_out, (b, t, self.num_heads, self.head_dim))
+        ao = ttnn.multiply(ao, ttnn.reshape(gates, (b, t, self.num_heads, 1)))
+        attn_out = ttnn.reshape(ao, (b, t, self.num_heads * self.head_dim))
 
         attn_out = self.to_out(attn_out, compute_kernel_config=self.compute_config)
         x = attn_out + residual
 
         # FF with residual
         residual = x
-        x = _rms_norm(x, self.eps)
+        x = ttnn.experimental.dit_rms_norm_unary_fused(
+            x, weight=None, epsilon=self.eps, compute_kernel_config=self.rmsnorm_cc
+        )
         x = self.ff1(x, compute_kernel_config=self.compute_config)
         # ff2 is RowParallel: reduce_scatter internally → each device has dim/TP
         x = self.ff2(x, compute_kernel_config=self.compute_config)
@@ -249,7 +252,6 @@ class EmbeddingsConnector(Module):
     def __init__(
         self,
         *,
-        input_dim: int,  # 188160 = 49 * 3840
         output_dim: int,  # 4096 (video) or 2048 (audio)
         num_blocks: int,  # 8 (video) or 2 (audio)
         num_heads: int = 32,
@@ -264,9 +266,11 @@ class EmbeddingsConnector(Module):
         self.output_dim = output_dim
         self.num_learnable_registers = num_learnable_registers
         self.mesh_device = mesh_device
+        self.eps = eps
+        self.rmsnorm_cc = _rms_norm_cc(mesh_device)
 
-        # Aggregate embed: Linear(188160 → output_dim)
-        self.aggregate_embed = Linear(input_dim, output_dim, bias=True, mesh_device=mesh_device)
+        # aggregate_embed lives in GemmaFeatureExtractor (reference FeatureExtractorV2 boundary);
+        # this connector consumes the projected features.
 
         # Learnable registers (replace padding tokens)
         if num_learnable_registers > 0:
@@ -283,28 +287,24 @@ class EmbeddingsConnector(Module):
             for _ in range(num_blocks)
         )
 
-        # Final norm is parameter-free RMS norm (matching reference)
-
     def _prepare_torch_state(self, state):
-        # aggregate_embed comes from a separate prefix in the checkpoint
-        # (handled by the caller, not here)
         pass
 
-    def forward(self, stacked_hidden_states: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, features: ttnn.Tensor) -> ttnn.Tensor:
         """
         Args:
-            stacked_hidden_states: (B, seq, 49*3840) stacked Gemma hidden states
+            features: (B, seq, output_dim) aggregate_embed output from GemmaFeatureExtractor
 
         Returns:
             (B, seq, output_dim) embeddings ready for DiT
         """
-        # Project to target dim
-        x = self.aggregate_embed(stacked_hidden_states)
-
-        # Run through transformer blocks
+        # Run through transformer blocks (no RoPE on this convenience path)
+        x = features
         for block in self.transformer_1d_blocks:
             x = block(x)
 
         # Final norm (parameter-free RMS norm)
-        x = _rms_norm(x)
+        x = ttnn.experimental.dit_rms_norm_unary_fused(
+            x, weight=None, epsilon=self.eps, compute_kernel_config=self.rmsnorm_cc
+        )
         return x

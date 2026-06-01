@@ -24,7 +24,7 @@ from loguru import logger
 from safetensors import safe_open
 
 import ttnn
-from models.tt_dit.encoders.gemma.embeddings_connector import _rms_norm
+from models.tt_dit.encoders.gemma.embeddings_connector import _rms_norm_cc
 from models.tt_dit.pipelines.ltx.pipeline_ltx_av import LTXAVPipeline
 
 VIDEO_PREFIX = "model.diffusion_model.video_embeddings_connector."
@@ -86,7 +86,9 @@ def test_connector_blocks_isolated(*, mesh_device):
             num_layers=8,
             positional_embedding_theta=10000.0,
             positional_embedding_max_pos=[1],
-            rope_type=LTXRopeType.INTERLEAVED,
+            # Checkpoint is SPLIT-rotation; the device path mirrors it via load-time _permute_qk
+            # + interleaved rotary_embedding_llama (equivalent). Reference must be SPLIT to match.
+            rope_type=LTXRopeType.SPLIT,
             double_precision_rope=False,
             apply_gated_attention=True,
             num_learnable_registers=128,
@@ -115,20 +117,37 @@ def test_connector_blocks_isolated(*, mesh_device):
     registers = ttnn.to_torch(ttnn.get_device_tensors(pipe.video_connector.learnable_registers.data)[0]).float()
     x_replaced = LTXAVPipeline._replace_padded_with_registers(x.float(), binary_mask, registers, 128).bfloat16()
 
+    # Device blocks now take head-split (BHND) interleaved cos/sin + a trans_mat and run the
+    # on-device rotary_embedding_llama kernel (Q/K permuted at load). Mirror _run_connector.
     rope_cos, rope_sin = precompute_freqs_cis(
         torch.arange(seq, dtype=torch.float32)[None, None, :],
         dim=dim,
-        out_dtype=torch.bfloat16,
+        out_dtype=torch.float32,
         theta=10000.0,
         max_pos=[1],
         num_attention_heads=32,
         rope_type=LTXRopeType.INTERLEAVED,
         freq_grid_generator=generate_freq_grid_pytorch,
+    )  # (1, seq, dim)
+    rope_cos = ttnn.from_torch(
+        pipe._reshape_interleaved_to_bhnd(rope_cos, 32).bfloat16(),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
     )
+    rope_sin = ttnn.from_torch(
+        pipe._reshape_interleaved_to_bhnd(rope_sin, 32).bfloat16(),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+    )
+    trans_mat = pipe._prepare_trans_mat()
     tt_x = ttnn.from_torch(x_replaced, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     for block in pipe.video_connector.transformer_1d_blocks:
-        tt_x = block(tt_x, rope_cos=rope_cos, rope_sin=rope_sin)
-    tt_x = _rms_norm(tt_x)
+        tt_x = block(tt_x, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat)
+    tt_x = ttnn.experimental.dit_rms_norm_unary_fused(
+        tt_x, weight=None, epsilon=1e-6, compute_kernel_config=_rms_norm_cc(mesh_device)
+    )
     dev_out = ttnn.to_torch(ttnn.get_device_tensors(tt_x)[0]).float()
 
     logger.info(

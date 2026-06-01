@@ -24,6 +24,7 @@ from loguru import logger
 from safetensors import safe_open
 
 import ttnn
+from models.tt_dit.encoders.gemma.feature_extractor import GemmaFeatureExtractor
 from models.tt_dit.pipelines.ltx.pipeline_ltx_av import LTXAVPipeline
 
 CONNECTOR_PREFIXES = (
@@ -76,7 +77,11 @@ def test_aggregate_embed_isolated(*, mesh_device):
                     raw[k] = f.get_tensor(k)
     pipe.load_embeddings_connectors(conn_state, audio_num_blocks=8)
 
-    Wv = raw["text_embedding_projection.video_aggregate_embed.weight"].float()  # [4096, 188160]
+    # The device aggregate_embed weight is permuted D-major→layer-major at load, so the
+    # reference must use the same permuted weight to be an apples-to-apples linear check.
+    Wv = GemmaFeatureExtractor._weight_to_layer_major(
+        raw["text_embedding_projection.video_aggregate_embed.weight"].float(), 3840, 49
+    )  # [4096, 188160], layer-major
     bv = raw["text_embedding_projection.video_aggregate_embed.bias"].float()  # [4096]
     in_dim = Wv.shape[1]
 
@@ -86,9 +91,9 @@ def test_aggregate_embed_isolated(*, mesh_device):
     # torch reference linear
     ref = (x.float() @ Wv.t()) + bv
 
-    # device aggregate_embed
+    # device aggregate_embed (now owned by the feature extractor)
     tt_x = ttnn.from_torch(x, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    tt_y = pipe.video_connector.aggregate_embed(tt_x)
+    tt_y = pipe.feature_extractor.video_aggregate_embed(tt_x)
     dev = ttnn.to_torch(ttnn.get_device_tensors(tt_y)[0]).float()
 
     logger.info(f"aggregate_embed: ref={tuple(ref.shape)} dev={tuple(dev.shape)}  PCC={pcc(dev, ref):.4f}")
