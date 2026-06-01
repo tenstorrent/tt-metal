@@ -94,7 +94,6 @@ class LTXUpsamplerResBlock(Module):
         channels: int,
         mid_channels: int | None = None,
         *,
-        input_hw: tuple[int, int],
         gn_input_nhw: int,
         gn_num_batches: int = 1,
         mesh_device: ttnn.MeshDevice,
@@ -235,9 +234,7 @@ class LTXLatentUpsampler(Module):
 
         self.res_blocks = ModuleList(
             [
-                LTXUpsamplerResBlock(
-                    mid_channels, input_hw=(H_in, W_in), gn_input_nhw=pre_gn_nhw, conv_dims=pre_dims, **block_kwargs
-                )
+                LTXUpsamplerResBlock(mid_channels, gn_input_nhw=pre_gn_nhw, conv_dims=pre_dims, **block_kwargs)
                 for _ in range(num_blocks_per_stage)
             ]
         )
@@ -248,9 +245,7 @@ class LTXLatentUpsampler(Module):
 
         self.post_upsample_res_blocks = ModuleList(
             [
-                LTXUpsamplerResBlock(
-                    mid_channels, input_hw=(H_out, W_out), gn_input_nhw=post_gn_nhw, conv_dims=post_dims, **block_kwargs
-                )
+                LTXUpsamplerResBlock(mid_channels, gn_input_nhw=post_gn_nhw, conv_dims=post_dims, **block_kwargs)
                 for _ in range(num_blocks_per_stage)
             ]
         )
