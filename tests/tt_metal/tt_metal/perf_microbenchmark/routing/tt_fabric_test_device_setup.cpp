@@ -13,14 +13,28 @@ namespace tt::tt_fabric::fabric_tests {
 // ====================================
 
 void FabricConnectionManager::register_client(
-    const CoreCoord& core,
-    RoutingDirection direction,
-    uint32_t link_idx,
-    TestWorkerType worker_type,
-    const FabricNodeId& dst_node_id,
-    uint8_t vc_id) {
-    ConnectionKey key = {direction, link_idx, vc_id, dst_node_id};
-    auto& conn = connections_[key];
+    const CoreCoord& core, TestWorkerType worker_type, const ConnectionKey& key, const FabricNodeId& next_hop_dst) {
+    auto [it, inserted] = connections_.try_emplace(key);
+    auto& conn = it->second;
+
+    if (inserted) {
+        conn.next_hop_dst = next_hop_dst;
+    } else {
+        // (eth_chan, vc_id) uniquely determines the next-hop neighbor; enforce that every
+        // registration for the same key resolves to the same first-hop dst. Use TT_FATAL
+        // (not TT_ASSERT) so this invariant holds in release builds as well — silently
+        // continuing with a mismatched next_hop_dst would emit wrong RT-args downstream.
+        TT_FATAL(
+            conn.next_hop_dst == next_hop_dst,
+            "ConnectionKey (dir={}, link={}, vc={}, eth_chan={}) registered with conflicting "
+            "next-hop dsts: existing={}, new={}",
+            static_cast<int>(key.direction),
+            key.link_idx,
+            static_cast<uint32_t>(key.vc_id),
+            static_cast<uint32_t>(key.eth_chan),
+            conn.next_hop_dst,
+            next_hop_dst);
+    }
 
     // Store worker type for this core (for channel assignment later)
     conn.core_worker_types[core] = worker_type;
@@ -111,7 +125,8 @@ void FabricConnectionManager::process(
                 all_mux_client_cores_.insert(client_core);
             }
 
-            test_device_ptr->add_mux_worker_config(mux_core.value(), mux_configs_.at(mux_core.value()).get(), key);
+            test_device_ptr->add_mux_worker_config(
+                mux_core.value(), mux_configs_.at(mux_core.value()).get(), key, conn.next_hop_dst);
         }
     }
 
@@ -277,9 +292,10 @@ std::vector<uint32_t> FabricConnectionManager::generate_connection_args_for_core
                 static_cast<uint32_t>(mux_config->get_status_address())};
             rt_args.insert(rt_args.end(), mux_rt_args.begin(), mux_rt_args.end());
         } else {
-            // Use the destination from the ConnectionKey directly instead of re-deriving
-            // from direction, which would lose multi-Z disambiguation.
-            const auto& neighbor_node_id = key.dst_node_id;
+            // The first-hop neighbor is invariant per ConnectionKey and was recorded on
+            // the Connection at registration time (multi-Z disambiguation is encoded in the
+            // eth_chan / link_idx, so this dst is uniquely determined per key).
+            const auto& neighbor_node_id = conn.next_hop_dst;
             if (key.use_vc2()) {
                 append_fabric_vc2_connection_rt_args(
                     fabric_node_id, neighbor_node_id, key.link_idx, program_handle, core, rt_args);
@@ -410,14 +426,15 @@ void TestSender::add_config(TestTrafficSenderConfig config) {
             this->test_device_ptr_->get_forwarding_direction(this->test_device_ptr_->get_node_id(), dst_node_id);
     }
 
-    // Use common helper to register fabric connection
+    // Use common helper to register fabric connection. The final dst_node_id is intentionally
+    // not part of the dedup key — multiple traffic configs with different dsts that share the
+    // same physical eth chan + VC will collapse to a single ConnectionKey.
     auto fabric_connection_key = this->test_device_ptr_->register_fabric_connection(
         this->logical_core_,
         TestWorkerType::SENDER,
         this->test_device_ptr_->connection_manager_,
         outgoing_direction,
         config.link_id,
-        dst_node_id,
         config.vc_id);
 
     this->configs_.emplace_back(std::move(config), fabric_connection_key);
@@ -478,8 +495,7 @@ void TestReceiver::add_config(TestTrafficReceiverConfig config) {
             TestWorkerType::RECEIVER,
             this->test_device_ptr_->connection_manager_,
             outgoing_direction,
-            config.link_id,
-            dst_node_id);
+            config.link_id);
     }
 
     this->configs_.emplace_back(std::move(config), credit_connection_key);
@@ -535,8 +551,7 @@ void TestSync::add_config(TestTrafficSyncConfig sync_config) {
         TestWorkerType::SYNC,
         this->test_device_ptr_->get_sync_connection_manager(),
         outgoing_direction,
-        sender_config.link_id,
-        sender_config.dst_node_ids[0]);
+        sender_config.link_id);
 
     this->configs_.emplace_back(std::move(sync_config), fabric_connection_key);
 }
@@ -553,10 +568,11 @@ bool TestSync::validate_results(std::vector<uint32_t>& /*data*/) const {
 TestMux::TestMux(CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
     TestWorker(logical_core, test_device_ptr, kernel_src) {}
 
-void TestMux::set_config(FabricMuxConfig* mux_config, ConnectionKey connection_key) {
+void TestMux::set_config(FabricMuxConfig* mux_config, ConnectionKey connection_key, FabricNodeId next_hop_dst) {
     TT_FATAL(config_ == nullptr, "Mux config already set for core {}", logical_core_);
     config_ = mux_config;
     connection_key_ = connection_key;
+    next_hop_dst_ = next_hop_dst;
 }
 
 // ====================================
@@ -623,51 +639,61 @@ ConnectionKey TestDevice::register_fabric_connection(
     FabricConnectionManager& connection_mgr,
     RoutingDirection outgoing_direction,
     uint32_t link_idx,
-    const FabricNodeId& dst_node_id,
     uint8_t vc_id) {
-    // Get available link indices for this direction (to validate link_idx)
-    std::vector<uint32_t> available_link_indices =
-        get_forwarding_link_indices_in_direction(this->fabric_node_id_, dst_node_id, outgoing_direction);
-
+    // Resolve link_idx -> physical eth chan and the first-hop neighbor on the other end.
+    // The ConnectionKey dedups on (direction, link_idx, vc_id, eth_chan): all four are
+    // mutually consistent, but eth_chan is what we conceptually identify the connection by.
+    // The caller's final dst is intentionally not part of the key — many traffic configs
+    // with different final dsts can legitimately share one physical connection (e.g. Z-link
+    // sub-torus all-to-all). The first-hop neighbor is recorded on the Connection so that
+    // downstream calls into the fabric API have a valid (dst, link_idx) pair.
+    //
+    // Validation is by direction only (no per-destination filter): for Z, multiple chans
+    // in one direction can land on different peer chips, and the same link_idx may
+    // legitimately serve many final dsts. Per-destination forwarding correctness is
+    // enforced by the fabric API at append-connection time.
+    const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto candidate_eth_chans =
+        cp.get_active_fabric_eth_channels_in_direction(fabric_node_id_, outgoing_direction);
     TT_FATAL(
-        !available_link_indices.empty(),
-        "No forwarding link indices found for direction {} from node {}",
+        !candidate_eth_chans.empty(),
+        "No active fabric eth channels in direction {} from node {}",
         static_cast<int>(outgoing_direction),
         this->fabric_node_id_);
-
     TT_FATAL(
-        std::find(available_link_indices.begin(), available_link_indices.end(), link_idx) !=
-            available_link_indices.end(),
-        "On node {}, link_idx={} is not valid for direction {}",
+        link_idx < candidate_eth_chans.size(),
+        "On node {}, link_idx={} out of range for direction {} ({} eth chans available)",
         this->fabric_node_id_,
         link_idx,
-        static_cast<int>(outgoing_direction));
+        static_cast<int>(outgoing_direction),
+        candidate_eth_chans.size());
+    const chan_id_t eth_chan = candidate_eth_chans[link_idx];
 
-    // Collapse cardinal-direction dst to the immediate next-hop neighbor so multi-hop flows
-    // sharing the same first-hop link dedup to one ConnectionKey (avoids per-key worker
-    // semaphore allocations in append_fabric_connection_rt_args). Z is single-hop; keep dst
-    // as-is to preserve cross-mesh disambiguation.
-    FabricNodeId key_dst = (outgoing_direction == RoutingDirection::Z)
-                               ? dst_node_id
-                               : route_manager_->get_neighbor_node_id(fabric_node_id_, outgoing_direction);
+    // Resolve the peer per eth_chan: this handles multi-Z (chans in one direction may land on
+    // different neighbor meshes / chips) and NESW uniformly (where it returns the single
+    // per-direction neighbor).
+    const FabricNodeId next_hop_dst = cp.get_connected_mesh_chip_chan_ids(fabric_node_id_, eth_chan).first;
 
-    ConnectionKey connection_key{outgoing_direction, link_idx, vc_id, key_dst};
+    ConnectionKey connection_key{outgoing_direction, link_idx, vc_id, eth_chan};
     auto registered_keys = connection_mgr.get_connection_keys_for_core(logical_core, worker_type);
 
     if (std::find(registered_keys.begin(), registered_keys.end(), connection_key) != registered_keys.end()) {
         return connection_key;
     }
 
-    connection_mgr.register_client(logical_core, outgoing_direction, link_idx, worker_type, key_dst, vc_id);
+    connection_mgr.register_client(logical_core, worker_type, connection_key, next_hop_dst);
 
     log_debug(
         tt::LogTest,
-        "Worker type {} core {} registered with connection_manager: direction={}, link_idx={}, next_hop={}",
+        "Worker type {} core {} registered with connection_manager: direction={}, link_idx={}, vc={}, "
+        "eth_chan={}, next_hop={}",
         static_cast<int>(worker_type),
         logical_core,
         static_cast<int>(outgoing_direction),
         link_idx,
-        key_dst);
+        static_cast<uint32_t>(vc_id),
+        static_cast<uint32_t>(eth_chan),
+        next_hop_dst);
 
     return connection_key;
 }
@@ -697,12 +723,12 @@ void TestDevice::add_receiver_traffic_config(CoreCoord logical_core, const TestT
 }
 
 void TestDevice::add_mux_worker_config(
-    CoreCoord logical_core, FabricMuxConfig* mux_config, ConnectionKey connection_key) {
+    CoreCoord logical_core, FabricMuxConfig* mux_config, ConnectionKey connection_key, FabricNodeId next_hop_dst) {
     if (!this->muxes_.contains(logical_core)) {
         this->add_worker(TestWorkerType::MUX, logical_core);
     }
 
-    this->muxes_.at(logical_core).set_config(mux_config, connection_key);
+    this->muxes_.at(logical_core).set_config(mux_config, connection_key, next_hop_dst);
 }
 
 void TestDevice::create_kernels() {
@@ -736,9 +762,10 @@ void TestDevice::create_mux_kernels() {
         auto* mux_config = mux_worker.config_;
         const auto& connection_key = mux_worker.connection_key_;
 
-        // Use the destination from the ConnectionKey directly instead of re-deriving
-        // from direction, which would lose multi-Z disambiguation.
-        const auto& dst_node_id = connection_key.dst_node_id;
+        // Use the per-connection first-hop neighbor recorded at registration time.
+        // For Z links this resolves to the actual peer chip on the other end of the eth
+        // chan; for NESW it is the (unique) per-direction neighbor.
+        const auto& dst_node_id = mux_worker.next_hop_dst_;
 
         auto mux_ct_args = mux_config->get_fabric_mux_compile_time_args();
         auto mux_rt_args = mux_config->get_fabric_mux_run_time_args(
@@ -1143,6 +1170,18 @@ RoutingDirection TestDevice::get_forwarding_direction(
 }
 
 std::vector<uint32_t> TestDevice::get_forwarding_link_indices_in_direction(const RoutingDirection& direction) const {
+    // Z is intentionally rejected here: a single direction can land on multiple peer
+    // chips on Z, so resolving link indices without a concrete destination is undefined.
+    // Callers with a known destination should use the 3-arg overload
+    // get_forwarding_link_indices_in_direction(src, dst, direction). Callers that only
+    // need to validate / enumerate physical links in a direction should query
+    // ControlPlane::get_active_fabric_eth_channels_in_direction(src, direction) directly.
+    TT_FATAL(
+        direction != RoutingDirection::Z,
+        "TestDevice::get_forwarding_link_indices_in_direction(direction) does not support Z "
+        "(node {}). Use the (src, dst, direction) overload, or query the control plane's "
+        "active eth channels in the direction directly.",
+        this->fabric_node_id_);
     const auto link_indices =
         this->route_manager_->get_forwarding_link_indices_in_direction(this->fabric_node_id_, direction);
     TT_FATAL(
@@ -1339,8 +1378,10 @@ void TestDevice::create_latency_sender_kernel(
 
     // Register fabric connection to mark ethernet link as "used"
     // This is required for telemetry and code profiling to know which cores to read from
+    // Use the 3-arg overload (src, dst, direction) so this works for Z, where a single
+    // direction can have multiple peer chips and the single-arg overload is undefined.
     RoutingDirection outgoing_direction = get_forwarding_direction(fabric_node_id_, dest_node);
-    auto available_links = get_forwarding_link_indices_in_direction(outgoing_direction);
+    auto available_links = get_forwarding_link_indices_in_direction(fabric_node_id_, dest_node, outgoing_direction);
     TT_FATAL(
         !available_links.empty(),
         "No forwarding links available in direction {} from node {} to node {}",
@@ -1438,8 +1479,10 @@ void TestDevice::create_latency_responder_kernel(
     // Register fabric connection to mark ethernet link as "used"
     // This is required for telemetry and code profiling to know which cores to read from
     // Note: Responder sends back to sender, so use RECEIVER worker type (similar to flow control credits)
+    // Use the 3-arg overload (src, dst, direction) so this works for Z, where a single
+    // direction can have multiple peer chips and the single-arg overload is undefined.
     RoutingDirection outgoing_direction = get_forwarding_direction(fabric_node_id_, sender_node);
-    auto available_links = get_forwarding_link_indices_in_direction(outgoing_direction);
+    auto available_links = get_forwarding_link_indices_in_direction(fabric_node_id_, sender_node, outgoing_direction);
     TT_FATAL(
         !available_links.empty(),
         "No forwarding links available in direction {} from node {} to node {}",

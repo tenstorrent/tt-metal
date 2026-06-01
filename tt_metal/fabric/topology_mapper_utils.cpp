@@ -2191,7 +2191,7 @@ TopologyMappingResult map_multi_mesh_to_physical(
     }
 
     // Log initial mapping setup
-    log_info(
+    log_trace(
         tt::LogFabric,
         "Starting multi-mesh mapping: {} logical mesh(es) to {} physical mesh(es)",
         logical_meshes.size(),
@@ -2232,7 +2232,7 @@ TopologyMappingResult map_multi_mesh_to_physical(
         // Only log errors if this is the final attempt
         bool quiet_mode = (retry_attempt < max_retry_attempts);
 
-        log_info(
+        log_trace(
             tt::LogFabric,
             "Multi-mesh mapping attempt {}/{}: Trying inter-mesh mapping",
             retry_attempt,
@@ -2261,7 +2261,7 @@ TopologyMappingResult map_multi_mesh_to_physical(
         }
 
         // Log successful inter-mesh mapping
-        log_info(
+        log_trace(
             tt::LogFabric,
             "Attempt {}: Inter-mesh mapping succeeded, found {} mesh pair(s)",
             retry_attempt,
@@ -2273,9 +2273,9 @@ TopologyMappingResult map_multi_mesh_to_physical(
         // Step 2: For each mesh mapping, do the sub mapping for fabric node id to asic id
         std::unordered_map<MeshId, MeshId> mesh_mappings(
             solver_result.target_to_global.begin(), solver_result.target_to_global.end());
-        log_info(tt::LogFabric, "Attempt {}: Mapping {} mesh pair(s)", retry_attempt, mesh_mappings.size());
+        log_trace(tt::LogFabric, "Attempt {}: Mapping {} mesh pair(s)", retry_attempt, mesh_mappings.size());
         for (const auto& [logical_mesh_id, physical_mesh_id] : mesh_mappings) {
-            log_info(
+            log_trace(
                 tt::LogFabric,
                 "Attempt {}: Mapping mesh {} -> {}",
                 retry_attempt,
@@ -2334,7 +2334,7 @@ TopologyMappingResult map_multi_mesh_to_physical(
                 // If exit node constraints cannot be satisfied (no valid physical exit nodes or over-constrained),
                 // treat this as a mapping failure and try next combination
                 if (!exit_node_constraints_success) {
-                    log_info(
+                    log_trace(
                         tt::LogFabric,
                         "Attempt {}: Exit node constraints cannot be satisfied for mesh {} -> {}",
                         retry_attempt,
@@ -2371,7 +2371,7 @@ TopologyMappingResult map_multi_mesh_to_physical(
 
             // If the intra-mesh mapping fails, add a forbidden constraint so it doesn't try to map this pair again
             if (!sub_mapping.success) {
-                log_info(
+                log_trace(
                     tt::LogFabric,
                     "Attempt {}: Intra-mesh mapping failed for mesh {} -> {}",
                     retry_attempt,
@@ -2408,14 +2408,14 @@ TopologyMappingResult map_multi_mesh_to_physical(
         // If all mesh pairs were mapped we can stop the loop
         if (mapped_mesh_pairs == mesh_mappings.size()) {
             success = true;
-            log_info(
+            log_trace(
                 tt::LogFabric,
                 "Multi-mesh mapping succeeded after {} attempt(s): {} mesh pair(s) mapped",
                 retry_attempt,
                 mapped_mesh_pairs);
         } else {
             // Remove all the results that were added so far and start over
-            log_info(
+            log_trace(
                 tt::LogFabric,
                 "Attempt {}: Only {}/{} mesh pair(s) mapped, retrying",
                 retry_attempt,
