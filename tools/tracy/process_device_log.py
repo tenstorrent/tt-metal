@@ -4,7 +4,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ast
 import os
 import sys
 import inspect
@@ -24,22 +23,6 @@ import tracy.device_post_proc_config as device_post_proc_config
 SUM_MARKER_ID_START = 3000
 
 dispatchCores = set()
-
-
-def parse_device_csv_meta_data(meta_data_str):
-    if meta_data_str is None:
-        return None
-    meta_data_str = str(meta_data_str).strip()
-    if not meta_data_str:
-        return None
-    try:
-        return json.loads(meta_data_str.replace(";", ","))
-    except json.JSONDecodeError:
-        try:
-            parsed = ast.literal_eval(meta_data_str)
-            return parsed if isinstance(parsed, dict) else None
-        except (ValueError, SyntaxError):
-            return None
 
 
 def coreCompare(core):
@@ -342,19 +325,15 @@ def get_dispatch_core_ops(timeseries):
             continue
         riscData[risc]["zone"].append(ts)
 
-        raw_meta_data = timerID.get("meta_data")
-        meta_data = None
-        if raw_meta_data and ("workers_runtime_id" in raw_meta_data or "dispatch_command_type" in raw_meta_data):
-            meta_data = parse_device_csv_meta_data(raw_meta_data)
-        if meta_data and "workers_runtime_id" in meta_data:
+        if "meta_data" in timerID and "workers_runtime_id" in timerID["meta_data"]:
             riscData[risc]["opFinished"] = False
-            riscData[risc]["opID"] = meta_data["workers_runtime_id"]
+            riscData[risc]["opID"] = eval(timerID["meta_data"])["workers_runtime_id"]
             # Only record first trace
             if riscData[risc]["opID"] in riscData[risc]["ops"]:
                 riscData[risc]["opID"] = 0
 
-        if meta_data and "dispatch_command_type" in meta_data:
-            riscData[risc]["cmdType"] = meta_data["dispatch_command_type"]
+        if "meta_data" in timerID and "dispatch_command_type" in timerID["meta_data"]:
+            riscData[risc]["cmdType"] = eval(timerID["meta_data"])["dispatch_command_type"]
             if "CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL" in riscData[risc]["cmdType"]:
                 riscData[risc]["opFinished"] = True
 

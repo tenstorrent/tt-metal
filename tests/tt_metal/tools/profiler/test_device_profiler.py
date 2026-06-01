@@ -117,7 +117,6 @@ def run_device_profiler_test(
     testName=None,
     noPostProcess=False,
     setupAutoExtract=False,
-    setup_name=None,
     doDeviceTrace=False,
     slowDispatch=False,
     doSync=False,
@@ -125,7 +124,7 @@ def run_device_profiler_test(
     doDispatchCores=False,
     setOpSupportCount=PROFILER_DEFAULT_OP_SUPPORT_COUNT,
 ):
-    name = setup_name or inspect.stack()[1].function
+    name = inspect.stack()[1].function
     testCommand = f"build/{PROG_EXMP_DIR}/{name}"
     if testName:
         testCommand = testName
@@ -977,8 +976,7 @@ def test_dispatch_cores_extended_worker():
     verify_stats(
         run_device_profiler_test(
             testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops -k DispatchCoreType.WORKER",
-            setupAutoExtract=True,
-            setup_name="test_dispatch_cores_extended_worker_dispatch_ops",
+            setupAutoExtract=False,
             doDispatchCores=True,
         ),
         statTypes=["dispatch_total_cq_cmd_op_time", "dispatch_go_send_wait_time"],

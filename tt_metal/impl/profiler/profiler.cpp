@@ -2144,8 +2144,6 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                                    tracy::MarkerDetails::MarkerNameKeyword::RUNTIME_HOST_ID_DISPATCH)]) {
                         current_dispatch_meta_data.worker_runtime_id = (uint32_t)marker.data;
                         marker.meta_data["workers_runtime_id"] = current_dispatch_meta_data.worker_runtime_id;
-                        add_program_sub_device_meta_data(
-                            marker.meta_data, marker.chip_id, current_dispatch_meta_data.worker_runtime_id);
                     } else if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
                                    tracy::MarkerDetails::MarkerNameKeyword::PACKED_DATA_DISPATCH)]) {
                         current_dispatch_meta_data.cmd_subtype = fmt::format(
