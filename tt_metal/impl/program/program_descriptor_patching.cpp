@@ -54,17 +54,15 @@ ResolvedBindings resolve_bindings(
             if (!buf) {
                 continue;
             }
-            if (i < num_input_buffers) {
-                if (!input_buffers.insert(buf).second) {
-                    return ResolvedBindings{};  // duplicate among inputs (e.g. matmul(X, X)) — ambiguous
-                }
-            } else if (input_buffers.count(buf) == 0) {
-                // Output/workload buffer that does NOT alias an input: a duplicate here is still
-                // ambiguous, so preserve the original conservative bail.  (A buffer that DOES
-                // alias an input is the safe in-place case and falls through.)
-                if (!output_buffers.insert(buf).second) {
-                    return ResolvedBindings{};
-                }
+            const bool is_input = i < num_input_buffers;
+            // An output/workload buffer that aliases an input is the safe in-place case — skip it.
+            if (!is_input && input_buffers.count(buf) != 0) {
+                continue;
+            }
+            // Otherwise a repeat is ambiguous (matmul(X, X), or a repeated output) — bail to slow path.
+            auto& seen = is_input ? input_buffers : output_buffers;
+            if (!seen.insert(buf).second) {
+                return ResolvedBindings{};
             }
         }
     }
