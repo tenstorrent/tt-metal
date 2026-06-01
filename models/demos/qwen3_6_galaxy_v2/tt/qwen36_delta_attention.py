@@ -813,11 +813,30 @@ class TtQwen36DeltaAttention(LightweightModule):
         out_rank = len(qkvz.shape)
         q_per_row = self.q_per_row  # 256
         v_per_row = self.v_per_row  # 768
+        # ------------------------------------------------------------------
+        # Fuse A (QWEN36_DN_FUSE_QKV_SLICE, default on): the pre-conv q,k,v are
+        # ONLY used downstream to rebuild mixed=concat([q,k,v]). Since the per-row
+        # layout [Q_256 | K_256 | V_768 | Z_768] is contiguous, the first 1280
+        # cols ARE concat(q,k,v) byte-for-byte, so we return mixed=qkvz[...,:1280]
+        # (one slice) and z=qkvz[...,1280:2048] (one slice) directly — skipping
+        # the 4-way q/k/v/z slice AND the downstream concat (−3 ops/layer).
+        # Only the rank-3 qkvz layout is wired (both decode and prefill call
+        # _project_inputs with rank-3 x → rank-3 qkvz); rank-4 falls back below.
+        # Mixed bytes are identical to concat(q,k,v) → PCC-safe (locked by
+        # tests/test_dn_create_heads.py::test_qkv_slice_fuse_contract).
+        # ------------------------------------------------------------------
+        conv_per_row = self.conv_per_row  # 1280 = q+q+v
+        _fuse_qkv = os.environ.get("QWEN36_DN_FUSE_QKV_SLICE", "1") == "1" and out_rank == 3
+        if _fuse_qkv:
+            B_, T_, _ = list(qkvz.shape)
+            mixed = ttnn.slice(qkvz, [0, 0, 0], [B_, T_, conv_per_row], memory_config=mem)
+            z = ttnn.slice(qkvz, [0, 0, conv_per_row], [B_, T_, conv_per_row + v_per_row], memory_config=mem)
+            qkvz.deallocate(True)
         # Slice Q | K | V | Z along the last dim.
         # Per-row layout (after the ShardTensor2dMesh split): [Q_256 | K_256 | V_768 | Z_768]
         # repeated across the 8 rows. ttnn.slice over the global dim picks the
         # same per-row offset on each row.
-        if out_rank == 3:
+        elif out_rank == 3:
             B_, T_, _ = list(qkvz.shape)
             q = ttnn.slice(qkvz, [0, 0, 0], [B_, T_, q_per_row], memory_config=mem)
             k = ttnn.slice(qkvz, [0, 0, q_per_row], [B_, T_, 2 * q_per_row], memory_config=mem)
@@ -862,11 +881,24 @@ class TtQwen36DeltaAttention(LightweightModule):
             a = ttnn.slice(ba, [0, 0, 0, n_v_per_row], [B_, D1_, T_, 2 * n_v_per_row], memory_config=mem)
         ba.deallocate(True)
 
-        return q, k, v, z, a, b
+        # Fuse A: signal the call site whether the first two returns are
+        # (mixed, z) [fused] or (q, k) [legacy]. v is None when fused.
+        if _fuse_qkv:
+            return mixed, z, None, None, a, b, True
+        return q, k, v, z, a, b, False
 
-    def _apply_conv_and_split(self, q, k, v, B, T, conv_state=None):
+    def _apply_conv_and_split(self, q, k, v, B, T, conv_state=None, mixed=None):
+        """Conv1d + post-conv q/k/v split.
+
+        Fuse A: when ``mixed`` is provided (the contiguous Q|K|V slice from
+        _project_inputs), use it directly and SKIP the concat([q,k,v]). The
+        legacy path (q,k,v given, mixed=None) still concats.
+        """
         mem = ttnn.DRAM_MEMORY_CONFIG
-        mixed = ttnn.concat([q, k, v], dim=-1, memory_config=mem)
+        if mixed is None:
+            # Legacy path: rebuild mixed from the separate q,k,v slices.
+            mixed = ttnn.concat([q, k, v], dim=-1, memory_config=mem)
+        # else: Fuse A — `mixed` is the contiguous Q|K|V slice; deallocate after conv.
         mixed_conv, new_conv_state = _causal_conv1d_fir_mesh(
             mixed,
             self.conv_weight_taps,
@@ -2758,14 +2790,22 @@ class TtQwen36DeltaAttention(LightweightModule):
         _pf_carry = _pf_ci is not None and _pf_ci > 0
 
         # 1. Projections
-        q, k, v, z, a, b = self._project_inputs(x)
+        _p0, _p1, _p2, _p3, a, b, _fused_qkv = self._project_inputs(x)
 
         # 2. Conv1d + split (conv_state carried from previous chunk, or fresh)
         _conv_in = self.conv_state_buffer if _pf_carry else None
-        q_conv, k_conv, v_conv, new_conv_state = self._apply_conv_and_split(q, k, v, B, T, conv_state=_conv_in)
-        q.deallocate(True)
-        k.deallocate(True)
-        v.deallocate(True)
+        if _fused_qkv:
+            # Fuse A: _p0 is the contiguous Q|K|V slice (mixed), _p1 is z.
+            mixed, z = _p0, _p1
+            q_conv, k_conv, v_conv, new_conv_state = self._apply_conv_and_split(
+                None, None, None, B, T, conv_state=_conv_in, mixed=mixed
+            )
+        else:
+            q, k, v, z = _p0, _p1, _p2, _p3
+            q_conv, k_conv, v_conv, new_conv_state = self._apply_conv_and_split(q, k, v, B, T, conv_state=_conv_in)
+            q.deallocate(True)
+            k.deallocate(True)
+            v.deallocate(True)
 
         # --- Fast path: fused gdn_prefill kernel (one launch for the whole
         # sequence recurrence), mirroring the P150 gdn_prefill_fused flow. ---
@@ -2901,15 +2941,23 @@ class TtQwen36DeltaAttention(LightweightModule):
         assert T == 1, f"Decode expects T=1, got T={T}"
 
         # 1. Projections
-        q, k, v, z, a, b = self._project_inputs(x)
+        _p0, _p1, _p2, _p3, a, b, _fused_qkv = self._project_inputs(x)
 
         # 2. Conv1d + split — read persistent conv_state buffer
-        q_conv, k_conv, v_conv, new_conv_state = self._apply_conv_and_split(
-            q, k, v, B, T, conv_state=self.conv_state_buffer
-        )
-        q.deallocate(True)
-        k.deallocate(True)
-        v.deallocate(True)
+        if _fused_qkv:
+            # Fuse A: _p0 is the contiguous Q|K|V slice (mixed), _p1 is z.
+            mixed, z = _p0, _p1
+            q_conv, k_conv, v_conv, new_conv_state = self._apply_conv_and_split(
+                None, None, None, B, T, conv_state=self.conv_state_buffer, mixed=mixed
+            )
+        else:
+            q, k, v, z = _p0, _p1, _p2, _p3
+            q_conv, k_conv, v_conv, new_conv_state = self._apply_conv_and_split(
+                q, k, v, B, T, conv_state=self.conv_state_buffer
+            )
+            q.deallocate(True)
+            k.deallocate(True)
+            v.deallocate(True)
 
         # The fused-heads layout is only wired into the pure-ttnn fp32 recurrent
         # core (the else-branch below). The tt-lang kernel paths still expect the

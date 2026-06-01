@@ -226,3 +226,47 @@ def test_fused_create_heads_rejects_inverse_gqa():
             f"nlp_create_qkv_heads needs k_heads==v_heads (num_kv_heads); "
             f"GDN has k={nkv_for_k}, v={nkv_for_v} (inverse GQA) — not directly fusable."
         )
+
+
+# ---------------------------------------------------------------------------
+# Fuse A: pre-conv q/k/v slice+concat → single slice (QWEN36_DN_FUSE_QKV_SLICE)
+# ---------------------------------------------------------------------------
+# Per-row qkvz layout is contiguous [Q(256)|K(256)|V(768)|Z(768)] (total 2048).
+# The pre-conv individual q,k,v are ONLY used to rebuild mixed=concat([q,k,v]).
+# Since [Q|K|V] is the contiguous first 1280 cols, mixed == qkvz[..., :1280]
+# directly (ONE slice, no concat) and z == qkvz[..., 1280:2048]. This is a pure
+# layout identity: the bytes of qkvz[:1280] are bit-identical to
+# concat([qkvz[:256], qkvz[256:512], qkvz[512:1280]]). PCC must be ~1.0.
+_QKVZ_TOTAL = 2 * _Q_PER_ROW + 2 * _V_PER_ROW  # 256+256+768+768 = 2048
+_CONV_PER_ROW = 2 * _Q_PER_ROW + _V_PER_ROW  # 1280
+
+
+def test_qkv_slice_fuse_contract(mesh):
+    """Fuse A contract: slice(qkvz,[:1280]) == concat(q,k,v); slice([1280:]) == z.
+
+    Locks the layout identity that lets _project_inputs return mixed,z (2 slices)
+    instead of q,k,v,z (4 slices) + a downstream concat. Must hold at PCC>0.999.
+    """
+    torch.manual_seed(0)
+    qkvz = torch.randn(_B, _T, _QKVZ_TOTAL)
+
+    # torch reference: the OLD path's mixed = concat(q,k,v)
+    q_ref = qkvz[..., 0:_Q_PER_ROW]
+    k_ref = qkvz[..., _Q_PER_ROW : 2 * _Q_PER_ROW]
+    v_ref = qkvz[..., 2 * _Q_PER_ROW : 2 * _Q_PER_ROW + _V_PER_ROW]
+    z_ref = qkvz[..., 2 * _Q_PER_ROW + _V_PER_ROW :]
+    mixed_ref = torch.cat([q_ref, k_ref, v_ref], dim=-1)  # == qkvz[..., :1280]
+    assert torch.equal(mixed_ref, qkvz[..., :_CONV_PER_ROW])
+    assert torch.equal(z_ref, qkvz[..., _CONV_PER_ROW:])
+
+    # ttnn NEW path: single slice for mixed, single slice for z
+    mem = ttnn.DRAM_MEMORY_CONFIG
+    qkvz_t = _to_dev(qkvz, mesh)
+    mixed_t = ttnn.slice(qkvz_t, [0, 0, 0], [_B, _T, _CONV_PER_ROW], memory_config=mem)
+    z_t = ttnn.slice(qkvz_t, [0, 0, _CONV_PER_ROW], [_B, _T, _QKVZ_TOTAL], memory_config=mem)
+
+    pcc_mixed = _pcc(_first_replica(mixed_t, mesh, [_B, _T, _CONV_PER_ROW]), mixed_ref)
+    pcc_z = _pcc(_first_replica(z_t, mesh, [_B, _T, _V_PER_ROW]), z_ref)
+    print(f"[fuse-A] mixed PCC={pcc_mixed:.6f}  z PCC={pcc_z:.6f}")
+    assert pcc_mixed > 0.999, f"mixed PCC {pcc_mixed:.6f} < 0.999"
+    assert pcc_z > 0.999, f"z PCC {pcc_z:.6f} < 0.999"
