@@ -312,6 +312,13 @@ class TtMistral4Attention(LightweightModule):
         # Save grid for the prefill o_proj PC helper; build lazily and cache by m_tiles.
         self._compute_grid = grid
         self._o_proj_prefill_pc_cache: dict = {}
+        # 1D-mcast PCs for the bottleneck-projection matmuls, tuned via
+        # tests/perf/test_matmul_pc_sweep.py on P150x8 (cached by m_tiles).
+        self._mcast_pc_cache: dict = {}
+        # Batched PC for the prefill wkv_b2 (V-side absorption) matmul: without it the
+        # auto-config drops to ~4 cores (~96 μs); one head per core uses ~8×. (env-off.)
+        self._wkv_b2_prefill_pc_cache: dict = {}
+        self._wkv_b2_use_pc = os.environ.get("MISTRAL4_WKV_B2_PC", "1") == "1"
 
         # Height-sharded input mem config required by paged_update_cache (the
         # tensor-indexed, trace-compatible latent-cache write used in decode).
@@ -571,6 +578,90 @@ class TtMistral4Attention(LightweightModule):
         return pc
 
     # ------------------------------------------------------------------
+    def _mcast_pc(self, gx: int, gy: int, in0_block_w: int, n_tiles: int, m_tiles: int):
+        """1D-mcast program config for a bottleneck projection (fixed gx×gy / in0_block_w
+        from tests/perf/test_matmul_pc_sweep.py). per_core_N spreads N over all cores;
+        per_core_M scales with seq. Returns None if the (gx,gy) grid doesn't fit this
+        device (→ default path). Cached by (gx,gy,in0_block_w,n_tiles,m_tiles).
+        """
+        if gx > self._compute_grid.x or gy > self._compute_grid.y:
+            return None
+        num_cores = gx * gy
+        if n_tiles % num_cores != 0:
+            return None
+        key = (gx, gy, in0_block_w, n_tiles, m_tiles)
+        cached = self._mcast_pc_cache.get(key)
+        if cached is not None:
+            return cached
+        per_core_N = n_tiles // num_cores
+        out_subblock_w = 1
+        for w in (4, 2, 1):
+            if per_core_N % w == 0:
+                out_subblock_w = w
+                break
+        out_subblock_h = 1
+        for h in (4, 2, 1):
+            if m_tiles % h == 0 and h * out_subblock_w <= 8:
+                out_subblock_h = h
+                break
+        pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(gx, gy),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=m_tiles,
+            per_core_N=per_core_N,
+            fuse_batch=True,
+            fused_activation=None,
+            mcast_in0=True,
+        )
+        self._mcast_pc_cache[key] = pc
+        return pc
+
+    # ------------------------------------------------------------------
+    def _wkv_b2_prefill_pc(self, m_tiles: int):
+        """Batched PC for the prefill V-side absorption matmul.
+
+        attn_latent [1, N_HEADS, seq, KV_LORA_RANK] @ wkv_b2 [1, N_HEADS, KV_LORA_RANK,
+        V_HEAD_DIM] is a per-head batched matmul; with no PC it auto-picks ~4 cores
+        (~96 μs). Mapping one head per core across an N_HEADS-core grid parallelises the
+        weight reads ~8× (~13 μs). Cached by m_tiles.
+        """
+        cached = self._wkv_b2_prefill_pc_cache.get(m_tiles)
+        if cached is not None:
+            return cached
+        K_TILES = KV_LORA_RANK // ttnn.TILE_SIZE  # 8
+        N_TILES = V_HEAD_DIM // ttnn.TILE_SIZE  # 4
+        in0_block_w = 1
+        for c in (8, 4, 2):
+            if K_TILES % c == 0:
+                in0_block_w = c
+                break
+        out_subblock_w = 1
+        for c in (4, 2, 1):
+            if N_TILES % c == 0:
+                out_subblock_w = c
+                break
+        out_subblock_h = 1
+        for c in (4, 2, 1):
+            if m_tiles % c == 0 and c * out_subblock_w <= 8:
+                out_subblock_h = c
+                break
+        # One head per core: gx*gy == N_HEADS, clamped to the device grid.
+        gx = min(8, self._compute_grid.x)
+        gy = min((N_HEADS + gx - 1) // gx, self._compute_grid.y)
+        pc = ttnn.MatmulMultiCoreReuseProgramConfig(
+            compute_with_storage_grid_size=(gx, gy),
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=m_tiles,
+            per_core_N=N_TILES,
+        )
+        self._wkv_b2_prefill_pc_cache[m_tiles] = pc
+        return pc
+
+    # ------------------------------------------------------------------
     def _build_kv_update_mem_cfg(self, grid, head_width: int):
         """Height-sharded ``[1, 1, N_HEADS, head_width]`` config for paged_update_cache.
 
@@ -605,24 +696,32 @@ class TtMistral4Attention(LightweightModule):
             [1, 1, seq_len, HIDDEN_SIZE] replicated on all devices
         """
         seq_len = x.shape[2]
+        m_tiles = (seq_len + 31) // 32
         reshape_mem = ttnn.L1_MEMORY_CONFIG if self.prefill_l1_reshape else ttnn.DRAM_MEMORY_CONFIG
 
         # ── Q projection (pre-split q_b → per-head q_nope / q_rope) ─────────
+        # PC sweep winner (P150x8, M=1 tile): 8x2=16 cores, in0_block_w=8, out→L1
+        # (57 → ~19 µs vs the no-PC default).
         q_latent = ttnn.linear(
             x,
             self.q_a_proj,
             compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            program_config=self._mcast_pc(8, 2, 8, Q_LORA_RANK // 32, m_tiles),
         )  # [1, 1, seq, Q_LORA_RANK]
         q_latent = ttnn.rms_norm(q_latent, weight=self.q_a_norm, epsilon=NORM_EPS, memory_config=ttnn.L1_MEMORY_CONFIG)
 
+        # PC sweep winner (P150x8, M=1 tile): 8x4=32 cores, in0_block_w=8 (19 → ~7 µs
+        # each). q_nope/q_rope share the N=N_HEADS*64=2048 shape, so one PC covers both.
+        _q_b_pc = self._mcast_pc(8, 4, 8, (self.n_heads * self.qk_nope_head_dim) // 32, m_tiles)
         q_nope_flat = ttnn.linear(
             q_latent,
             self.q_nope_w,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=reshape_mem,
+            program_config=_q_b_pc,
         )  # [1, 1, seq, N_HEADS * QK_NOPE_HEAD_DIM]
         q_rope_flat = ttnn.linear(
             q_latent,
@@ -630,6 +729,7 @@ class TtMistral4Attention(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=reshape_mem,
+            program_config=_q_b_pc,
         )  # [1, 1, seq, N_HEADS * QK_ROPE_HEAD_DIM]
         ttnn.deallocate(q_latent)
 
@@ -668,12 +768,15 @@ class TtMistral4Attention(LightweightModule):
         # q_mla: [1, N_HEADS, seq, KV_LORA_RANK + QK_ROPE_HEAD_DIM]
 
         # ── KV projection → compressed latent (kvpe), no per-head expansion ─
+        # PC sweep winner (P150x8, M=1 tile): 10x1=10 cores, in0_block_w=8, out→DRAM
+        # (41 → ~17 µs vs the no-PC default).
         kv_combined = ttnn.linear(
             x,
             self.kv_a_proj,
             compute_kernel_config=self.lofi_compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self._mcast_pc(10, 1, 8, KV_A_PROJ_OUT // 32, m_tiles),
         )  # [1, 1, seq, KV_A_PROJ_OUT]
         kv_latent = ttnn.slice(kv_combined, [0, 0, 0, 0], [1, 1, seq_len, self.kv_lora_rank])
         k_rope_raw = ttnn.slice(kv_combined, [0, 0, 0, self.kv_lora_rank], [1, 1, seq_len, self.kv_a_proj_out])
@@ -712,12 +815,15 @@ class TtMistral4Attention(LightweightModule):
         ttnn.deallocate(kvpe)
 
         # Expand the V side of kv_b: attn_latent @ wkv_b2 → per-head value output.
+        # One-head-per-core batched PC: the default auto-config drops to ~4 cores
+        # (~96 μs) on this per-head [.,256]@[256,128] shape.
         attn_out = ttnn.matmul(
             attn_latent,
             self.wkv_b2,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=self._wkv_b2_prefill_pc(m_tiles) if self._wkv_b2_use_pc else None,
         )  # [1, N_HEADS, seq, V_HEAD_DIM]
         ttnn.deallocate(attn_latent)
 
