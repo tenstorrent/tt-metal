@@ -1146,7 +1146,7 @@ def _run_auto_iterate_loop(
             _cap_components = [
                 str(c.get("name", "")).strip()
                 for c in json.loads(_cap_status_path.read_text()).get("components", [])
-                if c.get("status") == "NEW" and str(c.get("name", "")).strip()
+                if c.get("status") in ("NEW", "ADAPT") and str(c.get("name", "")).strip()
             ]
         else:
             _cap_components = []
@@ -1186,7 +1186,7 @@ def _run_auto_iterate_loop(
             _preflight_new_components = [
                 str(c.get("name", "")).strip()
                 for c in json.loads(_preflight_status_path.read_text()).get("components", [])
-                if c.get("status") == "NEW" and str(c.get("name", "")).strip()
+                if c.get("status") in ("NEW", "ADAPT") and str(c.get("name", "")).strip()
             ]
         else:
             _preflight_new_components = []
@@ -1580,7 +1580,7 @@ def _run_auto_iterate_loop(
                     if (demo_dir / "bringup_status.json").is_file()
                     else []
                 )
-                if c.get("status") == "NEW" and str(c.get("name", "")).strip()
+                if c.get("status") in ("NEW", "ADAPT") and str(c.get("name", "")).strip()
             }
         except Exception:
             new_component_names = set()
@@ -3628,7 +3628,7 @@ def _run_auto_iterate_loop(
             if (demo_dir / "bringup_status.json").is_file()
             else []
         ):
-            if comp_meta.get("status") == "NEW":
+            if comp_meta.get("status") in ("NEW", "ADAPT"):
                 nm = str(comp_meta.get("name", "")).strip()
                 if nm:
                     all_new_components.add(nm)
@@ -4144,7 +4144,7 @@ def _run_auto_iterate_loop(
                     if (demo_dir / "bringup_status.json").is_file()
                     else []
                 )
-                if c.get("status") == "NEW" and str(c.get("name", "")).strip()
+                if c.get("status") in ("NEW", "ADAPT") and str(c.get("name", "")).strip()
             }
         except Exception:
             new_names_set = set()

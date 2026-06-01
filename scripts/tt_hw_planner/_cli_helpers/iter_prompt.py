@@ -131,11 +131,15 @@ def build_per_target_blocks(
     attempts_per_component: Dict[str, int],
     focused_stub_excerpts: List[str],
     strict_native: bool = False,
+    component_status: str = "NEW",
+    tt_reuse_target: Optional[str] = None,
+    last_pcc_value: Optional[float] = None,
 ) -> Dict[str, str]:
     from ..cli import (
         _build_cross_component_context_block,
         _format_escalated_edit_scope_block,
         _native_directive,
+        _refinement_directive,
         _strategy_directive_for_failure,
     )
 
@@ -144,15 +148,27 @@ def build_per_target_blocks(
         target_component,
         f"(no prior failure recorded for `{target_component}` in the latest pytest report)",
     )
+
+    # Prompt routing: ADAPT components get the refinement directive
+    # (wrap canonical, edit config only — never rewrite class).
+    # NEW components get the from-scratch directive (write ttnn ops).
+    if component_status == "ADAPT" and tt_reuse_target:
+        directive = _refinement_directive(
+            tt_reuse_target=tt_reuse_target,
+            pcc_value=last_pcc_value,
+        )
+    else:
+        directive = _native_directive(
+            forbidden_excerpt="\n\n".join(focused_stub_excerpts) if focused_stub_excerpts else "",
+            strict_native=strict_native,
+        )
+
     return {
         "failure_class": failure_class,
         "failure_context": failure_block,
         "strategy_directive": _strategy_directive_for_failure(failure_class, strict_native=strict_native),
         "escalated_scope_block": _format_escalated_edit_scope_block(demo_dir, failure_class),
-        "native_directive": _native_directive(
-            forbidden_excerpt="\n\n".join(focused_stub_excerpts) if focused_stub_excerpts else "",
-            strict_native=strict_native,
-        ),
+        "native_directive": directive,
         "cross_component_block": _build_cross_component_context_block(
             demo_dir,
             current_target=target_component,

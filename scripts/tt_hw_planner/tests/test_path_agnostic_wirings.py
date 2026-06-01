@@ -372,6 +372,46 @@ def test_wiring_14_adapt_canonical_wrapper_stub_is_working_not_notimpl() -> None
     assert '_comp_status == "ADAPT"' in bringup_loop_src  # gating
 
 
+# ---------------------------------------------------------------------------
+# WIRING #15: ADAPT components get refinement directive (not from-scratch)
+# ---------------------------------------------------------------------------
+
+
+def test_wiring_15_adapt_components_use_refinement_directive() -> None:
+    """Pin: when the LLM is invoked on an ADAPT component, it gets the
+    REFINEMENT directive (do NOT rewrite, edit config only) — NOT the
+    NEW components' from-scratch directive.
+
+    Without this, ADAPT components see the same "implement with ttnn
+    ops" prompt as NEW components and the LLM rewrites the canonical
+    class instead of refining args. Caught in the Qwen2.5-14B 2026-06-01
+    verification: even when stubs WRAPPED the canonical, the LLM rewrote
+    them in subsequent iters because the prompt said "implement"."""
+    from scripts.tt_hw_planner.cli import _refinement_directive
+
+    text = _refinement_directive("models/tt_transformers/tt/attention.py", pcc_value=0.5)
+
+    # Refinement-specific language present
+    assert "REFINEMENT TARGET (ADAPT" in text
+    assert "ALREADY EXISTS" in text
+    assert "Make a tiny edit" in text
+    assert "1-3 lines" in text
+
+    # PCC value surfaced for trajectory-aware reasoning
+    assert "0.5000" in text
+
+    # Forbidden actions explicit
+    assert "Do NOT write a new class" in text
+    assert "Do NOT replace the `from models/tt_transformers/tt/attention.py` import" in text
+
+    # ADAPT-specific path through iter_prompt.build_per_target_blocks
+    iter_prompt_src = _read("scripts/tt_hw_planner/_cli_helpers/iter_prompt.py")
+    assert 'component_status: str = "NEW"' in iter_prompt_src
+    assert "tt_reuse_target: Optional[str] = None" in iter_prompt_src
+    assert 'if component_status == "ADAPT" and tt_reuse_target:' in iter_prompt_src
+    assert "_refinement_directive(" in iter_prompt_src
+
+
 def test_all_touched_modules_import_cleanly() -> None:
     """Last-line-of-defense: every module touched by the wirings
     must still import. A syntax error or wrong import in any wire

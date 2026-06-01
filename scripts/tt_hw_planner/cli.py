@@ -531,7 +531,11 @@ def _summarize_bringup_status(model_id: str) -> Tuple[Dict[str, int], List[Tuple
 
 def _list_component_pcc_tests(demo_dir: Path, *, only: Optional[List[str]] = None) -> List[str]:
     """Return the canonical per-component PCC test files for this demo,
-    scoped to the components listed in `bringup_status.json` (status NEW).
+    scoped to the components listed in `bringup_status.json` (status
+    NEW or ADAPT — both need per-component PCC validation).
+
+    NEW = LLM writes from scratch; ADAPT = canonical wrapper, may refine.
+    REUSE components are trusted as-is (no per-component test).
 
     This ignores stale/leftover `test_*.py` from earlier template-based
     scaffolds (e.g. `test_sam2_hiera_tiny_for_image_classification.py` that
@@ -547,7 +551,7 @@ def _list_component_pcc_tests(demo_dir: Path, *, only: Optional[List[str]] = Non
         return []
     components: List[str] = []
     for comp in data.get("components", []):
-        if comp.get("status") != "NEW":
+        if comp.get("status") not in ("NEW", "ADAPT"):
             continue
         name = str(comp.get("name", "")).strip()
         if name and (only is None or name in only):
@@ -581,7 +585,9 @@ def _auto_iteration_blockers(model_id: str) -> Tuple[List[str], List[str]]:
     ungraduated: List[str] = []
     smoke_tests: List[str] = []
     for comp in data.get("components", []):
-        if comp.get("status") != "NEW":
+        # ADAPT components also need per-component validation; they get
+        # canonical-wrapper stubs and per-component PCC tests just like NEW.
+        if comp.get("status") not in ("NEW", "ADAPT"):
             continue
         name = str(comp.get("name", "")).strip()
         if not name:
@@ -6227,6 +6233,50 @@ def _ungraduated_breakdown(demo_dir: Path, components: List[str]) -> str:
         for bl in body.splitlines():
             lines.append(f"      | {bl}")
     return "\n".join(lines)
+
+
+def _refinement_directive(tt_reuse_target: str, pcc_value: Optional[float] = None) -> str:
+    """Directive for ADAPT components — the canonical TT impl already exists
+    and the stub WRAPS it. The LLM's job is to REFINE config/args, NOT to
+    rewrite the class or implement ttnn ops from scratch.
+
+    Used when ``component.status == "ADAPT"`` (force_adapt_all-demoted or
+    registry-mapped with SUPPORTED+!DROP_IN). Distinct from
+    :func:`_native_directive` which targets NEW components (write from
+    scratch).
+    """
+    pcc_str = f" (current per-component PCC = {pcc_value:.4f})" if pcc_value is not None else ""
+    return (
+        "\nREFINEMENT TARGET (ADAPT — read carefully):\n"
+        f"  The canonical TT implementation at `{tt_reuse_target}` ALREADY "
+        f"EXISTS and works for sibling models (Llama, Qwen3, etc.). The "
+        f"current stub WRAPS it.\n"
+        f"\n"
+        f"  The per-component PCC test was run{pcc_str}.\n"
+        "  The bug is NOT in the canonical class — the bug is in HOW THIS\n"
+        "  stub WIRES it for this model's specifics (wrong ModelArgs config,\n"
+        "  wrong constructor args, missing tt_ccl / transformation_mats /\n"
+        "  configuration, wrong dtype, etc.).\n"
+        "\n"
+        "YOUR JOB — make a MINIMAL EDIT to fix the wiring:\n"
+        "  1. Look at the stub's `build(device, torch_module)` function.\n"
+        "  2. Find which arg the canonical constructor needs that's missing\n"
+        "     or wrong, or which ModelArgs config value needs Qwen2-specific\n"
+        "     override.\n"
+        "  3. Make a tiny edit — usually 1-3 lines. The diff should be small.\n"
+        "\n"
+        "ABSOLUTELY FORBIDDEN:\n"
+        f"  - Do NOT write a new class to replace `{tt_reuse_target}`'s impl.\n"
+        f"  - Do NOT replace the `from {tt_reuse_target}` import with your own ttnn ops.\n"
+        "  - Do NOT bypass the canonical impl by re-implementing forward.\n"
+        "  - Do NOT delegate to torch (no `_torch_module`, no `_get_torch_submodule`,\n"
+        "    no `transformers.AutoModel.from_pretrained`, no submodule walking).\n"
+        "  - Do NOT rewrite `__init__` / `build` / `__call__` to NOT delegate to `self._impl`.\n"
+        "\n"
+        "  The loop WILL reject your stub if it detects the class being\n"
+        "  rewritten instead of refined. Convergence comes from small\n"
+        "  config-level edits, not from new code.\n"
+    )
 
 
 def _native_directive(forbidden_excerpt: str = "", *, strict_native: bool = False) -> str:
