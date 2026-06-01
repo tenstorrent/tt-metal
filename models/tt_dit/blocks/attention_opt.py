@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
@@ -48,13 +49,17 @@ class Attention(Module):
     default_sdpa_chunk_size: tuple[int, int] = (128, 512)
 
     ring_sdpa_chunk_size_map: dict[tuple, tuple[int, int]] = {
-        (False, 2, 4): (256, 256),
-        (False, 8, 4): (256, 256),
-        (True, 2, 2): (128, 512),
-        (True, 4, 8): (128, 512),
-        (True, 8, 4): (256, 512),
+        # -1 is the default resolution.
+        (False, 2, 4): {-1: (256, 256)},
+        (False, 8, 4): {-1: (256, 256)},
+        (True, 2, 2): {-1: (128, 512)},
+        # BH 4×8 (sp=4, tp=8): optimal for 2048×2048 (q=256 fills 108 cores exactly,
+        # k=512 maximises arithmetic intensity).  For 1024×1024 the optimal q was 128
+        # (1.5× more work items, better core fill at that resolution).
+        (True, 4, 8): {-1: (256, 512), 1024: (128, 512), 2048: (256, 512)},
+        (True, 8, 4): {-1: (256, 512)},
     }
-    default_ring_sdpa_chunk_size: tuple[int, int] = (256, 256)
+    default_ring_sdpa_chunk_size: tuple[int, int] = {-1: (256, 256)}
 
     def __init__(
         self,
@@ -132,20 +137,7 @@ class Attention(Module):
         )
 
         self.ring_sdpa_worker_grid = (full_grid.x, full_grid.y - 1)
-        ring_chunk_size = self.ring_sdpa_chunk_size_map.get(
-            (
-                is_blackhole(),
-                parallel_config.sequence_parallel.factor,
-                parallel_config.tensor_parallel.factor,
-            ),
-            self.default_ring_sdpa_chunk_size,
-        )
-        self.ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.ring_sdpa_worker_grid,
-            q_chunk_size=ring_chunk_size[0],
-            k_chunk_size=ring_chunk_size[1],
-            exp_approx_mode=False,  # NOTE: False is more correct
-        )
+        self.ring_sdpa_program_config = {}
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -244,6 +236,30 @@ class Attention(Module):
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
         )
+
+    def get_ring_sdpa_program_config(self, per_device_seq_len: int) -> ttnn.SDPAProgramConfig:
+        if per_device_seq_len not in self.ring_sdpa_program_config:
+            device_parallel_key = (
+                is_blackhole(),
+                self.parallel_config.sequence_parallel.factor,
+                self.parallel_config.tensor_parallel.factor,
+            )
+            ring_chunk_size = self.ring_sdpa_chunk_size_map.get(device_parallel_key, self.default_ring_sdpa_chunk_size)
+            if per_device_seq_len in ring_chunk_size:
+                ring_chunk_size = ring_chunk_size[per_device_seq_len]
+            else:
+                logger.warning(
+                    f"No ring SDPA chunk size found for resolution {per_device_seq_len}, using default {ring_chunk_size[-1]}"
+                )
+                ring_chunk_size = ring_chunk_size[-1]
+
+            self.ring_sdpa_program_config[per_device_seq_len] = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.ring_sdpa_worker_grid,
+                q_chunk_size=ring_chunk_size[0],
+                k_chunk_size=ring_chunk_size[1],
+                exp_approx_mode=False,  # NOTE: False is more correct
+            )
+        return self.ring_sdpa_program_config[per_device_seq_len]
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         weight, bias = self._reshape_and_merge_qkv(
@@ -562,7 +578,7 @@ class Attention(Module):
                 ),
                 joint_strategy="rear",
                 logical_n=spatial_sequence_length,
-                program_config=self.ring_sdpa_program_config,
+                program_config=self.get_ring_sdpa_program_config(spatial.shape[1]),
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
