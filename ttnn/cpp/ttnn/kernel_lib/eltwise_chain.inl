@@ -911,14 +911,17 @@ struct UnaryBcast : UnaryBcastTag {
         constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Dim));
         // Small per-element init only — the caller owns BIG init (compute_kernel_hw_startup /
         // a boot unary_bcast_init). This does NOT re-run any hw_configure or pack init.
-        //   1. srca format reconfig (UnaryBcastReconfig::Input): switch srca to Cb's format,
-        //      covering chains that change the bcast input CB between elements (e.g. layernorm
-        //      cb_ex2 -> cb_ex2pe). No-op at the LLK level when the format already matches.
+        //   1. format reconfig of BOTH srca and srcb to Cb (UnaryBcastReconfig::Input). The
+        //      broadcast datacopy MOP drives the FPU SrcB lane (ELWADD + SRCB_BCAST_*), so srcb
+        //      must be reprogrammed too — a srca-only reconfig leaves ALU_FORMAT_SPEC_REG1_SrcB
+        //      stale from a preceding two-operand op (e.g. layernorm's BinaryFpu(cb_ex2, cb_eps)
+        //      leaves SrcB = cb_eps), which corrupts the bcast. No-op at the LLK level when the
+        //      formats already match.
         //   2. the bcast datacopy MOP (unpack-A + math datacopy), icb-only — mirrors the
         //      MOP-init portion of `unary_bcast_init`, minus every BIG hw_configure / pack line.
         // The pack target is reconfigured by the downstream PackTile (PackTileReconfig::Output).
         if constexpr (Reconfig == UnaryBcastReconfig::Input) {
-            reconfig_data_format_srca(Cb);
+            reconfig_data_format(Cb, Cb);
         }
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
         const std::uint32_t dst_format = get_operand_dst_format(Cb);

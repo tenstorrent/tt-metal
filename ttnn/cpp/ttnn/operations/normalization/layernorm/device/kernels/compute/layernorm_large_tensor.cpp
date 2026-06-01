@@ -251,21 +251,15 @@ void kernel_main() {
         // Broadcast the tile since cb_ex2pe is a column vector that contains the important data.
         // PARTIAL migration: UnaryBcast<COL> + PackTile (same-CB in/out on cb_ex2pe).
         //
-        // This multi-stage kernel reconfigures unpack/pack away from cb_ex2pe between stages
-        // and does not boot-init cb_ex2pe, so the per-stage BIG init is the caller's
-        // responsibility (D8): emit unary_bcast_init for cb_ex2pe right before the chain.
-        // The chain's UnaryBcast then only needs its small per-element MOP init.
+        // Reconfig: UnaryBcast's small init reconfigs BOTH srca and srcb to cb_ex2pe
+        // (UnaryBcastReconfig::Input) — the COL bcast datacopy drives the FPU SrcB lane, and the
+        // preceding BinaryFpu(cb_ex2, cb_eps) left SrcB = cb_eps, so both sources must be
+        // reprogrammed. Pack-side reconfig is owned by the downstream PackTile
+        // (PackTileReconfig::Output). No mid-kernel hw_configure needed.
         //
         // Lifecycle: cb_ex2pe input Streaming (per-tile wait+pop), output OutStreaming
         // (per-tile reserve+push). After the chain, the new pushed tile is re-waited
         // for downstream use.
-        //
-        // FIXME: a BIG init (unary_bcast_init does hw_configure) in the middle of the kernel is
-        // unsafe (MMIO writes mid-MAIN are undefined per compute_kernel_hw_startup.h:26-30). This
-        // is a stopgap that reproduces the prior behavior; the kernel should be restructured so
-        // cb_ex2pe is set up via per-element reconfig (reconfig_data_format_*) only, with no
-        // mid-kernel hw_configure. Remove this call once that rework lands.
-        unary_bcast_init<BroadcastType::COL>(cb_ex2pe, cb_ex2pe);
         compute_kernel_lib::eltwise_chain(
             onetile,
             compute_kernel_lib::UnaryBcast<
@@ -279,7 +273,7 @@ void kernel_main() {
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutStreaming,
                 compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::PackTileReconfig::None>{});
+                compute_kernel_lib::PackTileReconfig::Output>{});
         cb_ex2pe_obj.wait_front(onetile);
 
         // End of
