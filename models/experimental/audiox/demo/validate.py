@@ -13,21 +13,9 @@ import torchaudio
 
 from models.experimental.audiox.demo.demo import (
     _HF_CONFIG,
-    _build_audio_pretransform,
-    _build_conditioners,
-    _build_metadata_batch_with_inputs,
-    _load_visual_prompt,
-    _make_cross_attn_cond,
-    _resolve_audio_prompt,
     run_demo,
 )
 from models.experimental.audiox.demo.media import make_synthetic_video_prompt
-from models.experimental.audiox.utils.loader import (
-    load_audiox_checkpoint,
-    load_into,
-    remap_conditioner_state_dict,
-    remap_oobleck_encoder_state_dict,
-)
 
 
 def _infer_conditioning_mode(
@@ -195,36 +183,6 @@ def _run_cpu_reference(args: argparse.Namespace, cpu_output: Path, *, synthetic_
     return summary
 
 
-def _build_shared_cross_attn_cond(
-    args: argparse.Namespace,
-    *,
-    synthetic_video_prompt: torch.Tensor | None,
-) -> torch.Tensor:
-    raw_sd = load_audiox_checkpoint(args.checkpoint)
-    encoder_sd = remap_oobleck_encoder_state_dict(raw_sd, n_blocks=len(_HF_CONFIG["decoder_c_mults"]))
-
-    audio_prompt = _resolve_audio_prompt(args.audio, None)
-    audio_pretransform = _build_audio_pretransform() if audio_prompt is not None else None
-    if audio_pretransform is not None:
-        load_into(audio_pretransform, encoder_sd, label="encoder")
-
-    multi = _build_conditioners(audio_pretransform=audio_pretransform)
-    for cid in ("text_prompt", "video_prompt", "audio_prompt"):
-        cond_sd = remap_conditioner_state_dict(raw_sd, conditioner_id=cid)
-        load_into(multi.conditioners[cid], cond_sd, label=f"cond:{cid}")
-
-    visual_prompt = synthetic_video_prompt if synthetic_video_prompt is not None else _load_visual_prompt(args.video, args.image)
-    cond_out = multi(
-        _build_metadata_batch_with_inputs(
-            prompt=args.prompt,
-            video_prompt=visual_prompt,
-            audio_prompt=audio_prompt,
-        ),
-        "cpu",
-    )
-    return _make_cross_attn_cond(cond_out)
-
-
 def _run_tt_reference(args: argparse.Namespace, tt_output: Path, *, synthetic_video_prompt: torch.Tensor | None) -> dict:
     from models.experimental.audiox.demo.tt_demo import TtAudioXSession, close_tt_device, open_tt_device, run_tt_demo
 
@@ -254,16 +212,12 @@ def _run_tt_reference(args: argparse.Namespace, tt_output: Path, *, synthetic_vi
         summary["_latent"] = details["latent"]
         return summary
 
+    warm_runs = []
+    measured_details = None
+    measured_elapsed_seconds = None
+    shared_cross_attn_cond = None
     device = open_tt_device(device_id=args.tt_device_id)
     try:
-        shared_cross_attn_cond = _build_shared_cross_attn_cond(
-            args,
-            synthetic_video_prompt=synthetic_video_prompt,
-        )
-
-        warm_runs = []
-        measured_details = None
-        measured_elapsed_seconds = None
         for run_index in range(1, args.tt_warm_runs + 1):
             session = TtAudioXSession(args.checkpoint, device, seed=args.seed)
             try:
@@ -285,9 +239,9 @@ def _run_tt_reference(args: argparse.Namespace, tt_output: Path, *, synthetic_vi
             finally:
                 session.deallocate()
                 gc.collect()
-
             run_details["steps"] = args.steps
             run_summary = _summarize_run_details(run_details["output_path"], run_elapsed_seconds, run_details)
+            shared_cross_attn_cond = run_details["cross_attn_cond"].detach().cpu()
             if run_index == args.tt_warm_runs:
                 measured_details = run_details
                 measured_elapsed_seconds = run_elapsed_seconds
