@@ -70,11 +70,11 @@ jobs:
           #     "owner_id": "U08TJ70UFRT"
           #   },
           #   {
-          #     "name": "[BH-QB-GE] Gemma4-31B",
+          #     "name": "[BH-QB-2] Gemma4-31B",
           #     "model": "google/gemma-4-31B-it",
           #     "server-timeout": 20,
           #     "benchmark-timeout": 5,
-          #     "runner-label": "BH-QB-GE",
+          #     "runner-label": "BH-Quietbox-2",
           #     "arch": "arch-blackhole",
           #     "mesh-device": "P150x4",
           #     "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
@@ -140,11 +140,11 @@ jobs:
               "owner_id": "U08TJ70UFRT"
             },
             {
-              "name": "[BH-QB-GE] Gemma4-26B-A4B",
+              "name": "[BH-QB-2] Gemma4-26B-A4B",
               "model": "google/gemma-4-26B-A4B-it",
               "server-timeout": 15,
               "benchmark-timeout": 5,
-              "runner-label": "BH-QB-GE",
+              "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
               "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
