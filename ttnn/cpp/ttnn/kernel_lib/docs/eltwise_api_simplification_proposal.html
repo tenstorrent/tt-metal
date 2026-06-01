@@ -96,7 +96,7 @@
   <tr><td>4</td><td>Collapse <code>TileBase</code> (3 types) → binary <code>TileOffset</code> enum</td><td><span class="tag t-lock">locked</span></td><td>~78 offset sites</td></tr>
   <tr><td>5</td><td>Clamp runtime <code>block_size</code> to compile-time DEST capacity</td><td><span class="tag t-lock">locked</span></td><td>dispatch body only</td></tr>
   <tr><td>6</td><td>Remove <code>OperandKind IndexMode</code> from <code>PackTile</code></td><td><span class="tag t-lock">locked</span></td><td>346 PackTile sites (drop a token)</td></tr>
-  <tr><td>7</td><td><code>UnaryBcast</code>: per-element small init (drop BIG init), remove <code>CbOut</code></td><td><span class="tag t-lock">locked</span></td><td>8 UnaryBcast sites; init inlined in helper</td></tr>
+  <tr><td>7</td><td><code>UnaryBcast</code>: per-element small init (drop BIG init), remove <code>CbOut</code></td><td><span class="tag t-open">blocked</span></td><td>layernorm kernels lean on the BIG init — reverted</td></tr>
   <tr><td>8</td><td>Remove the dead 1D dispatch path; drop the <code>_2d</code> suffix</td><td><span class="tag t-lock">locked</span></td><td>internal only (no call-site change)</td></tr>
   <tr><td>9</td><td>Infer <code>PackTile</code>'s DEST slot from the preceding writer (keep explicit override)</td><td><span class="tag t-lock">locked</span></td><td>346 PackTile sites (drop the slot token)</td></tr>
   <tr><td>—</td><td>Unify the reconfig enums into one shared two-state type</td><td><span class="tag t-open">open</span></td><td>find/replace</td></tr>
@@ -303,7 +303,13 @@ if constexpr (!chain_supports_block_v&lt;Chain&gt;) {
 
 <!-- ============================================================ -->
 <div class="change" id="c7">
-<h2>7 · <code>UnaryBcast</code> — per-element small init, drop <code>CbOut</code> <span class="tag t-lock">locked</span></h2>
+<h2>7 · <code>UnaryBcast</code> — per-element small init, drop <code>CbOut</code> <span class="tag t-open">BLOCKED — see note</span></h2>
+
+<div class="panel" style="border-color:#f8514944">
+<b style="color:#ff7b72">Implementation blocked (reverted) — the "caller owns BIG init" premise fails for layernorm</b>
+<p style="margin:8px 0 0">Attempted and reverted. <b>bcast_to works</b> (its boot <code>unary_bcast_init(cb_src, cb_dst)</code> configures everything; the per-iter init was pure redundancy). But the <b>layernorm large-tensor (welford) kernels break</b>: their boot init is <code>binary_op_init_common(cb_in, cb_inb, cb_interm_pre_add)</code>, which does <b>not</b> configure the <code>cb_ex2pe</code> hardware — they lean on <code>UnaryBcast</code>'s per-iteration BIG <code>unary_bcast_init(cb_ex2pe, cb_ex2pe)</code> to configure unpack/math/pack for <code>cb_ex2pe</code>. Dropping the BIG init (even with a <code>reconfig_data_format_srca(Cb)</code> + MOP-only small init) produces numeric garbage — <code>test_layer_norm</code> welford w=4096 fails, passes at baseline. To unblock, the layernorm partial-migration kernels must first gain a proper boot init for <code>cb_ex2pe</code> (or keep their <code>UnaryBcast</code> BIG init). Out of scope for the helper change; needs a decision.</p>
+</div>
+
 <div class="meta"><span>Risk: <b>low–med</b></span><span>Removes: <b>a per-entry engine re-boot + the <code>CbOut</code> param</b></span><span>Adds: <b>nothing — init inlined in the helper</b></span></div>
 
 <p><code>UnaryBcast</code> is the <b>only</b> chain element that does a BIG init per entry. Its <code>init()</code> calls <code>unary_bcast_init&lt;bt&gt;(icb, ocb)</code>, which re-boots unpack/math/pack engine state:</p>
