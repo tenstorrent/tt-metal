@@ -39,6 +39,11 @@ class GLM51Config:
     QK_ROPE_HEAD_DIM = 64
     V_HEAD_DIM = 256
 
+    # Indexer / sparse attention
+    INDEX_TOPK = 2048
+    INDEX_HEAD_DIM = 128
+    INDEX_N_HEADS = 32
+    
     # Other
     RMS_NORM_EPS = 1e-5
     ROUTE_SCALE = 2.5
