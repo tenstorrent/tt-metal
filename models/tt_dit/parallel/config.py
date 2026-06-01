@@ -51,6 +51,27 @@ class AudioTParallelConfig(NamedTuple):
         return self.axis0.factor * self.axis1.factor
 
 
+class AudioTCParallelConfig(NamedTuple):
+    """T-halo + channel-TP for the audio vocoder on a 2D mesh.
+
+    Shards T (time) on ``time_parallel`` (halo exchange between contiguous
+    chips) and channels on ``channel_parallel`` (tensor-parallel). Unlike the
+    T+T :class:`AudioTParallelConfig`, this is sound on a 2D mesh: channels have
+    no sequence boundary, so the channel axis needs no halo.
+    """
+
+    time_parallel: ParallelFactor
+    channel_parallel: ParallelFactor
+
+    @property
+    def factor(self) -> int:
+        return self.time_parallel.factor
+
+    @property
+    def mesh_axis(self) -> int:
+        return self.time_parallel.mesh_axis
+
+
 class MochiVAEParallelConfig(NamedTuple):
     time_parallel: ParallelFactor
     h_parallel: ParallelFactor

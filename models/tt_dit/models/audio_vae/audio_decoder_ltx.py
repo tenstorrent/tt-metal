@@ -4,26 +4,9 @@
 
 """LTX-2 audio mel-VAE decoder (Stage A).
 
-Mirror of the torch reference ``AudioDecoder`` from
-``LTX-2/packages/ltx-core/src/ltx_core/model/audio_vae/audio_vae.py:276``.
-
-The production LTX-2.3 22B distilled config consumes 8-channel latents
-``(B, z=8, frames, mel_bins=64)`` and produces 2-channel log-mel spectrograms
-``(B, out_ch=2, time, 64)``. The architecture:
-
-- ``conv_in``: CausalConv2d k=3 (z → ch * ch_mult[-1])
-- mid block: 2 ResnetBlocks (no attention; ``mid_block_add_attention=false``)
-- upsampling path: ``num_resolutions`` levels reversed
-  - each: ``num_res_blocks + 1`` ResnetBlocks (+ optional attention — never in
-    production), followed by an Upsample on every level except the bottom
-- ``norm_out`` (PixelNorm) → SiLU → ``conv_out`` (CausalConv2d k=3) → no tanh
-
-All convs are CausalConv2d with ``causality_axis=HEIGHT`` (= front-pad on the
-time axis). The pixel-norm path makes this a single-chip module — there is no
-mesh-time work here, only a small ROW_MAJOR conv chain.
-
-Layout: ``Conv2dViaConv3d`` operates on ``(B, H, W, C)``. The reference torch
-code uses BCHW. We convert at the device boundary and convert back on exit.
+Conv2dViaConv3d operates on ``(B, H, W, C)`` (mel_bins is W); the torch
+reference uses BCHW, so we convert at the device boundary and back on exit.
+All convs are causal on the height (time) axis. Single-chip module.
 """
 
 from __future__ import annotations
@@ -37,29 +20,14 @@ from ...layers.audio_ops import Conv2dViaConv3d
 from ...layers.module import Module, ModuleList
 from ...utils.conv3d import conv_pad_in_channels
 
-# Mirrors LATENT_DOWNSAMPLE_FACTOR in audio_vae.py.
 LATENT_DOWNSAMPLE_FACTOR = 4
 
 
-# ---------------------------------------------------------------------------
-# Host-side helpers (patchifier, per-channel statistics).
-# ---------------------------------------------------------------------------
-
-
 class LTXAudioPatchifier:
-    """Host-side patchifier mirroring ``AudioPatchifier`` with ``patch_size=1``.
+    """Host-side patchifier with ``patch_size=1``: flatten over (channels, mel_bins).
 
-    With ``patch_size=1`` and ``audio_latent_downsample_factor=4`` the patchify
-    is a simple flatten over (channels, mel_bins):
-
-    - ``patchify``:   ``(B, C, T, F) → (B, T, C*F)``
-    - ``unpatchify``: ``(B, T, C*F) → (B, C, T, F)`` given the original shape
-
-    The per-channel statistics in ``PerChannelStatistics.un_normalize`` are
-    applied to the patchified tensor (so they broadcast across ``T`` and ``F``
-    rather than just channels) before unpatchifying back. We mirror this exactly
-    on the host so the latent denormalization path matches the reference bit-
-    exact.
+    Per-channel un-normalize stats are applied to the patchified tensor so they
+    broadcast across T and F, not just channels.
     """
 
     def __init__(
@@ -80,27 +48,14 @@ class LTXAudioPatchifier:
         self.shift = shift
 
     def patchify(self, audio_latents: torch.Tensor) -> torch.Tensor:
-        """``(B, C, T, F) → (B, T, C*F)``."""
         return einops.rearrange(audio_latents, "b c t f -> b t (c f)")
 
     def unpatchify(self, audio_latents: torch.Tensor, channels: int, mel_bins: int) -> torch.Tensor:
-        """``(B, T, C*F) → (B, C, T, F)`` given the target channel/mel counts."""
         return einops.rearrange(audio_latents, "b t (c f) -> b c t f", c=channels, f=mel_bins)
 
 
-# ---------------------------------------------------------------------------
-# On-device modules.
-# ---------------------------------------------------------------------------
-
-
 class LTXAudioPixelNorm(Module):
-    """Per-pixel RMS normalization for BHWC tensors.
-
-    ``y = x / sqrt(mean(x², dim=-1, keepdim=True) + eps)`` — same maths as the
-    reference ``PixelNorm`` (which uses ``dim=1`` in BCHW); in BHWC the channel
-    dim is the last axis. No learned parameters. Defaults match the reference
-    ``build_normalization_layer`` (eps=1e-6).
-    """
+    """Per-pixel RMS normalization over the channel (last) axis. No learned params."""
 
     def __init__(self, eps: float = 1e-6) -> None:
         super().__init__()
@@ -114,16 +69,7 @@ class LTXAudioPixelNorm(Module):
 
 
 class LTXAudioResnetBlock(Module):
-    """LTX-2 audio mel-VAE Resnet block.
-
-    Forward:
-        h = norm1(x); h = silu(h); h = conv1(h)
-        h = norm2(h); h = silu(h); h = conv2(h)
-        if in != out: x = nin_shortcut(x)  # CausalConv2d k=1
-        return x + h
-
-    No temb branch (production has ``temb_channels=0``). No dropout.
-    """
+    """LTX-2 audio mel-VAE Resnet block. No temb branch, no dropout."""
 
     def __init__(
         self,
@@ -172,8 +118,6 @@ class LTXAudioResnetBlock(Module):
             )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # Strip non-parametric submodules (non_linearity, dropout) and the
-        # absent shortcut keys when channels match.
         keys_to_remove = [k for k in state if k.startswith("non_linearity") or k.startswith("dropout")]
         for k in keys_to_remove:
             del state[k]
@@ -204,22 +148,11 @@ class LTXAudioResnetBlock(Module):
             )
             residual = self.nin_shortcut(residual)
 
-        # add tolerates layout mismatch; pull both to TILE for the add since
-        # conv output is ROW_MAJOR and ttnn.add infers layout from the inputs.
         return ttnn.add(residual, h)
 
 
 class LTXAudioUpsample(Module):
-    """Nearest-neighbour 2× upsample + causal conv + drop first row.
-
-    Mirrors ``Upsample`` in upsample.py with ``causality_axis=HEIGHT``:
-
-      x = nearest(x, 2)          # (B, H, W, C) → (B, 2H, 2W, C)
-      x = causal_conv2d_k3(x)    # H-causal pad on the front
-      x = x[:, 1:, :, :]         # drop the leading H row
-
-    Always uses ``with_conv=True`` (production setting).
-    """
+    """Nearest-neighbour 2x upsample + causal conv + drop leading H row."""
 
     def __init__(
         self,
@@ -246,21 +179,13 @@ class LTXAudioUpsample(Module):
         x_BHWC = ttnn.upsample(x_BHWC, scale_factor=2)
         x_BHWC = self.conv(x_BHWC)
 
-        # Drop the first H row to undo the causal padding (see Upsample docstring
-        # in the reference: this keeps output length 1 + 2 * n_in).
-        # ttnn slicing on the row-major dim is supported.
+        # Drop the leading H row to undo the causal pad: output length is 1 + 2*n_in.
         x_BHWC = x_BHWC[:, 1:, :, :]
         return x_BHWC
 
 
 class _MidBlock(Module):
-    """Mid block: two Resnet blocks, no attention.
-
-    The torch reference structures this as ``mid.block_1`` / ``mid.attn_1`` /
-    ``mid.block_2`` where ``attn_1 = nn.Identity()`` when
-    ``mid_block_add_attention=false``. We mirror the same attribute names so
-    state-dict keys match.
-    """
+    """Mid block: two Resnet blocks, no attention."""
 
     def __init__(
         self,
@@ -276,9 +201,6 @@ class _MidBlock(Module):
             mesh_device=mesh_device,
             dtype=dtype,
         )
-        # NB: attn_1 is nn.Identity() in production — no params, no submodule
-        # registered here. _prepare_torch_state strips any "attn_1.*" keys
-        # (there should be none for production weights).
         self.block_2 = LTXAudioResnetBlock(
             in_channels=channels,
             out_channels=channels,
@@ -287,8 +209,6 @@ class _MidBlock(Module):
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # attn_1 is nn.Identity() — should have no params, but defensively
-        # strip the prefix.
         keys_to_remove = [k for k in state if k.startswith("attn_1")]
         for k in keys_to_remove:
             del state[k]
@@ -300,13 +220,7 @@ class _MidBlock(Module):
 
 
 class _UpStage(Module):
-    """One level of the upsampling path: ``block`` (ModuleList) + optional ``upsample``.
-
-    Mirrors the per-level ``stage`` object created by ``build_upsampling_path``.
-    The torch reference uses ``stage.block`` / ``stage.attn`` (always empty in
-    production) / ``stage.upsample``. We omit ``stage.attn`` entirely (no params
-    in production).
-    """
+    """One upsampling level: ``block`` (ModuleList) + optional ``upsample``."""
 
     def __init__(
         self,
@@ -320,9 +234,7 @@ class _UpStage(Module):
     ) -> None:
         super().__init__()
 
-        # ``num_res_blocks_in_stage`` is ``num_res_blocks + 1`` per the
-        # reference's loop range. First block does the channel transition;
-        # the rest are out_channels → out_channels.
+        # First block does the channel transition; the rest are out → out.
         self.block = ModuleList()
         cur_in = in_channels
         for _ in range(num_res_blocks_in_stage):
@@ -345,7 +257,6 @@ class _UpStage(Module):
             )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # No attn in production — strip prophylactically.
         keys_to_remove = [k for k in state if k.startswith("attn.")]
         for k in keys_to_remove:
             del state[k]
@@ -362,22 +273,11 @@ class _UpStage(Module):
         return x_BHWC
 
 
-# ---------------------------------------------------------------------------
-# Top-level decoder.
-# ---------------------------------------------------------------------------
-
-
 class LTXAudioDecoder(Module):
     """LTX-2 audio mel-VAE decoder.
 
-    Constructor mirrors the reference ``AudioDecoder.__init__`` keyword
-    arguments. The state-dict layout matches the torch reference so
-    ``load_torch_state_dict(torch_decoder.state_dict())`` works without
-    remapping.
-
-    ``forward`` accepts a torch tensor ``(B, z_channels, frames, mel_bins)``
-    and returns a torch tensor ``(B, out_ch, T_target, mel_bins)`` per the
-    reference's ``_denormalize_latents`` / ``_adjust_output_shape``.
+    ``forward`` accepts a torch tensor ``(B, z_channels, frames, mel_bins)`` and
+    returns ``(B, out_ch, T_target, mel_bins)``.
     """
 
     def __init__(
@@ -421,14 +321,11 @@ class LTXAudioDecoder(Module):
         self.mesh_device = mesh_device
         self.dtype = dtype
 
-        # Per-channel statistics: stored on host. The reference registers buffers
-        # under the *exact* names ``std-of-means`` / ``mean-of-means`` (note the
-        # hyphens — these are not valid Python identifiers). We hold them as
-        # plain torch tensors and consume them in _denormalize_latents.
+        # Per-channel denormalize stats: non-Parameter host tensors consumed in
+        # _denormalize_latents.
         self._stats_std = torch.empty(ch)
         self._stats_mean = torch.empty(ch)
 
-        # Host-side patchifier (identical to reference AudioPatchifier).
         self.patchifier = LTXAudioPatchifier(
             patch_size=1,
             sample_rate=sample_rate,
@@ -439,7 +336,6 @@ class LTXAudioDecoder(Module):
 
         base_block_channels = ch * self.ch_mult[-1]
 
-        # conv_in: z → base_block_channels, CausalConv2d k=3
         self.conv_in = Conv2dViaConv3d(
             z_channels,
             base_block_channels,
@@ -450,17 +346,14 @@ class LTXAudioDecoder(Module):
             dtype=dtype,
         )
 
-        # mid block (registered as `mid` to match the torch reference)
         self.mid = _MidBlock(
             channels=base_block_channels,
             mesh_device=mesh_device,
             dtype=dtype,
         )
 
-        # Upsampling path. The reference builds `up` as a ModuleList of length
-        # ``num_resolutions`` indexed by the *original* (un-reversed) level
-        # number, then iterates in reverse. We mirror that exactly so the
-        # state-dict path ``up.<level>.block.<idx>.*`` matches.
+        # `up` is indexed by the original (un-reversed) level so state-dict keys
+        # ``up.<level>.block.<idx>.*`` match; it is iterated in reverse.
         self.up = ModuleList()
         block_in = base_block_channels
         for level in range(self.num_resolutions):
@@ -474,7 +367,6 @@ class LTXAudioDecoder(Module):
                     dtype=dtype,
                 )
             )
-        # Now rebuild in reverse order to track block_in through the levels.
         for level in reversed(range(self.num_resolutions)):
             block_out = ch * self.ch_mult[level]
             has_upsample = level != 0
@@ -486,13 +378,11 @@ class LTXAudioDecoder(Module):
                 mesh_device=mesh_device,
                 dtype=dtype,
             )
-            # Replace the placeholder at index `level`.
             self.up._children[str(level)] = stage
             block_in = block_out
 
         final_block_channels = block_in
 
-        # norm_out and conv_out
         self.norm_out = LTXAudioPixelNorm()
         self.conv_out = Conv2dViaConv3d(
             final_block_channels,
@@ -504,14 +394,9 @@ class LTXAudioDecoder(Module):
             dtype=dtype,
         )
 
-    # ------------------------------------------------------------------
-    # State-dict prep: strip / remap the torch reference's non-Module keys.
-    # ------------------------------------------------------------------
-
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        # ``per_channel_statistics`` is registered as buffers on a separate
-        # nn.Module in the reference. We consume the two buffers on host.
-        # Keys: ``per_channel_statistics.std-of-means``, ``...mean-of-means``.
+        # per_channel_statistics buffers carry hyphens (not valid Python idents),
+        # so consume them on host rather than registering them as children.
         std_key = "per_channel_statistics.std-of-means"
         mean_key = "per_channel_statistics.mean-of-means"
         if std_key in state:
@@ -519,14 +404,19 @@ class LTXAudioDecoder(Module):
         if mean_key in state:
             self._stats_mean = state.pop(mean_key).detach().clone()
 
-        # non_linearity is nn.SiLU() — no params.
         keys_to_remove = [k for k in state if k.startswith("non_linearity")]
         for k in keys_to_remove:
             del state[k]
 
-    # ------------------------------------------------------------------
-    # Host-side latent denormalize / output shape adjustment.
-    # ------------------------------------------------------------------
+    def set_per_channel_stats(self, std: torch.Tensor, mean: torch.Tensor) -> None:
+        """Re-inject the per-channel denormalize stats after a binary cache load.
+
+        These are non-Parameter host buffers; the weight cache carries no
+        non-Parameter state, so without re-injection the denormalize multiplies
+        by uninitialised memory.
+        """
+        self._stats_std = std.detach().clone().float()
+        self._stats_mean = mean.detach().clone().float()
 
     def _denormalize_latents(self, sample: torch.Tensor) -> tuple[torch.Tensor, tuple[int, int, int, int]]:
         """Apply ``un_normalize`` on the patchified latents, then unpatchify.
@@ -536,25 +426,15 @@ class LTXAudioDecoder(Module):
         """
         B, C, T, F = sample.shape
 
-        # Patchify: (B, C, T, F) → (B, T, C*F)
         patched = self.patchifier.patchify(sample)
 
-        # Per-channel un-normalize: ``x * std + mean``. The reference stores
-        # the stats as 1D tensors that must broadcast against the last dim of
-        # the patched tensor (``B, T, C*F``). The exact length depends on the
-        # checkpoint:
-        #   - production checkpoints store stats of length C (and rely on
-        #     ``C*F == C`` — i.e. mel_bins == 1 or patch_size == mel_bins)
-        #   - the unit test overrides them at length C*F so the math actually
-        #     works regardless of mel_bins
-        # We accept both: if stats length matches the patched last dim use
-        # them directly; otherwise broadcast over mel_bins via
-        # ``repeat_interleave``.
+        # Stats length depends on the checkpoint: either C*F (direct broadcast)
+        # or C (broadcast over mel_bins via repeat_interleave).
         std = self._stats_std.to(patched.dtype).to(patched.device)
         mean = self._stats_mean.to(patched.dtype).to(patched.device)
         last_dim = patched.shape[-1]
         if std.shape[0] == last_dim:
-            pass  # direct broadcast
+            pass
         elif std.shape[0] == C and last_dim == C * F:
             std = std.repeat_interleave(F)
             mean = mean.repeat_interleave(F)
@@ -565,10 +445,8 @@ class LTXAudioDecoder(Module):
             )
         sample_denormalized = patched * std + mean
 
-        # Unpatchify back to (B, C, T, F)
         sample = self.patchifier.unpatchify(sample_denormalized, channels=C, mel_bins=F)
 
-        # Target shape per reference:
         target_frames = T * LATENT_DOWNSAMPLE_FACTOR
         if self.is_causal:
             target_frames = max(target_frames - (LATENT_DOWNSAMPLE_FACTOR - 1), 1)
@@ -579,16 +457,14 @@ class LTXAudioDecoder(Module):
 
     @staticmethod
     def _adjust_output_shape(decoded_output: torch.Tensor, target_shape: tuple[int, int, int, int]) -> torch.Tensor:
-        """Crop / pad the decoded output to the exact target shape (mirrors ref)."""
+        """Crop / pad the decoded output to the exact target shape."""
         _, _, current_time, current_freq = decoded_output.shape
         _, target_channels, target_time, target_freq = target_shape
 
-        # Step 1: crop
         decoded_output = decoded_output[
             :, :target_channels, : min(current_time, target_time), : min(current_freq, target_freq)
         ]
 
-        # Step 2: pad if needed
         time_padding_needed = target_time - decoded_output.shape[2]
         freq_padding_needed = target_freq - decoded_output.shape[3]
         if time_padding_needed > 0 or freq_padding_needed > 0:
@@ -600,59 +476,41 @@ class LTXAudioDecoder(Module):
             )
             decoded_output = torch.nn.functional.pad(decoded_output, padding)
 
-        # Step 3: final safety crop
         return decoded_output[:, :target_channels, :target_time, :target_freq]
 
-    # ------------------------------------------------------------------
-    # Forward.
-    # ------------------------------------------------------------------
-
     def forward(self, latent: torch.Tensor) -> torch.Tensor:
-        """``latent``: torch tensor ``(B, z_channels, frames, mel_bins)``.
-
-        Returns torch tensor ``(B, out_ch, target_frames, target_mel_bins)``.
+        """``latent``: ``(B, z_channels, frames, mel_bins)`` →
+        ``(B, out_ch, target_frames, target_mel_bins)``.
         """
-        # Host: denormalize.
         sample_bcfk, target_shape = self._denormalize_latents(latent)
 
-        # Convert to BHWC for the device. ``F`` (mel_bins) is the W axis.
-        # (B, C=z, T=H, F=W) → (B, H, W, C)
+        # To BHWC for the device (mel_bins is W).
         sample_bhwc = sample_bcfk.permute(0, 2, 3, 1).contiguous().to(torch.float32)
 
-        # Pad C up to the conv3d alignment if needed (Conv2dViaConv3d pads
-        # in_channels internally for its weight but the *input tensor* must
-        # carry the same padded channel count).
+        # The input tensor must carry the same padded channel count as the
+        # Conv2dViaConv3d weight.
         sample_bhwc_padded = conv_pad_in_channels(sample_bhwc)
 
         x = ttnn.from_torch(
             sample_bhwc_padded, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
         )
 
-        # conv_in
         x = self.conv_in(x)
-
-        # mid block
         x = self.mid(x)
 
-        # upsampling path (reversed iteration)
         for level in reversed(range(self.num_resolutions)):
             stage = self.up[level]
             x = stage(x)
 
-        # norm_out → SiLU → conv_out
         x = self.norm_out(x)
         x = ttnn.silu(x)
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT) if x.layout != ttnn.ROW_MAJOR_LAYOUT else x
         x = self.conv_out(x)
-        # ``tanh_out=False`` in production — no tanh.
 
-        # Pull off device.
         out_bhwc = ttnn.to_torch(ttnn.get_device_tensors(x)[0])
 
-        # Strip channel padding introduced by Conv2dViaConv3d.out_channels
-        # rounding (out_ch=2 gets padded up to 32). Then BHWC → BCHW.
+        # Strip out_channels padding from Conv2dViaConv3d, then BHWC → BCHW.
         out_bhwc = out_bhwc[..., : self.out_ch]
         out_bchw = out_bhwc.permute(0, 3, 1, 2).contiguous()
 
-        # Host: adjust output shape.
         return self._adjust_output_shape(out_bchw, target_shape)
