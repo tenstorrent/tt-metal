@@ -78,7 +78,10 @@ TensorSpec EmaDeviceOperation::compute_output_specs(
     if (tensor_args.optional_output_tensor.has_value()) {
         return tensor_args.optional_output_tensor->tensor_spec();
     }
-    return tensor_args.input.tensor_spec().with_memory_config(operation_attributes.output_mem_config);
+    const auto& old_spec = tensor_args.input.tensor_spec();
+    return TensorSpec(
+        old_spec.logical_shape(),
+        TensorLayout(old_spec.data_type(), old_spec.page_config(), operation_attributes.output_mem_config));
 }
 
 Tensor EmaDeviceOperation::create_output_tensors(

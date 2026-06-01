@@ -155,13 +155,6 @@ TensorSpec::TensorSpec(tt::tt_metal::Shape logical_shape, TensorLayout tensor_la
     populate_sharding_specs();
 }
 
-TensorSpec TensorSpec::with_memory_config(MemoryConfig memory_config) const {
-    TensorSpec result = *this;
-    result.tensor_layout_ = tensor_layout_.with_memory_config(std::move(memory_config));
-    result.populate_sharding_specs();
-    return result;
-}
-
 TensorSpec TensorSpec::sharded_across_dims(
     tt::stl::Span<const int32_t> dims, CoreRangeSet grid, ShardOrientation orientation) const {
     Shape shard_shape = padded_shape();
@@ -246,10 +239,12 @@ TensorSpec TensorSpec::sharded(
 void TensorSpec::populate_sharding_specs() {
     if (memory_config().created_with_nd_shard_spec()) {
         if (auto upd_mem_config = populate_legacy_shard_spec_from_nd()) {
-            tensor_layout_ = tensor_layout_.with_memory_config(std::move(*upd_mem_config));
+            tensor_layout_ =
+                TensorLayout(data_type(), page_config(), std::move(*upd_mem_config), tensor_layout_.get_alignment());
         }
     } else if (memory_config().shard_spec()) {
-        tensor_layout_ = tensor_layout_.with_memory_config(populate_nd_shard_spec_from_legacy());
+        tensor_layout_ = TensorLayout(
+            data_type(), page_config(), populate_nd_shard_spec_from_legacy(), tensor_layout_.get_alignment());
     }
 }
 

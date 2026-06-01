@@ -90,10 +90,15 @@ TEST_F(TensorSerializationFlatbufferTest, WithMemoryConfig) {
     TemporaryFile test_file("flatbuffer.tensorbin");
     std::vector<float> test_data{1.0f, 2.5f, -3.7f, 42.0f, -0.5f, 100.0f};
 
+    const auto base_spec = get_tensor_spec(ttnn::Shape{1, 2, 3, 1}, DataType::FLOAT32);
     Tensor original_tensor = Tensor::from_vector(
         test_data,
-        get_tensor_spec(ttnn::Shape{1, 2, 3, 1}, DataType::FLOAT32)
-            .with_memory_config(MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1}));
+        TensorSpec(
+            base_spec.logical_shape(),
+            TensorLayout(
+                base_spec.data_type(),
+                base_spec.page_config(),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1})));
 
     EXPECT_TRUE(original_tensor.storage_type() == StorageType::HOST);
 

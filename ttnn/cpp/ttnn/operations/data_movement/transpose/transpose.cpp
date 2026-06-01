@@ -76,7 +76,10 @@ inline Tensor transpose_(
                                                         adjusted->shape[1] % tt::constants::TILE_WIDTH != 0))) {
                         shard_derivation_fallback();
                     } else {
-                        output_mem_constructed = output_mem_constructed.with_shard_spec(std::move(adjusted));
+                        output_mem_constructed = MemoryConfig(
+                            output_mem_constructed.memory_layout(),
+                            output_mem_constructed.buffer_type(),
+                            std::move(adjusted.value()));
                     }
                 }
             } else if (transpose_dim == ttnn::prim::TransposeOpDim::HC && a.layout() == Layout::TILE) {
@@ -90,7 +93,10 @@ inline Tensor transpose_(
                     adjusted->shape[1] % tt::constants::TILE_WIDTH != 0) {
                     shard_derivation_fallback();
                 } else {
-                    output_mem_constructed = output_mem_constructed.with_shard_spec(std::move(adjusted));
+                    output_mem_constructed = MemoryConfig(
+                        output_mem_constructed.memory_layout(),
+                        output_mem_constructed.buffer_type(),
+                        std::move(adjusted.value()));
                 }
             }
         } else if (output_mem_config.has_value()) {
@@ -210,7 +216,7 @@ ttnn::Tensor transpose_impl(
                 if (!final_mc.shard_spec().has_value()) {
                     auto shard_spec = operations::data_movement::transpose::generate_transpose_shard_spec(
                         result, result.padded_shape(), final_mc.memory_layout());
-                    final_mc = final_mc.with_shard_spec(shard_spec);
+                    final_mc = MemoryConfig(final_mc.memory_layout(), final_mc.buffer_type(), shard_spec);
                 }
                 result = ttnn::to_memory_config(result, final_mc, std::nullopt);
             }

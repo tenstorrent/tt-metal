@@ -91,7 +91,9 @@ MeshTensor enqueue_write_tensor(
         "non-uniform data movement APIs.");
     std::optional<TensorSpec> tensor_spec_overriden_memory_config;
     if (memory_config) {
-        tensor_spec_overriden_memory_config = host_tensor.tensor_spec().with_memory_config(*memory_config);
+        const auto& old_spec = host_tensor.tensor_spec();
+        tensor_spec_overriden_memory_config = TensorSpec(
+            old_spec.logical_shape(), TensorLayout(old_spec.data_type(), old_spec.page_config(), *memory_config));
     }
 
     const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
@@ -200,10 +202,15 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
         cq.enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
     }
 
-    device_tensor = MeshTensor(
-        mesh_buffer,
-        host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
-        host_tensor.tensor_topology());
+    {
+        const auto& old_spec = host_tensor.tensor_spec();
+        device_tensor = MeshTensor(
+            mesh_buffer,
+            TensorSpec(
+                old_spec.logical_shape(),
+                TensorLayout(old_spec.data_type(), old_spec.page_config(), device_tensor.memory_config())),
+            host_tensor.tensor_topology());
+    }
 }
 
 // ======================================================================================
@@ -311,7 +318,9 @@ std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> enqueue_write_te
     ttsl::optional_reference<const MemoryConfig> memory_config) {
     std::optional<TensorSpec> tensor_spec_overriden_memory_config;
     if (memory_config) {
-        tensor_spec_overriden_memory_config = host_tensor.tensor_spec().with_memory_config(*memory_config);
+        const auto& old_spec = host_tensor.tensor_spec();
+        tensor_spec_overriden_memory_config = TensorSpec(
+            old_spec.logical_shape(), TensorLayout(old_spec.data_type(), old_spec.page_config(), *memory_config));
     }
 
     const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
@@ -370,8 +379,13 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
 
     const auto& mesh_device_shape = mesh_buffer->device()->shape();
     auto topology = TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape);
-    device_tensor =
-        MeshTensor(mesh_buffer, host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()), topology);
+    const auto& old_spec = host_tensor.tensor_spec();
+    device_tensor = MeshTensor(
+        mesh_buffer,
+        TensorSpec(
+            old_spec.logical_shape(),
+            TensorLayout(old_spec.data_type(), old_spec.page_config(), device_tensor.memory_config())),
+        topology);
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -453,9 +467,12 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
     coords.reserve(shard_coords.size());
     std::copy(shard_coords.begin(), shard_coords.end(), std::back_inserter(coords));
 
+    const auto& old_spec = host_tensor.tensor_spec();
     device_tensor = MeshTensor(
         mesh_buffer,
-        host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
+        TensorSpec(
+            old_spec.logical_shape(),
+            TensorLayout(old_spec.data_type(), old_spec.page_config(), device_tensor.memory_config())),
         host_tensor.tensor_topology());
 
     return coords;
