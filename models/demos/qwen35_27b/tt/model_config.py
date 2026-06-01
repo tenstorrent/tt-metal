@@ -302,7 +302,7 @@ class Qwen35ModelArgs(ModelArgs):
         self.gdn_nv = GDN_Nv
         self.gdn_dv = GDN_Dv
         self.gdn_conv_kernel_size = GDN_CONV_KERNEL_SIZE
-        self.gdn_chunk_size = 64  # Chunkwise prefill chunk size (must be power of 2, >= 32)
+        self.gdn_chunk_size = 128  # Chunkwise prefill chunk size; gated_delta_attn_seq kernel requires 128 (Ct=Kt=Vt=4)
 
         # Override prefill_len_cutoff for long-sequence support.
         # Framework default is 512 on BH, which limits MLP matmul to 512 rows.
