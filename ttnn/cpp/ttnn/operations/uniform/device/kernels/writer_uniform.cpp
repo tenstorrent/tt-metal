@@ -29,7 +29,7 @@ void kernel_main() {
         auto intermed_cb_addr = reinterpret_cast<float*>(intermed_cb_read_ptr);
 
 #ifdef OUTPUT_DTYPE_FLOAT32
-        noc_async_write_tile(i, output_addrg, intermed_cb_read_ptr);
+        noc_async_write_page(i, output_addrg, intermed_cb_read_ptr);
         noc_async_write_barrier();
         cb_pop_front(intermed_cb_id, 1);
 #endif
@@ -48,7 +48,7 @@ void kernel_main() {
         }
         cb_pop_front(intermed_cb_id, 1);
 
-        noc_async_write_tile(i, output_addrg, dst_cb_write_ptr);
+        noc_async_write_page(i, output_addrg, dst_cb_write_ptr);
         noc_async_write_barrier();
 #endif
     }

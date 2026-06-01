@@ -43,7 +43,7 @@ void kernel_main() {
                     // DeviceZoneScopedN("reader_row_tw");
                     cb_reserve_back(cb_id_src, onetile);
                     uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
-                    noc_async_read_tile(tile_offset + tw, src, l1_write_addr_src);
+                    noc_async_read_page(tile_offset + tw, src, l1_write_addr_src);
                     noc_async_read_barrier();
                     cb_push_back(cb_id_src, onetile);
                     ++num_tiles_read;
