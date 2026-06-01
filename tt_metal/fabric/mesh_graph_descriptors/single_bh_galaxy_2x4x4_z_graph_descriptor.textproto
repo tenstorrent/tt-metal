@@ -1,5 +1,5 @@
 # --- Meshes ---------------------------------------------------------------
-# Single BH galaxy (32 chips) carved into 2 Z-connected meshes ("4x4x2"):
+# Single BH galaxy (32 chips) carved into 2 Z-connected meshes ("2x4x4"):
 #   - Z dimension = 2 meshes (mesh_id 0..1), wired with a single Z link.
 #   - Each mesh is a 4x4 grid (16 chips) -> intra-mesh neighbor hops use the
 #     non-Z N/S/E/W routing directions (X RING, Y LINE).
