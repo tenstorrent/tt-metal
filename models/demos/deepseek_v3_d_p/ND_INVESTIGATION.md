@@ -268,6 +268,20 @@ allocator places them non-overlapping. The compute partials CBs (`c_7`/`c_8`/`c_
 do not overlap the reader-written input CBs (`c_0`..`c_3`, `c_12`). So a structural
 CB-overlap race is not the cause.
 
+## Reader DEFINITIVELY exonerated → the compute kernel is the source
+`noc_async_write_multicast` (and the loopback variant) default to **`posted=false`**
+(non-posted, `dataflow_api.h`) — multicast writes are acked, so the max-sync
+`noc_async_write_barrier()` genuinely waited for the data to LAND at receivers before
+the valid semaphore was set. Max-sync still didn't fix it ⇒ the receivers got correct,
+fully-delivered input data, yet the FFN output is non-deterministic. Combined with the
+writer being trivially correct (writes unique per-core valid rows, barriered), the
+non-determinism is in the **compute kernel `fused_swiglu`** — a timing-dependent
+hazard that turns deterministic inputs into non-deterministic output. Most likely:
+a packer hazard around `llk_pack_reconfig_l1_acc(0/1)` not synchronized with the
+adjacent pack, the shared-packer-state dual-partials fused gate/up matmul, or an
+SFPU/dst-register management hazard. Pinning the exact line needs Trisc DPRINT of
+intermediate tiles across two runs (kernel-owner tooling).
+
 ## Hypotheses eliminated (testable ones) — what remains needs hardware tracing
 Eliminated by direct measurement/inspection: KV-cache, gate/routing, dispatch,
 shared expert, combine `init_zeros`/H1, capacity overflow, reader mcast
