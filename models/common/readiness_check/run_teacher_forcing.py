@@ -35,6 +35,11 @@ from models.common.readiness_check.contract import (
     BuildGeneratorFn,
     Generator,
 )
+from models.common.readiness_check.mesh_device import (
+    add_mesh_device_args,
+    close_readiness_mesh_device,
+    open_readiness_mesh_device,
+)
 from models.common.readiness_check.teacher_forcing import TokenAccuracy
 
 
@@ -67,35 +72,6 @@ def _import_build_generator(model_dir: Path) -> BuildGeneratorFn:
             f"See models/common/readiness_check/contract.py."
         )
     return fn  # type: ignore[return-value]
-
-
-#: Label → (mesh rows, mesh cols). N300 (2 chips) is openable as N150 by
-#: requesting (1, 1) — the device manager picks one of the two chips. T3K
-#: and TG follow the same row-major convention used in the demo fixtures.
-_MESH_SHAPES: dict[str, tuple[int, int]] = {
-    "N150": (1, 1),
-    "N300": (1, 2),
-    "T3K": (1, 8),
-    "TG": (8, 4),
-}
-
-
-def _resolve_mesh_device(mesh_device_arg: str):
-    """
-    Open a mesh device matching the given label.
-
-    Single-device meshes (N150) do not require fabric setup — the
-    tt-transformers conftest explicitly forces fabric_config=None on
-    single-device. Multi-chip meshes (N300+) may need
-    ttnn.set_fabric_config(FABRIC_1D, ...) called before this; left as a
-    follow-up when we extend the runner to those topologies.
-    """
-    import ttnn  # noqa: WPS433 — lazy
-
-    shape = _MESH_SHAPES.get(mesh_device_arg)
-    if shape is None:
-        raise ValueError(f"Unknown --mesh-device {mesh_device_arg!r}. Supported: {sorted(_MESH_SHAPES)}.")
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*shape))
 
 
 def _run_one_entry(
@@ -177,18 +153,10 @@ def _main() -> None:
     parser = argparse.ArgumentParser(description="Run the teacher-forcing readiness check against a reference file.")
     parser.add_argument("--model-dir", type=Path, required=True, help="Path to the model directory.")
     parser.add_argument("--reference", type=Path, required=True, help="Path to the .refpt reference file.")
-    parser.add_argument(
-        "--mesh-device",
-        type=str,
-        required=True,
-        choices=sorted(_MESH_SHAPES.keys()),
-        help="Mesh device label. Mapped to a ttnn.MeshShape internally.",
-    )
+    add_mesh_device_args(parser)
     args = parser.parse_args()
 
-    import ttnn  # noqa: WPS433 — lazy
-
-    mesh_device = _resolve_mesh_device(args.mesh_device)
+    mesh_device = open_readiness_mesh_device(args.mesh_device, args.fabric_config)
     try:
         run_teacher_forcing(
             model_dir=args.model_dir.resolve(),
@@ -196,7 +164,7 @@ def _main() -> None:
             mesh_device=mesh_device,
         )
     finally:
-        ttnn.close_mesh_device(mesh_device)
+        close_readiness_mesh_device(mesh_device, args.fabric_config)
 
 
 if __name__ == "__main__":

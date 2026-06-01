@@ -35,6 +35,11 @@ from models.common.readiness_check.contract import (
     BuildGeneratorFn,
     Generator,
 )
+from models.common.readiness_check.mesh_device import (
+    add_mesh_device_args,
+    close_readiness_mesh_device,
+    open_readiness_mesh_device,
+)
 from models.common.readiness_check.schema import Reference, ReferenceEntry, load_reference
 
 
@@ -64,25 +69,6 @@ def _import_build_generator(model_dir: Path) -> BuildGeneratorFn:
             f"See models/common/readiness_check/contract.py."
         )
     return fn  # type: ignore[return-value]
-
-
-#: Label → (mesh rows, mesh cols)
-_MESH_SHAPES: dict[str, tuple[int, int]] = {
-    "N150": (1, 1),
-    "N300": (1, 2),
-    "T3K": (1, 8),
-    "TG": (8, 4),
-}
-
-
-def _resolve_mesh_device(mesh_device_arg: str):
-    """Open a mesh device matching the given label."""
-    import ttnn  # noqa: WPS433 — lazy
-
-    shape = _MESH_SHAPES.get(mesh_device_arg)
-    if shape is None:
-        raise ValueError(f"Unknown --mesh-device {mesh_device_arg!r}. Supported: {sorted(_MESH_SHAPES)}.")
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*shape))
 
 
 def _run_one_entry_prefill(
@@ -262,18 +248,10 @@ def _main() -> None:
     parser = argparse.ArgumentParser(description="Run the batch prefill readiness check against a reference file.")
     parser.add_argument("--model-dir", type=Path, required=True, help="Path to the model directory.")
     parser.add_argument("--reference", type=Path, required=True, help="Path to the .refpt reference file.")
-    parser.add_argument(
-        "--mesh-device",
-        type=str,
-        required=True,
-        choices=sorted(_MESH_SHAPES.keys()),
-        help="Mesh device label. Mapped to a ttnn.MeshShape internally.",
-    )
+    add_mesh_device_args(parser)
     args = parser.parse_args()
 
-    import ttnn  # noqa: WPS433 — lazy
-
-    mesh_device = _resolve_mesh_device(args.mesh_device)
+    mesh_device = open_readiness_mesh_device(args.mesh_device, args.fabric_config)
     try:
         run_prefill_check(
             model_dir=args.model_dir.resolve(),
@@ -281,7 +259,7 @@ def _main() -> None:
             mesh_device=mesh_device,
         )
     finally:
-        ttnn.close_mesh_device(mesh_device)
+        close_readiness_mesh_device(mesh_device, args.fabric_config)
 
 
 if __name__ == "__main__":
