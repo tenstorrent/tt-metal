@@ -467,7 +467,16 @@ class VoxtralTTSPipeline:
 
     def decode_waveform_from_codes_tt(self, codes_b37t: torch.Tensor) -> torch.Tensor:
         """``[B,37,T]`` int CPU codes → float32 waveform (latent + decoder + pretransform on TT)."""
-        latent_tt = self.audio_tokenizer.latent_from_codes(codes_b37t)
+        codes_tt = ttnn.from_torch(
+            codes_b37t.to(torch.uint32).contiguous(),
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        latent_tt = self.audio_tokenizer.latent_from_codes_tt(codes_tt)
+        if codes_tt.is_allocated():
+            ttnn.deallocate(codes_tt)
         mel_tt = self.audio_tokenizer.decode_latent_to_mel_b1tc(latent_tt)
         ttnn.deallocate(latent_tt)
         wav_tt = self.audio_tokenizer.pretransform_decode_tt(mel_tt)

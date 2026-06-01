@@ -165,6 +165,34 @@ def audio_tokenizer_latent_dim(cfg: VoxtralAudioTokenizerConfig) -> int:
     return int(cfg.semantic_dim + cfg.acoustic_dim)
 
 
+def decoder_transformer_window_sizes(cfg: VoxtralAudioTokenizerConfig) -> tuple[int, ...]:
+    """Sliding-window size per decoder transformer stage (``decoder_blocks.1/.3/.5/...``).
+
+    Mirrors the upstream ``VoxtralTTSAudioTokenizer.__init__``: the window starts at
+    ``attn_sliding_window_size`` and is halved at each encoder downsampling, then doubled at each
+    decoder upsampling (``half_attn_window_upon_downsampling``). For the default config this yields
+    ``(2, 4, 8, 16)`` rather than a constant ``16``. When the flag is off, every stage uses the
+    base window.
+    """
+    strides = parse_csv_ints(cfg.decoder_convs_strides_str)
+    lengths = parse_csv_ints(cfg.decoder_transformer_lengths_str)
+    if not cfg.half_attn_window_upon_downsampling:
+        return tuple(int(cfg.attn_sliding_window_size) for _ in lengths)
+
+    # Encoder and decoder are symmetric (prod of strides equal), so the window after the encoder is
+    # the base halved once per decoder upsampling (each upsampling is 2x).
+    num_upsamples = sum(1 for s in strides if s > 1)
+    cur = int(cfg.attn_sliding_window_size) >> num_upsamples
+    if strides[0] > 1:
+        cur *= 2
+    windows: list[int] = []
+    for idx in range(len(lengths)):
+        windows.append(cur)
+        if (idx + 1 != len(lengths)) and idx + 1 < len(strides) and strides[idx + 1] > 1:
+            cur *= 2
+    return tuple(windows)
+
+
 def load_voxtral_config(model_name_or_path: str = DEFAULT_VOXTRAL_MODEL) -> VoxtralConfig:
     """Load Voxtral's Mistral-format params.json into a typed reference config."""
 
