@@ -44,7 +44,8 @@ class GLM51Config:
     INDEX_TOPK = 2048
     INDEX_HEAD_DIM = 128
     INDEX_N_HEADS = 32
-    
+
     # Other
     RMS_NORM_EPS = 1e-5
     ROUTE_SCALE = 2.5
+    ROPE_THETA = 1000000

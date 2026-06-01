@@ -28,6 +28,8 @@ class GptOss120BConfig:
     NUM_LAYERS = 36
     VOCAB_SIZE = 201088
     SLIDING_WINDOW = 128
+    # TODO: HF config defines `layer_types` interleaving `sliding_attention` and `full_attention`
+    # per layer. Decide whether to encode that pattern here or hardcode it at the call site.
 
     # Attention dimensions
     NUM_ATTENTION_HEADS = 64

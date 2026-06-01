@@ -38,11 +38,11 @@ class DeepSeekV4ProConfig:
     O_GROUPS = 16
     QK_ROPE_HEAD_DIM = 64
 
-    # Indexer / sparse attention  
+    # Indexer / sparse attention
     INDEX_N_HEADS = 64
     INDEX_HEAD_DIM = 128
-    INDEX_TOPK = 512
-    # Compressed attention config             
+    INDEX_TOPK = 1024
+    # Compressed attention config
     COMPRESS_RATES = {"compressed_sparse_attention": 4, "heavily_compressed_attention": 128}
     COMPRESS_ROPE_THETA = 160000.0
     HC_MULT = 4
@@ -53,3 +53,4 @@ class DeepSeekV4ProConfig:
     ROUTE_SCALE = 2.5
     ROPE_THETA = 10000
     SWIGLU_LIMIT = 10.0
+    MAX_POSITION_EMBEDDINGS = 1048576
