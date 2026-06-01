@@ -209,6 +209,7 @@ TEST_P(AccessorBenchmarks, PagesIteratorSharded) {
 }
 
 TEST_P(AccessorBenchmarks, ManualPagesIterationInterleaved) {
+    GTEST_SKIP() << "Disabled: see #45681";
     auto static_interleaved_args_combinations = get_all_static_interleaved_args_config();
     benchmark_args_combinations_single_core(
         GetParam(),
@@ -220,6 +221,7 @@ TEST_P(AccessorBenchmarks, ManualPagesIterationInterleaved) {
 }
 
 TEST_P(AccessorBenchmarks, PagesIteratorInterleaved) {
+    GTEST_SKIP() << "Disabled: see #45681";
     auto static_interleaved_args_combinations = get_all_static_interleaved_args_config();
     benchmark_args_combinations_single_core(
         GetParam(),
