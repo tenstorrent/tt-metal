@@ -75,7 +75,15 @@ def _log_generated_code_tokenizer_diagnostics(pipe: VoxtralTTSPipeline, codes_b3
         sd,
         n_acoustic_levels=cfg.acoustic_codebook_size,
     ).to(torch.bfloat16)
-    latent_tt = pipe.audio_tokenizer.latent_from_codes(codes_b37t)
+    codes_tt = ttnn.from_torch(
+        codes_b37t.to(torch.uint32).contiguous(),
+        device=pipe.mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    latent_tt = pipe.audio_tokenizer.latent_from_codes_tt(codes_tt)
+    ttnn.deallocate(codes_tt)
     tt_latent_btc = ttnn.to_torch(latent_tt).squeeze(1).float()
     ref_latent_btc = ref_latent_ncl.permute(0, 2, 1).contiguous().float()
     _, msg = comp_pcc(ref_latent_btc, tt_latent_btc, pcc=0.99)
@@ -97,8 +105,10 @@ def _log_generated_code_tokenizer_diagnostics(pipe: VoxtralTTSPipeline, codes_b3
     _log_pcc("output_proj mel", float(msg), 0.99)
 
     ref_wav = pretransform_decode(ref_mel_ncl, channels=cfg.channels).float()
-    tt_wav = pipe.audio_tokenizer.pretransform_decode_torch(mel_tt)
+    tt_wav_dev = pipe.audio_tokenizer.pretransform_decode_tt(mel_tt)
     ttnn.deallocate(mel_tt)
+    tt_wav = ttnn.to_torch(tt_wav_dev).float()
+    ttnn.deallocate(tt_wav_dev)
     _, msg = comp_pcc(ref_wav.float(), tt_wav.float(), pcc=0.99)
     _log_pcc("pretransform waveform", float(msg), 0.99)
 
