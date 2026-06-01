@@ -34,7 +34,7 @@ struct DramSenderStateBlock {
     uint32_t receiver_noc_xy_ptr;     // -> the receiver NOC XY table below
     uint32_t aligned_pages_sent_ptr;  // DRISC-side per-receiver pages_sent slot base
     uint32_t num_receivers_and_remote_pages_sent_ptr;  // packed; see remote_cb_pack()
-    // ----- Sender config block, pointed to by config_ptr (16 B) -----
+    // ----- Sender config block, pointed to by config_ptr (20 B) -----
     // Read by the remote-CB kernel helpers (fifo_size_per_receiver at word [3]) and by
     // the prefetcher kernel (num_receivers).
     uint32_t is_sender;

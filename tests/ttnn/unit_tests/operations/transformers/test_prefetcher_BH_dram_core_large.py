@@ -656,11 +656,6 @@ def test_dram_core_prefetcher_recv_contig_smoke(device, num_tensors, num_layers)
     gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
 
     num_iters_total = num_layers * num_tensors * ring_size
-    logger.info(
-        f"[recv_contig] num_tensors={num_tensors} num_layers={num_layers} K={K} N={N} "
-        f"banks={num_dram_banks} ring={num_receivers} n_per_recv={n_per_recv} "
-        f"push_page={push_page_size} gcb_size={gcb_size} num_iters_total={num_iters_total}"
-    )
 
     ttnn.experimental.start_dram_core_prefetcher(device)
     ttnn.experimental.queue_dram_core_prefetcher_request(
@@ -676,4 +671,3 @@ def test_dram_core_prefetcher_recv_contig_smoke(device, num_tensors, num_layers)
     )
     ttnn.experimental.stop_dram_core_prefetcher(device)
     ttnn.synchronize_device(device)
-    logger.info(f"[recv_contig] num_tensors={num_tensors} num_layers={num_layers} completed cleanly")
