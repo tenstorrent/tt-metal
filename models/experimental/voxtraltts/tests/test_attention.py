@@ -56,6 +56,7 @@ def test_voxtral_text_attention_pcc(device, reset_seeds):
         attention_mask=None,
     )
 
+    # L1 activations: Tracy shows in0:l1_interleaved vs dram_interleaved; short seq fits L1.
     tt_model = VoxtralTTAttention(
         device=device,
         hidden_size=hidden,
@@ -64,6 +65,7 @@ def test_voxtral_text_attention_pcc(device, reset_seeds):
         head_dim=head_dim,
         state_dict=layer_weights,
         weight_prefix="attention",
+        activation_memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     tt_input = ttnn.from_torch(
@@ -71,7 +73,7 @@ def test_voxtral_text_attention_pcc(device, reset_seeds):
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     tt_output = tt_model(tt_input, cos=cos, sin=sin)
     tt_output_torch = ttnn.to_torch(tt_output).squeeze(1)
@@ -104,6 +106,7 @@ def test_voxtral_attention_causal_identity_rope_runs(device, reset_seeds):
     cos = torch.ones(batch, seq_len, head_dim, dtype=torch.bfloat16)
     sin = torch.zeros(batch, seq_len, head_dim, dtype=torch.bfloat16)
 
+    # L1 activations for perf / Tracy labels (short causal smoke).
     tt_model = VoxtralTTAttention(
         device=device,
         hidden_size=hidden,
@@ -113,13 +116,14 @@ def test_voxtral_attention_causal_identity_rope_runs(device, reset_seeds):
         state_dict=layer_weights,
         weight_prefix="attention",
         is_causal=True,
+        activation_memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     tt_input = ttnn.from_torch(
         torch_input,
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     tt_output = tt_model(tt_input, cos=cos, sin=sin)
     out_t = ttnn.to_torch(tt_output)
