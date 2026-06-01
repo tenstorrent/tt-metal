@@ -439,21 +439,15 @@ def _vision_mlp_down_l1_pc(device):
 
 def _vision_merger_fc1_bs_program_config(device):
     """Program config for patch-merger fc1 (3072×6144×6144) with L1-interleaved
-    in0 and L1 BLOCK_SHARDED output (the o_proj-style interleaved-in0/sharded-out
-    pattern).
+    in0 and L1 BLOCK_SHARDED output (interleaved-in0 / sharded-out pattern).
 
     The output is block-sharded over the full 8×8 grid: shard is [M/8, N/8] =
-    [384, 768] (= 12×24 tiles). matmul_device_operation.cpp:839 requires
-    ``out_subblock_h == 1`` when the output is BLOCK_SHARDED and
-    ``out_subblock_w (8) != per_core_N (24)``.
+    [384, 768] (= 12×24 tiles). The sharded output requires ``out_subblock_h == 1``
+    since ``out_subblock_w (8) != per_core_N (24)``.
 
     in0 is L1-interleaved BF16 (~590 KB/core; the norm cannot emit BFP8 without a
-    typecast op). To fit the sharded-output CBs alongside that BF16 in0,
-    in0_block_w is held to 2: in0 590 KB + in0 CB (6·2·2·2048 = 49 KB) + in1 CB
-    (24·2·2·1088 = 104 KB) + interm0 (6·24·2048 = 288 KB) + out shard 313 KB +
-    bias 26 KB ≈ 1.37 MB at out_block_h=6, under the 1,395 KB bank. out_block_h
-    stays at 6 (= the interleaved baseline) so weight-DRAM re-reads are unchanged;
-    only in1's K-block granularity shrinks. GELU is fused here. Returns None when
+    typecast op). in0_block_w is held to 2 so the BF16 in0 + sharded-output CBs
+    still fit the 1,395 KB bank at out_block_h=6. GELU is fused. Returns None when
     the device grid is smaller than 8×8.
     """
     if device is None:
@@ -1054,6 +1048,7 @@ class TTNNDotsVisionMLP(TTNNModule):
         # OOM-test this bucket (S=12288) before relying on it; if it overflows,
         # revert to DRAM (do NOT shrink out_block_h -- that doubles weight DRAM
         # re-reads on this weight-DRAM-bound matmul and cancels the win).
+        _vision_debug_mem("up input", hidden_states)
         up = ttnn.linear(
             hidden_states,
             self.tt_fc3_weight,
@@ -1796,7 +1791,7 @@ class TTNNDotsVisionBlock(TTNNModule):
         hidden_states = ttnn.add(residual, attn_out, dtype=ttnn.bfloat8_b)
         _vision_debug_mem("after attn residual add", hidden_states)
         ttnn.deallocate(attn_out)
-
+        ttnn.deallocate(residual)
         residual = hidden_states
         _vision_debug_mem("residual_pre_mlp", residual)
         normed = self.norm2(hidden_states, output_l1=True)
@@ -2002,85 +1997,51 @@ class TTNNDotsPatchMerger(TTNNModule):
             raise ValueError(f"PatchMerger reshape: S*H={flat} not divisible by mlp_size={self.mlp_size}")
         new_r = flat // int(self.mlp_size)
 
-        # BLOCK_SHARD the fc1 output over the 8x8 grid (and feed that shard to fc2)
-        # using the o_proj-style interleaved-in0/sharded-out pattern. The program
-        # configs are built for the production S=12288 bucket (folded M=3072 =>
-        # per_core_M=12); other buckets fall back to the L1-interleaved path. fc1's
-        # in0 stays L1-interleaved BF16 (the norm has no dtype kwarg, so it can't be
-        # made BFP8 without adding a typecast op); the fc1 program config uses a
-        # small in0_block_w so the BF16 in0 + sharded-output CBs still fit L1.
+        # Block-sharded merger MLP. fc1 in0 is L1-interleaved BF16; fc1 output is L1
+        # BLOCK_SHARDED over the 8x8 grid ([M/8, N/8] = [384, 768] shards); fc2
+        # consumes the fc1 output shard with no reshard. Requires the production
+        # 8x8 grid with M (= folded S/4) divisible by the shard grid.
         fc1_bs_pc = _vision_merger_fc1_bs_program_config(self.device)
         fc2_bs_pc = _vision_merger_fc2_bs_program_config(self.device)
         bs_mem = _vision_block_sharded_mem(self.device, new_r, int(self.mlp_size))
-        use_bs = new_r == 3072 and fc1_bs_pc is not None and fc2_bs_pc is not None and bs_mem is not None
+        if fc1_bs_pc is None or fc2_bs_pc is None or bs_mem is None:
+            raise RuntimeError(
+                f"PatchMerger block-sharded path requires an 8x8 grid and folded M={new_r} "
+                "divisible by the shard grid; got an incompatible device/shape."
+            )
 
         if self._use_layer_norm:
-            hidden_states = ttnn.layer_norm(
-                hidden_states,
-                weight=self.tt_ln_weight,
-                bias=self.tt_ln_bias,
-                epsilon=1e-6,
-            )
+            hidden_states = ttnn.layer_norm(hidden_states, weight=self.tt_ln_weight, bias=self.tt_ln_bias, epsilon=1e-6)
         elif self.tt_ln_weight is not None:
-            hidden_states = ttnn.rms_norm(
-                hidden_states,
-                weight=self.tt_ln_weight,
-                epsilon=1e-6,
-            )
+            hidden_states = ttnn.rms_norm(hidden_states, weight=self.tt_ln_weight, epsilon=1e-6)
 
-        # Fold in TILE only (avoids RM untilize/tilize). Stays L1-interleaved BF16.
+        # Fold [B,1,S,H] -> [B,1,S',mlp_size] in TILE (avoids RM untilize/tilize).
         hidden_states = ttnn.reshape(
-            hidden_states,
-            (b0, b1, new_r, int(self.mlp_size)),
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            hidden_states, (b0, b1, new_r, int(self.mlp_size)), memory_config=ttnn.L1_MEMORY_CONFIG
         )
 
         compute_kc = getattr(self, "compute_kernel_config", None)
-        _vision_debug_mem("biggest one", hidden_states)
 
-        if use_bs:
-            print(".......................................................................................")
-            print("inside bs of last big matmul")
-            # GELU is fused via the program config. fc1 out is BLOCK_SHARDED with
-            # the same shard spec fc2 consumes -- no reshard between them.
-            hidden_states = ttnn.linear(
-                hidden_states,
-                self.tt_w1,
-                bias=self.tt_w1_bias,
-                dtype=ttnn.bfloat8_b,
-                memory_config=bs_mem,
-                program_config=fc1_bs_pc,
-                compute_kernel_config=compute_kc,
-            )
-            _vision_debug_mem("biggest one2", hidden_states)
-            hidden_states = ttnn.linear(
-                hidden_states,
-                self.tt_w2,
-                bias=self.tt_w2_bias,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                program_config=fc2_bs_pc,
-                compute_kernel_config=compute_kc,
-            )
-        else:
-            hidden_states = ttnn.linear(
-                hidden_states,
-                self.tt_w1,
-                bias=self.tt_w1_bias,
-                activation="gelu",
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=compute_kc,
-            )
-            _vision_debug_mem("biggest one2", hidden_states)
-            hidden_states = ttnn.linear(
-                hidden_states,
-                self.tt_w2,
-                bias=self.tt_w2_bias,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=compute_kc,
-            )
+        # fc1: L1-interleaved BF8 in0 -> BLOCK_SHARDED out, GELU fused via program config.
+        hidden_states = ttnn.linear(
+            hidden_states,
+            self.tt_w1,
+            bias=self.tt_w1_bias,
+            dtype=ttnn.bfloat4_b,
+            memory_config=bs_mem,
+            program_config=fc1_bs_pc,
+            compute_kernel_config=compute_kc,
+        )
+        # fc2: consumes the fc1 output shard directly -> L1 interleaved out.
+        hidden_states = ttnn.linear(
+            hidden_states,
+            self.tt_w2,
+            bias=self.tt_w2_bias,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            program_config=fc2_bs_pc,
+            compute_kernel_config=compute_kc,
+        )
 
         return hidden_states
 
@@ -2093,6 +2054,17 @@ class TTNNDotsVisionBlockStack(TTNNLayerStack):
     via the cache key mechanism in TracedRun.
     """
 
+    # Every layer (incl. the O(S^2) SDPA, which is ~52% of vision-tower device
+    # time) runs at the bucket the actual sequence is padded up to, so SDPA cost
+    # scales with bucket^2. The old 4096->8192->12288 jumps (2x / 1.5x) forced up
+    # to ~1064 patches of padding for a typical ~11224-patch image -> ~16% wasted
+    # attention FLOPs. The 1024-step fillers below cap padding at <1024 patches in
+    # the common large-image range (e.g. 11224 -> 11264 instead of 12288, ~16%
+    # less SDPA for that image). All values are multiples of 256 so the per-layer
+    # matmul program configs (which need (bucket/32) % grid_y == 0) stay on the
+    # tuned 2D-mcast path instead of falling back to auto-config. Each bucket is a
+    # separately captured trace, so trim this list to the image sizes you actually
+    # serve if trace-capture memory/time becomes a concern.
     SEQ_LEN_BUCKETS = [
         256,
         512,
@@ -2104,7 +2076,13 @@ class TTNNDotsVisionBlockStack(TTNNLayerStack):
         3072,
         3584,
         4096,
+        5120,
+        6144,
+        7168,
         8192,
+        9216,
+        10240,
+        11264,
         12288,
         16384,
         20480,
