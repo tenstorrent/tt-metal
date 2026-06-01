@@ -25,11 +25,19 @@ namespace tt::tt_metal::experimental {
 //  KernelSpec API
 // ============================================================================
 //
-// A KernelSpec is a descriptor for a Tenstorrent kernel:
-//   A single computational task compiled into one or more executable files that work
-//   collaboratively on a single node.
+// A *kernel* is a function — a kernel_main() — that runs on a node's baby RISC-V
+// cores: device code, in the GPU-programming-model sense. A Tenstorrent kernel is
+// specifically either a *compute* kernel or a *data-movement* kernel.
 //
-// The KernelSpec describes all the properties of a compute or data movement kernel:
+// A KernelSpec describes a *compiled kernel*: it specializes a kernel for
+// compilation, baking in the kernel's compile-time arguments and compiler options.
+// A compiled kernel may run as several cooperating threads (see num_threads) — a
+// small number of independent threads that each run the whole kernel function and
+// coordinate explicitly. How those threads map onto the node's physical RISC-V
+// cores — and how many binaries the kernel compiles to — is an implementation
+// detail the programming model hides.
+//
+// The KernelSpec describes all the properties of a kernel:
 //  - Source code
 //  - Compiler options for generating the kernel binary(ies)
 //  - Resource bindings (access to DFBs, semaphores, etc.)
@@ -42,9 +50,10 @@ namespace tt::tt_metal::experimental {
 //   endpoint bindings, different semaphore bindings, etc. Each KernelSpec compiles
 //   independently and is placed independently, via its WorkUnitSpec membership.
 //
-// INSTANCING: At runtime, one independent kernel instance runs on each device node
-//   where the kernel is placed.  Each node's kernel instance is passed its own
-//   instance-specific runtime arguments.
+// INSTANCING: At runtime, one *kernel instance* runs on each node where the kernel
+//   is placed. Each instance is a copy of the compiled kernel, fed its own per-node
+//   runtime arguments (see ProgramRunArgs) — so sibling instances can do different
+//   work from the same binary.
 //
 // PLACEMENT: The nodes the kernel runs on is derived from WorkUnitSpec membership.
 //
