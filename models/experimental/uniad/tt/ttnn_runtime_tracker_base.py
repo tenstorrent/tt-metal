@@ -28,6 +28,17 @@ class TtRuntimeTrackerBase(object):
         # disappear_time are written back as device tensors because downstream
         # ops (active-track selection, the -2 ego-query mask) consume them as
         # ttnn tensors.
+        #
+        # The reference also has an optional IoU gate (skip the new-track id if
+        # the box overlaps an existing track above iou_thre). Every UniAD caller
+        # passes iou_thre=None, so that branch is not ported; fail loudly rather
+        # than silently over-allocate ids if it is ever enabled.
+        if iou_thre is not None:
+            raise NotImplementedError(
+                "TtRuntimeTrackerBase.update does not implement the iou_thre IoU gate; "
+                "all UniAD callers pass iou_thre=None."
+            )
+
         device = track_instances.obj_idxes.device()
         obj_layout = track_instances.obj_idxes.layout
         dt_layout = track_instances.disappear_time.layout
