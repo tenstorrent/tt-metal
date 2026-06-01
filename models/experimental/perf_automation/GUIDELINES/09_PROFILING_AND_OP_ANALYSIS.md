@@ -9,10 +9,10 @@ count**. This is the loop that drove the Swin-L + DyHead and BGE-M3 campaigns.
 
 ## 1. Capture a device profile
 
-Metal must be built with profiling enabled:
+Build Metal normally — the profiler is included automatically:
 
 ```bash
-./build_metal.sh -p          # -p = enable device profiler
+./build_metal.sh
 ```
 
 Then capture a single traced forward, signpost-bounded (see 07 section 6 for why):
@@ -207,7 +207,7 @@ Python / config / memory-layout surface.
 
 | Goal | Command / view |
 |---|---|
-| Build with profiler | `./build_metal.sh -p` |
+| Build with profiler | `./build_metal.sh` |
 | Capture | `TT_METAL_DEVICE_PROFILER=1 python -m tracy -r -p -v -m pytest ... -k case` |
 | Report | `tt-perf-report ops_perf_*.csv --start-signpost start --end-signpost stop` |
 | One layer only | `--id-range` or run a 1-layer test |
