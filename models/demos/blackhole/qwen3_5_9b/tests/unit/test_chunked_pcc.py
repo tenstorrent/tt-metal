@@ -134,7 +134,7 @@ def test_delta_rule_ops_direct_pcc(seq_len, device):
 
     exp_dir = os.path.abspath(
         os.path.join(
-            os.path.dirname(__file__), "..", "..", "..", "..", "experimental", "gated_attention_gated_deltanet"
+            os.path.dirname(__file__), "..", "..", "..", "..", "..", "experimental", "gated_attention_gated_deltanet"
         )
     )
     if exp_dir not in sys.path:
