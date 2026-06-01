@@ -83,8 +83,9 @@ void validate_rm_preconditions(
 
 std::vector<uint32_t> build_rm_reader_ct_args(
     const RmPlan& plan, uint32_t scaler_bits, const tt::tt_metal::MeshTensor& src, tt::tt_metal::ReduceOpDim dim) {
-    // Slot 8 (H_logical) is only consumed by the reader's REDUCE_COL branch;
-    // the W kernel ignores it.
+    // Slots 0-7 are shared by both paths. The reader's REDUCE_COL (H) branch additionally consumes
+    // H_logical at slot 8; the W path omits it, so the source TensorAccessor args follow at slot 8 (W)
+    // or slot 9 (H). The kernel is templated on REDUCE_DIM so the unused slot is genuinely dropped.
     // Only supports ReduceOpDim::W or ReduceOpDim::H
     std::vector<uint32_t> args = {
         scaler_bits,
@@ -95,24 +96,29 @@ std::vector<uint32_t> build_rm_reader_ct_args(
         plan.wt_tiles_per_chunk,
         plan.rm_rows_per_tile,
         plan.ht_tiles_per_chunk,
-        dim == tt::tt_metal::ReduceOpDim::H ? plan.H_logical : 0u,
     };
+    if (dim == tt::tt_metal::ReduceOpDim::H) {
+        args.push_back(plan.H_logical);
+    }
     tt::tt_metal::TensorAccessorArgs(src).append_to(args);
     return args;
 }
 
 std::vector<uint32_t> build_rm_writer_ct_args(
     const RmPlan& plan, const tt::tt_metal::MeshTensor& dst, tt::tt_metal::ReduceOpDim dim) {
-    // Slots 1-3 (Wt, W_logical, wt_tiles_per_chunk) are only consumed by the writer's
-    // REDUCE_COL branch; the W kernel ignores them.
+    // Slot 0 (datum_bytes) is shared. The writer's REDUCE_COL (H) branch additionally consumes
+    // Wt, W_logical, and wt_tiles_per_chunk at slots 1-3; the W path omits them, so the dst
+    // TensorAccessor args follow at slot 1 (W) or slot 4 (H). The kernel is templated on REDUCE_DIM
+    // so the unused slots are genuinely dropped.
     // Only supports ReduceOpDim::W or ReduceOpDim::H
-    const bool is_h = dim == tt::tt_metal::ReduceOpDim::H;
     std::vector<uint32_t> args = {
         plan.dst_datum_size,
-        is_h ? plan.Wt : 0u,
-        is_h ? plan.W_logical : 0u,
-        is_h ? plan.wt_tiles_per_chunk : 0u,
     };
+    if (dim == tt::tt_metal::ReduceOpDim::H) {
+        args.push_back(plan.Wt);
+        args.push_back(plan.W_logical);
+        args.push_back(plan.wt_tiles_per_chunk);
+    }
     tt::tt_metal::TensorAccessorArgs(dst).append_to(args);
     return args;
 }

@@ -30,7 +30,8 @@
 // w_chunks outer (over the core's output tile range, possibly crossing NCs), inner h_chunks re-reads
 // the same H rows for that NC's full source range. `chunk_idx` in compute resets per W chunk in this mode.
 //
-void kernel_main() {
+template <ckernel::ReduceDim DIM>
+void reduce_rm_reader() {
     //
     // Runtime args. Slots are shared between paths; semantics differ:
     //   W reduce: (src_addr, num_rows_for_this_core, start_row_id)
@@ -41,7 +42,8 @@ void kernel_main() {
     const uint32_t rt_start = get_arg_val<uint32_t>(2);
 
     //
-    // Compile-time args
+    // Compile-time args. Slots 0-7 are shared by both paths. The H reduce path adds H_logical at
+    // slot 8, so the source TensorAccessor args start at slot 8 (W) or slot 9 (H).
     //
     constexpr uint32_t scaler_bits = get_compile_time_arg_val(0);
     constexpr uint32_t W_logical = get_compile_time_arg_val(1);
@@ -51,9 +53,7 @@ void kernel_main() {
     constexpr uint32_t wt_tiles_per_chunk = get_compile_time_arg_val(5);
     constexpr uint32_t rm_rows_per_tile = get_compile_time_arg_val(6);
     constexpr uint32_t ht_tiles_per_chunk = get_compile_time_arg_val(7);
-    // H_logical is only consumed by the H reduce path (rows per NC slab in source). The W factory passes 0.
-    constexpr uint32_t H_logical = get_compile_time_arg_val(8);
-    constexpr auto tensor_args = TensorAccessorArgs<9>();
+    constexpr auto tensor_args = TensorAccessorArgs<(DIM == ckernel::ReduceDim::REDUCE_ROW) ? 8 : 9>();
 
     static_assert(ht_tiles_per_chunk <= RM_MAX_HT_TILES_PER_CHUNK, "ht_tiles_per_chunk exceeds reader slab cap");
 
@@ -79,7 +79,7 @@ void kernel_main() {
         }
         return (W_logical < tt::constants::TILE_WIDTH) ? W_logical : tt::constants::TILE_WIDTH;
     }();
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_scaler, REDUCE_OP, REDUCE_DIM>(scaler_f, scaler_valid_for_reduce);
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_scaler, REDUCE_OP, DIM>(scaler_f, scaler_valid_for_reduce);
 
     //
     // Identity template (reused for clearing every staged page before real RM data is overlaid).
@@ -97,7 +97,7 @@ void kernel_main() {
     const uint32_t page_bytes = get_local_cb_interface(cb_id_rm).fifo_page_size;
     const uint32_t valid_row_bytes = W_logical * elem_bytes;
 
-    if constexpr (REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW) {
+    if constexpr (DIM == ckernel::ReduceDim::REDUCE_ROW) {
         //
         // === W reduce path ===
         //
@@ -148,6 +148,11 @@ void kernel_main() {
         // chunk_idx in the compute kernel resets per w_chunk and advances per h_chunk_base — so within this
         // path the outer loop is w_chunks (over the core's output tile range) and the inner loop is h_chunks.
         //
+        // H_logical (rows per NC slab in source) is only consumed here, so it lives in this branch.
+        // The index embeds DIM to make it value-dependent: a literal `get_compile_time_arg_val(8)`
+        // would be eagerly instantiated even in this discarded branch (the W path omits slot 8).
+        constexpr uint32_t H_logical = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 8 : 0);
+
         const uint32_t Ht_total = (H_logical + rm_rows_per_tile - 1) / rm_rows_per_tile;
         uint32_t outputs_remaining = rt_count;
         uint32_t current_nc = rt_start / Wt;
@@ -194,3 +199,5 @@ void kernel_main() {
         }
     }
 }
+
+void kernel_main() { reduce_rm_reader<REDUCE_DIM>(); }

@@ -31,7 +31,8 @@
 //   overflow the destination page.
 //
 
-void kernel_main() {
+template <ckernel::ReduceDim DIM>
+void reduce_rm_writer() {
     //
     // Runtime args. Slots shared between paths; semantics differ:
     //   W reduce: (dst_addr, num_rows, start_page)
@@ -42,15 +43,11 @@ void kernel_main() {
     const uint32_t rt_start = get_arg_val<uint32_t>(2);
 
     //
-    // Compile-time args. Slot 0 (datum_bytes) is shared; slots 1–3 are only consumed by the
-    // H reduce path. The W factory passes zero/ignored values for those slots so both factories
-    // present the same arg layout.
+    // Compile-time args. Slot 0 (datum_bytes) is shared. The H reduce path adds Wt, W_logical, and
+    // wt_tiles_per_chunk at slots 1-3, so the dst TensorAccessor args start at slot 1 (W) or slot 4 (H).
     //
     constexpr uint32_t datum_bytes = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    constexpr uint32_t W_logical = get_compile_time_arg_val(2);
-    constexpr uint32_t wt_tiles_per_chunk = get_compile_time_arg_val(3);
-    constexpr auto dst_args = TensorAccessorArgs<4>();
+    constexpr auto dst_args = TensorAccessorArgs<(DIM == ckernel::ReduceDim::REDUCE_ROW) ? 1 : 4>();
 
     constexpr uint32_t cb_id_tile = tt::CBIndex::c_3;
     constexpr uint32_t onetile = 1;
@@ -61,7 +58,7 @@ void kernel_main() {
     Noc noc;
     CircularBuffer cb_tile(cb_id_tile);
 
-    if constexpr (REDUCE_DIM == ckernel::ReduceDim::REDUCE_ROW) {
+    if constexpr (DIM == ckernel::ReduceDim::REDUCE_ROW) {
         //
         // === W reduce path ===
         //
@@ -98,6 +95,14 @@ void kernel_main() {
         // One page per (n, c), W datums per page. Each output tile contributes one row-stripe of
         // up to TILE_WIDTH datums (1–2 face-wise wide writes per tile).
         //
+        // Wt, W_logical, and wt_tiles_per_chunk are only consumed here, so they live in this branch.
+        // The indices embed DIM to make them value-dependent: a literal `get_compile_time_arg_val(N)`
+        // is non-dependent and would be eagerly instantiated even in this discarded branch, tripping
+        // the index range check for the W path (which never passes these slots).
+        constexpr uint32_t Wt = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 1 : 0);
+        constexpr uint32_t W_logical = get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 2 : 0);
+        constexpr uint32_t wt_tiles_per_chunk =
+            get_compile_time_arg_val((DIM == ckernel::ReduceDim::REDUCE_COL) ? 3 : 0);
         constexpr uint32_t face_w = tt::constants::TILE_WIDTH / 2;
         const uint32_t num_output_tiles_local = rt_count;
         const uint32_t start_output_tile_id = rt_start;
@@ -155,3 +160,5 @@ void kernel_main() {
         }
     }
 }
+
+void kernel_main() { reduce_rm_writer<REDUCE_DIM>(); }
