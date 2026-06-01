@@ -18,6 +18,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_convert_to_hwc_gather.cpp
     test_gelu_bw_ulp.cpp
     test_gelu_bw_main_ulp.cpp
+    test_fusion_dispatch_op_helpers.cpp
     test_generic_op.cpp
     test_graph_add.cpp
     test_graph_basic.cpp

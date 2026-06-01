@@ -403,15 +403,15 @@ void py_module_types(nb::module_& mod) {
             "Byte offset from buffer base address for CB placement (default 0)")
         .def(
             "has_buffer",
-            [](const tt::tt_metal::CBDescriptor& self) { return self.buffer != nullptr; },
+            [](const tt::tt_metal::CBDescriptor& self) { return self.buffer != nullptr || self.tensor != nullptr; },
             R"pbdoc(
-                Check if this CB has a pinned L1 buffer.
+                Check if this CB has a pinned L1 buffer/ tensor.
 
                 When True, the CB is bound to a specific L1 address (e.g., a sharded tensor's memory).
                 Writes to this CB go directly to that tensor's L1 space.
 
                 Returns:
-                    True if a buffer pointer is set, False otherwise.
+                    True if a buffer or tensor pointer is set, False otherwise.
             )pbdoc")
         .def(
             "has_global_circular_buffer",
@@ -456,6 +456,7 @@ void py_module_types(nb::module_& mod) {
             "set_buffer_from_cb",
             [](tt::tt_metal::CBDescriptor& self, const tt::tt_metal::CBDescriptor& other) {
                 self.buffer = other.buffer;
+                self.tensor = other.tensor;
             },
             nb::arg("other"),
             R"pbdoc(
@@ -469,6 +470,9 @@ void py_module_types(nb::module_& mod) {
             [](const tt::tt_metal::CBDescriptor& self) -> std::optional<uint32_t> {
                 if (self.buffer != nullptr) {
                     return self.buffer->address();
+                }
+                if (self.tensor != nullptr) {
+                    return static_cast<uint32_t>(self.tensor->address());
                 }
                 return std::nullopt;
             },

@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
@@ -40,12 +41,18 @@ inline std::optional<std::uint32_t> find_io_tensor_index(std::uint32_t value, co
     return std::nullopt;
 }
 
-/// For each CBDescriptor with a buffer, match its address against *tensor_addrs*.
+/// For each CBDescriptor backed by a buffer or tensor, match its address against *tensor_addrs*.
 inline std::vector<std::pair<uint32_t, uint32_t>> compute_cb_io_tensor_map(
     const tt::tt_metal::ProgramDescriptor& desc, const std::vector<OptionalAddr>& tensor_addrs) {
     std::vector<std::pair<uint32_t, uint32_t>> result;
     for (size_t ci = 0; ci < desc.cbs.size(); ++ci) {
-        const auto* buf = desc.cbs[ci].buffer;
+        const auto& cb = desc.cbs[ci];
+        // A CB may be backed by either a raw Buffer* or a MeshTensor* (mutually exclusive); resolve
+        // both to the reference Buffer so either kind matches against the IO-tensor addresses.
+        const tt::tt_metal::Buffer* buf = cb.buffer;
+        if (buf == nullptr && cb.tensor != nullptr) {
+            buf = cb.tensor->mesh_buffer().get_reference_buffer();
+        }
         if (buf != nullptr) {
             if (auto ti = find_io_tensor_index(buf->address(), tensor_addrs)) {
                 result.emplace_back(static_cast<uint32_t>(ci), *ti);
@@ -72,10 +79,11 @@ struct CommonRTArgSlot {
     std::uint32_t io_tensor_index;
 };
 
-/// Slot: a CB whose buffer comes from an IO tensor.
+/// Slot: a CB whose backing (buffer or tensor) comes from an IO tensor.
 struct CBSlot {
     std::uint32_t cb_idx;
     std::uint32_t io_tensor_index;
+    bool tensor_backed = false;  // true if the CB is backed by .tensor (MeshTensor*) rather than .buffer
 };
 
 /// Slot: a per-core runtime arg that holds a barrier semaphore L1 address.
@@ -142,7 +150,7 @@ inline AddressSlots compute_address_slots(
     }
 
     for (const auto& [cb_idx, io_idx] : compute_cb_io_tensor_map(desc, tensor_addrs)) {
-        slots.cb_slots.push_back({cb_idx, io_idx});
+        slots.cb_slots.push_back({cb_idx, io_idx, desc.cbs[cb_idx].tensor != nullptr});
     }
 
     return slots;
@@ -175,7 +183,19 @@ inline void patch_stale_descriptor(
         }
     }
     for (const auto& slot : slots.cb_slots) {
-        desc.cbs[slot.cb_idx].buffer = io_tensors[slot.io_tensor_index].buffer();
+        const auto& tensor = io_tensors[slot.io_tensor_index];
+        auto& cb = desc.cbs[slot.cb_idx];
+        if (slot.tensor_backed) {
+            // Repoint at the live tensor's MeshTensor.  ``mesh_tensor()`` returns a reference owned
+            // by the Tensor's shared storage, so the pointer is valid for the duration of this
+            // dispatch — the same lifetime guarantee as the ``buffer()`` pointer in the else-branch.
+            // Clear ``buffer`` to uphold the CBDescriptor buffer-xor-tensor invariant.
+            cb.tensor = &tensor.mesh_tensor();
+            cb.buffer = nullptr;
+        } else {
+            cb.buffer = tensor.buffer();
+            cb.tensor = nullptr;
+        }
     }
 }
 
