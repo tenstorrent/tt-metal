@@ -299,11 +299,9 @@ H2DSocket::H2DSocket(
     uint32_t data_l1_local_addr,
     uint64_t dram_l1_noc_offset) :
     recv_core_(recv_core),
-    buffer_type_(BufferType::L1),
     fifo_size_(fifo_size),
     pcie_alignment_(MetalContext::instance().hal().get_alignment(HalMemType::HOST)),
     pinned_memory_(nullptr),
-    h2d_mode_(H2DMode::HOST_PUSH),
     mesh_device_(mesh_device.get()),
     dram_l1_noc_offset_(dram_l1_noc_offset),
     recv_core_type_(RecvCoreType::Dram) {

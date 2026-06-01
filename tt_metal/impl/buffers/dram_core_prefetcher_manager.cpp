@@ -194,8 +194,8 @@ void DramCorePrefetcherManager::allocate_sockets() {
                                             .hal()
                                             .get_l1_noc_offset(HalProgrammableCoreType::DRAM);
 
-    for (uint32_t d = 0; d < devices_.size(); ++d) {
-        const MeshCoordinate device_coord = mesh_device_->get_view().find_device(devices_[d]->id());
+    for (auto* device : devices_) {
+        const MeshCoordinate device_coord = mesh_device_->get_view().find_device(device->id());
         for (uint32_t s = 0; s < num_senders_; ++s) {
             const CoreCoord sender_logical = sender_logical_cores_[s];
             // Uniform L1 layout per DRAM core: only one socket lives on each core
@@ -458,7 +458,7 @@ void DramCorePrefetcherManager::queue(
     for (const auto& range : effective_subset.ranges()) {
         for (const auto& coord : range) {
             TT_FATAL(
-                device_index_by_coord_.find(coord) != device_index_by_coord_.end(),
+                device_index_by_coord_.contains(coord),
                 "QueueDramCorePrefetcherRequest target MeshCoordinate {} is not in the mesh this prefetcher was "
                 "started "
                 "on",
