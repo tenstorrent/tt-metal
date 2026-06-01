@@ -23,6 +23,17 @@ void kernel_main() {
     constexpr uint32_t dst_noc_y = get_compile_time_arg_val(5);
     constexpr uint32_t num_iterations = get_compile_time_arg_val(6);
     constexpr uint32_t transaction_size_bytes = get_compile_time_arg_val(7);
+    constexpr uint32_t src_noc_x = get_compile_time_arg_val(8);
+    constexpr uint32_t src_noc_y = get_compile_time_arg_val(9);
+
+    DEVICE_PRINT(
+        "[sender] running on core ({},{}), writing {} bytes to core ({},{}) for {} iterations\n",
+        src_noc_x,
+        src_noc_y,
+        transaction_size_bytes,
+        dst_noc_x,
+        dst_noc_y,
+        num_iterations);
 
     uint64_t dst_data_noc = get_noc_addr(dst_noc_x, dst_noc_y, dst_l1_data_addr);
     uint64_t dst_flag_noc = get_noc_addr(dst_noc_x, dst_noc_y, dst_l1_flag_addr);
@@ -38,7 +49,8 @@ void kernel_main() {
         noc_async_write_barrier();
         uint32_t t1 = rdcycles();
 
-        DEVICE_PRINT("[sender] iter {}: {} cycles\n", i, t1 - t0);
+        DEVICE_PRINT(
+            "[sender] ({},{}) -> ({},{}) iter {}: {} cycles\n", src_noc_x, src_noc_y, dst_noc_x, dst_noc_y, i, t1 - t0);
 
         *(volatile tt_l1_ptr uint32_t*)(flag_local_addr + MEM_L1_UNCACHED_BASE) = i + 1;
         noc_async_write(flag_local_addr, dst_flag_noc, sizeof(uint32_t));

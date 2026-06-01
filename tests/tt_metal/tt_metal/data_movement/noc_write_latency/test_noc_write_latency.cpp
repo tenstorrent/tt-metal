@@ -18,6 +18,8 @@ namespace unit_tests::dm::noc_write_latency {
 struct NocWriteLatencyConfig {
     CoreCoord src_core;
     CoreCoord dst_core;
+    // When true, dst_core is ignored and the bottom-right compute core is used instead.
+    bool dst_far_corner = false;
     uint32_t num_iterations = 100;
     uint32_t transaction_size_bytes = 32;
 };
@@ -30,18 +32,33 @@ bool run_noc_write_latency(const shared_ptr<distributed::MeshDevice>& mesh_devic
         return true;
     }
     auto grid = device->compute_with_storage_grid_size();
-    if (grid.x < 9 || grid.y < 4) {
-        log_info(LogTest, "Skipping: grid {}x{} smaller than 9x4", grid.x, grid.y);
+    log_info(LogTest, "Compute grid: {}x{}", grid.x, grid.y);
+
+    // The bottom-right compute core is (grid.x - 1, grid.y - 1).
+    CoreCoord dst_core = cfg.dst_far_corner ? CoreCoord{grid.x - 1, grid.y - 1} : cfg.dst_core;
+
+    if (cfg.src_core.x >= grid.x || cfg.src_core.y >= grid.y || dst_core.x >= grid.x || dst_core.y >= grid.y) {
+        log_info(
+            LogTest,
+            "Skipping: src ({},{}) or dst ({},{}) outside compute grid {}x{}",
+            cfg.src_core.x,
+            cfg.src_core.y,
+            dst_core.x,
+            dst_core.y,
+            grid.x,
+            grid.y);
         return true;
     }
+    log_info(LogTest, "src ({},{}) -> dst ({},{})", cfg.src_core.x, cfg.src_core.y, dst_core.x, dst_core.y);
 
-    CoreCoord phys_dst = device->worker_core_from_logical_core(cfg.dst_core);
+    CoreCoord phys_src = device->worker_core_from_logical_core(cfg.src_core);
+    CoreCoord phys_dst = device->worker_core_from_logical_core(dst_core);
 
     L1AddressInfo src_l1 = unit_tests::dm::get_l1_address_and_size(mesh_device, cfg.src_core);
     uint32_t src_l1_addr = src_l1.base_address;
     uint32_t flag_local_addr = src_l1.base_address + 64;
 
-    L1AddressInfo dst_l1 = unit_tests::dm::get_l1_address_and_size(mesh_device, cfg.dst_core);
+    L1AddressInfo dst_l1 = unit_tests::dm::get_l1_address_and_size(mesh_device, dst_core);
     uint32_t dst_l1_data_addr = dst_l1.base_address;
     uint32_t dst_l1_flag_addr = dst_l1.base_address + 64;
 
@@ -56,7 +73,7 @@ bool run_noc_write_latency(const shared_ptr<distributed::MeshDevice>& mesh_devic
         cfg.transaction_size_bytes);
 
     vector<uint32_t> zero{0};
-    detail::WriteToDeviceL1(device, cfg.dst_core, dst_l1_flag_addr, zero);
+    detail::WriteToDeviceL1(device, dst_core, dst_l1_flag_addr, zero);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     Program program = CreateProgram();
@@ -76,12 +93,14 @@ bool run_noc_write_latency(const shared_ptr<distributed::MeshDevice>& mesh_devic
                 (uint32_t)phys_dst.y,
                 cfg.num_iterations,
                 cfg.transaction_size_bytes,
+                (uint32_t)phys_src.x,
+                (uint32_t)phys_src.y,
             }});
 
     experimental::quasar::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/data_movement/noc_write_latency/kernels/receiver.cpp",
-        cfg.dst_core,
+        dst_core,
         experimental::quasar::QuasarDataMovementConfig{
             .num_threads_per_cluster = 1,
             .compile_args = {
@@ -116,7 +135,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, NocWriteLatencyFarCorners) {
     }
     unit_tests::dm::noc_write_latency::NocWriteLatencyConfig cfg{
         .src_core = {0, 0},
-        .dst_core = {8, 3},
+        .dst_core = {0, 0},
+        .dst_far_corner = true,
         .num_iterations = 100,
         .transaction_size_bytes = 32,
     };
@@ -131,6 +151,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, NocWriteLatencyAdjacentCores) {
     unit_tests::dm::noc_write_latency::NocWriteLatencyConfig cfg{
         .src_core = {0, 0},
         .dst_core = {1, 0},
+        .dst_far_corner = false,
         .num_iterations = 100,
         .transaction_size_bytes = 32,
     };
