@@ -1828,7 +1828,7 @@ void TestConfigBuilder::expand_sequential_all_to_all_unicast(
 void TestConfigBuilder::expand_all_devices_uniform_pattern(
     ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
     log_debug(LogTest, "Expanding all_devices_uniform_pattern for test: {}", test.name);
-    std::vector<FabricNodeId> devices = device_info_provider_.get_global_node_ids();
+    std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
     TT_FATAL(!devices.empty(), "Cannot expand all_devices_uniform_pattern because no devices were found.");
 
     for (const auto& src_node : devices) {
