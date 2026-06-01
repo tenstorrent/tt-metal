@@ -12,7 +12,11 @@ from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.common import Mode
 
 
-def _repeat_kv_ttnn(kv: ttnn.Tensor, repeats: int) -> ttnn.Tensor:
+def _repeat_kv_ttnn(
+    kv: ttnn.Tensor,
+    repeats: int,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
     """Repeat-interleave KV heads on TT: [B, Kv, S, D] -> [B, Kv*repeats, S, D]."""
     if repeats == 1:
         return kv
@@ -23,7 +27,7 @@ def _repeat_kv_ttnn(kv: ttnn.Tensor, repeats: int) -> ttnn.Tensor:
         head_rep = ttnn.repeat(head, (1, repeats, 1, 1))
         ttnn.deallocate(head)
         repeated.append(head_rep)
-    out = ttnn.concat(repeated, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.concat(repeated, dim=1, memory_config=memory_config)
     for t in repeated:
         ttnn.deallocate(t)
     return out
@@ -161,7 +165,7 @@ class VoxtralTTAttention:
             ttnn.deallocate(xqkv)
             xq = self.q_norm(xq, mode=_qk_mode)
             xk = self.k_norm(xk, mode=_qk_mode)
-            xqkv = ttnn.concat([xq, xk, xv], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            xqkv = ttnn.concat([xq, xk, xv], dim=3, memory_config=act_mem)
             ttnn.deallocate(xq)
             ttnn.deallocate(xk)
             ttnn.deallocate(xv)
@@ -171,7 +175,7 @@ class VoxtralTTAttention:
             num_heads=self.num_attention_heads,
             num_kv_heads=self.num_key_value_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=act_mem,
         )
         ttnn.deallocate(xqkv)
 
@@ -217,14 +221,14 @@ class VoxtralTTAttention:
                 device=self.device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=act_mem,
             )
             sin_tt = ttnn.from_torch(
                 sin_slice.unsqueeze(1),
                 device=self.device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=act_mem,
             )
 
             q_in = q
@@ -258,8 +262,8 @@ class VoxtralTTAttention:
                 k = k_rot
 
         n_rep = self.num_attention_heads // self.num_key_value_heads
-        k_rep = _repeat_kv_ttnn(k, n_rep)
-        v_rep = _repeat_kv_ttnn(v, n_rep)
+        k_rep = _repeat_kv_ttnn(k, n_rep, memory_config=act_mem)
+        v_rep = _repeat_kv_ttnn(v, n_rep, memory_config=act_mem)
         if n_rep > 1:
             ttnn.deallocate(k)
             ttnn.deallocate(v)
@@ -279,7 +283,7 @@ class VoxtralTTAttention:
 
         attn_out = ttnn.experimental.nlp_concat_heads(
             attn_out,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=act_mem,
         )
 
         out = ttnn.linear(attn_out, self.wo, **_lin_kw)

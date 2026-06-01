@@ -930,7 +930,7 @@ class Attention(LightweightModule):
             self.mesh_device,
             self.tt_ccl,
             cluster_axis=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.args.get_attn_qkv_all_reduce_output_mem_config(Mode.PREFILL, 1, None),
             dtype=self.ccl_dtype,
         )
 
@@ -957,7 +957,7 @@ class Attention(LightweightModule):
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
             transpose_k_heads=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.args.get_attn_create_head_input_mem_config(Mode.PREFILL),
         )
 
         norm_config = self.args.get_norm_config("attn", Mode.PREFILL, None)
@@ -1123,7 +1123,7 @@ class Attention(LightweightModule):
         ###
         attn_output_11SH = ttnn.experimental.nlp_concat_heads(
             attn_output_1QSD,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.args.get_attn_concat_heads_output_mem_config(Mode.PREFILL, None),
         )
         ttnn.deallocate(attn_output_1QSD)
 
@@ -1146,7 +1146,7 @@ class Attention(LightweightModule):
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
                 topology=self.ccl_topology,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=self.args.get_attn_all_gather_output_mem_config(Mode.PREFILL, None),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=10,
                 num_workers_per_link=2,
@@ -1158,7 +1158,7 @@ class Attention(LightweightModule):
             self.wo,
             compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
             dtype=self.activation_dtype or ttnn.bfloat8_b,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self.args.get_attn_wo_output_mem_config(Mode.PREFILL, None),
             program_config=self.args.get_attn_wo_program_config(Mode.PREFILL, seq_len, None),
         )
 
@@ -1175,7 +1175,7 @@ class Attention(LightweightModule):
                 cluster_axis=0,
                 dim=0 if self.TG else 3,
                 topology=self.ccl_topology,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=self.args.get_attn_dense_output_mem_config(Mode.PREFILL, None),
                 dtype=self.ccl_dtype,
             )
 
