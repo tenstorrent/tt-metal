@@ -253,6 +253,20 @@ The correct pattern (static/dynamic split):
 Compile-time values (CB sizes, `#define`s, compile args) can **never** be dynamic — they bake the
 kernel ELF. They must stay hashed (keep them in `attribute_values()`).
 
+> **Precondition for the fast path: the program hash must include everything the per-core runtime
+> args depend on — in particular the shape.** The fast cache-hit path (buffer bindings +
+> `get_dynamic_runtime_args`) only re-patches buffer addresses and your declared dynamic scalars; it
+> does **not** recompute the rest of the runtime args. So it's only correct when "same hash" implies
+> "same program structure" — same shape, same work-split, same per-core tile counts/offsets.
+>
+> Some ops deliberately do the opposite: they **exclude shape from the hash** so one program is
+> reused across shapes, with the per-core args (num_tiles, offsets, num_cores) carrying the shape and
+> the **slow-path rebuild** recomputing them every dispatch (e.g. `binary_ng` hashes `shard_volumes`,
+> not shape). Such shape-agnostic ops **cannot** use buffer bindings — the fast path would leave the
+> shape-dependent args stale and miscompute. Leave them on the slow path (raw addresses, no
+> bindings). Forcing the fast path would require either putting shape back in the hash (losing the
+> cross-shape reuse) or re-deriving every per-core arg (which is just the slow-path rebuild).
+
 ### 1.5 CMakeLists.txt
 
 Create a `CMakeLists.txt` for the `_new` operation and add it to `ttnn/CMakeLists.txt`:
