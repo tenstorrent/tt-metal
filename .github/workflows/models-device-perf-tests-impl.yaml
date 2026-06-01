@@ -96,7 +96,14 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
+        # bh_p150 / bh_loudbox / bh_galaxy[_perf] and the WH SKUs run on machines
+        # that host the canonical HF / tt_cache layout under /mnt/MLPerf, so the
+        # standard mount works as-is. bh_quietbox_2 uses QB2's in YYZ4 with a NFS mount
+        # whose equivalent layout lives at /mnt/models/huggingface
+        # — map that host path onto /mnt/MLPerf/huggingface inside the container
+        # so a single test cmd referencing /mnt/MLPerf/... resolves on both
+        # cache modes.
+        - ${{ matrix.test-group.sku == 'bh_quietbox_2' && format('/mnt/models/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw') || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
       options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
     defaults:
       run:

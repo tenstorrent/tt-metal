@@ -114,8 +114,9 @@ jobs:
         # from .github/blackhole_demo_systems.yaml during matrix build.
         # If weights-cache-mode is lfc, we don't mount the model cache volume — weights download via LFC (P300s in CIv1-style env on Proxmox with LFC endpoint)
         # If weights-cache-mode is cloud-mlperf, mount from /mnt/MLPerf/huggingface (canonical HF cache root, shared with the Wormhole pipelines)
+        # If weights-cache-mode is yyz4-mnt-models, mount from /mnt/models/huggingface (YYZ4 Exabox nfs storage mount)
         # If weights-cache-mode is local-disk, mount from /localdev/blackhole_demos/huggingface_data (CIv1 GH VLAN, not on Cloud)
-        - "${{ matrix.test-group['weights-cache-mode'] != 'lfc' && format('{0}:/localdev/blackhole_demos/huggingface_data{1}', matrix.test-group['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface' || '/localdev/blackhole_demos/huggingface_data', inputs.regenerate-ttnn-cache == true && ':rw' || ':ro') || '/no_hf_cache' }}"
+        - "${{ matrix.test-group['weights-cache-mode'] != 'lfc' && format('{0}:/localdev/blackhole_demos/huggingface_data{1}', matrix.test-group['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface' || matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' && '/mnt/models/huggingface' || '/localdev/blackhole_demos/huggingface_data', inputs.regenerate-ttnn-cache == true && ':rw' || ':ro') || '/no_hf_cache' }}"
       options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
       run:
