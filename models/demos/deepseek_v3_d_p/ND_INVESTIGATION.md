@@ -268,6 +268,14 @@ allocator places them non-overlapping. The compute partials CBs (`c_7`/`c_8`/`c_
 do not overlap the reader-written input CBs (`c_0`..`c_3`, `c_12`). So a structural
 CB-overlap race is not the cause.
 
+## Compute packer-reconfig sequencing — checked, correct
+`matmul_phase_fused_gu` places `llk_pack_reconfig_l1_acc(1)` only AFTER block 0's
+full subblock loop (both gate and up packs), so block-0 packs correctly overwrite and
+blocks 1+ accumulate — matches the canonical matmul kernel. Not the bug. So within the
+compute kernel the defect is a subtler LLK/hardware hazard (SFPU silu pass, dst-register
+management across gate→up→copy phases, or a Trisc pipeline hazard) — needs Trisc DPRINT
+of intermediate tiles across two runs to pin.
+
 ## Reader DEFINITIVELY exonerated → the compute kernel is the source
 `noc_async_write_multicast` (and the loopback variant) default to **`posted=false`**
 (non-posted, `dataflow_api.h`) — multicast writes are acked, so the max-sync
