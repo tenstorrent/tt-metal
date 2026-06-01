@@ -60,6 +60,9 @@ class VoxtralTTTextModel:
 
     def __init__(self, inner_transformer: Transformer) -> None:
         self.inner = inner_transformer
+        # Pre-compute static decode configs once — args and prefetcher are fixed after init.
+        self._decode_mem_cfg = inner_transformer.args.get_residual_mem_config(Mode.DECODE, inner_transformer.prefetcher)
+        self._lm_norm_cfg = inner_transformer.args.get_norm_config("lm_head", Mode.DECODE, inner_transformer.prefetcher)
 
     @classmethod
     def create(
@@ -147,67 +150,58 @@ class VoxtralTTTextModel:
     def forward(self, *args, **kwargs):
         return self.inner.forward(*args, **kwargs)
 
-    # handle the tt tensot coming from embed coming from tt
-    def prefill_from_embeds(
+    def _decode_single_token_to_tt(
         self,
-        inputs_embeds: torch.Tensor,
-        start_pos: int = 0,
+        x_embed: "torch.Tensor | ttnn.Tensor",
+        pos_idx: int,
         *,
         collect_layer_hiddens: bool = False,
-    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        """Prefill via per-token decode (KV-safe; avoids P150 prefill L1 overflow). Returns ``[dim]`` hidden."""
-        S = inputs_embeds.shape[0]
-        embeds = inputs_embeds.to(dtype=torch.bfloat16)
+    ) -> "ttnn.Tensor | tuple[ttnn.Tensor, dict[str, torch.Tensor]]":
+        """Core TT decode step: embed → device x_norm (post-norm, no host readback).
 
-        last_hidden: torch.Tensor | None = None
-        layer_hiddens: dict[str, torch.Tensor] = {}
-        for i in range(S):
-            is_last = i == S - 1
-            if collect_layer_hiddens and is_last:
-                last_hidden, layer_hiddens = self.decode_step_from_embeds(
-                    embeds[i], start_pos + i, collect_layer_hiddens=True
-                )
-            else:
-                last_hidden = self.decode_step_from_embeds(embeds[i], start_pos + i)
+        Accepts either a CPU ``torch.Tensor`` (AR loop from audio codes) or an already
+        on-device ``ttnn.Tensor`` (e.g. from ``_audio_codes_to_mm_embed_device``).
 
-        assert last_hidden is not None
-        if collect_layer_hiddens:
-            return last_hidden, layer_hiddens
-        return last_hidden
-
-    #  handle tt tensor instead of torch tensor
-    def decode_step_from_embeds(
-        self,
-        x_embed: torch.Tensor,
-        current_pos_idx: int,
-        *,
-        collect_layer_hiddens: bool = False,
-    ) -> torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        """One decode step from a CPU embedding; returns post-norm ``[dim]`` hidden (pre-LM-head)."""
+        Shared by ``decode_step_from_embeds`` (wraps + host gather) and ``forward_device_resident``
+        (keeps hidden on device for acoustic model via ``forward_from_tt``).
+        ``collect_layer_hiddens`` is a debug flag that causes per-layer host readbacks.
+        """
         dim = self.inner.args.dim
-        args = self.inner.args
-        activation_dtype = _decode_activation_dtype(args) or ttnn.bfloat16
-        x_4d = x_embed.reshape(1, 1, 1, dim).to(dtype=torch.bfloat16).contiguous()
+        activation_dtype = _decode_activation_dtype(self.inner.args) or ttnn.bfloat16
 
-        # for demo it should not be dummy (only for test )  ,   ii) all things move to ttnn tensor rather than torch tensor , iii) initialization shloud be done in init not during runtime untill reqiured
-        dummy_token = torch.zeros(1, dtype=torch.int64)
-        current_pos_t = torch.tensor([current_pos_idx], dtype=torch.int64)
-        _, current_pos_tt, rope_idxs, page_table = self.prepare_inputs_decode(dummy_token, current_pos_t)
-
-        rot_mats_global = self.inner.rope_setup.get_rot_mats(rope_idxs)
+        current_pos_t = torch.tensor([pos_idx], dtype=torch.int64)
+        rot_mats_global = self.inner.rope_setup.get_rot_mats(current_pos_t)
         rot_mats_local = (
-            self.inner.rope_local_setup.get_rot_mats(rope_idxs) if hasattr(self.inner, "rope_local_setup") else None
+            self.inner.rope_local_setup.get_rot_mats(current_pos_t) if hasattr(self.inner, "rope_local_setup") else None
         )
-        # check if it reqiured for the run time f not put it init
-        decode_mem_cfg = args.get_residual_mem_config(Mode.DECODE, self.inner.prefetcher)
-        x_tt = ttnn.from_torch(
-            x_4d,
+        current_pos_tt = ttnn.from_torch(
+            current_pos_t,
             device=self.inner.mesh_device,
-            dtype=activation_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=decode_mem_cfg,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.inner.mesh_device),
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.inner.mesh_device,
+                dims=(None, None),
+                mesh_shape=self.inner.args.cluster_shape,
+            ),
         )
+
+        if isinstance(x_embed, ttnn.Tensor):
+            # Embed already on device (from mm_audio_encode_tokens_summed_forward).
+            # Convert layout + memory config in one call — no host round-trip.
+            if x_embed.layout != ttnn.TILE_LAYOUT:
+                x_tt = ttnn.to_layout(x_embed, ttnn.TILE_LAYOUT, memory_config=self._decode_mem_cfg)
+            else:
+                x_tt = ttnn.to_memory_config(x_embed, self._decode_mem_cfg)
+        else:
+            x_4d = x_embed.reshape(1, 1, 1, dim).to(dtype=torch.bfloat16).contiguous()
+            x_tt = ttnn.from_torch(
+                x_4d,
+                device=self.inner.mesh_device,
+                dtype=activation_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self._decode_mem_cfg,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.inner.mesh_device),
+            )
 
         layer_hiddens: dict[str, torch.Tensor] = {}
         for i, layer in enumerate(self.inner.layers):
@@ -218,19 +212,172 @@ class VoxtralTTTextModel:
                 rot_mats_local=rot_mats_local,
                 user_id=0,
                 mode=Mode.DECODE,
-                page_table=page_table,
+                page_table=None,
                 kv_cache=None,
             )
             if collect_layer_hiddens:
                 host_layer = self.inner.concat_host_output(x_tt)
                 layer_hiddens[f"layer.{i}"] = host_layer[0, 0, 0, :dim].to(dtype=torch.bfloat16)
-        # these aslo shlould be in init if it is one time initialization,
-        lm_norm_cfg = args.get_norm_config("lm_head", Mode.DECODE, self.inner.prefetcher)
-        x_norm = self.inner.norm(x_tt, mode=Mode.DECODE, norm_config=lm_norm_cfg)
+
+        x_norm = self.inner.norm(x_tt, mode=Mode.DECODE, norm_config=self._lm_norm_cfg)
         ttnn.deallocate(x_tt)
-        host = self.inner.concat_host_output(x_norm)  ## concat should be change into tt not i torch
-        ttnn.deallocate(x_norm)
-        hidden = host[0, 0, 0, :dim].to(dtype=torch.bfloat16)  ##  check this , hidden should be in tt tensor
+        if collect_layer_hiddens:
+            return x_norm, layer_hiddens
+        return x_norm
+
+    def hidden_tt_to_torch(self, x_norm_tt: "ttnn.Tensor") -> torch.Tensor:
+        """Gather device hidden ``[1,1,1,dim]`` → CPU ``[dim]`` bfloat16.
+
+        Use this whenever a caller needs a torch tensor from a TT hidden returned by
+        ``prefill_from_embeds`` — e.g. for PCC comparison or feeding the acoustic model.
+        """
+        host = self.inner.concat_host_output(x_norm_tt)
+        return host[0, 0, 0, : self.inner.args.dim].to(dtype=torch.bfloat16)
+
+    # Flow: torch input → ONE ttnn.from_torch at the top → TT slicing inside the loop
+    # → TT throughout all layer computation → returned as ttnn.Tensor.
+    # Convert to torch only when the caller explicitly needs it (PCC, acoustic model):
+    #   hidden_torch = model.hidden_tt_to_torch(hidden_tt); ttnn.deallocate(hidden_tt)
+    def prefill_from_embeds(
+        self,
+        inputs_embeds: "torch.Tensor | ttnn.Tensor",
+        start_pos: int = 0,
+        *,
+        collect_layer_hiddens: bool = False,
+    ) -> "ttnn.Tensor | tuple[ttnn.Tensor, dict[str, torch.Tensor]]":
+        """Prefill via per-token decode (KV-safe). Returns device ``x_norm`` as ``ttnn.Tensor``.
+
+        Uploads the full ``[S, dim]`` embedding sequence to TT in ONE ``ttnn.from_torch``
+        call, then slices per token on device — no per-step host→device DMA inside the loop.
+
+        The voice-injection scatter (building the ``[S, dim]`` tensor before calling this) is
+        currently done on CPU; porting it to TT (``ttnn.embedding`` + ``ttnn.where``) is a
+        follow-on task.
+        """
+        dim = self.inner.args.dim
+        activation_dtype = _decode_activation_dtype(self.inner.args) or ttnn.bfloat16
+
+        # ── SINGLE TT UPLOAD ─────────────────────────────────────────────────
+        # One ttnn.from_torch for the full sequence — no per-step DMA.
+        if isinstance(inputs_embeds, ttnn.Tensor):
+            S = int(inputs_embeds.shape[0])
+            owns_embeds_tt = False
+            # Need ROW_MAJOR for non-tile-aligned per-token slicing.
+            if inputs_embeds.layout != ttnn.ROW_MAJOR_LAYOUT:
+                embeds_tt = ttnn.to_layout(inputs_embeds, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                embeds_tt = inputs_embeds
+            # Ensure shape is [S, 1, 1, dim] for uniform slice coordinates.
+            if len(embeds_tt.shape) != 4:
+                embeds_tt = ttnn.reshape(embeds_tt, (S, 1, 1, dim))
+        else:
+            S = int(inputs_embeds.shape[0])
+            owns_embeds_tt = True
+            embeds_4d = inputs_embeds.reshape(S, 1, 1, dim).to(dtype=torch.bfloat16).contiguous()
+            embeds_tt = ttnn.from_torch(
+                embeds_4d,
+                device=self.inner.mesh_device,
+                dtype=activation_dtype,
+                layout=ttnn.ROW_MAJOR_LAYOUT,  # ROW_MAJOR allows non-tile-aligned token slicing
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.inner.mesh_device),
+            )
+        # embeds_tt: [S, 1, 1, dim] ROW_MAJOR DRAM
+
+        # ── TT-ONLY LOOP ─────────────────────────────────────────────────────
+        last_hidden_tt: ttnn.Tensor | None = None
+        layer_hiddens: dict[str, torch.Tensor] = {}
+
+        for i in range(S):
+            is_last = i == S - 1
+            collect_this = collect_layer_hiddens and is_last
+
+            # Slice token i on device — zero host round-trips for the embedding data.
+            embed_i_rm = ttnn.slice(embeds_tt, (i, 0, 0, 0), (i + 1, 1, 1, dim))
+            # Convert to TILE_LAYOUT + decode shard in one call.
+            embed_i_tt = ttnn.to_layout(embed_i_rm, ttnn.TILE_LAYOUT, memory_config=self._decode_mem_cfg)
+            if embed_i_rm.is_allocated():
+                ttnn.deallocate(embed_i_rm)
+
+            # Position/rope: pos_idx is a Python int — a 1-element scalar index (4 bytes),
+            # not embedding data. This tiny transfer is unavoidable.
+            current_pos_t = torch.tensor([start_pos + i], dtype=torch.int64)
+            rot_mats_global = self.inner.rope_setup.get_rot_mats(current_pos_t)
+            rot_mats_local = (
+                self.inner.rope_local_setup.get_rot_mats(current_pos_t)
+                if hasattr(self.inner, "rope_local_setup")
+                else None
+            )
+            current_pos_tt = ttnn.from_torch(
+                current_pos_t,
+                device=self.inner.mesh_device,
+                dtype=ttnn.int32,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.inner.mesh_device,
+                    dims=(None, None),
+                    mesh_shape=self.inner.args.cluster_shape,
+                ),
+            )
+
+            # Layer loop — pure TT. No host readback except the debug collect path.
+            x_tt = embed_i_tt
+            layer_hiddens_step: dict[str, torch.Tensor] = {}
+            for j, layer in enumerate(self.inner.layers):
+                x_tt = layer(
+                    x_tt,
+                    current_pos_tt,
+                    rot_mats_global=rot_mats_global,
+                    rot_mats_local=rot_mats_local,
+                    user_id=0,
+                    mode=Mode.DECODE,
+                    page_table=None,
+                    kv_cache=None,
+                )
+                if collect_this:
+                    host_layer = self.inner.concat_host_output(x_tt)
+                    layer_hiddens_step[f"layer.{j}"] = host_layer[0, 0, 0, :dim].to(dtype=torch.bfloat16)
+
+            x_norm_tt = self.inner.norm(x_tt, mode=Mode.DECODE, norm_config=self._lm_norm_cfg)
+            ttnn.deallocate(x_tt)
+
+            if collect_this:
+                layer_hiddens = layer_hiddens_step
+                layer_hiddens["layer.final_norm"] = self.hidden_tt_to_torch(x_norm_tt)
+
+            if last_hidden_tt is not None and last_hidden_tt.is_allocated():
+                ttnn.deallocate(last_hidden_tt)
+            last_hidden_tt = x_norm_tt
+
+        if owns_embeds_tt and embeds_tt.is_allocated():
+            ttnn.deallocate(embeds_tt)
+
+        assert last_hidden_tt is not None
+        if collect_layer_hiddens:
+            return last_hidden_tt, layer_hiddens
+        return last_hidden_tt
+
+    # Torch-return wrapper: callers that feed the hidden directly to the acoustic model
+    # (which takes a torch tensor) should use this. TT-input callers use decode_step_from_embeds_tt.
+    def decode_step_from_embeds(
+        self,
+        x_embed: torch.Tensor,
+        current_pos_idx: int,
+        *,
+        collect_layer_hiddens: bool = False,
+    ) -> "torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]":
+        """One decode step from a CPU embedding; returns post-norm ``[dim]`` hidden (pre-LM-head)."""
+        if collect_layer_hiddens:
+            x_norm_tt, layer_hiddens = self._decode_single_token_to_tt(
+                x_embed, current_pos_idx, collect_layer_hiddens=True
+            )
+        else:
+            x_norm_tt = self._decode_single_token_to_tt(x_embed, current_pos_idx)
+            layer_hiddens = {}
+
+        # concat_host_output is the required multi-device gather (sharded → host tensor).
+        # Acoustic model takes torch; TT-resident callers use decode_step_from_embeds_tt.
+        hidden = self.hidden_tt_to_torch(x_norm_tt)
+        ttnn.deallocate(x_norm_tt)
         if collect_layer_hiddens:
             layer_hiddens["layer.final_norm"] = hidden
             return hidden, layer_hiddens
@@ -245,12 +392,11 @@ class VoxtralTTTextModel:
         page_table: ttnn.Tensor,
     ) -> ttnn.Tensor:
         """One DECODE step for trace replay; returns device hidden (post-norm) without host readback."""
-        decode_mem_cfg = self.inner.args.get_residual_mem_config(Mode.DECODE, self.inner.prefetcher)
         activation_dtype = _decode_activation_dtype(self.inner.args)
         if activation_dtype is not None and x_embed_tt.dtype != activation_dtype:
-            x_tt = ttnn.to_memory_config(x_embed_tt, decode_mem_cfg, activation_dtype)
+            x_tt = ttnn.to_memory_config(x_embed_tt, self._decode_mem_cfg, activation_dtype)
         else:
-            x_tt = ttnn.to_memory_config(x_embed_tt, decode_mem_cfg)
+            x_tt = ttnn.to_memory_config(x_embed_tt, self._decode_mem_cfg)
 
         for i, layer in enumerate(self.inner.layers):
             x_tt = layer(
@@ -264,13 +410,6 @@ class VoxtralTTTextModel:
                 kv_cache=None,
             )
 
-        x_norm = self.inner.norm(
-            x_tt,
-            mode=Mode.DECODE,
-            norm_config=self.inner.args.get_norm_config("lm_head", Mode.DECODE, self.inner.prefetcher),
-        )
+        x_norm = self.inner.norm(x_tt, mode=Mode.DECODE, norm_config=self._lm_norm_cfg)
         ttnn.deallocate(x_tt)
         return x_norm
-
-
-# check this tt why dont call it from the text model class
