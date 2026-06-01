@@ -580,6 +580,10 @@ def run(
                 return False, device_err, None, None
 
             if is_model_traced:
+                # all_gather gathers along ONE dimension. The input must be
+                # sharded along that dim across ALL devices (each device holds
+                # a 1/N slice). ShardTensorToMesh handles both 1D and 2D meshes
+                # by splitting into total_devices chunks along the gather dim.
                 if is_2d_mesh:
                     if shard_dims is not None:
                         mapper_dims = shard_dims
@@ -587,27 +591,12 @@ def run(
                         mapper_dims = (None, effective_dim)
                     else:
                         mapper_dims = (effective_dim, None)
-                    # all_gather_async expects genuinely sharded input — each
-                    # device holds a unique slice along the gather dim. Using
-                    # replicate_with_topology puts identical data on every chip
-                    # which causes fabric deadlocks on large tensors (the
-                    # gather expects different data from each device).
-                    # Use ShardTensor2dMesh to actually shard the input.
-                    tt_input = ttnn.from_torch(
-                        torch_input,
-                        layout=layout,
-                        dtype=input_dtype,
-                        memory_config=input_memory_config,
-                        mesh_mapper=ShardTensor2dMesh(device, dims=mapper_dims, mesh_shape=mesh_shape),
-                        device=device,
-                    )
-                else:
-                    tt_input = ttnn.from_torch(
-                        torch_input,
-                        layout=layout,
-                        dtype=input_dtype,
-                        memory_config=input_memory_config,
-                        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=effective_dim),
+                tt_input = ttnn.from_torch(
+                    torch_input,
+                    layout=layout,
+                    dtype=input_dtype,
+                    memory_config=input_memory_config,
+                    mesh_mapper=ttnn.ShardTensorToMesh(device, dim=effective_dim),
                         device=device,
                     )
 
