@@ -133,6 +133,11 @@ void py_module(nb::module_& m) {
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
         py_distributed.def("enable_fabric", &ttnn_fixed::distributed::enable_fabric);
+        py_distributed.def(
+            "disable_fabric",
+            &ttnn_fixed::distributed::disable_fabric,
+            "Tear down the process-global fabric config (SetFabricConfig(DISABLED)). "
+            "Safe to call only when no devices are open; close the mesh device first.");
 
         // Returns std::unique_ptr<TensorToMesh>
         py_distributed.def(

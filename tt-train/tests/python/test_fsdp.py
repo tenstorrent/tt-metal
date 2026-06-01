@@ -54,15 +54,30 @@ pytestmark = pytest.mark.requires_device
 # exercise larger mesh sizes.
 FSDP_AXIS_SIZE = 2
 
-# Bundled MGD files we know how to use as a fallback when the user
-# hasn't exported ``TT_MESH_GRAPH_DESC_PATH``. Keyed by the full mesh
-# shape we want to open. Extend this when more shapes are needed; if a
-# shape isn't in the map we fall back to whatever ``_validate_mgd``
-# does (warn + skip validation), which is fine on most setups.
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-_MGD_FOR_SHAPE = {
-    (1, 2): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_1_2_line_line.textproto"),
+_MGD_FOR_ARCH_AND_SHAPE = {
+    ("blackhole", (1, 2)): os.path.join(_REPO_ROOT, "configs", "mgd", "bh_galaxy_1_2_line_line.textproto"),
+    ("wormhole_b0", (1, 2)): os.path.join(_REPO_ROOT, "configs", "mgd", "n300_1_2_line_line.textproto"),
 }
+
+
+def _detect_arch() -> Optional[str]:
+    """Return ``"blackhole"`` or ``"wormhole_b0"`` for the host, or ``None``.
+
+    Uses ``ttnn.get_arch_name()`` which reads the cluster yaml at
+    process start and does not require any device to be open. Returns
+    ``None`` on any failure so the caller can fall back to whatever the
+    user supplied via ``TT_MESH_GRAPH_DESC_PATH``.
+    """
+    try:
+        name = ttnn.get_arch_name().lower()
+    except Exception:  # noqa: BLE001
+        return None
+    if "blackhole" in name:
+        return "blackhole"
+    if "wormhole_b0" in name:
+        return "wormhole_b0"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -84,8 +99,9 @@ def _ensure_mgd_path(shape: tuple[int, ...]) -> Optional[str]:
     soft warning when the env var is unset — but the underlying fabric
     layer relies on the MGD too, so on a Blackhole galaxy host the open
     can hang or fail without one. We pick a bundled MGD that matches the
-    requested mesh shape; if no match exists we leave the env alone so
-    the open path can still succeed on hosts that don't need an MGD.
+    host arch + requested mesh shape; if no match exists we leave the
+    env alone so the open path can still succeed on hosts that don't
+    need an MGD.
 
     Returns the previous value of the env var (``None`` if unset), so the
     caller can restore it on teardown.
@@ -93,7 +109,10 @@ def _ensure_mgd_path(shape: tuple[int, ...]) -> Optional[str]:
     previous = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
     if previous:
         return previous
-    candidate = _MGD_FOR_SHAPE.get(shape)
+    arch = _detect_arch()
+    if arch is None:
+        return previous
+    candidate = _MGD_FOR_ARCH_AND_SHAPE.get((arch, shape))
     if candidate and os.path.isfile(candidate):
         os.environ["TT_MESH_GRAPH_DESC_PATH"] = candidate
     return previous
@@ -115,9 +134,9 @@ def fsdp_mesh():
     mesh). Skips the module if the system can't host the requested mesh.
 
     If ``TT_MESH_GRAPH_DESC_PATH`` isn't set in the environment, we point
-    it at a bundled MGD that matches the requested shape (see
-    ``_MGD_FOR_SHAPE``) so the fabric layer can come up cleanly. The
-    original value is restored at teardown.
+    it at a bundled MGD that matches the host arch + requested shape (see
+    ``_MGD_FOR_ARCH_AND_SHAPE``) so the fabric layer can come up cleanly.
+    The original value is restored at teardown.
     """
     shape = (1, FSDP_AXIS_SIZE)
     previous_mgd = _ensure_mgd_path(shape)
