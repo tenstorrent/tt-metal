@@ -411,12 +411,22 @@ class TtRoutedExpert(LightweightModule):
         #     naive per-expert Python loop (extract -> routed_expert_ffn ->
         #     insert), unchanged from before.
         shapes_2880 = self.emb_dim == 2880 and self.hidden_dim == 2880
-        # TEMP testing knob: TT_REXPERT_FORCE_NAIVE forces the non-unified
-        # fallback (per-expert extract -> routed_expert_ffn -> insert composite)
-        # even on Blackhole, so the naive path can be compared against the
-        # unified kernel. Not for production.
+        # [ND-fix 2026-06] The unified Blackhole FFN kernel (fused_swiglu) is
+        # NON-DETERMINISTIC across runs: with bit-identical inputs it produces a
+        # different FFN output, which flips the prefill token. Validated at full
+        # scale (61 layers / iter25 / pie960): the unified path gave tokens
+        # 14 (p=0.92) vs 260 (p=0.03) on two identical runs, while the naive
+        # per-expert path gave 2845 (p=1.0) on both. Reader/writer/dispatch/
+        # combine/gate are all deterministic — the defect is inside the fused
+        # compute kernel (see models/demos/deepseek_v3_d_p/ND_INVESTIGATION.md).
+        # Until the kernel-level race is fixed, DEFAULT to the deterministic
+        # naive path on Blackhole. Set TT_REXPERT_FORCE_UNIFIED=1 to re-enable
+        # the faster (non-deterministic) unified kernel for perf work.
+        # TT_REXPERT_FORCE_NAIVE=1 still forces naive everywhere. The Wormhole
+        # 2880x2880 path is unchanged (separate WH kernel config; not retested).
         force_naive = bool(os.environ.get("TT_REXPERT_FORCE_NAIVE"))
-        use_unified = (not force_naive) and (is_blackhole() or (is_wormhole_b0() and shapes_2880))
+        force_unified = bool(os.environ.get("TT_REXPERT_FORCE_UNIFIED"))
+        use_unified = (not force_naive) and ((is_blackhole() and force_unified) or (is_wormhole_b0() and shapes_2880))
         if use_unified:
             signpost(header="UnifiedRoutedExpertMoe")
             expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(

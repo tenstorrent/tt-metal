@@ -190,6 +190,33 @@ Two options:
    reused before all receivers consumed it). Kernels are JIT-compiled, so this can be
    iterated and verified on-device with the 5L/25600 fingerprint A/B (no full rebuild).
 
+## FULL-SCALE VALIDATION + SHIPPED FIX (2026-06-01)
+Validated at the real scale (61 layers, iter25, 25600 tokens) using the
+drift-sensitive `pie960` input and the Gumbel-safe token oracle (two separate
+processes, same `manual_seed(42)` → identical Gumbel → the final token differs
+ONLY if the logits are non-deterministic):
+
+| routed-expert path | run 1 | run 2 | verdict |
+|--------------------|-------|-------|---------|
+| **unified** (BH fused kernel) | token 14, p=0.9210 | token 260, p=0.0274 | **NON-DETERMINISTIC** |
+| **naive** (per-expert) | token 2845, p=1.0000 | token 2845, p=1.0000 | **DETERMINISTIC** |
+
+(longbook_qa_eng, which predicts a near-certain token, also gave a stable 1009/1009
+under naive but is a weak discriminator — pie960 is the discriminating input.)
+
+**SHIPPED FIX:** `tt_routed_expert.py` now defaults the Blackhole routed expert to the
+deterministic **naive** path. `TT_REXPERT_FORCE_UNIFIED=1` re-enables the faster
+non-deterministic unified kernel for perf work; `TT_REXPERT_FORCE_NAIVE=1` forces naive
+everywhere. WH 2880 path unchanged. This makes the prefill **deterministic out of the
+box** at the cost of the unified kernel's Blackhole FFN speedup, pending the kernel-level
+race fix (still open — see compute-kernel section; needs Trisc DPRINT/NoC tracing).
+
+Fix attempts on the unified kernel that did NOT work (kernels reverted to pristine):
+sender `flushed`→`barrier` (mcast writes are non-posted, so barrier already waits —
+data lands before valid), max-sync reader (8 barriers), `dst_full_sync_en=true`. These
+narrow the defect to the compute kernel `fused_swiglu` (single-core compute producing
+non-deterministic output from deterministic inputs).
+
 ## FINAL SUMMARY (what is proven)
 
 **Root cause:** the **unified fused routed-expert FFN kernel**
