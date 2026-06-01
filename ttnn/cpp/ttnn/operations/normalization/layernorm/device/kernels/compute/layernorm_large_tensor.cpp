@@ -259,6 +259,12 @@ void kernel_main() {
         // Lifecycle: cb_ex2pe input Streaming (per-tile wait+pop), output OutStreaming
         // (per-tile reserve+push). After the chain, the new pushed tile is re-waited
         // for downstream use.
+        //
+        // FIXME: a BIG init (unary_bcast_init does hw_configure) in the middle of the kernel is
+        // unsafe (MMIO writes mid-MAIN are undefined per compute_kernel_hw_startup.h:26-30). This
+        // is a stopgap that reproduces the prior behavior; the kernel should be restructured so
+        // cb_ex2pe is set up via per-element reconfig (reconfig_data_format_*) only, with no
+        // mid-kernel hw_configure. Remove this call once that rework lands.
         unary_bcast_init<BroadcastType::COL>(cb_ex2pe, cb_ex2pe);
         compute_kernel_lib::eltwise_chain(
             onetile,
