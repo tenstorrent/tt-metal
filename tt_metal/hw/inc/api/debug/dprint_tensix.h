@@ -7,8 +7,12 @@
 #include <cstdint>
 
 #include "ckernel_debug.h"
+#if !defined(ENV_LLK_INFRA)
 #include "api/compute/compute_kernel_api.h"
 #include "dprint.h"
+#else
+using namespace ckernel;
+#endif
 #include "tensix_types.h"
 
 // Given a Tensix configuration register field name, print the contents of the register.
@@ -133,6 +137,7 @@ inline uint32_t reconstruct_float32(uint32_t float16, uint32_t mantissa16) {
     return sign | exponent | mantissa;
 }
 
+#if !defined(ENV_LLK_INFRA)
 // Helper function that prints one row from dest when dest is configured for storing float32 values.
 // This function should be used only from dprint_tensix_dest_reg.
 // Float32 in dest = [Float16, Mantissa16]
@@ -263,6 +268,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
     })
     dbg_unhalt();
 }
+#endif  // !defined(ENV_LLK_INFRA)
 
 // Print the contents of the specified configuration register field.
 // Example:

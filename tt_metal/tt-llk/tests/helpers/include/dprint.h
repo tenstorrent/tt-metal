@@ -43,6 +43,8 @@ inline __attribute__((always_inline)) void invalidate_l1_cache()
 // We need to include this header after the above definitions.
 #include "api/debug/device_print.h"
 
+#define DPRINT(format, ...) DEVICE_PRINT(format, ##__VA_ARGS__)
+
 #if !defined(LLK_DEVICE_PRINT_BUFFER_BASE) || !defined(LLK_RUNTIME_ARGS_START)
 #error "LLK_DEVICE_PRINT_BUFFER_BASE and LLK_RUNTIME_ARGS_START must be defined by the build"
 #endif
@@ -63,5 +65,6 @@ static_assert(
 #else
 
 #define DEVICE_PRINT(fmt, ...)
+#define DPRINT(fmt, ...)
 
 #endif // defined(DEBUG_PRINT_ENABLED) && !defined(COVERAGE)

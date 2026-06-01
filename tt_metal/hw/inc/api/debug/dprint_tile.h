@@ -5,6 +5,8 @@
 #pragma once
 
 #include "hostdevcommon/dprint_common.h"
+
+#if !defined(ENV_LLK_INFRA)
 #include "llk_io.h"
 #include "api/debug/ring_buffer.h"
 
@@ -12,6 +14,7 @@
 #if defined(DEBUG_PRINT_ENABLED) && defined(DEBUG_PRINT_ENABLED)
 #include "chlkc_descriptors.h"
 #endif
+#endif  // !defined(ENV_LLK_INFRA)
 
 // Macros for printing circular buffer internals
 #define CB_RD_PTR(id) (get_local_cb_interface(id).fifo_rd_ptr << cb_addr_shift)  // only valid in unpacker thread
@@ -173,6 +176,7 @@ static constexpr bool is_supported_format(const CommonDataFormat& format) {
     }
 }
 
+#if !defined(ENV_LLK_INFRA)
 inline tile_info_t get_tile_info(
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
     uint8_t cb, dprint_tslice_cb_t cb_type, dprint_tslice_ptr_t ptr_type
@@ -214,6 +218,7 @@ inline tile_info_t get_tile_info(
     info.face_dim_c = info.tile_dim_r * info.tile_dim_c / info.num_faces / info.face_dim_r;
     return info;
 }
+#endif  // !defined(ENV_LLK_INFRA)
 #endif  // defined(DEBUG_PRINT_ENABLED)
 
 // Specialization of TileSliceHostDev, with device-side implementation
@@ -249,6 +254,7 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
         }
     }
 
+#if !defined(ENV_LLK_INFRA)
     __attribute__((__noinline__)) TileSlice(
         uint8_t cb,
         int tile_idx,
@@ -355,6 +361,7 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
         }
 #endif  // DEBUG_PRINT_ENABLED
     }
+#endif  // !defined(ENV_LLK_INFRA)
 } ATTR_PACK;
 
 using TSLICE = TileSlice<64>;

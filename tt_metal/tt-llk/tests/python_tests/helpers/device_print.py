@@ -132,11 +132,13 @@ class _Placeholder:
     so high-rate prints don't re-run the regex / re-compute offsets.
 
     `kind` determines how the value is rendered:
-      - "enum":    resolve through DWARF (uses enum_name, is_flag, use_full_name, cleaned_spec)
-      - "string":  dereference into .device_print_strings (uses spec)
-      - "plain":   apply spec directly to the unpacked value
-      - "custom":  call formatter, then apply spec as string padding
-      - "unknown": emit error_msg, no unpack
+      - "enum":        resolve through DWARF (uses enum_name, is_flag, use_full_name, cleaned_spec)
+      - "string":      dereference into .device_print_strings (uses spec)
+      - "plain":       apply spec directly to the unpacked value
+      - "custom":      call formatter, then apply spec as string padding
+      - "typed_array": dp_typed_array_t: variable size, [hdr | N*u32], decoded per DataFormat
+      - "tile_slice":  TileSliceHostDev: 16-byte header + data, decoded per DataFormat
+      - "unknown":     emit error_msg, no unpack
     Other fields are unused when not relevant for the kind.
     """
 
@@ -195,8 +197,15 @@ def _build_render_plan(
     for ridx in sorted(type_for_ridx):
         type_token = type_for_ridx[ridx]
         base_char = type_token[3] if type_token.startswith("/") else type_token
-        entry = type_table.get(base_char)
         offsets[ridx] = cur
+        if base_char in ("A", "t"):
+            # dp_typed_array_t ('A') and TileSlice ('t') are variable-size.
+            # Size is only known at decode time, so we can't advance `cur`
+            # for any following args. Both are only ever emitted as the
+            # sole placeholder in their DEVICE_PRINT call.
+            cur = -1
+            continue
+        entry = type_table.get(base_char)
         cur += entry[1] if entry else 4
 
     literals: list[str] = []
@@ -210,7 +219,23 @@ def _build_render_plan(
         entry = type_table.get(base_char)
         spec = m.group("spec") or ""
 
-        if entry is None:
+        if base_char == "A":
+            compiled.append(
+                _Placeholder(
+                    kind="typed_array",
+                    offset=offsets[ridx],
+                    spec=spec,
+                )
+            )
+        elif base_char == "t":
+            compiled.append(
+                _Placeholder(
+                    kind="tile_slice",
+                    offset=offsets[ridx],
+                    spec=spec,
+                )
+            )
+        elif entry is None:
             compiled.append(
                 _Placeholder(kind="unknown", error_msg=f"<unknown type '{type_token}'>")
             )
@@ -421,6 +446,140 @@ class ElfStrings:
         return self._strings_data[offset:end].decode("utf-8", errors="replace")
 
 
+# DataFormat enum values from tt_metal/hw/inc/internal/tt-{1,2}xx/*/tensix_types.h.
+# Only the formats device print can plausibly receive are listed; anything else
+# falls through as unsupported.
+_DF_FLOAT32 = 0
+_DF_FLOAT16 = 1
+_DF_TF32 = 4
+_DF_FLOAT16_B = 5
+_DF_INT32 = 8
+_DF_UINT16 = 9
+_DF_INT8 = 14
+_DF_UINT32 = 24
+_DF_UINT8 = 30
+
+# Per-element decoder for each supported DataFormat: takes (data_bytes, i, fmt)
+# and returns the formatted element string. The byte layout is the same for
+# dp_typed_array_t and TileSliceHostDev — both store N elements packed
+# contiguously, little-endian — so this dispatch is shared by both records.
+_ELEMENT_DECODERS = {
+    _DF_FLOAT32: lambda d, i, f: f(struct.unpack_from("<f", d, i * 4)[0]),
+    _DF_INT32: lambda d, i, f: f(struct.unpack_from("<i", d, i * 4)[0]),
+    _DF_UINT32: lambda d, i, f: f(struct.unpack_from("<I", d, i * 4)[0]),
+    # bf16 == high 16 bits of float32; widen by left-shifting into a uint32.
+    _DF_FLOAT16_B: lambda d, i, f: f(
+        struct.unpack(
+            "<f", struct.pack("<I", struct.unpack_from("<H", d, i * 2)[0] << 16)
+        )[0]
+    ),
+    _DF_FLOAT16: lambda d, i, f: f(struct.unpack_from("<e", d, i * 2)[0]),
+    # TF32 (sign:1 | exp:8 | mantissa:10) sits in the low 19 bits of a uint32;
+    # shift back into float32 position to reconstruct.
+    _DF_TF32: lambda d, i, f: f(
+        struct.unpack(
+            "<f",
+            struct.pack("<I", (struct.unpack_from("<I", d, i * 4)[0] & 0x7FFFF) << 13),
+        )[0]
+    ),
+    _DF_UINT16: lambda d, i, f: f(struct.unpack_from("<H", d, i * 2)[0]),
+    _DF_INT8: lambda d, i, f: f(struct.unpack_from("<b", d, i)[0]),
+    _DF_UINT8: lambda d, i, f: f(d[i]),
+}
+
+_BYTES_PER_DATUM = {
+    _DF_FLOAT32: 4,
+    _DF_INT32: 4,
+    _DF_UINT32: 4,
+    _DF_TF32: 4,
+    _DF_FLOAT16: 2,
+    _DF_FLOAT16_B: 2,
+    _DF_UINT16: 2,
+    _DF_INT8: 1,
+    _DF_UINT8: 1,
+}
+
+
+def _typed_array_header(args_blob: bytes, offset: int) -> tuple[int, int]:
+    """Decode the (len << 16) | type word that prefixes a dp_typed_array_t."""
+    word = struct.unpack_from("<I", args_blob, offset)[0]
+    return word >> 16, word & 0xFFFF
+
+
+def _render_typed_array(args_blob: bytes, offset: int, spec: str) -> str:
+    """Render a dp_typed_array_t record. Trailing space matches Metal."""
+    length, fmt_code = _typed_array_header(args_blob, offset)
+    bpd = _BYTES_PER_DATUM.get(fmt_code, 0)
+    if bpd == 0:
+        return f"<typed array: unsupported DataFormat={fmt_code}, len={length}>"
+    fmt = ("{:" + spec + "}" if spec else "{}").format
+    decode = _ELEMENT_DECODERS[fmt_code]
+    data = args_blob[offset + 4 : offset + 4 + length * 4]
+    return " ".join(decode(data, i, fmt) for i in range(length * 4 // bpd)) + " "
+
+
+# TileSliceHostDev<MAX_BYTES> header layout (dprint_common.h:117):
+# cb_ptr(u32) | slice_range(6×u8) | cb_id(u8) | data_format(u8) |
+# data_count(u8) | endl_rows(u8) | return_code(u8) | pad(u8).
+# `pad` carries MAX_BYTES so the host can size the trailing data[] section.
+_TILE_SLICE_HEADER_STRUCT = struct.Struct("<I12B")
+_TILE_SLICE_HEADER_SIZE = 16
+_DPRINT_OK = 2
+_RETURN_CODE_MSGS = {4: "BAD TILE POINTER", 5: "unsupported data format"}
+
+
+def _render_tile_slice(args_blob: bytes, offset: int, spec: str) -> str:
+    """Render a TileSliceHostDev<MAX_BYTES> record. Mirrors PrintTileSlice
+    in tt_metal/impl/debug/dprint_parser.cpp."""
+    (
+        _cb_ptr,
+        h0,
+        h1,
+        hs,
+        w0,
+        w1,
+        ws,
+        _cb_id,
+        data_format,
+        data_count,
+        endl_rows,
+        return_code,
+        max_bytes,
+    ) = _TILE_SLICE_HEADER_STRUCT.unpack_from(args_blob, offset)
+
+    if return_code != _DPRINT_OK:
+        return f"<TileSlice: {_RETURN_CODE_MSGS.get(return_code, f'return_code={return_code}')}>"
+    decode = _ELEMENT_DECODERS.get(data_format)
+    if decode is None:
+        return f"<TileSlice: unsupported DataFormat={data_format}>"
+
+    data = args_blob[
+        offset + _TILE_SLICE_HEADER_SIZE : offset + _TILE_SLICE_HEADER_SIZE + max_bytes
+    ]
+    fmt = ("{:" + spec + "}" if spec else "{}").format
+
+    # data_count < (slice cells) is a real case: producer hits MAX_BYTES before
+    # the slice ends. Stop the row mid-stream and emit Metal's truncation message.
+    parts: list[str] = []
+    i = 0
+    for h in range(h0, h1, hs):
+        row: list[str] = []
+        for w in range(w0, w1, ws):
+            if i >= data_count:
+                parts.append(" ".join(row))
+                parts.append(
+                    f"<TileSlice data truncated due to exceeding max count ({data_count})>\n"
+                )
+                return "".join(parts)
+            row.append(decode(data, i, fmt))
+            i += 1
+        parts.append(" ".join(row))
+        if endl_rows:
+            parts.append("\n")
+
+    return "".join(parts)
+
+
 def _decode_wpos_rpos(buf: bytes) -> tuple[int, int]:
     wpos, rpos = struct.unpack_from("<II", buf, 0)
     return wpos, rpos
@@ -602,6 +761,14 @@ class DevicePrintParser:
 
             if ph.kind == "unknown":
                 parts.append(ph.error_msg)
+                continue
+
+            if ph.kind == "typed_array":
+                parts.append(_render_typed_array(args_blob, ph.offset, ph.spec))
+                continue
+
+            if ph.kind == "tile_slice":
+                parts.append(_render_tile_slice(args_blob, ph.offset, ph.spec))
                 continue
 
             if ph.offset + ph.size > blob_len:

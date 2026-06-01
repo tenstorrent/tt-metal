@@ -22,7 +22,7 @@
 #include "risc_common.h"
 #endif
 
-#if defined(KERNEL_BUILD)
+#if defined(KERNEL_BUILD) || defined(ENV_LLK_INFRA)
 #include "dprint_tile.h"
 #endif
 
@@ -879,7 +879,7 @@ struct device_print_type<const char[N]> {
     static constexpr device_print_type_info value = {'s', sizeof(const char*)};
 };
 
-#if defined(KERNEL_BUILD)
+#if defined(KERNEL_BUILD) || defined(ENV_LLK_INFRA)
 // TileSlice types
 template <uint32_t MAX_BYTES>
 struct device_print_type<TileSlice<MAX_BYTES>> {
@@ -931,6 +931,7 @@ struct device_print_type<TileSlice<128>> {
         }
     }
 };
+#endif  // defined(KERNEL_BUILD) || defined(ENV_LLK_INFRA)
 
 // dp_typed_array_t: serialized as (len + 1) uint32_t elements: [(len << 16) | type, data[0..len-1]]
 template <uint16_t len>
@@ -945,7 +946,6 @@ struct device_print_type<dp_typed_array_t<len>> {
         }
     }
 };
-#endif
 
 // Enum types: serialized as their underlying type.
 template <typename T>
