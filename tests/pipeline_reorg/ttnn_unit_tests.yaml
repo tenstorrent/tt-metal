@@ -1,0 +1,252 @@
+# This file defines the test matrix for the TTNN nightly unit tests pipeline.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#   merge_gate: false for nightly tests (never run on PR/merge gate).
+#
+# For max allowed timeout refer to .github/time_budget.yaml.
+# pytest --timeout is per-test (10 min); the SKU timeout is the wall-clock
+# budget for the whole job.
+
+- name: ttnn nightly conv tests
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  skus:
+    wh_n150:
+      timeout: 10
+    wh_n300:
+      timeout: 10
+    bh_p100:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  merge_gate: false
+
+- name: ttnn nightly matmul tests
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  skus:
+    wh_n150:
+      timeout: 10
+    wh_n300:
+      timeout: 10
+    bh_p100:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
+  owner_id: U084B1CES7M # Borys Bradel
+  team: ttnn
+  merge_gate: false
+
+- name: ttnn nightly fused tests
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/fused -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  skus:
+    wh_n150:
+      timeout: 15
+    wh_n300:
+      timeout: 15
+    bh_p100:
+      timeout: 15
+    bh_p150b_civ2:
+      timeout: 15
+  owner_id: U084B1CES7M # Borys Bradel
+  team: ttnn
+  merge_gate: false
+
+- name: ttnn nightly reduction tests
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/reduction -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  skus:
+    wh_n150:
+      timeout: 10
+    wh_n300:
+      timeout: 10
+    bh_p100:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
+  owner_id: U084B1CES7M # Borys Bradel
+  team: ttnn
+  merge_gate: false
+
+- name: ttnn nightly experimental tests (wormhole)
+  # test_moe_grouped_topk hangs on Wormhole (TODO: file issue + restore). Exclude on WH only.
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_moe_grouped_topk" --timeout=600'
+  skus:
+    wh_n150:
+      timeout: 15
+    wh_n300:
+      timeout: 15
+  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  team: ttnn
+  merge_gate: false
+
+- name: ttnn nightly experimental tests (blackhole)
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance" --timeout=600'
+  skus:
+    bh_p100:
+      timeout: 15
+    bh_p150b_civ2:
+      timeout: 15
+  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  team: ttnn
+  merge_gate: false
+
+- name: ttnn nightly pool tests
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  skus:
+    wh_n150:
+      timeout: 10
+    wh_n300:
+      timeout: 10
+    bh_p100:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  merge_gate: false
+
+- name: ttnn nightly eltwise tests group 1
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 1 -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  skus:
+    wh_n150:
+      timeout: 15
+    wh_n300:
+      timeout: 15
+    bh_p100:
+      timeout: 15
+    bh_p150b_civ2:
+      timeout: 15
+  owner_id: U09BX3N0N95 # Mateusz Nowak
+  team: ttnn
+  merge_gate: false
+
+- name: ttnn nightly eltwise tests group 2
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 2 -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  skus:
+    wh_n150:
+      timeout: 15
+    wh_n300:
+      timeout: 15
+    bh_p100:
+      timeout: 15
+    bh_p150b_civ2:
+      timeout: 15
+  owner_id: U09BX3N0N95 # Mateusz Nowak
+  team: ttnn
+  merge_gate: false
+
+- name: ttnn nightly eltwise tests group 3
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 3 -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  skus:
+    wh_n150:
+      timeout: 15
+    wh_n300:
+      timeout: 15
+    bh_p100:
+      timeout: 15
+    bh_p150b_civ2:
+      timeout: 15
+  owner_id: U09BX3N0N95 # Mateusz Nowak
+  team: ttnn
+  merge_gate: false
+
+- name: ttnn nightly eltwise tests group 4
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 4 -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  skus:
+    wh_n150:
+      timeout: 15
+    wh_n300:
+      timeout: 15
+    bh_p100:
+      timeout: 15
+    bh_p150b_civ2:
+      timeout: 15
+  owner_id: U09BX3N0N95 # Mateusz Nowak
+  team: ttnn
+  merge_gate: false
+
+- name: ttnn nightly transformers tests
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  skus:
+    wh_n150:
+      timeout: 15
+    wh_n300:
+      timeout: 15
+    bh_p100:
+      timeout: 15
+    bh_p150b_civ2:
+      timeout: 15
+  owner_id: U08JFM3CFA4 # Gongyu Wang
+  team: ttnn
+  merge_gate: false
+
+- name: ttnn nightly moreh tests
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/moreh -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  skus:
+    wh_n150:
+      timeout: 10
+    wh_n300:
+      timeout: 10
+    bh_p100:
+      timeout: 10
+    bh_p150b_civ2:
+      timeout: 10
+  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  team: ttnn
+  merge_gate: false
+
+- name: ttnn nightly misc (rand and ssm) tests
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/rand tests/ttnn/nightly/unit_tests/operations/ssm -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  skus:
+    wh_n150:
+      timeout: 5
+    wh_n300:
+      timeout: 5
+    bh_p100:
+      timeout: 5
+    bh_p150b_civ2:
+      timeout: 5
+  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  team: ttnn
+  merge_gate: false
+
+- name: ttnn nightly sdpa tests
+  # MLA decode / prefill stress are split out into ttnn_integration_tests.yaml as
+  # ttnn-sdpa-stress; this entry runs the rest of the sdpa nightly suite.
+  cmd: |
+    pytest tests/ttnn/nightly/unit_tests/operations/sdpa \
+      --ignore=tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_decode_stress.py \
+      --ignore=tests/ttnn/nightly/unit_tests/operations/sdpa/test_mla_prefill_stress.py \
+      -xv --timeout=600
+  skus:
+    wh_n150:
+      timeout: 15
+    wh_n300:
+      timeout: 15
+    bh_p150b_civ2:
+      timeout: 15
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+  merge_gate: false
+
+- name: ttnn nightly data_movement tests
+  cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=600'
+  skus:
+    wh_n150:
+      timeout: 15
+    wh_n300:
+      timeout: 15
+    bh_p100:
+      timeout: 15
+    bh_p150b_civ2:
+      timeout: 15
+  owner_id: U05ACKAJTHS # Naif Tarafdar
+  team: ttnn
+  merge_gate: false

@@ -74,6 +74,11 @@ ttnn:
   unit:
     wh_llmbox: 50
     wh_galaxy: 35
+    # Single-card nightly per-op tests (ttnn_unit_tests.yaml).
+    wh_n150: 190
+    wh_n300: 190
+    bh_p100: 175           # sdpa-nightly excluded on p100
+    bh_p150b_civ2: 190
   e2e:
     wh_llmbox: 90
     wh_galaxy: 90
@@ -87,6 +92,15 @@ ttnn:
   integration:
     wh_llmbox: 30   # t3k_integration_tests.yaml (ttnn entries)
     wh_galaxy: 340  # galaxy_integration_tests.yaml
+    # Single-card nightly integration tests (ttnn_integration_tests.yaml).
+    wh_n150: 75            # sdpa-stress + 3 ccl/p2p groups
+    wh_n300: 75
+    bh_p100: 45            # ccl/p2p groups only (sdpa-stress skipped)
+    bh_p150b_civ2: 75
+    wh_n150_civ2: 15       # docs_examples
+    wh_n300_civ2: 15
+    bh_p100a_civ2_viommu: 15
+    bh_p150b_civ2_viommu: 15
   # Profiler budgets are kept under their own subheading for now while team /
   # test-framework assignment is being settled. Tracked in
   # https://github.com/tenstorrent/tt-metal/issues/44285
