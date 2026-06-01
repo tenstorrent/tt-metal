@@ -148,6 +148,13 @@ class HybridAttentionForCausalLM(Generator):
     presence of ``get_kv_cache_spec`` on the model class.
     """
 
+    # Keep this in sync with get_kv_cache_spec below and with the TT vLLM
+    # worker's token-budget calculation. While SlidingWindowSpec is disabled,
+    # vLLM produces one full-attention KV group and the legacy single page_table
+    # path is sufficient. When SlidingWindowSpec is restored, flip this back so
+    # warmup also exercises the per-layer persistent page-table path.
+    _HYBRID_KV_CACHE_GROUPS_ENABLED = False
+
     @classmethod
     def get_kv_cache_spec(cls, vllm_config):
         """Build per-layer KVCacheSpec from HF config ``layer_types``.
@@ -230,17 +237,17 @@ class HybridAttentionForCausalLM(Generator):
 
     def _ensure_page_tables_per_layer(self, page_tables_per_layer, page_table):
         """When invoked outside the vLLM hybrid plugin (e.g. by warmup
-        which only knows about the legacy single ``page_table``), broadcast
-        the single page table to a per-layer list. This is required so
-        trace capture exercises the per-layer code path inside
-        ``Transformer.forward`` — otherwise the trace specializes on the
-        legacy fallback branch and runtime per-layer updates are silently
-        ignored at replay (the trace reads from whatever address the
-        legacy single tensor lived at during capture). The persistent
-        device tensors allocated in ``Transformer._page_tables_to_ttnn``
-        are then bound at trace time and updated in place each call.
+        which only knows about the legacy single ``page_table``), optionally
+        broadcast the single page table to a per-layer list.
+
+        Broadcasting is only correct while hybrid KV cache groups are enabled:
+        trace capture then needs to exercise the per-layer code path inside
+        ``Transformer.forward`` so replay reads the persistent per-layer device
+        tensors updated before each call. While hybrid groups are temporarily
+        disabled, all layers use one full-attention KV group, so we intentionally
+        keep warmup/runtime on the legacy single-page-table path.
         """
-        if page_tables_per_layer is not None or page_table is None:
+        if page_tables_per_layer is not None or page_table is None or not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
             return page_tables_per_layer
         # Broadcast the same torch tensor across every layer in every
         # submesh — content is identical, persistent allocation gives each

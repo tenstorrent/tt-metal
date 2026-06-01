@@ -31,7 +31,7 @@ void kernel_main() {
         const uint32_t val = a[i];
         const uint32_t new_val = val + 1;
         b[i] = new_val;
-        DPRINT << "Read the value " << val << " and wrote the value " << new_val << ENDL();
+        DPRINT("Read the value {} and wrote the value {}\n", val, new_val);
 #if defined(OUTGOING_SEM)
         sem_out.up(1);
 #endif

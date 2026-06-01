@@ -27,53 +27,21 @@ namespace compute_kernel_lib {
 // Internal Helper Implementations
 // =============================================================================
 
-template <uint32_t dfb_id>
-constexpr bool has_32x32_tiles() {
-    // pack_tile_r/c_dim[] available on PACK; unpack_tile_r/c_dim[] on UNPACK/MATH.
-    // Both originate from the same desc.buf_tile_r/c_dim_arr, so values are identical.
-#if defined(UCK_CHLKC_PACK)
-    constexpr uint32_t tile_r_dim = pack_tile_r_dim[dfb_id];
-    constexpr uint32_t tile_c_dim = pack_tile_c_dim[dfb_id];
-#else
-    constexpr uint32_t tile_r_dim = unpack_tile_r_dim[dfb_id];
-    constexpr uint32_t tile_c_dim = unpack_tile_c_dim[dfb_id];
-#endif
-    // Fast tilize requires 32x32 tiles
-    return tile_r_dim == 32 && tile_c_dim == 32;
-}
-
 template <uint32_t input_dfb>
 constexpr bool has_supported_fast_tilize_format() {
-    // Fast tilize only supports Float32 (0) and Float16_b (5)
-    // DataFormat enum values: Float32 = 0, Float16_b = 5, Int32 = 8, etc.
-    // unpack_src_format (UNPACK/MATH) and pack_dst_format (PACK) are both the L1 format
-    // for the DFB, equalized by JIT (genfiles.cpp:equalize_data_format_vectors).
-#if defined(UCK_CHLKC_PACK)
-    constexpr auto format = pack_dst_format[input_dfb];
-#else
-    constexpr auto format = unpack_src_format[input_dfb];
-#endif
-    return format == 0 || format == 5;  // Float32 or Float16_b
+    constexpr auto format = dfb_l1_format<input_dfb>();
+    return format == static_cast<uint32_t>(DataFormat::Float32) ||
+           format == static_cast<uint32_t>(DataFormat::Float16_b);
 }
 
 template <uint32_t input_dfb>
 constexpr bool is_fp32_input_format() {
-#if defined(UCK_CHLKC_PACK)
-    constexpr auto format = pack_dst_format[input_dfb];
-#else
-    constexpr auto format = unpack_src_format[input_dfb];
-#endif
-    return format == 0;  // Float32
+    return dfb_l1_format<input_dfb>() == static_cast<uint32_t>(DataFormat::Float32);
 }
 
 template <uint32_t output_dfb>
 constexpr bool is_fp32_output_format() {
-#if defined(UCK_CHLKC_PACK)
-    constexpr auto format = pack_dst_format[output_dfb];
-#else
-    constexpr auto format = unpack_src_format[output_dfb];
-#endif
-    return format == 0;  // Float32
+    return dfb_l1_format<output_dfb>() == static_cast<uint32_t>(DataFormat::Float32);
 }
 
 template <uint32_t block_width_tiles, uint32_t input_dfb, uint32_t output_dfb>
@@ -83,7 +51,7 @@ constexpr bool can_use_fast_tilize() {
     // That truncation is acceptable for bf16/bfp output but destroys precision
     // for fp32 output, producing garbage results in downstream fp32 consumers
     // (see attn_matmul_fp32 regression).
-    return block_width_tiles < 256 && has_32x32_tiles<output_dfb>() && !get_dst_full_sync_enabled() &&
+    return block_width_tiles < 256 && dfb_has_32x32_tiles<output_dfb>() && !get_dst_full_sync_enabled() &&
            has_supported_fast_tilize_format<input_dfb>() && !is_fp32_output_format<output_dfb>();
 }
 
