@@ -17,14 +17,14 @@ void kernel_main() {
     uint32_t sem_addr = get_arg(args::sem_addr);
 
     if (is_leader) {
-        DPRINT << "[leader] (" << my_x << "," << my_y << ") waiting for " << expected_acks << " acks\n";
+        DPRINT("[leader] (%u,%u) waiting for %u acks\n", my_x, my_y, expected_acks);
         // Use uncached address for local polling so NOC writes are immediately visible.
         volatile tt_l1_ptr uint32_t* sem_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr + MEM_L1_UNCACHED_BASE);
         noc_semaphore_wait(sem_ptr, expected_acks);
-        DPRINT << "[leader] got " << *sem_ptr << " acks\n";
+        DPRINT("[leader] got %u acks\n", *sem_ptr);
     } else {
-        DPRINT << "[worker] hello from (" << my_x << "," << my_y << ")\n";
+        DPRINT("[worker] hello from (%u,%u)\n", my_x, my_y);
         Noc noc;
         // sem_addr is the physical L1 offset (no uncached base) for the NOC address.
         uint64_t noc_addr = get_noc_addr(leader_noc_x, leader_noc_y, sem_addr);
