@@ -747,13 +747,8 @@ inline void configure_pack(
     regfile[p_gpr_pack::TILE_HEADER + 3] = 0;
     sync_regfile_write(p_gpr_pack::TILE_HEADER + 3);
 
-    const std::uint32_t face_dim = face_r_dim * FACE_C_DIM;
-
-    // To untilize narrow tile (32x16) we just pack 2 faces back to back
-    // Number of datums to pack per row
-    const std::uint32_t pack_x_dim = (narrow_tile || pack_mode != PackMode::Untilize) ? face_dim : FACE_R_DIM;
-
-    TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
+    // x-start/x-end (packer ADC X counter) is a transient state set by each operation's init LLK
+    // (see tt-llk#1036), so it is intentionally not programmed here in the HW config.
 }
 
 inline std::uint8_t get_packer_dest_offset_index()

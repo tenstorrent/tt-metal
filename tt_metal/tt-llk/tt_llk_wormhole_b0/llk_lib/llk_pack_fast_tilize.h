@@ -239,8 +239,7 @@ inline void _llk_pack_fast_tilize_uninit_(
     // restore default packer dest offsets
     _llk_init_packer_dest_offset_registers_<Dst>();
 
-    // packers pack a whole face by default, restore it
-    TTI_SETADCXX(p_setadc::PAC, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+    // x-start/x-end is transient (see tt-llk#1036) and is restored by _llk_pack_init_ below.
     // reset counters
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, SETADC_CH01(p_setadc::ZW));
 

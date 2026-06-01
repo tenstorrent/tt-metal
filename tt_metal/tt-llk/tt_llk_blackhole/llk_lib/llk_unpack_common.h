@@ -172,7 +172,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
         // Set Z-dim to number of faces
         cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0xffff0000>(0 | (unpack_num_faces << 16));
 
-        TT_SETADCXX(p_setadc::UNP_A, (unpack_face_r_dim << 4) - 1, 0x0);
+        // x-start/x-end is transient (set by each operation's init LLK, see tt-llk#1036); not touched on reconfig.
     }
 }
 
@@ -235,7 +235,7 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
         // Set Z-dim to number of faces
         cfg_reg_rmw_tensix<THCON_SEC1_REG0_TileDescriptor_ADDR32 + 1, 0, 0xffff0000>(0 | (unpack_num_faces << 16));
 
-        TT_SETADCXX(p_setadc::UNP_B, (unpack_face_r_dim << 4) - 1, 0x0);
+        // x-start/x-end is transient (set by each operation's init LLK, see tt-llk#1036); not touched on reconfig.
     }
 }
 

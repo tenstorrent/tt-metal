@@ -641,8 +641,8 @@ inline void configure_pack(
     regfile[p_gpr_pack::TILE_HEADER + 3] = 0;
     sync_regfile_write(p_gpr_pack::TILE_HEADER + 3);
 
-    // In Blackhole, x_start/x_end must be within 1 row size (i.e. from 0 to 15)
-    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+    // x-start/x-end (packer ADC X counter) is a transient state set by each operation's init LLK
+    // (see tt-llk#1036), so it is intentionally not programmed here in the HW config.
 }
 
 inline std::uint8_t get_packer_dest_offset_index()

@@ -357,8 +357,8 @@ inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpa
  * @note Call @ref _llk_unpack_A_init_ with matching template args before this function.
  */
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_A_uninit_(const std::uint32_t face_r_dim)
+inline void _llk_unpack_A_uninit_([[maybe_unused]] const std::uint32_t face_r_dim)
 {
-    constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE) ? p_setadc::UNP_A : p_setadc::UNP_AB;
-    TT_SETADCXX(UNP_SEL, face_r_dim * FACE_C_DIM - 1, 0x0);
+    // x-start/x-end is transient and programmed by each operation's init LLK (see tt-llk#1036);
+    // nothing to restore here.
 }

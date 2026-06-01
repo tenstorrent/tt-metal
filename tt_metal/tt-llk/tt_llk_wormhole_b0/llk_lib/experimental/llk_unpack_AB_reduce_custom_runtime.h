@@ -156,12 +156,11 @@ inline void _llk_unpack_AB_reduce_block_max_row_runtime_(const std::uint32_t add
  * Standard _llk_unpack_AB_reduce_init_ operations typically don't require explicit cleanup.
  */
 inline void _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(
-    const std::uint32_t unpA_face_r_dim, const std::uint32_t unpB_face_r_dim, bool respect_trigger = false)
+    [[maybe_unused]] const std::uint32_t unpA_face_r_dim, [[maybe_unused]] const std::uint32_t unpB_face_r_dim, bool respect_trigger = false)
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
     TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
-    TT_SETADCXX(p_setadc::UNP_A, unpA_face_r_dim * FACE_C_DIM - 1, 0x0);
-    TT_SETADCXX(p_setadc::UNP_B, unpB_face_r_dim * FACE_C_DIM - 1, 0x0);
+    // x-start/x-end is transient and programmed by each operation's init LLK (see tt-llk#1036); nothing to restore here.
 
     if (respect_trigger)
     {
