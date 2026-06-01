@@ -435,9 +435,15 @@ class Qwen35ModelArgs(ModelArgs):
         from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DecoderLayer as HFLayer
 
         hf_text_config = self.hf_config.text_config
-        hf_layer = HFLayer(hf_text_config, layer_idx=layer_idx)
+
+        with torch.no_grad():
+            hf_layer = HFLayer(hf_text_config, layer_idx=layer_idx)
+            hf_layer.eval()
 
         return hf_layer
+
+    def reference_mlp(self):
+        return self.reference_decoder().mlp
 
 
 # ── Weight Preparation Helpers ─────────────────────────────────────────────
