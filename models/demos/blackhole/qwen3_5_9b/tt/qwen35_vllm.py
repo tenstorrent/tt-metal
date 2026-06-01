@@ -69,6 +69,9 @@ class TTQwen35ForCausalLM(nn.Module):
         **kwargs,
     ):
         """Factory method called by TTModelLoader."""
+        # HF_MODEL is the single source of truth. vLLM passes the hub name / local
+        # path via hf_config._name_or_path; resolve a local dir (download if needed)
+        # and feed it through from_pretrained's hf_model kwarg, which sets HF_MODEL.
         name_or_path = hf_config._name_or_path
         if name_or_path and os.path.isdir(name_or_path):
             checkpoint_dir = name_or_path
@@ -78,9 +81,9 @@ class TTQwen35ForCausalLM(nn.Module):
             checkpoint_dir = snapshot_download(name_or_path)
         model = Qwen35Model.from_pretrained(
             device=mesh_device,
-            checkpoint_dir=checkpoint_dir,
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
+            hf_model=checkpoint_dir,
         )
         return cls(model, mesh_device)
 

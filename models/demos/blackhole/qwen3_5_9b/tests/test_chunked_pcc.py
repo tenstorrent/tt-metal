@@ -6,6 +6,8 @@ the recurrent (sequential) reference within PCC > 0.99.
 
 Run: pytest models/demos/blackhole/qwen3_5_9b/tests/test_chunked_pcc.py -v -s --timeout=600
 """
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -13,7 +15,10 @@ from loguru import logger
 import ttnn
 from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
 
-CHECKPOINT_DIR = "/local/ttuser/atupe/Qwen9b"
+# HF_MODEL (hub name or local path) is the single source of truth for the config.
+# CHECKPOINT_DIR is still used directly to glob the raw safetensors.
+CHECKPOINT_DIR = os.environ.get("HF_MODEL", "/local/ttuser/atupe/Qwen9b")
+os.environ.setdefault("HF_MODEL", CHECKPOINT_DIR)
 
 
 def compute_pcc(a, b):
@@ -42,7 +47,7 @@ def _run_single_deltanet_layer_both_modes(device, seq_len, chunk_size=64):
     from models.demos.blackhole.qwen3_5_9b.tt.qwen35_gated_deltanet import Qwen35GatedDeltaNet
     from models.demos.blackhole.qwen3_5_9b.tt.weight_mapping import remap_qwen35_state_dict
 
-    args = Qwen35ModelArgs(mesh_device=device, checkpoint_dir=CHECKPOINT_DIR)
+    args = Qwen35ModelArgs(mesh_device=device)
     raw = {}
     for path in sorted(glob.glob(f"{CHECKPOINT_DIR}/model.safetensors-*.safetensors")):
         with safe_open(path, framework="pt", device="cpu") as f:
@@ -195,7 +200,7 @@ def test_chunked_state_pcc(seq_len, device):
     from models.demos.blackhole.qwen3_5_9b.tt.qwen35_gated_deltanet import Qwen35GatedDeltaNet
     from models.demos.blackhole.qwen3_5_9b.tt.weight_mapping import remap_qwen35_state_dict
 
-    args = Qwen35ModelArgs(mesh_device=device, checkpoint_dir=CHECKPOINT_DIR)
+    args = Qwen35ModelArgs(mesh_device=device)
     raw = {}
     for path in sorted(glob.glob(f"{CHECKPOINT_DIR}/model.safetensors-*.safetensors")):
         with safe_open(path, framework="pt", device="cpu") as f:

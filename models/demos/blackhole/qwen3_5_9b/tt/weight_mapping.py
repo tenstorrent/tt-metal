@@ -47,12 +47,18 @@ def remap_qwen35_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, to
         if key.startswith("mtp"):
             continue
 
-        # Strip model.language_model. prefix
-        # Note: after this point, use `new_key` for language model weights,
-        # but `key` for top-level weights like lm_head.weight that have no prefix.
+        # Strip the language-model prefix. Two checkpoint sources produce different
+        # prefixes for the same internal weights:
+        #   - raw sharded safetensors:           model.language_model.X
+        #   - AutoModelForCausalLM.from_pretrained (text-only Qwen3_5ForCausalLM): model.X
+        # Strip whichever matches, longest first, so BOTH sources yield identical
+        # internal keys. Top-level weights like lm_head.weight have no prefix and are
+        # matched against the original `key` below.
         new_key = key
-        if new_key.startswith("model.language_model."):
-            new_key = new_key[len("model.language_model.") :]
+        for prefix in ("model.language_model.", "model."):
+            if new_key.startswith(prefix):
+                new_key = new_key[len(prefix) :]
+                break
 
         # Rename top-level weights
         if new_key == "embed_tokens.weight":

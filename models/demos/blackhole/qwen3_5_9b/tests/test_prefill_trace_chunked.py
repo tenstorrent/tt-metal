@@ -25,7 +25,9 @@ from loguru import logger
 
 import ttnn
 
-CHECKPOINT_DIR = "/local/ttuser/atupe/Qwen9b"
+# HF_MODEL (hub name or local path) is the single source of truth.
+CHECKPOINT_DIR = os.environ.get("HF_MODEL", "/local/ttuser/atupe/Qwen9b")
+os.environ.setdefault("HF_MODEL", CHECKPOINT_DIR)
 DEVICE_PARAMS = [{"l1_small_size": 24576, "num_command_queues": 2}]
 BLOCK_SIZE = 64
 MAX_NUM_BLOCKS = 1280  # 1280 * 64 = 81920 token capacity (covers the >64k isolation case)
@@ -61,7 +63,6 @@ def test_chunked_replay_matches_reference(device, actual_len):
     # 4 layers (pattern G,G,G,F) exercises both chunk-seq GDN and paged attention.
     model = Qwen35Model.from_pretrained(
         device,
-        CHECKPOINT_DIR,
         max_batch_size=1,
         max_seq_len=MAX_NUM_BLOCKS * BLOCK_SIZE,
         n_layers=4,
