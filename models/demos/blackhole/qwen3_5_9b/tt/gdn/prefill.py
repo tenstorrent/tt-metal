@@ -177,7 +177,7 @@ def prefill_kernel_forward(gdn, x, prefill_output=None):
     o = ttnn.linear(o, w.o_proj_weight, memory_config=mc, compute_kernel_config=ckc)
 
     # ---- 9. Update conv state for next chunk / decode ----
-    # new_fused_conv is already TILE_LAYOUT from line 497.
+    # new_fused_conv is already TILE_LAYOUT (set where it was sliced above).
     # Don't split here — splitting is deferred to first decode call
     # (either via prefill_paged post-processing or lazy on first T=1 forward).
     if gdn.use_inplace_state and gdn.fused_conv_state is not None:
