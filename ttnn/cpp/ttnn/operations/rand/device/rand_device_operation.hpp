@@ -6,9 +6,12 @@
 
 #include <optional>
 
+#include <vector>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::operations::rand {
 
@@ -41,6 +44,17 @@ struct RandDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
+    // seed/from/to are intentionally excluded from compute_program_hash (so calls differing only in
+    // those values cache-hit instead of recompiling).  They are therefore DYNAMIC: this returns the
+    // current per-core (seed) and per-call (from/to) values so the framework re-applies them to the
+    // cached program on every dispatch.  Must mirror the seed/from/to runtime args built in
+    // create_descriptor() — the test_rand_different_seed_values regression test enforces this.
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& output,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 }  // namespace ttnn::operations::rand

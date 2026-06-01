@@ -106,4 +106,30 @@ ResolvedBindings resolve_bindings(
 void apply_resolved_bindings(
     Program& program, const ResolvedBindings& bindings, std::span<Buffer* const> current_buffers);
 
+// ---------------------------------------------------------------------------
+// Dynamic (non-Buffer) runtime args
+// ---------------------------------------------------------------------------
+
+// Declares one runtime-arg slot whose value is DYNAMIC: it is intentionally excluded from the
+// program-cache hash (so two calls that differ only in this value still cache-hit) and therefore
+// MUST be re-applied to the cached program on every dispatch.  This is the non-Buffer analog of
+// BufferBinding: BufferBinding re-patches a buffer address on a cache hit; DynamicRuntimeArg
+// re-patches an arbitrary scalar that a custom compute_program_hash deliberately omitted (e.g. an
+// RNG seed, an [from,to) range, a semaphore L1 address).  The owning device operation produces the
+// current values for each dispatch (see DeviceOperation::get_dynamic_runtime_args); this struct is
+// just the destination (kernel/core/arg) plus the value to write.
+struct DynamicRuntimeArg {
+    uint32_t kernel_idx = 0;  // index into ProgramDescriptor::kernels
+    CoreCoord core{};         // ignored when is_common == true
+    uint32_t arg_idx = 0;     // position within that kernel/core's runtime args
+    uint32_t value = 0;       // current value, derived from the live operation_attributes
+    bool is_common = false;   // true => common (non-per-core) runtime args
+};
+
+// Write each DynamicRuntimeArg's value into the cached program's live runtime args.  Call on every
+// cache hit (after apply_resolved_bindings) for ops that declare dynamic non-Buffer runtime args.
+// Uses GetRuntimeArgs / GetCommonRuntimeArgs for the same pre/post-first-enqueue correctness as
+// apply_resolved_bindings.
+void apply_dynamic_runtime_args(Program& program, std::span<const DynamicRuntimeArg> dynamic_args);
+
 }  // namespace tt::tt_metal

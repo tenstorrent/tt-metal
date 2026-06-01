@@ -207,4 +207,25 @@ void apply_resolved_bindings(
     }
 }
 
+void apply_dynamic_runtime_args(Program& program, std::span<const DynamicRuntimeArg> dynamic_args) {
+    // dynamic_args are not sorted (unlike resolved rt_args): the per-op get_dynamic_runtime_args()
+    // typically emits only a handful of slots, so re-deriving the RuntimeArgsData reference per
+    // entry is cheap and avoids imposing an ordering contract on op authors.  The reference is
+    // taken fresh on each call so first-enqueue retargeting of rt_args_data is observed correctly.
+    for (const auto& d : dynamic_args) {
+        auto& data =
+            d.is_common ? GetCommonRuntimeArgs(program, d.kernel_idx) : GetRuntimeArgs(program, d.kernel_idx, d.core);
+        TT_FATAL(
+            d.arg_idx < data.size(),
+            "DynamicRuntimeArg for kernel {} {}arg[{}] is out of range (runtime args size {}). "
+            "The (kernel_idx, core, arg_idx) declared by get_dynamic_runtime_args() must match the "
+            "slot populated in create_descriptor().",
+            d.kernel_idx,
+            d.is_common ? "common " : "",
+            d.arg_idx,
+            data.size());
+        data[d.arg_idx] = d.value;
+    }
+}
+
 }  // namespace tt::tt_metal

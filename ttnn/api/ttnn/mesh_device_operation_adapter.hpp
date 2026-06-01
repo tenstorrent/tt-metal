@@ -514,6 +514,29 @@ public:
             }
         }
 
+        // If the device operation declares dynamic (non-Buffer) runtime args via
+        // get_dynamic_runtime_args(), re-apply them to the cached program for this coordinate.
+        // These are values a custom compute_program_hash deliberately excluded from the cache key
+        // (e.g. an RNG seed, an [from,to) range, a semaphore address) and so must be patched on
+        // every fast-path cache hit — the non-Buffer analog of apply_resolved_bindings.  Ops that
+        // don't define the method compile this away (if constexpr) and pay nothing.
+        static void apply_dynamic_runtime_args_if_declared(
+            tt::tt_metal::Program& program,
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const ttnn::MeshCoordinateRange& coordinate_range) {
+            if constexpr (requires {
+                              DeviceOperation::get_dynamic_runtime_args(
+                                  attrs, tensor_args, tensor_return_value, std::optional<ttnn::MeshCoordinate>{});
+                          }) {
+                const std::optional<ttnn::MeshCoordinate> coord(coordinate_range.start_coord());
+                const auto dynamic_args =
+                    DeviceOperation::get_dynamic_runtime_args(attrs, tensor_args, tensor_return_value, coord);
+                tt::tt_metal::apply_dynamic_runtime_args(program, dynamic_args);
+            }
+        }
+
         static void apply_descriptor(
             cached_mesh_workload_t& cached_workload,
             const operation_attributes_t& attrs,
@@ -534,6 +557,10 @@ public:
                             collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
                         tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, current_buffers);
                     }
+                    // Contract (2) never rebuilds, so any value a custom hash excluded would stay
+                    // frozen at first miss — re-apply declared dynamic non-Buffer runtime args.
+                    apply_dynamic_runtime_args_if_declared(
+                        program, attrs, tensor_args, tensor_return_value, coordinate_range);
                 } else {
                     // Contract (1) — simple per-coord factory.  Fast-path only
                     // when the factory declared rt-arg buffer bindings via
@@ -546,6 +573,11 @@ public:
                         auto current_buffers =
                             collect_tensor_buffers(tensor_args, tensor_return_value, sv.workload_descriptor);
                         tt::tt_metal::apply_resolved_bindings(program, sv.resolved_bindings, current_buffers);
+                        // Fast path doesn't rebuild the descriptor, so re-apply any declared dynamic
+                        // non-Buffer runtime args (the slow-path else-branch below rebuilds
+                        // create_descriptor() and so already re-derives them).
+                        apply_dynamic_runtime_args_if_declared(
+                            program, attrs, tensor_args, tensor_return_value, coordinate_range);
                     } else {
                         const ttnn::MeshCoordinate mesh_coord = coordinate_range.start_coord();
                         const std::optional<ttnn::MeshCoordinate> mesh_dispatch_coordinate(mesh_coord);
