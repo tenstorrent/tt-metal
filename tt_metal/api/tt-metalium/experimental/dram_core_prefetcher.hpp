@@ -39,6 +39,18 @@ struct DramCorePrefetcherConfig {};
 // dividing K (k_block_w_tiles = ceil(K_tiles / block_count)), so different
 // tensors — within one request or across GCBs — can use different K-block
 // counts. The consuming matmul must wait_front(block_count) per layer.
+//
+// Required `tensor` layout (validated at Queue time, when the request is
+// serialized):
+//   - DRAM-resident, TILE layout,
+//   - width-sharded across all DRAM banks (one shard per bank; each shard holds
+//     the full K dimension and `N / num_dram_banks` columns),
+//   - tile-aligned in both K and N (shard_shape divisible by TILE_HEIGHT/WIDTH).
+// The per-bank N columns are further split evenly across that bank's receivers,
+// so `N_per_bank` (= N / num_dram_banks) must divide the GCB's receiver count:
+// receiver r in bank b owns columns
+// `[b*N_per_bank + r*N_per_recv, b*N_per_bank + (r+1)*N_per_recv)`, where
+// N_per_recv = N_per_bank / num_receivers_per_sender.
 struct DramCorePrefetcherInput {
     const MeshTensor* tensor = nullptr;
     uint32_t block_count = 0;
