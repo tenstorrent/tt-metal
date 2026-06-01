@@ -40,17 +40,14 @@ from models.common.readiness_check.contract import (
     BuildGeneratorFn,
     Generator,
 )
+from models.common.readiness_check.mesh_device import (
+    add_mesh_device_args,
+    close_readiness_mesh_device,
+    open_readiness_mesh_device,
+)
 
 DEFAULT_PROMPT_FILE = Path(__file__).parent / "autoregressive_prompt.txt"
 DEFAULT_MAX_NEW_TOKENS = 256
-
-
-_MESH_SHAPES: dict[str, tuple[int, int]] = {
-    "N150": (1, 1),
-    "N300": (1, 2),
-    "T3K": (1, 8),
-    "TG": (8, 4),
-}
 
 
 def _import_build_generator(model_dir: Path) -> BuildGeneratorFn:
@@ -76,15 +73,6 @@ def _import_build_generator(model_dir: Path) -> BuildGeneratorFn:
             f"See models/common/readiness_check/contract.py."
         )
     return fn  # type: ignore[return-value]
-
-
-def _resolve_mesh_device(mesh_device_arg: str):
-    import ttnn  # noqa: WPS433 — lazy
-
-    shape = _MESH_SHAPES.get(mesh_device_arg)
-    if shape is None:
-        raise ValueError(f"Unknown --mesh-device {mesh_device_arg!r}. Supported: {sorted(_MESH_SHAPES)}.")
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*shape))
 
 
 def _hf_generate_greedy(
@@ -224,13 +212,7 @@ def _main() -> None:
         default=DEFAULT_PROMPT_FILE,
         help=f"Path to the prompt file. Default: {DEFAULT_PROMPT_FILE}",
     )
-    parser.add_argument(
-        "--mesh-device",
-        type=str,
-        required=True,
-        choices=sorted(_MESH_SHAPES.keys()),
-        help="Mesh device label. Mapped to a ttnn.MeshShape internally.",
-    )
+    add_mesh_device_args(parser)
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -248,9 +230,7 @@ def _main() -> None:
 
     output_dir = args.output_dir or (args.model_dir / "readiness_autoregressive")
 
-    import ttnn  # noqa: WPS433 — lazy
-
-    mesh_device = _resolve_mesh_device(args.mesh_device)
+    mesh_device = open_readiness_mesh_device(args.mesh_device, args.fabric_config)
     try:
         run_autoregressive(
             model_dir=args.model_dir.resolve(),
@@ -261,7 +241,7 @@ def _main() -> None:
             max_new_tokens=args.max_new_tokens,
         )
     finally:
-        ttnn.close_mesh_device(mesh_device)
+        close_readiness_mesh_device(mesh_device, args.fabric_config)
 
 
 if __name__ == "__main__":
