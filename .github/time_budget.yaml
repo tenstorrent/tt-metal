@@ -123,8 +123,8 @@ scaleout:
     wh_galaxy: 100
     bh_galaxy: 60
     bh_spsg: 20 # single galaxy
-    bh_sp1: 50
-    bh_sp4: 50
+    bh_sp1: 90
+    bh_sp4: 150
     bh_deskbox: 80
     bh_llmbox: 80
     bh_loudbox: 80
@@ -214,7 +214,7 @@ models:
     wh_galaxy: 0
     wh_galaxy_perf: 150
     wh_galaxy_release: 345
-    bh_galaxy: 320
+    bh_galaxy: 370
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
