@@ -2,6 +2,7 @@
 
 > **Source of truth.** This file is the canonical record of automation-tracked PRs. Wiping it resets the automation to fresh-state view; stale GitHub PRs not listed here are intentionally invisible.
 
+|| [#45700](https://github.com/tenstorrent/tt-metal/pull/45700) | T3000 e2e tests (`t3000-e2e-tests.yaml`) — `t3k_ccl_tests [wh_llmbox]` | `verifying` | [run 26747001669](https://github.com/tenstorrent/tt-metal/actions/runs/26747001669) — dispatched 2026-06-01T09:36 UTC | No — verifying | NEW 2026-06-01. Disables `test_reduce_scatter_async_training_shapes` tt_training_test_six-perf (fabric_ring). Issue #45699. 3 consecutive failures: 26677770587/26706571044/26742897792. |
 || [#45680](https://github.com/tenstorrent/tt-metal/pull/45680) | T3000 unit tests (`t3000-unit-tests.yaml`) — `t3k_tt_metal_multiprocess_tests [wh_llmbox]` | `verification-inconclusive` | [run 26732379070](https://github.com/tenstorrent/tt-metal/actions/runs/26732379070) — inconclusive (device poisoned by prior `RandomizedInterMeshUnicast`; socket tests failed at 0ms in SetUp()) | No — pending PR #45684 merge before re-dispatch | Disables `MultiHostSocketTestsSplitT3K.SocketTests` (20 parametrizations). Issue #45679. Root cause is PR #45684. |
 || [#45684](https://github.com/tenstorrent/tt-metal/pull/45684) | T3000 unit tests (`t3000-unit-tests.yaml`) — `t3k_tt_metal_multiprocess_tests [wh_llmbox]` | `verified-pass` | [run 26735095737](https://github.com/tenstorrent/tt-metal/actions/runs/26735095737) — **verified-pass** 2026-06-01T05:38 UTC | Yes — verified-pass, ready for merge review | NEW 2026-06-01. Disables `IntermeshSplit2x2FabricFixture.RandomizedInterMeshUnicast`. Issue #45683. |
 || [#45676](https://github.com/tenstorrent/tt-metal/pull/45676) | Runtime unit tests (`runtime-unit-tests.yaml`) — `runtime_sd_debug_tools_device_dispatch` | `verified-pass` | [run 26735098433](https://github.com/tenstorrent/tt-metal/actions/runs/26735098433) — verified-pass 2026-06-01T05:12 UTC | Yes — verified-pass | GTEST_SKIP fix (commit 4b5834fd9bb) moved to fixture SetUp(). |
@@ -45,6 +46,7 @@
 || [#45684](https://github.com/tenstorrent/tt-metal/pull/45684) | T3000 unit tests (`t3000-unit-tests.yaml`) — `t3k_tt_metal_multiprocess_tests [wh_llmbox]` | `verified-pass` | [run 26735095737](https://github.com/tenstorrent/tt-metal/actions/runs/26735095737) — **verified-pass** 2026-06-01T05:38 UTC | Yes — verified-pass, ready for merge review | NEW 2026-06-01. Disables `IntermeshSplit2x2FabricFixture.RandomizedInterMeshUnicast`. Issue #45683. |
 || [#45688](https://github.com/tenstorrent/tt-metal/pull/45688) | T3000 e2e tests (`t3000-e2e-tests.yaml`) — `t3k_ccl_tests [wh_llmbox]` | `verified-pass` | [run 26738723462](https://github.com/tenstorrent/tt-metal/actions/runs/26738723462) — **verified-pass** 2026-06-01T07:15 UTC | Yes — verified-pass, ready for merge review | NEW 2026-06-01. Disables `test_reduce_scatter_async_sharded_to_interleaved` Composite RS. Issue #45687. 3 consecutive failures: 26624591673/26677770587/26706571044. |
 || [#45690](https://github.com/tenstorrent/tt-metal/pull/45690) | Runtime unit tests (`runtime-unit-tests.yaml`) — `runtime_fd2 [wh_n150_civ2]` / `[bh_p150b_civ2]` | `verified-pass` | [run 26743211946](https://github.com/tenstorrent/tt-metal/actions/runs/26743211946) — **verified-pass** 2026-06-01T08:31 UTC | Yes — verified-pass, ready for merge review | Disables `SlowDispatch/SDPrefetch*` (SDPrefetchTestBase, 7 fixture classes) AND `SlowDispatch/SDDispatch*` (SDDispatchTestBase, 5 fixture classes). Issue #45689. Run 26740717159 was verification-inconclusive; extended PR (commit 2fb43f8a1bf); re-dispatched as 26743211946 → **verified-pass**. |
+|| [#45700](https://github.com/tenstorrent/tt-metal/pull/45700) | T3000 e2e tests (`t3000-e2e-tests.yaml`) — `t3k_ccl_tests [wh_llmbox]` | `verifying` | [run 26747001669](https://github.com/tenstorrent/tt-metal/actions/runs/26747001669) — dispatched 2026-06-01T09:36 UTC | No — verifying | NEW 2026-06-01. Disables `test_reduce_scatter_async_training_shapes[...-fabric_ring-random-...-tt_training_test_six-perf-...-1link-mesh_device0]`. Issue #45699. 3 consecutive failures: 26677770587 (05-30 timeout), 26706571044 (05-31 TT_THROW@system_memory_manager:738), 26742897792 (06-01 TT_THROW@system_memory_manager:738). |
 
 ---
 
@@ -52,6 +54,7 @@
 
 | Run | Pipeline | Branch | Started | Status | Notes |
 |-----|----------|--------|---------|--------|-------|
+| [26747001669](https://github.com/tenstorrent/tt-metal/actions/runs/26747001669) | (T3K) T3000 e2e tests (`t3000-e2e-tests.yaml`) | `ci-disable/t3000-e2e-tests-reduce-scatter-training-shapes-20260601` | 2026-06-01T09:36 UTC | in_progress | PR #45700 first verification. Fresh build (no SHA-matching successful t3000-e2e-tests main run on 97ca6204). |
 **Policy:** Concurrent runs across PRs are allowed; each automation session may dispatch at most three new runs.
 
 ---
@@ -601,6 +604,36 @@ Main-run evidence: see PR description.
 
 ---
 
+## PR #45700 — T3000 e2e tests (test_reduce_scatter_async_training_shapes tt_training_test_six-perf)
+
+| Field | Value |
+|-------|-------|
+|| PR | [#45700](https://github.com/tenstorrent/tt-metal/pull/45700) — `[skip ci] Disable test_reduce_scatter_async_training_shapes tt_training_test_six-perf in t3000-e2e-tests t3k_ccl_tests` (draft, open) |
+|| Disable issue | [#45699](https://github.com/tenstorrent/tt-metal/issues/45699) — `[CI] Track disable: test_reduce_scatter_async_training_shapes[...-tt_training_test_six-perf-fabric_ring-...] in t3000-e2e-tests t3k_ccl_tests [wh_llmbox]` (open) |
+|| Timeout issue | none |
+|| Branch | `ci-disable/t3000-e2e-tests-reduce-scatter-training-shapes-20260601` (head SHA `1a55dadb4ed`) |
+|| Workflow file | `.github/workflows/t3000-e2e-tests.yaml` |
+|| Lifecycle stage | `verifying` |
+|| Last rebase | 2026-06-01T09:36 UTC — branch created from main `97ca6204f5aa5d6dbee6fe39da6bd468e4ef42d7` |
+|| Last revalidation | 2026-06-01T09:36 UTC — `test_reduce_scatter_async_training_shapes[...-tt_training_test_six-perf-...]` confirmed still FAILING in latest run [26742897792](https://github.com/tenstorrent/tt-metal/actions/runs/26742897792)/job [78812418447](https://github.com/tenstorrent/tt-metal/actions/runs/26742897792/job/78812418447) [wh_llmbox] (2026-06-01T09:09 UTC). 3 consecutive failures on different SHAs. |
+|| Verification run | [26747001669](https://github.com/tenstorrent/tt-metal/actions/runs/26747001669) — dispatched 2026-06-01T09:36 UTC, in_progress (fresh build, model=all) |
+|| Last touched by automation | 2026-06-01T09:36 UTC |
+|| Readiness | No — verifying |
+
+### Disables (with main evidence)
+
+| Disabled test | Most recent failing main run (job link) | Commit | Run completed at |
+|---|---|---|---|
+| `tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py::test_reduce_scatter_async_training_shapes[wormhole_b0-fabric_ring-random-mem_config_input0-mem_config_rs0-tt_training_test_six-perf-mesh_device0-1link]` [wh_llmbox] | https://github.com/tenstorrent/tt-metal/actions/runs/26742897792/job/78812418447 | [97ca6204](https://github.com/tenstorrent/tt-metal/commit/97ca6204f5aa5d6dbee6fe39da6bd468e4ef42d7) | 2026-06-01 09:09 UTC |
+
+**Root cause**: Test consistently hanging or crashing — 05-30: `Failed: Timeout (>300.0s)` from pytest-timeout; 05-31 + 06-01: `TT_THROW @ /project/tt_metal/impl/dispatch/system_memory_manager.cpp:738`. Parametrization: `[16, 8, 8, 8]` shape, dim=1, `use_new=True`, `enable_trace=True`, `num_iters=10`, `fabric_ring` topology. Distinct from `test_reduce_scatter_async_sharded_to_interleaved[...-rs_input_shape2-...]` (issue #45687, PR #45688) which fails with `TT_FATAL @ mesh_trace.cpp:78`.
+
+**Disable**: `pytest.param([16, 8, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, True, 10, marks=pytest.mark.skip(reason="Disabled: see #45699"))` added to `tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py` at `tt_training_test_six-perf` entry (index 5 of the `rs_input_shape` parametrize ids list).
+
+Main-run evidence: see PR description.
+
+---
+
 
 ## Blockers
 
@@ -611,6 +644,8 @@ Main-run evidence: see PR description.
 ---
 
 ## Recent Activity
+
+- **2026-06-01T09:27 UTC session (continued).** Focus lane (1 new PR): [#45700](https://github.com/tenstorrent/tt-metal/pull/45700) (`t3000-e2e-tests.yaml` `t3k_ccl_tests [wh_llmbox]` — `test_reduce_scatter_async_training_shapes[wormhole_b0-fabric_ring-random-mem_config_input0-mem_config_rs0-tt_training_test_six-perf-mesh_device0-1link]` — `TT_THROW @ system_memory_manager.cpp:738` or timeout; 3 consecutive failures: run 26677770587 (2026-05-30, SHA d7a34140, timeout), run 26706571044 (2026-05-31, SHA b24ad48d, TT_THROW), run 26742897792 (2026-06-01T09:09, SHA 97ca6204, TT_THROW); detected in main run 26742897792 — previously masked by coexisting `rs_input_shape2` failure (PR #45688); `pytest.param(..., marks=pytest.mark.skip(reason="Disabled: see #45699"))` added to line 666 of `tests/nightly/t3000/ccl/test_minimal_reduce_scatter_async.py`; issue [#45699](https://github.com/tenstorrent/tt-metal/issues/45699) created; verification [run 26747001669](https://github.com/tenstorrent/tt-metal/actions/runs/26747001669) dispatched fresh-build). 1/3 dispatch slots used. Main run 26742897792 completed (conclusion: failure): 2 failed (rs_input_shape2 covered by #45688 + tt_training_test_six-perf covered by #45700), 279 passed, 133 skipped, 1 xfailed, 393 errors — 393 errors are pre-existing consistent pattern (same in prior runs 26706571044 + 26677770587), out-of-scope. Paralysis check: passed: 1 focus PR (dispatched) + 1 examining PR (PR #45678).
 
 - **2026-06-01T09:15 UTC session.** Examining lane (1 PR revalidated): PR #45678 — evidence confirmed current: same 3 `test_generator_vllm.py` tests still FAILING in latest t3000-integration-tests main run [26728843280](https://github.com/tenstorrent/tt-metal/actions/runs/26728843280)/job [78769290307](https://github.com/tenstorrent/tt-metal/actions/runs/26728843280/job/78769290307) (2026-06-01T01:16 UTC, SHA `97ca6204`): `test_initialize_vllm_model_passes_cache_dir_without_enabling_weight_cache` (AttributeError), `test_get_max_tokens_all_users_overrides_deepseek_r1_on_wormhole` (ValueError), `test_get_max_tokens_all_users_uses_fallback_for_other_configs` (ValueError); no newer completed runs; branch at main HEAD, no rebase needed; PR comment posted. PR #45680 per-PR section corrected: `verifying` → `verification-inconclusive` (was correct in Quick Index already; per-PR section was stale since 04:30 UTC session classification). Pipeline survey: PR #45684 still DRAFT/not merged → PR #45680 re-dispatch still blocked. Run [26742897792](https://github.com/tenstorrent/tt-metal/actions/runs/26742897792) (t3000-e2e-tests main run) still in_progress (started 08:06 UTC, last updated 08:39 UTC). Run [26737118737](https://github.com/tenstorrent/tt-metal/actions/runs/26737118737) (blackhole-demo-tests main run) still queued (created 05:33 UTC; build completed, test jobs waiting for runners). blackhole-post-commit BH-LLMBox fabric fast unit tests: 2 consecutive failures (runs 26728775039 + 26737069639) — BOTH are PyPI infra faults (graphviz-0.21 fetch failed after 3 retries, exit code 2) — OUT-OF-SCOPE. single-card-demo-tests bert_tiny-N300-func: 1 consecutive failure (run 26739334429, 2026-06-01T06:39 UTC) — only 1 consecutive, not yet eligible. t3000-integration-tests: only deepseek failing (covered by #45678). t3000-unit-tests run [26742357353](https://github.com/tenstorrent/tt-metal/actions/runs/26742357353) (2026-06-01T07:54 UTC): same pre-existing failures: `t3k_tt_metal_multiprocess_tests [wh_llmbox]` (RandomizedInterMeshUnicast covered by #45684 + SocketTests covered by #45680), `t3k_ttnn_tests [wh_llmbox]` (Accessor covered by #45682) — no new uncovered failures. tt-metal-l2-nightly run [26725622800](https://github.com/tenstorrent/tt-metal/actions/runs/26725622800) (2026-05-31T21:57 UTC, SUCCESS): all 4 `llk-sd-unit-tests` jobs passed — `MeshDeviceFixture.Top32RmDevPipelineCompletes` was EXCLUDED via `gtest-filter=-MeshDeviceFixture.Top32RmDevPipelineCompletes` (PR #45484 already MERGED, filter applied to main). In-progress nightly run [26741685564](https://github.com/tenstorrent/tt-metal/actions/runs/26741685564) on SHA 97ca6204. Focus lane: 0/3 dispatch slots used (no new uncovered workflows; PR #45680 re-dispatch blocked on #45684 merge). Throttled PRs not examined: #45676 (touched 05:25 UTC, 3h50m ago), #45682/#45684 (touched 06:10 UTC), #45688 (touched 08:15 UTC), #45690 (touched 09:01 UTC), #45514 (touched 07:15 UTC). Paralysis check: limited: 0 focus runs active + 1 examining PR (only #45678 eligible beyond 4h throttle).
 
