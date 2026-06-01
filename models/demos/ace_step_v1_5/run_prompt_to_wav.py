@@ -253,18 +253,51 @@ def _normalize_wav_for_save(wav: "torch.Tensor") -> "torch.Tensor":
     return (wav / denom).clamp(-1.0, 1.0)
 
 
-def _configure_vae_quality(*, frames: int, mesh_sku: str | None, duration_sec: float) -> None:
-    """Use BF16 VAE compute/weights for long mesh clips (BFP8 tiled decode sounds noisy)."""
+def _log_duration_preprocess_health(
+    payload: dict[str, Any],
+    *,
+    duration_sec: float,
+    frames: int,
+    audio_code_string: str = "",
+) -> None:
+    """Log LM code count vs duration — short code streams pad with silence and sound noisy."""
+    from models.demos.ace_step_v1_5.ttnn_impl.audio_code_detokenizer import parse_audio_code_string
+
+    expected_codes = max(1, int(round(float(duration_sec) * 5.0)))
+    n_codes = len(parse_audio_code_string(str(audio_code_string or "")))
+    hints = payload.get("precomputed_lm_hints_25Hz")
+    hint_t = int(hints.shape[1]) if hints is not None and hasattr(hints, "shape") else 0
+    print(
+        f"[ace_step_v1_5] duration health: {float(duration_sec):g}s latent_frames={int(frames)} "
+        f"lm_audio_codes={n_codes} (expect~{expected_codes}) lm_hint_T={hint_t}",
+        flush=True,
+    )
+    if n_codes > 0 and n_codes + 2 < expected_codes:
+        print(
+            f"[ace_step_v1_5] WARNING: LM produced only {n_codes}/{expected_codes} audio codes; "
+            "hint tail is silence-padded → expect muddy/noisy audio after "
+            f"~{n_codes / 5.0:.1f}s",
+            flush=True,
+        )
+
+
+def _configure_vae_quality(*, frames: int, mesh_sku: str | None, duration_sec: float, clarity: bool = False) -> None:
+    """Use BF16 VAE compute/weights for long mesh clips (≥30 s with ``--clarity``, else ≥40 s)."""
     from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_vae_quality_decode_enabled
 
     os.environ["ACE_STEP_VAE_LATENT_FRAMES"] = str(int(frames))
     os.environ["ACE_STEP_VAE_DURATION_SEC"] = str(float(duration_sec))
+    if bool(clarity):
+        os.environ["ACE_STEP_VAE_CLARITY"] = "1"
+    else:
+        os.environ.pop("ACE_STEP_VAE_CLARITY", None)
     if mesh_sku is not None:
         os.environ["ACE_STEP_VAE_MESH_SKU"] = str(mesh_sku)
     if not ace_step_vae_quality_decode_enabled(
         latent_frames=int(frames),
         mesh_sku=mesh_sku,
         duration_sec=float(duration_sec),
+        clarity_mode=bool(clarity),
     ):
         return
     # Force (not setdefault): BFP8 conv weights are chosen at VAE module init time.
@@ -487,11 +520,20 @@ def main() -> None:
     )
     ap.add_argument(
         "--clarity",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=False,
         help=(
-            "BH mesh quality preset: APG (not ADG), wider TTNN VAE tile overlap for long clips, "
-            "and CFG only through t=0.95 (reduces end-of-chain noise). "
-            "Single-chip runs ignore mesh-specific parts."
+            "BH mesh quality preset: ADG guidance (default on mesh when set), wider TTNN VAE "
+            "tile overlap for long clips. Single-chip runs ignore mesh-specific parts."
+        ),
+    )
+    ap.add_argument(
+        "--use-adg",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "DiT CFG guidance: ADG (default on single-chip base/sft) vs APG (default on mesh). "
+            "``--clarity`` on mesh defaults to ADG unless overridden."
         ),
     )
     ap.add_argument(
@@ -562,6 +604,21 @@ def main() -> None:
     mesh_sku = resolve_ace_step_mesh_sku(cli_value=args.mesh_device)
     split_device = ace_step_needs_split_device(mesh_sku)
 
+    _predicted_latent_frames = max(1, int(round(float(args.duration_sec) * 25.0)))
+    from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_configure_dit_long_clip_quality
+
+    if ace_step_configure_dit_long_clip_quality(
+        latent_frames=_predicted_latent_frames,
+        duration_sec=float(args.duration_sec),
+        mesh_sku=mesh_sku,
+    ) and bool(args.use_trace):
+        print(
+            "[ace_step_v1_5] long clip (>=30s on mesh): forcing --no-use-trace "
+            "(DiT body trace is not bit-accurate at patch_seq>=375)",
+            flush=True,
+        )
+        args.use_trace = False
+
     perf_log_enabled = ace_step_mesh_perf_log_default(mesh_sku=mesh_sku)
     vae_chunk_latents = 32
     vae_overlap_latents = 4
@@ -570,16 +627,8 @@ def main() -> None:
     cfg_interval_end = 1.0
     if bool(args.clarity) and split_device:
         vae_overlap_latents = 12
-        if cfg_interval_end >= 1.0:
-            cfg_interval_end = 0.95
         print(
-            "[ace_step_v1_5] --clarity: mesh APG, VAE overlap≥12, CFG interval end=0.95",
-            flush=True,
-        )
-    elif split_device and float(args.duration_sec) >= 30.0 and cfg_interval_end >= 1.0:
-        cfg_interval_end = 0.95
-        print(
-            "[ace_step_v1_5] long clip (≥30s): CFG interval end=0.95 (reduces end-of-chain noise)",
+            "[ace_step_v1_5] --clarity: mesh ADG (default), VAE overlap≥12, BF16 VAE at ≥30 s",
             flush=True,
         )
     host_only_preprocess = bool(split_device)
@@ -619,10 +668,13 @@ def main() -> None:
             gs = 7.0
     gs = float(gs)
 
+    cli_use_adg = args.use_adg
+    if bool(args.clarity) and split_device and cli_use_adg is None:
+        cli_use_adg = True
     use_adg = ace_step_mesh_use_adg(
         mesh_sku=mesh_sku,
         variant=str(args.variant),
-        cli_use_adg=False if (bool(args.clarity) and split_device) else None,
+        cli_use_adg=cli_use_adg,
     )
 
     if mesh_sku is not None:
@@ -904,7 +956,12 @@ def main() -> None:
         null_emb = cached.null_emb
         frames = int(cached.frames)
         perf.set_params(frames=frames)
-        _configure_vae_quality(frames=frames, mesh_sku=mesh_sku, duration_sec=float(args.duration_sec))
+        _configure_vae_quality(
+            frames=frames,
+            mesh_sku=mesh_sku,
+            duration_sec=float(args.duration_sec),
+            clarity=bool(args.clarity),
+        )
         condition_tensors_on_device = False
         enc_hs_tt_one = None
         ctx_tt_one = None
@@ -1026,8 +1083,19 @@ def main() -> None:
             use_trace = bool(args.use_trace)
             with perf.timed("handler_preprocess", device=dev):
                 payload, frames = handler_prepare_condition_payload(dit_handler, filtered)
+            _log_duration_preprocess_health(
+                payload,
+                duration_sec=float(args.duration_sec),
+                frames=int(frames),
+                audio_code_string=str(filtered.get("audio_code_string") or ""),
+            )
             perf.set_params(frames=int(frames))
-            _configure_vae_quality(frames=int(frames), mesh_sku=mesh_sku, duration_sec=float(args.duration_sec))
+            _configure_vae_quality(
+                frames=int(frames),
+                mesh_sku=mesh_sku,
+                duration_sec=float(args.duration_sec),
+                clarity=bool(args.clarity),
+            )
             if use_trace:
                 release_preprocess_device_traces(
                     device=dev,
@@ -1129,6 +1197,7 @@ def main() -> None:
         fp32_tile_to_bf16_tile_l1,
         precompute_dit_temb_steps,
         prepare_latents_for_ttnn_vae,
+        refresh_fp32_tile_from_host,
         slice_batch_btc,
         stage_host_temb_steps_to_device,
         stage_host_temb_tp_row,
@@ -1187,7 +1256,7 @@ def main() -> None:
     wav_bct_cpu: Any = None
 
     try:
-        if demo_session.pipe is None:
+        if demo_session.pipe is None or demo_session.dit_frames != int(frames):
             with perf.timed("dit_pipeline_init", device=dev):
                 demo_session.pipe = AceStepV15TTNNPipeline(
                     device=dev,
@@ -1195,12 +1264,23 @@ def main() -> None:
                     timesteps_host=timesteps_host,
                     expected_input_length=int(frames),
                 )
+            demo_session.dit_frames = int(frames)
         pipe = demo_session.pipe
         if ace_step_device_num_chips(dev) > 1:
             ace_step_synchronize_device(ttnn, dev)
         print("[ace_step_v1_5] DiT pipeline init complete", flush=True)
 
         defer_vae_init = ace_step_device_num_chips(dev) > 1
+        from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_vae_quality_decode_enabled
+
+        vae_quality_on = ace_step_vae_quality_decode_enabled(
+            latent_frames=int(frames),
+            mesh_sku=mesh_sku,
+            duration_sec=float(args.duration_sec),
+        )
+        vae_init_key = (int(frames), bool(vae_quality_on))
+        if demo_session.tt_vae is not None and demo_session.vae_init_key != vae_init_key:
+            demo_session.tt_vae = None
         tt_vae: TtOobleckVaeDecoder | None = demo_session.tt_vae
         if not bool(args.torch_vae):
             vae_cfg = vae_dir / "config.json"
@@ -1245,6 +1325,7 @@ def main() -> None:
                             weights_dtype=w_dtype_vae,
                         )
                     demo_session.tt_vae = tt_vae
+                    demo_session.vae_init_key = vae_init_key
 
         _ensure_acestep_on_path()
 
@@ -1405,6 +1486,15 @@ def main() -> None:
             patch_sz = int(pipe.patch_embed.config.patch_size)
             patch_seq = (int(frames_i) + patch_sz - 1) // patch_sz
             pipe_batch = ace_step_dit_pipe_batch_size(dev, do_cfg=do_cfg)
+            if demo_session.trace_state is not None and demo_session.trace_state.has_buffers():
+                if not demo_session.trace_state.matches_shape(
+                    frames=int(frames_i),
+                    pipe_batch=int(pipe_batch),
+                    c_lat=64,
+                    do_cfg=bool(do_cfg),
+                ):
+                    demo_session.trace_state.release(dev)
+                    demo_session.trace_state = None
             if demo_session.trace_state is None:
                 if ace_step_dit_body_trace_safe(batch_size=pipe_batch, patch_seq_len=patch_seq):
                     demo_session.trace_state = _E2EDenoiseTrace(use_full_step=False)
@@ -1510,14 +1600,23 @@ def main() -> None:
                 if temb_per_step is None or tp_per_step is None:
                     raise RuntimeError("Internal error: temb precompute missing for host latent sampler.")
                 momentum_host = MomentumBuffer() if do_cfg and not use_adg else None
+                _xt_tile_buf: Any = None
 
                 def _diffusion_iterate_host(*, step_idx: int, t_curr_f: float, euler_dt: float, log_line: str) -> None:
-                    nonlocal xt_host
+                    nonlocal xt_host, _xt_tile_buf
                     if step_idx == 0:
                         print(
                             "[ace_step_v1_5] denoise step 1: staging xt (first step may compile kernels) …", flush=True
                         )
-                    xt_row = bf16_row_from_numpy_bc(_as_host_numpy_f32(xt_host), device=dev, dram=mem)
+                    xt_f32_tile, _xt_tile_buf = refresh_fp32_tile_from_host(
+                        xt_host, device=dev, dram=mem, buf=_xt_tile_buf
+                    )
+                    xt_row = fp32_tile_to_bf16_tile_l1(xt_f32_tile, dram=mem)
+                    if xt_f32_tile is not _xt_tile_buf:
+                        try:
+                            ttnn.deallocate(xt_f32_tile)
+                        except Exception:
+                            pass
 
                     if temb_on_host:
                         if step_idx == 0:
@@ -1787,6 +1886,7 @@ def main() -> None:
                     weights_dtype=w_dtype_vae,
                 )
             demo_session.tt_vae = tt_vae
+            demo_session.vae_init_key = vae_init_key
             print("[ace_step_v1_5] VAE init done", flush=True)
 
         if tt_vae is not None:
