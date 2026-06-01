@@ -55,9 +55,11 @@ def test_mlp_bench(mesh_device, reset_seeds, ensure_gc):
 
     repeats = int(os.environ.get("BENCH_REPEATS", "50"))
     num_tensors = 3  # FF1/FF3/FF2
-    # The prefetcher must feed one warmup forward plus `repeats` traced forwards; each decode
-    # forward consumes one "layer" of the 3 MLP weights from the ring.
-    num_layers = repeats + 1
+    # One MLP module's worth of weights per prefetch. The worker-core Prefetcher expects exactly
+    # num_tensors*num_layers distinct inserted weights (one set per real decoder layer), so we use
+    # num_layers=1 and re-prefetch per forward — the realistic decode pattern (prefetch once per
+    # forward()) that both backends' run()/stop() lifecycles support.
+    num_layers = 1
 
     # Pin both backends to the same ring for an apples-to-apples comparison. 3B's FF2 (N=dim=3072)
     # only divides cleanly at ring=32 (recv_per_bank=4); the worker-core auto-pick would otherwise
@@ -93,7 +95,6 @@ def test_mlp_bench(mesh_device, reset_seeds, ensure_gc):
     )
 
     prefetcher.prefetch()
-    prefetcher.run()
 
     torch_input = torch.randn(1, 1, seq_len, model_args.dim)
 
@@ -108,38 +109,46 @@ def test_mlp_bench(mesh_device, reset_seeds, ensure_gc):
             layout=ttnn.TILE_LAYOUT,
         )
 
-    # Warmup forward (primes program cache + consumes the first prefetched layer).
-    # The full MLP decode forward contains a device read (CCL/reshard) that can't be traced, so we
-    # time async-dispatched forwards with a single trailing synchronize rather than trace replay.
-    # Both backends run identical MLP code, so host-dispatch overhead is common-mode and the latency
-    # delta reflects the prefetcher-fed weight path. Inputs are pre-built outside the timed region.
+    # Each decode forward is preceded by one prefetch (run) and followed by stop — the production
+    # decode pattern. The full MLP forward contains a device read (CCL/reshard) so we can't trace it;
+    # we time per-forward run()+forward()+stop() with a synchronize each iteration. Both backends run
+    # identical MLP code, so the latency delta reflects the prefetcher-fed weight path. Inputs are
+    # pre-built outside the timed region (MLP.forward deallocates its input).
+    prefetcher.run()
     out = tt_model(make_input(), mode)
+    prefetcher.stop()
     ttnn.synchronize_device(mesh_device)
 
     inputs = [make_input() for _ in range(repeats)]
     ttnn.synchronize_device(mesh_device)
 
     aiclk_pre = mesh_device.get_clock_rate_mhz() if hasattr(mesh_device, "get_clock_rate_mhz") else None
-    t0 = time.perf_counter()
+    per_forward_times = []
     bench_out = None
     for i in range(repeats):
+        t0 = time.perf_counter()
+        prefetcher.run()
         bench_out = tt_model(inputs[i], mode)
-    ttnn.synchronize_device(mesh_device)
-    elapsed = time.perf_counter() - t0
+        prefetcher.stop()
+        ttnn.synchronize_device(mesh_device)
+        per_forward_times.append(time.perf_counter() - t0)
     assert bench_out is not None
+    elapsed = sum(per_forward_times)
 
-    prefetcher.stop()
     if hasattr(prefetcher, "teardown"):
         prefetcher.teardown()
 
     per_forward_us = elapsed / repeats * 1e6
+    sorted_us = sorted(t * 1e6 for t in per_forward_times)
+    median_us = sorted_us[len(sorted_us) // 2]
+    min_us = sorted_us[0]
     # 2 * M * K * N flops per matmul; FF1 + FF3 (dim->hidden) + FF2 (hidden->dim) per forward.
     dim = model_args.dim
     hidden = model_args.hidden_dim // model_args.num_devices
     flops = 2 * seq_len * (2 * dim * hidden + hidden * dim)
-    tflops = flops * repeats / elapsed / 1e12
+    tflops = flops / (median_us / 1e6) / 1e12
     logger.info(
         f"[mlp_bench] backend={backend} ring={prefetcher.ring_size} repeats={repeats} "
-        f"trace_elapsed={elapsed * 1e3:.2f}ms per_forward={per_forward_us:.2f}us "
-        f"aiclk={aiclk_pre}MHz -> {tflops:.3f} TFLOP/s (MLP)"
+        f"per_forward mean={per_forward_us:.2f}us median={median_us:.2f}us min={min_us:.2f}us "
+        f"aiclk={aiclk_pre}MHz -> {tflops:.3f} TFLOP/s (MLP, @median)"
     )
