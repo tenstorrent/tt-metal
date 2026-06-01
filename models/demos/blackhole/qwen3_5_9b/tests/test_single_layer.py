@@ -71,7 +71,7 @@ class TestGatedAttentionLayer:
         x_torch = torch.randn(B, T, args.dim, dtype=torch.bfloat16)
         x_ttnn = ttnn.from_torch(x_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-        from models.demos.blackhole.qwen3_5_9b.tt.qwen35_rope import Qwen35RoPESetup
+        from models.demos.blackhole.qwen3_5_9b.tt.rope import Qwen35RoPESetup
 
         rope = Qwen35RoPESetup(device, args)
         pos_ids = torch.arange(T).unsqueeze(0)

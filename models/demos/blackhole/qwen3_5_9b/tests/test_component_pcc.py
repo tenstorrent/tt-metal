@@ -174,7 +174,7 @@ class TestGatedAttention:
     def test_gated_attention_vs_torch(self, device, setup):
         """Compare TTNN gated attention against torch reference for layer 3."""
         args, sd, raw = setup
-        from models.demos.blackhole.qwen3_5_9b.tt.qwen35_rope import Qwen35RoPESetup, compute_rope_freqs
+        from models.demos.blackhole.qwen3_5_9b.tt.rope import Qwen35RoPESetup, compute_rope_freqs
         from models.experimental.gated_attention_gated_deltanet.torch_functional.gated_attention import (
             gated_attention_forward,
         )
