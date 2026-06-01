@@ -126,9 +126,8 @@ constexpr uint32_t to_mesh_id = TO_MESH_ID;
 constexpr bool is_2d_fabric = FABRIC_2D;
 
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-static constexpr uint32_t quasar_cmddat_post_sync_iters = 32;
-static constexpr uint32_t quasar_cmddat_pre_retire_iters = 128;
-static constexpr uint32_t quasar_prefetch_iters = 32;
+static constexpr uint32_t quasar_cmddat_pre_retire_iters = 8;
+static constexpr uint32_t quasar_cmddat_pre_cmd_decode_iters = 32;
 
 // NOC fills cmddat at cached offsets; invalidate before uncached_l1_ptr decode sees fresh TL1.
 FORCE_INLINE void cmddat_invalidate_after_noc_read(uintptr_t cached_start, uint32_t size_bytes) {
@@ -140,14 +139,6 @@ FORCE_INLINE void cmddat_invalidate_after_noc_read(uintptr_t cached_start, uint3
     }
 }
 
-FORCE_INLINE void quasar_cmddat_post_fetch_sync() {
-    asm volatile("fence" ::: "memory");
-    for (volatile int delay = 0; delay < static_cast<int>(quasar_cmddat_post_sync_iters); ++delay) {
-        (void)delay;
-    }
-    asm volatile("fence" ::: "memory");
-}
-
 FORCE_INLINE void quasar_cmddat_pre_retire_barrier_sync(uint32_t trid) {
     asm volatile("fence" ::: "memory");
     for (volatile int delay = 0; delay < static_cast<int>(quasar_cmddat_pre_retire_iters); ++delay) {
@@ -157,9 +148,11 @@ FORCE_INLINE void quasar_cmddat_pre_retire_barrier_sync(uint32_t trid) {
     asm volatile("fence" ::: "memory");
 }
 
-FORCE_INLINE void quasar_prefetch_publish_phase_replacement() {
+// After fetch_q_get_cmds returns committed cmddat; before uncached cmd header read in process_cmd.
+// Replaces removed prefetch_publish_phase + post-retire delay (Quasar RTL timing).
+FORCE_INLINE void quasar_cmddat_pre_cmd_decode_sync() {
     asm volatile("fence" ::: "memory");
-    for (volatile int delay = 0; delay < static_cast<int>(quasar_prefetch_iters); ++delay) {
+    for (volatile int delay = 0; delay < static_cast<int>(quasar_cmddat_pre_cmd_decode_iters); ++delay) {
         (void)delay;
     }
     asm volatile("fence" ::: "memory");
@@ -177,12 +170,9 @@ FORCE_INLINE void quasar_cmddat_retire_fetch_read(uint32_t trid, uintptr_t read_
     noc_async_read_barrier_with_trid(trid);
 
     cmddat_invalidate_after_noc_read(read_start, size_bytes);
-
-    quasar_cmddat_post_fetch_sync();
 }
 #else
 FORCE_INLINE void cmddat_invalidate_after_noc_read(uintptr_t, uint32_t) {}
-FORCE_INLINE void quasar_cmddat_post_fetch_sync() {}
 FORCE_INLINE void quasar_cmddat_retire_fetch_read(uint32_t trid, uintptr_t, uint32_t) {
     noc_async_read_barrier_with_trid(trid);
 }
@@ -2255,13 +2245,9 @@ bool process_cmd(
     uint32_t& stride,
     uint32_t* l1_cache,
     PrefetchExecBufState& exec_buf_state) {
-#if !(defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM))
-    // Fetch retire chain already invalidated + post_fetch_sync'd committed cmddat on Quasar DM.
-    quasar_cmddat_post_fetch_sync();
-#endif
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    quasar_prefetch_publish_phase_replacement();
+    quasar_cmddat_pre_cmd_decode_sync();
 #endif
     bool done = false;
 
