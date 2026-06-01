@@ -51,16 +51,17 @@ class TtMotionHead:
         self.num_anchor_group = len(group_id_list)
 
         # we merge the classes into groups for anchor assignment.
-        # Keep cls2group as a small host-side numpy array — it's only used
+        # Keep cls2group as a small host-side Python list — it's only used
         # for a single int→int lookup in group_mode_query_pos. The previous
         # code uploaded it as a ttnn.Tensor and then indexed it with a host
         # int, which forced a host roundtrip on every lookup to read the
-        # result back. Pure host indexing avoids both transfers.
+        # result back. Pure host indexing avoids both transfers, and a plain
+        # list yields native Python ints (no numpy scalar to unwrap).
         cls2group = [0 for _ in range(num_classes)]
         for i, grouped_ids in enumerate(group_id_list):
             for gid in grouped_ids:
                 cls2group[gid] = i
-        self.cls2group = np.array(cls2group, dtype=np.int64)
+        self.cls2group = cls2group
         self.pc_range = pc_range
         self.predict_steps = predict_steps
         self.vehicle_id_list = vehicle_id_list
@@ -449,8 +450,8 @@ class TtMotionHead:
         batched_mode_query_pos = []
         for i in range(batch_size):
             bboxes, scores, labels, bbox_index, mask = bbox_results[i]
-            # cls2group lives on host (np.array) so the lookup is a pure host
-            # op — one device→host read for `labels`, then int indexing.
+            # cls2group lives on host (Python list) so the lookup is a pure
+            # host op — one device→host read for `labels`, then int indexing.
             glabel_int = int(self.cls2group[int(labels.item())])
             grouped_mode_query_pos = [mode_query_pos[i, j, glabel_int] for j in range(agent_num)]
             batched_mode_query_pos.append(ttnn.stack(grouped_mode_query_pos, 0))

@@ -30,8 +30,19 @@ def test_uniad_query_interaction(device, reset_seeds, model_location_generator):
 
     ref_pts = torch.rand(num_instances, 3)
     query = torch.rand(num_instances, 512)
-    output_embedding = torch.zeros(num_instances, 256)
+    # Non-zero output_embedding: it feeds the self-attention value and the FFN
+    # in _update_track_embedding, so zeros would drive the query_feat half of
+    # the output to a per-instance constant and make the PCC check below
+    # degenerate. Random input exercises the attention/FFN path for real.
+    output_embedding = torch.rand(num_instances, 256)
+    # _select_active_tracks keeps only `obj_idxes >= 0`, and only those active
+    # tracks pass through _update_track_embedding. With every obj_idx == -1 the
+    # active set is empty, so the QIM was a pure no-op and the assertions below
+    # compared the (unchanged) input query/ref_pts to itself — vacuously
+    # passing. Make a deterministic ~half active so the attention/FFN update
+    # actually runs and the filter (>= 0) itself is exercised.
     obj_idxes = torch.full((num_instances,), -1, dtype=torch.long)
+    obj_idxes[: num_instances // 2] = torch.arange(num_instances // 2, dtype=torch.long)
     track_instances.ref_pts = ref_pts
     track_instances.query = query
     track_instances.output_embedding = output_embedding

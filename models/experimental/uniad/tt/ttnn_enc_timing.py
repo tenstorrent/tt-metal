@@ -6,7 +6,14 @@
 MSDeformAttn so all of them can record into one dict without a circular
 import. Gated on TT_UNIAD_TIMING=1, active only from call#2 onward (warm
 cache). All helpers are no-ops otherwise so import sites can call them
-unconditionally."""
+unconditionally.
+
+Caveat: `record()` / `sync_now()` call `ttnn.synchronize_device`, which
+is rejected inside `ttnn.begin_trace_capture`. The encoders therefore
+pass `_enc_stats=None` on the trace-capture call (the first warm call of
+a given shape), so that call's per-sub-phase timings show up as zeros.
+Sub-phase numbers are only meaningful on subsequent (trace-replay) calls
+— read the totals, not the breakdown, on the capture call."""
 
 import os
 import time

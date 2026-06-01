@@ -55,6 +55,28 @@ def inverse_sigmoid(x, eps: float = 1e-5):
 # — caching avoids rebuilding the tiny bf16 tensor every encoder layer.
 _MSDA_GRID_SCALE_CACHE = {}
 
+# grid_sample bilinear otherwise accumulates the 4-corner reduction in bf16,
+# which costs ~0.05 PCC per encoder layer and compounds (seg-head DETR encoder
+# memory dropped to ~0.43 over 6 layers). HiFi4 + fp32 dest accumulation lifts
+# that reduction to fp32, matching the host reference. Same config the device
+# DCN path uses for its grid_sample. Cached per device arch.
+_MSDA_GS_COMPUTE_CONFIG = {}
+
+
+def _msda_grid_sample_compute_config(device):
+    arch = device.arch()
+    cfg = _MSDA_GS_COMPUTE_CONFIG.get(arch)
+    if cfg is None:
+        cfg = ttnn.init_device_compute_kernel_config(
+            arch,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+            math_approx_mode=False,
+        )
+        _MSDA_GS_COMPUTE_CONFIG[arch] = cfg
+    return cfg
+
 
 def _msda_grid_scale(h_l, w_l, device):
     key = (int(h_l), int(w_l), id(device))
@@ -149,7 +171,7 @@ def multi_scale_deformable_attn_pytorch(
             _r(_enc_stats, "msda_gs_layout", _t, device)
             _t = _s(device)
 
-        sampled = ttnn.grid_sample(value_l, grid)
+        sampled = ttnn.grid_sample(value_l, grid, compute_kernel_config=_msda_grid_sample_compute_config(device))
         if _enc_stats is not None:
             _r(_enc_stats, "msda_grid_sample", _t, device)
             _t = _s(device)
@@ -212,7 +234,7 @@ def multi_scale_deformable_attn_pytorch(
         if _enc_stats is not None:
             _r(_enc_stats, "msda_gs_layout", _tlvl, device)
             _tlvl = _s(device)
-        sampled = ttnn.grid_sample(value_l, grid)
+        sampled = ttnn.grid_sample(value_l, grid, compute_kernel_config=_msda_grid_sample_compute_config(device))
         if _enc_stats is not None:
             _r(_enc_stats, "msda_grid_sample", _tlvl, device)
             _tlvl = _s(device)

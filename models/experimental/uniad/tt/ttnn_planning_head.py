@@ -305,11 +305,13 @@ class TtPlanningHeadSingleMode:
         sdc_traj_all = self.forward_device(bev_embed, bev_pos, sdc_traj_query, sdc_track_query)
 
         sdc_traj_all = ttnn.to_torch(sdc_traj_all, dtype=torch.float32)
-        occ_mask = ttnn.to_torch(occ_mask, dtype=torch.float32)
 
         if self.use_col_optim and not self.training:
-            # post process, only used when testing
+            # post process, only used when testing. occ_mask is consumed
+            # only here, so pull it back to host inside the guard rather
+            # than on every call.
             assert occ_mask is not None
+            occ_mask = ttnn.to_torch(occ_mask, dtype=torch.float32)
             sdc_traj_all = self.collision_optimization(sdc_traj_all, occ_mask)
 
         return dict(

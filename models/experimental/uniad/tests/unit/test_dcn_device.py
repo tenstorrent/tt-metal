@@ -4,9 +4,11 @@
 
 """PCC test for the device-side modulated_deform_conv prototype.
 
-Verifies that `TtModulatedDeformConv2dDevice` reproduces mmcv's reference
-output to within bfloat16 tolerance on the small shapes UniAD's ResNet
-stages 3 and 4 actually use.
+Verifies that `TtModulatedDeformConv2dDevice` reproduces the host DCNv2
+reference (`torchvision.ops.deform_conv2d`, which is mathematically
+equivalent to the mmcv kernel the weights were trained with) to within
+bfloat16 tolerance on the small shapes UniAD's ResNet stages 3 and 4
+actually use.
 """
 
 import pytest
@@ -30,7 +32,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         (6, 1024, 512, 20, 12),  # 4 c-chunks (ResNet101 stage 3 DCN shape)
     ],
 )
-def test_modulated_deform_conv_device_matches_mmcv(device, B, C_in, C_out, H_in, W_in):
+def test_modulated_deform_conv_device_matches_reference(device, B, C_in, C_out, H_in, W_in):
     K = 3
     stride = _pair(1)
     padding = _pair(1)
@@ -50,7 +52,7 @@ def test_modulated_deform_conv_device_matches_mmcv(device, B, C_in, C_out, H_in,
     weight_torch = torch.randn(C_out, C_in, K, K, dtype=torch.float32) * (1.0 / (C_in * K * K) ** 0.5)
     bias_torch = None
 
-    # mmcv's CPU/CUDA modulated_deform_conv kernel reads offset channel
+    # The DCNv2 kernel (torchvision and mmcv alike) reads offset channel
     # `2 * (kh*K + kw) + 0` as y-offset and `+1` as x-offset for kernel
     # position (kh, kw) — i.e. interleaved (y0, x0, y1, x1, ..., y8, x8).
     # The standard wrapper produces conv_offset output where this layout
@@ -58,7 +60,7 @@ def test_modulated_deform_conv_device_matches_mmcv(device, B, C_in, C_out, H_in,
     # normal training; with explicitly constructed offsets we have to
     # honour the actual layout the kernel reads. The scaffold consumes
     # the same interleaved layout, so we build it once and use it for
-    # both the mmcv reference and the device call.
+    # both the host reference and the device call.
     offset_yx_nchw = torch.stack([offset_y_torch, offset_x_torch], dim=2).reshape(B, 2 * K * K, H_out, W_out)
 
     ref_out_nchw = ref_modulated_deform_conv2d(

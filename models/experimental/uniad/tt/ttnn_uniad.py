@@ -6,6 +6,7 @@ import copy
 import os
 import time
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -436,16 +437,13 @@ class TtUniAD:
         2 warmup iters, the next forward replays the trace and runs hot.
         """
         for i in range(n_iters):
-            print(f"[warmup] iteration {i + 1}/{n_iters} — populating ttnn caches…", flush=True)
+            logger.info(f"[warmup] iteration {i + 1}/{n_iters} — populating ttnn caches…")
             t0 = time.perf_counter()
             self.reset_test_state()
             self.forward_test(*args, **kwargs)
-            print(
-                f"[warmup] iteration {i + 1}/{n_iters} done ({(time.perf_counter() - t0):.2f} s)",
-                flush=True,
-            )
+            logger.info(f"[warmup] iteration {i + 1}/{n_iters} done ({(time.perf_counter() - t0):.2f} s)")
         self.reset_test_state()
-        print("[warmup] complete — subsequent forward calls will run on warm cache", flush=True)
+        logger.info("[warmup] complete — subsequent forward calls will run on warm cache")
 
     def __call__(self, return_loss=True, **kwargs):
         return self.forward_test(**kwargs)

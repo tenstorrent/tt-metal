@@ -6,9 +6,9 @@
 
 UniAD's ResNet101 backbone has 26 modulated deformable conv calls per
 inference (stages 3 & 4 with `stage_with_dcn=(False, False, True, True)`).
-The default path in TtModulatedDeformConv2dPack pulls x / offset / mask
-to host and calls mmcv's `ext_module.modulated_deform_conv_forward` on
-CPU — TT_DCN_TIMING=1 shows the CPU compute dominates that path.
+The host fallback path in TtModulatedDeformConv2dPack pulls x / offset /
+mask to host and calls `torchvision.ops.deform_conv2d` (DCNv2) on CPU —
+TT_DCN_TIMING=1 shows the CPU compute dominates that path.
 
 This module decomposes modulated deformable conv (Dai et al. 2018) into
 K*K (= 9 for K=3) `ttnn.grid_sample` calls + per-kernel-position
@@ -32,8 +32,8 @@ Math (per output (h_o, w_o), output channel c_out):
   - input NHWC, shape (N, H_in, W_in, C)
   - grid (N, H_out, W_out, 2) in (x, y) order normalized to [-1, 1]
   - mode="bilinear", align_corners=False (paired with the matching base
-    grid formula; equivalent to align_corners=True for mmcv reference
-    since both invert to the same pixel-space sample location)
+    grid formula; equivalent to align_corners=True for the DCNv2
+    reference since both invert to the same pixel-space sample location)
 
 ttnn.grid_sample's input is bounded to C_in <= TILE_WIDTH * 8 = 256
 channels. UniAD DCNs hit C_in = 1024 (stage 3) and 2048 (stage 4), so
@@ -141,7 +141,7 @@ class TtModulatedDeformConv2dDevice:
         (image_coord = (grid + 1) * H / 2 - 0.5):
             gy = (2 * sy + 1) / H - 1
 
-        mmcv samples at pixel-space `sy` directly; align_corners=False and
+        DCNv2 samples at pixel-space `sy` directly; align_corners=False and
         align_corners=True both invert to that same sy, so the two are
         equivalent for the reference. We use False because the formula
         avoids the H=1 edge case and the grid_sample call below mirrors it.
@@ -179,10 +179,10 @@ class TtModulatedDeformConv2dDevice:
 
         Args:
           x_nhwc: (B, H_in, W_in, C_in) bfloat16 NHWC on device
-          offset_yx_nhwc: (B, H_out, W_out, 2*K*K) bfloat16 NHWC, in mmcv's
-              interleaved channel order — channel `2*kk` is the y-offset
-              for kernel position kk and channel `2*kk + 1` is x. This is
-              the layout the CPU/CUDA `modulated_deform_conv` kernel reads
+          offset_yx_nhwc: (B, H_out, W_out, 2*K*K) bfloat16 NHWC, in the
+              DCNv2 interleaved channel order — channel `2*kk` is the
+              y-offset for kernel position kk and channel `2*kk + 1` is x.
+              This is the layout torchvision/mmcv `deform_conv2d` reads
               directly, so the production wrapper's existing `concat(o1, o2)`
               output can be passed through without permutation.
           mask_nhwc: (B, H_out, W_out, K*K) bfloat16 NHWC — modulation masks
@@ -225,7 +225,7 @@ class TtModulatedDeformConv2dDevice:
         # the K*K per-channel-chunk inner loop the original code ran. The
         # output shape (B, H_out, W_out, c_chunk*K*K) matches the previous
         # concat-of-K*K-blocks shape so the downstream matmul weights are
-        # unchanged. offset_yx_nhwc is in mmcv's interleaved layout
+        # unchanged. offset_yx_nhwc is in the DCNv2 interleaved layout
         # (y0, x0, y1, x1, …) so per kp we slice (2*kk, 2*kk+1) for (y, x).
         packed_grid_parts = []
         packed_mask_parts = []

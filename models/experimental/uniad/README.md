@@ -12,73 +12,36 @@ Note: UniAD model tests run successfully only on Python 3.10.12.
 - The pre-trained weights will be downloaded automatically during sub-module testing.
 - If the weights are not downloaded automatically, you can manually fetch them using the command, `wget https://github.com/OpenDriveLab/UniAD/releases/download/v1.0.1/uniad_base_e2e.pth`. Place it in the following path `models/experimental/uniad/`.
 
-## Branch
-- Checkout to the branch, https://github.com/tenstorrent/tt-metal/tree/punith/ttnn_uniad. Use the below command to checkout to the branch,
+## Testing
 
+Make sure `TT_METAL_HOME` points at this checkout and its Python env is active,
+otherwise device init fails while building dispatch kernels.
 
-        git checkout punith/ttnn_uniad
+Run everything (per-submodule PCC tests + the device DCN unit test):
 
-
-## Run the following commands to test the individual submodules,
-
-**DetectionTransformerDecoder** -
 ```
-pytest models/experimental/uniad/tests/pcc/test_ttnn_decoder.py
+pytest models/experimental/uniad/tests/
 ```
-**BEVFormerEncoder** -
+
+End-to-end (full UniAD; asserts planning `sdc_traj` and the seg head outputs vs
+the PyTorch reference on the real BEV embedding):
+
+```
+pytest models/experimental/uniad/tests/pcc/test_ttnn_uniad.py::test_uniad
+```
+
+A single submodule (one file per submodule lives under `tests/pcc/`), e.g.:
+
 ```
 pytest models/experimental/uniad/tests/pcc/test_ttnn_encoder.py
 ```
-**MotionHead** -
-```
-pytest models/experimental/uniad/tests/pcc/test_ttnn_motion_head.py
-```
 
-**MemoryBank** -
-```
-pytest models/experimental/uniad/tests/pcc/test_ttnn_memory_bank.py
-```
-
-**BEVFormerTrackHead** -
-```
-pytest models/experimental/uniad/tests/pcc/test_ttnn_head.py
-```
-
-**OccHead** -
-```
-pytest models/experimental/uniad/tests/pcc/test_ttnn_occ_head.py
-```
-
-**ResNet** -
-```
-pytest models/experimental/uniad/tests/pcc/test_ttnn_resnet.py::test_uniad_resnet
-```
-
-**PlanningHeadSingleMode** -
-```
-pytest models/experimental/uniad/tests/pcc/test_ttnn_planning_head.py
-```
-
-**QueryInteractionModule** -
-```
-pytest models/experimental/uniad/tests/pcc/test_ttnn_query_interaction.py
-```
-
-**PansegformerHead** -
-```
-pytest models/experimental/uniad/tests/pcc/test_ttnn_pan_segformer_head.py.py
-```
-
-**ModulatedDeformConv (device)** -
-```
-pytest models/experimental/uniad/tests/unit/test_dcn_device.py
-```
-
-## Run the following command to test full model(UniAD) integration
-
-```
-pytest models/experimental/uniad/tests/pcc/test_ttnn_uniad.py
-```
+Notes:
+- `tests/pcc/` — per-submodule PCC tests against the PyTorch reference.
+- `tests/unit/` — isolated custom-op tests (currently the device modulated deformable conv).
+- `test_ttnn_pan_segformer_head.py` is a structural smoke test only; the seg head's
+  accuracy is asserted in the e2e on the real BEV embedding (random input makes its
+  deformable-attention PCC meaningless).
 
 ## Performance
 
@@ -141,8 +104,8 @@ prohibitive, the standard mitigations are:
 The ResNet101 backbone runs 26 modulated deformable convs in
 `layer3`/`layer4`. By default this routes through a device-side
 `TtModulatedDeformConv2dDevice` (built on `ttnn.grid_sample`), which
-removes ~3.5 sec of per-forward host CPU compute vs. the legacy
-mmcv fallback. Set `TT_DCN_DEVICE=0` to switch back to the host
+removes ~3.5 sec of per-forward host CPU compute vs. the host
+fallback. Set `TT_DCN_DEVICE=0` to switch back to the host
 path (`torchvision.ops.deform_conv2d`) for numerical bisection.
 
 ### Environment variables

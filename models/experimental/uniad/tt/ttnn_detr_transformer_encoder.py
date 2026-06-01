@@ -77,9 +77,11 @@ class TtMultiScaleDeformableAttention:
 
         bs, num_query, _ = query.shape
         bs, num_value, _ = value.shape
-        # Removed `assert ttnn.sum(spatial_shapes[:,0]*spatial_shapes[:,1]) == num_value`
-        # — it ran a slice+mul+sum then compared the resulting ttnn scalar to a
-        # Python int every encoder layer, forcing a host sync per call.
+        # The old per-layer `assert ttnn.sum(spatial_shapes[:,0]*spatial_shapes[:,1])
+        # == num_value` forced a slice+mul+sum and a host sync on every call.
+        # The equivalent check now runs once, off the hot/trace path, when
+        # `_spatial_shapes_list_cache` is first populated (see below) — it
+        # reuses the `.item()` reads that cache already pays for.
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
         value = ttnn.linear(value, params.value_proj.weight, bias=params.value_proj.bias)
         if key_padding_mask is not None:
@@ -147,6 +149,15 @@ class TtMultiScaleDeformableAttention:
             self._spatial_shapes_list_cache = [
                 (int(spatial_shapes[lvl][0].item()), int(spatial_shapes[lvl][1].item())) for lvl in range(num_levels)
             ]
+            # One-time replacement for the removed per-layer assert: the
+            # spatial shapes must account for exactly `num_value` tokens.
+            # Runs only on the first (cache-populating) call, so it never
+            # touches the trace-replay hot path.
+            total_tokens = sum(h * w for h, w in self._spatial_shapes_list_cache)
+            assert total_tokens == num_value, (
+                f"spatial_shapes describe {total_tokens} value tokens but value "
+                f"has {num_value} (shapes={self._spatial_shapes_list_cache})"
+            )
         output = multi_scale_deformable_attn_pytorch(
             value,
             spatial_shapes,

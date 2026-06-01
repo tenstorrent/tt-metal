@@ -635,6 +635,23 @@ def test_uniad(device, reset_seeds, model_location_generator):
     except (KeyError, AssertionError, TypeError) as exc:
         failures.append(("planning.result_planning.sdc_traj", exc))
 
+    # ----- seg-head PCC gate (real bev_embed) -----------------------------
+    # The seg head's accuracy is validated HERE, on the real BEV embedding —
+    # NOT in test_ttnn_pan_segformer_head, which feeds random pts_feats. White
+    # noise makes the seg DETR encoder's deformable-attention PCC meaningless
+    # (sampling uncorrelated noise amplifies bf16 error: outputs_classes ~0.75
+    # on random vs ~0.999 here on real features). The continuous forward()
+    # outputs are the clean signal that feeds motion -> planning.
+    for _key in ("outputs_classes", "outputs_coords"):
+        try:
+            _rt = reference_model.seg_head._last_forward_outs[_key].to(torch.float32).reshape(-1)
+            _xt = ttnn.to_torch(ttnn_model.seg_head._last_forward_outs[_key]).to(torch.float32).reshape(-1)
+            _n = min(_rt.numel(), _xt.numel())
+            _, _msg = assert_with_pcc(_rt[:_n], _xt[:_n], pcc=0.99)
+            logger.info(f"PCC seg_head.{_key}: {_msg}")
+        except (KeyError, AssertionError, TypeError, AttributeError) as exc:
+            failures.append((f"seg_head.{_key}", exc))
+
     # ----- Perf regression gate -------------------------------------------
     # Asserts every tracked phase stays within tolerance vs the baseline
     # committed alongside this test. Runs only when the timing harness is

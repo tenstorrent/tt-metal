@@ -130,7 +130,7 @@ class TtModulatedDeformConv2dPack:
         out = ttnn.reshape(out, (B, out_h, out_w, last))
         o1, o2, mask = ttnn.chunk(out, 3, dim=3)
         ttnn.deallocate(out)
-        offset = ttnn.concat((o1, o2), dim=3)  # NHWC (B, H_out, W_out, 2*K*K), mmcv interleaved layout
+        offset = ttnn.concat((o1, o2), dim=3)  # NHWC (B, H_out, W_out, 2*K*K), DCNv2 (y,x) interleaved layout
         ttnn.deallocate(o1)
         ttnn.deallocate(o2)
         mask = ttnn.sigmoid(mask)  # low pcc if we use ttnn sigmoid for mask
@@ -156,7 +156,8 @@ class TtModulatedDeformConv2dPack:
                 _dcn_accum["n"] += 1
             return result_ttnn, out_h, out_w
 
-        # Host fallback: pull x / offset / mask back, call mmcv on CPU.
+        # Host fallback: pull x / offset / mask back, run torchvision
+        # deform_conv2d (DCNv2) on CPU.
         mask = ttnn.permute(mask, (0, 3, 1, 2))
 
         if _DCN_TIMING:
