@@ -332,6 +332,29 @@ def pick_subblock(m_block, n_block, max_dest_volume=4):
     return best
 
 
+# Aliases used by test_sweep_mm.py
+def get_block_candidates(per_core_tiles):
+    return get_mn_block_candidates(per_core_tiles)
+
+
+def get_divisors(k_tiles):
+    return get_k_block_candidates(k_tiles)
+
+
+def generate_subblock_combos(m_block, n_block, max_dest_volume=4):
+    """Return list of valid (sb_h, sb_w) pairs for given block sizes."""
+    combos = []
+    for h in range(1, min(m_block, max_dest_volume) + 1):
+        if m_block % h != 0:
+            continue
+        for w in range(1, min(n_block, max_dest_volume) + 1):
+            if n_block % w != 0:
+                continue
+            if h * w <= max_dest_volume:
+                combos.append((h, w))
+    return combos
+
+
 def generate_kn_combos(K_per_device, N_per_core, m_block=1, use_case="plain"):
     """Generate (K_block, N_block) combos filtered by L1 budget."""
     k_candidates = get_k_block_candidates(K_per_device)
