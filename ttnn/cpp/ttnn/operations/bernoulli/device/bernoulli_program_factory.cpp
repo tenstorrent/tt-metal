@@ -158,15 +158,17 @@ ProgramDescriptor BernoulliDeviceOperation::create_descriptor(
             TT_THROW("Core not in specified core ranges");
         }
 
-        reader_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{input.buffer()->address(), tile_offset, units_per_core});
+        // Register input/output addresses as Buffer* bindings so bernoulli takes the fast
+        // cache-hit path (the framework patches their addresses each dispatch).
+        reader_desc.emplace_runtime_args(core, {input.buffer(), tile_offset, units_per_core});
 
+        // seed is DYNAMIC (excluded from compute_program_hash): baked here for the cache-miss
+        // build, re-applied on every cache hit via get_dynamic_runtime_args().
         uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
         compute_desc.runtime_args.emplace_back(
             core, KernelDescriptor::CoreRuntimeArgs{seed, tile_offset, units_per_core});
 
-        writer_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs{output.buffer()->address(), tile_offset, units_per_core});
+        writer_desc.emplace_runtime_args(core, {output.buffer(), tile_offset, units_per_core});
 
         tile_offset += units_per_core;
     }
@@ -176,6 +178,34 @@ ProgramDescriptor BernoulliDeviceOperation::create_descriptor(
     desc.kernels.push_back(std::move(compute_desc));
 
     return desc;
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> BernoulliDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& /*tensor_args*/,
+    tensor_return_value_t& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // MUST mirror create_descriptor(): kernels are pushed reader(0), writer(1), compute(2); the
+    // compute runtime args are {seed, tile_offset, units_per_core}.  Only the per-call seed is
+    // re-applied.  The work-split is recomputed (cheap host-side integer math, no rebuild) so the
+    // per-core seed offsets match create_descriptor() exactly.
+    constexpr uint32_t kComputeKernelIdx = 2;
+
+    IDevice* device = output.device();
+    auto grid = device->compute_with_storage_grid_size();
+    uint32_t units_to_divide = output.physical_volume() / constants::TILE_HW;
+    [[maybe_unused]] auto
+        [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
+            split_work_to_cores(grid, units_to_divide);
+    auto cores = grid_to_cores(num_cores, grid.x, grid.y);
+
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    dynamic_args.reserve(cores.size());
+    for (int i = 0; i < static_cast<int>(cores.size()); ++i) {
+        const uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
+        dynamic_args.push_back({kComputeKernelIdx, cores[i], 0, seed});
+    }
+    return dynamic_args;
 }
 
 }  // namespace ttnn::operations::bernoulli
