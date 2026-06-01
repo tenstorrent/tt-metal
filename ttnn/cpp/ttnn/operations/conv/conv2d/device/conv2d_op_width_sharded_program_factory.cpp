@@ -32,14 +32,6 @@ namespace unary = ttnn::operations::unary;
 using ttnn::operations::conv::conv_skip_mcast;
 using ttnn::operations::conv::SkipMcast;
 
-using tt::tt_metal::ComputeConfigDescriptor;
-using tt::tt_metal::DataMovementConfigDescriptor;
-using tt::tt_metal::KernelDescriptor;
-using tt::tt_metal::ProgramDescriptor;
-using tt::tt_metal::SemaphoreDescriptor;
-using tt::tt_metal::WorkloadBuffer;
-using tt::tt_metal::WorkloadDescriptor;
-
 std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(
     const ttnn::Shape& conv_activation_shape,
     const ttnn::operations::sliding_window::SlidingWindowConfig& sliding_window_config,
@@ -61,7 +53,7 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activat
     return {{1, num_rows_padded, num_cols_padded}, {1, num_rows, num_cols}};
 }
 
-WorkloadDescriptor Conv2dWidthShardedProgramFactory::create_workload_descriptor(
+tt::tt_metal::WorkloadDescriptor Conv2dWidthShardedProgramFactory::create_workload_descriptor(
     const Conv2dParams& operation_attributes,
     const Conv2dInputs& tensor_args,
     Tensor& output_tensor,
@@ -333,7 +325,7 @@ WorkloadDescriptor Conv2dWidthShardedProgramFactory::create_workload_descriptor(
         (p_config.per_core_out_matrix_height_ntile + act_block_h_ntiles - 1) / act_block_h_ntiles;
     uint32_t num_blocks_weight_w_per_core = p_config.per_core_out_matrix_width_ntile / weight_block_w_ntiles;
 
-    KernelDescriptor::Defines reader_defines;
+    tt::tt_metal::KernelDescriptor::Defines reader_defines;
 
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / (input_num_cores * per_core_num_blocks_act_w);
 
@@ -389,8 +381,8 @@ WorkloadDescriptor Conv2dWidthShardedProgramFactory::create_workload_descriptor(
 
     TT_FATAL(act_block_h_datums % 2 == 0, "2 Indices are packed in one uint32_t word.");
 
-    KernelDescriptor::Defines writer_defines;
-    KernelDescriptor::Defines writer_mcast_sender_defines;
+    tt::tt_metal::KernelDescriptor::Defines writer_defines;
+    tt::tt_metal::KernelDescriptor::Defines writer_mcast_sender_defines;
     std::map<std::string, std::string> compute_defines;
 
     const SkipMcast skip_mcast = conv_skip_mcast(parallelization_config, a.memory_config().memory_layout());
@@ -473,7 +465,7 @@ WorkloadDescriptor Conv2dWidthShardedProgramFactory::create_workload_descriptor(
         input_channels_padded,
         reader_indices_actual_page_size);
 
-    ProgramDescriptor desc;
+    tt::tt_metal::ProgramDescriptor desc;
 
     // Descriptor-flow CB allocation: appends one CBDescriptor per non-empty
     // CBInfo entry to `desc.cbs` and fills `CBInfo::index`.  Sharded CBs are
@@ -594,35 +586,36 @@ WorkloadDescriptor Conv2dWidthShardedProgramFactory::create_workload_descriptor(
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(weights_kernel_compile_args);
     tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(weights_kernel_compile_args);
 
-    KernelDescriptor act_kernel_desc;
+    tt::tt_metal::KernelDescriptor act_kernel_desc;
     act_kernel_desc.kernel_source = activation_kernel_path;
-    act_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    act_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     act_kernel_desc.core_ranges = CoreRangeSet(all_reader_cores);
     act_kernel_desc.compile_time_args = std::move(activation_kernel_compile_args);
     act_kernel_desc.defines = reader_defines;
-    act_kernel_desc.config = DataMovementConfigDescriptor{
+    act_kernel_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
         .noc = act_noc,
     };
 
-    KernelDescriptor weights_kernel_desc;
+    tt::tt_metal::KernelDescriptor weights_kernel_desc;
     weights_kernel_desc.kernel_source = weights_kernel_path;
-    weights_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    weights_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     weights_kernel_desc.core_ranges = all_cores;
     weights_kernel_desc.compile_time_args = std::move(weights_kernel_compile_args);
     weights_kernel_desc.defines = std::move(writer_defines);
-    weights_kernel_desc.config = DataMovementConfigDescriptor{
+    weights_kernel_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
         .noc = weights_noc,
     };
 
-    KernelDescriptor compute_kernel_desc;
+    tt::tt_metal::KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source = compute_kernel_path;
-    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.compile_time_args = std::move(compute_kernel_args);
-    compute_kernel_desc.defines = KernelDescriptor::Defines{compute_defines.begin(), compute_defines.end()};
-    compute_kernel_desc.config = ComputeConfigDescriptor{
+    compute_kernel_desc.defines =
+        tt::tt_metal::KernelDescriptor::Defines{compute_defines.begin(), compute_defines.end()};
+    compute_kernel_desc.config = tt::tt_metal::ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
     };
@@ -692,12 +685,12 @@ WorkloadDescriptor Conv2dWidthShardedProgramFactory::create_workload_descriptor(
     // Semaphore Descriptors — match the legacy CreateSemaphore(... 0 /*INVALID*/)
     // pair above.  Both semaphores live on `all_cores` and are referenced from
     // the activation kernel by their compile-time-arg ids (0 and 1).
-    desc.semaphores.push_back(SemaphoreDescriptor{
+    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
         .id = act_mcast_sender_semaphore,
         .core_ranges = all_cores,
         .initial_value = 0,
     });
-    desc.semaphores.push_back(SemaphoreDescriptor{
+    desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
         .id = act_mcast_receiver_semaphore,
         .core_ranges = all_cores,
         .initial_value = 0,
@@ -713,13 +706,13 @@ WorkloadDescriptor Conv2dWidthShardedProgramFactory::create_workload_descriptor(
     post_conv2d_op_memory_checks(
         desc, operation_attributes, tensor_args, output_tensor, reader_indices_actual_page_size);
 
-    WorkloadDescriptor workload_descriptor;
+    tt::tt_metal::WorkloadDescriptor workload_descriptor;
     // Park the reader-indices Tensor so the framework keeps it alive for the
     // cached MeshWorkload's lifetime (see comment above the Tensor allocation).
     // The shared_ptr<Tensor> ownership defers ~Tensor (which would force-free
     // the underlying device memory) until the cached workload is evicted.
-    workload_descriptor.buffers.push_back(
-        WorkloadBuffer{.owner = std::move(conv_reader_indices_owner), .buffer = conv_reader_indices_buffer});
+    workload_descriptor.buffers.push_back(tt::tt_metal::WorkloadBuffer{
+        .owner = std::move(conv_reader_indices_owner), .buffer = conv_reader_indices_buffer});
 
     // Replicate the single ProgramDescriptor across every coordinate range —
     // every coord in the workload runs the same conv2d program.  Move the

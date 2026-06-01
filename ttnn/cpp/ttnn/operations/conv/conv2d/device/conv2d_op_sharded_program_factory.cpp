@@ -40,14 +40,6 @@ using ttnn::operations::conv::is_1d_depthwise_conv;
 using ttnn::operations::conv::should_coalesce_1d_depthwise_conv_reads;
 using ttnn::operations::conv::SkipMcast;
 
-using tt::tt_metal::ComputeConfigDescriptor;
-using tt::tt_metal::DataMovementConfigDescriptor;
-using tt::tt_metal::KernelDescriptor;
-using tt::tt_metal::ProgramDescriptor;
-using tt::tt_metal::SemaphoreDescriptor;
-using tt::tt_metal::WorkloadBuffer;
-using tt::tt_metal::WorkloadDescriptor;
-
 // Compute kernel addressing mode divides addresses with 16
 constexpr uint32_t COMPUTE_KERNEL_ADDRESS_DIVISOR = 16;
 
@@ -183,7 +175,7 @@ ActivationReuseConfig calculate_activation_reuse_params(
     return config;
 }
 
-WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_descriptor(
+tt::tt_metal::WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_descriptor(
     const Conv2dParams& operation_attributes,
     const Conv2dInputs& tensor_args,
     Tensor& output_tensor,
@@ -716,7 +708,7 @@ WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_descriptor(
     // framework patches their base addresses on cache hits.  The reader-
     // indices Tensor is the workload-scoped buffer parked below; the L1 path
     // (config_tensors_in_dram == false) picks it up via this CB binding.
-    ProgramDescriptor desc;
+    tt::tt_metal::ProgramDescriptor desc;
     allocate_cbs_to_program_descriptor(cb_info, desc, all_cores, a, output, conv_reader_indices_tensor);
 
     const uint32_t in_num_cores_x = input_cores.bounding_box().end_coord.x + 1;
@@ -775,13 +767,13 @@ WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_descriptor(
             mcast_sender_cores = input_cores.subtract(mcast_receiver_cores);
         }
         act_mcast_sender_semaphore_id = next_sem_id++;
-        desc.semaphores.push_back(SemaphoreDescriptor{
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
             .id = act_mcast_sender_semaphore_id,
             .core_ranges = all_cores,
             .initial_value = 0,
         });
         act_mcast_receiver_semaphore_id = next_sem_id++;
-        desc.semaphores.push_back(SemaphoreDescriptor{
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
             .id = act_mcast_receiver_semaphore_id,
             .core_ranges = all_cores,
             .initial_value = 0,
@@ -789,38 +781,38 @@ WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_descriptor(
 
         if (split_reader_cb_shared) {
             weights_mcast_sender_semaphore_id = next_sem_id++;
-            desc.semaphores.push_back(SemaphoreDescriptor{
+            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
                 .id = weights_mcast_sender_semaphore_id,
                 .core_ranges = all_cores,
                 .initial_value = 0,
             });
             weights_mcast_receiver_semaphore_id = next_sem_id++;
-            desc.semaphores.push_back(SemaphoreDescriptor{
+            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
                 .id = weights_mcast_receiver_semaphore_id,
                 .core_ranges = all_cores,
                 .initial_value = 0,
             });
             act_split_reader_reserve_done_semaphore_id = next_sem_id++;
-            desc.semaphores.push_back(SemaphoreDescriptor{
+            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
                 .id = act_split_reader_reserve_done_semaphore_id,
                 .core_ranges = all_cores,
                 .initial_value = 0,
             });
             act_split_reader_write_done_semaphore_id = next_sem_id++;
-            desc.semaphores.push_back(SemaphoreDescriptor{
+            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
                 .id = act_split_reader_write_done_semaphore_id,
                 .core_ranges = all_cores,
                 .initial_value = 0,
             });
         } else {
             weights_mcast_sender_semaphore_id = next_sem_id++;
-            desc.semaphores.push_back(SemaphoreDescriptor{
+            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
                 .id = weights_mcast_sender_semaphore_id,
                 .core_ranges = output_cores,
                 .initial_value = 0,
             });
             weights_mcast_receiver_semaphore_id = next_sem_id++;
-            desc.semaphores.push_back(SemaphoreDescriptor{
+            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
                 .id = weights_mcast_receiver_semaphore_id,
                 .core_ranges = output_cores,
                 .initial_value = 0,
@@ -831,13 +823,13 @@ WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_descriptor(
         if (!skip_weights_mcast) {
             mcast_receiver_cores = all_cores.subtract(mcast_sender_cores);
             weights_mcast_sender_semaphore_id = next_sem_id++;
-            desc.semaphores.push_back(SemaphoreDescriptor{
+            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
                 .id = weights_mcast_sender_semaphore_id,
                 .core_ranges = output_cores,
                 .initial_value = 0,
             });
             weights_mcast_receiver_semaphore_id = next_sem_id++;
-            desc.semaphores.push_back(SemaphoreDescriptor{
+            desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
                 .id = weights_mcast_receiver_semaphore_id,
                 .core_ranges = output_cores,
                 .initial_value = 0,
@@ -1208,14 +1200,14 @@ WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_descriptor(
     // for-one; the only structural change is that compile_args & defines move
     // off of DataMovementConfig / ComputeConfig (which become pure
     // ConfigDescriptors) and onto the KernelDescriptor itself.
-    KernelDescriptor writer_mcast_sender_desc;
+    tt::tt_metal::KernelDescriptor writer_mcast_sender_desc;
     writer_mcast_sender_desc.kernel_source = writer_mcast_sender_kernel;
-    writer_mcast_sender_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_mcast_sender_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     writer_mcast_sender_desc.core_ranges = mcast_sender_cores;
     writer_mcast_sender_desc.compile_time_args = writer_compile_time_args;
     writer_mcast_sender_desc.defines =
-        KernelDescriptor::Defines{writer_mcast_sender_defines.begin(), writer_mcast_sender_defines.end()};
-    writer_mcast_sender_desc.config = DataMovementConfigDescriptor{
+        tt::tt_metal::KernelDescriptor::Defines{writer_mcast_sender_defines.begin(), writer_mcast_sender_defines.end()};
+    writer_mcast_sender_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
         .noc = writer_mcast_noc,
     };
@@ -1224,37 +1216,39 @@ WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_descriptor(
     // otherwise it stays empty and is not appended to `desc.kernels` below
     // (matching the legacy `KernelHandle writer_mcast_receiver_id = -1` path
     // where no kernel is created on the receiver cores).
-    KernelDescriptor writer_mcast_receiver_desc;
+    tt::tt_metal::KernelDescriptor writer_mcast_receiver_desc;
     if (!skip_weights_mcast) {
         writer_mcast_receiver_desc.kernel_source = writer_mcast_receiver_kernel;
-        writer_mcast_receiver_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        writer_mcast_receiver_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         writer_mcast_receiver_desc.core_ranges = mcast_receiver_cores;
         writer_mcast_receiver_desc.compile_time_args = writer_compile_time_args;
-        writer_mcast_receiver_desc.defines = KernelDescriptor::Defines{writer_defines.begin(), writer_defines.end()};
-        writer_mcast_receiver_desc.config = DataMovementConfigDescriptor{
+        writer_mcast_receiver_desc.defines =
+            tt::tt_metal::KernelDescriptor::Defines{writer_defines.begin(), writer_defines.end()};
+        writer_mcast_receiver_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = writer_mcast_noc,
         };
     }
 
-    KernelDescriptor reader_kernel_desc;
+    tt::tt_metal::KernelDescriptor reader_kernel_desc;
     reader_kernel_desc.kernel_source = reader_kernel;
-    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel_desc.core_ranges = height_sharded ? input_cores : all_cores;
     reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_kernel_desc.defines = KernelDescriptor::Defines{reader_defines.begin(), reader_defines.end()};
-    reader_kernel_desc.config = DataMovementConfigDescriptor{
+    reader_kernel_desc.defines = tt::tt_metal::KernelDescriptor::Defines{reader_defines.begin(), reader_defines.end()};
+    reader_kernel_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
         .noc = reader_noc,
     };
 
-    KernelDescriptor compute_kernel_desc;
+    tt::tt_metal::KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source = compute_kernel;
-    compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = height_sharded ? input_cores : all_cores;
     compute_kernel_desc.compile_time_args = std::move(compute_kernel_args);
-    compute_kernel_desc.defines = KernelDescriptor::Defines{compute_defines.begin(), compute_defines.end()};
-    compute_kernel_desc.config = ComputeConfigDescriptor{
+    compute_kernel_desc.defines =
+        tt::tt_metal::KernelDescriptor::Defines{compute_defines.begin(), compute_defines.end()};
+    compute_kernel_desc.config = tt::tt_metal::ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
     };
@@ -1387,7 +1381,7 @@ WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_descriptor(
                 "bias_tile_offset {} should be less than bias_ntiles {}",
                 bias_tile_offset,
                 bias_ntiles);
-            KernelDescriptor::RTArgList sender_rt_args;
+            tt::tt_metal::KernelDescriptor::RTArgList sender_rt_args;
             sender_rt_args.push_back(b.buffer());  // [0] weights Buffer* — binding auto-registered
             if (has_bias) {
                 sender_rt_args.push_back(bias_buffer);  // [1] bias Buffer* — binding auto-registered
@@ -1555,13 +1549,13 @@ WorkloadDescriptor Conv2dShardedProgramFactory::create_workload_descriptor(
     post_conv2d_op_memory_checks(
         desc, operation_attributes, tensor_args, output_tensor, reader_indices_actual_page_size);
 
-    WorkloadDescriptor workload_descriptor;
+    tt::tt_metal::WorkloadDescriptor workload_descriptor;
     // Park the reader-indices Tensor so the framework keeps it alive for the
     // cached MeshWorkload's lifetime (see comment above the Tensor allocation).
     // The shared_ptr<Tensor> ownership defers ~Tensor (which would force-free
     // the underlying device memory) until the cached workload is evicted.
-    workload_descriptor.buffers.push_back(
-        WorkloadBuffer{.owner = std::move(conv_reader_indices_owner), .buffer = conv_reader_indices_buffer});
+    workload_descriptor.buffers.push_back(tt::tt_metal::WorkloadBuffer{
+        .owner = std::move(conv_reader_indices_owner), .buffer = conv_reader_indices_buffer});
 
     // Replicate the single ProgramDescriptor across every coordinate range —
     // every coord in the workload runs the same conv2d program.  Move the
