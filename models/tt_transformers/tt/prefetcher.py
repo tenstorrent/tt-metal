@@ -457,12 +457,16 @@ class Prefetcher(LightweightModule):
         )
         return tt_tensor_addrs
 
-    def insert_tensor(self, tensor: ttnn.Tensor):
+    def insert_tensor(self, tensor: ttnn.Tensor, program_config=None):
         """
         Populates the tensor addresses that need to be prefetched
         Args:
             tensor: The tensor to insert into the prefetcher queue
+            program_config: Accepted for API parity with DramCorePrefetcher (which sizes its GCB
+                from per_core_N); the worker-core path derives block sizes from the tensor itself
+                and ignores it.
         """
+        del program_config
         assert self.init_decode_done, "Prefetcher has not been initialized for decode mode. Cannot insert tensors"
         bytes_in_tile = {ttnn.bfloat4_b: 576, ttnn.bfloat8_b: 1088, ttnn.bfloat16: 2048}
         if tensor.volume() % self.ring_size != 0:
