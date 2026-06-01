@@ -162,5 +162,4 @@ jobs:
     secrets:
       AGGREGATE_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       ISSUE_WRITE_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
       COPILOT_PAT: ${{ secrets.AUTO_TRIAGE_TOKEN }}
