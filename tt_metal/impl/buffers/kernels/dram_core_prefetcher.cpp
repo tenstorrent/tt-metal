@@ -11,10 +11,13 @@
 // fifo_wr_ptr back to L1 so the next request to the same GCB resumes from the right
 // ring offset, and acks the socket page.
 //
-// Request page wire format (one socket page): a DramCorePrefetcherRequestHeader
-// followed by per-tensor DramCorePrefetcherTensorGeom entries. See
+// Request page wire format (one socket page): a DramCorePrefetcherRequestHeader, then
+// a forward-growing table of per-tensor DramCorePrefetcherEntry (address + layout index)
+// and a backward-growing (from the end of the payload) deduplicated table of
+// DramCorePrefetcherTensorLayout. The kernel walks the entries in order, resolving each
+// entry's geometry from the referenced layout. See
 // tt_metal/impl/buffers/dram_core_prefetcher_request.hpp. A header with
-// num_tensors == 0 is the stop sentinel.
+// num_entries == 0 is the stop sentinel.
 //
 // Per-GCB sender state block layout: see
 // tt_metal/impl/buffers/dram_sender_state_block.hpp.
@@ -29,9 +32,11 @@
 #include "tt_metal/impl/buffers/dram_sender_state_block.hpp"
 #include "tt_metal/impl/buffers/dram_core_prefetcher_request.hpp"
 
+using tt::tt_metal::DramCorePrefetcherEntry;
 using tt::tt_metal::DramCorePrefetcherRequestHeader;
-using tt::tt_metal::DramCorePrefetcherTensorGeom;
+using tt::tt_metal::DramCorePrefetcherTensorLayout;
 using tt::tt_metal::DramSenderStateBlock;
+using tt::tt_metal::kRequestPageBytes;
 
 // DRISC firmware doesn't define cb_interface (no CB infra on DRAM cores).
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
@@ -174,6 +179,7 @@ void kernel_main() {
 
     experimental::drisc_set_stream_mode();
     RemoteSenderCBInterface& iface = get_remote_sender_cb_interface(remote_cb_id);
+    bool has_loaded_sender_state = false;
 
     // ---- Request loop ----
     while (true) {
@@ -181,33 +187,43 @@ void kernel_main() {
 
         volatile tt_l1_ptr DramCorePrefetcherRequestHeader* req =
             reinterpret_cast<volatile tt_l1_ptr DramCorePrefetcherRequestHeader*>(socket.read_ptr);
-        const uint32_t req_num_tensors = req->num_tensors;
-        if (req_num_tensors == 0) {
-            // Stop sentinel.
+        const uint32_t req_num_entries = req->num_entries;
+        if (req_num_entries == 0) {
+            // Stop sentinel. Receiver pages_acked atomics target DRISC L1 while
+            // stream mode is active; wait for the last loaded GCB to drain before
+            // exiting the request loop and restoring NoC2AXI mode.
+            if (has_loaded_sender_state) {
+                experimental::remote_cb_sender_barrier(remote_cb_id);
+            }
             socket_pop_pages(socket, 1);
             socket_notify_sender(socket);
             break;
         }
-        const uint32_t req_num_layers = req->num_layers;
         const uint32_t gcb_state_addr = req->gcb_state_addr;
         volatile tt_l1_ptr DramSenderStateBlock* state =
             reinterpret_cast<volatile tt_l1_ptr DramSenderStateBlock*>(gcb_state_addr);
 
         load_sender_state(state, iface);
+        has_loaded_sender_state = true;
         // num_receivers lives inside the GCB's state block (set by the GCB ctor).
         // Reading it per request lets a single prefetcher serve GCBs with different
         // receiver counts.
         const uint32_t num_receivers = state->num_receivers;
 
-        // The per-tensor geometry blocks follow the header in the same socket page.
-        volatile tt_l1_ptr DramCorePrefetcherTensorGeom* geoms =
-            reinterpret_cast<volatile tt_l1_ptr DramCorePrefetcherTensorGeom*>(
+        // Entries follow the header (grow forward); the deduplicated layout table grows
+        // backward from the end of the payload, so layout i lives at read_ptr +
+        // kRequestPageBytes - (i+1)*sizeof(layout). See dram_core_prefetcher_request.hpp.
+        volatile tt_l1_ptr DramCorePrefetcherEntry* entries =
+            reinterpret_cast<volatile tt_l1_ptr DramCorePrefetcherEntry*>(
                 socket.read_ptr + sizeof(DramCorePrefetcherRequestHeader));
+        const uint32_t layout_table_end = socket.read_ptr + kRequestPageBytes;
 
-        for (uint32_t layer = 0; layer < req_num_layers; ++layer) {
-            for (uint32_t t = 0; t < req_num_tensors; ++t) {
-                volatile tt_l1_ptr DramCorePrefetcherTensorGeom* g = &geoms[t];
-                const uint32_t tensor_base = g->bank_local_base;
+        {
+            for (uint32_t e = 0; e < req_num_entries; ++e) {
+                const uint32_t tensor_base = entries[e].bank_local_base;
+                volatile tt_l1_ptr DramCorePrefetcherTensorLayout* g =
+                    reinterpret_cast<volatile tt_l1_ptr DramCorePrefetcherTensorLayout*>(
+                        layout_table_end - (entries[e].layout_index + 1) * sizeof(DramCorePrefetcherTensorLayout));
                 const uint32_t t_num_sub = g->num_sub;
                 const uint32_t t_M = g->M;
                 const uint32_t t_rows_per_sub = g->rows_per_sub;
@@ -237,7 +253,7 @@ void kernel_main() {
 
                 // The flat chunk index `c` decomposes into three nested counters,
                 // advanced by compare-and-increment (ch fastest, then sb, then blk):
-                uint32_t blk = 0;  // K-block index within the layer, in [0, t_block_count)
+                uint32_t blk = 0;  // K-block index within the tensor, in [0, t_block_count)
                 uint32_t sb = 0;   // sub-band index within the block, in [0, t_num_sub)
                 uint32_t ch = 0;   // chunk index within the sub-band, in [0, t_M)
                 // stage_slot ping-pongs between stage_slot_a and stage_slot_b; toggle via
@@ -352,10 +368,6 @@ void kernel_main() {
                     sb = next_sb;
                     ch = next_ch;
                     stage_slot = next_slot;
-                }
-
-                if (t == req_num_tensors - 1) {
-                    experimental::remote_cb_sender_barrier(remote_cb_id);
                 }
             }
         }

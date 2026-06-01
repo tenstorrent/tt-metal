@@ -16,7 +16,6 @@ void start_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_devi
 void queue_dram_core_prefetcher_request(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     const std::vector<std::pair<ttnn::Tensor, uint32_t>>& tensors,
-    uint32_t num_layers,
     const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset) {
     std::vector<tt::tt_metal::experimental::DramCorePrefetcherInput> inputs;
@@ -24,8 +23,7 @@ void queue_dram_core_prefetcher_request(
     for (const auto& [tensor, block_count] : tensors) {
         inputs.push_back({&tensor.mesh_tensor(), block_count});
     }
-    tt::tt_metal::experimental::QueueDramCorePrefetcherRequest(
-        *mesh_device, global_cb, device_subset, inputs, num_layers);
+    tt::tt_metal::experimental::QueueDramCorePrefetcherRequest(*mesh_device, global_cb, device_subset, inputs);
 }
 
 void stop_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {

@@ -65,8 +65,12 @@ void StartDramCorePrefetcher(distributed::MeshDevice& mesh_device, const DramCor
 //     same mesh device.
 //   - `device_subset` defaults to the full mesh when std::nullopt. Devices
 //     outside the subset do not process this request.
-//   - `input_tensors` is the list of weight tensors to prefetch (at least one),
-//     each paired with the block_count to divide its K dimension into.
+//   - `input_tensors` is the full, flattened list of weight tensors to prefetch
+//     (at least one), each paired with the block_count to divide its K dimension
+//     into. They are streamed to the receivers in list order; pass distinct
+//     tensors for distinct model layers, or repeat a tensor to replay it. Tensors
+//     that share a layout are deduplicated on the wire, and a list that overflows
+//     one request page is transparently split across pages.
 //   - Per-GCB ring-buffer state is preserved across requests, so successive
 //     Queue calls against the same GCB resume where the previous call left off.
 //
@@ -76,8 +80,7 @@ void QueueDramCorePrefetcherRequest(
     distributed::MeshDevice& mesh_device,
     const GlobalCircularBuffer& gcb,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
-    const std::vector<DramCorePrefetcherInput>& input_tensors,
-    uint32_t num_layers);
+    const std::vector<DramCorePrefetcherInput>& input_tensors);
 
 // Block until all previously queued requests have been delivered and the
 // kernels have exited, then release the prefetcher's resources. No-op if no

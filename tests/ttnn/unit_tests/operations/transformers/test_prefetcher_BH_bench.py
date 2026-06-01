@@ -433,8 +433,7 @@ def test_bench_dram_core_repeats(device, op_name, shape):
     ttnn.experimental.start_dram_core_prefetcher(device)
     ttnn.experimental.queue_dram_core_prefetcher_request(
         device,
-        [(tt_weight, ring_size)],
-        num_layers=num_prefetch_layers,
+        [(tt_weight, ring_size)] * num_prefetch_layers,
         global_cb=gcb,
     )
 

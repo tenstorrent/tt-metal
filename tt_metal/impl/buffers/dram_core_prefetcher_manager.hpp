@@ -45,14 +45,15 @@ class MeshDevice;
 //     kernel on every DRAM sender core. Allocates one H2D socket per (device,
 //     sender). Launches the programs (non-blocking — kernels park on
 //     socket_wait_for_pages) and spawns the host worker thread.
-//   * queue(gcb, subset, tensors, num_layers) serializes one request into a
-//     fixed-size socket page and pushes it onto the internal queue. The host
-//     worker thread fans it out to every socket whose mesh coord is in
-//     `subset` via non-blocking try_write so one slow socket can't starve the
-//     others. The caller is responsible for keeping tensors and the GCB alive
-//     until stop() (see the public dram_core_prefetcher.hpp note).
+//   * queue(gcb, subset, tensors) serializes the request into one or more
+//     fixed-size socket pages (splitting when the tensor list overflows a page)
+//     and pushes them onto the internal queue in order. The host worker thread
+//     fans each page out to every socket whose mesh coord is in `subset` via
+//     non-blocking try_write so one slow socket can't starve the others. The
+//     caller is responsible for keeping tensors and the GCB alive until stop()
+//     (see the public dram_core_prefetcher.hpp note).
 //   * stop() pushes a zero-tensor request targeting the full mesh, joins the
-//     worker thread (the kernel exits on `num_tensors == 0`), WaitProgramDone
+//     worker thread (the kernel exits on `num_entries == 0`), WaitProgramDone
 //     on each device, releases per-cycle resources.
 //   * Destructor calls stop().
 class DramCorePrefetcherManager {
@@ -70,8 +71,7 @@ public:
     void queue(
         const experimental::GlobalCircularBuffer& gcb,
         const std::optional<MeshCoordinateRangeSet>& device_subset,
-        const std::vector<experimental::DramCorePrefetcherInput>& tensors,
-        uint32_t num_layers);
+        const std::vector<experimental::DramCorePrefetcherInput>& tensors);
 
     void stop();
 
@@ -79,20 +79,18 @@ public:
 
 private:
     // ---- Constants shared with the kernel side ----
-    // Max tensors per request. 16 is enough for Llama production shapes (typical is
-    // 5–10 tensors per matmul layer). The request page wire format is a
-    // DramCorePrefetcherRequestHeader followed by kMaxTensorsPerRequest geom entries
-    // (see impl/buffers/dram_core_prefetcher_request.hpp).
-    static constexpr uint32_t kMaxTensorsPerRequest = 16;
-    static constexpr uint32_t kRequestPageBytes =
-        sizeof(DramCorePrefetcherRequestHeader) + kMaxTensorsPerRequest * sizeof(DramCorePrefetcherTensorGeom);
+    // The request page wire format (header + entry table + deduplicated layout table)
+    // and the fixed payload size kRequestPageBytes live in
+    // impl/buffers/dram_core_prefetcher_request.hpp so the host and the kernel agree on
+    // both the byte layout and the payload size. A Queue call whose tensors overflow one
+    // page is split across multiple pages.
 
     // FIFO depth — how many in-flight requests a single socket can hold before
-    // back-pressuring. 16 pages × ~656 B per page ≈ 11 KB per socket.
+    // back-pressuring. kSocketFifoPages × align_up(kRequestPageBytes, pcie) per socket.
     static constexpr uint32_t kSocketFifoPages = 16;
 
     struct Request {
-        std::vector<uint8_t> page;  // size = kRequestPageBytes; identical bytes for every target
+        std::vector<uint8_t> page;  // one socket page; identical bytes for every target
         std::vector<MeshCoordinate> target_devices;
     };
 
@@ -100,11 +98,11 @@ private:
     void enumerate_dram_senders();
     void build_and_launch_programs(uint32_t stage_ring_base, uint32_t stage_ring_size);
     void allocate_sockets();
-    // Serialize a Queue call's bytes into one socket page.
-    std::vector<uint8_t> serialize_request_page(
+    // Serialize a Queue call's tensors into one or more socket pages, deduplicating
+    // tensor layouts within each page and splitting when a page fills.
+    std::vector<std::vector<uint8_t>> serialize_request_pages(
         const experimental::GlobalCircularBuffer& gcb,
-        const std::vector<experimental::DramCorePrefetcherInput>& data_tensors,
-        uint32_t num_layers) const;
+        const std::vector<experimental::DramCorePrefetcherInput>& data_tensors) const;
     MeshCoordinateRangeSet full_mesh_subset() const;
 
     MeshDevice* mesh_device_;

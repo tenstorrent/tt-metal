@@ -9,6 +9,7 @@
 #include "impl/buffers/h2d_socket_internal.hpp"
 
 #include <cstdint>
+#include <cstring>
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
@@ -58,12 +59,13 @@ std::pair<uint32_t, uint32_t> pick_page_size(uint32_t max_page_size, uint32_t nu
     return {page, static_cast<uint32_t>(total / page)};
 }
 
-// Per-tensor geometry for the DRAM-core prefetcher kernel — see
-// DramCorePrefetcherTensorGeom in impl/buffers/dram_core_prefetcher_request.hpp for
+// Address-independent per-tensor geometry for the DRAM-core prefetcher kernel — see
+// DramCorePrefetcherTensorLayout in impl/buffers/dram_core_prefetcher_request.hpp for
 // the field-by-field documentation, and tt_metal/impl/buffers/prefetcher_matmul_design.md
-// §6 for the fit ladder.
-DramCorePrefetcherTensorGeom compute_tensor_geom(
-    const MeshTensor& t, uint32_t bank_local_base, uint32_t block_count, uint32_t num_receivers, uint32_t ring_half) {
+// §6 for the fit ladder. The tensor's bank-local address is carried separately in the
+// per-tensor DramCorePrefetcherEntry, so identical-geometry tensors share one layout.
+DramCorePrefetcherTensorLayout compute_tensor_layout(
+    const MeshTensor& t, uint32_t block_count, uint32_t num_receivers, uint32_t ring_half) {
     const auto* ref_buffer = t.mesh_buffer().get_reference_buffer();
     const auto shard_shape = ref_buffer->shard_spec().shape();
     const uint32_t tile_bytes = tt::tile_size(datatype_to_dataformat_converter(t.dtype()));
@@ -136,8 +138,7 @@ DramCorePrefetcherTensorGeom compute_tensor_geom(
     TT_FATAL(
         sub_chunk_bytes <= ring_half, "Internal: chunk size {} B exceeds ring_half {} B", sub_chunk_bytes, ring_half);
 
-    DramCorePrefetcherTensorGeom g;
-    g.bank_local_base = bank_local_base;
+    DramCorePrefetcherTensorLayout g;
     g.num_sub = num_sub;
     g.M = M;
     g.rows_per_sub = rows_per_sub;
@@ -149,6 +150,12 @@ DramCorePrefetcherTensorGeom compute_tensor_geom(
     g.page_bytes_per_recv = k_block_w_tiles * coalesced_num_pages * coalesced_page_size;
     g.block_count = block_count;
     return g;
+}
+
+// Two layouts are interchangeable iff every geometry field matches. The struct is a
+// packed POD of uint32_t fields, so a byte compare is exact (no padding).
+bool layout_equal(const DramCorePrefetcherTensorLayout& a, const DramCorePrefetcherTensorLayout& b) {
+    return std::memcmp(&a, &b, sizeof(DramCorePrefetcherTensorLayout)) == 0;
 }
 
 }  // namespace
@@ -332,54 +339,101 @@ MeshCoordinateRangeSet DramCorePrefetcherManager::full_mesh_subset() const {
     return out;
 }
 
-std::vector<uint8_t> DramCorePrefetcherManager::serialize_request_page(
+std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_pages(
     const experimental::GlobalCircularBuffer& gcb,
-    const std::vector<experimental::DramCorePrefetcherInput>& data_tensors,
-    uint32_t num_layers) const {
-    const uint32_t num_tensors = static_cast<uint32_t>(data_tensors.size());
-    TT_FATAL(
-        num_tensors > 0 && num_tensors <= kMaxTensorsPerRequest,
-        "QueueDramCorePrefetcherRequest: num_tensors={} must be in [1, {}]",
-        num_tensors,
-        kMaxTensorsPerRequest);
+    const std::vector<experimental::DramCorePrefetcherInput>& data_tensors) const {
+    TT_FATAL(!data_tensors.empty(), "QueueDramCorePrefetcherRequest requires at least one tensor");
 
     // Derive num_receivers from the GCB itself so each Queue call can target a
     // GCB with a different receiver count.
     const uint32_t gcb_num_receivers = gcb.sender_receiver_core_mapping().front().second.num_cores();
     const uint32_t gcb_state_addr = static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(gcb));
 
-    // Pad to the socket page size; the header + geom structs occupy the first
-    // kRequestPageBytes, the rest stays zero.
     const uint32_t pcie_alignment =
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
-    const uint32_t page_bytes = align_up(kRequestPageBytes, pcie_alignment);
-    std::vector<uint8_t> bytes(page_bytes, 0);
+    const uint32_t aligned_page_bytes = align_up(kRequestPageBytes, pcie_alignment);
 
-    auto* header = reinterpret_cast<DramCorePrefetcherRequestHeader*>(bytes.data());
-    header->num_tensors = num_tensors;
-    header->num_layers = num_layers;
-    header->gcb_state_addr = gcb_state_addr;
+    constexpr uint32_t kHeaderBytes = sizeof(DramCorePrefetcherRequestHeader);
+    constexpr uint32_t kEntryBytes = sizeof(DramCorePrefetcherEntry);
+    constexpr uint32_t kLayoutBytes = sizeof(DramCorePrefetcherTensorLayout);
 
-    auto* geoms =
-        reinterpret_cast<DramCorePrefetcherTensorGeom*>(bytes.data() + sizeof(DramCorePrefetcherRequestHeader));
-    for (uint32_t t = 0; t < num_tensors; ++t) {
+    std::vector<std::vector<uint8_t>> pages;
+
+    // Per-page packing state. Entries grow forward from kHeaderBytes; the layout table
+    // grows backward from kRequestPageBytes (layout i at kRequestPageBytes -
+    // (i+1)*kLayoutBytes). `seen` holds this page's deduplicated layouts in index order.
+    std::vector<uint8_t> page;
+    uint32_t num_entries = 0;
+    uint32_t num_layouts = 0;
+    std::vector<DramCorePrefetcherTensorLayout> seen;
+
+    auto begin_page = [&]() {
+        page.assign(aligned_page_bytes, 0);
+        num_entries = 0;
+        num_layouts = 0;
+        seen.clear();
+    };
+    auto finalize_page = [&]() {
+        auto* header = reinterpret_cast<DramCorePrefetcherRequestHeader*>(page.data());
+        header->num_entries = num_entries;
+        header->num_layouts = num_layouts;
+        header->gcb_state_addr = gcb_state_addr;
+        pages.push_back(std::move(page));
+    };
+
+    begin_page();
+    for (uint32_t t = 0; t < data_tensors.size(); ++t) {
         const experimental::DramCorePrefetcherInput& input = data_tensors[t];
         TT_FATAL(input.tensor != nullptr, "QueueDramCorePrefetcherRequest: input tensor {} is null", t);
         // block_count is per-tensor: it sets how many K-blocks the kernel pushes
-        // (and how K is divided in compute_tensor_geom), replacing the GCB ring size.
+        // (and how K is divided in compute_tensor_layout), replacing the GCB ring size.
+        const DramCorePrefetcherTensorLayout layout =
+            compute_tensor_layout(*input.tensor, input.block_count, gcb_num_receivers, ring_half_);
         const uint32_t bank_local_base = static_cast<uint32_t>(input.tensor->mesh_buffer().address());
-        geoms[t] =
-            compute_tensor_geom(*input.tensor, bank_local_base, input.block_count, gcb_num_receivers, ring_half_);
-    }
 
-    return bytes;
+        // Find this layout in the current page (dedup), or decide it needs adding.
+        auto find_layout = [&]() -> int32_t {
+            for (uint32_t i = 0; i < num_layouts; ++i) {
+                if (layout_equal(seen[i], layout)) {
+                    return static_cast<int32_t>(i);
+                }
+            }
+            return -1;
+        };
+        int32_t layout_idx = find_layout();
+        const uint32_t need = kEntryBytes + (layout_idx < 0 ? kLayoutBytes : 0);
+        const uint32_t entry_high = kHeaderBytes + num_entries * kEntryBytes;
+        const uint32_t layout_low = kRequestPageBytes - num_layouts * kLayoutBytes;
+        if (need > layout_low - entry_high) {
+            // No room in the current page — emit it and start a fresh one. The tensor's
+            // layout is page-local, so it becomes a new layout in the next page.
+            finalize_page();
+            begin_page();
+            layout_idx = -1;
+        }
+
+        if (layout_idx < 0) {
+            layout_idx = static_cast<int32_t>(num_layouts);
+            std::memcpy(page.data() + (kRequestPageBytes - (num_layouts + 1) * kLayoutBytes), &layout, kLayoutBytes);
+            seen.push_back(layout);
+            ++num_layouts;
+        }
+
+        DramCorePrefetcherEntry entry;
+        entry.bank_local_base = bank_local_base;
+        entry.layout_index = static_cast<uint32_t>(layout_idx);
+        std::memcpy(page.data() + (kHeaderBytes + num_entries * kEntryBytes), &entry, kEntryBytes);
+        ++num_entries;
+    }
+    finalize_page();
+
+    return pages;
 }
 
 void DramCorePrefetcherManager::queue(
     const experimental::GlobalCircularBuffer& gcb,
     const std::optional<MeshCoordinateRangeSet>& device_subset,
-    const std::vector<experimental::DramCorePrefetcherInput>& tensors,
-    uint32_t num_layers) {
+    const std::vector<experimental::DramCorePrefetcherInput>& tensors) {
     TT_FATAL(active_, "QueueDramCorePrefetcherRequest called before StartDramCorePrefetcher");
     TT_FATAL(
         experimental::sender_core_type(gcb) == experimental::SenderCoreType::Dram,
@@ -391,10 +445,14 @@ void DramCorePrefetcherManager::queue(
         num_senders_);
     TT_FATAL(!tensors.empty(), "QueueDramCorePrefetcherRequest requires at least one tensor");
 
-    Request req;
-    req.page = serialize_request_page(gcb, tensors, num_layers);
+    // A Queue call may span more tensors than fit in one socket page; serialize into one
+    // or more pages, each an independent request. The per-GCB fifo_wr_ptr persists across
+    // requests, so the split is invisible to the receiver.
+    std::vector<std::vector<uint8_t>> pages = serialize_request_pages(gcb, tensors);
+
     // Target devices: subset if given, else full mesh. Caller is responsible
     // for keeping tensors and the GCB alive until stop() — see the public API doc.
+    std::vector<MeshCoordinate> target_devices;
     MeshCoordinateRangeSet effective_subset = device_subset.has_value() ? *device_subset : full_mesh_subset();
     for (const auto& range : effective_subset.ranges()) {
         for (const auto& coord : range) {
@@ -404,13 +462,20 @@ void DramCorePrefetcherManager::queue(
                 "started "
                 "on",
                 coord);
-            req.target_devices.push_back(coord);
+            target_devices.push_back(coord);
         }
     }
 
     {
+        // Push all pages of this call under one lock so worker_loop sends them in order
+        // (required for fifo_wr_ptr continuity across the split).
         std::lock_guard<std::mutex> lk(queue_mu_);
-        pending_.push_back(std::move(req));
+        for (auto& page : pages) {
+            Request req;
+            req.page = std::move(page);
+            req.target_devices = target_devices;
+            pending_.push_back(std::move(req));
+        }
     }
     queue_cv_.notify_one();
 }
@@ -467,8 +532,8 @@ void DramCorePrefetcherManager::stop() {
     if (!active_) {
         return;
     }
-    // Stop = a zero-filled page (num_tensors == 0) broadcast to every device in
-    // the mesh. The kernel exits its request loop on `num_tensors == 0`. The
+    // Stop = a zero-filled page (num_entries == 0) broadcast to every device in
+    // the mesh. The kernel exits its request loop on `num_entries == 0`. The
     // worker_loop returns once pending is drained and stop_requested_ is set.
     Request sentinel;
     const uint32_t pcie_alignment =
@@ -523,10 +588,9 @@ void QueueDramCorePrefetcherRequest(
     distributed::MeshDevice& mesh_device,
     const GlobalCircularBuffer& gcb,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
-    const std::vector<DramCorePrefetcherInput>& input_tensors,
-    uint32_t num_layers) {
+    const std::vector<DramCorePrefetcherInput>& input_tensors) {
     auto& manager = mesh_device.impl().dram_core_prefetcher(&mesh_device);
-    manager.queue(gcb, device_subset, input_tensors, num_layers);
+    manager.queue(gcb, device_subset, input_tensors);
 }
 
 void StopDramCorePrefetcher(distributed::MeshDevice& mesh_device) {
