@@ -65,7 +65,7 @@ std::pair<uint32_t, uint32_t> pick_page_size(uint32_t max_page_size, uint32_t nu
 // §6 for the fit ladder. The tensor's bank-local address is carried separately in the
 // per-tensor DramCorePrefetcherEntry, so identical-geometry tensors share one layout.
 DramCorePrefetcherTensorLayout compute_tensor_layout(
-    const MeshTensor& t, uint32_t block_count, uint32_t num_receivers, uint32_t ring_half) {
+    const MeshTensor& t, uint32_t block_count, uint32_t num_receivers, uint32_t ring_half, ContextId context_id) {
     const auto* ref_buffer = t.mesh_buffer().get_reference_buffer();
     const auto shard_shape = ref_buffer->shard_spec().shape();
     const uint32_t tile_bytes = tt::tile_size(datatype_to_dataformat_converter(t.dtype()));
@@ -90,7 +90,7 @@ DramCorePrefetcherTensorLayout compute_tensor_layout(
     const uint32_t n_per_recv = n_per_bank / num_receivers;
     const uint32_t row_bytes = n_per_bank * tile_bytes;
     const uint32_t block_bytes = k_block_w_tiles * row_bytes;
-    const uint32_t noc_max_burst = MetalContext::instance().hal().get_noc_max_burst_size_bytes();
+    const uint32_t noc_max_burst = MetalContext::instance(context_id).hal().get_noc_max_burst_size_bytes();
     const auto [coalesced_page_size, coalesced_num_pages] = pick_page_size(noc_max_burst, n_per_recv, tile_bytes);
     TT_FATAL(
         coalesced_page_size <= noc_max_burst,
@@ -344,14 +344,15 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
     const std::vector<experimental::DramCorePrefetcherInput>& data_tensors) const {
     TT_FATAL(!data_tensors.empty(), "QueueDramCorePrefetcherRequest requires at least one tensor");
 
+    const ContextId context_id = mesh_device_->impl().get_context_id();
+
     // Derive num_receivers from the GCB itself so each Queue call can target a
     // GCB with a different receiver count. The DRAM-sender GCB ctor enforces a
     // uniform receiver count across senders, so front() speaks for every sender.
     const uint32_t gcb_num_receivers = gcb.sender_receiver_core_mapping().front().second.num_cores();
     const uint32_t gcb_state_addr = static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(gcb));
 
-    const uint32_t pcie_alignment =
-        MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
+    const uint32_t pcie_alignment = MetalContext::instance(context_id).hal().get_alignment(HalMemType::HOST);
     const uint32_t aligned_page_bytes = align_up(kRequestPageBytes, pcie_alignment);
 
     constexpr uint32_t kHeaderBytes = sizeof(DramCorePrefetcherRequestHeader);
@@ -389,7 +390,7 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
         // block_count is per-tensor: it sets how many K-blocks the kernel pushes
         // (and how K is divided in compute_tensor_layout), replacing the GCB ring size.
         const DramCorePrefetcherTensorLayout layout =
-            compute_tensor_layout(*input.tensor, input.block_count, gcb_num_receivers, ring_half_);
+            compute_tensor_layout(*input.tensor, input.block_count, gcb_num_receivers, ring_half_, context_id);
         const uint32_t bank_local_base = static_cast<uint32_t>(input.tensor->mesh_buffer().address());
 
         // Find this layout in the current page (dedup), or decide it needs adding.

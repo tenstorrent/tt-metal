@@ -300,7 +300,8 @@ H2DSocket::H2DSocket(
     uint64_t dram_l1_noc_offset) :
     recv_core_(recv_core),
     fifo_size_(fifo_size),
-    pcie_alignment_(MetalContext::instance().hal().get_alignment(HalMemType::HOST)),
+    pcie_alignment_(
+        MetalContext::instance(extract_context_id(mesh_device.get())).hal().get_alignment(HalMemType::HOST)),
     pinned_memory_(nullptr),
     mesh_device_(mesh_device.get()),
     dram_l1_noc_offset_(dram_l1_noc_offset),
@@ -345,11 +346,13 @@ H2DSocket::H2DSocket(
 
     const CoreCoord virtual_core = mesh_device->get_device(recv_core_.device_coord)
                                        ->virtual_core_from_logical_core(recv_core_.core_coord, CoreType::DRAM);
-    MetalContext::instance().get_cluster().write_core(
-        mesh_device->get_device(recv_core_.device_coord)->id(),
-        tt_cxy_pair(mesh_device->get_device(recv_core_.device_coord)->id(), virtual_core),
-        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&md), sizeof(md)),
-        static_cast<uint64_t>(config_buffer_address_) + dram_l1_noc_offset_);
+    MetalContext::instance(extract_context_id(mesh_device.get()))
+        .get_cluster()
+        .write_core(
+            mesh_device->get_device(recv_core_.device_coord)->id(),
+            tt_cxy_pair(mesh_device->get_device(recv_core_.device_coord)->id(), virtual_core),
+            std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&md), sizeof(md)),
+            static_cast<uint64_t>(config_buffer_address_) + dram_l1_noc_offset_);
 }
 
 H2DSocket::~H2DSocket() noexcept {
