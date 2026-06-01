@@ -259,7 +259,9 @@ def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
     """
     if mesh_config.tp > 1:
         tensor_allreduced = mesh_config.allreduce(tensor, ccl_manager, pad_size=0, axis=mesh_config.tp_axis)
-        tensor.deallocate(True)
+        # ``mesh_config.allreduce`` now frees its input internally between
+        # reduce_scatter and all_gather to keep peak DRAM within bounds for
+        # long-context prefill; don't deallocate again here.
         tensor = tensor_allreduced
 
         # Remove padding added in weights.py for tile-aligned CCL operations.

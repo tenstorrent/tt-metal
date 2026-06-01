@@ -4,12 +4,29 @@
 
 #pragma once
 
+#include <cstring>
 #include <stdint.h>
+
+#include "internal/risc_attribs.h"
 
 inline constexpr uint16_t NEG_INF_BFLOAT16 = 0xFF80;    // Representation of negative infinity in bfloat16
 inline constexpr uint16_t POS_INF_BFLOAT16 = 0x7F80;    // Representation of positive infinity in bfloat16
 inline constexpr uint16_t NAN_BFLOAT16 = 0x7FFF;        // Representation of NaN in bfloat16
 inline constexpr uint16_t BFLOAT16_SIGN_MASK = 0x8000;  // Sign bit mask for bfloat16
+
+// Convert a single-precision float to bfloat16 using IEEE 754 round-to-nearest-even.
+// Matches the packer hardware semantics, so values produced via this helper compare
+// bit-identically against values rounded down to bf16 by the packer.
+FORCE_INLINE std::uint16_t fp32_to_bf16(float x) {
+    std::uint32_t bits;
+    std::memcpy(&bits, &x, sizeof(bits));
+
+    std::uint32_t lsb = (bits >> 16) & 1u;
+    std::uint32_t rounding_bias = 0x7FFFu + lsb;
+    bits += rounding_bias;
+
+    return static_cast<std::uint16_t>(bits >> 16);
+}
 
 // Optimized function to compare two bfloat16 values using integer arithmetic
 bool bfloat16_greater(uint16_t bf16_a, uint16_t bf16_b) {

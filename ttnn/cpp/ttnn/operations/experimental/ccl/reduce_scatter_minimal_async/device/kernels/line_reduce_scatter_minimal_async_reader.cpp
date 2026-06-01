@@ -198,7 +198,7 @@ void kernel_main() {
                         uint32_t l1_write_addr = get_write_ptr(cb_in0);
                         for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                             uint32_t tile_id = input_tile_id_start + input_row_offset + input_pages_read_in_row;
-                            uint64_t noc_read_addr = get_noc_addr(tile_id, input_tensor_addrgen);
+                            uint64_t noc_read_addr = input_tensor_addrgen.get_noc_addr(tile_id);
                             noc_async_read(noc_read_addr, l1_write_addr, page_size);
                             l1_write_addr += page_size;
 
@@ -236,7 +236,7 @@ void kernel_main() {
                         uint32_t l1_write_addr = get_write_ptr(cb_in0);
                         for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                             uint32_t tile_id = input_tile_id_start + input_row_offset + input_pages_read_in_row;
-                            uint64_t noc_read_addr = get_noc_addr(tile_id, input_tensor_addrgen);
+                            uint64_t noc_read_addr = input_tensor_addrgen.get_noc_addr(tile_id);
                             noc_async_read(noc_read_addr, l1_write_addr, page_size);
                             l1_write_addr += page_size;
 
@@ -260,7 +260,7 @@ void kernel_main() {
                         for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                             uint32_t tile_id =
                                 intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
-                            uint64_t noc_read_addr = get_noc_addr(tile_id, intermediate_tensor_addrgen);
+                            uint64_t noc_read_addr = intermediate_tensor_addrgen.get_noc_addr(tile_id);
                             noc_async_read(noc_read_addr, l1_write_addr, page_size);
                             l1_write_addr += page_size;
 
@@ -367,8 +367,8 @@ void kernel_main() {
                     uint32_t l1_write_addr = get_write_ptr(cb_in0);
                     for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                         uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
-                        uint64_t noc_read_addr = accumulate_output ? get_noc_addr(tile_id, output_tensor_addrgen)
-                                                                   : get_noc_addr(tile_id, input_tensor_addrgen);
+                        uint64_t noc_read_addr = accumulate_output ? output_tensor_addrgen.get_noc_addr(tile_id)
+                                                                   : input_tensor_addrgen.get_noc_addr(tile_id);
                         noc_async_read(noc_read_addr, l1_write_addr, page_size);
                         l1_write_addr += page_size;
 
@@ -392,7 +392,7 @@ void kernel_main() {
                     for (uint32_t j = 0; j < num_pages_to_read; ++j) {
                         uint32_t intermediate_tile_id =
                             intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
-                        uint64_t noc_read_addr = get_noc_addr(intermediate_tile_id, intermediate_tensor_addrgen);
+                        uint64_t noc_read_addr = intermediate_tensor_addrgen.get_noc_addr(intermediate_tile_id);
                         noc_async_read(noc_read_addr, l1_write_addr, page_size);
                         l1_write_addr += page_size;
 
