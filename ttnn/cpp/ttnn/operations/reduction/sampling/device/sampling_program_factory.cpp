@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -76,8 +77,6 @@ m2::DataflowBufferSpec MakeDFB(
         .entry_size = entry_size,
         .num_entries = num_entries,
         .data_format_metadata = data_format};
-    // Implicit sync is Gen2-only; explicit sync is the Gen1 contract.
-    dfb.disable_implicit_sync = true;
     return dfb;
 }
 
@@ -203,7 +202,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     ////////////////////////////////////////////////////////////////////////////
     m2::KernelSpec reader_spec;
     reader_spec.unique_id = K_READER;
-    reader_spec.source = m2::KernelSpec::SourceFilePath{
+    reader_spec.source = std::filesystem::path{
         "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/dataflow/reader_values_indices_tensor.cpp"};
     reader_spec.config_spec = m2::DataMovementConfiguration{
         .gen1_data_movement_config =
@@ -232,7 +231,7 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     ////////////////////////////////////////////////////////////////////////////
     m2::KernelSpec writer_spec;
     writer_spec.unique_id = K_WRITER;
-    writer_spec.source = m2::KernelSpec::SourceFilePath{
+    writer_spec.source = std::filesystem::path{
         "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/dataflow/writer_interleaved.cpp"};
     writer_spec.config_spec = m2::DataMovementConfiguration{
         .gen1_data_movement_config =
@@ -282,8 +281,8 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     ////////////////////////////////////////////////////////////////////////////
     m2::KernelSpec compute_spec;
     compute_spec.unique_id = K_COMPUTE;
-    compute_spec.source = m2::KernelSpec::SourceFilePath{
-        "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/compute/sampling.cpp"};
+    compute_spec.source =
+        std::filesystem::path{"ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/compute/sampling.cpp"};
     compute_spec.config_spec = m2::ComputeConfiguration{};
     compute_spec.compile_time_arg_bindings = {
         {"Ht", Ht},
@@ -301,8 +300,8 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
         std::string r = std::string(base) + "_r";
         compute_spec.dfb_bindings.push_back(ProducerDFB(name, w.c_str()));
         compute_spec.dfb_bindings.push_back(ConsumerDFB(name, r.c_str()));
-        compute_spec.dfb_compute_self_loop_scopes.push_back(
-            {.dfb_spec_name = name, .scope = m2::KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+        compute_spec.advanced_options.dfb_compute_self_loop_scopes.push_back(
+            {.dfb_spec_name = name, .scope = m2::DFBComputeSelfLoopScope::Scope::INTRA});
     };
     compute_spec.dfb_bindings.push_back(ConsumerDFB(DFB_INPUT_VALUES, "input_values"));
     compute_spec.dfb_bindings.push_back(ConsumerDFB(DFB_INDEX, "index"));
