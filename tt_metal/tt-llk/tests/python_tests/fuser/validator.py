@@ -208,9 +208,9 @@ class FpuMathSchemaBase(BaseModel):
                     raise ValueError(error_msg)
 
         if self.unpacker is not None:
-            _, checks = type(self)._unpacker_map[self.unpacker]
-            if checks is not None:
-                for check, error_msg in checks:
+            unpacker_factory, unpacker_checks = type(self)._unpacker_map[self.unpacker]
+            if unpacker_checks is not None:
+                for check, error_msg in unpacker_checks:
                     if check(self, src_a, src_b):
                         raise ValueError(error_msg)
 
@@ -235,7 +235,6 @@ class FpuMathSchemaBase(BaseModel):
             "unpack_to_dest": self.unpack_to_dest,
         }
         if self.unpacker is not None:
-            unpacker_factory, _ = type(self)._unpacker_map[self.unpacker]
             kwargs["unpacker"] = unpacker_factory(self)
 
         return ComputeNode(fpu=fpu, src_a=src_a, src_b=src_b, sfpu=None, **kwargs)
@@ -335,6 +334,6 @@ class OperationSchemaBase(BaseModel):
         if not dims:
             return None
 
-        max_r = min(d[0] for d in dims)
-        max_c = min(d[1] for d in dims)
-        return (max_r, max_c)
+        bound_r = min(d[0] for d in dims)
+        bound_c = min(d[1] for d in dims)
+        return (bound_r, bound_c)
