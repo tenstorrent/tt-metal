@@ -778,7 +778,12 @@ class TtMistral4Attention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self._mcast_pc(10, 1, 8, KV_A_PROJ_OUT // 32, m_tiles),
         )  # [1, 1, seq, KV_A_PROJ_OUT]
-        kv_latent = ttnn.slice(kv_combined, [0, 0, 0, 0], [1, 1, seq_len, self.kv_lora_rank])
+        # kv_latent → L1 so kv_a_norm reads L1 (it already writes L1) — no reshard
+        # added, just moves the norm off the DRAM-interleaved input. Tensor is tiny
+        # ([seq, KV_LORA_RANK=256]).
+        kv_latent = ttnn.slice(
+            kv_combined, [0, 0, 0, 0], [1, 1, seq_len, self.kv_lora_rank], memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         k_rope_raw = ttnn.slice(kv_combined, [0, 0, 0, self.kv_lora_rank], [1, 1, seq_len, self.kv_a_proj_out])
         ttnn.deallocate(kv_combined)
 
