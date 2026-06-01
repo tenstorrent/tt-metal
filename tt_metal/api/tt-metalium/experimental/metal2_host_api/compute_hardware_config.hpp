@@ -10,19 +10,29 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/base_types.hpp>  // For MathFidelity, UnpackToDestMode (global scope)
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
-struct ComputeConfiguration {
-    // Tensix hardware resource configuration for compute kernels.
-    // (Common to all Tenstorrent accelerators.)
+// ============================================================================
+//  ComputeHardwareConfig
+// ============================================================================
+//
+// The ComputeHardwareConfig describes the configuration of the Tensix compute
+// accelerator hardware resources controlled by a compute kernel.
+//
+// You must specify a ComputeHardwareConfig for every compute kernel.
+// The configuration is common to all Tenstorrent accelerator families.
+//
+// The Tensix Engine pipeline consists of Unpack, Math, and Pack stages.
+// There are two math engines:
+//  - FPU reads operands from the SrcA / SrcB register files (~19-bit),
+//    writes to the Dest register file (16- or 32-bit, configurable).
+//  - SFPU runs SIMD transcendentals. It can only access Dest.
+//
+// The ComputeHardwareConfig fields configure this pipeline.
+//
+// ============================================================================
 
-    // The Tensix Engine pipeline consists of Unpack, Math, and Pack stages.
-    // There are two math engines:
-    //  - FPU reads operands from the SrcA / SrcB register files (~19-bit),
-    //    writes to the Dest register file (16- or 32-bit, configurable).
-    //  - SFPU runs SIMD transcendentals. It can only access Dest.
-    // The fields below configure this pipeline.
-
+struct ComputeHardwareConfig {
     // Number of multiply passes the FPU runs to use more mantissa bits
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 
@@ -53,8 +63,11 @@ struct ComputeConfiguration {
     // You MUST provide an unpack_to_dest_mode entry for the DFB if these conditions hold;
     // failing to do so will trigger an error. Otherwise, supplying an entry is optional
     // and only Default is accepted.
-    using UnpackToDestModeEntry = std::pair<DFBSpecName, tt::tt_metal::UnpackToDestMode>;
-    std::vector<UnpackToDestModeEntry> unpack_to_dest_mode;
+    struct DFBUnpackToDestMode {
+        DFBSpecName dfb_spec_name;
+        tt::tt_metal::UnpackToDestMode mode;
+    };
+    std::vector<DFBUnpackToDestMode> unpack_to_dest_mode;
 };
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental
