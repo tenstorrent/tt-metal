@@ -58,6 +58,19 @@ _T2U_SDPA_Q_CHUNK_ROWS = 256
 # HF ``torch.finfo(torch.bfloat16).min`` additive padding mask floor (approx.).
 _BF16_MASK_FLOOR = -3.3895313892565356e38
 
+# Bucket the (tile-aligned) decoder unit length to this multiple. The T2U decoder (the dominant T2U
+# cost: ``decoder_layers`` × SDPA at ``padded_unit_seq``) is shape-specialized by its sequence
+# length, so a unit-length jitter recompiles it. ``unit_seq`` (a duration sum) jitters run-to-run
+# (EOS/text variation), so rounding to a coarse grid collapses the jitter onto a fixed program set →
+# reused instead of recompiled. The decoder already pads ``unit_seq`` → ``padded_unit_seq`` and
+# masks the padded queries/keys, so coarsening the alignment is PCC-neutral (just more masked pad).
+_T2U_UNIT_SEQ_BUCKET = 256
+
+
+def _t2u_padded_unit_seq(unit_seq: int) -> int:
+    """Tile-aligned unit length bucketed to ``_T2U_UNIT_SEQ_BUCKET`` (>= a tile) for stable decoder shapes."""
+    return ((int(unit_seq) + _T2U_UNIT_SEQ_BUCKET - 1) // _T2U_UNIT_SEQ_BUCKET) * _T2U_UNIT_SEQ_BUCKET
+
 
 def _linear_token_rows(x: ttnn.Tensor) -> int:
     if len(x.shape) == 3:
@@ -641,7 +654,7 @@ def make_t2u_trace_prealloc_tensors(
     """Pre-build T2U tensors that must not be allocated during trace capture (run before ``compile``)."""
     char_len = int(sum(int(x) for x in cc_list))
     unit_seq = int(sum(int(x) for x in ref_durs))
-    padded_unit_seq = ((unit_seq + 31) // 32) * 32
+    padded_unit_seq = _t2u_padded_unit_seq(unit_seq)
     dur_sum = unit_seq
 
     char_frame = ttnn.arange(0, char_len, step=1, dtype=ttnn.float32, device=device)
@@ -2393,7 +2406,7 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         dur_sum = int(sum(dur_list))
         assert dur_sum == unit_seq
         self._long_seq_mc = ttnn.DRAM_MEMORY_CONFIG if max(char_len, unit_seq) > TILE else None
-        padded_unit_seq = ((unit_seq + 31) // 32) * 32
+        padded_unit_seq = _t2u_padded_unit_seq(unit_seq)
         if padded_unit_seq > unit_seq:
             if full_trace_prebuf:
                 tail_tt = tb.unit_hidden_pad_tail_bf16
