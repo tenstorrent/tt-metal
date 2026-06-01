@@ -137,9 +137,9 @@ class AceStepQwen3Encoder:
         self.config = AutoConfig.from_pretrained(self._hf_model_dir, local_files_only=True)
         self._blocks_per_seq = blocks_per_seq
 
-        # Eager forward uses ``TtQwen3EmbeddingEncoder`` (HF causal+key-padding mask, bf16
-        # weights) — >=0.99 PCC vs ``AutoModel``.  The ``tt_transformers`` stack is lazy-loaded
-        # only for :meth:`forward_traced` / :meth:`embed_tokens_traced``.
+        # Custom ``TtQwen3EmbeddingEncoder`` is kept for ``embed_tokens`` (lyric lookup) and
+        # batched ``forward(B>1)``.  Single-batch ``forward`` / ``forward_traced`` use the
+        # stock ``tt_transformers`` prefill stack (PCC ~0.98 vs HF).
         self._eager_enc: Optional[TtQwen3EmbeddingEncoder] = None
         self.model_args = None
         self.tt_model = None
@@ -233,8 +233,8 @@ class AceStepQwen3Encoder:
 
         Args:
             input_ids: ``np.ndarray`` (``uint32``) or ``torch.Tensor`` of shape ``[B, S]``.
-            attention_mask: optional ``[B, S]`` mask (1=keep, 0=pad). Honoured on the eager
-                path via ``TtQwen3EmbeddingEncoder`` (HF-compatible causal + key padding).
+            attention_mask: optional ``[B, S]`` mask (1=keep, 0=pad). Used only on the
+                ``B > 1`` fallback path via ``TtQwen3EmbeddingEncoder``.
 
         Returns:
             TTNN tensor of shape ``[B, 1, S, H]`` (TILE layout, ``bfloat16``).
@@ -245,6 +245,15 @@ class AceStepQwen3Encoder:
         b, s = int(ids_t.shape[0]), int(ids_t.shape[1])
         if b > self.max_batch_size:
             raise ValueError(f"batch size {b} > max_batch_size {self.max_batch_size}")
+        if s > self.max_seq_len:
+            raise ValueError(f"seq_len {s} > max_seq_len {self.max_seq_len}")
+
+        if b == 1:
+            _qwen_debug("forward tt_transformers prefill B=1 S=%d max_seq_len=%d", s, self.max_seq_len)
+            out = self.prefill_eager(ids_t.numpy().astype(np.uint32))
+            if s < self.max_seq_len:
+                out = ttnn.slice(out, (0, 0, 0, 0), (1, 1, s, int(out.shape[-1])))
+            return out
 
         mask_t = None
         if attention_mask is not None:
@@ -254,7 +263,7 @@ class AceStepQwen3Encoder:
 
         pad_id = int(getattr(self.config, "pad_token_id", 0) or 0)
         ids_np, mask_np = self._pad_ids_and_mask(ids_t, mask_t, max_seq_len=self.max_seq_len, pad_token_id=pad_id)
-        _qwen_debug("forward eager B=%d S=%d->%d pad_id=%d", b, s, self.max_seq_len, pad_id)
+        _qwen_debug("forward custom eager B=%d S=%d->%d pad_id=%d", b, s, self.max_seq_len, pad_id)
         out = self._ensure_eager_encoder().forward(ids_np, mask_np)
         if s < self.max_seq_len:
             out = ttnn.slice(out, (0, 0, 0, 0), (b, 1, s, int(out.shape[-1])))

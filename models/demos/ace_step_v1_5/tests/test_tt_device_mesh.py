@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 
 import numpy as np
@@ -128,15 +129,81 @@ def test_mesh_split_ttnn_preprocess_on_multi_device():
 
 def test_mesh_use_adg_defaults():
     assert ace_step_mesh_use_adg(mesh_sku=None, variant="acestep-v15-base", cli_use_adg=None)
-    assert not ace_step_mesh_use_adg(mesh_sku="BH_QB", variant="acestep-v15-base", cli_use_adg=None)
+    assert ace_step_mesh_use_adg(mesh_sku="BH_QB", variant="acestep-v15-base", cli_use_adg=None)
     assert ace_step_mesh_use_adg(mesh_sku="BH_QB", variant="acestep-v15-base", cli_use_adg=True)
+    assert not ace_step_mesh_use_adg(mesh_sku="BH_QB", variant="acestep-v15-base", cli_use_adg=False)
     assert not ace_step_mesh_use_adg(mesh_sku="BH_QB", variant="acestep-v15-turbo", cli_use_adg=None)
+
+
+def test_dit_prefers_dram_at_30s_patch_seq():
+    from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_dit_prefers_dram_activations
+
+    # 15 s → patch_seq 188 @ patch_size=2
+    assert not ace_step_dit_prefers_dram_activations(batch_size=1, seq_len=188)
+    # 30 s → patch_seq 375
+    assert ace_step_dit_prefers_dram_activations(batch_size=1, seq_len=375)
+
+
+def test_dit_long_clip_quality_defaults(monkeypatch):
+    from models.demos.ace_step_v1_5.ttnn_impl import math_perf_env as m
+
+    monkeypatch.delenv("ACE_STEP_DIT_LONG_CLIP_QUALITY", raising=False)
+    assert m.ace_step_dit_long_clip_quality_enabled(latent_frames=750, duration_sec=30.0, mesh_sku="BH_QB")
+    assert not m.ace_step_dit_long_clip_quality_enabled(latent_frames=375, duration_sec=15.0, mesh_sku="BH_QB")
+    assert not m.ace_step_dit_long_clip_quality_enabled(latent_frames=750, duration_sec=30.0, mesh_sku=None)
+
+    monkeypatch.setenv("ACE_STEP_DIT_LONG_CLIP_QUALITY", "0")
+    assert not m.ace_step_dit_long_clip_quality_enabled(latent_frames=750, duration_sec=30.0, mesh_sku="BH_QB")
+
+
+def test_configure_dit_long_clip_quality_sets_env(monkeypatch):
+    from models.demos.ace_step_v1_5.ttnn_impl import math_perf_env as m
+
+    monkeypatch.delenv("ACE_STEP_DIT_LONG_CLIP_QUALITY", raising=False)
+    monkeypatch.delenv("ACE_STEP_DIT_BFLOAT8_ATTN_QO", raising=False)
+    monkeypatch.delenv("ACE_STEP_DIT_BFLOAT4_WEIGHTS", raising=False)
+    assert m.ace_step_configure_dit_long_clip_quality(latent_frames=750, duration_sec=30.0, mesh_sku="BH_QB")
+    assert m.ace_step_dit_long_clip_quality_active()
+    assert os.environ.get("ACE_STEP_DIT_BFLOAT8_ATTN_QO") is None
+    assert os.environ.get("ACE_STEP_DIT_BFLOAT4_WEIGHTS") is None
+
+
+def test_vae_quality_clarity_30s_on_mesh():
+    from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_vae_quality_decode_enabled
+
+    assert ace_step_vae_quality_decode_enabled(
+        latent_frames=750,
+        mesh_sku="BH_QB",
+        duration_sec=30.0,
+        clarity_mode=True,
+    )
+    assert ace_step_vae_quality_decode_enabled(
+        latent_frames=750,
+        mesh_sku="BH_QB",
+        duration_sec=30.0,
+        clarity_mode=False,
+    )
+    assert not ace_step_vae_quality_decode_enabled(
+        latent_frames=375,
+        mesh_sku="BH_QB",
+        duration_sec=15.0,
+        clarity_mode=False,
+    )
+    assert ace_step_vae_quality_decode_enabled(
+        latent_frames=1000,
+        mesh_sku="BH_QB",
+        duration_sec=40.0,
+        clarity_mode=False,
+    )
 
 
 def test_resolve_vae_tiling_mesh_long_clip():
     chunk, overlap = ace_step_resolve_vae_tiling(frames=375, mesh_sku="BH_QB", chunk_cli=32, overlap_cli=4)
     assert chunk == 32
     assert overlap >= 8
+    chunk30, overlap30 = ace_step_resolve_vae_tiling(frames=750, mesh_sku="BH_QB", chunk_cli=32, overlap_cli=4)
+    assert chunk30 == 32
+    assert overlap30 >= 14
     chunk2, overlap2 = ace_step_resolve_vae_tiling(frames=1500, mesh_sku="BH_QB", chunk_cli=32, overlap_cli=4)
     assert chunk2 == 32
     assert overlap2 >= 14

@@ -46,6 +46,7 @@ class AceStepDemoSession:
     tt_vae: Any = None
     trace_state: Any = None
     dit_frames: int | None = None
+    vae_init_key: tuple[int, bool] | None = None
     cached_preprocess: CachedPreprocess | None = None
     session_perf: Any = None
 
@@ -117,6 +118,8 @@ class AceStepDemoSession:
         self.preprocess_dev = None
         self.pipe = None
         self.tt_vae = None
+        self.dit_frames = None
+        self.vae_init_key = None
         self.qwen_tt_encoder = None
         self.audio_code_detokenizer = None
         self.condition_encoder = None

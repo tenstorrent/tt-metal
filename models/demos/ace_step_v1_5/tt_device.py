@@ -94,6 +94,8 @@ def ace_step_resolve_vae_tiling(
         # 15 s @ 25 Hz ≈ 375 frames → ~16 tiles at overlap=4; wider overlap reduces boundary artifacts.
         if frames_i >= 1000 and overlap < 14:
             overlap = 14
+        elif frames_i >= 750 and overlap < 14:
+            overlap = 14
         elif frames_i >= 400 and overlap < 12:
             overlap = 12
         elif frames_i >= 200 and overlap < 8:
@@ -127,7 +129,7 @@ def ace_step_mesh_perf_log_default(*, mesh_sku: str | None) -> bool:
 
 
 def ace_step_mesh_use_adg(*, mesh_sku: str | None, variant: str, cli_use_adg: bool | None) -> bool:
-    """CFG guidance: ADG on single-chip base/sft; APG on multi-device mesh unless ``cli_use_adg`` overrides."""
+    """CFG guidance: ADG for base/sft (single-chip and mesh); APG only when ``--no-use-adg``."""
     is_turbo = "turbo" in str(variant).lower()
     if is_turbo:
         return False
@@ -136,8 +138,6 @@ def ace_step_mesh_use_adg(*, mesh_sku: str | None, variant: str, cli_use_adg: bo
         return bool(cli_use_adg)
     if cli_use_adg is not None:
         return bool(cli_use_adg)
-    if mesh_sku is not None and ace_step_needs_split_device(mesh_sku):
-        return False
     return True
 
 
@@ -458,7 +458,7 @@ def ace_step_log_mesh_quality_hints(
         )
     if is_base and not is_turbo and int(rows) * int(cols) > 1 and not use_adg:
         print(
-            "[ace_step_v1_5] mesh tip: using APG (not ADG) on BH by default. If still noisy, try ``--torch-vae``.",
+            "[ace_step_v1_5] mesh tip: using APG (--no-use-adg). If harsh/noisy try default ADG (omit --no-use-adg).",
             flush=True,
         )
     elif is_base and not is_turbo and int(rows) * int(cols) > 1 and use_adg:
