@@ -137,35 +137,17 @@ tt-perf-report generated/profiler/reports/<timestamp>/ops_perf_results_<timestam
 ## Galaxy multi-chip measurement (data parallel)
 
 `dp_multiprocess.py` benchmarks BGE-M3 across many chips (e.g. a 32-chip
-Blackhole Galaxy) using **one process per chip**. Each worker isolates a single
-chip via `TT_VISIBLE_DEVICES`, builds its own model and trace, and is pinned to a
-dedicated CPU core range. Workers rendezvous on a barrier after warmup so build /
-compile of slower workers never overlaps the measurement window. This sidesteps
-the single-process mesh-dispatch serialization and gives near-linear scaling.
-
-The global batch is `--batch-size` (per chip) × `--num-devices`. Each worker runs
-the full H2D → Forward (trace) → D2H pipeline and reports per-stage timing; the
-orchestrator aggregates per-chip medians into global throughput (gated by the
-slowest chip, since all chips run in lockstep after the barrier).
+Blackhole Galaxy) with one process per chip. Global batch is `--batch-size` (per
+chip) × `--num-devices`; the report shows the H2D / Forward / D2H breakdown plus
+throughput. Do not set `TT_VISIBLE_DEVICES` — the script assigns chips itself.
 
 ```bash
-# Batch 1 per chip, 32 chips -> global batch 32
-python models/demos/wormhole/bge_m3/tests/perf/dp_multiprocess.py \
-    --batch-size 1 --num-devices 32
+# Batch 1 per chip, 32 chips (global batch 32)
+python models/demos/wormhole/bge_m3/tests/perf/dp_multiprocess.py --batch-size 1 --num-devices 32
 
-# Batch 32 per chip, 32 chips -> global batch 1024
-python models/demos/wormhole/bge_m3/tests/perf/dp_multiprocess.py \
-    --batch-size 32 --num-devices 32
+# Batch 32 per chip, 32 chips (global batch 1024)
+python models/demos/wormhole/bge_m3/tests/perf/dp_multiprocess.py --batch-size 32 --num-devices 32
 ```
-
-Useful flags (defaults match `perf.py`): `--seq-len` (512), `--iterations` (10
-measured), `--warmup` (3 trace warmups), `--num-devices` (32). Reduce
-`--num-devices` (e.g. 4 or 8) for a quick smoke test before the full run.
-
-The report prints, per chip and in aggregate, the H2D / Forward / D2H breakdown
-plus throughput in embeddings/s and tokens/s. Do **not** set
-`TT_VISIBLE_DEVICES` when launching — the script assigns each worker its own
-chip internally.
 
 ## Embedding API
 
