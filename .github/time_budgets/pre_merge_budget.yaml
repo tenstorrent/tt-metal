@@ -17,17 +17,13 @@ merge_gate:
   wh_n150_civ2:           15
   wh_n300_civ2:           53
   wh_llmbox_civ2:          5
-  bh_p100a_civ2_viommu:    1
   bh_p150b_civ2_viommu:    9
   bh_p150b_civ2:          20
-  bh_loudbox_civ2_viommu:  0
 
 pr_gate:
   # ── CIv2 ────────────────────────────────
   wh_n150_civ2:            8
   wh_n300_civ2:           26
   wh_llmbox_civ2:          2
-  bh_p100a_civ2_viommu:    0
   bh_p150b_civ2_viommu:    5
   bh_p150b_civ2:          10
-  bh_loudbox_civ2_viommu:  0
