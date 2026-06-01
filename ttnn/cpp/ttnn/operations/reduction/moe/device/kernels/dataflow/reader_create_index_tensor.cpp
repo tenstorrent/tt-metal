@@ -79,20 +79,7 @@ void kernel_main() {
     // require substantially more memory (we would be double buffering four Wt sized CBs)
 
     uint32_t tile_id = 0;
-    uint32_t tile_id_expert = 0;
     for (uint32_t i = 0; i < Ht; ++i) {
-        // Expert mask is not consumed by the compute kernel. Enable back once support is added to the compute kernel.
-        /*
-        cb_expert.reserve_back(Wt);
-        for (uint32_t j = 0; j < Wt; ++j) {
-            noc.async_read(
-                s2, cb_expert, tile_bytes_expert, {.page_id = tile_id_expert}, {.offset_bytes = j * tile_bytes_expert});
-            tile_id_expert++;
-        }
-        noc.async_read_barrier();
-        cb_expert.push_back(Wt);
-        */
-
         // input: stream two tiles at a time (Wt is guaranteed to be a multiple of 2 for this kernel).
         for (uint32_t j = 0; j < Wt; j += 2) {
             cb_in0.reserve_back(2);
@@ -106,6 +93,18 @@ void kernel_main() {
             cb_in0.push_back(2);
         }
     }
+
+    // Expert mask: load a single row of Wt tiles. The compute kernel applies it via
+    // add_block_bcast_rows_inplace(), which row-broadcasts this row across all Ht rows.
+    uint32_t tile_id_expert = 0;
+    cb_expert.reserve_back(Wt);
+    for (uint32_t j = 0; j < Wt; ++j) {
+        noc.async_read(
+            s2, cb_expert, tile_bytes_expert, {.page_id = tile_id_expert}, {.offset_bytes = j * tile_bytes_expert});
+        tile_id_expert++;
+    }
+    noc.async_read_barrier();
+    cb_expert.push_back(Wt);
 
     // Topk mask: load a single row of Kt tiles. The compute kernel applies it via
     // add_block_bcast_rows_inplace(), which row-broadcasts this row across all Ht rows.

@@ -57,6 +57,35 @@ void sub_exp_block_bcast_cols_inplace() {
     }
 }
 
+// Bcast helper that writes results to a separate output CB instead of in-place.
+// Avoids hardware-state issues with the in-place pattern when followed by transpose+topk.
+void add_block_bcast_rows_to_cb(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t rows, uint32_t cols) {
+    // Precondition: in0_cb and in1_cb have rows*cols and cols tiles produced respectively
+    // Postcondition: in0_cb consumed, in1_cb consumed, out_cb has rows*cols tiles produced
+
+    CircularBuffer in0_cb_obj(in0_cb);
+    CircularBuffer in1_cb_obj(in1_cb);
+    CircularBuffer out_cb_obj(out_cb);
+
+    uint32_t num_tiles = rows * cols;
+    init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(in0_cb, in1_cb, out_cb);
+
+    in0_cb_obj.wait_front(num_tiles);
+    in1_cb_obj.wait_front(cols);
+    out_cb_obj.reserve_back(num_tiles);
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t j = 0; j < cols; ++j) {
+            acquire_dst();
+            add_tiles_bcast_rows(in0_cb, in1_cb, i * cols + j, j, 0);
+            pack_tile(0, out_cb);
+            release_dst();
+        }
+    }
+    out_cb_obj.push_back(num_tiles);
+    in0_cb_obj.pop_front(num_tiles);
+    in1_cb_obj.pop_front(cols);
+}
+
 void add_block_bcast_rows_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols, bool first_call) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
@@ -398,21 +427,21 @@ void kernel_main() {
     constexpr uint32_t cb_cur_max = get_compile_time_arg_val(15);
     constexpr uint32_t cb_cur_sum = get_compile_time_arg_val(16);
     constexpr uint32_t tile_width = get_compile_time_arg_val(17);
+    constexpr uint32_t masked_input_cb_index = get_compile_time_arg_val(18);
 
     constexpr uint32_t Kt = K % tile_width == 0 ? K / tile_width : K / tile_width + 1;
 
-    // mask out invalid experts
-    // TODO: fix the bug that makes this give bad results
-    // add_block_bcast_rows_inplace(input_cb_index, expert_mask_cb_index, Ht,Wt, true);
+    // mask out invalid experts: input + expert_mask -> masked_input_cb (separate CB to avoid in-place issues)
+    add_block_bcast_rows_to_cb(input_cb_index, expert_mask_cb_index, masked_input_cb_index, Ht, Wt);
 
-    // top-k
+    // top-k (reads from masked_input_cb)
     top_k<
         Ht,
         Wt,
         K,
         logWt,
         logk,
-        input_cb_index,
+        masked_input_cb_index,
         index_cb_index,
         input_transposed_cb_index,
         index_transposed_cb_index,
