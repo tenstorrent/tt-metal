@@ -97,6 +97,8 @@
 #include "ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/update_padded_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/zero_padded_kv_cache/zero_padded_kv_cache_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/rotary_embedding_indexed_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/moe/fused_experts/fused_experts_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/hyperconnection/fused_hyperconnection_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -197,6 +199,8 @@ void py_module(nb::module_& mod) {
     deepseek::moe::detail::bind_moe_gate_mm(mod);
     deepseek::moe::detail::bind_deepseek_moe_gate(mod);
     deepseek::moe::detail::bind_generalized_moe_gate(mod);
+    deepseek::moe::detail::bind_fused_experts(mod);
+    deepseek::detail::bind_fused_hyperconnection(mod);
     topk_large_indices::detail::bind_topk_large_indices(mod);
     topk_router_gpt::detail::bind_topk_router_gpt(mod);
     deepseek::mla::detail::bind_matmul_wo(mod);
