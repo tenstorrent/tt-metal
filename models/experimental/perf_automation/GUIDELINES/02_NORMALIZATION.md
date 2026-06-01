@@ -2,8 +2,14 @@
 
 Normalization is the most numerically sensitive op in a transformer and a frequent
 bottleneck. This file combines the LayerNorm findings from BGE-M3 (24-layer BERT,
-the hardest precision case), ViT (12-layer, fully sharded), and the GroupNorm findings
-from Swin-L + DyHead.
+the hardest precision case), ViT (12-layer, fully sharded), the GroupNorm findings
+from Swin-L + DyHead, and the RMSNorm / distributed-norm patterns from the LLM
+(Llama / DeepSeek) implementations.
+
+> RMSNorm vs LayerNorm: RMSNorm skips the mean subtraction and the beta shift -
+> `y = x * rsqrt(mean(x^2) + eps) * gamma`. It needs only `E[x^2]` (one reduction) where
+> LayerNorm needs both `E[x]` and `E[x^2]`. Everything below about sharding, fidelity,
+> fp32 accumulation, and residual fusion applies identically to both.
 
 ---
 
@@ -24,12 +30,17 @@ instead of over the hidden dim — same reduction structure, different axis.
 
 ---
 
-## 2. Interleaved vs sharded — the central decision
+## 2. Interleaved vs sharded vs distributed — the central decision
 
 | Variant | Input layout | Program config | Use when |
 |---|---|---|---|
-| **Interleaved** | DRAM-interleaved | default (`None`) | activation doesn't fit L1 (large batch / long seq) |
+| **Interleaved** | DRAM-interleaved | default (`None`) | activation doesn't fit L1 (large batch / long seq / LLM prefill) |
 | **Sharded** | block-sharded L1 | `LayerNormShardedMultiCoreProgramConfig` | activation fits in the core-grid L1 shards |
+| **Distributed** | sharded **along embedding dim across devices** | pre/post all-gather ops | multi-device, hidden dim fractured across chips (LLMs) |
+
+**Interleaved-vs-sharded by phase (LLM):** for the *non-distributed* norm, interleaved
+input parallelizes across `seq_len` -> optimal for **prefill** (long seq); width-sharded
+input splits across the embedding dim -> optimal for **decode** (`seq_len=1`).
 
 - **ViT**: sharded LN everywhere — the entire 12-layer encoder stays block-sharded in L1.
 - **BGE-M3 batch 1**: sharded LN (activation fits 64-core L1).
@@ -76,6 +87,41 @@ Worked examples:
 
 ViT (12 layers) does **not** set the legacy/welford knobs and uses `math_approx_mode=True`
 — acceptable at its depth. BGE-M3 (24 layers) needs the conservative settings.
+
+---
+
+## 3b. Distributed norm — sharded across devices on the embedding dim
+
+When the hidden dim is fractured across devices (LLMs), no single device has the full row
+to reduce over. The distributed norm is a three-step pattern:
+
+```python
+# 1. local partial stats on each device's shard
+stats = ttnn.rms_norm_pre_all_gather(x_shard)          # [1,1,batch, TILE_W*num_stats]
+#    num_stats=1 for RMSNorm (E[x^2]); =2 for LayerNorm (E[x], E[x^2])
+# 2. gather stats across devices (moves only the tiny stats tensor, not the activation)
+gathered = ttnn.all_gather(stats, dim=3, cluster_axis=1, mesh_device=mesh, topology=...)
+# 3. global normalize using the gathered stats
+y = ttnn.rms_norm_post_all_gather(x_shard, epsilon=eps, weight=g_shard, stats=gathered, ...)
+```
+
+The all-gather moves only the tiny stats tensor (one column per device), not the
+activation - that's what makes distributed norm cheap. Use bf8b for the CCL where PCC
+allows (see 08 section 7). Reference: `models/tt_transformers/tt/distributed_norm.py`.
+
+---
+
+## 3c. The DRAM weight-layout trick (norm weights)
+
+Norm weights (gamma, beta) in TILE layout need padding to TILE_HEIGHT, wasting DRAM
+bandwidth. Wrap them into TILE_WIDTH sticks in ROW_MAJOR instead - no padding, done once
+at init, zero runtime cost:
+
+```python
+gamma = gamma.view(1, 1, embedding_dim // TILE_WIDTH, TILE_WIDTH)
+ttnn_gamma_rm = ttnn.as_tensor(gamma, layout=ttnn.ROW_MAJOR_LAYOUT,
+                               dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+```
 
 ---
 

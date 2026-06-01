@@ -129,9 +129,20 @@ compute = ttnn.init_device_compute_kernel_config(
 | SDPA at bf8b | LoFi | with `fp32_dest_acc_en=True` for softmax sum |
 | SDPA at bf16 / high-precision ViT | HiFi2 or HiFi4 | ViT high-res uses HiFi4 for score precision |
 
+**Throughput multipliers (vs HiFi4):** the Tensix math engine runs ~2x faster at HiFi2 and
+~3.6x faster at LoFi. This matters most for *compute-bound* matmuls (prefill); for
+*DRAM-bound* matmuls (decode) the weight read dominates and fidelity barely moves the needle.
+
+**Fidelity-by-weight-dtype rule (LLM convention):**
+| Weights | Fidelity | Note |
+|---|---|---|
+| bf16 | HiFi4 | or when accuracy is critical (often attention) |
+| bf8b | HiFi2 | drops the LSB of a bf16 @ bf8b mul; usually fine. LoFi often also works |
+| bf4b | LoFi | matches the 4-bit mantissa; works for many MLP matmuls |
+
 ViT-BH note: it uses `math_approx_mode=True` for its sharded LayerNorm compute config
 (the approximate rsqrt is safe at ViT's 12-layer depth and 224 seq). BGE-M3 at 24 layers
-keeps `math_approx_mode=False` for LN. **Depth matters** — see §7.
+keeps `math_approx_mode=False` for LN. **Depth matters** - see section 7.
 
 ---
 
@@ -145,6 +156,10 @@ keeps `math_approx_mode=False` for LN. **Depth matters** — see §7.
 | height-sharded L1 | grid splits M only | attention BMMs (per-head), 1D-mcast matmul |
 | width-sharded L1 | grid splits N only | 1D-mcast inputs, decode-style activations |
 | DRAM-sharded weights | DRAM, per-bank N-slices | decode (small M, weight-bandwidth-bound) — **almost never for prefill** |
+
+**Matmul variant follows the regime** (full detail in 08): Matmul 2D for prefill/encoder
+(compute-bound, DRAM interleaved); DRAM-sharded for decode (bandwidth-bound, L1
+width-sharded act); `minimal_matmul` as the L1-CB escape hatch when 2D mcast clashes.
 
 **The reshard rule:** every transition between memory configs is a real op (1–100 µs).
 Match producer→consumer layouts to avoid them. But a reshard the next op performs

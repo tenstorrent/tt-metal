@@ -105,6 +105,43 @@ bandwidth-bound on Q/K/V — check for an unnecessary bf16 cast (§5).
 
 ---
 
+## 3b. Flash-decode — SDPA for autoregressive generation
+
+Decoder LLMs in decode mode (`seq_len=1`, parallel over batch) use a *different* SDPA op:
+
+```python
+attn = ttnn.transformer.scaled_dot_product_attention_decode(
+    Q, K, V, cur_pos_tensor=cur_pos, is_causal=True)      # or paged_..._decode with page_table
+```
+
+- **Flash-decode** processes the whole (tiny) Q against chunked K/V — `q_chunk_size` is
+  unused; only `k_chunk_size` matters. Parallelized over batch, then kv-head.
+- When `heads*batch < cores`, multiple cores cooperate on one head (that's the point).
+  `max_cores_per_head_batch=16` caps it — beyond 16 cores/head the inter-core NoC
+  bandwidth bottlenecks.
+- **`is_causal=True`** removes the need for an `attn_mask` (lower-triangular implied) —
+  saves mask bandwidth. Use it for standard causal decode/prefill. Only pass `attn_mask`
+  for non-causal cases (e.g. cross-attention in VLMs).
+- **Current position as a tensor** (`cur_pos_tensor`), not a list — required for tracing
+  (see 08 section 3).
+
+Prefill uses the regular `scaled_dot_product_attention` with `is_causal=True` (no mask
+needed for causal). See 08 section 4 for the full prefill/decode op table.
+
+---
+
+## 3c. `exp_approx_mode` depends on seqlen/chunk ratio
+
+The earlier "exact is faster on BH" finding holds for *short* encoder sequences. For LLMs:
+- **Short `seqlen/chunk_size`**: `exp_approx_mode=True` is fine and can be faster.
+- **Long sequences (>16k)**: `exp_approx_mode=False` — the approximation error accumulates
+  through flash chunk accumulation and tanks PCC. Llama uses `q=k_chunk=512`,
+  `exp_approx_mode=False` for long context.
+
+Rule: the longer the sequence (more chunks to accumulate over), the more you need exact exp.
+
+---
+
 ## 4. DRAM staging for SDPA (long sequence)
 
 For long sequences SDPA's internal flash buffers need L1 room. Stage Q/K/V in **DRAM**

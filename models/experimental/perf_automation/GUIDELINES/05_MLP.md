@@ -17,6 +17,12 @@ FFN with fused GELU), and the general matmul-tuning method.
 
 The K vs N asymmetry drives the tuning: FF1's output CB is the constraint, FF2's input CB is.
 
+**Gated MLP (SwiGLU / GeGLU — Llama, DeepSeek):** three matmuls instead of two —
+`w2_in = SiLU(FF1(x)) * FF3(x)`, `y = FF2(w2_in)`. FF1 and FF3 share the input `x`, so
+they share program configs and can be fused (double the FF1 N and split, or use the op's
+`activation_fn="swiglu"` path). FF2 is the down-projection. All the tuning below applies
+per-matmul identically.
+
 ---
 
 ## 2. Fuse the activation into FF1 — never split it
@@ -76,6 +82,24 @@ For high-resolution (long seq), ViT **halves `in0_block_w`** on FF1 and chunks F
 K (`in0_block_w = 2·dim_t__x`) to fit the larger intermediate in L1. **The block-sharded
 FF2 output and residual add stay in the same L1 config** so there's no reshard between FF2
 and the residual.
+
+---
+
+## 3b. Matmul variant by regime (LLM prefill vs decode)
+
+For generative LLMs the MLP matmul *variant* changes by phase (full detail in 08 section 2):
+
+| Phase | Bottleneck | Variant | Activation |
+|---|---|---|---|
+| **Prefill** | compute | **Matmul 2D** (`MultiCastProgramConfig`) | DRAM interleaved |
+| **Decode** | DRAM bandwidth (weights) | **DRAM-sharded** (`MultiCastDRAMShardedProgramConfig`) | L1 width-sharded |
+
+Decode reads weights at ~240 GB/s (DRAM-sharded) vs ~190 GB/s (interleaved) on Wormhole —
+that bandwidth *is* the decode MLP perf. Prefill is compute-bound so 2D mcast with
+maximized subblock/`in0_block_w` wins. **Same weight, two configs — build both.**
+
+This is distinct from the encoder/large-batch case below, where `minimal_matmul` is the
+escape hatch for an L1 CB clash rather than a decode-bandwidth play.
 
 ---
 

@@ -145,6 +145,42 @@ Tracy: stock create_heads 15 µs/call → 4 µs/call (groups tuned); concat 7.1 
 
 ---
 
+## 5b. RoPE — fused rotary embeddings (LLMs)
+
+Decoder LLMs apply rotary position embeddings to Q and K *after* the head split, *before*
+attention. Use the fused op, never a manual slice+rotate+concat:
+
+```python
+q = ttnn.experimental.rotary_embedding_llama(q_pre, cos, sin, trans_mat, is_decode_mode=False)
+k = ttnn.experimental.rotary_embedding_llama(k_pre, cos, sin, trans_mat, is_decode_mode=False)
+```
+
+- Prefill (`is_decode_mode=False`): cos/sin computed once at init for the seq length;
+  inputs interleaved L1.
+- Decode (`is_decode_mode=True`): cos/sin must be regenerated each token (positions
+  advance) via `RotarySetup` on-device; inputs height-sharded over batch.
+
+Generate cos/sin on-device — don't push rotation matrices from host each iteration. Full
+detail in 08 section 6.
+
+---
+
+## 5c. Decode head-split is a different op
+
+The head-split op differs by phase (they are genuinely different kernels):
+
+| Phase | Op | Output |
+|---|---|---|
+| Prefill | `nlp_create_qkv_heads` | `[1, n_heads, seq, head_dim]` |
+| Decode | `nlp_create_qkv_heads_decode` | height-sharded over **batch** on `bsz` cores |
+| Concat (prefill) | `nlp_concat_heads` | — |
+| Concat (decode) | `nlp_concat_heads_decode` | — |
+
+Decode parallelizes over batch (one token/user), so its head-split height-shards across
+the batch dimension. See 08 section 4.
+
+---
+
 ## 6. Resharding between QKV and attention (ViT pattern)
 
 ViT runs the fused QKV on the **fixed full grid** (10×12) but the attention BMMs on a

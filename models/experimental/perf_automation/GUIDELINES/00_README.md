@@ -10,10 +10,11 @@ campaigns, distilled into reusable rules that apply to any encoder/decoder trans
 |---|---|---|---|---|
 | **BGE-M3** | BERT / XLM-R encoder (24 layers, H=1024, 16 heads) | Blackhole P150 | batch 1 & batch 32, seq 512 | B1 5.7→4.30 ms; B32 194.9→60.55 ms (3.22×) |
 | **ViT** | Vision Transformer (12 layers, H=768, 12 heads) | Blackhole P150 + Wormhole | batch 10, seq 224; high-res seq 1024–4096 | fully block-sharded L1 pipeline |
-| **Swin-L + DyHead** | Windowed-attention backbone + detection head | Wormhole B0 | trace + 2CQ, 640×640 | 5.66→6.45 FPS (+14%) |
+| **Swin-L + DyHead** | Windowed-attention backbone + detection head | Wormhole B0 | trace + 2CQ, 640x640 | 5.66->6.45 FPS (+14%) |
+| **TT-Transformers / Llama-70B / DeepSeek-V3** | Decoder LLMs (RoPE, GQA, KV-cache, MoE) | Wormhole / T3000 / Galaxy | prefill + decode, multi-device | the canonical generative-LLM patterns |
 
-Three very different transformers, three different hardware/batch regimes — the
-**common practices** that survived all three are what these guidelines capture.
+Four very different transformer families, multiple hardware/batch regimes - the
+**common practices** that survived across all of them are what these guidelines capture.
 
 ## Scope
 
@@ -22,7 +23,8 @@ These guidelines focus **only on the transformer data path**:
 - **[02_NORMALIZATION.md](./02_NORMALIZATION.md)** — LayerNorm, RMSNorm: sharding, fidelity, the precision-compounding bug, residual fusion.
 - **[03_QKV_PROJECTION.md](./03_QKV_PROJECTION.md)** — QKV matmul program configs, memory layout, fidelity, head-split strategies.
 - **[04_ATTENTION_SDPA.md](./04_ATTENTION_SDPA.md)** — SDPA vs manual attention, chunk sizing, softmax, score dtype, DRAM staging.
-- **[05_MLP.md](./05_MLP.md)** — FF1/FF2 matmuls, fused activation, `minimal_matmul`, subblock tuning.
+- **[05_MLP.md](./05_MLP.md)** — FF1/FF2/FF3 (SwiGLU) matmuls, fused activation, `minimal_matmul`, subblock tuning.
+- **[08_DECODE_PREFILL_AND_MULTIDEVICE.md](./08_DECODE_PREFILL_AND_MULTIDEVICE.md)** — generative-LLM specifics: prefill vs decode, matmul-variant-by-regime, KV-cache, GQA, RoPE, multi-device weight fracturing + CCLs.
 
 Supporting cross-cutting material:
 

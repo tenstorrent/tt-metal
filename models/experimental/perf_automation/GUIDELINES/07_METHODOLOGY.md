@@ -73,6 +73,30 @@ usually a fine predictor there. Depth matters: a 12-layer ViT tolerates approxim
 
 ---
 
+## 5b. The accuracy ladder (bottom-up) and target PCCs
+
+Test sub-modules up to full token generation. Target PCCs from the LLM campaigns:
+
+| Level | Target PCC | Test |
+|---|---|---|
+| Sub-module (MLP, attention) | ~0.999 | per-module unit test vs HF reference |
+| Single decoder layer | ~0.998 | one-layer test |
+| Full model (all layers) | ~0.99 | model test, multi-iteration |
+| Dataset eval | within a couple % of reference | perplexity / top-1,5 / task benchmark |
+
+Metrics beyond PCC: **top-1/top-5 accuracy**, **perplexity**, **task benchmarks** (MMLU,
+STSBenchmark, etc.), and **human ocular eval**. PCC alone can pass while generation quality
+fails — if unit tests pass but the dataset/ocular eval fails, you have insufficient
+consecutive-token testing or PCC targets set too low.
+
+**Accuracy-debug ladder when a model is wrong:** find the smallest failing test → compare
+op-by-op against the reference → for the suspect op try (a) higher fidelity/dtype, (b) force
+DRAM-interleaved in/out, (c) drop the custom program config for the default, (d) verify
+producer/consumer shard specs match, (e) for multi-device verify the CCL reduction dim /
+cluster_axis, (f) regenerate cached weights from torch (a stale cached memcfg corrupts).
+
+---
+
 ## 6. Signpost-bound the Tracy report
 
 Default Tracy captures compile + warmup + every replay → doubled counts, inflated totals.
@@ -87,6 +111,24 @@ If you see double, you're including warmup — fix the signpost range.
 
 Filter the matmul rows by `(K, N)` to separate QKV / attn-out / FF1 / FF2 — they all show
 as `MatmulDeviceOperation` and aggregate reports mix them.
+
+---
+
+## 6b. The five performance components
+
+TT-NN wall time decomposes into: (1) main Python thread, (2) host API (C++ dispatch),
+(3) host-device comms (PCIe + tilize/untilize), (4) device dispatch (op-to-op gap),
+(5) device op execution. You control 1, 3, and (indirectly) 4-5.
+
+- **Op-to-op gap** = host time + dispatch time. Tracing collapses host time; dispatch time
+  (driven by runtime-arg count) is reduced by converting runtime args to compile-time args
+  or fusing ops (LayerNorm, SDPA-decode are examples that were worth fusing). Traced
+  op-to-op gap is typically < 6 us.
+- **Profile the Python thread** with viztracer (only relevant when NOT tracing). Generate
+  shard-spec / compute-kernel-config objects **once in the constructor**, never in the
+  forward pass — torch module overhead on every call is real.
+- A report showing more time in the op-to-op gap than in the ops themselves means you are
+  host-bound → enable tracing (see 01 section 8 regime, and the host-bound playbook).
 
 ---
 
