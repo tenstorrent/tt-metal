@@ -20,7 +20,7 @@ training_config:
   scheduler_type: warmup_linear
   gradient_accumulation_steps: 1
 device_config:
-  enable_ddp: true
+  enable_fsdp: true
   enable_tp: true
   mesh_shape: [8, 4]
 eval_config:
