@@ -680,7 +680,7 @@ inline void configure_pack(
     const std::uint32_t face_r_dim  = FACE_R_DIM,
     const std::uint32_t num_faces   = 4,
     const bool partial_face         = false,
-    const bool narrow_tile          = false,
+    [[maybe_unused]] const bool narrow_tile = false,
     const std::uint32_t relu_config = 0)
 {
     static_assert(
