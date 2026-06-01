@@ -5,8 +5,7 @@
 #include "fd_kernel.hpp"
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
-#include <host_api.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <utility>
 #include <variant>
 #include "impl/buffers/semaphore.hpp"
