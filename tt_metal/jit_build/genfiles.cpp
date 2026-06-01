@@ -134,7 +134,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     //       Legacy kernels passed semaphores both ways, kernel folks think this was more random than intentional.
     //
     //       TensorBindings are the first accessor category to use implicit CRTAs (for the tensor base address).
-    //       Each binding's tensor base address is specified per-enqueue, from the corresponding TensorArg.
+    //       Each binding's tensor base address is specified per-enqueue, from the corresponding TensorArgument.
     //       The static layout tensor metadata (rank, shape, bank coords, etc.) comes in through positional CTAs,
     //       added automatically by the Metal 2.0 host API machinery.
     ostringstream content;
@@ -201,8 +201,8 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     const fs::path path = out_dir / "kernel_args_generated.h";
 
     // Named RTAs/CRTAs come straight from the settings as ordered vectors.
-    const vector<string>& rta_names = settings.get_named_runtime_args();
-    const vector<string>& crta_names = settings.get_named_common_runtime_args();
+    const vector<string>& rta_names = settings.get_runtime_arg_names();
+    const vector<string>& crta_names = settings.get_common_runtime_arg_names();
 
     // The kernel's CRTA buffer is laid out as three back-to-back sections:
     //   [ user-named CRTAs | TensorBinding section | varargs ]
