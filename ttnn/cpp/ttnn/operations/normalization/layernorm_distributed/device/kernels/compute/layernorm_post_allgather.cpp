@@ -21,6 +21,8 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "chain_llk.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -162,53 +164,90 @@ void kernel_main() {
         reduce_uninit();
 
         /*
-         * E[x]**2
+         * E[x]**2  — same-CB Mul at index 1.
+         * cb_stats_reduced: pre-waited for stats_tile_stride at line 171, held
+         *   (popped at line 229). InputLifecycle::HeldBulk + Scalar + compute_kernel_lib::TileOffset::Set.
+         * Same-CB constraint: AIndex==BIndex (both Scalar + same TileBase).
+         * Reconfig audit: explicit reconfig_data_format(cb_stats_reduced, cb_stats_reduced)
+         *   + mul_tiles_init reconfigs (idempotent) -> Input. Explicit
+         *   pack_reconfig_data_format(cb_mean_squared) -> Output.
          */
-        reconfig_data_format(cb_stats_reduced, cb_stats_reduced);
-        pack_reconfig_data_format(cb_mean_squared);
-        mul_tiles_init(cb_stats_reduced, cb_stats_reduced);
-        cb_reserve_back(cb_mean_squared, onetile);
         cb_wait_front(cb_stats_reduced, stats_tile_stride);
-        ACQ();
-        mul_tiles(cb_stats_reduced, cb_stats_reduced, 1, 1, 0);
-        pack_tile(0, cb_mean_squared);
-        REL();
-
-        cb_push_back(cb_mean_squared, 1);
-
-        /*
-         * E[x**2] - E[x]**2
-         */
-        reconfig_data_format(cb_stats_reduced, cb_mean_squared);
-        pack_reconfig_data_format(cb_var);
-        sub_tiles_init(cb_stats_reduced, cb_mean_squared);
-
-        cb_reserve_back(cb_var, onetile);
-        cb_wait_front(cb_mean_squared, 1);
-        ACQ();
-        sub_tiles(cb_stats_reduced, cb_mean_squared, 0, 0, 0);
-        pack_tile(0, cb_var);
-        REL();
-        cb_push_back(cb_var, 1);
-        cb_pop_front(cb_mean_squared, 1);
+        compute_kernel_lib::eltwise_chain(
+            1,
+            compute_kernel_lib::BinaryFpu<
+                cb_stats_reduced,
+                cb_stats_reduced,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::TileOffset::Set,
+                compute_kernel_lib::TileOffset::Set>{1, 1},
+            compute_kernel_lib::PackTile<
+                cb_mean_squared,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         /*
-         * 1/sqrt(var + eps)
+         * E[x**2] - E[x]**2  — sub at index 0.
+         * cb_stats_reduced: InputLifecycle::HeldBulk + Scalar (no TileBase, reads index 0).
+         * cb_mean_squared: InputLifecycle::Bulk + Scalar (wait at 187 / pop at 193 in original — chain owns).
+         * cb_var: OutputLifecycle::Bulk + Scalar (reserve + push 1).
+         * Reconfig: explicit reconfig + sub_tiles_init -> Input. Explicit pack_reconfig -> Output.
          */
-        cb_wait_front(cb_var, 1);
-        cb_reserve_back(cb_recip_sqrt_var, 1);
-        reconfig_data_format(cb_var, cb_eps);
-        pack_reconfig_data_format(cb_recip_sqrt_var);
+        compute_kernel_lib::eltwise_chain(
+            1,
+            compute_kernel_lib::BinaryFpu<
+                cb_stats_reduced,
+                cb_mean_squared,
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::PackTile<
+                cb_var,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
-        add_tiles_init(cb_var, cb_eps);
-        ACQ();
-        add_tiles(cb_var, cb_eps, 0, 0, 0);
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(0);
-        pack_tile(0, cb_recip_sqrt_var);
-        REL();
-        cb_push_back(cb_recip_sqrt_var, 1);
-        cb_pop_front(cb_var, 1);
+        /*
+         * 1/sqrt(var + eps)  — same shape as layernorm.cpp Var+eps prologue.
+         * cb_var InputLifecycle::Streaming, cb_eps InputLifecycle::CallerManaged, cb_recip_sqrt_var
+         * OutputLifecycle::Streaming. Reconfig: explicit reconfig + add_tiles_init -> Input. Explicit pack_reconfig ->
+         * Output.
+         */
+        compute_kernel_lib::eltwise_chain(
+            1,
+            compute_kernel_lib::BinaryFpu<
+                cb_var,
+                cb_eps,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::Rsqrt<
+                compute_kernel_lib::Approx::Exact,
+                LEGACY_RSQRT ? compute_kernel_lib::Legacy::On : compute_kernel_lib::Legacy::Off,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_recip_sqrt_var,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         if constexpr (do_gamma && do_beta) {
             /*

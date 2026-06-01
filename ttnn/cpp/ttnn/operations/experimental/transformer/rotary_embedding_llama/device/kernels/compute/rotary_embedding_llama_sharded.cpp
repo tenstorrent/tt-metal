@@ -8,6 +8,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -66,40 +67,67 @@ void kernel_main() {
         cb_push_back(rotated_in_interm_cb, Wt);
         cb_wait_front(rotated_in_interm_cb, Wt);
 
-        mul_bcast_rows_init_short(rotated_in_interm_cb, sin_cb);
-        ACQ();
-        for (uint32_t j = 0; j < Wt; ++j) {
-            // sin_interim = rotated * sin
-            mul_tiles_bcast<BroadcastType::ROW>(rotated_in_interm_cb, sin_cb, j, j, j);
-            pack_tile(j, sin_interm_cb, j);
-        }
-        REL();
-        cb_push_back(sin_interm_cb, Wt);
-        cb_pop_front(rotated_in_interm_cb, Wt);
+        // sin_interim = rotated * sin (bcast ROW).
+        // rotated InputLifecycle::Bulk + Block; sin InputLifecycle::HeldBulk + Block (pre-waited line 42, popped at
+        // 106). sin_interm OutputLifecycle::Bulk + Block. Reconfig Input + None (no explicit pack_reconfig).
+        compute_kernel_lib::eltwise_chain(
+            compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
+            compute_kernel_lib::BinaryFpu<
+                rotated_in_interm_cb,
+                sin_cb,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Block>{},
+            compute_kernel_lib::PackTile<
+                sin_interm_cb,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::PackTileReconfig::None>{});
 
-        ACQ();
-        for (uint32_t j = 0; j < Wt; ++j) {
-            // cos_interim = x * cos
-            mul_tiles_bcast<BroadcastType::ROW>(in_cb, cos_cb, j, j, j);
-            pack_tile(j, cos_interm_cb, j);
-        }
-        REL();
-        cb_push_back(cos_interm_cb, Wt);
-        cb_pop_front(in_cb, Wt);  // Done with input
+        // cos_interim = x * cos (bcast ROW). Same pattern as sin_interim.
+        compute_kernel_lib::eltwise_chain(
+            compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
+            compute_kernel_lib::BinaryFpu<
+                in_cb,
+                cos_cb,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Block>{},
+            compute_kernel_lib::PackTile<
+                cos_interm_cb,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::PackTileReconfig::None>{});
 
-        cb_wait_front(sin_interm_cb, Wt);
-        cb_wait_front(cos_interm_cb, Wt);
-        add_tiles_init(cos_interm_cb, sin_interm_cb);
-        ACQ();
-        for (uint32_t j = 0; j < Wt; ++j) {
-            // out = cos_interim + sin_interim
-            add_tiles(cos_interm_cb, sin_interm_cb, j, j, j);
-            pack_tile(j, out_cb, j);
-        }
-        REL();
-        cb_push_back(out_cb, Wt);
-        cb_pop_front(sin_interm_cb, Wt);
-        cb_pop_front(cos_interm_cb, Wt);
+        // out = cos_interim + sin_interim. Both InputLifecycle::Bulk + Block, out_cb OutputLifecycle::Bulk + Block.
+        compute_kernel_lib::eltwise_chain(
+            compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
+            compute_kernel_lib::BinaryFpu<
+                cos_interm_cb,
+                sin_interm_cb,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Block>{},
+            compute_kernel_lib::PackTile<
+                out_cb,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::PackTileReconfig::None>{});
     }
 
     // Done with the sin/cos matrices, so remove from CB

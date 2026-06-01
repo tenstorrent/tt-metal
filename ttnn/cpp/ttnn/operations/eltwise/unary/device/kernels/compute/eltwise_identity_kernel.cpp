@@ -3,9 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/common.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
@@ -14,28 +13,20 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
 
-    CircularBuffer cb_in(cb_input);
-    CircularBuffer cb_out(cb_output);
-
     init_sfpu(cb_input, cb_output);
-    copy_tile_init(cb_input);
 
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        tile_regs_acquire();
-
-        cb_in.wait_front(1);
-        cb_out.reserve_back(1);
-
-        copy_tile(cb_input, 0, 0);
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_output);
-
-        cb_in.pop_front(1);
-        cb_out.push_back(1);
-
-        tile_regs_release();
-    }
+    // Identity: per-tile cb_input -> cb_output. Single-stage chain.
+    compute_kernel_lib::eltwise_chain(
+        num_tiles,
+        compute_kernel_lib::CopyTile<
+            cb_input,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::CopyTileReconfig::None>{},
+        compute_kernel_lib::PackTile<
+            cb_output,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::None>{});
 }

@@ -18,6 +18,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
@@ -295,30 +297,38 @@ void kernel_main() {
                 cb_ex.reserve_back(1);
                 cb_ex.push_back(1);
             }
-            // x - E[x]
-            sub_tiles_bcast_scalar_init_short(cb_x_id, cb_ex_global_id);
-
+            // x - E[x] — same-CB sub_bcast_scalar over block_hw tiles.
+            //
+            // Original used per-subblock acquire/release with index = w
+            // (index_subblock_w_offset stays at 0 — never incremented in this block,
+            // so cb_x reads from front 0..subblock_w-1, pops subblock_w, slides).
+            // Chain emits per-tile wait+pop+pack+push with InputLifecycle::Streaming + OutputLifecycle::Streaming
+            // on cb_x; net effect over block_hw iters is identical (cb_x slid by
+            // block_hw on both ends).
+            //
+            // Reconfig: sub_tiles_bcast_scalar_init_short reconfigs srca/srcb ->
+            // BinaryDataFormatReconfig::Input. Original used plain pack_tile (no
+            // pack_reconfig) -> PackTileReconfig::None.
+            // cb_ex_global is held outside chain via wait_front(1) -> InputLifecycle::CallerManaged.
             cb_ex_global.wait_front(1);
-            for (uint32_t i = 0; i < block_h; i++) {
-                index_subblock_w_offset = 0;
-                for (uint32_t j = 0; j < num_subblocks_w; j++) {
-                    tile_regs_acquire();
-                    for (uint32_t w = 0; w < subblock_w; w++) {
-                        uint32_t index = w + index_subblock_w_offset;
-                        sub_tiles_bcast_scalar(cb_x_id, cb_ex_global_id, index, 0, w);
-                    }
-                    tile_regs_commit();
-                    cb_x.pop_front(subblock_w);
-                    cb_x.reserve_back(subblock_w);
-                    tile_regs_wait();
-                    for (uint32_t k = 0; k < subblock_w; k++) {
-                        pack_tile(k, cb_x_id);
-                    }
-                    cb_x.push_back(subblock_w);
-                    tile_regs_release();
-                    cb_x.wait_front(block_hw);
-                }
-            }
+            compute_kernel_lib::eltwise_chain(
+                block_hw,
+                compute_kernel_lib::BinaryFpu<
+                    cb_x_id,
+                    cb_ex_global_id,
+                    compute_kernel_lib::BinaryFpuOp::Sub,
+                    compute_kernel_lib::BroadcastDim::Scalar,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::PackTile<
+                    cb_x_id,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::None>{});
             cb_ex_global.pop_front(1);
 
             reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);
@@ -400,24 +410,36 @@ void kernel_main() {
             }
 
             // global reduce results
-
+            // PARTIAL migration: (Var + eps) -> 1/sqrt(...) = BinaryFpu(Add) + Rsqrt + PackTile.
+            // Reconfig audit: add_tiles_init reconfigs srca/srcb (no explicit
+            // reconfig_data_format) -> BinaryDataFormatReconfig::Input. No pack_reconfig in
+            // original -> PackTileReconfig::None. rsqrt_tile_init<true> -> Legacy::On.
+            // cb_ex2pe.reserve_back(1) + push_back(1) present -> OutputLifecycle::Streaming.
+            // Lifecycles: cb_ex_global InputLifecycle::Streaming (wait+pop per call); cb_eps held by
+            // unchanged cb_eps.wait_front(1) above -> InputLifecycle::CallerManaged.
             cb_eps.wait_front(1);
-            cb_ex_global.wait_front(1);
-            cb_ex2pe.reserve_back(1);
-
-            // (Var + eps)
-            tile_regs_acquire();
-            add_tiles_init(cb_ex_global_id, cb_eps_id);
-            add_tiles(cb_ex_global_id, cb_eps_id, 0, 0, dst0);
-            // 1/[sqrt(Var + eps)]
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex2pe_id);
-            tile_regs_release();
-            cb_ex2pe.push_back(1);
-            cb_ex_global.pop_front(1);
+            compute_kernel_lib::eltwise_chain(
+                1,
+                compute_kernel_lib::BinaryFpu<
+                    cb_ex_global_id,
+                    cb_eps_id,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::Rsqrt<
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Legacy::On,
+                    compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<
+                    cb_ex2pe_id,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::None>{});
             //  (x - Ex) * 1/[sqrt(Var + eps)]
             index_h_offset = 0;
             mul_tiles_bcast_scalar_init_short(cb_x_id, cb_ex2pe_id);

@@ -3,13 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/common.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/exp.h"
-#include "api/compute/logsigmoid.h"
-#include "api/compute/eltwise_unary/negative.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Exp
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Negative
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp"  // Logsigmoid
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
@@ -18,37 +16,35 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
 
-    CircularBuffer cb_in(cb_input);
-    CircularBuffer cb_out(cb_output);
-
     init_sfpu(cb_input, cb_output);
 
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        cb_in.wait_front(1);
-        cb_out.reserve_back(1);
-
-        tile_regs_acquire();
-
-        copy_tile_to_dst_init_short(cb_input);
-        copy_tile(cb_input, 0, 0);
-        copy_tile(cb_input, 0, 1);
-
-        negative_tile_init();
-        negative_tile(1);
-
-        exp_tile_init<true>();
-        exp_tile<true>(1);
-
-        logsigmoid_tile_init();
-        logsigmoid_tile(0, 1, 0);
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_output);
-        tile_regs_release();
-
-        cb_in.pop_front(1);
-        cb_out.push_back(1);
-    }
+    // Logsigmoid(x) = -log(1 + exp(-x)) = -softplus(-x).
+    //   D0 = cb_input   (InputLifecycle::HeldStream — second copy reuses same tile)
+    //   D1 = -cb_input -> exp -> exp(-x) (InputLifecycle::NoWaitPop pops cb_input)
+    //   Logsigmoid<D0, D1, D0> reads D0=x and D1=exp(-x), writes D0.
+    //   pack_tile(D0) -> cb_output.
+    compute_kernel_lib::eltwise_chain(
+        num_tiles,
+        compute_kernel_lib::CopyTile<
+            cb_input,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::InputLifecycle::HeldStream,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::CopyTileReconfig::None>{},
+        compute_kernel_lib::CopyTile<
+            cb_input,
+            compute_kernel_lib::Dst::D1,
+            compute_kernel_lib::InputLifecycle::NoWaitPop,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::CopyTileReconfig::None>{},
+        compute_kernel_lib::Negative<compute_kernel_lib::Dst::D1>{},
+        compute_kernel_lib::
+            Exp<compute_kernel_lib::Approx::Fast, compute_kernel_lib::Approx::Fast, compute_kernel_lib::Dst::D1>{},
+        compute_kernel_lib::
+            Logsigmoid<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>{},
+        compute_kernel_lib::PackTile<
+            cb_output,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::None>{});
 }

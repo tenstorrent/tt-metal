@@ -5,6 +5,9 @@
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Exp
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask, Negative
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
@@ -64,55 +67,96 @@ void kernel_main() {
                 compute_kernel_lib::Accumulate::at(cb_max, 1));  // iteration=1, reload from cb_max
         }
 
-        // compute x - max(x)
-        cb_x_m_max_obj.reserve_back(Ht);
-        cb_in0_obj.wait_front(Ht);
-        cb_max_obj.wait_front(1);
+        // compute x - max(x)  — ROW bcast: cb_max is 1 tile broadcast across Ht rows.
+        // Reconfig audit: sub_bcast_rows_init_short_with_dt reconfigs srca/srcb -> Input.
+        //   pack_tile_with_dt -> Output.
+        // Lifecycles: cb_in0 InputLifecycle::Bulk + Block (chain owns wait Ht + pop Ht). cb_max
+        //   InputLifecycle::Bulk + Scalar — chain emits cb_wait_front(cb_max, 1) thanks to the
+        //   OperandKind-aware window_1d helper. cb_x_m_max OutputLifecycle::Bulk + Block.
+        compute_kernel_lib::eltwise_chain(
+            Ht,
+            compute_kernel_lib::BinaryFpu<
+                cb_in0,
+                cb_max,
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::PackTile<
+                cb_x_m_max,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
-        for (uint32_t h = 0; h < Ht; ++h) {
-            tile_regs_acquire();
-            sub_bcast_rows_init_short_with_dt(cb_in0, cb_max);
-            sub_tiles_bcast<BroadcastType::ROW>(cb_in0, cb_max, h, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_x_m_max);
-            tile_regs_release();
-        }
-        cb_max_obj.pop_front(1);
-        cb_in0_obj.pop_front(Ht);
-        cb_x_m_max_obj.push_back(Ht);
-
-        // compute exp(x - max(x))
-        cb_exps_obj.reserve_back(Ht);
+        // compute exp(x - max(x)). Original per-tile copy + (Negative if !SOFTMAX)
+        // + Exp + (Mask on last tile) + pack with cb_exps reserve(Ht) upfront and
+        // push(Ht) at end. Split into 2 chains:
+        //   A (Ht-1 iters, non-last): CopyTile(cb_x_m_max @ i) + ... + Exp + Pack
+        //   B (1 iter, last with mask): CopyTile(cb_x_m_max @ Ht-1) + ... + Exp +
+        //                                CopyTile(cb_mask) + Mask + Pack
+        //
+        // cb_x_m_max InputLifecycle::CallerManaged + Block (held outside; sequential read 0..Ht-1
+        // across iters; compute_kernel_lib::TileOffset::Set(Ht-1) for the last tile).
+        // cb_mask InputLifecycle::CallerManaged + Scalar (held outside via line 42 wait_front(1)).
+        // cb_exps OutputLifecycle::Streaming (per-tile reserve+push replaces upfront reserve+
+        // push; net Ht tiles pushed matches original).
+        //
+        // Reconfig: copy_tile_init_with_dt -> CopyTileReconfig::Input.
+        // pack_tile_with_dt -> PackTileReconfig::Output.
         cb_x_m_max_obj.wait_front(Ht);
-        for (uint32_t h = 0; h < Ht; ++h) {
-            tile_regs_acquire();
-            copy_tile_init_with_dt(cb_x_m_max);
-            copy_tile(cb_x_m_max, h, dst0);
-
+        compute_kernel_lib::eltwise_chain(
+            Ht - 1,
+            compute_kernel_lib::CopyTile<
+                cb_x_m_max,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::CopyTileReconfig::Input>{},
 #ifndef SOFTMAX
-            negative_tile_init();
-            negative_tile(dst0);
+            compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
 #endif
+            compute_kernel_lib::Exp<
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_exps,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
-            exp_tile_init();
-            exp_tile(dst0);
-
-            if (h == Ht - 1) {
-                copy_tile_init_with_dt(cb_mask);
-                copy_tile(cb_mask, 0, dst1);
-
-                mask_tile_init();
-                mask_tile(dst0, dst1);
-            }
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_exps);
-            tile_regs_release();
-        }
-        cb_exps_obj.push_back(Ht);
+        compute_kernel_lib::eltwise_chain(
+            1u,
+            compute_kernel_lib::CopyTile<
+                cb_x_m_max,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::CopyTileReconfig::Input,
+                compute_kernel_lib::TileOffset::Set>{Ht - 1},
+#ifndef SOFTMAX
+            compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
+#endif
+            compute_kernel_lib::Exp<
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::CopyTile<
+                cb_mask,
+                compute_kernel_lib::Dst::D1,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::Input>{},
+            compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_exps,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
 #ifdef LOG
         // log(sum) - pop tiles after reduce
@@ -144,43 +188,56 @@ void kernel_main() {
                 });
 #endif
 
-        // compute final result
-        cb_out0_obj.reserve_back(Ht);
+        // compute final result — ROW bcast on cb_recipsumexps (1 tile).
+        // LOG path: out = (x - max) - log(sum_exp). Reads cb_x_m_max (held by
+        //   external wait/pop) and cb_recipsumexps.
+        // !LOG path: out = exp(x-max) / sum_exp. Reads cb_exps (chain-owned bulk
+        //   wait+pop) and cb_recipsumexps; cb_x_m_max held externally because
+        //   the chain doesn't touch it.
+        // cb_x_m_max wait/pop wrap the chain symmetrically in both paths (chain
+        // uses InputLifecycle::CallerManaged on it in LOG path).
+        // Reconfig: *_bcast_rows_init_short_with_dt -> Input.
+        //   pack_tile_with_dt -> Output.
         cb_x_m_max_obj.wait_front(Ht);
-        cb_recipsumexps_obj.wait_front(1);
-#ifndef LOG
-        cb_exps_obj.wait_front(Ht);
-#endif
-
-        for (uint32_t h = 0; h < Ht; h += onetile) {
 #ifdef LOG
-            // x - max - log(sum)
-            tile_regs_acquire();
-            sub_bcast_rows_init_short_with_dt(cb_x_m_max, cb_recipsumexps);
-            sub_tiles_bcast<BroadcastType::ROW>(cb_x_m_max, cb_recipsumexps, h, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_out0);
-            tile_regs_release();
+        compute_kernel_lib::eltwise_chain(
+            Ht,
+            compute_kernel_lib::BinaryFpu<
+                cb_x_m_max,
+                cb_recipsumexps,
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::PackTile<
+                cb_out0,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 #else
-            // exp(x - max) / psum
-            tile_regs_acquire();
-            mul_bcast_rows_init_short_with_dt(cb_exps, cb_recipsumexps);
-            mul_tiles_bcast_rows(cb_exps, cb_recipsumexps, h, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_out0);
-            tile_regs_release();
+        compute_kernel_lib::eltwise_chain(
+            Ht,
+            compute_kernel_lib::BinaryFpu<
+                cb_exps,
+                cb_recipsumexps,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::PackTile<
+                cb_out0,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
-        }
-
-        cb_recipsumexps_obj.pop_front(1);
         cb_x_m_max_obj.pop_front(Ht);
-        cb_out0_obj.push_back(Ht);
-#ifndef LOG
-        cb_exps_obj.pop_front(Ht);
-#endif
     }
 }

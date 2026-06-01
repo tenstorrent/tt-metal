@@ -18,6 +18,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
 
 void kernel_main() {
@@ -392,33 +394,39 @@ void kernel_main() {
                 }
 
                 cb_in0.wait_front(out_block_hw_normal);
-                // x - E[x]
-                sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
-
-                cb_xmm.reserve_back(out_block_hw_normal);
+                // x - E[x] — sub_bcast_scalar per-tile streaming over
+                // out_block_hw_actual tiles. Same shape as the Variance Calc
+                // sibling block below. cb_in0 InputLifecycle::Streaming + Scalar pops 1 per
+                // tile; cb_ex_global InputLifecycle::CallerManaged (external wait/pop bracket).
+                // cb_xmm via OutputLifecycle::Streaming per-tile reserve+push; slack pops/
+                // pushes handle the extra_out_block case.
+                //
+                // Reconfig: sub_tiles_bcast_scalar_init_short -> Input.
+                // Original plain pack_tile -> PackTileReconfig::None.
                 cb_ex_global.wait_front(1);
-                for (uint32_t i = 0; i < out_block_h_actual; i++) {
-                    index_subblock_w_offset = 0;
-                    for (uint32_t j = 0; j < num_subblocks_w; j++) {
-                        tile_regs_acquire();
-                        for (uint32_t w = 0; w < subblock_w; w++) {
-                            uint32_t index = w + index_subblock_w_offset;
-                            sub_tiles_bcast_scalar(cb_in0_id, cb_ex_global_id, index, 0, w);
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < subblock_w; i++) {
-                            pack_tile(i, cb_xmm_id);
-                        }
-                        tile_regs_release();
-                        index_subblock_w_offset += subblock_w;
-                    }
-                    cb_in0.pop_front(block_w);
-                }
+                compute_kernel_lib::eltwise_chain(
+                    out_block_hw_actual,
+                    compute_kernel_lib::BinaryFpu<
+                        cb_in0_id,
+                        cb_ex_global_id,
+                        compute_kernel_lib::BinaryFpuOp::Sub,
+                        compute_kernel_lib::BroadcastDim::Scalar,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Scalar>{},
+                    compute_kernel_lib::PackTile<
+                        cb_xmm_id,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
+                        compute_kernel_lib::PackTileReconfig::None>{});
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
+                    cb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
+                    cb_xmm.push_back(out_block_hw_normal - out_block_hw_last);
                 }
-                cb_xmm.push_back(out_block_hw_normal);
 
                 // zero out the garbage values by mult mask again
                 reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);
@@ -510,23 +518,38 @@ void kernel_main() {
 
             // Start Variance Calc
             //  global reduce results
+            // PARTIAL migration: (Var + eps) -> 1/sqrt(...) becomes
+            // BinaryFpu(Add) + Rsqrt + PackTile. Reconfig audit:
+            //   - add_tiles_init reconfigs srca/srcb (no explicit reconfig_data_format)
+            //     -> BinaryDataFormatReconfig::Input.
+            //   - No pack_reconfig_data_format in original -> PackTileReconfig::None.
+            //   - rsqrt_tile_init<true> -> Legacy::On.
+            //   - cb_ex2pe.reserve_back + push_back present -> OutputLifecycle::Streaming.
+            // Lifecycles: cb_ex2_global InputLifecycle::Streaming (wait+pop per iter); cb_eps held outside
+            // the chain via the unchanged cb_eps.wait_front(1) above -> InputLifecycle::CallerManaged.
             cb_eps.wait_front(1);
-            cb_ex2_global.wait_front(1);
-            cb_ex2pe.reserve_back(1);
-            // (Var + eps)
-            tile_regs_acquire();
-            add_tiles_init(cb_ex2_global_id, cb_eps_id);
-            add_tiles(cb_ex2_global_id, cb_eps_id, 0, 0, dst0);
-            tile_regs_wait();
-            // 1/[sqrt(Var + eps)]
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile(dst0, cb_ex2pe_id);
-            tile_regs_release();
-            cb_ex2pe.push_back(1);
-            cb_ex2_global.pop_front(1);
+            compute_kernel_lib::eltwise_chain(
+                1,
+                compute_kernel_lib::BinaryFpu<
+                    cb_ex2_global_id,
+                    cb_eps_id,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::Rsqrt<
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Legacy::On,
+                    compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<
+                    cb_ex2pe_id,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::None>{});
             // End Variance Calc
 
             bool start_copy_or_add = copy_or_add;
@@ -546,32 +569,47 @@ void kernel_main() {
                 }
 
                 cb_in0.wait_front(out_block_hw_normal);
-                // x - E[x]
-                sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
-                cb_xmm.reserve_back(out_block_hw_normal);
+                // x - E[x] — sub_bcast_scalar per-tile streaming. Chain emits
+                // wait+pop on cb_in0 and reserve+push on cb_xmm per tile, matching
+                // the original's net effect over out_block_hw_actual iterations.
+                //
+                // Original quirks preserved:
+                //   - cb_xmm.reserve_back(out_block_hw_normal) upfront + push_back at end
+                //     becomes per-tile reserve+push (chain OutputLifecycle::Streaming). For non-extra
+                //     blocks (actual==normal) this matches exactly. For the extra-last
+                //     block, the slack (normal - actual) is reserved+pushed after the
+                //     chain so downstream wait_front(out_block_hw_normal) succeeds.
+                //   - cb_in0 row-level pop becomes per-tile pop; total pops match
+                //     out_block_hw_actual; the extra cleanup pop covers the slack.
+                //
+                // Reconfig: sub_tiles_bcast_scalar_init_short -> BinaryDataFormatReconfig::Input.
+                // Original pack_tile (no _with_dt / no pack_reconfig) -> PackTileReconfig::None.
+                // cb_ex_global held by external wait_front(1) / pop_front(1) -> InputLifecycle::CallerManaged.
                 cb_ex_global.wait_front(1);
-                for (uint32_t i = 0; i < out_block_h_actual; i++) {
-                    index_subblock_w_offset = 0;
-                    for (uint32_t j = 0; j < num_subblocks_w; j++) {
-                        tile_regs_acquire();
-                        for (uint32_t w = 0; w < subblock_w; w++) {
-                            uint32_t index = w + index_subblock_w_offset;
-                            sub_tiles_bcast_scalar(cb_in0_id, cb_ex_global_id, index, 0, w);
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < subblock_w; i++) {
-                            pack_tile(i, cb_xmm_id);
-                        }
-                        tile_regs_release();
-                        index_subblock_w_offset += subblock_w;
-                    }
-                    cb_in0.pop_front(block_w);
-                }
+                compute_kernel_lib::eltwise_chain(
+                    out_block_hw_actual,
+                    compute_kernel_lib::BinaryFpu<
+                        cb_in0_id,
+                        cb_ex_global_id,
+                        compute_kernel_lib::BinaryFpuOp::Sub,
+                        compute_kernel_lib::BroadcastDim::Scalar,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Scalar>{},
+                    compute_kernel_lib::PackTile<
+                        cb_xmm_id,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
+                        compute_kernel_lib::PackTileReconfig::None>{});
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
+                    // Slack reserve+push so consumer wait_front(out_block_hw_normal) succeeds.
+                    cb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
+                    cb_xmm.push_back(out_block_hw_normal - out_block_hw_last);
                 }
-                cb_xmm.push_back(out_block_hw_normal);
 
                 // zero out the garbage values by mult mask again
                 reconfig_data_format_srcb(cb_ex_global_id, cb_input_mask_id);

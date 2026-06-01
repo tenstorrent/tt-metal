@@ -19,6 +19,8 @@
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 namespace generic = norm::kernel_util::generic;
 
@@ -346,37 +348,56 @@ void kernel_main() {
         // =====================================
         // Calculate 1/(√(Var(X) + ε))
         // =====================================
-        reconfig_data_format(cb_ex2, cb_eps);
-        add_tiles_init(cb_ex2, cb_eps);
+        // PARTIAL migration: BinaryFpu(Add, cb_ex2, cb_eps) + Rsqrt + PackTile(cb_ex2pe).
+        // Reconfig audit: explicit reconfig_data_format(cb_ex2, cb_eps) + add_tiles_init's
+        // reconfig (idempotent) -> BinaryDataFormatReconfig::Input.
+        // NO pack_reconfig in original (pack stays at cb_ex2 from preceding stage; cb_ex2 and
+        // cb_ex2pe formats assumed compatible) -> PackTileReconfig::None.
+        // cb_ex2pe.reserve_back IS called in original -> use OutputLifecycle::Streaming (reserve + push per tile).
+        // Non-LEGACY rsqrt -> Legacy::Off.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_ex2,
+                cb_eps,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::Rsqrt<
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Legacy::Off,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_ex2pe,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::None>{});
 
-        cb_ex2_obj.wait_front(onetile);
-        tile_regs_acquire();
-        add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
-        rsqrt_tile_init();
-        rsqrt_tile(dst0);
-        tile_regs_commit();
-        cb_ex2_obj.pop_front(onetile);
-
-        cb_ex2pe_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex2pe);
-        tile_regs_release();
-        cb_ex2pe_obj.push_back(onetile);
-
-        // broadcasts the tile since cb_ex2pe is a column vector that contains the important data
-        cb_ex2pe_obj.wait_front(onetile);
-        tile_regs_acquire();
-        reconfig_data_format_srca(cb_ex2pe);
-        unary_bcast_init<BroadcastType::COL>(cb_ex2pe, cb_ex2pe);
-        unary_bcast<BroadcastType::COL>(cb_ex2pe, 0, dst0);
-        cb_ex2pe_obj.pop_front(onetile);
-        tile_regs_commit();
-
-        cb_ex2pe_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex2pe);
-        tile_regs_release();
-        cb_ex2pe_obj.push_back(onetile);
+        // PARTIAL migration: UnaryBcast<COL> + PackTile (same-CB in/out on cb_ex2pe).
+        // Reconfig: UnaryBcast's small init reconfigs BOTH srca and srcb to cb_ex2pe
+        // (UnaryBcastReconfig::Input) — the COL bcast datacopy drives the FPU SrcB lane, and the
+        // preceding BinaryFpu(cb_ex2, cb_eps) left SrcB = cb_eps, so both sources must be
+        // reprogrammed. Pack-side reconfig is owned by the downstream PackTile
+        // (PackTileReconfig::Output). No mid-kernel hw_configure needed.
+        // Lifecycle: cb_ex2pe InputLifecycle::Streaming in, OutputLifecycle::Streaming out.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::UnaryBcast<
+                compute_kernel_lib::BroadcastDim::Col,
+                cb_ex2pe,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::UnaryBcastReconfig::Input>{},
+            compute_kernel_lib::PackTile<
+                cb_ex2pe,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         // =====================================
         // Second pass over the input.
@@ -421,7 +442,7 @@ void kernel_main() {
             binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_ex2pe);
             for (auto i : block.local()) {
                 binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                    cb_ex2pe, 0 /*in_tile_index*/, i);
+                    cb_ex2pe, 0, i);
             }
             tile_regs_commit();
 

@@ -5,6 +5,9 @@
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Exp
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask, Negative
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
@@ -99,55 +102,85 @@ void kernel_main() {
             cb_max_obj.push_back(1);
         }
 
-        // compute x - max(x)
-        cb_x_m_max_obj.reserve_back(Wt);
-        cb_in0_obj.wait_front(Wt);
-        cb_max_obj.wait_front(1);
+        // compute x - max(x)  — COL bcast: cb_max is 1 tile broadcast across Wt cols.
+        // Reconfig: sub_bcast_cols_init_short_with_dt -> Input. pack_tile_with_dt -> Output.
+        // Lifecycles: cb_in0 InputLifecycle::Bulk + Block; cb_max InputLifecycle::Bulk + Scalar (chain emits
+        //   wait/pop(1) via window_1d<Scalar> — commit 14a5a61e462 made the
+        //   OperandKind drive the wait count); cb_x_m_max OutputLifecycle::Bulk + Block.
+        compute_kernel_lib::eltwise_chain(
+            Wt,
+            compute_kernel_lib::BinaryFpu<
+                cb_in0,
+                cb_max,
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::Col,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::PackTile<
+                cb_x_m_max,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
-        for (uint32_t w = 0; w < Wt; ++w) {
-            tile_regs_acquire();
-            sub_bcast_cols_init_short_with_dt(cb_in0, cb_max);
-            sub_tiles_bcast<BroadcastType::COL>(cb_in0, cb_max, w, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_x_m_max);
-            tile_regs_release();
-        }
-        cb_max_obj.pop_front(1);
-        cb_in0_obj.pop_front(Wt);
-        cb_x_m_max_obj.push_back(Wt);
-
-        // compute exp(x - max(x))
-        cb_exps_obj.reserve_back(Wt);
+        // compute exp(x - max(x)) — split into 2 chains, same pattern as
+        // moreh_softmax_h.cpp. cb_x_m_max held outside; cb_mask held outside;
+        // cb_exps OutputLifecycle::Streaming per-tile.
+        //
+        // Reconfig: copy_tile_init_with_dt -> Input. pack_tile_with_dt -> Output.
         cb_x_m_max_obj.wait_front(Wt);
-        for (uint32_t w = 0; w < Wt; ++w) {
-            tile_regs_acquire();
-            copy_tile_init_with_dt(cb_x_m_max);
-            copy_tile(cb_x_m_max, w, dst0);
-
+        compute_kernel_lib::eltwise_chain(
+            Wt - 1,
+            compute_kernel_lib::CopyTile<
+                cb_x_m_max,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::CopyTileReconfig::Input>{},
 #ifndef SOFTMAX
-            negative_tile_init();
-            negative_tile(dst0);
+            compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
 #endif
+            compute_kernel_lib::Exp<
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_exps,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
-            exp_tile_init();
-            exp_tile(dst0);
-
-            if (w == Wt - 1) {
-                copy_tile_init_with_dt(cb_mask);
-                copy_tile(cb_mask, 0, dst1);
-
-                mask_tile_init();
-                mask_tile(dst0, dst1);
-            }
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_exps);
-            tile_regs_release();
-        }
-        cb_exps_obj.push_back(Wt);
+        compute_kernel_lib::eltwise_chain(
+            1u,
+            compute_kernel_lib::CopyTile<
+                cb_x_m_max,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::CopyTileReconfig::Input,
+                compute_kernel_lib::TileOffset::Set>{Wt - 1},
+#ifndef SOFTMAX
+            compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
+#endif
+            compute_kernel_lib::Exp<
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::CopyTile<
+                cb_mask,
+                compute_kernel_lib::Dst::D1,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::Input>{},
+            compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_exps,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
 #ifdef LOG
         // log(sum) - pop tiles after reduce
@@ -179,44 +212,55 @@ void kernel_main() {
                 });
 #endif
 
-        // compute final result
-        cb_out0_obj.reserve_back(Wt);
+        // compute final result — COL bcast on cb_recipsumexps (1 tile).
+        // LOG: out = (x-max) - log(sum_exp). cb_x_m_max chain-read (LOG owns it).
+        // !LOG: out = exp(x-max) / sum_exp. cb_exps chain-read; cb_x_m_max held
+        //   externally (chain doesn't touch it — uses InputLifecycle::CallerManaged-style outer
+        //   wait/pop in !LOG path).
+        // cb_x_m_max wait/pop wrap the chain symmetrically; chain uses
+        // InputLifecycle::CallerManaged + Scalar in LOG path to avoid double-pop.
+        // Reconfig: *_bcast_cols_init_short_with_dt + pack_tile_with_dt
+        // -> Input + Output.
         cb_x_m_max_obj.wait_front(Wt);
-        cb_recipsumexps_obj.wait_front(1);
-
-#ifndef LOG
-        cb_exps_obj.wait_front(Wt);
-#endif
-
-        for (uint32_t w = 0; w < Wt; w += onetile) {
 #ifdef LOG
-            // x - max - log(sum)
-            tile_regs_acquire();
-            sub_bcast_cols_init_short_with_dt(cb_x_m_max, cb_recipsumexps);
-            sub_tiles_bcast<BroadcastType::COL>(cb_x_m_max, cb_recipsumexps, w, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_out0);
-            tile_regs_release();
+        compute_kernel_lib::eltwise_chain(
+            Wt,
+            compute_kernel_lib::BinaryFpu<
+                cb_x_m_max,
+                cb_recipsumexps,
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::Col,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::PackTile<
+                cb_out0,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 #else
-            // exp(x - max) / psum
-            tile_regs_acquire();
-            mul_bcast_cols_init_short_with_dt(cb_exps, cb_recipsumexps);
-            mul_tiles_bcast_cols(cb_exps, cb_recipsumexps, w, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_out0);
-            tile_regs_release();
+        compute_kernel_lib::eltwise_chain(
+            Wt,
+            compute_kernel_lib::BinaryFpu<
+                cb_exps,
+                cb_recipsumexps,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::Col,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::PackTile<
+                cb_out0,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
-        }
-
-        cb_recipsumexps_obj.pop_front(1);
         cb_x_m_max_obj.pop_front(Wt);
-        cb_out0_obj.push_back(Wt);
-#ifndef LOG
-        cb_exps_obj.pop_front(Wt);
-#endif
     }
 }

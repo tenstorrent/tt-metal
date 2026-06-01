@@ -1,7 +1,12 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Abs, Negative, Mask, MaskPosInf
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // BinaryMax
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_predicates.hpp"   // UnaryNe
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
@@ -11,156 +16,182 @@ void kernel_main() {
     const auto Ht = get_arg_val<uint32_t>(i++);
     const auto origin_h = get_arg_val<uint32_t>(i++);
 
-    std::uint8_t input_id{tt::CB::c_in0};
-    const auto cb_x = input_id++;
-    CircularBuffer cb_x_obj(cb_x);  // input
-    const auto cb_one = input_id++;
-    CircularBuffer cb_one_obj(cb_one);  // one
-    const auto cb_mask_h = input_id++;
-    CircularBuffer cb_mask_h_obj(cb_mask_h);  // mask_h
+    constexpr uint32_t cb_x = tt::CBIndex::c_0;       // input
+    constexpr uint32_t cb_one = tt::CBIndex::c_1;     // one
+    constexpr uint32_t cb_mask_h = tt::CBIndex::c_2;  // mask_h
+    CircularBuffer cb_one_obj(cb_one);
+    CircularBuffer cb_mask_h_obj(cb_mask_h);
 
-    std::uint8_t output_id{tt::CB::c_out0};
-    const auto cb_y = output_id++;
-    CircularBuffer cb_y_obj(cb_y);  // output
+    constexpr uint32_t cb_y = tt::CBIndex::c_16;  // output
 
-    std::uint8_t intermed_id{tt::CB::c_intermed0};
-    const auto cb_tmp0 = intermed_id++;
-    const auto cb_tmp1 = intermed_id++;
-    const auto cb_tmp2 = intermed_id++;
-
-    const auto cb_val = cb_tmp0;
-    CircularBuffer cb_val_obj(cb_val);  // f(x)
-    const auto cb_cal = cb_tmp1;
-    CircularBuffer cb_cal_obj(cb_cal);  // calculate f(x) over dimension
-    const auto cb_reduce = cb_tmp2;
-    CircularBuffer cb_reduce_obj(cb_reduce);  // reduce f(x)
+    constexpr uint32_t cb_val = tt::CBIndex::c_24;     // f(x)
+    constexpr uint32_t cb_cal = tt::CBIndex::c_25;     // accumulator (sum or max across rows)
+    constexpr uint32_t cb_reduce = tt::CBIndex::c_26;  // reduce output
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t dst1 = 1;
 
     binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0, tt::CB::c_out0);
 
-    cb_one_obj.wait_front(onetile);  // comes from the reader
+    cb_one_obj.wait_front(onetile);
 
     constexpr uint32_t TILE_H = 32;
     const bool do_mask_h = (origin_h % TILE_H) != 0;
-    const auto mask_h = do_mask_h ? (origin_h % TILE_H) : TILE_H;
 
     if (do_mask_h) {
-        cb_mask_h_obj.wait_front(onetile);  // comes from the reader
+        cb_mask_h_obj.wait_front(onetile);
     }
+
     for (uint32_t col_idx = 0; col_idx < num_cols_per_core; ++col_idx) {
         for (uint32_t row_idx = 0; row_idx < Ht; ++row_idx) {
-            // f(x)
-            tile_regs_acquire();
-            cb_x_obj.wait_front(onetile);  // comes from the reader
-            cb_val_obj.reserve_back(onetile);
-
-            copy_tile_init_with_dt(cb_x);
-            copy_tile(cb_x, 0, dst0);
-
-            if (do_mask_h && (row_idx == Ht - 1)) {
-                copy_tile_init_with_dt(cb_mask_h);
-                copy_tile(cb_mask_h, 0, dst1);
-
-                mask_tile_init();
+            // f(x) prologue. 2-branch dispatch on (do_mask_h && last-row).
+            // Per-stage reconfig matches original copy_tile_init_with_dt / pack_tile_with_dt.
+            // cb_x InputLifecycle::Streaming; cb_mask_h InputLifecycle::CallerManaged + Scalar (held outside loop).
+            const bool mask_this = do_mask_h && (row_idx == Ht - 1);
+            if (mask_this) {
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::CopyTile<
+                        cb_x,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::CopyTileReconfig::Input>{},
+                    compute_kernel_lib::CopyTile<
+                        cb_mask_h,
+                        compute_kernel_lib::Dst::D1,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::CopyTileReconfig::Input>{},
 #ifdef MINUS_INF
-                mask_posinf_tile(dst0, dst1);
+                    compute_kernel_lib::MaskPosInf<compute_kernel_lib::Dst::D0>{},
 #else
-                mask_tile(dst0, dst1);
+                    compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
 #endif
-            }
 #ifdef IS_ZERO
-            unary_ne_tile_init();
-            unary_ne_tile(dst0, 0);
+                    compute_kernel_lib::UnaryNe<compute_kernel_lib::Dst::D0>{0u},
 #else
-            abs_tile_init();
-            abs_tile(dst0);
+                    compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
 #endif
-
 #ifdef MINUS_INF
-            negative_tile_init();
-            negative_tile(dst0);
+                    compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
 #endif
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_val);
-            tile_regs_release();
-
-            cb_x_obj.pop_front(onetile);
-            cb_val_obj.push_back(onetile);
-
-            // calculate f(x) over dimension
-            if (row_idx == 0) {
-                tile_regs_acquire();
-                cb_val_obj.wait_front(onetile);
-                cb_cal_obj.reserve_back(onetile);
-
-                copy_tile_init_with_dt(cb_val);
-                copy_tile(cb_val, 0, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_cal);
-                tile_regs_release();
-
-                cb_val_obj.pop_front(onetile);
-                cb_cal_obj.push_back(onetile);
-
+                    compute_kernel_lib::PackTile<
+                        cb_val,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
             } else {
-                tile_regs_acquire();
-                cb_val_obj.wait_front(onetile);
-                cb_cal_obj.wait_front(onetile);
-                cb_cal_obj.reserve_back(onetile);
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::CopyTile<
+                        cb_x,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::CopyTileReconfig::Input>{},
 #ifdef IS_ZERO
-                add_tiles_init_with_dt(cb_val, cb_cal);
-                add_tiles(cb_val, cb_cal, 0, 0, dst0);
+                    compute_kernel_lib::UnaryNe<compute_kernel_lib::Dst::D0>{0u},
 #else
-                copy_tile_init_with_dt(cb_val);
-                copy_tile(cb_val, 0, dst0);
-
-                copy_tile_init_with_dt(cb_cal);
-                copy_tile(cb_cal, 0, dst1);
-
-                binary_max_tile_init();
-                binary_max_tile(dst0, dst1, dst0);
+                    compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
 #endif
-                tile_regs_commit();
+#ifdef MINUS_INF
+                    compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
+#endif
+                    compute_kernel_lib::PackTile<
+                        cb_val,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
+            }
 
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_cal);
-                tile_regs_release();
-
-                cb_val_obj.pop_front(onetile);
-                cb_cal_obj.pop_front(onetile);
-                cb_cal_obj.push_back(onetile);
+            // Accumulator: row_idx==0 -> seed copy; else -> reduce-across-rows op.
+            //   IS_ZERO  -> add_tiles (sum of != zero count)
+            //   default  -> binary_max (running max via two-DEST SFPU)
+            if (row_idx == 0) {
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::CopyTile<
+                        cb_val,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::CopyTileReconfig::Input>{},
+                    compute_kernel_lib::PackTile<
+                        cb_cal,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
+            } else {
+#ifdef IS_ZERO
+                // cb_cal = cb_val + cb_cal (in-place accumulator).
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::BinaryFpu<
+                        cb_val,
+                        cb_cal,
+                        compute_kernel_lib::BinaryFpuOp::Add,
+                        compute_kernel_lib::BroadcastDim::None,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Scalar>{},
+                    compute_kernel_lib::PackTile<
+                        cb_cal,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
+#else
+                // cb_cal = max(cb_val, cb_cal) via two-DEST SFPU.
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::CopyTile<
+                        cb_val,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::CopyTileReconfig::Input>{},
+                    compute_kernel_lib::CopyTile<
+                        cb_cal,
+                        compute_kernel_lib::Dst::D1,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::CopyTileReconfig::Input>{},
+                    compute_kernel_lib::BinaryMax<
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::Dst::D1,
+                        compute_kernel_lib::Dst::D0>{},
+                    compute_kernel_lib::PackTile<
+                        cb_cal,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
+#endif
             }
         }
-        // reduce f(x)
+
+        // Reduce f(x) accumulator across the column. Uses reduce helper.
         compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
             cb_cal, cb_one, cb_reduce, compute_kernel_lib::ReduceInputBlockShape::single());
 
-        tile_regs_acquire();
-
-        cb_reduce_obj.wait_front(onetile);
-        cb_y_obj.reserve_back(onetile);
-
-        copy_tile_init_with_dt(cb_reduce);
-        copy_tile(cb_reduce, 0, dst0);
+        // Final: copy reduce result -> [negate if MINUS_INF] -> cb_y.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::CopyTile<
+                cb_reduce,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::Input>{},
 #ifdef MINUS_INF
-        negative_tile_init();
-        negative_tile(dst0);
+            compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
 #endif
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_y);
-        tile_regs_release();
-
-        cb_reduce_obj.pop_front(onetile);
-        cb_y_obj.push_back(onetile);
+            compute_kernel_lib::PackTile<
+                cb_y,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>{});
     }
 
     cb_one_obj.pop_front(onetile);

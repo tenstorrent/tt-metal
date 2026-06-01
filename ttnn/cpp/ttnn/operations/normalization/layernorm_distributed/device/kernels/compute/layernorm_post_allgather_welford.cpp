@@ -21,6 +21,8 @@
 #include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
 #include "chain_llk.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 constexpr uint32_t cb_inp = tt::CBIndex::c_0;
 constexpr uint32_t cb_stats = tt::CBIndex::c_1;
@@ -129,21 +131,35 @@ void kernel_main() {
          * 1/sqrt(var + eps)
          */
 
-        cb_wait_front(cb_stats_reduced, 2);
-        cb_reserve_back(cb_recip_sqrt_var, 1);
-        reconfig_data_format(cb_stats_reduced, cb_eps);
-        pack_reconfig_data_format(cb_recip_sqrt_var);
-
-        add_tiles_init(cb_stats_reduced, cb_eps);
-        tile_regs_acquire();
-        tile_regs_wait();
-        add_tiles(cb_stats_reduced, cb_eps, 1, 0, 0);
-        rsqrt_tile_init<true>();
-        rsqrt_tile<true>(0);
-        pack_tile(0, cb_recip_sqrt_var);
-        tile_regs_commit();
-        tile_regs_release();
-        cb_push_back(cb_recip_sqrt_var, 1);
+        // 1/sqrt(var + eps)  — Add reads cb_stats_reduced at index 1 (variance slot;
+        // mean is at index 0); cb_eps at index 0.
+        // Reconfig audit: explicit reconfig_data_format + add_tiles_init -> Input.
+        // Explicit pack_reconfig_data_format -> Output. rsqrt_tile_init<true> -> Legacy::On.
+        // Lifecycles: cb_stats_reduced InputLifecycle::HeldBulk + Scalar + compute_kernel_lib::TileOffset::Set
+        // (held, popped at line 164 with stats_tile_stride). cb_eps InputLifecycle::CallerManaged + Scalar.
+        // cb_recip_sqrt_var OutputLifecycle::Streaming.
+        compute_kernel_lib::eltwise_chain(
+            1,
+            compute_kernel_lib::BinaryFpu<
+                cb_stats_reduced,
+                cb_eps,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::TileOffset::Set,
+                compute_kernel_lib::TileOffset::Unset>{1, 0u},
+            compute_kernel_lib::
+                Rsqrt<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Legacy::On, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_recip_sqrt_var,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         if constexpr (do_gamma && do_beta) {
             /*

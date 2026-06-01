@@ -2,205 +2,104 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "ttnn/kernel/compute/moreh_common.hpp"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/rsqrt.h"
-#include "api/compute/eltwise_unary/typecast.h"
-
 #include <cstdint>
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Rsqrt
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Typecast
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // AddBinary, SubBinary, MulBinary
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
 #include "api/dataflow/circular_buffer.h"
 
-// batchnorm_bcast_tiles: For each output tile in [tile_start, freq), computes batch-norm on tiles from cb_other
-// (input) broadcast against cb_bcast (batch mean). First builds 1/sqrt(batch_var + eps) in cb_den, then per tile:
-// (input - mean) * den, optional multiply by weight, optional add bias. When NeedsOutputTypecast, SFPU typecasts
-// from FP32 staging (cb_output_0) to writer-facing cb_output_final. Tracks last_srca_cb in/out so
-// copy_tile_to_dst_init_short_with_dt can reconfigure the SrcA unpacker correctly across mixed dtypes.
-template <bool NeedsOutputTypecast, uint32_t TcInFmt, uint32_t TcOutFmt>
-ALWI uint32_t batchnorm_bcast_tiles(
+// batchnorm_bcast_tiles: for each output tile in [tile_start, freq), computes
+//
+//   cb_den         = rsqrt(cb_batch_var + cb_eps)                  // Stage 1, one tile
+//   running        = (cb_other - cb_bcast) * cb_den                // Stage 2
+//                    [* cb_weight if WeightHas]                    // Stage 3
+//                    [+ cb_bias  if BiasHas]                       // Stage 4
+//   cb_final_out   = [typecast(running) if NeedsTypecast]          // Stage 5
+//                    else running
+//
+// SFPU variant: every multiplicand other than the running operand is loaded into
+// DEST::D1 via CopyTile (which the chain emits before the binary). The binary
+// SFPU helpers (AddBinary/SubBinary/MulBinary) consume D0+D1 and write D0, so the
+// running result stays in D0 across the whole chain — no intermediate CB writes.
+// Original code staged through cb_tmp_1 between separate tile_regs windows; with
+// the fused chain that bridge is unnecessary and cb_tmp_1 is dropped.
+
+template <
+    bool WeightHas,
+    bool BiasHas,
+    bool NeedsTypecast,
+    uint32_t TcInFmt,
+    uint32_t TcOutFmt,
     uint32_t cb_bcast,
     uint32_t cb_other,
-    uint32_t freq,
-    uint32_t tile_start,
     uint32_t cb_batch_var,
     uint32_t cb_eps,
     uint32_t cb_den,
     uint32_t cb_weight,
     uint32_t cb_bias,
-    uint32_t cb_tmp_1,
     uint32_t cb_output_0,
-    uint32_t cb_output_final,
-    uint32_t weight_has,
-    uint32_t bias_has,
-    uint32_t last_srca_cb) {
-    constexpr uint32_t onetile = 1;
-    constexpr uint32_t index = 0;
-    uint32_t weight_has_value = weight_has;
-    uint32_t bias_has_value = bias_has;
-    auto cb_affine_or_out = (weight_has_value || bias_has_value) ? cb_tmp_1 : cb_output_0;
-    auto cb_scaled_output = (bias_has_value) ? cb_tmp_1 : cb_output_0;
+    uint32_t cb_output_final>
+ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
+    using namespace compute_kernel_lib;
 
-    CircularBuffer cb_bcast_obj(cb_bcast);
-    CircularBuffer cb_other_obj(cb_other);
-    CircularBuffer cb_batch_var_obj(cb_batch_var);
-    CircularBuffer cb_den_obj(cb_den);
-    CircularBuffer cb_weight_obj(cb_weight);
-    CircularBuffer cb_bias_obj(cb_bias);
-    CircularBuffer cb_tmp_1_obj(cb_tmp_1);
-    CircularBuffer cb_output_0_obj(cb_output_0);
-    CircularBuffer cb_affine_or_out_obj(cb_affine_or_out);
-    CircularBuffer cb_scaled_output_obj(cb_scaled_output);
+    // Stage 1: cb_den = rsqrt(cb_batch_var + cb_eps).
+    // cb_batch_var: InputLifecycle::Bulk + Scalar — chain emits 1-tile wait+pop per call (window_1d<Scalar>).
+    // cb_eps:        InputLifecycle::CallerManaged + Scalar — held by kernel_main for the whole kernel.
+    eltwise_chain(
+        1,
+        CopyTile<cb_batch_var, Dst::D0, InputLifecycle::Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
+        CopyTile<cb_eps, Dst::D1, InputLifecycle::CallerManaged, OperandKind::Scalar, CopyTileReconfig::Input>{},
+        AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
+        Rsqrt<>{},
+        PackTile<cb_den, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
 
-    // 1/(sqrt(batch_var + eps)) = cb_den
-    cb_den_obj.reserve_back(onetile);
-    cb_batch_var_obj.wait_front(onetile);
+    const uint32_t inner_count = freq - tile_start;
 
-    tile_regs_acquire();
-    copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_batch_var);
-    last_srca_cb = cb_batch_var;
-    copy_tile(cb_batch_var, index, index * 2);
-    add_binary_tile_init();
-    copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_eps);
-    last_srca_cb = cb_eps;
-    copy_tile(cb_eps, index, index * 2 + 1);
-    add_binary_tile(index * 2, index * 2 + 1, index * 2);
-    rsqrt_tile_init();
-    rsqrt_tile(index * 2);
-    tile_regs_commit();
+    // Output CB depends on whether the typecast tail runs: when NeedsTypecast is true the
+    // typecast tile writes the cast result to cb_output_final directly, so the fused chain's
+    // pack target is cb_output_final; otherwise it's cb_output_0.
+    constexpr uint32_t cb_final_out = NeedsTypecast ? cb_output_final : cb_output_0;
 
-    tile_regs_wait();
-    pack_tile(index * 2, cb_den);
-    tile_regs_release();
-
-    cb_den_obj.push_back(onetile);
-    cb_batch_var_obj.pop_front(onetile);
-
-    cb_bcast_obj.wait_front(onetile);  // input - batch_mean
-    cb_den_obj.wait_front(onetile);    // (input - batch_mean)/(sqrt(batch_var + eps)) = result
-    if (weight_has_value) {            // result = result * weight
-        cb_weight_obj.wait_front(onetile);
-    }
-    if (bias_has_value) {  // result = result + bias
-        cb_bias_obj.wait_front(onetile);
-    }
-    for (uint32_t j = tile_start; j < freq; ++j) {
-        cb_other_obj.wait_front(onetile);
-        cb_affine_or_out_obj.reserve_back(onetile);
-
-        // (input - batch_mean) * den
-        tile_regs_acquire();
-        copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_other);
-        last_srca_cb = cb_other;
-        copy_tile(cb_other, index, index * 2);
-        sub_binary_tile_init();
-        copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_bcast);
-        last_srca_cb = cb_bcast;
-        copy_tile(cb_bcast, index, index * 2 + 1);
-        sub_binary_tile(index * 2, index * 2 + 1, index * 2);
-
-        mul_binary_tile_init();
-        copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_den);
-        last_srca_cb = cb_den;
-        copy_tile(cb_den, index, index * 2 + 1);
-        mul_binary_tile(index * 2, index * 2 + 1, index * 2);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile(index * 2, cb_affine_or_out);
-        tile_regs_release();
-
-        cb_other_obj.pop_front(onetile);
-        cb_affine_or_out_obj.push_back(onetile);
-
-        if (weight_has_value) {  // result = result * weight
-            cb_affine_or_out_obj.wait_front(onetile);
-            cb_scaled_output_obj.reserve_back(onetile);
-
-            tile_regs_acquire();
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_affine_or_out);
-            last_srca_cb = cb_affine_or_out;
-            copy_tile(cb_affine_or_out, index, index * 2);
-            mul_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_weight);
-            last_srca_cb = cb_weight;
-            copy_tile(cb_weight, index, index * 2 + 1);
-            mul_binary_tile(index * 2, index * 2 + 1, index * 2);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile(index * 2, cb_scaled_output);
-            tile_regs_release();
-
-            cb_scaled_output_obj.push_back(onetile);
-            cb_affine_or_out_obj.pop_front(onetile);
-        }
-
-        if (bias_has_value) {  // result = result + bias
-            cb_tmp_1_obj.wait_front(onetile);
-            cb_output_0_obj.reserve_back(onetile);
-
-            tile_regs_acquire();
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_tmp_1);
-            last_srca_cb = cb_tmp_1;
-            copy_tile(cb_tmp_1, index, index * 2);
-            add_binary_tile_init();
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_bias);
-            last_srca_cb = cb_bias;
-            copy_tile(cb_bias, index, index * 2 + 1);
-            add_binary_tile(index * 2, index * 2 + 1, index * 2);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile(index * 2, cb_output_0);
-            tile_regs_release();
-
-            cb_output_0_obj.push_back(onetile);
-            cb_tmp_1_obj.pop_front(onetile);
-        }
-
-        if constexpr (NeedsOutputTypecast) {
-            cb_output_0_obj.wait_front(onetile);
-            CircularBuffer cb_output_final_obj(cb_output_final);
-            cb_output_final_obj.reserve_back(onetile);
-
-            tile_regs_acquire();
-            copy_tile_to_dst_init_short_with_dt(last_srca_cb, cb_output_0);
-            last_srca_cb = cb_output_0;
-            copy_tile(cb_output_0, index, index * 2);
-            typecast_tile_init<TcInFmt, TcOutFmt>();
-            typecast_tile<TcInFmt, TcOutFmt>(index * 2);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_reconfig_data_format(cb_output_final);
-            pack_tile(index * 2, cb_output_final);
-            tile_regs_release();
-
-            pack_reconfig_data_format(cb_output_final, cb_output_0);
-
-            cb_output_0_obj.pop_front(onetile);
-            cb_output_final_obj.push_back(onetile);
-        }
-    }
-    cb_bcast_obj.pop_front(onetile);
-    cb_den_obj.pop_front(onetile);
-    if (weight_has_value) {
-        cb_weight_obj.pop_front(onetile);
-    }
-    if (bias_has_value) {
-        cb_bias_obj.pop_front(onetile);
-    }
-    return last_srca_cb;
+    // Stage 2..5 fused — DEST[0] threaded through Sub → Mul(den) → [Mul(weight)] → [Add(bias)]
+    // → [Typecast] → Pack. CopyTile<…, D1> loads each new operand into D1; the SFPU binaries
+    // then consume (D0, D1) and write back to D0.
+    //
+    // Lifecycles: every held single-tile operand uses InputLifecycle::Bulk + Scalar — chain's
+    // window_1d<Scalar> collapses to 1, so each side emits a single
+    // cb_wait_front(cb, 1) at the chain head and cb_pop_front(cb, 1) at the tail.
+    // For cb_weight / cb_bias, wrapping the CopyTile in OptionalChainElement also
+    // makes the wait/pop conditional on the compile-time flag — when the option
+    // is off the wrapped element collapses to a tag with a_policy() == InputLifecycle::CallerManaged,
+    // so the chain emits NOTHING for the inactive branch (CB ids, wait, pop all
+    // suppressed).
+    eltwise_chain(
+        inner_count,
+        CopyTile<cb_other, Dst::D0, InputLifecycle::Streaming, OperandKind::Scalar, CopyTileReconfig::Input>{},
+        CopyTile<cb_bcast, Dst::D1, InputLifecycle::Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
+        SubBinary<Dst::D0, Dst::D1, Dst::D0>{},
+        CopyTile<cb_den, Dst::D1, InputLifecycle::Bulk, OperandKind::Scalar, CopyTileReconfig::Input>{},
+        MulBinary<Dst::D0, Dst::D1, Dst::D0>{},
+        OptionalChainElement<
+            WeightHas,
+            CopyTile<cb_weight, Dst::D1, InputLifecycle::Bulk, OperandKind::Scalar, CopyTileReconfig::Input>>{},
+        OptionalChainElement<WeightHas, MulBinary<Dst::D0, Dst::D1, Dst::D0>>{},
+        OptionalChainElement<
+            BiasHas,
+            CopyTile<cb_bias, Dst::D1, InputLifecycle::Bulk, OperandKind::Scalar, CopyTileReconfig::Input>>{},
+        OptionalChainElement<BiasHas, AddBinary<Dst::D0, Dst::D1, Dst::D0>>{},
+        OptionalChainElement<NeedsTypecast, Typecast<TcInFmt, TcOutFmt, Dst::D0>>{},
+        PackTile<cb_final_out, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
 }
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     uint32_t tile_freq = get_arg_val<uint32_t>(1);
     uint32_t tile_start = get_arg_val<uint32_t>(2);
-    constexpr uint32_t weight_has_value = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t bias_has_value = get_compile_time_arg_val(1) == 1;
+    constexpr bool weight_has_value = get_compile_time_arg_val(0) == 1;
+    constexpr bool bias_has_value = get_compile_time_arg_val(1) == 1;
 
     if (num_tiles == 0) {
         return;
@@ -208,68 +107,61 @@ void kernel_main() {
 
     constexpr auto cb_input = get_compile_time_arg_val(2);       // input
     constexpr auto cb_batch_mean = get_compile_time_arg_val(3);  // batch_mean
-    constexpr auto cb_output_0 =
-        get_compile_time_arg_val(4);  // output -- > [(input - batch_mean)/(sqrt(batch_var + eps))] * weight
-    constexpr auto cb_batch_var = get_compile_time_arg_val(5);  // batch_var
-    constexpr auto cb_eps = get_compile_time_arg_val(6);        // eps
-    constexpr auto cb_den = get_compile_time_arg_val(7);        // 1/(sqrt(batch_var + eps))
-    constexpr auto cb_weight = get_compile_time_arg_val(8);     // weight tensor
-    constexpr auto cb_tmp_1 = get_compile_time_arg_val(9);      // (input - batch_mean)/(sqrt(batch_var + eps))
-    constexpr auto cb_bias = get_compile_time_arg_val(10);      // bias tensor
-    constexpr auto cb_output_final = get_compile_time_arg_val(11);  // writer-facing output CB (BF16 when typecast)
+    constexpr auto cb_output_0 = get_compile_time_arg_val(4);    // pre-typecast staging (or final output)
+    constexpr auto cb_batch_var = get_compile_time_arg_val(5);
+    constexpr auto cb_eps = get_compile_time_arg_val(6);
+    constexpr auto cb_den = get_compile_time_arg_val(7);
+    constexpr auto cb_weight = get_compile_time_arg_val(8);
+    // get_compile_time_arg_val(9) used to be cb_tmp_1 — no longer referenced (the fused chain
+    // keeps the running result in DEST instead of staging through cb_tmp_1). CT-arg slot kept
+    // for ABI compatibility with the program factory.
+    constexpr auto cb_bias = get_compile_time_arg_val(10);
+    constexpr auto cb_output_final = get_compile_time_arg_val(11);
     constexpr bool needs_output_typecast = get_compile_time_arg_val(12) == 1;
     constexpr uint32_t tc_in_fmt = get_compile_time_arg_val(13);
     constexpr uint32_t tc_out_fmt = get_compile_time_arg_val(14);
 
-    auto cb_bcast = cb_batch_mean;
-    auto cb_other = cb_input;
+    compute_kernel_hw_startup(cb_input, cb_batch_mean, cb_output_0);
 
-    unary_op_init_common(cb_other, cb_output_0);
-    uint32_t last_srca_cb = cb_other;
+    cb_wait_front(cb_eps, 1);
 
-    uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
-    uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
-
-    constexpr uint32_t onetile = 1;
-    CircularBuffer cb_eps_obj(cb_eps);
-    cb_eps_obj.wait_front(onetile);
+    const uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
+    const uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        last_srca_cb = batchnorm_bcast_tiles<needs_output_typecast, tc_in_fmt, tc_out_fmt>(
-            cb_bcast,
-            cb_other,
-            tile_freq,
-            tile_start,
+        batchnorm_bcast_tiles<
+            weight_has_value,
+            bias_has_value,
+            needs_output_typecast,
+            tc_in_fmt,
+            tc_out_fmt,
+            cb_batch_mean,
+            cb_input,
             cb_batch_var,
             cb_eps,
             cb_den,
             cb_weight,
             cb_bias,
-            cb_tmp_1,
             cb_output_0,
-            cb_output_final,
-            weight_has_value,
-            bias_has_value,
-            last_srca_cb);
+            cb_output_final>(tile_freq, tile_start);
     }
     if (remaining_iterations > 0) {
-        last_srca_cb = batchnorm_bcast_tiles<needs_output_typecast, tc_in_fmt, tc_out_fmt>(
-            cb_bcast,
-            cb_other,
-            remaining_iterations,
-            tile_start,
+        batchnorm_bcast_tiles<
+            weight_has_value,
+            bias_has_value,
+            needs_output_typecast,
+            tc_in_fmt,
+            tc_out_fmt,
+            cb_batch_mean,
+            cb_input,
             cb_batch_var,
             cb_eps,
             cb_den,
             cb_weight,
             cb_bias,
-            cb_tmp_1,
             cb_output_0,
-            cb_output_final,
-            weight_has_value,
-            bias_has_value,
-            last_srca_cb);
+            cb_output_final>(remaining_iterations, tile_start);
     }
 
-    cb_eps_obj.pop_front(onetile);
+    cb_pop_front(cb_eps, 1);
 }

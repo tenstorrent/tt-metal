@@ -19,6 +19,8 @@
 #include "api/dataflow/circular_buffer.h"
 
 #include "layernorm_compute_utils.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 namespace kutil = norm::kernel_util;
@@ -217,38 +219,60 @@ void kernel_main() {
         //                     1
         //  cb_ex2pe =   -------------
         //               √(Var(X) + ε)
-        cb_ex2_obj.wait_front(onetile);
-        reconfig_data_format(cb_ex2, cb_eps);
-        tile_regs_acquire();
+        // PARTIAL migration: BinaryFpu(Add, cb_ex2, cb_eps) + Rsqrt + PackTile(cb_ex2pe).
+        // Reconfig audit: original has explicit reconfig_data_format(cb_ex2, cb_eps) and
+        // pack_reconfig_data_format(cb_ex2pe). add_tiles_init reconfigs srca/srcb (idempotent
+        // after the explicit reconfig). -> BinaryDataFormatReconfig::Input + PackTileReconfig::Output.
+        // Original lacks cb_ex2pe.reserve_back (relies on CB capacity) and only does push_back.
+        // -> Use OutputLifecycle::DeferredReserve (no reserve, push at end) to match original exactly.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_ex2,
+                cb_eps,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::Rsqrt<
+                compute_kernel_lib::Approx::Exact,
+                LEGACY_RSQRT ? compute_kernel_lib::Legacy::On : compute_kernel_lib::Legacy::Off,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_ex2pe,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::DeferredReserve,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
-        add_tiles_init(cb_ex2, cb_eps);
-        add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
-
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(dst0);
-
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_reconfig_data_format(cb_ex2pe);
-        pack_tile(dst0, cb_ex2pe);
-        tile_regs_release();
-        cb_ex2pe_obj.push_back(onetile);
-        cb_ex2_obj.pop_front(onetile);
-
-        // broadcasts the tile since cb_ex2pe is a column vector that contains the important data
-        cb_ex2pe_obj.wait_front(onetile);
-        tile_regs_acquire();
-        reconfig_data_format_srca(cb_ex2pe);
-
-        unary_bcast_init<BroadcastType::COL>(cb_ex2pe, cb_ex2pe);
-        unary_bcast<BroadcastType::COL>(cb_ex2pe, 0, dst0);
-        cb_ex2pe_obj.pop_front(onetile);
-
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex2pe);
-        tile_regs_release();
-        cb_ex2pe_obj.push_back(onetile);
+        // Broadcast the tile since cb_ex2pe is a column vector that contains the important data.
+        // PARTIAL migration: UnaryBcast<COL> + PackTile (same-CB in/out on cb_ex2pe).
+        //
+        // Reconfig: UnaryBcast's small init reconfigs BOTH srca and srcb to cb_ex2pe
+        // (UnaryBcastReconfig::Input) — the COL bcast datacopy drives the FPU SrcB lane, and the
+        // preceding BinaryFpu(cb_ex2, cb_eps) left SrcB = cb_eps, so both sources must be
+        // reprogrammed. Pack-side reconfig is owned by the downstream PackTile
+        // (PackTileReconfig::Output). No mid-kernel hw_configure needed.
+        //
+        // Lifecycle: cb_ex2pe input InputLifecycle::Streaming (per-tile wait+pop), output OutputLifecycle::Streaming
+        // (per-tile reserve+push). After the chain, the new pushed tile is re-waited
+        // for downstream use.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::UnaryBcast<
+                compute_kernel_lib::BroadcastDim::Col,
+                cb_ex2pe,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::UnaryBcastReconfig::Input>{},
+            compute_kernel_lib::PackTile<
+                cb_ex2pe,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>{});
         cb_ex2pe_obj.wait_front(onetile);
 
         // End of

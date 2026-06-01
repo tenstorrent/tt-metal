@@ -3,44 +3,41 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/common.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/dropout.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"  // Dropout
+#include "api/compute/eltwise_unary/dropout.h"          // dropout_kernel_init
 
 void kernel_main() {
-    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
-    uint32_t per_core_block_dim = get_compile_time_arg_val(1);
-    uint32_t int_probability = get_compile_time_arg_val(2);
-    uint32_t int_scale_factor = get_compile_time_arg_val(3);
+    constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+    constexpr uint32_t per_core_block_dim = get_compile_time_arg_val(1);
+    constexpr uint32_t int_probability = get_compile_time_arg_val(2);
+    constexpr uint32_t int_scale_factor = get_compile_time_arg_val(3);
 
     uint32_t seed = get_arg_val<uint32_t>(0);
 
-    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);
+    constexpr auto cb_input = tt::CBIndex::c_0;
+    constexpr auto cb_output = tt::CBIndex::c_2;
+
+    init_sfpu(cb_input, cb_output);
     dropout_kernel_init(seed);
-    for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        cb_reserve_back(tt::CBIndex::c_2, per_core_block_dim);
-        for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
-            tile_regs_acquire();
 
-            // Pop tile after tile, copy to DST and pack
-            cb_wait_front(tt::CBIndex::c_0, 1);
-
-            copy_tile(tt::CBIndex::c_0, 0, 0);
-
-            dropout_tile(0, int_probability, int_scale_factor);
-
-            tile_regs_commit();
-
-            tile_regs_wait();
-
-            pack_tile(0, tt::CBIndex::c_2);
-
-            cb_pop_front(tt::CBIndex::c_0, 1);
-
-            tile_regs_release();
-        }
-        cb_push_back(tt::CBIndex::c_2, per_core_block_dim);
-    }
+    // Original: per-tile copy_tile + dropout_tile + pack_tile. Chain compresses
+    // the two nested loops into a single n=block_cnt*block_dim sweep, since
+    // there's no inter-block state.
+    constexpr uint32_t total_tiles = per_core_block_cnt * per_core_block_dim;
+    compute_kernel_lib::eltwise_chain(
+        total_tiles,
+        compute_kernel_lib::CopyTile<
+            cb_input,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::CopyTileReconfig::None>{},
+        compute_kernel_lib::Dropout<compute_kernel_lib::Dst::D0>{int_probability, int_scale_factor},
+        compute_kernel_lib::PackTile<
+            cb_output,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::None>{});
 }

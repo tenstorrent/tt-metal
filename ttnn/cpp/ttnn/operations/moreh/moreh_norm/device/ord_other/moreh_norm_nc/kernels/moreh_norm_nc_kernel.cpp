@@ -1,6 +1,11 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Abs, Negative
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // BinaryMax
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_predicates.hpp"   // UnaryNe
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
@@ -9,130 +14,128 @@ void kernel_main() {
     const auto num_output_tiles_per_core = get_arg_val<uint32_t>(i++);
     const auto num_reduced_tiles_along_dim = get_arg_val<uint32_t>(i++);
 
-    std::uint8_t input_id{tt::CB::c_in0};
-    const auto cb_x = input_id++;
-    CircularBuffer cb_x_obj(cb_x);  // input
-    const auto cb_one = input_id++;
-    CircularBuffer cb_one_obj(cb_one);  // one
+    constexpr uint32_t cb_x = tt::CBIndex::c_0;    // input
+    constexpr uint32_t cb_one = tt::CBIndex::c_1;  // one
+    CircularBuffer cb_one_obj(cb_one);
 
-    std::uint8_t output_id{tt::CB::c_out0};
-    const auto cb_y = output_id++;
-    CircularBuffer cb_y_obj(cb_y);  // output
+    constexpr uint32_t cb_y = tt::CBIndex::c_16;  // output
 
-    std::uint8_t intermed_id{tt::CB::c_intermed0};
-    const auto cb_tmp0 = intermed_id++;
-    const auto cb_tmp1 = intermed_id++;
-
-    const auto cb_val = cb_tmp0;
-    CircularBuffer cb_val_obj(cb_val);  // f(x)
-    const auto cb_cal = cb_tmp1;
-    CircularBuffer cb_cal_obj(cb_cal);  // calculate f(x) over dimensions
+    constexpr uint32_t cb_val = tt::CBIndex::c_24;
+    constexpr uint32_t cb_cal = tt::CBIndex::c_25;
 
     constexpr uint32_t onetile = 1;
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t dst1 = 1;
 
     binary_op_init_common(tt::CB::c_in0, tt::CB::c_in0, tt::CB::c_out0);
 
-    cb_one_obj.wait_front(onetile);  // comes from the reader
+    cb_one_obj.wait_front(onetile);
 
     for (uint32_t outer_idx = 0; outer_idx < num_output_tiles_per_core; ++outer_idx) {
         for (uint32_t inner_idx = 0; inner_idx < num_reduced_tiles_along_dim; ++inner_idx) {
-            // x != 0
-            tile_regs_acquire();
-            cb_x_obj.wait_front(onetile);  // comes from the reader
-            cb_val_obj.reserve_back(onetile);
-
-            copy_tile_init_with_dt(cb_x);
-            copy_tile(cb_x, 0, dst0);
+            // f(x): no mask in nc path. IS_ZERO -> unary_ne; default -> abs.
+            // MINUS_INF additionally negates.
+            // Per-stage reconfig matches original *_with_dt calls.
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::CopyTile<
+                    cb_x,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input>{},
 #ifdef IS_ZERO
-            unary_ne_tile_init();
-            unary_ne_tile(dst0, 0);
+                compute_kernel_lib::UnaryNe<compute_kernel_lib::Dst::D0>{0u},
 #else
-            abs_tile_init();
-            abs_tile(dst0);
+                compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
 #endif
-
 #ifdef MINUS_INF
-            negative_tile_init();
-            negative_tile(dst0);
+                compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
 #endif
-            tile_regs_commit();
+                compute_kernel_lib::PackTile<
+                    cb_val,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::Output>{});
 
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_val);
-            tile_regs_release();
-
-            cb_x_obj.pop_front(onetile);
-            cb_val_obj.push_back(onetile);
-
-            // Add(x != 0)
+            // Accumulator over N/C dimension.
             if (inner_idx == 0) {
-                tile_regs_acquire();
-                cb_val_obj.wait_front(onetile);
-                cb_cal_obj.reserve_back(onetile);
-
-                copy_tile_init_with_dt(cb_val);
-                copy_tile(cb_val, 0, dst0);
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_cal);
-                tile_regs_release();
-
-                cb_val_obj.pop_front(onetile);
-                cb_cal_obj.push_back(onetile);
-
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::CopyTile<
+                        cb_val,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::CopyTileReconfig::Input>{},
+                    compute_kernel_lib::PackTile<
+                        cb_cal,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
             } else {
-                tile_regs_acquire();
-                cb_val_obj.wait_front(onetile);
-                cb_cal_obj.wait_front(onetile);
-                cb_cal_obj.reserve_back(onetile);
 #ifdef IS_ZERO
-                add_tiles_init_with_dt(cb_val, cb_cal);
-                add_tiles(cb_val, cb_cal, 0, 0, dst0);
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::BinaryFpu<
+                        cb_val,
+                        cb_cal,
+                        compute_kernel_lib::BinaryFpuOp::Add,
+                        compute_kernel_lib::BroadcastDim::None,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Scalar>{},
+                    compute_kernel_lib::PackTile<
+                        cb_cal,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
 #else
-                copy_tile_init_with_dt(cb_val);
-                copy_tile(cb_val, 0, dst0);
-
-                copy_tile_init_with_dt(cb_cal);
-                copy_tile(cb_cal, 0, dst1);
-
-                binary_max_tile_init();
-                binary_max_tile(dst0, dst1, dst0);
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::CopyTile<
+                        cb_val,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::CopyTileReconfig::Input>{},
+                    compute_kernel_lib::CopyTile<
+                        cb_cal,
+                        compute_kernel_lib::Dst::D1,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::CopyTileReconfig::Input>{},
+                    compute_kernel_lib::BinaryMax<
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::Dst::D1,
+                        compute_kernel_lib::Dst::D0>{},
+                    compute_kernel_lib::PackTile<
+                        cb_cal,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
-                tile_regs_commit();
-
-                tile_regs_wait();
-                pack_tile_with_dt(dst0, cb_cal);
-                tile_regs_release();
-
-                cb_val_obj.pop_front(onetile);
-                cb_cal_obj.pop_front(onetile);
-                cb_cal_obj.push_back(onetile);
             }
         }
 
-        // Compute cb_y
-        tile_regs_acquire();
-
-        cb_cal_obj.wait_front(onetile);
-        cb_y_obj.reserve_back(onetile);
-
-        copy_tile_init_with_dt(cb_cal);
-        copy_tile(cb_cal, 0, dst0);
+        // Final: copy cb_cal -> [negate if MINUS_INF] -> cb_y.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::CopyTile<
+                cb_cal,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::Input>{},
 #ifdef MINUS_INF
-        negative_tile_init();
-        negative_tile(dst0);
+            compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
 #endif
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_y);
-        tile_regs_release();
-
-        cb_cal_obj.pop_front(onetile);
-        cb_y_obj.push_back(onetile);
+            compute_kernel_lib::PackTile<
+                cb_y,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>{});
     }
     cb_one_obj.pop_front(onetile);
 }

@@ -9,6 +9,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 void kernel_main() {
     const auto num_input_tiles = get_arg_val<uint32_t>(0);
@@ -37,45 +38,75 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_output_tiles; i++) {
         bool enable_reload = false;
         for (uint32_t j = 0; j < num_input_tiles; ++j) {
-            bool last_out = (j == num_input_tiles - 1);
-
-            tile_regs_acquire();
-            cb_in0_obj.wait_front(onetile);
+            // Accumulator add: cb_intermed0 = cb_in0 + (reload? cb_intermed0 : cb_in1)
+            // First iter (!reload): B=cb_in1 (InputLifecycle::CallerManaged — pre-waited, never popped).
+            // Subsequent iters (reload): B=cb_intermed0 (InputLifecycle::Streaming, same-CB in/out).
+            // cb_in0 InputLifecycle::Streaming on A. cb_intermed0 OutputLifecycle::Streaming.
+            // Reconfig: add_tiles_init_with_dt + pack_tile_with_dt -> Input + Output.
             if (enable_reload) {
-                cb_intermed0_obj.wait_front(onetile);
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::BinaryFpu<
+                        cb_in0,
+                        cb_intermed0,
+                        compute_kernel_lib::BinaryFpuOp::Add,
+                        compute_kernel_lib::BroadcastDim::None,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Scalar>{},
+                    compute_kernel_lib::PackTile<
+                        cb_intermed0,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
+            } else {
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::BinaryFpu<
+                        cb_in0,
+                        cb_in1,
+                        compute_kernel_lib::BinaryFpuOp::Add,
+                        compute_kernel_lib::BroadcastDim::None,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Scalar>{},
+                    compute_kernel_lib::PackTile<
+                        cb_intermed0,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
             }
-
-            uint32_t cb_add = (enable_reload) ? (cb_intermed0) : (cb_in1);
-            add_tiles_init_with_dt(cb_in0, cb_add);
-            add_tiles(cb_in0, cb_add, first_tile, first_tile, dst0);
-
-            cb_in0_obj.pop_front(onetile);
-            if (enable_reload) {
-                cb_intermed0_obj.pop_front(onetile);
-            }
-            tile_regs_commit();
-
-            cb_intermed0_obj.reserve_back(onetile);
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_intermed0);
-            tile_regs_release();
-            cb_intermed0_obj.push_back(onetile);
 
             enable_reload = true;
         }
 
-        // output * (1 / number_of_elements)
-        tile_regs_acquire();
-        cb_intermed0_obj.wait_front(onetile);
-        mul_tiles_bcast_scalar_init_short_with_dt(cb_intermed0, cb_scalar);
-        mul_tiles_bcast<BroadcastType::SCALAR>(cb_intermed0, cb_scalar, 0, 0, 0);
-        tile_regs_commit();
-
-        cb_out0_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_out0);
-        tile_regs_release();
-        cb_out0_obj.push_back(onetile);
-        cb_intermed0_obj.pop_front(onetile);
+        // output * (1 / number_of_elements)  — SCALAR bcast Mul.
+        // cb_intermed0 InputLifecycle::Streaming (last iter's push, popped here);
+        // cb_scalar InputLifecycle::CallerManaged + Scalar (pre-waited at top of kernel);
+        // cb_out0 OutputLifecycle::Streaming.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_intermed0,
+                cb_scalar,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::Scalar,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::PackTile<
+                cb_out0,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>{});
     }
 }

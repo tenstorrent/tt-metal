@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // PowerIterative, Recip, Log, Exp
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask, Abs
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
@@ -16,29 +19,19 @@ void kernel_main() {
     const auto origin_h = get_arg_val<uint32_t>(i++);
     const auto origin_w = get_arg_val<uint32_t>(i++);
 
-    std::uint8_t input_id{0};
-    const auto cb_x = input_id++;
-    CircularBuffer cb_x_obj(cb_x);  // input(==x)
-    const auto cb_one = input_id++;
-    CircularBuffer cb_one_obj(cb_one);  // one
-    const auto cb_decimal = input_id++;
-    CircularBuffer cb_decimal_obj(cb_decimal);  // decimal
-    const auto cb_mask_h_w = input_id++;
-    CircularBuffer cb_mask_h_w_obj(cb_mask_h_w);  // mask_h_w
+    constexpr uint32_t cb_x = 0;         // input(==x)
+    constexpr uint32_t cb_one = 1;       // one
+    constexpr uint32_t cb_decimal = 2;   // decimal
+    constexpr uint32_t cb_mask_h_w = 3;  // mask_h_w
 
-    std::uint8_t output_id{16};
-    const auto cb_y = output_id++;  // output(==y)
+    constexpr uint32_t cb_y = 16;  // output(==y)
 
-    std::uint8_t intermed_id{24};
-    const auto cb_xabs = intermed_id++;
-    CircularBuffer cb_xabs_obj(cb_xabs);         // |x|
-    const auto cb_xpow = intermed_id++;          // |x|^p
-    const auto cb_xpowadd = intermed_id++;
-    CircularBuffer cb_xpowadd_obj(cb_xpowadd);   // Add[|x|^p * exp(log(|x|) * decimal)]
-    const auto cb_logx = intermed_id++;          // log(|x|)
-    const auto cb_exp_lxmd = intermed_id++;      // exp(log(|x|) * decimal)
-    const auto cb_correct_xpow = intermed_id++;
-    CircularBuffer cb_correct_xpow_obj(cb_correct_xpow);  // |x|^p * exp(log(|x|) * decimal)
+    constexpr uint32_t cb_xabs = 24;          // |x|
+    constexpr uint32_t cb_xpow = 25;          // |x|^p
+    constexpr uint32_t cb_xpowadd = 26;       // Add[|x|^p * exp(log(|x|) * decimal)]
+    constexpr uint32_t cb_logx = 27;          // log(|x|)
+    constexpr uint32_t cb_exp_lxmd = 28;      // exp(log(|x|) * decimal)
+    constexpr uint32_t cb_correct_xpow = 29;  // |x|^p * exp(log(|x|) * decimal)
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
@@ -55,85 +48,253 @@ void kernel_main() {
 
     binary_op_init_common(cb_logx, cb_decimal, cb_y);
 
-    cb_decimal_obj.wait_front(onetile);  // comes from the reader
-    cb_one_obj.wait_front(onetile);      // comes from the reader
+    cb_wait_front(cb_decimal, onetile);  // comes from the reader
+    cb_wait_front(cb_one, onetile);      // comes from the reader
 
     if (do_mask_h || do_mask_w) {
-        cb_mask_h_w_obj.wait_front(2);  // comes from the reader
+        cb_wait_front(cb_mask_h_w, 2);  // comes from the reader
     }
 
     // Compute cb_xpowadd
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
-        // Comput cb_xabs and mask(optional)
-        // |x|
-        tile_regs_acquire();
-        cb_x_obj.wait_front(onetile);  // comes from the reader
-        cb_xabs_obj.reserve_back(onetile);
-
-        copy_tile_init(cb_x);
-        copy_tile(cb_x, 0, dst0);
-
-        if (do_mask_h && need_to_do_mask_h(tile_idx, ht, wt)) {
-            copy_tile_init(cb_mask_h_w);
-            copy_tile(cb_mask_h_w, 0, dst1);
-
-            mask_tile_init();
-            mask_tile(dst0, dst1);
+        // abs(x) with optional H/W masking.
+        // 4-branch runtime dispatch on (mh, mw): copy_x -> [opt mask(0)] ->
+        // [opt mask(1)] -> abs -> pack to cb_xabs.
+        //
+        // Reconfig audit: copy_tile_init reconfigs srca per copy ->
+        //   CopyTileReconfig::Input on each copy. pack_tile (no reconfig) ->
+        //   PackTileReconfig::None.
+        // Lifecycles: cb_x InputLifecycle::Streaming (chain owns wait+pop); cb_mask_h_w
+        //   InputLifecycle::CallerManaged + Scalar (waited once outside loop at line 53;
+        //   chain reads at index 0 / index 1 via compute_kernel_lib::TileOffset::Set);
+        //   cb_xabs OutputLifecycle::Streaming.
+        const bool mh = do_mask_h && need_to_do_mask_h(tile_idx, ht, wt);
+        const bool mw = do_mask_w && ((tile_idx + 1) % wt) == 0;
+        if (mh && mw) {
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::CopyTile<
+                    cb_x,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input>{},
+                compute_kernel_lib::CopyTile<
+                    cb_mask_h_w,
+                    compute_kernel_lib::Dst::D1,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input>{},
+                compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::CopyTile<
+                    cb_mask_h_w,
+                    compute_kernel_lib::Dst::D1,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input,
+                    compute_kernel_lib::TileOffset::Set>{},
+                compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<
+                    cb_xabs,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::None>{});
+        } else if (mh) {
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::CopyTile<
+                    cb_x,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input>{},
+                compute_kernel_lib::CopyTile<
+                    cb_mask_h_w,
+                    compute_kernel_lib::Dst::D1,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input>{},
+                compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<
+                    cb_xabs,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::None>{});
+        } else if (mw) {
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::CopyTile<
+                    cb_x,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input>{},
+                compute_kernel_lib::CopyTile<
+                    cb_mask_h_w,
+                    compute_kernel_lib::Dst::D1,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input,
+                    compute_kernel_lib::TileOffset::Set>{},
+                compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<
+                    cb_xabs,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::None>{});
+        } else {
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::CopyTile<
+                    cb_x,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input>{},
+                compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<
+                    cb_xabs,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::None>{});
         }
-
-        if (do_mask_w && ((tile_idx + 1) % wt) == 0) {
-            copy_tile_init(cb_mask_h_w);
-            copy_tile(cb_mask_h_w, 1, dst1);
-
-            mask_tile_init();
-            mask_tile(dst0, dst1);
-        }
-
-        abs_tile_init();
-        abs_tile(dst0);
-        cb_x_obj.pop_front(onetile);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile(dst0, cb_xabs);
-        cb_xabs_obj.push_back(onetile);
-        tile_regs_release();
 
         // |x + decimal|^p
-        power_tile_to_cb(cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow, p, p_is_negative);
+        // Inline power_tile_to_cb body as 4 eltwise_chain stages
+        // (see moreh_clip_grad_norm_step2 51cffeb6f03 for the same pattern).
+        //   A: |x|^p  (InputLifecycle::HeldStream cb_xabs + PowerIterative(p) + [Recip] + PackTile<cb_xpow>)
+        //   B: log(|x|) (InputLifecycle::NoWaitPop cb_xabs + Log + PackTile<cb_logx>)
+        //   C: exp(log*decimal) (BinaryFpu Mul + Exp + PackTile<cb_exp_lxmd>)
+        //   D: xpow * exp_lxmd -> cb_correct_xpow
+        // cb_decimal InputLifecycle::CallerManaged (pre-waited at top of kernel).
+        if (p_is_negative) {
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::CopyTile<
+                    cb_xabs,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::InputLifecycle::HeldStream,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input>{},
+                compute_kernel_lib::PowerIterative<compute_kernel_lib::Dst::D0>{p},
+                compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<
+                    cb_xpow,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::Output>{});
+        } else {
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::CopyTile<
+                    cb_xabs,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::InputLifecycle::HeldStream,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input>{},
+                compute_kernel_lib::PowerIterative<compute_kernel_lib::Dst::D0>{p},
+                compute_kernel_lib::PackTile<
+                    cb_xpow,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::Output>{});
+        }
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::CopyTile<
+                cb_xabs,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::InputLifecycle::NoWaitPop,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::Input>{},
+            compute_kernel_lib::Log<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_logx,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_logx,
+                cb_decimal,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::Exp<
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_exp_lxmd,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_xpow,
+                cb_exp_lxmd,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::PackTile<
+                cb_correct_xpow,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         if (tile_idx == 0) {
-            tile_regs_acquire();
-            cb_correct_xpow_obj.wait_front(onetile);
-            cb_xpowadd_obj.reserve_back(onetile);
-
-            copy_tile_init(cb_correct_xpow);
-            copy_tile(cb_correct_xpow, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile(dst0, cb_xpowadd);
-
-            cb_correct_xpow_obj.pop_front(onetile);
-            cb_xpowadd_obj.push_back(onetile);
-            tile_regs_release();
+            // Seed cb_xpowadd with first cb_correct_xpow tile.
+            // Original: copy_tile_init(cb_correct_xpow) reconfigs srca; pack_tile has no
+            // pack reconfig (pack is set to cb_y at startup).
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::CopyTile<
+                    cb_correct_xpow,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::CopyTileReconfig::Input>{},
+                compute_kernel_lib::PackTile<
+                    cb_xpowadd,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::None>{});
         } else {
-            tile_regs_acquire();
-            cb_correct_xpow_obj.wait_front(onetile);
-            cb_xpowadd_obj.wait_front(onetile);
-            cb_xpowadd_obj.reserve_back(onetile);
-
-            add_tiles_init(cb_correct_xpow, cb_xpowadd);
-            add_tiles(cb_correct_xpow, cb_xpowadd, 0, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile(dst0, cb_xpowadd);
-
-            cb_correct_xpow_obj.pop_front(onetile);
-            cb_xpowadd_obj.pop_front(onetile);
-            cb_xpowadd_obj.push_back(onetile);
-            tile_regs_release();
+            // cb_xpowadd = cb_correct_xpow + cb_xpowadd (in-place accumulator).
+            // Original: add_tiles_init reconfigs srca/srcb; pack_tile no reconfig.
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::BinaryFpu<
+                    cb_correct_xpow,
+                    cb_xpowadd,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::PackTile<
+                    cb_xpowadd,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::None>{});
         }
     }
 
@@ -141,9 +302,9 @@ void kernel_main() {
     compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
         cb_xpowadd, cb_one, cb_y, compute_kernel_lib::ReduceInputBlockShape::single());
 
-    cb_decimal_obj.pop_front(onetile);
-    cb_one_obj.pop_front(onetile);
+    cb_pop_front(cb_decimal, onetile);
+    cb_pop_front(cb_one, onetile);
     if (do_mask_h || do_mask_w) {
-        cb_mask_h_w_obj.pop_front(2);
+        cb_pop_front(cb_mask_h_w, 2);
     }
 }

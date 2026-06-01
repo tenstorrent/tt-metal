@@ -19,6 +19,8 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/matmul.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 void kernel_main() {
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
@@ -79,23 +81,41 @@ void kernel_main() {
 
         /*
          * 1/sqrt(mean_squared + eps)
+         * PARTIAL migration: BinaryFpu(Add) + Rsqrt + PackTile, all on the same CB
+         * (reduce_result_cb read for input, packed back as output).
+         *
+         * Reconfig audit: explicit reconfig_data_format + add_tiles_init -> Input.
+         * Explicit pack_reconfig_data_format -> Output.
+         * use_legacy_rsqrt forwarded via Legacy::On/Off.
+         *
+         * Lifecycle: reduce_result_cb InputLifecycle::Streaming (chain owns wait+pop); epsilon_cb
+         * InputLifecycle::CallerManaged (waited once at MAIN entry); reduce_result_cb output
+         * OutputLifecycle::Streaming (chain owns reserve+push). Same-CB in/out is fine — original
+         * popped the input tile then re-reserved+packed; chain emits the same
+         * sequence.
          */
-        cb_wait_front(reduce_result_cb, 1);
-        reconfig_data_format(reduce_result_cb, epsilon_cb);
-        pack_reconfig_data_format(reduce_result_cb);
-
-        add_tiles_init(reduce_result_cb, epsilon_cb);
-        tile_regs_acquire();
-        add_tiles(reduce_result_cb, epsilon_cb, 0, 0, 0);
-        rsqrt_tile_init<use_legacy_rsqrt>();
-        rsqrt_tile<use_legacy_rsqrt>(0);
-        tile_regs_commit();
-        cb_pop_front(reduce_result_cb, 1);
-        cb_reserve_back(reduce_result_cb, 1);
-        tile_regs_wait();
-        pack_tile(0, reduce_result_cb);
-        tile_regs_release();
-        cb_push_back(reduce_result_cb, 1);
+        compute_kernel_lib::eltwise_chain(
+            1,
+            compute_kernel_lib::BinaryFpu<
+                reduce_result_cb,
+                epsilon_cb,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::Rsqrt<
+                compute_kernel_lib::Approx::Exact,
+                use_legacy_rsqrt ? compute_kernel_lib::Legacy::On : compute_kernel_lib::Legacy::Off,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                reduce_result_cb,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         /*
          * norm x

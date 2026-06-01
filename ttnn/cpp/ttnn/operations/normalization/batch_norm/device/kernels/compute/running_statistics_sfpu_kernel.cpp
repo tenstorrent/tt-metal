@@ -14,11 +14,7 @@
 
 template <bool NeedsTypecast, uint32_t TcInFmt, uint32_t TcOutFmt>
 ALWI void maybe_typecast_stat(
-    CircularBuffer& src_obj,
-    uint32_t src_cb,
-    uint32_t dst_cb,
-    uint32_t& last_srca_cb,
-    uint32_t tile_index) {
+    CircularBuffer& src_obj, uint32_t src_cb, uint32_t dst_cb, uint32_t& last_srca_cb, uint32_t tile_index) {
     if constexpr (NeedsTypecast) {
         constexpr uint32_t onetile = 1;
         src_obj.wait_front(onetile);

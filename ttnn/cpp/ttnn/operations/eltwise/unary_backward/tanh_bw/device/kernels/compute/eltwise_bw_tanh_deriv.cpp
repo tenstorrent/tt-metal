@@ -2,59 +2,61 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute kernel for tanh backward using sech²(x) = 4·exp(-2|x|) / (1 + exp(-2|x|))²
+// Compute kernel for tanh backward using sech²(x) = 4·exp(-2|x|) / (1 + exp(-2|x|))².
 // Avoids catastrophic cancellation in the naive 1 - tanh²(x) formula.
 
 #include <cstdint>
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/common.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/tanh_derivative.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/compute_kernel_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp"  // TanhDerivative
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // MulBinary
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
-    uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
+    uint32_t per_core_tile_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
 
     constexpr auto cb_grad_out = tt::CBIndex::c_0;
     constexpr auto cb_input = tt::CBIndex::c_1;
     constexpr auto cb_grad_in = tt::CBIndex::c_2;
 
-    CircularBuffer exp_cb_grad_out(cb_grad_out);
-    CircularBuffer exp_cb_input(cb_input);
-    CircularBuffer exp_cb_grad_in(cb_grad_in);
-
     unary_op_init_common(cb_grad_out, cb_grad_in);
-    tanh_derivative_tile_init<false>();
-    mul_binary_tile_init();
 
-    for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-        exp_cb_grad_in.reserve_back(per_core_block_size);
-        exp_cb_grad_out.wait_front(per_core_block_size);
-        exp_cb_input.wait_front(per_core_block_size);
+    // tanh backward: grad_in = grad_out * sech²(input).
+    //   D0 = grad_out, D1 = input -> TanhDerivative<D1>, MulBinary<D0, D1, D0>.
+    //
+    // 1D shape with explicit block size: EltwiseShape::tiles(n, block_size) emits
+    // a chain that walks n tiles in chunks of block_size each. Per-element inits
+    // (tanh_derivative_tile_init, mul_binary_tile_init, copy_tile_to_dst_init_short)
+    // are hoisted once at chain entry; per-chunk InputLifecycle::Chunked lifecycle waits / pops
+    // block_size tiles at a time. PF picks per_core_block_size as the largest
+    // power-of-2 divisor of per_core_tile_cnt (<= 8).
+    //
+    // Lifecycles:
+    //   cb_grad_out / cb_input  InputLifecycle::Chunked + Block (per-chunk wait+pop of per_core_block_size tiles)
+    //   cb_grad_in              OutputLifecycle::Chunked + Block (per-chunk reserve+push)
+    const auto shape = compute_kernel_lib::EltwiseShape::tiles(per_core_tile_cnt, per_core_block_size);
 
-        for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            tile_regs_acquire();
-
-            copy_tile(cb_grad_out, i, 0);    // dest[0] = grad_out
-            copy_tile(cb_input, i, 1);       // dest[1] = input
-            tanh_derivative_tile<false>(1);  // dest[1] = sech²(input)
-            mul_binary_tile(0, 1, 0);        // dest[0] = grad_out * sech²(input)
-
-            tile_regs_commit();
-            tile_regs_wait();
-
-            pack_tile(0, cb_grad_in);
-
-            tile_regs_release();
-        }
-
-        exp_cb_grad_out.pop_front(per_core_block_size);
-        exp_cb_input.pop_front(per_core_block_size);
-        exp_cb_grad_in.push_back(per_core_block_size);
-    }
+    compute_kernel_lib::eltwise_chain(
+        shape,
+        compute_kernel_lib::CopyTile<
+            cb_grad_out,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::InputLifecycle::Chunked,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::CopyTileReconfig::None>{},
+        compute_kernel_lib::CopyTile<
+            cb_input,
+            compute_kernel_lib::Dst::D1,
+            compute_kernel_lib::InputLifecycle::Chunked,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::CopyTileReconfig::None>{},
+        compute_kernel_lib::TanhDerivative<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D1>{},
+        compute_kernel_lib::
+            MulBinary<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>{},
+        compute_kernel_lib::PackTile<
+            cb_grad_in,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::OutputLifecycle::Chunked,
+            compute_kernel_lib::PackTileReconfig::None>{});
 }

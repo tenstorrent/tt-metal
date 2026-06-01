@@ -17,6 +17,8 @@
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 namespace kutil = norm::kernel_util;
 namespace generic = kutil::generic;
@@ -103,32 +105,30 @@ void kernel_main() {
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         if constexpr (fuse_pre_add) {
-            // x = in + b
-            add_tiles_init(cb_in, cb_inb);
-            reconfig_data_format(cb_in, cb_inb);
-            pack_reconfig_data_format(cb_x);
+            // x = in + b  — per-block bulk add.
+            // Reconfig audit: original has explicit reconfig_data_format(cb_in, cb_inb) +
+            // pack_reconfig_data_format(cb_x) + add_tiles_init ONCE outside the loop.
+            // Chain emits per-call (fold elides after first iter). -> Input + Output.
+            // Lifecycles: cb_in/cb_inb InputLifecycle::Bulk + Block, cb_x OutputLifecycle::Bulk + Block.
             for (auto block : generic::blocks(Wt, blk)) {
-                // In/inb come from the reader and need to be
-                // synced on full block size. Keep cb_x aligned
-                // to full block size as well so pre-add/no-pre-add
-                // can be handled the same way.
-                cb_in_obj.wait_front(block.full_block_size());
-                cb_inb_obj.wait_front(block.full_block_size());
-                tile_regs_acquire();
-                for (auto i : block.local()) {
-                    add_tiles(cb_in, cb_inb, i, i, i);
-                }
-                tile_regs_commit();
-                cb_in_obj.pop_front(block.full_block_size());
-                cb_inb_obj.pop_front(block.full_block_size());
-
-                cb_x_obj.reserve_back(block.full_block_size());
-                tile_regs_wait();
-                for (auto i : block.local()) {
-                    pack_tile(i, cb_x);
-                }
-                tile_regs_release();
-                cb_x_obj.push_back(block.full_block_size());  // push the sum into the same buffer
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
+                    compute_kernel_lib::BinaryFpu<
+                        cb_in,
+                        cb_inb,
+                        compute_kernel_lib::BinaryFpuOp::Add,
+                        compute_kernel_lib::BroadcastDim::None,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block>{},
+                    compute_kernel_lib::PackTile<
+                        cb_x,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutputLifecycle::Bulk,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
             }
             reconfig_data_format(cb_in, cb_x, cb_inb, cb_ex);
         }
@@ -197,27 +197,37 @@ void kernel_main() {
         cb_ex_obj.push_back(onetile);
         cb_ex2_obj.push_back(onetile);
 
-        // x - E[x]
-        // Reuse cb_x since we didn't pop anything from it
-        if constexpr (FLOAT32_DTYPE) {
-            reconfig_data_format(cb_x, cb_ex);
-        }
-        cb_ex_obj.wait_front(onetile);  // should have 1 tile
-        cb_xmm_obj.reserve_back(total_buffer_size);
-        sub_bcast_cols_init_short(cb_x, cb_ex);
+        // x - E[x]  per-block, col bcast on cb_ex (1 tile per row).
+        // Reconfig audit:
+        //   - conditional reconfig_data_format(cb_x, cb_ex) under FLOAT32_DTYPE +
+        //     sub_bcast_cols_init_short reconfigs srca/srcb -> BinaryDataFormatReconfig::Input.
+        //   - No pack_reconfig in original -> PackTileReconfig::None.
+        // Behavioral diff: original had cb_xmm.reserve_back(total_buffer_size) ONCE
+        // upfront; chain BlockIter pack requires Upfront*/NoReserve* (chain.inl:361)
+        // so OutputLifecycle::Bulk emits per-block reserve+push. The total capacity is the same.
+        // cb_ex_obj.wait_front(1) outside the chain matches InputLifecycle::CallerManaged on the B side.
+        // Lifecycles: cb_x InputLifecycle::Bulk + Block, cb_ex InputLifecycle::CallerManaged + Scalar, cb_xmm
+        // OutputLifecycle::Bulk + Block.
+        cb_ex_obj.wait_front(onetile);  // pre-wait, never popped inside chain
         for (auto block : generic::blocks(Wt, blk)) {
-            tile_regs_acquire();
-            for (auto i : block.local()) {
-                sub_tiles_bcast_cols(cb_x, cb_ex, i, 0, i);
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (auto i : block.local()) {
-                pack_tile(i, cb_xmm);
-            }
-            tile_regs_release();
-            cb_xmm_obj.push_back(block.full_block_size());
-            cb_x_obj.pop_front(block.full_block_size());
+            compute_kernel_lib::eltwise_chain(
+                compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
+                compute_kernel_lib::BinaryFpu<
+                    cb_x,
+                    cb_ex,
+                    compute_kernel_lib::BinaryFpuOp::Sub,
+                    compute_kernel_lib::BroadcastDim::Col,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::PackTile<
+                    cb_xmm,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::PackTileReconfig::None>{});
         }
         cb_ex_obj.pop_front(1);
         cb_xmm_obj.wait_front(total_buffer_size);
@@ -226,109 +236,121 @@ void kernel_main() {
             reconfig_data_format_srca(cb_x, cb_xmm);
         }
 
-        // Var(x) + eps
-        if constexpr (FLOAT32_DTYPE) {
-            reconfig_data_format(cb_ex2, cb_eps);
-        }
-        cb_ex2_obj.wait_front(onetile);  // should have 1 tile
-        tile_regs_acquire();
-        add_tiles_init(cb_ex2, cb_eps);
-        add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
-        rsqrt_tile_init();
-        rsqrt_tile(dst0);
-        tile_regs_commit();
-        cb_ex2_obj.pop_front(onetile);
-
-        cb_ex2pe_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile(dst0, cb_ex2pe);
-        tile_regs_release();
-        cb_ex2pe_obj.push_back(onetile);
+        // Var(x) + eps  ->  1/sqrt(Var(x) + eps)
+        // PARTIAL migration: BinaryFpu(Add, cb_ex2, cb_eps) + Rsqrt + PackTile(cb_ex2pe).
+        // Reconfig audit: add_tiles_init reconfigs srca/srcb regardless (matches Input);
+        // no explicit pack_reconfig in original -> PackTileReconfig::None.
+        // cb_ex2: InputLifecycle::Streaming. cb_eps: InputLifecycle::CallerManaged. cb_ex2pe:
+        // OutputLifecycle::Streaming.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_ex2,
+                cb_eps,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::Rsqrt<
+                compute_kernel_lib::Approx::Exact,
+                compute_kernel_lib::Legacy::Off,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_ex2pe,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::None>{});
 
         // Remainder of the layernorm operation
-        // norm(x) * gamma + beta,
-        // where norm(x) is:
-        // (x - E[x]) / sqrt(E[(x-E[x])^2] + eps)
+        // norm(x) * gamma + beta, where norm(x) = (x - E[x]) / sqrt(E[(x-E[x])^2] + eps)
+        //
+        // No SFPU_OP_INIT_ACTIVATION macros in welford variant -> all three stages migrate
+        // cleanly into chains. cb_xmm: InputLifecycle::HeldBulk + Block +
+        // compute_kernel_lib::TileOffset::Set(block.start()) (held from x-E[x] stage, popped at end of NCHt loop).
+        // cb_ex2pe: Caller-managed. cb_gamma / cb_beta: cumulative wait (block.start() + full_block_size); model as
+        // InputLifecycle::HeldBulk + Block + compute_kernel_lib::TileOffset::Set(block.start()) — chain emits
+        // cb_wait_front(cb, base + n_tiles) per call matching original.
         cb_ex2pe_obj.wait_front(onetile);
         for (auto block : generic::blocks(Wt, blk)) {
-            reconfig_data_format(cb_xmm, cb_ex2pe);
-            if constexpr (do_gamma == 0 && do_beta == 0) {
-                pack_reconfig_data_format(cb_out);
-            } else {
-                pack_reconfig_data_format(cb_fusion);
-            }
-
-            mul_bcast_cols_init_short(cb_xmm, cb_ex2pe);
-            tile_regs_acquire();
-            for (auto i : block.local()) {
-                // cb_xmm[wt+wtr] since we pop Wt from cb_xmm after the entire loop
-                mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, block.to_global(i), 0, i);
-            }
-            tile_regs_commit();
-
-            cb_im_or_out_obj.reserve_back(block.full_block_size());
-            tile_regs_wait();
-            for (auto i : block.local()) {
-                pack_tile(i, cb_im_or_out);  // pack either to intermediate (cb_fusion or out0)
-            }
-            tile_regs_release();
-            cb_im_or_out_obj.push_back(
-                block.full_block_size());  // if no gamma/beta are provided, this will be passed on to the writer
+            // Stage 1 (always-on): cb_im_or_out = cb_xmm * cb_ex2pe (col bcast).
+            //   Reconfig: explicit reconfig_data_format(cb_xmm, cb_ex2pe) +
+            //     mul_bcast_cols_init_short -> Input. Explicit pack_reconfig
+            //     selects cb_out or cb_fusion at compile time -> Output.
+            compute_kernel_lib::eltwise_chain(
+                compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
+                compute_kernel_lib::BinaryFpu<
+                    cb_xmm,
+                    cb_ex2pe,
+                    compute_kernel_lib::BinaryFpuOp::Mul,
+                    compute_kernel_lib::BroadcastDim::Col,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::InputLifecycle::HeldBulk,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::TileOffset::Set,
+                    compute_kernel_lib::TileOffset::Unset>{block.start(), 0u},
+                compute_kernel_lib::PackTile<
+                    cb_im_or_out,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::PackTileReconfig::Output>{});
 
             if constexpr (do_gamma) {
-                if constexpr (do_beta == 0) {
-                    pack_reconfig_data_format(cb_out);
-                }
-                reconfig_data_format_srcb(cb_ex2pe, cb_gamma);
-                uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
-                CircularBuffer cb_outg_obj(cb_outg);
-                mul_bcast_rows_init_short(cb_fusion, cb_gamma);
-                cb_gamma_obj.wait_front(
-                    block.start() + block.full_block_size());  // we don't pop, TODO: only wait on first ht
-                cb_fusion_obj.wait_front(block.full_block_size());
-                tile_regs_acquire();
-                for (auto i : block.local()) {
-                    mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
-                }
-                tile_regs_commit();
-                // We don't pop gamma since it's 1,1,1,Wt and we reuse it for all NCHt
-                cb_fusion_obj.pop_front(block.full_block_size());
-
-                cb_outg_obj.reserve_back(block.full_block_size());
-                tile_regs_wait();
-                for (auto i : block.local()) {
-                    pack_tile(i, cb_outg);  // pack either to intermediate (cb_fusion or out0)
-                }
-                tile_regs_release();
-                cb_outg_obj.push_back(block.full_block_size());
+                // Stage 2: cb_outg = cb_fusion * cb_gamma (row bcast).
+                // cb_fusion was just pushed by stage 1 (intermediate when do_gamma|do_beta);
+                // InputLifecycle::Bulk wait+pop per block. cb_gamma: cumulative wait, never popped ->
+                // InputLifecycle::HeldBulk + Block + compute_kernel_lib::TileOffset::Set(block.start()).
+                constexpr uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
+                    compute_kernel_lib::BinaryFpu<
+                        cb_fusion,
+                        cb_gamma,
+                        compute_kernel_lib::BinaryFpuOp::Mul,
+                        compute_kernel_lib::BroadcastDim::Row,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::InputLifecycle::HeldBulk,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::TileOffset::Unset,
+                        compute_kernel_lib::TileOffset::Set>{0u, block.start()},
+                    compute_kernel_lib::PackTile<
+                        cb_outg,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutputLifecycle::Bulk,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
             }
             if constexpr (do_beta) {
-                pack_reconfig_data_format(cb_out);
-                if constexpr (do_gamma) {
-                    reconfig_data_format_srcb(cb_gamma, cb_beta);
-                } else {
-                    reconfig_data_format_srcb(cb_ex2pe, cb_beta);
-                }
-
-                add_bcast_rows_init_short(cb_fusion, cb_beta);
-                cb_beta_obj.wait_front(
-                    block.start() + block.full_block_size());  // TODO: optimization - only wait on first ht
-                cb_fusion_obj.wait_front(block.full_block_size());
-                tile_regs_acquire();
-                for (auto i : block.local()) {
-                    add_tiles_bcast_rows(cb_fusion, cb_beta, i, block.to_global(i), i);  // tile *= 1/(sum(exp(x)))
-                }
-                tile_regs_commit();
-                cb_fusion_obj.pop_front(block.full_block_size());
-                // We don't pop beta since it's 1,1,1,Wt and we reuse it for all NCHt
-
-                cb_out_obj.reserve_back(block.full_block_size());
-                tile_regs_wait();
-                for (auto i : block.local()) {
-                    pack_tile(i, cb_out);  // pack either to intermediate (cb_fusion or out0)
-                }
-                tile_regs_release();
-                cb_out_obj.push_back(block.full_block_size());
+                // Stage 3: cb_out = cb_fusion + cb_beta (row bcast).
+                // Same lifecycle pattern as Stage 2 with gamma -> beta.
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
+                    compute_kernel_lib::BinaryFpu<
+                        cb_fusion,
+                        cb_beta,
+                        compute_kernel_lib::BinaryFpuOp::Add,
+                        compute_kernel_lib::BroadcastDim::Row,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::InputLifecycle::HeldBulk,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::TileOffset::Unset,
+                        compute_kernel_lib::TileOffset::Set>{0u, block.start()},
+                    compute_kernel_lib::PackTile<
+                        cb_out,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutputLifecycle::Bulk,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
             }
         }
         cb_ex2pe_obj.pop_front(onetile);

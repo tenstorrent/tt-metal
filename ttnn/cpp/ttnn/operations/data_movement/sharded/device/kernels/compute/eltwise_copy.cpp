@@ -3,33 +3,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-
-#include "api/compute/common.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t per_core_tile_cnt = get_arg_val<uint32_t>(0);
 
-    CircularBuffer cb_in(tt::CBIndex::c_0);
-    CircularBuffer cb_out(tt::CBIndex::c_16);
+    constexpr auto cb_in = tt::CBIndex::c_0;
+    constexpr auto cb_out = tt::CBIndex::c_16;
 
-    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    copy_tile_init(tt::CBIndex::c_0);
-    for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
-        acquire_dst();
+    unary_op_init_common(cb_in, cb_out);
 
-        // Pop tile after tile, copy to DST and pack
-        cb_in.wait_front(1);
-        cb_out.reserve_back(1);
-        copy_tile(tt::CBIndex::c_0, 0, 0);
-
-        pack_tile(0, tt::CBIndex::c_16);
-
-        cb_in.pop_front(1);
-        cb_out.push_back(1);
-
-        release_dst();
-    }
+    // Per-tile copy cb_in -> cb_out. Original used unary_op_init_common +
+    // copy_tile_init at boot, then plain copy_tile / pack_tile per iter —
+    // no per-iter reconfig, so CopyTileReconfig::None + PackTileReconfig::None.
+    compute_kernel_lib::eltwise_chain(
+        per_core_tile_cnt,
+        compute_kernel_lib::CopyTile<
+            cb_in,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::CopyTileReconfig::None>{},
+        compute_kernel_lib::PackTile<
+            cb_out,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::None>{});
 }

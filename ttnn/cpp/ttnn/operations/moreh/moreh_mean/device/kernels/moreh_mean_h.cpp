@@ -9,6 +9,8 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
@@ -57,25 +59,31 @@ void kernel_main() {
 
             // Optional masking of last H tile
             if constexpr (do_mask_h) {
-                tile_regs_acquire();
-                cb_input_obj.wait_front(onetile);
-                copy_tile_init_with_dt(cb_input);
-                copy_tile(cb_input, 0, reduce_dst_idx);
-
-                copy_tile_init_with_dt(cb_mask_h);
-                copy_tile(cb_mask_h, 0, mask_dst_idx);
-
-                mask_tile_init();
-                mask_tile(reduce_dst_idx, mask_dst_idx);
-                tile_regs_commit();
-
-                cb_masked_input_obj.reserve_back(onetile);
-                tile_regs_wait();
-                pack_tile_with_dt(reduce_dst_idx, cb_masked_input);
-                tile_regs_release();
-                cb_masked_input_obj.push_back(onetile);
-
-                cb_input_obj.pop_front(onetile);
+                // CopyTile<cb_input, D0> + CopyTile<cb_mask_h, D1> + Mask + PackTile.
+                // Reconfig: copy_tile_init_with_dt -> CopyTileReconfig::Input on each.
+                //   pack_tile_with_dt -> PackTileReconfig::Output.
+                // cb_input InputLifecycle::Streaming (chain owns wait+pop); cb_mask_h InputLifecycle::CallerManaged
+                //   (held outside the loop); cb_masked_input OutputLifecycle::Streaming.
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::CopyTile<
+                        cb_input,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::CopyTileReconfig::Input>{},
+                    compute_kernel_lib::CopyTile<
+                        cb_mask_h,
+                        compute_kernel_lib::Dst::D1,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::CopyTileReconfig::Input>{},
+                    compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+                    compute_kernel_lib::PackTile<
+                        cb_masked_input,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
 
                 // Phase 2 with masked input: Reduce final masked tile with accumulation
                 compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(

@@ -5,6 +5,8 @@
 #include "api/compute/matmul.h"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask
 
 void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
@@ -69,28 +71,30 @@ void kernel_main() {
             }
 
             if (do_mask_w) {
-                tile_regs_acquire();
-                CircularBuffer(cb_input).wait_front(onetile);
-#if defined FP32_DEST_ACC_EN
-                reconfig_data_format_srca(cb_input);
-#endif
-                copy_tile_to_dst_init_short(cb_input);
-                copy_tile(cb_input, 0, reduce_dst_idx);
-                copy_tile(cb_mask_w, 0, mask_dst_idx);
-                mask_tile_init();
-                mask_tile(reduce_dst_idx, mask_dst_idx);
-                tile_regs_commit();
-
-                cb_masked_input_obj.reserve_back(onetile);
-                tile_regs_wait();
-#if defined FP32_DEST_ACC_EN
-                pack_reconfig_data_format(cb_masked_input);
-#endif
-                pack_tile(reduce_dst_idx, cb_masked_input);
-                tile_regs_release();
-                cb_masked_input_obj.push_back(onetile);
-
-                CircularBuffer(cb_input).pop_front(onetile);
+                // CopyTile<cb_input=c_0, D0> + CopyTile<cb_mask_w, D1> + Mask + PackTile.
+                // cb_input is always c_0 here (reset at line 46 before this conditional).
+                // Reconfig: chain Input+Output (fold elides no-op transitions); matches
+                // the FP32_DEST_ACC_EN-guarded reconfigs in the original.
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::CopyTile<
+                        tt::CBIndex::c_0,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::CopyTileReconfig::Input>{},
+                    compute_kernel_lib::CopyTile<
+                        cb_mask_w,
+                        compute_kernel_lib::Dst::D1,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::CopyTileReconfig::Input>{},
+                    compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+                    compute_kernel_lib::PackTile<
+                        cb_masked_input,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
                 cb_input = cb_masked_input;
             }
 

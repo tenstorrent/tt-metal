@@ -17,6 +17,8 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
@@ -65,41 +67,64 @@ void kernel_main() {
         cb_push_back(cb_stats_reduced, stats_tile_stride);
         cb_wait_front(cb_stats_reduced, stats_tile_stride);
 
-        // Compute 1/sqrt(var + eps) into cb_recip_sqrt_var
-        cb_reserve_back(cb_recip_sqrt_var, 1);
-        reconfig_data_format(cb_stats_reduced, cb_eps);
-        pack_reconfig_data_format(cb_recip_sqrt_var);
-
-        add_tiles_init(cb_stats_reduced, cb_eps);
-        rsqrt_tile_init<true>();
-        tile_regs_acquire();
-        tile_regs_wait();
-        // stats_reduced tile 1 holds variance (after combine_welford_partials)
-        add_tiles(cb_stats_reduced, cb_eps, 1, 0, 0);
-        rsqrt_tile<true>(0);
-        pack_tile(0, cb_recip_sqrt_var);
-        tile_regs_commit();
-        tile_regs_release();
-        cb_push_back(cb_recip_sqrt_var, 1);
+        // Compute 1/sqrt(var + eps) into cb_recip_sqrt_var.
+        // Same migration as layernorm_distributed/layernorm_post_allgather_welford.
+        // cb_stats_reduced tile 1 holds variance (after combine_welford_partials).
+        // Reconfig: Input + Output (explicit reconfig_data_format +
+        //   pack_reconfig_data_format + add_tiles_init in original).
+        // Lifecycles: cb_stats_reduced InputLifecycle::HeldBulk + Scalar + compute_kernel_lib::TileOffset::Set;
+        //   cb_eps InputLifecycle::CallerManaged + Scalar; cb_recip_sqrt_var OutputLifecycle::Streaming.
+        // rsqrt_tile_init<true> -> Legacy::On.
+        compute_kernel_lib::eltwise_chain(
+            1,
+            compute_kernel_lib::BinaryFpu<
+                cb_stats_reduced,
+                cb_eps,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::TileOffset::Set,
+                compute_kernel_lib::TileOffset::Unset>{1, 0u},
+            compute_kernel_lib::
+                Rsqrt<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Legacy::On, compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_recip_sqrt_var,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         // Process tiles across width in blocks
         for (uint32_t col_tile = 0; col_tile < Wt; col_tile += block_size) {
-            // 1) x_minus_mean
-            reconfig_data_format(cb_inp, cb_stats_reduced);
-            pack_reconfig_data_format(cb_intermediate);
-            sub_bcast_cols_init_short(cb_inp, cb_stats_reduced);
-            cb_wait_front(cb_inp, block_size);
-            cb_reserve_back(cb_intermediate, block_size);
-            tile_regs_acquire();
-            tile_regs_wait();
-            for (uint32_t i = 0; i < block_size; i++) {
-                sub_tiles_bcast_cols(cb_inp, cb_stats_reduced, i, 0, i);
-                pack_tile(i, cb_intermediate);
-            }
-            tile_regs_commit();
-            tile_regs_release();
-            cb_pop_front(cb_inp, block_size);
-            cb_push_back(cb_intermediate, block_size);
+            // 1) x_minus_mean: cb_intermediate[i] = cb_inp[i] - cb_stats_reduced[0]
+            // (bcast cols).  cb_inp: InputLifecycle::Bulk + Block (per-block_size wait+pop).
+            // cb_stats_reduced: InputLifecycle::CallerManaged + Scalar (held by outer per-row scope).
+            // cb_intermediate: OutputLifecycle::Bulk + Block (per-block_size reserve+push).
+            // Reconfig: explicit reconfig_data_format + sub_bcast_cols_init_short ->
+            // BinaryDataFormatReconfig::Input. pack_reconfig_data_format ->
+            // PackTileReconfig::Output.
+            compute_kernel_lib::eltwise_chain(
+                compute_kernel_lib::EltwiseShape::tiles(block_size, /*block_size=*/block_size),
+                compute_kernel_lib::BinaryFpu<
+                    cb_inp,
+                    cb_stats_reduced,
+                    compute_kernel_lib::BinaryFpuOp::Sub,
+                    compute_kernel_lib::BroadcastDim::Col,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::PackTile<
+                    cb_intermediate,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::PackTileReconfig::Output>{});
 
             // 2) normalize: (x-mean) * inv_std
             constexpr uint32_t norm_target_cb = (do_gamma || do_beta) ? cb_intermediate : cb_out;
@@ -155,25 +180,36 @@ void kernel_main() {
             }
 
             // 4) optional beta (only if gamma was provided)
+            // cb_out[i] = cb_intermediate[i] + cb_beta[col_tile + i] (bcast rows).
+            // Different CBs (no in-place). cb_intermediate InputLifecycle::Bulk + Block. cb_beta
+            // InputLifecycle::CallerManaged + Block + col_tile (cb_beta is held
+            // across the col_tile loop via the cumulative wait_front above).
+            // cb_out OutputLifecycle::Bulk + Block.
+            // Reconfig: reconfig_data_format + add_bcast_rows_init_short ->
+            // BinaryDataFormatReconfig::Input. pack_reconfig_data_format ->
+            // PackTileReconfig::Output.
             if constexpr (do_beta) {
-                // Input is always in cb_intermediate, output is always cb_out
-                reconfig_data_format(cb_intermediate, cb_beta);
-                pack_reconfig_data_format(cb_out);
-                add_bcast_rows_init_short(cb_intermediate, cb_beta);
-
                 cb_wait_front(cb_beta, col_tile + block_size);
-                cb_wait_front(cb_intermediate, block_size);
-                cb_reserve_back(cb_out, block_size);
-                tile_regs_acquire();
-                tile_regs_wait();
-                for (uint32_t i = 0; i < block_size; i++) {
-                    add_tiles_bcast_rows(cb_intermediate, cb_beta, i, col_tile + i, i);
-                    pack_tile(i, cb_out);
-                }
-                tile_regs_commit();
-                tile_regs_release();
-                cb_pop_front(cb_intermediate, block_size);
-                cb_push_back(cb_out, block_size);
+                compute_kernel_lib::eltwise_chain(
+                    compute_kernel_lib::EltwiseShape::tiles(block_size, /*block_size=*/block_size),
+                    compute_kernel_lib::BinaryFpu<
+                        cb_intermediate,
+                        cb_beta,
+                        compute_kernel_lib::BinaryFpuOp::Add,
+                        compute_kernel_lib::BroadcastDim::Row,
+                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                        compute_kernel_lib::InputLifecycle::Bulk,
+                        compute_kernel_lib::InputLifecycle::CallerManaged,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OperandKind::Block,
+                        compute_kernel_lib::TileOffset::Unset,
+                        compute_kernel_lib::TileOffset::Set>{0u, col_tile},
+                    compute_kernel_lib::PackTile<
+                        cb_out,
+                        compute_kernel_lib::Dst::D0,
+                        compute_kernel_lib::OutputLifecycle::Bulk,
+                        compute_kernel_lib::PackTileReconfig::Output>{});
             }
         }
 

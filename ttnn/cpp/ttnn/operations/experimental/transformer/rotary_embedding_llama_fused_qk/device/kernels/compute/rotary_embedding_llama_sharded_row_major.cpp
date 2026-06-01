@@ -8,6 +8,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -75,12 +76,31 @@ void kernel_main() {
         cb_push_back(rotated_in_interm_cb, Wt);
         cb_wait_front(rotated_in_interm_cb, Wt);
 
-        mul_tiles_init(rotated_in_interm_cb, sin_cb);
-        ACQ();
-        // sin_interim = rotated * sin
-        mul_tiles(rotated_in_interm_cb, sin_cb, 0, 0, 0);
-        pack_tile(0, sin_interm_cb, 0);
-        REL();
+        // sin_interim = rotated * sin (single tile compute; outer push/pop on Wt).
+        // PARTIAL: only sin stage migrates. cos and add stages use runtime in_cb /
+        // out_cb (lines 33-38 select from q_*_cb / k_*_cb based on runtime is_q).
+        // BLOCKED — same constexpr-CB constraint as sibling sharded.cpp.
+        // Reconfig: mul_tiles_init reconfigs srca/srcb -> Input. No pack_reconfig -> None.
+        // Lifecycles: InputLifecycle::CallerManaged on both sides (outer push/pop unchanged);
+        //   OutputLifecycle::CallerManaged on pack so chain emits no reserve/push.
+        compute_kernel_lib::eltwise_chain(
+            1,
+            compute_kernel_lib::BinaryFpu<
+                rotated_in_interm_cb,
+                sin_cb,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::PackTile<
+                sin_interm_cb,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::CallerManaged,
+                compute_kernel_lib::PackTileReconfig::None>{});
         cb_push_back(sin_interm_cb, Wt);
         cb_pop_front(rotated_in_interm_cb, Wt);
 

@@ -11,6 +11,8 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
@@ -201,26 +203,36 @@ void kernel_main() {
                 compute_kernel_lib::ReduceInputBlockShape::row(num_distributed_blocks));
             cb_pop_front(cb_stats, num_distributed_blocks);
 
-            // 1/[sqrt(Var + eps)],
-            reconfig_data_format(cb_var, cb_eps);  // cb_var is cb_stats in case of RMS norm
-            pack_reconfig_data_format(cb_stats_reduced);
-            cb_wait_front(cb_var, 1);
-            cb_wait_front(cb_eps, 1);
-
-            add_tiles_init(cb_var, cb_eps);
-            tile_regs_acquire();
-            add_tiles(cb_var, cb_eps, 0, 0, post_dst0);
-            tile_regs_wait();
-            rsqrt_tile_init<true>();
-            rsqrt_tile<true>(post_dst0);
-            tile_regs_commit();
-            tile_regs_wait();
-            cb_reserve_back(cb_stats_reduced, 1);
-            pack_tile(post_dst0, cb_stats_reduced);
-            tile_regs_release();
-            cb_pop_front(cb_var, 1);
-            cb_pop_front(cb_eps, 1);
-            cb_push_back(cb_stats_reduced, 1);
+            // 1/[sqrt(Var + eps)] — Variance Calc to inverse square root.
+            // PARTIAL migration: BinaryFpu(Add) + Rsqrt + PackTile.
+            // Reconfig audit: explicit reconfig_data_format(cb_var, cb_eps) +
+            //   add_tiles_init reconfigs srca/srcb -> Input. Explicit
+            //   pack_reconfig_data_format(cb_stats_reduced) -> Output.
+            // Lifecycles: cb_var InputLifecycle::Streaming (wait+pop per call); cb_eps InputLifecycle::Streaming
+            //   (also wait+pop per call here, unlike other rsqrt kernels where
+            //   cb_eps is held); cb_stats_reduced OutputLifecycle::Streaming. rsqrt Legacy::On.
+            compute_kernel_lib::eltwise_chain(
+                1,
+                compute_kernel_lib::BinaryFpu<
+                    cb_var,
+                    cb_eps,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::Rsqrt<
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Legacy::On,
+                    compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<
+                    cb_stats_reduced,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::Output>{});
         }
     }
     pack_reconfig_data_format(cb_im);

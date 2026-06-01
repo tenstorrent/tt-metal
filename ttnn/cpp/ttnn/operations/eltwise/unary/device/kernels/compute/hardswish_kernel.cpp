@@ -3,15 +3,23 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/common.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/compute_kernel_api.h"
-#include "api/compute/eltwise_unary/activations.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp"  // Hardsigmoid
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // MulBinary
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
 #include "api/dataflow/circular_buffer.h"
+
+// `#ifdef`-driven constexpr selectors: keep the program-factory's INP_FLOAT*
+// numeric defines but reduce them to compile-time booleans here so the chain
+// body is a single eltwise_chain call gated by OptionalChainElement instead
+// of two top-level #ifdef'd chain invocations.
+#ifdef INP_FLOAT32
+constexpr bool kIsFloat32 = true;
+#else
+constexpr bool kIsFloat32 = false;
+#endif
+constexpr bool kIsFloat = !kIsFloat32;
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -19,41 +27,69 @@ void kernel_main() {
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
 
-    CircularBuffer cb_in(cb_input);
-    CircularBuffer cb_out(cb_output);
-
     init_sfpu(cb_input, cb_output);
 
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        tile_regs_acquire();
-
-        cb_in.wait_front(1);
-        cb_out.reserve_back(1);
-
-        copy_tile_to_dst_init_short(cb_input);
-        copy_tile(cb_input, 0, 0);
-        copy_tile(cb_input, 0, 1);
-
-        hardsigmoid_tile_init();
-        hardsigmoid_tile(0);
-
-#ifdef INP_FLOAT32
-        mul_binary_tile_init();
-        mul_binary_tile(0, 1, 0);
-#endif
-#ifdef INP_FLOAT
-        binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_input);
-        binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_input, 0, 0);
-#endif
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_output);
-
-        cb_in.pop_front(1);
-        cb_out.push_back(1);
-
-        tile_regs_release();
-    }
+    // Hardswish: x * hardsigmoid(x). Same shape as tanhshrink (27bcccc7fea)
+    // with Tanh -> Hardsigmoid and Sub -> Mul.
+    //
+    // FLOAT32: CopyTile(cb_input -> D0 InputLifecycle::HeldStream) + Hardsigmoid<D0>
+    //          + CopyTile(cb_input -> D1 InputLifecycle::NoWaitPop) + MulBinary<D0, D1, D0>
+    //          + PackTile.
+    // FLOAT:   CopyTile(cb_input -> D0 InputLifecycle::HeldStream) + Hardsigmoid<D0>
+    //          + DestReuseBinary<cb_input, Mul, DEST_TO_SRCA> + PackTile.
+    //          srca = DEST = hardsigmoid(x), srcb = cb_input,
+    //          result = hardsigmoid(x) * cb_input.
+    //
+    // Why the 2nd CopyTile (cb_input -> D1) is FLOAT32-only:
+    //   SFPU MulBinary is pure DEST-to-DEST (mul_binary_tile(dst_in0, dst_in1,
+    //   dst_out)) — it cannot read from a CB directly. To compute x *
+    //   hardsigmoid(x) on the SFPU we need x present in a DEST slot, so we
+    //   load cb_input -> D1 a second time. The FLOAT path avoids this load by
+    //   using DestReuseBinary, which is an FPU op (binary_dest_reuse_tiles)
+    //   that DOES read a CB on the non-DEST side. Both forms are correct;
+    //   the SFPU form is preferred under FP32_DEST_ACC because the FPU's
+    //   binary_dest_reuse path loses precision on FP32 DEST inputs.
+    //
+    // Both paths share the CopyTile(D0 InputLifecycle::HeldStream) + Hardsigmoid + PackTile
+    // outer shape. OptionalChainElement collapses the inactive branch to a
+    // no-op tag (no wait, no pop, no compute emitted), so the chain "selects"
+    // between (CopyTile<D1, InputLifecycle::NoWaitPop> + MulBinary) and DestReuseBinary based
+    // on kIsFloat32 / kIsFloat.
+    compute_kernel_lib::eltwise_chain(
+        num_tiles,
+        compute_kernel_lib::CopyTile<
+            cb_input,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::InputLifecycle::HeldStream,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::CopyTileReconfig::None>{},
+        compute_kernel_lib::Hardsigmoid<compute_kernel_lib::Dst::D0>{},
+        compute_kernel_lib::OptionalChainElement<
+            kIsFloat32,
+            compute_kernel_lib::CopyTile<
+                cb_input,
+                compute_kernel_lib::Dst::D1,
+                compute_kernel_lib::InputLifecycle::NoWaitPop,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::CopyTileReconfig::None>>{},
+        compute_kernel_lib::OptionalChainElement<
+            kIsFloat32,
+            compute_kernel_lib::
+                MulBinary<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>>{},
+        compute_kernel_lib::OptionalChainElement<
+            kIsFloat,
+            compute_kernel_lib::DestReuseBinary<
+                cb_input,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::DestReuseReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::OperandKind::Scalar>>{},
+        compute_kernel_lib::PackTile<
+            cb_output,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::None>{});
 }

@@ -4,38 +4,36 @@
 
 #include <cstdint>
 
-#include "api/compute/eltwise_binary.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "api/dataflow/circular_buffer.h"
-
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
 
 void kernel_main() {
     constexpr int onetile = 1;
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
-
-    CircularBuffer cb_c0(tt::CBIndex::c_0);
-    CircularBuffer cb_c1(tt::CBIndex::c_1);
-    CircularBuffer cb_c24(tt::CBIndex::c_24);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
 
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
         bool last_out = block == (per_core_block_cnt - 1);
 
-        ACQ();
-        cb_c0.wait_front(onetile);
-        cb_c1.wait_front(onetile);
-
-        cb_c24.reserve_back(onetile);
-        mul_tiles_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
-        mul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
-        pack_tile(0, tt::CBIndex::c_24);
-        cb_c24.push_back(onetile);
-
-        cb_c0.pop_front(onetile);
-        cb_c1.pop_front(onetile);
-        REL();
+        // elemwise-mul: cb_intermed0 = cb_in0 * cb_in1
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                tt::CBIndex::c_0,
+                tt::CBIndex::c_1,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::PackTile<
+                tt::CBIndex::c_24,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::None>{});
 
         // reduce-w
         compute_kernel_lib::reduce<

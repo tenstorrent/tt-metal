@@ -27,6 +27,8 @@
 #include "api/dataflow/circular_buffer.h"
 
 #include "layernorm_compute_utils.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 namespace generic = norm::kernel_util::generic;
 namespace kutil = norm::kernel_util;
@@ -133,26 +135,42 @@ void kernel_main() {
  * X + Y
  */
 #ifdef FUSE_PRE_ADD
-        reconfig_data_format(cb_in, cb_inb);
-        pack_reconfig_data_format(cb_x);
-        add_tiles_init(cb_in, cb_inb);
+        // X + Y per-block bulk add. Original: explicit reconfig_data_format(cb_in, cb_inb) +
+        // pack_reconfig_data_format(cb_x) + add_tiles_init ONCE outside the loop. Each loop
+        // iter does: wait_front(block.full_block_size()) on cb_in/cb_inb, reserve_back+push
+        // on cb_x, inner add_tiles + pack_tile loop, then pop_front on cb_in/cb_inb.
+        //
+        // Reconfig audit: chain re-emits its element-level reconfig per-call. With
+        // BinaryDataFormatReconfig::Input + PackTileReconfig::Output, the chain emits
+        // reconfig per outer block iter (extra MOPs vs original's once-outside). The fold
+        // elision skips reconfig when prev format matches, so the per-iter cost is amortized
+        // after the first block. (Alternative: BinaryDataFormatReconfig::None + keep the
+        // explicit reconfigs above — same effect, but the chain owns the lifecycle).
+        // Net: same correctness; slightly different MOP placement.
+        //
+        // Per-block bulk: A/B InputLifecycle::Bulk + OperandKind::Block (chain walks 0..full_block_size-1
+        // per call). cb_x: OutputLifecycle::Bulk + Block. BlockSize template = block_size so DEST lanes
+        // process all tiles in one DEST window — matches the original's `for (auto i : block.local())`
+        // inside one ACQ/REL.
         for (auto block : generic::blocks(Wt, block_size)) {
-            ACQ();
-            // In/inb come from the reader and need to be
-            // synced on full block size. Keep cb_x aligned
-            // to full block size as well so pre-add/no-pre-add
-            // can be handled the same way.
-            cb_in_obj.wait_front(block.full_block_size());
-            cb_inb_obj.wait_front(block.full_block_size());
-            cb_x_obj.reserve_back(block.full_block_size());
-            for (auto i : block.local()) {
-                add_tiles(cb_in, cb_inb, i, i, i);
-                pack_tile(i, cb_x);
-            }
-            REL();
-            cb_x_obj.push_back(block.full_block_size());  // push the sum into the same buffer
-            cb_in_obj.pop_front(block.full_block_size());
-            cb_inb_obj.pop_front(block.full_block_size());
+            compute_kernel_lib::eltwise_chain(
+                compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/block_size),
+                compute_kernel_lib::BinaryFpu<
+                    cb_in,
+                    cb_inb,
+                    compute_kernel_lib::BinaryFpuOp::Add,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Block>{},
+                compute_kernel_lib::PackTile<
+                    cb_x,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::PackTileReconfig::Output>{});
         }
 #ifndef RMSNORM
         reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
@@ -172,19 +190,45 @@ void kernel_main() {
         numeric::row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithoutPopPolicy>(
             cb_x, cb_scaler, cb_ex, W, Wt, block_size, tile_width);
 
-        // x - E[x]
-        reconfig_data_format(cb_x, cb_ex);
-        cb_xmm_obj.reserve_back(total_buffer_size);
-        sub_bcast_cols_init_short(cb_x, cb_ex);
+        // x - E[x]  per-block, scalar bcast on cb_ex (col bcast — cb_ex is 1 tile per row).
+        // Original: explicit reconfig_data_format(cb_x, cb_ex) + sub_bcast_cols_init_short
+        // ONCE outside the loop; cb_xmm_obj.reserve_back(total_buffer_size) ONCE upfront;
+        // per-iter ACQ/inner-loop/push(full_block_size)/pop_front(cb_x, full_block_size)/REL;
+        // cb_ex popped once after the outer loop.
+        //
+        // Reconfig audit:
+        //   - reconfig_data_format(cb_x, cb_ex) + sub_bcast_cols_init_short both reconfig
+        //     srca/srcb -> BinaryDataFormatReconfig::Input (chain re-emits per call;
+        //     fold elides after first iter).
+        //   - No pack_reconfig in original -> PackTileReconfig::None.
+        //
+        // Behavioral diff:
+        //   - Original: 1 upfront cb_xmm.reserve_back(total) + N per-block push.
+        //   - Chain:   N per-block cb_xmm.reserve_back(full_block_size) + N per-block push.
+        //     Chain BlockIter pack requires Upfront* / NoReserve* policy (chain.inl:361);
+        //     OutputLifecycle::DeferredReserve / OutputLifecycle::Streaming are static_assert'd out.
+        //     OutputLifecycle::Bulk per call emits both. The upfront reserve(total) is dropped — per-block reserves
+        //     cover the same capacity progressively. All reserves are capacity-checks;
+        //     since the producer/consumer balance is unchanged, behavior is identical.
         for (auto block : generic::blocks(Wt, block_size)) {
-            ACQ();
-            for (auto i : block.local()) {
-                sub_tiles_bcast_cols(cb_x, cb_ex, i, 0, i);
-                pack_tile(i, cb_xmm);
-            }
-            cb_xmm_obj.push_back(block.full_block_size());
-            cb_x_obj.pop_front(block.full_block_size());
-            REL();
+            compute_kernel_lib::eltwise_chain(
+                compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/block_size),
+                compute_kernel_lib::BinaryFpu<
+                    cb_x,
+                    cb_ex,
+                    compute_kernel_lib::BinaryFpuOp::Sub,
+                    compute_kernel_lib::BroadcastDim::Col,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Scalar>{},
+                compute_kernel_lib::PackTile<
+                    cb_xmm,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::PackTileReconfig::None>{});
         }
         cb_ex_obj.pop_front(1);
 
@@ -194,24 +238,58 @@ void kernel_main() {
 #endif
 
         /* (x - E[x])^2
-         * compute temp = xmm*xmm = (x-E[x])^2
+         * compute temp = xmm*xmm = (x-E[x])^2  — per-block same-CB squaring with
+         * cumulative wait on cb_xmm (each block waits a growing prefix: block.start()
+         * + size). cb_xmm is held across blocks (popped later in gamma/beta stage).
+         *
+         * Reconfig audit: mul_tiles_init(cb_xmm, cb_xmm) reconfigs srca/srcb ONCE
+         * outside the loop. No explicit reconfig_data_format. Inner loop has no
+         * reconfig. No pack_reconfig (pack stays at whatever was set by previous
+         * stage). -> BinaryDataFormatReconfig::Input (chain emits per-call, but since
+         * CbA==CbB and prev=cur srca after first iter, fold elides it) +
+         * PackTileReconfig::None.
+         *
+         * Same-CB BinaryFpu Mul: chain dedups B-side wait/pop since CbA == CbB.
+         * Index: A walks block-local 0..size-1 with compute_kernel_lib::TileOffset::Set(block.start())
+         * so absolute index = block.start() + i = block.to_global(i). B (same-CB)
+         * must match A's index per static_assert -> Block + compute_kernel_lib::TileOffset::Set(block.start()).
+         *
+         * cb_xmm lifecycle: cumulative wait (each block waits `start + size` tiles),
+         * never popped here. Chain expresses this as InputLifecycle::HeldBulk +
+         * compute_kernel_lib::TileOffset::Set(start): the chain emits `cb_wait_front(cb_xmm, start + n_tiles)` per call
+         * (InputLifecycle::HeldBulk inflates the wait count by the runtime base — see chain.hpp §1d) and no pop.
+         * InputLifecycle::HeldCumulative isn't legal with compute_kernel_lib::TileOffset::Set (legal-with-base list at
+         * chain.hpp:553 is
+         * InputLifecycle::Bulk/InputLifecycle::HeldBulk/InputLifecycle::DeferredPop/InputLifecycle::BulkDrain/InputLifecycle::CallerManaged)
+         * and would also under-wait — InputLifecycle::HeldBulk is the correct policy match. cb_xmm2: reserve+push
+         * block.full_block_size per call -> OutputLifecycle::Bulk + Block.
+         *
+         * NOTE: the #ifdef RMSNORM branch waits block.full_block_size vs the
+         * non-RMSNORM branch's block.size(). The chain processes n_tiles tiles
+         * regardless — using block.full_block_size() matches the RMSNORM wait and
+         * preserves the padded-junk-pack semantics for the non-RMSNORM path.
          */
-        mul_tiles_init(cb_xmm, cb_xmm);
         for (auto block : generic::blocks(Wt, block_size)) {
-#ifndef RMSNORM
-            cb_xmm_obj.wait_front(block.start() + block.size());
-#else
-            cb_xmm_obj.wait_front(block.start() + block.full_block_size());
-#endif
-            cb_xmm2_obj.reserve_back(block.full_block_size());
-            ACQ();
-            for (auto i : block.local()) {
-                const auto global_i = block.to_global(i);
-                mul_tiles(cb_xmm, cb_xmm, global_i, global_i, i);
-                pack_tile(i, cb_xmm2);
-            }
-            cb_xmm2_obj.push_back(block.full_block_size());
-            REL();
+            compute_kernel_lib::eltwise_chain(
+                compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/block_size),
+                compute_kernel_lib::BinaryFpu<
+                    cb_xmm,
+                    cb_xmm,
+                    compute_kernel_lib::BinaryFpuOp::Mul,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::InputLifecycle::HeldBulk,
+                    compute_kernel_lib::InputLifecycle::HeldBulk,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::TileOffset::Set,
+                    compute_kernel_lib::TileOffset::Set>{block.start(), block.start()},
+                compute_kernel_lib::PackTile<
+                    cb_xmm2,
+                    compute_kernel_lib::Dst::D0,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::PackTileReconfig::None>{});
         }
 #if defined RMSNORM and not defined FUSED_PRE_ADD
         reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
@@ -221,21 +299,34 @@ void kernel_main() {
         numeric::row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
             cb_xmm2, cb_scaler, cb_ex2, W, Wt, block_size, tile_width);
 
-        // Var[x] + eps
-        cb_ex2_obj.wait_front(1);
-        reconfig_data_format(cb_ex2, cb_eps);
-        ACQ();
-        add_tiles_init(cb_ex2, cb_eps);
-        add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
-
-        cb_ex2pe_obj.reserve_back(1);  // 1
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(dst0);
-        pack_reconfig_data_format(cb_ex2pe);
-        pack_tile(dst0, cb_ex2pe);
-        cb_ex2pe_obj.push_back(1);
-        REL();
-        cb_ex2_obj.pop_front(1);
+        // Var[x] + eps  ->  1/sqrt(Var[x] + eps)
+        // PARTIAL migration: BinaryFpu(Add, cb_ex2, cb_eps) + Rsqrt + PackTile(cb_ex2pe).
+        // Original: explicit reconfig_data_format(cb_ex2, cb_eps) + add_tiles_init reconfigs
+        // srca/srcb; pack_reconfig_data_format(cb_ex2pe) explicitly reconfigs pack.
+        // cb_ex2: InputLifecycle::Streaming (chain owns wait/pop). cb_eps: InputLifecycle::CallerManaged (waited once
+        // outside the loop, never popped). cb_ex2pe: OutputLifecycle::Streaming (chain owns reserve/push).
+        compute_kernel_lib::eltwise_chain(
+            1,
+            compute_kernel_lib::BinaryFpu<
+                cb_ex2,
+                cb_eps,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::Rsqrt<
+                compute_kernel_lib::Approx::Exact,
+                LEGACY_RSQRT ? compute_kernel_lib::Legacy::On : compute_kernel_lib::Legacy::Off,
+                compute_kernel_lib::Dst::D0>{},
+            compute_kernel_lib::PackTile<
+                cb_ex2pe,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         // (x-E[x]) / sqrt(Var[x] + eps) * gamma + beta
         cb_ex2pe_obj.wait_front(1);

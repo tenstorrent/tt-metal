@@ -8,6 +8,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -91,14 +92,36 @@ void kernel_main() {
         cb_push_back(rotated_in_interm_cb, Wt);
         cb_wait_front(rotated_in_interm_cb, Wt);
 
-        mul_bcast_rows_init_short(rotated_in_interm_cb, sin_cb);
-        ACQ();
-        for (uint32_t j = 0; j < Wt; ++j) {
-            // sin_interim = rotated * sin
-            mul_tiles_bcast<BroadcastType::ROW>(rotated_in_interm_cb, sin_cb, j, j, j);
-            pack_tile(j, sin_interm_cb, j);
-        }
-        REL();
+        // sin_interim = rotated * sin (ROW-bcast).
+        // PARTIAL: only the sin stage migrates here. cos and add stages BLOCKED on
+        // runtime CB ids (in_cb / out_cb selected via is_q at runtime). Chain template
+        // args require constexpr CBs; duplicating the chain in both q/k branches
+        // would inflate code size — file is already at TRISC2 size limit (see comment
+        // at line 17). PARTIAL gate cite: chain template constexpr CB constraint;
+        // file-level TRISC2 size budget blocks the duplication workaround.
+        //
+        // Lifecycles: NoWait* / NoReserve* on all sides. Outer cb_wait_front /
+        // cb_pop_front (line 92, 103) and cb_push_back (102) stay on raw LLK.
+        // Reconfig: mul_bcast_rows_init_short reconfigs srca/srcb -> Input.
+        // No pack_reconfig -> None.
+        compute_kernel_lib::eltwise_chain(
+            compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
+            compute_kernel_lib::BinaryFpu<
+                rotated_in_interm_cb,
+                sin_cb,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Block>{},
+            compute_kernel_lib::PackTile<
+                sin_interm_cb,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::CallerManaged,
+                compute_kernel_lib::PackTileReconfig::None>{});
         cb_push_back(sin_interm_cb, Wt);
         cb_pop_front(rotated_in_interm_cb, Wt);
 

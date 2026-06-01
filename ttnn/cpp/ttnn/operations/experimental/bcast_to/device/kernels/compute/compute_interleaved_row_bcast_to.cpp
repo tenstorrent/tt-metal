@@ -4,7 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/bcast.h"
-#include "api/compute/eltwise_binary.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
@@ -32,18 +32,19 @@ void kernel_main() {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_th = 0) {
             for (uint32_t th = start_th; th < Ht && num_tiles_read < num_tiles; ++th, start_tw = 0) {
                 for (uint32_t tw = start_tw; tw < Wt && num_tiles_read < num_tiles; ++tw) {
-                    cb_wait_front(tt::CBIndex::c_0, 1);
-                    tile_regs_acquire();
-                    unary_bcast<BroadcastType::ROW>(cb_id_src, 0, 0);
-                    tile_regs_commit();
-
-                    cb_pop_front(cb_id_src, 1);
-                    cb_reserve_back(cb_id_dst, 1);
-                    tile_regs_wait();
-                    pack_tile(0, cb_id_dst);
-
-                    cb_push_back(cb_id_dst, 1);
-                    tile_regs_release();
+                    compute_kernel_lib::eltwise_chain(
+                        1u,
+                        compute_kernel_lib::UnaryBcast<
+                            compute_kernel_lib::BroadcastDim::Row,
+                            cb_id_src,
+                            compute_kernel_lib::Dst::D0,
+                            compute_kernel_lib::InputLifecycle::Streaming,
+                            compute_kernel_lib::UnaryBcastReconfig::Input>{},
+                        compute_kernel_lib::PackTile<
+                            cb_id_dst,
+                            compute_kernel_lib::Dst::D0,
+                            compute_kernel_lib::OutputLifecycle::Streaming,
+                            compute_kernel_lib::PackTileReconfig::None>{});
                     ++num_tiles_read;
                 }
             }

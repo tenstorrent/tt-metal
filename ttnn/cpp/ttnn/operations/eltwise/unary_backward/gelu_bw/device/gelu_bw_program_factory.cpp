@@ -118,7 +118,17 @@ GeluBwProgramFactory::cached_program_t GeluBwProgramFactory::create(
             core,
             {src0_buffer->address(), src1_buffer->address(), num_tiles_per_core, num_tiles_written, 0, 0, num_cores_y});
 
-        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, {num_tiles_per_core, 1});
+        // Pick block_size = largest power-of-2 divisor of num_tiles_per_core (<= 8).
+        // Falls back to 1 if num_tiles_per_core is odd. The chain emits chunked
+        // wait/pop with per_core_block_size tiles per chunk.
+        uint32_t per_core_block_size = 1;
+        for (uint32_t b : {8u, 4u, 2u}) {
+            if (num_tiles_per_core % b == 0) {
+                per_core_block_size = b;
+                break;
+            }
+        }
+        tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, {num_tiles_per_core, per_core_block_size});
 
         tt::tt_metal::SetRuntimeArgs(
             program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles_per_core, num_tiles_written});
@@ -179,7 +189,16 @@ void GeluBwProgramFactory::override_runtime_arguments(
         reader_runtime_args[core.x][core.y][2] = num_tiles_per_core;
         reader_runtime_args[core.x][core.y][3] = num_tiles_written;
 
+        // Same block_size computation as the create() path.
+        uint32_t per_core_block_size = 1;
+        for (uint32_t b : {8u, 4u, 2u}) {
+            if (num_tiles_per_core % b == 0) {
+                per_core_block_size = b;
+                break;
+            }
+        }
         compute_runtime_args[core.x][core.y][0] = num_tiles_per_core;
+        compute_runtime_args[core.x][core.y][1] = per_core_block_size;
 
         writer_runtime_args[core.x][core.y][0] = dst_buffer->address();
         writer_runtime_args[core.x][core.y][1] = num_tiles_per_core;

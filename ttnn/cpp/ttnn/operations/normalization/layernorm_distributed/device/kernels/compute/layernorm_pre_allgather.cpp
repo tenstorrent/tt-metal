@@ -15,13 +15,11 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/operations/normalization/kernel_util/compute/pre_add.h"
 
 namespace pre_add = norm::kernel_util::compute::pre_add;
-
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
 
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
@@ -45,42 +43,42 @@ void kernel_main() {
         binary_op_init_common(cb_inp, cb_reduce, cb_x2);
     }
 
+    // 2D walk for the squaring chain: outer = Wt/blk subblocks, inner = blk tiles.
+    // Total iterations = Wt. Wt is assumed divisible by blk (matches the original
+    // loop `for (wt = 0; wt < Wt; wt += blk)` which has no tail handling).
+    constexpr auto squaring_shape = compute_kernel_lib::EltwiseShape::of(Wt / blk, blk);
+
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Fuse pre-add: cb_inp = cb_in0 + cb_res (no-op when !FUSE_PRE_ADD)
         pre_add::one_row<FUSE_PRE_ADD>(cb_in0, cb_res, cb_inp, Wt, blk);
 
-        /*
-         * x**2
-         */
-        reconfig_data_format(cb_inp, cb_inp);
-        pack_reconfig_data_format(cb_x2);
-        mul_tiles_init(cb_inp, cb_inp);
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            cb_wait_front(cb_inp, wt + blk);  // cumulative wait
-            cb_reserve_back(cb_x2, blk);
-            ACQ();
-            for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                mul_tiles(cb_inp, cb_inp, wt + wtr, wt + wtr, wtr);
-                pack_tile(wtr, cb_x2, wt + wtr);
-            }
-            REL();
-            cb_push_back(cb_x2, blk);
-        }
-        /*
-         * sum(x**2)
-         */
+        // x**2 — same-CB FPU mul. cb_inp lifecycle: InputLifecycle::HeldCumulative (chain emits
+        // cumulative `cb_wait_front(cb_inp, (i+1)*blk)` per blk-chunk; never pops).
+        // The downstream reduce on cb_inp consumes the Wt tiles via BulkWaitBulkPop.
+        // cb_x2 lifecycle: OutputLifecycle::Chunked (chain emits cb_reserve_back(blk) +
+        // cb_push_back(blk) per chunk; pack writes absolute slots via Block index).
+        compute_kernel_lib::eltwise_chain(
+            squaring_shape,
+            compute_kernel_lib::BinaryFpu<
+                cb_inp,
+                cb_inp,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::HeldCumulative,
+                compute_kernel_lib::InputLifecycle::HeldCumulative,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Block>{},
+            compute_kernel_lib::
+                PackTile<cb_x2, compute_kernel_lib::Dst::D0, compute_kernel_lib::OutputLifecycle::Bulk>{});
 
-        // BulkWaitBulkPop: All Wt tiles already in CB (see cumulative wait above)
-        // Bulk mode for optimal performance
+        // sum(x**2) — BulkWaitBulkPop: all Wt tiles already in CB.
         compute_kernel_lib::
             reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
                 cb_x2, cb_reduce, cb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt));
 
-        /*
-         * sum(x)
-         */
-        // BulkWaitBulkPop: All Wt tiles already in CB (see cumulative wait above)
-        // Bulk mode for optimal performance
+        // sum(x) — BulkWaitBulkPop pops Wt tiles from cb_inp.
         compute_kernel_lib::
             reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
                 cb_inp, cb_reduce, cb_out, compute_kernel_lib::ReduceInputBlockShape::row(Wt));

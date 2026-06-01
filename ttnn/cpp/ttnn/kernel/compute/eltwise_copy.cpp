@@ -3,29 +3,30 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-
-#include "api/compute/common.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
 void kernel_main() {
-    uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+    constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+    constexpr auto cb_in = tt::CBIndex::c_0;
+    constexpr auto cb_out = tt::CBIndex::c_16;
 
-    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    copy_tile_init(tt::CBIndex::c_0);
-    for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
-        acquire_dst();
+    unary_op_init_common(cb_in, cb_out);
 
-        // Pop tile after tile, copy to DST and pack
-        cb_wait_front(tt::CBIndex::c_0, 1);
-        cb_reserve_back(tt::CBIndex::c_16, 1);
-        copy_tile(tt::CBIndex::c_0, 0, 0);
-
-        pack_tile(0, tt::CBIndex::c_16);
-
-        cb_pop_front(tt::CBIndex::c_0, 1);
-        cb_push_back(tt::CBIndex::c_16, 1);
-
-        release_dst();
-    }
+    // Per-tile copy cb_in -> cb_out via a single chain over all tiles.
+    // Original used unary_op_init_common + copy_tile_init at boot (no per-iter
+    // reconfig) — CopyTileReconfig::None + PackTileReconfig::None preserve that.
+    compute_kernel_lib::eltwise_chain(
+        per_core_tile_cnt,
+        compute_kernel_lib::CopyTile<
+            cb_in,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::CopyTileReconfig::None>{},
+        compute_kernel_lib::PackTile<
+            cb_out,
+            compute_kernel_lib::Dst::D0,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::None>{});
 }
