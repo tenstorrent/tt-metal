@@ -108,7 +108,7 @@ void kernel_main() {
             if (((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset) ==
                 ((uint64_t)l1_write_addr & dram_align_offset)) {
                 // Read from DRAM to tmp buffer
-                noc_async_read(src_noc_addr + (uint64_t)start_column_id, (uint64_t)l1_write_addr, width_size);
+                noc_async_read(src_noc_addr + (uint64_t)start_column_id, l1_write_addr, width_size);
 
                 // Block before copying data from tmp to cb buffer
                 noc_async_read_barrier();
@@ -124,7 +124,7 @@ void kernel_main() {
                 // buffer
                 noc_async_read(
                     (src_noc_addr + (uint64_t)start_column_id) & dram_align_mask,
-                    (uint64_t)temp_addr,
+                    temp_addr,
                     width_size + dram_alignment);
 
                 // Block before copying data from tmp to cb buffer
@@ -141,8 +141,8 @@ void kernel_main() {
                 }
 
                 tt_memmove<false, false, true, 0>(
-                    (uint64_t)l1_write_addr,
-                    (uint64_t)temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset),
+                    l1_write_addr,
+                    temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset),
                     width_size);
             }
 
