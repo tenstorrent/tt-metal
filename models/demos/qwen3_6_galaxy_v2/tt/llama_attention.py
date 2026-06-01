@@ -14,6 +14,19 @@ from models.common.rmsnorm import RMSNorm
 _QWEN36_TILE = 32
 
 
+def _qwen36_kv_cache_dtype():
+    """KV paged cache dtype. ``QWEN36_KV_BF8=1`` halves the per-step KV read that
+    dominates full-attention SDPA at long context (llama70b ships bf8 KV). The
+    fill/update_cache kernels accept a bf16 producer into a bf8 cache (they
+    quantize on write) and paged SDPA reads bf8 directly, so ONLY the cache
+    allocation changes — producers stay bf16.
+    Default OFF: bf8 KV quantization compounds over the 16 full-attn layers and
+    garbled Qwen3.6-27B decode output even at ISL-128 (next token 248068→43223,
+    coherent English → CJK mojibake). Do NOT enable until it clears the 128k
+    coherence gate; on this model it does not."""
+    return ttnn.bfloat8_b if os.environ.get("QWEN36_KV_BF8", "0") == "1" else ttnn.bfloat16
+
+
 # ---------------------------------------------------------------------------
 # qwen3.6 internal helpers (ported from
 # ``models/demos/qwen3_6_galaxy/tt/llama_attention.py`` — PCC-verified in v1)
@@ -890,11 +903,14 @@ class TtLlamaAttention(LightweightModule):
             # the QKVG linear at bfloat16 dtype); bake the cache in bfloat16
             # so ttnn.fill_cache / paged_fill_cache don't trip the
             # "input and cache must have same dtype" check.
+            # QWEN36_KV_BF8=1 allocates the cache as bfloat8_b (halves the
+            # SDPA KV read); the write paths typecast k_rot/v_t to match.
+            _kv_dtype = _qwen36_kv_cache_dtype()
             self.layer_past = [
                 ttnn.from_torch(
                     kv,
                     device=self.mesh_device,
-                    dtype=ttnn.bfloat16,
+                    dtype=_kv_dtype,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=row_shard_kv,
@@ -1652,6 +1668,10 @@ class TtLlamaAttention(LightweightModule):
             keys_cache, values_cache = kv_cache[0], kv_cache[1]
         else:
             keys_cache, values_cache = self.layer_past[0], self.layer_past[1]
+        # KV cache fill. Under QWEN36_KV_BF8 the cache is bfloat8_b; the
+        # paged_fill_cache / fill_cache kernels accept bf16 producers into a
+        # bf8 cache (the kernel quantizes on write — see fill_cache device op
+        # dtype assert: input fp32/bf16 OR cache bf8/bf4), so no producer cast.
         if page_table is not None:
             ttnn.experimental.paged_fill_cache(keys_cache, k_rot, page_table, batch_idx=user_id)
             ttnn.experimental.paged_fill_cache(values_cache, v_t, page_table, batch_idx=user_id)
@@ -1865,6 +1885,11 @@ class TtLlamaAttention(LightweightModule):
             )
             k_rot_sharded = ttnn.to_memory_config(k_rot, memory_config=_height_shard_cfg)
             v_t_sharded = ttnn.to_memory_config(v_t, memory_config=_height_shard_cfg)
+            # paged_update_cache REQUIRES a fp32/bf16 producer (it rejects bf8
+            # inputs — see paged_update_cache device op dtype assert). The bf8
+            # cache (QWEN36_KV_BF8) is written from this bf16 producer; the
+            # kernel quantizes on write, matching llama70b's decode path which
+            # feeds a bf16 rotary output into its bf8 cache. Do NOT cast here.
             ttnn.experimental.paged_update_cache(
                 keys_cache, k_rot_sharded, update_idxs_tensor=current_pos, page_table=page_table
             )
@@ -1881,6 +1906,8 @@ class TtLlamaAttention(LightweightModule):
                 _pos = int(
                     ttnn.to_torch(current_pos, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))[0].item()
                 )
+            # update_cache requires fp32/bf16 producer; the bf8 cache is
+            # written from the bf16 producer (kernel quantizes on write).
             ttnn.update_cache(keys_cache, k_rot, _pos, batch_offset=0)
             ttnn.update_cache(values_cache, v_t, _pos, batch_offset=0)
         k_rot.deallocate(True)
