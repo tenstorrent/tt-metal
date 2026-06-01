@@ -34,9 +34,11 @@ namespace distributed {
 class MeshDevice;
 
 // Long-lived DRAM-core (DRISC) prefetcher for a single MeshDevice. Holds the
-// per-device Programs, the per-(device, sender) H2D sockets, the host worker
-// thread that drains the request queue, and the tensor references held alive
-// for the lifetime of the Start/Stop cycle.
+// per-device Programs, the per-(device, sender) H2D sockets, and the host worker
+// thread that drains the request queue. It does NOT own or hold the queued tensors
+// or GCBs alive — queue() serializes each request into socket pages and keeps only
+// those bytes, so the caller must keep the tensors and GCB alive until stop() (see
+// the public dram_core_prefetcher.hpp note).
 //
 // Single-prefetcher-at-a-time invariant: start() asserts is_active() is false.
 //

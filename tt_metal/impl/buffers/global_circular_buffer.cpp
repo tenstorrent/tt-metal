@@ -19,6 +19,7 @@
 #include <tt_align.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
+#include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -58,6 +59,7 @@ void initialize_global_circular_buffer(
     TT_FATAL(num_sender_cores > 0, "At least one sender required");
     uint32_t num_receiver_cores = 0;
     uint32_t max_num_receivers_per_sender = 0;
+    uint32_t min_num_receivers_per_sender = std::numeric_limits<uint32_t>::max();
     std::vector<CoreRange> sender_cores;
     sender_cores.reserve(num_sender_cores);
     for (const auto& [sender_core, receiver_cores] : sender_receiver_core_mapping) {
@@ -65,6 +67,7 @@ void initialize_global_circular_buffer(
         sender_cores.emplace_back(sender_core);
         receiver_cores_out = receiver_cores_out.merge(receiver_cores);
         max_num_receivers_per_sender = std::max(max_num_receivers_per_sender, receiver_cores.num_cores());
+        min_num_receivers_per_sender = std::min(min_num_receivers_per_sender, receiver_cores.num_cores());
     }
     sender_cores_out = CoreRangeSet(sender_cores);
     TT_FATAL(num_sender_cores == sender_cores_out.num_cores(), "Duplicate sender cores found");
@@ -77,6 +80,17 @@ void initialize_global_circular_buffer(
         // DRAM senders and worker receivers live in disjoint programmable-core types, so their
         // physical NoC coords can never collide — no extra cross-type check needed.
         all_cores_out = receiver_cores_out;
+        // The DRAM-sender path is built around a single per-GCB receiver count: the sender
+        // state block sizes one NOC XY table at max_num_receivers_per_sender, the kernel walks
+        // exactly num_receivers entries, and compute_tensor_layout derives geometry from one
+        // receiver count. A non-uniform mapping would index past the shorter senders' tables
+        // and feed the wrong receiver count to those senders, so require uniformity here.
+        TT_FATAL(
+            min_num_receivers_per_sender == max_num_receivers_per_sender,
+            "DRAM-sender GlobalCircularBuffer requires the same number of receivers for every sender; got min={}, "
+            "max={}",
+            min_num_receivers_per_sender,
+            max_num_receivers_per_sender);
     }
     max_num_receivers_per_sender_out = max_num_receivers_per_sender;
 }
@@ -226,16 +240,20 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
         }
         for (IDevice* dev : devices) {
             const CoreCoord virtual_core = dev->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
-            MetalContext::instance().get_cluster().write_core(
-                dev->id(),
-                tt_cxy_pair(dev->id(), virtual_core),
-                std::span<const uint8_t>(pages_sent_zero_bytes.data(), pages_sent_zero_bytes.size()),
-                pages_sent_write_addr);
-            MetalContext::instance().get_cluster().write_core(
-                dev->id(),
-                tt_cxy_pair(dev->id(), virtual_core),
-                std::span<const uint8_t>(block_bytes.data(), block_bytes.size()),
-                write_addr);
+            MetalContext::instance(context_id)
+                .get_cluster()
+                .write_core(
+                    dev->id(),
+                    tt_cxy_pair(dev->id(), virtual_core),
+                    std::span<const uint8_t>(pages_sent_zero_bytes.data(), pages_sent_zero_bytes.size()),
+                    pages_sent_write_addr);
+            MetalContext::instance(context_id)
+                .get_cluster()
+                .write_core(
+                    dev->id(),
+                    tt_cxy_pair(dev->id(), virtual_core),
+                    std::span<const uint8_t>(block_bytes.data(), block_bytes.size()),
+                    write_addr);
         }
     }
 }

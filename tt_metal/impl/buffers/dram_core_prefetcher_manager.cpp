@@ -345,7 +345,8 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
     TT_FATAL(!data_tensors.empty(), "QueueDramCorePrefetcherRequest requires at least one tensor");
 
     // Derive num_receivers from the GCB itself so each Queue call can target a
-    // GCB with a different receiver count.
+    // GCB with a different receiver count. The DRAM-sender GCB ctor enforces a
+    // uniform receiver count across senders, so front() speaks for every sender.
     const uint32_t gcb_num_receivers = gcb.sender_receiver_core_mapping().front().second.num_cores();
     const uint32_t gcb_state_addr = static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(gcb));
 
@@ -522,6 +523,11 @@ void DramCorePrefetcherManager::worker_loop() {
                 } else {
                     next_pending.push_back(sock_idx);
                 }
+            }
+            // If no socket drained this pass, every remaining target is back-pressured;
+            // yield rather than busy-spinning at 100% CPU until a receiver frees a page.
+            if (next_pending.size() == still_pending.size()) {
+                std::this_thread::yield();
             }
             still_pending = std::move(next_pending);
         }
