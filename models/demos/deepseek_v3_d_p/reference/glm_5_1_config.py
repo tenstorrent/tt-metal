@@ -30,6 +30,7 @@ class GLM51Config:
     NUM_LAYERS = 78
     NUM_DENSE_LAYERS = 3  # first_k_dense_replace
     VOCAB_SIZE = 154880
+    MAX_POSITION_EMBEDDINGS = 202752
 
     # MLA dimensions
     NUM_ATTENTION_HEADS = 64
