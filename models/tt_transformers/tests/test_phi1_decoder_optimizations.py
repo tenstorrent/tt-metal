@@ -9,6 +9,7 @@ from models.tt_transformers.demo.simple_text_demo import (
     get_parametrized_mesh_device,
     is_greedy_sampling_request,
     normalize_greedy_sampling_params,
+    resolve_paged_attention_mode,
     should_disable_device_sampling,
 )
 from models.tt_transformers.tt.model_config import (
@@ -61,6 +62,37 @@ def test_parametrized_mesh_device_uses_env_mapping_without_hardware_probe(monkey
     monkeypatch.setenv("MESH_DEVICE", "N150")
 
     assert get_parametrized_mesh_device() == (1, 1)
+
+
+def test_phi1_defaults_to_non_paged_attention_for_single_user_short_context():
+    assert not resolve_paged_attention_mode(
+        "microsoft/phi-1",
+        paged_attention=True,
+        batch_size=1,
+        data_parallel=1,
+        max_seq_len=1024,
+    )
+
+
+def test_phi1_keeps_explicit_paged_attention_override():
+    assert resolve_paged_attention_mode(
+        "microsoft/phi-1",
+        paged_attention=True,
+        batch_size=1,
+        data_parallel=1,
+        max_seq_len=1024,
+        paged_attention_arg=True,
+    )
+
+
+def test_non_phi_models_keep_default_paged_attention():
+    assert resolve_paged_attention_mode(
+        "meta-llama/Llama-3.2-1B",
+        paged_attention=True,
+        batch_size=1,
+        data_parallel=1,
+        max_seq_len=1024,
+    )
 
 
 @pytest.mark.parametrize(
