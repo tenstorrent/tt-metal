@@ -59,7 +59,7 @@
       --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_single_pod --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
       --rank-binding rev_c_rank_binding_single_pod.yaml \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
-        --max-new-tokens 128000 \
+        --max-new-tokens 4096 \
         --no-stop-at-eos \
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
@@ -147,7 +147,7 @@
       --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_superpod --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
       --rank-binding rev_c_rank_binding_superpod.yaml \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
-        --max-new-tokens 128000 \
+        --max-new-tokens 4096 \
         --no-stop-at-eos \
         --weights real \
         --cache-path /mnt/models/deepseek-ai/cache-2026-03-22 \
