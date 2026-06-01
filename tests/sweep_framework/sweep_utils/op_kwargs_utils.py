@@ -149,13 +149,35 @@ def _is_core_range_set_dict(value: Any) -> bool:
 def _parse_core_range_set(value: Any) -> Any:
     """Parse a CoreRangeSet dict into a ttnn.CoreRangeSet.
 
-    Handles format: {"type": "CoreRangeSet", "value": "{CoreRange(CoreCoord(0, 0), CoreCoord(7, 7))}"}
+    Handles C++ repr format: {"type": "CoreRangeSet", "value": "{[0-0 - 7-7]}"}
+    where each CoreRange is rendered as [x1-y1 - x2-y2] by CoreRange::str().
+    Also handles structured data format with "data" key.
     """
     import re
+    import json as _json
+
+    data = value.get("data")
+    if data is not None:
+        try:
+            if isinstance(data, str):
+                data = _json.loads(data)
+            if isinstance(data, list):
+                core_ranges = set()
+                for rd in data:
+                    start = rd["start"]
+                    end = rd["end"]
+                    core_ranges.add(ttnn.CoreRange(
+                        ttnn.CoreCoord(start["x"], start["y"]),
+                        ttnn.CoreCoord(end["x"], end["y"]),
+                    ))
+                if core_ranges:
+                    return ttnn.CoreRangeSet(core_ranges)
+        except (KeyError, TypeError, ValueError):
+            pass
 
     repr_str = str(value.get("value", value.get("repr", "")))
     core_ranges = set()
-    for m in re.finditer(r"CoreRange\(CoreCoord\((\d+),\s*(\d+)\),\s*CoreCoord\((\d+),\s*(\d+)\)\)", repr_str):
+    for m in re.finditer(r"\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\]", repr_str):
         x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
         core_ranges.add(ttnn.CoreRange(ttnn.CoreCoord(x1, y1), ttnn.CoreCoord(x2, y2)))
     if core_ranges:
