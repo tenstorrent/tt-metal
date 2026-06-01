@@ -5,6 +5,7 @@ Requires a Blackhole P150 device.
 Run: pytest models/demos/blackhole/qwen3_5_9b/tests/test_single_layer.py -v
 """
 import glob
+import os
 
 import pytest
 import torch
@@ -15,7 +16,10 @@ from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
 from models.demos.blackhole.qwen3_5_9b.tt.qwen35_decoder import Qwen35TransformerBlock
 from models.demos.blackhole.qwen3_5_9b.tt.weight_mapping import remap_qwen35_state_dict
 
-CHECKPOINT_DIR = "/local/ttuser/atupe/Qwen9b"
+# HF_MODEL (hub name or local path) is the single source of truth for the config.
+# CHECKPOINT_DIR is still used directly to glob the raw safetensors.
+CHECKPOINT_DIR = os.environ.get("HF_MODEL", "/local/ttuser/atupe/Qwen9b")
+os.environ.setdefault("HF_MODEL", CHECKPOINT_DIR)
 pytestmark = run_for_blackhole()
 PCC_THRESHOLD = 0.98
 
@@ -42,7 +46,7 @@ def device():
 @pytest.fixture(scope="module")
 def model_fixtures(device):
     """Load config and weights once for all tests."""
-    args = Qwen35ModelArgs(mesh_device=device, checkpoint_dir=CHECKPOINT_DIR)
+    args = Qwen35ModelArgs(mesh_device=device)
 
     from safetensors import safe_open
 
