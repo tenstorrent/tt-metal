@@ -977,7 +977,7 @@ def as_tensor(
 
     try:
         tensor = ttnn._ttnn.tensor.load_tensor_flatbuffer(cache_file_name, device=device)
-        logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
+        # logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
     except RuntimeError as e:
         if not _as_tensor_cache_repair:
             raise RuntimeError(f"Failed to load cache file {cache_file_name}: {e}. Delete it to regenerate.") from e
