@@ -1370,7 +1370,6 @@ re_run_command:
                 *((uint32_t*)cmd_ptr + 3));
             WAYPOINT("!CMD");
             ASSERT(0);
-        }
     }
 
     return done;
@@ -1419,7 +1418,6 @@ static inline bool process_cmd_h(uintptr_t& cmd_ptr) {
                 *((uint32_t*)cmd_ptr + 3));
             WAYPOINT("!CMD");
             ASSERT(0);
-        }
     }
 
     return done;
