@@ -1021,9 +1021,40 @@ static std::map<std::string, std::string> build_kernel_defines(
         defines["ARCH_BLACKHOLE"] = "1";
     }
 
-    defines["NUM_DRAM_BANKS"] = std::to_string(num_dram_channels ? num_dram_channels : 1);
-    defines["NUM_L1_BANKS"] = std::to_string(EMULE_NUM_L1_BANKS);
+    {
+        uint32_t num_dram = num_dram_channels ? num_dram_channels : 1;
+        uint32_t num_l1 = EMULE_NUM_L1_BANKS;
+        defines["NUM_DRAM_BANKS"] = std::to_string(num_dram);
+        defines["NUM_L1_BANKS"] = std::to_string(num_l1);
+        // Mirror tt_metal/jit_build/build_env_manager.cpp:118-129. Upstream
+        // `interleaved_addr_gen::get_bank_offset_index<DRAM>` chooses bit-shift
+        // when banks are a power of two and a constant divisor otherwise.
+        // Without these defines, non-pow2 bank counts (12 on WH-N150) silently
+        // fall through to a 0-bit shift and every page lands in bank 0.
+        auto is_pow2 = [](uint32_t n) { return n > 0 && (n & (n - 1)) == 0; };
+        auto log2u = [](uint32_t n) {
+            uint32_t l = 0;
+            while ((1u << l) < n) {
+                ++l;
+            }
+            return l;
+        };
+        if (is_pow2(num_dram)) {
+            defines["LOG_BASE_2_OF_NUM_DRAM_BANKS"] = std::to_string(log2u(num_dram));
+        } else {
+            defines["IS_NOT_POW2_NUM_DRAM_BANKS"] = "1";
+        }
+        if (is_pow2(num_l1)) {
+            defines["LOG_BASE_2_OF_NUM_L1_BANKS"] = std::to_string(log2u(num_l1));
+        } else {
+            defines["IS_NOT_POW2_NUM_L1_BANKS"] = "1";
+        }
+    }
     defines["NUM_NOCS"] = std::to_string(NUM_NOCS);
+    // Upstream tensor/dspec.h gates `get_common_arg_addr` as a forward-decl
+    // under KERNEL_BUILD; emule's jit_kernel_stubs.hpp provides the definition.
+    // Without KERNEL_BUILD, dspec.h emits a stub that collides with emule's.
+    defines["KERNEL_BUILD"] = "1";
     defines["DRAM_ALIGNMENT"] = std::to_string(hal::get_dram_alignment());
     defines["L1_ALIGNMENT"] = std::to_string(hal::get_l1_alignment());
     defines["EMULE_WORKER_COL_MAP"] = worker_col_map_str;
