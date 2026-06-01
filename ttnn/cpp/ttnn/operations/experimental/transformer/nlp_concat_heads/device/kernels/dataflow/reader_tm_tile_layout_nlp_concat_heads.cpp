@@ -38,7 +38,7 @@ void kernel_main() {
             for (uint32_t w_dim = 0; w_dim < in0_w_tiles; w_dim++) {
                 cb_reserve_back(cb_id_in0, block_size);
 
-                noc_async_read_tile(in0_tensor_current_tile_id, s0, l1_write_addr);
+                noc_async_read_page(in0_tensor_current_tile_id, s0, l1_write_addr);
                 l1_write_addr += single_tile_size_bytes;
                 in0_tensor_current_tile_id++;
 

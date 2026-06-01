@@ -51,7 +51,7 @@ void kernel_main() {
         uint32_t l1_target_write_addr = get_write_ptr(cb_target_idx);
 
         auto [page, offset] = get_page_and_offset(row, tiled_H);
-        noc_async_read(get_noc_addr(page, target_addr_gen, offset), l1_target_write_addr, target_read_page_size);
+        noc_async_read(target_addr_gen.get_noc_addr(page, offset), l1_target_write_addr, target_read_page_size);
 
         // Zero-initialize so out-of-shard targets produce 0.0.
         cb_reserve_back(cb_output_idx, onetile);

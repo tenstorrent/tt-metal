@@ -236,6 +236,7 @@ jobs:
     if: ${{
         github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
         needs.find-changed-files.outputs.tt-nn-changed == 'true'
       }}
     strategy:
@@ -313,7 +314,7 @@ jobs:
         uv pip install pyyaml  # Needed by clang-tidy-diff-20.py
     - name: Restore CPM source cache
       id: cpm-cache
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
         path: .cpmcache.tar.zst
         key: cpm-z22-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
@@ -339,7 +340,7 @@ jobs:
         [ -d .cpmcache ] && tar -I 'zstd -T0 --ultra -22' -cf .cpmcache.tar.zst .cpmcache || true
     - name: Save CPM source cache
       if: steps.cpm-cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
       with:
         path: .cpmcache.tar.zst
         key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
@@ -405,6 +406,18 @@ jobs:
         # TT internal runners mount the workspace at /__w/ not /home/runner/work/.
         # Without this, fixes.yml paths don't match the PR diff and comments are silently dropped.
         repo_path_prefix: /__w
+
+  # Full clang-tidy scan (same checks enforced at merge gate).
+  code-analysis:
+    needs: [build-docker-images]
+    if: (github.event_name == 'pull_request' && !github.event.pull_request.draft) || github.event_name == 'merge_group'
+    uses: ./.github/workflows/code-analysis.yaml
+    secrets: inherit
+    with:
+      platform: "Ubuntu 22.04"
+      ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
+      dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
+      force-scan: true
 
   # LLK PR Labeling — auto-apply labels based on which LLK directories changed
   llk-label-pr:
@@ -556,6 +569,7 @@ jobs:
       - ttnn-smoke-tests
       - metalium-examples
       - clang-tidy-light
+      - code-analysis
       - model-charts-sync
       - build-docs
       - llk-test-wormhole
@@ -568,6 +582,7 @@ jobs:
         with:
           required-jobs: "asan-build"
           optional-jobs: >-
+            code-analysis,
             clang-tidy-light,
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
             model-charts-sync, build-docs,

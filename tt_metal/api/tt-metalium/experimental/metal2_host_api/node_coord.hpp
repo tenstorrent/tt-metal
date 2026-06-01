@@ -19,6 +19,8 @@
 // A "node" is a NOC endpoint with an x,y address - a block in the accelerator grid.
 // This header provides type aliases for the new "Node" terminology.
 
+#include <variant>
+
 #include <tt-metalium/core_coord.hpp>
 
 namespace tt::tt_metal::experimental::metal2_host_api {
@@ -27,6 +29,9 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 using NodeCoord = tt::tt_metal::CoreCoord;
 using NodeRange = tt::tt_metal::CoreRange;
 using NodeRangeSet = tt::tt_metal::CoreRangeSet;
+
+// A set of nodes specified as a single point, range, or range set.
+using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
 
 // Function aliases: Node terminology equivalents
 

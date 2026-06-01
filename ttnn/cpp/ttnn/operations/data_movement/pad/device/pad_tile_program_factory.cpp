@@ -6,6 +6,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -14,22 +15,21 @@ namespace ttnn::prim {
 using ttnn::operations::data_movement::float_to_uint16;
 using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 
-PadTileCoreProgramFactory::cached_program_t PadTileCoreProgramFactory::create(
-    const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output) {
+ProgramDescriptor PadTileCoreProgramFactory::create_descriptor(
+    const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& a = tensor_args.input;
+    Tensor& output = tensor_return_value;
     const auto& pad_value = operation_attributes.pad_value;
     const auto& output_padded_shape = operation_attributes.output_padded_shape;
-    tt::tt_metal::Program program{};
 
-    CoreRange core({0, 0}, {0, 0});
+    const CoreRangeSet core_ranges{CoreRange{{0, 0}, {0, 0}}};
 
     // This should allocate a DRAM buffer on the device
 
-    auto output_shape = output_padded_shape;
+    const auto& output_shape = output_padded_shape;
 
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
-
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
+    Buffer* src0_buffer = a.buffer();
+    Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -42,19 +42,31 @@ PadTileCoreProgramFactory::cached_program_t PadTileCoreProgramFactory::create(
     log_debug(tt::LogOp, "input_tensor_start: {}", operation_attributes.input_tensor_start);
     log_debug(tt::LogOp, "pad_value: {}", pad_value);
 
-    uint32_t src0_cb_index = 0;
-    uint32_t num_input_tiles = 2;
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    ProgramDescriptor desc;
 
-    uint32_t src1_cb_index = 1;  // For pad buffer
-    uint32_t num_pad_tiles = 1;
-    tt::tt_metal::CircularBufferConfig cb_src1_config =
-        tt::tt_metal::CircularBufferConfig(num_pad_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
-            .set_page_size(src1_cb_index, single_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    const uint32_t src0_cb_index = 0;
+    const uint32_t num_input_tiles = 2;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_input_tiles * single_tile_size,
+        .core_ranges = core_ranges,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src0_cb_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
+
+    const uint32_t src1_cb_index = 1;  // For pad buffer
+    const uint32_t num_pad_tiles = 1;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = num_pad_tiles * single_tile_size,
+        .core_ranges = core_ranges,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src1_cb_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        }}},
+    });
 
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
@@ -80,71 +92,52 @@ PadTileCoreProgramFactory::cached_program_t PadTileCoreProgramFactory::create(
 
     uint32_t num_unpadded_tiles = a.physical_volume() / TILE_HW;
 
-    const std::array reader_kernel_args = {
-        src0_buffer->address(),
-        num_unpadded_tiles,
-        std::uint32_t{0},
-    };
-    const std::array writer_kernel_args = {
-        dst_buffer->address(),
-        num_unpadded_W,
-        num_padded_Wt,
-        num_unpadded_Z,
-        num_padded_Zt,
-        num_unpadded_Yt,
-        num_padded_Yt,
-        num_unpadded_Xt,
-        num_padded_Xt,
-        packed_pad_value,
-    };
-
     // Reader compile-time args
     // Data is 32 byte aligned
     std::vector<uint32_t> reader_compile_time_args;
-    tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {src0_cb_index, src1_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+
     // Tilized reader
-    tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
-        core,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = core_ranges;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_unary_pad_dims_interleaved.cpp",
-        core,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_unary_pad_dims_interleaved.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = core_ranges;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
-    tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_kernel_args);
+    // Slot 0 of both kernels is a raw buffer base address (no offset).  Use Buffer*
+    // for BufferBinding so the framework patches addresses on cache hits without
+    // rebuilding the descriptor.
+    reader_desc.emplace_runtime_args(CoreCoord{0, 0}, {src0_buffer, num_unpadded_tiles, std::uint32_t{0}});
 
-    tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_kernel_args);
+    writer_desc.emplace_runtime_args(
+        CoreCoord{0, 0},
+        {dst_buffer,
+         num_unpadded_W,
+         num_padded_Wt,
+         num_unpadded_Z,
+         num_padded_Zt,
+         num_unpadded_Yt,
+         num_padded_Yt,
+         num_unpadded_Xt,
+         num_padded_Xt,
+         packed_pad_value});
 
-    return cached_program_t{std::move(program), {unary_reader_kernel_id, unary_writer_kernel_id}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
 
-void PadTileCoreProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const PadParams& /*operation_attributes*/,
-    const PadInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto* src_dram_buffer = tensor_args.input.buffer();
-    auto* dst_dram_buffer = tensor_return_value.buffer();
-
-    CoreCoord core = {0, 0};
-
-    {
-        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(
-            cached_program.program, cached_program.shared_variables.unary_reader_kernel_id, core);
-        runtime_args[0] = src_dram_buffer->address();
-    }
-
-    {
-        auto& runtime_args = tt::tt_metal::GetRuntimeArgs(
-            cached_program.program, cached_program.shared_variables.unary_writer_kernel_id, core);
-        runtime_args[0] = dst_dram_buffer->address();
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim

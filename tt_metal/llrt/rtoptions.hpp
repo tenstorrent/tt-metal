@@ -317,6 +317,9 @@ class RunTimeOptions {
     // Dispatch kernel progress update period in milliseconds (default 100ms)
     uint32_t dispatch_progress_update_ms = 100;
 
+    // Disable dispatch telemetry
+    bool dispatch_telemetry_disabled = false;
+
     // Using MGD 2.0 syntax for mesh graph descriptor
     bool use_mesh_graph_descriptor_2_0 = false;
 
@@ -348,9 +351,6 @@ class RunTimeOptions {
 
     // Disable use of pre-compiled firmware and fall back to JIT compilation.
     bool disable_precompiled_fw = false;
-
-    // Use new DEVICE_PRINT system instead of legacy DPRINT
-    bool use_device_print = false;
 
     // Time (in microseconds) between DEVICE_PRINT dispatch stall-detection passes
     // and full-dispatch passes on dispatch_s.
@@ -566,13 +566,12 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_kernels_early_return(),
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
-            get_disable_fabric_2_erisc_mode(),
-            get_use_device_print());
+            get_disable_fabric_2_erisc_mode());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -778,6 +777,9 @@ public:
     std::chrono::duration<float> get_timeout_duration_for_operations() const { return timeout_duration_for_operations; }
     std::string get_dispatch_timeout_command_to_execute() const { return dispatch_timeout_command_to_execute; }
     uint32_t get_dispatch_progress_update_ms() const { return dispatch_progress_update_ms; }
+
+    bool get_dispatch_telemetry_disabled() const { return dispatch_telemetry_disabled; }
+
     // Mesh graph descriptor version accessor
     bool get_use_mesh_graph_descriptor_2_0() const { return use_mesh_graph_descriptor_2_0; }
 
@@ -801,9 +803,6 @@ public:
 
     bool get_disable_precompiled_fw() const { return disable_precompiled_fw; }
     void set_disable_precompiled_fw(bool disable) { disable_precompiled_fw = disable; }
-
-    bool get_use_device_print() const { return use_device_print; }
-    void set_use_device_print(bool use) { use_device_print = use; }
 
     uint32_t get_device_print_dispatch_stall_us() const { return device_print_dispatch_stall_us; }
     void set_device_print_dispatch_stall_us(uint32_t v) { device_print_dispatch_stall_us = v; }

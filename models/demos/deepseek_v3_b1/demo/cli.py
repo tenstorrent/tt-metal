@@ -132,6 +132,14 @@ def create_parser() -> argparse.ArgumentParser:
         help="Maximum number of SRAM-pinned hot experts per MoE layer (top-N by routing frequency).",
     )
     parser.add_argument(
+        "--enable-sram-bspm",
+        action="store_true",
+        help=(
+            "Use the BSPM precision map for SRAM hot expert weights too "
+            "(default: uniform BFP4). Requires --bspm-dir to be set."
+        ),
+    )
+    parser.add_argument(
         "--launch-only",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -203,6 +211,7 @@ def run_demo(
     sram_hot_experts_ceiling: int = 64,
     bspm_dir: Path | None = None,
     bspm_budget: float = 3.5,
+    enable_sram_bspm: bool = False,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     configure_runtime_env(enable_sram_hot_experts=enable_sram_hot_experts)
@@ -234,6 +243,7 @@ def run_demo(
             sram_hot_experts_ceiling=sram_hot_experts_ceiling,
             bspm_dir=bspm_dir,
             bspm_budget=bspm_budget,
+            enable_sram_bspm=enable_sram_bspm,
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()
@@ -333,6 +343,7 @@ def main(argv: list[str] | None = None) -> int:
         sram_hot_experts_ceiling=args.sram_hot_experts_ceiling,
         bspm_dir=args.bspm_dir,
         bspm_budget=args.bspm_budget,
+        enable_sram_bspm=args.enable_sram_bspm,
     )
     print(end="", file=sys.stdout, flush=True)
     return 0

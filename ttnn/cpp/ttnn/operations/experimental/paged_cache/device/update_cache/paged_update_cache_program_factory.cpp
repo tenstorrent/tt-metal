@@ -162,6 +162,11 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
 
     auto* dst_buffer = cache_tensor.buffer();
 
+    // cache_position_modulo: 0 = disabled (legacy), nonzero = wrap update_idx mod this
+    // value before page_table lookup. Required when the caller's page_table is sized for
+    // a bounded sliding-window cache (vLLM SlidingWindowSpec).
+    const uint32_t cache_position_modulo = operation_attributes.cache_position_modulo.value_or(0u);
+
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src1_cb_index,
@@ -183,6 +188,7 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
         cb_pagetable_id,
         St,
         in0_sequential_mode_semaphore_id,
+        cache_position_modulo,
     };
     TensorAccessorArgs(dst_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(update_idxs_tensor.has_value() ? update_idxs_tensor->buffer() : nullptr)
@@ -209,6 +215,7 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
         cb_pagetable_id,
         St,
         in0_sequential_mode_semaphore_id,
+        cache_position_modulo,
     };
     TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
 

@@ -97,6 +97,15 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
 
 
 class Gemma4Model:
+    # Generator-interface flags. Decode inputs are recomputed on host every
+    # token (host embedding + PLI), so the captured trace's input buffers
+    # have to be refreshed on every replay rather than just on the first
+    # call after a token-shape change. On-device sampling stays off until
+    # the host-sampling path is solid; flip this once the on-device path
+    # is verified end-to-end.
+    _tt_vllm_always_refresh_decode_trace_inputs = True
+    _supports_on_device_sampling = False
+
     def __init__(
         self,
         mesh_device,
@@ -112,6 +121,7 @@ class Gemma4Model:
         paged_attention_config=None,
         create_kv_cache=True,
         precision=None,
+        bounded_sliding_kv_cache: bool = False,
         # Legacy parameters — ignored
         transformation_mats=None,
     ):
@@ -235,6 +245,24 @@ class Gemma4Model:
         self._embed_weight_cpu = None
         if embed_key and state_dict:
             self._embed_weight_cpu = state_dict[embed_key]
+
+        # Stash for prefill inputs computed in ``prepare_inputs_prefill``.
+        # The Generator interface splits prefill into prepare→forward, but
+        # forward's signature doesn't carry the host-side input_ids/embeds
+        # the model needs for per-layer inputs, so we cache them here.
+        # Direct callers (text_demo, unit tests) pass them explicitly to
+        # ``ttnn_prefill_forward`` and bypass this stash.
+        self._prefill_input_ids_torch = None
+        self._prefill_embeds_torch = None
+
+        # Stash for the per-layer-input (PLI) device tensor produced in
+        # ``prepare_decode_inputs_host``. ``Generator``'s decode path
+        # unpacks only the first 4 elements of ``prepare_inputs_decode``'s
+        # return tuple, dropping the trailing PLI tensor (E2B/E4B), so we
+        # cache it here and have ``ttnn_decode_forward`` fall back to it
+        # when the explicit kwarg is None — same pattern as the prefill
+        # stash above.
+        self._decode_pli_combined = None
         self.per_layer_input_weights = {}
         if self.hidden_size_per_layer_input and state_dict:
             pli_size = self.hidden_size_per_layer_input
@@ -257,6 +285,7 @@ class Gemma4Model:
                     break
 
         # Decoder layers (each creates its own KV cache if requested)
+        self.bounded_sliding_kv_cache = bounded_sliding_kv_cache
         self.layers = []
         for i in range(n_layers):
             layer = Gemma4DecoderLayer(
@@ -274,6 +303,7 @@ class Gemma4Model:
                 mesh_config=mesh_config,
                 max_seq_len=max_seq_len,
                 max_local_batch_size=max_local_batch_size,
+                bounded_sliding_kv_cache=bounded_sliding_kv_cache,
             )
             # Create KV cache for non-shared layers only
             # Shared layers will use their source layer's KV cache
@@ -281,6 +311,19 @@ class Gemma4Model:
                 from models.demos.gemma4.tt.attention.kv_cache import init_kv_cache
 
                 attn_cfg = Gemma4AttentionConfig(hf_config, i)
+                # Bounded SlidingWindowSpec allocation for sliding layers: only enough
+                # physical blocks to cover one sliding-window-sized region per user,
+                # instead of one max_seq_len-sized region. Mirrors vLLM's hybrid
+                # kv_cache_groups. Full-attention layers keep the existing allocation.
+                max_num_blocks_override = None
+                if (
+                    bounded_sliding_kv_cache
+                    and attn_cfg.is_sliding
+                    and attn_cfg.sliding_window is not None
+                    and paged_attention_config is not None
+                ):
+                    sliding_blocks_per_seq = attn_cfg.sliding_window // paged_attention_config.block_size
+                    max_num_blocks_override = sliding_blocks_per_seq * max_local_batch_size
                 kv_cache = init_kv_cache(
                     mesh_device=mesh_device,
                     config=attn_cfg,
@@ -288,6 +331,7 @@ class Gemma4Model:
                     max_seq_len=max_seq_len,
                     paged_attention_config=paged_attention_config,
                     cache_dtype=ttnn.bfloat16,
+                    max_num_blocks_override=max_num_blocks_override,
                 )
                 layer.self_attn.kv_cache = kv_cache
             self.layers.append(layer)
@@ -435,6 +479,7 @@ class Gemma4Model:
         position_idx_cache=None,
         pli_combined=None,
         get_last_token=-1,
+        page_tables_per_layer=None,
     ):
         """
         Forward pass through decoder layers + final norm + lm_head + softcapping.
@@ -452,9 +497,21 @@ class Gemma4Model:
             pli_device_tensors: optional list of pre-computed PLI device tensors (trace mode)
             position_idx_cache: optional [batch] int32 tensor for KV cache update (when position_idx is uint32)
             pli_combined: optional [1,1,n_layers,pli_size] device tensor of pre-computed PLI (decode)
+            page_tables_per_layer: optional list of per-layer page tables, one
+                entry per decoder layer. When set, each layer's attention
+                receives ``page_tables_per_layer[i]`` instead of ``page_table``.
+                The vLLM hybrid kv-cache manager produces this list so
+                sliding-window layers can index a smaller paged pool than
+                full-attention layers (KV cache groups).
         """
         seq_len = hidden_states.shape[2]
         caches = kv_caches or self.tt_kv_cache
+
+        if page_tables_per_layer is not None and len(page_tables_per_layer) != len(self.layers):
+            raise ValueError(
+                f"page_tables_per_layer has {len(page_tables_per_layer)} entries "
+                f"but model has {len(self.layers)} layers"
+            )
 
         # Compute per-layer inputs (E2B/E4B)
         # Decode: pre-computed on host via compute_host_embeddings (pli_combined)
@@ -520,11 +577,12 @@ class Gemma4Model:
             elif not is_decode and i in kv_source_indices:
                 keep_kv = True
 
+            layer_page_table = page_tables_per_layer[i] if page_tables_per_layer is not None else page_table
             hidden_states = layer(
                 hidden_states,
                 rope_mats=layer_rope,
                 position_idx=position_idx,
-                page_table=page_table,
+                page_table=layer_page_table,
                 kv_cache=kv_cache,
                 is_decode=is_decode,
                 token_index=token_index,
@@ -639,22 +697,233 @@ class Gemma4Model:
 
     # ── Generator-compatible interface ────────────────────────────────────
 
+    def _replicate_to_mesh_mapper(self):
+        """ReplicateTensorToMesh on multi-device meshes; None on single device."""
+        is_mesh = hasattr(self.mesh_device, "shape")
+        if is_mesh and self.mesh_device.get_num_devices() > 1:
+            return ttnn.ReplicateTensorToMesh(self.mesh_device)
+        return None
+
+    def _page_table_torch_to_ttnn(self, page_table_torch):
+        """Build a page-table device tensor from a torch tensor.
+
+        Mirrors the single-page-table handling in
+        :meth:`prepare_decode_inputs_host`: slice to the first user
+        (Gemma4 currently runs batch=1 per submesh) and replicate across
+        the mesh.
+        """
+        pt = page_table_torch[0:1] if page_table_torch.dim() > 1 else page_table_torch.unsqueeze(0)
+        return ttnn.from_torch(
+            pt,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self._replicate_to_mesh_mapper(),
+        )
+
+    def _page_tables_to_ttnn(self, page_tables_per_layer):
+        """Lazy-allocate persistent device tensors for per-layer page tables.
+
+        The persistent buffers are allocated once and reused across calls
+        so trace capture binds stable device addresses. Per-step content
+        updates happen out-of-trace via
+        :meth:`update_persistent_per_layer_page_tables`.
+
+        Layers in upstream's HMA tensor-sharing layout that point at the
+        same DRAM buffer still get their own page table object here — the
+        per-layer block IDs are what differs across them, even when the
+        underlying KV tensor is shared.
+        """
+        if page_tables_per_layer is None:
+            return None
+        persistent = getattr(self, "_persistent_per_layer_page_tables", None)
+        n = len(page_tables_per_layer)
+        if persistent is None or len(persistent) != n:
+            persistent = []
+            for pt in page_tables_per_layer:
+                if pt is None:
+                    persistent.append(None)
+                    continue
+                if isinstance(pt, ttnn.Tensor):
+                    persistent.append(pt)
+                    continue
+                persistent.append(self._page_table_torch_to_ttnn(pt))
+            self._persistent_per_layer_page_tables = persistent
+        return persistent
+
+    def update_persistent_per_layer_page_tables(self, page_tables_per_layer):
+        """Update the content of persistent per-layer page-table device
+        tensors in place.
+
+        Trace replay reads block IDs from stable device addresses, so we
+        ``copy_host_to_device`` rather than reallocate. Called by the
+        vLLM hybrid bridge before each forward (out-of-trace) so the
+        next traced call observes the new block IDs.
+        """
+        if page_tables_per_layer is None:
+            return
+        persistent = getattr(self, "_persistent_per_layer_page_tables", None)
+        if persistent is None or len(persistent) != len(page_tables_per_layer):
+            return
+        for i, pt in enumerate(page_tables_per_layer):
+            if pt is None or persistent[i] is None or isinstance(pt, ttnn.Tensor):
+                continue
+            pt_sliced = pt[0:1] if pt.dim() > 1 else pt.unsqueeze(0)
+            host_pt = ttnn.from_torch(
+                pt_sliced,
+                device=None,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self._replicate_to_mesh_mapper(),
+            )
+            ttnn.copy_host_to_device_tensor(host_pt, persistent[i])
+
+    def prepare_inputs_prefill(
+        self,
+        tokens,
+        start_pos=0,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        trace_enabled=False,
+        last_token_idx=None,
+        global_user_id=None,
+        batch_size=1,
+        user_id=0,
+        batched_prefill=False,
+        **kwargs,
+    ):
+        """Build prefill device inputs and cache the host-side state needed
+        for per-layer inputs.
+
+        Returns a 6-tuple matching
+        ``models/tt_transformers/tt/model.py:prepare_inputs_prefill``:
+        ``(tt_input, None, None, tt_page_table, tt_chunk_page_table,
+        tt_chunk_start_idx)``. ``tt_input`` is host-staged token IDs when
+        ``trace_enabled`` (so the trace owns the embed step) and tile-laid
+        embeddings otherwise. The two ``None`` slots are placeholders for
+        ``rot_mats_global``/``rot_mats_local`` — Gemma4 computes RoPE
+        internally from layer state. ``tt_chunk_start_idx`` is always
+        ``None`` because Gemma4 doesn't chunk-prefill (added to the
+        return so the generator's 6-element unpack at
+        ``tt_transformers/tt/generator.py:1151`` lines up).
+        """
+        import torch.nn.functional as F
+
+        del start_pos, last_token_idx, global_user_id, batch_size, user_id, batched_prefill, kwargs
+        del chunk_start_idx  # Accepted for signature compat; Gemma4 doesn't chunk-prefill.
+
+        device = None if trace_enabled else self.mesh_device
+        mesh_mapper = self._replicate_to_mesh_mapper()
+
+        tokens_torch = tokens.to(torch.long)
+        tt_tokens = ttnn.from_torch(
+            tokens,
+            device=device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=mesh_mapper,
+        )
+
+        tt_page_table = None
+        if page_table is not None:
+            tt_page_table = ttnn.from_torch(
+                page_table,
+                device=device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mesh_mapper,
+            )
+
+        tt_chunk_page_table = None
+        if chunk_page_table is not None:
+            tt_chunk_page_table = ttnn.from_torch(
+                chunk_page_table,
+                device=device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=mesh_mapper,
+            )
+
+        self._prefill_input_ids_torch = tokens_torch
+        if self._embed_weight_cpu is not None:
+            self._prefill_embeds_torch = F.embedding(tokens_torch, self._embed_weight_cpu).float() * self.embed_scale
+        else:
+            self._prefill_embeds_torch = None
+
+        if trace_enabled:
+            return tt_tokens, None, None, tt_page_table, tt_chunk_page_table, None
+
+        tt_embeds = self.embed_tokens(tt_tokens)
+        if len(tt_embeds.shape) == 3:
+            tt_embeds = ttnn.unsqueeze_to_4D(tt_embeds)
+        tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
+
+        return tt_embeds, None, None, tt_page_table, tt_chunk_page_table, None
+
+    def prepare_prefill_inputs_trace(self, tokens, **kwargs):
+        return self.prepare_inputs_prefill(tokens, trace_enabled=True, **kwargs)
+
+    def transform_and_embed_prefill_inputs_device(self, tokens, tt_page_table, tt_chunk_page_table):
+        """Inside-trace input transform: lookup embeddings and tile-lay them.
+
+        Called when the captured trace owns the embed step (so the input
+        tensor is the raw token tensor staged by ``prepare_inputs_prefill``
+        with ``trace_enabled=True``).
+        """
+        tt_embeds = self.embed_tokens(tokens)
+        if len(tt_embeds.shape) == 3:
+            tt_embeds = ttnn.unsqueeze_to_4D(tt_embeds)
+        tt_embeds = ttnn.to_layout(tt_embeds, ttnn.TILE_LAYOUT)
+        return tt_embeds, tt_page_table, tt_chunk_page_table
+
     def ttnn_prefill_forward(
         self,
         x,
+        rot_mats_global=None,
+        rot_mats_local=None,
         user_id=0,
         page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
         get_last_token=-1,
         kv_cache=None,
         batch_size=1,
         input_ids_torch=None,
         embeds_torch=None,
+        page_tables_per_layer=None,
+        **kwargs,
     ):
-        """Prefill forward — matches tt_transformers Generator interface."""
-        seq_len = x.shape[-2]
-        # Pass get_last_token down so the slice happens BEFORE lm_head — the
-        # post-lm_head slice would still allocate full-seq logits first.
-        logits = self(
+        """Prefill forward — Generator-compatible signature.
+
+        Generator-irrelevant kwargs (``rot_mats_*``, ``chunk_*``) are
+        accepted and discarded — the model computes RoPE internally and
+        does not chunk prefill. ``input_ids_torch``/``embeds_torch`` may
+        be passed directly by callers that compute them inline (text
+        demos, unit tests); the Generator path stashes them on ``self``
+        during ``prepare_inputs_prefill`` and they're picked up here when
+        the explicit kwargs are None.
+
+        ``page_tables_per_layer`` likewise comes via a stash
+        (``_active_page_tables_per_layer``) when running under the vLLM
+        hybrid bridge — Generator's prefill internals don't thread the
+        kwarg, so the bridge attaches it to the model object before
+        invoking us. When None, falls back to legacy single-page-table
+        behavior.
+
+        ``get_last_token`` is passed down so the last-token slice happens
+        *before* lm_head — slicing after would still allocate full-seq
+        logits first.
+        """
+        del rot_mats_global, rot_mats_local, chunk_page_table, chunk_start_idx, kwargs
+        if input_ids_torch is None:
+            input_ids_torch = self._prefill_input_ids_torch
+        if embeds_torch is None:
+            embeds_torch = self._prefill_embeds_torch
+        if page_tables_per_layer is None:
+            page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
+        page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
+        return self(
             hidden_states=x,
             position_idx=None,
             page_table=page_table,
@@ -663,9 +932,30 @@ class Gemma4Model:
             input_ids_torch=input_ids_torch,
             embeds_torch=embeds_torch,
             get_last_token=get_last_token,
+            page_tables_per_layer=page_tables_per_layer,
         )
 
-        return logits
+    def process_output_prefill(self, tt_out, last_token_idx):
+        """Read prefill logits to host and slice to the last token's vocab row.
+
+        Under TP, Gemma4 all-gathers logits inside the model so a single
+        device tensor already holds the full vocab.
+        """
+        if self.mesh_config is not None and self.mesh_config.tp > 1:
+            torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+        else:
+            torch_output = ttnn.to_torch(tt_out)
+        return torch_output[..., last_token_idx, : self.vocab_size]
+
+    def process_logits_after_prefill_trace(self, logits, last_token_idx):
+        """Slice the 32-token tile containing ``last_token_idx`` from a
+        traced prefill's logit tensor (the trace returns full-tile output)."""
+        get_last_token = (last_token_idx // 32) * 32
+        return ttnn.slice(
+            logits,
+            (0, 0, get_last_token, 0),
+            (1, 1, get_last_token + 32, logits.shape[-1]),
+        )
 
     def switch_mode(self, mode):
         """Generator compatibility — no prefetcher to reinitialize."""
@@ -731,7 +1021,26 @@ class Gemma4Model:
         from models.tt_transformers.tt.common import copy_host_to_device
 
         host_inputs = self.prepare_decode_inputs_host(tokens, current_pos, page_table)
-        return copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+        self.bind_decode_trace_inputs(device_inputs)
+        return device_inputs
+
+    def bind_decode_trace_inputs(self, device_inputs):
+        """Stash extra (>4) device inputs on ``self`` so
+        ``ttnn_decode_forward`` can pick them up.
+
+        ``Generator``'s decode paths only thread the first four
+        elements of ``prepare_inputs_decode``'s return tuple through
+        the call signature; anything beyond that — Gemma4's
+        host-precomputed per-layer-input (PLI) at index 4 — has to
+        reach the model via a side channel. ``Generator`` calls this
+        hook in both the no-trace path (through this wrapper) and at
+        trace-capture time (so traced ops bind against
+        ``trace_inputs_decode[i][4]`` rather than the compile-run
+        buffer); see :meth:`Generator._capture_decode_trace_text`.
+        """
+        if len(device_inputs) > 4:
+            self._decode_pli_combined = device_inputs[4]
 
     def ttnn_decode_forward(
         self,
@@ -743,6 +1052,7 @@ class Gemma4Model:
         sampling_on_device=False,
         capture_sampling_trace=False,
         pli_combined=None,
+        page_tables_per_layer=None,
     ):
         """Decode forward — matches tt_transformers Generator interface.
 
@@ -759,6 +1069,9 @@ class Gemma4Model:
             capture_sampling_trace: If True, return logits for split-trace sampling.
             pli_combined: Optional [1,1,n_layers,pli_size] device tensor of host-precomputed
                 per-layer inputs (E2B/E4B). Required for Gemma3n-style models in decode.
+            page_tables_per_layer: Optional list of per-layer page tables. Falls back to
+                ``self._active_page_tables_per_layer`` (set by the vLLM hybrid bridge,
+                since ``Generator``'s decode path doesn't thread the kwarg).
         """
         # Convert ROW_MAJOR host data to TILE on device
         input_embeds = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
@@ -767,6 +1080,18 @@ class Gemma4Model:
         token_index = None if self.rope_caches_2d else 0
 
         position_idx_cache = rot_mat_idxs  # Generator passes pos_int32 as rot_mat_idxs
+
+        if page_tables_per_layer is None:
+            page_tables_per_layer = getattr(self, "_active_page_tables_per_layer", None)
+        page_tables_per_layer = self._page_tables_to_ttnn(page_tables_per_layer)
+
+        # ``Generator``'s decode path slices ``prepare_inputs_decode``'s
+        # return tuple to its first 4 elements before calling here, so
+        # the PLI tensor produced by ``prepare_decode_inputs_host`` for
+        # E2B/E4B per-layer inputs is dropped on the way in. Fall back
+        # to the cached value the host-prep step stashed on ``self``.
+        if pli_combined is None:
+            pli_combined = self._decode_pli_combined
 
         logits = self(
             hidden_states=input_embeds,
@@ -777,6 +1102,7 @@ class Gemma4Model:
             token_index=token_index,
             position_idx_cache=position_idx_cache,
             pli_combined=ttnn.to_layout(pli_combined, ttnn.TILE_LAYOUT) if pli_combined is not None else None,
+            page_tables_per_layer=page_tables_per_layer,
         )
 
         # On-device sampling
@@ -790,3 +1116,23 @@ class Gemma4Model:
             return tt_tokens, tt_log_probs
 
         return logits, None
+
+    def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
+        """Read decode logits or sampled tokens to host.
+
+        Under TP, decode logits are already all-gathered across devices
+        inside the model forward, so a single device tensor contains the
+        full vocab.
+        """
+        if is_tokens or is_log_probs:
+            if self.mesh_config is not None and self.mesh_config.tp > 1:
+                torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+            else:
+                torch_out = ttnn.to_torch(tt_out)
+            return torch_out.reshape(-1)[:B]
+
+        if self.mesh_config is not None and self.mesh_config.tp > 1:
+            torch_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+        else:
+            torch_out = ttnn.to_torch(tt_out)
+        return torch_out[:, :, :B, : self.vocab_size].view(B, S, -1)

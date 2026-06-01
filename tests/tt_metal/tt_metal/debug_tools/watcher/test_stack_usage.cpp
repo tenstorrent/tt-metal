@@ -86,8 +86,8 @@ void RunOneTest(
             std::string name = fmt::format("dm_{}", i);
             kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
                 .unique_id = name,
-                .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{path_metal2},
-                .num_threads = static_cast<uint8_t>(dms_per_kernel),
+                .source = path_metal2,
+                .num_threads = dms_per_kernel,
                 .compile_time_arg_bindings = {{"usage", free}},
                 .config_spec =
                     experimental::metal2_host_api::DataMovementConfiguration{
@@ -99,7 +99,7 @@ void RunOneTest(
         constexpr const char* COMPUTE_NAME = "compute";
         kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
             .unique_id = COMPUTE_NAME,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{path_metal2},
+            .source = path_metal2,
             // One thread per Neo (Quasar Tensix has 4) so the compute kernel fans out across
             // all Neos; each Neo internally runs the kernel on its 4 TRISCs.
             .num_threads = 4,
@@ -117,7 +117,7 @@ void RunOneTest(
             auto noc = (type_idx == 1) ? tt::tt_metal::NOC::RISCV_1_default : tt::tt_metal::NOC::RISCV_0_default;
             kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
                 .unique_id = name,
-                .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{path_metal2},
+                .source = path_metal2,
                 .num_threads = 1,
                 .compile_time_arg_bindings = {{"usage", free}},
                 .config_spec =
@@ -131,7 +131,7 @@ void RunOneTest(
         constexpr const char* COMPUTE_NAME = "compute";
         kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
             .unique_id = COMPUTE_NAME,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{path_metal2},
+            .source = path_metal2,
             .num_threads = 1,
             .compile_time_arg_bindings = {{"usage", free}},
             .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
