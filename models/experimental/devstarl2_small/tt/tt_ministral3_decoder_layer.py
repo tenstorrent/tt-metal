@@ -50,7 +50,7 @@ class TtMinistral3DecoderLayer(LightweightModule):
                         TensorGroup.ACTIVATION: PrecisionSetting.BFP8,
                     },
                     "OpFidelity": {
-                        OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
+                        OpGroup.LI_QKV_PREFILL: MathFidelitySetting.LOFI,
                         OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,
                     },
                 }

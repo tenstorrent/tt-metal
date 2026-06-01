@@ -22,6 +22,18 @@ from models.tt_transformers.tt.model_config import ModelArgs
 
 DEVSTRAL_REPO_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"
 MINISTRAL_SHORT_PREFILL_L1_WIDTH_MM_ENV = "TT_MINISTRAL3_SHORT_PREFILL_L1_WIDTH_MM"
+_MESH_DEVICE_PRESETS = {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}
+
+
+def _mesh_device_param():
+    """Mesh shape for parametrized tests without probing PCIe at pytest collection."""
+    mesh_env = os.environ.get("MESH_DEVICE")
+    if mesh_env in _MESH_DEVICE_PRESETS:
+        return _MESH_DEVICE_PRESETS[mesh_env]
+    try:
+        return ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size()
+    except Exception:
+        return int(os.environ.get("TT_MESH_WIDTH", "4"))
 
 
 def _text_model_root(multimodal_inner):
@@ -58,15 +70,7 @@ def trust_remote_ministral(monkeypatch):
 
 @torch.no_grad()
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
-    indirect=True,
-)
+@pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
 @pytest.mark.parametrize("seq_len", (128,))
 @pytest.mark.parametrize("batch_size", (1,))
 @pytest.mark.parametrize(
@@ -94,9 +98,10 @@ def test_ministral3_model_pcc_devstral_weights(
         use_hf_rope=True,
         cache_hf=True,
     )
-    # Keep this test lightweight while validating full model wiring.
-    model_args.n_layers = 1
     model_args.is_distributed_norm = types.MethodType(lambda self, mode: False, model_args)
+    logger.info(
+        f"Ministral3 model prefill PCC: n_layers={model_args.n_layers} seq_len={seq_len} batch_size={batch_size}"
+    )
 
     text_cfg = model_args.hf_config.text_config
 
@@ -184,10 +189,11 @@ def test_ministral3_model_pcc_devstral_weights(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     pos_tt = ttnn.from_torch(
-        position_ids.to(torch.int32),
+        position_ids.to(torch.bfloat16).reshape(1, 1, 1, seq_len),
         device=mesh_device,
-        dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 

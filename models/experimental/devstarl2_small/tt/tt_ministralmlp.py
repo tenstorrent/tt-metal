@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import os
+
 import torch
 
 import ttnn
@@ -11,6 +13,116 @@ from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode, pad_to_size
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
+
+
+def _ff1_shard_n(args) -> int:
+    return int(args.hidden_dim) // int(args.num_devices)
+
+
+_TILE = 32
+
+
+def _padded_seq_len(seq_len: int) -> int:
+    return ((int(seq_len) + _TILE - 1) // _TILE) * _TILE
+
+
+def _ff1_input_block_sharding_enabled(args, seq_len: int, full_seq_len: int) -> bool:
+    """Shard FF1/FF3 activations for short prefill (128×5120×8192)."""
+    if int(full_seq_len) != int(seq_len):
+        return False
+    return int(seq_len) <= 128 and int(args.dim) == 5120
+
+
+def _ff1_matmul_grid(args, seq_len: int, mesh_device) -> ttnn.CoreGrid:
+    if _ff1_linear_sweep_fits_device(mesh_device) and int(seq_len) <= 128:
+        return ttnn.CoreGrid(y=4, x=8)
+    row_tiles = _padded_seq_len(seq_len) // _TILE
+    col_tiles = int(args.dim) // _TILE
+    rows, cols = args.find_prefill_grid(row_tiles, col_tiles)
+    return ttnn.CoreGrid(y=rows, x=cols)
+
+
+def _ff1_block_sharded_input_mem_cfg(args, seq_len: int, grid: ttnn.CoreGrid) -> ttnn.MemoryConfig:
+    padded_seq = _padded_seq_len(seq_len)
+    return ttnn.create_sharded_memory_config(
+        (1, 1, padded_seq, int(args.dim)),
+        core_grid=grid,
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+
+def _prepare_ff1_block_sharded_input(x: ttnn.Tensor, sharded_mem_cfg: ttnn.MemoryConfig) -> ttnn.Tensor:
+    mc = x.memory_config()
+    if mc.is_sharded() and mc == sharded_mem_cfg:
+        return x
+    if mc.is_sharded():
+        x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
+    return ttnn.interleaved_to_sharded(x, sharded_mem_cfg)
+
+
+def _ff1_linear_sweep_fits_device(mesh_device) -> bool:
+    grid = mesh_device.compute_with_storage_grid_size()
+    return int(grid.x) >= 8 and int(grid.y) >= 4
+
+
+def _ff1_linear_sweep_enabled(args, seq_len: int, full_seq_len: int, mesh_device) -> bool:
+    """Sweep winner for 128×5120×8192 prefill FF1/FF3 (test_linear_128x5120x8192_sweep)."""
+    default = os.environ.get("TT_MINISTRAL3_SHORT_PREFILL_L1_WIDTH_MM", "1")
+    if os.environ.get("TT_MINISTRAL3_FF1_LINEAR_SWEEP", default).strip().lower() in ("0", "false", "no"):
+        return False
+    # Sweep used [1,1,M,K]; batched reshape [1,B,128,H] (demo prefill L>128) needs a different grid.
+    if int(full_seq_len) != int(seq_len):
+        return False
+    if not _ff1_linear_sweep_fits_device(mesh_device):
+        return False
+    return int(seq_len) <= 128 and int(args.dim) == 5120 and _ff1_shard_n(args) == 8192
+
+
+def _ff1_linear_sweep_program_config() -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+    # 2D dram/ds/dram 8x4 w4: 193.43us vs minimal_matmul 8x8 M8K8N8 ~382us on 128×5120×8192.
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=4,
+        out_block_h=1,
+        out_block_w=32,
+        per_core_M=1,
+        per_core_N=32,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+
+
+def _ff2_linear_sweep_enabled(args, seq_len: int, full_seq_len: int, mesh_device) -> bool:
+    """Sweep winner for 128×8192×5120 prefill FF2 (test_linear_128x8192x5120_sweep)."""
+    default = os.environ.get("TT_MINISTRAL3_SHORT_PREFILL_L1_WIDTH_MM", "1")
+    if os.environ.get("TT_MINISTRAL3_FF2_LINEAR_SWEEP", default).strip().lower() in ("0", "false", "no"):
+        return False
+    if int(full_seq_len) != int(seq_len):
+        return False
+    if not _ff1_linear_sweep_fits_device(mesh_device):
+        return False
+    return int(seq_len) <= 128 and int(args.dim) == 5120 and _ff1_shard_n(args) == 8192
+
+
+def _ff2_linear_sweep_program_config() -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+    # 2D dram/ds/dram 8x4 w8: ~189us vs default matmul ~319us; matches Tracy MatmulDeviceOperation ~188us.
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
+        in0_block_w=8,
+        out_subblock_h=1,
+        out_subblock_w=4,
+        out_block_h=1,
+        out_block_w=20,
+        per_core_M=1,
+        per_core_N=20,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
 
 
 class TtMinistralMLP(LightweightModule):
@@ -126,30 +238,76 @@ class TtMinistralMLP(LightweightModule):
                 x = ttnn.reshape(x, [1, full_seq_len // chunk, chunk, -1])
                 cfg_seq = chunk
 
-        pc_2 = self.args.get_mlp_ff2_prg_config(mode, cfg_seq, self.prefetcher)
+        ff1_x = x
+        ff1_input_sharded = False
+
+        use_ff2_sweep = (
+            mode == Mode.PREFILL
+            and not TG
+            and cfg_seq <= 128
+            and _ff2_linear_sweep_enabled(self.args, cfg_seq, full_seq_len, self.mesh_device)
+        )
+        pc_2 = (
+            _ff2_linear_sweep_program_config()
+            if use_ff2_sweep
+            else self.args.get_mlp_ff2_prg_config(mode, cfg_seq, self.prefetcher)
+        )
+
+        if (
+            mode == Mode.PREFILL
+            and not TG
+            and _ff1_input_block_sharding_enabled(self.args, cfg_seq, full_seq_len)
+            and _ff1_linear_sweep_enabled(self.args, cfg_seq, full_seq_len, self.mesh_device)
+        ):
+            ff1_grid = _ff1_matmul_grid(self.args, cfg_seq, self.mesh_device)
+            ff1_in_mem = _ff1_block_sharded_input_mem_cfg(self.args, cfg_seq, ff1_grid)
+            ff1_x = _prepare_ff1_block_sharded_input(x, ff1_in_mem)
+            ff1_input_sharded = ff1_x is not x
 
         if mode == Mode.PREFILL and not TG:
-            grid = self.args.mlp1_3_grid(cfg_seq)
-            mmc_ff13 = ttnn.MinimalMatmulConfig(
-                M_block_size=8,
-                K_block_size=8,
-                N_block_size=8,
-                compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
-            )
-            w1_out = ttnn.experimental.minimal_matmul(
-                x,
-                self.w1,
-                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-                config=mmc_ff13,
-                dtype=ttnn.bfloat8_b,
-            )
-            w3_out = ttnn.experimental.minimal_matmul(
-                x,
-                self.w3,
-                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-                config=mmc_ff13,
-                dtype=ttnn.bfloat8_b,
-            )
+            if _ff1_linear_sweep_enabled(self.args, cfg_seq, full_seq_len, self.mesh_device):
+                pc_ff13 = _ff1_linear_sweep_program_config()
+                mem_ff13 = self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher)
+                w1_out = ttnn.linear(
+                    ff1_x,
+                    self.w1,
+                    dtype=ttnn.bfloat8_b,
+                    core_grid=None,
+                    compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                    program_config=pc_ff13,
+                    memory_config=mem_ff13,
+                )
+                w3_out = ttnn.linear(
+                    ff1_x,
+                    self.w3,
+                    dtype=ttnn.bfloat8_b,
+                    core_grid=None,
+                    compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                    program_config=pc_ff13,
+                    memory_config=mem_ff13,
+                )
+            else:
+                grid = self.args.mlp1_3_grid(cfg_seq)
+                mmc_ff13 = ttnn.MinimalMatmulConfig(
+                    M_block_size=8,
+                    K_block_size=8,
+                    N_block_size=8,
+                    compute_with_storage_grid_size=ttnn.CoreCoord(grid[0], grid[1]),
+                )
+                w1_out = ttnn.experimental.minimal_matmul(
+                    x,
+                    self.w1,
+                    compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                    config=mmc_ff13,
+                    dtype=ttnn.bfloat8_b,
+                )
+                w3_out = ttnn.experimental.minimal_matmul(
+                    x,
+                    self.w3,
+                    compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                    config=mmc_ff13,
+                    dtype=ttnn.bfloat8_b,
+                )
         elif mode == Mode.DECODE and not TG and self.prefetcher is None:
             # decode FF1/FF3 via minimal_matmul (DRAM-sharded weights).
             # Config tuned by tests/matmul/test_decode_ff13_matmul_sweep.py: at
@@ -184,7 +342,7 @@ class TtMinistralMLP(LightweightModule):
             pc_1 = self.args.get_mlp_ff1_3_prg_config(mode, cfg_seq, self.prefetcher)
             pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, cfg_seq, self.prefetcher)
             w1_out = ttnn.linear(
-                x,
+                ff1_x,
                 self.w1,
                 dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
                 core_grid=None,
@@ -197,7 +355,7 @@ class TtMinistralMLP(LightweightModule):
                 else None,
             )
             w3_out = ttnn.linear(
-                x,
+                ff1_x,
                 self.w3,
                 dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
                 core_grid=None,
@@ -209,6 +367,8 @@ class TtMinistralMLP(LightweightModule):
                 if self.prefetcher is not None and mode == Mode.DECODE
                 else None,
             )
+        if ff1_input_sharded:
+            ttnn.deallocate(ff1_x)
         ttnn.deallocate(x)
 
         if TG:
@@ -307,7 +467,7 @@ class TtMinistralMLP(LightweightModule):
             decoder_id=self.layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
 
-        if cfg_seq > 128 and mode != Mode.DECODE:
+        if cfg_seq > 128 and mode != Mode.DECODE and not use_ff2_sweep:
             w2_out = ttnn.experimental.minimal_matmul(
                 w2_in,
                 self.w2,

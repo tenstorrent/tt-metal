@@ -5,11 +5,108 @@
 from __future__ import annotations
 
 import math
+import os
+from contextlib import contextmanager
 
 import ttnn
 
 from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.common import Mode
+
+
+def _qkv_shard_n(args) -> int:
+    return int(args.qkv_size) // int(args.num_devices)
+
+
+def _qkv_linear_sweep_enabled(args, seq_len: int) -> bool:
+    """Sweep winner for 128×5120×1536 prefill QKV (test_linear_128x5120x1536_sweep)."""
+    default = os.environ.get("TT_MINISTRAL3_SHORT_PREFILL_L1_WIDTH_MM", "1")
+    if os.environ.get("TT_MINISTRAL3_QKV_LINEAR_SWEEP", default).strip().lower() in ("0", "false", "no"):
+        return False
+    return (
+        int(seq_len) <= 128
+        and int(args.dim) == 5120
+        and _qkv_shard_n(args) == 1536
+        and not args.use_minimal_qkv_prefill_matmul(seq_len)
+    )
+
+
+def _qkv_linear_sweep_program_config() -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+    # 2D l1/ds/dram 8x4 w8: 46.70us vs baseline dram 120.16us on 128×5120×1536.
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
+        in0_block_w=8,
+        out_subblock_h=1,
+        out_subblock_w=3,
+        out_block_h=1,
+        out_block_w=6,
+        per_core_M=1,
+        per_core_N=6,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
+
+
+def _prepare_qkv_linear_sweep_input(x: ttnn.Tensor) -> ttnn.Tensor:
+    if x.memory_config().buffer_type == ttnn.BufferType.L1:
+        return x
+    return ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+
+
+def _typecast_if_needed(x: ttnn.Tensor, dtype) -> ttnn.Tensor:
+    if x.dtype == dtype:
+        return x
+    return ttnn.typecast(x, dtype=dtype)
+
+
+@contextmanager
+def _skip_identity_typecast():
+    """Skip no-op typecasts; avoid deallocating a tensor still used as the cast output."""
+    orig_typecast = ttnn.typecast
+    orig_deallocate = ttnn.deallocate
+    identity_src_ids: set[int] = set()
+
+    def typecast(tensor, dtype=None, **kwargs):
+        target = dtype if dtype is not None else kwargs.get("dtype")
+        if target is not None and tensor.dtype == target:
+            identity_src_ids.add(id(tensor))
+            return tensor
+        return orig_typecast(tensor, dtype=dtype, **kwargs)
+
+    def deallocate(tensor):
+        tid = id(tensor)
+        if tid in identity_src_ids:
+            identity_src_ids.discard(tid)
+            return
+        return orig_deallocate(tensor)
+
+    ttnn.typecast = typecast
+    ttnn.deallocate = deallocate
+    try:
+        yield
+    finally:
+        ttnn.typecast = orig_typecast
+        ttnn.deallocate = orig_deallocate
+
+
+@contextmanager
+def _qkv_linear_sweep_program_config_override(args, seq_len: int):
+    if not _qkv_linear_sweep_enabled(args, seq_len):
+        yield
+        return
+    orig_get_pc = args.get_attn_qkv_program_config
+
+    def get_pc_override(mode, sl=1, prefetcher=None):
+        if mode == Mode.PREFILL and _qkv_linear_sweep_enabled(args, sl):
+            return _qkv_linear_sweep_program_config()
+        return orig_get_pc(mode, sl, prefetcher)
+
+    args.get_attn_qkv_program_config = get_pc_override
+    try:
+        yield
+    finally:
+        args.get_attn_qkv_program_config = orig_get_pc
 
 
 class TtMinistralAttention(Attention):
@@ -26,8 +123,8 @@ class TtMinistralAttention(Attention):
         self.llama_4_scaling_beta = llama_4_scaling_beta
         self.original_max_position_embeddings = original_max_position_embeddings
         super().__init__(*args, **kwargs)
-        # Decoder-layer profiling target: keep only QKV/WO prefill on HiFi2 + BF8 inputs.
-        self.li_qkv_prefill_compute_kernel_cfg = configuration.compute_kernel_config_hifi2
+        # QKV prefill (128×5120×1536): LoFi BFP8 matmul; WO prefill stays HiFi2.
+        self.li_qkv_prefill_compute_kernel_cfg = configuration.compute_kernel_config_lofi
         self.li_o_prefill_compute_kernel_cfg = configuration.compute_kernel_config_hifi2
         if self.wqkv.dtype != ttnn.bfloat8_b:
             self.wqkv = ttnn.typecast(self.wqkv, dtype=ttnn.bfloat8_b)
@@ -56,10 +153,8 @@ class TtMinistralAttention(Attention):
 
     def _hf_rope_prefill_legacy(self, q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats):
         """Legacy HF prefill rope (full TILE cos/sin from TtMinistral3RotaryEmbedding)."""
-        if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:
-            q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
-        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:
-            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
+        q_heads_1QSD_pre_rot = _typecast_if_needed(q_heads_1QSD_pre_rot, ttnn.bfloat16)
+        k_heads_1KSD_pre_rot = _typecast_if_needed(k_heads_1KSD_pre_rot, ttnn.bfloat16)
 
         q_heads_1QSD = ttnn.experimental.rotary_embedding(q_heads_1QSD_pre_rot, rot_mats[0], rot_mats[1])
         k_heads_1KSD = ttnn.experimental.rotary_embedding(k_heads_1KSD_pre_rot, rot_mats[0], rot_mats[1])
@@ -70,10 +165,8 @@ class TtMinistralAttention(Attention):
         cos, sin = rot_mats[0], rot_mats[1]
         B_iter = self.batch_size_per_device_group
 
-        if q_heads_pre_rot_1BQD.dtype != ttnn.bfloat16:
-            q_heads_pre_rot_1BQD = ttnn.typecast(q_heads_pre_rot_1BQD, dtype=ttnn.bfloat16)
-        if k_heads_pre_rot_1BKD.dtype != ttnn.bfloat16:
-            k_heads_pre_rot_1BKD = ttnn.typecast(k_heads_pre_rot_1BKD, dtype=ttnn.bfloat16)
+        q_heads_pre_rot_1BQD = _typecast_if_needed(q_heads_pre_rot_1BQD, ttnn.bfloat16)
+        k_heads_pre_rot_1BKD = _typecast_if_needed(k_heads_pre_rot_1BKD, ttnn.bfloat16)
 
         q_out_mem = q_heads_pre_rot_1BQD.memory_config()
         k_out_mem = k_heads_pre_rot_1BKD.memory_config()
@@ -129,7 +222,7 @@ class TtMinistralAttention(Attention):
         """Llama-4 scale factor in bf16 to avoid fp32 tilize/typecast overhead."""
         orig = float(self.original_max_position_embeddings)
         beta = float(self.llama_4_scaling_beta)
-        pos_f = ttnn.typecast(pos_tt, ttnn.bfloat16)
+        pos_f = _typecast_if_needed(pos_tt, ttnn.bfloat16)
         ratio = ttnn.divide(pos_f, orig)
         floored = ttnn.floor(ratio)
         log_term = ttnn.log1p(floored)
@@ -156,9 +249,10 @@ class TtMinistralAttention(Attention):
         scale_f = self._llama4_scale_factor_from_positions_ttnn(pos_row)
         scale_4d = ttnn.reshape(scale_f, (1, b, 1, 1))
         mul_dtype = q_heads.dtype if q_heads.dtype in (ttnn.bfloat16, ttnn.bfloat8_b) else ttnn.bfloat16
-        scale_tt = ttnn.typecast(scale_4d, mul_dtype)
+        scale_tt = _typecast_if_needed(scale_4d, mul_dtype)
         out = ttnn.mul(q_heads, scale_tt, dtype=mul_dtype)
-        ttnn.deallocate(scale_tt)
+        if scale_tt is not scale_4d:
+            ttnn.deallocate(scale_tt)
         return out
 
     def _apply_llama4_query_scale_prefill(self, q_heads, position_ids: ttnn.Tensor | None = None):
@@ -182,10 +276,15 @@ class TtMinistralAttention(Attention):
 
         scale_4d = ttnn.reshape(scale_f, (batch_dim, 1, seq_dim, 1))
         mul_dtype = q_heads.dtype if q_heads.dtype in (ttnn.bfloat16, ttnn.bfloat8_b) else ttnn.bfloat16
-        scale_tt = ttnn.typecast(scale_4d, mul_dtype)
+        scale_tt = _typecast_if_needed(scale_4d, mul_dtype)
         out = ttnn.mul(q_heads, scale_tt, dtype=mul_dtype)
-        ttnn.deallocate(scale_tt)
+        if scale_tt is not scale_4d:
+            ttnn.deallocate(scale_tt)
         return out
+
+    def _prefill_bf16_activations_enabled(self) -> bool:
+        default = os.environ.get("TT_MINISTRAL3_QKV_BF16_ACT", "1")
+        return default.strip().lower() not in ("0", "false", "no")
 
     def forward_prefill(
         self,
@@ -200,23 +299,40 @@ class TtMinistralAttention(Attention):
     ):
         """Prefill with optional device position_ids for Llama-4 Q scaling."""
         x_prefill = x_11SH
-        if x_prefill.dtype != ttnn.bfloat8_b:
-            x_prefill = ttnn.typecast(x_prefill, dtype=ttnn.bfloat8_b)
         self._prefill_position_ids_for_llama4_scale = position_ids
         old_activation_dtype = self.activation_dtype
-        self.activation_dtype = ttnn.bfloat8_b
+        old_ccl_dtype = self.ccl_dtype
+        if self._prefill_bf16_activations_enabled():
+            # BF16×BFP8 QKV; skip BF16=>BFP8 input cast and post-matmul BF8 round-trip.
+            self.activation_dtype = ttnn.bfloat16
+            self.ccl_dtype = ttnn.bfloat16
+        else:
+            if x_prefill.dtype != ttnn.bfloat8_b:
+                x_prefill = ttnn.typecast(x_prefill, dtype=ttnn.bfloat8_b)
+            self.activation_dtype = ttnn.bfloat8_b
+
+        batch_size = x_prefill.shape[0]
+        qkv_seq_len = int(x_prefill.shape[-2])
+        if batch_size > 1:
+            qkv_seq_len *= int(x_prefill.shape[-3]) * batch_size
+        use_qkv_sweep = _qkv_linear_sweep_enabled(self.args, qkv_seq_len)
+        if use_qkv_sweep:
+            x_prefill = _prepare_qkv_linear_sweep_input(x_prefill)
+
         try:
-            return super().forward_prefill(
-                x_prefill,
-                rot_mats,
-                user_id=user_id,
-                page_table=page_table,
-                chunk_page_table=chunk_page_table,
-                chunk_start_idx=chunk_start_idx,
-                kv_cache=kv_cache,
-            )
+            with _qkv_linear_sweep_program_config_override(self.args, qkv_seq_len), _skip_identity_typecast():
+                return super().forward_prefill(
+                    x_prefill,
+                    rot_mats,
+                    user_id=user_id,
+                    page_table=page_table,
+                    chunk_page_table=chunk_page_table,
+                    chunk_start_idx=chunk_start_idx,
+                    kv_cache=kv_cache,
+                )
         finally:
             self.activation_dtype = old_activation_dtype
+            self.ccl_dtype = old_ccl_dtype
             self._prefill_position_ids_for_llama4_scale = None
 
     def forward(
