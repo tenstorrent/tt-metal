@@ -38,6 +38,17 @@ class DeepSeekV4FlashConfig:
     O_GROUPS = 8
     QK_ROPE_HEAD_DIM = 64
 
+    # Indexer / sparse attention (NSA-style)   
+    INDEX_N_HEADS = 64
+    INDEX_HEAD_DIM = 128
+    INDEX_TOPK = 512
+    # Compressed attention config             
+    COMPRESS_RATES = {"compressed_sparse_attention": 4, "heavily_compressed_attention": 128}
+    COMPRESS_ROPE_THETA = 160000.0
+    HC_MULT = 4
+    HC_SINKHORN_ITERS = 20
+    HC_EPS = 1.0e-6
+    
     # Other
     RMS_NORM_EPS = 1e-6
     ROUTE_SCALE = 1.5
