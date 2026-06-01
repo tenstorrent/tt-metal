@@ -20,5 +20,5 @@ void kernel_main() {
         }
     }
 
-    DEVICE_PRINT("[receiver] core (%u,%u) received all %u writes\n", my_noc_x, my_noc_y, num_iterations);
+    DEVICE_PRINT("[receiver] core ({},{}) received all {} writes\n", my_noc_x, my_noc_y, num_iterations);
 }

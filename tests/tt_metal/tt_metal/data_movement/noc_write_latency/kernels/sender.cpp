@@ -38,7 +38,7 @@ void kernel_main() {
         noc_async_write_barrier();
         uint32_t t1 = rdcycles();
 
-        DEVICE_PRINT("[sender] iter %u: %u cycles\n", i, t1 - t0);
+        DEVICE_PRINT("[sender] iter {}: {} cycles\n", i, t1 - t0);
 
         *(volatile tt_l1_ptr uint32_t*)(flag_local_addr + MEM_L1_UNCACHED_BASE) = i + 1;
         noc_async_write(flag_local_addr, dst_flag_noc, sizeof(uint32_t));
