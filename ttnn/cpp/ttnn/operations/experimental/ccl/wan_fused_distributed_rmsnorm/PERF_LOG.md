@@ -649,3 +649,119 @@ a drain win later re-exposes POST compute as the bottleneck, re-introduce this.
 RoPE matmul are all drain/fabric-hidden per findings #1–#5). The only remaining
 levers that can move the wall are the **output drain (writer NoC)** and the
 **fabric AG**. Next focus there.
+
+## DECISIVE: the op is DRAM-BANDWIDTH bound, NOT compute bound (2026-05-29)
+
+Earlier this session I instrumented the writer/reader (W_AG, W_DRAIN, R_INPUT
+zones) and the raw profile *looked* compute-bound (RMS_PRE 187us ≈ RMS_POST
+175us, both >> W_DRAIN 50us / R_INPUT 71us). That reading was **wrong** — the
+TRISC zones include stall (input-wait + output backpressure), so they
+over-attribute time to "compute".
+
+**Probe (traced bench, ground truth):** gutted ~95% of PRE compute (replaced
+the 40 x²-mul + 40 l1-acc-pack per row with ONE mul+pack; CB counts preserved;
+bench has no PCC assert). Result vs baseline:
+
+| config | baseline us | PRE-gutted us | delta |
+|---|---|---|---|
+| self_N18944 (RoPE)  | 417.9 | 401.4 | **−16.4** |
+| self_N9472  (RoPE)  | 247.3 | 241.1 | −6.2 |
+| self_N2368  (RoPE)  | 119.5 | 116.9 | −2.6 |
+| cross_q_N18944      | 311.8 | 306.0 | −5.8 |
+| cross_q_N9472       | 188.4 | 188.5 | +0.0 |
+| cross_q_N2368       |  84.8 |  82.2 | −2.6 |
+| cross_k_L512        |  42.5 |  40.9 | −1.7 |
+
+Removing ~180us of profiled PRE "compute" moved the wall by ≤16us. **PRE
+compute is almost entirely hidden.** Combined with the batched-splat wash
+(POST compute also hidden), this confirms: **compute is off the critical path;
+the wall is DRAM read/write bandwidth + fabric.** Fidelity/precision are
+therefore free to keep maxed (the correctness constraint costs nothing here).
+
+**Bandwidth math:** N18944 moves 47MB read + 47MB write per device. At 512
+GB/s peak that's ~92us each. cross_q_N18944 = 311us ⇒ ~30–60% of peak — there
+is 2× headroom. The 3×/1.5× targets require approaching peak DRAM util, not
+faster math.
+
+**Reader limiter identified:** reader issues 40 input reads then a per-row
+`noc_async_read_barrier()` — reads do NOT overlap across rows (depth capped at
+40 tiles ≈ 80KB in flight ≈ ~31% of peak at ~500ns DRAM latency). The writer
+already uses `noc_async_writes_flushed()` per row (writes pipeline across
+rows). Asymmetry ⇒ deepen the reads. (Next experiments below.)
+
+### Deepen-the-reads experiments — ALL REGRESSED (2026-05-29)
+
+Two ways to raise read depth past the 40-tile per-row barrier were tried; both
+made the large shape SLOWER, not faster:
+
+1. **Coarse chunk-push** (issue a whole chunk's reads, one barrier per chunk):
+   cross_q_N18944 regressed vs the 311us baseline.
+2. **Transaction-ID reads** (`noc_async_read_set_trid` per row, drain with
+   `noc_async_read_barrier_with_trid`, whole chunk outstanding): correctness
+   PASSED (TP=4 PCC 99.9998%, TP=1 rope 4/4, multihead incl N12400) but perf
+   regressed to **326.6us vs 311us baseline** (and N2368 rope 0.87×). Reverted
+   the reader to clean HEAD.
+
+**Interpretation:** the read path is NOT simply latency-starved (if it were,
+more outstanding reads would help). Raising in-flight depth ADDS NoC/DRAM-
+controller contention that outweighs the latency-hiding gain — the op sits at a
+delicate local optimum at 64 workers. Reads alone run at ~175 GB/s (35% of
+peak) with neither the 8 DRAM banks nor the workers saturated, which points to
+NoC arbitration / NCRISC issue-rate as the limiter rather than raw DRAM BW.
+Both "more outstanding" and "fewer/more workers" (below) move OFF this optimum.
+
+### Worker-count sweeps — rows/2 heuristic is already near-optimal (2026-05-29)
+
+Two sweeps via `WAN_RMSNORM_WORKER_CAP` (caps the heuristic) and a new
+`WAN_RMSNORM_FORCE_WORKERS` (pins an exact count, added this session — inert
+when unset, so HEAD behavior is preserved by default).
+
+**Large shapes (cap sweep):** monotonic improvement with workers up to ~48–64,
+then plateau. cross_q_N18944: cap8 0.66× → cap16 1.22× → cap24 1.65× → cap48
+1.89× (≈ default cap64 1.83–1.91×). self_N18944 plateaus ≈1.5–1.6×. The default
+cap 64 is the concave optimum; more workers do not unlock 3×.
+
+**Small shape N2368 (74 rows; force-workers sweep, TP=4 LINE):**
+
+| workers | rope | no-rope |
+|---|---|---|
+| 37 (= rows/2, default) | 0.91× | 1.14× |
+| 48 | 0.97× (peak) | 1.09× |
+| 56 | 0.95× | 1.04× |
+| 64 | 0.85× | 0.96× |
+| 72 (≈ one-per-row) | 0.79× | 0.88× |
+
+(TP=8 RING N2368 same shape: peak at 37–48 then degrades — rope 1.17→1.18→…
+→1.06×; no-rope 1.37→1.31→…→0.98×.)
+
+The earlier cap-sweep gain 24→37 (rope 0.64→0.91) was climbing TO this peak;
+past ~48 workers EVERY config degrades. **rows/2 is already essentially optimal
+for the small shape** — pushing parallelism past it re-introduces the same
+MUX/fabric congestion. Worker count is therefore EXHAUSTED as a lever for the
+small-shape 1.5× target.
+
+**Why N2368 rope loses to composite (0.91×):** N2368 moves only ~11.8 MB
+(5.9 read + 5.9 write) ⇒ ~23us at peak BW; fused takes 119us, so this shape is
+NOT bandwidth-bound — it is latency / per-worker fixed-overhead / compute bound
+(huge headroom over the 23us BW floor). The rope-vs-no-rope gap at 37 workers
+(119us vs 86us = 33us) is the inlined RoPE compute (per-row trans_mat matmul +
+cos/sin muls + add, plus ~4 reconfig pairs) sitting on each worker's critical
+path. The composite applies RoPE as a separate, well-tuned op, so for small
+latency-bound shapes the fused inline RoPE is structurally at a disadvantage.
+The only remaining small-shape lever is cutting RoPE compute/config-switch
+overhead in the compute kernel (modest upside; unlikely to reach 1.5×).
+
+### Status vs targets (2026-05-29)
+
+| shape | current | target | regime | verdict |
+|---|---|---|---|---|
+| cross_q_N18944 | 1.83–1.91× | 3× | DRAM-BW bound (read ~175 GB/s = 35% peak) | read-path local optimum; 3× needs ~92% peak |
+| self_N18944 (rope) | 1.5–1.6× | 3× | DRAM-BW bound | same |
+| cross_q_N2368 (no-rope) | 1.14–1.15× | 1.5× | latency/overhead bound | worker count maxed |
+| self_N2368 (rope) | 0.91× | 1.5× | latency + exposed RoPE compute | only inline-RoPE-cost lever left |
+
+**Levers exhausted:** input_cb depth; coarse-push reads; trid deep reads;
+worker-count up AND down (both regimes). **Untested larger levers** (all
+substantial, uncertain payoff): worker→DRAM-controller core placement to lift
+read BW; reshard input to DRAM-block-sharded for contiguous large reads (costs
+a reshard pass); a non-matmul RoPE formulation to cut small-shape compute.
