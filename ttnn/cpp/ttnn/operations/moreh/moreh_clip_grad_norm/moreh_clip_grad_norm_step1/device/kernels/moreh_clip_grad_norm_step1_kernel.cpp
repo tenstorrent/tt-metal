@@ -40,6 +40,10 @@ void kernel_main() {
     const auto cb_correct_xpow = intermed_id++;
     CircularBuffer cb_correct_xpow_obj(cb_correct_xpow);  // |x|^p * exp(log(|x|) * decimal)
 
+    constexpr auto cb_xpowadd_id = tt::CBIndex::c_26;
+    constexpr auto cb_one_id = tt::CBIndex::c_1;
+    constexpr auto cb_y_id = tt::CBIndex::c_16;
+
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
@@ -138,8 +142,8 @@ void kernel_main() {
     }
 
     // Compute cb_y - reduce single pre-accumulated tile to scalar
-    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-        cb_xpowadd, cb_one, cb_y, compute_kernel_lib::ReduceInputBlockShape::single());
+    compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_xpowadd_id, cb_one_id, cb_y_id>(
+        compute_kernel_lib::ReduceInputBlockShape::single());
 
     cb_decimal_obj.pop_front(onetile);
     cb_one_obj.pop_front(onetile);

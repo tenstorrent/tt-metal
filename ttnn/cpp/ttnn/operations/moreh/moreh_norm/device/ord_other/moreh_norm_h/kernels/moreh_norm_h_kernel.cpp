@@ -35,6 +35,10 @@ void kernel_main() {
     const auto cb_reduce = cb_tmp2;
     CircularBuffer cb_reduce_obj(cb_reduce);  // reduce f(x)
 
+    constexpr auto cb_cal_id = tt::CBIndex::c_25;
+    constexpr auto cb_one_id = tt::CBIndex::c_1;
+    constexpr auto cb_reduce_id = tt::CBIndex::c_26;
+
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
@@ -139,8 +143,8 @@ void kernel_main() {
             }
         }
         // reduce f(x)
-        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-            cb_cal, cb_one, cb_reduce, compute_kernel_lib::ReduceInputBlockShape::single());
+        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_cal_id, cb_one_id, cb_reduce_id>(
+            compute_kernel_lib::ReduceInputBlockShape::single());
 
         tile_regs_acquire();
 

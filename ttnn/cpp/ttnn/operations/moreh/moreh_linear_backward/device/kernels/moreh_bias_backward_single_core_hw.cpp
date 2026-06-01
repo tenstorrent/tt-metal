@@ -44,7 +44,6 @@ void kernel_main() {
                 bool last_out = (num_tile_done == num_tiles - 1);
                 bool do_mask = (do_mask_h && last_row) || (do_mask_w && last_col);
 
-                auto cb_reduce = cb_in0;
                 if (do_mask) {
                     // get tile from reader and apply mask
                     cb_in0_obj.wait_front(onetile);
@@ -86,17 +85,32 @@ void kernel_main() {
                     tile_regs_release();
 
                     cb_in0_obj.pop_front(onetile);
-                    cb_reduce = cb_intermed0;
                 }
 
-                auto output_cb = last_out ? cb_out0 : cb_intermed1;
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM>(
-                    cb_reduce,
-                    cb_scaler,
-                    output_cb,
-                    compute_kernel_lib::ReduceInputBlockShape::single(),
-                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                    compute_kernel_lib::Accumulate::at(cb_intermed1, num_tile_done));
+                // CB ids are now reduce<> template params, but both the input CB (cb_in0 vs
+                // cb_intermed0, set by do_mask) and the output CB (cb_out0 vs cb_intermed1, set by
+                // last_out) are chosen at runtime, so the selection is hoisted into compile-time
+                // instantiations. The runtime args are identical across branches.
+                const auto reduce_block = compute_kernel_lib::ReduceInputBlockShape::single();
+                const auto reduce_layout = compute_kernel_lib::ReduceInputMemoryLayout::contiguous();
+                const auto reduce_accum = compute_kernel_lib::Accumulate::at(cb_intermed1, num_tile_done);
+                if (do_mask) {
+                    if (last_out) {
+                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_intermed0, cb_scaler, cb_out0>(
+                            reduce_block, reduce_layout, reduce_accum);
+                    } else {
+                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_intermed0, cb_scaler, cb_intermed1>(
+                            reduce_block, reduce_layout, reduce_accum);
+                    }
+                } else {
+                    if (last_out) {
+                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_in0, cb_scaler, cb_out0>(
+                            reduce_block, reduce_layout, reduce_accum);
+                    } else {
+                        compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_in0, cb_scaler, cb_intermed1>(
+                            reduce_block, reduce_layout, reduce_accum);
+                    }
+                }
 
                 num_tile_done++;
             }

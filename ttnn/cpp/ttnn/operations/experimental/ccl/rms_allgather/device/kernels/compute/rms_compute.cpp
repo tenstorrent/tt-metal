@@ -160,18 +160,28 @@ void kernel_main() {
         const bool is_second_stage_reader = get_arg_val<uint32_t>(3) == 1;
         uint32_t num_blocks_reduce;
         num_blocks_reduce = (is_second_stage_reader) ? num_blocks_second_stage_reduction : num_blocks_first_stage;
-        const uint32_t cb_reduction_out =
-            (!use_two_stage_reduce or is_second_stage_reader) ? cb_to_allgather_writer : cb_ex2;
+        const auto reduce_block =
+            compute_kernel_lib::ReduceInputBlockShape::of(num_tiles_per_allgather_worker, num_blocks_reduce);
 
-        compute_kernel_lib::reduce<
-            PoolType::AVG,
-            ReduceDim::REDUCE_ROW,
-            compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-            compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
-            cb_ex_external2,
-            cb_scaler_global,
-            cb_reduction_out,
-            compute_kernel_lib::ReduceInputBlockShape::of(num_tiles_per_allgather_worker, num_blocks_reduce));
+        if (!use_two_stage_reduce || is_second_stage_reader) {
+            compute_kernel_lib::reduce<
+                PoolType::AVG,
+                ReduceDim::REDUCE_ROW,
+                cb_ex_external2,
+                cb_scaler_global,
+                cb_to_allgather_writer,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(reduce_block);
+        } else {
+            compute_kernel_lib::reduce<
+                PoolType::AVG,
+                ReduceDim::REDUCE_ROW,
+                cb_ex_external2,
+                cb_scaler_global,
+                cb_ex2,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(reduce_block);
+        }
     }
 
     // Waits for stats tensor to have valid data
@@ -193,11 +203,11 @@ void kernel_main() {
             compute_kernel_lib::reduce<
                 PoolType::AVG,
                 ReduceDim::REDUCE_ROW,
-                compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
                 cb_stats,
                 post_cb_scaler_global,
                 cb_var,
+                compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
                 compute_kernel_lib::ReduceInputBlockShape::row(num_distributed_blocks));
             cb_pop_front(cb_stats, num_distributed_blocks);
 
