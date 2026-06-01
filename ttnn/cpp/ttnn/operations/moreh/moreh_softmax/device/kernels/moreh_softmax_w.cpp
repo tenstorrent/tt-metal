@@ -163,7 +163,7 @@ void kernel_main() {
                 compute_kernel_lib::CallerManaged,
                 compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::CopyTileReconfig::Input,
-                compute_kernel_lib::TileBaseRuntime>{compute_kernel_lib::TileBaseRuntime{Wt - 1}},
+                compute_kernel_lib::TileOffset::Set>{Wt - 1},
 #ifndef SOFTMAX
             compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
 #endif

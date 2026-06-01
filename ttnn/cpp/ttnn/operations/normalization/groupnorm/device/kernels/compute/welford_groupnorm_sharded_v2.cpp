@@ -236,10 +236,10 @@ void kernel_main() {
         // Wait for final welford values in cb_ex_global_id
         cb_ex_global.wait_front(2 * num_groups);
         // PARTIAL migration: per-group (Var + eps) -> 1/sqrt(...) — same pattern as
-        // welford_groupnorm.cpp. TileBaseRuntime(1 + (g << 1)) expresses the strided read.
+        // welford_groupnorm.cpp. compute_kernel_lib::TileOffset::Set(1 + (g << 1)) expresses the strided read.
         // Reconfig: add_tiles_init + explicit reconfig_data_format_srcb(cb_eps_id) -> Input.
         // No pack_reconfig -> None. rsqrt_tile_init<true> -> Legacy::On.
-        // cb_ex_global HeldBulk + Scalar + TileBaseRuntime. cb_eps CallerManaged + Scalar.
+        // cb_ex_global HeldBulk + Scalar + compute_kernel_lib::TileOffset::Set. cb_eps CallerManaged + Scalar.
         // cb_ex2pe OutBulk + Scalar per call (replaces upfront reserve + push at end).
         for (uint32_t g = 0; g < num_groups; ++g) {
             compute_kernel_lib::eltwise_chain(
@@ -255,9 +255,8 @@ void kernel_main() {
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::TileBaseRuntime,
-                    compute_kernel_lib::TileBaseNone>{
-                    compute_kernel_lib::TileBaseRuntime{1u + (g << 1)}, compute_kernel_lib::TileBaseNone{}},
+                    compute_kernel_lib::TileOffset::Set,
+                    compute_kernel_lib::TileOffset::Unset>{1u + (g << 1), 0u},
                 compute_kernel_lib::Rsqrt<
                     compute_kernel_lib::Approx::Exact,
                     compute_kernel_lib::Legacy::On,
@@ -432,9 +431,8 @@ void kernel_main() {
                             compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::Dst::D0,
                             compute_kernel_lib::OperandKind::Scalar,
-                            compute_kernel_lib::TileBaseNone,
-                            compute_kernel_lib::TileBaseRuntime>{
-                            compute_kernel_lib::TileBaseNone{}, compute_kernel_lib::TileBaseRuntime{nt}},
+                            compute_kernel_lib::TileOffset::Unset,
+                            compute_kernel_lib::TileOffset::Set>{0u, nt},
                         compute_kernel_lib::PackTile<
                             cb_x_id,
                             compute_kernel_lib::Dst::D0,
@@ -461,9 +459,8 @@ void kernel_main() {
                             compute_kernel_lib::OperandKind::Scalar,
                             compute_kernel_lib::Dst::D0,
                             compute_kernel_lib::OperandKind::Scalar,
-                            compute_kernel_lib::TileBaseNone,
-                            compute_kernel_lib::TileBaseRuntime>{
-                            compute_kernel_lib::TileBaseNone{}, compute_kernel_lib::TileBaseRuntime{nt}},
+                            compute_kernel_lib::TileOffset::Unset,
+                            compute_kernel_lib::TileOffset::Set>{0u, nt},
                         compute_kernel_lib::PackTile<
                             cb_x_id,
                             compute_kernel_lib::Dst::D0,

@@ -571,21 +571,23 @@ constexpr bool is_legal_kind_lifecycle(OperandKind kind, InputLifecycle lc) noex
 }
 
 // =============================================================================
-// 1d. TileBase — orthogonal runtime/compile-time tile-index offset
+// 1d. TileOffset — orthogonal tile-index offset (present / absent)
 // =============================================================================
 //
 // Composes with `OperandKind` to express compound CB tile addressing:
 //
 //     tile_id = base + derived_from_kind(r, c)
 //              ^^^^   ^^^^^^^^^^^^^^^^^^^^^^^^
-//              TileBase                OperandKind (Block / Row / Col / Scalar)
+//              TileOffset              OperandKind (Block / Row / Col / Scalar)
 //
-// Three flavors:
-//   - `TileBaseNone`               : default, no offset, zero overhead.
-//   - `TileBaseCompileTime<K>`     : compile-time constant K, folded into address calc.
-//   - `TileBaseRuntime`            : ctor-supplied runtime value.
+// Binary: an element either has an offset or it doesn't.
+//   - `TileOffset::Unset` : default — no offset, zero overhead (the `+base` term and the
+//                           stored value are compile-time-elided).
+//   - `TileOffset::Set`   : an offset is present; its (runtime) value is supplied via the
+//                           element's constructor (a compile-time constant works too — it
+//                           constant-propagates into the address add).
 //
-// Lifecycle restriction: `TileBase != None` requires Bulk-family or CallerManaged
+// Lifecycle restriction: `TileOffset::Set` requires Bulk-family or CallerManaged
 // lifecycles (input: Bulk / HeldBulk / DeferredPop / BulkDrain / CallerManaged;
 // output: OutBulk / OutDeferredReserve / OutHeldReserve / OutCallerManaged).
 // Streaming / Chunked / Cumulative / Held{Stream,Cumulative} / NoWaitPop are
@@ -594,49 +596,17 @@ constexpr bool is_legal_kind_lifecycle(OperandKind kind, InputLifecycle lc) noex
 // `base + window` tiles before the chain reads them. The chain's emitted
 // wait/reserve/pop/push counts inflate by `base` at runtime.
 
-struct TileBaseNone {};
+enum class TileOffset : bool { Unset = false, Set = true };
 
-template <uint32_t K>
-struct TileBaseCompileTime {
-    static constexpr uint32_t base = K;
-};
-
-struct TileBaseRuntime {
-    uint32_t base;
-    constexpr explicit TileBaseRuntime(uint32_t b) noexcept : base(b) {}
-};
-
-template <class T>
-struct is_tile_base_none : std::is_same<T, TileBaseNone> {};
-template <class T>
-inline constexpr bool is_tile_base_none_v = is_tile_base_none<T>::value;
-
-template <class T>
-struct is_tile_base_runtime : std::false_type {};
-template <>
-struct is_tile_base_runtime<TileBaseRuntime> : std::true_type {};
-template <class T>
-inline constexpr bool is_tile_base_runtime_v = is_tile_base_runtime<T>::value;
-
-template <class T>
-struct is_tile_base_compile_time : std::false_type {};
-template <uint32_t K>
-struct is_tile_base_compile_time<TileBaseCompileTime<K>> : std::true_type {};
-template <class T>
-inline constexpr bool is_tile_base_compile_time_v = is_tile_base_compile_time<T>::value;
-
-/// Extract the (runtime or compile-time) base offset value. Returns 0 for
-/// `TileBaseNone` (compile-time-folded to zero — empty-base optimization).
-template <class T>
-ALWI uint32_t tile_base_value(const T& t) noexcept {
-    if constexpr (is_tile_base_none_v<T>) {
-        (void)t;
+/// Extract the offset value stored on an element. Returns 0 (compile-time-folded) when the
+/// element's `Offset` is `Unset`, so the `+base` term and the stored field vanish.
+template <TileOffset Offset>
+ALWI uint32_t tile_base_value(uint32_t stored) noexcept {
+    if constexpr (Offset == TileOffset::Unset) {
+        (void)stored;
         return 0u;
-    } else if constexpr (is_tile_base_compile_time_v<T>) {
-        (void)t;
-        return T::base;
     } else {
-        return t.base;
+        return stored;
     }
 }
 
@@ -986,7 +956,7 @@ template <
     InputLifecycle Policy = Streaming,
     OperandKind IndexMode = OperandKind::Scalar,
     CopyTileReconfig Reconfig = CopyTileReconfig::Input,
-    class TileBaseT = TileBaseNone>
+    TileOffset Offset = TileOffset::Unset>
 struct CopyTile;
 
 template <
@@ -1000,8 +970,8 @@ template <
     OperandKind AIndex = OperandKind::Scalar,
     Dst DstSlot = Dst::D0,
     OperandKind BIndex = AIndex,
-    class TileBaseA = TileBaseNone,
-    class TileBaseB = TileBaseNone>
+    TileOffset OffsetA = TileOffset::Unset,
+    TileOffset OffsetB = TileOffset::Unset>
 struct BinaryFpu;
 
 template <
@@ -1013,7 +983,7 @@ template <
     DestReuseReconfig Reconfig = DestReuseReconfig::Input,
     InputLifecycle Policy = Streaming,
     OperandKind IndexMode = OperandKind::Scalar,
-    class TileBaseT = TileBaseNone>
+    TileOffset Offset = TileOffset::Unset>
 struct DestReuseBinary;
 
 template <
@@ -1030,7 +1000,7 @@ template <
     OutputLifecycle Policy = OutStreaming,
     OperandKind IndexMode = OperandKind::Scalar,
     PackTileReconfig Reconfig = PackTileReconfig::Output,
-    class TileBaseT = TileBaseNone>
+    TileOffset Offset = TileOffset::Unset>
 struct PackTile;
 
 // Fill / Rand forward declarations — implementations live in eltwise_fill.hpp / eltwise_rand.hpp.

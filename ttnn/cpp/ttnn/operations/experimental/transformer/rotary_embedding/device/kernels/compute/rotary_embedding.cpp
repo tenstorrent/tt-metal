@@ -19,7 +19,7 @@
 //
 // DECODE_MODE branch: in1_cb is the retilized sin/cos held across the entire
 // num_rows*Wt walk; we read tile at runtime offset `in1_idx` (= j) with
-// bcast-rows, never popping in1. TileBaseRuntime requires CallerManaged
+// bcast-rows, never popping in1. compute_kernel_lib::TileOffset::Set requires CallerManaged
 // lifecycle, so the wait/reserve/pop/push are emitted externally.
 //
 // Non-DECODE_MODE branch: standard per-iter Streaming on both sides + plain
@@ -44,8 +44,8 @@ ALWI void mul_tiles_chain(uint32_t in1_idx) {
             OperandKind::Scalar,
             Dst::D0,
             OperandKind::Scalar,
-            TileBaseNone,
-            TileBaseRuntime>{TileBaseNone{}, TileBaseRuntime{in1_idx}},
+            compute_kernel_lib::TileOffset::Unset,
+            compute_kernel_lib::TileOffset::Set>{0u, in1_idx},
         PackTile<out_cb, Dst::D0, OutCallerManaged, OperandKind::Scalar, PackTileReconfig::None>{});
     cb_pop_front(in0_cb, 1);
     cb_push_back(out_cb, 1);

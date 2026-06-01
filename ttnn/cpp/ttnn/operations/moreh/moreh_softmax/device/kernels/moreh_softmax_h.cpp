@@ -101,7 +101,7 @@ void kernel_main() {
         //                                CopyTile(cb_mask) + Mask + Pack
         //
         // cb_x_m_max CallerManaged + Block (held outside; sequential read 0..Ht-1
-        // across iters; TileBaseRuntime(Ht-1) for the last tile).
+        // across iters; compute_kernel_lib::TileOffset::Set(Ht-1) for the last tile).
         // cb_mask CallerManaged + Scalar (held outside via line 42 wait_front(1)).
         // cb_exps OutStreaming (per-tile reserve+push replaces upfront reserve+
         // push; net Ht tiles pushed matches original).
@@ -139,7 +139,7 @@ void kernel_main() {
                 compute_kernel_lib::CallerManaged,
                 compute_kernel_lib::OperandKind::Block,
                 compute_kernel_lib::CopyTileReconfig::Input,
-                compute_kernel_lib::TileBaseRuntime>{compute_kernel_lib::TileBaseRuntime{Ht - 1}},
+                compute_kernel_lib::TileOffset::Set>{Ht - 1},
 #ifndef SOFTMAX
             compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
 #endif

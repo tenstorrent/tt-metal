@@ -135,7 +135,7 @@ void kernel_main() {
         // mean is at index 0); cb_eps at index 0.
         // Reconfig audit: explicit reconfig_data_format + add_tiles_init -> Input.
         // Explicit pack_reconfig_data_format -> Output. rsqrt_tile_init<true> -> Legacy::On.
-        // Lifecycles: cb_stats_reduced HeldBulk + Scalar + TileBaseCompileTime<1>
+        // Lifecycles: cb_stats_reduced HeldBulk + Scalar + compute_kernel_lib::TileOffset::Set
         // (held, popped at line 164 with stats_tile_stride). cb_eps CallerManaged + Scalar.
         // cb_recip_sqrt_var OutStreaming.
         compute_kernel_lib::eltwise_chain(
@@ -151,9 +151,8 @@ void kernel_main() {
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::TileBaseCompileTime<1>,
-                compute_kernel_lib::TileBaseNone>{
-                compute_kernel_lib::TileBaseCompileTime<1>{}, compute_kernel_lib::TileBaseNone{}},
+                compute_kernel_lib::TileOffset::Set,
+                compute_kernel_lib::TileOffset::Unset>{1, 0u},
             compute_kernel_lib::
                 Rsqrt<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Legacy::On, compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<

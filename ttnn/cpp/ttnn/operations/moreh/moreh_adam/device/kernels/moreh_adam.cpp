@@ -141,7 +141,7 @@ void kernel_main() {
         // bias_correction2 = 1 - pow(beta2, step);
         // cb_tmp1 = pow(beta2, step);
         // Reconfig: copy_tile_init_with_dt -> Input. pack_tile_with_dt -> Output.
-        // cb_scalar_args CallerManaged + Scalar + TileBaseCompileTime<beta2_tile>.
+        // cb_scalar_args CallerManaged + Scalar + compute_kernel_lib::TileOffset::Set.
         compute_kernel_lib::eltwise_chain(
             onetile,
             compute_kernel_lib::CopyTile<
@@ -150,8 +150,7 @@ void kernel_main() {
                 compute_kernel_lib::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::CopyTileReconfig::Input,
-                compute_kernel_lib::TileBaseCompileTime<beta2_tile>>{
-                compute_kernel_lib::TileBaseCompileTime<beta2_tile>{}},
+                compute_kernel_lib::TileOffset::Set>{beta2_tile},
             compute_kernel_lib::Power<compute_kernel_lib::Dst::D0>{step},
             compute_kernel_lib::PackTile<
                 cb_tmp1,
@@ -299,7 +298,7 @@ void kernel_main() {
         // Reconfig: add_tiles_init + WITH_FP32_DEST_ACC reconfig -> Input.
         //   pack_tile_with_dt -> Output.
         // Lifecycles: cb_tmp1 Streaming on read + OutStreaming on write (same-CB).
-        //   cb_scalar_args CallerManaged + Scalar + TileBaseCompileTime<eps_tile>.
+        //   cb_scalar_args CallerManaged + Scalar + compute_kernel_lib::TileOffset::Set.
         compute_kernel_lib::eltwise_chain(
             onetile,
             compute_kernel_lib::BinaryFpu<
@@ -313,9 +312,8 @@ void kernel_main() {
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::TileBaseNone,
-                compute_kernel_lib::TileBaseCompileTime<eps_tile>>{
-                compute_kernel_lib::TileBaseNone{}, compute_kernel_lib::TileBaseCompileTime<eps_tile>{}},
+                compute_kernel_lib::TileOffset::Unset,
+                compute_kernel_lib::TileOffset::Set>{0u, eps_tile},
             compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<
                 cb_tmp1,
@@ -327,7 +325,7 @@ void kernel_main() {
         // bias_correction1 = 1 - pow(beta1, step);
         // cb_tmp2 = pow(beta1, step);
         // Reconfig: copy_tile_init_with_dt -> Input. pack_tile_with_dt -> Output.
-        // cb_scalar_args CallerManaged + Scalar + TileBaseCompileTime<beta1_tile>.
+        // cb_scalar_args CallerManaged + Scalar + compute_kernel_lib::TileOffset::Set.
         compute_kernel_lib::eltwise_chain(
             onetile,
             compute_kernel_lib::CopyTile<
@@ -336,8 +334,7 @@ void kernel_main() {
                 compute_kernel_lib::CallerManaged,
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::CopyTileReconfig::Input,
-                compute_kernel_lib::TileBaseCompileTime<beta1_tile>>{
-                compute_kernel_lib::TileBaseCompileTime<beta1_tile>{}},
+                compute_kernel_lib::TileOffset::Set>{beta1_tile},
             compute_kernel_lib::Power<compute_kernel_lib::Dst::D0>{step},
             compute_kernel_lib::PackTile<
                 cb_tmp2,

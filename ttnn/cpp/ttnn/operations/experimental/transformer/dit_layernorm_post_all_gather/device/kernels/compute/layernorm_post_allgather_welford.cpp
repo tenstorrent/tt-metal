@@ -72,7 +72,7 @@ void kernel_main() {
         // cb_stats_reduced tile 1 holds variance (after combine_welford_partials).
         // Reconfig: Input + Output (explicit reconfig_data_format +
         //   pack_reconfig_data_format + add_tiles_init in original).
-        // Lifecycles: cb_stats_reduced HeldBulk + Scalar + TileBaseCompileTime<1>;
+        // Lifecycles: cb_stats_reduced HeldBulk + Scalar + compute_kernel_lib::TileOffset::Set;
         //   cb_eps CallerManaged + Scalar; cb_recip_sqrt_var OutStreaming.
         // rsqrt_tile_init<true> -> Legacy::On.
         compute_kernel_lib::eltwise_chain(
@@ -88,9 +88,8 @@ void kernel_main() {
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::TileBaseCompileTime<1>,
-                compute_kernel_lib::TileBaseNone>{
-                compute_kernel_lib::TileBaseCompileTime<1>{}, compute_kernel_lib::TileBaseNone{}},
+                compute_kernel_lib::TileOffset::Set,
+                compute_kernel_lib::TileOffset::Unset>{1, 0u},
             compute_kernel_lib::
                 Rsqrt<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Legacy::On, compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<
@@ -185,7 +184,7 @@ void kernel_main() {
             // 4) optional beta (only if gamma was provided)
             // cb_out[i] = cb_intermediate[i] + cb_beta[col_tile + i] (bcast rows).
             // Different CBs (no in-place). cb_intermediate Bulk + Block. cb_beta
-            // CallerManaged + Block + TileBaseRuntime{col_tile} (cb_beta is held
+            // CallerManaged + Block + col_tile (cb_beta is held
             // across the col_tile loop via the cumulative wait_front above).
             // cb_out OutBulk + Block.
             // Reconfig: reconfig_data_format + add_bcast_rows_init_short ->
@@ -206,9 +205,8 @@ void kernel_main() {
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Block,
-                        compute_kernel_lib::TileBaseNone,
-                        compute_kernel_lib::TileBaseRuntime>{
-                        compute_kernel_lib::TileBaseNone{}, compute_kernel_lib::TileBaseRuntime{col_tile}},
+                        compute_kernel_lib::TileOffset::Unset,
+                        compute_kernel_lib::TileOffset::Set>{0u, col_tile},
                     compute_kernel_lib::PackTile<
                         cb_out,
                         compute_kernel_lib::Dst::D0,

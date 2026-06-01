@@ -519,9 +519,8 @@ void kernel_main() {
                                 compute_kernel_lib::OperandKind::Scalar,
                                 compute_kernel_lib::Dst::D0,
                                 compute_kernel_lib::OperandKind::Scalar,
-                                compute_kernel_lib::TileBaseNone,
-                                compute_kernel_lib::TileBaseRuntime>{
-                                compute_kernel_lib::TileBaseNone{}, compute_kernel_lib::TileBaseRuntime{nt}},
+                                compute_kernel_lib::TileOffset::Unset,
+                                compute_kernel_lib::TileOffset::Set>{0u, nt},
                             compute_kernel_lib::PackTile<
                                 cb_x_id,
                                 compute_kernel_lib::Dst::D0,
@@ -548,9 +547,8 @@ void kernel_main() {
                                 compute_kernel_lib::OperandKind::Scalar,
                                 compute_kernel_lib::Dst::D0,
                                 compute_kernel_lib::OperandKind::Scalar,
-                                compute_kernel_lib::TileBaseNone,
-                                compute_kernel_lib::TileBaseRuntime>{
-                                compute_kernel_lib::TileBaseNone{}, compute_kernel_lib::TileBaseRuntime{nt}},
+                                compute_kernel_lib::TileOffset::Unset,
+                                compute_kernel_lib::TileOffset::Set>{0u, nt},
                             compute_kernel_lib::PackTile<
                                 cb_x_id,
                                 compute_kernel_lib::Dst::D0,

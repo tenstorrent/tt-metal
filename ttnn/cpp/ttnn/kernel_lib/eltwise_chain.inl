@@ -249,7 +249,7 @@ template <uint32_t Cb,
           InputLifecycle Policy,
           OperandKind IndexMode,
           CopyTileReconfig Reconfig,
-          class TileBaseT>
+          TileOffset Offset>
 struct CopyTile : CopyTileTag {
     // ---- compile-time validation ----
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
@@ -265,11 +265,11 @@ struct CopyTile : CopyTileTag {
     static_assert(detail::valid_policy_mode_v<Policy, IndexMode>,
                   "CopyTile: RowBcast / ColBcast index require non-streaming policy "
                   "(WaitUpfrontPopAtEnd, WaitNoPop, NoWaitPop, NoWaitNoPop, CumulativeWaitPopAtEnd)");
-    // TileBase != None requires Bulk-family / CallerManaged lifecycle — iter-dependent
+    // TileOffset::Set requires Bulk-family / CallerManaged lifecycle — iter-dependent
     // counts (Streaming/Chunked/Cumulative/Held{Stream,Cumulative}/NoWaitPop) can't
     // compose with runtime base offsets. Caller must size CB to base+window.
-    static_assert(is_tile_base_none_v<TileBaseT> || is_legal_input_lifecycle_with_base(Policy),
-                  "CopyTile: TileBase != None requires Bulk-family or CallerManaged lifecycle "
+    static_assert(Offset == TileOffset::Unset || is_legal_input_lifecycle_with_base(Policy),
+                  "CopyTile: TileOffset::Set requires Bulk-family or CallerManaged lifecycle "
                   "(Bulk / HeldBulk / DeferredPop / BulkDrain / CallerManaged)");
 
     static constexpr uint32_t       cb              = Cb;
@@ -290,10 +290,10 @@ struct CopyTile : CopyTileTag {
     static constexpr uint32_t       reconfig_srcb_cb = NO_PREV_CB;
     static constexpr uint32_t       reconfig_pack_cb = NO_PREV_CB;
 
-    [[no_unique_address]] TileBaseT tile_base{};
+    uint32_t tile_base = 0;
 
     constexpr CopyTile() noexcept = default;
-    constexpr explicit CopyTile(TileBaseT base) noexcept : tile_base(base) {}
+    constexpr explicit CopyTile(uint32_t base) noexcept : tile_base(base) {}
 
     // ---- chain pipeline hooks ----
     static ALWI void init() {
@@ -337,12 +337,12 @@ struct CopyTile : CopyTileTag {
         if constexpr (Policy == Bulk ||
                       Policy == HeldBulk ||
                       Policy == BulkDrain) {
-            cb_wait_front(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value(tile_base));
+            cb_wait_front(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
         }
     }
 
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
-        const uint32_t in_idx = tile_base_value(tile_base) + detail::idx<IndexMode>(i_flat, ht, wt);
+        const uint32_t in_idx = tile_base_value<Offset>(tile_base) + detail::idx<IndexMode>(i_flat, ht, wt);
         copy_tile(Cb, in_idx, to_u32(DstSlot) + slot_offset);
     }
 
@@ -350,7 +350,7 @@ struct CopyTile : CopyTileTag {
         if constexpr (Policy == Bulk ||
                       Policy == Pipelined ||
                       Policy == DeferredPop) {
-            cb_pop_front(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value(tile_base));
+            cb_pop_front(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
         }
     }
 
@@ -382,7 +382,7 @@ template <uint32_t Cb,
           OutputLifecycle Policy,
           OperandKind IndexMode,
           PackTileReconfig Reconfig,
-          class TileBaseT>
+          TileOffset Offset>
 struct PackTile : PackTileTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "PackTile: DEST slot exceeds DEST_AUTO_LIMIT");
@@ -396,8 +396,8 @@ struct PackTile : PackTileTag {
     // output CB (caller pre-reserved a window large enough for base + kind window).
     // Streaming / Chunked reserve+push counts can't be inflated by a runtime base
     // without per-iter bookkeeping the chain doesn't own.
-    static_assert(is_tile_base_none_v<TileBaseT> || is_legal_output_lifecycle_with_base(Policy),
-                  "PackTile: TileBase != None requires Bulk-family or OutCallerManaged lifecycle "
+    static_assert(Offset == TileOffset::Unset || is_legal_output_lifecycle_with_base(Policy),
+                  "PackTile: TileOffset::Set requires Bulk-family or OutCallerManaged lifecycle "
                   "(OutBulk / OutDeferredReserve / OutHeldReserve / OutCallerManaged)");
 
     static constexpr uint32_t          cb                  = Cb;
@@ -415,10 +415,10 @@ struct PackTile : PackTileTag {
     static constexpr uint32_t          reconfig_pack_cb    =
         (Reconfig == PackTileReconfig::Output) ? Cb : NO_PREV_CB;
 
-    [[no_unique_address]] TileBaseT tile_base{};
+    uint32_t tile_base = 0;
 
     constexpr PackTile() noexcept = default;
-    constexpr explicit PackTile(TileBaseT base) noexcept : tile_base(base) {}
+    constexpr explicit PackTile(uint32_t base) noexcept : tile_base(base) {}
 
     static ALWI void init() {
         // Pack reconfig is fold-driven (compile-time-elided when prev_pack_cb == Cb).
@@ -446,7 +446,7 @@ struct PackTile : PackTileTag {
     // 2D pack exec — output is block-walked (i_flat = ht*Wt + wt) for BlockIter,
     // or pinned to slot 0 (+ base) for FirstTile. TileBase adds runtime offset.
     ALWI void exec(uint32_t i_flat, uint32_t /*ht*/, uint32_t /*wt*/, uint32_t slot_offset) const {
-        const uint32_t base = tile_base_value(tile_base);
+        const uint32_t base = tile_base_value<Offset>(tile_base);
         const uint32_t out_idx = [&]() -> uint32_t {
             if constexpr (IndexMode == OperandKind::Scalar) return base;
             else /* BlockIter */                                     return base + i_flat;
@@ -457,13 +457,13 @@ struct PackTile : PackTileTag {
     // 2D upfront reserve/push — OperandKind-aware window (Scalar = 1, Block = Ht*Wt).
     ALWI void reserve_upfront(uint32_t Ht, uint32_t Wt) const {
         if constexpr (Policy == OutBulk) {
-            cb_reserve_back(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value(tile_base));
+            cb_reserve_back(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
         }
     }
     ALWI void push_at_end(uint32_t Ht, uint32_t Wt) const {
         if constexpr (Policy == OutDeferredReserve ||
                       Policy == OutBulk) {
-            cb_push_back(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value(tile_base));
+            cb_push_back(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
         }
     }
 
@@ -498,8 +498,8 @@ template <uint32_t CbA,
           OperandKind AIndex,
           Dst DstSlot,
           OperandKind BIndex,
-          class TileBaseA,
-          class TileBaseB>
+          TileOffset OffsetA,
+          TileOffset OffsetB>
 struct BinaryFpu : BinaryFpuTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "BinaryFpu: DEST slot exceeds DEST_AUTO_LIMIT");
@@ -525,10 +525,10 @@ struct BinaryFpu : BinaryFpuTag {
                   "BinaryFpu: B-side RowBcast / ColBcast index require non-streaming BPolicy");
     // Per-operand TileBase lifecycle compatibility — Streaming/Chunked/Cumulative
     // can't compose with runtime base offsets (iter-dependent wait/pop counts).
-    static_assert(is_tile_base_none_v<TileBaseA> || is_legal_input_lifecycle_with_base(APolicy),
-                  "BinaryFpu: TileBaseA != None requires APolicy to be Bulk-family or CallerManaged");
-    static_assert(is_tile_base_none_v<TileBaseB> || is_legal_input_lifecycle_with_base(BPolicy),
-                  "BinaryFpu: TileBaseB != None requires BPolicy to be Bulk-family or CallerManaged");
+    static_assert(OffsetA == TileOffset::Unset || is_legal_input_lifecycle_with_base(APolicy),
+                  "BinaryFpu: OffsetA Set requires APolicy to be Bulk-family or CallerManaged");
+    static_assert(OffsetB == TileOffset::Unset || is_legal_input_lifecycle_with_base(BPolicy),
+                  "BinaryFpu: OffsetB Set requires BPolicy to be Bulk-family or CallerManaged");
     // Per-block streaming uses chunk-local CB front. When the two sides use
     // DIFFERENT regimes (one per-block → chunk-local index `j`; the other upfront /
     // caller-managed → absolute index `base_tile + j`), the chain dispatcher
@@ -575,19 +575,19 @@ struct BinaryFpu : BinaryFpuTag {
          DfReconfig == BinaryDataFormatReconfig::SrcB) ? CbB : NO_PREV_CB;
     static constexpr uint32_t      reconfig_pack_cb = NO_PREV_CB;
 
-    [[no_unique_address]] TileBaseA tile_base_a{};
-    [[no_unique_address]] TileBaseB tile_base_b{};
+    uint32_t tile_base_a = 0;
+    uint32_t tile_base_b = 0;
 
     constexpr BinaryFpu() noexcept = default;
-    constexpr BinaryFpu(TileBaseA a, TileBaseB b) noexcept : tile_base_a(a), tile_base_b(b) {}
-    constexpr explicit BinaryFpu(TileBaseA a) noexcept : tile_base_a(a) {}
+    constexpr BinaryFpu(uint32_t a, uint32_t b) noexcept : tile_base_a(a), tile_base_b(b) {}
+    constexpr explicit BinaryFpu(uint32_t a) noexcept : tile_base_a(a) {}
 
     // Helper: when same_cb, both bases live in the single shared wait window.
     // Wait/pop count uses max(base_a, base_b) — caller must stage that many tiles
     // in front of both reads.
     ALWI uint32_t same_cb_base_max() const noexcept {
-        const uint32_t bA = tile_base_value(tile_base_a);
-        const uint32_t bB = tile_base_value(tile_base_b);
+        const uint32_t bA = tile_base_value<OffsetA>(tile_base_a);
+        const uint32_t bB = tile_base_value<OffsetB>(tile_base_b);
         return bA > bB ? bA : bB;
     }
 
@@ -660,19 +660,19 @@ struct BinaryFpu : BinaryFpuTag {
         if constexpr (APolicy == Bulk ||
                       APolicy == HeldBulk ||
                       APolicy == BulkDrain) {
-            const uint32_t a_base = same_cb ? same_cb_base_max() : tile_base_value(tile_base_a);
+            const uint32_t a_base = same_cb ? same_cb_base_max() : tile_base_value<OffsetA>(tile_base_a);
             cb_wait_front(CbA, detail::window<AIndex>(Ht, Wt) + a_base);
         }
         if constexpr (!same_cb && (BPolicy == Bulk ||
                                    BPolicy == HeldBulk ||
                                    BPolicy == BulkDrain)) {
-            cb_wait_front(CbB, detail::window<BIndex>(Ht, Wt) + tile_base_value(tile_base_b));
+            cb_wait_front(CbB, detail::window<BIndex>(Ht, Wt) + tile_base_value<OffsetB>(tile_base_b));
         }
     }
 
     // Per-side index mode. AIndex drives a_idx, BIndex drives b_idx. The canonical
     // bcast walk is A=BlockIter (walks the tile range) + B=FirstTile (pins the
-    // scaler/vector operand at tile 0). TileBaseA / TileBaseB add a runtime or
+    // scaler/vector operand at tile 0). OffsetA / OffsetB add a runtime or
     // compile-time base offset to the per-iter index. The 3-arg overload accepts a
     // chunk-local index (`i_local`) and an absolute index (`i_abs`); each side
     // picks via `a_uses_local_idx` / `b_uses_local_idx`. The 2-arg overload is
@@ -719,8 +719,8 @@ struct BinaryFpu : BinaryFpuTag {
         const uint32_t b_flat = b_uses_local_idx ? i_flat_local : i_flat_abs;
         const uint32_t a_wt   = a_uses_local_idx ? wt_local     : wt_abs;
         const uint32_t b_wt   = b_uses_local_idx ? wt_local     : wt_abs;
-        const uint32_t a_idx  = tile_base_value(tile_base_a) + detail::idx<AIndex>(a_flat, ht, a_wt);
-        const uint32_t b_idx  = tile_base_value(tile_base_b) + detail::idx<BIndex>(b_flat, ht, b_wt);
+        const uint32_t a_idx  = tile_base_value<OffsetA>(tile_base_a) + detail::idx<AIndex>(a_flat, ht, a_wt);
+        const uint32_t b_idx  = tile_base_value<OffsetB>(tile_base_b) + detail::idx<BIndex>(b_flat, ht, b_wt);
         const uint32_t dst    = to_u32(DstSlot) + slot_offset;
         if constexpr (Bcast == BroadcastDim::None) {
             if constexpr      (Op == BinaryFpuOp::Add) add_tiles(CbA, CbB, a_idx, b_idx, dst);
@@ -742,13 +742,13 @@ struct BinaryFpu : BinaryFpuTag {
         if constexpr (APolicy == Bulk ||
                       APolicy == Pipelined ||
                       APolicy == DeferredPop) {
-            const uint32_t a_base = same_cb ? same_cb_base_max() : tile_base_value(tile_base_a);
+            const uint32_t a_base = same_cb ? same_cb_base_max() : tile_base_value<OffsetA>(tile_base_a);
             cb_pop_front(CbA, detail::window<AIndex>(Ht, Wt) + a_base);
         }
         if constexpr (!same_cb && (BPolicy == Bulk ||
                                    BPolicy == Pipelined ||
                                    BPolicy == DeferredPop)) {
-            cb_pop_front(CbB, detail::window<BIndex>(Ht, Wt) + tile_base_value(tile_base_b));
+            cb_pop_front(CbB, detail::window<BIndex>(Ht, Wt) + tile_base_value<OffsetB>(tile_base_b));
         }
     }
 };
@@ -765,7 +765,7 @@ template <uint32_t Cb,
           DestReuseReconfig Reconfig,
           InputLifecycle Policy,
           OperandKind IndexMode,
-          class TileBaseT>
+          TileOffset Offset>
 struct DestReuseBinary : DestReuseBinaryTag {
     static_assert(to_u32(DstIn) < DEST_AUTO_LIMIT && to_u32(DstOut) < DEST_AUTO_LIMIT,
                   "DestReuseBinary: DEST slot exceeds DEST_AUTO_LIMIT");
@@ -774,8 +774,8 @@ struct DestReuseBinary : DestReuseBinaryTag {
                   "Streaming / HeldStream / BulkDrain / NoWaitPop on Block walkers.");
     static_assert(detail::valid_policy_mode_v<Policy, IndexMode>,
                   "DestReuseBinary: RowBcast / ColBcast index require non-streaming policy");
-    static_assert(is_tile_base_none_v<TileBaseT> || is_legal_input_lifecycle_with_base(Policy),
-                  "DestReuseBinary: TileBase != None requires Bulk-family or CallerManaged lifecycle");
+    static_assert(Offset == TileOffset::Unset || is_legal_input_lifecycle_with_base(Policy),
+                  "DestReuseBinary: TileOffset::Set requires Bulk-family or CallerManaged lifecycle");
 
     static constexpr uint32_t       cb_a_id()         { return Cb; }
     static constexpr uint32_t       cb_b_id()         { return 0;  }
@@ -804,10 +804,10 @@ struct DestReuseBinary : DestReuseBinaryTag {
          Reconfig == DestReuseReconfig::SrcB) ? Cb : NO_PREV_CB;
     static constexpr uint32_t       reconfig_pack_cb  = NO_PREV_CB;
 
-    [[no_unique_address]] TileBaseT tile_base{};
+    uint32_t tile_base = 0;
 
     constexpr DestReuseBinary() noexcept = default;
-    constexpr explicit DestReuseBinary(TileBaseT base) noexcept : tile_base(base) {}
+    constexpr explicit DestReuseBinary(uint32_t base) noexcept : tile_base(base) {}
 
     // F-PERF-3: srca / srcb reconfig is fold-driven; init() programs only the per-op
     // LLK shape.
@@ -840,7 +840,7 @@ struct DestReuseBinary : DestReuseBinaryTag {
         if constexpr (Policy == Bulk ||
                       Policy == HeldBulk ||
                       Policy == BulkDrain) {
-            cb_wait_front(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value(tile_base));
+            cb_wait_front(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
         }
     }
     ALWI void exec(uint32_t i_flat, uint32_t ht, uint32_t wt, uint32_t slot_offset) const {
@@ -850,14 +850,14 @@ struct DestReuseBinary : DestReuseBinaryTag {
         constexpr auto reuse = (ReuseType == DestReuseType::DEST_TO_SRCA)
                                    ? ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCA
                                    : ckernel::EltwiseBinaryReuseDestType::DEST_TO_SRCB;
-        const uint32_t in_idx = tile_base_value(tile_base) + detail::idx<IndexMode>(i_flat, ht, wt);
+        const uint32_t in_idx = tile_base_value<Offset>(tile_base) + detail::idx<IndexMode>(i_flat, ht, wt);
         binary_dest_reuse_tiles<et, reuse>(Cb, in_idx, to_u32(DstIn) + slot_offset);
     }
     ALWI void pop_upfront_end(uint32_t Ht, uint32_t Wt) const {
         if constexpr (Policy == Bulk ||
                       Policy == Pipelined ||
                       Policy == DeferredPop) {
-            cb_pop_front(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value(tile_base));
+            cb_pop_front(Cb, detail::window<IndexMode>(Ht, Wt) + tile_base_value<Offset>(tile_base));
         }
     }
 

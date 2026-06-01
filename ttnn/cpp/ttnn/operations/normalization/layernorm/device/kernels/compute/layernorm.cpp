@@ -252,15 +252,15 @@ void kernel_main() {
          * PackTileReconfig::None.
          *
          * Same-CB BinaryFpu Mul: chain dedups B-side wait/pop since CbA == CbB.
-         * Index: A walks block-local 0..size-1 with TileBaseRuntime(block.start())
+         * Index: A walks block-local 0..size-1 with compute_kernel_lib::TileOffset::Set(block.start())
          * so absolute index = block.start() + i = block.to_global(i). B (same-CB)
-         * must match A's index per static_assert -> Block + TileBaseRuntime(block.start()).
+         * must match A's index per static_assert -> Block + compute_kernel_lib::TileOffset::Set(block.start()).
          *
          * cb_xmm lifecycle: cumulative wait (each block waits `start + size` tiles),
-         * never popped here. Chain expresses this as HeldBulk + TileBaseRuntime(start):
+         * never popped here. Chain expresses this as HeldBulk + compute_kernel_lib::TileOffset::Set(start):
          * the chain emits `cb_wait_front(cb_xmm, start + n_tiles)` per call (HeldBulk
          * inflates the wait count by the runtime base — see chain.hpp §1d) and no pop.
-         * HeldCumulative isn't legal with TileBaseRuntime (legal-with-base list at
+         * HeldCumulative isn't legal with compute_kernel_lib::TileOffset::Set (legal-with-base list at
          * chain.hpp:553 is Bulk/HeldBulk/DeferredPop/BulkDrain/CallerManaged) and would
          * also under-wait — HeldBulk is the correct policy match.
          * cb_xmm2: reserve+push block.full_block_size per call -> OutBulk + Block.
@@ -284,10 +284,8 @@ void kernel_main() {
                     compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Block,
-                    compute_kernel_lib::TileBaseRuntime,
-                    compute_kernel_lib::TileBaseRuntime>{
-                    compute_kernel_lib::TileBaseRuntime{block.start()},
-                    compute_kernel_lib::TileBaseRuntime{block.start()}},
+                    compute_kernel_lib::TileOffset::Set,
+                    compute_kernel_lib::TileOffset::Set>{block.start(), block.start()},
                 compute_kernel_lib::PackTile<
                     cb_xmm2,
                     compute_kernel_lib::Dst::D0,

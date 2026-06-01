@@ -270,10 +270,10 @@ void kernel_main() {
         // norm(x) * gamma + beta, where norm(x) = (x - E[x]) / sqrt(E[(x-E[x])^2] + eps)
         //
         // No SFPU_OP_INIT_ACTIVATION macros in welford variant -> all three stages migrate
-        // cleanly into chains. cb_xmm: HeldBulk + Block + TileBaseRuntime(block.start())
+        // cleanly into chains. cb_xmm: HeldBulk + Block + compute_kernel_lib::TileOffset::Set(block.start())
         // (held from x-E[x] stage, popped at end of NCHt loop). cb_ex2pe: Caller-managed.
         // cb_gamma / cb_beta: cumulative wait (block.start() + full_block_size); model as
-        // HeldBulk + Block + TileBaseRuntime(block.start()) — chain emits
+        // HeldBulk + Block + compute_kernel_lib::TileOffset::Set(block.start()) — chain emits
         // cb_wait_front(cb, base + n_tiles) per call matching original.
         cb_ex2pe_obj.wait_front(onetile);
         for (auto block : generic::blocks(Wt, blk)) {
@@ -294,9 +294,8 @@ void kernel_main() {
                     compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::TileBaseRuntime,
-                    compute_kernel_lib::TileBaseNone>{
-                    compute_kernel_lib::TileBaseRuntime{block.start()}, compute_kernel_lib::TileBaseNone{}},
+                    compute_kernel_lib::TileOffset::Set,
+                    compute_kernel_lib::TileOffset::Unset>{block.start(), 0u},
                 compute_kernel_lib::PackTile<
                     cb_im_or_out,
                     compute_kernel_lib::Dst::D0,
@@ -308,7 +307,7 @@ void kernel_main() {
                 // Stage 2: cb_outg = cb_fusion * cb_gamma (row bcast).
                 // cb_fusion was just pushed by stage 1 (intermediate when do_gamma|do_beta);
                 // Bulk wait+pop per block. cb_gamma: cumulative wait, never popped ->
-                // HeldBulk + Block + TileBaseRuntime(block.start()).
+                // HeldBulk + Block + compute_kernel_lib::TileOffset::Set(block.start()).
                 constexpr uint32_t cb_outg = do_beta ? cb_fusion : cb_out;
                 compute_kernel_lib::eltwise_chain(
                     compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
@@ -323,9 +322,8 @@ void kernel_main() {
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Block,
-                        compute_kernel_lib::TileBaseNone,
-                        compute_kernel_lib::TileBaseRuntime>{
-                        compute_kernel_lib::TileBaseNone{}, compute_kernel_lib::TileBaseRuntime{block.start()}},
+                        compute_kernel_lib::TileOffset::Unset,
+                        compute_kernel_lib::TileOffset::Set>{0u, block.start()},
                     compute_kernel_lib::PackTile<
                         cb_outg,
                         compute_kernel_lib::Dst::D0,
@@ -349,9 +347,8 @@ void kernel_main() {
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Block,
-                        compute_kernel_lib::TileBaseNone,
-                        compute_kernel_lib::TileBaseRuntime>{
-                        compute_kernel_lib::TileBaseNone{}, compute_kernel_lib::TileBaseRuntime{block.start()}},
+                        compute_kernel_lib::TileOffset::Unset,
+                        compute_kernel_lib::TileOffset::Set>{0u, block.start()},
                     compute_kernel_lib::PackTile<
                         cb_out,
                         compute_kernel_lib::Dst::D0,

@@ -166,7 +166,7 @@ void kernel_main() {
         /*
          * E[x]**2  — same-CB Mul at index 1.
          * cb_stats_reduced: pre-waited for stats_tile_stride at line 171, held
-         *   (popped at line 229). HeldBulk + Scalar + TileBaseCompileTime<1>.
+         *   (popped at line 229). HeldBulk + Scalar + compute_kernel_lib::TileOffset::Set.
          * Same-CB constraint: AIndex==BIndex (both Scalar + same TileBase).
          * Reconfig audit: explicit reconfig_data_format(cb_stats_reduced, cb_stats_reduced)
          *   + mul_tiles_init reconfigs (idempotent) -> Input. Explicit
@@ -186,9 +186,8 @@ void kernel_main() {
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::TileBaseCompileTime<1>,
-                compute_kernel_lib::TileBaseCompileTime<1>>{
-                compute_kernel_lib::TileBaseCompileTime<1>{}, compute_kernel_lib::TileBaseCompileTime<1>{}},
+                compute_kernel_lib::TileOffset::Set,
+                compute_kernel_lib::TileOffset::Set>{1, 1},
             compute_kernel_lib::PackTile<
                 cb_mean_squared,
                 compute_kernel_lib::Dst::D0,

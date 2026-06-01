@@ -120,7 +120,7 @@ void kernel_main() {
         // cb_tmp1 = cb_one[first_tile] - cb_scalar_args[beta2_tile]
         // Reconfig: sub_tiles_init_with_dt -> Input. pack_tile_with_dt -> Output.
         // Both operands held externally -> CallerManaged + Scalar; cb_scalar_args at
-        // beta2_tile -> TileBaseCompileTime<beta2_tile>.
+        // beta2_tile -> compute_kernel_lib::TileOffset::Set.
         compute_kernel_lib::eltwise_chain(
             onetile,
             compute_kernel_lib::BinaryFpu<
@@ -134,9 +134,8 @@ void kernel_main() {
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::TileBaseNone,
-                compute_kernel_lib::TileBaseCompileTime<beta2_tile>>{
-                compute_kernel_lib::TileBaseNone{}, compute_kernel_lib::TileBaseCompileTime<beta2_tile>{}},
+                compute_kernel_lib::TileOffset::Unset,
+                compute_kernel_lib::TileOffset::Set>{0u, beta2_tile},
             compute_kernel_lib::PackTile<
                 cb_tmp1,
                 compute_kernel_lib::Dst::D0,
@@ -276,7 +275,7 @@ void kernel_main() {
         // Reconfig: add_tiles_init_with_dt reconfigs srca/srcb -> Input.
         //   pack_tile_with_dt -> Output.
         // Lifecycles: cb_tmp1 Streaming + OutStreaming (same-CB).
-        //   cb_scalar_args CallerManaged + Scalar + TileBaseCompileTime<eps_tile>.
+        //   cb_scalar_args CallerManaged + Scalar + compute_kernel_lib::TileOffset::Set.
         compute_kernel_lib::eltwise_chain(
             onetile,
             compute_kernel_lib::BinaryFpu<
@@ -290,9 +289,8 @@ void kernel_main() {
                 compute_kernel_lib::OperandKind::Scalar,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::TileBaseNone,
-                compute_kernel_lib::TileBaseCompileTime<eps_tile>>{
-                compute_kernel_lib::TileBaseNone{}, compute_kernel_lib::TileBaseCompileTime<eps_tile>{}},
+                compute_kernel_lib::TileOffset::Unset,
+                compute_kernel_lib::TileOffset::Set>{0u, eps_tile},
             compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<
                 cb_tmp1,

@@ -66,7 +66,7 @@ void kernel_main() {
         //   PackTileReconfig::None.
         // Lifecycles: cb_x Streaming (chain owns wait+pop); cb_mask_h_w
         //   CallerManaged + Scalar (waited once outside loop at line 53;
-        //   chain reads at index 0 / index 1 via TileBaseCompileTime<1>);
+        //   chain reads at index 0 / index 1 via compute_kernel_lib::TileOffset::Set);
         //   cb_xabs OutStreaming.
         const bool mh = do_mask_h && need_to_do_mask_h(tile_idx, ht, wt);
         const bool mw = do_mask_w && ((tile_idx + 1) % wt) == 0;
@@ -92,7 +92,7 @@ void kernel_main() {
                     compute_kernel_lib::CallerManaged,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::CopyTileReconfig::Input,
-                    compute_kernel_lib::TileBaseCompileTime<1>>{},
+                    compute_kernel_lib::TileOffset::Set>{},
                 compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
                 compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
                 compute_kernel_lib::PackTile<
@@ -139,7 +139,7 @@ void kernel_main() {
                     compute_kernel_lib::CallerManaged,
                     compute_kernel_lib::OperandKind::Scalar,
                     compute_kernel_lib::CopyTileReconfig::Input,
-                    compute_kernel_lib::TileBaseCompileTime<1>>{},
+                    compute_kernel_lib::TileOffset::Set>{},
                 compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
                 compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
                 compute_kernel_lib::PackTile<

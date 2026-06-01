@@ -198,7 +198,7 @@ void kernel_main() {
         //   pack_reconfig_data_format(cb_exps) ONCE outside the outer loop —
         //   chain emits per-call (fold-elided after first since prev == curr).
         //   -> CopyTileReconfig::Input + PackTileReconfig::Output.
-        // Lifecycles: cb_in0 HeldBulk + Block + TileBaseRuntime(index_subblock_w_offset)
+        // Lifecycles: cb_in0 HeldBulk + Block + compute_kernel_lib::TileOffset::Set(index_subblock_w_offset)
         //   per outer iter — chain emits cb_wait_front(base + subblock_w) per call,
         //   matching the caller's pre-pushed sharded input. cb_exps OutBulk + Block.
         // BlockSize=1 (subblock_w is runtime; per-tile semantics).
@@ -212,7 +212,7 @@ void kernel_main() {
                     compute_kernel_lib::HeldBulk,
                     compute_kernel_lib::OperandKind::Block,
                     compute_kernel_lib::CopyTileReconfig::Input,
-                    compute_kernel_lib::TileBaseRuntime>{compute_kernel_lib::TileBaseRuntime{index_subblock_w_offset}},
+                    compute_kernel_lib::TileOffset::Set>{index_subblock_w_offset},
                 compute_kernel_lib::Exp<
                     static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
                     compute_kernel_lib::Approx::Exact,

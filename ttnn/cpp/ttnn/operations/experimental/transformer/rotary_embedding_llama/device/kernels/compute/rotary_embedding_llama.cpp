@@ -83,11 +83,11 @@ void kernel_main() {
 
                 // sin_interim = rotated * sin
                 // A = rotated_in_interm_cb Bulk + Block (Wt tiles waited above, popped below).
-                // B = sin_cb: index = j + (sin_cos_row_cnt * Wt). Block + TileBaseRuntime.
+                // B = sin_cb: index = j + (sin_cos_row_cnt * Wt). Block + compute_kernel_lib::TileOffset::Set.
                 //   RELOAD_IMPL==0: sin held externally (waited my_cos_sin_tiles outside)
                 //     -> CallerManaged; sin_cos_row_cnt increments per seq_tile so offset varies.
                 //   RELOAD_IMPL==1: sin waited Wt per iter (line 63), popped Wt below
-                //     -> Bulk; sin_cos_row_cnt always 0 so TileBaseRuntime(0).
+                //     -> Bulk; sin_cos_row_cnt always 0 so compute_kernel_lib::TileOffset::Set(0).
                 // Output sin_interm_cb OutBulk + Block (Wt tiles).
                 // Reconfig audit: mul_tiles_init reconfigs srca/srcb -> Input.
                 //   No explicit pack_reconfig (relies on sin_interm_cb format == out_cb's
@@ -106,9 +106,8 @@ void kernel_main() {
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Block,
-                        compute_kernel_lib::TileBaseNone,
-                        compute_kernel_lib::TileBaseRuntime>{
-                        compute_kernel_lib::TileBaseNone{}, compute_kernel_lib::TileBaseRuntime{sin_cos_row_cnt * Wt}},
+                        compute_kernel_lib::TileOffset::Unset,
+                        compute_kernel_lib::TileOffset::Set>{0u, sin_cos_row_cnt * Wt},
                     compute_kernel_lib::PackTile<
                         sin_interm_cb,
                         compute_kernel_lib::Dst::D0,
@@ -152,9 +151,8 @@ void kernel_main() {
                         compute_kernel_lib::OperandKind::Block,
                         compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OperandKind::Block,
-                        compute_kernel_lib::TileBaseNone,
-                        compute_kernel_lib::TileBaseRuntime>{
-                        compute_kernel_lib::TileBaseNone{}, compute_kernel_lib::TileBaseRuntime{sin_cos_row_cnt * Wt}},
+                        compute_kernel_lib::TileOffset::Unset,
+                        compute_kernel_lib::TileOffset::Set>{0u, sin_cos_row_cnt * Wt},
                     compute_kernel_lib::PackTile<
                         cos_interm_cb,
                         compute_kernel_lib::Dst::D0,
