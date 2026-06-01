@@ -95,6 +95,17 @@ inline void _llk_math_matmul_di_addrmod_(std::uint8_t ct_dim, std::uint8_t rt_di
     constexpr int FIDELITY_INCREMENT  = high_fidelity ? 1 : 0;
     const std::uint16_t num_tile_incr = (ct_dim >= rt_dim) ? 64 : ct_dim * 64;
 
+    // Direct indexing supplies absolute srcb/srca/dest indices in each MVMULDI, so the
+    // replayed instructions (which all select ADDR_MOD_0) must apply no auto-increment.
+    // Program it explicitly: otherwise ADDR_MOD_0 is inherited from a prior matmul kernel
+    // (e.g. a regular MVMUL matmul leaves dest/srcb +=8), perturbing the dest addressing.
+    addr_mod_t {
+        .srca = {.incr = 0, .clr = 0, .cr = 0},
+        .srcb = {.incr = 0, .clr = 0, .cr = 0},
+        .dest = {.incr = 0, .clr = 0, .cr = 0},
+    }
+        .set(ADDR_MOD_0);
+
     // only increment fidelity if we have more fidelity phases
     addr_mod_t {
         .srca     = {.incr = 0, .clr = 0, .cr = 0},

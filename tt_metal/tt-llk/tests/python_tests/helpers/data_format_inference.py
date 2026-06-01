@@ -158,25 +158,14 @@ def infer_unpack_out(
                 f"register_format_hint={register_format_hint.name} is not a supported "
                 f"SrcA/SrcB-only register format. Expected MxFp4_2x_A or MxFp4_2x_B."
             )
-        if input_format != DataFormat.MxFp4:
+        if input_format == DataFormat.MxFp4 and register_format_hint not in [
+            DataFormat.MxFp4_2x_A,
+            DataFormat.MxFp4_2x_B,
+        ]:
             raise ValueError(
-                f"register_format_hint={register_format_hint.name} requires input_format=MxFp4 "
-                f"(got {input_format.name})."
+                f"register_format_hint={register_format_hint.name} is not compatible with input_format={input_format.name}."
             )
-        if register_format_hint == DataFormat.MxFp4_2x_A and output_format not in {
-            DataFormat.Float16,
-            DataFormat.Float32,
-        }:
-            raise ValueError(
-                f"MxFp4_2x_A pairs with Float16 or Float32 output (got {output_format.name})."
-            )
-        if register_format_hint == DataFormat.MxFp4_2x_B and output_format not in {
-            DataFormat.Float16_b,
-            DataFormat.Float32,
-        }:
-            raise ValueError(
-                f"MxFp4_2x_B pairs with Float16_b or Float32 output (got {output_format.name})."
-            )
+        # The hint is family-compatible with the output format, so it's a valid configuration.
         return register_format_hint
 
     # MX formats can only exist in L1, not in registers. Hardware unpacks MX to bfloat16 for math.

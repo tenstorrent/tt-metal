@@ -5,7 +5,7 @@
 import pytest
 import torch
 from helpers.data_format_inference import data_formats
-from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     TILE_DIM,
     MatmulGolden,
@@ -62,7 +62,9 @@ matmul_dimensions_dest_sync = [
     for kt_dim in kt_dims
 ]
 
-# Generate format-aware combinations
+# Generate format-aware combinations. MxFp4 is an input-only (L1) format here: the
+# unpacker produces MxFp4_2x_A/B in the src registers, so drop the cross-product
+# entries where MxFp4 would land as an output.
 MATMUL_FORMAT = input_output_formats(
     [
         DataFormat.Float16,
@@ -75,21 +77,6 @@ MATMUL_FORMAT = input_output_formats(
         DataFormat.MxInt2,
     ],
 )
-
-# 2x-packed FP4 src register variants. L1 input stays MxFp4; the unpacker produces
-# MxFp4_2x_A/B in src registers. _A pairs with the FP16 family, _B with the FP16_b family.
-MATMUL_FORMAT += [
-    InputOutputFormat(
-        DataFormat.MxFp4,
-        DataFormat.Float16,
-        register_format_hint=DataFormat.MxFp4_2x_A,
-    ),
-    InputOutputFormat(
-        DataFormat.MxFp4,
-        DataFormat.Float16_b,
-        register_format_hint=DataFormat.MxFp4_2x_B,
-    ),
-]
 
 
 @pytest.mark.quasar
@@ -107,6 +94,11 @@ MATMUL_FORMAT += [
         if format.input_format.is_mx_format()
         else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
     ),
+    register_format_hint=lambda format: (
+        [DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B]
+        if format.input_format == DataFormat.MxFp4
+        else [None]
+    ),
     transpose=[Transpose.No],
 )
 # Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself
@@ -115,8 +107,10 @@ def test_matmul(
     dimensions_dest_acc_dest_sync,
     format,
     implied_math_format,
+    register_format_hint,
     transpose,
 ):
+    format.register_format_hint = register_format_hint
 
     input_A_dimensions, input_B_dimensions, dest_acc, dest_sync_mode = (
         dimensions_dest_acc_dest_sync
@@ -124,14 +118,20 @@ def test_matmul(
 
     torch_format = format_dict[format.output_format]
 
-    sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    # Seed the operand stimuli so inputs are reproducible and independent of the
+    # parametrize sweep order. The defaults draw from the global torch RNG, whose
+    # position depends on how many prior variants ran -- harmless for high-precision
+    # formats but flaky for FP4-coarse MxFp4, where a different draw can tip the
+    # relaxed mismatch tolerance. Distinct seeds for A/B avoid a degenerate A==B matmul.
+    spec_A = StimuliSpec.uniform(low=0.0, high=1.0, seed=0)
+    spec_B = StimuliSpec.uniform(low=0.0, high=1.0, seed=1)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=format.input_format,
         input_dimensions_A=input_A_dimensions,
         stimuli_format_B=format.input_format,
         input_dimensions_B=input_B_dimensions,
-        spec_A=sfpu_false_spec,
-        spec_B=sfpu_false_spec,
+        spec_A=spec_A,
+        spec_B=spec_B,
         output_format=format.output_format,
     )
 
