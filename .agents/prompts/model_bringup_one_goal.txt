@@ -44,24 +44,29 @@ python -m models.common.readiness_check.run_prefill_check \
   --model-dir models/autoports/<model_name> \
   --reference models/common/readiness_check/references/<model_name>.refpt \
   --mesh-device <N150|N300|T3K|TG>
+  --fabric-config <value>
 
 python -m models.common.readiness_check.run_teacher_forcing \
   --model-dir models/autoports/<model_name> \
   --reference models/common/readiness_check/references/<model_name>.refpt \
   --mesh-device <N150|N300|T3K|TG>
+  --fabric-config <value>
 
 python -m models.common.readiness_check.run_autoregressive \
   --model-dir models/autoports/<model_name> \
   --hf-model <hf-model-id-or-local-path> \
   --mesh-device <N150|N300|T3K|TG>
+  --fabric-config <value>
 
 python -m models.common.readiness_check.run_vllm_server \
   --model-dir models/autoports/<model_name> \
   --hf-model <hf-model-id-or-local-path> \
   --mesh-device <N150|N300|T3K|TG> \
   --max-model-len <int>                              # if the model caps below vLLM's default \
-  --tt-config '{"trace_region_size": <bytes>, ...}'  # if the model needs specific TT plugin tuning
+  --tt-config '{"trace_region_size": <bytes>, "fabric_config": <value> ...}'  # if the model needs specific args
 ```
+
+Patch the readiness runners if they lack a required setup step and there is no cleaner model-local fix.
 
 - Report top-1, top-5, and top-100 hit rates for prefill and teacher-forcing decode. Expect top-5 >= 98% and top-100 = 100%; top-1 can be acceptable as low as 90% with low-precision weights if top-k behavior is otherwise strong. If the readiness results are below these bars, debug the model path first, then increase dtype precision or compute fidelity where evidence points to numerical loss.
 - `run_autoregressive` writes greedy completions from HF and the TT model side-by-side under `<model_dir>/readiness_autoregressive/`. There is no programmatic check — read both completions and judge whether the ported model's output is reasonable given the reference. Minor lexical drift from low-precision weights is fine; incoherent text, repetition loops, or wrong-language drift is not.

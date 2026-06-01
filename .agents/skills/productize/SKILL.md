@@ -95,7 +95,9 @@ python -m models.common.readiness_check.run_teacher_forcing ...
 python -m models.common.readiness_check.run_autoregressive ...
 ```
 
-You will need to provide the readiness check with the correct mesh device shape to match the decoder and your model.
+You will need to provide the readiness check with the correct mesh device shape, and maybe fabric config, to match the decoder and your model
+
+If the readiness checks are missing a setup step your model needs and there is no cleaner way to handle it in code you created, you may patch them. Record what you changed and why in the work log.
 
 Reuse an existing reference file when it matches the prompt set and token lengths. Generate a new one when it does not. Report top-1, top-5, and top-100 hit rates for prefill and teacher-forcing decode. Differences between prefill and decode are debugging signal: cache, position, page table, or sampling behavior often explains them. We expect top-5 ≥ 98%, top-100 = 100%. Lower top-1 (~90%) is expected from bf8 quantization. If we're getting lower than these figures then first investigate your own new model code for bugs and if that is clean dive into the decoder and try increasing the datatype precision / compute fidelity to see if that improves accuracy. It's our job to deliver a fully working model, so if the decoder we have been given needs to be fixed then we're the ones who will fix it!
 
@@ -116,16 +118,19 @@ python -m models.common.readiness_check.run_prefill_check \
   --model-dir models/autoports/<model_name> \
   --reference models/common/readiness_check/references/<model>.refpt \
   --mesh-device <N150|N300|T3K|TG>
+  --fabric-config <value>
 
 python -m models.common.readiness_check.run_teacher_forcing \
   --model-dir models/autoports/<model_name> \
   --reference models/common/readiness_check/references/<model>.refpt \
   --mesh-device <N150|N300|T3K|TG>
+  --fabric-config <value>
 
 python -m models.common.readiness_check.run_autoregressive \
   --model-dir models/autoports/<model_name> \
   --hf-model <hf-model-id-or-local-path> \
   --mesh-device <N150|N300|T3K|TG>
+  --fabric-config <value>
 ```
 
 The first two are scored numerically (top-1 / top-5 / top-100). The third — `run_autoregressive` — has both the HF reference and the ported model generate a completion to the same prompt (loaded from `models/common/readiness_check/autoregressive_prompt.txt`) and writes `hf_completion.txt` and `tt_completion.txt` side by side under `<model_dir>/readiness_autoregressive/`. There is **no programmatic check** — you must read both completions yourself and judge whether the ported model's output is reasonable given the reference. Expect minor lexical drift from bf8 quantization; you're looking for coherent, on-topic continuation, not token-exact match. Severe divergence (incoherent text, immediate repetition, wrong language, runs of identical tokens) means the model is broken even if teacher-forcing top-100 looks healthy. Include the verdict — and a short excerpt from each — in the work log.
@@ -152,7 +157,7 @@ python -m models.common.readiness_check.run_vllm_server \
   --hf-model <hf-model-id-or-local-path> \
   --mesh-device <N150|N300|T3K|TG> \
   --max-model-len <int>                            # if the model caps below vLLM's default \
-  --tt-config '{"trace_region_size": <bytes>, ...}'  # if the model needs specific TT plugin tuning
+  --tt-config '{"trace_region_size": <bytes>, "fabric_config": <fabric mode>}'
 ```
 
 To hold the server open without running checks (useful when iterating on a single check, because trace compile can take 10+ minutes on first start):
