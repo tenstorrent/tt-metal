@@ -11,8 +11,23 @@ from pathlib import Path
 import torch
 import torchaudio
 
-from models.experimental.audiox.demo.demo import _HF_CONFIG, run_demo
+from models.experimental.audiox.demo.demo import (
+    _HF_CONFIG,
+    _build_audio_pretransform,
+    _build_conditioners,
+    _build_metadata_batch_with_inputs,
+    _load_visual_prompt,
+    _make_cross_attn_cond,
+    _resolve_audio_prompt,
+    run_demo,
+)
 from models.experimental.audiox.demo.media import make_synthetic_video_prompt
+from models.experimental.audiox.utils.loader import (
+    load_audiox_checkpoint,
+    load_into,
+    remap_conditioner_state_dict,
+    remap_oobleck_encoder_state_dict,
+)
 
 
 def _infer_conditioning_mode(
@@ -180,6 +195,36 @@ def _run_cpu_reference(args: argparse.Namespace, cpu_output: Path, *, synthetic_
     return summary
 
 
+def _build_shared_cross_attn_cond(
+    args: argparse.Namespace,
+    *,
+    synthetic_video_prompt: torch.Tensor | None,
+) -> torch.Tensor:
+    raw_sd = load_audiox_checkpoint(args.checkpoint)
+    encoder_sd = remap_oobleck_encoder_state_dict(raw_sd, n_blocks=len(_HF_CONFIG["decoder_c_mults"]))
+
+    audio_prompt = _resolve_audio_prompt(args.audio, None)
+    audio_pretransform = _build_audio_pretransform() if audio_prompt is not None else None
+    if audio_pretransform is not None:
+        load_into(audio_pretransform, encoder_sd, label="encoder")
+
+    multi = _build_conditioners(audio_pretransform=audio_pretransform)
+    for cid in ("text_prompt", "video_prompt", "audio_prompt"):
+        cond_sd = remap_conditioner_state_dict(raw_sd, conditioner_id=cid)
+        load_into(multi.conditioners[cid], cond_sd, label=f"cond:{cid}")
+
+    visual_prompt = synthetic_video_prompt if synthetic_video_prompt is not None else _load_visual_prompt(args.video, args.image)
+    cond_out = multi(
+        _build_metadata_batch_with_inputs(
+            prompt=args.prompt,
+            video_prompt=visual_prompt,
+            audio_prompt=audio_prompt,
+        ),
+        "cpu",
+    )
+    return _make_cross_attn_cond(cond_out)
+
+
 def _run_tt_reference(args: argparse.Namespace, tt_output: Path, *, synthetic_video_prompt: torch.Tensor | None) -> dict:
     from models.experimental.audiox.demo.tt_demo import TtAudioXSession, close_tt_device, open_tt_device, run_tt_demo
 
@@ -211,32 +256,41 @@ def _run_tt_reference(args: argparse.Namespace, tt_output: Path, *, synthetic_vi
 
     device = open_tt_device(device_id=args.tt_device_id)
     try:
-        session = TtAudioXSession(args.checkpoint, device, seed=args.seed)
+        shared_cross_attn_cond = _build_shared_cross_attn_cond(
+            args,
+            synthetic_video_prompt=synthetic_video_prompt,
+        )
+
         warm_runs = []
-        details = None
-        elapsed_seconds = None
+        measured_details = None
+        measured_elapsed_seconds = None
         for run_index in range(1, args.tt_warm_runs + 1):
-            if run_index > 1:
-                torch.manual_seed(args.seed)
-            output_path = tt_output if run_index == 1 else tt_output.with_name(f"tt_output_run{run_index}.wav")
-            started_at = time.perf_counter()
-            run_details = session.run(
-                prompt=args.prompt,
-                output=output_path,
-                video_path=args.video,
-                image_path=args.image,
-                audio_path=args.audio,
-                video_prompt_tensor=synthetic_video_prompt,
-                steps=args.steps,
-                seed=args.seed,
-                return_details=True,
-            )
-            run_elapsed_seconds = time.perf_counter() - started_at
+            session = TtAudioXSession(args.checkpoint, device, seed=args.seed)
+            try:
+                output_path = tt_output if run_index == args.tt_warm_runs else tt_output.with_name(f"tt_warmup_run{run_index}.wav")
+                started_at = time.perf_counter()
+                run_details = session.run(
+                    prompt=args.prompt,
+                    output=output_path,
+                    video_path=args.video,
+                    image_path=args.image,
+                    audio_path=args.audio,
+                    video_prompt_tensor=synthetic_video_prompt,
+                    cross_attn_cond_torch=shared_cross_attn_cond,
+                    steps=args.steps,
+                    seed=args.seed,
+                    return_details=True,
+                )
+                run_elapsed_seconds = time.perf_counter() - started_at
+            finally:
+                session.deallocate()
+                gc.collect()
+
             run_details["steps"] = args.steps
             run_summary = _summarize_run_details(run_details["output_path"], run_elapsed_seconds, run_details)
-            if run_index == 1:
-                details = run_details
-                elapsed_seconds = run_elapsed_seconds
+            if run_index == args.tt_warm_runs:
+                measured_details = run_details
+                measured_elapsed_seconds = run_elapsed_seconds
             else:
                 warm_runs.append(
                     {
@@ -251,10 +305,14 @@ def _run_tt_reference(args: argparse.Namespace, tt_output: Path, *, synthetic_vi
                 )
     finally:
         close_tt_device(device)
+        gc.collect()
 
-    details["steps"] = args.steps
-    summary = _summarize_run_details(details["output_path"], elapsed_seconds, details)
-    summary["_latent"] = details["latent"]
+    measured_details["steps"] = args.steps
+    summary = _summarize_run_details(measured_details["output_path"], measured_elapsed_seconds, measured_details)
+    summary["_latent"] = measured_details["latent"]
+    summary["latent_comparison_anchor"] = (
+        f"tt_warm_run_{args.tt_warm_runs}" if warm_runs else "tt_run_1"
+    )
     if warm_runs:
         summary["warm_runs"] = warm_runs
     return summary
@@ -317,13 +375,7 @@ def main(argv: list[str] | None = None) -> int:
         report["comparison"] = _compare_audio_files(cpu_output, tt_output)
         report["latent_comparison"] = _compare_tensors(report["cpu"]["_latent"], report["tt"]["_latent"])
 
-    tt_perf_summary = None
-    if report["tt"] is not None:
-        warm_runs = report["tt"].get("warm_runs") or []
-        if warm_runs:
-            tt_perf_summary = warm_runs[-1]
-        else:
-            tt_perf_summary = report["tt"]
+    tt_perf_summary = report["tt"]
 
     report["stage1_checks"] = {
         "valid_16khz": bool(report["cpu"]["valid_16khz"]) and (
