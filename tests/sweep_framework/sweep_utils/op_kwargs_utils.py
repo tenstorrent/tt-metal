@@ -141,6 +141,28 @@ def _is_program_config_dict(value: Any) -> bool:
     return False
 
 
+def _is_core_range_set_dict(value: Any) -> bool:
+    """Check if a value looks like a CoreRangeSet dict."""
+    return isinstance(value, dict) and value.get("type") == "CoreRangeSet"
+
+
+def _parse_core_range_set(value: Any) -> Any:
+    """Parse a CoreRangeSet dict into a ttnn.CoreRangeSet.
+
+    Handles format: {"type": "CoreRangeSet", "value": "{CoreRange(CoreCoord(0, 0), CoreCoord(7, 7))}"}
+    """
+    import re
+
+    repr_str = str(value.get("value", value.get("repr", "")))
+    core_ranges = set()
+    for m in re.finditer(r"CoreRange\(CoreCoord\((\d+),\s*(\d+)\),\s*CoreCoord\((\d+),\s*(\d+)\)\)", repr_str):
+        x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+        core_ranges.add(ttnn.CoreRange(ttnn.CoreCoord(x1, y1), ttnn.CoreCoord(x2, y2)))
+    if core_ranges:
+        return ttnn.CoreRangeSet(core_ranges)
+    return None
+
+
 def _is_core_grid_dict(value: Any) -> bool:
     """Check if a value looks like a core_grid dict."""
     if not isinstance(value, dict):
@@ -253,6 +275,8 @@ def parse_dict_value(key: str, value: Any) -> Any:
             return dict_to_compute_kernel_config(value)
         elif _is_program_config_dict(value):
             return dict_to_program_config(value)
+        elif _is_core_range_set_dict(value):
+            return _parse_core_range_set(value)
         elif _is_core_grid_dict(value):
             return dict_to_core_grid(value)
         elif _is_dtype_dict(value):
