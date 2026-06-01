@@ -12,12 +12,13 @@ Required Options:
     --image <docker-image>              Docker image to use ("none" to use local build)
 
 Optional:
-    --config <4x8|4x32|8x16|4x8z|2x4x4z|4x32z>  Mesh configuration (default: 4x32)
+    --config <4x8|4x32|8x16|4x8z|2x4x4z|4x32z|16x4x4z>  Mesh configuration (default: 4x32)
                                         The *z configs are multi-mesh layouts that exercise Z links
                                         (inter-mesh) in addition to the intra-mesh N/S/E/W links.
                                         They launch one MPI rank per mesh, each with its own TT_MESH_ID.
-                                        4x8z   = single galaxy as 4 Z-connected 4x2 meshes (4 ranks).
-                                        2x4x4z = single galaxy as 2 Z-connected 4x4 meshes (2 ranks, dual_4x4 layout).
+                                        4x8z    = single galaxy as 4 Z-connected 4x2 meshes (4 ranks).
+                                        2x4x4z  = single galaxy as 2 Z-connected 4x4 meshes (2 ranks, dual_4x4 layout).
+                                        16x4x4z = full quad: 4 hosts x 2 Z-connected 4x4 meshes each (8 ranks).
     --output <directory>                Output directory for log files (default: fabric_test_logs)
     --mesh-graph-desc-path <path>       Path to mesh graph descriptor file (overrides --config)
                                         4x8 default:   tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
@@ -27,13 +28,15 @@ Optional:
                                                        (single galaxy split into 4 Z-connected 4x2 meshes)
                                         2x4x4z default: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_2x4x4_z_graph_descriptor.textproto
                                                        (single galaxy split into 2 Z-connected 4x4 meshes)
-                                        4x32z default: tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_4x4x8_z_torus_graph_descriptor.textproto
+                                        4x32z default:  tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_4x4x8_z_torus_graph_descriptor.textproto
                                                        (4 galaxies as 4 Z-connected 8x4 torus meshes)
+                                        16x4x4z default: tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_8x4x4_z_graph_descriptor.textproto
+                                                       (4 galaxies x 2 Z-connected 4x4 meshes each)
     --test-binary <path>                Path to test binary
                                         (default: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric)
     --test-config <path>                Path to test configuration file
                                         (default: tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml)
-                                        (4x8z/2x4x4z/4x32z default: test_fabric_multi_mesh_sanity_common.yaml, whose
+                                        (4x8z/2x4x4z/4x32z/16x4x4z default: test_fabric_multi_mesh_sanity_common.yaml, whose
                                          neighbor_exchange/all_to_all patterns route across mesh boundaries / Z links)
     --filter <pattern>                  Filter pattern passed to test_tt_fabric --filter
     --mpi-if <interface>                Network interface for MPI TCP transport (default: ens5f0np0)
@@ -58,6 +61,7 @@ MESH_GRAPH_DESC_PATH_4x8z="tt_metal/fabric/mesh_graph_descriptors/single_bh_gala
 # 2x4x4z: single galaxy split into 2 Z-connected 4x4 meshes (dual_4x4 layout).
 MESH_GRAPH_DESC_PATH_2x4x4z="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_2x4x4_z_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_4x32z="tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_4x4x8_z_torus_graph_descriptor.textproto"
+MESH_GRAPH_DESC_PATH_16x4x4z="tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_8x4x4_z_graph_descriptor.textproto"
 CONFIG="4x32"
 MESH_GRAPH_DESC_PATH=""
 MESH_GRAPH_DESC_PATH_EXPLICIT=false
@@ -98,8 +102,8 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             CONFIG="$2"
-            if [[ "$CONFIG" != "4x8" && "$CONFIG" != "4x32" && "$CONFIG" != "8x16" && "$CONFIG" != "4x8z" && "$CONFIG" != "2x4x4z" && "$CONFIG" != "4x32z" ]]; then
-                echo "Error: --config must be one of '4x8', '4x32', '8x16', '4x8z', '2x4x4z', or '4x32z'"
+            if [[ "$CONFIG" != "4x8" && "$CONFIG" != "4x32" && "$CONFIG" != "8x16" && "$CONFIG" != "4x8z" && "$CONFIG" != "2x4x4z" && "$CONFIG" != "4x32z" && "$CONFIG" != "16x4x4z" ]]; then
+                echo "Error: --config must be one of '4x8', '4x32', '8x16', '4x8z', '2x4x4z', '4x32z', or '16x4x4z'"
                 echo ""
                 show_help
                 exit 1
@@ -207,12 +211,14 @@ if [[ "$MESH_GRAPH_DESC_PATH_EXPLICIT" == false ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_2x4x4z"
     elif [[ "$CONFIG" == "4x32z" ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x32z"
+    elif [[ "$CONFIG" == "16x4x4z" ]]; then
+        MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_16x4x4z"
     fi
 fi
 
 # Multi-mesh (Z) configs need a multi-mesh-aware test config; fall back to the
 # multi-mesh sanity config unless the user explicitly passed --test-config.
-if [[ "$TEST_CONFIG_EXPLICIT" == false && ( "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" ) ]]; then
+if [[ "$TEST_CONFIG_EXPLICIT" == false && ( "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$CONFIG" == "16x4x4z" ) ]]; then
     TEST_CONFIG="$TEST_CONFIG_Z"
 fi
 
@@ -251,49 +257,221 @@ if [[ -n "$FILTER" ]]; then
     EXTRA_BINARY_ARGS="$EXTRA_BINARY_ARGS --filter $FILTER"
 fi
 
+# Resolve TT_VISIBLE_DEVICES for single-host multi-mesh Z configs from tray discovery
+# (tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py --fabric-config).
+resolve_fabric_python() {
+    local tt_metal_home="${TT_METAL_HOME:-$(pwd)}"
+    local py="${tt_metal_home}/python_env/bin/python"
+    if [[ -x "$py" ]]; then
+        echo "$py"
+    elif [[ -n "${VIRTUAL_ENV:-}" && -x "${VIRTUAL_ENV}/bin/python" ]]; then
+        echo "${VIRTUAL_ENV}/bin/python"
+    else
+        echo python3
+    fi
+}
+
+FABRIC_PYTHON="$(resolve_fabric_python)"
+
+run_fabric_discovery_local() {
+    local fabric_config="$1"
+    local tt_metal_home="${TT_METAL_HOME:-$(pwd)}"
+    local gen_rb="${tt_metal_home}/tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
+
+    if [[ "$DOCKER_IMAGE" == "none" ]]; then
+        cd "$tt_metal_home" && \
+        LD_LIBRARY_PATH="${tt_metal_home}/build/lib:${LD_LIBRARY_PATH:-}" \
+        "$FABRIC_PYTHON" "$gen_rb" --fabric-config "$fabric_config" --print-devices --work-dir "$tt_metal_home"
+    else
+        docker run --rm --net=host --privileged \
+            -v /tmp:/tmp \
+            -v /dev/hugepages-1G:/dev/hugepages-1G \
+            -v "$HOME:$HOME" \
+            --user "$(id -u):$(id -g)" \
+            -v /etc/passwd:/etc/passwd:ro \
+            -v /etc/group:/etc/group:ro \
+            --entrypoint="" \
+            -e "LD_LIBRARY_PATH=${tt_metal_home}/build/lib" \
+            "$DOCKER_IMAGE" \
+            bash -c "cd '${tt_metal_home}' && python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py --fabric-config '${fabric_config}' --print-devices --work-dir '${tt_metal_home}'"
+    fi
+}
+
+is_local_fabric_host() {
+    local host="$1"
+    local short_name fqdn host_short
+    short_name="$(hostname -s 2>/dev/null || hostname)"
+    fqdn="$(hostname -f 2>/dev/null || true)"
+    host_short="${host%%.*}"
+    [[ "$host" == "localhost" || "$host" == "127.0.0.1" || "$host" == "$short_name" || "$host" == "$fqdn" || "$host_short" == "$short_name" ]]
+}
+
+run_fabric_discovery_on_host() {
+    local host="$1"
+    local fabric_config="$2"
+    local tt_metal_home="${TT_METAL_HOME:-$(pwd)}"
+    local gen_rb="${tt_metal_home}/tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
+    local ssh_opts=(-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
+    local remote_py="${tt_metal_home}/python_env/bin/python"
+
+    if is_local_fabric_host "$host"; then
+        run_fabric_discovery_local "$fabric_config"
+        return
+    fi
+
+    if [[ "$DOCKER_IMAGE" == "none" ]]; then
+        ssh "${ssh_opts[@]}" "$host" \
+            "PY='${remote_py}'; [[ -x \"\$PY\" ]] || PY=python3; cd '${tt_metal_home}' && LD_LIBRARY_PATH='${tt_metal_home}/build/lib:'\${LD_LIBRARY_PATH:-} \"\$PY\" '${gen_rb}' --fabric-config '${fabric_config}' --print-devices --work-dir '${tt_metal_home}'"
+    else
+        ssh "${ssh_opts[@]}" "$host" \
+            "docker run --rm --net=host --privileged \
+                -v /tmp:/tmp \
+                -v /dev/hugepages-1G:/dev/hugepages-1G \
+                -v '${HOME}:${HOME}' \
+                --user '$(id -u):$(id -g)' \
+                -v /etc/passwd:/etc/passwd:ro \
+                -v /etc/group:/etc/group:ro \
+                --entrypoint='' \
+                -e 'LD_LIBRARY_PATH=${tt_metal_home}/build/lib' \
+                '${DOCKER_IMAGE}' \
+                bash -c \"cd '${tt_metal_home}' && python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py --fabric-config '${fabric_config}' --print-devices --work-dir '${tt_metal_home}'\""
+    fi
+}
+
+resolve_single_host_z_visible_devices() {
+    local fabric_config="$1"
+    local expected_ranks="$2"
+    local tt_metal_home="${TT_METAL_HOME:-$(pwd)}"
+    local gen_rb="${tt_metal_home}/tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
+
+    if [[ ! -f "$gen_rb" ]]; then
+        echo "Error: rank binding helper not found: $gen_rb" >&2
+        exit 1
+    fi
+
+    echo "Resolving TT_VISIBLE_DEVICES via tray discovery (--fabric-config ${fabric_config})..."
+    Z_VISIBLE_DEVICES=()
+
+    mapfile -t Z_VISIBLE_DEVICES < <(
+        run_fabric_discovery_local "$fabric_config" \
+            | grep '^FABRIC_VISIBLE_DEVICES:' | sed 's/^FABRIC_VISIBLE_DEVICES://'
+    )
+
+    if [[ "${#Z_VISIBLE_DEVICES[@]}" -ne "$expected_ranks" ]]; then
+        echo "Error: expected ${expected_ranks} TT_VISIBLE_DEVICES entries for ${fabric_config}, got ${#Z_VISIBLE_DEVICES[@]}" >&2
+        exit 1
+    fi
+    for ((i = 0; i < expected_ranks; i++)); do
+        echo "  rank $i -> TT_VISIBLE_DEVICES=${Z_VISIBLE_DEVICES[$i]}"
+    done
+}
+
+resolve_quad_host_z_visible_devices() {
+    local per_host_fabric_config="$1"
+    local num_hosts="$2"
+    local ranks_per_host="$3"
+    local expected_total=$((num_hosts * ranks_per_host))
+    local tt_metal_home="${TT_METAL_HOME:-$(pwd)}"
+    local gen_rb="${tt_metal_home}/tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
+
+    if [[ ! -f "$gen_rb" ]]; then
+        echo "Error: rank binding helper not found: $gen_rb" >&2
+        exit 1
+    fi
+
+    IFS=',' read -ra Z_RANK_HOSTS <<< "$HOSTS"
+    if [[ "${#Z_RANK_HOSTS[@]}" -ne "$num_hosts" ]]; then
+        echo "Error: --config requires exactly $num_hosts hosts in --hosts (got ${#Z_RANK_HOSTS[@]})" >&2
+        exit 1
+    fi
+
+    echo "Resolving TT_VISIBLE_DEVICES via tray discovery on ${num_hosts} hosts (--fabric-config ${per_host_fabric_config})..."
+    Z_VISIBLE_DEVICES=()
+
+    local host_idx=0
+    for host in "${Z_RANK_HOSTS[@]}"; do
+        local host_devices=()
+        mapfile -t host_devices < <(
+            run_fabric_discovery_on_host "$host" "$per_host_fabric_config" \
+                | grep '^FABRIC_VISIBLE_DEVICES:' | sed 's/^FABRIC_VISIBLE_DEVICES://'
+        )
+        if [[ "${#host_devices[@]}" -ne "$ranks_per_host" ]]; then
+            echo "Error: expected ${ranks_per_host} TT_VISIBLE_DEVICES entries from ${host}, got ${#host_devices[@]}" >&2
+            exit 1
+        fi
+        for ((local_rank = 0; local_rank < ranks_per_host; local_rank++)); do
+            local global_rank=$((host_idx * ranks_per_host + local_rank))
+            Z_VISIBLE_DEVICES+=("${host_devices[$local_rank]}")
+            echo "  rank $global_rank (host ${host}, local mesh ${local_rank}) -> TT_VISIBLE_DEVICES=${host_devices[$local_rank]}"
+        done
+        ((host_idx++))
+    done
+
+    if [[ "${#Z_VISIBLE_DEVICES[@]}" -ne "$expected_total" ]]; then
+        echo "Error: expected ${expected_total} TT_VISIBLE_DEVICES entries, got ${#Z_VISIBLE_DEVICES[@]}" >&2
+        exit 1
+    fi
+}
+
+write_quad_z_rankfile() {
+    local ranks_per_host="$1"
+    Z_RANKFILE="$(mktemp)"
+    local global_rank=0
+    for ((h = 0; h < ${#Z_RANK_HOSTS[@]}; h++)); do
+        for ((slot = 0; slot < ranks_per_host; slot++)); do
+            echo "rank $global_rank=${Z_RANK_HOSTS[$h]} slot=$slot" >> "$Z_RANKFILE"
+            ((global_rank++))
+        done
+    done
+    Z_GLOBAL_HOST=(--hostfile "$Z_RANKFILE" --map-by "rankfile:file=$Z_RANKFILE")
+}
+
 # Marker used to detect reports written during this run (vs. stale ones from a
 # previous run). We compare report mtimes against this file with bash's `-nt`.
 RUN_START_MARKER="$(mktemp)"
-cleanup_run_artifacts() { rm -f "$RUN_START_MARKER"; }
+cleanup_run_artifacts() {
+    rm -f "$RUN_START_MARKER"
+    [[ -n "$Z_RANKFILE" ]] && rm -f "$Z_RANKFILE"
+}
 trap cleanup_run_artifacts EXIT
 
-if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" ]]; then
+if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$CONFIG" == "16x4x4z" ]]; then
     # Multi-mesh Z configs: launch one MPI rank per mesh, each with its own
     # TT_MESH_ID, so the descriptor's inter-mesh (Z) connections are exercised
     # alongside the intra-mesh N/S/E/W links during neighbor exchange.
-    # NUM_MESHES is set per-config below (2x4x4z has only 2 meshes).
     Z_VISIBLE_DEVICES=()
-    Z_RANK_HOSTS=()      # 4x32z host list (for rankfile + logging); empty for single-host Z configs
-    Z_GLOBAL_HOST=()     # global --host args (single-host packing case)
+    Z_RANK_HOSTS=()
+    Z_GLOBAL_HOST=()
+    Z_RANKS_PER_HOST=1
 
     if [[ "$CONFIG" == "4x8z" ]]; then
-        # Single galaxy host carved into 4 Z-connected 4x2 meshes (8 chips each).
-        # Split the 32 chips into 4 groups of 8 via TT_VISIBLE_DEVICES
-        # (rank i -> mesh i -> tray (i+1)). Placement order is irrelevant on one
-        # host, so use a global host spec.
         NUM_MESHES=4
         SINGLE_HOST="${HOSTS%%,*}"
         Z_GLOBAL_HOST=(--host "${SINGLE_HOST}:${NUM_MESHES}")
-        Z_VISIBLE_DEVICES=(
-            "0,1,2,3,4,5,6,7"
-            "8,9,10,11,12,13,14,15"
-            "16,17,18,19,20,21,22,23"
-            "24,25,26,27,28,29,30,31"
-        )
+        resolve_single_host_z_visible_devices "4x8z" "$NUM_MESHES"
         echo "Running multi-mesh 4x8z (4 Z-connected 4x2 meshes) on single host: $SINGLE_HOST"
     elif [[ "$CONFIG" == "2x4x4z" ]]; then
-        # Single galaxy host carved into 2 Z-connected 4x4 meshes (16 chips each)
-        # -- the dual_4x4 layout. Split the 32 chips into 2 groups of 16 via
-        # TT_VISIBLE_DEVICES. Placement order
-        # is irrelevant on one host, so use a global host spec.
         NUM_MESHES=2
         SINGLE_HOST="${HOSTS%%,*}"
         Z_GLOBAL_HOST=(--host "${SINGLE_HOST}:${NUM_MESHES}")
-        Z_VISIBLE_DEVICES=(
-            "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
-            "16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31"
-        )
+        resolve_single_host_z_visible_devices "2x4x4z" "$NUM_MESHES"
         echo "Running multi-mesh 2x4x4z (2 Z-connected 4x4 meshes) on single host: $SINGLE_HOST"
+    elif [[ "$CONFIG" == "16x4x4z" ]]; then
+        NUM_MESHES=8
+        Z_RANKS_PER_HOST=2
+        IFS=',' read -ra Z_RANK_HOSTS <<< "$HOSTS"
+        if [[ "${#Z_RANK_HOSTS[@]}" -ne 4 ]]; then
+            echo "Error: --config 16x4x4z requires exactly 4 hosts in --hosts (got ${#Z_RANK_HOSTS[@]})"
+            exit 1
+        fi
+        resolve_quad_host_z_visible_devices "2x4x4z" 4 "$Z_RANKS_PER_HOST"
+        write_quad_z_rankfile "$Z_RANKS_PER_HOST"
+        echo "Running multi-mesh 16x4x4z (4 hosts x 2 Z-connected 4x4 meshes, 8 ranks total); rank i pinned via rankfile:"
+        for ((i = 0; i < NUM_MESHES; i++)); do
+            local_host_idx=$((i / Z_RANKS_PER_HOST))
+            local_mesh=$((i % Z_RANKS_PER_HOST))
+            echo "  rank $i -> mesh_id $i -> ${Z_RANK_HOSTS[$local_host_idx]} (local mesh ${local_mesh})"
+        done
     else
         NUM_MESHES=4
         # 4x32z: one full galaxy per host. The Z ring (mesh 0->1->2->3->0) only
@@ -306,20 +484,12 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" ]]; t
             echo "Error: --config 4x32z requires exactly $NUM_MESHES hosts in --hosts (got ${#Z_RANK_HOSTS[@]})"
             exit 1
         fi
-        # mpi-docker requires --host/--hostfile in global MPI args (before the first
-        # -np). MPMD with per-segment --host or global host:1 slot syntax does NOT
-        # reliably pin ranks when each segment is a separate -np 1 (rank 0 can still
-        # land on the launch node). Use an OpenMPI rankfile + --map-by rankfile,
-        # matching scaleout_configs/full_rankfile and tt-run's production pattern.
-        Z_RANKFILE="$OUTPUT_DIR/fabric_rankfile_${RUN_TIMESTAMP}.txt"
-        : > "$Z_RANKFILE"
+        Z_RANKFILE="$(mktemp)"
         for ((i = 0; i < NUM_MESHES; i++)); do
             echo "rank $i=${Z_RANK_HOSTS[$i]} slot=0" >> "$Z_RANKFILE"
         done
         Z_GLOBAL_HOST=(--hostfile "$Z_RANKFILE" --map-by "rankfile:file=$Z_RANKFILE")
         echo "Running multi-mesh 4x32z (4 Z-connected 8x4 torus galaxies); rank i pinned to host i:"
-        echo "Rankfile: $Z_RANKFILE"
-        cat "$Z_RANKFILE"
         for ((i = 0; i < NUM_MESHES; i++)); do
             echo "  rank $i -> mesh_id $i -> ${Z_RANK_HOSTS[$i]}"
         done
@@ -345,6 +515,14 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" ]]; t
         Z_SEGMENTS+=("$TEST_BINARY" --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS)
     done
 
+    # Single-host and multi-rank-per-host Z configs via mpi-docker: one container
+    # per MPMD segment. OpenMPI's default sm BTL needs a shared IPC namespace
+    # across containers on the same host; force TCP instead (same as tt-run).
+    Z_DOCKER_MPI_ARGS=()
+    if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "16x4x4z" ]]; then
+        Z_DOCKER_MPI_ARGS=(--mca btl self,tcp)
+    fi
+
     if [[ "$DOCKER_IMAGE" == "none" ]]; then
         mpirun-ulfm \
             --tag-output \
@@ -358,6 +536,7 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" ]]; t
         ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
             --empty-entrypoint \
             --mpi-interface "$MPI_IF" \
+            "${Z_DOCKER_MPI_ARGS[@]}" \
             "${MPI_EXTRA_ARGS[@]}" \
             --bind-to none \
             "${Z_GLOBAL_HOST[@]}" \
