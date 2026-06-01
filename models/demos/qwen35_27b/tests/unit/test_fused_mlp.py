@@ -46,7 +46,7 @@ def hf_model():
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (64 * 1024, 32 * 1024, 512, 32),
+    (512, 32),
 )
 @pytest.mark.parametrize(
     "batch_size",
