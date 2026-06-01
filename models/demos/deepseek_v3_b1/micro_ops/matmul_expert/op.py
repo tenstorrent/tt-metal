@@ -1288,8 +1288,13 @@ class ExpertKernel:
         sram_per_core_n: int = 0,
         sram_k_per_core: int = 0,
         sram_core_grid=None,  # CoreRangeSet for SRAM cores, or None if no SRAM.
-        sram_fmt_tensors: dict = None,  # from create_expert_fmt_tensors(), keyed by MeshCoordinate.
-        sram_base_addr_tensors: dict = None,  # from create_expert_fmt_tensors(), keyed by MeshCoordinate.
+        # Lockstep mesh tensors from create_expert_fmt_tensors() — single tensor each
+        # (ShardTensor2dMesh across the mesh, HEIGHT_SHARDED on core_grid).  Uniform
+        # L1 base address across mesh; per-core content varies via per-device slab.
+        sram_fmt_tensor: ttnn.Tensor = None,
+        sram_base_addr_tensor: ttnn.Tensor = None,
+        sram_fmt_l1_addrs: list = None,  # list[int] per-core L1 addrs, uniform across mesh.
+        sram_base_addrs_l1_addrs: list = None,
         sram_k_offsets: list = None,  # [(CoreCoord, k_offset_tiles), ...] for K-sliced SRAM.
         n_parallel_per_bank: int = 1,
         k_parallel_per_bank: int = 1,
@@ -1329,7 +1334,10 @@ class ExpertKernel:
             assert sram_per_core_n > 0, "sram_per_core_n must be set when has_sram=True"
             assert sram_k_per_core > 0, "sram_k_per_core must be set when has_sram=True"
             assert sram_core_grid is not None, "sram_core_grid must be set when has_sram=True"
-            assert sram_fmt_tensors is not None, "sram_fmt_tensors must be set when has_sram=True"
+            assert sram_fmt_tensor is not None, "sram_fmt_tensor must be set when has_sram=True"
+            assert sram_base_addr_tensor is not None, "sram_base_addr_tensor must be set when has_sram=True"
+            assert sram_fmt_l1_addrs is not None, "sram_fmt_l1_addrs must be set when has_sram=True"
+            assert sram_base_addrs_l1_addrs is not None, "sram_base_addrs_l1_addrs must be set when has_sram=True"
             assert sram_output_tensor is not None, "sram_output_tensor must be set when has_sram=True"
 
         if not tp_expert:
@@ -1359,28 +1367,17 @@ class ExpertKernel:
                 sram_out_dev = sram_out_per_device[dev_idx]
                 idx_dev = index_per_device[dev_idx]
 
-                # SRAM fmt + base addrs for this device.
+                # SRAM fmt + base addrs for this device.  Lockstep tensors give
+                # uniform L1 addrs across the mesh, so we pair the pre-computed
+                # per-core address lists with cores in row-major order (matches
+                # create_expert_fmt_tensors's row_wise=True iteration).
                 sram_fmt_l1 = []
                 sram_base_addrs_l1 = []
-                sram_fmt_tensors_dev = {}
-                sram_base_addr_tensors_dev = {}
                 if has_sram:
-                    sram_fmt_tensors_dev = sram_fmt_tensors[coord]
-                    sram_base_addr_tensors_dev = sram_base_addr_tensors[coord]
-                    sram_cores_list = ttnn.corerange_to_cores(sram_core_grid)
-                    sram_fmt_l1 = [
-                        (
-                            sram_cores_list[i],
-                            sram_fmt_tensors_dev[i].experimental_per_core_buffer_address(sram_cores_list[i]),
-                        )
-                        for i in range(len(sram_cores_list))
-                    ]
+                    sram_cores_list = ttnn.corerange_to_cores(sram_core_grid, row_wise=True)
+                    sram_fmt_l1 = [(sram_cores_list[i], sram_fmt_l1_addrs[i]) for i in range(len(sram_cores_list))]
                     sram_base_addrs_l1 = [
-                        (
-                            sram_cores_list[i],
-                            sram_base_addr_tensors_dev[i].experimental_per_core_buffer_address(sram_cores_list[i]),
-                        )
-                        for i in range(len(sram_cores_list))
+                        (sram_cores_list[i], sram_base_addrs_l1_addrs[i]) for i in range(len(sram_cores_list))
                     ]
 
                 # DRAM for this device. _partial_sem / _pipeline_sem are carried
@@ -1452,12 +1449,23 @@ class ExpertKernel:
                 mesh_program[ttnn.MeshCoordinateRange(coord, coord)] = program
 
         # --- Collect all live tensors ---
+        # Lockstep mesh tensors: one tensor each across the whole mesh.  Keep
+        # them alive via a single reference (not per-device per-core).
         all_ct_data = [t for ct in (sram_cts + dram_cts) for t in ct.get_data_tensors()]
-        all_sram_fmt = [t for per_dev in sram_fmt_tensors.values() for t in per_dev.values()]
-        all_sram_base = [t for per_dev in (sram_base_addr_tensors or {}).values() for t in per_dev.values()]
+        all_sram_fmt = [sram_fmt_tensor] if sram_fmt_tensor is not None else []
+        all_sram_base = [sram_base_addr_tensor] if sram_base_addr_tensor is not None else []
         per_device_dram = []
+        # offset_t / bsize_t are single mesh tensors (post-lockstep refactor), the
+        # SAME object for every coord under the lockstep design.  Dedup by id() so
+        # we keep each unique tensor alive exactly once.
+        _seen_meta = set()
         for in1_backing, (offset_t, bsize_t), fmt_info, *_ in dram_meta_tensors.values():
-            per_device_dram.extend([in1_backing, *offset_t.values(), *bsize_t.values(), fmt_info["fmt_dram_tensor"]])
+            per_device_dram.append(in1_backing)
+            for t in (offset_t, bsize_t):
+                if id(t) not in _seen_meta:
+                    _seen_meta.add(id(t))
+                    per_device_dram.append(t)
+            per_device_dram.append(fmt_info["fmt_dram_tensor"])
         io_tensors = [
             a_tensor,
             *all_ct_data,
