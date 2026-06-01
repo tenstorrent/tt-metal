@@ -134,8 +134,6 @@ m2::DataflowBufferSpec MakeDFB(
     if (borrowed_from.has_value()) {
         dfb.borrowed_from = *borrowed_from;
     }
-    // Implicit sync is a Gen2-only feature; this op targets WH/BH (Gen1).
-    dfb.disable_implicit_sync = true;
     return dfb;
 }
 
@@ -458,7 +456,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     // ---------- Reader ----------
     m2::KernelSpec reader_spec;
     reader_spec.unique_id = READER_KERNEL;
-    reader_spec.source = m2::KernelSpec::SourceFilePath{reader_kernel_path};
+    reader_spec.source = std::filesystem::path{reader_kernel_path};
     // Both Gen1 (WH/BH) and Gen2 (Quasar) configs are set so the same ProgramSpec
     // lowers on both archs. Gen2 uses QuasarDataMovementKernel under the hood — without
     // a `gen2_data_movement_config` entry, Quasar emulator runs reject the kernel.
@@ -561,7 +559,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     // ---------- Writer ----------
     m2::KernelSpec writer_spec;
     writer_spec.unique_id = WRITER_KERNEL;
-    writer_spec.source = m2::KernelSpec::SourceFilePath{writer_kernel_path};
+    writer_spec.source = std::filesystem::path{writer_kernel_path};
     writer_spec.config_spec = m2::DataMovementConfiguration{
         .gen1_data_movement_config =
             m2::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -586,7 +584,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     // ---------- Compute ----------
     m2::KernelSpec compute_spec;
     compute_spec.unique_id = COMPUTE_KERNEL;
-    compute_spec.source = m2::KernelSpec::SourceFilePath{compute_kernel_path};
+    compute_spec.source = std::filesystem::path{compute_kernel_path};
     m2::ComputeConfiguration compute_config{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -670,8 +668,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     auto bind_compute_pair = [&](const char* dfb_name, const char* accessor_name) {
         compute_spec.dfb_bindings.push_back(ProducerDFB(dfb_name, accessor_name));
         compute_spec.dfb_bindings.push_back(ConsumerDFB(dfb_name, accessor_name));
-        compute_spec.dfb_compute_self_loop_scopes.push_back(
-            {.dfb_spec_name = dfb_name, .scope = m2::KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+        compute_spec.advanced_options.dfb_compute_self_loop_scopes.push_back(
+            {.dfb_spec_name = dfb_name, .scope = m2::DFBComputeSelfLoopScope::Scope::INTRA});
     };
     // Reader → compute (consumer endpoints on compute).
     compute_spec.dfb_bindings.push_back(ConsumerDFB(DFB_CB_IN, "cb_in"));

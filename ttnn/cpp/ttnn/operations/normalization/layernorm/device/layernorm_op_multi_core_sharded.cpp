@@ -112,8 +112,6 @@ m2::DataflowBufferSpec MakeDFB(
     if (borrowed_from.has_value()) {
         dfb.borrowed_from = *borrowed_from;
     }
-    // Implicit sync is a Gen2-only feature; this op targets WH/BH (Gen1).
-    dfb.disable_implicit_sync = true;
     return dfb;
 }
 
@@ -446,10 +444,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     // SemaphoreSpecs (always all 3; placement = all_cores)
     ////////////////////////////////////////////////////////////////////////////
     std::vector<m2::SemaphoreSpec> semaphores = {
-        m2::SemaphoreSpec{.unique_id = SEM_REDUCE_SENDER, .target_nodes = core_ranges.all_cores, .initial_value = 0},
-        m2::SemaphoreSpec{.unique_id = SEM_REDUCE_RECEIVER, .target_nodes = core_ranges.all_cores, .initial_value = 0},
-        m2::SemaphoreSpec{
-            .unique_id = SEM_REDUCE_SECOND_STAGE, .target_nodes = core_ranges.all_cores, .initial_value = 0},
+        m2::SemaphoreSpec{.unique_id = SEM_REDUCE_SENDER, .target_nodes = core_ranges.all_cores},
+        m2::SemaphoreSpec{.unique_id = SEM_REDUCE_RECEIVER, .target_nodes = core_ranges.all_cores},
+        m2::SemaphoreSpec{.unique_id = SEM_REDUCE_SECOND_STAGE, .target_nodes = core_ranges.all_cores},
     };
 
     ////////////////////////////////////////////////////////////////////////////
@@ -536,7 +533,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     ////////////////////////////////////////////////////////////////////////////
     m2::KernelSpec reader_sender;
     reader_sender.unique_id = K_READER_SENDER;
-    reader_sender.source = m2::KernelSpec::SourceFilePath{kernel_paths.reader_sender};
+    reader_sender.source = std::filesystem::path{kernel_paths.reader_sender};
     reader_sender.config_spec = m2::DataMovementConfiguration{
         .gen1_data_movement_config =
             m2::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -553,8 +550,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     reader_sender.runtime_arguments_schema.named_runtime_args = {
         "mcast_start_x", "mcast_start_y", "mcast_end_x", "mcast_end_y", "start_x", "start_y"};
     // Mcast noc lists are passed as varargs (variable count per node)
-    reader_sender.runtime_arguments_schema.num_runtime_varargs =
-        core_ranges.num_cores_x_mcast + core_ranges.num_cores_y_mcast;
+    reader_sender.advanced_options.num_runtime_varargs = core_ranges.num_cores_x_mcast + core_ranges.num_cores_y_mcast;
 
     ////////////////////////////////////////////////////////////////////////////
     // Reader receiver (all-to-all) KernelSpec — only when grid uses mcast
@@ -562,7 +558,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     m2::KernelSpec reader_rcv_a2a;
     if (has_reader_receiver_all_to_all) {
         reader_rcv_a2a.unique_id = K_READER_RCV_A2A;
-        reader_rcv_a2a.source = m2::KernelSpec::SourceFilePath{kernel_paths.reader_receiver};
+        reader_rcv_a2a.source = std::filesystem::path{kernel_paths.reader_receiver};
         reader_rcv_a2a.config_spec = m2::DataMovementConfiguration{
             .gen1_data_movement_config =
                 m2::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -579,7 +575,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         }
         reader_rcv_a2a.runtime_arguments_schema.named_runtime_args = {
             "is_last_all_to_all_worker", "all_to_all_offset_bytes", "is_second_stage_reader", "start_x", "start_y"};
-        reader_rcv_a2a.runtime_arguments_schema.num_runtime_varargs =
+        reader_rcv_a2a.advanced_options.num_runtime_varargs =
             core_ranges.num_cores_x_mcast + core_ranges.num_cores_y_mcast;
     }
 
@@ -589,7 +585,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     m2::KernelSpec reader_rcv;
     if (has_not_all_to_all_workers) {
         reader_rcv.unique_id = K_READER_RCV;
-        reader_rcv.source = m2::KernelSpec::SourceFilePath{kernel_paths.reader_receiver};
+        reader_rcv.source = std::filesystem::path{kernel_paths.reader_receiver};
         reader_rcv.config_spec = m2::DataMovementConfiguration{
             .gen1_data_movement_config =
                 m2::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -670,7 +666,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
 
     m2::KernelSpec writer_sender;
     writer_sender.unique_id = K_WRITER_SENDER;
-    writer_sender.source = m2::KernelSpec::SourceFilePath{kernel_paths.writer};
+    writer_sender.source = std::filesystem::path{kernel_paths.writer};
     writer_sender.config_spec = m2::DataMovementConfiguration{
         .gen1_data_movement_config =
             m2::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -686,12 +682,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     // and varargs for the variable write-back segment list (per-core, multi-segment).
     writer_sender.runtime_arguments_schema.named_runtime_args = {
         "packed_cinv", "packed_winv", "eps_u", "gamma_addr", "beta_addr", "gamma_tile_start", "beta_tile_start"};
-    writer_sender.runtime_arguments_schema.num_runtime_varargs = 64;  // upper bound; legacy was variable
+    writer_sender.advanced_options.num_runtime_varargs = 64;  // upper bound; legacy was variable
 
     m2::KernelSpec writer_rcv;
     if (has_not_all_to_all_workers) {
         writer_rcv.unique_id = K_WRITER_RCV;
-        writer_rcv.source = m2::KernelSpec::SourceFilePath{kernel_paths.writer};
+        writer_rcv.source = std::filesystem::path{kernel_paths.writer};
         writer_rcv.config_spec = m2::DataMovementConfiguration{
             .gen1_data_movement_config =
                 m2::DataMovementConfiguration::Gen1DataMovementConfig{
@@ -707,7 +703,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         }
         writer_rcv.runtime_arguments_schema.named_runtime_args = {
             "packed_cinv", "packed_winv", "eps_u", "gamma_addr", "beta_addr", "gamma_tile_start", "beta_tile_start"};
-        writer_rcv.runtime_arguments_schema.num_runtime_varargs = 64;
+        writer_rcv.advanced_options.num_runtime_varargs = 64;
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -762,8 +758,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
             // Self-loop on cb_ex_partial2 and cb_ex2 — compute writes them then reads them back
             k.dfb_bindings.push_back(ProducerDFB(DFB_EX_PARTIAL2, "cb_ex_partial2"));
             k.dfb_bindings.push_back(ConsumerDFB(DFB_EX_PARTIAL2, "cb_ex_partial2"));
-            k.dfb_compute_self_loop_scopes.push_back(
-                {.dfb_spec_name = DFB_EX_PARTIAL2, .scope = m2::KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+            k.advanced_options.dfb_compute_self_loop_scopes.push_back(
+                {.dfb_spec_name = DFB_EX_PARTIAL2, .scope = m2::DFBComputeSelfLoopScope::Scope::INTRA});
             k.dfb_bindings.push_back(ConsumerDFB(DFB_EX2, "cb_ex2"));
             k.dfb_bindings.push_back(ConsumerDFB(DFB_EX_EXTERNAL2, "cb_ex_external2"));
             k.dfb_bindings.push_back(ConsumerDFB(DFB_EX2PE, "cb_ex2pe"));
@@ -771,21 +767,21 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         if (!rms_norm) {
             k.dfb_bindings.push_back(ProducerDFB(DFB_EX_PARTIAL, "cb_ex_partial"));
             k.dfb_bindings.push_back(ConsumerDFB(DFB_EX_PARTIAL, "cb_ex_partial"));
-            k.dfb_compute_self_loop_scopes.push_back(
-                {.dfb_spec_name = DFB_EX_PARTIAL, .scope = m2::KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+            k.advanced_options.dfb_compute_self_loop_scopes.push_back(
+                {.dfb_spec_name = DFB_EX_PARTIAL, .scope = m2::DFBComputeSelfLoopScope::Scope::INTRA});
             k.dfb_bindings.push_back(ConsumerDFB(DFB_EX, "cb_ex"));
             k.dfb_bindings.push_back(ConsumerDFB(DFB_EX_EXTERNAL, "cb_ex_external"));
         }
         // cb_x: self-loop
         k.dfb_bindings.push_back(ProducerDFB(DFB_X, "cb_x"));
         k.dfb_bindings.push_back(ConsumerDFB(DFB_X, "cb_x"));
-        k.dfb_compute_self_loop_scopes.push_back(
-            {.dfb_spec_name = DFB_X, .scope = m2::KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+        k.advanced_options.dfb_compute_self_loop_scopes.push_back(
+            {.dfb_spec_name = DFB_X, .scope = m2::DFBComputeSelfLoopScope::Scope::INTRA});
         // cb_xmm: self-loop
         k.dfb_bindings.push_back(ProducerDFB(DFB_XMM, "cb_xmm"));
         k.dfb_bindings.push_back(ConsumerDFB(DFB_XMM, "cb_xmm"));
-        k.dfb_compute_self_loop_scopes.push_back(
-            {.dfb_spec_name = DFB_XMM, .scope = m2::KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+        k.advanced_options.dfb_compute_self_loop_scopes.push_back(
+            {.dfb_spec_name = DFB_XMM, .scope = m2::DFBComputeSelfLoopScope::Scope::INTRA});
         // cb_ex_global: consumer
         k.dfb_bindings.push_back(ConsumerDFB(DFB_EX_GLOBAL, "cb_ex_global"));
         // Output
@@ -798,8 +794,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
             k.dfb_bindings.push_back(ConsumerDFB(DFB_RECIPROCALS, "cb_reciprocals"));
             k.dfb_bindings.push_back(ProducerDFB(DFB_TRANSPOSE, "cb_transpose"));
             k.dfb_bindings.push_back(ConsumerDFB(DFB_TRANSPOSE, "cb_transpose"));
-            k.dfb_compute_self_loop_scopes.push_back(
-                {.dfb_spec_name = DFB_TRANSPOSE, .scope = m2::KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+            k.advanced_options.dfb_compute_self_loop_scopes.push_back(
+                {.dfb_spec_name = DFB_TRANSPOSE, .scope = m2::DFBComputeSelfLoopScope::Scope::INTRA});
         }
         if (is_post_all_gather) {
             // cb_stats is borrowed-memory (backed by stats tensor) — no kernel produces
@@ -812,13 +808,13 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
             // self-loop on compute + plus the reader_sender binding handles consumption.
             k.dfb_bindings.push_back(ProducerDFB(DFB_STATS_REDUCED, "cb_stats_reduced"));
             k.dfb_bindings.push_back(ConsumerDFB(DFB_STATS_REDUCED, "cb_stats_reduced"));
-            k.dfb_compute_self_loop_scopes.push_back(
-                {.dfb_spec_name = DFB_STATS_REDUCED, .scope = m2::KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+            k.advanced_options.dfb_compute_self_loop_scopes.push_back(
+                {.dfb_spec_name = DFB_STATS_REDUCED, .scope = m2::DFBComputeSelfLoopScope::Scope::INTRA});
             // cb_var: compute self-loop (variance written and read back within compute).
             k.dfb_bindings.push_back(ProducerDFB(DFB_VAR, "cb_var"));
             k.dfb_bindings.push_back(ConsumerDFB(DFB_VAR, "cb_var"));
-            k.dfb_compute_self_loop_scopes.push_back(
-                {.dfb_spec_name = DFB_VAR, .scope = m2::KernelSpec::DFBComputeSelfLoopScope::Scope::INTRA});
+            k.advanced_options.dfb_compute_self_loop_scopes.push_back(
+                {.dfb_spec_name = DFB_VAR, .scope = m2::DFBComputeSelfLoopScope::Scope::INTRA});
         }
     };
 
@@ -882,7 +878,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
 
     m2::KernelSpec compute_a2a;
     compute_a2a.unique_id = K_COMPUTE_A2A;
-    compute_a2a.source = m2::KernelSpec::SourceFilePath{kernel_paths.compute};
+    compute_a2a.source = std::filesystem::path{kernel_paths.compute};
     compute_a2a.config_spec = build_compute_config();
     compute_a2a.compile_time_arg_bindings = build_compute_ctas(true);
     bind_compute_dfbs(compute_a2a);
@@ -890,12 +886,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         compute_a2a.compiler_options.defines.push_back(d);
     }
     compute_a2a.runtime_arguments_schema.named_runtime_args = {"num_reduce_tiles_per_block_h"};
-    compute_a2a.runtime_arguments_schema.num_runtime_varargs = 4;  // is_a2a + variable suffix
+    compute_a2a.advanced_options.num_runtime_varargs = 4;  // is_a2a + variable suffix
 
     m2::KernelSpec compute_not_a2a;
     if (has_not_all_to_all_workers) {
         compute_not_a2a.unique_id = K_COMPUTE_NOT_A2A;
-        compute_not_a2a.source = m2::KernelSpec::SourceFilePath{kernel_paths.compute};
+        compute_not_a2a.source = std::filesystem::path{kernel_paths.compute};
         compute_not_a2a.config_spec = build_compute_config();
         compute_not_a2a.compile_time_arg_bindings = build_compute_ctas(false);
         bind_compute_dfbs(compute_not_a2a);
@@ -1047,7 +1043,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
                     varargs.push_back(num_distributed_devices);
                 }
                 compute_a2a_rp.named_runtime_args.push_back({.node = node, .args = std::move(args)});
-                compute_a2a_rp.runtime_varargs.push_back({.node = node, .args = std::move(varargs)});
+                compute_a2a_rp.advanced_options.runtime_varargs.push_back({.node = node, .args = std::move(varargs)});
             } else {
                 compute_not_a2a_rp.named_runtime_args.push_back({.node = node, .args = std::move(args)});
             }
@@ -1109,7 +1105,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
                 }
             }
             reader_sender_rp.named_runtime_args.push_back({.node = node, .args = std::move(args)});
-            reader_sender_rp.runtime_varargs.push_back({.node = node, .args = std::move(varargs)});
+            reader_sender_rp.advanced_options.runtime_varargs.push_back({.node = node, .args = std::move(varargs)});
         } else if (is_a2a) {
             bool is_last_a2a;
             if (grid.use_two_stage_reduce) {
@@ -1145,7 +1141,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
                 }
             }
             reader_rcv_a2a_rp.named_runtime_args.push_back({.node = node, .args = std::move(args)});
-            reader_rcv_a2a_rp.runtime_varargs.push_back({.node = node, .args = std::move(varargs)});
+            reader_rcv_a2a_rp.advanced_options.runtime_varargs.push_back({.node = node, .args = std::move(varargs)});
         } else {
             // Non-all-to-all receiver
             std::unordered_map<std::string, uint32_t> args = {
@@ -1218,10 +1214,10 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
             };
             if (is_a2a) {
                 writer_sender_rp.named_runtime_args.push_back({.node = node, .args = std::move(args)});
-                writer_sender_rp.runtime_varargs.push_back({.node = node, .args = write_back_varargs});
+                writer_sender_rp.advanced_options.runtime_varargs.push_back({.node = node, .args = write_back_varargs});
             } else {
                 writer_rcv_rp.named_runtime_args.push_back({.node = node, .args = std::move(args)});
-                writer_rcv_rp.runtime_varargs.push_back({.node = node, .args = write_back_varargs});
+                writer_rcv_rp.advanced_options.runtime_varargs.push_back({.node = node, .args = write_back_varargs});
             }
         }
     }
