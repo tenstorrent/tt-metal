@@ -291,6 +291,10 @@ struct NoOp {
  *
  * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX) - required explicit parameter
  * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - required explicit parameter
+ * @tparam reduce_format Routes Int32/Float32 MAX to the SFPU path (Float32 for precision; Int32 has
+ *                       no FPU support). Pass via REDUCE_FORMAT define from host (same as REDUCE_OP
+ *                       / REDUCE_DIM). Other formats use FPU/GMPOOL. Only REDUCE_ROW/REDUCE_COL MAX
+ *                       on SFPU; MIN dispatched via reduce_{h,w}_neg.cpp (SFPU vs FPU branch).
  * @tparam input_policy Input handling policy (default: WaitAndPopPerTile - streaming mode)
  * @tparam reconfig_mode Data format reconfiguration mode (default: INPUT_AND_OUTPUT)
  *
@@ -374,6 +378,7 @@ template <
     ReduceDim reduce_dim,
     ReduceInputPolicy input_policy = ReduceInputPolicy::WaitAndPopPerTile,
     ReduceDataFormatReconfigMode reconfig_mode = ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+    DataFormat reduce_format = DataFormat::Invalid,
     typename AccumulateT = NoAccumulation,
     typename PostReduceOp = NoOp>
 ALWI void reduce(
