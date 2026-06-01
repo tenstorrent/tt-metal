@@ -480,23 +480,24 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         input_features = audio_inputs["input_features"]
         input_speech_attn = audio_inputs["attention_mask"]
 
-        # Warm the speech-encoder JIT/disk cache for this audio's mel-length bucket before the timed
-        # speech tasks. The encoder kernels are shape-specialized, so the first encode of a bucket
-        # otherwise pays a cold ~7-20 s recompile (this is why S2TT — the first speech task — was the
-        # slowest); after this, S2TT/S2ST/ASR rebuild from the warm cache (~1-2 s). The length is
-        # derived from the actual audio — nothing input-specific. (Only the live bucket is warmed:
-        # padding to a larger neighbour bucket compiles an oversized program that clashes with the
-        # decode CB budget on the last task — see ``prewarm_speech_encoder``.)
-        _mel_len = int(input_features.shape[1])
-        tt_model.prewarm_speech_encoder([_mel_len])
-        # Reset the program cache + release any prewarm L1 so the timed tasks start from the same
-        # clean state as without prewarm (the prewarm only needed to warm the on-disk JIT cache).
-        tt_model.clear_runtime_program_cache()
-        ttnn.synchronize_device(device)
+        # Warm the speech-encoder JIT/disk cache for a given audio's mel-length bucket *before* its
+        # timed task. The encoder kernels are shape-specialized, so the first encode of a bucket
+        # otherwise pays a cold ~7-20 s recompile; after this the task rebuilds from the warm cache
+        # (~1-2 s). Called per speech task so each task is self-contained — run a single task in
+        # isolation and it warms its own bucket and reproduces the steady-state number; in this chained
+        # run ``prewarm_speech_encoder`` is idempotent so the shared bucket is warmed only once. The
+        # length is derived from the actual audio (not input-specific); only the live bucket is warmed
+        # (a larger neighbour bucket compiles an oversized program that clashes with the decode CB
+        # budget — see ``prewarm_speech_encoder``). The clear resets to a clean pre-task device state.
+        def _warm_speech_enc(feats_torch: torch.Tensor) -> None:
+            tt_model.prewarm_speech_encoder([int(feats_torch.shape[1])])
+            tt_model.clear_runtime_program_cache()
+            ttnn.synchronize_device(device)
 
         # =========================================================================
         # 3. S2TT — Speech-to-Text Translation (Hindi speech → English text)
         # =========================================================================
+        _warm_speech_enc(input_features)
         _print_header(3, "Speech-to-Text Translation", "S2TT", tgt_translate, tgt_back_text)
         print(f"  Input audio ({tgt_translate}): {T2ST_WAV} ({sample_rate} Hz)")
         s2tt_feats_tt = torch_feats_to_ttnn(device, input_features)
@@ -523,6 +524,7 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         # =========================================================================
         # 4. S2ST — Speech-to-Speech Translation (Hindi speech → Spanish speech)
         # =========================================================================
+        _warm_speech_enc(input_features)
         _print_header(4, "Speech-to-Speech Translation", "S2ST", tgt_translate, tgt_speech_other)
         print(f"  Input audio ({tgt_translate}): {T2ST_WAV} ({sample_rate} Hz)")
         s2st_feats_tt = torch_feats_to_ttnn(device, input_features)
@@ -559,6 +561,7 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         # already-emitted tokens, which pushes a Hindi target toward the alternative-language
         # vocabulary (output drifts to English). Disable penalty just for this task.
         gen_common_asr = {**gen_common, "repetition_penalty": 1.0}
+        _warm_speech_enc(input_features)
         _print_header(5, "Automatic Speech Recognition", "ASR", tgt_translate, tgt_asr)
         print(f"  Input audio ({tgt_translate}): {T2ST_WAV} ({sample_rate} Hz)")
         asr_feats_tt = torch_feats_to_ttnn(device, input_features)
