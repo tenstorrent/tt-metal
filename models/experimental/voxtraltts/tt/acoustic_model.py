@@ -322,7 +322,7 @@ class VoxtralTTAcousticModel:
         ttnn.deallocate(s2)
         if debug_out is not None:
             debug_out["concat_input"] = ttnn.to_torch(h).float()
-
+        # ckeck for torch and ttnn
         cos = self._cos_identity
         sin = self._sin_identity
 
@@ -363,9 +363,11 @@ class VoxtralTTAcousticModel:
 
         for i in range(self.n_layers):
             residual_attn = ttnn.clone(h, dtype=self.dtype, memory_config=_residual_mc)
+            # check for torch or ttnn
             normed = self.attn_norms[i](h, mode=Mode.DECODE, norm_config={"output_mem_config": _residual_mc})
             if debug_out is not None:
                 debug_out[f"layer{i}.attn_norm"] = ttnn.to_torch(normed).float()
+            # check for torch or ttnn
             attn_out = self.attentions[i](normed, cos, sin, attention_mask=None, activation_memory_config=_residual_mc)
             ttnn.deallocate(normed)
             attn_out = _slice_like(attn_out, h)
@@ -380,9 +382,11 @@ class VoxtralTTAcousticModel:
                 debug_out[f"layer{i}.post_attn"] = ttnn.to_torch(h).float()
 
             residual_ffn = ttnn.clone(h, dtype=self.dtype, memory_config=_residual_mc)
+            # check for torch or ttnn
             normed_ff = self.ffn_norms[i](h, mode=Mode.DECODE, norm_config={"output_mem_config": _residual_mc})
             if debug_out is not None:
                 debug_out[f"layer{i}.ffn_norm"] = ttnn.to_torch(normed_ff).float()
+            # check for torch or ttnn
             ff_out = self.mlps[i](normed_ff, activation_memory_config=_residual_mc)
             ttnn.deallocate(normed_ff)
             ff_out = _slice_like(ff_out, h)
@@ -400,6 +404,7 @@ class VoxtralTTAcousticModel:
         if debug_out is not None:
             debug_out["final_norm"] = ttnn.to_torch(h).float()
 
+        # check for torch or ttnn
         h_shape = tuple(h.shape)
         h0 = ttnn.slice(h, [0, 0, 0, 0], [h_shape[0], 1, 1, h_shape[-1]])
         ttnn.deallocate(h)
@@ -488,6 +493,7 @@ class VoxtralTTAcousticModel:
         scaled_host = self._fm_pre_round_scaled_from_sampled_tt(sampled_tt, bsz)
         return scaled_host.round().long()
 
+    # change into tt.tensor as input  then check if intialization are requied during runtime , if not then move to init
     def _decode_one_frame(
         self,
         semantic_code: torch.Tensor,
@@ -502,8 +508,9 @@ class VoxtralTTAcousticModel:
         dtype = llm_hidden.dtype
         should_decode = semantic_code != self._end_audio_token_id
 
+        # need to use ttnn.randn
         x_0 = torch.randn(bsz, self.n_acoustic_out, device=device, dtype=dtype)
-        timesteps = self._timesteps_cpu
+        timesteps = self._timesteps_cpu  ### is timesteps statci then move to init, else justify
 
         sampled_tt = ttnn.from_torch(
             x_0.to(torch.bfloat16).unsqueeze(1),
@@ -526,7 +533,7 @@ class VoxtralTTAcousticModel:
         ttnn.deallocate(tt_llm)
         ttnn.deallocate(tt_llm_zero)
 
-        ca = cfg_alpha.to(dtype=dtype, device=device)
+        ca = cfg_alpha.to(dtype=dtype, device=device)  ##### check this for torch or ttnn
         if ca.dim() == 0:
             cfg_a = ca.reshape(1, 1).expand(bsz, 1)
         elif ca.dim() == 1:
@@ -541,6 +548,7 @@ class VoxtralTTAcousticModel:
             dt_val = float((timesteps[i + 1] - timesteps[i]).item())
 
             te = self._time_embedding_tt(t_val, bsz)
+            #  check the data type as  typecasted from fp32 to bf16
             x_in = self._sampled_tt_for_velocity(sampled_tt)
             x_batched = ttnn.concat([x_in, x_in], dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             if x_in is not sampled_tt and x_in.is_allocated():
@@ -588,10 +596,11 @@ class VoxtralTTAcousticModel:
 
             v_t_3d = ttnn.reshape(v_t_tt, (bsz, 1, self.n_acoustic_out))
             ttnn.deallocate(v_t_tt)
+            # check for torch or ttnn
             sampled_tt = self._euler_integrate_sampled(sampled_tt, v_t_3d, dt_val)
 
         ttnn.deallocate(tt_llm_batched)
-
+        # check for torch or ttnn   , can initialization move to init
         output_codes = self._fm_round_acoustic_codes_from_sampled_tt(sampled_tt, bsz)
         output_codes[~should_decode] = self._empty_audio_token_id
         offset = len(AudioSpecialTokens.all_special_tokens())
@@ -705,7 +714,7 @@ class VoxtralTTAcousticModel:
         )
         if owned_cast and llm_in.is_allocated():
             ttnn.deallocate(llm_in)
-        sem_logits = ttnn.to_torch(sem_tt).float()
+        sem_logits = ttnn.to_torch(sem_tt).float()  # why convert here
         ttnn.deallocate(sem_tt)
         if sem_logits.dim() == 4:
             sem_logits = sem_logits.squeeze(1)
@@ -790,6 +799,7 @@ class VoxtralTTAcousticModel:
 
         Returns ``[B, 1 + n_acoustic_codebook]``: semantic token column-major compatible with reference.
         """
+        # is llm hidden shape changes durin runtime, if not then move into init
         bsz = llm_hidden.shape[0]
         need_debug = return_debug or collect_semantic_logits
         debug: dict[str, torch.Tensor] | None = {} if need_debug else None
@@ -805,6 +815,7 @@ class VoxtralTTAcousticModel:
         )
         sem_logits = self._semantic_logits_tt(tt_llm_sem, input_fp32=False)
         ttnn.deallocate(tt_llm_sem)
+        # armax should called as ttn.argmax    not the torch.argmax
         semantic_code = sem_logits.argmax(dim=-1, keepdim=True).long().reshape(bsz, 1)
         if debug is not None:
             debug["semantic_logits"] = sem_logits
