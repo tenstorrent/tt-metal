@@ -469,7 +469,7 @@ def prepare_attn_qg(sd, prefix, n_heads, head_dim, tp):
     ShardTensorToMesh(dim=-1) on the transposed weight naturally groups contiguous heads
     per device, preserving the per-head [Q, gate] layout expected by forward_decode.
     """
-    return sd[prefix + "attention.wq.weight"]
+    return sd[prefix + "attention.wqkv.weight"]
 
 
 def prepare_conv_taps(sd, prefix, tp):

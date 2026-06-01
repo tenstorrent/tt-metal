@@ -2942,12 +2942,12 @@ class ModelArgs:
         return self.model_config
 
     def get_hf_model_cls(self):
-        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
 
         if not self.is_multimodal:
             return AutoModelForCausalLM
 
-        for model_cls in (AutoModelForImageTextToText,):
+        for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
             if type(self.hf_config) in model_cls._model_mapping:
                 return model_cls
 
