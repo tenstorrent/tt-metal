@@ -154,9 +154,11 @@ class TestMLP:
             down_w.to(torch.bfloat16),
         )
 
-        from models.demos.blackhole.qwen3_5_9b.tt.qwen35_mlp import Qwen35MLP
+        from models.demos.blackhole.qwen3_5_9b.tt.mlp import Qwen35MLP
+        from models.demos.blackhole.qwen3_5_9b.utils.substate import substate
 
-        mlp = Qwen35MLP(args, sd, 0, device)
+        mlp_state = substate(sd, "layers.0.mlp")
+        mlp = Qwen35MLP(device, mlp_state)
         x_t = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         out = ttnn.to_torch(mlp.forward(x_t))
 
