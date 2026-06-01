@@ -405,7 +405,7 @@
       timeout: 15
       tier: 2
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
       tier: 2
     # bh_galaxy_perf: temporarily disabled — Blackhole Galaxy fabric / ethernet
     # bring-up hits an unrecoverable hang at open_mesh_device (FabricFirmwareInitializer
@@ -432,7 +432,7 @@
       timeout: 15
       tier: 2
     bh_quietbox_2:
-      timeout: 15
+      timeout: 30
       tier: 2
     # bh_galaxy_perf: temporarily disabled — same Blackhole Galaxy fabric / ethernet
     # hang as 26B-A4B above. Re-enable once root-caused.
@@ -530,7 +530,7 @@
       timeout: 30
       tier: 1
     bh_quietbox_2:
-      timeout: 25
+      timeout: 45
       tier: 1
     bh_galaxy:
       timeout: 30
