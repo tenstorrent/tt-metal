@@ -16,6 +16,7 @@ from models.experimental.voxtraltts.reference.voxtral_config import (
     DEFAULT_VOXTRAL_MODEL,
     VoxtralAudioTokenizerConfig,
     audio_tokenizer_latent_dim,
+    decoder_transformer_window_sizes,
     load_voxtral_config,
     parse_csv_ints,
 )
@@ -300,10 +301,13 @@ class VoxtralTTAudioTokenizer:
                 conv_weight_base="output_proj.conv",
                 kernel_size=ks,
                 stride=1,
-                pad_mode="replicate",
+                pad_mode="reflect",
                 in_channels=ic,
                 out_channels=oc,
                 output_channel_splits=8,
+                # kernel_w(7) * 1024ch * 2B = 14336B > 8192B NOC burst on the height-sharded conv
+                # reader; split in_channels (1024 -> 512) so each coalesced read fits (7*512*2=7168B).
+                input_channel_splits=2,
                 weight_dtype=self._weight_dtype,
                 activations_dtype=self._dtype,
                 output_dtype=self._dtype,
@@ -356,20 +360,26 @@ class VoxtralTTAudioTokenizer:
 
         nl = max(int(tokenizer_cfg.acoustic_codebook_size), 2)
         sc = 2.0 / (nl - 1)
-        self._acoustic_fsq_scale_tt = ttnn.from_torch(
-            torch.full((1, 1, 1), sc, dtype=torch.float32),
+        self._acoustic_fsq_scale_tt = ttnn.full(
+            (1, 1, 1),
+            fill_value=sc,
             device=mesh_device,
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        self._acoustic_fsq_one_tt = ttnn.from_torch(
-            torch.full((1, 1, 1), 1.0, dtype=torch.float32),
+        self._acoustic_fsq_one_tt = ttnn.full(
+            (1, 1, 1),
+            fill_value=1.0,
             device=mesh_device,
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+        # Per-stage decoder sliding windows (decoder_blocks.1/.3/.5/.7), e.g. (2, 4, 8, 16).
+        self._decoder_windows = decoder_transformer_window_sizes(self.cfg)
+        self._attn_mask_cache: dict[tuple[int, int], ttnn.Tensor] = {}
 
     def encoder_checkpoint_present(self) -> bool:
         """True if ``input_proj`` (and typically encoder) tensors exist in the loaded slice."""
@@ -411,20 +421,30 @@ class VoxtralTTAudioTokenizer:
             raise RuntimeError("decoder_blocks.0 conv is not loaded for this checkpoint.")
         return self.decoder_blocks_0_conv(latent_b1tc)
 
-    def _decoder_sliding_window_attn_mask_tt(self, seq_len: int) -> ttnn.Tensor:
-        """ALiBi + causal + sliding-window bias ``[1,1,H,T,T]`` on device (bf16 tile), current ``seq_len``."""
+    def _decoder_sliding_window_attn_mask_tt(self, seq_len: int, window: int) -> ttnn.Tensor:
+        """ALiBi + causal + sliding-window bias ``[1,H,T,T]`` on device (bf16 tile), cached by ``(seq_len, window)``.
+
+        The bias is a constant for a given ``(seq_len, window)`` (depends only on ``n_heads``), so the
+        device tensor is built once and reused. The cache owns it; callers must NOT deallocate it.
+        """
+        key = (seq_len, window)
+        cached = self._attn_mask_cache.get(key)
+        if cached is not None and cached.is_allocated():
+            return cached
         mask = audio_tokenizer_sliding_window_attention_bias(
             self.cfg.n_heads,
             seq_len,
-            self.cfg.attn_sliding_window_size,
+            window,
         ).to(torch.bfloat16)
-        return ttnn.from_torch(
+        mask_tt = ttnn.from_torch(
             mask,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        self._attn_mask_cache[key] = mask_tt
+        return mask_tt
 
     def decode_full_forward(self, latent_b1tc: ttnn.Tensor) -> ttnn.Tensor:
         """``[B,1,T,latent_dim]`` → ``[B,1,T_out,dim]``: all 12 decoder blocks, no ``output_proj``."""
@@ -455,11 +475,11 @@ class VoxtralTTAudioTokenizer:
         stack_input = latent_b1tc
         padded_stack_input = None
         if input_t < decode_t:
-            pad = ttnn.from_torch(
-                torch.zeros((b, 1, decode_t - input_t, input_c), dtype=torch.bfloat16),
-                device=self.mesh_device,
+            pad = ttnn.zeros(
+                (b, 1, decode_t - input_t, input_c),
                 dtype=self._dtype,
                 layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             stack_input = ttnn.concat([latent_b1tc, pad], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -469,23 +489,22 @@ class VoxtralTTAudioTokenizer:
         x = self.decoder_blocks_0_forward(stack_input)
         if padded_stack_input is not None:
             ttnn.deallocate(padded_stack_input)
-        m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]))
+        # Per-stage sliding windows (decoder_blocks.1/.3/.5/.7). Masks are cached by (seq_len, window)
+        # (see _decoder_sliding_window_attn_mask_tt); the cache owns them, so they are not deallocated here.
+        w = self._decoder_windows
+        m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]), w[0])
         x = self.decoder_blocks_1_forward(x, attn_mask=m)
-        ttnn.deallocate(m)
         x = self.decoder_blocks_2_forward(x)
-        m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]))
+        m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]), w[1])
         x = self.decoder_blocks_3_forward(x, attn_mask=m)
-        ttnn.deallocate(m)
         x = self.decoder_blocks_4_forward(x)
-        m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]))
+        m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]), w[2])
         x = self.decoder_blocks_5_forward(x, attn_mask=m)
-        ttnn.deallocate(m)
         # Free L1 from prior SDPA before decoder_blocks_6 conv static-CB compile (P150).
         ttnn.synchronize_device(self.mesh_device)
         x = self.decoder_blocks_6_forward(x)
-        m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]))
+        m = self._decoder_sliding_window_attn_mask_tt(int(x.shape[2]), w[3])
         x = self.decoder_blocks_7_forward(x, attn_mask=m)
-        ttnn.deallocate(m)
         if input_t < decode_t:
             upsample = 1
             for stride in parse_csv_ints(self.cfg.decoder_convs_strides_str)[1:]:
@@ -681,19 +700,6 @@ class VoxtralTTAudioTokenizer:
             raise RuntimeError("encoder_blocks.1 downsample conv is not loaded for this checkpoint.")
         return self.encoder_downsample_after_transformer_0(x_b1tc)
 
-    def latent_from_codes(self, codes_b37t: torch.Tensor) -> ttnn.Tensor:
-        """``[B, 37, T]`` host integer codes → ``[B, 1, T, latent_dim]`` bf16 tile on device."""
-        codes_tt = ttnn.from_torch(
-            codes_b37t.to(torch.int64).clamp(min=0).to(torch.uint32).contiguous(),
-            device=self.mesh_device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        out = self.latent_from_codes_tt(codes_tt)
-        ttnn.deallocate(codes_tt)
-        return out
-
     def pretransform_decode_tt(self, mel_b1tc: ttnn.Tensor) -> ttnn.Tensor:
         """``[B,1,T,C_mel]`` → ``[B,1,T*C_mel]`` waveform on device (chunked for P150 L1)."""
         if len(mel_b1tc.shape) != 4 or int(mel_b1tc.shape[1]) != 1:
@@ -772,25 +778,12 @@ class VoxtralTTAudioTokenizer:
         if len(tensors) == 1:
             return tensors[0]
 
-        # Final segments are individually too large to concat on device; stitch on host.
-        host_parts = [ttnn.to_torch(part).float() for part in tensors]
-        for part in tensors:
+        out = tensors[0]
+        for part in tensors[1:]:
+            merged = ttnn.concat([out, part], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if out.is_allocated():
+                ttnn.deallocate(out)
             if part.is_allocated():
                 ttnn.deallocate(part)
-        stitched = torch.cat(host_parts, dim=-1).to(torch.bfloat16)
-        return ttnn.from_torch(
-            stitched,
-            device=self.mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-    def pretransform_decode_torch(self, mel_b1tc: ttnn.Tensor) -> torch.Tensor:
-        """``[B,1,T,C_mel]`` TT mel → ``[B,1,T*C_mel]`` float32 host tensor."""
-        if len(mel_b1tc.shape) != 4 or int(mel_b1tc.shape[1]) != 1:
-            raise ValueError(f"Expected [B,1,T,C_mel] mel, got {tuple(mel_b1tc.shape)}")
-        b, _, t, c_mel = (int(mel_b1tc.shape[i]) for i in range(4))
-        # Flatten on host — large TT reshape blows L1 on P150.
-        mel_host = ttnn.to_torch(mel_b1tc).float()
-        return mel_host.reshape(b, 1, t * c_mel)
+            out = merged
+        return out
