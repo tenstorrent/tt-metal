@@ -204,8 +204,8 @@ SEQ_LEN = 512
 
 @pytest.mark.parametrize(
     "batch_size",
-    [1, 32],
-    ids=["batch1", "batch32"],
+    [1, 8, 16, 32],
+    ids=["batch1", "batch8", "batch16", "batch32"],
 )
 @pytest.mark.parametrize(
     "device_params",
