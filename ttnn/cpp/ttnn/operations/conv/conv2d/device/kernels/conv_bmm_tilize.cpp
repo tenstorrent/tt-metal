@@ -593,23 +593,16 @@ void kernel_main() {
                 }
                 if constexpr (packer_untilize) {
                     // Narrow output block: gather subblock-major matmul output into row-major
-                    // and untilize via pack_untilize_dest. reblock_and_untilize_init now owns the
-                    // data-format reconfig (srcA=matmul_partials, pack=out) AND the pack_untilize
-                    // init — so this branch no longer needs an external reconfig. The Neither +
-                    // NoReconfigure loop body does neither, amortizing the reconfig/init across the
-                    // in0_subblock iterations.
-                    compute_kernel_lib::reblock_and_untilize_init<out_subblock_w, out_block_w>(
-                        cb_matmul_partials, cb_out);
-                    for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
-                        compute_kernel_lib::reblock_and_untilize<
-                            out_subblock_w,
-                            out_block_w,
-                            compute_kernel_lib::reblock_untilize_config::InitUninitMode::Neither,
-                            compute_kernel_lib::reblock_untilize_config::ReconfigureRegisterDatatypeMode::
-                                NoReconfigure>(
-                            in1_num_subblocks, out_subblock_num_tiles, out_subblock_h, cb_matmul_partials, cb_out);
-                    }
-                    compute_kernel_lib::reblock_and_untilize_uninit(cb_matmul_partials);
+                    // and untilize via pack_untilize_dest. One call — reblock_and_untilize loops
+                    // over all in0_num_subblocks internally and owns the data-format reconfig
+                    // (srcA=matmul_partials, pack=out) + the pack_untilize init/uninit.
+                    compute_kernel_lib::reblock_and_untilize<out_subblock_w, out_block_w>(
+                        in0_num_subblocks,
+                        in1_num_subblocks,
+                        out_subblock_num_tiles,
+                        out_subblock_h,
+                        cb_matmul_partials,
+                        cb_out);
                 } else {
                     // Wide output: plain untilize. srcA reconfig to matmul_partials is handled
                     // externally here because untilize is invoked with NoReconfigure (the pack
