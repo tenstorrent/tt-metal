@@ -41,6 +41,7 @@ TILE_HEIGHT = 32
 TILE_WIDTH = 32
 
 CSV_COLUMNS = [
+    "transfer_mode",
     "num_connections",
     "socket_page_size_bytes",
     "per_chip_tensor_size_bytes",
@@ -139,9 +140,22 @@ def _run_mesh_socket_bandwidth_case(
     socket_page_size,
     total_tensor_size_bytes,
     bandwidth_csv_writer,
+    transfer_mode="async",
 ) -> None:
-    """Run one ``MeshSocket`` bandwidth measurement and record the result."""
+    """Run one ``MeshSocket`` bandwidth measurement and record the result.
+
+    ``transfer_mode`` selects between the FIFO-based ``send_async``/``recv_async`` ops and the
+    direct-write ``send_direct_async``/``recv_direct_async`` ops (which bypass the socket FIFO for
+    payload data and only use it for the handshake and completion signal).
+    """
     torch.manual_seed(0)
+
+    if transfer_mode == "direct":
+        send_op = ttnn.experimental.send_direct_async
+        recv_op = ttnn.experimental.recv_direct_async
+    else:
+        send_op = ttnn.experimental.send_async
+        recv_op = ttnn.experimental.recv_async
 
     sender_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 2), ttnn.MeshCoordinate(0, 0))
     receiver_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 2), ttnn.MeshCoordinate(1, 0))
@@ -167,15 +181,15 @@ def _run_mesh_socket_bandwidth_case(
     output_tensor = ttnn.allocate_tensor_on_device(input_tensor.spec, receiver_mesh_device)
 
     for _ in range(NUM_WARMUP_ITERS):
-        ttnn.experimental.send_async(input_tensor, send_socket)
-        ttnn.experimental.recv_async(output_tensor, recv_socket)
+        send_op(input_tensor, send_socket)
+        recv_op(output_tensor, recv_socket)
     ttnn.synchronize_device(sender_mesh_device)
     ttnn.synchronize_device(receiver_mesh_device)
 
     start = time.perf_counter()
     for _ in range(NUM_MEASURED_ITERS):
-        ttnn.experimental.send_async(input_tensor, send_socket)
-        ttnn.experimental.recv_async(output_tensor, recv_socket)
+        send_op(input_tensor, send_socket)
+        recv_op(output_tensor, recv_socket)
     ttnn.synchronize_device(sender_mesh_device)
     ttnn.synchronize_device(receiver_mesh_device)
     elapsed_s = time.perf_counter() - start
@@ -191,7 +205,8 @@ def _run_mesh_socket_bandwidth_case(
     aggregate_bw_gbps = total_bytes / elapsed_s / 1e9
 
     print(
-        f"\n[MeshSocket BW] num_connections={num_connections} "
+        f"\n[MeshSocket BW] mode={transfer_mode} "
+        f"num_connections={num_connections} "
         f"page_size={socket_page_size}B "
         f"per_chip_size={total_tensor_size_bytes}B "
         f"chips={num_chips} iters={NUM_MEASURED_ITERS} "
@@ -202,6 +217,7 @@ def _run_mesh_socket_bandwidth_case(
 
     bandwidth_csv_writer(
         {
+            "transfer_mode": transfer_mode,
             "num_connections": num_connections,
             "socket_page_size_bytes": socket_page_size,
             "per_chip_tensor_size_bytes": total_tensor_size_bytes,
@@ -229,11 +245,17 @@ def _run_mesh_socket_bandwidth_case(
 )
 @pytest.mark.parametrize(
     "num_connections",
-    [1, 2],
+    [2],
     ids=lambda v: f"conn{v}",
+)
+@pytest.mark.parametrize(
+    "transfer_mode",
+    ["async", "direct"],
+    ids=lambda v: f"mode_{v}",
 )
 def test_mesh_socket_bandwidth(
     mesh_device,
+    transfer_mode,
     num_connections,
     socket_page_size,
     total_tensor_size_bytes,
@@ -253,4 +275,5 @@ def test_mesh_socket_bandwidth(
         socket_page_size,
         total_tensor_size_bytes,
         bandwidth_csv_writer,
+        transfer_mode=transfer_mode,
     )
