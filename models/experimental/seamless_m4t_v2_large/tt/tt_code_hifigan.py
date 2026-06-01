@@ -41,6 +41,16 @@ _HIFIGAN_MAX_CONV1D_TLEN = 4096
 # ~20 min to ~30 s at unchanged PCC (0.9994 vs 0.9995).
 _VOCODER_CONV1D_INTERIOR = 3968
 
+# Bucket the upsampled unit length ``t_audio`` to this multiple. The whole vocoder timeline
+# (frame index, duration-expansion mask, HiFi-GAN conv chunking) is shape-specialized by
+# ``t_audio``, so a jitter of even 1 frame recompiles ~all ~5k device programs (measured). Since
+# ``t_audio`` (a duration sum) jitters run-to-run, rounding it to a grid collapses the jitter onto a
+# fixed program set → reused instead of recompiled (kills the 5-9s run-to-run variance). The extra
+# frames are zero-expanded (no unit maps past the real length) — equivalent to the conv's own
+# end-of-sequence zero padding — and the output is cropped to the real length via ``lengths``, so
+# the valid waveform is unchanged. Cost: a few % extra conv work on the padding.
+_VOCODER_TAUDIO_BUCKET = 256
+
 
 def _vocoder_dram_slice_count(input_length: int) -> int:
     """DRAM height slices for long vocoder upsample timelines on Blackhole."""
@@ -1183,6 +1193,14 @@ class TTSeamlessM4Tv2CodeHifiGan:
             self._last_t_audio = t_audio
             self._last_gather_idx = idx
 
+        # Bucket the upsampled length so run-to-run jitter reuses the shape-specialized vocoder
+        # programs instead of recompiling. ``t_audio_real`` drives the (cropped) output length;
+        # the bucketed ``t_audio`` drives every downstream shape. Frames in
+        # ``[t_audio_real, t_audio)`` get an all-zero expansion (no unit's [cumsum_prev, cumsum)
+        # interval covers them), so the valid waveform is unchanged (see _VOCODER_TAUDIO_BUCKET).
+        t_audio_real = t_audio
+        t_audio = ((t_audio + _VOCODER_TAUDIO_BUCKET - 1) // _VOCODER_TAUDIO_BUCKET) * _VOCODER_TAUDIO_BUCKET
+
         if not trace_no_profiler:
             ttnn.ReadDeviceProfiler(self.device)
 
@@ -1241,7 +1259,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
         wav = self._hifi_gan(merged_NLC, self.p.hifi_gan, batch=batch, tlen=t_audio)
 
         # ---------- length (host formula, single int32 upload per row) ----------
-        lengths = self._output_lengths_dev(t_audio, batch=batch)
+        # Real (un-bucketed) length so the bucket-padded waveform tail is cropped out by consumers.
+        lengths = self._output_lengths_dev(t_audio_real, batch=batch)
         ttnn.deallocate(cumsum_inc)
         ttnn.deallocate(cumsum_prev)
         return wav, lengths
