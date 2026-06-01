@@ -302,12 +302,7 @@ class Qwen35ModelArgs(ModelArgs):
         self.gdn_nv = GDN_Nv
         self.gdn_dv = GDN_Dv
         self.gdn_conv_kernel_size = GDN_CONV_KERNEL_SIZE
-        self.gdn_chunk_size = 64  # Chunkwise prefill chunk size (must be power of 2, >= 32)
-
-        # Override prefill_len_cutoff for long-sequence support.
-        # Framework default is 512 on BH, which limits MLP matmul to 512 rows.
-        # We need up to 4096 for attention layers that process full sequences.
-        self.prefill_len_cutoff = 4096
+        self.gdn_chunk_size = 128  # Chunkwise prefill chunk size; gated_delta_attn_seq kernel requires 128 (Ct=Kt=Vt=4)
 
         # Framework's MAX_PREFILL_CHUNK_SIZES_DIV1024 table doesn't list Qwen3.5-27B,
         # so the base ModelArgs defaults max_prefill_chunk_size to 4 * 1024 = 4096.
@@ -436,11 +431,13 @@ class Qwen35ModelArgs(ModelArgs):
         mapped = module_map.get(module_name, module_name.lower())
         return layer_prefix + mapped
 
-    def reference_mlp(self):
-        from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5MLP
+    def reference_decoder(self, layer_idx=0):
+        from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DecoderLayer as HFLayer
 
-        text_config = self.hf_config.text_config
-        return Qwen3_5MLP(text_config, text_config.intermediate_size)
+        hf_text_config = self.hf_config.text_config
+        hf_layer = HFLayer(hf_text_config, layer_idx=layer_idx)
+
+        return hf_layer
 
 
 # ── Weight Preparation Helpers ─────────────────────────────────────────────
@@ -472,7 +469,7 @@ def prepare_attn_qg(sd, prefix, n_heads, head_dim, tp):
     ShardTensorToMesh(dim=-1) on the transposed weight naturally groups contiguous heads
     per device, preserving the per-head [Q, gate] layout expected by forward_decode.
     """
-    return sd[prefix + "attention.wqkv.weight"]
+    return sd[prefix + "attention.wq.weight"]
 
 
 def prepare_conv_taps(sd, prefix, tp):

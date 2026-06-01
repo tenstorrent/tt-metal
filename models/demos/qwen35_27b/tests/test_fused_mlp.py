@@ -18,6 +18,18 @@ from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.prefetcher import Prefetcher
 
 
+def _tt_state_dict(model_args, hf_mlp):
+    layer_prefix = model_args.get_state_dict_prefix(model_args.mlp_cls.__name__, 0)
+
+    rename_keys = {
+        "gate_proj.weight": f"{layer_prefix}.w1.weight",
+        "down_proj.weight": f"{layer_prefix}.w2.weight",
+        "up_proj.weight": f"{layer_prefix}.w3.weight",
+    }
+    state_dict = {rename_keys.get(k): v.clone() for k, v in hf_mlp.state_dict().items()}
+    return state_dict
+
+
 @torch.no_grad()
 @pytest.mark.parametrize(
     "use_prefetcher",
@@ -41,8 +53,8 @@ from models.tt_transformers.tt.prefetcher import Prefetcher
     (1,),
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
-@pytest.mark.parametrize("hf_model", ("Qwen/Qwen3.5-27B-FP8",))
-def test_mlp_inference(seq_len, batch_size, mesh_device, hf_model, reset_seeds, ensure_gc, use_prefetcher):
+@pytest.mark.parametrize("hf_model", ("Qwen/Qwen3.5-27B",))
+def test_mlp_inference(seq_len, batch_size, mesh_device, hf_model, tmp_path, reset_seeds, ensure_gc, use_prefetcher):
     os.environ["HF_MODEL"] = hf_model
     dtype = ttnn.bfloat8_b
     mode = Mode.DECODE if seq_len <= 32 else Mode.PREFILL
@@ -58,25 +70,13 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, hf_model, reset_seeds, 
         mesh_device,
         max_batch_size=batch_size,
         max_seq_len=128000,
-        cache_hf=True,
+        cache_hf=False,
         prefetcher=prefetcher,
     )
 
-    model_args.n_layers = 1
-    state_dict = model_args.load_state_dict()
+    hf_mlp = model_args.reference_decoder().mlp
 
-    # Ref model needs partial state dict -- fused mlp layer only -- but our models use full state dict keys as cached weight names
-    first_layer_prefix = model_args.get_state_dict_prefix(model_args.mlp_cls.__name__, 0)
-    fused_mlp_state_dict = {
-        k[len(first_layer_prefix) + 1 :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-    }
-    # HF Qwen3_5MLP names its linears gate_proj/up_proj/down_proj; our cached state_dict uses w1/w3/w2.
-    # Remap so the reference model can load with strict key matching.
-    ref_map = {"w1.weight": "gate_proj.weight", "w2.weight": "down_proj.weight", "w3.weight": "up_proj.weight"}
-    fused_mlp_state_dict = {ref_map.get(k, k): v for k, v in fused_mlp_state_dict.items()}
-
-    reference_model = model_args.reference_mlp()
-    reference_model.load_state_dict(fused_mlp_state_dict)
+    state_dict = _tt_state_dict(model_args, hf_mlp)
 
     tt_ccl = TT_CCL(mesh_device)
     tt_model = Qwen35FusedMLP(
@@ -84,7 +84,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, hf_model, reset_seeds, 
         tt_ccl=tt_ccl,
         args=model_args,
         state_dict=state_dict,
-        weight_cache_path=model_args.weight_cache_path(dtype),
+        weight_cache_path=tmp_path,
         layer_num=0,
         dtype=dtype,
         model_config=model_args.get_model_config(),
@@ -96,10 +96,8 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, hf_model, reset_seeds, 
         prefetcher.prefetch()
         prefetcher.run()
 
-    torch_input = torch.randn(
-        1, 1, seq_len, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
-    )
-    reference_output = reference_model(torch_input)
+    torch_input = torch.randn(1, 1, seq_len, model_args.dim, dtype=get_ref_model_dype(hf_mlp, model_args.model_name))
+    reference_output = hf_mlp(torch_input)
 
     tt_input = ttnn.from_torch(
         torch_input,
@@ -109,7 +107,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, hf_model, reset_seeds, 
             dims=(None, 3) if model_args.is_galaxy else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
-        dtype=ttnn.bfloat8_b,
+        dtype=dtype,
         memory_config=model_args.get_mlp_input_mem_config(mode, prefetcher),
         layout=ttnn.TILE_LAYOUT,
     )
