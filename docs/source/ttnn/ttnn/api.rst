@@ -42,6 +42,7 @@ Core
    ttnn.as_tensor
    ttnn.copy_device_to_host_tensor
    ttnn.copy_host_to_device_tensor
+   ttnn.copy_host_to_device_tensor_partial
    ttnn.deallocate
    ttnn.dump_tensor
    ttnn.from_device
@@ -78,6 +79,7 @@ Tensor Creation
    ttnn.ones
    ttnn.ones_like
    ttnn.rand
+   ttnn.randn
    ttnn.uniform
    ttnn.zeros
    ttnn.zeros_like
@@ -317,6 +319,7 @@ Pointwise Ternary
    ttnn.addcmul
    ttnn.lerp
    ttnn.mac
+   ttnn.snake_beta
    ttnn.where
 
 Quantization
@@ -391,6 +394,7 @@ Data Movement
    ttnn.moe_expert_token_remap
    ttnn.moe_routing_remap
    ttnn.move
+   ttnn.narrow
    ttnn.nonzero
    ttnn.pad
    ttnn.permute
@@ -587,6 +591,7 @@ KV Cache
 
    ttnn.kv_cache.fill_cache_for_user_
    ttnn.kv_cache.update_cache_for_token_
+   ttnn.kv_cache.zero_cache_range
    ttnn.fill_cache
    ttnn.update_cache
 
