@@ -13,14 +13,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.models.vae.vae_ltx import (
-    LTXCausalConv3d,
-    LTXDepthToSpaceUpsample,
-    LTXResnetBlock3D,
-    LTXVideoDecoder,
-    LTXVideoDecoderTorch,
-    LTXVideoEncoderTorch,
-)
+from models.tt_dit.models.vae.vae_ltx import LTXCausalConv3d, LTXDepthToSpaceUpsample, LTXResnetBlock3D, LTXVideoDecoder
 from models.tt_dit.parallel.config import ParallelFactor, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
@@ -433,36 +426,3 @@ def test_ltx_video_decoder_2k(
     generic blockings — correct, but not yet perf-tuned. See conv3d.py.
     """
     _run_ltx_decoder_parity(mesh_device, h_axis, w_axis, num_links, num_frames, height, width)
-
-
-def test_ltx_vae_roundtrip():
-    """Test VAE encode → decode round-trip (torch-only, no device needed)."""
-    torch.manual_seed(42)
-
-    encoder_blocks = [
-        ("compress_space_res", {}),
-        ("compress_time_res", {}),
-        ("compress_all_res", {}),
-        ("compress_all_res", {}),
-    ]
-    decoder_blocks = [
-        ("compress_all", {"multiplier": 2}),
-        ("compress_all", {"multiplier": 2}),
-        ("compress_time", {"multiplier": 2}),
-        ("compress_space", {"multiplier": 2}),
-    ]
-
-    encoder = LTXVideoEncoderTorch.from_config(encoder_blocks)
-    decoder = LTXVideoDecoderTorch.from_config(decoder_blocks)
-
-    # Random video: (B, 3, F, H, W) — F must be 1 + 8k
-    video = torch.randn(1, 3, 17, 128, 128)
-
-    latent = encoder.encode(video)
-    logger.info(f"Encode: {video.shape} -> {latent.shape}")
-
-    reconstructed = decoder.decode(latent)
-    logger.info(f"Decode: {latent.shape} -> {reconstructed.shape}")
-
-    assert reconstructed.shape == video.shape, f"Shape mismatch: {reconstructed.shape} != {video.shape}"
-    logger.info("PASSED: VAE encode->decode round-trip shapes correct")

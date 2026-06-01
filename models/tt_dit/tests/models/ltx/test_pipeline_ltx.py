@@ -203,7 +203,6 @@ def test_pipeline_with_vae_decode(mesh_device: ttnn.MeshDevice):
     pipeline.load_vae_decoder(
         state_dict=torch_decoder.state_dict(),
         decoder_blocks=decoder_blocks,
-        use_ttnn=True,
     )
 
     num_frames = 17

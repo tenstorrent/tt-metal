@@ -42,7 +42,7 @@ from ...encoders.gemma.model_gemma import GemmaConfig, GemmaEncoder
 from ...models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
 from ...models.upsampler.latent_upsampler_ltx import LTXLatentUpsampler
-from ...models.vae.vae_ltx import LTXVideoDecoder, LTXVideoDecoderTorch
+from ...models.vae.vae_ltx import LTXVideoDecoder
 from ...parallel.config import (
     AudioTCParallelConfig,
     DiTParallelConfig,
@@ -1120,36 +1120,22 @@ class LTXPipeline:
         state_dict: dict[str, torch.Tensor],
         decoder_blocks: list[tuple[str, dict]],
         *,
-        use_ttnn: bool = True,
         patch_size: int = 4,
         base_channels: int = 128,
     ) -> None:
-        """Load VAE decoder weights.
-
-        Args:
-            state_dict: PyTorch state dict for the decoder
-            decoder_blocks: Block configuration list
-            use_ttnn: If True, use TTNN decoder; if False, use torch-only wrapper
-        """
-        if use_ttnn:
-            self.vae_decoder = LTXVideoDecoder(
-                decoder_blocks=decoder_blocks,
-                in_channels=self.in_channels,
-                out_channels=3,
-                patch_size=patch_size,
-                base_channels=base_channels,
-                mesh_device=self.mesh_device,
-                parallel_config=self.vae_parallel_config,
-                ccl_manager=self.vae_ccl_manager,
-            )
-            self.vae_decoder.load_torch_state_dict(state_dict)
-            logger.info("Loaded TTNN VAE decoder")
-        else:
-            self.vae_decoder = LTXVideoDecoderTorch.from_config(
-                decoder_blocks, in_channels=self.in_channels, patch_size=patch_size, base_channels=base_channels
-            )
-            self.vae_decoder.load_state_dict(state_dict)
-            logger.info("Loaded torch-only VAE decoder")
+        """Load TTNN VAE decoder weights."""
+        self.vae_decoder = LTXVideoDecoder(
+            decoder_blocks=decoder_blocks,
+            in_channels=self.in_channels,
+            out_channels=3,
+            patch_size=patch_size,
+            base_channels=base_channels,
+            mesh_device=self.mesh_device,
+            parallel_config=self.vae_parallel_config,
+            ccl_manager=self.vae_ccl_manager,
+        )
+        self.vae_decoder.load_torch_state_dict(state_dict)
+        logger.info("Loaded TTNN VAE decoder")
 
     def _prepare_vae(self) -> None:
         """Push VAE decoder weights onto the mesh. Module was constructed in
@@ -1202,10 +1188,7 @@ class LTXPipeline:
         latent_spatial = latent.reshape(B, latent_frames, latent_h, latent_w, self.in_channels)
         latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
 
-        if isinstance(self.vae_decoder, LTXVideoDecoder):
-            return self.vae_decoder(latent_spatial)
-        else:
-            return self.vae_decoder.decode(latent_spatial)
+        return self.vae_decoder(latent_spatial)
 
     def _vae_per_channel_stats(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Cached ``(mean-of-means, std-of-means)`` reshaped for ``(B, C, F, H, W)``
