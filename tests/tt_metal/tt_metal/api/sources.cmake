@@ -35,12 +35,15 @@ set(UNIT_TESTS_API_SOURCES
     test_banked.cpp
     test_bit_utils.cpp
     test_filesystem_utils.cpp
+    test_graph_tracking.cpp
     test_buffer_region.cpp
     test_compile_time_args.cpp
     test_compile_defines.cpp
     test_compiler_include_paths.cpp
     test_direct.cpp
     test_dram_kernels.cpp
+    test_dram_sender_global_cb.cpp
+    test_dram_subchannel_helper.cpp
     test_dram_to_l1_multicast.cpp
     test_dram.cpp
     test_global_circular_buffers.cpp
@@ -67,7 +70,6 @@ set(UNIT_TESTS_API_SOURCES
     test_descriptor_patching.cpp
     test_duplicate_kernel.cpp
     test_core_local_mem_api.cpp
-    
     test_alignment_writes.cpp
     test_cb_leak.cpp
     test_cb_pages.cpp
@@ -80,6 +82,5 @@ set(UNIT_TESTS_API_SOURCES
     test_valid_mem_wrong_alloc.cpp
     test_write_beyond_res_pages.cpp
     test_write_outside_tensor.cpp
-    
     disaggregation/test_kv_chunk_address_table.cpp
 )

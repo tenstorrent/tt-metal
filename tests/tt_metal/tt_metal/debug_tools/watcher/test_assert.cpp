@@ -28,7 +28,6 @@
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "internal/tt-2xx/quasar/error_handling.h"
-#include <tt-metalium/experimental/host_api.hpp>
 #include "impl/debug/debug_helpers.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 
@@ -84,7 +83,7 @@ static void RunTest(
             virtual_core = device->worker_core_from_logical_core(logical_core);
             experimental::metal2_host_api::KernelSpec assert_kernel_spec{
                 .unique_id = ASSERT_KERNEL_NAME,
-                .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel},
+                .source = kernel,
                 .runtime_arguments_schema = {.named_runtime_args = {"a", "b", "assert_type", "hw_assert_cause"}},
             };
             switch (processor.processor_class) {

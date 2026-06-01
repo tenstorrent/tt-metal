@@ -358,7 +358,7 @@ void kernel_main() {
                 }
 
                 noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
-                local_noc_addrs[i] = get_noc_addr(tile_id, output_addrgen);
+                local_noc_addrs[i] = output_addrgen.get_noc_addr(tile_id);
             }
 
             if (direction == 1) {

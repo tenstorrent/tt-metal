@@ -152,7 +152,8 @@ void py_module(nb::module_& m) {
             &ttml::ops::distributed::vocab_parallel_cross_entropy_loss,
             nb::arg("logits"),
             nb::arg("targets"),
-            nb::arg("cluster_axis") = nb::none());
+            nb::arg("cluster_axis") = nb::none(),
+            nb::arg("reduce") = ReduceType::MEAN);
     }
 
     {

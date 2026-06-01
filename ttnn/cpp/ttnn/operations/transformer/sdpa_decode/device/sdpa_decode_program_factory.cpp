@@ -50,6 +50,13 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const float scale =
         operation_attributes.scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1])));
     const uint32_t sliding_window_size = operation_attributes.sliding_window_size.value_or(0);
+    // capacity_t is in TILE rows (= cache_position_modulo / TILE_HEIGHT); 0 = unbounded.
+    // Validator enforces cache_position_modulo % effective_block_size == 0, so the
+    // tile-aligned divide is exact. Sets the kernel's compile-time wrap modulus on
+    // every page_table lookup so a bounded sliding-window cache can be indexed by
+    // absolute positions.
+    const uint32_t cache_position_modulo = operation_attributes.cache_position_modulo.value_or(0);
+    const uint32_t capacity_t = cache_position_modulo / TILE_HEIGHT;
     const bool share_cache = operation_attributes.share_cache.value_or(false);
 
     // V tensor: use K if MLA (V is subset of K), otherwise require explicit V
@@ -541,6 +548,12 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
 
     // Optional input CBs (cur_pos and page_table - raw data, no tile dims)
     if (use_cur_pos_tensor) {
+        // #44366: cur_pos is consumed by both the writer and compute kernels.
+        // A single shared CB races: whichever consumer pops first drains the
+        // count and the other hangs in cb_wait_front. Use one CB per consumer
+        // — c_8 for the writer, c_15 for compute — each with capacity 1. The
+        // reader fills c_8 (from DRAM, or via the aliased sharded buffer)
+        // then does an L1->L1 copy into c_15.
         add_cb(
             CBIndex::c_8,
             cur_pos_stick_size,
@@ -548,6 +561,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             cur_pos_stick_size,
             nullptr,
             is_cur_pos_tensor_sharded ? cur_pos_buffer : nullptr);
+        add_cb(CBIndex::c_15, cur_pos_stick_size, cur_pos_df, cur_pos_stick_size);
     }
     if (is_paged_attention) {
         uint32_t page_table_cb_size = is_page_table_sharded ? B * page_table_stick_size : page_table_stick_size;
@@ -665,6 +679,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         static_cast<uint32_t>(q_locally_available),
         static_cast<uint32_t>(use_col_major_group_indexing),  // use_k_mcast
         Bmask,
+        capacity_t,
     };
     tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
     tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);

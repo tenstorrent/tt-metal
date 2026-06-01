@@ -185,7 +185,7 @@ uint32_t read_mask_chunk(
     for (uint32_t row = 0; row < PNHt; ++row) {
         uint32_t mask_tile_id = mask_start_tile_id + row * PSt;
         for (uint32_t col = 0; col < Sk_chunk_t; ++col) {
-            noc_async_read_tile(mask_tile_id, mask_reader, mask_write_ptr);
+            noc_async_read_page(mask_tile_id, mask_reader, mask_write_ptr);
             mask_tile_id++;
             mask_write_ptr += mask_tile_bytes;
 
@@ -398,7 +398,7 @@ uint32_t write_tiles_to_memory(uint32_t& out_tile_id, const WriterType& out_writ
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     uint32_t l1_read_addr = get_read_ptr(cb_out);
     for (uint32_t tile = 0; tile < out_chunk_tiles; ++tile) {
-        noc_async_write_tile(out_tile_id, out_writer, l1_read_addr);
+        noc_async_write_page(out_tile_id, out_writer, l1_read_addr);
         ++out_tile_id;
         l1_read_addr += tile_bytes;
         if (++barrier_count == barrier_threshold) {
@@ -442,7 +442,7 @@ uint32_t write_partial_tiles_to_memory(
             uint32_t l1_read_addr_head = l1_base_addr + tile_index * tile_bytes + in_tile_offset;
 
             // DRAM tile: global index = out_tile_id + tile_index
-            uint64_t out_writer_tile_addr = get_noc_addr(out_tile_id + tile_index, out_writer);
+            uint64_t out_writer_tile_addr = out_writer.get_noc_addr(out_tile_id + tile_index);
             uint64_t out_writer_noc_addr_head = out_writer_tile_addr + in_tile_offset;
 
             // Write first phase
@@ -579,6 +579,7 @@ template <
     uint32_t barrier_threshold,
     bool is_page_table_sharded,
     bool use_mcast,
+    uint32_t capacity_t,
     typename KReaderType>
 uint64_t read_k(
     uint32_t k_chunk_tiles,
@@ -601,13 +602,20 @@ uint64_t read_k(
                 uint32_t k_write_ptr_col = k_write_ptr + row * k_tile_bytes;
                 uint32_t virtual_k_tile_row_num = k_chunk_start_row_num + row;
                 uint32_t physical_k_tile_id =
-                    (is_page_table_sharded)
-                        ? virtual_seq_tile_id_to_physical_tile_id<uint16_t, num_kv_heads, block_size_t, DHt>(
-                              virtual_k_tile_row_num, cur_head, page_table_ptr_u16)
-                        : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, DHt>(
-                              virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
+                    (is_page_table_sharded) ? virtual_seq_tile_id_to_physical_tile_id<
+                                                  uint16_t,
+                                                  num_kv_heads,
+                                                  block_size_t,
+                                                  DHt,
+                                                  capacity_t>(virtual_k_tile_row_num, cur_head, page_table_ptr_u16)
+                                            : virtual_seq_tile_id_to_physical_tile_id<
+                                                  uint32_t,
+                                                  num_kv_heads,
+                                                  block_size_t,
+                                                  DHt,
+                                                  capacity_t>(virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
                 for (uint32_t col = 0; col < DHt; ++col) {
-                    noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
+                    noc_async_read_page(physical_k_tile_id, k_reader, k_write_ptr_col);
                     physical_k_tile_id += 1;
                     k_write_ptr_col += Sk_chunk_t_dynamic * k_tile_bytes;
                     if (++barrier_count == barrier_threshold) {
@@ -658,12 +666,12 @@ uint64_t read_k(
             uint32_t virtual_k_tile_row_num = k_chunk_start_row_num + row;
             uint32_t physical_k_tile_id =
                 (is_page_table_sharded)
-                    ? virtual_seq_tile_id_to_physical_tile_id<uint16_t, num_kv_heads, block_size_t, DHt>(
+                    ? virtual_seq_tile_id_to_physical_tile_id<uint16_t, num_kv_heads, block_size_t, DHt, capacity_t>(
                           virtual_k_tile_row_num, cur_head, page_table_ptr_u16)
-                    : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, DHt>(
+                    : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, DHt, capacity_t>(
                           virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
             for (uint32_t col = 0; col < DHt; ++col) {
-                noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
+                noc_async_read_page(physical_k_tile_id, k_reader, k_write_ptr_col);
                 physical_k_tile_id += 1;                               // Go to next tile in row
                 k_write_ptr_col += Sk_chunk_t_dynamic * k_tile_bytes;  // Go to next column in CB
 
@@ -688,6 +696,7 @@ template <
     uint32_t barrier_threshold,
     bool is_page_table_sharded,
     bool reuse_k,
+    uint32_t capacity_t,
     typename VReaderType>
 void read_v(
     uint32_t v_chunk_tiles,
@@ -723,12 +732,12 @@ void read_v(
             // Use vDHt for V tensor's width since V is independent
             uint32_t physical_v_tile_id =
                 (is_page_table_sharded)
-                    ? virtual_seq_tile_id_to_physical_tile_id<uint16_t, num_kv_heads, block_size_t, vDHt>(
+                    ? virtual_seq_tile_id_to_physical_tile_id<uint16_t, num_kv_heads, block_size_t, vDHt, capacity_t>(
                           virtual_v_tile_row_num, cur_head, page_table_ptr_u16)
-                    : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, vDHt>(
+                    : virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_kv_heads, block_size_t, vDHt, capacity_t>(
                           virtual_v_tile_row_num, cur_head, page_table_ptr_u32);
             for (uint32_t col = 0; col < vDHt; ++col) {
-                noc_async_read_tile(physical_v_tile_id, v_reader, v_write_ptr);
+                noc_async_read_page(physical_v_tile_id, v_reader, v_write_ptr);
                 physical_v_tile_id += 1;
                 v_write_ptr += v_tile_bytes;
 
@@ -784,7 +793,7 @@ void read_kv_mask_chunks(
         for (uint32_t col = 0; col < DHt; ++col) {
             uint32_t k_tile_id = k_start_tile_id + col;
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
-                noc_async_read_tile(k_tile_id, k_reader, k_write_ptr);
+                noc_async_read_page(k_tile_id, k_reader, k_write_ptr);
                 if (++barrier_count == barrier_threshold) {
                     noc_async_read_barrier();
                     barrier_count = 0;
@@ -824,7 +833,7 @@ void read_kv_mask_chunks(
             uint32_t v_tile_id = v_start_tile_id;
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
                 for (uint32_t col = 0; col < vDHt; ++col) {
-                    noc_async_read_tile(v_tile_id, v_reader, v_write_ptr);
+                    noc_async_read_page(v_tile_id, v_reader, v_write_ptr);
                     if (++barrier_count == barrier_threshold) {
                         noc_async_read_barrier();
                         barrier_count = 0;

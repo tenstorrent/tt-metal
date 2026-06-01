@@ -39,6 +39,31 @@ from models.demos.deepseek_v3_b1.weights.prepare import (
 from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import SramExpertCoreGrids, SramHotExpertConfig
 from models.demos.deepseek_v3_b1.weights.upload import Uploadable, two_phase_upload
 
+_DENSE_NUM_CHUNKS = 8  # Dense MLP is split into 8 routed-equivalent chunks
+
+
+def resolve_sram_expert_ids(
+    layer_id: int,
+    override: list[int] | None,
+    *,
+    is_moe: bool,
+) -> list[int]:
+    """Initial sram_expert_ids list passed into ``prepare_*_layer_weights``.
+
+    Precedence:
+      * ``override`` (explicit per-call list, e.g. test scenarios) — wins.
+      * Dense — every chunk is equally hot (no routing); default to all 8 chunks.
+        L1-fit truncation happens inside ``_build_dense_sram_routed_weights``.
+      * MoE without override — return empty. ``prepare_moe_layer_weights``
+        builds ``sram_slots`` from ``sram_hot_experts`` (passed separately) and
+        derives the final list from ``sram_slots.slot_experts`` post L1-fit.
+    """
+    if override is not None:
+        return list(override)
+    if not is_moe:
+        return list(range(_DENSE_NUM_CHUNKS))
+    return []
+
 
 class WeightProvider(Protocol):
     """Provides embedding and LM head weights on demand; each host loads only what its stage needs."""
@@ -49,10 +74,22 @@ class WeightProvider(Protocol):
     def load_lm_head(self, device: ttnn.MeshDevice) -> DeepSeekV3LMHeadWeights:
         ...
 
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+    def load_moe_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3MoELayerWeights:
         ...
 
-    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
+    def load_dense_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3DenseLayerWeights:
         ...
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
@@ -285,7 +322,13 @@ class CacheWeightProvider:
             move_to_device=True,
         )
 
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+    def load_moe_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3MoELayerWeights:
         # Iteration 1 (correctness baseline): inline upload (move_to_device=True).
         # Two-phase upload for routed-DRAM CTs is currently disabled here while
         # we restore correctness; iteration 2 will re-enable it via deferred
@@ -307,10 +350,21 @@ class CacheWeightProvider:
             bspm_variant=self._bspm_variant,
             bspm_budget=self._bspm_budget,
             compressed_tp8=True,
+            sram_expert_ids=resolve_sram_expert_ids(
+                layer_id,
+                sram_expert_ids_override,
+                is_moe=True,
+            ),
         )
         return self._upload_prepared_weights(device, host_weights)
 
-    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
+    def load_dense_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3DenseLayerWeights:
         # See load_moe_layer for iteration-1 rationale.
         host_weights = prepare_dense_layer_weights(
             device,
@@ -318,6 +372,11 @@ class CacheWeightProvider:
             layer_id,
             move_to_device=True,
             cache_config=self._cache_config(device),
+            sram_expert_ids=resolve_sram_expert_ids(
+                layer_id,
+                sram_expert_ids_override,
+                is_moe=False,
+            ),
         )
         return self._upload_prepared_weights(device, host_weights)
 
@@ -385,7 +444,13 @@ class SyntheticWeightProvider:
             move_to_device=True,
         )
 
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+    def load_moe_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3MoELayerWeights:
         sd = _build_synthetic_moe_state_dict(layer_id, num_routed_experts=NUM_ROUTED_EXPERTS)
         return prepare_moe_layer_weights(
             device,
@@ -401,11 +466,32 @@ class SyntheticWeightProvider:
             bspm_variant=self._bspm_variant,
             bspm_budget=self._bspm_budget,
             compressed_tp8=True,
+            sram_expert_ids=resolve_sram_expert_ids(
+                layer_id,
+                sram_expert_ids_override,
+                is_moe=True,
+            ),
         )
 
-    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
+    def load_dense_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3DenseLayerWeights:
         sd = _build_synthetic_dense_state_dict(layer_id)
-        return prepare_dense_layer_weights(device, sd, layer_id, move_to_device=True)
+        return prepare_dense_layer_weights(
+            device,
+            sd,
+            layer_id,
+            move_to_device=True,
+            sram_expert_ids=resolve_sram_expert_ids(
+                layer_id,
+                sram_expert_ids_override,
+                is_moe=False,
+            ),
+        )
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
         sd = _build_synthetic_mtp_state_dict()
@@ -453,7 +539,13 @@ class StateDictWeightProvider:
             move_to_device=True,
         )
 
-    def load_moe_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3MoELayerWeights:
+    def load_moe_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3MoELayerWeights:
         return prepare_moe_layer_weights(
             device,
             self._state_dict,
@@ -468,10 +560,31 @@ class StateDictWeightProvider:
             bspm_variant=self._bspm_variant,
             bspm_budget=self._bspm_budget,
             compressed_tp8=True,
+            sram_expert_ids=resolve_sram_expert_ids(
+                layer_id,
+                sram_expert_ids_override,
+                is_moe=True,
+            ),
         )
 
-    def load_dense_layer(self, layer_id: int, device: ttnn.MeshDevice) -> DeepSeekV3DenseLayerWeights:
-        return prepare_dense_layer_weights(device, self._state_dict, layer_id, move_to_device=True)
+    def load_dense_layer(
+        self,
+        layer_id: int,
+        device: ttnn.MeshDevice,
+        *,
+        sram_expert_ids_override: list[int] | None = None,
+    ) -> DeepSeekV3DenseLayerWeights:
+        return prepare_dense_layer_weights(
+            device,
+            self._state_dict,
+            layer_id,
+            move_to_device=True,
+            sram_expert_ids=resolve_sram_expert_ids(
+                layer_id,
+                sram_expert_ids_override,
+                is_moe=False,
+            ),
+        )
 
     def load_mtp(self, device: ttnn.MeshDevice) -> DeepSeekV3MTPWeights:
         return prepare_mtp_weights(

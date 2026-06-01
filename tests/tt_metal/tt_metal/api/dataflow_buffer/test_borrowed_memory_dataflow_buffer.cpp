@@ -110,7 +110,7 @@ void run_borrowed_memory_dfb_program(
     KernelSpec producer_spec = (arch == ARCH::QUASAR)
         ? MakeMinimalDMKernel("producer", static_cast<uint8_t>(cfg.num_producers))
         : MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
-    producer_spec.source = KernelSpec::SourceFilePath{DFB_PRODUCER_KERNEL};
+    producer_spec.source = DFB_PRODUCER_KERNEL;
     producer_spec.compile_time_arg_bindings = {
         {"num_entries_per_producer", entries_per_producer},
         {"implicit_sync",            implicit_sync},
@@ -133,7 +133,7 @@ void run_borrowed_memory_dfb_program(
         consumer_spec = (arch == ARCH::QUASAR)
             ? MakeMinimalComputeKernel("consumer", static_cast<uint8_t>(cfg.num_consumers))
             : MakeMinimalComputeKernel("consumer");
-        consumer_spec.source = KernelSpec::SourceFilePath{DFB_TENSIX_CONSUMER_KERNEL};
+        consumer_spec.source = DFB_TENSIX_CONSUMER_KERNEL;
         consumer_spec.compile_time_arg_bindings = {
             {"num_entries_per_consumer", entries_per_consumer},
         };
@@ -142,7 +142,7 @@ void run_borrowed_memory_dfb_program(
         consumer_spec = (arch == ARCH::QUASAR)
             ? MakeMinimalDMKernel("consumer", static_cast<uint8_t>(cfg.num_consumers))
             : MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
-        consumer_spec.source = KernelSpec::SourceFilePath{DFB_DM_CONSUMER_KERNEL};
+        consumer_spec.source = DFB_DM_CONSUMER_KERNEL;
         consumer_spec.compile_time_arg_bindings = {
             {"num_entries_per_consumer", entries_per_consumer},
             {"blocked_consumer",         static_cast<uint32_t>(is_all ? 1u : 0u)},
@@ -277,7 +277,7 @@ void run_update_address_test(
     KernelSpec producer_spec = (arch == ARCH::QUASAR)
         ? MakeMinimalDMKernel("producer")
         : MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
-    producer_spec.source = KernelSpec::SourceFilePath{DFB_PRODUCER_KERNEL};
+    producer_spec.source = DFB_PRODUCER_KERNEL;
     producer_spec.compile_time_arg_bindings = {
         {"num_entries_per_producer", num_entries},
         {"implicit_sync",            implicit_sync},
@@ -293,7 +293,7 @@ void run_update_address_test(
     KernelSpec consumer_spec = (arch == ARCH::QUASAR)
         ? MakeMinimalDMKernel("consumer")
         : MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
-    consumer_spec.source = KernelSpec::SourceFilePath{DFB_DM_CONSUMER_KERNEL};
+    consumer_spec.source = DFB_DM_CONSUMER_KERNEL;
     consumer_spec.compile_time_arg_bindings = {
         {"num_entries_per_consumer", num_entries},
         {"blocked_consumer",         0u},

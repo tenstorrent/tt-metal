@@ -243,16 +243,33 @@ extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
 
 // Resolve a NOC address (encoded 64-bit) to a host pointer.
 // Real firmware encoding: y in bits [47:42], x in bits [41:36], addr in bits [35:0]
+//
+// The L1_SLOT_MASK is applied ONLY for WORKER cores. Two reasons:
+//  1. The mask handles a worker-kernel pattern where the L1 offset is a
+//     truncated host pointer (from `get_write_ptr()`) rather than a
+//     firmware-style L1 offset. Worker L1 slots are 2 MB-aligned, so the
+//     masked low bits recover the in-slot offset.
+//  2. DRAM banks are GB-scale (2 GB on Wormhole views, 4 GB on Blackhole)
+//     and the kernel-side per-bank addrgen helper produces an `addr` field
+//     that is the true in-bank offset (already includes
+//     `bank_to_dram_offset[bank_index]`). Masking to 2 MB silently aliases
+//     any DRAM access >= 2 MB to an offset within the first 2 MB of the bank.
 extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
     uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
     uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
-    uint64_t l1_offset = noc_addr & NOC_LOCAL_MASK;
+    uint64_t local_addr = noc_addr & NOC_LOCAL_MASK;  // 36 bits, raw
+
+    static constexpr uint32_t L1_SLOT_SIZE = 2u * 1024 * 1024;  // 2 MB per worker L1 slot
+    static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
 
     if (__emule_core_map) {
         uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
         auto it = __emule_core_map->find(key);
         if (it != __emule_core_map->end()) {
-            return it->second->l1_ptr(static_cast<uint32_t>(l1_offset));
+            uint32_t offset = (it->second->role() == tt_emule::CoreRole::WORKER)
+                                  ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
+                                  : static_cast<uint32_t>(local_addr);
+            return it->second->l1_ptr(offset);
         }
         if (tt::tt_metal::emule::emule_asan_enabled()) {
             fprintf(stderr,
@@ -280,7 +297,15 @@ extern "C" bool __emule_noc_addr_is_dram(uint64_t noc_addr) {
 
 // Resolve multicast: iterate over rectangle of cores and memcpy to each.
 // Real firmware encoding: x_start [53:48], y_start [59:54], x_end [41:36], y_end [47:42], addr [35:0]
-extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src, uint32_t size) {
+//
+// `include_self`: silicon's NOC_CMD_BRCST_SRC_INCLUDE bit. When the API is
+// `noc_async_write_multicast_loopback_src` (or _set_multicast_loopback_src),
+// silicon sets the bit and the sender NIU receives its own packet ->
+// include_self=true. When the API is `noc_async_write_multicast` (non-loopback),
+// silicon clears the bit and the sender NIU drops the packet at itself ->
+// include_self=false. Sender coords come from the TLS that thread launch
+// wires up (my_x[0], my_y[0]).
+extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src, uint32_t size, bool include_self) {
     uint32_t x_end = (mcast_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
     uint32_t y_end = (mcast_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
     uint32_t x_start = (mcast_addr >> (NOC_LOCAL_BITS + 2 * NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
@@ -291,6 +316,8 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     // than a firmware-style L1 offset.  Worker L1 slots are 2 MB-aligned, so
     // masking with SLOT_MASK extracts the true within-slot offset.  For
     // firmware-style offsets (< 2 MB) this is a no-op.
+    // Multicast targets only WORKER cores (DRAM cores are skipped by the role
+    // check in the delivery loop below), so the mask is L1-correct here.
     static constexpr uint32_t L1_SLOT_SIZE = 2u * 1024 * 1024;  // 2 MB per worker L1 slot
     static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
     l1_offset &= L1_SLOT_MASK;
@@ -299,9 +326,17 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
         return;
     }
 
+    // Sender coordinates (from the TLS that thread launch wires up). Used to
+    // skip self when include_self=false (non-loopback multicast).
+    uint32_t self_x = my_x[0];
+    uint32_t self_y = my_y[0];
+
     uint32_t delivered = 0;
     for (uint32_t x = std::min(x_start, x_end); x <= std::max(x_start, x_end); x++) {
         for (uint32_t y = std::min(y_start, y_end); y <= std::max(y_start, y_end); y++) {
+            if (!include_self && x == self_x && y == self_y) {
+                continue;
+            }
             uint64_t key = (uint64_t(x) << 32) | y;
             auto it = __emule_core_map->find(key);
             if (it != __emule_core_map->end() && it->second->role() == tt_emule::CoreRole::WORKER) {
@@ -652,7 +687,24 @@ static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& 
     kernel.process_semaphore_local_accessor_handles(
         [&s](const std::string& name, uint16_t id) { s.sem_accessors[name] = id; });
     kernel.process_tensor_binding_handles(
-        [&s](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off, uint32_t) {
+        // Match the genfiles.cpp pattern: drop num_runtime_field_crta_words. Emule's
+        // snapshot doesn't yet model per-binding runtime CRTA words, and the
+        // downstream `named_crta_words` math in emit_metal2_namespaces still assumes
+        // 1 word per binding — so a dynamic-shape kernel would silently get its
+        // CRTAs decoded at the wrong offsets. Static-shape kernels pass
+        // num_rt_words == 0 and are unaffected. Fail loudly on dynamic-shape until
+        // snapshot + cache key + get_common_vararg offset math are wired up to
+        // consume the per-binding count.
+        [&s](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off, uint32_t num_rt_words) {
+            TT_FATAL(
+                num_rt_words == 0,
+                "Emule does not yet support dynamic-shape Metal 2.0 tensor bindings "
+                "(binding '{}' has num_runtime_field_crta_words={}). Wire the per-"
+                "binding word count through Metal2BindingsSnapshot::TaEntry, the "
+                "cache key, and emit_metal2_namespaces' get_common_vararg base "
+                "before enabling this path.",
+                name,
+                num_rt_words);
             s.ta_accessors.push_back({name, cta_off, addr_crta_off});
         });
     return s;
@@ -938,22 +990,31 @@ static void populate_bank_mapping(
     num_dram_channels_out = static_cast<uint32_t>(metal_soc.get_num_dram_views());
 
     // noc_xy encoding: (y << 6) | x (matching Blackhole firmware encoding).
+    // Populate per-NOC preferred coords separately. On Wormhole the NOC-0 and
+    // NOC-1 preferred workers for a given DRAM view differ (e.g. channel 0
+    // NOC0=[2,2], NOC1=[1,1]). On Blackhole they happen to match, so this is
+    // a no-op change there.
     std::memset(dram_bank_to_noc_xy, 0, sizeof(dram_bank_to_noc_xy));
     std::memset(bank_to_dram_offset, 0, sizeof(bank_to_dram_offset));
     for (uint32_t ch = 0; ch < num_dram_channels_out && ch < MAX_NUM_BANKS; ch++) {
-        auto dc = metal_soc.get_preferred_worker_core_for_dram_view(ch, 0 /* NOC 0 */);
-        uint16_t noc_xy = (static_cast<uint16_t>(dc.y) << NOC_NODE_ID_BITS) | static_cast<uint16_t>(dc.x);
-        dram_bank_to_noc_xy[0][ch] = noc_xy;  // NOC 0
-        dram_bank_to_noc_xy[1][ch] = noc_xy;  // NOC 1 (same for emulation)
+        auto dc0 = metal_soc.get_preferred_worker_core_for_dram_view(ch, 0 /* NOC 0 */);
+        auto dc1 = metal_soc.get_preferred_worker_core_for_dram_view(ch, 1 /* NOC 1 */);
+        uint16_t noc_xy0 = (static_cast<uint16_t>(dc0.y) << NOC_NODE_ID_BITS) | static_cast<uint16_t>(dc0.x);
+        uint16_t noc_xy1 = (static_cast<uint16_t>(dc1.y) << NOC_NODE_ID_BITS) | static_cast<uint16_t>(dc1.x);
+        dram_bank_to_noc_xy[0][ch] = noc_xy0;
+        dram_bank_to_noc_xy[1][ch] = noc_xy1;
         bank_to_dram_offset[ch] = static_cast<int32_t>(metal_soc.get_address_offset(ch));
 
         log_debug(
             tt::LogMetal,
-            "  DRAM bank[{}]: core({},{}) noc_xy=0x{:04x} offset=0x{:x}",
+            "  DRAM bank[{}]: NOC0=({},{}) NOC1=({},{}) noc_xy0=0x{:04x} noc_xy1=0x{:04x} offset=0x{:x}",
             ch,
-            dc.x,
-            dc.y,
-            noc_xy,
+            dc0.x,
+            dc0.y,
+            dc1.x,
+            dc1.y,
+            noc_xy0,
+            noc_xy1,
             bank_to_dram_offset[ch]);
     }
 
@@ -1208,6 +1269,36 @@ static void collect_kernels(
             auto* qck = dynamic_cast<experimental::quasar::QuasarComputeKernel*>(kernel.get());
             bool is_quasar_compute = is_tensix && (qck != nullptr);
 
+            // Issue tenstorrent/tt-emule#24: emule runs all three TRISC code paths
+            // in a single unified compute thread (no separate UNPACK/MATH/PACK
+            // RISC cores). tt-mlir-generated D2M kernels guard hardware code
+            // paths with `#ifdef TRISC_UNPACK|MATH|PACK`; without these defines
+            // helpers like `experimental::write_row_mask_tile` compile to empty
+            // bodies and the downstream `where_tile` reads stale data. Define
+            // all three so the kernel's `#ifdef TRISC_*` blocks execute exactly
+            // once on the unified thread.
+            //
+            // EXCEPT for tilize kernels: emule's host-side
+            // `tilize_with_val_padding` already produces tiled data, so an
+            // additional kernel-side tilize would re-tilize and corrupt the
+            // layout. Skip TRISC defines when the kernel source mentions
+            // `llk_unpack_tilize` (the tilize compute path).
+            bool is_tilize_kernel = false;
+            if (is_tensix && !is_quasar_compute) {
+                std::ifstream kscan(src_path);
+                if (!kscan) {
+                    throw std::runtime_error(
+                        "collect_kernels: cannot read kernel source for TRISC-define gating: " + src_path);
+                }
+                std::string content((std::istreambuf_iterator<char>(kscan)), std::istreambuf_iterator<char>());
+                is_tilize_kernel = content.find("llk_unpack_tilize") != std::string::npos;
+            }
+            if (is_tensix && !is_quasar_compute && !is_tilize_kernel) {
+                defines["TRISC_UNPACK"] = "1";
+                defines["TRISC_MATH"] = "1";
+                defines["TRISC_PACK"] = "1";
+            }
+
             // Metal 2.0 bindings — same across this Kernel's TRISC variants, so
             // capture the cache-key suffix once and append it to every variant key.
             Metal2BindingsSnapshot bindings = build_metal2_snapshot(*kernel);
@@ -1393,13 +1484,18 @@ static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
             }
         }
         // Add DRAM cores (metal_SocDescriptor preferred worker coords)
+        // Register BOTH NOC0 and NOC1 preferred coords — on Wormhole they
+        // differ per channel (e.g. ch0 NOC0=[2,2], NOC1=[1,1]); both must
+        // be in the core_map so __emule_resolve_noc_addr can route either.
         {
             auto& msoc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
             for (uint32_t ch = 0; ch < msoc.get_num_dram_views() && ch < MAX_NUM_BANKS; ch++) {
-                auto dc = msoc.get_preferred_worker_core_for_dram_view(ch, 0);
-                auto* core = sw_emu->get_core(tt_xy_pair(dc.x, dc.y));
-                uint64_t key = (uint64_t(dc.x) << 32) | dc.y;
-                (*core_map)[key] = core;
+                for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
+                    auto dc = msoc.get_preferred_worker_core_for_dram_view(ch, noc);
+                    auto* core = sw_emu->get_core(tt_xy_pair(dc.x, dc.y));
+                    uint64_t key = (uint64_t(dc.x) << 32) | dc.y;
+                    (*core_map)[key] = core;
+                }
             }
         }
     } else if (!core_map) {
