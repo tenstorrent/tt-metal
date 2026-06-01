@@ -120,7 +120,7 @@ class TestLMHead:
 class TestRMSNorm:
     def test_standard_rmsnorm(self, device, setup):
         args, sd, raw = setup
-        from models.demos.blackhole.qwen3_5_9b.tt.qwen35_decoder import rms_norm_ttnn
+        from models.demos.blackhole.qwen3_5_9b.tt.rms_norm import rms_norm_ttnn
 
         w = sd["layers.0.input_layernorm.weight"]
         x = torch.randn(1, 4, 4096, dtype=torch.bfloat16)
@@ -309,13 +309,13 @@ class TestFullForwardOneLayer:
     def test_decoder_block_pcc(self, device, setup):
         """Test full decoder block (norm + attention + norm + MLP) for layer 0."""
         args, sd, raw = setup
-        from models.demos.blackhole.qwen3_5_9b.tt.qwen35_decoder import Qwen35TransformerBlock
+        from models.demos.blackhole.qwen3_5_9b.tt.layer import Qwen35DecoderLayer
 
         layer_num = 0  # DeltaNet layer
         B, T = 1, 4
         x = torch.randn(B, T, 4096, dtype=torch.bfloat16)
 
-        block = Qwen35TransformerBlock(args, sd, layer_num, device)
+        block = Qwen35DecoderLayer(device, args, sd, layer_num)
         block.attention.reset_state(B)
 
         x_t = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
