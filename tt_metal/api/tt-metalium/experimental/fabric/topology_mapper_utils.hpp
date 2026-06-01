@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -45,6 +46,18 @@ using AsicPositionMap = std::map<tt::tt_metal::AsicID, AsicPosition>;
 // This constrains which physical ASIC a logical node can be mapped to
 using PinningConstraint = std::pair<AsicPosition, FabricNodeId>;
 
+// Undirected ASIC pair -> best (highest-priority) port type between them within a physical mesh.
+using PortTypeLinkKey = std::pair<tt::tt_metal::AsicID, tt::tt_metal::AsicID>;
+using PortTypeLinkMap = std::map<PortTypeLinkKey, tt::tt_metal::PortType>;
+
+/**
+ * @brief Port-type policy for a logical edge derived from endpoint host ranks.
+ */
+struct LogicalEdgePortRequirement {
+    std::optional<tt::tt_metal::PortType> required;
+    std::optional<tt::tt_metal::PortType> preferred;
+};
+
 /**
  * @brief Configuration options for topology mapping
  */
@@ -78,7 +91,42 @@ struct TopologyMappingConfig {
     // has exactly one rank binding (all ASICs on the same host map to fabric nodes with the same rank).
     // Used even when some ASICs have UNSET rank. Default empty.
     std::map<std::string, std::set<tt::tt_metal::AsicID>> hostname_to_asics;
+
+    // Optional per-mesh port-type link metadata populated from PSD discovery (#44932).
+    // When absent, port-type constraint helpers are skipped (synthetic unit tests).
+    std::optional<PortTypeLinkMap> port_type_links;
 };
+
+/** Lower rank value means higher preference (TRACE best). Used when collapsing multi-link ASIC pairs. */
+int port_type_preference_rank(tt::tt_metal::PortType port_type);
+
+/** Canonical undirected key for port-type link lookup. */
+PortTypeLinkKey canonical_port_type_link_key(tt::tt_metal::AsicID a, tt::tt_metal::AsicID b);
+
+/** Build best port type per undirected ASIC pair within mesh_asics from PSD eth connections. */
+PortTypeLinkMap build_port_type_link_map(
+    const tt::tt_metal::PhysicalSystemDescriptor& psd, const std::set<tt::tt_metal::AsicID>& mesh_asics);
+
+/** Same-host edges prefer TRACE; cross-host edges require QSFP_DD. UNSET ranks yield no policy. */
+LogicalEdgePortRequirement infer_logical_edge_port_requirement(MeshHostRankId rank_a, MeshHostRankId rank_b);
+
+/** ASICs that can satisfy TRACE preference for all same-host logical neighbors. */
+std::set<tt::tt_metal::AsicID> compute_preferred_asics_for_fabric_node(
+    FabricNodeId fabric_node,
+    const LogicalAdjacencyMap& logical_adjacency,
+    const PhysicalAdjacencyMap& physical_adjacency,
+    const std::map<FabricNodeId, MeshHostRankId>& node_to_host_rank,
+    const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_to_host_rank,
+    const PortTypeLinkMap& port_type_links);
+
+/** ASICs that satisfy required port types for all cross-host logical neighbors. */
+std::set<tt::tt_metal::AsicID> compute_required_asics_for_fabric_node(
+    FabricNodeId fabric_node,
+    const LogicalAdjacencyMap& logical_adjacency,
+    const PhysicalAdjacencyMap& physical_adjacency,
+    const std::map<FabricNodeId, MeshHostRankId>& node_to_host_rank,
+    const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_to_host_rank,
+    const PortTypeLinkMap& port_type_links);
 
 /**
  * @brief Result of topology mapping operation
@@ -351,6 +399,14 @@ struct PhysicalMultiMeshGraph {
     // represented by duplicate entries.
     std::map<MeshId, AdjacencyGraph<PhysicalExitNode>> mesh_exit_node_graphs_;
 };
+
+/** Physical mesh partitions preferred for a logical mesh from cross-partition QSFP connectivity. */
+std::set<MeshId> compute_preferred_physical_meshes_for_logical_mesh(
+    MeshId logical_mesh,
+    const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
+    const PhysicalMultiMeshGraph& physical_graph,
+    const PortTypeLinkMap& port_type_links,
+    const std::set<MeshId>& bound_physical_mesh_ids);
 
 /**
  * @brief Build a physical multi-mesh adjacency graph from physical system descriptor

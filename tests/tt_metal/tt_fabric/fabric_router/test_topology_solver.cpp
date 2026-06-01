@@ -1240,6 +1240,61 @@ TEST_F(TopologySolverTest, ConsistencyCheckerLocalConsistencyStrictMode) {
     EXPECT_TRUE(result3);
 }
 
+TEST_F(TopologySolverTest, ConsistencyCheckerPortTypeCrossHostValidation) {
+    using namespace tt::tt_fabric::detail;
+
+    // Cross-host target edge: 1 (rank 0) <-> 2 (rank 1)
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj_map;
+    target_adj_map[1] = {2};
+    target_adj_map[2] = {1};
+
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj_map);
+
+    // Global: 100 (rank 0) connects to 200 and 201 (rank 1)
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj_map;
+    global_adj_map[100] = {200, 201};
+    global_adj_map[200] = {100};
+    global_adj_map[201] = {100};
+
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj_map);
+
+    GraphIndexData graph_data(target_graph, global_graph);
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+
+    PortTypeMappingValidationContext<TestTargetNode, TestGlobalNode> port_type_context;
+    port_type_context.target_host_ranks = {{1, MeshHostRankId{0}}, {2, MeshHostRankId{1}}};
+    port_type_context.global_host_ranks = {
+        {100, MeshHostRankId{0}}, {200, MeshHostRankId{1}}, {201, MeshHostRankId{1}}};
+    port_type_context.undirected_link_port_types = {
+        {{100, 200}, tt::tt_metal::PortType::WARP100},
+        {{100, 201}, tt::tt_metal::PortType::QSFP_DD},
+    };
+    constraints.set_port_type_validation_context(std::move(port_type_context));
+
+    ConstraintIndexData constraint_data(constraints, graph_data);
+    ASSERT_TRUE(constraint_data.port_type_validation.enabled);
+
+    std::vector<int> mapping(2, -1);
+    mapping[0] = 0;  // 1 -> 100
+
+    const auto* port_type_validation = &constraint_data.port_type_validation;
+
+    // Adjacency exists but cross-host pair lacks required QSFP_DD on 100-200
+    bool wrong_port_type = ConsistencyChecker::check_local_consistency(
+        1, 1, graph_data, mapping, ConnectionValidationMode::RELAXED, port_type_validation);
+    EXPECT_FALSE(wrong_port_type);
+
+    // Without port-type validation, adjacency-only check would pass
+    bool adjacency_only = ConsistencyChecker::check_local_consistency(
+        1, 1, graph_data, mapping, ConnectionValidationMode::RELAXED, nullptr);
+    EXPECT_TRUE(adjacency_only);
+
+    // Correct QSFP link on 100-201 satisfies cross-host requirement
+    bool correct_port_type = ConsistencyChecker::check_local_consistency(
+        1, 2, graph_data, mapping, ConnectionValidationMode::RELAXED, port_type_validation);
+    EXPECT_TRUE(correct_port_type);
+}
+
 TEST_F(TopologySolverTest, ConsistencyCheckerForwardConsistency) {
     using namespace tt::tt_fabric::detail;
 

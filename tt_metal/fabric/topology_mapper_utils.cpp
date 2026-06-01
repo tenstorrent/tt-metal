@@ -34,6 +34,421 @@
 
 namespace tt::tt_metal::experimental::tt_fabric {
 
+namespace {
+
+using tt::tt_metal::AsicID;
+using tt::tt_metal::PortType;
+
+std::set<AsicID> physical_asics_from_adjacency(const PhysicalAdjacencyMap& physical_adjacency) {
+    std::set<AsicID> asics;
+    for (const auto& [asic, _] : physical_adjacency) {
+        asics.insert(asic);
+    }
+    return asics;
+}
+
+std::set<AsicID> asics_with_host_rank(
+    const std::map<AsicID, MeshHostRankId>& asic_to_host_rank,
+    MeshHostRankId rank,
+    const std::set<AsicID>& physical_asics) {
+    std::set<AsicID> asics;
+    for (const auto& asic : physical_asics) {
+        const auto it = asic_to_host_rank.find(asic);
+        if (it != asic_to_host_rank.end() && it->second == rank) {
+            asics.insert(asic);
+        }
+    }
+    return asics;
+}
+
+std::optional<MeshHostRankId> fabric_node_rank(
+    const std::map<FabricNodeId, MeshHostRankId>& node_to_host_rank, FabricNodeId fabric_node) {
+    const auto it = node_to_host_rank.find(fabric_node);
+    if (it == node_to_host_rank.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+}  // namespace
+
+int port_type_preference_rank(tt::tt_metal::PortType port_type) {
+    using tt::tt_metal::PortType;
+    switch (port_type) {
+        case PortType::TRACE: return 0;
+        case PortType::WARP400: return 1;
+        case PortType::QSFP_DD: return 2;
+        case PortType::WARP100: return 3;
+        case PortType::LINKING_BOARD_1:
+        case PortType::LINKING_BOARD_2:
+        case PortType::LINKING_BOARD_3: return 50;
+        case PortType::UNKNOWN: return 100;
+    }
+    return 100;
+}
+
+PortTypeLinkKey canonical_port_type_link_key(tt::tt_metal::AsicID a, tt::tt_metal::AsicID b) {
+    if (a < b) {
+        return {a, b};
+    }
+    return {b, a};
+}
+
+namespace {
+
+bool port_type_link_has_type(const PortTypeLinkMap& port_type_links, AsicID a, AsicID b, PortType port_type) {
+    const auto key = canonical_port_type_link_key(a, b);
+    const auto it = port_type_links.find(key);
+    return it != port_type_links.end() && it->second == port_type;
+}
+
+}  // namespace
+
+PortTypeLinkMap build_port_type_link_map(
+    const tt::tt_metal::PhysicalSystemDescriptor& psd, const std::set<tt::tt_metal::AsicID>& mesh_asics) {
+    using tt::tt_metal::AsicID;
+    using tt::tt_metal::PortType;
+    PortTypeLinkMap port_type_links;
+    for (const auto& src : mesh_asics) {
+        for (const auto& dst : psd.get_asic_neighbors(src)) {
+            if (src == dst || !mesh_asics.contains(dst)) {
+                continue;
+            }
+            for (const auto& eth_conn : psd.get_eth_connections(src, dst)) {
+                if (eth_conn.port_type == PortType::UNKNOWN) {
+                    continue;
+                }
+                const auto key = canonical_port_type_link_key(src, dst);
+                const auto it = port_type_links.find(key);
+                if (it == port_type_links.end() ||
+                    port_type_preference_rank(eth_conn.port_type) < port_type_preference_rank(it->second)) {
+                    port_type_links[key] = eth_conn.port_type;
+                }
+            }
+        }
+    }
+    return port_type_links;
+}
+
+LogicalEdgePortRequirement infer_logical_edge_port_requirement(MeshHostRankId rank_a, MeshHostRankId rank_b) {
+    LogicalEdgePortRequirement requirement;
+    if (rank_a == ::tt::tt_fabric::MESH_HOST_RANK_UNSET || rank_b == ::tt::tt_fabric::MESH_HOST_RANK_UNSET) {
+        return requirement;
+    }
+    if (rank_a == rank_b) {
+        requirement.preferred = tt::tt_metal::PortType::TRACE;
+    } else {
+        requirement.required = tt::tt_metal::PortType::QSFP_DD;
+    }
+    return requirement;
+}
+
+std::set<tt::tt_metal::AsicID> compute_preferred_asics_for_fabric_node(
+    FabricNodeId fabric_node,
+    const LogicalAdjacencyMap& logical_adjacency,
+    const PhysicalAdjacencyMap& physical_adjacency,
+    const std::map<FabricNodeId, MeshHostRankId>& node_to_host_rank,
+    const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_to_host_rank,
+    const PortTypeLinkMap& port_type_links) {
+    using tt::tt_metal::AsicID;
+    const auto fabric_rank = fabric_node_rank(node_to_host_rank, fabric_node);
+    if (!fabric_rank.has_value()) {
+        return {};
+    }
+
+    const auto logical_it = logical_adjacency.find(fabric_node);
+    if (logical_it == logical_adjacency.end()) {
+        return {};
+    }
+
+    const auto physical_asics = physical_asics_from_adjacency(physical_adjacency);
+    std::optional<std::set<AsicID>> preferred_asics;
+
+    for (const auto& neighbor : logical_it->second) {
+        const auto neighbor_rank = fabric_node_rank(node_to_host_rank, neighbor);
+        if (!neighbor_rank.has_value()) {
+            continue;
+        }
+
+        const auto edge_requirement = infer_logical_edge_port_requirement(fabric_rank.value(), neighbor_rank.value());
+        if (!edge_requirement.preferred.has_value()) {
+            continue;
+        }
+
+        const auto neighbor_rank_asics = asics_with_host_rank(asic_to_host_rank, neighbor_rank.value(), physical_asics);
+        std::set<AsicID> candidates_for_neighbor;
+        for (const auto& candidate : physical_asics) {
+            for (const auto& neighbor_asic : neighbor_rank_asics) {
+                if (port_type_link_has_type(port_type_links, candidate, neighbor_asic, *edge_requirement.preferred)) {
+                    candidates_for_neighbor.insert(candidate);
+                    break;
+                }
+            }
+        }
+
+        if (!preferred_asics.has_value()) {
+            preferred_asics = std::move(candidates_for_neighbor);
+        } else {
+            std::set<AsicID> intersection;
+            std::set_intersection(
+                preferred_asics->begin(),
+                preferred_asics->end(),
+                candidates_for_neighbor.begin(),
+                candidates_for_neighbor.end(),
+                std::inserter(intersection, intersection.begin()));
+            preferred_asics = std::move(intersection);
+        }
+    }
+
+    return preferred_asics.value_or(std::set<AsicID>{});
+}
+
+std::set<tt::tt_metal::AsicID> compute_required_asics_for_fabric_node(
+    FabricNodeId fabric_node,
+    const LogicalAdjacencyMap& logical_adjacency,
+    const PhysicalAdjacencyMap& physical_adjacency,
+    const std::map<FabricNodeId, MeshHostRankId>& node_to_host_rank,
+    const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_to_host_rank,
+    const PortTypeLinkMap& port_type_links) {
+    using tt::tt_metal::AsicID;
+    const auto fabric_rank = fabric_node_rank(node_to_host_rank, fabric_node);
+    if (!fabric_rank.has_value()) {
+        return {};
+    }
+
+    const auto logical_it = logical_adjacency.find(fabric_node);
+    if (logical_it == logical_adjacency.end()) {
+        return {};
+    }
+
+    auto physical_asics = physical_asics_from_adjacency(physical_adjacency);
+    std::set<AsicID> required_asics = physical_asics;
+    bool has_cross_host_neighbor = false;
+
+    for (const auto& neighbor : logical_it->second) {
+        const auto neighbor_rank = fabric_node_rank(node_to_host_rank, neighbor);
+        if (!neighbor_rank.has_value()) {
+            continue;
+        }
+
+        const auto edge_requirement = infer_logical_edge_port_requirement(fabric_rank.value(), neighbor_rank.value());
+        if (!edge_requirement.required.has_value()) {
+            continue;
+        }
+
+        has_cross_host_neighbor = true;
+        const auto neighbor_rank_asics = asics_with_host_rank(asic_to_host_rank, neighbor_rank.value(), physical_asics);
+        std::set<AsicID> candidates_for_neighbor;
+        for (const auto& candidate : required_asics) {
+            for (const auto& neighbor_asic : neighbor_rank_asics) {
+                if (port_type_link_has_type(port_type_links, candidate, neighbor_asic, *edge_requirement.required)) {
+                    candidates_for_neighbor.insert(candidate);
+                    break;
+                }
+            }
+        }
+        required_asics = std::move(candidates_for_neighbor);
+        if (required_asics.empty()) {
+            break;
+        }
+    }
+
+    if (!has_cross_host_neighbor) {
+        return physical_asics;
+    }
+    return required_asics;
+}
+
+namespace {
+
+std::set<tt::tt_metal::AsicID> asics_in_physical_mesh(
+    const PhysicalMultiMeshGraph& physical_graph, MeshId physical_mesh_id) {
+    std::set<tt::tt_metal::AsicID> asics;
+    const auto mesh_it = physical_graph.mesh_adjacency_graphs_.find(physical_mesh_id);
+    if (mesh_it == physical_graph.mesh_adjacency_graphs_.end()) {
+        return asics;
+    }
+    for (const auto& asic_id : mesh_it->second.get_nodes()) {
+        asics.insert(asic_id);
+    }
+    return asics;
+}
+
+bool physical_meshes_have_qsfp_link(
+    const std::set<tt::tt_metal::AsicID>& asics_a,
+    const std::set<tt::tt_metal::AsicID>& asics_b,
+    const PortTypeLinkMap& port_type_links) {
+    for (const auto& asic_a : asics_a) {
+        for (const auto& asic_b : asics_b) {
+            if (port_type_link_has_type(port_type_links, asic_a, asic_b, tt::tt_metal::PortType::QSFP_DD)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+std::set<MeshId> unbound_physical_meshes(
+    const PhysicalMultiMeshGraph& physical_graph, const std::set<MeshId>& bound_physical_mesh_ids) {
+    std::set<MeshId> unbound;
+    for (const auto& [physical_mesh_id, adj] : physical_graph.mesh_adjacency_graphs_) {
+        if (!bound_physical_mesh_ids.contains(physical_mesh_id) && !adj.get_nodes().empty()) {
+            unbound.insert(physical_mesh_id);
+        }
+    }
+    return unbound;
+}
+
+std::set<MeshId> intersect_mesh_id_sets(const std::set<MeshId>& a, const std::set<MeshId>& b) {
+    std::set<MeshId> intersection;
+    std::set_intersection(a.begin(), a.end(), b.begin(), b.end(), std::inserter(intersection, intersection.begin()));
+    return intersection;
+}
+
+}  // namespace
+
+std::set<MeshId> compute_preferred_physical_meshes_for_logical_mesh(
+    MeshId logical_mesh,
+    const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
+    const PhysicalMultiMeshGraph& physical_graph,
+    const PortTypeLinkMap& port_type_links,
+    const std::set<MeshId>& bound_physical_mesh_ids) {
+    auto unbound = unbound_physical_meshes(physical_graph, bound_physical_mesh_ids);
+    const auto& logical_neighbors = mesh_logical_level_graph.get_neighbors(logical_mesh);
+    if (logical_neighbors.empty()) {
+        return unbound;
+    }
+
+    std::set<MeshId> preferred;
+    for (const MeshId physical_mesh : unbound) {
+        const auto asics_in_mesh = asics_in_physical_mesh(physical_graph, physical_mesh);
+        bool has_qsfp_to_other_partition = false;
+        for (const MeshId other_physical_mesh : unbound) {
+            if (other_physical_mesh == physical_mesh) {
+                continue;
+            }
+            const auto other_asics = asics_in_physical_mesh(physical_graph, other_physical_mesh);
+            if (physical_meshes_have_qsfp_link(asics_in_mesh, other_asics, port_type_links)) {
+                has_qsfp_to_other_partition = true;
+                break;
+            }
+        }
+        if (has_qsfp_to_other_partition) {
+            preferred.insert(physical_mesh);
+        }
+    }
+    return preferred;
+}
+
+bool fabric_node_has_cross_host_required_port_type(
+    FabricNodeId fabric_node,
+    const LogicalAdjacencyMap& logical_adjacency,
+    const std::map<FabricNodeId, MeshHostRankId>& node_to_host_rank) {
+    const auto fabric_rank = fabric_node_rank(node_to_host_rank, fabric_node);
+    if (!fabric_rank.has_value()) {
+        return false;
+    }
+
+    const auto logical_it = logical_adjacency.find(fabric_node);
+    if (logical_it == logical_adjacency.end()) {
+        return false;
+    }
+
+    for (const auto& neighbor : logical_it->second) {
+        const auto neighbor_rank = fabric_node_rank(node_to_host_rank, neighbor);
+        if (!neighbor_rank.has_value()) {
+            continue;
+        }
+        const auto edge_requirement = infer_logical_edge_port_requirement(fabric_rank.value(), neighbor_rank.value());
+        if (edge_requirement.required.has_value()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::optional<std::string> add_intra_mesh_port_type_required_constraints(
+    ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
+    const LogicalAdjacencyMap& logical_adjacency,
+    const PhysicalAdjacencyMap& physical_adjacency,
+    const std::map<FabricNodeId, MeshHostRankId>& node_to_host_rank,
+    const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_to_host_rank,
+    const TopologyMappingConfig& config) {
+    if (!config.port_type_links.has_value()) {
+        return std::nullopt;
+    }
+    const PortTypeLinkMap& port_type_links = *config.port_type_links;
+    const auto physical_asics = physical_asics_from_adjacency(physical_adjacency);
+
+    for (const auto& [fabric_node, _] : logical_adjacency) {
+        const auto required_asics = compute_required_asics_for_fabric_node(
+            fabric_node, logical_adjacency, physical_adjacency, node_to_host_rank, asic_to_host_rank, port_type_links);
+
+        if (required_asics.empty()) {
+            if (fabric_node_has_cross_host_required_port_type(fabric_node, logical_adjacency, node_to_host_rank)) {
+                return fmt::format(
+                    "No physical ASIC satisfies required port type for fabric node {} (mesh_id={}, chip_id={})",
+                    fabric_node,
+                    fabric_node.mesh_id.get(),
+                    fabric_node.chip_id);
+            }
+            continue;
+        }
+
+        if (required_asics.size() < physical_asics.size()) {
+            if (!intra_mesh_constraints.add_required_constraint(fabric_node, required_asics)) {
+                return fmt::format(
+                    "Failed to add required port-type constraint for fabric node {} (mesh_id={}, chip_id={})",
+                    fabric_node,
+                    fabric_node.mesh_id.get(),
+                    fabric_node.chip_id);
+            }
+        }
+    }
+
+    return std::nullopt;
+}
+
+void add_intra_mesh_port_type_preferred_constraints(
+    ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
+    const LogicalAdjacencyMap& logical_adjacency,
+    const PhysicalAdjacencyMap& physical_adjacency,
+    const std::map<FabricNodeId, MeshHostRankId>& node_to_host_rank,
+    const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_to_host_rank,
+    const TopologyMappingConfig& config) {
+    if (!config.port_type_links.has_value()) {
+        return;
+    }
+    const PortTypeLinkMap& port_type_links = *config.port_type_links;
+
+    for (const auto& [fabric_node, _] : logical_adjacency) {
+        const auto preferred_asics = compute_preferred_asics_for_fabric_node(
+            fabric_node, logical_adjacency, physical_adjacency, node_to_host_rank, asic_to_host_rank, port_type_links);
+
+        if (!preferred_asics.empty()) {
+            intra_mesh_constraints.add_preferred_constraint(fabric_node, preferred_asics);
+        }
+    }
+}
+
+void attach_port_type_validation_context(
+    ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& constraints,
+    const std::map<FabricNodeId, MeshHostRankId>& node_to_host_rank,
+    const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_to_host_rank,
+    const TopologyMappingConfig& config) {
+    if (!config.port_type_links.has_value()) {
+        return;
+    }
+
+    ::tt::tt_fabric::PortTypeMappingValidationContext<FabricNodeId, tt::tt_metal::AsicID> context;
+    context.target_host_ranks = node_to_host_rank;
+    context.global_host_ranks = asic_to_host_rank;
+    for (const auto& [link_key, port_type] : *config.port_type_links) {
+        context.undirected_link_port_types[link_key] = port_type;
+    }
+    constraints.set_port_type_validation_context(std::move(context));
+}
+
 TopologyMappingResult map_mesh_to_physical(
     MeshId mesh_id,
     const LogicalAdjacencyMap& logical_adjacency,
@@ -179,6 +594,18 @@ TopologyMappingResult map_mesh_to_physical(
                 pinnings_str);
         }
     }
+
+    if (const auto port_type_error = add_intra_mesh_port_type_required_constraints(
+            constraints, logical_adjacency, physical_adjacency, node_to_host_rank, asic_to_host_rank, config)) {
+        result.success = false;
+        result.error_message = *port_type_error;
+        return result;
+    }
+
+    add_intra_mesh_port_type_preferred_constraints(
+        constraints, logical_adjacency, physical_adjacency, node_to_host_rank, asic_to_host_rank, config);
+
+    attach_port_type_validation_context(constraints, node_to_host_rank, asic_to_host_rank, config);
 
     ConnectionValidationMode validation_mode = ConnectionValidationMode::RELAXED;
     auto mode_it = config.mesh_validation_modes.find(mesh_id);
@@ -1490,6 +1917,321 @@ void add_inter_mesh_minimal_host_cover_from_hostname_map(
     }
 }
 
+// Inter-mesh preferred constraints using port-type link metadata and host locality.
+void add_inter_mesh_port_type_preferred_constraints(
+    const TopologyMappingConfig& config,
+    const PhysicalMultiMeshGraph& physical_graph,
+    const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
+    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId>& inter_mesh_constraints,
+    const std::map<MeshId, MeshId>& rank_bound_logical_to_physical) {
+    if (!config.port_type_links.has_value()) {
+        return;
+    }
+    const PortTypeLinkMap& port_type_links = *config.port_type_links;
+
+    std::set<MeshId> bound_physical_mesh_ids;
+    for (const auto& [_, physical_mesh_id] : rank_bound_logical_to_physical) {
+        bound_physical_mesh_ids.insert(physical_mesh_id);
+    }
+
+    std::set<MeshId> logical_target_set;
+    for (const MeshId& m : mesh_logical_level_graph.get_nodes()) {
+        if (!rank_bound_logical_to_physical.contains(m)) {
+            logical_target_set.insert(m);
+        }
+    }
+    if (logical_target_set.size() <= 1) {
+        return;
+    }
+
+    const auto all_unbound_physical = unbound_physical_meshes(physical_graph, bound_physical_mesh_ids);
+
+    std::optional<std::set<MeshId>> host_preferred_globals;
+    if (!config.hostname_to_asics.empty()) {
+        std::vector<std::set<MeshId>> global_mesh_groups;
+        std::map<std::string, std::size_t> host_group_index;
+        for (const auto& [phys_mesh_id, adj] : physical_graph.mesh_adjacency_graphs_) {
+            if (bound_physical_mesh_ids.contains(phys_mesh_id)) {
+                continue;
+            }
+            if (adj.get_nodes().empty()) {
+                continue;
+            }
+            std::set<std::string> hosts_for_mesh;
+            for (const auto& asic_id : adj.get_nodes()) {
+                auto hostname = hostname_for_asic_from_hostname_map(asic_id, config.hostname_to_asics);
+                if (hostname.has_value()) {
+                    hosts_for_mesh.insert(*hostname);
+                }
+            }
+            if (hosts_for_mesh.size() == 1) {
+                auto [it, inserted] = host_group_index.try_emplace(*hosts_for_mesh.begin(), global_mesh_groups.size());
+                if (inserted) {
+                    global_mesh_groups.emplace_back();
+                }
+                global_mesh_groups[it->second].insert(phys_mesh_id);
+            } else {
+                global_mesh_groups.push_back({phys_mesh_id});
+            }
+        }
+
+        if (!global_mesh_groups.empty()) {
+            const auto [single_group_fits, preferred_globals] =
+                ::tt::tt_fabric::PhysicalGroupingDescriptor::find_minimum_coverage_group(
+                    logical_target_set, global_mesh_groups);
+            if (single_group_fits) {
+                std::vector<std::set<MeshId>> target_groups;
+                target_groups.push_back(logical_target_set);
+                if (inter_mesh_constraints.set_same_rank_groups_constraint(target_groups, global_mesh_groups)) {
+                    return;
+                }
+                log_warning(
+                    tt::LogFabric,
+                    "Inter-mesh port-type host alignment: failed to set same-rank groups constraint; falling back to "
+                    "preferred globals");
+            }
+            if (!preferred_globals.empty()) {
+                if (!single_group_fits) {
+                    log_debug(
+                        tt::LogFabric,
+                        "Inter-mesh port-type host alignment: target count {} exceeds largest single partition; "
+                        "preferring minimal host cover ({} preferred globals)",
+                        logical_target_set.size(),
+                        preferred_globals.size());
+                }
+                host_preferred_globals = preferred_globals;
+            }
+        }
+    }
+
+    for (const MeshId& target : logical_target_set) {
+        const auto port_preferred = compute_preferred_physical_meshes_for_logical_mesh(
+            target, mesh_logical_level_graph, physical_graph, port_type_links, bound_physical_mesh_ids);
+
+        std::set<MeshId> final_preferred;
+        if (host_preferred_globals.has_value() && !host_preferred_globals->empty()) {
+            if (!port_preferred.empty()) {
+                final_preferred = intersect_mesh_id_sets(*host_preferred_globals, port_preferred);
+            } else {
+                final_preferred = *host_preferred_globals;
+            }
+        } else if (!port_preferred.empty()) {
+            final_preferred = port_preferred;
+        }
+
+        if (final_preferred.empty()) {
+            continue;
+        }
+        if (final_preferred.size() < all_unbound_physical.size()) {
+            inter_mesh_constraints.add_preferred_constraint(target, final_preferred);
+        }
+    }
+}
+
+// Physical mesh partition (among unbound) that minimally covers required_asics, else nullopt.
+std::optional<MeshId> smallest_physical_mesh_covering_required_asics(
+    const PhysicalMultiMeshGraph& physical_graph,
+    const std::set<MeshId>& bound_physical_mesh_ids,
+    const std::set<tt::tt_metal::AsicID>& required_asics) {
+    if (required_asics.empty()) {
+        return std::nullopt;
+    }
+
+    auto node_vec_contains = [](const std::vector<tt::tt_metal::AsicID>& nodes, tt::tt_metal::AsicID asic) -> bool {
+        return std::find(nodes.begin(), nodes.end(), asic) != nodes.end();
+    };
+
+    std::optional<MeshId> best_physical;
+    std::optional<std::size_t> best_node_count;
+    for (const auto& [physical_mesh_id, adj] : physical_graph.mesh_adjacency_graphs_) {
+        if (bound_physical_mesh_ids.contains(physical_mesh_id)) {
+            continue;
+        }
+        const auto& node_vec = adj.get_nodes();
+        if (node_vec.empty()) {
+            continue;
+        }
+
+        bool covers_all = true;
+        for (const auto& asic : required_asics) {
+            if (!node_vec_contains(node_vec, asic)) {
+                covers_all = false;
+                break;
+            }
+        }
+        if (!covers_all) {
+            continue;
+        }
+
+        const std::size_t n = node_vec.size();
+        if (!best_node_count.has_value() || n < *best_node_count) {
+            best_node_count = n;
+            best_physical = physical_mesh_id;
+        } else if (n == *best_node_count && physical_mesh_id < *best_physical) {
+            best_physical = physical_mesh_id;
+        }
+    }
+    return best_physical;
+}
+
+// Tray 1 / ASIC location 1 (discovery coordinate) used as soft inter-mesh anchor for logical mesh 0.
+inline const AsicPosition k_logical_mesh_zero_preferred_discovery_asic_position =
+    AsicPosition{tt::tt_metal::TrayID{1u}, tt::tt_metal::ASICLocation{1u}};
+
+// Resolve a single ASIC at `anchor_position` preferring resolved-local-host ASIC list; else unique global hit.
+std::optional<tt::tt_metal::AsicID> resolve_anchor_asic_at_discovery_position(
+    const TopologyMappingConfig& config,
+    const std::optional<std::string>& resolved_local_hostname_key,
+    const AsicPosition& anchor_position) {
+    if (config.asic_positions.empty()) {
+        return std::nullopt;
+    }
+
+    auto position_matches = [&](tt::tt_metal::AsicID asic_id) -> bool {
+        auto pos_it = config.asic_positions.find(asic_id);
+        return pos_it != config.asic_positions.end() && pos_it->second == anchor_position;
+    };
+
+    if (resolved_local_hostname_key.has_value()) {
+        auto host_it = config.hostname_to_asics.find(*resolved_local_hostname_key);
+        if (host_it != config.hostname_to_asics.end()) {
+            int local_count = 0;
+            std::optional<tt::tt_metal::AsicID> local_only;
+            for (const auto& asic : host_it->second) {
+                if (position_matches(asic)) {
+                    ++local_count;
+                    local_only = asic;
+                }
+            }
+            if (local_count == 1) {
+                return local_only;
+            }
+        }
+    }
+
+    int global_count = 0;
+    std::optional<tt::tt_metal::AsicID> global_only;
+    for (const auto& [asic_id, pos] : config.asic_positions) {
+        if (pos == anchor_position) {
+            ++global_count;
+            global_only = asic_id;
+        }
+    }
+    return global_count == 1 ? global_only : std::nullopt;
+}
+
+/**
+ * Biases inter-mesh solving so logical mesh id 0 prefers the right physical partition(s):
+ * - the partition covering the Phase-1 / mapping host (`gethostname` match in `hostname_to_asics`),
+ * - and the partition that contains discovery ASIC (tray id 1, ASIC location 1), which tracks the canonical
+ *   "starter" silicon on that stack.
+ *
+ * Rationale for CI / multihost: without this soft anchor, isomorphism in the mapper can associate logical mesh 0 with
+ * an arbitrary symmetric physical mesh, which shifts which host owns mesh 0 and which ASIC lands on which UMD-visible
+ * index after rank bindings (`TT_VISIBLE_DEVICES`, etc.). That makes rank-0 / mesh-0 / device-0 assumptions in tests
+ * and golden ASIC-mapping checks brittle across hosts or reorderings. Preferring localhost + tray 1 / location 1 keeps
+ * launched jobs and documented expectations aligned so we avoid those mismatches.
+ *
+ * Constraints are preferences only—the solver may still choose another isomorphism if constraints demand it.
+ * If localhost cover and tray/loc anchors disagree on the physical mesh, tray 1 / location 1 wins (see log line).
+ */
+void add_logical_mesh_zero_anchor_inter_mesh_preference(
+    const TopologyMappingConfig& config,
+    const PhysicalMultiMeshGraph& physical_graph,
+    const AdjacencyGraph<MeshId>& mesh_logical_level_graph,
+    const std::map<MeshId, MeshId>& rank_bound_logical_to_physical,
+    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId>& inter_mesh_constraints) {
+    if (config.hostname_to_asics.empty() && config.asic_positions.empty()) {
+        return;
+    }
+
+    constexpr MeshId k_logical_anchor{0};
+    const auto& logical_nodes_vec = mesh_logical_level_graph.get_nodes();
+    const bool logical_anchor_exists =
+        std::find(logical_nodes_vec.begin(), logical_nodes_vec.end(), k_logical_anchor) != logical_nodes_vec.end();
+    if (!logical_anchor_exists) {
+        return;
+    }
+
+    std::set<MeshId> bound_physical_mesh_ids;
+    for (const auto& [_, physical_mesh_id] : rank_bound_logical_to_physical) {
+        bound_physical_mesh_ids.insert(physical_mesh_id);
+    }
+
+    std::optional<std::string> local_hostname_opt;
+    if (!config.hostname_to_asics.empty()) {
+        local_hostname_opt = resolve_local_hostname_from_hostname_asics_map(config.hostname_to_asics);
+    }
+
+    std::optional<MeshId> from_hostname_partition;
+    if (local_hostname_opt.has_value()) {
+        auto host_it = config.hostname_to_asics.find(*local_hostname_opt);
+        if (host_it != config.hostname_to_asics.end() && !host_it->second.empty()) {
+            from_hostname_partition = smallest_physical_mesh_covering_required_asics(
+                physical_graph, bound_physical_mesh_ids, host_it->second);
+        }
+    }
+    if (!from_hostname_partition.has_value() && !config.hostname_to_asics.empty()) {
+        log_debug(
+            tt::LogFabric,
+            "Logical mesh {} anchor: no partition from local hostname hostname_to_asics match",
+            k_logical_anchor.get());
+    }
+
+    std::optional<MeshId> from_discovery_position_partition;
+    const auto anchor_asic_coords = resolve_anchor_asic_at_discovery_position(
+        config, local_hostname_opt, k_logical_mesh_zero_preferred_discovery_asic_position);
+    if (anchor_asic_coords.has_value()) {
+        const std::set<tt::tt_metal::AsicID> single{*anchor_asic_coords};
+        from_discovery_position_partition =
+            smallest_physical_mesh_covering_required_asics(physical_graph, bound_physical_mesh_ids, single);
+    }
+    if (!from_discovery_position_partition.has_value()) {
+        if (!config.asic_positions.empty()) {
+            log_debug(
+                tt::LogFabric,
+                "Logical mesh {} anchor: could not resolve tray 1 / ASIC location 1 partition (ambiguous or missing in "
+                "TopologyMappingConfig::asic_positions / no smallest cover)",
+                k_logical_anchor.get());
+        }
+    }
+
+    std::optional<MeshId> chosen_physical;
+    if (from_hostname_partition.has_value() && from_discovery_position_partition.has_value()) {
+        if (*from_hostname_partition == *from_discovery_position_partition) {
+            chosen_physical = from_hostname_partition;
+        } else {
+            chosen_physical = from_discovery_position_partition;
+            log_info(
+                tt::LogFabric,
+                "Logical mesh {} anchor: localhost partition ({}) differs from tray-1/loc-1 partition ({}); preferring "
+                "the latter",
+                k_logical_anchor.get(),
+                from_hostname_partition->get(),
+                from_discovery_position_partition->get());
+        }
+    } else if (from_discovery_position_partition.has_value()) {
+        chosen_physical = from_discovery_position_partition;
+    } else if (from_hostname_partition.has_value()) {
+        chosen_physical = from_hostname_partition;
+    }
+
+    if (!chosen_physical.has_value()) {
+        return;
+    }
+
+    inter_mesh_constraints.add_preferred_constraint(k_logical_anchor, *chosen_physical);
+
+    log_info(
+        tt::LogFabric,
+        "Inter-mesh preference: logical mesh {} → physical mesh {} (hostname_anchor={}, "
+        "tray1_asic_location1_anchor={})",
+        k_logical_anchor.get(),
+        chosen_physical->get(),
+        from_hostname_partition.has_value(),
+        from_discovery_position_partition.has_value());
+}
+
 // Helper function to build ASIC positions to ASIC IDs map
 std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
     const ::tt::tt_fabric::AdjacencyGraph<tt::tt_metal::AsicID>& physical_graph, const TopologyMappingConfig& config) {
@@ -1518,8 +2260,15 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
 
     // Skip if rank bindings are disabled
     if (config.disable_rank_bindings) {
-        add_inter_mesh_minimal_host_cover_from_hostname_map(
-            config, physical_graph, mesh_logical_level_graph, inter_mesh_constraints, {});
+        if (config.port_type_links.has_value()) {
+            add_inter_mesh_port_type_preferred_constraints(
+                config, physical_graph, mesh_logical_level_graph, inter_mesh_constraints, {});
+        } else {
+            add_inter_mesh_minimal_host_cover_from_hostname_map(
+                config, physical_graph, mesh_logical_level_graph, inter_mesh_constraints, {});
+        }
+        add_logical_mesh_zero_anchor_inter_mesh_preference(
+            config, physical_graph, mesh_logical_level_graph, {}, inter_mesh_constraints);
         return inter_mesh_constraints;
     }
 
@@ -1575,8 +2324,15 @@ std::map<AsicPosition, std::set<tt::tt_metal::AsicID>> build_asic_positions_map(
         inter_mesh_constraints.add_required_constraint(logical_mesh_id, physical_it->second);
     }
 
-    add_inter_mesh_minimal_host_cover_from_hostname_map(
-        config, physical_graph, mesh_logical_level_graph, inter_mesh_constraints, rank_bound_logical_to_physical);
+    if (config.port_type_links.has_value()) {
+        add_inter_mesh_port_type_preferred_constraints(
+            config, physical_graph, mesh_logical_level_graph, inter_mesh_constraints, rank_bound_logical_to_physical);
+    } else {
+        add_inter_mesh_minimal_host_cover_from_hostname_map(
+            config, physical_graph, mesh_logical_level_graph, inter_mesh_constraints, rank_bound_logical_to_physical);
+    }
+    add_logical_mesh_zero_anchor_inter_mesh_preference(
+        config, physical_graph, mesh_logical_level_graph, rank_bound_logical_to_physical, inter_mesh_constraints);
     return inter_mesh_constraints;
 }
 
@@ -2361,6 +3117,64 @@ TopologyMappingResult map_multi_mesh_to_physical(
             // Build ASIC positions map and add pinning constraints
             auto asic_positions_to_asic_ids = build_asic_positions_map(physical_graph, config);
             add_pinning_constraints(intra_mesh_constraints, asic_positions_to_asic_ids, config, logical_mesh_id);
+
+            std::map<FabricNodeId, MeshHostRankId> node_to_host_rank;
+            if (fabric_node_id_to_mesh_rank.contains(logical_mesh_id)) {
+                node_to_host_rank = fabric_node_id_to_mesh_rank.at(logical_mesh_id);
+            }
+            std::map<tt::tt_metal::AsicID, MeshHostRankId> asic_to_host_rank;
+            if (asic_id_to_mesh_rank.contains(logical_mesh_id)) {
+                asic_to_host_rank = asic_id_to_mesh_rank.at(logical_mesh_id);
+            } else {
+                for (const auto& [_, asic_set] : config.hostname_to_asics) {
+                    for (const auto& asic_id : asic_set) {
+                        asic_to_host_rank[asic_id] = ::tt::tt_fabric::MESH_HOST_RANK_UNSET;
+                    }
+                }
+            }
+            const auto& logical_adjacency = logical_graph.get_adjacency_map();
+            const auto& physical_adjacency = physical_graph.get_adjacency_map();
+
+            if (const auto port_type_error = add_intra_mesh_port_type_required_constraints(
+                    intra_mesh_constraints,
+                    logical_adjacency,
+                    physical_adjacency,
+                    node_to_host_rank,
+                    asic_to_host_rank,
+                    config)) {
+                log_info(
+                    tt::LogFabric,
+                    "Attempt {}: Port-type required constraint error for mesh {} -> {}: {}",
+                    retry_attempt,
+                    logical_mesh_id.get(),
+                    physical_mesh_id.get(),
+                    *port_type_error);
+                if (!handle_forbidden_constraint(
+                        inter_mesh_constraints,
+                        logical_mesh_id,
+                        physical_mesh_id,
+                        failed_mesh_pairs,
+                        current_attempt_failed_pairs,
+                        retry_attempt,
+                        logical_meshes,
+                        physical_meshes,
+                        inter_mesh_validation_mode,
+                        result,
+                        *port_type_error)) {
+                    return result;
+                }
+                continue;
+            }
+
+            add_intra_mesh_port_type_preferred_constraints(
+                intra_mesh_constraints,
+                logical_adjacency,
+                physical_adjacency,
+                node_to_host_rank,
+                asic_to_host_rank,
+                config);
+
+            attach_port_type_validation_context(intra_mesh_constraints, node_to_host_rank, asic_to_host_rank, config);
 
             // Determine validation mode
             auto validation_mode = determine_intra_mesh_validation_mode(config, logical_mesh_id);
