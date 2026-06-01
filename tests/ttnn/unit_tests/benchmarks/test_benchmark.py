@@ -253,12 +253,12 @@ matmul_configs = [
     # (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False),
     # (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
     # (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, False),
-    # (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False),
+    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, False),
     # (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, False),
     # (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, True),
     # (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, True),
     # (ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2, True),
-    # (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, True),
+    (ttnn.bfloat8_b, ttnn.MathFidelity.LoFi, True),
     # (ttnn.bfloat4_b, ttnn.MathFidelity.LoFi, True),
     (ttnn.fp8_e4m3, ttnn.MathFidelity.LoFi, False),
     (ttnn.fp8_e4m3, ttnn.MathFidelity.LoFi, True),
@@ -266,11 +266,14 @@ matmul_configs = [
 
 
 # @pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
+# The whole dtype x shape sweep runs in a single test item, so the repo-global
+# 300s pytest-timeout (pytest.ini) is far too short; disable it for this benchmark.
+@pytest.mark.timeout(0)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
-@pytest.mark.parametrize("num_warmup_iterations", [5])
-@pytest.mark.parametrize("num_measurement_iterations", [50])
+@pytest.mark.parametrize("num_warmup_iterations", [10])
+@pytest.mark.parametrize("num_measurement_iterations", [100])
 def test_matmul_2d_host_perf(
     device,
     grid_size,
@@ -346,15 +349,20 @@ def test_matmul_2d_host_perf(
             # FP8 hack: ship inputs as UInt8 tensors of raw FP8 e4m3 bytes. The matmul
             # device code remaps UInt8 input CBs to Fp8_e4m3 (see matmul_utilities.hpp)
             # so the LLK runs the real FP8 path. Output stays bf16 because the FP8
-            # output writeback isn't on the golden path yet. Compute config also flips
-            # to fp32_dest / no packer_l1_acc to match the FP8 LLK gtest config.
+            # output writeback isn't on the golden path yet. FP8 flips on fp32_dest
+            # (the only assertion-enforced FP8 requirement).
             is_fp8 = dtype == ttnn.fp8_e4m3
             input_dtype = ttnn.uint8 if is_fp8 else dtype
             output_dtype = ttnn.bfloat16 if is_fp8 else dtype
             # FP8 forces fp32_dest_acc_en=True (halves dest -> caps subblock H*W at 4).
             # Subblock selection must know this or it picks shapes that overflow dest.
             fp32_dest_acc_en = is_fp8
-            packer_l1_acc = not is_fp8
+            # packer_l1_acc on for both dtypes: rtawfik's FP8 LLK gtest
+            # (TensixTestSingleCoreMultiBlockL1AccComputeMatmulFp8e4m3) runs FP8 with
+            # packer_l1_acc=True and passes. With bf16 output the per-block re-quant
+            # accuracy cost (which only bites FP8 *output*) does not apply, so this is
+            # the apples-to-apples match against the BF8 L1-acc path.
+            packer_l1_acc = True
             for m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w in matmul_shapes:
                 profiler.clear()
 
@@ -662,11 +670,14 @@ matmul_configs_oob = [
 
 
 # @pytest.mark.skip(reason="Benchmark is not intended to be run as part of CI and can be manually run locally")
+# The whole dtype x shape sweep runs in a single test item, so the repo-global
+# 300s pytest-timeout (pytest.ini) is far too short; disable it for this benchmark.
+@pytest.mark.timeout(0)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 3855488}], indirect=True)
 @pytest.mark.parametrize("tile_h", [32])
 @pytest.mark.parametrize("tile_w", [32])
-@pytest.mark.parametrize("num_warmup_iterations", [1])
-@pytest.mark.parametrize("num_measurement_iterations", [5])
+@pytest.mark.parametrize("num_warmup_iterations", [10])
+@pytest.mark.parametrize("num_measurement_iterations", [100])
 def test_matmul_2d_host_perf_out_of_box(
     device,
     grid_size,
@@ -786,15 +797,16 @@ def test_matmul_2d_host_perf_out_of_box(
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
 
-                # FP8 LLK requires fp32 dest acc and no packer_l1_acc. For the non-FP8
-                # OOB path we pass compute_kernel_config=None to keep the @-operator
-                # default behavior (identical to `in0_t @ in1_t`).
+                # FP8 LLK requires fp32 dest acc (assertion-enforced); packer_l1_acc=True
+                # matches both the default BF8 @-operator path and rtawfik's FP8 L1-acc
+                # gtest. For the non-FP8 OOB path we keep the @-operator default behavior
+                # (identical to `in0_t @ in1_t`).
                 if is_fp8:
                     fp8_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
                         math_fidelity=math_fidelity,
                         math_approx_mode=True,
                         fp32_dest_acc_en=True,
-                        packer_l1_acc=False,
+                        packer_l1_acc=True,
                         throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
                     )
 
