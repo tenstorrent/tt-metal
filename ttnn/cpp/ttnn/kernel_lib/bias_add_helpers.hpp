@@ -97,20 +97,26 @@ struct NoPostBias {
  * Ht×Wt tile grid with NO subblock structure — so add-bias does NOT inherently need the
  * matmul's subblock shape. This helper is nonetheless kept (not folded into binary_op)
  * for three reasons; a future migration MUST preserve all three:
- *   1. SubblockMajor interm consumption. binary_op reads tiles row-major. When the
- *      upstream matmul packs interm SubblockMajor (the default), bias must address tiles
- *      in subblock order — which is exactly why BiasAddShape mirrors the matmul subblock
- *      dims. Only on the TileRowMajor matmul-output path is interm already in row order,
- *      and ONLY there could binary_op consume it directly (and bias's blocking decouple
- *      from the matmul's for extra DST-fill freedom).
+ *   1. SubblockMajor interm consumption. binary_op today walks a flat row-major tile
+ *      grid; when the upstream matmul packs interm SubblockMajor (the default) the tiles
+ *      aren't in row order, so binary_op would need subblock-aware input indexing + a
+ *      matching subblock-order output pack. NOTE: this is a MISSING binary_op feature, not
+ *      a fundamental blocker — the bias add itself is order-independent, and NO writer
+ *      change is needed (the output stays subblock-major, which the matmul's existing
+ *      writer already reads; bias is a compute-side phase, not its own writer kernel). On
+ *      the TileRowMajor path interm is already row-ordered, so binary_op could consume it
+ *      directly today (and bias's blocking could decouple from the matmul's subblock shape
+ *      for extra DST-fill freedom). TODO(post-binary_op-merge): teach binary_op subblock
+ *      addressing so BOTH layouts can route through it.
  *   2. Packer-thread fused activation. This helper fuses SFPU activation on the PACKER
  *      thread (apply_activation_from_pack) at the pack stage — the FUSE_BIAS+activation
  *      overlap path. binary_op's post-op callback runs on the MATH thread only.
  *   3. bias_offset walk-base. conv2d pushes the whole per-core bias slice once and walks
  *      it via bias_offset; binary_op has no equivalent addressing hook.
- * Migration target: once binary_op and this helper share a branch, route the TileRowMajor
- * inner add through binary_op<ADD, ROW|NONE> and keep this helper as the thin layer that
- * owns (2) and (3) and the SubblockMajor gather of (1).
+ * Migration target: once binary_op and this helper share a branch, route the inner add
+ * through binary_op<ADD, ROW|NONE> — TileRowMajor directly, SubblockMajor once binary_op
+ * grows subblock-aware addressing — and keep this helper as the thin layer that owns (2)
+ * and (3).
  *
  * Composes with matmul_block by reading from the same interm_cb that matmul_block
  * packed to (when pack_last_to_interm=true). The `tile_order` template must match
