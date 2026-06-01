@@ -15,16 +15,12 @@ from typing import Sequence
 import torch
 from loguru import logger
 
-# (C, T_pad, K, stride) for which ttnn.conv1d's depthwise kernel builds (its
-# in0_block_w % K assert holds only for some C) and fits L1. The assert is a fatal,
-# uncatchable crash, so conv1d is opt-in per shape; every other shape uses MAC.
-_CONV1D_SAFE_SHAPES: set = {
-    (256, 6155, 12, 2),
-    (384, 5131, 12, 2),
-    (384, 5161, 12, 1),
-    (768, 2571, 12, 2),
-    (768, 2601, 12, 1),
-}
+# (C, T_pad, K, stride) shapes allowed to use ttnn.conv1d's depthwise kernel
+# instead of the MAC shifted-accumulate. Empty: conv1d diverges from MAC by
+# ~0.9 dB PSNR on the vocoder anti-alias filters (high-frequency amplitude
+# compression), so MAC is the numerical baseline. The conv1d path below stays
+# for a future halo-aware depthwise kernel that matches MAC.
+_CONV1D_SAFE_SHAPES: set = set()
 
 import ttnn
 
