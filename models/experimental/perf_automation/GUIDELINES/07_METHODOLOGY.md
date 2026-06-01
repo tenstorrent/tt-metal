@@ -99,6 +99,10 @@ cluster_axis, (f) regenerate cached weights from torch (a stale cached memcfg co
 
 ## 6. Signpost-bound the Tracy report
 
+> For the full capture -> report -> op-bucketing workflow (commands, the CSV analysis
+> script, ranking by device time and op count, drilling by shape), see
+> **09_PROFILING_AND_OP_ANALYSIS.md**. This section covers only the signpost gotcha.
+
 Default Tracy captures compile + warmup + every replay → doubled counts, inflated totals.
 Bound the measured forward:
 
