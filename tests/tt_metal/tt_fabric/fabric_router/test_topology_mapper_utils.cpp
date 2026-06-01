@@ -4910,9 +4910,19 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     // Mock cluster descriptors (used in CPU-only tests) may not provide bus_id data needed to
     // derive tray_id, causing the PSD to have tray_id=0 for all ASICs. The 4x4_Mesh BH grouping
     // requires tray_id matching (TRAY_3 + TRAY_1), so skip rather than fail in that case.
-    if (physical_multi_mesh_graph.mesh_adjacency_graphs_.empty()) {
-        GTEST_SKIP() << "PSD has no tray_id info — mock cluster lacks bus_id support needed for "
-                     << "torus-aware TRAY_3+TRAY_1 grouping matching (run on real hardware for full coverage)";
+    // Check the PSD directly: if every ASIC has tray_id==0 the mock cluster lacks bus_id data.
+    {
+        bool any_nonzero_tray = false;
+        for (const auto& [asic_id, _] : psd.get_asic_descriptors()) {
+            if (psd.get_tray_id(asic_id).get() != 0) {
+                any_nonzero_tray = true;
+                break;
+            }
+        }
+        if (!any_nonzero_tray) {
+            GTEST_SKIP() << "PSD has tray_id=0 for all ASICs — mock cluster lacks bus_id support needed for "
+                         << "torus-aware TRAY_3+TRAY_1 grouping matching (run on real hardware for full coverage)";
+        }
     }
     EXPECT_EQ(physical_multi_mesh_graph.mesh_adjacency_graphs_.size(), 2u);
 

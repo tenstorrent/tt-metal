@@ -225,14 +225,18 @@ std::vector<std::pair<uint32_t, uint32_t>> compute_torus_wraparound_edges(
         }
         total_size *= dim;
     }
+    // Guard: node IDs are uint32_t so a mesh with more than 2^32 nodes cannot be represented.
+    if (total_size > static_cast<int64_t>(std::numeric_limits<uint32_t>::max())) {
+        TT_THROW("Mesh topology too large: total_size {} exceeds uint32_t node-id range", total_size);
+    }
 
     // Row-major helpers: the last dimension varies fastest (matches build_row_major_mesh_graph).
     auto get_coords = [&](uint32_t idx) -> std::vector<int32_t> {
         std::vector<int32_t> coords(dims.size());
-        int32_t remaining = static_cast<int32_t>(idx);
+        uint32_t remaining = idx;  // kept as uint32_t to avoid narrowing; safe since total_size <= UINT32_MAX
         for (int32_t i = static_cast<int32_t>(dims.size()) - 1; i >= 0; --i) {
-            coords[i] = remaining % dims[i];
-            remaining /= dims[i];
+            coords[i] = static_cast<int32_t>(remaining % static_cast<uint32_t>(dims[i]));
+            remaining /= static_cast<uint32_t>(dims[i]);
         }
         return coords;
     };
@@ -1441,7 +1445,7 @@ constexpr size_t kMaxPlacementsPerRun = 10000;
 // while still capping worst-case enumeration cost. A warning is logged if the cap is hit.
 constexpr size_t kMaxPlacementsPerGrouping = 1024;
 // Wall-clock budget for the set-packing branch-and-bound pass. On expiry the best feasible packing found so far
-// is returned; correctness is preserved (≥ greedy) since greedy is a valid feasible packing the solver will match.
+// is returned (may be empty or sub-optimal if the solver has not yet found any solution).
 constexpr std::chrono::milliseconds kSetPackingBudget{5000};
 
 std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
@@ -1491,7 +1495,7 @@ std::vector<MappingResult<uint32_t, AsicID>> solve_for_many_groupings_to_psd(
 //   Phase A — for each grouping, enumerate up to kMaxPlacementsPerGrouping distinct image-set placements
 //             via solve_topology_mapping_n(unique_shapes=true). Identical ASIC sets across groupings are de-duped.
 //   Phase B — Maximum Weight Set Packing via branch-and-bound to pick the disjoint subset that maximizes total
-//             ASIC coverage. Wall-clock-budgeted; falls back to best-feasible on expiry (still ≥ greedy).
+//             ASIC coverage. Wall-clock-budgeted; returns best feasible solution found on expiry.
 // Returns map from each GroupingInfo* (by address into the input vector) to its vector of selected MappingResults.
 std::unordered_map<const GroupingInfo*, std::vector<MappingResult<uint32_t, AsicID>>>
 solve_for_many_groupings_to_psd_heterogeneous(
