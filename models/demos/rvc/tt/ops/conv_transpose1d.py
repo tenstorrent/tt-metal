@@ -132,11 +132,14 @@ class TTNNConvTranspose1d:
                 out_w = dims
         else:
             output_tensor = result
-            # Compute manually
+            # L_out = (L_in - 1)*stride - 2*padding + dilation*(kernel-1) + output_padding + 1
+            # This class hardcodes dilation=1 (HiFi-GAN ConvTranspose1d).
+            dilation = 1
             out_w = ((input_length - 1) * self.stride
                      - 2 * self.padding
-                     + self.kernel_size
-                     + self.output_padding)
+                     + dilation * (self.kernel_size - 1)
+                     + self.output_padding
+                     + 1)
 
         return output_tensor, out_w
 

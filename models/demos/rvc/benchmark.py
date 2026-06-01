@@ -7,7 +7,7 @@ What this measures
 ------------------
 The same chunked flow→generator pipeline as `demo.py`. Same modules
 (`TTNNFlowDecoder`, `TTNNGeneratorNSF`), same chunking (MAX_CHUNK_FRAMES=75,
-OVERLAP=5), same overlap-add trimming, same checkpoint, same preprocessing.
+OVERLAP=3), same overlap-add trimming, same checkpoint, same preprocessing.
 
 What this adds vs `demo.py`
 ---------------------------
