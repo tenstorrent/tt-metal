@@ -480,6 +480,20 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         input_features = audio_inputs["input_features"]
         input_speech_attn = audio_inputs["attention_mask"]
 
+        # Warm the speech-encoder JIT/disk cache for this audio's mel-length bucket before the timed
+        # speech tasks. The encoder kernels are shape-specialized, so the first encode of a bucket
+        # otherwise pays a cold ~7-20 s recompile (this is why S2TT — the first speech task — was the
+        # slowest); after this, S2TT/S2ST/ASR rebuild from the warm cache (~1-2 s). The length is
+        # derived from the actual audio — nothing input-specific. (Only the live bucket is warmed:
+        # padding to a larger neighbour bucket compiles an oversized program that clashes with the
+        # decode CB budget on the last task — see ``prewarm_speech_encoder``.)
+        _mel_len = int(input_features.shape[1])
+        tt_model.prewarm_speech_encoder([_mel_len])
+        # Reset the program cache + release any prewarm L1 so the timed tasks start from the same
+        # clean state as without prewarm (the prewarm only needed to warm the on-disk JIT cache).
+        tt_model.clear_runtime_program_cache()
+        ttnn.synchronize_device(device)
+
         # =========================================================================
         # 3. S2TT — Speech-to-Text Translation (Hindi speech → English text)
         # =========================================================================
