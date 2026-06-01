@@ -11,6 +11,12 @@
 
 #include "ttnn/operations/experimental/deepseek_prefill/common/fp8_quant_common.hpp"
 
+// v0 of per_token_cast_to_fp8 uses a writer-side software conversion (bf16/fp32 -> fp8). The LLK
+// path (tilize bf16 RM -> bf16 TILE -> pack_untilize -> fp8 RM) was attempted and produced
+// incorrect results — the unpacker/packer state coordination between the two stages in one
+// compute kernel did not yield correct fp8 bytes on Blackhole. The software path is correct,
+// fast enough for v0, and isolates this op from LLK gaps.
+
 namespace ttnn::experimental::prim::per_token_cast_to_fp8 {
 
 namespace common = ttnn::operations::experimental::deepseek_prefill::fp8_quant_common;
@@ -57,25 +63,21 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
     constexpr uint32_t cb_scratch_fp8_idx = CBIndex::c_1;
     constexpr uint32_t cb_scale_const_idx = CBIndex::c_2;
 
-    // cb_in_rm: 32 RM pages (one per stick) of input dtype.
     CircularBufferConfig cb_in_rm_cfg =
         CircularBufferConfig(constants::TILE_HEIGHT * stick_size_input, {{cb_in_rm_idx, input_df}})
             .set_page_size(cb_in_rm_idx, stick_size_input);
     CreateCircularBuffer(program, all_cores, cb_in_rm_cfg);
 
-    // cb_scratch_fp8: L1 region for 32 converted fp8 sticks (= TILE_HEIGHT * H bytes total).
     const uint32_t fp8_scratch_bytes = constants::TILE_HEIGHT * stick_size_fp8;
     CircularBufferConfig cb_scratch_fp8_cfg = CircularBufferConfig(fp8_scratch_bytes, {{cb_scratch_fp8_idx, fp8_df}})
                                                   .set_page_size(cb_scratch_fp8_idx, fp8_scratch_bytes);
     CreateCircularBuffer(program, all_cores, cb_scratch_fp8_cfg);
 
-    // cb_scale_const: 1 page sized to the scale buffer's aligned_page_size.
     CircularBufferConfig cb_scale_const_cfg =
         CircularBufferConfig(scale_write_size_bytes, {{cb_scale_const_idx, scale_df}})
             .set_page_size(cb_scale_const_idx, scale_write_size_bytes);
     CreateCircularBuffer(program, all_cores, cb_scale_const_cfg);
 
-    // Reader kernel (RISCV_1).
     std::vector<uint32_t> reader_ct_args = {cb_in_rm_idx, stick_size_input};
     TensorAccessorArgs(src_buffer).append_to(reader_ct_args);
     KernelHandle reader_kernel_id = CreateKernel(
@@ -86,7 +88,6 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
 
-    // Writer kernel (RISCV_0) — does bf16/fp32 -> fp8 conversion in software.
     std::vector<uint32_t> writer_ct_args = {
         cb_in_rm_idx,
         cb_scratch_fp8_idx,
@@ -106,8 +107,6 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_ct_args});
-
-    // No compute kernel: conversion happens in the writer (software path).
 
     auto all_cores_vec = corerange_to_cores(all_cores, num_cores, true);
     uint32_t row_offset = 0;
