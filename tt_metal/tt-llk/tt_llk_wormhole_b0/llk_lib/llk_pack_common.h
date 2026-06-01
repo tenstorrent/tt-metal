@@ -137,11 +137,7 @@ inline void set_dst_write_addr(const std::uint32_t tile_index)
 
 TT_ALWAYS_INLINE void _llk_pack_relu_config_(const ckernel::ReluConfig& relu_config)
 {
-    // Program the 2-bit RELU_MODE field directly; matches _llk_pack_hw_configure_ on
-    // this arch and Quasar's _llk_pack_relu_config_, and preserves HW ZERO_RELU's
-    // sign-bit-exact path (MIN_THRESHOLD_RELU goes through threshold compare instead).
-    const std::uint32_t mode = static_cast<std::uint32_t>(relu_config.get_mode());
-    const std::uint32_t val  = (relu_config.get_threshold() << STACC_RELU_ReluThreshold_SHAMT) | (mode << STACC_RELU_ApplyRelu_SHAMT);
+    const std::uint32_t val = (relu_config.get_threshold() << STACC_RELU_ReluThreshold_SHAMT) | (relu_config.get_hw_mode() << STACC_RELU_ApplyRelu_SHAMT);
     TTI_SETDMAREG(0, val & 0xffff, 0, LO_16(p_gpr_pack::TMP0));
     TTI_SETDMAREG(0, val >> 16, 0, HI_16(p_gpr_pack::TMP0));
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
