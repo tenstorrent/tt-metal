@@ -124,6 +124,51 @@ class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
             tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
         return tt_out
 
+    def _forward_prefill_sharded(self, inp, original_shape):
+        # Block-sharded prefill RMSNorm (op 16). Consumes the BLOCK_SHARDED
+        # attention-residual sum produced on the o_proj op-14 8x8 grid and
+        # normalizes in place on that grid, so there is no reshard around the
+        # post-attention LN. The gamma is the same [32, padded_dim] TILE-layout
+        # ``tt_weight_sharded`` the decode path uses (the sharded LN kernel
+        # accepts a [TILE_HEIGHT, width] TILE gamma; see
+        # layernorm_device_operation.cpp gamma validation).
+        eps = getattr(self.torch_layer, "variance_epsilon", getattr(self.torch_layer, "eps", 1e-6))
+        if len(original_shape) == 3:
+            inp = ttnn.unsqueeze(inp, 1)
+        shard_spec = inp.memory_config().shard_spec
+        bbox = shard_spec.grid.bounding_box()
+        grid_x = int(bbox.end.x - bbox.start.x + 1)
+        grid_y = int(bbox.end.y - bbox.start.y + 1)
+        block_h = int(shard_spec.shape[0]) // ttnn.TILE_SIZE
+        block_w = int(shard_spec.shape[1]) // ttnn.TILE_SIZE
+        subblock_w = min(4, block_w)
+        while subblock_w > 1 and block_w % subblock_w != 0:
+            subblock_w -= 1
+        program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+            compute_with_storage_grid_size=[grid_x, grid_y],
+            subblock_w=subblock_w,
+            block_h=block_h,
+            block_w=block_w,
+            inplace=False,
+        )
+        sharded_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+        tt_out = ttnn.rms_norm(
+            inp,
+            epsilon=eps,
+            weight=self.tt_weight_sharded,
+            program_config=program_config,
+            memory_config=inp.memory_config(),
+            compute_kernel_config=sharded_compute_kernel_config,
+        )
+        if len(original_shape) == 3 and len(tt_out.shape) == 4:
+            tt_out = ttnn.reshape(tt_out, [tt_out.shape[0], tt_out.shape[2], tt_out.shape[3]])
+        return tt_out
+
     def forward(self, inp):
         original_shape = inp.shape
         # Sharded LN fast path: decode-shape (M=1) and single-device or pure DP
@@ -132,6 +177,12 @@ class TTNNDotsOCRLocalShardRMSNorm(TTNNDistributedRMSNorm):
         is_decode = len(original_shape) >= 2 and int(original_shape[-2]) == 1
         if is_decode and not _tp_requires_ccl(self.device):
             return self._forward_decode_sharded(inp, original_shape)
+
+        # Prefill block-sharded fast path: input already lives BLOCK_SHARDED on
+        # the o_proj op-14 grid, so normalize there (no reshard). Single-device
+        # / pure-DP only; TP and interleaved inputs fall through.
+        if not _tp_requires_ccl(self.device) and inp.memory_config().is_sharded():
+            return self._forward_prefill_sharded(inp, original_shape)
 
         if len(original_shape) == 3:
             inp = ttnn.unsqueeze(inp, 1)
@@ -220,6 +271,35 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
             decode_cur_pos_tt=kwargs.get("decode_cur_pos_tt"),
             decode_cos_sin=kwargs.get("decode_cos_sin"),
         )
+
+        # Prefill block-sharded region (ops 14-16): the o_proj returns its
+        # output BLOCK_SHARDED on the 8x8 grid, so do the attention residual-add
+        # and post-attention RMSNorm on that grid (no reshards). The pre-norm
+        # sum H1 is kept block-sharded as the MLP residual.
+        if not is_decode and attn_out.memory_config().is_sharded():
+            attn_mc = attn_out.memory_config()
+            residual_bs = ttnn.to_memory_config(residual, attn_mc)
+            ttnn.deallocate(residual)
+            hs = ttnn.add(residual_bs, attn_out, memory_config=attn_mc)
+            ttnn.deallocate(attn_out)
+            ttnn.deallocate(residual_bs)
+
+            residual = hs  # H1 (block-sharded)
+            normed = self.post_attention_layernorm(hs)
+
+            # Op 17: the gate-up matmul consumes the BLOCK_SHARDED LN output
+            # directly (block-sharded in0 -> DRAM out), so the LN->gate-up
+            # reshard is gone. down_proj still emits interleaved, so op 22
+            # reshards the H1 residual once to match mlp_out.
+            mlp_out = self.mlp(normed)
+            ttnn.deallocate(normed)
+
+            residual_il = ttnn.sharded_to_interleaved(residual, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(residual)
+            hs = ttnn.add(residual_il, mlp_out)
+            ttnn.deallocate(mlp_out)
+            ttnn.deallocate(residual_il)
+            return (hs,)
 
         hs = (
             ttnn.add(residual, attn_out, memory_config=decode_l1_mc)

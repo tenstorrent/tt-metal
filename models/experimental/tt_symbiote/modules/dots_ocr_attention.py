@@ -4,7 +4,11 @@
 
 import torch
 import ttnn
-from models.experimental.tt_symbiote.core.module import TTNNModule
+from models.experimental.tt_symbiote.core.module import (
+    TTNNModule,
+    run_on_devices,
+    SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
+)
 from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from models.experimental.tt_symbiote.core.run_config import trace_enabled
 from models.experimental.tt_symbiote.modules.attention import (
@@ -14,6 +18,8 @@ from models.experimental.tt_symbiote.modules.attention import (
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWAllReduced,
     TTNNLinearLLamaIReplicatedWColSharded,
+    _tp_mesh_mapper,
+    _tp_requires_ccl,
 )
 from models.experimental.tt_symbiote.modules.rope import BailingRotarySetup
 
@@ -62,6 +68,109 @@ class _TTNNDotsOCRQKVPrefillLinear(TTNNLinearLLamaIColShardedWAllReduced):
                 ttnn.L1_MEMORY_CONFIG,
             )
         return None, None
+
+
+class _TTNNDotsOCROProjPrefillLinear(TTNNLinearLLamaIReplicatedWColSharded):
+    """O-projection with a tuned block-sharded prefill matmul (op 14).
+
+    Decode keeps the parent's DRAM-width-sharded fast path unchanged. Prefill
+    at the canonical dots.ocr shape (M=2816 -> 88 M-tiles, K=N=1536) runs the
+    tuned 8x8 2D-mcast matmul from test_prefill_ops_sequence_univ_2.py op 14:
+    BLOCK_SHARDED in0/out on the 8x8 grid, BF16 x BFP4 -> BF16, LoFi
+    (~97.6 us, 136 TFLOPs). The tiling (in0_block_w=6, per_core_M=11,
+    per_core_N=6) is what the adaptive prefill helper already picks; the win is
+    keeping in0 and out BLOCK_SHARDED instead of DRAM-interleaved.
+
+    The 2D-mcast kernel needs a DRAM_INTERLEAVED operand B, while the parent
+    stores the weight DRAM_WIDTH_SHARDED for its decode kernel, so a second
+    BFP4 DRAM_INTERLEAVED weight copy (~0.6 MB / layer) is built here. Only the
+    single-device / pure-DP path is affected (gated on ``not _tp_requires_ccl``,
+    like every other fast path); TP keeps the parent's CCL forward. The
+    block-sharded output is resharded back to DRAM here so nothing downstream
+    changes -- the fused residual+LN (ops 15-16) will later consume it sharded.
+    """
+
+    _PREFILL_M_TILES = 88  # M=2816
+    _PREFILL_DIM = 1536
+
+    def move_weights_to_device_impl(self):
+        # Clone the raw [out, in] torch weight before the parent preprocess
+        # consumes/transposes ``tt_weight_host`` into the DRAM-sharded copy.
+        raw_weight_torch = self.tt_weight_host.clone() if isinstance(self.tt_weight_host, torch.Tensor) else None
+        super().move_weights_to_device_impl()
+
+        self._prefill_weight = None
+        self._prefill_in0_mem = None
+        self._prefill_out_mem = None
+        self._prefill_pc = None
+
+        shape_matches = int(self.in_features) == self._PREFILL_DIM and int(self.out_features) == self._PREFILL_DIM
+        if raw_weight_torch is None or _tp_requires_ccl(self.device) or not shape_matches:
+            return
+
+        weight_t = raw_weight_torch.T.contiguous()  # [K, N] = [in, out]
+        self._prefill_weight = ttnn.as_tensor(
+            weight_t,
+            device=self.device,
+            dtype=getattr(self, "_weight_dtype", ttnn.bfloat4_b),
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        m = self._PREFILL_M_TILES * ttnn.TILE_SIZE
+        self._prefill_in0_mem = ttnn.create_sharded_memory_config(
+            (1, 1, m, self._PREFILL_DIM),
+            core_grid=ttnn.CoreGrid(y=8, x=8),
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        self._prefill_out_mem = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            buffer_type=ttnn.BufferType.L1,
+        )
+        # per_core_M=11 (88/8), per_core_N=6 (48/8), in0_block_w=6 (K=48 tiles / 8 grid rows).
+        self._prefill_pc = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),
+            in0_block_w=6,
+            out_subblock_h=1,
+            out_subblock_w=3,
+            out_block_h=11,
+            out_block_w=6,
+            per_core_M=11,
+            per_core_N=6,
+            transpose_mcast=False,
+            fused_activation=None,
+        )
+
+    @run_on_devices(*SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS)
+    def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        if getattr(self, "_prefill_weight", None) is not None and not _tp_requires_ccl(self.device):
+            if input_tensor.layout != ttnn.TILE_LAYOUT:
+                input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            in_shape = list(input_tensor.shape)
+            shape_4d = list(in_shape)
+            while len(shape_4d) < 4:
+                shape_4d.insert(1, 1)
+            m_tiles = (int(shape_4d[-2]) + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+            if m_tiles == self._PREFILL_M_TILES and int(shape_4d[-1]) == self._PREFILL_DIM:
+                x = ttnn.reshape(input_tensor, shape_4d)
+                x_bs = ttnn.to_memory_config(x, self._prefill_in0_mem)
+                out = ttnn.matmul(
+                    x_bs,
+                    self._prefill_weight,
+                    program_config=self._prefill_pc,
+                    memory_config=self._prefill_out_mem,
+                    dtype=ttnn.bfloat16,
+                    compute_kernel_config=self.compute_kernel_config,
+                )
+                ttnn.deallocate(x_bs)
+                # Leave the output BLOCK_SHARDED on the 8x8 grid: the decoder
+                # layer consumes it directly for the block-sharded residual-add
+                # + sharded RMSNorm (ops 15-16), so the sharded_to_interleaved
+                # that used to sit here is gone.
+                return ttnn.reshape(out, in_shape[:-1] + [-1])
+        return super().forward(input_tensor)
 
 
 @trace_enabled
@@ -186,8 +295,8 @@ class TTNNDotsOCRAttention(TTNNModule):
             fused_linear_conv.bias.data = torch.cat([qb_conv, kb_conv, vb_conv], dim=0)
         new_attn.qkv_proj_prefill = _TTNNDotsOCRQKVPrefillLinear.from_torch(fused_linear_conv)
 
-        # O projection
-        new_attn.o_proj = TTNNLinearLLamaIReplicatedWColSharded.from_torch(hf_attn.o_proj)
+        # O projection (block-sharded tuned prefill matmul + decode DRAM-sharded fast path)
+        new_attn.o_proj = _TTNNDotsOCROProjPrefillLinear.from_torch(hf_attn.o_proj)
 
         new_attn.sdpa = TTNNSDPAAttention()
         new_attn.core_grid = ttnn.CoreGrid(y=8, x=8)
@@ -209,7 +318,7 @@ class TTNNDotsOCRAttention(TTNNModule):
                 compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
                 q_chunk_size=256,
                 k_chunk_size=256,
-                exp_approx_mode=True,
+                exp_approx_mode=False,
             )
             self.sdpa.decode_program_config = ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=(self.core_grid.x, self.core_grid.y),
