@@ -43,9 +43,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, Quasar9x4SanityAllCoresAck) {
     constexpr const char* ACK_KERNEL = "ack_kernel";
     experimental::metal2_host_api::KernelSpec ack_kernel_spec{
         .unique_id = ACK_KERNEL,
-        .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/quasar_9x4_ack.cpp"},
+        .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/quasar_9x4_ack.cpp",
         .num_threads = 1,
         .runtime_arguments_schema =
             {
