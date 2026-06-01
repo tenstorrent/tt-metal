@@ -153,7 +153,7 @@ class IdentityStrategy:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@functools.lru_cache(maxsize=None)
+@functools.lru_cache(maxsize=32)
 def _enumerate_representable(
     stimuli_format: DataFormat,
     low: float,

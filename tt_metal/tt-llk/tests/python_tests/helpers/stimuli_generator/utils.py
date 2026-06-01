@@ -625,48 +625,32 @@ def convert_to_l1_view(
     # Face order in tilized format: [f0, f1, f2, f3]
     tensor_by_tiles = tilized_tensor.flatten().view(tile_cnt, 4, face_rows, face_cols)
 
-    # Create output tensor with same shape, initialized to zeros
-    output = torch.zeros_like(tensor_by_tiles)
-
-    # Determine which faces to use and how many rows from each
-    # tile_rows <= 16: only top faces (f0, f1), take tile_rows from each
-    # tile_rows == 32: all faces, take all 16 rows from each
-    # tile_cols == 16: only left faces (f0, f2)
-    # tile_cols == 32: both left and right faces
+    # Which faces to keep and how many rows from each top-face:
+    #   tile_rows <= 16 → only top faces (f0, f1), take tile_rows from each
+    #   tile_rows == 32 → all faces, all 16 rows from each
+    #   tile_cols == 16 → only left faces (f0, f2)
+    #   tile_cols == 32 → both left and right faces
     use_bottom_faces = tile_rows == 32
     use_right_faces = tile_cols == 32
     rows_per_face = tile_rows if tile_rows <= 16 else 16
 
-    # Extract data face by face (not interleaved)
-    for tile_idx in range(tile_cnt):
-        out_flat = []
+    # Collect the kept parts of each face across all tiles, then join them in
+    # face order into one condensed block per tile.
+    segments = [tensor_by_tiles[:, 0, :rows_per_face, :].reshape(tile_cnt, -1)]
+    if use_right_faces:
+        segments.append(tensor_by_tiles[:, 1, :rows_per_face, :].reshape(tile_cnt, -1))
+    if use_bottom_faces:
+        segments.append(tensor_by_tiles[:, 2, :, :].reshape(tile_cnt, -1))
+    if use_bottom_faces and use_right_faces:
+        segments.append(tensor_by_tiles[:, 3, :, :].reshape(tile_cnt, -1))
 
-        # f0: always used - extract rows_per_face rows
-        for row in range(rows_per_face):
-            out_flat.extend(tensor_by_tiles[tile_idx, 0, row, :].tolist())
+    condensed = torch.cat(segments, dim=1)  # [tile_cnt, condensed_len]
 
-        # f1: used if tile_cols == 32 - extract rows_per_face rows
-        if use_right_faces:
-            for row in range(rows_per_face):
-                out_flat.extend(tensor_by_tiles[tile_idx, 1, row, :].tolist())
+    # Place condensed data at the head of each tile; remainder stays zero.
+    tile_elems = 4 * face_rows * face_cols
+    output = torch.zeros(tile_cnt, tile_elems, dtype=tilized_tensor.dtype)
+    output[:, : condensed.shape[1]] = condensed
 
-        # f2: used if tile_rows == 32 - extract all 16 rows
-        if use_bottom_faces:
-            for row in range(16):
-                out_flat.extend(tensor_by_tiles[tile_idx, 2, row, :].tolist())
-
-        # f3: used if tile_rows == 32 and tile_cols == 32 - extract all 16 rows
-        if use_bottom_faces and use_right_faces:
-            for row in range(16):
-                out_flat.extend(tensor_by_tiles[tile_idx, 3, row, :].tolist())
-
-        # Place condensed data at the beginning of the tile
-        out_flat_tensor = torch.tensor(out_flat, dtype=tilized_tensor.dtype)
-        output_flat = output[tile_idx].flatten()
-        output_flat[: len(out_flat)] = out_flat_tensor
-        output[tile_idx] = output_flat.view(4, face_rows, face_cols)
-
-    # Flatten and return
     return output.flatten()
 
 
