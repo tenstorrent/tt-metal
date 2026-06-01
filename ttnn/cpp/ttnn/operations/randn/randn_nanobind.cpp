@@ -40,14 +40,14 @@ void bind_randn_operation(nb::module_& mod) {
                 :header-rows: 1
 
                 * - dtype
-                - layout
+                  - layout
                 * - FLOAT32
-                - ROW_MAJOR, TILE
+                  - ROW_MAJOR, TILE
                 * - BFLOAT16
-                - ROW_MAJOR, TILE
+                  - ROW_MAJOR, TILE
 
-        Memory Support:
-            - Interleaved: DRAM and L1
+        .. note::
+            Memory layout support: interleaved DRAM and L1.
         )doc";
 
     ttnn::bind_function<"randn">(
