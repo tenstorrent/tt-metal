@@ -7,6 +7,7 @@
 #include "matmul_dataflow_common.hpp"
 #include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "api/debug/dprint.h"
 
 using ttnn::ccl::Topology;
 
