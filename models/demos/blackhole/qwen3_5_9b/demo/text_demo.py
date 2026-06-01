@@ -27,6 +27,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen3_5_9b.tt.model import Qwen35Model
+from models.tt_transformers.tt.generator import Generator
 
 # HF_MODEL (hub name or local path) is the single source of truth.
 CHECKPOINT_DIR = os.environ.get("HF_MODEL", "/local/ttuser/atupe/Qwen9b")
@@ -154,8 +155,8 @@ def _warmup_prefill(model, device, token_ids):
     logits = model.prefill(warmup_tokens)
     ttnn.synchronize_device(device)
 
-    # Decode warmup is handled by capture_decode_trace_paged() or decode_paged()
-    # at generation time, so we only warmup prefill here.
+    # Decode warmup is handled by Generator.decode_forward() on the first decode call
+    # (it captures its own trace then), so we only warmup prefill here.
 
     compile_time = time.time() - t0
     logger.info(f"Warmup complete: {compile_time:.1f}s (programs now cached)")
@@ -258,6 +259,23 @@ def test_demo_text(
     _assert_results(perf, actual_len, len(generated))
 
 
+def _should_use_chunked_trace(model):
+    """Whether to capture ONE chunk's prefill forward and replay it per chunk (chunk-outer)
+    instead of one whole-sequence trace. True when the chunk-seq GDN prefill kernel is active
+    (QWEN9B_GDN_CHUNK_SEQ=1): chunk-outer keeps the captured trace small (under the 4 GiB
+    ceiling at long context) and every GDN call at <=2048 tokens.
+
+    The flag lives on the GDN weights (``attn.weights.use_chunk_seq_prefill``) since the
+    tt/gdn/ reorg moved it off the old ``attn._use_chunk_seq_prefill`` attribute. Reading the
+    stale name silently fell back to the slow whole-sequence trace (~20x slower capture).
+    """
+    return any(
+        (not layer.is_full_attention)
+        and getattr(getattr(layer.attention, "weights", None), "use_chunk_seq_prefill", False)
+        for layer in model.layers
+    )
+
+
 def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_tokens):
     """Prefill + paged traced decode loop. Returns (generated_tokens, perf_dict).
 
@@ -282,10 +300,7 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     # ceiling at long context. When chunk-seq is enabled, capture ONE chunk's all-layer
     # forward and replay it per chunk (chunk-outer), keeping the trace small. Otherwise use
     # the legacy whole-sequence prefill trace.
-    use_chunked_trace = any(
-        (not layer.is_full_attention) and getattr(layer.attention, "_use_chunk_seq_prefill", False)
-        for layer in model.layers
-    )
+    use_chunked_trace = _should_use_chunked_trace(model)
     chunk_size = 2048
     bucket_size = ((T + chunk_size - 1) // chunk_size) * chunk_size
     logger.info(
@@ -328,23 +343,34 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
             # ttnn.zeros/from_torch inside the captured trace, which does a
             # host→device write and FATALs.
 
-    # Capture decode trace
-    model.capture_decode_trace_paged(device, page_table)
+    gen = Generator([model], [model.args], device)
+
+    # Capture the decode trace once with GDN-state save/restore so the loop replays from the
+    # correct post-prefill state. The stock Generator capture runs the forward twice (compile +
+    # capture), which would otherwise double-advance the in-place GDN recurrent state.
+    from models.demos.blackhole.qwen3_5_9b.tt.generator_interface import prime_decode_trace
+
+    prime_decode_trace(gen, model, torch.tensor([[next_token]], dtype=torch.long), torch.tensor([T]), page_table)
 
     generated = [next_token]
     decode_times = []
     current_pos = T
 
     for i in range(max_generated_tokens - 1):
-        next_input = torch.tensor([[next_token]], dtype=torch.long)
-
         t_step = time.time()
-        logits = model.decode_traced_paged(next_input, current_pos=current_pos, page_table=page_table)
+        out = gen.decode_forward(
+            torch.tensor([[next_token]], dtype=torch.long),
+            torch.tensor([current_pos]),
+            page_table=page_table,
+            kv_cache=None,
+            enable_trace=True,
+            read_from_device=True,
+        )
         decode_times.append(time.time() - t_step)
 
-        logits_torch = ttnn.to_torch(logits).squeeze()
-        assert not torch.isnan(logits_torch).any(), f"NaN in traced decode at step {i}"
-        next_token = logits_torch.argmax().item()
+        dl = (out[0] if isinstance(out, tuple) else out).squeeze().float()
+        assert not torch.isnan(dl).any(), f"NaN in traced decode at step {i}"
+        next_token = int(dl.argmax())
         generated.append(next_token)
         current_pos += 1
 
@@ -381,20 +407,26 @@ def _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tok
     assert not torch.isnan(logits_torch).any(), "NaN in paged prefill logits"
     next_token = logits_torch.argmax().item()
 
+    gen = Generator([model], [model.args], device)
+
     generated = [next_token]
     decode_times = []
 
     for i in range(max_generated_tokens - 1):
-        next_input = torch.tensor([[next_token]], dtype=torch.long)
-
         t_step = time.time()
-        logits = model.decode_paged(next_input, current_pos=T + i, page_table=page_table)
-        ttnn.synchronize_device(device)
+        out = gen.decode_forward(
+            torch.tensor([[next_token]], dtype=torch.long),
+            torch.tensor([T + i]),
+            page_table=page_table,
+            kv_cache=None,
+            enable_trace=False,
+            read_from_device=True,
+        )
         decode_times.append(time.time() - t_step)
 
-        logits_torch = ttnn.to_torch(logits).squeeze()
-        assert not torch.isnan(logits_torch).any(), f"NaN in paged decode logits at step {i}"
-        next_token = logits_torch.argmax().item()
+        dl = (out[0] if isinstance(out, tuple) else out).squeeze().float()
+        assert not torch.isnan(dl).any(), f"NaN in paged decode logits at step {i}"
+        next_token = int(dl.argmax())
 
         if next_token == tokenizer.eos_token_id:
             break
