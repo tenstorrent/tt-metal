@@ -186,10 +186,6 @@ inline void patch_stale_descriptor(
         const auto& tensor = io_tensors[slot.io_tensor_index];
         auto& cb = desc.cbs[slot.cb_idx];
         if (slot.tensor_backed) {
-            // Repoint at the live tensor's MeshTensor.  ``mesh_tensor()`` returns a reference owned
-            // by the Tensor's shared storage, so the pointer is valid for the duration of this
-            // dispatch — the same lifetime guarantee as the ``buffer()`` pointer in the else-branch.
-            // Clear ``buffer`` to uphold the CBDescriptor buffer-xor-tensor invariant.
             cb.tensor = &tensor.mesh_tensor();
             cb.buffer = nullptr;
         } else {
