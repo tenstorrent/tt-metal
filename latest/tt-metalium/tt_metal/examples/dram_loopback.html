@@ -262,10 +262,10 @@
 <span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">out0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">TensorAccessor</span><span class="p">(</span><span class="n">out0_args</span><span class="p">,</span><span class="w"> </span><span class="n">dram_buffer_dst_addr</span><span class="p">,</span><span class="w"> </span><span class="n">tile_size_bytes</span><span class="p">);</span>
 
 <span class="w">    </span><span class="k">for</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="o">=</span><span class="mi">0</span><span class="p">;</span><span class="n">i</span><span class="o">&lt;</span><span class="n">num_tiles</span><span class="p">;</span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-<span class="w">        </span><span class="n">noc_async_read_tile</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">in0</span><span class="p">,</span><span class="w"> </span><span class="n">l1_buffer_addr</span><span class="p">);</span>
+<span class="w">        </span><span class="n">noc_async_read_page</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">in0</span><span class="p">,</span><span class="w"> </span><span class="n">l1_buffer_addr</span><span class="p">);</span>
 <span class="w">        </span><span class="n">noc_async_read_barrier</span><span class="p">();</span>
 
-<span class="w">        </span><span class="n">noc_async_write_tile</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">out0</span><span class="p">,</span><span class="w"> </span><span class="n">l1_buffer_addr</span><span class="p">);</span>
+<span class="w">        </span><span class="n">noc_async_write_page</span><span class="p">(</span><span class="n">i</span><span class="p">,</span><span class="w"> </span><span class="n">out0</span><span class="p">,</span><span class="w"> </span><span class="n">l1_buffer_addr</span><span class="p">);</span>
 <span class="w">        </span><span class="n">noc_async_write_barrier</span><span class="p">();</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="p">}</span>

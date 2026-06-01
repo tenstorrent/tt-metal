@@ -671,10 +671,10 @@ by automatically computing the physical DRAM address for any given tile index.</
 For each tile, the kernel first reserves space in both circular buffers using blocking calls to <code class="docutils literal notranslate"><span class="pre">cb_reserve_back</span></code>
 to ensure that space is available before attempting to write.
 Once space is reserved, the kernel obtains write pointers to the circular buffers and initiates two non-blocking asynchronous
-read operations using <code class="docutils literal notranslate"><span class="pre">noc_async_read_tile</span></code>. Observe that this call takes in the index of the tile being read and an address generator,
+read operations using <code class="docutils literal notranslate"><span class="pre">noc_async_read_page</span></code>. Observe that this call takes in the index of the tile being read and an address generator,
 along with the circular buffer address to write the tile to. The address generator automatically maps the logical tile index to the correct physical
 DRAM address based on the specific memory layout.</p>
-<p>Because <code class="docutils literal notranslate"><span class="pre">noc_async_read_tile</span></code> is non-blocking, the two reads can proceed in parallel if sufficient bandwidth is available, transferring data from DRAM to
+<p>Because <code class="docutils literal notranslate"><span class="pre">noc_async_read_page</span></code> is non-blocking, the two reads can proceed in parallel if sufficient bandwidth is available, transferring data from DRAM to
 the circular buffers simultaneously. After both reads are initiated, the kernel calls <code class="docutils literal notranslate"><span class="pre">noc_async_read_barrier</span></code> to wait
 for both transfers to complete. This is important because the kernel should not signal that the tiles are ready for consumption
 until data is actually available.</p>
@@ -1300,10 +1300,10 @@ You should add assertions (using <code class="docutils literal notranslate"><spa
 <li><p>Update kernel creation code to refer to kernel <code class="docutils literal notranslate"><span class="pre">.cpp</span></code> files in the new directory.</p></li>
 <li><p>Update the reader kernel to read the tiles of <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> in the correct order.
 The order of reading tiles from <code class="docutils literal notranslate"><span class="pre">A</span></code> and <code class="docutils literal notranslate"><span class="pre">B</span></code> should match the pattern of visiting one row of tiles of <code class="docutils literal notranslate"><span class="pre">A</span></code>
-with all columns of tiles of <code class="docutils literal notranslate"><span class="pre">B</span></code>, as discussed above. Keep in mind that <code class="docutils literal notranslate"><span class="pre">noc_async_read_tile</span></code> function only requires the index of the tile to read,
+with all columns of tiles of <code class="docutils literal notranslate"><span class="pre">B</span></code>, as discussed above. Keep in mind that <code class="docutils literal notranslate"><span class="pre">noc_async_read_page</span></code> function only requires the index of the tile to read,
 not the actual memory address, so your code only needs to generate indices in the right order.</p></li>
 <li><p>Update the writer kernel to write the tiles of <code class="docutils literal notranslate"><span class="pre">C</span></code> in the correct order. The order should match the pattern of visiting tiles of <code class="docutils literal notranslate"><span class="pre">C</span></code> in row-major order.
-Keep in mind that <code class="docutils literal notranslate"><span class="pre">noc_async_write_tile</span></code> function only requires the index of the tile to write, not the actual memory address,
+Keep in mind that <code class="docutils literal notranslate"><span class="pre">noc_async_write_page</span></code> function only requires the index of the tile to write, not the actual memory address,
 so your code only needs to generate indices in the right order.</p></li>
 <li><p>Update the compute kernel to perform matrix multiplication rather than elementwise addition.
 To initialize the Tensix Engine for matrix multiplication, you will need to use the <code class="docutils literal notranslate"><span class="pre">mm_init</span></code> function provided in <code class="docutils literal notranslate"><span class="pre">tt_metal/hw/inc/api/compute/matmul.h</span></code>.

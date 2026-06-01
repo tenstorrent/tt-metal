@@ -346,7 +346,7 @@ changes to:</p>
 <span class="w">        </span><span class="n">cb_wait_front</span><span class="p">(</span><span class="n">cb_id_out</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 <span class="w">        </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">l1_read_addr</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_read_ptr</span><span class="p">(</span><span class="n">cb_id_out</span><span class="p">);</span>
 <span class="w">        </span><span class="c1">// Write to the correct offset based on start_id</span>
-<span class="w">        </span><span class="n">noc_async_write_tile</span><span class="p">(</span><span class="n">i</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">start_id</span><span class="p">,</span><span class="w"> </span><span class="n">c</span><span class="p">,</span><span class="w"> </span><span class="n">l1_read_addr</span><span class="p">);</span>
+<span class="w">        </span><span class="n">noc_async_write_page</span><span class="p">(</span><span class="n">i</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">start_id</span><span class="p">,</span><span class="w"> </span><span class="n">c</span><span class="p">,</span><span class="w"> </span><span class="n">l1_read_addr</span><span class="p">);</span>
 <span class="w">        </span><span class="n">noc_async_write_barrier</span><span class="p">();</span>
 <span class="w">        </span><span class="n">cb_pop_front</span><span class="p">(</span><span class="n">cb_id_out</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 <span class="w">    </span><span class="p">}</span>
@@ -429,7 +429,7 @@ changes to:</p>
 <span class="w">            </span><span class="p">{</span>
 <span class="w">                </span><span class="n">cb_reserve_back</span><span class="p">(</span><span class="n">cb_id_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 <span class="w">                </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">l1_write_addr_in0</span><span class="w">     </span><span class="o">=</span><span class="w"> </span><span class="n">get_write_ptr</span><span class="p">(</span><span class="n">cb_id_in0</span><span class="p">);</span>
-<span class="w">                </span><span class="n">noc_async_read_tile</span><span class="p">(</span><span class="n">tile_A</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">l1_write_addr_in0</span><span class="p">);</span>
+<span class="w">                </span><span class="n">noc_async_read_page</span><span class="p">(</span><span class="n">tile_A</span><span class="p">,</span><span class="w"> </span><span class="n">a</span><span class="p">,</span><span class="w"> </span><span class="n">l1_write_addr_in0</span><span class="p">);</span>
 <span class="w">                </span><span class="n">noc_async_read_barrier</span><span class="p">();</span>
 <span class="w">                </span><span class="n">cb_push_back</span><span class="p">(</span><span class="n">cb_id_in0</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 <span class="w">            </span><span class="p">}</span>
@@ -438,7 +438,7 @@ changes to:</p>
 <span class="w">            </span><span class="p">{</span>
 <span class="w">                </span><span class="n">cb_reserve_back</span><span class="p">(</span><span class="n">cb_id_in1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 <span class="w">                </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">l1_write_addr_in1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_write_ptr</span><span class="p">(</span><span class="n">cb_id_in1</span><span class="p">);</span>
-<span class="w">                </span><span class="n">noc_async_read_tile</span><span class="p">(</span><span class="n">tile_B</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="n">l1_write_addr_in1</span><span class="p">);</span>
+<span class="w">                </span><span class="n">noc_async_read_page</span><span class="p">(</span><span class="n">tile_B</span><span class="p">,</span><span class="w"> </span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="n">l1_write_addr_in1</span><span class="p">);</span>
 <span class="w">                </span><span class="n">noc_async_read_barrier</span><span class="p">();</span>
 <span class="w">                </span><span class="n">cb_push_back</span><span class="p">(</span><span class="n">cb_id_in1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">);</span>
 <span class="w">            </span><span class="p">}</span>
