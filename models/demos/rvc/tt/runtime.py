@@ -418,6 +418,12 @@ class TTNNGeneratorNSF:
         # + two host roundtrips on every chunk.
         self._cond_cache_g = None
         self._cond_cache_cl = None
+        # Lazy cache of prepared ResBlock conv1d weight+bias keyed by shape.
+        # ttnn.conv1d re-tilizes weight on every call by default;
+        # prepare_conv_weights does that once and returns a device-resident
+        # tensor — eliminates the per-call write that dominates Generator
+        # inner-loop overhead (288 conv1d calls per inference).
+        self._prep_cache = {}
 
     @classmethod
     def from_checkpoint(cls, state_dict, device):
@@ -561,6 +567,30 @@ class TTNNGeneratorNSF:
             x_cf = xt + x_cf
         return x_cf
 
+    def _ensure_prepared_conv(self, w_host, b_host, in_ch, out_ch, k, seq_len, dilation):
+        """Lazy prepared-weight cache for Generator conv1d shapes."""
+        key = (id(w_host), in_ch, out_ch, k, seq_len, dilation)
+        cached = self._prep_cache.get(key)
+        if cached is not None:
+            return cached
+        padding = dilation * (k - 1) // 2
+        cfg = ttnn.Conv2dConfig(weights_dtype=DEFAULT_DTYPE)
+        common = dict(
+            input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            input_layout=ttnn.ROW_MAJOR_LAYOUT,
+            in_channels=in_ch, out_channels=out_ch, batch_size=1,
+            input_height=1, input_width=seq_len,
+            kernel_size=(1, k), stride=(1, 1),
+            padding=(0, padding), dilation=(1, dilation), groups=1,
+            device=self._device, input_dtype=DEFAULT_DTYPE,
+            conv_config=cfg,
+        )
+        w_p = ttnn.prepare_conv_weights(weight_tensor=w_host, weights_format="OIHW",
+                                          has_bias=True, **common)
+        b_p = ttnn.prepare_conv_bias(bias_tensor=b_host, **common)
+        self._prep_cache[key] = (w_p, b_p, cfg)
+        return self._prep_cache[key]
+
     def _conv1d_device(self, x_in, w_tt, b_tt, in_ch, out_ch, k, seq_len,
                        dilation=1):
         """Conv1d that returns a device tensor in interleaved DRAM.
@@ -573,15 +603,21 @@ class TTNNGeneratorNSF:
         relayout. Output is forced to interleaved DRAM because sharded
         L1 outputs accumulate bank pressure across chained calls and
         eventually break subsequent conv halo allocations.
+
+        Weight + bias are passed through prepare_conv_weights/bias on first
+        call per shape (cached) so the per-call internal tilization write
+        is paid once at model warmup, not on every conv1d dispatch.
         """
         padding = dilation * (k - 1) // 2
+        w_p, b_p, cfg = self._ensure_prepared_conv(w_tt, b_tt, in_ch, out_ch, k, seq_len, dilation)
         result = ttnn.conv1d(
-            input_tensor=x_in, weight_tensor=w_tt, device=self._device,
+            input_tensor=x_in, weight_tensor=w_p, device=self._device,
             in_channels=in_ch, out_channels=out_ch, batch_size=1,
             input_length=seq_len, kernel_size=k, stride=1,
             padding=padding, dilation=dilation, groups=1,
             dtype=DEFAULT_DTYPE, return_output_dim=True,
-            bias_tensor=b_tt,
+            bias_tensor=b_p,
+            conv_config=cfg,
         )
         out_tt = result[0]
         try:
