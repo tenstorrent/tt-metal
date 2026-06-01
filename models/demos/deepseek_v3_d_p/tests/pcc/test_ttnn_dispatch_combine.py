@@ -314,11 +314,11 @@ def test_ttnn_dispatch_combine(
         dtype=ttnn.bfloat16,
     )
     tt_indices = ttnn.from_torch(
-        indices,
+        indices.to(torch.int16),
         mesh_mapper=mesh_mapper_dispatch_inputs,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
-        dtype=ttnn.int32,
+        dtype=ttnn.uint16,
     )
 
     # Initialize TTNN dispatch module
@@ -668,11 +668,11 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overfl
         dtype=ttnn.bfloat16,
     )
     tt_indices = ttnn.from_torch(
-        indices,
+        indices.to(torch.int16),
         mesh_mapper=mesh_mapper_dispatch_inputs,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
-        dtype=ttnn.int32,
+        dtype=ttnn.uint16,
     )
 
     expert_dispatch_table = ExpertMapping.create_dispatch_table(
