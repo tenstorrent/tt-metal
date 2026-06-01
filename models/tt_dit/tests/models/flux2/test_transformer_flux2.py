@@ -330,8 +330,8 @@ def test_transformer_profile(
 
     tt_model = Flux2Transformer(
         in_channels=in_channels,
-        num_layers=1 if xformer_idx > 0 else 0,
-        num_single_layers=1 if xformer_idx != 1 else 0,
+        num_layers=torch_model.config.num_layers if xformer_idx == 4 else 1 if xformer_idx > 0 else 0,
+        num_single_layers=torch_model.config.num_single_layers if xformer_idx == 4 else 1 if xformer_idx != 1 else 0,
         attention_head_dim=head_dim,
         num_attention_heads=num_heads,
         joint_attention_dim=joint_attention_dim,
