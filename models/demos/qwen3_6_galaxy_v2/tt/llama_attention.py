@@ -1928,12 +1928,54 @@ class TtLlamaAttention(LightweightModule):
             # fits in a single tile read at decode-time so the grid bump
             # adds no compute throughput; the multi-core reduction order
             # also subtly changes the bf8-quantized softmax outputs.
-            paged_sdpa_prog_cfg = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(1, 1),
-                exp_approx_mode=False,
-                q_chunk_size=0,
-                k_chunk_size=0,
-            )
+            # QWEN36_SDPA_MULTICORE (default "0"): the long-context payoff — run the
+            # paged SDPA decode multi-core (8,6)=48 cores + sub_core_grids instead of
+            # single-core (1,1). The (1,1) kernel is KV-bandwidth-bound: it reads the
+            # ENTIRE KV cache for all 16 full-attn layers on one core per step, which
+            # dominates long-context decode wall-clock.
+            #
+            # A correctness probe (tests/test_sdpa_decode_grid.py, the
+            # ``multi_8x6_subcore_shardout`` variant) proved this kernel is coherent
+            # at qwen3.6 dims (head_dim=256, n_q_pc=3, GQA 3:1, batch=1): PCC 0.9995
+            # vs single-core and 4-8× faster (gap widens with ctx). The KEY is that
+            # sub_core_grids ASSERTS a *sharded* output (is_q_sharded||is_output_
+            # sharded) — a plain (8,6)/DRAM-output integration (V2-11) instead
+            # silently produced the right shape but garbled the downstream
+            # _qwen36_heads_to_flat consumer (alpha 118→34). So we MUST give the op a
+            # height-sharded output, then convert it back to DRAM so the existing
+            # permute → heads_to_flat → gate → WO path is byte-for-byte identical to
+            # the single-core path. We reuse the model_config's PAGED_SDPA_DECODE_
+            # PROGCFG (already (8,6)+sub_core_grids(48)) and SCORES_BATCHED_MM_OUTPUT_
+            # MEMCFG (height-sharded [ceil(n_local_heads/32)*32, hd] on B cores) —
+            # the exact (progcfg, sharded-memcfg) pair the probe validated.
+            #
+            # EMPIRICAL VERDICT (this integration, gated runs): the sharded-output
+            # path is COHERENT and faster up to 32k context — demo ISL-32k decode
+            # 13.86 → 19.46 tok/s/user (1.4×), text stays coherent; ISL-128 stays
+            # coherent at 20.5 tok/s. But at ISL-128k it GARBLES despite a 2.2×
+            # decode win (8.26 → 18.08 tok/s/user). Root cause is NOT a layout bug
+            # (the probe shows the kernel at ctx=131072 is PCC 0.99974 vs torch —
+            # MORE accurate than single-core's 0.99502 — and 8× faster): it is
+            # fidelity COMPOUNDING. The multi-core cross-core softmax reduction
+            # differs from single-core by PCC ~0.995, and that per-layer delta
+            # accumulates across the 16 full-attention layers over a 131072-deep
+            # softmax until it breaks coherence (same mechanism documented for the
+            # 64L logits-PCC 0.9996→0.16 collapse). SDPA already runs HiFi4 +
+            # fp32_dest_acc_en, so there is no fidelity lever left. Therefore the
+            # default stays "0"; flip to "1" ONLY for context ≤ 32k.
+            if os.environ.get("QWEN36_SDPA_MULTICORE", "0") == "1":
+                _sdpa_progcfg = self.model_config["PAGED_SDPA_DECODE_PROGCFG"]
+                _sdpa_out_memcfg = self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"](
+                    self.batch_size_per_device_group
+                )
+            else:
+                _sdpa_progcfg = ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=(1, 1),
+                    exp_approx_mode=False,
+                    q_chunk_size=0,
+                    k_chunk_size=0,
+                )
+                _sdpa_out_memcfg = ttnn.DRAM_MEMORY_CONFIG
             attn_out_1bnd = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q_1bnd,
                 keys_cache,
@@ -1941,11 +1983,19 @@ class TtLlamaAttention(LightweightModule):
                 page_table,
                 cur_pos_tensor=current_pos,
                 scale=self.scale,
-                program_config=paged_sdpa_prog_cfg,
+                program_config=_sdpa_progcfg,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=_sdpa_out_memcfg,
             )
             q_1bnd.deallocate(True)
+            # Multi-core path returns a height-sharded [pad(n_q_pc), hd] L1 tensor;
+            # convert back to DRAM-interleaved so the downstream permute/heads_to_flat
+            # sees the identical layout as the single-core (1,1) DRAM output. The
+            # probe confirmed the sharded→DRAM readout matches torch at PCC 0.9995.
+            if attn_out_1bnd.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+                _attn_dram = ttnn.to_memory_config(attn_out_1bnd, ttnn.DRAM_MEMORY_CONFIG)
+                attn_out_1bnd.deallocate(True)
+                attn_out_1bnd = _attn_dram
             attn_out = ttnn.permute(attn_out_1bnd, (1, 2, 0, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
             attn_out_1bnd.deallocate(True)
         else:
