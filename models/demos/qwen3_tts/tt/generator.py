@@ -111,11 +111,26 @@ class TTSGenerator:
             weight_cache_path=weight_cache_path,
         )
 
-        # Build Code Predictor (CPU, float32 for numerical accuracy)
-        from models.demos.qwen3_tts.tt.code_predictor_cpu import CPUCodePredictor
+        # Build Code Predictor (TT device, KV cache)
+        from models.demos.qwen3_tts.tt.code_predictor import CodePredictorTransformer
+        from models.demos.qwen3_tts.tt.model_config import CodePredictorModelArgs
 
-        logger.info("Building Code Predictor (CPU)...")
-        code_predictor = CPUCodePredictor.from_pretrained(model_path)
+        logger.info("Building Code Predictor (TT)...")
+        cp_args = CodePredictorModelArgs(
+            mesh_device=mesh_device,
+            max_batch_size=max_batch_size,
+            max_seq_len=128,
+            use_hf_rope=True,
+        )
+        cp_state_dict = cp_args.load_state_dict()
+        cp_weight_cache = cp_args.weight_cache_path(dtype)
+        code_predictor = CodePredictorTransformer(
+            args=cp_args,
+            dtype=dtype,
+            mesh_device=mesh_device,
+            state_dict=cp_state_dict,
+            weight_cache_path=cp_weight_cache,
+        )
 
         # Build Speaker Encoder (runs on host CPU, small model)
         from models.demos.qwen3_tts.tt.speaker_encoder import SpeakerEncoder
