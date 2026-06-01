@@ -17,7 +17,7 @@ import torch
 import torch.nn as nn
 
 import ttnn
-from models.demos.blackhole.qwen3_5_9b.tt.qwen35_model import Qwen35Model
+from models.demos.blackhole.qwen3_5_9b.tt.model import Qwen35Model
 
 _PREFILL_WARMUP_BUCKET = 4096
 _PREFILL_WARMUP_CHUNK = 2048

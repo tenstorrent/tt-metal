@@ -12,7 +12,7 @@ import torch
 
 import ttnn  # noqa
 from models.common.utility_functions import run_for_blackhole
-from models.demos.blackhole.qwen3_5_9b.tt.qwen35_model import Qwen35Model
+from models.demos.blackhole.qwen3_5_9b.tt.model import Qwen35Model
 
 pytestmark = run_for_blackhole()
 

@@ -58,7 +58,7 @@ def test_chunked_replay_matches_reference(device, actual_len):
     os.environ["QWEN9B_GDN_CHUNK_SEQ"] = "1"
     device.enable_program_cache()
 
-    from models.demos.blackhole.qwen3_5_9b.tt.qwen35_model import Qwen35Model
+    from models.demos.blackhole.qwen3_5_9b.tt.model import Qwen35Model
 
     # 4 layers (pattern G,G,G,F) exercises both chunk-seq GDN and paged attention.
     model = Qwen35Model.from_pretrained(

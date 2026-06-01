@@ -26,7 +26,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.blackhole.qwen3_5_9b.tt.qwen35_model import Qwen35Model
+from models.demos.blackhole.qwen3_5_9b.tt.model import Qwen35Model
 
 # HF_MODEL (hub name or local path) is the single source of truth.
 CHECKPOINT_DIR = os.environ.get("HF_MODEL", "/local/ttuser/atupe/Qwen9b")

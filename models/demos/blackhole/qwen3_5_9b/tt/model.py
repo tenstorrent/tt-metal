@@ -1,4 +1,4 @@
-# models/demos/blackhole/qwen3_5_9b/tt/qwen35_model.py
+# models/demos/blackhole/qwen3_5_9b/tt/model.py
 """Full Qwen3.5-9B text model for Blackhole P150.
 
 Assembly: tok_embeddings → 32 × Qwen35DecoderLayer → RMSNorm → LM Head
@@ -13,8 +13,8 @@ from tqdm import tqdm
 import ttnn
 from models.demos.blackhole.qwen3_5_9b.tt.layer import Qwen35DecoderLayer
 from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
-from models.demos.blackhole.qwen3_5_9b.tt.qwen35_rope import Qwen35RoPESetup
 from models.demos.blackhole.qwen3_5_9b.tt.rms_norm import rms_norm_ttnn
+from models.demos.blackhole.qwen3_5_9b.tt.rope import Qwen35RoPESetup
 
 
 class Qwen35Model:
@@ -27,9 +27,9 @@ class Qwen35Model:
         logits = model.decode(token_id, position)
     """
 
-    def __init__(self, args, state_dict, device, weight_cache_path=None):
+    def __init__(self, mesh_device, args, state_dict, tensor_cache_path=None):
         self.args = args
-        self.device = device
+        self.device = mesh_device
 
         # Embedding
         embed_weight = state_dict["tok_embeddings.weight"]
@@ -37,19 +37,19 @@ class Qwen35Model:
             embed_weight.unsqueeze(0).unsqueeze(0),
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
+            device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=weight_cache_path / "tok_embeddings.weight" if weight_cache_path else None,
+            cache_file_name=tensor_cache_path / "tok_embeddings.weight" if tensor_cache_path else None,
         )
 
         # RoPE setup (for gated attention layers only)
-        self.rope = Qwen35RoPESetup(device, args)
+        self.rope = Qwen35RoPESetup(mesh_device, args)
 
         # Transformer layers
         logger.info(f"Loading {args.n_layers} transformer layers...")
         self.layers = []
         for i in tqdm(range(args.n_layers), desc="Loading layers"):
-            layer = Qwen35DecoderLayer(device, args, state_dict, i, weight_cache_path)
+            layer = Qwen35DecoderLayer(mesh_device, args, state_dict, i, tensor_cache_path)
             self.layers.append(layer)
 
         # Final norm — pre-offset by +1 for zero-centered RMSNorm
@@ -58,9 +58,9 @@ class Qwen35Model:
             norm_weight,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
-            device=device,
+            device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=weight_cache_path / "norm.weight" if weight_cache_path else None,
+            cache_file_name=tensor_cache_path / "norm.weight" if tensor_cache_path else None,
         )
         self.norm_eps = args.norm_eps
 
@@ -70,9 +70,9 @@ class Qwen35Model:
             lm_head_weight,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
-            device=device,
+            device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=weight_cache_path / "output.weight" if weight_cache_path else None,
+            cache_file_name=tensor_cache_path / "output.weight" if tensor_cache_path else None,
         )
 
         self.vocab_size = args.vocab_size
@@ -130,7 +130,7 @@ class Qwen35Model:
         state_dict = args.load_state_dict()
 
         cache_path = args.weight_cache_path()
-        return cls(args, state_dict, device, weight_cache_path=cache_path)
+        return cls(device, args, state_dict, tensor_cache_path=cache_path)
 
     def prefill(self, token_ids):
         B, T = token_ids.shape
