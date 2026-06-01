@@ -6,6 +6,8 @@
 #include "api/debug/device_print.h"
 #include "dev_mem_map.h"
 
+// DeviceTimestampedData/DeviceZoneScopedN are not available on Quasar emulator;
+// use inline rdcycle CSR read instead.
 static inline uint32_t rdcycles() {
     uint32_t c;
     asm volatile("rdcycle %0" : "=r"(c));
@@ -30,6 +32,8 @@ void kernel_main() {
 
         noc_async_write(src_l1_addr, dst_data_noc, transaction_size_bytes);
 
+        // Measures time for the write to retire on the sender side (write ACK received).
+        // t0 is placed after noc_async_write() — the write may already be in-flight.
         uint32_t t0 = rdcycles();
         noc_async_write_barrier();
         uint32_t t1 = rdcycles();

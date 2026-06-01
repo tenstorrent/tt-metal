@@ -35,7 +35,6 @@ bool run_noc_write_latency(const shared_ptr<distributed::MeshDevice>& mesh_devic
         return true;
     }
 
-    CoreCoord phys_src = device->worker_core_from_logical_core(cfg.src_core);
     CoreCoord phys_dst = device->worker_core_from_logical_core(cfg.dst_core);
 
     L1AddressInfo src_l1 = unit_tests::dm::get_l1_address_and_size(mesh_device, cfg.src_core);
@@ -45,6 +44,16 @@ bool run_noc_write_latency(const shared_ptr<distributed::MeshDevice>& mesh_devic
     L1AddressInfo dst_l1 = unit_tests::dm::get_l1_address_and_size(mesh_device, cfg.dst_core);
     uint32_t dst_l1_data_addr = dst_l1.base_address;
     uint32_t dst_l1_flag_addr = dst_l1.base_address + 64;
+
+    if (src_l1.size < cfg.transaction_size_bytes || dst_l1.size < cfg.transaction_size_bytes) {
+        log_error(LogTest, "Insufficient L1 size for the test configuration");
+        return false;
+    }
+
+    TT_FATAL(
+        cfg.transaction_size_bytes <= 64,
+        "transaction_size_bytes {} exceeds 64 bytes; data and flag buffers would overlap",
+        cfg.transaction_size_bytes);
 
     vector<uint32_t> zero{0};
     detail::WriteToDeviceL1(device, cfg.dst_core, dst_l1_flag_addr, zero);
