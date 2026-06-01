@@ -290,6 +290,7 @@ jobs:
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
+      use-artifacts-from-run: 26770732783
 
   # ── Tier 1 ────────────────────────────────────────────────────────
   t1-unit-tests:
