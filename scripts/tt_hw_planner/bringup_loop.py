@@ -1756,6 +1756,22 @@ def _emit_autofill_smoke_test(
     ``target_is_ast_native`` gate still refuses to graduate the
     component until the stub body uses ``ttnn.*`` ops directly.
     """
+    # Auto-upgrade: if an existing test file at this path is a stale
+    # SMOKE test (left from a pre-strip run, or restored by overlay
+    # replay), force-overwrite it with a real PCC test. Without this,
+    # `_emit_pcc_template`'s preserve-existing branch returns the SMOKE
+    # template untouched and the brain still treats the component as
+    # a SMOKE candidate — re-opening the deadlock we're trying to close.
+    safe = _safe_id(component_name)
+    test_path_check = demo_dir / "tests" / "pcc" / f"test_{safe}.py"
+    _force = False
+    if test_path_check.is_file():
+        try:
+            _head = test_path_check.read_text(errors="ignore")[:600]
+            if "Phase-1 SMOKE test" in _head:
+                _force = True
+        except Exception:
+            pass
     test_path, _generated, _already = _emit_pcc_template(
         demo_dir=demo_dir,
         component_name=component_name,
@@ -1763,7 +1779,7 @@ def _emit_autofill_smoke_test(
         hf_reference=hf_reference,
         new_shape=new_shape or {},
         repo_root=repo_root,
-        overwrite=False,
+        overwrite=_force,
         discovered_submodule_path=discovered_submodule_path,
     )
     return test_path
