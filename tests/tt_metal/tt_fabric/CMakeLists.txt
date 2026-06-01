@@ -167,6 +167,11 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric/test_infra
 )
 
+add_executable(
+    test_tt_fabric_mux_bandwidth
+    ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_tt_fabric_mux_bandwidth.cpp
+)
+
 target_link_libraries(
     test_tt_fabric_mux_bandwidth
     PRIVATE
