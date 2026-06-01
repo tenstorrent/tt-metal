@@ -12,6 +12,7 @@
 #include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "sfpu/ckernel_sfpu_trigonometry.h"
+#include "ckernel_sfpu_sinh_cosh.h"
 #include "sfpi.h"
 
 using namespace sfpi;
@@ -451,27 +452,53 @@ inline void calculate_acos() {
     calculate_asin_acos_impl<APPROXIMATION_MODE, is_fp32_dest_acc_en, true, ITERATIONS>();
 }
 
-// cosh = (exp(x) + exp(-x)) / 2
+// Optimised cosh: polynomial for |x| < 0.5, expm1 identity for |x| >= 0.5.
+// See ckernel_sfpu_sinh_cosh.h for details.
+// Must call init_hyperbolic_trig() before entering the loop.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosh() {
-    // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat result =
-            (_sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(v) + _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(-v)) * 0.5f;
+        sfpi::vFloat abs_v = sfpi::abs(v);
+        sfpi::vFloat result;
+
+        v_if(abs_v < 0.5f) {
+            result = _sfpu_cosh_poly_<is_fp32_dest_acc_en>(v);
+        }
+        v_else {
+            result = _sfpu_cosh_expm1_identity_<is_fp32_dest_acc_en>(v);
+        }
+        v_endif;
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+        }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }
 
-// sinh = (exp(x) - exp(-x)) / 2
+// Optimised sinh: polynomial for |x| < 0.5, expm1 identity for |x| >= 0.5.
+// See ckernel_sfpu_sinh_cosh.h for details.
+// Must call init_hyperbolic_trig() before entering the loop.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_sinh() {
-    // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::vFloat result =
-            (_sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(v) - _sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(-v)) * 0.5f;
+        sfpi::vFloat abs_v = sfpi::abs(v);
+        sfpi::vFloat result;
+
+        v_if(abs_v < 0.5f) {
+            result = _sfpu_sinh_poly_<is_fp32_dest_acc_en>(v);
+        }
+        v_else {
+            result = _sfpu_sinh_expm1_identity_<is_fp32_dest_acc_en>(v);
+        }
+        v_endif;
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+        }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
@@ -504,9 +531,11 @@ void tangent_init() {
     sfpi::vConstFloatPrgm2 = FRAC_2_PI;
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void init_hyperbolic_trig() {
-    _init_exponential_<APPROXIMATION_MODE, p_sfpu::kCONST_1_FP16B>();
+    // APPROXIMATION_MODE is unused — retained for API compatibility with
+    // SFPU_TWO_TEMPLATE_PARAM_INIT which always passes APPROX as the first param.
+    sinh_init<is_fp32_dest_acc_en>();
 }
 
 template <bool APPROXIMATION_MODE>
