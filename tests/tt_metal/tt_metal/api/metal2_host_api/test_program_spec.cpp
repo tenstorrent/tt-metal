@@ -375,7 +375,9 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersInSameWorkUnitFails) {
     spec.name = "test_program";
 
     auto producer = MakeMinimalDMKernel("producer");
-    auto consumer1 = MakeMinimalComputeKernel("consumer1");
+    // Both consumers DM (same kind) so the per-role kind-uniformity check passes and the
+    // WU-disjointness check is what fires.
+    auto consumer1 = MakeMinimalDMKernel("consumer1");
     auto consumer2 = MakeMinimalDMKernel("consumer2");
 
     auto dfb = MakeMinimalDFB("dfb");
@@ -544,6 +546,40 @@ TEST_F(ProgramSpecTestQuasar, DFBMultiBindingNumThreadsMismatchFails) {
             ::testing::HasSubstr("DFB 'dfb' has multiple CONSUMER KernelSpecs with mismatched num_threads")));
 }
 
+TEST_F(ProgramSpecTestQuasar, DFBMultiBindingMixingComputeAndDMOnSameRoleFails) {
+    NodeCoord node0{0, 0};
+    NodeCoord node1{1, 0};
+
+    ProgramSpec spec;
+    spec.program_id = "test_program";
+
+    // Producer side mixes a DM and a compute kernel on disjoint zones. Each individually
+    // would form a valid binding, but the DFB's hardware config carries a single producer
+    // processor mask per role; the two kinds occupy disjoint mask bit ranges and cannot
+    // share a mask. The validator must reject upfront.
+    auto dm_producer = MakeMinimalDMKernel("dm_producer");
+    auto compute_producer = MakeMinimalComputeKernel("compute_producer");
+    auto consumer = MakeMinimalDMKernel("consumer");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    BindDFBToKernel(dm_producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(compute_producer, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    spec.kernels = {dm_producer, compute_producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_g1", node0, {"dm_producer", "consumer"}),
+        MakeMinimalWorkUnit("wu_g2", node1, {"compute_producer", "consumer"}),
+    };
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("mixing compute and data-movement kinds")));
+}
+
 TEST_F(ProgramSpecTestQuasar, DFBMultiBindingSelfLoopWithMatchingSidesSucceeds) {
     NodeCoord node0{0, 0};
     NodeCoord node1{1, 0};
@@ -588,9 +624,12 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopWithExtraProducerSideKernelFails) {
     // an unrelated producer-only kernel is bound, while extra_consumer covers the consume side.
     // Producer set = {self_loop_1, extra_producer}; consumer set = {self_loop_1, extra_consumer}.
     // The sets are not equal — the self-loop multi-binding rule rejects this mix.
-    auto self_loop_1 = MakeMinimalComputeKernel("self_loop_1");
+    //
+    // All three kernels are DM (an unusual self-loop pattern but mechanically valid) so the
+    // per-role kind-uniformity check passes and the self-loop refinement check is reached.
+    auto self_loop_1 = MakeMinimalDMKernel("self_loop_1");
     auto extra_producer = MakeMinimalDMKernel("extra_producer");
-    auto extra_consumer = MakeMinimalComputeKernel("extra_consumer");
+    auto extra_consumer = MakeMinimalDMKernel("extra_consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;

@@ -996,13 +996,18 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
     for (const auto& dfb : spec.dataflow_buffers) {
         const auto& endpoints = collected.dfb_endpoints.at(dfb.unique_id);
 
-        // (3) and (4): per-role uniformity of binding-site parameters.
+        // (3) and (4): per-role uniformity of binding-site parameters, plus kernel kind.
+        // Kind (compute vs DM) must agree because the DFB's hardware config carries a single
+        // processor mask per role, and compute / DM masks live in disjoint bit ranges (bits
+        // 0-7 vs 8-15 on Gen2; orthogonal RISC encodings on Gen1) — mismatched kinds cannot
+        // share a mask.
         auto check_role_uniformity = [&](const auto& records, std::string_view role) {
             if (records.size() < 2) {
                 return;
             }
             const auto first_pattern = records[0].binding->access_pattern;
             const auto first_threads = records[0].kernel->num_threads;
+            const bool first_is_compute = records[0].kernel->is_compute_kernel();
             const auto& first_kernel = records[0].kernel->unique_id;
             for (size_t i = 1; i < records.size(); ++i) {
                 TT_FATAL(
@@ -1022,6 +1027,18 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     first_threads,
                     records[i].kernel->unique_id,
                     records[i].kernel->num_threads);
+                TT_FATAL(
+                    records[i].kernel->is_compute_kernel() == first_is_compute,
+                    "DFB '{}' has multiple {} KernelSpecs mixing compute and data-movement kinds "
+                    "('{}' is a {} kernel; '{}' is a {} kernel). All KernelSpecs bound to the same "
+                    "DFB role must be of the same kind — the DFB's hardware config carries a single "
+                    "processor mask per role.",
+                    dfb.unique_id,
+                    role,
+                    first_kernel,
+                    first_is_compute ? "compute" : "data-movement",
+                    records[i].kernel->unique_id,
+                    first_is_compute ? "data-movement" : "compute");
             }
         };
         check_role_uniformity(endpoints.producers, "PRODUCER");
@@ -2117,11 +2134,11 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     const DataflowBufferSpec* dfb_spec,
     const CollectedSpecData::DFBEndpointInfo& dfb_endpoint_info,
     const KernelRiscMaskMap& kernel_to_risc_mask) {
-    // With multi-binding, all producer KernelSpecs share the same access_pattern, num_threads,
-    // AND risc_mask: the first two are enforced in ValidateProgramSpec; the third is checked
-    // in MakeProgramFromSpec right after the risc-mask solver runs (see the
-    // "check_uniform_mask" loop). So any representative producer/consumer gives the correct
-    // DFB config — we take the first.
+    // With multi-binding, all same-role KernelSpecs share kind (DM/compute), access_pattern,
+    // num_threads, and risc_mask. The first three are enforced in ValidateProgramSpec; the
+    // fourth is solver-guaranteed on Gen2 (the coupling-group equivalence-class constraint)
+    // and user-validated on Gen1 (see Step 2a-bis in MakeProgramFromSpec). So any
+    // representative producer/consumer gives the correct DFB config — we take the first.
     const KernelSpec* producer = dfb_endpoint_info.producers.front().kernel;
     const KernelSpec* consumer = dfb_endpoint_info.consumers.front().kernel;
     const DFBBinding* producer_binding = dfb_endpoint_info.producers.front().binding;
