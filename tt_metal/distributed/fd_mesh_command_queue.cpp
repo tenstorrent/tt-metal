@@ -15,8 +15,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
-#include <cstdlib>
-#include <cstring>
 #include <functional>
 #include <optional>
 #include <type_traits>
@@ -65,18 +63,6 @@ struct ProgramCommandSequence;
 namespace tt::tt_metal::distributed {
 
 namespace {
-
-bool simulator_direct_tensor_writes_enabled() {
-    static const bool enabled = [] {
-        const char* env = std::getenv("TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES");
-        if (env == nullptr) {
-            return false;
-        }
-        return std::strcmp(env, "0") != 0 && std::strcmp(env, "false") != 0 && std::strcmp(env, "FALSE") != 0 &&
-               std::strcmp(env, "off") != 0 && std::strcmp(env, "OFF") != 0;
-    }();
-    return enabled;
-}
 
 // Don't use std::forward since we are in a loop.
 // NOLINTBEGIN(cppcoreguidelines-missing-std-forward)
@@ -615,7 +601,10 @@ bool FDMeshCommandQueue::write_shard_to_device(
     // Only takes effect while the CQ is idle; once any FD work has been enqueued on this CQ we
     // fall back to the FD path so that ordering against in-flight programs is preserved.
     if (!in_use_ && this->get_target_device_type() == tt::TargetDevice::Simulator &&
-        simulator_direct_tensor_writes_enabled() && src != nullptr && region_value.offset == 0) {
+        MetalContext::instance(mesh_device_->impl().get_context_id())
+            .rtoptions()
+            .get_simulator_direct_tensor_writes() &&
+        src != nullptr && region_value.offset == 0) {
         auto payload =
             tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src), static_cast<size_t>(region_value.size));
         if (logical_core_filter != nullptr) {
