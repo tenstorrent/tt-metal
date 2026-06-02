@@ -445,6 +445,11 @@ class TTSeamlessM4Tv2Model:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        # Width-sharded lm_head metadata (see model_preprocessing): the traced decode step computes a
+        # ``local_vocab_size``-wide logits slice per device; the host combine maps (device, chunk, idx)
+        # back to a global token id.
+        self._lm_local_vocab = int(getattr(parameters.lm_head, "local_vocab_size", 0) or 0)
+        self._lm_num_devices = max(1, self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1)
         self._kv_decode_rt: Optional[TextDecoderKvDecodeRuntime] = None
         self._decode_trace_kernels_warmed = False
         self._t2u_attn_mask_cache: dict[tuple[int, int], ttnn.Tensor] = {}
@@ -549,6 +554,19 @@ class TTSeamlessM4Tv2Model:
             dec_out,
             self.parameters.lm_head.weight,
             bias=None,
+            core_grid=core_grid(self.device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self._lm_head_compute,
+        )
+
+    def _lm_head_sharded(self, dec_out: ttnn.Tensor) -> ttnn.Tensor:
+        """Width-sharded ``lm_head`` for the traced decode step → ``[1, 1, V/tp]`` *per device* (each
+        device holds a different vocab slice). The ``-1e9`` bias masks the padding columns. Feeds the
+        per-shard chunked argmax; the host combine (``_greedy_next_token_id``) reduces across shards."""
+        return ttnn.linear(
+            dec_out,
+            self.parameters.lm_head.weight_sharded,
+            bias=self.parameters.lm_head.bias_sharded,
             core_grid=core_grid(self.device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self._lm_head_compute,
@@ -978,7 +996,7 @@ class TTSeamlessM4Tv2Model:
         *,
         cache_seq_len: int,
     ) -> ttnn.Tensor:
-        """One KV decode step + ``lm_head`` → ``[B, 1, V]`` logits."""
+        """One KV decode step + width-sharded ``lm_head`` → ``[1, 1, V/tp]`` logits *per device*."""
         dec_out = self.text_decoder.forward(
             rt.token_tt,
             rt.pos_tt,
@@ -992,7 +1010,7 @@ class TTSeamlessM4Tv2Model:
             cache_seq_len=cache_seq_len,
             trace_no_profiler=True,
         )
-        logits = self._lm_head(dec_out)
+        logits = self._lm_head_sharded(dec_out)
         ttnn.deallocate(dec_out)
         return logits
 
@@ -1463,12 +1481,28 @@ class TTSeamlessM4Tv2Model:
         self,
         logits: ttnn.Tensor,
         dec_len: int,
+        *,
+        sharded: bool = False,
     ) -> "torch.Tensor":
-        """Read one logits row ``[B, V]`` on host (no device allocations; safe under active trace)."""
+        """Read one logits row ``[B, V]`` on host (no device allocations; safe under active trace).
+
+        ``sharded`` (the width-sharded ``lm_head`` decode path): gather the per-device vocab slices via
+        ``ConcatMeshToTensor`` into the full ``[B, dec_seq, V_padded]`` row (decode is B=dec_seq=1)."""
         import torch as _torch
 
-        batch = int(logits.shape[0])
         idx = dec_len - 1
+        if sharded:
+            host = (
+                ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=-1))
+                .to(_torch.float32)
+                .contiguous()
+            )
+            batch = int(host.shape[0])
+            if host.dim() == 3:
+                return host[:, idx, :].reshape(batch, -1)
+            return host.reshape(batch, -1)
+
+        batch = int(logits.shape[0])
         dec_seq = int(logits.shape[1])
         vocab_w = int(logits.shape[2])
         host = to_torch_replicated_first_shard(logits).to(_torch.float32).contiguous()
@@ -1492,9 +1526,11 @@ class TTSeamlessM4Tv2Model:
         """Greedy next-token id for traced KV decode.
 
         Fast path: when ``tok_tt`` is given (argmax fused into the decode trace, see
-        ``_decode_argmax_token``), read back only the per-chunk ``(local_idx, chunk_max)`` pair (64
-        scalars) and combine on host: winning chunk ``c = argmax(chunk_max)`` → token
-        ``c * chunk_width + local_idx[c]``. Far cheaper than the full 256k-vocab logits row (~4.4 ms).
+        ``_decode_argmax_token``), read back only the per-(device, chunk) ``(local_idx, chunk_max)`` pair
+        and combine on host. The width-sharded ``lm_head`` gives each device a different ``V/tp`` vocab
+        slice, so each device emits 32 per-chunk maxes; the global winner is ``argmax`` over all
+        ``tp * 32`` chunk maxes → device ``d``, chunk ``c`` → token ``d*V_loc + c*chunk_width +
+        local_idx[d, c]``. A few hundred scalars vs the full 256k-vocab logits row (~4.4 ms).
 
         Speculative rep-penalty: the device argmax ignores the penalty. If the (unpenalized) winner is a
         previously-emitted token, the penalty could demote it → recompute exactly on host from
@@ -1505,15 +1541,21 @@ class TTSeamlessM4Tv2Model:
 
         if tok_tt is not None:
             local_idx_tt, chunk_max_tt = tok_tt
-            local_idx = to_torch_replicated_first_shard(local_idx_tt).reshape(-1).to(_torch.int64)
-            chunk_max = to_torch_replicated_first_shard(chunk_max_tt).reshape(-1).to(_torch.float32)
-            chunk_w = ((int(logits.shape[-1]) + self._ARGMAX_CHUNKS - 1) // self._ARGMAX_CHUNKS + 31) // 32 * 32
-            c = int(chunk_max.argmax())
-            token = c * chunk_w + int(local_idx[c])
+            nch = self._ARGMAX_CHUNKS
+            nd = self._lm_num_devices
+            composer = ttnn.ConcatMeshToTensor(self.device, dim=0)
+            local_idx = ttnn.to_torch(local_idx_tt, mesh_composer=composer).reshape(nd, nch).to(_torch.int64)
+            chunk_max = ttnn.to_torch(chunk_max_tt, mesh_composer=composer).reshape(nd, nch).to(_torch.float32)
+            v_loc = int(logits.shape[-1])  # per-device vocab slice width
+            chunk_w = ((v_loc + nch - 1) // nch + 31) // 32 * 32
+            flat = int(chunk_max.reshape(-1).argmax())
+            d, c = flat // nch, flat % nch
+            token = d * v_loc + c * chunk_w + int(local_idx[d, c])
             if not (repetition_penalty > 1.0 and prev_token_ids and token in set(prev_token_ids)):
                 return token
-
-        host = self._logits_row_to_host(logits, dec_len)
+            host = self._logits_row_to_host(logits, dec_len, sharded=True)
+        else:
+            host = self._logits_row_to_host(logits, dec_len)
         if repetition_penalty > 1.0 and prev_token_ids:
             ids = _torch.as_tensor(list(prev_token_ids), dtype=_torch.int64)
             vocab_w = int(host.shape[-1])
