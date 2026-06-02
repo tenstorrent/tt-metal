@@ -7,18 +7,14 @@
 #include <cstdint>
 #include <type_traits>
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
 #include "ckernel_ops.h"
 #include "sfpi.h"
-
-using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, InstrModLoadStore INSTRUCTION_MODE, bool SIGN_MAGNITUDE_FORMAT>
-inline void _calculate_binary_left_shift_(
+inline void calculate_binary_left_shift(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
         is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
@@ -48,7 +44,7 @@ inline void _calculate_binary_left_shift_(
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, InstrModLoadStore INSTRUCTION_MODE, bool SIGN_MAGNITUDE_FORMAT>
-inline void _calculate_binary_right_shift_(
+inline void calculate_binary_right_shift(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
         is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
@@ -87,7 +83,7 @@ inline void _calculate_binary_right_shift_(
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, InstrModLoadStore INSTRUCTION_MODE, bool SIGN_MAGNITUDE_FORMAT>
-inline void _calculate_logical_right_shift_(
+inline void calculate_logical_right_shift(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {
     static_assert(
         is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
@@ -115,26 +111,6 @@ inline void _calculate_logical_right_shift_(
         TT_SFPSTORE(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_3, dst_index_out * dst_tile_size);
         sfpi::dst_reg++;
     }
-}
-
-template <
-    bool APPROXIMATION_MODE,
-    int ITERATIONS = 8,
-    InstrModLoadStore INSTRUCTION_MODE,
-    bool SIGN_MAGNITUDE_FORMAT = false>
-inline void calculate_binary_left_shift(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    _calculate_binary_left_shift_<APPROXIMATION_MODE, ITERATIONS, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>(
-        dst_index_in0, dst_index_in1, dst_index_out);
-}
-
-template <
-    bool APPROXIMATION_MODE,
-    int ITERATIONS = 8,
-    InstrModLoadStore INSTRUCTION_MODE,
-    bool SIGN_MAGNITUDE_FORMAT = false>
-inline void calculate_binary_right_shift(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    _calculate_binary_right_shift_<APPROXIMATION_MODE, ITERATIONS, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>(
-        dst_index_in0, dst_index_in1, dst_index_out);
 }
 
 }  // namespace sfpu

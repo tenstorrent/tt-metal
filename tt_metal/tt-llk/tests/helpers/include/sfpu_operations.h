@@ -74,11 +74,11 @@ void call_unary_sfpu_operation_init()
 {
     if constexpr (OPERATION == SfpuType::acosh || OPERATION == SfpuType::asinh)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(_init_inverse_hyperbolic_<APPROX_MODE>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(init_inverse_hyperbolic<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::atanh)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(_init_atanh_<APPROX_MODE>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(init_atanh<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::exp2)
     {
@@ -168,15 +168,15 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::acosh)
     {
-        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_acosh_, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_acosh, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::asinh)
     {
-        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_asinh_, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_asinh, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::atanh)
     {
-        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_atanh_, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_atanh, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::celu)
     {
@@ -192,7 +192,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::cosine)
     {
-        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_cosine_, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, ITERATIONS);
+        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_cosine, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::elu)
     {
@@ -324,7 +324,12 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
         SFPU_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_rsqrt, (APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, FAST_MODE), dst_index, vector_mode, ITERATIONS);
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_rsqrt,
+            (APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, FAST_MODE, false /* legacy_compat */),
+            dst_index,
+            vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::silu)
     {
@@ -332,11 +337,11 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::sine)
     {
-        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_sine_, (APPROX_MODE, ITERATIONS), dst_index, vector_mode, ITERATIONS);
+        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sine, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::sqrt)
     {
-        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sqrt, (APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, FAST_MODE), dst_index, vector_mode, ITERATIONS);
+        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sqrt, (APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, FAST_MODE), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
@@ -536,7 +541,7 @@ void call_binary_sfpu_operation(
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            _calculate_binary_right_shift_,
+            calculate_binary_right_shift,
             (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
             dst_index_in0,
             dst_index_in1,
@@ -548,7 +553,7 @@ void call_binary_sfpu_operation(
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            _calculate_binary_left_shift_,
+            calculate_binary_left_shift,
             (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
             dst_index_in0,
             dst_index_in1,
@@ -560,7 +565,7 @@ void call_binary_sfpu_operation(
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            _calculate_logical_right_shift_,
+            calculate_logical_right_shift,
             (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
             dst_index_in0,
             dst_index_in1,

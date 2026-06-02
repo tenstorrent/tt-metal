@@ -96,7 +96,12 @@ inline void _calculate_sqrt_internal_() {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool fp32_dest_acc_en, bool FAST_APPROX>
+template <
+    bool APPROXIMATION_MODE,
+    int ITERATIONS = 8,
+    bool fp32_dest_acc_en,
+    bool FAST_APPROX,
+    bool legacy_compat = false>
 inline void calculate_sqrt() {
     if constexpr (legacy_compat) {
         _calculate_sqrt_compat_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en>(ITERATIONS);

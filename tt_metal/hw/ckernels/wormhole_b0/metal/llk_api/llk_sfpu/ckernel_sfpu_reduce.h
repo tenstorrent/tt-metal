@@ -948,7 +948,7 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
  *       - MAX/MIN with Int32 format only supports block_rt_dim == 1 (single tile)
  */
 template <PoolType pool_type, ReduceDim reduce_dim, DataFormat format>
-inline void calculate_reduce(uint32_t ct_dim, uint32_t rt_dim) {
+inline void calculate_reduce(uint32_t block_ct_dim = 1, uint32_t block_rt_dim = 1) {
     static_assert(
         reduce_dim == ReduceDim::REDUCE_COL || (pool_type == PoolType::SUM && reduce_dim == ReduceDim::REDUCE_ROW) ||
             (pool_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW),

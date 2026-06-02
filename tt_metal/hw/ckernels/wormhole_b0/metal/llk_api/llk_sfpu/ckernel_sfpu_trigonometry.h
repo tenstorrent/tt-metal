@@ -644,7 +644,7 @@ inline void _calculate_cosine_(const int iterations) {
 // https://en.wikipedia.org/wiki/Inverse_hyperbolic_functions#Definitions_in_terms_of_logarithms
 // acosh(x) = log(x + sqrt(x^2 - 1))
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_acosh_() {
+inline void calculate_acosh() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat inp = sfpi::dst_reg[0];
@@ -664,7 +664,7 @@ inline void _calculate_acosh_() {
 
 // asinh(x) = log(x + sqrt(x^2 + 1))
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_asinh_() {
+inline void calculate_asinh() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat inp = sfpi::dst_reg[0];
@@ -681,7 +681,7 @@ inline void _calculate_asinh_() {
 
 // atanh[x] = 0.5 * ln((1 + x) / (1 - x))
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void _calculate_atanh_() {
+inline void calculate_atanh() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat inp = sfpi::dst_reg[0];
@@ -713,12 +713,12 @@ inline void _calculate_atanh_() {
 }
 
 template <bool APPROXIMATION_MODE>
-void _init_inverse_hyperbolic_() {
+void init_inverse_hyperbolic() {
     sqrt_init<APPROXIMATION_MODE>();
 }
 
 template <bool APPROXIMATION_MODE>
-void _init_atanh_() {
+void init_atanh() {
     _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
 }
 
