@@ -380,6 +380,16 @@ class TTNNFlowDecoder:
                     ttnn.deallocate(b)
                 except (RuntimeError, ValueError):
                     pass
+        # Free prepared conv1d (weight, bias) tensors held in _prep_cache. They
+        # come from ttnn.prepare_conv_weights / prepare_conv_bias and stay
+        # device-resident across calls — must be released on teardown too.
+        for (w_p, b_p, _cfg) in self._prep_cache.values():
+            for t in (w_p, b_p):
+                try:
+                    ttnn.deallocate(t)
+                except (RuntimeError, ValueError):
+                    pass
+        self._prep_cache = {}
         self._flows = []
         self._conv_weights = []
 
@@ -830,6 +840,16 @@ class TTNNGeneratorNSF:
                     ttnn.deallocate(tensor)
                 except (RuntimeError, ValueError):
                     pass
+        # Free prepared conv1d (weight, bias) tensors held in _prep_cache.
+        # ttnn.prepare_conv_weights / prepare_conv_bias produce device-resident
+        # tensors that live until explicitly deallocated.
+        for (w_p, b_p, _cfg) in self._prep_cache.values():
+            for t in (w_p, b_p):
+                try:
+                    ttnn.deallocate(t)
+                except (RuntimeError, ValueError):
+                    pass
+        self._prep_cache = {}
         self._cond_w = None
         self._cond_b = None
         self._ups = []

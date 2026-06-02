@@ -58,6 +58,11 @@ from scipy import signal  # noqa: E402
 # Reuse demo.py's exact loaders and constants so the benchmark exercises the
 # identical inference graph.
 from models.demos.rvc.demo import (
+    # Chunking constants — demo.py is the single source of truth shared
+    # with the production-shape tests; eliminates drift between files.
+    MAX_CHUNK_FRAMES,
+    OVERLAP,
+    TARGET_LEN,
     SR_HUBERT,
     SR_TARGET,
     UPP,
@@ -79,11 +84,6 @@ from models.demos.rvc.torch_impl.reference import (
 from models.demos.rvc.tt.runtime import TTNNFlowDecoder, TTNNGeneratorNSF
 from models.demos.rvc.utils.audio import load_audio
 from models.demos.rvc.utils.config import get_model_and_config_paths
-
-# Chunking parameters — must match demo.py exactly.
-MAX_CHUNK_FRAMES = 75
-OVERLAP = 3
-TARGET_LEN = MAX_CHUNK_FRAMES + 2 * OVERLAP
 
 
 class FallbackError(RuntimeError):

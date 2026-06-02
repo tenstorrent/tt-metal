@@ -58,6 +58,13 @@ SR_TARGET = 48000
 WINDOW = 160
 UPP = 480  # product of upsample rates [12, 10, 2, 2]
 
+# Chunking — single source of truth used by demo, benchmark, and tests.
+# A change here must be reflected in benchmark.py and any test that
+# parametrizes over production chunk shapes.
+MAX_CHUNK_FRAMES = 75  # L1-safe maximum nominal chunk
+OVERLAP = 3            # boundary smoothing context per side
+TARGET_LEN = MAX_CHUNK_FRAMES + 2 * OVERLAP  # padded ext-chunk size = 81
+
 # Butterworth highpass for preprocessing
 bh, ah = signal.butter(N=5, Wn=48, btype="high", fs=SR_HUBERT)
 
@@ -159,8 +166,17 @@ _torch_fallback_cache = {}
 
 
 def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
-             f0_method="rmvpe", index_path=None, index_rate=0.0):
-    """Run full hybrid inference pipeline."""
+             f0_method="rmvpe", index_path=None, index_rate=0.0,
+             allow_torch_fallback=False):
+    """Run full hybrid inference pipeline.
+
+    allow_torch_fallback=False (default): TTNN errors on any chunk raise.
+    allow_torch_fallback=True:            OOM/L1 errors silently run torch for
+                                          that chunk; chunks that fell back
+                                          are excluded from the TTNN-only
+                                          timing summary so RTF reflects
+                                          actual N300 work, not torch CPU.
+    """
     print("=" * 60)
     print("RVC TTNN Hybrid Inference Demo")
     print("=" * 60)
@@ -212,8 +228,7 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
     # Chunked processing: Hubert+TextEncoder run on full audio (torch),
     # then z_p is chunked for TTNN flow+generator to stay within L1 limits.
     # Generator L1 budget allows up to 75 frames per chunk on N300; 80+ OOMs.
-    MAX_CHUNK_FRAMES = 75  # L1-safe maximum (~0.75s output per chunk)
-    OVERLAP = 3  # boundary smoothing context per side; tuned with chunk=75
+    # MAX_CHUNK_FRAMES / OVERLAP / TARGET_LEN are module-level above.
 
     print("\n--- Preprocessing (torch, full audio) ---")
     with torch.no_grad():
@@ -281,6 +296,7 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
     audio_segments = []
     t_flow_total = 0
     t_gen_total = 0
+    fallback_chunks = []  # chunk indices that ran on torch instead of TTNN
 
     with torch.no_grad():
         for c in range(n_chunks):
@@ -297,36 +313,54 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
             har_chunk = har_source[:, :, ext_start * UPP:ext_end * UPP]
 
             # Pad to uniform shape so conv1d cache reuses entries (prevents OOM)
-            target_len = MAX_CHUNK_FRAMES + 2 * OVERLAP
-            if ext_len < target_len:
-                pad_len = target_len - ext_len
+            if ext_len < TARGET_LEN:
+                pad_len = TARGET_LEN - ext_len
                 z_p_chunk = F.pad(z_p_chunk, (0, pad_len))
                 har_chunk = F.pad(har_chunk, (0, pad_len * UPP))
 
-            try:
-                # Flow (TTNN)
+            # No silent fallback by default — TTNN errors must surface so a
+            # device-shape regression doesn't masquerade as a successful run.
+            # The opt-in --allow-torch-fallback path catches OOM/L1 and runs
+            # torch for that chunk, but the chunk is then excluded from the
+            # TTNN timing summary (RTF reflects actual N300 work).
+            if not allow_torch_fallback:
                 t0 = time.time()
                 z_chunk = flow(z_p_chunk, g)
                 t_flow_total += time.time() - t0
-
-                # Generator (TTNN)
                 t0 = time.time()
                 audio_chunk = gen(z_chunk, har_chunk, g)
                 t_gen_total += time.time() - t0
                 backend = "TTNN"
-            except RuntimeError as e:
-                if "out of memory" not in str(e).lower() and "l1" not in str(e).lower():
-                    raise  # Re-raise non-OOM errors
-                from models.demos.rvc.torch_impl.reference import (
-                    load_flow_torch_modules, torch_flow_forward,
-                    build_torch_generator, torch_generator_forward,
-                )
-                if 'flow_mods' not in _torch_fallback_cache:
-                    _torch_fallback_cache['flow_mods'] = load_flow_torch_modules(sd)
-                    _torch_fallback_cache['gen'] = build_torch_generator(sd)
-                z_chunk = torch_flow_forward(z_p_chunk, g, _torch_fallback_cache['flow_mods'])
-                audio_chunk = torch_generator_forward(z_chunk, har_chunk, g, _torch_fallback_cache['gen'])
-                backend = "torch"
+            else:
+                # Local timers so a gen failure after a successful flow
+                # doesn't leak flow time into t_flow_total for a chunk that
+                # ultimately ran on torch.
+                t_flow_chunk = 0.0
+                t_gen_chunk = 0.0
+                try:
+                    t0 = time.time()
+                    z_chunk = flow(z_p_chunk, g)
+                    t_flow_chunk = time.time() - t0
+                    t0 = time.time()
+                    audio_chunk = gen(z_chunk, har_chunk, g)
+                    t_gen_chunk = time.time() - t0
+                    t_flow_total += t_flow_chunk
+                    t_gen_total += t_gen_chunk
+                    backend = "TTNN"
+                except RuntimeError as e:
+                    if "out of memory" not in str(e).lower() and "l1" not in str(e).lower():
+                        raise  # non-OOM errors still surface
+                    from models.demos.rvc.torch_impl.reference import (
+                        load_flow_torch_modules, torch_flow_forward,
+                        build_torch_generator, torch_generator_forward,
+                    )
+                    if 'flow_mods' not in _torch_fallback_cache:
+                        _torch_fallback_cache['flow_mods'] = load_flow_torch_modules(sd)
+                        _torch_fallback_cache['gen'] = build_torch_generator(sd)
+                    z_chunk = torch_flow_forward(z_p_chunk, g, _torch_fallback_cache['flow_mods'])
+                    audio_chunk = torch_generator_forward(z_chunk, har_chunk, g, _torch_fallback_cache['gen'])
+                    backend = "torch"
+                    fallback_chunks.append(c)
 
             # Trim: first remove zero-padding, then remove overlap
             # Audio from padded region
@@ -375,9 +409,8 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
             har_chunk = har_source[:, :, ext_start * UPP:ext_end * UPP]
 
             # Pad to uniform shape (same as TTNN)
-            target_len = MAX_CHUNK_FRAMES + 2 * OVERLAP
-            if ext_len < target_len:
-                pad_len = target_len - ext_len
+            if ext_len < TARGET_LEN:
+                pad_len = TARGET_LEN - ext_len
                 z_p_chunk = F.pad(z_p_chunk, (0, pad_len))
                 har_chunk = F.pad(har_chunk, (0, pad_len * UPP))
 
@@ -433,7 +466,15 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
     output_secs = audio_out.shape[2] / SR_TARGET
     t_ttnn_total = t_flow_total + t_gen_total
     t_preprocessing = t_hubert + t_f0 + t_enc + t_src
-    rtf = t_ttnn_total / output_secs if output_secs > 0 else float('inf')
+    n_ttnn_chunks = n_chunks - len(fallback_chunks)
+    # RTF: t_ttnn_total covers only TTNN chunks (fallback chunks excluded
+    # from the accumulators above). Scale denominator to match — otherwise
+    # RTF reports artificially low when some chunks ran on torch CPU.
+    if n_ttnn_chunks > 0 and output_secs > 0:
+        ttnn_secs = output_secs * (n_ttnn_chunks / n_chunks)
+        rtf = t_ttnn_total / ttnn_secs
+    else:
+        rtf = float('inf')
 
     print(f"\n{'=' * 60}")
     print(f"TIMING SUMMARY")
@@ -441,12 +482,19 @@ def run_demo(speaker_id=0, f0_up_key=0, device_id=0, max_secs=5.0,
     print(f"  Input audio:      {audio_secs:.2f}s")
     print(f"  Output audio:     {output_secs:.2f}s @ {SR_TARGET}Hz")
     print(f"  Chunks:           {n_chunks} × {MAX_CHUNK_FRAMES} frames")
+    if fallback_chunks:
+        print(f"  TTNN chunks:      {n_ttnn_chunks}/{n_chunks}  ({len(fallback_chunks)} fell back to torch: {fallback_chunks})")
     print(f"  Preprocessing:    {t_preprocessing:.3f}s")
-    print(f"  TTNN flow:        {t_flow_total:.3f}s")
-    print(f"  TTNN generator:   {t_gen_total:.3f}s")
+    print(f"  TTNN flow:        {t_flow_total:.3f}s   ({n_ttnn_chunks} TTNN chunks)")
+    print(f"  TTNN generator:   {t_gen_total:.3f}s   ({n_ttnn_chunks} TTNN chunks)")
     print(f"  TTNN total:       {t_ttnn_total:.3f}s")
     print(f"  Torch ref total:  {t_ref:.3f}s")
-    print(f"  RTF (TTNN only):  {rtf:.4f}")
+    if n_ttnn_chunks == n_chunks:
+        print(f"  RTF (TTNN only):  {rtf:.4f}")
+    elif n_ttnn_chunks > 0:
+        print(f"  RTF (TTNN only):  {rtf:.4f}   (over {n_ttnn_chunks}/{n_chunks} TTNN chunks; torch chunks excluded)")
+    else:
+        print(f"  RTF (TTNN only):  N/A — every chunk fell back to torch")
     print(f"  Audio PCC:        {audio_pcc:.6f}")
     print(f"{'=' * 60}")
 
@@ -469,9 +517,15 @@ if __name__ == "__main__":
                         help="Path to FAISS .index file for feature retrieval")
     parser.add_argument("--index_rate", type=float, default=0.0,
                         help="Feature retrieval blending rate (0=disabled, 1=full retrieval)")
+    parser.add_argument("--allow-torch-fallback", action="store_true",
+                        help="Catch TTNN OOM/L1 errors on a per-chunk basis and run torch "
+                             "for that chunk. Off by default — silent fallback hides device "
+                             "regressions and contaminates the TTNN timing summary. When on, "
+                             "fallback chunks are excluded from the TTNN-only RTF.")
     args = parser.parse_args()
 
     run_demo(speaker_id=args.speaker_id, f0_up_key=args.key,
              device_id=args.device_id, max_secs=args.max_secs,
              f0_method=args.f0_method, index_path=args.index_path,
-             index_rate=args.index_rate)
+             index_rate=args.index_rate,
+             allow_torch_fallback=args.allow_torch_fallback)
