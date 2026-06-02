@@ -5,12 +5,11 @@
 // Wrapper for Metal's dprint_tensix.h.
 // LLK needs its own dprint_tensix_dest_reg. It diverges from Metal in two ways:
 //   - Skips dbg_halt<MathThreadId>, as it would hang.
-//   - On Blackhole, reads DEST through 0xFFBD8000 for all formats (we program
-//     SEC1 once up front). Metal uses that only for fp32/int32 and falls back
-//     to dbg_read_dest_acc_row for the other formats, but that is unreliable
-//     on BH from here.
+//   - On Blackhole, reads DEST through 0xFFBD8000 for all formats. Metal does that
+//     only for fp32/int32 and reads with dbg_read_dest_acc_row for other formats,
+//     but that is unreliable on BH from here.
 //
-// Quasar is currently unsupported; Metal device print doesn't support arrays for Quasar.
+// Quasar is currently unsupported here; Metal device print doesn't support arrays for Quasar.
 
 #pragma once
 
@@ -46,8 +45,8 @@ inline void dprint_tensix_dest_reg(int tile_id = 0)
     DEVICE_PRINT("Tile ID = {}", tile_id);
 
 #ifdef ARCH_BLACKHOLE
-    // Program SEC1 once up front, then read every row from the memory-mapped
-    // DEST aperture. Element pointer type matches the format's element width.
+    // Program SEC1 once up front, then read every row from 0xFFBD8000.
+    // Element pointer type matches the format's element width.
     // Informed by tt_llk_blackhole/common/inc/ckernel_debug.h:dbg_copy_dest_tile.
     {
         const DataFormat fmt = static_cast<DataFormat>(data_format);
