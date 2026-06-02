@@ -113,6 +113,28 @@ PROMPT = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight 
 MAX_HEIGHT = max(height for _, height, _ in SHAPES)
 MAX_WIDTH = max(width for _, _, width in SHAPES)
 
+# --- Correctness-sweep instrumentation (env-gated; off for normal perf runs) ----------
+# When WAN_RUN_TAG is set, each generated image is saved (lossless uint8 PNG) to
+# outputs/correctness/<WAN_RUN_TAG>/<BxHxW>.png for offline CLIP/PSNR collation
+# (collate_correctness.py). WAN_TRACED toggles whether the measured run is traced (so
+# the same config can be run traced and untraced). WAN_STEPS overrides the step count.
+RUN_TAG = os.environ.get("WAN_RUN_TAG")
+TRACED = os.environ.get("WAN_TRACED", "1") == "1"
+METRIC_STEPS = int(os.environ.get("WAN_STEPS", str(NUM_INFERENCE_STEPS)))
+
+
+def _save_correctness_image(frames, batch_size, height, width):
+    """Save the generated image(s) under outputs/correctness/<RUN_TAG>/ for collation."""
+    if not RUN_TAG:
+        return
+    out = Path("outputs/correctness") / RUN_TAG
+    out.mkdir(parents=True, exist_ok=True)
+    for b in range(batch_size):
+        path = out / f"{b}x{height}x{width}.png"
+        Image.fromarray(frames[b][0]).save(path)
+        logger.info(f"  [correctness] saved {path}")
+
+
 # Reserve a DRAM trace region so denoising steps replay from a captured trace
 # instead of being dispatched op-by-op from host. The trace records one
 # combined_step; its size scales with op count (constant across resolutions),
@@ -260,11 +282,13 @@ def _write_csv(results, csv_path: Path) -> None:
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp, encoder_tp_axis",
     [
         [(4, 8), (4, 4), 1, 0, 4, False, traced_params_4x4, ttnn.Topology.Linear, True, None],
+        [(4, 8), (4, 4), 0, 1, 4, False, traced_params_4x4, ttnn.Topology.Linear, True, None],
         [(4, 8), (2, 4), 0, 1, 4, False, traced_params_2x4, ttnn.Topology.Linear, True, None],
         [(4, 8), (2, 4), 1, 0, 4, False, traced_params_2x4, ttnn.Topology.Linear, True, 1],
     ],
     ids=[
         "wh_4x4_sp1tp0",
+        "wh_4x4_sp0tp1",
         "wh_2x4_sp0tp1",
         "wh_2x4_sp1tp0",
     ],
@@ -351,22 +375,23 @@ def test_resolution_sweep(
 
             # Traced warmup: captures the trace (first combined_step) and replays
             # it (second). The measured run below then replays instead of
-            # dispatching denoising steps op-by-op from host.
-            logger.info(f"  Traced warmup {label}...")
-            with torch.no_grad():
-                pipeline(
-                    prompt=prompts,
-                    height=height,
-                    width=width,
-                    num_frames=NUM_FRAMES,
-                    num_inference_steps=2,
-                    guidance_scale=5.0,
-                    traced=True,
-                    output_type="uint8",
-                )
-            ttnn.synchronize_device(mesh_device)
+            # dispatching denoising steps op-by-op from host. Skipped when TRACED is off.
+            if TRACED:
+                logger.info(f"  Traced warmup {label}...")
+                with torch.no_grad():
+                    pipeline(
+                        prompt=prompts,
+                        height=height,
+                        width=width,
+                        num_frames=NUM_FRAMES,
+                        num_inference_steps=2,
+                        guidance_scale=5.0,
+                        traced=True,
+                        output_type="uint8",
+                    )
+                ttnn.synchronize_device(mesh_device)
 
-            logger.info(f"  Measuring {label}...")
+            logger.info(f"  Measuring {label} (traced={TRACED}, {METRIC_STEPS} steps)...")
             profiler = BenchmarkProfiler()
             with profiler("run", iteration=0):
                 with torch.no_grad():
@@ -375,12 +400,12 @@ def test_resolution_sweep(
                         height=height,
                         width=width,
                         num_frames=NUM_FRAMES,
-                        num_inference_steps=NUM_INFERENCE_STEPS,
+                        num_inference_steps=METRIC_STEPS,
                         guidance_scale=5.0,
                         profiler=profiler,
                         profiler_iteration=0,
                         seed=42,
-                        traced=True,
+                        traced=TRACED,
                         output_type="uint8",
                     )
                 ttnn.synchronize_device(mesh_device)
@@ -406,6 +431,7 @@ def test_resolution_sweep(
                     height=height,
                     width=width,
                 )
+                _save_correctness_image(frames, batch_size, height, width)
 
         except Exception as e:
             logger.warning(f"  {label} FAILED: {e}")
@@ -492,6 +518,9 @@ def _build_cfg_pipeline(
         # Two 4x4 submeshes auto-tiled from a 4x8 parent (split axis 1). Submesh sp1tp0 —
         # the CFG-parallel analogue of the wh_4x4_sp1tp0 baseline.
         [(4, 8), 1, 1, 0, 4, None, None, traced_params_4x4],
+        # Same two 4x4 submeshes but sp0tp1 (sp on axis 0, tp on axis 1) — analogue of
+        # wh_4x4_sp0tp1.
+        [(4, 8), 1, 0, 1, 4, None, None, traced_params_4x4],
         # Two 2x4 submeshes carved EXPLICITLY from a 4x8 parent at rows 0-1 and rows 2-3
         # (cols 0-3). Submesh sp0tp1 — the analogue of the wh_2x4_sp0tp1 baseline. Explicit
         # offsets are required because auto-tiling a (2,8)/(4,4) parent lands a 2x4 submesh
@@ -500,7 +529,7 @@ def _build_cfg_pipeline(
         # adjacent (config A's 4x4 submeshes train), so these 2x4 blocks train cleanly.
         [(4, 8), 0, 0, 1, 4, (2, 4), [(0, 0), (2, 0)], traced_params_2x4],
     ],
-    ids=["cfg2_4x4_sp1tp0", "cfg2_2x4_sp0tp1"],
+    ids=["cfg2_4x4_sp1tp0", "cfg2_4x4_sp0tp1", "cfg2_2x4_sp0tp1"],
     indirect=["mesh_device", "device_params"],
 )
 def test_cfg_parallel(
@@ -564,7 +593,7 @@ def test_cfg_parallel(
         sweep_shapes = [s for s in SHAPES if f"{s[0]}x{s[1]}x{s[2]}" in wanted]
         logger.info(f"WAN_SWEEP_SHAPES set; running {len(sweep_shapes)} shape(s): {sorted(wanted)}")
 
-    steps = int(os.environ.get("WAN_CFG_STEPS", NUM_INFERENCE_STEPS))
+    steps = int(os.environ.get("WAN_CFG_STEPS", str(METRIC_STEPS)))
 
     for batch_size, height, width in sweep_shapes:
         label = f"{batch_size}x{height}x{width}"
@@ -589,21 +618,23 @@ def test_cfg_parallel(
             _sync()
 
             # Traced warmup: captures each submesh's forward trace and replays it.
-            logger.info(f"  Traced warmup {label}...")
-            with torch.no_grad():
-                pipeline(
-                    prompt=prompts,
-                    height=height,
-                    width=width,
-                    num_frames=NUM_FRAMES,
-                    num_inference_steps=2,
-                    guidance_scale=5.0,
-                    traced=True,
-                    output_type="uint8",
-                )
-            _sync()
+            # Skipped when TRACED is off (untraced correctness run).
+            if TRACED:
+                logger.info(f"  Traced warmup {label}...")
+                with torch.no_grad():
+                    pipeline(
+                        prompt=prompts,
+                        height=height,
+                        width=width,
+                        num_frames=NUM_FRAMES,
+                        num_inference_steps=2,
+                        guidance_scale=5.0,
+                        traced=True,
+                        output_type="uint8",
+                    )
+                _sync()
 
-            logger.info(f"  Measuring {label} ({steps} steps)...")
+            logger.info(f"  Measuring {label} (traced={TRACED}, {steps} steps)...")
             profiler = BenchmarkProfiler()
             with profiler("run", iteration=0):
                 with torch.no_grad():
@@ -617,7 +648,7 @@ def test_cfg_parallel(
                         profiler=profiler,
                         profiler_iteration=0,
                         seed=42,
-                        traced=True,
+                        traced=TRACED,
                         output_type="uint8",
                     )
                 _sync()
@@ -637,6 +668,7 @@ def test_cfg_parallel(
             if not is_ci_env and int(ttnn.distributed_context_get_rank()) == 0:
                 frames = result.frames if hasattr(result, "frames") else result[0]
                 _save_output_images(frames=frames, run_id=run_id, batch_size=batch_size, height=height, width=width)
+                _save_correctness_image(frames, batch_size, height, width)
 
         except Exception as e:
             logger.warning(f"  {label} FAILED: {e}")
