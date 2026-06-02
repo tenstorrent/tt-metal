@@ -302,7 +302,35 @@ _OMIT = _Omit()
 
 
 def _build_torch_reference():
-    model = transformers.AutoModel.from_pretrained(HF_MODEL_ID, trust_remote_code=True)
+    # AutoModelForCausalLM-first fallback: HF causal-LM models
+    # (Llama / Qwen / Mistral / DeepSeek / Phi / Gemma / ...) follow
+    # the `XxxForCausalLM(model: XxxModel)` structure. `AutoModel.from_pretrained`
+    # returns the INNER `XxxModel` (no LM head); captured submodule paths
+    # typically reference the OUTER `XxxForCausalLM` (e.g. `model.layers.0`).
+    # The path mismatch causes `_resolve` to land on a bare `nn.Module`
+    # whose `_forward_unimplemented` raises TypeError on every kwarg.
+    # Mirror the multi-class fallback pattern already established in
+    # `agentic/probe.py:159`, `output_validation.py:830-965`, and
+    # `activation_diff.py:1163-1171` so the PCC test harness resolves
+    # the same class the capture step used.
+    model = None
+    _last_err = None
+    for _cls_name in ("AutoModelForCausalLM", "AutoModel"):
+        try:
+            _cls = getattr(transformers, _cls_name)
+        except AttributeError:
+            continue
+        try:
+            model = _cls.from_pretrained(HF_MODEL_ID, trust_remote_code=True)
+            break
+        except Exception as _e:
+            _last_err = _e
+            continue
+    if model is None:
+        raise RuntimeError(
+            f"Could not load {{HF_MODEL_ID}} via AutoModelForCausalLM or "
+            f"AutoModel; last error: {{type(_last_err).__name__}}: {{_last_err}}"
+        )
     model.eval()
     torch_module = None
     resolved_path = None
@@ -610,20 +638,40 @@ class BringupLoopResult:
 
 
 def find_demo_dir(model_id: str, repo_root: Optional[Path] = None) -> Optional[Path]:
+    """Locate the scaffolded demo directory for ``model_id``.
+
+    Searches every known "demo root" under the repo for a
+    ``bringup_status.json`` whose ``new_model_id`` matches. Scaffold
+    writes either to ``models/demos/<slug>/`` (cold-start path) OR to
+    ``<backend.demo_path>.parent/<slug>/`` for ALREADY-SUPPORTED
+    escalation paths — commonly ``models/tt_transformers/demo/<slug>/``.
+    Searching only ``models/demos/`` (old behaviour) missed sibling
+    dirs of family backends and caused Step 4 autofill to silently
+    fail with "No scaffolded demo folder found" even right after
+    scaffold had written it.
+    """
     from .discovery import BRINGUP_ROOT, REPO_ROOT as _CANONICAL_REPO_ROOT
 
     if repo_root is None or Path(repo_root).resolve() == _CANONICAL_REPO_ROOT.resolve():
         repo_root = BRINGUP_ROOT()
-    demos = repo_root / "models" / "demos"
-    if not demos.is_dir():
-        return None
-    for status_file in demos.rglob("bringup_status.json"):
-        try:
-            data = json.loads(status_file.read_text())
-        except Exception:
+    # Roots scaffold may write under. Add new backend-demo parents
+    # here when registering a family backend whose scaffold output
+    # sits outside `models/demos/`.
+    search_roots = [
+        repo_root / "models" / "demos",
+        repo_root / "models" / "tt_transformers" / "demo",
+        repo_root / "models" / "tt_dit",
+    ]
+    for root in search_roots:
+        if not root.is_dir():
             continue
-        if data.get("new_model_id") == model_id:
-            return status_file.parent
+        for status_file in root.rglob("bringup_status.json"):
+            try:
+                data = json.loads(status_file.read_text())
+            except Exception:
+                continue
+            if data.get("new_model_id") == model_id:
+                return status_file.parent
     return None
 
 
@@ -1163,7 +1211,26 @@ def _resolve(obj, dotted: str):
 def _get_torch_submodule():
     if "module" in _cache:
         return _cache["module"]
-    model = transformers.AutoModel.from_pretrained(HF_MODEL_ID, trust_remote_code=True)
+    # AutoModelForCausalLM-first fallback (same rationale as
+    # _PCC_TEST_TEMPLATE._build_torch_reference); see comment there.
+    model = None
+    _last_err = None
+    for _cls_name in ("AutoModelForCausalLM", "AutoModel"):
+        try:
+            _cls = getattr(transformers, _cls_name)
+        except AttributeError:
+            continue
+        try:
+            model = _cls.from_pretrained(HF_MODEL_ID, trust_remote_code=True)
+            break
+        except Exception as _e:
+            _last_err = _e
+            continue
+    if model is None:
+        raise RuntimeError(
+            f"Could not load {{HF_MODEL_ID}} via AutoModelForCausalLM or "
+            f"AutoModel; last error: {{type(_last_err).__name__}}: {{_last_err}}"
+        )
     model.eval()
     resolved = None
     for path in _CANDIDATE_SUBMODULE_PATHS:
@@ -1926,9 +1993,25 @@ def _set_submodule(model, dotted: str, new_module):
 
 
 def _build_hf_model():
-    model = transformers.AutoModel.from_pretrained(
-        HF_MODEL_ID, trust_remote_code=True
-    )
+    # AutoModelForCausalLM-first fallback (see _PCC_TEST_TEMPLATE
+    # ._build_torch_reference for rationale).
+    model = None
+    _last_err = None
+    for _cls_name in ("AutoModelForCausalLM", "AutoModel"):
+        try:
+            _cls = getattr(transformers, _cls_name)
+        except AttributeError:
+            continue
+        try:
+            model = _cls.from_pretrained(HF_MODEL_ID, trust_remote_code=True)
+            break
+        except Exception as _e:
+            _last_err = _e
+            continue
+    if model is None:
+        raise RuntimeError(
+            f"Could not load {{HF_MODEL_ID}}: {{type(_last_err).__name__}}: {{_last_err}}"
+        )
     model.eval()
     return model
 
