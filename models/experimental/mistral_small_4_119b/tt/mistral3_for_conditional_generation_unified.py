@@ -246,3 +246,13 @@ class TtMistral3ForConditionalGenerationUnified:
         """Pass-through: capture the text model's decode step as a replayable trace."""
         assert self.text_model is not None, "load_text() must be called first"
         self.text_model.capture_decode_trace()
+
+    def begin_decode_2cq(self) -> None:
+        """Pass-through: arm the text model's 2-CQ decode pipeline."""
+        assert self.text_model is not None, "load_text() must be called first"
+        self.text_model.begin_decode_2cq()
+
+    def decode_next_token_2cq(self, input_id: torch.Tensor, current_pos: int) -> int:
+        """Pass-through to the text model's 2-CQ decode step (CQ1 upload ∥ CQ0 trace)."""
+        assert self.text_model is not None, "load_text() must be called first"
+        return self.text_model.decode_next_token_2cq(input_id, current_pos)
