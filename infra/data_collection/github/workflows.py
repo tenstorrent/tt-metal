@@ -71,14 +71,7 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
     )
 
     if not has_reset:
-        return [
-            {
-                "tt_smi_reset_attempt": 1,
-                "final_status": "UNKNOWN",
-                "total_reset_time_sec": None,
-                "error_summary": "No tt-smi reset found",
-            }
-        ]
+        return []
 
     # Find where the reset section starts
     reset_start_idx = None
@@ -132,8 +125,11 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
                     block_end_ts = ts
                 reset_done = True
 
+    # If no actual tt-smi tool invocations were seen ("===== START of output =====" never
+    # appeared), the reset section matched a false positive (e.g. "tt-smi reset" text in
+    # a Metal teardown error or unrelated log line). Don't record a fake reset.
     if num_smi_attempts == 0:
-        num_smi_attempts = 1
+        return []
 
     duration = None
     if block_start_ts and block_end_ts:
