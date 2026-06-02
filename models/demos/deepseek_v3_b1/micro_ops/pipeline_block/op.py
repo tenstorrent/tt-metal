@@ -211,6 +211,7 @@ class PipelineBlock:
         stages_metadata=None,
         pipeline_config=None,
         forward_metadata=False,
+        io_socket_descriptor_prefix=None,
     ):
         if loopback is None:
             # Middle stages don't need a loopback config; fall back to a no-loopback placeholder.
@@ -303,6 +304,7 @@ class PipelineBlock:
                 host_io_placement=loopback.host_io_placement,
                 exit_node_upstream=exit_node_upstream,
                 entry_node_downstream=entry_node_downstream,
+                io_socket_descriptor_prefix=io_socket_descriptor_prefix,
             )
         elif self.is_last_stage and not self.initialize_loopback:
             self._init_last_stage_with_d2h(
@@ -370,6 +372,7 @@ class PipelineBlock:
         host_io_placement=None,
         exit_node_upstream=None,
         entry_node_downstream=None,
+        io_socket_descriptor_prefix=None,
     ):
         assert h2d_socket_fifo_size is not None, "H2D Socket FIFO Size must be provided to first pipeline stage"
         assert host_io_placement is not None, "host_io_placement must be provided to first pipeline stage"
@@ -414,6 +417,10 @@ class PipelineBlock:
                 mesh_device, ttnn.MeshCoreCoord(d2h_device_coord, host_io_placement.d2h_core), d2h_socket_fifo_size
             )
             self._d2h_page_size_bytes = d2h_socket_page_size
+
+        if io_socket_descriptor_prefix is not None:
+            self.h2d_socket.export_descriptor(f"{io_socket_descriptor_prefix}")
+            self.d2h_socket.export_descriptor(f"{io_socket_descriptor_prefix}")
 
         self.host_io = HostInterface(
             self.h2d_socket,
