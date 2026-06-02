@@ -177,7 +177,8 @@ models:
     wh_n150: 100
     wh_n300: 15
     wh_galaxy_perf: 120
-    bh_p150b_civ2: 55
+    bh_p150b_civ2: 63
+    bh_loudbox: 183
     bh_p150: 60
     bh_p300: 50
     bh_loudbox: 130
