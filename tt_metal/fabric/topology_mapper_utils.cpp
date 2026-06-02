@@ -689,14 +689,14 @@ LogicalMultiMeshGraph merge_logical_multi_mesh_adjacency_graphs(
         const auto& local_to_global = renum.per_part_local_to_global_mesh_id[i];
 
         LogicalMultiMeshGraph part = remap_logical_multi_mesh_for_merge(g, local_to_global);
-        for (const auto& [mesh_id, adj] : part.mesh_adjacency_graphs_) {
+        for (auto& [mesh_id, adj] : part.mesh_adjacency_graphs_) {
             merged.mesh_adjacency_graphs_[mesh_id] = std::move(adj);
         }
         for (const auto& [node, nbrs] : part.mesh_level_graph_.get_adjacency_map()) {
             auto& slot = merged_mesh_level[node];
             slot.insert(slot.end(), nbrs.begin(), nbrs.end());
         }
-        for (const auto& [mesh_id, exit_adj] : part.mesh_exit_node_graphs_) {
+        for (auto& [mesh_id, exit_adj] : part.mesh_exit_node_graphs_) {
             merged.mesh_exit_node_graphs_[mesh_id] = std::move(exit_adj);
         }
     }
