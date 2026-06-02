@@ -271,7 +271,7 @@ def _run_multi_rank(passthrough: list[str], tt_run_args: list[str]) -> int:
         renderer.on_eof()
     finally:
         renderer.finalize()
-        if stderr_lines:
+        if stderr_lines and proc.returncode != 0:
             sys.stderr.write("\n".join(stderr_lines) + "\n")
 
     return proc.returncode
