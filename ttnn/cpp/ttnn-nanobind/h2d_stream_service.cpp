@@ -135,9 +135,7 @@ void py_module_types(nb::module_& mod) {
             // `metadata` must be exactly `metadata_size_bytes` bytes long when the
             // service was constructed with metadata enabled; empty otherwise. An
             // empty bytes object always satisfies the disabled case.
-            [](tt::tt_metal::H2DStreamService& self,
-               const tt::tt_metal::Tensor& host_tensor,
-               nb::bytes metadata) {
+            [](tt::tt_metal::H2DStreamService& self, const tt::tt_metal::Tensor& host_tensor, nb::bytes metadata) {
                 auto meta_span = ttsl::Span<const std::byte>(
                     reinterpret_cast<const std::byte*>(metadata.c_str()), metadata.size());
                 self.forward_to_tensor(host_tensor, meta_span);
@@ -368,6 +366,38 @@ void py_module_types(nb::module_& mod) {
 
                 Returns:
                     str: Full path to the written descriptor file.
+            )doc")
+        .def_static(
+            "connect",
+            [](const std::string& service_id, std::optional<uint32_t> timeout_ms) {
+                return tt::tt_metal::H2DStreamService::connect(service_id, timeout_ms);
+            },
+            nb::arg("service_id"),
+            nb::arg("timeout_ms") = nb::none(),
+            R"doc(
+                Attach to an exported H2DStreamService from another process.
+
+                Reads the descriptor file at
+                `/dev/shm/tt_h2d_stream_service_<service_id>.bin`,
+                reconstructs the mapper from the embedded mesh shape + mapper
+                config, and attaches every per-coord H2DSocket inline. The
+                returned service holds NO MeshDevice handle — it talks to the
+                device only through the per-socket PCIeCoreWriter paths.
+
+                The returned instance supports `forward_to_tensor`,
+                `forward_to_tensor_bytes`, `barrier`, and `get_per_shard_spec`.
+                Owner-only methods (`get_backing_tensor`, the worker-sync
+                getters, `export_descriptor`) raise on a connector-side
+                instance.
+
+                Args:
+                    service_id (str): Identifier the owner passed to
+                        `export_descriptor`.
+                    timeout_ms (int, optional): Max wait time for the
+                        descriptor file. Defaults to the C++ default (10s).
+
+                Returns:
+                    H2DStreamService: Connector-side service handle.
             )doc");
 }
 

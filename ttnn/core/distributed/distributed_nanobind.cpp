@@ -796,6 +796,31 @@ void py_module(nb::module_& mod) {
        Returns:
            TensorToMesh: A mapper providing the desired sharding.
    )doc");
+    // Shape-only overload: lets callers (e.g. cross-process H2DStreamService
+    // connectors) build a mapper without owning a MeshDevice handle. Mirrors
+    // the C++ `create_mesh_mapper(MeshShape, MeshMapperConfig)` overload.
+    mod.def(
+        "create_mesh_mapper",
+        [](const tt::tt_metal::distributed::MeshShape& mesh_shape,
+           const MeshMapperConfig& config) -> nbh::unique_ptr<TensorToMesh> {
+            return nbh::steal_rewrap_unique<TensorToMesh>(create_mesh_mapper(mesh_shape, config));
+        },
+        nb::arg("mesh_shape"),
+        nb::arg("config"),
+        R"doc(
+       Returns an ND mapper from a mesh shape only — no MeshDevice required.
+
+       Useful for processes that attach to a remote H2DStreamService via
+       `H2DStreamService.connect(...)` and need to construct an SP-sharded
+       host tensor without owning the device.
+
+       Args:
+           mesh_shape (MeshShape): Logical mesh shape the mapper distributes across.
+           config (MeshMapperConfig): A config object representing a set of placements.
+
+       Returns:
+           TensorToMesh: A mapper providing the desired sharding.
+   )doc");
     mod.def(
         "compute_distribution_to_mesh_mapping",
         [](const tt::tt_metal::distributed::MeshShape& distribution_shape,
