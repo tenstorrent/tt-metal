@@ -232,6 +232,7 @@ class Prefetcher(LightweightModule):
         num_tensors: int,
         num_layers: int,
         num_receiver_cores: int = None,
+        receiver_mapping_override: Optional[dict] = None,
     ):
         """
         Prefetcher class that prefetches tensors from DRAM to L1.
@@ -239,6 +240,8 @@ class Prefetcher(LightweightModule):
         Args:
             receiver_mapping_override: If provided, keys become sender cores and values become
                 their receiver cores. This overrides the default column 0/7 sender placement.
+                When set, ``num_receiver_cores`` is inferred from the override and the automatic
+                Blackhole sender/receiver mapping is skipped.
         """
         ### Device, Global CB, Parameters
         self.pf_config: dict = ARCH_CONFIG["blackhole"]
@@ -252,13 +255,22 @@ class Prefetcher(LightweightModule):
         self.num_senders: int = len(self.pf_config["dram_banks"])
         self.global_cb_size: int = 0  # Size of the global circular buffer in bytes storing prefetched matmul weights
         self.max_tensor_block_size: int = 0  # Max tensor block size is the largest block size of a tensor in bytes
-        self.receiver_mapping_override: Optional[dict] = None
+        self.receiver_mapping_override: Optional[dict] = receiver_mapping_override
         self.model_name = os.getenv("HF_MODEL", "")
         assert self.model_name != "", "HF_MODEL is not set. DRAM Prefetcher must be run with a model."
         assert (
             num_receiver_cores is None or num_receiver_cores in self.legal_receiver_cores
         ), "num_receiver_cores must be in legal_receiver_cores"
-        if num_receiver_cores is not None:
+        if self.receiver_mapping_override is not None:
+            if num_receiver_cores is None:
+                inferred_receiver_counts = {len(v) for v in self.receiver_mapping_override.values()}
+                assert len(inferred_receiver_counts) == 1, "receiver_mapping_override must assign the same number of receivers to every sender"
+                self.num_receiver_cores = inferred_receiver_counts.pop()
+            else:
+                self.num_receiver_cores = num_receiver_cores
+            assert self.num_receiver_cores > 0, "receiver_mapping_override must define at least one receiver per sender"
+            assert len(self.receiver_mapping_override) > 0, "receiver_mapping_override must define at least one sender"
+        elif num_receiver_cores is not None:
             assert is_prefetcher_supported(
                 self.model_name, self.mesh_device.get_num_devices(), num_receiver_cores * self.num_senders
             ), "num_receiver_cores is not supported"

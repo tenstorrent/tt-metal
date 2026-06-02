@@ -37,6 +37,35 @@ def round_up(n, multiple):
     return ((n + multiple - 1) // multiple) * multiple
 
 
+def test_prefetcher_override_infers_receiver_count(monkeypatch):
+    """Custom DRAM-core mappings should become a live constructor input, not dead test scaffolding."""
+
+    class _FakeMeshDevice:
+        def get_num_devices(self):
+            return 2
+
+        def compute_with_storage_grid_size(self):
+            return ttnn.CoreCoord(11, 10)
+
+    monkeypatch.setenv("HF_MODEL", "Llama-3.2-1B")
+
+    override = {
+        (0, 0): [(1, 0), (2, 0), (3, 0)],
+        (7, 0): [(8, 0), (9, 0), (10, 0)],
+    }
+
+    prefetcher = Prefetcher(
+        mesh_device=_FakeMeshDevice(),
+        num_tensors=5,
+        num_layers=1,
+        receiver_mapping_override=override,
+    )
+
+    assert prefetcher.receiver_mapping_override == override
+    assert prefetcher.num_receiver_cores == 3
+    assert prefetcher.ring_size == 3 * prefetcher.num_senders
+
+
 def create_weight_tensors(
     mesh_device,
     model_dims,
@@ -395,6 +424,7 @@ def run_prefetcher_all_matmuls(
         num_tensors=num_tensors_per_layer,
         num_layers=num_layers,
         num_receiver_cores=num_receiver_cores,
+        receiver_mapping_override=receiver_mapping_override,
     )
 
     # Initialize prefetcher for decode mode
