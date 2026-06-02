@@ -2813,8 +2813,23 @@ def _run_strict_pcc_gate(
     text comparator run for LLMs/VLMs even when the probe can't classify.
     """
     if not (auto_mode and getattr(args, "strict_pcc", True)):
+        # Loud about which knob disabled the gate — silent skips here
+        # used to hide bugs where the SUCCESS banner stamped rc=0 even
+        # though strict_pcc was off and no numerical check ever ran.
+        if not auto_mode:
+            print("  PCC gate: skipped (auto_mode=False — legacy non-auto invocations do not gate).")
+        else:
+            print("  PCC gate: skipped (--no-strict-pcc / args.strict_pcc=False — operator opted out).")
         return None, None
     if not captured_output:
+        # Same — never silent. An empty captured_output here means the
+        # pytest-output capture pipeline broke (pump thread, sink path
+        # wiring, etc.) so the diagnostic should be visible.
+        print(
+            "  PCC gate: skipped (captured_output is empty). pytest produced "
+            "output to the terminal but the tee'd capture file came back "
+            "empty — _pytest_capture_sink wiring is likely broken."
+        )
         return None, None
     from .correctness import run_gate as _correctness_run_gate
 
