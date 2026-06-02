@@ -123,9 +123,6 @@ class ColParallelLinear(Module):
         if self.activation_fn == "gelu":
             self.activation_fn = None
             self.fused_activation_fn = (ttnn.UnaryOpType.GELU, False)
-        elif self.activation_fn == "sigmoid":
-            self.activation_fn = None
-            self.fused_activation_fn = (ttnn.UnaryOpType.SIGMOID, False)
         elif self.activation_fn == "gelu_tanh":
             # True = approximate mode = tanh-LUT GELU (matches F.gelu(approximate="tanh")). The LUT
             # is NaN-safe (no pow/log), unlike a hand-rolled x**3 decomposition whose pow(x,3) can
