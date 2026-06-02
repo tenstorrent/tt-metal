@@ -25,7 +25,7 @@ import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
-from helpers.llk_params import DestAccumulation, format_dict
+from helpers.llk_params import DestAccumulation
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
