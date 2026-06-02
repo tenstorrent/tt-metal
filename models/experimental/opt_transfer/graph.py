@@ -4,6 +4,94 @@ from models.experimental.opt_transfer.handoff import dump_bundle
 from models.experimental.opt_transfer.config import CONFIG
 
 
+class RealImpl:
+    """Production node implementations binding KB/trace/matcher/structural/codegen/verify.
+    Device-touching; used by run.py and the e2e."""
+
+    def __init__(self, model_key, device, matcher, kb):
+        from models.experimental.opt_transfer.config import CONFIG
+
+        self.cfg = CONFIG.models[model_key]
+        self.device = device
+        self.matcher = matcher
+        self.kb = kb
+
+    def trace(self, state):
+        import importlib, torch
+        from models.experimental.opt_transfer.trace import trace_module
+
+        ref_mod = importlib.import_module(self.cfg["reference"]).SeamlessBlock(
+            self.cfg["embed_dim"], self.cfg["num_heads"]
+        )
+        g = trace_module(ref_mod, (torch.randn(1, 8, self.cfg["embed_dim"]),))
+        state["_ref"] = ref_mod
+        state["graph_summary"] = g.summary_json()
+        state["_graph"] = g
+        return state
+
+    def match(self, state):
+        props = self.matcher.propose(state["graph_summary"], self.kb)
+        state["proposals"] = [p.__dict__ for p in props]
+        state["_proposals"] = props
+        return state
+
+    def gate(self, state):
+        from models.experimental.opt_transfer.structural import validate
+
+        kb_by_id = {e.id: e for e in self.kb}
+        applied = []
+        for p in state["_proposals"]:
+            ok, reason = validate(state["_graph"], p, kb_by_id[p.entry_id])
+            if ok:
+                applied.append(p)
+        state["_applied"] = applied
+        state["applied"] = [p.entry_id for p in applied]
+        return state
+
+    def codegen(self, state):
+        from models.experimental.opt_transfer.codegen import build_fused_qkv
+
+        dims = {"H": self.cfg["num_heads"], "D": self.cfg["head_dim"], "embed": self.cfg["embed_dim"]}
+        ref = state["_ref"]
+        runners = []
+        for p in state["_applied"]:
+            p = p.resolve(dims)
+            weights = {
+                n: {"weight": getattr(ref, n).weight.detach(), "bias": getattr(ref, n).bias.detach()}
+                for n in p.matched_nodes
+            }
+            runners.append(build_fused_qkv(p, weights, self.device, dims))
+        state["_runners"] = runners
+        return state
+
+    def verify(self, state):
+        # Per-block: compare fused QKV against the reference's separate-projection split.
+        # Both sides must consume the SAME input the q/k/v projections see in the reference
+        # forward, i.e. the post-attn_norm hidden state h — not raw x.
+        import torch
+        from models.experimental.opt_transfer.verify import pcc
+
+        ref = state["_ref"]
+        embed = self.cfg["embed_dim"]
+        ref.eval()
+        with torch.no_grad():
+            x = torch.randn(1, 64, embed)
+            h = ref.attn_norm(x)
+        worst = 1.0
+        for run in state["_runners"]:
+            q, k, v = run(h)
+            for name, got in zip(("q_proj", "k_proj", "v_proj"), (q, k, v)):
+                with torch.no_grad():
+                    gold = ref._split(getattr(ref, name)(h))
+                worst = min(worst, pcc(gold, got))
+        state["full_pcc"] = worst
+        return state
+
+    def repair(self, state):
+        state["iteration"] = state.get("iteration", 0) + 1
+        return state
+
+
 def build_graph(impl, max_iterations: int = None):
     """impl provides node callables: trace, match, gate, codegen, verify, repair.
     Kept injectable so the graph is testable without device/API."""
