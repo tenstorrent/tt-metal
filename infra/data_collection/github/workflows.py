@@ -2,9 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pathlib
-import re
 import json
+import re
 from datetime import datetime, timedelta
 from functools import partial
 from typing import List
@@ -12,7 +11,6 @@ from typing import List
 from loguru import logger
 
 from infra.data_collection import junit_xml_utils, pydantic_models
-
 
 smi_pattern = re.compile(r'.*"tt_smi":\s*"([a-zA-Z0-9\-\.]+)"')
 tt_smi_reset_pattern = re.compile(r'"tt_smi_reset":\s*(\[.*\])')
@@ -302,7 +300,7 @@ def get_workflow_run_uuids_to_test_reports_paths_(workflow_outputs_dir, workflow
         try:
             # read all *.xml in test_report_dir (gtest can have one xml files per test executable)
             xml_file_paths = [file.resolve(strict=True) for file in list(test_report_dir.glob("*.xml"))]
-        except FileNotFoundError as e:
+        except FileNotFoundError:
             logger.warning(f"No pytest or gtest xml file found in {test_report_dir}, skipping directory.")
         else:
             workflow_run_test_reports_path[test_report_uuid] = xml_file_paths

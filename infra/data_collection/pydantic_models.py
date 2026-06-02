@@ -7,9 +7,9 @@ Definition of the pydantic models used for data production.
 """
 
 from datetime import datetime
-from typing import List, Optional, Union, Tuple
-
 from enum import Enum
+from typing import List, Optional, Union
+
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -70,12 +70,8 @@ class TTSmiReset(BaseModel):
     """
 
     workflow_attempt: int = Field(description="Workflow run attempt number.")
-    tt_smi_reset_attempt: int = Field(
-        description="Sequential tt-smi reset attempt number within the job."
-    )
-    final_status: str = Field(
-        description="Final reset status for this reset attempt: SUCCESS or FAILURE."
-    )
+    tt_smi_reset_attempt: int = Field(description="Sequential tt-smi reset attempt number within the job.")
+    final_status: str = Field(description="Final reset status for this reset attempt: SUCCESS or FAILURE.")
     total_reset_time_sec: Optional[float] = Field(
         None, description="Total time spent in this reset attempt in seconds."
     )
