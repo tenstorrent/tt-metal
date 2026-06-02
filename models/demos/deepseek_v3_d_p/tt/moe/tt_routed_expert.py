@@ -411,22 +411,17 @@ class TtRoutedExpert(LightweightModule):
         #     naive per-expert Python loop (extract -> routed_expert_ffn ->
         #     insert), unchanged from before.
         shapes_2880 = self.emb_dim == 2880 and self.hidden_dim == 2880
-        # [ND-fix 2026-06] The unified Blackhole FFN kernel (fused_swiglu) is
-        # NON-DETERMINISTIC across runs: with bit-identical inputs it produces a
-        # different FFN output, which flips the prefill token. Validated at full
-        # scale (61 layers / iter25 / pie960): the unified path gave tokens
-        # 14 (p=0.92) vs 260 (p=0.03) on two identical runs, while the naive
-        # per-expert path gave 2845 (p=1.0) on both. Reader/writer/dispatch/
-        # combine/gate are all deterministic — the defect is inside the fused
-        # compute kernel (see models/demos/deepseek_v3_d_p/ND_INVESTIGATION.md).
-        # Until the kernel-level race is fixed, DEFAULT to the deterministic
-        # naive path on Blackhole. Set TT_REXPERT_FORCE_UNIFIED=1 to re-enable
-        # the faster (non-deterministic) unified kernel for perf work.
-        # TT_REXPERT_FORCE_NAIVE=1 still forces naive everywhere. The Wormhole
-        # 2880x2880 path is unchanged (separate WH kernel config; not retested).
+        # [ND-fix 2026-06, updated] The prefill non-determinism was previously (wrongly)
+        # attributed to the unified Blackhole FFN kernel, so this path was temporarily
+        # defaulted to the slow naive per-expert loop. The real root cause is the ring
+        # attention (`ring_joint_scaled_dot_product_attention` in MLA) — fixed there
+        # (fp32 merge + persistent-buffer reset, default-on). With that fix the unified
+        # kernel is DETERMINISTIC: at 61L/iter25 it gives token 2845 (p=1.0) across
+        # processes, identical to naive, while being ~3.2x faster (5.96 vs 19.1 s/iter).
+        # So Blackhole DEFAULTS to the unified kernel again. TT_REXPERT_FORCE_NAIVE=1
+        # forces the naive path (escape hatch). See ND_INVESTIGATION.md.
         force_naive = bool(os.environ.get("TT_REXPERT_FORCE_NAIVE"))
-        force_unified = bool(os.environ.get("TT_REXPERT_FORCE_UNIFIED"))
-        use_unified = (not force_naive) and ((is_blackhole() and force_unified) or (is_wormhole_b0() and shapes_2880))
+        use_unified = (not force_naive) and (is_blackhole() or (is_wormhole_b0() and shapes_2880))
         if use_unified:
             signpost(header="UnifiedRoutedExpertMoe")
             expert_outputs = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
