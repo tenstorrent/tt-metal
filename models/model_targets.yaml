@@ -180,11 +180,41 @@ targets:
             owner_id: U08TJ70UFRT # Harry Andrews
             team: models
             note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_p150:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
 
   gemma-4-e4b:
     aliases: ["gemma-4-e4b", "google/gemma-4-E4B-it"]
     skus:
       wh_n150:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_p300:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_quietbox_2:
         entries:
           - batch_size: 1
             seq_len: null
@@ -208,11 +238,71 @@ targets:
             owner_id: U08TJ70UFRT # Harry Andrews
             team: models
             note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_quietbox_2:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_loudbox:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_galaxy_perf:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
 
   gemma-4-31b:
     aliases: ["gemma-4-31b", "google/gemma-4-31B-it"]
     skus:
       wh_llmbox_perf:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_quietbox_2:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_loudbox:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_galaxy_perf:
         entries:
           - batch_size: 1
             seq_len: null
