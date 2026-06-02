@@ -20,7 +20,7 @@ For each open issue labelled `CI auto triage` in `tenstorrent/tt-metal`:
 
 ## Fundamental Principle — Issue Body Accuracy
 
-While an issue is open, the following fields **must always reflect the current failure on `main`** (or the last known failure before a disable PR landed):
+While an issue is open, the following fields **in the description of the issue must always reflect the current failure on `main`** (or the last known failure before a disable PR landed):
 
 - **Title** — must name the current failing test or subsystem
 - **Job name** — in the `**Job:**` line, `### Affected jobs`, and `Auto-triage-job-name` metadata
