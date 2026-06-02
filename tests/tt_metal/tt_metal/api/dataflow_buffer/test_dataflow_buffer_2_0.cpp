@@ -2966,6 +2966,33 @@ TEST_F(MeshDeviceFixture, B6_AllProducer_Rejected_2_0) {
         std::exception);
 }
 
+// B10 — BLOCKED access pattern is rejected (not yet implemented). Today this throws because
+// BLOCKED is gated at lowering (program_spec.cpp to_hw_access_pattern) and a BLOCKED binding
+// with block_size==0 also fails the host validation. Flip to a passing config-probe when
+// BLOCKED support lands (Phase 3+).
+TEST_F(MeshDeviceFixture, B10_Blocked_Rejected_2_0) {
+    auto& mesh_device = this->devices_.at(0);
+    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB validation tested on Quasar";
+    }
+    using namespace m2_config_test_helpers;
+    M2ConfigDFBParams p{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 1,
+        .pap = m2::DFBAccessPattern::STRIDED,
+        .cap = m2::DFBAccessPattern::BLOCKED,  // <-- the offense (BLOCKED not yet supported)
+        .implicit_sync = false,
+    };
+    EXPECT_THROW(
+        {
+            Program program = build_single_dfb_program_2_0(mesh_device, p);
+            program.impl().finalize_dataflow_buffer_configs();
+        },
+        std::exception);
+}
+
 // B7 — CB+DFB mix rejection.
 // Not applicable to M2: ProgramSpec doesn't expose a circular-buffer API
 // (CircularBufferConfig is a legacy host-API construct). M2 programs are
