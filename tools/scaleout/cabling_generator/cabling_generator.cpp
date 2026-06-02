@@ -423,11 +423,13 @@ Node build_node(
     if (it != node_templates.end()) {
         Node node = it->second;  // Copy template
         node.host_id = host_id;
+        node.node_descriptor_name = node_descriptor_name;
         return node;
     }
 
     // Build new node template (with host_id=0)
     Node template_node;
+    template_node.node_descriptor_name = node_descriptor_name;
 
     auto node_descriptor = find_node_descriptor(node_descriptor_name, cluster_descriptor);
 
@@ -528,6 +530,7 @@ Node build_node(
     // Create instance with actual host_id
     Node node = template_node;
     node.host_id = host_id;
+    node.node_descriptor_name = node_descriptor_name;
     return node;
 }
 
@@ -1120,11 +1123,17 @@ static std::optional<std::string> find_template_key_for_node(
 
 // Helper to recreate a node from its template, resetting port availability
 // After merging descriptors, nodes may have stale port usage info. This function
-// preserves host_id and merged inter_board_connections
+// preserves host_id, the source descriptor binding, and merged inter_board_connections
 static Node create_base_node_from_template(
     const Node& source_node, const std::unordered_map<std::string, Node>& node_templates) {
-    // Find the template by matching motherboard and board structure
-    auto template_key = find_template_key_for_node(source_node, node_templates);
+    // Prefer the descriptor name this child was bound to in its source file; fall back to
+    // the shape-based lookup only when the binding is missing (e.g. older callers).
+    std::optional<std::string> template_key;
+    if (!source_node.node_descriptor_name.empty() && node_templates.contains(source_node.node_descriptor_name)) {
+        template_key = source_node.node_descriptor_name;
+    } else {
+        template_key = find_template_key_for_node(source_node, node_templates);
+    }
 
     if (!template_key) {
         throw std::runtime_error(fmt::format(
@@ -1139,6 +1148,10 @@ static Node create_base_node_from_template(
     // (template only has ports marked as used for inter-board connections from node descriptor)
     Node base_node = template_node;
     base_node.host_id = source_node.host_id;
+    // Preserve the per-child binding so output emits the original template name even if the
+    // templates table aliases two names to the same Node (e.g. after a torus merge).
+    base_node.node_descriptor_name =
+        source_node.node_descriptor_name.empty() ? *template_key : source_node.node_descriptor_name;
     // Copy inter_board_connections from source (they may have been merged from multiple files)
     base_node.inter_board_connections = source_node.inter_board_connections;
     // Re-mark ports as used for the merged inter-board connections
@@ -1190,9 +1203,17 @@ static void merge_resolved_graph_instances(
                 // For torus-compatible nodes, we merge the connections
                 // For non-torus nodes, we only merge internal_connections, not inter_board_connections
 
-                // Check if this is a torus-compatible merge scenario
-                auto target_template_key = find_template_key_for_node(target.nodes[name], node_templates);
-                auto source_template_key = find_template_key_for_node(source_node, node_templates);
+                // Check if this is a torus-compatible merge scenario. Prefer the descriptor names
+                // each side was bound to in its source file; fall back to shape-based lookup when
+                // a binding is missing.
+                auto resolve_key = [&](const Node& n) -> std::optional<std::string> {
+                    if (!n.node_descriptor_name.empty() && node_templates.contains(n.node_descriptor_name)) {
+                        return n.node_descriptor_name;
+                    }
+                    return find_template_key_for_node(n, node_templates);
+                };
+                auto target_template_key = resolve_key(target.nodes[name]);
+                auto source_template_key = resolve_key(source_node);
 
                 // Same instance name, different node type across files (e.g. host declared as
                 // WH_GALAXY in one and BH_GALAXY in another) - real conflict; fail with a clear
@@ -1569,7 +1590,13 @@ static void resolved_graph_to_protobuf(
         child->set_name(name);
         auto* node_ref = child->mutable_node_ref();
 
-        auto template_key = find_template_key_for_node(node, node_templates);
+        // Prefer the descriptor name the child was bound to in its source file.
+        std::optional<std::string> template_key;
+        if (!node.node_descriptor_name.empty() && node_templates.contains(node.node_descriptor_name)) {
+            template_key = node.node_descriptor_name;
+        } else {
+            template_key = find_template_key_for_node(node, node_templates);
+        }
         if (!template_key) {
             throw std::runtime_error(fmt::format(
                 "Could not find node descriptor for node '{}' with motherboard '{}' and {} boards",

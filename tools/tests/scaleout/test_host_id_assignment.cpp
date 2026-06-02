@@ -12,6 +12,7 @@
 
 #include <cabling_generator/cabling_generator.hpp>
 #include "protobuf/cluster_config.pb.h"
+#include "protobuf/deployment.pb.h"
 #include "protobuf/factory_system_descriptor.pb.h"
 
 namespace tt::scaleout_tools {
@@ -312,6 +313,52 @@ root_instance { template_name: "root"
     write_deploy(dir + "dep.textproto", {"node1", "node2"}, "WH_GALAXY");
 
     EXPECT_THROW(CablingGenerator(cdir, dir + "dep.textproto"), std::runtime_error);
+
+    std::filesystem::remove_all(dir);
+}
+
+// REV_AB and REV_C share motherboard + boards and differ only in internal wiring, so the
+// shape-based output lookup collapsed every child to the same key. Each child must keep its
+// source template, and cabling node_descriptor must equal deployment node_type per host.
+TEST(HeterogeneousMergeTest, MixedRevAB_RevC_PreservesPerChildBinding) {
+    auto dir = tmp_dir("hetero_mixed_revs");
+    std::string cdir = dir + "c/";
+    std::filesystem::create_directories(cdir);
+    write_single_node_cabling(cdir + "a.textproto", "host_ab", "BH_GALAXY_REV_AB", 0);
+    write_single_node_cabling(cdir + "b.textproto", "host_c", "BH_GALAXY_REV_C", 0);
+    write(
+        dir + "dep.textproto",
+        "hosts{host:\"host_ab\" node_type:\"BH_GALAXY_REV_AB\"}\n"
+        "hosts{host:\"host_c\" node_type:\"BH_GALAXY_REV_C\"}\n");
+
+    CablingGenerator gen(cdir, dir + "dep.textproto");
+    gen.emit_cabling_descriptor(dir + "out.textproto");
+    gen.emit_deployment_descriptor(dir + "dep_out.textproto");
+
+    cabling_generator::proto::ClusterDescriptor desc;
+    ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(read_file(dir + "out.textproto"), &desc));
+    tt::scaleout_tools::deployment::proto::DeploymentDescriptor dep_out;
+    ASSERT_TRUE(google::protobuf::TextFormat::ParseFromString(read_file(dir + "dep_out.textproto"), &dep_out));
+
+    std::map<std::string, std::string> child_to_desc;
+    for (const auto& [_, tmpl] : desc.graph_templates()) {
+        for (const auto& child : tmpl.children()) {
+            if (child.has_node_ref()) {
+                child_to_desc[child.name()] = child.node_ref().node_descriptor();
+            }
+        }
+    }
+    std::map<std::string, std::string> host_to_node_type;
+    for (const auto& h : dep_out.hosts()) {
+        host_to_node_type[h.host()] = h.node_type();
+    }
+
+    ASSERT_EQ(child_to_desc.size(), 2u);
+    EXPECT_EQ(child_to_desc["host_ab"], "BH_GALAXY_REV_AB");
+    EXPECT_EQ(child_to_desc["host_c"], "BH_GALAXY_REV_C");
+    for (const auto& [name, desc_name] : child_to_desc) {
+        EXPECT_EQ(host_to_node_type[name], desc_name) << name;
+    }
 
     std::filesystem::remove_all(dir);
 }
