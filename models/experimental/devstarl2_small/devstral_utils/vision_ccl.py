@@ -15,6 +15,10 @@ from models.experimental.devstarl2_small.devstral_utils.dram_sharded_matmul impo
     TILE,
     width_sharded_l1_memcfg,
 )
+from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import (
+    vision_rms_norm_block_shard_eligible,
+    vision_rms_norm_block_shard_memcfg,
+)
 
 
 def _vision_ccl_core_grid(configuration: Any) -> tuple[int, int]:
@@ -53,6 +57,29 @@ def vision_ccl_rs_width_sharded_memcfg(
     return vision_ccl_width_sharded_memcfg(seq_len, local_dim, configuration)
 
 
+def vision_ccl_rs_block_shard_memcfg(
+    seq_len: int,
+    feature_dim: int,
+    num_devices: int,
+    configuration: Any,
+    grid_x: int = 8,
+    grid_y: int = 8,
+) -> Optional[ttnn.MemoryConfig]:
+    """Block-sharded L1 for reduce-scatter output (feature / num_devices per chip)."""
+    local_dim = nearest_32(int(feature_dim) // int(num_devices))
+    if not vision_rms_norm_block_shard_eligible(seq_len, local_dim, grid_x, grid_y):
+        return None
+    _ = configuration
+    return vision_rms_norm_block_shard_memcfg(seq_len, local_dim, grid_x, grid_y)
+
+
+def _is_block_sharded_l1(tensor: ttnn.Tensor) -> bool:
+    if not tensor.is_sharded():
+        return False
+    mem = tensor.memory_config()
+    return mem.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED and mem.buffer_type == ttnn.BufferType.L1
+
+
 def _prepare_ccl_input(
     tensor: ttnn.Tensor,
     sharded_mem: Optional[ttnn.MemoryConfig],
@@ -77,6 +104,7 @@ def vision_sum_all_reduce(
     configuration: Any,
     *,
     cluster_axis: int = 1,
+    ag_out_mem: Optional[ttnn.MemoryConfig] = None,
 ) -> ttnn.Tensor:
     """Sum partial matmul outputs across mesh (K-sharded wo/w2). RS+AG vs all_gather+reduce."""
     mesh_shape = list(mesh_device.shape)
@@ -84,12 +112,18 @@ def vision_sum_all_reduce(
         return partial
 
     num_devices = int(mesh_shape[cluster_axis])
-    rs_sharded_mem = vision_ccl_rs_width_sharded_memcfg(seq_len, feature_dim, num_devices, configuration)
+    grid_x, grid_y = _vision_ccl_core_grid(configuration)
+    rs_width_mem = vision_ccl_rs_width_sharded_memcfg(seq_len, feature_dim, num_devices, configuration)
+    rs_block_mem = vision_ccl_rs_block_shard_memcfg(seq_len, feature_dim, num_devices, configuration, grid_x, grid_y)
     in_sharded_mem = vision_ccl_width_sharded_memcfg(seq_len, feature_dim, configuration)
-    ag_out_mem = ttnn.DRAM_MEMORY_CONFIG
+    gathered_mem = ag_out_mem if ag_out_mem is not None else ttnn.DRAM_MEMORY_CONFIG
 
-    ccl_in = _prepare_ccl_input(partial, in_sharded_mem)
-    rs_out_mem = rs_sharded_mem if rs_sharded_mem is not None else ttnn.DRAM_MEMORY_CONFIG
+    if _is_block_sharded_l1(partial) and rs_block_mem is not None:
+        ccl_in = partial
+        rs_out_mem = rs_block_mem
+    else:
+        ccl_in = _prepare_ccl_input(partial, in_sharded_mem)
+        rs_out_mem = rs_width_mem if rs_width_mem is not None else ttnn.DRAM_MEMORY_CONFIG
     prepared = ccl_in is not partial
 
     scattered = ttnn.experimental.reduce_scatter_minimal_async(
@@ -120,7 +154,7 @@ def vision_sum_all_reduce(
         num_links=tt_ccl.get_num_links(cluster_axis),
         cluster_axis=cluster_axis,
         topology=ttnn.Topology.Linear,
-        memory_config=ag_out_mem,
+        memory_config=gathered_mem,
         barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
         chunks_per_sync=10,
         num_workers_per_link=2,
@@ -139,6 +173,7 @@ def vision_sum_all_reduce(
 
 
 __all__ = [
+    "vision_ccl_rs_block_shard_memcfg",
     "vision_ccl_rs_width_sharded_memcfg",
     "vision_ccl_width_sharded_memcfg",
     "vision_sum_all_reduce",
