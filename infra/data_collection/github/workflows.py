@@ -132,19 +132,22 @@ def search_for_tt_smi_reset_in_log_file_(log_file):
                     block_end_ts = ts
                 reset_done = True
 
-    # If no actual tt-smi tool invocations were seen ("===== START of output =====" never
-    # appeared), the reset section matched a false positive (e.g. "tt-smi reset" text in
-    # a Metal teardown error or unrelated log line). Keep the row but clear any spurious
-    # error_summary that came from unrelated log lines.
+    # "===== START of output =====" counts internal tt-smi retry invocations.
+    # If it never appeared but we got a clear SUCCESS, the reset ran once without retries.
+    # If it never appeared and status is still UNKNOWN or FAILURE, no real tool ran —
+    # it was a false positive (e.g. "tt-smi reset" / "Error:" in an unrelated log line).
     if num_smi_attempts == 0:
-        return [
-            {
-                "tt_smi_reset_attempt": 1,
-                "final_status": "UNKNOWN",
-                "total_reset_time_sec": None,
-                "error_summary": None,
-            }
-        ]
+        if final_status == "SUCCESS":
+            num_smi_attempts = 1
+        else:
+            return [
+                {
+                    "tt_smi_reset_attempt": 1,
+                    "final_status": "UNKNOWN",
+                    "total_reset_time_sec": None,
+                    "error_summary": None,
+                }
+            ]
 
     duration = None
     if block_start_ts and block_end_ts:
