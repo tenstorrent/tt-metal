@@ -864,6 +864,57 @@ def all_reduce_sum_replicate(
     return acc  # type: ignore[return-value]
 
 
+# TP encoder: large prefill activations in DRAM avoid L1 clashes with block-sharded matmul CBs.
+ENCODER_TP_DRAM_TOKEN_THRESHOLD = 256
+
+
+def encoder_tp_activation_memory_config(token_rows: int) -> ttnn.MemoryConfig:
+    """Activation buffer type for encoder TP prefill (interleaved BSH)."""
+    if token_rows >= ENCODER_TP_DRAM_TOKEN_THRESHOLD:
+        return ttnn.DRAM_MEMORY_CONFIG
+    return ttnn.L1_MEMORY_CONFIG
+
+
+def encoder_all_reduce_sum_replicate(
+    x: ttnn.Tensor,
+    mesh_device: ttnn.Device,
+    *,
+    cluster_axis: int = 1,
+    memory_config: ttnn.MemoryConfig = ttnn.L1_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    """Text encoder only: sum row-parallel partials via ``ttnn.all_reduce`` (no ``all_gather``).
+
+    Decoder / speech / T2U keep ``all_reduce_sum_replicate`` (gather + local sum).
+    """
+    num_devices = 1
+    if hasattr(mesh_device, "get_num_devices"):
+        try:
+            num_devices = int(mesh_device.get_num_devices())
+        except Exception:
+            num_devices = 1
+    if num_devices <= 1:
+        return x
+
+    mc = memory_config
+    x_shape = list(x.shape)
+    token_rows = 1
+    for d in x_shape[:-1]:
+        token_rows *= int(d)
+    if mc.buffer_type == ttnn.BufferType.L1 and token_rows >= ENCODER_TP_DRAM_TOKEN_THRESHOLD:
+        mc = ttnn.DRAM_MEMORY_CONFIG
+
+    result = ttnn.all_reduce(
+        x,
+        cluster_axis=cluster_axis,
+        memory_config=mc,
+        num_links=1,
+        topology=ttnn.Topology.Linear,
+    )
+    if result is not x:
+        ttnn.deallocate(x)
+    return result
+
+
 def sdpa_program_config(
     device: ttnn.Device,
     seq_q: int,
