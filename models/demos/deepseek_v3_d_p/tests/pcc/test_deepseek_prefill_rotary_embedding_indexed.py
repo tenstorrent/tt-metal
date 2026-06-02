@@ -65,19 +65,35 @@ def _rotated_chip_positions(kv_actual, sp, chunk_local):
 
 @pytest.mark.parametrize("mesh_device", [(2, 4), (8, 4)], ids=["2x4", "8x4"], indirect=True)
 @pytest.mark.parametrize(
-    "config_name, n_heads, new_isl_tiles_per_dev, cache_tokens_per_dev",
+    "config_name, num_heads_local, new_isl_tiles_per_dev, cache_tokens_per_dev",
     [
-        ("small", 2, 4, 512),  # small: 2 heads (exercises cos/sin head-broadcast), 4-tile chunk/dev
-        ("repr", 2, 20, 6400),  # representative: 5k new isl + 50k cache on 8x4 (per-dev scaled)
+        ("small", 2, 4, 512),  # small: 2 heads/dev, 4-tile chunk/dev
+        ("repr", 8, 20, 6400),  # representative: 8 heads/dev, 5k new isl + 50k cache on 8x4 (per-dev scaled)
     ],
     ids=["small", "repr"],
 )
+@pytest.mark.parametrize("tensor_kind", ["Q", "KV"], ids=["Q", "KV"])
 @pytest.mark.parametrize("scenario", ["non_padded", "padded_partial"], ids=["non_padded", "padded_partial"])
 @pytest.mark.timeout(0)
 def test_rotary_embedding_indexed_multi_iteration_prefill(
-    mesh_device, config_name, n_heads, new_isl_tiles_per_dev, cache_tokens_per_dev, scenario, is_ci_env, is_ci_v2_env
+    mesh_device,
+    config_name,
+    num_heads_local,
+    new_isl_tiles_per_dev,
+    cache_tokens_per_dev,
+    tensor_kind,
+    scenario,
+    is_ci_env,
+    is_ci_v2_env,
 ):
-    """Multi-iteration prefill RoPE.
+    """Multi-iteration prefill RoPE, for both MLA rope tensors.
+
+    - tensor_kind="Q": multi-head input sharded on BOTH the TP axis (heads, like
+      num_heads_local = num_heads // tp_factor in mla.py) and the SP axis (seq). Proves the op is
+      TP-layout-agnostic -- the cos/sin offset depends only on the SP coordinate, and cos/sin are
+      TP-replicated, so each device applies the right per-SP rope to whatever heads it holds.
+    - tensor_kind="KV": single-head input, TP-replicated and SP-sharded (kv rope is reduced across
+      TP before rotation in mla.py, so n_heads=1 and freq_per_head degenerates).
 
     - non_padded: two full-chunk iterations (chunk-aligned -> uniform per-device offset).
     - padded_partial: three iterations with whole-tile, non-zero pad offsets so the boundary chip's
@@ -93,6 +109,13 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
     sp = mesh_device.shape[sp_axis]
     tp = mesh_device.shape[tp_axis]
     tile = ttnn.TILE_SIZE
+
+    # Q: heads sharded across TP (n_heads = num_heads_local * tp), like mla.py tt_q_rope.
+    # KV: single head, TP-replicated, like mla.py tt_kv_rope.
+    if tensor_kind == "Q":
+        n_heads = num_heads_local * tp
+    else:
+        n_heads = 1
     C = new_isl_tiles_per_dev * tile  # per-device chunk (tokens), fixed every iter
     chunk_global = C * sp
 
@@ -105,7 +128,8 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
     assert cum_total <= cache_global, f"valid tokens ({cum_total}) must fit the cache ({cache_global})"
 
     logger.info(
-        f"sp={sp} tp={tp} chunk_local={C} chunk_global={chunk_global} cache_global={cache_global}; "
+        f"tensor_kind={tensor_kind} n_heads={n_heads} sp={sp} tp={tp} chunk_local={C} "
+        f"chunk_global={chunk_global} cache_global={cache_global}; "
         f"new_isl per iter={new_actual_isls} (cum_total={cum_total})"
     )
 
@@ -142,6 +166,8 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
 
     input_shard_dims = [None, None]
     input_shard_dims[sp_axis] = 2  # split the global chunk across SP devices (contiguous)
+    if tensor_kind == "Q":
+        input_shard_dims[tp_axis] = 1  # shard heads across TP (like mla.py); KV replicates instead
 
     concat_dims = [None, None]
     concat_dims[sp_axis] = 2
@@ -181,7 +207,7 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(concat_dims), mesh_shape=mesh_device.shape),
         ).to(torch.bfloat16)[
             :, :n_heads, :, :
-        ]  # drop the TP-replicated head copies
+        ]  # Q: heads reassembled across TP (no-op slice); KV: drop the TP-replicated copies
 
         # Reference: rotate each chip-concat row by cos/sin at its true global position.
         cos_sel = cos_full[0, 0, flat, :].unsqueeze(0).unsqueeze(0)  # [1, 1, chunk_global, head_dim]
