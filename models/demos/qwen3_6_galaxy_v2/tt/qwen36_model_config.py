@@ -18,8 +18,11 @@ qwen3.6-specific:
    8-DRAM-bank topology), but the existing config still carves col 4 out
    of `sub_core_grids` as if it were a prefetcher sender column. With no
    prefetcher running, col 4 is unused Tensix compute. We reclaim it:
-   `sub_core_grids` becomes `(1,0) → (6,9) = 60 cores`, vs the previous
-   `(1,0) → (3,9) + (5,0) → (6,9) = 50 cores`. +20% compute area.
+   `sub_core_grids` is now DYNAMIC — derived from the live device compute
+   grid as cols `1 .. grid.x-1` × rows `0 .. grid.y-1` (col 0 reserved for
+   DRAM). On BH P150 galaxy (grid (12,10)) that is cols 1-11 × 10 = 110
+   cores, vs the inherited Wormhole hard-coded 60 (`(1,0)→(6,9)`) and the
+   original prefetcher-aware 50-core split. ~83% more compute area.
 """
 import math
 import os
@@ -188,11 +191,22 @@ class TtQwen36ModelArgs(TtModelArgs):
         # col 4 is unused — reclaim it for compute.
         _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(12, 2, False)
 
-        # Compute grid: cols 1-6 × rows 0-9 = 60 cores (vs 50 with carve-out).
-        # col 0 is DRAM, col 7 is dispatch — leave reserved.
+        # Compute grid: DYNAMIC full band derived from the live device grid.
+        # Read the actual Tensix compute grid (WH TG: (7,10); BH P150 galaxy:
+        # (12,10)) and span cols 1..grid.x-1 × rows 0..grid.y-1. Col 0 is
+        # reserved for DRAM-adjacent ops. On BH this gives cols 1-11 × 10 rows
+        # = 110 cores (vs the inherited Wormhole hard-coded 60). The old
+        # "col 7 = dispatch" reservation was a WH leftover — on BH the dispatch
+        # core is the last worker column, already OUTSIDE this band, and col 7
+        # is normal compute. Do NOT hard-code 12 — derive it so harvested SKUs
+        # (P100 = 7 DRAM banks, etc.) pick the correct width automatically.
+        _compute_grid = mesh_device.compute_with_storage_grid_size()
         self.sub_core_grids = ttnn.CoreRangeSet(
             [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(6, 9)),
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(1, 0),
+                    ttnn.CoreCoord(_compute_grid.x - 1, _compute_grid.y - 1),
+                ),
             ]
         )
         # topk path still uses a narrower grid (3-col band).

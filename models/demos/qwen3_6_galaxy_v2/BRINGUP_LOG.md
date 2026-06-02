@@ -3,6 +3,40 @@
 Live tracker. Append-only. Mirrors the format in
 `models/demos/olmo_galaxy/BRINGUP_LOG.md`.
 
+## 2026-06-02 — BH grid widening: sub_core_grids 60 → 110 (dynamic) ✅
+
+**Step 1 of BH_GRID_MIGRATION.** `sub_core_grids` master compute grid was
+hard-coded to the inherited Wormhole 60-core band `(1,0)→(6,9)`. Widened to a
+DYNAMIC full band derived from the live device grid:
+`CoreRange((1,0), (grid.x-1, grid.y-1))` — col 0 reserved for DRAM. On this BH
+P150 galaxy (`compute_with_storage_grid_size() == (12,10)`) that is cols 1-11 ×
+10 rows = **110 cores** (was 60; +83% compute area). The "col 7 = dispatch"
+comment was a WH leftover (dispatch is the last worker column, outside the band).
+Not hard-coded — harvested SKUs auto-derive the right width.
+
+Files: `tt/qwen36_model_config.py` (dynamic derivation + docstring); the only
+60-core literal duplicate was the config itself (demo/test `(1,0)→(3,9)+(5,0)→(6,9)`
+50-core literals are the local SAMPLING/argmax grid, independent of the master
+compute grid — left untouched; ops that read `args.sub_core_grids` auto-pick the
+wider grid). Updated `tests/test_ccl_buffer_keys.py` mock (grid 7→12,
+`num_cores 60→110`). New contract test `tests/test_sub_core_grids_dynamic.py`
+(parametrized: grid (12,10)→110, (7,10)→60).
+
+Per-op ring/SDPA program configs (XQKV/WO/FF/LM-head 24-core rings, SDPA decode)
+NOT widened — separate later migration steps with their own shape math.
+
+**Gates (all PASS):**
+- Unit: contract test 3/3 + `test_ccl_buffer_keys.py` 6/6.
+- ISL-128 (`test_decode_perf_intrace::test_qwen36_64L_decode_intrace_perf`,
+  greedy): coherent text (123 alpha chars, condiment-prompt continuation),
+  **20.52 tok/s/user** (up from ~18.x baseline). No op broke on the wider grid.
+- 128k demo (`text_demo_qwen36::test_qwen36_demo_batch1`, sampled): ISL=131072
+  (103409 real tokens), COHERENT on-topic output, prefill 1406 tok/s warm,
+  decode **18.52 tok/s/user** (vs ~18.3 baseline). TTFT warm 93.2 s.
+
+No op assumed the cols 1-6 layout — the dynamic ops (CREATE_HEAD_OUTPUT_MEMCFG,
+llama_ccl sub_device_crs, RoPE trans-mat) cleanly picked up the wider grid.
+
 ## 2026-06-01 — COHERENCE FIXED + sampling; clean ISL sweep 128→128k ✅
 
 **The coherence bug (garbage output at every ISL) — ROOT CAUSE & FIX.**

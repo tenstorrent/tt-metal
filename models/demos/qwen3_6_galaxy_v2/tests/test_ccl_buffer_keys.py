@@ -26,7 +26,11 @@ import pytest
 class _FakeModelArgs:
     def __init__(self):
         self.sub_core_grids = MagicMock(name="sub_core_grids")
-        self.sub_core_grids.num_cores.return_value = 60
+        # Dynamic full-band grid: BH P150 galaxy reports compute grid (12,10),
+        # so sub_core_grids spans cols 1..11 × 10 rows = 110 cores (was the
+        # inherited Wormhole 60). Matches the dynamic derivation in
+        # qwen36_model_config.py.
+        self.sub_core_grids.num_cores.return_value = 110
         # Required by get_decode_reduce_scatter_buffers via shard_spec.num_cores().
         self.max_top_k = 32
         self.max_batch_size = 32
@@ -60,7 +64,8 @@ def _make_fake_mesh_device():
     md = MagicMock(name="mesh_device")
     md.shape = [8, 4]
     grid = MagicMock(name="grid_size")
-    grid.x = 7
+    # BH P150 galaxy compute grid (cols 0-11 × rows 0-9).
+    grid.x = 12
     grid.y = 10
     md.compute_with_storage_grid_size.return_value = grid
     md.get_num_devices.return_value = 32
