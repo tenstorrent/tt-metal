@@ -340,12 +340,6 @@ def test_bw_dram_core_prefetcher_recv_contig(device, op_name, shape):
         device, bank_to_receivers, gcb_size, dual_senders_per_bank=dual_senders
     )
 
-    logger.info(
-        f"[dram_core_bw_rc][{op_name}] dual_senders={dual_senders} K={_K_ORIG} K_padded={_K} N={_N_ORIG} N_padded={_N} "
-        f"ring={num_receivers} page_size={page_size} pages_per_layer={pages_per_layer} "
-        f"gcb_size={gcb_size} trace_repeats={trace_repeats} num_prefetch_layers={num_prefetch_layers}"
-    )
-
     ttnn.experimental.start_dram_core_prefetcher(device, dual_senders_per_bank=dual_senders)
     ttnn.experimental.queue_dram_core_prefetcher_request(
         device, [(tt_weight, num_receivers)] * num_prefetch_layers, global_cb=gcb

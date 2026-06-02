@@ -629,12 +629,6 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
         dst_full_sync_en=True,
     )
 
-    logger.info(
-        f"[dram_core_rc][{op_name}] K={_K} K_padded={k_padded} N={_N} banks={num_dram_banks} ring={ring_size} "
-        f"n_per_recv={n_per_recv} gcb_size={gcb_size} trace_repeats={trace_repeats} "
-        f"num_prefetch_layers={num_prefetch_layers}"
-    )
-
     optional_output_tensor = ttnn.from_torch(
         torch.zeros(1, 1, _M, _N),
         device=device,
