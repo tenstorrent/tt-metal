@@ -20,6 +20,15 @@ Run::
     export MISTRAL4_WEIGHT_CACHE_DIR=/tmp/mistral4_weights  # optional; cache quantized text weights to skip re-quantization
     export MESH_DEVICE=P150x8
     pytest models/experimental/mistral_small_4_119b/tests/test_multimodal_pcc_unified.py -v -s --timeout=0
+
+Long-context (vision + language) sweep:
+  Set MISTRAL4_MM_MAX_TEXT_TOKENS to pad the prompt with coherent English filler up to that
+  many text tokens (image tokens are added on top). Verified up to 32000 on P150x8. The HF
+  CPU reference (RAM + O(seq^2) attention) is the practical ceiling — full 36+24 layers at
+  32K needs a large-RAM host (>256 GB recommended).
+
+    export MISTRAL4_MM_MAX_TEXT_TOKENS=32000
+    pytest models/experimental/mistral_small_4_119b/tests/test_multimodal_pcc_unified.py -v -s --timeout=0
 """
 
 from __future__ import annotations
@@ -72,6 +81,10 @@ _IMAGE_PATH = os.environ.get("MISTRAL4_MM_IMAGE", "")
 _PROMPT = os.environ.get("MISTRAL4_MM_PROMPT", "Describe this image.")
 _IMAGE_MAX_SIDE = int(os.environ.get("MISTRAL4_MM_IMAGE_MAX_SIDE", "224"))
 _IMG_PATCHES = int(os.environ.get("MISTRAL4_MM_IMG_PATCHES", "10"))
+# Long-context sweep: pad the text prompt with coherent English filler up to this many
+# tokens (0 = use _PROMPT unchanged). Verified up to 32000 (vision + language) on P150x8;
+# the HF CPU reference RAM/time is the practical ceiling beyond that.
+_MAX_TEXT_TOKENS = int(os.environ.get("MISTRAL4_MM_MAX_TEXT_TOKENS", "0"))
 # Vision bf8 quantization dominates the accuracy floor.
 _PCC_FLOOR = 0.80
 
@@ -160,6 +173,27 @@ def _build_hf_mm_ref(full_config, state_dict: dict, n_text: int, n_vision: int):
     return model.eval()
 
 
+_FILLER_SENTENCE = (
+    "Context padding for long-window multimodal benchmarking on Tenstorrent hardware. "
+    "Please ignore this repeated section when answering; respond only to the final question. "
+)
+
+
+def _build_long_prompt(tokenizer, target_text_tokens: int, question: str) -> str:
+    """Coherent natural-language haystack of ~target_text_tokens tokens, then a real question.
+
+    Uses repeated real English (not random token ids) so the MoE router selects the same
+    experts in the HF fp32 reference and the TT bf16 path. Random ids make routing scores
+    near-tied and collapse PCC, which does not reflect a real accuracy regression.
+    """
+    per = len(tokenizer(_FILLER_SENTENCE, add_special_tokens=False).input_ids)
+    filler = _FILLER_SENTENCE * max(1, target_text_tokens // max(1, per))
+    ids = tokenizer(filler, add_special_tokens=False).input_ids
+    if len(ids) > target_text_tokens:
+        filler = tokenizer.decode(ids[:target_text_tokens], skip_special_tokens=True)
+    return f"{filler}\n\nNow answer only this: {question}"
+
+
 @torch.no_grad()
 @run_for_wormhole_b0_or_blackhole()
 @pytest.mark.skipif(
@@ -212,12 +246,21 @@ def test_mistral_small_4_multimodal_pcc_unified(reset_seeds, mesh_device):
         logger.info(f"No MISTRAL4_MM_IMAGE set; using deterministic synthetic {side}×{side} RGB image")
 
     processor = AutoProcessor.from_pretrained(HF_MODEL_ID)
+
+    prompt_text = _PROMPT
+    if _MAX_TEXT_TOKENS:
+        from transformers import AutoTokenizer
+
+        tok = getattr(processor, "tokenizer", None) or AutoTokenizer.from_pretrained(HF_MODEL_ID)
+        prompt_text = _build_long_prompt(tok, _MAX_TEXT_TOKENS, _PROMPT)
+        logger.info(f"Long-context prompt: target {_MAX_TEXT_TOKENS} text tokens, {len(prompt_text)} chars")
+
     messages = [
         {
             "role": "user",
             "content": [
                 {"type": "image", "image": img},
-                {"type": "text", "text": _PROMPT},
+                {"type": "text", "text": prompt_text},
             ],
         }
     ]
@@ -240,7 +283,7 @@ def test_mistral_small_4_multimodal_pcc_unified(reset_seeds, mesh_device):
     logger.info(
         f"Config: text_layers={_TEXT_LAYERS}, vision_layers={_VISION_LAYERS}, "
         f"pixel_values {tuple(pixel_values.shape)}, {num_image_tokens} image tokens, "
-        f"seq_len={seq_len}, prompt={_PROMPT!r}"
+        f"seq_len={seq_len}, prompt_chars={len(prompt_text)}"
     )
 
     # ── HF reference forward ─────────────────────────────────────────

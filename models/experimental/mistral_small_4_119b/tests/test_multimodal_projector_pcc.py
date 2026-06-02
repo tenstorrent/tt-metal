@@ -18,7 +18,7 @@ Run::
 
     export MISTRAL4_MMP_PCC=1
     export MISTRAL4_MMP_IMG_PATCHES=10   # patches per side BEFORE merge (must be even); default 10
-    export MESH_DEVICE=T3K               # T3K=1x8, P150x4=1x4, single=1x1
+    export MESH_DEVICE=P150x8
     pytest models/experimental/mistral_small_4_119b/tests/test_multimodal_projector_pcc.py -v -s --timeout=0
 """
 
