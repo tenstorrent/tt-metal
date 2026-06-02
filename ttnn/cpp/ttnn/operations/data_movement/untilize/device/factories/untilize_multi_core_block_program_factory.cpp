@@ -58,11 +58,11 @@ ProgramDescriptor UntilizeMultiCoreBlockProgramFactory::create_descriptor(
     const UntilizeTensorArgs& tensor_args,
     UntilizeTensorReturnValue& tensor_return_value) {
     const auto& a = tensor_args.input;
-    const Tensor& output = tensor_return_value;
+    const MeshTensor& c = tensor_return_value.mesh_tensor();
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(c.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     const auto& input_shape = a.padded_shape();
@@ -110,15 +110,13 @@ ProgramDescriptor UntilizeMultiCoreBlockProgramFactory::create_descriptor(
 
     uint32_t el_size = a.element_size();
     if (a.dtype() == DataType::BFLOAT8_B) {
-        row_size_bytes = input_shape[-1] * output.element_size();
-        el_size = output.element_size();
+        row_size_bytes = input_shape[-1] * c.element_size();
+        el_size = c.element_size();
     } else {
         row_size_bytes = input_shape[-1] * a.element_size();
     }
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    const auto& src0_tensor = a.mesh_tensor();
 
     ProgramDescriptor desc;
 
@@ -166,7 +164,7 @@ ProgramDescriptor UntilizeMultiCoreBlockProgramFactory::create_descriptor(
     // reader
     uint32_t num_tiles_2d = a.padded_shape()[-1] * a.padded_shape()[-2] / TILE_HW;
 
-    auto log_shape = output.logical_shape();
+    auto log_shape = c.logical_shape();
     uint32_t third_dim = 1;
     if (log_shape.rank() == 3) {
         third_dim = log_shape[-3];
@@ -175,7 +173,7 @@ ProgramDescriptor UntilizeMultiCoreBlockProgramFactory::create_descriptor(
     }
 
     std::vector<uint32_t> reader_compile_time_args = {num_tiles_2d, third_dim, total_tiles_per_row};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src0_tensor).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -186,9 +184,9 @@ ProgramDescriptor UntilizeMultiCoreBlockProgramFactory::create_descriptor(
     reader_desc.config = ReaderConfigDescriptor{};
 
     // writer
-    uint32_t total_num_rows = output.logical_shape()[-2];
+    uint32_t total_num_rows = c.logical_shape()[-2];
     std::vector<uint32_t> writer_ct_args = {total_num_rows, third_dim, TILE_HEIGHT, row_size_bytes};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+    TensorAccessorArgs(c).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -291,12 +289,12 @@ ProgramDescriptor UntilizeMultiCoreBlockProgramFactory::create_descriptor(
         // reader runtime args — Buffer* slot auto-registers as a BufferBinding so the
         // framework patches addresses on cache hits.
         reader_desc.emplace_runtime_args(
-            core, {src0_buffer, tile_start_id, single_block_size_row_arg, single_block_size_col_arg});
+            core, {src0_tensor, tile_start_id, single_block_size_row_arg, single_block_size_col_arg});
 
         // writer runtime args
         writer_desc.emplace_runtime_args(
             core,
-            {dst_buffer,
+            {c,
              TILE_WIDTH * el_size * single_block_size_row_arg,
              start_row_id,
              start_column_id,

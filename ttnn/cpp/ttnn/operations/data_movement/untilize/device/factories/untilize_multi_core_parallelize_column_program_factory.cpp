@@ -23,8 +23,8 @@ ProgramDescriptor UntilizeMultiCoreParallelizeColumnProgramFactory::create_descr
     const UntilizeOperationAttributes& operation_attributes,
     const UntilizeTensorArgs& tensor_args,
     UntilizeTensorReturnValue& tensor_return_value) {
-    const auto& a = tensor_args.input;
-    const Tensor& output = tensor_return_value;
+    const auto& a = tensor_args.input.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
@@ -32,7 +32,7 @@ ProgramDescriptor UntilizeMultiCoreParallelizeColumnProgramFactory::create_descr
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
-    IDevice* device = a.device();
+    IDevice* device = &a.mutable_device();
     auto grid_size = device->compute_with_storage_grid_size();
 
     uint32_t ntiles = a.physical_volume() / TILE_HW;
@@ -68,9 +68,6 @@ ProgramDescriptor UntilizeMultiCoreParallelizeColumnProgramFactory::create_descr
 
     bool row_major = true;
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-
     const uint32_t src0_cb_index = tt::CBIndex::c_0;
     const uint32_t output_cb_index = tt::CBIndex::c_16;
 
@@ -99,7 +96,7 @@ ProgramDescriptor UntilizeMultiCoreParallelizeColumnProgramFactory::create_descr
     });
 
     std::vector<uint32_t> reader_ct_args;
-    TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
+    TensorAccessorArgs(a).append_to(reader_ct_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -110,7 +107,7 @@ ProgramDescriptor UntilizeMultiCoreParallelizeColumnProgramFactory::create_descr
     reader_desc.config = ReaderConfigDescriptor{};
 
     std::vector<uint32_t> writer_ct_args = {stick_size};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+    TensorAccessorArgs(output).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -197,13 +194,13 @@ ProgramDescriptor UntilizeMultiCoreParallelizeColumnProgramFactory::create_descr
         uint32_t ntiles_per_core = ntiles_per_block * nblocks_per_core;
         reader_desc.emplace_runtime_args(
             core,
-            {src0_buffer,      // src_addr
+            {a,                // src_addr
              ntiles_per_core,  // ntiles
              tile_start_id});  // start_id
 
         writer_desc.emplace_runtime_args(
             core,
-            {dst_buffer,                                                 // dst_addr
+            {output,                                                     // dst_addr
              nsticks_per_core,                                           // nsticks
              ntiles_per_core,                                            // ntiles_per_core
              static_cast<uint32_t>(TILE_WIDTH * output.element_size()),  // tile_width_size
@@ -220,13 +217,13 @@ ProgramDescriptor UntilizeMultiCoreParallelizeColumnProgramFactory::create_descr
         uint32_t ntiles_per_core_cliff = ntiles_per_block * nblocks_per_core_cliff;
         reader_desc.emplace_runtime_args(
             core,
-            {src0_buffer,            // src_addr
+            {a,                      // src_addr
              ntiles_per_core_cliff,  // ntiles
              tile_start_id});        // start_id
 
         writer_desc.emplace_runtime_args(
             core,
-            {dst_buffer,                                                 // dst_addr
+            {output,                                                     // dst_addr
              nsticks_per_core,                                           // nsticks
              stick_size,                                                 // block_size_nbytes
              ntiles_per_core_cliff,                                      // ntiles_per_core

@@ -17,30 +17,36 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+// Aligned page size depends on the device allocator (DRAM vs L1) and is not surfaced by
+// MeshTensor/MeshBuffer, so it is reached through the reference buffer.
+uint32_t get_buffer_aligned_page_size(const MeshTensor& t) {
+    return static_cast<uint32_t>(t.mesh_buffer().get_reference_buffer()->aligned_page_size());
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
 ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
     const TilizeParams& operation_attributes, const TilizeInputs& tensor_args, Tensor& tensor_return_value) {
-    const auto& a = tensor_args.input_tensor;
-    const Tensor& output = tensor_return_value;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+    const MeshTensor& a = tensor_args.input_tensor.mesh_tensor();
+    const MeshTensor& c = tensor_return_value.mesh_tensor();
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(c.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
                         output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-
     auto logical_shape = a.logical_shape();
     uint32_t logical_width = logical_shape[-1];
     uint32_t ntiles_per_block = tt::div_up(logical_width, TILE_WIDTH);
-    uint32_t ntiles = dst_buffer->num_pages();
+    uint32_t ntiles = c.mesh_buffer().num_pages();
     uint32_t nblocks = tt::div_up(ntiles, ntiles_per_block);
-    auto* device = a.device();
-    auto grid_size = device->compute_with_storage_grid_size();
+    auto grid_size = a.device().compute_with_storage_grid_size();
     CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     CoreRangeSet default_grid(default_cores);
     CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
@@ -75,8 +81,8 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
 
     /** reader
      */
-    uint32_t page_size = src0_buffer->page_size();
-    uint32_t aligned_page_size = src0_buffer->aligned_page_size();
+    uint32_t page_size = a.mesh_buffer().page_size();
+    uint32_t aligned_page_size = get_buffer_aligned_page_size(a);
     uint32_t num_pages_in_row = 1;
     uint32_t size_of_valid_data_in_last_page_in_row = page_size;
     if (a.is_sharded()) {
@@ -91,7 +97,7 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
     }
     std::vector<uint32_t> reader_ct_args = {
         aligned_page_size, num_pages_in_row, size_of_valid_data_in_last_page_in_row};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
+    TensorAccessorArgs(a).append_to(reader_ct_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -105,7 +111,7 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
     /** writer
      */
     std::vector<uint32_t> writer_ct_args = {output_cb_index};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+    TensorAccessorArgs(c).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -163,11 +169,11 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
     for (uint32_t i = 0; i < ncores_full; ++i) {
         const CoreCoord& core = cores[i];
 
-        // reader runtime args — Buffer* slots auto-register as BufferBindings so the
-        // framework patches addresses on cache hits.
+        // reader runtime args — the tensor slot auto-registers a binding so the
+        // framework patches the address on cache hits.
         reader_desc.emplace_runtime_args(
             core,
-            {src0_buffer,
+            {a,
              nblocks_per_core * TILE_HEIGHT,
              page_size,
              ntiles_per_block,
@@ -180,7 +186,7 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
         // writer runtime args
         writer_desc.emplace_runtime_args(
             core,
-            {dst_buffer,
+            {c,
              ntiles_per_block * nblocks_per_core,  // ntiles per core
              tile_start_id});                      // start id
 
@@ -194,7 +200,7 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
         // reader runtime args
         reader_desc.emplace_runtime_args(
             core,
-            {src0_buffer,
+            {a,
              nblocks_per_core_cliff * TILE_HEIGHT,
              page_size,
              ntiles_per_block,
@@ -207,7 +213,7 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
         // writer runtime args
         writer_desc.emplace_runtime_args(
             core,
-            {dst_buffer,
+            {c,
              ntiles_per_block * nblocks_per_core_cliff,  // ntiles per core
              tile_start_id});                            // start id
     }

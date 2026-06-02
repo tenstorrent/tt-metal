@@ -25,8 +25,8 @@ tt::tt_metal::ProgramDescriptor UntilizeSingleCoreProgramFactory::create_descrip
     const UntilizeOperationAttributes& operation_attributes,
     const UntilizeTensorArgs& tensor_args,
     const UntilizeTensorReturnValue& tensor_return_value) {
-    const auto& a = tensor_args.input;
-    const auto& output = tensor_return_value;
+    const auto& a = tensor_args.input.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
     ProgramDescriptor desc;
@@ -37,10 +37,6 @@ tt::tt_metal::ProgramDescriptor UntilizeSingleCoreProgramFactory::create_descrip
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
-
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
@@ -66,7 +62,7 @@ tt::tt_metal::ProgramDescriptor UntilizeSingleCoreProgramFactory::create_descrip
     // Determine how much L1 space we can use for input and output CBs,
     // ensuring that we don't intrude into other L1 storage space
     uint32_t max_l1_size =
-        (a.device()->l1_size_per_core() / 2) - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
+        (a.device().l1_size_per_core() / 2) - a.device().allocator()->get_base_allocator_addr(HalMemType::L1);
 
     // Determine the max number of tiles that can be in any CB at a given time (1 input CB + 1 output CB = 2 total CBs)
     uint32_t max_tiles_per_cb = max_l1_size / (input_single_tile_size + output_single_tile_size);
@@ -118,7 +114,7 @@ tt::tt_metal::ProgramDescriptor UntilizeSingleCoreProgramFactory::create_descrip
     // Reader compile-time args
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
 
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(a).append_to(reader_compile_time_args);
 
     // Tilized reader
     KernelDescriptor reader_desc;
@@ -141,7 +137,7 @@ tt::tt_metal::ProgramDescriptor UntilizeSingleCoreProgramFactory::create_descrip
         (uint32_t)num_tiles_per_block,
         (uint32_t)output_single_block_width_size,
     };
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output).append_to(writer_compile_time_args);
 
     // Untilized writer
     KernelDescriptor writer_desc;
@@ -182,10 +178,10 @@ tt::tt_metal::ProgramDescriptor UntilizeSingleCoreProgramFactory::create_descrip
 
     // Reader run-time args
     uint32_t start_page_id = 0;
-    reader_desc.emplace_runtime_args(CoreCoord{0, 0}, {src0_buffer, num_tiles, start_page_id});
+    reader_desc.emplace_runtime_args(CoreCoord{0, 0}, {a, num_tiles, start_page_id});
 
     // Writer run-time args
-    writer_desc.emplace_runtime_args(CoreCoord{0, 0}, {dst_buffer});
+    writer_desc.emplace_runtime_args(CoreCoord{0, 0}, {output});
 
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));

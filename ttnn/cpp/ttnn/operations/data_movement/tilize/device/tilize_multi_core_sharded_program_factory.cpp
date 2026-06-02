@@ -17,8 +17,8 @@ namespace ttnn::prim {
 
 ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
     const TilizeParams& /*operation_attributes*/, const TilizeInputs& tensor_args, Tensor& tensor_return_value) {
-    const auto& input = tensor_args.input_tensor;
-    const Tensor& output = tensor_return_value;
+    const MeshTensor& input = tensor_args.input_tensor.mesh_tensor();
+    const MeshTensor& output = tensor_return_value.mesh_tensor();
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(input.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
@@ -34,9 +34,6 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
     const uint32_t src0_cb_index = tt::CBIndex::c_0;
     const uint32_t output_cb_index = tt::CBIndex::c_16;
 
-    Buffer* src_buffer = input.buffer();
-    Buffer* dst_buffer = output.buffer();
-
     ProgramDescriptor desc;
 
     // Sharded input CB — globally allocated to the input buffer; framework patches
@@ -50,7 +47,7 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
         });
-        cb_src0.buffer = src_buffer;
+        cb_src0.buffer = input.mesh_buffer().get_reference_buffer();
         desc.cbs.push_back(std::move(cb_src0));
     }
 
@@ -64,7 +61,7 @@ ProgramDescriptor TilizeMultiCoreShardedProgramFactory::create_descriptor(
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
         });
-        cb_output.buffer = dst_buffer;
+        cb_output.buffer = output.mesh_buffer().get_reference_buffer();
         desc.cbs.push_back(std::move(cb_output));
     }
 

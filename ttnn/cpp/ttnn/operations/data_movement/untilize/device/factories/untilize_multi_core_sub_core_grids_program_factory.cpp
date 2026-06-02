@@ -27,14 +27,14 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreSubCoreGridsProgramFactory::cre
     const UntilizeTensorReturnValue& tensor_return_value) {
     ProgramDescriptor desc;
 
-    const auto& a = tensor_args.input;
-    const auto& output = tensor_return_value;
+    const MeshTensor& a = tensor_args.input.mesh_tensor();
+    const MeshTensor& c = tensor_return_value.mesh_tensor();
     const auto& sub_core_grids = operation_attributes.sub_core_grids.value();
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(c.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     uint32_t ntiles = a.physical_volume() / TILE_HW;
@@ -52,7 +52,7 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreSubCoreGridsProgramFactory::cre
     uint32_t ntiles_per_block = ntiles / ncores;
     uint32_t stick_s = a.padded_shape()[-1];
     uint32_t ntiles_per_row = stick_s / TILE_WIDTH;
-    uint32_t stick_size = stick_s * output.element_size();
+    uint32_t stick_size = stick_s * c.element_size();
     uint32_t ntiles_per_column = ntiles / ntiles_per_row;
     uint32_t starting_tile = ntiles_per_block;
     if (ntiles_per_row > max_tiles) {
@@ -93,10 +93,8 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreSubCoreGridsProgramFactory::cre
         }}},
     });
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
     std::vector<uint32_t> reader_ct_args;
-    TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
+    TensorAccessorArgs(a).append_to(reader_ct_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -107,7 +105,7 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreSubCoreGridsProgramFactory::cre
     reader_desc.config = ReaderConfigDescriptor{};
 
     std::vector<uint32_t> writer_ct_args = {stick_size};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+    TensorAccessorArgs(c).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -159,7 +157,7 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreSubCoreGridsProgramFactory::cre
         reader_desc.emplace_runtime_args(
             core,
             {
-                src0_buffer,      // src_addr
+                a,                // src_addr
                 ntiles_per_core,  // ntiles
                 tile_start_id     // start_id
             });
@@ -167,16 +165,16 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreSubCoreGridsProgramFactory::cre
         writer_desc.emplace_runtime_args(
             core,
             {
-                dst_buffer,                          // dst_addr
-                nsticks_per_core,                    // nsticks
-                ntiles_per_core,                     // ntiles_per_core
-                TILE_WIDTH * output.element_size(),  // tile_width_size
-                std::uint32_t{0},                    // start stick id = 0, since parallelizing on height
-                offset_within_stick                  //
+                c,                                                     // dst_addr
+                nsticks_per_core,                                      // nsticks
+                ntiles_per_core,                                       // ntiles_per_core
+                static_cast<uint32_t>(TILE_WIDTH * c.element_size()),  // tile_width_size
+                std::uint32_t{0},    // start stick id = 0, since parallelizing on height
+                offset_within_stick  //
             });
 
         tile_start_id += ntiles_per_core;
-        offset_within_stick += ntiles_per_core * TILE_WIDTH * output.element_size();
+        offset_within_stick += ntiles_per_core * TILE_WIDTH * c.element_size();
     }
 
     desc.kernels.push_back(std::move(reader_desc));

@@ -29,17 +29,15 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
     const UntilizeTensorReturnValue& output) {
     ProgramDescriptor desc;
 
-    const auto& a = tensor_args.input;
+    const MeshTensor& a = tensor_args.input.mesh_tensor();
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    const auto& dst_tensor = output.mesh_tensor();
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(dst_tensor.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
-    tt::tt_metal::IDevice* device = a.device();
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    tt::tt_metal::IDevice* device = &a.mutable_device();
 
     uint32_t tensor_width = a.padded_shape()[-1];
     uint32_t tensor_height = a.physical_volume() / tensor_width;
@@ -84,7 +82,7 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
         num_input_blocks_per_full_core = input_shard_height / tile_height;
         num_input_blocks_per_cliff_core = 0;
 
-        ordered_cores_with_data = get_optimal_worker_cores_for_sharded_tensor(a);
+        ordered_cores_with_data = get_optimal_worker_cores_for_sharded_tensor(tensor_args.input);
         compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
         full_compute_core_range = compute_core_range;
         cliff_compute_core_range = CoreRangeSet();
@@ -98,7 +96,8 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
         has_uneven_sharding = (height_remainder != 0) || (width_remainder != 0);
     }
 
-    const bool input_is_dram_sharded = input_is_sharded && src0_buffer->buffer_type() == BufferType::DRAM;
+    const bool input_is_dram_sharded =
+        input_is_sharded && a.mesh_buffer().get_reference_buffer()->buffer_type() == BufferType::DRAM;
 
     // Block reader: unbacked double-buffer CB, reads from L1 shard block-by-block.
     // Required for uneven sharding where CB backing has a size mismatch.
@@ -115,7 +114,6 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
         input_cb_num_tiles =
             (num_input_blocks_per_full_core == 1) ? num_tiles_per_input_block : num_tiles_per_input_block * 2;
     }
-    Buffer* cb_backing_buffer = (input_is_sharded && !use_block_reader) ? src0_buffer : nullptr;
     constexpr uint8_t src0_cb_index = tt::CBIndex::c_0;
     desc.cbs.push_back(CBDescriptor{
         .total_size = input_cb_num_tiles * input_single_tile_size,
@@ -125,7 +123,7 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
         }}},
-        .buffer = cb_backing_buffer,
+        .buffer = (input_is_sharded && !use_block_reader) ? a.mesh_buffer().get_reference_buffer() : nullptr,
     });
 
     // Output CB
@@ -162,7 +160,7 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
             (uint32_t)src0_cb_index,
             (uint32_t)num_tiles_per_input_block,
         };
-        TensorAccessorArgs(*src0_buffer).append_to(reader_desc.compile_time_args);
+        TensorAccessorArgs(a).append_to(reader_desc.compile_time_args);
         reader_desc.config = ReaderConfigDescriptor{};
     } else if (input_is_sharded) {
         // Even sharding with pack_untilize: CB is backed by the sharded buffer, reader just pushes
@@ -176,23 +174,23 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
             "reader_unary_start_id.cpp";
         std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
-        TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+        TensorAccessorArgs(a).append_to(reader_compile_time_args);
         reader_desc.compile_time_args = std::move(reader_compile_time_args);
         reader_desc.config = ReaderConfigDescriptor{};
     }
 
     // Writer compile-time args
-    uint32_t output_element_size = output.element_size();
+    uint32_t output_element_size = dst_tensor.element_size();
     uint32_t output_page_width =
         tensor_width;  // In height-sharded and interleaved cases, the output page is the entire tensor row
     uint32_t output_num_blocks_across_width = 1;
-    if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-        output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
-        output.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
-        if (output.shard_spec().has_value()) {
-            output_page_width = output.shard_spec().value().shape[1];
+    if (dst_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+        dst_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+        dst_tensor.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
+        if (dst_tensor.shard_spec().has_value()) {
+            output_page_width = dst_tensor.shard_spec().value().shape[1];
         } else {
-            output_page_width = output.nd_shard_spec().value().shard_shape[-1];
+            output_page_width = dst_tensor.nd_shard_spec().value().shard_shape[-1];
         }
         output_num_blocks_across_width = tt::div_up(tensor_width, output_page_width);
     }
@@ -210,7 +208,7 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
         (uint32_t)num_cols_per_input_block,
         (uint32_t)num_cols_per_output_block,
     };
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -334,7 +332,7 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
             reader_ref.emplace_runtime_args(
                 core,
                 {
-                    src0_buffer,
+                    a,
                     i,
                     num_input_blocks_to_process,
                 });
@@ -342,7 +340,7 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
             reader_ref.emplace_runtime_args(core, {num_tiles_to_read});
         } else {
             // Interleaved input
-            reader_ref.emplace_runtime_args(core, {src0_buffer, num_tiles_to_read, tile_start_index});
+            reader_ref.emplace_runtime_args(core, {a, num_tiles_to_read, tile_start_index});
         }
 
         // Writer run-time args
@@ -352,7 +350,7 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
             input_block_global_col_index % num_cols_per_output_block;
         writer_ref.emplace_runtime_args(
             core,
-            {dst_buffer,
+            {dst_tensor,
              num_input_blocks_to_process,
              height_wise_input_block_start_index,
              num_unpadded_cols_per_input_block,
@@ -394,7 +392,7 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
             input_block_global_col_index % num_cols_per_output_block;
         writer_ref.emplace_runtime_args(
             cliff_core,
-            {dst_buffer,
+            {dst_tensor,
              num_input_blocks_to_process,
              height_wise_input_block_start_index,
              num_unpadded_cols_per_input_block,
@@ -403,7 +401,7 @@ tt::tt_metal::ProgramDescriptor UntilizeMultiCoreProgramFactory::create_descript
 
         // Reader run-time args (always reading interleaved input as cliff core does not exist for sharded input)
         uint32_t num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_to_process;
-        reader_ref.emplace_runtime_args(cliff_core, {src0_buffer, num_tiles_to_read, tile_start_index});
+        reader_ref.emplace_runtime_args(cliff_core, {a, num_tiles_to_read, tile_start_index});
 
         // Compute run-time args
         if (cliff_compute_idx >= 0) {

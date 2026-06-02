@@ -56,17 +56,18 @@ inline void push_cb_pair(
 tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedProgramFactory::create_descriptor(
     const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output) {
     const auto& a = input;
+    const MeshTensor& c = output.mesh_tensor();
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
     ProgramDescriptor desc;
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(c.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     const auto& input_shape = a.padded_shape();
-    const auto& output_shape = output.padded_shape();
+    const auto& output_shape = c.padded_shape();
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
     IDevice* device = a.device();
@@ -112,9 +113,9 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
 
     uint32_t el_size;
     if (a.dtype() == DataType::BFLOAT8_B) {
-        padded_row_size_bytes = input_shape[-1] * output.element_size();
-        unpadded_row_size_bytes = output_shape[-1] * output.element_size();
-        el_size = output.element_size();
+        padded_row_size_bytes = input_shape[-1] * c.element_size();
+        unpadded_row_size_bytes = output_shape[-1] * c.element_size();
+        el_size = c.element_size();
     } else {
         padded_row_size_bytes = input_shape[-1] * a.element_size();
         unpadded_row_size_bytes = output_shape[-1] * a.element_size();
@@ -165,15 +166,13 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
             output_cb_data_format);
     }
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    const MeshTensor& src0_tensor = a.mesh_tensor();
 
     // reader
 
     uint32_t num_tiles_2d = a.padded_shape()[-1] * a.padded_shape()[-2] / TILE_HW;
 
-    auto log_shape = output.logical_shape();
+    auto log_shape = c.logical_shape();
     uint32_t third_dim = 1;
     if (log_shape.rank() == 3) {
         third_dim = log_shape[-3];
@@ -182,7 +181,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
     }
 
     std::vector<uint32_t> reader_compile_time_args = {num_tiles_2d, third_dim, total_tiles_per_row};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src0_tensor).append_to(reader_compile_time_args);
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_wh_multicore.cpp";
@@ -192,9 +191,9 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
     reader_desc.config = ReaderConfigDescriptor{};
 
     // writer
-    uint32_t total_num_rows = output.logical_shape()[-2];
+    uint32_t total_num_rows = c.logical_shape()[-2];
     std::vector<uint32_t> writer_ct_args = {total_num_rows, third_dim, TILE_HEIGHT, unpadded_row_size_bytes};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+    TensorAccessorArgs(c).append_to(writer_ct_args);
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
@@ -290,23 +289,21 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
             single_sub_block_size_row_arg = single_sub_block_size;
         }
 
-        //  writer runtime args
-        std::vector<uint32_t> writer_rt_args = {
-            dst_buffer->address(),
-            TILE_WIDTH * el_size * single_block_size_row_arg,
-            start_row_id,
-            start_column_id,
-            single_block_size_row_arg,
-            single_block_size_col_arg,
-            TILE_WIDTH * el_size * single_sub_block_size_row_arg,
-            single_sub_block_size_row_arg};
-
         // reader runtime args
-        reader_desc.runtime_args.emplace_back(
+        reader_desc.emplace_runtime_args(
+            core, {src0_tensor, tile_start_id, single_block_size_row_arg, single_block_size_col_arg});
+
+        // writer runtime args
+        writer_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                src0_buffer->address(), tile_start_id, single_block_size_row_arg, single_block_size_col_arg});
-        writer_desc.runtime_args.emplace_back(core, std::move(writer_rt_args));
+            {c,
+             TILE_WIDTH * el_size * single_block_size_row_arg,
+             start_row_id,
+             start_column_id,
+             single_block_size_row_arg,
+             single_block_size_col_arg,
+             TILE_WIDTH * el_size * single_sub_block_size_row_arg,
+             single_sub_block_size_row_arg});
 
         uint32_t end_column_id = start_column_id + (single_block_size_row_arg * TILE_WIDTH * el_size);
         start_column_id = end_column_id % padded_row_size_bytes;

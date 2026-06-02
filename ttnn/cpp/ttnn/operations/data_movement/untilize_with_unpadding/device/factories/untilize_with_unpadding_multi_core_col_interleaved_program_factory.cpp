@@ -22,7 +22,8 @@ namespace ttnn::prim {
 
 tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreColInterleavedProgramFactory::create_descriptor(
     const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output) {
-    const auto& a = input;
+    const MeshTensor& a = input.mesh_tensor();
+    const MeshTensor& c = output.mesh_tensor();
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
@@ -30,14 +31,13 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreColInterleavedProg
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(c.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     const auto& input_shape = a.padded_shape();
-    const auto& output_shape = output.padded_shape();
+    const auto& output_shape = c.padded_shape();
 
-    IDevice* device = a.device();
-    CoreCoord grid_size = device->compute_with_storage_grid_size();
+    CoreCoord grid_size = a.device().compute_with_storage_grid_size();
     CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     CoreRangeSet default_grid(default_cores);
     CoreRangeSet available_grid = sub_core_grids.has_value() ? sub_core_grids.value() : default_grid;
@@ -55,8 +55,8 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreColInterleavedProg
 
     uint32_t el_size;
     if (a.dtype() == DataType::BFLOAT8_B) {
-        unpadded_row_size_bytes = output_shape[-1] * output.element_size();
-        el_size = output.element_size();
+        unpadded_row_size_bytes = output_shape[-1] * c.element_size();
+        el_size = c.element_size();
     } else {
         unpadded_row_size_bytes = output_shape[-1] * a.element_size();
         el_size = a.element_size();
@@ -83,14 +83,10 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreColInterleavedProg
         }}},
     });
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-
     // reader
     uint32_t num_tiles_2d = a.padded_shape()[-1] * a.padded_shape()[-2] / TILE_HW;
 
-    auto log_shape = output.logical_shape();
+    auto log_shape = c.logical_shape();
     uint32_t third_dim = 1;
     if (log_shape.rank() == 3) {
         third_dim = log_shape[-3];
@@ -99,7 +95,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreColInterleavedProg
     }
 
     std::vector<uint32_t> reader_compile_time_args = {num_tiles_2d, third_dim, nblocks_per_core};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(a).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -110,10 +106,10 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreColInterleavedProg
     reader_desc.config = ReaderConfigDescriptor{};
 
     // writer
-    uint32_t total_num_rows = output.logical_shape()[-2];
+    uint32_t total_num_rows = c.logical_shape()[-2];
 
     std::vector<uint32_t> writer_ct_args = {total_num_rows, ncores, third_dim, TILE_WIDTH, unpadded_row_size_bytes};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+    TensorAccessorArgs(c).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -163,10 +159,10 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreColInterleavedProg
         uint32_t size_per_row_per_block = nblocks_per_core * TILE_WIDTH * el_size;
 
         //  writer runtime args
-        writer_desc.runtime_args.emplace_back(
+        writer_desc.emplace_runtime_args(
             core,
-            std::vector<uint32_t>{
-                dst_buffer->address(),
+            {
+                c,
                 i,
                 size_per_row_per_block,
                 number_blocks_per_core,
@@ -174,8 +170,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreColInterleavedProg
             });
 
         // reader runtime args
-        reader_desc.runtime_args.emplace_back(
-            core, std::vector<uint32_t>{src0_buffer->address(), i, num_tiles_per_row, number_blocks_per_core});
+        reader_desc.emplace_runtime_args(core, {a, i, num_tiles_per_row, number_blocks_per_core});
     }
 
     // Insert reader+writer at the start so kernel ordering matches the legacy program: reader is

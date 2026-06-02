@@ -15,24 +15,31 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+// The ND-shard distribution spec, read Mesh-natively off the device-local buffer config.
+const BufferDistributionSpec& get_buffer_distribution_spec(const MeshTensor& t) {
+    return t.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec().value();
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
 namespace ttnn::prim {
 
 ProgramDescriptor UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::create_descriptor(
     const UntilizeOperationAttributes& operation_attributes,
     const UntilizeTensorArgs& tensor_args,
     UntilizeTensorReturnValue& tensor_return_value) {
-    const auto& a = tensor_args.input;
-    const Tensor& output = tensor_return_value;
+    const MeshTensor& a = tensor_args.input.mesh_tensor();
+    const MeshTensor& output = tensor_return_value.mesh_tensor();
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
-
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
@@ -49,7 +56,7 @@ ProgramDescriptor UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdentica
     uint32_t num_blocks_per_shard = (shard_height / tile_height) * (shard_vol / (shard_height * shard_width));
     uint32_t num_tiles_per_shard = num_tiles_per_block * num_blocks_per_shard;
 
-    const auto& distribution_spec = a.buffer()->buffer_distribution_spec().value();
+    const auto& distribution_spec = CMAKE_UNIQUE_NAMESPACE::get_buffer_distribution_spec(a);
 
     uint32_t total_shards = distribution_spec.num_shards();
     uint32_t num_cores = grid.num_cores();
@@ -78,7 +85,7 @@ ProgramDescriptor UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdentica
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
         });
-        cb_src0.buffer = src0_buffer;
+        cb_src0.buffer = a.mesh_buffer().get_reference_buffer();
         desc.cbs.push_back(std::move(cb_src0));
     }
 
@@ -92,7 +99,7 @@ ProgramDescriptor UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdentica
             .data_format = output_cb_data_format,
             .page_size = output_single_tile_size,
         });
-        cb_output.buffer = dst_buffer;
+        cb_output.buffer = output.mesh_buffer().get_reference_buffer();
         desc.cbs.push_back(std::move(cb_output));
     }
 

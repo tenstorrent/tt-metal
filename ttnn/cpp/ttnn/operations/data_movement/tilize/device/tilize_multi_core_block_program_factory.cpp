@@ -128,9 +128,8 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
 
     uint32_t row_size_bytes = a.padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    const auto& src0_tensor = a.mesh_tensor();
+    const auto& dst_tensor = output.mesh_tensor();
 
     const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
 
@@ -202,7 +201,7 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
 
     std::vector<uint32_t> reader_compile_time_args = {
         total_num_rows, third_dim, tile_height, a.element_size(), row_size_bytes, dram_alignment};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src0_tensor).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -215,7 +214,7 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
 
     // writer
     std::vector<uint32_t> writer_compile_time_args = {tt::CBIndex::c_16, num_tiles_2d, third_dim, total_tiles_per_row};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(dst_tensor).append_to(writer_compile_time_args);
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
@@ -309,7 +308,7 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
         // framework patches addresses on cache hits.
         reader_desc.emplace_runtime_args(
             core,
-            {src0_buffer,
+            {src0_tensor,
              std::uint32_t{0},
              TILE_WIDTH * a.element_size() * single_block_size_row_arg,
              start_row_id,
@@ -321,7 +320,7 @@ ProgramDescriptor TilizeMultiCoreBlockProgramFactory::create_descriptor(
 
         // writer runtime args
         writer_desc.emplace_runtime_args(
-            core, {dst_buffer, tile_start_id, single_block_size_row_arg, single_block_size_col_arg});
+            core, {dst_tensor, tile_start_id, single_block_size_row_arg, single_block_size_col_arg});
 
         uint32_t end_column_id = start_column_id + (single_block_size_row_arg * TILE_WIDTH * a.element_size());
         start_column_id = end_column_id % row_size_bytes;

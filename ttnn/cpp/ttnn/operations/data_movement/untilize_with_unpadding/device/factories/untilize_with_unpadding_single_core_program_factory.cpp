@@ -24,11 +24,12 @@ namespace ttnn::prim {
 
 tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::create_descriptor(
     const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output) {
-    const auto& a = input;
+    const MeshTensor& a = input.mesh_tensor();
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
     const auto& input_shape = a.padded_shape();
-    const auto& output_shape = output.padded_shape();
+    const MeshTensor& c = output.mesh_tensor();
+    const auto& output_shape = c.padded_shape();
 
     ProgramDescriptor desc;
 
@@ -37,21 +38,16 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(c.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     log_debug(tt::LogOp, "untilize_with_unpadding_single_core");
     log_debug(tt::LogOp, "input_cb_data_format: {}", input_cb_data_format);
     log_debug(tt::LogOp, "output_cb_data_format: {}", output_cb_data_format);
 
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
-
     int32_t num_tiles = a.physical_volume() / TILE_HW;
 
     // This should allocate a DRAM buffer on the device
-
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     auto input_w = input_shape.rank() >= 4 ? input_shape[-4] : 1;
     auto input_z = input_shape.rank() >= 3 ? input_shape[-3] : 1;
@@ -63,17 +59,17 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
     auto output_y = output_shape.rank() >= 2 ? output_shape[-2] : 1;
     auto output_x = output_shape[-1];
 
-    uint32_t padded_stick_size = input_x * output.element_size();  // Assuming bfloat16 dataformat
-    uint32_t unpadded_stick_size = output_x * output.element_size();
+    uint32_t padded_stick_size = input_x * c.element_size();  // Assuming bfloat16 dataformat
+    uint32_t unpadded_stick_size = output_x * c.element_size();
 
     constexpr uint32_t alignment = 32;
 
     uint32_t num_tiles_in_row = input_x / TILE_WIDTH;
     // Ensure we don't intrude into storage space
     uint32_t max_l1_size =
-        (a.device()->l1_size_per_core() / 2) - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
+        (a.device().l1_size_per_core() / 2) - a.device().allocator()->get_base_allocator_addr(HalMemType::L1);
     // Memory usage is 2 CBs of width W, plus buffer of size alignment + (W * datum size)
-    uint32_t max_X = (max_l1_size - alignment) / (output.element_size() * TILE_HEIGHT * 2 + output.element_size());
+    uint32_t max_X = (max_l1_size - alignment) / (c.element_size() * TILE_HEIGHT * 2 + c.element_size());
     uint32_t max_tiles = max_X / TILE_WIDTH;
 
     // Currently need the number of tiles in a row to be divisible by tiles in a block
@@ -89,7 +85,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
         }
     }
     uint32_t block_width = num_tiles_per_block * TILE_WIDTH;
-    uint32_t block_row_size = block_width * output.element_size();
+    uint32_t block_row_size = block_width * c.element_size();
     uint32_t num_blocks_w_output = unpadded_stick_size / block_row_size;
     uint32_t num_blocks_w_input = padded_stick_size / block_row_size;
     uint32_t block_row_leftover_size = unpadded_stick_size - (num_blocks_w_output * block_row_size);
@@ -127,14 +123,14 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
     });
 
     std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(a).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)((
             input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32 or
             input_cb_data_format == tt::DataFormat::Int32)),
         unpadded_stick_size};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(c).append_to(writer_compile_time_args);
 
     // Tilized reader
     KernelDescriptor reader_desc;
@@ -184,10 +180,10 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
     };
 
     CoreCoord core_0 = corerange_to_cores(core).at(0);
-    reader_desc.emplace_runtime_args(core_0, {src0_buffer, uint32_t(num_tiles), 0u});
+    reader_desc.emplace_runtime_args(core_0, {a, uint32_t(num_tiles), 0u});
     writer_desc.emplace_runtime_args(
         core_0,
-        {dst_buffer,
+        {c,
          output_w,
          padded_W_diff_blocks,
          output_z,

@@ -26,17 +26,16 @@ ProgramDescriptor UntilizeMultiCoreNDShardInputProgramFactory::create_descriptor
     const UntilizeOperationAttributes& operation_attributes,
     const UntilizeTensorArgs& tensor_args,
     UntilizeTensorReturnValue& tensor_return_value) {
+    // `a` stays a `ttnn::Tensor` because the external helper get_optimal_worker_cores_for_sharded_tensor(a)
+    // takes `const Tensor&`; src0_tensor is the MeshTensor view used for accessors and runtime args.
     const auto& a = tensor_args.input;
-    const Tensor& output = tensor_return_value;
+    const MeshTensor& src0_tensor = a.mesh_tensor();
+    const MeshTensor& output = tensor_return_value.mesh_tensor();
     const auto& fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
-
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t tensor_width = a.padded_shape()[-1];
     uint32_t output_tensor_width = output.padded_shape()[-1];
@@ -51,7 +50,8 @@ ProgramDescriptor UntilizeMultiCoreNDShardInputProgramFactory::create_descriptor
     uint32_t input_shard_height = nd_shard_spec.shard_shape[-2];
     uint32_t input_shard_width = nd_shard_spec.shard_shape[-1];
 
-    const auto distribution_spec = a.buffer()->buffer_distribution_spec().value();
+    const auto distribution_spec =
+        src0_tensor.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec().value();
 
     uint32_t num_shards = distribution_spec.num_shards();
     const auto page_mapping = distribution_spec.compute_page_mapping();
@@ -119,7 +119,7 @@ ProgramDescriptor UntilizeMultiCoreNDShardInputProgramFactory::create_descriptor
     // Reader compile-time args and kernel
     std::vector<uint32_t> reader_compile_time_args = {
         src0_cb_index, num_tiles_per_input_block, num_shards, num_compute_cores};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(src0_tensor).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -130,7 +130,7 @@ ProgramDescriptor UntilizeMultiCoreNDShardInputProgramFactory::create_descriptor
     reader_desc.config = ReaderConfigDescriptor{};
 
     // Writer compile-time args
-    uint32_t output_element_size = output.element_size();
+    uint32_t output_element_size = static_cast<uint32_t>(output.element_size());
     uint32_t output_page_width =
         output_tensor_width;  // In height-sharded and interleaved cases, the output page is the entire tensor row
     uint32_t output_num_blocks_across_width = 1;
@@ -166,8 +166,8 @@ ProgramDescriptor UntilizeMultiCoreNDShardInputProgramFactory::create_descriptor
         output_tensor_height,
     };
 
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-    TensorAccessorArgs(*src0_buffer)
+    TensorAccessorArgs(output).append_to(writer_compile_time_args);
+    TensorAccessorArgs(src0_tensor)
         .append_to(writer_compile_time_args);  // For ND sharded input, we need info on the input buffer distribution
 
     KernelDescriptor writer_desc;
@@ -243,10 +243,10 @@ ProgramDescriptor UntilizeMultiCoreNDShardInputProgramFactory::create_descriptor
 
         // Reader run-time args — Buffer* slot auto-registers as a BufferBinding so the
         // framework patches addresses on cache hits.
-        reader_desc.emplace_runtime_args(core, {src0_buffer, start_shard_id});
+        reader_desc.emplace_runtime_args(core, {src0_tensor, start_shard_id});
 
         // Writer run-time args (writer reads from input buffer too for ND sharded info)
-        writer_desc.emplace_runtime_args(core, {dst_buffer, src0_buffer, start_shard_id});
+        writer_desc.emplace_runtime_args(core, {output, src0_tensor, start_shard_id});
         start_shard_id++;
 
         // Compute run-time args

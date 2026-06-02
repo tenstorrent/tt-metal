@@ -22,21 +22,22 @@ namespace ttnn::prim {
 
 tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_descriptor(
     const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output) {
-    const auto& a = input;
+    const MeshTensor& a = input.mesh_tensor();
+    const MeshTensor& c = output.mesh_tensor();
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
     ProgramDescriptor desc;
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(c.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     const auto& input_shape = a.padded_shape();
-    const auto& output_shape = output.padded_shape();
+    const auto& output_shape = c.padded_shape();
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
-    IDevice* device = a.device();
+    IDevice* device = &a.mutable_device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
     CoreRange default_cores({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     CoreRangeSet default_grid(default_cores);
@@ -54,8 +55,8 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgram
     uint32_t unpadded_row_size_bytes;
 
     if (a.dtype() == DataType::BFLOAT8_B) {
-        padded_row_size_bytes = input_shape[-1] * output.element_size();
-        unpadded_row_size_bytes = output_shape[-1] * output.element_size();
+        padded_row_size_bytes = input_shape[-1] * c.element_size();
+        unpadded_row_size_bytes = output_shape[-1] * c.element_size();
     } else {
         padded_row_size_bytes = input_shape[-1] * a.element_size();
         unpadded_row_size_bytes = output_shape[-1] * a.element_size();
@@ -82,15 +83,11 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgram
         }}},
     });
 
-    Buffer* src0_buffer = a.buffer();
-    Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-
     /** reader
      */
 
     std::vector<uint32_t> reader_compile_time_args;
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(a).append_to(reader_compile_time_args);
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp";
@@ -105,7 +102,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgram
         (input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32 or
          input_cb_data_format == tt::DataFormat::Int32),
         unpadded_row_size_bytes};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+    TensorAccessorArgs(c).append_to(writer_ct_args);
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
@@ -166,7 +163,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgram
         desc.kernels.push_back(std::move(cliff_desc));
     }
 
-    uint32_t tile_height = output.tensor_spec().tile().get_height();
+    uint32_t tile_height = c.tensor_spec().tile().get_height();
     auto core_assignments = ttnn::distribute_work(
         output_shape, input_shape, ncores, nblocks_per_core, has_cliff, nblocks_per_core_cliff, tile_height);
 
@@ -182,7 +179,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgram
 
         // writer runtime args
         KernelDescriptor::RTArgList writer_rt_args;
-        writer_rt_args.push_back(dst_buffer);
+        writer_rt_args.push_back(c);
         writer_rt_args.push_back(padded_row_size_bytes);
         writer_rt_args.push_back(row_start_id);
         writer_rt_args.push_back(static_cast<uint32_t>(assignment.size()));
@@ -217,7 +214,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreInterleavedProgram
         uint32_t num_tiles_per_core = num_tiles_per_row * nblocks_per_core_core;
 
         // reader runtime args
-        reader_desc.emplace_runtime_args(core, {src0_buffer, num_tiles_per_core, tile_start_id});
+        reader_desc.emplace_runtime_args(core, {a, num_tiles_per_core, tile_start_id});
         writer_desc.emplace_runtime_args(core, writer_rt_args);
 
         tile_start_id += num_tiles_per_core;

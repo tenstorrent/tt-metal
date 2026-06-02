@@ -22,22 +22,34 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+uint32_t get_buffer_aligned_page_size(const MeshTensor& t) {
+    return static_cast<uint32_t>(
+        t.mesh_buffer().get_reference_buffer()->aligned_page_size());  // aligned_page_size() -> DeviceAddr
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
 tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFactory::create_descriptor(
     const UntilizeWithUnpaddingParams& operation_attributes, const Tensor& input, Tensor& output) {
-    const auto& a = input;
+    const MeshTensor& a = input.mesh_tensor();
+    const MeshTensor& c = output.mesh_tensor();
     bool fp32_dest_acc_en = operation_attributes.fp32_dest_acc_en;
 
     ProgramDescriptor desc;
 
     bool src_sharded = a.memory_config().is_sharded();
-    bool out_sharded = output.memory_config().is_sharded();
+    bool out_sharded = c.memory_config().is_sharded();
     // Special handling for tensors of W=16 and H%32==0
     // In this case skip untilizing on compute and in writer kernel just copy face0 and face2,
     // and skip face1 and face3.
-    bool unpad_tensor_w_16 = output.padded_shape()[-1] == 16 && output.padded_shape()[-2] % TILE_HEIGHT == 0;
+    bool unpad_tensor_w_16 = c.padded_shape()[-1] == 16 && c.padded_shape()[-2] % TILE_HEIGHT == 0;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(c.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,
@@ -47,7 +59,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
     auto shard_spec = a.shard_spec().value();
 
     // I am not sure it is correct to ever use the shard_spec here.
-    auto out_shard_spec = output.shard_spec().has_value() ? output.shard_spec().value() : shard_spec;
+    auto out_shard_spec = c.shard_spec().has_value() ? c.shard_spec().value() : shard_spec;
 
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     auto all_cores = shard_spec.grid;
@@ -61,21 +73,21 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
     uint32_t ntiles_per_batch = ntiles_per_block * nblocks_per_core / batch;
 
     num_rows_block = out_shard_spec.shape[0];
-    block_row_size = out_shard_spec.shape[1] * output.element_size();     // in0_block_w * TILE_WIDTH * dtype_nbytes
-    output_row_size = output.padded_shape()[-1] * output.element_size();  // output row size bytes
-    last_block_row_size_unpadded = block_row_size - (tt::round_up(output.padded_shape()[-1], out_shard_spec.shape[1]) -
-                                                     output.padded_shape()[-1]) *
-                                                        output.element_size();
-    uint32_t num_output_rows = output.physical_volume() / output.padded_shape()[-1];
+    block_row_size = out_shard_spec.shape[1] * c.element_size();  // in0_block_w * TILE_WIDTH * dtype_nbytes
+    output_row_size = c.padded_shape()[-1] * c.element_size();    // output row size bytes
+    last_block_row_size_unpadded =
+        block_row_size -
+        (tt::round_up(c.padded_shape()[-1], out_shard_spec.shape[1]) - c.padded_shape()[-1]) * c.element_size();
+    uint32_t num_output_rows = c.physical_volume() / c.padded_shape()[-1];
     num_output_rows_unpadded =
         num_rows_block - (tt::round_up(num_output_rows, out_shard_spec.shape[0]) - num_output_rows);
     if (a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-        last_idx = tt::div_up(output.padded_shape()[-1], out_shard_spec.shape[1]) - 1;
+        last_idx = tt::div_up(c.padded_shape()[-1], out_shard_spec.shape[1]) - 1;
     } else if (a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         last_idx = tt::div_up(num_output_rows, out_shard_spec.shape[0]) - 1;
     } else {
         end_core = {
-            tt::div_up(output.padded_shape()[-1], out_shard_spec.shape[1]) - 1,
+            tt::div_up(c.padded_shape()[-1], out_shard_spec.shape[1]) - 1,
             tt::div_up(num_output_rows, out_shard_spec.shape[0]) - 1};
     }
     if (!row_major) {
@@ -94,11 +106,11 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
             .data_format = input_cb_data_format,
             .page_size = input_single_tile_size,
         }}},
-        .buffer = src_sharded ? a.buffer() : nullptr,
+        .buffer = src_sharded ? a.mesh_buffer().get_reference_buffer() : nullptr,
     });
 
     uint32_t num_output_tiles = out_sharded ? (unpad_tensor_w_16 ? 16 : ntiles_per_batch * 2) : ntiles_per_block * 2;
-    uint32_t aligned_page_size = static_cast<uint32_t>(output.buffer()->aligned_page_size());
+    uint32_t aligned_page_size = CMAKE_UNIQUE_NAMESPACE::get_buffer_aligned_page_size(c);
     constexpr uint8_t output_cb_index = tt::CBIndex::c_16;
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_output_tiles * output_single_tile_size,
@@ -123,12 +135,9 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
                 .data_format = output_cb_data_format,
                 .page_size = aligned_page_size,
             }}},
-            .buffer = output.buffer(),
+            .buffer = c.mesh_buffer().get_reference_buffer(),
         });
     }
-
-    Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     /** reader
      */
@@ -160,7 +169,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
             (input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32 or
              input_cb_data_format == tt::DataFormat::Int32),
             output_row_size};
-        TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+        TensorAccessorArgs(c).append_to(writer_ct_args);
         writer_desc.kernel_source = "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp";
         writer_desc.compile_time_args = std::move(writer_ct_args);
     }
@@ -225,7 +234,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
                 num_output_rows_unpadded,
                 ntiles_per_batch,
                 out_shard_spec.shape[0] / batch,
-                shard_spec.shape[1] * output.element_size(),
+                shard_spec.shape[1] * c.element_size(),
                 block_row_size,
                 batch};
         }
@@ -295,7 +304,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
 
             writer_desc.emplace_runtime_args(
                 core,
-                {dst_buffer,  // dst_addr
+                {c,  // dst_addr
                  num_rows_block,
                  block_row_size,
                  std::uint32_t{1},

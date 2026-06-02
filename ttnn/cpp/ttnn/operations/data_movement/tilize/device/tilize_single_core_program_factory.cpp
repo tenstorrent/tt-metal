@@ -17,25 +17,18 @@ namespace ttnn::prim {
 
 ProgramDescriptor TilizeSingleCoreProgramFactory::create_descriptor(
     const TilizeParams& operation_attributes, const TilizeInputs& tensor_args, Tensor& tensor_return_value) {
-    const auto& a = tensor_args.input_tensor;
-    const Tensor& output = tensor_return_value;
+    const MeshTensor& a = tensor_args.input_tensor.mesh_tensor();
+    const MeshTensor& c = tensor_return_value.mesh_tensor();
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
     CoreRange default_core({0, 0}, {0, 0});
     CoreRange core = sub_core_grids.has_value() ? corerange_to_cores(sub_core_grids.value()).at(0) : default_core;
     CoreRangeSet core_ranges{core};
 
-    Buffer* src0_buffer = a.buffer();
-
-    // This should allocate a DRAM buffer on the device
-
-    Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
 
-    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output.dtype());
+    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(c.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
 
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
@@ -54,7 +47,7 @@ ProgramDescriptor TilizeSingleCoreProgramFactory::create_descriptor(
     if (!operation_attributes.use_low_perf) {
         // Ensure we don't intrude into storage space
         uint32_t max_l1_size =
-            (a.device()->l1_size_per_core() / 2) - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
+            (a.device().l1_size_per_core() / 2) - a.device().allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
         // Currently need the number of tiles in a row to be divisible by tiles in a block
         if (num_tiles_in_row <= max_tiles) {
@@ -103,10 +96,10 @@ ProgramDescriptor TilizeSingleCoreProgramFactory::create_descriptor(
 
     // Reader compile-time args
     std::vector<uint32_t> reader_compile_time_args = {stick_size};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(a).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(c).append_to(writer_compile_time_args);
 
     // Tilized reader
     KernelDescriptor reader_desc;
@@ -118,10 +111,10 @@ ProgramDescriptor TilizeSingleCoreProgramFactory::create_descriptor(
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.config = ReaderConfigDescriptor{};
 
-    // Buffer* slots register BufferBindings so the framework patches addresses on cache hits.
+    // The MeshTensor slot registers a buffer binding so the framework patches addresses on cache hits.
     reader_desc.emplace_runtime_args(
         core.start_coord,
-        {src0_buffer,
+        {a,
          num_sticks,
          stick_size,
          num_tiles_per_block,
@@ -139,7 +132,7 @@ ProgramDescriptor TilizeSingleCoreProgramFactory::create_descriptor(
     writer_desc.core_ranges = core_ranges;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
-    writer_desc.emplace_runtime_args(core.start_coord, {dst_buffer, num_tiles, std::uint32_t{0}});
+    writer_desc.emplace_runtime_args(core.start_coord, {c, num_tiles, std::uint32_t{0}});
 
     std::vector<uint32_t> compute_args = {
         num_tiles / num_tiles_per_block,  // per_core_block_cnt
