@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Optional, TypedDict
 
 
 class PatternKind(str, Enum):
@@ -77,3 +77,19 @@ class Diagnosis:
 
     def __post_init__(self):
         assert self.axis in ("per_block_pcc", "long_decode_drift"), self.axis
+
+
+class BringupState(TypedDict, total=False):
+    model: str
+    graph_summary: list
+    proposals: list
+    applied: list
+    per_block_pcc: dict
+    full_pcc: float
+    drift: dict
+    perf: dict
+    diagnosis: dict
+    iteration: int
+    max_iterations: int
+    status: str  # "running" | "pass" | "handoff"
+    run_dir: str
