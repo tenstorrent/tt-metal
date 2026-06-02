@@ -303,6 +303,11 @@ def parse_dict_value(key: str, value: Any) -> Any:
             return parse_dtype(value.get("repr", ""))
         elif _is_layout_dict(value):
             return parse_layout(value.get("repr", ""))
+        elif value.get("type") == "Shape":
+            import re as _shape_re
+            m = _shape_re.search(r"Shape\(\[(.*?)\]\)", str(value.get("value", "")))
+            if m:
+                return [int(x.strip()) for x in m.group(1).split(",") if x.strip()]
     except (ValueError, TypeError, KeyError):
         pass
 
