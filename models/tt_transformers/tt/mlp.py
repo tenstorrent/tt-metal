@@ -142,6 +142,12 @@ class MLP(LightweightModule):
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher)
         pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
 
+        print(
+            "[MLP_MATMUL_SHAPE] "
+            f"layer={self.layer_num} mode={mode} op=ff1_ff3 "
+            f"input_shape={x.shape} w1_shape={self.w1.shape} w3_shape={self.w3.shape}",
+            flush=True,
+        )
         w1_out = ttnn.linear(
             x,
             self.w1,
@@ -272,6 +278,12 @@ class MLP(LightweightModule):
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
 
+        print(
+            "[MLP_MATMUL_SHAPE] "
+            f"layer={self.layer_num} mode={mode} op=ff2 "
+            f"input_shape={w2_in.shape} w2_shape={self.w2.shape}",
+            flush=True,
+        )
         if seq_len > 128 and mode != Mode.DECODE:
             w2_out = ttnn.experimental.minimal_matmul(
                 w2_in,

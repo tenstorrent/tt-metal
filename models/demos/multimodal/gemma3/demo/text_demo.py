@@ -86,7 +86,7 @@ def create_tt_model(
     optimizations,
     max_seq_len,
     paged_attention_config: PagedAttentionConfig = None,
-    dtype=ttnn.bfloat8_b,
+    dtype=ttnn.bfloat16,
     state_dict=None,
     num_layers=None,
     dummy_weights: bool = False,
@@ -104,6 +104,8 @@ def create_tt_model(
     )
     if num_layers is not None:
         tt_model_args.n_layers = num_layers
+    if dtype == ttnn.bfloat16:
+        tt_model_args.lm_head_dtype = ttnn.bfloat16
 
     if paged_attention_config and tt_model_args.base_model_name in ["gemma-3-4b", "gemma-3-27b"]:
         # Paged decode tuning improves text generation quality without affecting non-paged multimodal vision demos.
@@ -312,9 +314,10 @@ def prepare_generator_args(
             optimizations=optimizations,
             max_seq_len=max_seq_len,
             paged_attention_config=paged_attention_config,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             state_dict=state_dict,
             dummy_weights=dummy_weights,
+            num_layers=1,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -380,14 +383,14 @@ def _gemma3_text_demo_device_params():
             True,  # enable_trace
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
-            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_long_2k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            1024,  # max_seq_len
+            128 * 1024,  # max_seq_len
             32,  # batch_size
             200,  # max_generated_tokens
             True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # ci_only
@@ -447,13 +450,30 @@ def _gemma3_text_demo_device_params():
             False,  # stress_test
             True,  # enable_trace
         ),
+        (  # Long-context-4k run - Single user, long prompt (may vary based on the model's tokenizer)
+            "models/tt_transformers/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            32 * 1024,  # max_seq_len
+            1,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            False,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+            True,  # enable_trace
+        ),
         (  # Long-context-2k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_2k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             32 * 1024,  # max_seq_len
             1,  # batch_size
-            2000,  # max_generated_tokens
+            200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
@@ -470,8 +490,8 @@ def _gemma3_text_demo_device_params():
             1,  # repeat_batches
             8 * 1024,  # max_seq_len
             1,  # batch_size
-            2000,  # max_generated_tokens
-            False,  # paged_attention
+            200,  # max_generated_tokens
+            True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
@@ -712,6 +732,7 @@ def _gemma3_text_demo_device_params():
         "long-context-64k",  # 64k context, max_seq_len=128k
         "long-context-32k",  # 32k context, max_seq_len=32k
         "long-context-16k",  # 16k context, max_seq_len=32k
+        "long-context-4k",  # 4k context, max_seq_len=32k
         "long-context-2k",  # 2k context, max_seq_len=32k
         "long-context-1k",  # 1k context, max_seq_len=32k
         "stress-test",  # stress test
@@ -1205,7 +1226,7 @@ def test_demo_text(
         total_inference_decode_time += profiler.get_duration(f"inference_decode_time_{i}")
 
     # Average prefill time for each user
-    avg_time_to_first_token = total_inference_prefill_time / global_batch_size
+    avg_time_to_first_token = total_inference_prefill_time
     # Average decode time per batch iteration
     avg_decode_iteration_time = total_inference_decode_time / iteration
 
@@ -1255,6 +1276,7 @@ def test_demo_text(
     logger.info(
         f"Average speed: {round(avg_decode_iteration_time * 1000, 2)}ms @ {round(decode_tok_s_user, 2)} tok/s/user ({round(decode_tok_s, 2)} tok/s throughput)"
     )
+    logger.info(f"Total inference prefill time: {round(total_inference_prefill_time * 1000, 2)}ms")
 
     # Benchmark targets
     supported_models = ["Llama-3.2-1B", "Llama-3.2-3B", "Llama-3.1-8B", "Llama-3.2-11B", "Llama-3.1-70B", "Mistral-7B"]

@@ -195,6 +195,7 @@ class ModelOptimizations:
                         TensorGroup.WQKV: PrecisionSetting.BF16,
                         TensorGroup.KV_CACHE: PrecisionSetting.BF16,
                         TensorGroup.WO: PrecisionSetting.BF16,
+                        TensorGroup.FF1_FF3: PrecisionSetting.BF16,
                     },
                     "OpFidelity": {
                         OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
@@ -203,6 +204,7 @@ class ModelOptimizations:
                         OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
                         OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
                         OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
+                        OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI4,
                     },
                 }
             )
@@ -275,27 +277,22 @@ class ModelOptimizations:
         """
         return {
             "TensorPrecision": {
-                # MLP
-                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
-                TensorGroup.FF2: PrecisionSetting.BFP8,
-                # Attention
-                TensorGroup.WQKV: PrecisionSetting.BFP8,
-                TensorGroup.WO: PrecisionSetting.BFP8,
-                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
-                # Activation across whole model
-                TensorGroup.ACTIVATION: None,  # this signals that original dtype should be used
+                TensorGroup.FF1_FF3: PrecisionSetting.BF16,
+                TensorGroup.FF2: PrecisionSetting.BF16,
+                TensorGroup.WQKV: PrecisionSetting.BF16,
+                TensorGroup.WO: PrecisionSetting.BF16,
+                TensorGroup.KV_CACHE: PrecisionSetting.BF16,
+                TensorGroup.ACTIVATION: PrecisionSetting.BF16,
             },
             "OpFidelity": {
-                # MLP linear operators - BFP8 with FP16 accumulation to save L1
-                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2_FP16,
-                OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
-                # Attention operators -- linear and scaled_dot_product_attention, in decode and prefill modes
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
                 OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
                 OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
-                OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,  # FP32 accumulate is important here
+                OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,
                 OpGroup.ACCURACY: MathFidelitySetting.HIFI4_FP32,
             },
         }
