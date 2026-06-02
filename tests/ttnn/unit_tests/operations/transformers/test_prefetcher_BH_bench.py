@@ -577,6 +577,13 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
     block_size_bytes = int((k_padded * n_per_recv) * _DTYPE_BYTES)
     gcb_size = _gcb_size_capped(block_size_bytes, k=k_padded, ring_size=ring_size, max_buffered_blocks=1)
 
+    cc_program_config = _build_program_config(
+        ring_size=ring_size,
+        ring_cols=ring_cols,
+        ring_rows=ring_rows,
+        num_global_cb_receivers=num_receivers_per_bank,
+    )
+
     # STRIDED bank_to_receivers: bank b feeds ring positions [b, b+num_banks, ...], i.e. the
     # b-th receiver of each sorted y-row (column b of receivers_per_y). This matches the BDS
     # round-robin placement so ring position r receives shard r (full K, N-cols [r*npr,...)).
@@ -596,15 +603,16 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
         for b in range(num_dram_banks)
     ]
     dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
-    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
-        device, bank_to_receivers, gcb_size, dual_senders_per_bank=dual_senders
-    )
-
-    cc_program_config = _build_program_config(
-        ring_size=ring_size,
-        ring_cols=ring_cols,
-        ring_rows=ring_rows,
-        num_global_cb_receivers=num_receivers_per_bank,
+    # Centralized recv-contig GCB builder: validates the (program_config, weight, bank_to_receivers)
+    # triple (num_shards == ring_size, K % ring_size == 0, per_core_N == per-receiver N) and sizes/builds
+    # the GCB in one place.
+    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d_recv_contig(
+        device,
+        [cc_program_config],
+        [tt_weight],
+        bank_to_receivers,
+        gcb_size,
+        dual_senders_per_bank=dual_senders,
     )
     output_mem_config = ttnn.create_sharded_memory_config(
         shape=(_M, _N // ring_size),
@@ -648,10 +656,13 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
             sub_device_id=receiver_sub_device_id,
         )
 
+    # Centralized recv-contig param + cross-check: returns the validated block_count
+    # (== ring_size) and TT_FATALs on a weight/program_config/gcb mismatch.
+    block_count = ttnn.experimental.dram_core_prefetcher_block_count_for_matmul_1d(cc_program_config, tt_weight, gcb)
     ttnn.experimental.start_dram_core_prefetcher(device, dual_senders_per_bank=dual_senders)
     ttnn.experimental.queue_dram_core_prefetcher_request(
         device,
-        [(tt_weight, ring_size)] * num_prefetch_layers,
+        [(tt_weight, block_count)] * num_prefetch_layers,
         global_cb=gcb,
     )
 

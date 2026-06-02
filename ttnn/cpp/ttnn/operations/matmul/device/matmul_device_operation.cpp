@@ -635,6 +635,53 @@ void validate_dram_sender_global_cb_gather_in0_geometry(
         recv_per_bank);
 }
 
+// Receiver-contiguous counterpart of the cross-check above. The recv-contig weight is an
+// NdShardSpec tensor (num_shards == ring_size) with a strided bank->ring mapping, so the
+// K-row-major "bank b owns ring positions [b*rpb, (b+1)*rpb)" convention does not apply and
+// the bank-walk assertion is intentionally omitted. The two silent-hang guards still hold:
+// the weight K-tiles must divide ring_size, and per_core_N must equal the per-receiver N
+// (N_tiles / ring_size) so the matmul's in1 page size matches what the prefetcher pushes.
+void validate_dram_sender_global_cb_gather_in0_geometry_recv_contig(
+    const tt::tt_metal::experimental::GlobalCircularBuffer& gcb,
+    const Tensor& input_tensor_a,
+    const ttnn::Shape& b_shape_padded,
+    const tt::tt_metal::Tile& in1_tile,
+    const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config) {
+    const uint32_t ring_size = input_tensor_a.shard_spec().value().grid.num_cores();
+    const uint32_t num_recv = gcb.receiver_cores().num_cores();
+    TT_FATAL(
+        num_recv == ring_size,
+        "global_cb receiver count ({}) must equal in0 (activation) ring_size ({}). Receivers and matmul "
+        "workers must be the same set of cores.",
+        num_recv,
+        ring_size);
+
+    const uint32_t weight_K_tiles = b_shape_padded[-2] / in1_tile.get_height();
+    const uint32_t weight_N_tiles = b_shape_padded[-1] / in1_tile.get_width();
+    TT_FATAL(
+        weight_K_tiles % ring_size == 0,
+        "Weight K ({} tiles) must be divisible by ring_size ({}) for receiver-contiguous gather_in0 + "
+        "global_cb (remainder {}). The activation grid pads K past the weight K and the matmul would "
+        "wait forever for in1 pages the prefetcher never pushes.",
+        weight_K_tiles,
+        ring_size,
+        weight_K_tiles % ring_size);
+    TT_FATAL(
+        weight_N_tiles % ring_size == 0,
+        "Weight N ({} tiles) must be divisible by ring_size ({}) for receiver-contiguous gather_in0 + global_cb",
+        weight_N_tiles,
+        ring_size);
+    const uint32_t per_recv_N_tiles = weight_N_tiles / ring_size;
+    TT_FATAL(
+        per_recv_N_tiles == program_config.per_core_N,
+        "Matmul per_core_N ({}) must equal weight per-receiver N ({} = N_tiles {} / ring_size {}); otherwise "
+        "the matmul's in1 page size disagrees with what the recv-contig prefetcher pushes.",
+        program_config.per_core_N,
+        per_recv_N_tiles,
+        weight_N_tiles,
+        ring_size);
+}
+
 }  // namespace
 
 MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_factory(
@@ -1107,11 +1154,17 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     // non-WIDTH_SHARDED in1. recv-contig correctness is covered by
                     // test_validator_dram_sender_recv_contig and the bench PCC check.
                     if (attributes.global_cb.has_value() && input_tensor_a.is_sharded() &&
-                        input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
                         tt::tt_metal::experimental::sender_core_type(attributes.global_cb.value()) ==
                             tt::tt_metal::experimental::SenderCoreType::Dram) {
-                        validate_dram_sender_global_cb_gather_in0_geometry(
-                            attributes.global_cb.value(), input_tensor_a, b_shape_padded, in1_tile, program_config);
+                        const auto in1_layout = input_tensor_b.memory_config().memory_layout();
+                        if (in1_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+                            validate_dram_sender_global_cb_gather_in0_geometry(
+                                attributes.global_cb.value(), input_tensor_a, b_shape_padded, in1_tile, program_config);
+                        } else if (in1_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+                            // Receiver-contiguous DRAM weight (NdShardSpec is reported as BLOCK_SHARDED).
+                            validate_dram_sender_global_cb_gather_in0_geometry_recv_contig(
+                                attributes.global_cb.value(), input_tensor_a, b_shape_padded, in1_tile, program_config);
+                        }
                     }
 
                     TT_FATAL(!optional_bias.has_value(), "Bias is not supported when using gather_in0.");

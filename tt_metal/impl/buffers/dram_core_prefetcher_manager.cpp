@@ -239,12 +239,20 @@ DramCorePrefetcherTensorLayout compute_tensor_layout_recv_contig(
 
     const uint32_t tile_bytes = tt::tile_size(datatype_to_dataformat_converter(t.dtype()));
     TT_FATAL(block_count > 0, "DRAM-core prefetcher block_count must be > 0");
-    const uint32_t k_block_w_tiles = (k_tiles_raw + block_count - 1) / block_count;
+    // K must divide evenly into block_count K-blocks. A ceil here would make the kernel push
+    // block_count * ceil(K_tiles/block_count) K-rows per receiver — more than the slab
+    // (recv_stride = K_tiles * n_per_recv * tile_bytes) holds — so the last block over-reads
+    // into the next receiver's slab (or past the buffer for the last slab). For a matmul-fed
+    // weight, compute block_count via dram_core_prefetcher_block_count_for_matmul_1d(), which
+    // also pins block_count == ring_size.
     TT_FATAL(
-        k_block_w_tiles >= 1,
-        "Receiver-contiguous: K_tiles ({}) too small for block_count ({})",
+        k_tiles_raw % block_count == 0,
+        "Receiver-contiguous: weight K ({} tiles) must be divisible by block_count ({}); remainder {}. "
+        "block_count must equal the matmul ring_size.",
         k_tiles_raw,
-        block_count);
+        block_count,
+        k_tiles_raw % block_count);
+    const uint32_t k_block_w_tiles = k_tiles_raw / block_count;
 
     const uint32_t noc_max_burst = MetalContext::instance(context_id).hal().get_noc_max_burst_size_bytes();
     const auto [coalesced_page_size, coalesced_num_pages] = pick_page_size(noc_max_burst, n_per_recv, tile_bytes);
