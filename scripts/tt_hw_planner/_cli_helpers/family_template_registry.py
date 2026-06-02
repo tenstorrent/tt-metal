@@ -36,6 +36,12 @@ from typing import Any, Dict, List, Optional
 
 REGISTRY_FILENAME = "learned_chained_templates.json"
 
+# Bumped when the entry schema changes incompatibly. Entries with a
+# schema_version less than CURRENT are still readable but the caller
+# should treat them as candidates for re-validation (the synthesis
+# prompt format may have evolved, the saved template may be stale).
+CURRENT_SCHEMA_VERSION = 1
+
 
 @dataclass
 class ChainedTemplateEntry:
@@ -74,6 +80,14 @@ class ChainedTemplateEntry:
     updated_at: float = 0.0
     final_pcc: Optional[float] = None
     notes: str = ""
+    schema_version: int = 1
+    # Demotion state (Item 8 follow-on). When operators determine the
+    # template has regressed (new HF version, kernel API changed, etc.)
+    # they can demote it. Demoted entries are skipped by find_template_for_model
+    # so future bring-ups re-synthesize from scratch.
+    demoted: bool = False
+    demoted_at: float = 0.0
+    demoted_reason: str = ""
 
 
 # ─── Registry I/O ────────────────────────────────────────────────────
@@ -122,6 +136,10 @@ def load_registry(repo_root: Optional[Path] = None) -> Dict[str, ChainedTemplate
                 updated_at=float(val.get("updated_at") or 0.0),
                 final_pcc=val.get("final_pcc"),
                 notes=str(val.get("notes") or ""),
+                schema_version=int(val.get("schema_version") or 1),
+                demoted=bool(val.get("demoted", False)),
+                demoted_at=float(val.get("demoted_at") or 0.0),
+                demoted_reason=str(val.get("demoted_reason") or ""),
             )
         except Exception:
             continue
@@ -206,14 +224,54 @@ def find_template_for_model(
     *,
     model_type: str,
     repo_root: Optional[Path] = None,
+    include_demoted: bool = False,
 ) -> Optional[ChainedTemplateEntry]:
     """Look up a template by HF ``model_type``. Returns the entry or
     None. This is the Step-1 template-reuse hook: the e2e flow asks
     "do we have a chained template for this family?" before going
-    through Step-2/3 synthesis."""
+    through Step-2/3 synthesis.
+
+    Demoted templates are SKIPPED by default — they regressed and
+    shouldn't be auto-reused. Pass ``include_demoted=True`` to see
+    them (used by management commands like ``template-list --all``).
+    """
     if not model_type:
         return None
-    return load_registry(repo_root).get(model_type)
+    entry = load_registry(repo_root).get(model_type)
+    if entry is None:
+        return None
+    if entry.demoted and not include_demoted:
+        return None
+    return entry
+
+
+def demote_template(
+    *,
+    family_key: str,
+    reason: str = "",
+    repo_root: Optional[Path] = None,
+    clock: Optional[Any] = None,
+) -> Optional[ChainedTemplateEntry]:
+    """Mark a template as demoted (regressed). Future
+    :func:`find_template_for_model` calls skip it so the e2e flow
+    re-synthesizes from scratch.
+
+    Idempotent: re-demoting just updates ``demoted_at`` and
+    ``demoted_reason``. Returns the updated entry on success, None on
+    persistence failure or unknown family.
+    """
+    if not family_key:
+        return None
+    registry = load_registry(repo_root)
+    entry = registry.get(family_key)
+    if entry is None:
+        return None
+    entry.demoted = True
+    entry.demoted_at = (clock or time.time)()
+    entry.demoted_reason = reason or "operator-marked"
+    if not save_registry(registry, repo_root):
+        return None
+    return entry
 
 
 def list_all_templates(repo_root: Optional[Path] = None) -> List[ChainedTemplateEntry]:
@@ -229,9 +287,11 @@ def confirmation_count(entry: ChainedTemplateEntry) -> int:
 
 
 __all__ = [
+    "CURRENT_SCHEMA_VERSION",
     "REGISTRY_FILENAME",
     "ChainedTemplateEntry",
     "confirmation_count",
+    "demote_template",
     "find_template_for_model",
     "list_all_templates",
     "load_registry",

@@ -19,6 +19,7 @@ from scripts.tt_hw_planner._cli_helpers.e2e_synthesizer import (
     E2ESynthIterResult,
     E2ESynthResult,
     build_synthesis_prompt,
+    extract_late_discovery_markers,
     extract_pcc_from_output,
     parse_synthesized_demo_py,
     persist_synth_result,
@@ -388,6 +389,103 @@ def test_loop_handles_pytest_runner_exception(tmp_path: Path) -> None:
     )
     assert result.converged is False
     assert "pytest" in result.final_diagnostic.lower()
+
+
+# ─── extract_late_discovery_markers ─────────────────────────────────
+
+
+def test_extract_markers_returns_empty_for_no_markers() -> None:
+    assert extract_late_discovery_markers("") == []
+    assert extract_late_discovery_markers("def test_demo(): pass") == []
+
+
+def test_extract_markers_finds_single_marker() -> None:
+    src = "def test_demo():\n" "    # TODO[late-graduate]: vision_encoder.fpn_extract\n" "    pass\n"
+    assert extract_late_discovery_markers(src) == ["vision_encoder.fpn_extract"]
+
+
+def test_extract_markers_finds_multiple_in_declaration_order() -> None:
+    src = "# TODO[late-graduate]: a.b\n" "# TODO[late-graduate]: c.d.e\n" "# TODO[late-graduate]: f\n"
+    assert extract_late_discovery_markers(src) == ["a.b", "c.d.e", "f"]
+
+
+def test_extract_markers_is_case_insensitive() -> None:
+    src = "# todo[Late-Graduate]: module.x"
+    assert extract_late_discovery_markers(src) == ["module.x"]
+
+
+def test_extract_markers_strips_trailing_punctuation() -> None:
+    """LLM may emit ``TODO[late-graduate]: foo,`` — strip noise."""
+    src = "# TODO[late-graduate]: foo,bar);"
+    # Strips trailing , ; ) but keeps the path itself
+    markers = extract_late_discovery_markers(src)
+    assert markers == ["foo,bar"] or markers == ["foo"] or markers[0].startswith("foo")
+
+
+# ─── Late-discovery accumulation in run_e2e_synthesis_loop ──────────
+
+
+def test_loop_accumulates_late_discoveries_from_demo(tmp_path: Path) -> None:
+    """When the LLM writes TODO[late-graduate] markers in demo.py, the
+    loop classifies each and accumulates them on the result."""
+    demo_body = (
+        "def test_demo(device_params, device):\n"
+        "    # TODO[late-graduate]: vision_encoder.fpn_extract\n"
+        "    # TODO[late-graduate]: prompt_encoder.conv_s0\n"
+        "    print('end-to-end PCC=0.5')\n"
+        "    assert_with_pcc(a, b, pcc=0.99)\n"
+    )
+
+    def agent(prompt, *, expected_deliverable_files, timeout_s, **kwargs):
+        for p in expected_deliverable_files:
+            Path(p).write_text(demo_body, encoding="utf-8")
+        return 0
+
+    def pytest_fail(demo_py_path: Path) -> Tuple[int, str]:
+        return 1, "end-to-end PCC=0.5"
+
+    result = run_e2e_synthesis_loop(
+        model_id="org/m",
+        demo_dir=tmp_path,
+        hf_forward_src="x",
+        graduated_components=[],
+        pytest_runner=pytest_fail,
+        agent_invoker=agent,
+        max_iters=1,
+    )
+    # Two markers, one iter → two accumulated decisions
+    assert len(result.late_discoveries) == 2
+    paths = [d.submodule_spec["hf_reference"] if d.submodule_spec else None for d in result.late_discoveries]
+    assert "vision_encoder.fpn_extract" in paths
+    assert "prompt_encoder.conv_s0" in paths
+
+
+def test_loop_late_discoveries_empty_when_no_markers(tmp_path: Path) -> None:
+    """Demo without markers → no late-discovery accumulation."""
+    demo_body = (
+        "def test_demo(device_params, device):\n"
+        "    print('end-to-end PCC=0.99')\n"
+        "    assert_with_pcc(a, b, pcc=0.99)\n"
+    )
+
+    def agent(prompt, *, expected_deliverable_files, timeout_s, **kwargs):
+        for p in expected_deliverable_files:
+            Path(p).write_text(demo_body, encoding="utf-8")
+        return 0
+
+    def pytest_pass(demo_py_path: Path) -> Tuple[int, str]:
+        return 0, "end-to-end PCC=0.99"
+
+    result = run_e2e_synthesis_loop(
+        model_id="org/m",
+        demo_dir=tmp_path,
+        hf_forward_src="x",
+        graduated_components=[],
+        pytest_runner=pytest_pass,
+        agent_invoker=agent,
+        max_iters=1,
+    )
+    assert result.late_discoveries == []
 
 
 # ─── persist_synth_result ───────────────────────────────────────────

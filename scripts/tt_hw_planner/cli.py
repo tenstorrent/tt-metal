@@ -2643,6 +2643,88 @@ def _maybe_run_e2e_orchestrator(
         return None
 
 
+def cmd_template_list(args) -> int:
+    """Print every chained-template registry entry. Default: skip
+    demoted (set ``--all`` to include them). Used by operators to
+    inspect what families have promoted vs pending templates."""
+    from ._cli_helpers.family_template_registry import (
+        confirmation_count,
+        list_all_templates,
+    )
+
+    entries = list_all_templates()
+    if not entries:
+        print("(no chained-template entries registered yet)")
+        return 0
+    include_demoted = getattr(args, "all", False)
+    shown = 0
+    for entry in entries:
+        if entry.demoted and not include_demoted:
+            continue
+        shown += 1
+        status_tag = "DEMOTED" if entry.demoted else ("PROMOTED" if entry.promoted else "REGISTERED")
+        print()
+        print(f"  family={entry.family_key:24}  status={status_tag}")
+        print(f"    source_model      : {entry.source_model_id}")
+        print(f"    template_demo_src : {entry.template_demo_source}")
+        print(f"    confirmed_models  : {confirmation_count(entry)}  ({', '.join(entry.confirmed_models) or '(none)'})")
+        if entry.final_pcc is not None:
+            print(f"    final_pcc         : {entry.final_pcc:.4f}")
+        if entry.demoted:
+            print(f"    demoted_reason    : {entry.demoted_reason}")
+        if entry.notes:
+            print(f"    notes             : {entry.notes}")
+    if shown == 0:
+        print("(no non-demoted entries — pass --all to include demoted)")
+    return 0
+
+
+def cmd_template_promote(args) -> int:
+    """Force-promote a registered chained template by family_key,
+    bypassing the multi-model gate threshold.
+
+    Useful when an operator has manually verified a template works
+    for additional siblings outside the tool's auto-tracking, or
+    wants to opt-in to template reuse before the second sibling
+    has been brought up.
+    """
+    from ._cli_helpers.template_promotion import mark_promoted
+
+    family_key = getattr(args, "family_key", None)
+    if not family_key:
+        print("ERROR: family_key required", file=sys.stderr)
+        return 2
+    entry = mark_promoted(family_key=family_key, threshold=1)
+    if entry is None:
+        print(
+            f"ERROR: could not promote {family_key!r} — family not in registry " f"(or persistence failed)",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"OK  promoted family={entry.family_key}  promoted_at={entry.promoted_at:.0f}")
+    return 0
+
+
+def cmd_template_demote(args) -> int:
+    """Demote a chained template (mark as regressed). Future bring-ups
+    in this family will skip the template and re-synthesize from scratch.
+
+    Idempotent; safe to call repeatedly with updated reasons.
+    """
+    from ._cli_helpers.family_template_registry import demote_template
+
+    family_key = getattr(args, "family_key", None)
+    if not family_key:
+        print("ERROR: family_key required", file=sys.stderr)
+        return 2
+    entry = demote_template(family_key=family_key, reason=getattr(args, "reason", "") or "")
+    if entry is None:
+        print(f"ERROR: could not demote {family_key!r} — family not in registry", file=sys.stderr)
+        return 1
+    print(f"OK  demoted family={entry.family_key}  reason={entry.demoted_reason!r}")
+    return 0
+
+
 def _find_demo_dir_safe(model_id: str) -> Optional[Path]:
     """Resolve the demo dir for ``model_id``, returning ``None`` on any
     error.
@@ -9304,6 +9386,39 @@ def _cmd_up_core(args) -> int:
                 sep=sep,
                 notes="Auto-iterate loop reached all-native graduation.",
             )
+            # Register the chained template in the family registry
+            # (Item 6) regardless of whether the orchestrator path
+            # fired. Second sibling pass auto-promotes (Item 7).
+            # Best-effort: registry failures never downgrade the
+            # bring-up outcome.
+            try:
+                from ._cli_helpers.family_template_registry import register_template
+                from ._cli_helpers.template_promotion import auto_promote_after_register
+
+                _family_key = _resolve_model_type(MODEL)
+                _demo_dir_for_reg = _find_demo_dir_safe(MODEL)
+                _demo_path = (_demo_dir_for_reg / "demo.py") if _demo_dir_for_reg else None
+                if _family_key and _demo_path is not None and _demo_path.is_file():
+                    register_template(
+                        family_key=_family_key,
+                        template_demo_source=str(_demo_path),
+                        source_model_id=MODEL,
+                        notes="from Path A per-component graduation",
+                    )
+                    _promoted = auto_promote_after_register(family_key=_family_key)
+                    if _promoted is not None:
+                        print(
+                            f"  [family-registry] {_family_key}: template "
+                            f"auto-promoted ({len(_promoted.confirmed_models)} confirmed siblings)"
+                        )
+                    else:
+                        print(f"  [family-registry] {_family_key}: registered (awaiting more siblings)")
+            except Exception as _reg_exc:
+                print(
+                    f"  [family-registry] register/promote raised "
+                    f"{type(_reg_exc).__name__}: {_reg_exc} (non-fatal)",
+                    file=sys.stderr,
+                )
             # B-FIX #2 (2026-05-31): surface brain G8 demo-emit decline in
             # the OUTCOME extras so user knows the demo wasn't emitted.
             _success_extra = []
@@ -10767,6 +10882,29 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     pwl = sub.add_parser("worktree-list", help="List active tt_hw_planner bring-up worktrees (active + orphaned).")
     pwl.set_defaults(func=cmd_worktree_list)
+
+    # ─── Chained-template registry management commands ──────────────
+    ptl = sub.add_parser(
+        "template-list",
+        help="List chained-template registry entries (family templates produced by e2e synthesis).",
+    )
+    ptl.add_argument("--all", action="store_true", help="Include demoted entries.")
+    ptl.set_defaults(func=cmd_template_list)
+
+    ptp = sub.add_parser(
+        "template-promote",
+        help="Force-promote a chained template (skip the multi-model gate threshold).",
+    )
+    ptp.add_argument("family_key", help="HF model_type the template was registered under.")
+    ptp.set_defaults(func=cmd_template_promote)
+
+    ptd = sub.add_parser(
+        "template-demote",
+        help="Demote a chained template (regressed, force re-synthesis on next bring-up).",
+    )
+    ptd.add_argument("family_key", help="HF model_type to demote.")
+    ptd.add_argument("--reason", default="", help="Operator-supplied reason (stored in entry).")
+    ptd.set_defaults(func=cmd_template_demote)
 
     pwc = sub.add_parser("worktree-cleanup", help="Remove orphan worktrees (creators no longer alive).")
     pwc.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt and remove all orphans.")

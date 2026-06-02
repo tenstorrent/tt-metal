@@ -6,9 +6,11 @@ import json
 from pathlib import Path
 
 from scripts.tt_hw_planner._cli_helpers.family_template_registry import (
+    CURRENT_SCHEMA_VERSION,
     REGISTRY_FILENAME,
     ChainedTemplateEntry,
     confirmation_count,
+    demote_template,
     find_template_for_model,
     list_all_templates,
     load_registry,
@@ -308,3 +310,90 @@ def test_confirmation_count_zero_for_empty_list() -> None:
         confirmed_models=[],
     )
     assert confirmation_count(entry) == 0
+
+
+# ─── demote_template + schema_version ──────────────────────────────
+
+
+def test_schema_version_constant_at_least_1() -> None:
+    """Pin the constant — versioning is the only way to detect a
+    template authored under an older synthesis-prompt schema."""
+    assert CURRENT_SCHEMA_VERSION >= 1
+
+
+def test_register_defaults_schema_version(tmp_path: Path) -> None:
+    """Newly-registered templates carry schema_version=1 by default."""
+    register_template(
+        family_key="sam2",
+        template_demo_source="x",
+        source_model_id="m1",
+        repo_root=tmp_path,
+        clock=lambda: 100.0,
+    )
+    reg = load_registry(repo_root=tmp_path)
+    assert reg["sam2"].schema_version == 1
+
+
+def test_demote_returns_none_for_unknown_family(tmp_path: Path) -> None:
+    assert demote_template(family_key="never-registered", repo_root=tmp_path) is None
+
+
+def test_demote_marks_entry_with_reason(tmp_path: Path) -> None:
+    register_template(
+        family_key="sam2",
+        template_demo_source="x",
+        source_model_id="m1",
+        repo_root=tmp_path,
+        clock=lambda: 100.0,
+    )
+    entry = demote_template(
+        family_key="sam2",
+        reason="HF v5 broke conv_s0 path",
+        repo_root=tmp_path,
+        clock=lambda: 200.0,
+    )
+    assert entry is not None
+    assert entry.demoted is True
+    assert entry.demoted_at == 200.0
+    assert "HF v5" in entry.demoted_reason
+
+
+def test_find_template_skips_demoted_by_default(tmp_path: Path) -> None:
+    register_template(
+        family_key="sam2",
+        template_demo_source="x",
+        source_model_id="m1",
+        repo_root=tmp_path,
+        clock=lambda: 100.0,
+    )
+    demote_template(family_key="sam2", reason="regression", repo_root=tmp_path)
+    assert find_template_for_model(model_type="sam2", repo_root=tmp_path) is None
+
+
+def test_find_template_returns_demoted_when_include_demoted(tmp_path: Path) -> None:
+    register_template(
+        family_key="sam2",
+        template_demo_source="x",
+        source_model_id="m1",
+        repo_root=tmp_path,
+        clock=lambda: 100.0,
+    )
+    demote_template(family_key="sam2", reason="x", repo_root=tmp_path)
+    entry = find_template_for_model(model_type="sam2", repo_root=tmp_path, include_demoted=True)
+    assert entry is not None
+    assert entry.demoted is True
+
+
+def test_demote_is_idempotent(tmp_path: Path) -> None:
+    register_template(
+        family_key="sam2",
+        template_demo_source="x",
+        source_model_id="m1",
+        repo_root=tmp_path,
+        clock=lambda: 100.0,
+    )
+    demote_template(family_key="sam2", reason="r1", repo_root=tmp_path, clock=lambda: 200.0)
+    entry = demote_template(family_key="sam2", reason="r2", repo_root=tmp_path, clock=lambda: 300.0)
+    assert entry is not None
+    assert entry.demoted_at == 300.0
+    assert "r2" in entry.demoted_reason

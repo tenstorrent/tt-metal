@@ -70,6 +70,11 @@ class E2ESynthResult:
     ``demo_py_path`` points at the last-written demo.py (regardless of
     convergence — the caller may still want to inspect it on FAIL).
     ``iters`` records every attempt's outcome for post-mortem.
+    ``late_discoveries`` carries the structured per-marker decisions
+    the discovery handler produced across all iters. Callers (e.g. the
+    orchestrator) act on Case-C decisions by invoking late_graduate
+    for the listed modules and re-running synthesis with them
+    available.
     """
 
     converged: bool
@@ -77,10 +82,34 @@ class E2ESynthResult:
     demo_py_path: Optional[Path] = None
     final_pcc: Optional[float] = None
     final_diagnostic: str = ""  # last iter's failure summary, empty on converge
+    late_discoveries: List[Any] = field(default_factory=list)  # List[MissingPieceClassification]
 
     @property
     def iters_used(self) -> int:
         return len(self.iters)
+
+
+# ─── Late-discovery markers ──────────────────────────────────────────
+
+
+def extract_late_discovery_markers(demo_py_src: str) -> List[str]:
+    """Pull ``TODO[late-graduate]: <module_path>`` markers from a
+    synthesized demo.py.
+
+    The synthesis prompt instructs the LLM to surface missing modules
+    via this marker rather than fabricating. The synthesis loop reads
+    these between iters to route each marker through the late-discovery
+    classifier (Item 5) and downstream handlers (Item 4 Case C).
+
+    Returns the list of module paths in declaration order. Empty list
+    when no markers are present or input is empty. Never raises.
+    """
+    if not demo_py_src:
+        return []
+    import re
+
+    pattern = re.compile(r"TODO\[late-graduate\]\s*:\s*(\S+)", re.IGNORECASE)
+    return [m.group(1).rstrip(",;)") for m in pattern.finditer(demo_py_src)]
 
 
 # ─── Prompt builder ──────────────────────────────────────────────────
@@ -389,6 +418,46 @@ def run_e2e_synthesis_loop(
             )
         )
 
+        # Parse the written demo for late-discovery markers. Each
+        # ``TODO[late-graduate]: <module_path>`` the LLM left in the
+        # forward gets classified (Item 5) and accumulated on the
+        # result for the caller to act on (Item 4 Case C runs in
+        # the orchestrator, not here, since it needs a real
+        # component-iterate runner).
+        try:
+            demo_src = demo_py_path.read_text(encoding="utf-8") if demo_py_path.is_file() else ""
+        except Exception:
+            demo_src = ""
+        markers = extract_late_discovery_markers(demo_src)
+        if markers:
+            try:
+                from .late_discovery_classifier import heuristic_classify
+
+                for marker in markers:
+                    desc = f"missing module: {marker}"
+                    classified = heuristic_classify(desc)
+                    if classified is None:
+                        # Fall through to Case C (real submodule) by
+                        # default — that's the conservative route when
+                        # heuristic can't decide. Caller's classifier
+                        # can refine via the LLM later.
+                        from .late_discovery_classifier import MissingPieceClassification
+
+                        classified = MissingPieceClassification(
+                            case="C",
+                            piece_kind="submodule",
+                            description=desc,
+                            submodule_spec={
+                                "name": marker.rsplit(".", 1)[-1] or marker,
+                                "hf_reference": marker,
+                                "class_name": "",
+                            },
+                            notes="heuristic fell through; default Case C",
+                        )
+                    result.late_discoveries.append(classified)
+            except Exception:
+                pass
+
         if pytest_rc == 0 and pcc is not None and pcc >= pcc_target:
             result.converged = True
             result.final_pcc = pcc
@@ -521,6 +590,7 @@ __all__ = [
     "E2ESynthIterResult",
     "E2ESynthResult",
     "build_synthesis_prompt",
+    "extract_late_discovery_markers",
     "extract_pcc_from_output",
     "parse_synthesized_demo_py",
     "persist_synth_result",
