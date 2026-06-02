@@ -756,18 +756,21 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
     // Welford-specific compute args
     if (ctx.use_welford) {
         const uint32_t tile_width = ctx.tile_width;
-        uint32_t last_tile_W = ctx.K - (((ctx.K - tile_width) / tile_width) * tile_width);
+        // Number of valid (logical) columns in the final tile of the width. The kernel uses this
+        // both to bound the partial Welford tile and, via last_block_w, to weight the final width
+        // shard in the cross-core combine, so it must reflect the logical width, not padded K.
+        uint32_t last_tile_W = (ctx.logical_K % tile_width == 0) ? tile_width : (ctx.logical_K % tile_width);
         auto eps_u32 = std::bit_cast<uint32_t>(ctx.eps);
 
         args.compute_all_to_all.push_back(tile_width);
         args.compute_all_to_all.push_back(last_tile_W);
-        args.compute_all_to_all.push_back(ctx.K);
+        args.compute_all_to_all.push_back(ctx.logical_K);
         args.compute_all_to_all.push_back(eps_u32);
         args.compute_all_to_all.push_back(ctx.per_core_recip_lut_size);
 
         args.compute_not_all_to_all.push_back(tile_width);
         args.compute_not_all_to_all.push_back(last_tile_W);
-        args.compute_not_all_to_all.push_back(ctx.K);
+        args.compute_not_all_to_all.push_back(ctx.logical_K);
         args.compute_not_all_to_all.push_back(eps_u32);
         args.compute_not_all_to_all.push_back(ctx.per_core_recip_lut_size);
     }

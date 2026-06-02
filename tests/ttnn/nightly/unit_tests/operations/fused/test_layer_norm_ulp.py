@@ -32,11 +32,13 @@ pytestmark = pytest.mark.use_module_device
 import torch
 from loguru import logger
 
+import math
+
 import ttnn
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import measure_ulp_with_near_zero_atol
 from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import ttnn_layer_norm
-
+from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import ttnn_layer_norm_sharded
 
 # Poison value to ensure Welford's algorithm ignores padded elements (#31982)
 PAD_VALUE = -42
@@ -336,3 +338,130 @@ def test_layer_norm_ulp_fp32_with_weight_bias(device, h, w, desc, use_welford, d
     if not passed:
         logger.info(f"  {msg}")
     assert passed, f"[FP32 {wb_mode} {desc} use_welford={use_welford} dist={distribution}] {msg}"
+
+
+# ---------------------------------------------------------------------------
+# Sharded Welford: non-tile-aligned width
+# ---------------------------------------------------------------------------
+# Welford layer_norm must normalize over the logical width and ignore the tile
+# padding. The interleaved path already does (covered by the "odd" 37x41 shape
+# above); this exercises the same property on the sharded path, where the
+# normalization width and the per-core reciprocal-LUT size must track the logical
+# width rather than the padded shard width.
+#
+# Poisoning the implicit tile padding with a large out-of-distribution value makes
+# any read of the padded columns observable: a kernel that normalizes over the
+# logical width is unaffected, while one that folds the padded columns into the
+# mean/variance produces a grossly wrong result.
+
+
+# Widths that are not multiples of the tile width (32), each on a single core so the
+# whole logical row plus its tile padding lives in one shard.
+@pytest.mark.parametrize("w", [40, 72, 200])
+# Restricted to small-range distributions. The near-zero atol tolerance scales with the
+# golden's value range, so a wide-range distribution (e.g. wide_uniform, ±1e3) inflates the
+# tolerance enough to absorb the error from normalizing over padded columns. normal and
+# centered_uniform keep the range near unity, so PAD_VALUE-contaminated statistics are caught.
+@pytest.mark.parametrize("distribution", ["normal", "centered_uniform"])
+# Both reduction paths must normalize over the logical width: the Welford path (reciprocal LUT)
+# and the legacy reduce path (1/N reduction scaler).
+@pytest.mark.parametrize("use_welford", [True, False])
+def test_layer_norm_ulp_bf16_sharded_non_tile_aligned_width(device, w, distribution, use_welford):
+    """Sharded BF16 layer_norm over a non-tile-aligned width vs torch golden.
+
+    For the Welford path the reciprocal LUT is created exactly as production callers do (sized to
+    the per-core shard width via ttnn_layer_norm_sharded); the legacy path uses the 1/N reduction
+    scaler. The implicit tile padding is poisoned with PAD_VALUE so that normalizing over the
+    padded width corrupts the output. Mirrors the interleaved "odd" shape coverage for the sharded
+    path.
+    """
+    torch.manual_seed(0)
+    h = 32
+    padded_w = math.ceil(w / 32) * 32
+
+    torch_input_tensor = _make_ln_input(h, w, torch.bfloat16, distribution)
+    golden = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
+
+    # Single-core block-sharded config; the shard width is the tile-padded width.
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        [h, padded_w],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sharded_mem_config,
+    )
+    tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, PAD_VALUE)
+
+    actual = ttnn_layer_norm_sharded(
+        device,
+        tt_input_tensor,
+        use_welford=use_welford,
+        block_ht=h // 32,
+        block_wt=padded_w // 32,
+        subblock_w=1,
+    )
+    actual = actual[..., :w]
+
+    # BF16 accumulation thresholds (compute kernel config defaults), as elsewhere in this file.
+    passed, max_ulp, max_atol_err, atol_tol, msg, ulp_stats = measure_ulp_with_near_zero_atol(
+        golden, actual, _BF16_ULP_THRESHOLD_BF16_DEST, _BF16_NEAR_ZERO_ATOL_FRACTION_BF16_DEST
+    )
+    spec = f"sharded shape_hw=({h},{w}) padded_w={padded_w} welford={use_welford} dist={distribution}"
+    logger.info(
+        f"ttnn.layer_norm ULP (BF16, sharded) | {spec} | ulp mean={ulp_stats['mean']:.3g} p95={ulp_stats['p95']:.3g} p99={ulp_stats['p99']:.3g} max={max_ulp:.4g}/{_BF16_ULP_THRESHOLD_BF16_DEST} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
+    )
+    if ulp_stats["worst"]:
+        logger.info(f"  worst: {ulp_stats['worst']}")
+    if not passed:
+        logger.info(f"  {msg}")
+    assert passed, f"[BF16 sharded non-aligned w={w} welford={use_welford} dist={distribution}] {msg}"
+
+
+def test_layer_norm_ulp_sharded_welford_non_tile_aligned_multi_width_shard_rejected(device):
+    """A non-tile-aligned width split across multiple width shards is rejected, not silently wrong.
+
+    The Welford partial-tile handling uses one last-tile width for both the per-core reduction and
+    the cross-core combine; those agree only for a single width shard or a tile-aligned width. The
+    op must raise rather than normalize the full shards over their padding columns.
+    """
+    torch.manual_seed(0)
+    h, w = 32, 200  # 200 -> padded 256; split across 2 width shards of 128 (4 tiles) each
+    num_cores_w = 2
+    shard_w = math.ceil(w / num_cores_w / 32) * 32
+
+    torch_input_tensor = _make_ln_input(h, w, torch.bfloat16, "normal")
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, 0))}),
+        [h, shard_w],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sharded_mem_config,
+    )
+
+    with pytest.raises(RuntimeError, match="non-tile-aligned width"):
+        ttnn_layer_norm_sharded(
+            device,
+            tt_input_tensor,
+            use_welford=True,
+            block_ht=h // 32,
+            block_wt=shard_w // 32,
+            subblock_w=1,
+        )
