@@ -28,6 +28,7 @@ struct OnePacketConfig {
     uint32_t packet_size_bytes = 0;
     bool read = true;
     bool use_2_0 = false;
+    bool use_stateful_vc = false;  // exercises NocOptions::CUSTOM_VC via NocOptVals
 };
 
 /// @brief Does OneToOne or OneFromOne but with one_packet read/write
@@ -70,15 +71,19 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
         (uint32_t)test_config.num_packets, (uint32_t)test_config.packet_size_bytes, (uint32_t)test_config.test_id};
 
     std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/one_packet/kernels/";
-    std::string read_kernel_filename = "read_one_packet";
-    std::string write_kernel_filename = "write_one_packet";
-    if (test_config.read) {
-        kernels_dir += read_kernel_filename;
+    if (test_config.use_stateful_vc) {
+        kernels_dir += test_config.read ? "reader_stateful_vc_2_0" : "writer_stateful_vc_2_0";
     } else {
-        kernels_dir += write_kernel_filename;
-    }
-    if (test_config.use_2_0) {
-        kernels_dir += "_2_0";
+        std::string read_kernel_filename = "read_one_packet";
+        std::string write_kernel_filename = "write_one_packet";
+        if (test_config.read) {
+            kernels_dir += read_kernel_filename;
+        } else {
+            kernels_dir += write_kernel_filename;
+        }
+        if (test_config.use_2_0) {
+            kernels_dir += "_2_0";
+        }
     }
     kernels_dir += ".cpp";
 
@@ -402,6 +407,68 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes_2_0) {
             };
 
             // Run
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
+        }
+    }
+}
+
+// NocOptions::CUSTOM_VC via NocOptVals — set_async_read_state + async_read_with_state
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementNocApiStatefulReadCustomVc) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+    auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    uint32_t max_packet_size_bytes =
+        device->arch() == tt::ARCH::BLACKHOLE ? 16 * 1024 : 8 * 1024;
+    uint32_t max_packets = 256;
+
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord subordinate_core_coord = {0, 1};
+
+    for (uint32_t num_packets = 1; num_packets <= max_packets; num_packets *= 4) {
+        for (uint32_t packet_size_bytes = page_size_bytes; packet_size_bytes <= max_packet_size_bytes;
+             packet_size_bytes *= 2) {
+            unit_tests::dm::one_packet::OnePacketConfig test_config = {
+                .test_id = 86,
+                .master_core_coord = master_core_coord,
+                .subordinate_core_coord = subordinate_core_coord,
+                .num_packets = num_packets,
+                .packet_size_bytes = packet_size_bytes,
+                .read = true,
+                .use_stateful_vc = true,
+            };
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
+        }
+    }
+}
+
+// NocOptions::CUSTOM_VC via NocOptVals — set_async_write_state + async_write_with_state
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementNocApiStatefulWriteCustomVc) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->impl().get_device(0);
+    auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
+
+    uint32_t max_packet_size_bytes =
+        device->arch() == tt::ARCH::BLACKHOLE ? 16 * 1024 : 8 * 1024;
+    uint32_t max_packets = 256;
+
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord subordinate_core_coord = {0, 1};
+
+    for (uint32_t num_packets = 1; num_packets <= max_packets; num_packets *= 4) {
+        for (uint32_t packet_size_bytes = page_size_bytes; packet_size_bytes <= max_packet_size_bytes;
+             packet_size_bytes *= 2) {
+            unit_tests::dm::one_packet::OnePacketConfig test_config = {
+                .test_id = 87,
+                .master_core_coord = master_core_coord,
+                .subordinate_core_coord = subordinate_core_coord,
+                .num_packets = num_packets,
+                .packet_size_bytes = packet_size_bytes,
+                .read = false,
+                .use_stateful_vc = true,
+            };
             EXPECT_TRUE(run_dm(mesh_device, test_config));
         }
     }

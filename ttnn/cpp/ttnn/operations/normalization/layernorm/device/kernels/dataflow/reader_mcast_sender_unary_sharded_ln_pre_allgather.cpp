@@ -130,7 +130,7 @@ void kernel_main() {
                     write_offset = 0;
                     for (uint32_t block = 0; block < num_blocks_first_stage; ++block) {
                         for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_partial_result; ++tile_idx) {
-                            noc.async_read<Noc::TxnIdMode::DISABLED, NOC_MAX_BURST_SIZE>(
+                            noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                                 remote_ep,
                                 cb_external_obj,
                                 single_tile_size_bytes,
@@ -157,7 +157,7 @@ void kernel_main() {
                         write_offset = 0;
                         for (uint32_t block = 0; block < num_blocks_second_stage - 1; ++block) {
                             for (uint32_t tile_idx = 0; tile_idx < num_tiles_per_partial_result; ++tile_idx) {
-                                noc.async_read<Noc::TxnIdMode::DISABLED, NOC_MAX_BURST_SIZE>(
+                                noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
                                     remote_ep,
                                     cb_external_obj,
                                     single_tile_size_bytes,

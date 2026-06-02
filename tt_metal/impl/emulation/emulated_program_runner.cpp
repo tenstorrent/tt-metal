@@ -330,8 +330,8 @@ struct Metal2BindingsSnapshot {
     };
 
     bool is_metal2 = false;
-    std::vector<std::string> named_runtime_args;
-    std::vector<std::string> named_common_runtime_args;
+    std::vector<std::string> runtime_arg_names;
+    std::vector<std::string> common_runtime_arg_names;
     std::map<std::string, uint32_t> dfb_accessors;
     std::map<std::string, uint16_t> sem_accessors;
     std::vector<TaEntry> ta_accessors;
@@ -351,10 +351,10 @@ struct Metal2BindingsSnapshot {
             s += ":ta:" + ta.name + "=" + std::to_string(ta.cta_offset) + "," +
                  std::to_string(ta.addr_crta_offset);
         }
-        for (const auto& name : named_runtime_args) {
+        for (const auto& name : runtime_arg_names) {
             s += ":rta:" + name;
         }
-        for (const auto& name : named_common_runtime_args) {
+        for (const auto& name : common_runtime_arg_names) {
             s += ":crta:" + name;
         }
         return s;
@@ -572,8 +572,8 @@ static void preprocess_kernel_source_for_x86(const std::string& src_path, const 
 static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& kernel) {
     Metal2BindingsSnapshot s;
     s.is_metal2 = kernel.is_metal2_kernel();
-    s.named_runtime_args = kernel.get_named_runtime_args();
-    s.named_common_runtime_args = kernel.get_named_common_runtime_args();
+    s.runtime_arg_names = kernel.get_runtime_arg_names();
+    s.common_runtime_arg_names = kernel.get_common_runtime_arg_names();
     kernel.process_dataflow_buffer_local_accessor_handles(
         [&s](const std::string& name, uint16_t id) { s.dfb_accessors[name] = id; });
     kernel.process_semaphore_local_accessor_handles(
@@ -610,7 +610,7 @@ static void emit_metal2_namespaces(
     std::ostream& f,
     const Metal2BindingsSnapshot& s,
     const std::unordered_map<std::string, uint32_t>& named_compile_args) {
-    const bool has_args = !s.named_runtime_args.empty() || !s.named_common_runtime_args.empty() ||
+    const bool has_args = !s.runtime_arg_names.empty() || !s.common_runtime_arg_names.empty() ||
                           !named_compile_args.empty();
     if (has_args) {
         f << "#include \"experimental/kernel_args.h\"\n";
@@ -628,12 +628,12 @@ static void emit_metal2_namespaces(
     if (has_args) {
         f << "namespace args {\n";
         uint32_t rta_offset = 0;
-        for (const auto& name : s.named_runtime_args) {
+        for (const auto& name : s.runtime_arg_names) {
             f << "constexpr ::experimental::RtaArg<uint32_t> " << name << "{" << rta_offset << "};\n";
             rta_offset += sizeof(uint32_t);
         }
         uint32_t crta_offset = 0;
-        for (const auto& name : s.named_common_runtime_args) {
+        for (const auto& name : s.common_runtime_arg_names) {
             f << "constexpr ::experimental::CrtaArg<uint32_t> " << name << "{" << crta_offset << "};\n";
             crta_offset += sizeof(uint32_t);
         }
@@ -675,9 +675,9 @@ static void emit_metal2_namespaces(
     // TensorBinding addresses, varargs], so get_common_vararg's base skips
     // past both the named CRTAs and the binding section.
     if (s.is_metal2) {
-        const uint32_t named_rta_words = static_cast<uint32_t>(s.named_runtime_args.size());
+        const uint32_t named_rta_words = static_cast<uint32_t>(s.runtime_arg_names.size());
         const uint32_t named_crta_words =
-            static_cast<uint32_t>(s.named_common_runtime_args.size() + s.ta_accessors.size());
+            static_cast<uint32_t>(s.common_runtime_arg_names.size() + s.ta_accessors.size());
         f << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { "
           << "return get_arg_val<uint32_t>(" << named_rta_words << " + idx); }\n";
         f << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { "
