@@ -250,8 +250,8 @@ void kernel_main() {
                 cb_reduced.wait_front(tile_granularity);
                 uint32_t output_l1_read_addr = cb_reduced.get_read_ptr();
                 for (uint32_t j = 0; j < tile_granularity; ++j) {
-                    // Device 2.0 migration: no Device 2.0 endpoint for "raw local L1 address as write source."
-                    // Same gap as MEM_ZEROS callsites.
+                    // Device 2.0 migration: legacy primitive retained — no endpoint today for "raw local L1
+                    // address as NoC write source." TODO(#45845): migrate to a LocalL1 endpoint once available.
                     noc_async_write_page(tiles_read, output_tensor_accessor, output_l1_read_addr);
                     output_l1_read_addr += page_size;
                     tiles_read++;

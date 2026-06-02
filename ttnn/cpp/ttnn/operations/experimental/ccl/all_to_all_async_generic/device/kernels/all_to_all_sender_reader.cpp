@@ -48,20 +48,8 @@ void read_data(
             input_page_size / 2,
             {.page_id = tile_id, .offset_bytes = (device_id % 2) * input_page_size / 2},
             {});
-        // Device 2.0 migration: legacy primitive retained: MEM_ZEROS_BASE self-read has no typed Noc trait
-        // (the local x/y are implicit in get_noc_addr(addr)). Both this call and noc_obj issue on
-        // noc_index — legacy noc_async_read defaults its noc arg to noc_index (dataflow_api.h),
-        // and Noc{} default-constructs noc_id_ to noc_index (noc.h Noc() ctor) — so the surrounding
-        // noc_obj.async_read_barrier() flushes this transaction too.
-        //
-        // Suggested follow-up: extend the Device 2.0 NoC API with a `LocalL1` endpoint in
-        // tt_metal/hw/inc/api/dataflow/endpoints.h. It would mirror UnicastEndpoint (tag struct +
-        // noc_traits_t<LocalL1> with src_addr only) and let this block become
-        //     noc_obj.async_read(LocalL1{}, dst, input_page_size / 2,
-        //                        {.addr = MEM_ZEROS_BASE + input_page_size / 2}, {});
-        // — with an analogous write path for the noc_async_write(MEM_ZEROS_BASE, ...) caller in
-        // neighbor_pad_async/local_copy_writer.cpp. One shared endpoint covers all retained
-        // MEM_ZEROS callsites flagged by #45003 item 4.
+        // Device 2.0 migration: legacy primitive retained — MEM_ZEROS_BASE self-read has no typed Noc
+        // endpoint today. TODO(#45845): migrate to a LocalL1 endpoint once available.
         uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
         noc_async_read(zeros_noc_addr, l1_write_addr + input_page_size / 2, input_page_size / 2);
         l1_write_addr += input_page_size;

@@ -33,7 +33,8 @@ inline void zeroPad(uint32_t cb_output_id) {
     const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
     uint32_t cb_write_addr = get_write_ptr(cb_output_id);
 
-    // Device 2.0 migration: legacy primitive retained, MEM_ZEROS_BASE self-read has no typed Noc trait
+    // Device 2.0 migration: legacy primitive retained — MEM_ZEROS_BASE self-read has no typed Noc
+    // endpoint today. TODO(#45845): migrate to a LocalL1 endpoint once available.
     for (uint32_t i = 0; i < num_full_reads; ++i) {
         noc_async_read(zeros_noc_addr, cb_write_addr, MEM_ZEROS_SIZE);
         cb_write_addr += MEM_ZEROS_SIZE;
@@ -113,7 +114,8 @@ void kernel_main() {
         }
     }
 
-    // Device 2.0: legacy primitive retained, out_ready_sem is the address of a GlobalSemaphore.
+    // Check that the semaphore is received
+    // Device 2.0 migration: legacy primitive retained, out_ready_sem is the address of a GlobalSemaphore.
     if (!is_first_chip) {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 1);
     }

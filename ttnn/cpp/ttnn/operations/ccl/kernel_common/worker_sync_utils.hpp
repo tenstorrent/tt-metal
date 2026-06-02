@@ -11,10 +11,12 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <array>
 
-// Consumes raw L1 addresses and uses legacy noc_semaphore_* primitives.
+// Called by the master worker to synchronize with the slave workers
+//
+// Device 2.0 migration: consumes raw L1 addresses and uses legacy noc_semaphore_* primitives.
 // These semaphores are local (created via tt_metal::CreateSemaphore), and OpSignaler already does
 // the id to address translation via get_semaphore(id) on the kernel side before calling this helper.
-// TODO (Issue 45003): refactor to take an id-based interface.
+// TODO(#45846): refactor to take an id-based interface.
 FORCE_INLINE void master_sync_slaves(
 
     /* Used to get slave worker's sem addrs */
@@ -68,7 +70,9 @@ FORCE_INLINE void master_sync_slaves(
     }
 }
 
-// TODO (Issue 45003): refactor to take an id-based interface.
+// Called by the slave worker to synchronize with the master worker
+//
+// Device 2.0 migration: TODO(#45846): refactor to take an id-based interface (see master_sync_slaves note above).
 FORCE_INLINE void slave_sync_master(const uint32_t* worker_noc_coords, const uint32_t worker_sync_sem_addr) {
     // Signal the master that the slave has finished its work
     uint64_t remote_master_l1_semaphore_addr =

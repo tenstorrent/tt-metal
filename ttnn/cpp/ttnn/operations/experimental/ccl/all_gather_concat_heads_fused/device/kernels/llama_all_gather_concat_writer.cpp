@@ -164,10 +164,9 @@ void kernel_main() {
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
-    // Device 2.0 migration: out_ready_sem_bank_addr is the address of a GlobalSemaphore.
-    // GlobalSemaphore exposes only address() — there is no id(), which is a structural limitation.
-    // Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot
-    // wrap a GlobalSemaphore.
+    // increment locally
+    // Device 2.0 migration: legacy primitive retained — out_ready_sem_bank_addr is a GlobalSemaphore
+    // address, and Semaphore<> binds to per-program ids (no GlobalSemaphore wrapper exists).
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
