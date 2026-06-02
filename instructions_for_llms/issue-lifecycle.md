@@ -10,11 +10,11 @@ Execute it when asked to run the issue lifecycle on `CI auto triage` issues in `
 For each open issue labelled `CI auto triage` in `tenstorrent/tt-metal`:
 
 1. Parse the issue to find the tracked workflow/job
-2. Gate on having enough new data since the issue was created
+2. Gate on having enough new data since the issue was last modified
 3. Determine the current job status via the GitHub Actions API
 4. If still failing: update the "Failing job URLs" section in the issue body
 5. Analyze logs to decide: keep open / post update comment / close
-6. **Always dry-run first** — present decisions to Evan before executing any closes
+6. **Always dry-run first** — present decisions to the triage channel C0B1F8Z7GQM before executing any closes
 
 ---
 
@@ -78,10 +78,10 @@ Count runs in the last 7 days, divide by 7 → `runs_per_day`.
 
 ## Step 3 — Gate: Enough New Runs Since Issue Creation?
 
-Count completed workflow runs that occurred **after** `issue.created_at`.
+Count completed workflow runs that occurred **after** `issue.updated_at` (last modified time).
 
-If `new_runs_since_creation < threshold`:
-→ **Skip** this issue with reason `"only N/threshold new runs since issue creation"`
+If `new_runs_since_last_modified < threshold`:
+→ **Skip** this issue with reason `"only N/threshold new runs since issue was last modified"`
 
 ---
 
@@ -218,7 +218,13 @@ When closing, post this comment before closing the issue:
 *Closed by BrAIn lifecycle review.*
 ```
 
-### Update Comment Format (signature changed, keep open)
+### Update Action (signature changed, keep open)
+
+When posting an update:
+
+1. **Edit the issue body** to replace the "Failing job URLs" section with the new failing run URLs (same mechanism as Step 5).
+
+2. **Post a comment** to record that the update happened:
 
 ```markdown
 ## Auto-triage lifecycle update
@@ -227,9 +233,7 @@ When closing, post this comment before closing the issue:
 
 **Current symptom change:** <describe how the current failure differs symptomatically>
 
-**New failing run URLs:**
-- <url1>
-- <url2>
+Issue body updated with new failing run URLs at YYYY-MM-DD HH:MM UTC.
 
 *Updated by BrAIn lifecycle review.*
 ```
@@ -254,7 +258,7 @@ With per-close reasoning:
 - For each `UPDATE`: describe the symptom change
 - For skipped/kept: brief reason
 
-**Present this to Evan before executing anything. Wait for approval.**
+**Present this to the triage channel C0B1F8Z7GQM before executing anything. Wait for approval.**
 
 ---
 
@@ -279,7 +283,7 @@ For each approved URL update (from Step 5):
 - **Never close a mixed-conclusion issue.** Require ALL `threshold` logs to agree.
 - **Never guess fix PRs.** Only provide a URL if you found it literally in the log evidence.
 - **Respect `do-not-auto-close`.** If the label is present, skip the issue entirely.
-- **Minimum data.** If fewer than `threshold` runs have occurred since the issue was created, skip it.
+- **Minimum data.** If fewer than `threshold` runs have occurred since the issue was last modified, skip it.
 
 ---
 
