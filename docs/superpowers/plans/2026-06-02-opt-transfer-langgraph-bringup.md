@@ -754,6 +754,14 @@ git commit -m "feat(opt_transfer): comprehensive cached KB build (available+used
 > (b) both `status` values appear (some `supported_unused`); (c) the known fused ops
 > (`nlp_create_qkv_heads`/`_decode`, `nlp_concat_heads`/`_decode`, `scaled_dot_product_attention`,
 > `rotary_embedding_llama*`, `paged_update_cache`, CCL ops) have non-empty `config_template`.
+>
+> **Measured baseline (2026-06-02, this repo — sanity bounds for the acceptance check):** the
+> unit-test surface yields **368** distinct ttnn ops (the `available` set); usage scan finds **108**
+> distinct ops in `tt_transformers`, **126** in `tt_dit`, **329** in `demos`. The no-allowlist scan
+> surfaces model-specific fused ops a hardcoded list would miss — e.g. `dit_rms_norm_unary_fused`,
+> `all_gather_concat`, `all_gather_matmul`, `rms_norm_post_all_gather`, `deepseek_moe_reduce_scatter`,
+> `llama_reduce_scatter`, `minimal_matmul_strided_reduce_scatter_async`. If a real run yields only a
+> handful of ops, the scan is broken — investigate before proceeding.
 
 ---
 
