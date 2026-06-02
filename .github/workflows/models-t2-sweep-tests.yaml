@@ -37,10 +37,6 @@ on:
           - "wh_llmbox_perf (T3000 perf)"
           - "wh_galaxy (WH Galaxy)"
           - "wh_galaxy_perf (WH Galaxy perf)"
-          - "bh_p150 (P150)"
-          - "bh_p300 (P300)"
-          - "bh_quietbox_2 (BH QB2)"
-          - "bh_galaxy (BH Galaxy)"
       platform:
         required: false
         type: choice
