@@ -66,6 +66,53 @@ class MeshWrapper:
         return self._rank
 
 
+def _create_socket_resource(
+    mesh_device,
+    send_core_coord,
+    recv_core_coord,
+    socket_fifo_size,
+    sender_mesh,
+    receiver_mesh,
+    *,
+    use_rank_scoped_mesh_socket=False,
+    local_endpoint_type=None,
+):
+    """Create a socket resource and return the local endpoint object.
+
+    This is a minimal helper for cases that need to create the real point-to-point
+    socket resource without also materializing a forwarding kernel or an extra local
+    handoff pair. Existing ``SocketInterface`` construction paths remain unchanged.
+    """
+
+    socket_connection = ttnn.SocketConnection(send_core_coord, recv_core_coord)
+    socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
+
+    if sender_mesh.get_mesh_device() and receiver_mesh.get_mesh_device():
+        socket_config = ttnn.SocketConfig([socket_connection], socket_memory_config)
+        pair = ttnn.create_socket_pair(sender_mesh.get_mesh_device(), receiver_mesh.get_mesh_device(), socket_config)
+        assert local_endpoint_type is not None, "local_endpoint_type is required when both endpoints are local"
+        socket = pair[0] if local_endpoint_type == ttnn.SocketEndpoint.SENDER else pair[1]
+    else:
+        same_mesh = sender_mesh.get_mesh_id() == receiver_mesh.get_mesh_id()
+        if same_mesh or use_rank_scoped_mesh_socket:
+            socket_config = ttnn.SocketConfig(
+                connections=[socket_connection],
+                memory_config=socket_memory_config,
+                sender_rank=sender_mesh.get_rank(),
+                receiver_rank=receiver_mesh.get_rank(),
+            )
+        else:
+            socket_config = ttnn.SocketConfig(
+                connections=[socket_connection],
+                memory_config=socket_memory_config,
+                sender_mesh_id=sender_mesh.get_mesh_id(),
+                receiver_mesh_id=receiver_mesh.get_mesh_id(),
+            )
+        socket = ttnn.MeshSocket(mesh_device, socket_config)
+
+    return socket
+
+
 def _build_exchange_program(
     page_size,
     termination_semaphore,
@@ -76,8 +123,20 @@ def _build_exchange_program(
     packet_header_cb_index,
 ):
     """Build a d2d_exchange program for a single upstream->downstream path on one core."""
-    assert my_upstream_socket.get_active_cores()[0] == my_core_coord
-    assert my_downstream_socket.get_active_cores()[0] == my_core_coord
+
+    def _socket_is_active_on_runtime_core(socket, runtime_core_coord):
+        socket_core_coord = socket.get_active_cores()[0]
+        if socket_core_coord.core_coord != runtime_core_coord.core_coord:
+            return False
+
+        socket_fabric_node_id = socket.get_fabric_node_id(
+            socket.get_socket_endpoint_type(), socket_core_coord.device_coord
+        )
+        runtime_fabric_node_id = my_mesh_device.get_fabric_node_id(runtime_core_coord.device_coord)
+        return socket_fabric_node_id == runtime_fabric_node_id
+
+    assert _socket_is_active_on_runtime_core(my_upstream_socket, my_core_coord)
+    assert _socket_is_active_on_runtime_core(my_downstream_socket, my_core_coord)
 
     upstream_socket_config_addr = my_upstream_socket.get_config_buffer_address()
     downstream_socket_config_addr = my_downstream_socket.get_config_buffer_address()
@@ -198,6 +257,7 @@ class SocketInterface:
         upstream_core_coords=None,
         upstream_page_size=None,
         forward_metadata_size_bytes=0,
+        use_rank_scoped_mesh_socket=False,
     ):
         assert (
             sender_mesh.get_mesh_device() or receiver_mesh.get_mesh_device()
@@ -218,6 +278,7 @@ class SocketInterface:
         # Determine multi-upstream mode
         self.multi_upstream = upstream_sockets is not None or upstream_core_coords is not None
         self.forward_metadata_size_bytes = forward_metadata_size_bytes
+        self.use_rank_scoped_mesh_socket = use_rank_scoped_mesh_socket
         if self.multi_upstream:
             assert upstream_page_size is not None, "upstream_page_size required for multi-upstream mode"
             assert upstream_socket is None, "Cannot mix upstream_socket (singular) with multi-upstream params"
@@ -286,7 +347,7 @@ class SocketInterface:
         self.recv_core_coord = recv_core_coord
 
         # Create a socket between the sender and receiver cores
-        socket_connection = ttnn.SocketConnection(send_core_coord, recv_core_coord)
+        socket_connection = ttnn.SocketConnection(self.send_core_coord, self.recv_core_coord)
         socket_memory_config = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, socket_fifo_size)
 
         if self.local_socket:
@@ -296,7 +357,10 @@ class SocketInterface:
             )
         else:
             same_mesh = sender_mesh.get_mesh_id() == receiver_mesh.get_mesh_id()
-            if same_mesh:
+            # Rank-scoped sockets are required when one logical stage spans multiple
+            # hosts: the data edge is still point-to-point between endpoint owners,
+            # even if the two owners live on different meshes.
+            if same_mesh or self.use_rank_scoped_mesh_socket:
                 socket_config = ttnn.SocketConfig(
                     connections=[socket_connection],
                     memory_config=socket_memory_config,
@@ -338,6 +402,64 @@ class SocketInterface:
             1 if receiver_packet_header_cb_index is None else receiver_packet_header_cb_index
         )
 
+    @classmethod
+    def from_existing_sockets(
+        cls,
+        page_size,
+        data_size_per_transfer,
+        *,
+        mesh_device,
+        runtime_core_coord,
+        upstream_socket,
+        downstream_socket,
+        packet_header_cb_index=None,
+    ):
+        """Create a one-core forwarder over precreated upstream/downstream sockets.
+
+        This opt-in path avoids creating any extra local handoff socket pairs and is
+        intended for reference-style stage wiring where the real socket resources are
+        planned separately from the forwarder kernel placement.
+        """
+
+        del data_size_per_transfer  # Unused in the existing constructor as well.
+
+        self = cls.__new__(cls)
+        self.mesh_device = mesh_device
+        self.local_socket = False
+        self.forwarder_only = True
+        self.multi_upstream = False
+        self.forward_metadata_size_bytes = 0
+        self.use_rank_scoped_mesh_socket = False
+
+        self.page_size = page_size
+        self.send_core_coord = runtime_core_coord
+        self.recv_core_coord = runtime_core_coord
+        self.runtime_core_coord = runtime_core_coord
+
+        self.upstream_socket = upstream_socket
+        self.upstream_sockets_list = None
+        self.downstream_socket = downstream_socket
+
+        self.upstream_socket_pair = None
+        self.upstream_socket_pairs = []
+        self.downstream_socket_pair = None
+        self.internal_socket = None
+        self.internal_socket_pair = None
+
+        termination_semaphore_core_range = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(runtime_core_coord.core_coord, runtime_core_coord.core_coord)]
+        )
+        self.termination_semaphore = ttnn.create_global_semaphore(
+            mesh_device,
+            termination_semaphore_core_range,
+            0,
+            ttnn.BufferType.L1,
+        )
+        self.sender_packet_header_cb_index = 0 if packet_header_cb_index is None else packet_header_cb_index
+        self.receiver_packet_header_cb_index = self.sender_packet_header_cb_index
+
+        return self
+
     def _create_single_upstream_program(
         self,
         my_mesh_device,
@@ -364,9 +486,20 @@ class SocketInterface:
         my_downstream_socket,
         packet_header_cb_index,
     ):
+        def _socket_is_active_on_runtime_core(socket, runtime_core_coord):
+            socket_core_coord = socket.get_active_cores()[0]
+            if socket_core_coord.core_coord != runtime_core_coord.core_coord:
+                return False
+
+            socket_fabric_node_id = socket.get_fabric_node_id(
+                socket.get_socket_endpoint_type(), socket_core_coord.device_coord
+            )
+            runtime_fabric_node_id = my_mesh_device.get_fabric_node_id(runtime_core_coord.device_coord)
+            return socket_fabric_node_id == runtime_fabric_node_id
+
         for s in my_upstream_sockets:
-            assert s.get_active_cores()[0] == my_core_coord
-        assert my_downstream_socket.get_active_cores()[0] == my_core_coord
+            assert _socket_is_active_on_runtime_core(s, my_core_coord)
+        assert _socket_is_active_on_runtime_core(my_downstream_socket, my_core_coord)
 
         num_upstream = len(my_upstream_sockets)
         brisc_count = (num_upstream + 1) // 2
@@ -574,6 +707,16 @@ class SocketInterface:
         This enables multiple SocketInterface instances to have their programs
         merged and dispatched together in a single generic_op call.
         """
+        if getattr(self, "forwarder_only", False):
+            program = self._create_single_upstream_program(
+                self.mesh_device,
+                self.runtime_core_coord,
+                self.upstream_socket,
+                self.downstream_socket,
+                self.sender_packet_header_cb_index,
+            )
+            return [(self.runtime_core_coord.device_coord, program)]
+
         entries = []
         if self.local_socket:
             sender_program = self._create_sender_program(
@@ -653,9 +796,13 @@ class SocketInterface:
                 ttnn.synchronize_device(self.mesh_device)
 
     def get_downstream_socket(self):
+        if getattr(self, "forwarder_only", False):
+            return self.downstream_socket
         return self.downstream_socket_pair[1]
 
     def get_upstream_socket(self):
+        if getattr(self, "forwarder_only", False):
+            return self.upstream_socket
         return self.upstream_socket_pair[0]
 
     def get_upstream_sockets(self):

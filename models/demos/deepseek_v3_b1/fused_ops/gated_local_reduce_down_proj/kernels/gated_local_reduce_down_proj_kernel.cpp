@@ -189,7 +189,7 @@ void kernel_main() {
     };
 
     // Gated reduce writer args (BRISC no-op)
-    using GatedReduceCTArgs = deepseek_b1_ops::GatedReduce::WriterCTArgs;
+    using GatedReduceCTArgs = deepseek_b1_ops::GatedReduce::WriterCTArgs<>;
     deepseek_b1_ops::GatedReduce::WriterArgs gated_reduce_args{};
 
     // Mcast1 sender args

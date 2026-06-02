@@ -5,13 +5,22 @@
 #pragma once
 
 #include <optional>
+#include <variant>
 
+#include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include "fused_rmsnorm_post_all_gather_device_operation_types.hpp"
-#include "fused_rmsnorm_post_all_gather_program_factory.hpp"
 
 namespace ttnn::experimental::prim {
+
+struct FusedRMSNormPostAllGatherProgramFactory {
+    static tt::tt_metal::ProgramDescriptor create_descriptor(
+        const FusedRmsnormPostAllGatherParams& operation_attributes,
+        const FusedRmsnormPostAllGatherInputs& tensor_args,
+        Tensor& output_tensor);
+};
 
 struct FusedRMSNormPostAllGatherDeviceOperation {
     using operation_attributes_t = FusedRmsnormPostAllGatherParams;

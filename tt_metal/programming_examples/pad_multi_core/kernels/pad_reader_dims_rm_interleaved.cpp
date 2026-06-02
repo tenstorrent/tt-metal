@@ -77,7 +77,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_sticks_per_barrier && iter < num_sticks_per_core; ++i, ++iter) {
             bool read_stick = (curr_h >= front_pad_h and curr_h < H) and (curr_c >= front_pad_c and curr_c < C) and
                               (curr_n >= front_pad_n and curr_n < N);
-            uint64_t read_noc_addr = get_noc_addr(i_stick, s);
+            uint64_t read_noc_addr = s.get_noc_addr(i_stick);
             // Seed pad value in first word to guarantee padding when writer writes only stick_size_bytes
             *((volatile tt_l1_ptr uint32_t*)l1_write_addr) = packed_pad_value;
             if (read_stick) {

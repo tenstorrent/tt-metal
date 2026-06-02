@@ -63,8 +63,10 @@ struct ResolvedCbBinding {
     uint32_t address_offset = 0;
 };
 
-// All resolved bindings for one cached program. Non-empty only when the factory
-// declared at least one buffer arg via KernelDescriptor::emplace_runtime_args().
+// All resolved bindings for one cached program. Non-empty when the factory
+// declared at least one buffer arg via KernelDescriptor::emplace_runtime_args(),
+// (or none, when the descriptor declares no buffer bindings at all)
+// (declarative MeshDescriptor path).
 struct ResolvedBindings {
     std::vector<ResolvedRtArgBinding> rt_args;
     std::vector<ResolvedCbBinding> cbs;
@@ -82,6 +84,13 @@ struct ResolvedBindings {
 // current call's tensor_args and tensor_return_value (built by the adapter via
 // collect_tensor_buffers). Every binding Buffer* must appear in tensor_buffers;
 // TT_FATAL fires if a factory used a non-tensor buffer in emplace_runtime_args.
+//
+// The resolver is policy-free: it always resolves every binding the descriptor
+// declares, both runtime-arg bindings and CB `.buffer` bindings.  Deciding
+// whether the resulting `ResolvedBindings` is safe to fast-path on a given
+// cache hit is the caller's job (see DescriptorMeshWorkloadAdapter::apply_descriptor),
+// because the safety check depends on workload contract — specifically whether
+// a slow-path rebuild is available to refresh raw (non-binding) runtime args.
 //
 // Call immediately after Program{desc} on cache miss; store in shared_variables.
 ResolvedBindings resolve_bindings(

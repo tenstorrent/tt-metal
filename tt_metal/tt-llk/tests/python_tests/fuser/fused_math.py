@@ -49,13 +49,6 @@ class ComputePipeline:
 
         return math_units
 
-    def get_reduce_pack_mask(self) -> str:
-        for operation in self.operations:
-            if operation.reduce_dim is not None:
-                return operation.reduce_dim.cpp_enum_value
-
-        return None
-
     def _batch_loop(
         self, operation: "FusedOperation", config: "GlobalConfig", body_fn
     ) -> str:
@@ -280,15 +273,14 @@ class ComputePipeline:
         stage = operation.stage_id
         return f"// Operation {stage}: Packer\n"
 
-    def _pack_reduce_mask_config(self) -> str:
-        reduce_dim = self.get_reduce_pack_mask()
-        if reduce_dim is not None:
-            return f"_llk_pack_reduce_mask_config_<false, {reduce_dim}>();\n"
+    def _pack_reduce_mask_config(self, operation: "FusedOperation") -> str:
+        if operation.reduce_dim is not None:
+            reduce_dim = operation.reduce_dim.cpp_enum_value
+            return f"_llk_pack_reduce_mask_config_<{reduce_dim}>();\n"
         return ""
 
-    def _pack_reduce_mask_clear(self) -> str:
-        reduce_dim = self.get_reduce_pack_mask()
-        if reduce_dim is not None:
+    def _pack_reduce_mask_clear(self, operation: "FusedOperation") -> str:
+        if operation.reduce_dim is not None:
             return "_llk_pack_reduce_mask_clear_();\n"
         return ""
 
@@ -332,7 +324,7 @@ class ComputePipeline:
             code += 'ZONE_SCOPED("INIT")\n'
 
         code += config.sentinel.hw_configure_pack(config, operation)
-        code += self._pack_reduce_mask_config()
+        code += self._pack_reduce_mask_config(operation)
         code += self.packer().init(operation, config, None, None)
         code += self._pack_relu_config(config, operation)
         code += self._pack_l1_accumulation_config(config, operation)
@@ -364,7 +356,7 @@ class ComputePipeline:
 
         code += self.packer_sync_with_unpacker(operation, config)
         code += self.packer().uninit(operation, config, None, None)
-        code += self._pack_reduce_mask_clear()
+        code += self._pack_reduce_mask_clear(operation)
 
         if config.profiler_enabled:
             code += "PROFILER_SYNC();\n"

@@ -14,11 +14,8 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
-    ExpertMapping,
     create_fabric_router_config,
     create_gate_weights,
-    get_ep_mesh_composer,
-    get_gate_outputs,
     get_max_payload_size,
     get_sp_mesh_composer,
     load_gate_weights_from_hf,
@@ -26,7 +23,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     ValidationResult,
-    compare_exact,
     compare_pcc,
     compare_recall,
     validate_composed,
@@ -209,32 +205,16 @@ def test_forward_pass(
     # Create TT gate
     n_sp_devices = mesh_device.shape[0]
     n_tp_devices = mesh_device.shape[1]
-    n_routed_experts = config.n_routed_experts
 
-    dispatch_table = ExpertMapping.create_dispatch_table(
-        num_routed_experts=n_routed_experts,
-        dispatch_group_size=n_sp_devices,
-        num_dispatch_groups=n_tp_devices,
-    )
-    experts_per_chip = n_routed_experts // (n_sp_devices * n_tp_devices)
     tt_model = TtMoEGatePrefill(
         config,
         mesh_device,
-        dispatch_table=dispatch_table,
-        experts_per_chip=experts_per_chip,
         weight=gate_w["weight"],
         bias=gate_w["e_score_correction_bias"],
         fallback_mode=gate_fallback_mode,
     )
     # TT forward pass
-    (
-        tt_topk_scores,
-        tt_topk_indices,
-        tt_logits,
-        tt_dispatch_offsets,
-        tt_total_counts_per_expert,
-        _,
-    ) = tt_model(tt_input)
+    tt_topk_scores, tt_topk_indices, tt_logits = tt_model(tt_input)
 
     # Validation thresholds depend on gate compute mode
     if gate_fallback_mode == GateComputeMode.HOST_ALL:
@@ -294,51 +274,6 @@ def test_forward_pass(
 
     all_results = [recall_topk_indices, pcc_logits, pcc_scores]
 
-    # EP-sharded exact checks only make sense when the gate runs on host
-    if gate_fallback_mode == GateComputeMode.HOST_ALL:
-        experts_per_chip = n_routed_experts // (n_sp_devices * n_tp_devices)
-        ref_dispatch_offsets, ref_expert_token_counts, _, _ = get_gate_outputs(
-            indices=reference_topk_indices.view(n_sp_devices, seq_len_per_device, -1).int(),
-            dispatch_group_size=n_sp_devices,
-            num_routed_experts=n_routed_experts,
-            experts_per_chip=experts_per_chip,
-            seq_len_per_chip=seq_len_per_device,
-            num_experts_per_tok=config.n_activated_experts,
-            expert_dispatch_table=dispatch_table,
-        )
-
-        ep_composer = get_ep_mesh_composer(mesh_device)
-
-        tt_dispatch_offsets = ttnn.unsqueeze_to_4D(tt_dispatch_offsets)
-        host_dispatch_offsets = ttnn.to_torch(tt_dispatch_offsets, mesh_composer=ep_composer).squeeze(2).long()
-
-        exact_dispatch_offsets = validate_composed(
-            host_dispatch_offsets,
-            ref_dispatch_offsets.long(),
-            n_tp_devices,
-            n_sp_devices,
-            compare_exact,
-            name="dispatch_offsets",
-        )
-
-        tt_total_counts_per_expert = ttnn.unsqueeze_to_4D(tt_total_counts_per_expert)
-        host_tt_total_counts_per_expert = (
-            ttnn.to_torch(tt_total_counts_per_expert, mesh_composer=ep_composer).squeeze(2).long()
-        )
-        ref_expert_token_counts = ref_expert_token_counts[:, 0, :].unsqueeze(1).expand(-1, n_sp_devices, -1).long()
-
-        expert_token_counts = validate_composed(
-            host_tt_total_counts_per_expert,
-            ref_expert_token_counts,
-            n_tp_devices,
-            n_sp_devices,
-            compare_exact,
-            name="expert_token_counts",
-        )
-
-        all_results.extend([exact_dispatch_offsets, expert_token_counts])
-    else:
-        logger.info("Skipping dispatch_offsets and expert_token_counts exact checks (device gate mode)")
     for res in all_results:
         res.log_mismatches()
     log_validation_results(

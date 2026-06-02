@@ -16,9 +16,7 @@ void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const auto source_address_generator = TensorAccessor(src_args, src_addr);
 
-    DPRINT << "swr: args " << "\n\tsrc_addr=" << src_addr << "\n\tsrc_is_dram=" << (src_args.is_dram ? "T" : "F")
-           << "\n\tnum_pages_to_read_total=" << num_pages_to_read_total << "\n\tpage_size=" << page_size << "\n";
-    DEVICE_PRINT(
+    DPRINT(
         "swr: args \n\tsrc_addr={}\n\tsrc_is_dram={}\n\tnum_pages_to_read_total={}\n\tpage_size={}\n",
         src_addr,
         (src_args.is_dram ? "T" : "F"),
@@ -40,6 +38,5 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_id_in0, pages_to_read);
     }
-    DPRINT << "SR DONE\n";
-    DEVICE_PRINT("SR DONE\n");
+    DPRINT("SR DONE\n");
 }

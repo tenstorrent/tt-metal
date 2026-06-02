@@ -217,8 +217,12 @@ bool DeviceStorage::is_allocated() const { return mesh_tensor_holder_->is_alloca
 distributed::MeshDevice* DeviceStorage::get_device_bypass_deallocate_check() const {
     return std::visit(
         ttsl::overloaded{
-            [](const MeshTensorHolder::Allocated& allocated) { return &allocated.mesh_tensor_.device(); },
-            [](const MeshTensorHolder::DeallocatedTombStone& tombstone) { return tombstone.mesh_buffer_->device(); },
+            [](const MeshTensorHolder::Allocated& allocated) -> distributed::MeshDevice* {
+                return &allocated.mesh_tensor_.mutable_device();
+            },
+            [](const MeshTensorHolder::DeallocatedTombStone& tombstone) -> distributed::MeshDevice* {
+                return tombstone.mesh_buffer_->device();
+            },
             [](const auto&) -> distributed::MeshDevice* { TT_THROW("Tensor is not allocated"); }},
         mesh_tensor_holder_->state_);
 }

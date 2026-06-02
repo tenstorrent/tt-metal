@@ -29,3 +29,5 @@ install(
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/kernel_helper_functions
         COMPONENT ttnn-runtime
 )
+
+install(TARGETS ttnn_op_helper FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

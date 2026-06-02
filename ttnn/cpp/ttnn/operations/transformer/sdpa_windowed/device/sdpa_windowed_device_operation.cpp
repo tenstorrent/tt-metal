@@ -5,7 +5,6 @@
 #include "ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_program_factory.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operation.hpp"

@@ -270,6 +270,44 @@ def test_sdpa_decode_paged_attention_regressions(
         )
 
 
+@pytest.mark.parametrize(
+    "kv_dtype, q_dtype",
+    [
+        [ttnn.bfloat8_b, ttnn.bfloat16],
+    ],
+    ids=[
+        "kv_bfp8_q_bf16",
+    ],
+)
+@pytest.mark.parametrize(
+    "b, nh, nkv, s, d, grid_size, cur_pos_tensor, sliding_window_size",
+    ([1, 8, 1, 1024, 512, (8, 8), True, None],),  # Gemma-style global attention; issue #44311
+    ids=["paged-default-config-l1-regr"],
+)
+@pytest.mark.parametrize("block_size", (32,), ids=["paged_32"])
+@pytest.mark.timeout(120)
+def test_sdpa_decode_paged_attention_default_config_regression(
+    device, b, nh, nkv, s, d, kv_dtype, grid_size, q_dtype, cur_pos_tensor, sliding_window_size, block_size, reset_seeds
+):
+    run_test_sdpa_decode_paged_attention(
+        device,
+        b,
+        nh,
+        nkv,
+        s,
+        d,
+        kv_dtype,
+        grid_size,
+        q_dtype,
+        cur_pos_tensor,
+        block_size=block_size,
+        sharded_in=True,
+        sharded_out=False,
+        sliding_window_size=sliding_window_size,
+        use_program_config=False,
+    )
+
+
 @pytest.mark.timeout(120)
 def test_sdpa_decode_tree_reduction_power_of_2_regression(device):
     """Regression test for issue #38521: tree-reduction round count off-by-one for power-of-2 core counts.

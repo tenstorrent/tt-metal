@@ -12,11 +12,11 @@ void kernel_main() {
     DataflowBuffer dfb(dfb::out);
 
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
-        DEVICE_PRINT("producer tile id {}\n", tile_id);
+        DPRINT("producer tile id {}\n", tile_id);
         dfb.reserve_back(1);
         dfb.push_back(1);
     }
-    DEVICE_PRINT("PFW\n");
+    DPRINT("PFW\n");
     dfb.finish();
-    DEVICE_PRINT("PFD\n");
+    DPRINT("PFD\n");
 }

@@ -26,7 +26,7 @@ void kernel_main() {
 
     uint32_t page_id = row_page_offset;
     for (uint32_t row = 0; row < tile_height; ++row) {
-        uint64_t noc_addr = get_noc_addr(page_id, input_tensor_accessor, intra_row_byte_offset);
+        uint64_t noc_addr = input_tensor_accessor.get_noc_addr(page_id, intra_row_byte_offset);
         noc_async_read(noc_addr, l1_write_addr, bytes_to_read_per_row);
 
         l1_write_addr += bytes_to_read_per_row;

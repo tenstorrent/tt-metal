@@ -31,10 +31,11 @@ namespace tt::tt_metal::experimental {
  * tensor read/write paths. HostBuffer::pinned_memory_ is only populated
  * transiently (during enqueue_read calls) and cleared immediately afterward.
  *
- * The cache evicts global LRU entries to keep total cached pinned memory under
- * the runtime-configured limit. When pinning fails due to the kernel pin limit
- * being exhausted, it evicts the oldest entry that shares an MMIO device with
- * the failing pin and retries.
+ * The cache evicts LRU entries to keep total cached pinned memory under the
+ * runtime-configured global limit, and cached memory per MMIO device under the
+ * hardware NOC-mappable pin budget. When pinning fails due to the kernel pin
+ * limit being exhausted, it evicts the oldest entry that shares an MMIO device
+ * with the failing pin and retries.
  *
  * Two cleanup hooks ensure PinnedMemory never outlives its underlying memory
  * or its device:
@@ -116,14 +117,19 @@ private:
     // Erase all entries for `host_address`. Caller must hold mutex_.
     void release_locked(const void* host_address);
 
-    // Evict oldest unreferenced entries until adding `incoming_size_bytes` keeps the cache under its limit.
-    bool evict_oldest_until_within_limit(size_t incoming_size_bytes);
-
-    // Evict the oldest unreferenced entry across all MMIO devices.
-    bool evict_oldest_entry();
+    // Evict oldest unreferenced entries until adding `incoming_size_bytes` keeps the global cache under
+    // `global_limit_bytes` and each target MMIO device under `per_mmio_limit_bytes`.
+    bool evict_oldest_until_within_limit(
+        size_t incoming_size_bytes,
+        size_t global_limit_bytes,
+        size_t per_mmio_limit_bytes,
+        const std::set<int>& target_mmio_ids);
 
     // Evict the oldest unreferenced entry that overlaps the target MMIO devices.
     bool evict_oldest_entry_for_mmio_ids(const std::set<int>& target_mmio_ids);
+
+    // Evict the oldest unreferenced entry across all MMIO devices.
+    bool evict_oldest_entry();
 
     // Check whether any existing entry for `host_addr` has MMIO overlap with
     // `target_mmio_ids` and is still referenced externally (use_count > 1),
@@ -134,6 +140,7 @@ private:
     std::list<CacheEntry> lru_entries_;  // front = oldest (LRU candidate)
     std::unordered_multimap<const void*, std::list<CacheEntry>::iterator> address_map_;
     size_t current_size_bytes_ = 0;
+    std::unordered_map<int, size_t> current_size_bytes_by_mmio_id_;
 };
 
 }  // namespace tt::tt_metal::experimental

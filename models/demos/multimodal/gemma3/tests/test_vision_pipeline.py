@@ -19,9 +19,17 @@ from models.tt_transformers.tt.ccl import TT_CCL
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
+            "P150x8": (1, 8),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -53,7 +61,6 @@ def test_gemma_vision(
         state_dict_prefix=first_layer_prefix,
         dtype=dtype,
         configuration=model_args,
-        return_intermediate=False,
     )
     test_output = test_gemma_vision(input_tensor)
 
@@ -71,9 +78,14 @@ def test_gemma_vision(
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150": (1, 1),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -99,19 +111,27 @@ def test_gemma_vision_piecewise(
 
     input_tensor = torch.rand((bsz, in_channels, image_size, image_size))
 
-    reference_model = model_args.reference_vision_model()
-    reference_output = reference_model(input_tensor).last_hidden_state
-    tt_ccl = TT_CCL(mesh_device)
+    full_model_tt_ccl = TT_CCL(mesh_device)
     test_gemma_vision = TtSiglipGemmaVisionModel(
         mesh_device,
-        tt_ccl=tt_ccl,
+        tt_ccl=full_model_tt_ccl,
         state_dict=state_dict,
         state_dict_prefix=first_layer_prefix,
         dtype=dtype,
         configuration=model_args,
-        return_intermediate=False,
     )
     test_output = test_gemma_vision(input_tensor)
+    out = ttnn.from_device(test_output)
+    test_output_torch = ttnn.to_torch(out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0]
+    ttnn.deallocate(test_output)
+    del out, test_output, test_gemma_vision, full_model_tt_ccl
+    ttnn.device.DeallocateBuffers(mesh_device)
+
+    reference_model = model_args.reference_vision_model()
+    reference_model.eval()
+    with torch.no_grad():
+        reference_output = reference_model(input_tensor).last_hidden_state
+    tt_ccl = TT_CCL(mesh_device)
 
     test_gemma_vision_embeddings = TtSiglipVisionEmbeddings(
         mesh_device,
@@ -124,7 +144,8 @@ def test_gemma_vision_piecewise(
         hidden_dim=model_args.vision_dim,
         bias=True,
     )
-    reference_vision_embeddings_output = reference_model.embeddings(input_tensor)
+    with torch.no_grad():
+        reference_vision_embeddings_output = reference_model.embeddings(input_tensor)
     test_vision_embeddings_output = test_gemma_vision_embeddings(input_tensor)
 
     test_gemma_vision_encoder = TtGemmaImageTransformer(
@@ -147,7 +168,8 @@ def test_gemma_vision_piecewise(
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    reference_vision_encoder_output = reference_model.encoder(reference_vision_embeddings_output)
+    with torch.no_grad():
+        reference_vision_encoder_output = reference_model.encoder(reference_vision_embeddings_output)
     test_vision_encoder_output = test_gemma_vision_encoder(test_vision_embeddings_output, mask=tt_mask)
 
     test_gemma_vision_ln_post = TtLayerNorm(
@@ -158,7 +180,10 @@ def test_gemma_vision_piecewise(
         weight_dtype=dtype,
         eps=model_args.norm_eps,
     )
-    reference_vision_ln_post_output = reference_model.post_layernorm(reference_vision_encoder_output.last_hidden_state)
+    with torch.no_grad():
+        reference_vision_ln_post_output = reference_model.post_layernorm(
+            reference_vision_encoder_output.last_hidden_state
+        )
     test_vision_ln_post_output = test_gemma_vision_ln_post(test_vision_encoder_output)
 
     logger.info("Checking outputs")
@@ -170,8 +195,13 @@ def test_gemma_vision_piecewise(
         logger.info(comp_allclose(reference_output, tt_output_torch))
         logger.info(f"{test_name} PCC: {pcc_message}")
 
+    def compare_torch_outputs(reference_output, test_output, test_name):
+        passing, pcc_message = comp_pcc(reference_output, test_output, pcc_required)
+        logger.info(comp_allclose(reference_output, test_output))
+        logger.info(f"{test_name} PCC: {pcc_message}")
+
     compare_outputs(reference_vision_embeddings_output, test_vision_embeddings_output, "embeddings")
     compare_outputs(reference_vision_encoder_output.last_hidden_state, test_vision_encoder_output, "encoder")
     compare_outputs(reference_vision_ln_post_output, test_vision_ln_post_output, "ln_post")
-    compare_outputs(reference_output, test_output, "gemma_vision")
+    compare_torch_outputs(reference_output, test_output_torch, "gemma_vision")
     # assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

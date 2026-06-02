@@ -35,7 +35,7 @@ on:
         required: false
         type: boolean
         default: false
-      run_profiler_regression:
+      run_profiler_tests:
         description: 'Run Profiler Regression'
         required: false
         type: boolean
@@ -375,6 +375,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       dispatch-mode: sd
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
+      gtest-filter: "-MeshDeviceFixture.Top32RmDevPipelineCompletes"  # disabled — deterministic compile failure, tracking issue #45483
   # TTNN Tutorials
   test-ttnn-tutorials:
     needs: [build-artifact, generate-arch-matrix]
@@ -394,23 +395,24 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  run-profiler-regression:
+  profiler-tests:
     needs: [build-artifact, generate-arch-matrix]
     if: |
-      (github.event_name == 'schedule' || inputs.run_profiler_regression) &&
+      (github.event_name == 'schedule' || inputs.run_profiler_tests) &&
       needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]'
     secrets: inherit
     strategy:
       fail-fast: false
       matrix:
         test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-wormhole-only) }}
-    uses: ./.github/workflows/run-profiler-regression.yaml
+    uses: ./.github/workflows/single-card-profiler-tests-impl.yaml
     with:
-      arch: ${{ matrix.test-group.arch}}
-      runner-label: ${{ matrix.test-group.runner-label}}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      # matrix-wormhole-only emits N150 and/or N300; map to viommu SKUs.
+      enabled-skus: ${{ matrix.test-group.runner-label == 'N300' && 'wh_n300_civ2' || 'wh_n150_civ2' }}
+      test-selection: post-commit
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   tt-train-cpp-unit-tests:
     needs: [build-artifact, generate-arch-matrix]

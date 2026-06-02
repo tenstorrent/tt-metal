@@ -42,7 +42,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_sticks / tile_height; i++) {
         for (uint32_t tile_id = 0; tile_id < num_tiles_per_core; tile_id++) {
             for (uint32_t j = stick_id; j < (tile_height + stick_id); j++) {
-                base_dst_noc_addr[j] = get_noc_addr(j, s, curr_offset);
+                base_dst_noc_addr[j] = s.get_noc_addr(j, curr_offset);
             }
             write_tiles(1, tile_width_size, stick_size - curr_offset - tile_width_size);
             curr_offset += tile_width_size;

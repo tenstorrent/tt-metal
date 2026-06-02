@@ -55,7 +55,7 @@ void kernel_main() {
     cb.reserve_back(num_tiles);
     uint32_t l1_write_addr = cb.get_write_ptr();
     for (uint32_t i = start_id; i < start_id + num_tiles; i += ublock_size_tiles) {
-        noc_async_read_tile(i, src_addrgen, l1_write_addr);
+        noc_async_read_page(i, src_addrgen, l1_write_addr);
         noc_async_read_barrier();
         l1_write_addr += tile_bytes;
     }
@@ -87,7 +87,7 @@ void kernel_main() {
     cb.wait_front(num_tiles);
     uint32_t l1_read_addr = cb.get_read_ptr();
     for (uint32_t i = start_id; i < start_id + num_tiles; i += ublock_size_tiles) {
-        noc_async_write_tile(i, dst_addrgen, l1_read_addr);
+        noc_async_write_page(i, dst_addrgen, l1_read_addr);
         noc_async_write_barrier();
         l1_read_addr += tile_bytes;
     }

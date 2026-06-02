@@ -33,7 +33,7 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_and_call_(
     std::uint32_t dst_index_in0,
     std::uint32_t dst_index_in1,
     std::uint32_t dst_index_out,
-    int vector_mode,
+    VectorMode vector_mode,
     Args&&... args) {
     LLK_ASSERT(
         (dst_index_in0 < get_dest_max_tiles<DST_SYNC, DST_ACCUM, DstTileShape::Tile32x32>()),
@@ -94,7 +94,7 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_and_call_(
 
 /*
  * Same as SFPU_BINARY_CALL but vector_mode is given as a `VectorMode`
- * enumerator name. The `(int)VectorMode::MODE` cast is generated.
+ * enumerator token (e.g. RC, C, R).
  *   SFPU_BINARY_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE,
  *                         calculate_add_fp32, (APPROXIMATE),
  *                         RC, dst_in0, dst_in1, dst_out);
@@ -105,7 +105,7 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_and_call_(
         DST_IN0,                                                                                        \
         DST_IN1,                                                                                        \
         DST_OUT,                                                                                        \
-        (int)::ckernel::VectorMode::MODE,                                                               \
+        ::ckernel::VectorMode::MODE,                                                                    \
         ##__VA_ARGS__)
 
 /*

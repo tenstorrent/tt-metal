@@ -529,6 +529,10 @@ Tensor from_buffer_impl(
             auto cpp_buffer = nb::cast<std::vector<::bfloat16>>(buffer);
             return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);
         }
+        case DataType::FP8_E4M3:
+            TT_THROW(
+                "from_buffer: FP8_E4M3 is an output-only dtype, used exclusively by the DeepSeek V3 "
+                "prefill ops for now; host-side construction via from_buffer is not supported.");
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
         case DataType::INVALID: {

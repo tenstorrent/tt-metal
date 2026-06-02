@@ -106,6 +106,44 @@ def test_to_layout_2D(device, height, width, on_device, from_layout, to_layout, 
 
 @pytest.mark.parametrize(
     "shape",
+    # (30, 62) forces the padding-change branch (untilize_with_unpadding).
+    # (32, 64) and (1, 32, 128) are tile-aligned so the no-padding-change branch
+    # (untilize) handles them. Both branches must accept the BFLOAT8_B->BFLOAT16
+    # dtype change after the assert relaxation.
+    [(30, 62), (32, 64), (1, 32, 128)],
+)
+def test_to_layout_bfloat8_b_to_bfloat16(device, shape):
+    """Verify the relaxed dtype assert on ttnn::to_layout(ROW_MAJOR, dtype=bfloat16).
+
+    The underlying untilize / untilize_with_unpadding kernel converts BFLOAT8_B input
+    to BFLOAT16 output natively as part of de-tiling (see
+    untilize_device_operation.cpp). Before the assert relaxation this call would
+    TT_FATAL on dtype mismatch even though the kernel supports the conversion.
+    """
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    assert input_tensor.layout == ttnn.TILE_LAYOUT
+    assert input_tensor.dtype == ttnn.bfloat8_b
+
+    output_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+    assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert output_tensor.dtype == ttnn.bfloat16
+
+    torch_output_tensor = ttnn.to_torch(output_tensor)
+    # BFLOAT8_B roundtrip introduces ~1% quantization error; 0.99 PCC is the
+    # standard tolerance used elsewhere in the test suite for bfp8 paths.
+    assert_with_pcc(torch_input_tensor, torch_output_tensor, pcc=0.99)
+
+
+@pytest.mark.parametrize(
+    "shape",
     [(1, 1, 32, 128 * 1024), (1, 1, 128, 5120), (1, 1, 512, 5120), (1, 1, 128, 128 * 1024)],
 )
 @pytest.mark.parametrize("on_device", [True])

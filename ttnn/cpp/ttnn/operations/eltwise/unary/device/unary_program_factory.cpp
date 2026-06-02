@@ -44,7 +44,6 @@ void pack_first_op_scalars(
         return;
     }
     switch (op.type()) {
-        case UnaryOpType::MISH: packed_scalar1 = pack_scalar_runtime_arg(op, 0, input_dtype); break;
         case UnaryOpType::WHERE_TSS:
             packed_scalar1 = pack_scalar_runtime_arg(op, 0, input_dtype);
             packed_scalar2 = pack_scalar_runtime_arg(op, 1, input_dtype);

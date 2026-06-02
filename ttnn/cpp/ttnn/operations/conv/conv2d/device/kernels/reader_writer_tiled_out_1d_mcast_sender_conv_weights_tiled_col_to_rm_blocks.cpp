@@ -227,7 +227,7 @@ void kernel_main() {
                     uint32_t weight_tile_id = weight_row_start_tile_id;
                     // loop over weight block tiles along w
                     for (uint32_t weight_tile_w_i = 0; weight_tile_w_i < weight_block_width_ntiles; ++weight_tile_w_i) {
-                        // DPRINT << "weight_tile_id=" << weight_tile_id << ENDL();
+                        // DPRINT("weight_tile_id={}\n", weight_tile_id);
                         noc.async_read(
                             s_weight,
                             cb_weight_obj,

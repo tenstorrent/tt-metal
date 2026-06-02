@@ -153,7 +153,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
     }
 
-    _llk_math_eltwise_unary_sfpu_init_();
+    _llk_math_eltwise_sfpu_init_();
 
     // Apply SFPU abs (SFPABS) in-place on Dest for each tile.
     // Tile index must match the one used by the producer (datacopy above, or

@@ -13,6 +13,7 @@
 #include "metal_env_impl.hpp"
 #include "metal_env_accessor.hpp"
 #include "metal_context.hpp"
+#include "device/device_manager.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/sub_device/sub_device_impl.hpp"
 #include "firmware_capability.hpp"
@@ -191,6 +192,19 @@ bool MetalEnvImpl::set_fabric_config(
     tt_fabric::FabricUDMMode fabric_udm_mode,
     tt_fabric::FabricManagerMode fabric_manager,
     tt_fabric::FabricRouterConfig router_config) {
+    // Reject transitions that would reinitialize the control plane while devices are still open.
+    // Callers must close the mesh device first. Going TO DISABLED is allowed
+    if (fabric_config != tt_fabric::FabricConfig::DISABLED) {
+        const bool devices_still_open = MetalContext::instance_exists() && MetalContext::instance().device_manager() &&
+                                        !MetalContext::instance().device_manager()->get_all_active_devices().empty();
+        TT_FATAL(
+            !devices_still_open,
+            "SetFabricConfig({}) is not allowed while devices are still open: it would reinitialize the control "
+            "plane underneath running fabric kernels and dangle the ControlPlane& held by the fabric firmware "
+            "initializer. Close the mesh device before changing the fabric config to a non-DISABLED value.",
+            enchantum::to_string(fabric_config));
+    }
+
     force_reinit_ = true;
 
     // Export channel trimming capture data before fabric config changes.
@@ -263,10 +277,16 @@ bool MetalEnvImpl::set_fabric_config(
 }
 
 void MetalEnvImpl::teardown_fabric_config() {
+    // defer clear_fabric_context to fabric firmware teardown if devices are still open
+    const bool devices_still_open = MetalContext::instance_exists() && MetalContext::instance().device_manager() &&
+                                    !MetalContext::instance().device_manager()->get_all_active_devices().empty();
+
     this->fabric_config_ = tt_fabric::FabricConfig::DISABLED;
     this->get_cluster().configure_ethernet_cores_for_fabric_routers(this->fabric_config_);
     this->num_fabric_active_routing_planes_ = 0;
-    this->get_control_plane().clear_fabric_context();
+    if (!devices_still_open) {
+        this->get_control_plane().clear_fabric_context();
+    }
 }
 
 void MetalEnvImpl::initialize_fabric_config() {

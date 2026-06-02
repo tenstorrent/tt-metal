@@ -50,6 +50,8 @@ ttnn::experimental::prim::PagedUpdateCacheDeviceOperation::tensor_return_value_t
     uint32_t batch_offset,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const std::set<ttnn::MeshCoordinate>>& mesh_coords,
-    std::optional<uint32_t> block_size_override = std::nullopt);
+    std::optional<uint32_t> block_size_override = std::nullopt,
+    std::optional<uint32_t> num_kv_heads_override = std::nullopt,
+    std::optional<uint32_t> cache_position_modulo = std::nullopt);
 
 }  // namespace ttnn::prim

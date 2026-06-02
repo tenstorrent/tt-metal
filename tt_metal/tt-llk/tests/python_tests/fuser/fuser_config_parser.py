@@ -5,7 +5,7 @@
 import os
 import re
 from pathlib import Path
-from typing import Annotated, List, Optional, Tuple, Union
+from typing import Annotated, List, Optional, Tuple
 
 import pytest
 import yaml
@@ -24,7 +24,7 @@ from .fused_operand import OperandRegistry
 from .fuser_config import FuserConfig, GlobalConfig
 
 FUSER_CONFIG_DIR = (
-    Path(os.environ.get("LLK_HOME", ".")) / "tests" / "python_tests" / "fuser_config"
+    Path(os.environ.get("LLK_HOME", ".")) / "tests" / "python_tests" / "fuser_tests"
 )
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
@@ -112,7 +112,7 @@ class FuserConfigSchema(BaseModel):
                     seen_operands.add(node.src_b)
 
             if op.output in seen_operands:
-                raise ValueError("output already used")
+                raise ValueError(f"cannot use '{op.output}' as output twice")
 
             seen_operands.add(op.output)
 
@@ -142,22 +142,6 @@ class FuserConfigSchema(BaseModel):
         )
 
     @classmethod
-    def validate_file(cls, yaml_path: Union[str, Path]) -> "FuserConfigSchema":
-        yaml_path = Path(yaml_path)
-        if not yaml_path.exists():
-            raise FileNotFoundError(f"File not found: {yaml_path}")
-
-        with open(yaml_path, "r") as f:
-            config_dict = yaml.safe_load(f)
-
-        try:
-            return cls.model_validate(config_dict)
-        except ValidationError as e:
-            raise ValueError(
-                f"Validation failed for {yaml_path.name}:\n{format_validation_error(e)}"
-            ) from None
-
-    @classmethod
     def validate_string(cls, yaml_content: str) -> "FuserConfigSchema":
         config_dict = yaml.safe_load(yaml_content)
         try:
@@ -169,6 +153,28 @@ class FuserConfigSchema(BaseModel):
 
     @classmethod
     def load(cls, test_name: str):
-        yaml_path = FUSER_CONFIG_DIR / f"{test_name}.yaml"
-        schema = cls.validate_file(yaml_path)
+        yaml_path = (FUSER_CONFIG_DIR / f"{test_name}.yaml").resolve()
+        if not yaml_path.is_relative_to(FUSER_CONFIG_DIR.resolve()):
+            raise ValueError(f"Invalid test name: {test_name}")
+        if not yaml_path.exists():
+            raise FileNotFoundError(f"File not found: {yaml_path}")
+
+        with open(yaml_path, "r") as f:
+            config_dict = yaml.safe_load(f)
+
+        if not isinstance(config_dict, dict):
+            raise ValueError(f"Invalid config in {yaml_path.name}")
+
+        supported_archs = config_dict.pop("supported_archs", None)
+        if supported_archs is not None:
+            if arch.value not in supported_archs:
+                pytest.skip(f"Test '{test_name}' not supported on {arch.value}")
+
+        try:
+            schema = cls.model_validate(config_dict)
+        except ValidationError as e:
+            raise ValueError(
+                f"Validation failed for {yaml_path.name}:\n{format_validation_error(e)}"
+            ) from None
+
         return schema.to_fuser_config(test_name)

@@ -37,7 +37,6 @@ Grep for "X" in tt_llk_{target_arch}/ (*.h files)
 Common SFPU includes:
 ```cpp
 #include "sfpi.h"
-#include "sfpi_fp16.h"
 #include "ckernel_sfpu_load_config.h"
 ```
 
@@ -201,4 +200,4 @@ Every register modified in `_init_` must be restored in `_uninit_`. Do NOT reset
 2. **Compare with working code** — existing implementations are the most reliable reference
 3. **One fix at a time** — change one thing, recompile, verify
 4. **Structural vs superficial** — if individual fixes keep failing, compare the full file against a similar working kernel
-5. **Use verbose mode** — `QUIET=0` to see full output
+5. **Use verbose mode** — pass `--verbose` (or `-v`) to `run_test.sh` to see step headers on stderr

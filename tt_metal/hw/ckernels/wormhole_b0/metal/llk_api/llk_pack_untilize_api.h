@@ -11,7 +11,7 @@
  * LLK PACK UNTILIZE
  *************************************************************************/
 
-template <bool is_fp32_dest_acc_en, bool untilize = false>
+template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void llk_pack_untilize_hw_configure(
     const llk_pack_params_t* pack_params, const std::uint32_t face_r_dim, const std::uint32_t num_faces) {
     const std::uint32_t output_id = get_output_id(pack_params->pack_output);
@@ -20,7 +20,7 @@ inline void llk_pack_untilize_hw_configure(
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
 
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, untilize>(
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, pack_mode>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         tile_size,
@@ -33,10 +33,9 @@ inline void llk_pack_untilize_hw_configure(
 
 template <
     bool is_fp32_dest_acc_en,
-    bool untilize = false,
+    PackMode pack_mode = PackMode::Default,
     ReluType relu_type = ReluType::NO_RELU,
-    std::uint32_t relu_threshold = 0,
-    bool tilize = false /*unused*/>
+    std::uint32_t relu_threshold = 0>
 inline void llk_pack_untilize_hw_configure_disaggregated(
     std::uint32_t pack_output, std::uint32_t face_r_dim = 16, std::uint32_t num_faces = 4) {
     llk_pack_params_t llk_pack_params = {
@@ -46,7 +45,7 @@ inline void llk_pack_untilize_hw_configure_disaggregated(
                 .ApplyRelu = (std::uint32_t)relu_type,
                 .Threshold = relu_threshold,
             }}};
-    llk_pack_untilize_hw_configure<is_fp32_dest_acc_en, untilize>(&llk_pack_params, face_r_dim, num_faces);
+    llk_pack_untilize_hw_configure<is_fp32_dest_acc_en, pack_mode>(&llk_pack_params, face_r_dim, num_faces);
 }
 
 template <

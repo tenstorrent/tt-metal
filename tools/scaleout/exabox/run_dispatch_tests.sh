@@ -15,6 +15,7 @@ Optional:
     --output <directory>                Output directory for log files (default: dispatch_test_logs)
     --mesh-graph-desc-path <path>       Path to mesh graph descriptor file
                                         (default: tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto)
+    --mpi-if <interface>                Network interface for MPI TCP transport (default: ens5f0np0)
     --help                              Display this help message and exit
 
 Example:
@@ -28,6 +29,7 @@ HOSTS=""
 DOCKER_IMAGE=""
 OUTPUT_DIR="dispatch_test_logs"
 MESH_GRAPH_DESC_PATH="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
+MPI_IF="ens5f0np0"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -61,6 +63,14 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             MESH_GRAPH_DESC_PATH="$2"
+            shift 2
+            ;;
+        --mpi-if)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --mpi-if requires a non-empty value"
+                exit 1
+            fi
+            MPI_IF="$2"
             shift 2
             ;;
         --help)
@@ -102,6 +112,7 @@ echo "Using hosts: $HOSTS"
 echo "Using docker image: $DOCKER_IMAGE"
 echo "Output directory: $OUTPUT_DIR"
 echo "Mesh graph descriptor: $MESH_GRAPH_DESC_PATH"
+echo "MPI interface: $MPI_IF"
 echo "Log file: $LOG_FILE"
 echo "=========================================="
 echo ""
@@ -109,6 +120,7 @@ echo ""
 ./tools/scaleout/exabox/mpi-docker \
     --image "$DOCKER_IMAGE" \
     --empty-entrypoint \
+    --mpi-interface "$MPI_IF" \
     --host "$HOSTS" \
     -x TT_MESH_ID=0 \
     -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \

@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#define BCAST_LLKOP ELWADD
+#define BCAST_LLKOP EltwiseBinaryType::ELWADD
 #define BCAST_DIM BroadcastType::ROW
 
 #include "api/compute/matmul.h"

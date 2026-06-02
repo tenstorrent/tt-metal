@@ -59,7 +59,7 @@ jobs:
     steps:
       # Step 1: Checkout the repository
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       # Step 2: Install SFPI
       - name: Install SFPI
@@ -83,10 +83,10 @@ jobs:
           cd tests/python_tests/
 
           echo "Compiling Quasar..."
-          pytest -q --compile-producer -n 35 \
+          pytest -q --compile-producer -n 20 \
                 -m "${{ inputs.pytest_markers }}" \
                 --splits $TEST_SPLITS --group ${{ matrix.test_group }} \
-                --override-ini="addopts=-v" --tb=short --timeout=60 \
+                --override-ini=log_cli=false --tb=short --timeout=60 \
                 --junitxml=pytest-report-${CHIP_ARCH}-compile.xml .
 
       # Step 4: Upload JUnit report for compiling elfs

@@ -224,7 +224,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             ZONE_SCOPED("INIT")
             _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-            _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, true>(4, formats.math);
+            _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false, PackMode::Tilize>(4, formats.math);
         }
         {
             ZONE_SCOPED("TILE_LOOP")
@@ -332,15 +332,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             ZONE_SCOPED("INIT")
             _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-            _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
-            _llk_pack_init_<false, false, true>(formats.pack_src, FACE_R_DIM, TILE_C_DIM, 4, 1, false);
+            _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
+            _llk_pack_init_<ckernel::PackMode::Tilize, false /* zero_output */, false /* skip_addrmod_config */, false /* skip_packer_strides */>(
+                formats.pack_src, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */, 1 /* num_tiles */, false /* skip_bh_tilize_workaround */);
         }
         {
             ZONE_SCOPED("TILE_LOOP")
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 _llk_packer_wait_for_math_done_();
-                _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, L1_ADDRESS(buffer_Res[0]));
+                _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, L1_ADDRESS(buffer_Res[0]));
                 _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }
         }
@@ -354,7 +356,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             ZONE_SCOPED("INIT")
             _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-            _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
+            _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
             _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, formats.pack_dst, unit_dims[0], 4, formats.pack_src);
         }
         {

@@ -52,6 +52,7 @@ show_help() {
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
     echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
     echo "  --enable-lto                     Enable Link Time Optimization (LTO) for Release/RelWithDebInfo builds."
+    echo "  --disable-warnings-as-errors     Disable treating warnings as errors (CMAKE_COMPILE_WARNING_AS_ERROR=OFF)."
 }
 
 clean() {
@@ -94,6 +95,7 @@ enable_distributed="ON"
 with_python_bindings="ON"
 enable_fake_kernels_target="OFF"
 enable_lto="OFF"
+warnings_as_errors="ON"
 
 declare -a cmake_args
 
@@ -134,6 +136,7 @@ without-distributed
 without-python-bindings
 enable-fake-kernels-target
 enable-lto
+disable-warnings-as-errors
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -197,6 +200,8 @@ while true; do
             enable_fake_kernels_target="ON";;
         --enable-lto)
             enable_lto="ON";;
+        --disable-warnings-as-errors)
+            warnings_as_errors="OFF";;
         --disable-pch)
 	    pch="OFF";;
         --disable-unity-builds)
@@ -285,6 +290,7 @@ echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
 echo "INFO: Enable Tracy: $tracy_enabled"
 echo "INFO: Enable LTO: $enable_lto"
+echo "INFO: Warnings as errors: $warnings_as_errors"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
@@ -410,6 +416,10 @@ fi
 
 if [ "$enable_lto" = "ON" ]; then
     cmake_args+=("-DTT_ENABLE_LTO=ON")
+fi
+
+if [ "$warnings_as_errors" = "OFF" ]; then
+    cmake_args+=("-DCMAKE_COMPILE_WARNING_AS_ERROR=OFF")
 fi
 
 # toolchain and cxx_compiler settings would conflict with each other

@@ -168,7 +168,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     // Match EXACT order of working LLK test: dest_init → hw_configure
     _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en>(formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+        formats.pack_src, formats.pack_dst, SCALE_DATUM_SIZE(formats.pack_dst, TILE_C_DIM * TILE_R_DIM));
 
     // fast_tilize_init
     _llk_pack_fast_tilize_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>(0, formats.pack_dst, unit_dims[0], 4);

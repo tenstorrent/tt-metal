@@ -12,19 +12,20 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::moreh::moreh_sum {
-MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::MorehSumNCIntFactory::create(
+
+tt::tt_metal::ProgramDescriptor MorehSumOperation::MorehSumNCIntFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output_tensor) {
-    auto input = tensor_args.input;
-    const auto& output = output_tensor;
+    tensor_return_value_t& output) {
+    using namespace tt;
+    using namespace tt::tt_metal;
+
+    const auto& input = tensor_args.input;
     auto dim = operation_attributes.dim;
 
-    auto memory_config = operation_attributes.memory_config;
     const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    tt::tt_metal::IDevice* device{input.device()};
-    tt::tt_metal::Program program{tt::tt_metal::CreateProgram()};
+    IDevice* device{input.device()};
 
     const auto cb_data_format{datatype_to_dataformat_converter(output.dtype())};
 
@@ -32,7 +33,7 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
     const auto [Wt, Ht, inner_tile_size, reduce_tile_size] =
         extract_and_scale_spatial_dims(input_shape, static_cast<uint32_t>(dim));
     const auto num_reduce_input_tile{input_shape[dim]};
-    const auto num_output_tiles{output.physical_volume() / tt::constants::TILE_HW};
+    const auto num_output_tiles{output.physical_volume() / constants::TILE_HW};
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
 
@@ -68,64 +69,111 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
          core_group_1,
          core_group_2,
          num_cols_per_core_group_1,
-         num_cols_per_core_group_2] = tt::tt_metal::split_work_to_cores(grid, num_output_tiles);
+         num_cols_per_core_group_2] = split_work_to_cores(grid, num_output_tiles);
 
-    CreateCircularBuffer(
-        program,
-        all_cores,
-        cb_data_format,
-        {
-            {tt::CBIndex::c_0, in0_t},         // input
-            {tt::CBIndex::c_24, intermed0_t},  // accumulated sum
-            {tt::CBIndex::c_16, out0_t},       // output
-        });
+    uint32_t cb_tile_size = tile_size(cb_data_format);
 
-    std::vector<uint32_t> reader_compile_time_args = {};
-    std::vector<uint32_t> writer_compile_time_args = {};
+    ProgramDescriptor desc;
+
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in0_t * cb_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_0),
+            .data_format = cb_data_format,
+            .page_size = cb_tile_size,
+        }}},
+    });
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = intermed0_t * cb_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_24),
+            .data_format = cb_data_format,
+            .page_size = cb_tile_size,
+        }}},
+    });
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out0_t * cb_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_16),
+            .data_format = cb_data_format,
+            .page_size = cb_tile_size,
+        }}},
+    });
+
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args;
     TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
-    const auto* const reader_kernel_file =
+
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/reader_moreh_sum_nc.cpp";
-    const auto* const writer_kernel_file =
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args;
+    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/writer_moreh_sum_nc.cpp";
-    const auto reader_kernel_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
-    const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1, num_reduce_input_tile};
-    std::map<std::string, std::string> compute_defines;
+    KernelDescriptor::Defines compute_defines;
     if (fp32_dest_acc_en) {
-        compute_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines.emplace_back("FP32_DEST_ACC_EN", "1");
     }
+
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+
     const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/moreh_int_sum_nc.cpp";
-    CreateComputeKernel(
-        program,
-        compute_kernel_file,
-        {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
-        compute_defines,
-        math_fidelity,
-        fp32_dest_acc_en,
-        math_approx_mode);
 
-    std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
-    if (!core_group_2.ranges().empty()) {
-        const std::vector<uint32_t> compute_args_group_2{num_cols_per_core_group_2, num_reduce_input_tile};
-        compute_kernel_2_id = CreateComputeKernel(
-            program,
-            compute_kernel_file,
-            {core_group_2, num_cols_per_core_group_2, compute_args_group_2},
-            compute_defines,
-            math_fidelity,
-            fp32_dest_acc_en,
-            math_approx_mode);
+    KernelDescriptor compute_desc_1;
+    compute_desc_1.kernel_source = compute_kernel_file;
+    compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc_1.core_ranges = core_group_1;
+    compute_desc_1.compile_time_args = {num_cols_per_core_group_1, static_cast<uint32_t>(num_reduce_input_tile)};
+    compute_desc_1.defines = compute_defines;
+    compute_desc_1.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
+        .math_approx_mode = math_approx_mode,
+    };
+
+    KernelDescriptor compute_desc_2;
+    bool has_core_group_2 = !core_group_2.ranges().empty();
+    if (has_core_group_2) {
+        compute_desc_2.kernel_source = compute_kernel_file;
+        compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        compute_desc_2.core_ranges = core_group_2;
+        compute_desc_2.compile_time_args = {num_cols_per_core_group_2, static_cast<uint32_t>(num_reduce_input_tile)};
+        compute_desc_2.defines = compute_defines;
+        compute_desc_2.config = ComputeConfigDescriptor{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
+            .math_approx_mode = math_approx_mode,
+        };
     }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
+    auto* const input_buf = input.buffer();
+    auto* const output_buf = output.buffer();
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
@@ -138,51 +186,29 @@ MorehSumOperation::MorehSumNCIntFactory::cached_program_t MorehSumOperation::Mor
             TT_THROW("Core not in specified core ranges.");
         }
 
-        SetRuntimeArgs(
-            program,
-            reader_kernel_id,
+        reader_desc.emplace_runtime_args(
             core,
-            {input.buffer()->address(),
-             num_reduce_input_tile,
+            {input_buf,
+             static_cast<uint32_t>(num_reduce_input_tile),
              num_tiles_per_core,
              tile_offset,
              static_cast<uint32_t>(dim),
              reduce_tile_size,
              inner_tile_size});
 
-        SetRuntimeArgs(program, writer_kernel_id, core, {output.buffer()->address(), num_tiles_per_core, tile_offset});
+        writer_desc.emplace_runtime_args(core, {output_buf, num_tiles_per_core, tile_offset});
 
         tile_offset += num_tiles_per_core;
     }
 
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_y}};
-}
-
-void MorehSumOperation::MorehSumNCIntFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
-    auto& program = cached_program.program;
-    auto& reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
-    auto& writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-    auto num_cores = cached_program.shared_variables.num_cores;
-    auto num_cores_y = cached_program.shared_variables.num_cores_y;
-
-    log_debug(tt::LogOp, "{}:{} args_callback ", __func__, __LINE__);
-    const auto* input_buffer{tensor_args.input.buffer()};
-    const auto* output_buffer{tensor_return_value.buffer()};
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        {
-            auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = input_buffer->address();
-        }
-
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = output_buffer->address();
-        }
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc_1));
+    if (has_core_group_2) {
+        desc.kernels.push_back(std::move(compute_desc_2));
     }
+
+    return desc;
 }
+
 }  // namespace ttnn::operations::moreh::moreh_sum

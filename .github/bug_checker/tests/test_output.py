@@ -73,6 +73,36 @@ def test_format_pr_comment():
     assert "Something is wrong" in comment
 
 
+def test_format_pr_comment_links_rule_path(monkeypatch):
+    monkeypatch.delenv("BUG_CHECKER_RULE_REF", raising=False)
+    monkeypatch.delenv("GITHUB_SHA", raising=False)
+    monkeypatch.delenv("GITHUB_REF_NAME", raising=False)
+    finding = _make_finding(rule_id="reshape-dim-check")
+    comment = format_pr_comment(
+        finding,
+        rule_path=".github/bug_checker/rules/reshape-dim-check.md",
+    )
+    expected_link = (
+        "[`reshape-dim-check`](https://github.com/tenstorrent/tt-metal/blob/main/"
+        ".github/bug_checker/rules/reshape-dim-check.md)"
+    )
+    assert expected_link in comment
+
+
+def test_format_pr_comment_links_rule_path_with_configured_ref(monkeypatch):
+    monkeypatch.setenv("BUG_CHECKER_RULE_REF", "release/1.0")
+    finding = _make_finding(rule_id="reshape-dim-check")
+    comment = format_pr_comment(
+        finding,
+        rule_path=".github/bug_checker/rules/reshape-dim-check.md",
+    )
+    expected_link = (
+        "[`reshape-dim-check`](https://github.com/tenstorrent/tt-metal/blob/release%2F1.0/"
+        ".github/bug_checker/rules/reshape-dim-check.md)"
+    )
+    assert expected_link in comment
+
+
 def test_format_pr_comment_with_fix():
     finding = _make_finding(suggested_fix="auto x = correct();")
     comment = format_pr_comment(finding)
@@ -96,25 +126,24 @@ def test_format_summary_comment_with_failures():
     assert "2 comment(s) could not be posted" in summary
 
 
-def test_format_summary_comment_with_skipped_rules():
-    summary = format_summary_comment(
-        [], skipped_rules=["ccl-ring-buffer-mismatch", "reshape-dim-check"]
-    )
-    assert "2 rule(s) were skipped" in summary
+def test_format_summary_comment_with_failed_rules():
+    summary = format_summary_comment([], failed_rules=["ccl-ring-buffer-mismatch", "reshape-dim-check"])
+    assert "Bug Checker Failed" in summary
+    assert "2 rule(s) failed" in summary
     assert "`ccl-ring-buffer-mismatch`" in summary
     assert "`reshape-dim-check`" in summary
-    assert "Results may be incomplete" in summary
+    assert "exits non-zero" in summary
 
 
-def test_format_summary_comment_skipped_rules_shown_even_with_no_findings():
-    summary = format_summary_comment([], skipped_rules=["my-rule"])
-    assert "No issues found" in summary
+def test_format_summary_comment_failed_rules_shown_even_with_no_findings():
+    summary = format_summary_comment([], failed_rules=["my-rule"])
+    assert "cannot be treated as a pass" in summary
     assert "my-rule" in summary
 
 
-def test_format_summary_comment_no_skipped_rules_no_note():
+def test_format_summary_comment_no_failed_rules_no_note():
     summary = format_summary_comment([_make_finding()])
-    assert "skipped" not in summary
+    assert "failed during LLM analysis" not in summary
 
 
 def test_format_summary_comment_with_truncated_rules():

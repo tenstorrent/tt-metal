@@ -43,5 +43,6 @@ ttnn::Tensor prefill_combine(
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
     bool init_zeros,
-    bool use_l1_small_for_semaphores = false);
+    bool use_l1_small_for_semaphores = false,
+    bool use_fp8_combine = false);
 }  // namespace ttnn::prim

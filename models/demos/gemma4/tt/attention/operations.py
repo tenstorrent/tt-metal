@@ -139,3 +139,49 @@ def apply_output_projection(tensor, weights: AttentionWeights):
 def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
     """Apply tensor-parallel allreduce if TP > 1."""
     return ccl_allreduce(tensor, mesh_config, ccl_manager)
+
+
+def effective_block_size(k_cache, head_dim: int, num_kv_heads: int) -> int:
+    """Block-size override to pass to paged-cache ops when the cache
+    buffer's *allocation* view doesn't match this layer's view.
+
+    vLLM's hybrid kv-cache-groups manager runs a per-block-byte unifier
+    and can share one physical buffer between layers of different
+    attention types — for Gemma4 that's sliding (head_dim=256, kv=N)
+    and full (head_dim=512, kv=M). Per-block elements are preserved
+    across HMA-shared views, so a layer recovers its effective
+    block_size by inverting the invariant
+    ``input_kv * eff_bs * input_hd == cache_kv * cache_bs * cache_hd``:
+
+      eff_bs = cache_kv * cache_bs * cache_hd / (input_kv * input_hd)
+
+    Earlier versions of this helper omitted the ``cache_kv / input_kv``
+    factor, which was a no-op for Gemma4-E2B / E4B (sliding and full
+    share num_kv_heads) but produced the wrong block_size on
+    Gemma4-26B-A4B (kv=8 / 2) and 31B (kv=16 / 4) at small TP, tripping
+    the paged_fill_cache / paged_update_cache byte-count check.
+
+    When the cache happens to have been allocated *with* this layer's
+    own view, the override is a no-op for the kernel; passing it
+    unconditionally keeps the paged_{fill,update}_cache and
+    paged_scaled_dot_product_attention_decode call sites symmetric.
+    """
+    if num_kv_heads <= 0:
+        raise ValueError(f"num_kv_heads must be > 0, got {num_kv_heads}")
+    if head_dim <= 0:
+        raise ValueError(f"head_dim must be > 0, got {head_dim}")
+
+    cache_num_heads = k_cache.padded_shape[1]
+    cache_block_size = k_cache.padded_shape[2]
+    cache_head_dim = k_cache.padded_shape[-1]
+
+    numerator = cache_num_heads * cache_block_size * cache_head_dim
+    denominator = num_kv_heads * head_dim
+    if numerator % denominator != 0:
+        raise ValueError(
+            "KV-cache layout is incompatible with the requested layer view: "
+            f"({cache_num_heads} * {cache_block_size} * {cache_head_dim}) is not exactly divisible by "
+            f"({num_kv_heads} * {head_dim})"
+        )
+
+    return numerator // denominator

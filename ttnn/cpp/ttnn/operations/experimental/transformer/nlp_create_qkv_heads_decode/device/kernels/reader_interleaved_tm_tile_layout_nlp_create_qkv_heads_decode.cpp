@@ -75,7 +75,7 @@ void kernel_main() {
             uint32_t scratch_offset = scratch_base;
             uint32_t local_tile_id = starting_tile_id;
             for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
-                uint64_t aligned_src = get_noc_addr(local_tile_id, qkv_reader) + aligned_offset;
+                uint64_t aligned_src = qkv_reader.get_noc_addr(local_tile_id) + aligned_offset;
                 noc_async_read(aligned_src, scratch_offset, DRAM_ALIGN_BYTES);
                 scratch_offset += DRAM_ALIGN_BYTES;
                 local_tile_id++;
@@ -182,7 +182,7 @@ void kernel_main() {
         uint32_t q_write_addr = get_write_ptr(cb_id_q_out) + wptr_offset;
 
         for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
-            uint64_t qkv_in_noc_addr = get_noc_addr(qkv_tile_id, qkv_reader) + in_tile_offset_by_batch;
+            uint64_t qkv_in_noc_addr = qkv_reader.get_noc_addr(qkv_tile_id) + in_tile_offset_by_batch;
 
             // Read first phase
             if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 1) {
@@ -213,7 +213,7 @@ void kernel_main() {
         uint32_t k_write_addr = get_write_ptr(cb_id_k_out) + wptr_offset;
 
         for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
-            uint64_t qkv_in_noc_addr = get_noc_addr(qkv_tile_id, qkv_reader) + in_tile_offset_by_batch;
+            uint64_t qkv_in_noc_addr = qkv_reader.get_noc_addr(qkv_tile_id) + in_tile_offset_by_batch;
 
             if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 1) {
                 noc_async_read(qkv_in_noc_addr, k_write_addr, SUBTILE_LINE_BYTES);
@@ -242,7 +242,7 @@ void kernel_main() {
         uint32_t v_write_addr = get_write_ptr(cb_id_v_out) + wptr_offset;
 
         for (uint32_t i = 0; i < head_size_num_tiles; ++i) {
-            uint64_t qkv_in_noc_addr = get_noc_addr(qkv_tile_id, qkv_reader) + in_tile_offset_by_batch;
+            uint64_t qkv_in_noc_addr = qkv_reader.get_noc_addr(qkv_tile_id) + in_tile_offset_by_batch;
 
             if constexpr (PHASES_TO_READ == 0 || PHASES_TO_READ == 1) {
                 noc_async_read(qkv_in_noc_addr, v_write_addr, SUBTILE_LINE_BYTES);

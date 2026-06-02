@@ -210,6 +210,19 @@ void kernel_main() {
 #endif
     CircularBuffer mm_out_cb(mm_out_cb_id);
 
+    // Number of valid in1 columns in the last in1 subblock. For the DRAM-sharded variant the
+    // planner may pad per_core_N_compute beyond per_core_N_in1_sender so that out_subblock_w can be
+    // larger; the reader only pushes per_core_N_in1_sender tiles per block into cb_in1. To avoid
+    // reading those non-existent (padded) cb_in1 tiles, the compute kernel narrows the matmul_block
+    // call on the last in1 subblock to last_subblock_w_valid lanes. When no padding occurs this
+    // equals out_subblock_w and the original full-width path is preserved.
+#ifdef MATMUL_DRAM_SHARDED
+    constexpr uint32_t last_subblock_w_valid = get_named_compile_time_arg_val("last_subblock_w_valid");
+#else
+    constexpr uint32_t last_subblock_w_valid = out_subblock_w;
+#endif
+    constexpr bool last_subblock_padded = last_subblock_w_valid < out_subblock_w;
+
 #ifdef SFPU_ACTIVATION
     constexpr KernelActivation activation_type =
         static_cast<KernelActivation>(get_named_compile_time_arg_val("activation_type"));
@@ -297,6 +310,16 @@ void kernel_main() {
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                         int in1_index_subblock_offset = 0;
                         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                            // When last_subblock_padded is true the last in1 subblock has
+                            // (out_subblock_w - last_subblock_w_valid) padded lanes whose cb_in1 tiles were
+                            // never pushed by the reader. Narrow matmul_block so the unpacker only touches
+                            // tiles that exist; the padded dst lanes are left at whatever the previous
+                            // operation wrote there and the output writer (BRISC) drops those columns.
+                            const bool is_last_in1_subblock_padded =
+                                last_subblock_padded && (in1_subblock == in1_num_subblocks - 1);
+                            const uint32_t effective_subblock_w =
+                                is_last_in1_subblock_padded ? last_subblock_w_valid : out_subblock_w;
+
                             tile_regs_acquire();
                             if (enable_reload) {
                                 reload_from_cb_to_dst(
@@ -329,7 +352,7 @@ void kernel_main() {
                                     in1_index,
                                     dst_index,
                                     in1_transpose_tile,
-                                    out_subblock_w,
+                                    effective_subblock_w,
                                     out_subblock_h,
                                     in0_block_w);
                                 in0_index++;               // stride right by 1
@@ -464,16 +487,27 @@ void kernel_main() {
                 for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                     int in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                        // See matmul stage: the last in1 subblock has padded lanes whose bias tile was
+                        // never pushed by the reader. Redirect those out-of-range bias_tile_idx reads to
+                        // tile 0 of cb_bias to keep them in-bounds; the resulting padded output columns
+                        // are dropped by the writer.
+                        const bool is_last_in1_subblock_padded =
+                            last_subblock_padded && (in1_subblock == in1_num_subblocks - 1);
                         // Redundant wait since we know data was just pushed
                         mm_partials_cb.wait_front(out_subblock_num_tiles);
                         tile_regs_acquire();
                         for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
                             uint32_t bias_tile_idx = in1_index_subblock_offset;
                             for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
+                                const uint32_t safe_bias_tile_idx =
+                                    (is_last_in1_subblock_padded && k >= last_subblock_w_valid)
+                                        ? 0u              // Padded output columns with tile 0 of cb_bias added are
+                                        : bias_tile_idx;  // dropped by the writer.
+
                                 if constexpr (row_broadcast_bias) {
-                                    add_tiles_bcast_rows(mm_partials_cb_id, bias_cb_id, i, bias_tile_idx, i);
+                                    add_tiles_bcast_rows(mm_partials_cb_id, bias_cb_id, i, safe_bias_tile_idx, i);
                                 } else {
-                                    add_tiles(mm_partials_cb_id, bias_cb_id, i, bias_tile_idx, i);
+                                    add_tiles(mm_partials_cb_id, bias_cb_id, i, safe_bias_tile_idx, i);
                                 }
                                 bias_tile_idx++;
                             }

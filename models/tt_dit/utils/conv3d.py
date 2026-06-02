@@ -78,11 +78,10 @@ def compute_decoder_dims(
         return [StageHW(0, 0)] * n, [StageT(T_res=0, T_tconv=0, T_spatial=0)] * n
 
     vae_scale = 2**num_stages
-    # Height uses ceil because some configs don't divide evenly (e.g. 720/8/4=22.5 → 23);
-    # the hardware pads height via conv_pad_height.  Width always divides evenly for
-    # production targets and is not padded the same way, so floor division is correct.
+    # Both height and width use ceil because some configs don't divide evenly
+    # (e.g. 720/8/4=22.5 → 23).  The hardware pads via conv_pad_height / conv_pad_width.
     lat_h = math.ceil(height / vae_scale / h_factor)
-    lat_w = width // vae_scale // w_factor
+    lat_w = math.ceil(width / vae_scale / w_factor)
     stage_hw = [StageHW(lat_h * (2**s), lat_w * (2**s)) for s in range(num_stages + 1)]
 
     cur_T = t_chunk_size
@@ -123,7 +122,7 @@ def compute_encoder_dims(height, width, h_factor, w_factor, encoder_t_chunk_size
         return [StageHW(0, 0)] * n, [StageT(T_res=0, T_tconv=0, T_spatial=0)] * n
 
     full_h = math.ceil(height / h_factor)
-    full_w = width // w_factor
+    full_w = math.ceil(width / w_factor)
     stage_hw = [StageHW(full_h // (2**s), full_w // (2**s)) for s in range(n)]
 
     cur_T = encoder_t_chunk_size
@@ -304,7 +303,8 @@ _BLOCKINGS = {
     (2, 4, 192, 96, (1, 3, 3), 28, 240, 208): (192, 96, 1, 4, 16),  # up2_spatial — swept 6509us
     # Stage 3 (cur_T=28): T_res=30 (no temporal upsample)
     (2, 4, 96, 96, (3, 3, 3), 30, 240, 208): (96, 96, 7, 2, 16),  # up3_res — swept 9364us
-    (2, 4, 96, 3, (3, 3, 3), 30, 240, 208): (96, 32, 4, 16, 2),  # conv_out — partial 5990us
+    # conv_out disabled — T_out_block=4 caused a frame-24-25 artifact; falls back to _DEFAULT_BLOCKINGS pending a clean re-sweep.
+    # (2, 4, 96, 3, (3, 3, 3), 30, 240, 208): (96, 32, 4, 16, 2),  # conv_out — partial 5990us
     # ===================================================================
     # BH Galaxy 4x8, 720p image encoder, T=33 output frames
     # h_factor=4, w_factor=8. Per-device H/W are unpadded output dims.
@@ -546,6 +546,24 @@ def conv_unpad_height(tensor_BTHWC, logical_h):
     B, T, H, W, C = tensor_BTHWC.shape
     # Slice out the original height dimension
     return tensor_BTHWC[:, :, :logical_h, :, :]
+
+
+def conv_pad_width(tensor_BTHWC, w_factor):
+    """
+    Pad the width to the next multiple of w_factor, mirroring conv_pad_height.
+    """
+    B, T, H, W, C = tensor_BTHWC.shape
+    pad_w = (w_factor - W % w_factor) % w_factor
+    if pad_w > 0:
+        tensor_BTHWC = torch.nn.functional.pad(tensor_BTHWC, (0, 0, 0, pad_w))
+    return tensor_BTHWC, W
+
+
+def conv_unpad_width(tensor_BTHWC, logical_w):
+    """
+    Remove width padding that was added by conv_pad_width.
+    """
+    return tensor_BTHWC[:, :, :, :logical_w, :]
 
 
 def conv_pad_in_channels(tensor):

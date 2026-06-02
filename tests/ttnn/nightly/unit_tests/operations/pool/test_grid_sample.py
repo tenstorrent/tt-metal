@@ -341,7 +341,9 @@ def prepare_sharded_ttnn_grid(
         ("nearest", True, True),
         ("nearest", False, True),
         ("bilinear", False, True),
+        ("bilinear", True, True),
         ("bilinear", False, False),
+        ("bilinear", True, False),
     ],
 )
 def test_grid_sample_near_uniform_grid(device, input_shape, mode, align_corners, grid_shape, use_precomputed_grid):
@@ -502,7 +504,9 @@ def test_grid_sample_batch_output_channels_flag(
         ("nearest", True, True),
         ("nearest", False, True),
         ("bilinear", False, True),
+        ("bilinear", True, True),
         ("bilinear", False, False),
+        ("bilinear", True, False),
     ],
 )
 def test_grid_sample_sharded(

@@ -148,9 +148,10 @@ struct RMSNorm {
                 // Multiply by the weight
                 cb_reserve_back(CTArgs::output_cb, num_tiles);
                 if constexpr (CTArgs::do_gamma) {
-                    binary_dest_reuse_tiles_init<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(CTArgs::gamma_cb);
+                    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                        CTArgs::gamma_cb);
                     for (uint32_t i = 0; i < num_tiles; i++) {
-                        binary_dest_reuse_tiles<ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+                        binary_dest_reuse_tiles<EltwiseBinaryType::ELWMUL, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
                             CTArgs::gamma_cb, i, i);
                     }
                 }

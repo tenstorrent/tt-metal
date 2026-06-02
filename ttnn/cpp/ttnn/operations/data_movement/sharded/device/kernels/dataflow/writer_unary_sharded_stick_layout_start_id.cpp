@@ -38,7 +38,7 @@ void kernel_main() {
     cb_out.wait_front(block_height);
     uint32_t l1_read_addr = cb_out.get_read_ptr();
     for (uint32_t h = 0; h < block_height; ++h) {
-        uint64_t dst_noc_addr = get_noc_addr(stick_id, s);
+        uint64_t dst_noc_addr = s.get_noc_addr(stick_id);
         noc_async_write(l1_read_addr, dst_noc_addr, block_width_bytes);
         stick_id += output_width_in_pages;
         l1_read_addr += padded_block_width_bytes;

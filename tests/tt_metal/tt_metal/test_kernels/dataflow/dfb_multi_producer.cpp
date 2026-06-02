@@ -46,7 +46,7 @@ void kernel_main() {
             dfb.push_back(1);
         }
     }
-    DPRINT << "producer before finish" << ENDL();
+    DPRINT("producer before finish\n");
     dfb.finish();
-    DPRINT << "producer after finish" << ENDL();
+    DPRINT("producer after finish\n");
 }

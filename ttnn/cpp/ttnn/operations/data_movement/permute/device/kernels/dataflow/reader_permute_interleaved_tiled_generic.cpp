@@ -192,7 +192,7 @@ void kernel_main() {
 
             for (uint32_t x = x_start; x < x_end; ++x) {
                 uint32_t l1_col_base = src_buffer_l1_addr + page_offset;
-                uint64_t src_noc_addr = get_noc_addr(tile, s, base_face_line_offset_bytes);
+                uint64_t src_noc_addr = s.get_noc_addr(tile, base_face_line_offset_bytes);
 
                 // Read each face in [0..real_faces_w)
                 uint16_t w_offset = 0;

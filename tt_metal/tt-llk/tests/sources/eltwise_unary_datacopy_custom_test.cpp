@@ -69,15 +69,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_pack_hw_configure_wrapper_<false /* is_fp32_dest_acc_en */, false /* untilize */, false /* tilize */>(
+    _llk_pack_hw_configure_wrapper_<false /* is_fp32_dest_acc_en */, PackMode::Default>(
         formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
-    _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */, false /* tilize */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
     _llk_pack_dest_init_<DstSync::SyncHalf, false>();
 
     _llk_packer_wait_for_math_done_();
     for (std::uint32_t tile_num = 0; tile_num < params.TILE_CNT; ++tile_num)
     {
-        _llk_pack_<DstSync::SyncHalf, false, false>(tile_num, L1_ADDRESS(params.buffer_Res[tile_num]));
+        _llk_pack_<DstSync::SyncHalf, false, ckernel::PackMode::Default>(tile_num, L1_ADDRESS(params.buffer_Res[tile_num]));
     }
     _llk_pack_dest_section_done_<DstSync::SyncHalf, false>();
 }

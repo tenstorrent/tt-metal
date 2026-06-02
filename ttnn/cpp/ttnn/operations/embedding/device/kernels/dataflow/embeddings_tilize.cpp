@@ -38,7 +38,7 @@ void kernel_main() {
     uint32_t curr_row = input_start_id;
     uint32_t offset = input_start_offset;
     for (uint32_t i = 0; i < num_blocks; ++i) {
-        uint64_t noc_input_src_addr = get_noc_addr(curr_row, input) + offset;
+        uint64_t noc_input_src_addr = input.get_noc_addr(curr_row) + offset;
         noc_async_read<input_block_size_bytes>(noc_input_src_addr, input_l1_addr, input_block_size_bytes);
         noc_async_read_barrier();
 

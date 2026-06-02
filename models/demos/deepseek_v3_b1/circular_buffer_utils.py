@@ -46,7 +46,17 @@ class CircularBufferIdManager:
 
         cb_id = self._next_id
         if cb_id >= self.NUM_CIRCULAR_BUFFERS:
-            raise RuntimeError(f"All {self.NUM_CIRCULAR_BUFFERS} circular buffer IDs are exhausted")
+            from collections import Counter
+
+            breakdown = Counter()
+            for _id, (fmt, td) in self._id_to_format.items():
+                breakdown[(str(fmt), td.height, td.width)] += 1
+            lines = [f"  {k}: {v}" for k, v in sorted(breakdown.items(), key=lambda x: -x[1])]
+            raise RuntimeError(
+                f"All {self.NUM_CIRCULAR_BUFFERS} circular buffer IDs are exhausted.\n"
+                f"Trying to allocate ({data_format}, {tile.height}x{tile.width}); exclude_size={len(exclude)}\n"
+                f"Breakdown:\n" + "\n".join(lines)
+            )
         self._next_id += 1
         # Make a copy of the tile descriptor to avoid dependencies
         self._id_to_format[cb_id] = (data_format, ttnn.TileDescriptor(tile))
@@ -202,7 +212,109 @@ def record_cb_metadata(cb_descriptors):
     return cb_metadata
 
 
-def build_cb_reconfig_tensor(cb_metadata, full_device_grid, mesh_device):
+def record_cb_metadata_per_coord(cb_descriptors_replicated, cb_descriptors_per_coord, cb_size_overrides=None):
+    """
+    Extract per-mesh-coord CB config metadata.
+
+    Mirrors :func:`record_cb_metadata` but keyed by ``(mesh_row, mesh_col)`` —
+    needed when some CBs (e.g., BSPM-SRAM weight CBs) have per-device-different
+    L1 addresses.  Each coord's metadata is the merge of:
+        - ``cb_descriptors_replicated``: same on every device.
+        - ``cb_descriptors_per_coord[coord]``: this device's per-coord descs.
+
+    Args:
+        cb_descriptors_replicated: List of CBDescriptors identical on all devices.
+        cb_descriptors_per_coord: ``dict[(mesh_row, mesh_col)] -> list[CBDescriptor]``
+            holding the per-device CBDescriptors that differ across devices.
+        cb_size_overrides: optional ``{cb_id: (total_size, num_pages, page_size)}``
+            forced size triple recorded in place of the desc-derived values, only
+            for CBs listed in ``cb_descriptors_per_coord`` (the per-coord ones).
+            Real per-(device, core) addresses are still queried from each desc;
+            only the size fields are uniformized.
+
+            Use case: BSPM-SRAM produces per-(device, core)-different packed
+            byte sizes, but the kernel's ``cb_wait_front(cb_in1, 1)`` requires
+            ``num_pages >= 1`` and the framework's "received" counter is seeded
+            from ``num_pages`` at ``setup_sharded_buffer``.  All-bfp0 cores'
+            placeholder buffer (64 B < 576 B page_size) would otherwise record
+            ``num_pages=0`` → ``cb_wait_front`` blocks → kernel hangs.
+
+    Returns:
+        ``dict[(mesh_row, mesh_col)] -> dict[cb_id, list[(addr, total_size,
+        num_pages, page_size, core_ranges)]]`` — the per-coord equivalent of
+        :func:`record_cb_metadata`'s output.
+    """
+    overrides = cb_size_overrides or {}
+    replicated_meta = record_cb_metadata(cb_descriptors_replicated)
+    out = {}
+    for coord, per_coord_descs in cb_descriptors_per_coord.items():
+        # Shallow-copy replicated entries — tuples are immutable so list copy
+        # is enough to keep per-coord mutations isolated.
+        per_coord_meta = {cb_id: list(entries) for cb_id, entries in replicated_meta.items()}
+        for desc in per_coord_descs:
+            for fmt in desc.format_descriptors:
+                cb_id = fmt.buffer_index
+                addr = ttnn.get_cb_address(desc)
+                assert addr != 0, f"CB {cb_id} has address 0, which means it's not backed by a tensor"
+                if cb_id in overrides:
+                    total_size, num_pages, page_size = overrides[cb_id]
+                else:
+                    total_size = desc.total_size
+                    page_size = fmt.page_size
+                    num_pages = total_size // page_size
+                per_coord_meta.setdefault(cb_id, []).append((addr, total_size, num_pages, page_size, desc.core_ranges))
+        out[coord] = per_coord_meta
+    return out
+
+
+def _fill_config_block(config_block, cb_metadata, core_to_idx, _diag_label=None):
+    """Write per-core CB config words into a pre-allocated ``(num_cores, WORDS_PER_CORE)`` block.
+
+    Helper shared between the replicated and per-coord paths of
+    :func:`build_cb_reconfig_tensor`.  ``config_block`` is mutated in place.
+    """
+    _diag_writes = []  # (cb_id, (core.x, core.y), addr) — for ordering audit
+    for cb_id, entries in cb_metadata.items():
+        for addr, total_size, num_pages, page_size, core_ranges in entries:
+            cb_cores = ttnn.corerange_to_cores(core_ranges, row_wise=True)
+            for core in cb_cores:
+                key = (core.x, core.y)
+                if key not in core_to_idx:
+                    continue
+                core_idx = core_to_idx[key]
+                base = cb_id * 4
+                # Detect double-write to same (cb_id, core) — would indicate
+                # ordering bug where two entries claim the same CB slot on the
+                # same core (e.g., replicated overwriting per-coord or vice
+                # versa).  Loguru only here, in diag path.
+                if config_block[core_idx, base + 0] != 0 and _diag_label is not None:
+                    from loguru import logger as _diag_logger
+
+                    _diag_logger.warning(
+                        "[reconfig diag {}] double-write cb{} at core({}, {}): "
+                        "prev addr=0x{:x} new addr=0x{:x} prev pages={} new pages={}",
+                        _diag_label,
+                        cb_id,
+                        core.x,
+                        core.y,
+                        int(config_block[core_idx, base + 0]),
+                        addr,
+                        int(config_block[core_idx, base + 2]),
+                        num_pages,
+                    )
+                config_block[core_idx, base + 0] = addr
+                config_block[core_idx, base + 1] = total_size
+                config_block[core_idx, base + 2] = num_pages
+                config_block[core_idx, base + 3] = page_size
+                if cb_id < 32:
+                    config_block[core_idx, 256] |= 1 << cb_id
+                else:
+                    config_block[core_idx, 257] |= 1 << (cb_id - 32)
+                _diag_writes.append((cb_id, key, int(addr), int(total_size), int(num_pages)))
+    return _diag_writes
+
+
+def build_cb_reconfig_tensor(cb_metadata=None, full_device_grid=None, mesh_device=None, *, cb_metadata_per_coord=None):
     """
     Build an L1-sharded tensor containing per-core CB config data for reconfig.
 
@@ -219,56 +331,71 @@ def build_cb_reconfig_tensor(cb_metadata, full_device_grid, mesh_device):
         Words 258-259: cross-RISC sync semaphores (initialized to 0, used at runtime)
         Words 260-263: reserved (zeros)
 
+    Provide exactly one of ``cb_metadata`` (replicated mode — same config on
+    every device, distributed via ``ReplicateTensorToMesh``) or
+    ``cb_metadata_per_coord`` (per-device mode — addresses differ across the
+    mesh, e.g., under BSPM SRAM; distributed via ``ShardTensor2dMesh``).
+
     Args:
-        cb_metadata: dict mapping cb_id → list of (addr, total_size, num_pages, page_size, core_ranges)
-        full_device_grid: CoreRangeSet covering all cores on the device
-        mesh_device: Device or MeshDevice to place the tensor on
+        cb_metadata: Replicated mode — ``dict[cb_id] -> list[(addr, total_size,
+            num_pages, page_size, core_ranges)]``.
+        full_device_grid: CoreRangeSet covering all cores on the device.
+        mesh_device: Device or MeshDevice to place the tensor on.
+        cb_metadata_per_coord: Per-device mode — ``dict[(mesh_row, mesh_col)] ->
+            <replicated cb_metadata shape>``; see :func:`record_cb_metadata_per_coord`.
 
     Returns:
-        ttnn.Tensor: HEIGHT_SHARDED L1 tensor with 1 shard (264 uint32) per core
+        ttnn.Tensor: HEIGHT_SHARDED L1 tensor with 1 shard (264 uint32) per core.
     """
     import torch
 
+    assert (cb_metadata is None) != (
+        cb_metadata_per_coord is None
+    ), "Provide exactly one of cb_metadata (replicated) or cb_metadata_per_coord (per-device)"
+
     all_cores = ttnn.corerange_to_cores(full_device_grid, row_wise=True)
     num_cores = len(all_cores)
-
-    # Build (x, y) → index map for fast lookup
     core_to_idx = {(c.x, c.y): idx for idx, c in enumerate(all_cores)}
-
-    # 264 words per core: 64 CBs * 4 words + 2 mask words + 6 padding
     WORDS_PER_CORE = 264
-    config = torch.zeros((num_cores, WORDS_PER_CORE), dtype=torch.uint32)
-
-    for cb_id, entries in cb_metadata.items():
-        for addr, total_size, num_pages, page_size, core_ranges in entries:
-            cb_cores = ttnn.corerange_to_cores(core_ranges, row_wise=True)
-            for core in cb_cores:
-                key = (core.x, core.y)
-                if key not in core_to_idx:
-                    continue
-                core_idx = core_to_idx[key]
-                base = cb_id * 4
-                config[core_idx, base + 0] = addr
-                config[core_idx, base + 1] = total_size
-                config[core_idx, base + 2] = num_pages
-                config[core_idx, base + 3] = page_size
-                if cb_id < 32:
-                    config[core_idx, 256] |= 1 << cb_id
-                else:
-                    config[core_idx, 257] |= 1 << (cb_id - 32)
-
-    num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
-    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if num_devices > 1 else None
-    from_torch_kwargs = {"mesh_mapper": mesh_mapper} if mesh_mapper else {}
 
     shard_spec = ttnn.ShardSpec(full_device_grid, (1, WORDS_PER_CORE), ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
+    if cb_metadata is not None:
+        # Replicated path: one (num_cores, WORDS_PER_CORE) block, replicated across mesh.
+        config = torch.zeros((num_cores, WORDS_PER_CORE), dtype=torch.uint32)
+        _fill_config_block(config, cb_metadata, core_to_idx)
+
+        num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
+        mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if num_devices > 1 else None
+        from_torch_kwargs = {"mesh_mapper": mesh_mapper} if mesh_mapper else {}
+        return ttnn.from_torch(
+            config,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=mem_config,
+            **from_torch_kwargs,
+        )
+
+    # Per-device path: build a (mesh_rows * num_cores, mesh_cols * WORDS_PER_CORE)
+    # source so ShardTensor2dMesh splits both axes — each device (r, c) ends up
+    # with its own (num_cores, WORDS_PER_CORE) block.  Mirrors the layout used
+    # by ShardTensor2dMesh callers elsewhere (e.g. transforms/moe.py:466).
+    coords = list(cb_metadata_per_coord.keys())
+    mesh_rows = max(r for r, _ in coords) + 1
+    mesh_cols = max(c for _, c in coords) + 1
+    source = torch.zeros((mesh_rows * num_cores, mesh_cols * WORDS_PER_CORE), dtype=torch.uint32)
+    for (mr, mc), per_cb in cb_metadata_per_coord.items():
+        block = source[mr * num_cores : (mr + 1) * num_cores, mc * WORDS_PER_CORE : (mc + 1) * WORDS_PER_CORE]
+        _fill_config_block(block, per_cb, core_to_idx, _diag_label=f"coord({mr},{mc})")
+
+    mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(mesh_rows, mesh_cols), dims=(0, 1))
     return ttnn.from_torch(
-        config,
+        source,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
         memory_config=mem_config,
-        **from_torch_kwargs,
+        mesh_mapper=mesh_mapper,
     )

@@ -22,6 +22,7 @@ def init_kv_cache(
     paged_attention_config=None,
     cache_dtype=ttnn.bfloat16,
     tensor_cache_path=None,
+    max_num_blocks_override=None,
 ):
     """
     Initialize KV cache for a single attention layer.
@@ -37,6 +38,11 @@ def init_kv_cache(
         paged_attention_config: Optional paged attention config
         cache_dtype: Cache tensor dtype
         tensor_cache_path: Optional cache file path
+        max_num_blocks_override: When set (only meaningful in paged mode), size the
+            physical block pool to this value instead of paged_attention_config.max_num_blocks.
+            vLLM's hybrid kv_cache_groups uses this for SlidingWindowSpec layers: the
+            sliding-window cache holds only sliding_window/block_size blocks per sequence,
+            while the per-layer page_table is zero-padded to max_model_len/block_size.
 
     Returns:
         [k_cache, v_cache] list of TT tensors
@@ -50,8 +56,11 @@ def init_kv_cache(
     head_dim = config.head_dim
 
     if paged_attention_config:
+        max_num_blocks = (
+            max_num_blocks_override if max_num_blocks_override is not None else paged_attention_config.max_num_blocks
+        )
         cache_shape = [
-            paged_attention_config.max_num_blocks,
+            max_num_blocks,
             num_local_kv_heads,
             paged_attention_config.block_size,
             head_dim,

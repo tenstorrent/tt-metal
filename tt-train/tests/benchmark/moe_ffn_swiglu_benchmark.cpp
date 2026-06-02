@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
-#include <numeric>
 #include <random>
 #include <sstream>
 #include <string>
@@ -16,6 +15,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "benchmark_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/moe_ffn_swiglu_op.hpp"
 #include "test_utils/random_data.hpp"
@@ -99,7 +99,7 @@ Stats summarize(const std::vector<double>& times_us) {
     if (times_us.empty()) {
         return s;
     }
-    s.avg_us = std::accumulate(times_us.begin(), times_us.end(), 0.0) / static_cast<double>(times_us.size());
+    s.avg_us = ttml::benchmark_utils::average(times_us);
     s.min_us = *std::min_element(times_us.begin(), times_us.end());
     s.max_us = *std::max_element(times_us.begin(), times_us.end());
     std::vector<double> sorted = times_us;

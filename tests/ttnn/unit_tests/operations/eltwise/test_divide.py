@@ -4,8 +4,7 @@
 
 import ttnn
 import torch
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
-import math
+from tests.ttnn.utils_for_testing import assert_with_ulp
 import pytest
 
 pytestmark = pytest.mark.use_module_device

@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+GLM 5.1 Model Configuration.
+
+Single source of truth for model dimension constants.
+Values from HuggingFace config.json for GLM-5.1.
+"""
+
+
+class GLM51Config:
+    """GLM 5.1 model dimensions."""
+
+    # Core dimensions
+    EMB_SIZE = 6144  # embedding dimension
+    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
+    MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
+    INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
+
+    # MoE configuration
+    NUM_ROUTED_EXPERTS = 256
+    NUM_EXPERTS_PER_TOKEN = 8
+    NUM_SHARED_EXPERTS = 1
+    NUM_EXPERT_GROUPS = 1
+    NUM_LIMITED_GROUPS = 1
+
+    # Model architecture
+    NUM_LAYERS = 78
+    NUM_DENSE_LAYERS = 3  # first_k_dense_replace
+    VOCAB_SIZE = 154880
+    MAX_POSITION_EMBEDDINGS = 202752
+
+    # MLA dimensions
+    NUM_ATTENTION_HEADS = 64
+    Q_LORA_RANK = 2048
+    KV_LORA_RANK = 512
+    QK_NOPE_HEAD_DIM = 192
+    QK_ROPE_HEAD_DIM = 64
+    V_HEAD_DIM = 256
+
+    # Indexer / sparse attention
+    INDEX_TOPK = 2048
+    INDEX_HEAD_DIM = 128
+    INDEX_N_HEADS = 32
+
+    # Other
+    RMS_NORM_EPS = 1e-5
+    ROUTE_SCALE = 2.5
+    ROPE_THETA = 1000000

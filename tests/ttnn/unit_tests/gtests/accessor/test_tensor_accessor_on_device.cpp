@@ -663,6 +663,18 @@ TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalShardIterator) {
     }
 }
 
+TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalViaBankBaseAddress) {
+    const auto& params = GetParam();
+
+    const std::string kernel_path = "tests/ttnn/unit_tests/gtests/accessor/kernels/copy_local_via_bank_base.cpp";
+    switch (params.dtype) {
+        case DataType::UINT8: test_multi_core_copy<uint8_t>(params, mesh_device_.get(), kernel_path); break;
+        case DataType::UINT16: test_multi_core_copy<uint16_t>(params, mesh_device_.get(), kernel_path); break;
+        case DataType::BFLOAT16: test_multi_core_copy<bfloat16>(params, mesh_device_.get(), kernel_path); break;
+        default: TT_THROW("Unsupported data type");
+    }
+}
+
 TEST_P(ShardedAccessorTestsCopyOnDevice, MultiCoreCopyLocalShardIteratorBigStep) {
     const auto& params = GetParam();
 

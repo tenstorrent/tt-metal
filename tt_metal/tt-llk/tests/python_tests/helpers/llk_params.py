@@ -32,6 +32,7 @@ class MathOpType(Enum):
 
     SFPU_UNARY = auto()
     SFPU_BINARY = auto()
+    SFPU_BINARY_INT = auto()
     SFPU_TERNARY = auto()
 
     FPU_BINARY = auto()
@@ -118,6 +119,17 @@ class MathOperation(Enum):
     SfpuElwdiv = OpSpec("DIV", MathOpType.SFPU_BINARY)
     SfpuElwrsub = OpSpec("RSUB", MathOpType.SFPU_BINARY)
     SfpuElwpow = OpSpec("POW", MathOpType.SFPU_BINARY)
+    SfpuElwmulInt = OpSpec("MUL", MathOpType.SFPU_BINARY_INT)
+    SfpuGtInt = OpSpec("GT_INT", MathOpType.SFPU_BINARY_INT)
+    SfpuLtInt = OpSpec("LT_INT", MathOpType.SFPU_BINARY_INT)
+    SfpuLeInt = OpSpec("LE_INT", MathOpType.SFPU_BINARY_INT)
+    SfpuGeInt = OpSpec("GE_INT", MathOpType.SFPU_BINARY_INT)
+    SfpuElwLt = OpSpec("LT", MathOpType.SFPU_BINARY)
+    SfpuElwGt = OpSpec("GT", MathOpType.SFPU_BINARY)
+    SfpuElwLe = OpSpec("LE", MathOpType.SFPU_BINARY)
+    SfpuElwGe = OpSpec("GE", MathOpType.SFPU_BINARY)
+    SfpuElwEq = OpSpec("EQ", MathOpType.SFPU_BINARY)
+    SfpuElwNe = OpSpec("NE", MathOpType.SFPU_BINARY)
 
     # =============================================================================
     # SFPU TERNARY OPERATIONS
@@ -370,6 +382,10 @@ class Tilize(Enum):
     def cpp_enum_value(self):
         return str(self.value).lower()
 
+    @property
+    def pack_mode_value(self) -> str:
+        return "PackMode::Tilize" if self == Tilize.Yes else "PackMode::Default"
+
 
 class FastMode(Enum):
     Yes = True
@@ -537,6 +553,28 @@ class ReluConfig(Enum):
 class TopKSortDirection(Enum):
     Descending = 0
     Ascending = 1
+
+
+class VectorMode(Enum):
+    """Mirrors ckernel::VectorMode in tt_llk_quasar/llk_lib/llk_defs.h.
+
+    Selects which faces an SFPU dispatch processes:
+      * ``None_``: invoke the SFPU kernel once with no face advances (covers face 0 only).
+      * ``R``: faces 0 and 1 (top face-row of the tile).
+      * ``C``: faces 0 and 2 (left face-column of the tile).
+      * ``RC``: all four faces — the default.
+    """
+
+    None_ = 0
+    R = 1
+    C = 2
+    RC = 4
+
+    @property
+    def cpp_enum_value(self):
+        return (
+            f"ckernel::VectorMode::{'None' if self == VectorMode.None_ else self.name}"
+        )
 
 
 class GoldenType(Enum):

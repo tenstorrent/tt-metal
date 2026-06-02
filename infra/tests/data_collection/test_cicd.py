@@ -4,6 +4,7 @@ import pathlib
 from infra.data_collection.github import workflows
 from infra.data_collection.cicd import create_cicd_json_for_data_analysis
 from infra.data_collection.models import InfraErrorV1, TestErrorV1
+from infra.data_collection.github.utils import get_job_failure_signature_
 from infra.data_collection.pydantic_models import JobStatus
 from infra.data_collection.pydantic_models import Step
 from loguru import logger
@@ -384,3 +385,61 @@ def test_pipeline_job_contains_valid_steps():
             f" - {step.name}: status={step.status}, conclusion={step.conclusion}, "
             f"started_at={step.started_at}, completed_at={step.completed_at}"
         )
+
+
+def _make_mock_job(step_name="Checkout", step_conclusion="failure"):
+    """Helper: minimal GitHub job dict for get_job_failure_signature_ unit tests."""
+    return {
+        "id": 1,
+        "run_id": 1,
+        "steps": [
+            {
+                "name": step_name,
+                "status": "completed",
+                "conclusion": step_conclusion,
+                "started_at": "2026-01-01T00:00:00Z",
+                "completed_at": "2026-01-01T00:01:00Z",
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    "failure_description,step_name,step_conclusion",
+    [
+        # Annotation-level matches (specific error text surfaced in GitHub annotation)
+        (
+            "fatal: clone of 'https://github.com/tenstorrent/tt-umd.git' into submodule path failed",
+            "Run something",
+            "success",
+        ),
+        ("Failed to clone 'tt_metal/third_party/umd'. Retry scheduled", "Run something", "success"),
+        ("could not read Username for 'https://github.com': terminal prompts disabled", "Run something", "success"),
+        ("terminal prompts disabled", "Run something", "success"),
+        (
+            "Fetched in submodule path 'tt_metal/third_party/tracy', but it did not contain abc123",
+            "Run something",
+            "success",
+        ),
+        # Step-name match: generic git exit code annotation but checkout step failed
+        ("The process '/usr/bin/git' failed with exit code 1", "Checkout", "failure"),
+        ("The process '/usr/bin/git' failed with exit code 1", "\u2b07\ufe0f Checkout", "failure"),
+    ],
+)
+def test_checkout_failure_classified_correctly(failure_description, step_name, step_conclusion):
+    """git submodule clone failures and checkout step failures → CHECKOUT_FAILURE, not GENERIC_FAILURE."""
+    mock_job = _make_mock_job(step_name=step_name, step_conclusion=step_conclusion)
+    result = get_job_failure_signature_(mock_job, failure_description, workflow_outputs_dir=None)
+    assert result == str(InfraErrorV1.CHECKOUT_FAILURE), (
+        f"Expected CHECKOUT_FAILURE for description={failure_description!r}, "
+        f"step={step_name!r}/{step_conclusion!r}, got {result!r}"
+    )
+
+
+def test_non_checkout_git_failure_stays_generic():
+    """A git failure outside a checkout step should remain GENERIC_FAILURE."""
+    mock_job = _make_mock_job(step_name="Run build script", step_conclusion="failure")
+    result = get_job_failure_signature_(
+        mock_job, "The process '/usr/bin/git' failed with exit code 1", workflow_outputs_dir=None
+    )
+    assert result == str(InfraErrorV1.GENERIC_FAILURE)

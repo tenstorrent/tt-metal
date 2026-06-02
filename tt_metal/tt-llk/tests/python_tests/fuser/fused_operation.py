@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 from helpers.llk_params import (
@@ -11,6 +11,7 @@ from helpers.llk_params import (
     GoldenType,
     L1Accumulation,
     PackerReluType,
+    ReduceDimension,
     StochasticRounding,
     Tilize,
 )
@@ -34,6 +35,7 @@ class FusedOperation:
     pack_relu: PackerReluType = PackerReluType.NoRelu
     relu_threshold: float = 0.0
     pack_l1_accumulation: L1Accumulation = L1Accumulation.No
+    reduce_dim: Optional[ReduceDimension] = None
     bh_tilize: Tilize = Tilize.No
 
     def __post_init__(self):

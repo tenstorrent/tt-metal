@@ -24,13 +24,4 @@ struct TilizeInputs {
     std::optional<Tensor> optional_input_tensor;
 };
 
-struct MultiCoreSharedVariables {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle unary_reader_kernel_id{};
-        tt::tt_metal::KernelHandle unary_writer_kernel_id{};
-        std::vector<CoreCoord> cores;
-        uint32_t ncores{};
-    };
-};
-
 }  // namespace ttnn::prim

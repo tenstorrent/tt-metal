@@ -504,7 +504,9 @@ def run(
             else:
                 cluster_axis = 1 if effective_dim > 1 else 0
 
-        if mesh_shape[0] == 1 or mesh_shape[1] == 1:
+        if topology == ttnn.Topology.Ring:
+            fabric_config = ttnn.FabricConfig.FABRIC_1D_RING
+        elif mesh_shape[0] == 1 or mesh_shape[1] == 1:
             fabric_config = ttnn.FabricConfig.FABRIC_1D
         else:
             fabric_config = ttnn.FabricConfig.FABRIC_2D

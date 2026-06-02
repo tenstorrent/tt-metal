@@ -18,10 +18,11 @@ using ScalarVariant = std::variant<float, int32_t, uint32_t>;
 
 // Ternary operation types
 enum class TernaryOpType {
-    WHERE,    // conditional selection: out = predicate ? value_true : value_false
-    LERP,     // linear interpolation: out = input + weight * (end - input)
-    ADDCMUL,  // fused multiply-add: out = input_a + value * input_b * input_c
-    ADDCDIV,  // fused divide-add: out = input_a + value * input_b / input_c
+    WHERE,       // conditional selection: out = predicate ? value_true : value_false
+    LERP,        // linear interpolation: out = input + weight * (end - input)
+    ADDCMUL,     // fused multiply-add: out = input_a + value * input_b * input_c
+    ADDCDIV,     // fused divide-add: out = input_a + value * input_b / input_c
+    SNAKE_BETA,  // fused activation: out = a + sin^2(b * a) / c   (a=x, b=alpha, c=beta)
 };
 
 // Variant types for ternary operations

@@ -126,7 +126,7 @@ FORCE_INLINE void load_to_cb(
     const uint32_t& stick_id) {
     CircularBuffer cb_exp(cb);
     cb_exp.reserve_back(ONE_PAGE);
-    const uint64_t source_noc_address = get_noc_addr(stick_id, addr_gtor);
+    const uint64_t source_noc_address = addr_gtor.get_noc_addr(stick_id);
     const uint32_t l1_write_address = cb_exp.get_write_ptr();
 
     // Use legacy NOC API for raw address reads
@@ -146,7 +146,7 @@ FORCE_INLINE void write_to_output(
     const uint32_t& stick_id) {
     CircularBuffer cb_exp(cb);
     cb_exp.wait_front(ONE_PAGE);
-    const uint64_t destination_noc_address = get_noc_addr(stick_id, addr_gtor);
+    const uint64_t destination_noc_address = addr_gtor.get_noc_addr(stick_id);
     const uint32_t l1_read_address = cb_exp.get_read_ptr();
 
     // Use legacy NOC API for raw address writes

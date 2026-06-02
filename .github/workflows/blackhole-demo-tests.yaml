@@ -34,6 +34,7 @@ on:
           - flux.1-dev
           - mochi
           - wan2.2-t2v-a14b
+          - z-image-turbo
       system-type:
         description: 'Select system type to test'
         required: false
@@ -114,7 +115,7 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github

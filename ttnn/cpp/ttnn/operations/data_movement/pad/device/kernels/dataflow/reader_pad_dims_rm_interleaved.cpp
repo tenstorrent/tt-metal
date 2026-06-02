@@ -88,7 +88,7 @@ void kernel_main() {
                         pad_value);
                 } else {
                     // this is a data row possibly with padding at end
-                    uint64_t src_noc_addr = get_noc_addr(src_stick_id, s0, start_src_stick_offset);
+                    uint64_t src_noc_addr = s0.get_noc_addr(src_stick_id, start_src_stick_offset);
                     noc_async_read(src_noc_addr, l1_addr, unpadded_X_nbytes);
                     l1_addr_partial = l1_addr + unpadded_X_nbytes;
                     fill_with_val_async(

@@ -37,9 +37,8 @@ void UpdateGoldenOutput(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const std::string& risc) {
     // Using wildcard characters in lieu of actual values for the virtual coordinates as virtual coordinates can vary
-    // by machine
-    const std::string& device_core_risc =
-        std::to_string(mesh_device->get_devices()[0]->id()) + ":(x=?,y=?):" + risc + ": ";
+    // by machine. CoreCoord::str() formats as "x-y".
+    const std::string& device_core_risc = std::to_string(mesh_device->get_devices()[0]->id()) + ":?-?:" + risc + ": ";
 
     const std::string& output_line_all_riscs = device_core_risc + "Printing on a RISC.";
     golden_output.push_back(output_line_all_riscs);

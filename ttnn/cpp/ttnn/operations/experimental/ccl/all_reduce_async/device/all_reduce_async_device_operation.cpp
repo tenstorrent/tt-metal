@@ -88,6 +88,20 @@ AllReduceAsyncDeviceOperation::tensor_return_value_t AllReduceAsyncDeviceOperati
     return create_device_tensor(output_spec, tensor_args.input_tensor.device());
 }
 
+AllReduceAsyncDeviceOperation::topology_return_value_t AllReduceAsyncDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // after all_reduce, the output is fully replicated across all devices on `cluster_axis`.
+    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
+    auto output_placements = input_topology.placements();
+
+    if (args.cluster_axis < output_placements.size()) {
+        output_placements[args.cluster_axis] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+    }
+
+    return {tt::tt_metal::TensorTopology(
+        input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords())};
+}
+
 ttsl::hash::hash_t AllReduceAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "AllReduceAsyncDeviceOperation::compute_program_hash is called");

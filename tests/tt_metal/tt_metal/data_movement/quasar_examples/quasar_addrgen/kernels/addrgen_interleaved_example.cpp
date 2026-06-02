@@ -27,6 +27,8 @@
 #include "internal/tt-2xx/quasar/overlay/addrgen_api.hpp"
 #include <cstdint>
 
+using namespace overlay;
+
 constexpr uint32_t num_banks = 4;
 constexpr uint32_t first_bank = 20;   // use banks 20–23
 constexpr uint32_t bank_offset = 36;  // banks are 1MB (2^20 B) apart in address space
@@ -70,7 +72,6 @@ void kernel_main() {
         uint64_t dest_addr = peek_dest_addrgen_0();
         pop_src_addrgen_0();
         pop_dest_addrgen_0();
-        DPRINT << "  Source address: " << HEX() << (uint64_t)src_addr << " Destination address: " << HEX()
-               << (uint64_t)dest_addr << ENDL();
+        DPRINT("  Source address: {:#X} Destination address: {:#X}\n", src_addr, dest_addr);
     }
 }

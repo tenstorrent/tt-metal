@@ -232,7 +232,7 @@ void kernel_main() {
                     tile = base_tile_offset;
                 }
 
-                uint64_t dest_noc_addr = get_noc_addr(tile, s, local_face_offset_bytes);
+                uint64_t dest_noc_addr = s.get_noc_addr(tile, local_face_offset_bytes);
                 uint32_t l1_row_base = transposed_buffer_read_addr + page_offset;
 
                 // Write each face
@@ -297,7 +297,7 @@ void kernel_main() {
                     for (uint8_t sub_tile_line = sub_tile_line_start; sub_tile_line < FACE_HEIGHT; ++sub_tile_line) {
                         uint16_t offset =
                             static_cast<uint16_t>((face_offset + (sub_tile_line * FACE_WIDTH)) * element_size);
-                        uint64_t write_noc_base_addr = get_noc_addr(linear_idx, s, offset);
+                        uint64_t write_noc_base_addr = s.get_noc_addr(linear_idx, offset);
 
                         noc_async_write(l1_read_ptr, write_noc_base_addr, SUBTILE_LINE_BYTES);
                     }

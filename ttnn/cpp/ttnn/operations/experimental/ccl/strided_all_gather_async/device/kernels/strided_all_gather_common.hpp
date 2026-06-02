@@ -294,8 +294,8 @@ FORCE_INLINE uint32_t write_chunk(
                         NocUnicastScatterCommandHeader({noc_address0, noc_address1}, {0}));
                 }
                 if (direction == 1 && write_local) {
-                    uint64_t local_noc0_dest_noc_addr_tile_one = get_noc_addr(tile_one_id, output_addrgen);
-                    uint64_t local_noc0_dest_noc_addr_tile_two = get_noc_addr(tile_two_id, output_addrgen);
+                    uint64_t local_noc0_dest_noc_addr_tile_one = output_addrgen.get_noc_addr(tile_one_id);
+                    uint64_t local_noc0_dest_noc_addr_tile_two = output_addrgen.get_noc_addr(tile_two_id);
 
                     noc_async_write(l1_read_addr, local_noc0_dest_noc_addr_tile_one, output_page_size);
                     noc_async_write(
@@ -313,7 +313,7 @@ FORCE_INLINE uint32_t write_chunk(
                         &mux_connection, pkt_unicast_hdr, l1_read_addr, NocUnicastCommandHeader{noc_address0});
                 }
                 if (direction == 1 && write_local) {
-                    uint64_t local_noc0_dest_noc_addr = get_noc_addr(tile_one_id, output_addrgen);
+                    uint64_t local_noc0_dest_noc_addr = output_addrgen.get_noc_addr(tile_one_id);
                     noc_async_write(l1_read_addr, local_noc0_dest_noc_addr, output_page_size);
                     noc_async_write_barrier();
                 }

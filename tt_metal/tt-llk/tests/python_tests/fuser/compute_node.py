@@ -19,8 +19,6 @@ from helpers.llk_params import (
     EnforceFP32Accumulation,
     MathFidelity,
     PerfRunType,
-    ReduceDimension,
-    ReducePool,
     Transpose,
     UnpackToDest,
 )
@@ -46,8 +44,6 @@ class ComputeNode:
         broadcast_type: BroadcastType = BroadcastType.None_,
         data_copy_type: DataCopyType = DataCopyType.A2D,
         reuse_dest: EltwiseBinaryReuseDestType = EltwiseBinaryReuseDestType.NONE,
-        reduce_dim: ReduceDimension = None,
-        reduce_pool: ReducePool = ReducePool.Max,
         math_fidelity: MathFidelity = MathFidelity.LoFi,
         enforce_fp32_accumulation: EnforceFP32Accumulation = EnforceFP32Accumulation.No,
         clear_fp32_dst_acc: ClearFP32DstAcc = ClearFP32DstAcc.No,
@@ -68,8 +64,6 @@ class ComputeNode:
         self.unpack_transpose_within_face = unpack_transpose_within_face
         self.broadcast_type = broadcast_type
         self.reuse_dest = reuse_dest
-        self.reduce_dim = reduce_dim
-        self.reduce_pool = reduce_pool
         self.math_fidelity = math_fidelity
         self.enforce_fp32_accumulation = enforce_fp32_accumulation
         self.clear_fp32_dst_acc = clear_fp32_dst_acc
@@ -110,11 +104,11 @@ class ComputeNode:
         )
         if not skip_init:
             code += config.sentinel.configure_unpack(config, operation, self)
-            code += self.unpacker().init(operation, config, self, block)
+            code += self.unpacker.init(operation, config, self, block)
 
-        code += self.unpacker().loop.unpack_loop(operation, config, self, block)
+        code += self.unpacker.loop.unpack_loop(operation, config, self, block)
         if not skip_init:
-            code += self.unpacker().uninit(operation, config, self, block)
+            code += self.unpacker.uninit(operation, config, self, block)
 
         return code
 
@@ -188,7 +182,7 @@ class ComputeNode:
         config: "GlobalConfig",
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if self.unpacker is not None:
-            unpacked_tensor_a, unpacked_tensor_b = self.unpacker().golden(
+            unpacked_tensor_a, unpacked_tensor_b = self.unpacker.golden(
                 input_tensor_a, input_tensor_b, operation, config, self
             )
 
@@ -288,7 +282,9 @@ class ComputeNode:
 
     def __str__(self):
         if self.fpu is not None:
-            unpacker = f"{self.unpacker.__name__}" if self.unpacker is not None else ""
+            unpacker = (
+                f"{type(self.unpacker).__name__}" if self.unpacker is not None else ""
+            )
             return f"{unpacker}, {self.fpu}, {self.math_fidelity}"
         elif self.sfpu:
             return f"{self.sfpu}"

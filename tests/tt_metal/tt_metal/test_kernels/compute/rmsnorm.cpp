@@ -68,11 +68,11 @@ void kernel_main() {
         add_tiles_init(cb_in, cb_inb);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             ACQ();
-            // UNPACK(( { DPRINT  << "Waiting on cb_x" << ENDL(); } ));
+            // DPRINT_UNPACK("Waiting on cb_x\n");
             cb_wait_front(cb_in, blk);
-            // UNPACK(( { DPRINT  << "Waiting on cb_inb" << ENDL(); } ));
+            // DPRINT_UNPACK("Waiting on cb_inb\n");
             cb_wait_front(cb_inb, blk);
-            // UNPACK(( { DPRINT  << "Done Waiting on cb_inb" << ENDL(); } ));
+            // DPRINT_UNPACK("Done Waiting on cb_inb\n");
             cb_reserve_back(cb_x, blk);
             for (uint32_t j = 0; j < blk; j++) {
                 add_tiles(cb_in, cb_inb, j, j, j);
@@ -148,9 +148,7 @@ void kernel_main() {
         cb_reserve_back(cb_ex2pe, 1);  // 2
         cb_wait_front(cb_ex2pe, 1);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            // if (ht == 1) UNPACK(( DPRINT << "wt_2=" << wt << " " ));
-            // if (ht == 1) UNPACK(( DPRINT << "rem_2=" << rem << ENDL() ));
-            // if (ht == 1) DEVICE_PRINT_UNPACK("wt_2={} rem_2={}\n", wt, rem);
+            // if (ht == 1) DPRINT_UNPACK("wt_2={} rem_2={}\n", wt, rem);
             cb_reserve_back(cb_im_or_out, blk);
 
             ACQ();

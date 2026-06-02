@@ -84,7 +84,8 @@ jobs:
             { name: "vgg_unet", runner-label: "N300", performance: false, cmd: run_vgg_unet_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (keerthana-r-mcw)
             { name: "vovnet", runner-label: "N300", performance: false, cmd: run_vovnet_demo, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
             { name: "swin_v2", runner-label: "N300", performance: false, cmd: run_swin_v2_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
-            { name: "ds_r1_qwen", runner-label: "N300", performance: false, cmd: run_ds_r1_qwen_func, owner_id: U07RY6B5FLJ, civ2-compatible: true},  #Gongyu Wang
+            # DISABLED: test_demo_text times out (>1200s) in decode loop on N300. Tracked in issue #44631.
+            # { name: "ds_r1_qwen", runner-label: "N300", performance: false, cmd: run_ds_r1_qwen_func, owner_id: U07RY6B5FLJ, civ2-compatible: true},  #Gongyu Wang
             { name: "bge_m3", runner-label: "N150", performance: false, cmd: run_bge_m3_demo, owner_id: U082LLYBLSW,civ2-compatible: true}, # Gio Tobar
           ]]
     steps:
@@ -173,7 +174,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -268,7 +269,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Download all Tracy profiler reports
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

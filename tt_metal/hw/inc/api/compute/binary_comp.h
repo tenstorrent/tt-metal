@@ -35,16 +35,26 @@ namespace ckernel {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+#ifndef ARCH_QUASAR
 template <DataFormat data_format>
 ALWI void lt_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((llk_math_eltwise_binary_sfpu_lt_int<APPROX, data_format>(idst0, idst1, odst)));
 }
+#endif
 
 template <DataFormat data_format>
 ALWI void gt_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+#if defined(ARCH_QUASAR)
+    // Int8 copy_tile + fp32_dest_acc FPU writes sign-magnitude Int32 into dest.
+    // Native Int32 tiles use 2's-comp dest and keep SIGN_MAGNITUDE_FORMAT=false.
+    MATH((llk_math_eltwise_binary_sfpu_gt_int<APPROX, data_format, 8 /*ITERATIONS*/, true /*SIGN_MAGNITUDE_FORMAT*/>(
+        idst0, idst1, odst)));
+#else
     MATH((llk_math_eltwise_binary_sfpu_gt_int<APPROX, data_format>(idst0, idst1, odst)));
+#endif
 }
 
+#ifndef ARCH_QUASAR
 template <DataFormat data_format>
 ALWI void le_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((llk_math_eltwise_binary_sfpu_le_int<APPROX, data_format>(idst0, idst1, odst)));
@@ -54,22 +64,30 @@ template <DataFormat data_format>
 ALWI void ge_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((llk_math_eltwise_binary_sfpu_ge_int<APPROX, data_format>(idst0, idst1, odst)));
 }
+#endif
 
 /**
  * The following functions initialize the relational operations. They should be invoked prior to calling the execution
  * API. Please refer to execution API documentation (lt_int_tile/gt_int_tile/le_int_tile/ge_int_tile) to find out more
  * about the relational operations.
  */
+#ifndef ARCH_QUASAR
 template <DataFormat data_format>
 ALWI void lt_int_tile_init() {
     MATH((llk_math_eltwise_binary_sfpu_lt_int_init<data_format>()));
 }
+#endif
 
 template <DataFormat data_format>
 ALWI void gt_int_tile_init() {
+#if defined(ARCH_QUASAR)
+    MATH((llk_math_eltwise_binary_sfpu_gt_int_init<APPROX, data_format>()));
+#else
     MATH((llk_math_eltwise_binary_sfpu_gt_int_init<data_format>()));
+#endif
 }
 
+#ifndef ARCH_QUASAR
 template <DataFormat data_format>
 ALWI void le_int_tile_init() {
     MATH((llk_math_eltwise_binary_sfpu_le_int_init<data_format>()));
@@ -79,5 +97,6 @@ template <DataFormat data_format>
 ALWI void ge_int_tile_init() {
     MATH((llk_math_eltwise_binary_sfpu_ge_int_init<data_format>()));
 }
+#endif
 
 }  // namespace ckernel

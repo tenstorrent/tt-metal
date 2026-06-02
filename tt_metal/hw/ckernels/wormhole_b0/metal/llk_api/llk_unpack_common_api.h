@@ -197,7 +197,4 @@ inline void llk_unpack_reconfig_data_format(
         unpack_dst_format[get_operand_id(srca_new_operand)], unpack_dst_format[get_operand_id(srcb_new_operand)]);
 }
 
-// TODO NC: Remove as a part of tt-metal#36411
-inline void llk_unpack_dbg_feature_disable() { _llk_unpack_dbg_feature_disable_(); }
-
 inline void llk_unpack_set_srcb_dummy_valid() { _llk_unpack_set_srcb_dummy_valid_(); }

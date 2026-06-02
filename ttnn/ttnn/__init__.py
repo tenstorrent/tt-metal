@@ -216,6 +216,7 @@ from ttnn.types import (
     bfloat8_b,
     bfloat4_b,
     bfloat16,
+    fp8_e4m3,
     float32,
     MathFidelity,
     MemoryConfig,

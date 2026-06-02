@@ -38,17 +38,17 @@ constexpr uint32_t SUM_AND_MAX_REDUCE_FACTOR = 1;
 // =============================================================================
 
 /**
- * @brief Prepares a CB tile for reduce using a caller-provided float scaler
+ * @brief Prepares a DFB entry for reduce using a caller-provided float scaler
  *
  * Converts the float scaler to the appropriate bit representation based on
- * the circular buffer's data format, then fills the tile with the scaler in
+ * the DataflowBuffer's data format, then fills the tile with the scaler in
  * the layout required by the reduction:
  *   - Row-0 fill (reduce LLK path): used for REDUCE_COL, REDUCE_SCALAR, and MAX
  *   - Col-0 fill (matmul path): used for REDUCE_ROW with SUM or AVG
  *
- * Data format and tile shape (half/full) are deduced from the circular buffer.
+ * Data format and tile shape (half/full) are deduced from the DataflowBuffer.
  *
- * @tparam cb_id Circular buffer ID to write the tile to (must be constexpr)
+ * @tparam dfb_id DataflowBuffer ID to write the entry to (must be constexpr)
  * @tparam pool_type Type of pooling operation (SUM, AVG, MAX). Default MAX selects row-0 fill.
  * @tparam reduce_dim Reduction dimension (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR).
  *         Default REDUCE_COL selects row-0 fill.
@@ -56,28 +56,28 @@ constexpr uint32_t SUM_AND_MAX_REDUCE_FACTOR = 1;
  *         SUM/AVG + REDUCE_ROW combinations that would normally use col-0 fill (matmul layout).
  *         Set to true when the compute kernel uses reduce_tile LLK directly instead of
  *         compute_kernel_lib::reduce (which auto-switches to matmul for REDUCE_ROW SUM/AVG).
- * @param scaler_f Float scaler value to fill the tile with
+ * @param scaler_f Float scaler value to fill the entry with
  * @param valid_reduce_dim_elements_in_tile Number of valid elements along the reduce dimension
  *        in the tile (1-32, default 32 = full tile). When the last tile along the reduce
  *        dimension is partially filled, this specifies how many row or column elements contain
  *        valid data; the remaining positions are zeroed out so they do not affect the result.
  */
-template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim, bool compute_uses_reduce_tile = false>
+template <uint32_t dfb_id, PoolType pool_type, ReduceDim reduce_dim, bool compute_uses_reduce_tile = false>
 FORCE_INLINE void prepare_reduce_scaler(
     float scaler_f, uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
 
 /**
- * @brief Generate a reduce scaler tile with format and tile shape deduced from cb_id
+ * @brief Generate a reduce scaler tile with format and tile shape deduced from dfb_id
  *
  * Computes the appropriate scaler value based on pool type, reduce dimension,
  * and reduce factor. Supports both bfloat16 and float32 formats.
- * Data format and tile shape (half/full) are deduced from the circular buffer.
+ * Data format and tile shape (half/full) are deduced from the DataflowBuffer.
  *
  * For AVG pooling with REDUCE_SCALAR, uses 1/sqrt(N) since the LLK applies the
  * scaler twice (row then col). For AVG with REDUCE_ROW/REDUCE_COL, uses 1/N.
  * For SUM/MAX, the reduce_factor is ignored and the scaler is 1.0.
  *
- * @tparam cb_id Circular buffer ID to write the tile to (must be constexpr)
+ * @tparam dfb_id DataflowBuffer ID to write the entry to (must be constexpr)
  * @tparam pool_type Type of pooling operation (SUM, AVG, MAX)
  * @tparam reduce_dim Reduction dimension (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
  * @tparam reduce_factor Number of elements being reduced (N). Must be set for AVG;
@@ -92,7 +92,7 @@ FORCE_INLINE void prepare_reduce_scaler(
  *        valid data; the remaining positions are zeroed out so they do not affect the result.
  */
 template <
-    uint32_t cb_id,
+    uint32_t dfb_id,
     PoolType pool_type,
     ReduceDim reduce_dim,
     uint32_t reduce_factor = SUM_AND_MAX_REDUCE_FACTOR,

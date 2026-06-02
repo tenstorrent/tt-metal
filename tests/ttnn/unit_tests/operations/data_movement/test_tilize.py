@@ -96,6 +96,38 @@ def test_tilize_row_major_to_width_sharded(device, dtype, tensor_shape, shard_sh
         assert torch.equal(input_torch_tensor, output_torch_tensor)
 
 
+@pytest.mark.parametrize("api", ["tilize", "to_layout"])
+def test_tilize_width_sharded_to_interleaved(device, api):
+    torch.manual_seed(42)
+
+    tensor_shape = [32, 256]
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))}),
+        [32, 64],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec)
+    output_memory_config = ttnn.L1_MEMORY_CONFIG
+
+    input_torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=input_memory_config,
+    )
+
+    if api == "tilize":
+        output_tensor = ttnn.tilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
+    else:
+        output_tensor = ttnn.to_layout(input_ttnn_tensor, ttnn.TILE_LAYOUT, memory_config=output_memory_config)
+
+    assert output_tensor.layout == ttnn.TILE_LAYOUT
+    assert output_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+    assert_equal(input_torch_tensor, ttnn.to_torch(output_tensor))
+
+
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize(
     "tensor_shape, shard_shape, output_shard_shape",

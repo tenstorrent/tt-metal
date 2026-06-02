@@ -646,7 +646,7 @@ void kernel_main() {
         // Skip if address is 0 (fused mode: no output tensors allocated)
         if (expert_activation_output_address != 0) {
             uint32_t expert_activation_write_size = (num_activated_tokens + 1) * aligned_activation_row_bytes;
-            uint64_t expert_activation_dram_addr = get_noc_addr(0, expert_activation_output_tensor_addr_gen);
+            uint64_t expert_activation_dram_addr = expert_activation_output_tensor_addr_gen.get_noc_addr(0);
             noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
         }
 
@@ -836,7 +836,7 @@ void kernel_main() {
                 uint32_t token_id = *reinterpret_cast<uint32_t*>(e_t_expert_addr + (chunk_start + i) * e_t_entry_size);
                 // read the token from the input tensor at the tilize subtoken offset and size
                 noc_async_read(
-                    get_noc_addr(token_id, input_tensor_addr_gen) + global_subtoken_offset,
+                    input_tensor_addr_gen.get_noc_addr(token_id) + global_subtoken_offset,
                     get_write_ptr(tilize_input_cb_id) + i * subtoken_size,
                     subtoken_size);
             }

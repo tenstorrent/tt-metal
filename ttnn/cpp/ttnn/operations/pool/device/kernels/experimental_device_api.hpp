@@ -29,9 +29,8 @@ using CB = CircularBuffer;
 // Prefer passing experimental::CB with offset_bytes args over constructing CoreLocalMem directly.
 
 // Single-packet convenience wrappers for set_async_read_state / async_read_with_state.
-// All conv/pool activation reads are single-packet (size <= NOC_MAX_BURST_SIZE),
-// but the upstream API defaults to multi-packet mode. These wrappers put max_page_size
-// first so callers don't need to spell out VcSelection::DEFAULT every time.
+// These wrappers put max_page_size first so callers don't need to spell out
+// VcSelection::DEFAULT every time.
 
 // Helper to create UnicastEndpoint src_args for local L1 self-reads.
 // Must use my_x/my_y for the correct NOC — NOC 0 and NOC 1 have different coordinate spaces.
@@ -49,13 +48,14 @@ FORCE_INLINE void set_read_state(Noc noc, uint32_t src_addr) {
         ep, transfer_size, local_addr(src_addr, noc.get_noc_id()));
 }
 
-// Simple form: local L1 src addr -> local L1 dst addr
-// max_page_size=1 selects the single-packet branch (any value <= NOC_MAX_BURST_SIZE works);
-// size_bytes=0 is unused in that branch — the actual transfer size was set by set_read_state.
+// Simple form: local L1 src addr -> local L1 dst addr.
+// transfer_size must match the value used in set_read_state. Default of 1 selects the
+// single-packet branch for legacy callers.
+template <uint32_t transfer_size = 1>
 FORCE_INLINE void read_with_state(Noc noc, uint32_t dst_addr, uint32_t src_addr) {
     UnicastEndpoint ep;
-    noc.async_read_with_state<Noc::VcSelection::DEFAULT, 1>(
-        ep, CoreLocalMem<uint32_t>(dst_addr), 0, local_addr(src_addr, noc.get_noc_id()), {});
+    noc.async_read_with_state<Noc::VcSelection::DEFAULT, transfer_size>(
+        ep, CoreLocalMem<uint32_t>(dst_addr), transfer_size, local_addr(src_addr, noc.get_noc_id()), {});
 }
 
 // CB/typed destination form with dst_args (e.g. offset_bytes)

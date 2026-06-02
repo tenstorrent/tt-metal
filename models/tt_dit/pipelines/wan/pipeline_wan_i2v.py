@@ -15,7 +15,7 @@ import ttnn
 
 from ...models.vae.vae_wan2_1 import WanEncoder
 from ...utils import cache
-from ...utils.conv3d import conv_pad_height, conv_pad_in_channels
+from ...utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_pad_width
 from ...utils.tensor import bf16_tensor_2dshard, fast_device_to_host, unflatten
 from .pipeline_wan import WanPipeline
 
@@ -145,6 +145,9 @@ class WanPipelineI2V(WanPipeline):
         tt_video_condition_BTHWC, logical_h = conv_pad_height(
             tt_video_condition_BTHWC, self.vae_parallel_config.height_parallel.factor * self.vae_scale_factor_spatial
         )
+        tt_video_condition_BTHWC, logical_w = conv_pad_width(
+            tt_video_condition_BTHWC, self.vae_parallel_config.width_parallel.factor * self.vae_scale_factor_spatial
+        )
         tt_video_condition_BTHWC = bf16_tensor_2dshard(
             tt_video_condition_BTHWC,
             self.mesh_device,
@@ -155,7 +158,9 @@ class WanPipelineI2V(WanPipeline):
             },
         )
 
-        encoded_video_BCTHW, new_logical_h = self.tt_vae_encoder(tt_video_condition_BTHWC, logical_h)
+        encoded_video_BCTHW, new_logical_h, new_logical_w = self.tt_vae_encoder(
+            tt_video_condition_BTHWC, logical_h, logical_w=logical_w
+        )
 
         # convert to torch
         concat_dims = [None, None]
@@ -167,7 +172,7 @@ class WanPipelineI2V(WanPipeline):
             concat_dims,
             ccl_manager=self.vae_ccl_manager,
         )
-        encoded_video_torch = encoded_video_torch[:, :, :, :new_logical_h, :]
+        encoded_video_torch = encoded_video_torch[:, :, :, :new_logical_h, :new_logical_w]
         encoded_video_torch = encoded_video_torch.to(dtype=dtype)
 
         latents_mean = (

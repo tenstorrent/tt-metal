@@ -19,6 +19,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include "llk_device_fixture.hpp"
 #include "tt_metal/test_utils/bfloat_utils.hpp"
+#include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/test_utils/float8_utils.hpp"
 
 namespace tt::tt_metal {
 
@@ -103,33 +105,12 @@ static vector<uint32_t> run_fp8_typecast(
     return result_vec;
 }
 
-// Data generators use the existing uniform-distribution helpers:
-//   create_random_vector_of_bfloat16  (bfloat16.hpp)
-//   tt::test_utils::create_random_vector_of_bfp8  (bfloat_utils.hpp)
-// Both generate U(0, rand_max_float) + offset, so passing rand_max_float=20
-// and offset=-10 yields U(-10, 10).
-
 // --- Format-to-float unpackers ---
+// fp8_to_floats / bf16_to_floats live in tt_metal/test_utils/float8_utils.hpp;
+// expose them in this namespace so existing unqualified call sites resolve.
 
-static vector<float> fp8_to_floats(const vector<uint32_t>& packed) {
-    auto fp8_vec = unpack_uint32_vec_into_float8_e4m3_vec(packed);
-    vector<float> floats;
-    floats.reserve(fp8_vec.size());
-    for (const auto& v : fp8_vec) {
-        floats.push_back(static_cast<float>(v));
-    }
-    return floats;
-}
-
-static vector<float> bf16_to_floats(const vector<uint32_t>& packed) {
-    auto bf16_vec = unpack_uint32_vec_into_bfloat16_vec(packed);
-    vector<float> floats;
-    floats.reserve(bf16_vec.size());
-    for (const auto& v : bf16_vec) {
-        floats.push_back(static_cast<float>(v));
-    }
-    return floats;
-}
+using tt::test_utils::bf16_to_floats;
+using tt::test_utils::fp8_to_floats;
 
 static vector<float> bfp8_to_floats(const vector<uint32_t>& packed) {
     return unpack_bfp8_tiles_into_float_vec(
@@ -137,51 +118,11 @@ static vector<float> bfp8_to_floats(const vector<uint32_t>& packed) {
 }
 
 // --- Validation ---
+// is_close_vectors + is_close + check_pcc all live in tt_metal/test_utils/comparison.hpp.
 
-static bool check_floats_close(const vector<float>& a, const vector<float>& b, float rtol, float atol) {
-    if (a.size() != b.size()) {
-        return false;
-    }
-    for (size_t i = 0; i < a.size(); i++) {
-        if (!is_close(a[i], b[i], rtol, atol)) {
-            log_info(tt::LogTest, "check_floats_close: mismatch at index {} - a[i] = {}, b[i] = {}", i, a[i], b[i]);
-            return false;
-        }
-    }
-    return true;
-}
-
-static double compute_pcc(const vector<float>& a, const vector<float>& b) {
-    if (a.size() != b.size() || a.empty()) {
-        return 0.0;
-    }
-    const size_t n = a.size();
-    double sum_a = 0.0, sum_b = 0.0;
-    double sum_a2 = 0.0, sum_b2 = 0.0, sum_ab = 0.0;
-    for (size_t i = 0; i < n; i++) {
-        double ai = a[i], bi = b[i];
-        sum_a += ai;
-        sum_b += bi;
-        sum_a2 += ai * ai;
-        sum_b2 += bi * bi;
-        sum_ab += ai * bi;
-    }
-    double denom_a = (n * sum_a2) - (sum_a * sum_a);
-    double denom_b = (n * sum_b2) - (sum_b * sum_b);
-    if (denom_a == 0.0 || denom_b == 0.0) {
-        return 1.0;
-    }
-    return (n * sum_ab - sum_a * sum_b) / std::sqrt(denom_a * denom_b);
-}
-
-static bool check_pcc(const vector<float>& a, const vector<float>& b, double min_pcc) {
-    double pcc = compute_pcc(a, b);
-    if (pcc < min_pcc) {
-        log_info(tt::LogTest, "check_pcc: PCC = {} < min_pcc = {}", pcc, min_pcc);
-        return false;
-    }
-    return true;
-}
+using tt::test_utils::check_pcc;
+using tt::test_utils::is_close;
+using tt::test_utils::is_close_vectors;
 
 }  // namespace unit_tests::llk::fp8_typecast
 
@@ -204,28 +145,11 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixFp8e4m3ToFloat16b) {
         tt::DataFormat::Float16_b,
         src_vec,
         num_tiles,
-        /*fp32_dest_acc_en=*/false);
+        /*fp32_dest_acc_en=*/true);  // BH: Fp8 requires fp32_dest_acc_en=true (JIT-enforced)
     auto src_floats = fp8_to_floats(src_vec);
     auto dst_floats = bf16_to_floats(result_vec);
-    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
-    EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
-}
-
-TEST_F(LLKBlackholeSingleCardFixture, TensixFp8e4m3ToFloat16bFp32Dest) {
-    auto& mesh_device = *devices_[0];
-    constexpr uint32_t num_tiles = 64;
-    auto src_vec = create_random_vector_of_float8_e4m3(
-        tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-    auto result_vec = run_fp8_typecast(
-        mesh_device,
-        tt::DataFormat::Fp8_e4m3,
-        tt::DataFormat::Float16_b,
-        src_vec,
-        num_tiles,
-        /*fp32_dest_acc_en=*/true);
-    auto src_floats = fp8_to_floats(src_vec);
-    auto dst_floats = bf16_to_floats(result_vec);
-    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
+    EXPECT_TRUE(is_close_vectors<float>(
+        src_floats, dst_floats, [](float a, float b) { return is_close(a, b, /*rtol=*/0.0f, /*atol=*/0.0f); }));
     EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
 }
 
@@ -246,28 +170,11 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixFloat16bToFp8e4m3) {
         tt::DataFormat::Fp8_e4m3,
         src_vec,
         num_tiles,
-        /*fp32_dest_acc_en=*/false);
+        /*fp32_dest_acc_en=*/true);  // BH: Fp8 requires fp32_dest_acc_en=true (JIT-enforced)
     auto src_floats = bf16_to_floats(src_vec);
     auto dst_floats = fp8_to_floats(result_vec);
-    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.125f, /*atol=*/0.015625f));
-    EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/0.999));
-}
-
-TEST_F(LLKBlackholeSingleCardFixture, TensixFloat16bToFp8e4m3Fp32Dest) {
-    auto& mesh_device = *devices_[0];
-    constexpr uint32_t num_tiles = 64;
-    auto src_vec = create_random_vector_of_bfloat16(
-        tt::tile_size(tt::DataFormat::Float16_b) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-    auto result_vec = run_fp8_typecast(
-        mesh_device,
-        tt::DataFormat::Float16_b,
-        tt::DataFormat::Fp8_e4m3,
-        src_vec,
-        num_tiles,
-        /*fp32_dest_acc_en=*/true);
-    auto src_floats = bf16_to_floats(src_vec);
-    auto dst_floats = fp8_to_floats(result_vec);
-    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.125f, /*atol=*/0.015625f));
+    EXPECT_TRUE(is_close_vectors<float>(
+        src_floats, dst_floats, [](float a, float b) { return is_close(a, b, /*rtol=*/0.125f, /*atol=*/0.015625f); }));
     EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/0.999));
 }
 
@@ -284,23 +191,16 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixFp8e4m3ToBfp8b) {
     auto src_vec = create_random_vector_of_float8_e4m3(
         tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
     auto result_vec = run_fp8_typecast(
-        mesh_device, tt::DataFormat::Fp8_e4m3, tt::DataFormat::Bfp8_b, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
+        mesh_device,
+        tt::DataFormat::Fp8_e4m3,
+        tt::DataFormat::Bfp8_b,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/true);  // BH: Fp8 requires fp32_dest_acc_en=true (JIT-enforced)
     auto src_floats = fp8_to_floats(src_vec);
     auto dst_floats = bfp8_to_floats(result_vec);
-    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.3f, /*atol=*/0.3f));
-    EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/0.9999));
-}
-
-TEST_F(LLKBlackholeSingleCardFixture, TensixFp8e4m3ToBfp8bFp32Dest) {
-    auto& mesh_device = *devices_[0];
-    constexpr uint32_t num_tiles = 64;
-    auto src_vec = create_random_vector_of_float8_e4m3(
-        tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-    auto result_vec = run_fp8_typecast(
-        mesh_device, tt::DataFormat::Fp8_e4m3, tt::DataFormat::Bfp8_b, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
-    auto src_floats = fp8_to_floats(src_vec);
-    auto dst_floats = bfp8_to_floats(result_vec);
-    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.3f, /*atol=*/0.3f));
+    EXPECT_TRUE(is_close_vectors<float>(
+        src_floats, dst_floats, [](float a, float b) { return is_close(a, b, /*rtol=*/0.3f, /*atol=*/0.3f); }));
     EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/0.9999));
 }
 
@@ -319,27 +219,16 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixBfp8bToFp8e4m3) {
         /*seed=*/42,
         /*offset=*/-10.0f);
     auto result_vec = run_fp8_typecast(
-        mesh_device, tt::DataFormat::Bfp8_b, tt::DataFormat::Fp8_e4m3, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
+        mesh_device,
+        tt::DataFormat::Bfp8_b,
+        tt::DataFormat::Fp8_e4m3,
+        src_vec,
+        num_tiles,
+        /*fp32_dest_acc_en=*/true);  // BH: Fp8 requires fp32_dest_acc_en=true (JIT-enforced)
     auto src_floats = bfp8_to_floats(src_vec);
     auto dst_floats = fp8_to_floats(result_vec);
-    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.125f, /*atol=*/0.015625f));
-    EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/0.999));
-}
-
-TEST_F(LLKBlackholeSingleCardFixture, TensixBfp8bToFp8e4m3Fp32Dest) {
-    auto& mesh_device = *devices_[0];
-    constexpr uint32_t num_tiles = 64;
-    auto src_vec = tt::test_utils::create_random_vector_of_bfp8(
-        tt::tile_size(tt::DataFormat::Bfp8_b) * num_tiles,
-        /*is_exp_a=*/false,
-        /*rand_max_float=*/20,
-        /*seed=*/42,
-        /*offset=*/-10.0f);
-    auto result_vec = run_fp8_typecast(
-        mesh_device, tt::DataFormat::Bfp8_b, tt::DataFormat::Fp8_e4m3, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
-    auto src_floats = bfp8_to_floats(src_vec);
-    auto dst_floats = fp8_to_floats(result_vec);
-    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.125f, /*atol=*/0.015625f));
+    EXPECT_TRUE(is_close_vectors<float>(
+        src_floats, dst_floats, [](float a, float b) { return is_close(a, b, /*rtol=*/0.125f, /*atol=*/0.015625f); }));
     EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/0.999));
 }
 
@@ -363,7 +252,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixBfp8bToBfp8b) {
         mesh_device, tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp8_b, src_vec, num_tiles, /*fp32_dest_acc_en=*/false);
     auto src_floats = bfp8_to_floats(src_vec);
     auto dst_floats = bfp8_to_floats(result_vec);
-    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.3f, /*atol=*/0.3f));
+    EXPECT_TRUE(is_close_vectors<float>(
+        src_floats, dst_floats, [](float a, float b) { return is_close(a, b, /*rtol=*/0.3f, /*atol=*/0.3f); }));
     EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/0.9999));
 }
 
@@ -380,7 +270,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixBfp8bToBfp8bFp32Dest) {
         mesh_device, tt::DataFormat::Bfp8_b, tt::DataFormat::Bfp8_b, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
     auto src_floats = bfp8_to_floats(src_vec);
     auto dst_floats = bfp8_to_floats(result_vec);
-    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.3f, /*atol=*/0.3f));
+    EXPECT_TRUE(is_close_vectors<float>(
+        src_floats, dst_floats, [](float a, float b) { return is_close(a, b, /*rtol=*/0.3f, /*atol=*/0.3f); }));
     EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/0.9999));
 }
 
@@ -401,23 +292,11 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixFp8e4m3ToFp8e4m3) {
         tt::DataFormat::Fp8_e4m3,
         src_vec,
         num_tiles,
-        /*fp32_dest_acc_en=*/false);
+        /*fp32_dest_acc_en=*/true);  // BH: Fp8 requires fp32_dest_acc_en=true (JIT-enforced)
     auto src_floats = fp8_to_floats(src_vec);
     auto dst_floats = fp8_to_floats(result_vec);
-    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
-    EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
-}
-
-TEST_F(LLKBlackholeSingleCardFixture, TensixFp8e4m3ToFp8e4m3Fp32Dest) {
-    auto& mesh_device = *devices_[0];
-    constexpr uint32_t num_tiles = 64;
-    auto src_vec = create_random_vector_of_float8_e4m3(
-        tt::tile_size(tt::DataFormat::Fp8_e4m3) * num_tiles, /*rand_max_float=*/20, /*seed=*/42, /*offset=*/-10.0f);
-    auto result_vec = run_fp8_typecast(
-        mesh_device, tt::DataFormat::Fp8_e4m3, tt::DataFormat::Fp8_e4m3, src_vec, num_tiles, /*fp32_dest_acc_en=*/true);
-    auto src_floats = fp8_to_floats(src_vec);
-    auto dst_floats = fp8_to_floats(result_vec);
-    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
+    EXPECT_TRUE(is_close_vectors<float>(
+        src_floats, dst_floats, [](float a, float b) { return is_close(a, b, /*rtol=*/0.0f, /*atol=*/0.0f); }));
     EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
 }
 
@@ -441,7 +320,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixFloat16bToFloat16b) {
         /*fp32_dest_acc_en=*/false);
     auto src_floats = bf16_to_floats(src_vec);
     auto dst_floats = bf16_to_floats(result_vec);
-    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
+    EXPECT_TRUE(is_close_vectors<float>(
+        src_floats, dst_floats, [](float a, float b) { return is_close(a, b, /*rtol=*/0.0f, /*atol=*/0.0f); }));
     EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
 }
 
@@ -459,7 +339,8 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixFloat16bToFloat16bFp32Dest) {
         /*fp32_dest_acc_en=*/true);
     auto src_floats = bf16_to_floats(src_vec);
     auto dst_floats = bf16_to_floats(result_vec);
-    EXPECT_TRUE(check_floats_close(src_floats, dst_floats, /*rtol=*/0.0f, /*atol=*/0.0f));
+    EXPECT_TRUE(is_close_vectors<float>(
+        src_floats, dst_floats, [](float a, float b) { return is_close(a, b, /*rtol=*/0.0f, /*atol=*/0.0f); }));
     EXPECT_TRUE(check_pcc(src_floats, dst_floats, /*min_pcc=*/1.0));
 }
 

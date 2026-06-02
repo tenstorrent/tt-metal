@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include <vector>
+#include <variant>
 
-#include "tt-metalium/kernel_types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device_operation.hpp"
@@ -28,43 +28,14 @@ struct Fold {
     using tensor_return_value_t = Tensor;
 
     struct MultiCore {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernel_id;
-            tt::tt_metal::KernelHandle writer_kernel_id;
-            uint32_t stride_h;
-            uint32_t stride_w;
-            tt::tt_metal::CBHandle cb_src0;
-            tt::tt_metal::CBHandle cb_dst0;
-        };
-
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensor);
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output_tensor);
     };
 
     struct MultiCoreDRAMFold {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle writer_kernel_id{};
-            tt::tt_metal::KernelHandle reader_kernel_id{};
-            std::vector<CoreCoord> cores_with_rtargs;
-        };
-
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensor);
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output_tensor);

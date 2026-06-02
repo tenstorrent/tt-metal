@@ -12,12 +12,16 @@ from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
 from helpers.golden_generators import ReduceGolden, get_golden_generator
-from helpers.llk_params import DataFormat, ReducePool
+from helpers.llk_params import DataFormat, ReduceDimension, ReducePool
 from helpers.tilize_untilize import tilize_block, untilize_block
 
 
 class ReduceFpu(Fpu):
     loop: FusedLoop = LoopTileByTile()
+
+    def __init__(self, reduce_dim: ReduceDimension, reduce_pool: ReducePool):
+        self.reduce_dim = reduce_dim
+        self.reduce_pool = reduce_pool
 
     def get_headers(self) -> List[str]:
         return [
@@ -39,8 +43,8 @@ class ReduceFpu(Fpu):
         tile_cnt = (dimensions[0] * dimensions[1]) // 1024
         num_faces = operation.output.tile_shape.total_num_faces()
 
-        reduce_dim = compute_unit.reduce_dim
-        pool_type = compute_unit.reduce_pool
+        reduce_dim = self.reduce_dim
+        pool_type = self.reduce_pool
 
         src_a_reduced_tensor = tilize_block(
             tensor_a, dimensions, output_format, num_faces
@@ -71,11 +75,11 @@ class ReduceFpu(Fpu):
         golden_tensor = torch.zeros(tile_cnt * 1024)
 
         for i in range(tile_cnt * 1024):
-            if compute_unit.reduce_pool == ReducePool.Max:
+            if self.reduce_pool == ReducePool.Max:
                 golden_tensor[i] = max(src_a_reduced_tensor[i], dest_golden_tensor[i])
-            if compute_unit.reduce_pool == ReducePool.Sum:
+            if self.reduce_pool == ReducePool.Sum:
                 golden_tensor[i] = src_a_reduced_tensor[i] + dest_golden_tensor[i]
-            if compute_unit.reduce_pool == ReducePool.Average:
+            if self.reduce_pool == ReducePool.Average:
                 golden_tensor[i] = (
                     src_a_reduced_tensor[i] * 32 + dest_golden_tensor[i]
                 ) / 32
@@ -94,8 +98,8 @@ class ReduceFpu(Fpu):
         stage = operation.stage_id
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
-        pool_type_cpp = compute_unit.reduce_pool.cpp_enum_value
-        reduce_dim_cpp = compute_unit.reduce_dim.cpp_enum_value
+        pool_type_cpp = self.reduce_pool.cpp_enum_value
+        reduce_dim_cpp = self.reduce_dim.cpp_enum_value
         enforce_fp32_accumulation = (
             compute_unit.enforce_fp32_accumulation.cpp_enum_value
         )
@@ -114,8 +118,8 @@ class ReduceFpu(Fpu):
     ) -> str:
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
-        pool_type_cpp = compute_unit.reduce_pool.cpp_enum_value
-        reduce_dim_cpp = compute_unit.reduce_dim.cpp_enum_value
+        pool_type_cpp = self.reduce_pool.cpp_enum_value
+        reduce_dim_cpp = self.reduce_dim.cpp_enum_value
         enforce_fp32_accumulation = (
             compute_unit.enforce_fp32_accumulation.cpp_enum_value
         )

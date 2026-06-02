@@ -11,10 +11,14 @@
 #include "ttnn/operations/core/core.hpp"
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/distributed/types.hpp"
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
 #include "ttnn/operations/pool/upsample/device/upsample_device_operation_types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include <utility>
+#include <vector>
 
 namespace ttnn::prim {
 
@@ -29,24 +33,15 @@ struct UpsampleMultiCoreInterleavedProgramFactory {
 };
 
 struct UpsampleMultiCoreShardedProgramFactory {
-    // Persistent device-side state owned across cache hits.
-    // The config tensor encodes per-core halo lookup data; its buffer lifetime
-    // must outlive program execution, so the framework holds it in
-    // shared_variables and re-passes it into each create_descriptor call.
-    // Tensor's default ctor is explicit, so wrap in optional to satisfy the
-    // framework's `resource_t{}` value-init.
-    struct Resources {
-        std::optional<Tensor> config_tensor_device;
-    };
-
-    static Resources prepare_resources(
-        const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor);
-
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    // create_workload_descriptor() uploads the per-core halo lookup config
+    // tensor and parks its backing MeshBuffer on the returned
+    // WorkloadDescriptor (held by the program cache) so its lifetime
+    // outlives the cached programs.
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const UpsampleParams& operation_attributes,
         const Tensor& input_tensor,
         Tensor& output_tensor,
-        Resources& resources);
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 
 struct UpsampleNearestFloatProgramFactory {

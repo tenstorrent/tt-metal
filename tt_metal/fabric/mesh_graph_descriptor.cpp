@@ -180,6 +180,17 @@ uint32_t MeshGraphDescriptor::get_num_eth_ports_per_direction() const {
     return proto_->mesh_descriptors(0).channels().count();
 }
 
+std::vector<std::string> MeshGraphDescriptor::get_all_mesh_names() const {
+    std::unordered_set<std::string> names;
+    names.reserve(mesh_instances_.size());
+    for (GlobalNodeId id : mesh_instances_) {
+        names.insert(get_instance(id).name);
+    }
+    std::vector<std::string> out(names.begin(), names.end());
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
 uint32_t MeshGraphDescriptor::get_chip_count(GlobalNodeId mesh_instance_id) const {
     const auto& instance = get_instance(mesh_instance_id);
     return get_chip_count(instance);

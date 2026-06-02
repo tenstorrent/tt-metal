@@ -94,11 +94,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #endif
 
-const bool TILIZE = true;
+static constexpr bool TILIZE = true;
 
 #ifdef LLK_TRISC_MATH
 
 #include "llk_lib_math_wrappers.h"
+#include "llk_lib_unpack_wrappers.h"
 
 using namespace ckernel;
 
@@ -117,8 +118,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         ZONE_SCOPED("INIT")
         // copy srca to dest
-        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, TILIZE, is_int_fpu_en>(
-            4 /* num_faces */, formats.math);
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<
+            DataCopyType::A2D,
+            is_fp32_dest_acc_en,
+            BroadcastType::NONE,
+            is_int_fpu_en,
+            llk_test_pack_mode_v<false, TILIZE>>(4 /* num_faces */, formats.math);
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         PROFILER_SYNC();
@@ -202,13 +207,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t LOOP_FACTOR = params.LOOP_FACTOR;
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
 #endif
-    const bool UNTILIZE = false;
+    static constexpr bool UNTILIZE = false;
 
     {
         ZONE_SCOPED("INIT")
 
-        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, UNTILIZE, TILIZE>(formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
-        _llk_pack_init_wrapper_<UNTILIZE, false /* zero_output */, TILIZE>(formats.pack_dst);
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>>(
+            formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
+        _llk_pack_init_wrapper_<llk_unpack_tilize_sweep_pack_cfg_mode_v<UNTILIZE, TILIZE>, false /* zero_output */>(formats.pack_dst);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
@@ -230,7 +236,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     LLK_ASSERT(
                         (tile_index < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "Block tile index exceeds maximum destination tiles");
-                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, UNTILIZE>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index));
+                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index));
                 }
             }
             PROFILER_SYNC();
@@ -250,7 +256,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     LLK_ASSERT(
                         (tile_index < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "Block tile index exceeds maximum destination tiles");
-                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, UNTILIZE>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index));
+                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, pack_exec_mode_v<UNTILIZE>>(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index));
                 }
                 _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 remaining_tiles -= num_tiles;

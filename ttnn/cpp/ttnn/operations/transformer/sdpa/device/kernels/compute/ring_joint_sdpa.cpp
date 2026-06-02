@@ -21,8 +21,8 @@ void kernel_main() {
     constexpr uint32_t vDHt = get_compile_time_arg_val(4);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(6);
-    constexpr uint32_t local_padded_N = get_compile_time_arg_val(7);
-    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(8);
+    constexpr uint32_t q_local_padded_Nt [[maybe_unused]] = get_compile_time_arg_val(7);
+    constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(8);
     constexpr uint32_t padded_Nt = get_compile_time_arg_val(9);
     constexpr uint32_t logical_n = get_compile_time_arg_val(10);
     constexpr uint32_t logical_nt = get_compile_time_arg_val(11);
@@ -51,28 +51,36 @@ void kernel_main() {
     constexpr bool use_streaming_compute = get_compile_time_arg_val(33) == 1;
     constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(34);
     constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(35);
-    constexpr bool uniform_dataformat = get_compile_time_arg_val(36) == 1;
-    constexpr bool is_causal = get_compile_time_arg_val(37) == 1;
-    constexpr bool is_balanced = get_compile_time_arg_val(38) == 1;
-    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(39) == 1;
+    constexpr bool is_causal = get_compile_time_arg_val(36) == 1;
+    constexpr bool is_balanced = get_compile_time_arg_val(37) == 1;
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(38) == 1;
+    constexpr bool chunked_enabled = get_compile_time_arg_val(39) == 1;
+    constexpr uint32_t chunk_size_t = get_compile_time_arg_val(40);
+    // Diagonal-mask tile slot is shared by the kernel's is_causal path and the chunked-prefill
+    // path. kernel_is_causal is masked off by the program factory when chunked is on, so only
+    // one of the two paths drives the stamp per program — but they share the CB slot layout.
+    constexpr bool diag_tile_enabled = is_causal || chunked_enabled;
 
     // Lightweight mask: all mask tiles live in cb_mask_in.
     // Layout: [neginf(0)] [causal_diag?(1)] [global_n_partial?] [joint_l_partial?]
-    // Needed when any K/joint dimension has padding, or when causal masking is active.
-    constexpr bool local_n_has_padding = local_padded_Nt % Sk_chunk_t != 0;
+    constexpr bool local_n_has_padding = kv_local_padded_Nt % Sk_chunk_t != 0;
     constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool joint_has_padding = L > 0 && L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
     constexpr bool needs_lightweight_mask =
-        (local_n_has_padding || global_n_has_padding || joint_has_padding) || is_causal;
+        (local_n_has_padding || global_n_has_padding || joint_has_padding) || diag_tile_enabled;
 
     constexpr uint32_t neginf_tile_idx = 0;
-    constexpr uint32_t causal_diag_tile_idx = is_causal ? 1 : 0;
-    constexpr uint32_t base_partial_offset = 1 + (is_causal ? 1 : 0);
+    constexpr uint32_t causal_diag_tile_idx = diag_tile_enabled ? 1 : 0;
+    constexpr uint32_t base_partial_offset = 1 + (diag_tile_enabled ? 1 : 0);
     constexpr uint32_t global_n_partial_tile_idx = (global_n_partial_col > 0) ? base_partial_offset : 0;
     constexpr uint32_t joint_l_partial_tile_idx =
         (joint_l_partial_col > 0) ? (base_partial_offset + (global_n_partial_col > 0 ? 1 : 0)) : 0;
     constexpr uint32_t total_mask_tiles =
-        1 + (is_causal ? 1 : 0) + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
+        1 + (diag_tile_enabled ? 1 : 0) + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
+
+    // Chunked prefill masks against absolute Q/K coordinates. Use logical_nt as the populated
+    // cache boundary instead of deriving the Q start from the physical K cache extent.
+    constexpr uint32_t q_start_idx_t = chunked_enabled ? logical_nt - q_local_padded_Nt * ring_size : 0;
 
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
@@ -87,33 +95,33 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    // TODO: CB indices below are hardcoded and duplicated from the program factory.
-    // They should be passed as compile-time args so the factory is the single source of truth.
-    constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
-    constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
-    constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
-    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
-    constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
-    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
-    constexpr uint32_t cb_max_in = tt::CBIndex::c_6;  // deferred norm: running max
-    constexpr uint32_t cb_lse_in = tt::CBIndex::c_6;  // eager norm: LSE
-    constexpr uint32_t cb_prev_out = tt::CBIndex::c_7;
-    constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
-    constexpr uint32_t cb_recip_scratch = tt::CBIndex::c_9;  // 1-tile scratch for normalize_row_streaming
-    constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
-    constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
-    constexpr uint32_t cb_signal = tt::CBIndex::c_12;
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    constexpr uint32_t cb_max_out = tt::CBIndex::c_17;  // deferred norm: running max
-    constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;  // eager norm: LSE
-    constexpr uint32_t cb_qk_im = tt::CBIndex::c_24;
-    constexpr uint32_t cb_out_im_A = tt::CBIndex::c_25;
-    constexpr uint32_t cb_out_im_B = tt::CBIndex::c_26;
-    constexpr uint32_t cb_max_A = tt::CBIndex::c_27;
-    constexpr uint32_t cb_max_B = tt::CBIndex::c_28;
-    constexpr uint32_t cb_sum_A = tt::CBIndex::c_29;
-    constexpr uint32_t cb_sum_B = tt::CBIndex::c_30;
-    constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_31;
+    constexpr uint32_t cb_arg_offset = 41;
+    constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
+    constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
+    constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
+    constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
+    constexpr uint32_t cb_scale_in = get_compile_time_arg_val(cb_arg_offset + 4);
+    constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
+    constexpr uint32_t cb_max_in = get_compile_time_arg_val(cb_arg_offset + 6);  // deferred norm: running max
+    constexpr uint32_t cb_lse_in = cb_max_in;                                    // eager norm: LSE
+    constexpr uint32_t cb_prev_out = get_compile_time_arg_val(cb_arg_offset + 7);
+    constexpr uint32_t cb_col_identity = get_compile_time_arg_val(cb_arg_offset + 8);
+    constexpr uint32_t cb_recip_scratch =
+        get_compile_time_arg_val(cb_arg_offset + 9);  // 1-tile scratch for normalize_row_streaming
+    constexpr uint32_t cb_sum_out = get_compile_time_arg_val(cb_arg_offset + 10);
+    constexpr uint32_t cb_sum_in = get_compile_time_arg_val(cb_arg_offset + 11);
+    constexpr uint32_t cb_signal = get_compile_time_arg_val(cb_arg_offset + 12);
+    constexpr uint32_t cb_out = get_compile_time_arg_val(cb_arg_offset + 13);
+    constexpr uint32_t cb_max_out = get_compile_time_arg_val(cb_arg_offset + 14);  // deferred norm: running max
+    constexpr uint32_t cb_lse_out = cb_max_out;                                    // eager norm: LSE
+    constexpr uint32_t cb_qk_im = get_compile_time_arg_val(cb_arg_offset + 15);
+    constexpr uint32_t cb_out_im_A = get_compile_time_arg_val(cb_arg_offset + 16);
+    constexpr uint32_t cb_out_im_B = get_compile_time_arg_val(cb_arg_offset + 17);
+    constexpr uint32_t cb_max_A = get_compile_time_arg_val(cb_arg_offset + 18);
+    constexpr uint32_t cb_max_B = get_compile_time_arg_val(cb_arg_offset + 19);
+    constexpr uint32_t cb_sum_A = get_compile_time_arg_val(cb_arg_offset + 20);
+    constexpr uint32_t cb_sum_B = get_compile_time_arg_val(cb_arg_offset + 21);
+    constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 22);
 
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
@@ -128,10 +136,10 @@ void kernel_main() {
 
     // Precompute padded tile counts that are constant across ring iterations
     constexpr uint32_t local_n_padded_tiles =
-        (local_padded_Nt % Sk_chunk_t != 0) ? (Sk_chunk_t - (local_padded_Nt % Sk_chunk_t)) : 0;
+        (kv_local_padded_Nt % Sk_chunk_t != 0) ? (Sk_chunk_t - (kv_local_padded_Nt % Sk_chunk_t)) : 0;
     constexpr uint32_t joint_n_padded_tiles = (Lt % Sk_chunk_t != 0) ? (Sk_chunk_t - (Lt % Sk_chunk_t)) : 0;
 
-    using Straddle = KCausalStraddleInfo<local_padded_Nt, Sk_chunk_t>;
+    using Straddle = KCausalStraddleInfo<kv_local_padded_Nt, Sk_chunk_t>;
     constexpr bool has_straddle = Straddle::has_straddle;
     constexpr uint32_t straddle_chunk_id = Straddle::straddle_chunk_id;
     constexpr uint32_t straddle_num_padded_tiles = Straddle::straddle_num_padded_tiles;
@@ -142,47 +150,58 @@ void kernel_main() {
     };
 
     const uint32_t last_active_ring_iter = find_last_active_ring_iter(
-        fused_op_indexer.seq, local_padded_Nt, logical_n / tt::constants::TILE_HEIGHT, L, is_causal, is_balanced);
+        fused_op_indexer.seq, kv_local_padded_Nt, logical_nt - 1, L, is_causal, is_balanced, chunked_enabled);
 
     uint32_t ring_index = fused_op_indexer.seq.ring_index;
     uint32_t half_sequence = num_q_chunks / 2;
+    // The first active iter starts with fresh accumulators; restoring would read stale staging.
+    bool seen_active_iter = false;
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
         const bool do_joint_kv = ring_id == ring_size - 1;
         const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
 
         // First, find out if this ring iter processes any KV chunks.
-        const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
+        const uint32_t ring_iter_kv_start_tile = ring_id * kv_local_padded_Nt;
         const uint32_t ring_iter_kv_end_tile = ring_iter_kv_start_tile + num_local_k_chunks * Sk_chunk_t;
-        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;
-        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
+        // Last tile id holding any real K data; partial trailing tile is included here and gets
+        // its padding cells masked downstream (see same line in ring_joint_reader.cpp).
+        const uint32_t global_n_tile_id = logical_nt - 1;
+        const bool ring_iter_processes_KV_chunks =
+            chunked_enabled ? true : (ring_iter_kv_start_tile <= global_n_tile_id);
         const bool ring_iter_does_work = (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) &&
                                          !(is_causal && ring_index < ring_id && !is_balanced);
 
         if (!ring_iter_does_work) {
             continue;
         }
+        const bool is_first_active_iter = !seen_active_iter;
+        seen_active_iter = true;
 
-        const int32_t global_n_within_ring_iter = logical_n - ring_id * local_padded_N;
-        // Note the > and <=. This means there is real length of logical_n within this ring iter.
+        // Tile-aligned form. Chunked: real region ends on a per-chunk-region boundary
+        // (k-chunk-aligned via q_local_padded_Nt % Sk_chunk_t TT_FATAL), so the per-k_chunk-
+        // start skip handles it.
+        const int32_t global_nt_within_ring_iter =
+            static_cast<int32_t>(logical_nt) - static_cast<int32_t>(ring_id * kv_local_padded_Nt);
         const bool global_n_is_within_ring_iter =
-            global_n_within_ring_iter > 0 && global_n_within_ring_iter <= (int32_t)local_padded_N;
-        const bool global_n_needs_masking = global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+            !chunked_enabled &&
+            (global_nt_within_ring_iter > 0 && global_nt_within_ring_iter <= (int32_t)kv_local_padded_Nt);
+        const bool global_n_needs_masking = (global_nt_within_ring_iter % (int32_t)Sk_chunk_t) != 0;
         const bool ring_iter_needs_global_n_mask = global_n_is_within_ring_iter && global_n_needs_masking;
-        const uint32_t global_n_mask_chunk_id = global_n_within_ring_iter / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
+        const uint32_t global_n_mask_chunk_id = global_nt_within_ring_iter / Sk_chunk_t;
 
         // LOCAL N MASK
-        const bool local_n_needs_masking = local_padded_Nt % Sk_chunk_t != 0;
-        const uint32_t local_n_mask_chunk_id = local_padded_Nt / Sk_chunk_t;
+        const bool local_n_needs_masking = kv_local_padded_Nt % Sk_chunk_t != 0;
+        const uint32_t local_n_mask_chunk_id = kv_local_padded_Nt / Sk_chunk_t;
 
         // JOINT L MASK
         const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
         const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
         const uint32_t joint_n_mask_chunk_id = L / (Sk_chunk_t * tt::constants::TILE_HEIGHT);
 
-        // Build lightweight mask context for this ring iteration
+        // is_causal: diagonal only on iter 0 (K is local-frame). Chunked: every iter (absolute coords).
         LightweightMaskContext lw_mask;
-        lw_mask.is_causal = (ring_iter == 0 ? is_causal : false);
+        lw_mask.is_causal = chunked_enabled || (is_causal && ring_iter == 0);
         lw_mask.neginf_tile_idx = neginf_tile_idx;
         lw_mask.causal_diag_tile_idx = causal_diag_tile_idx;
         lw_mask.local_n_padded_tiles = local_n_padded_tiles;
@@ -197,9 +216,8 @@ void kernel_main() {
         lw_mask.straddle_num_padded_tiles = ring_iter_needs_straddle_mask ? straddle_num_padded_tiles : 0;
         lw_mask.straddle_mask_chunk_id = straddle_chunk_id;
         if (ring_iter_needs_global_n_mask) {
-            const uint32_t unpadded_in_chunk = global_n_within_ring_iter % (Sk_chunk_t * tt::constants::TILE_HEIGHT);
-            const uint32_t valid_tiles =
-                (unpadded_in_chunk + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
+            // Tile-aligned: valid_tiles == global_nt_within_ring_iter % Sk_chunk_t
+            const uint32_t valid_tiles = global_nt_within_ring_iter % Sk_chunk_t;
             lw_mask.global_n_padded_tiles = Sk_chunk_t - valid_tiles;
         }
 
@@ -247,14 +265,21 @@ void kernel_main() {
                 cb_max_out,
                 cb_prev_out,
                 cb_out,
-                uniform_dataformat,
                 cb_out,  // cb_normalized_out — output goes directly to cb_out
                 cb_sum_out,
                 cb_sum_in,
                 cb_signal,
                 needs_lightweight_mask,
                 is_causal,
-                is_balanced>(
+                is_balanced,
+                chunked_enabled,
+                kv_local_padded_Nt,
+                q_local_padded_Nt,
+                chunk_size_t,
+                global_n_has_padding,
+                local_n_has_padding,
+                joint_has_padding,
+                has_straddle && is_causal && is_balanced>(
                 global_q_start,
                 global_q_end,
                 iter_num_kv_chunks,
@@ -262,7 +287,6 @@ void kernel_main() {
                 ring_iter,
                 ring_id,
                 num_local_k_chunks,
-                local_padded_Nt,
                 logical_nt,
                 ring_iter_needs_global_n_mask,
                 ring_iter_needs_joint_n_mask,
@@ -275,7 +299,9 @@ void kernel_main() {
                 q_per_core,
                 lw_mask,
                 skip_first_half_q,
-                use_zigzag_balancing);
+                use_zigzag_balancing,
+                ChunkedContext{q_start_idx_t, ring_index},
+                is_first_active_iter);
         } else {
             sdpa_ring<
                 cb_qk_im,
@@ -287,7 +313,10 @@ void kernel_main() {
                 DHt,
                 vDHt,
                 scale_fp32,
-                needs_lightweight_mask>(
+                needs_lightweight_mask,
+                chunked_enabled,
+                q_local_padded_Nt,
+                chunk_size_t>(
                 qk_in0_block_w,
                 qk_subblock_w,
                 qk_subblock_h,
@@ -313,7 +342,7 @@ void kernel_main() {
                 ring_iter,
                 ring_id,
                 num_local_k_chunks,
-                local_padded_Nt,
+                kv_local_padded_Nt,
                 logical_nt,
                 ring_iter_needs_global_n_mask,
                 ring_iter_needs_joint_n_mask,
@@ -341,7 +370,8 @@ void kernel_main() {
                 lw_mask.is_causal,
                 skip_first_half_q,
                 is_last_ring_iter,
-                use_zigzag_balancing);
+                use_zigzag_balancing,
+                ChunkedContext{q_start_idx_t, ring_index});
         }
     }
 }

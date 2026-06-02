@@ -363,6 +363,9 @@ void kernel_main() {
                                         }
                                     }
                                 }
+                                if constexpr (enable_streaming_output) {
+                                    cb_out.wait_front(output_tiles);
+                                }
                                 noc.async_write_barrier();
                                 cb_out.pop_front(output_tiles);
                             }

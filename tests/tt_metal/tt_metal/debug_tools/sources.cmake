@@ -3,6 +3,7 @@
 
 set(UNIT_TESTS_DEBUG_TOOLS_SRC
     device_print/test_compilation_failures.cpp
+    device_print/test_multi_kernel_print.cpp
     device_print/test_dram_print_output.cpp
     device_print/test_eth_cores.cpp
     device_print/test_format_updates.cpp
@@ -17,20 +18,6 @@ set(UNIT_TESTS_DEBUG_TOOLS_SRC
     device_print/test_print_tile.cpp
     device_print/test_print_tiles_multiple.cpp
     device_print/test_checkpoint.cpp
-    dprint/test_dprint_mesh_coords.cpp
-    dprint/test_dram_cores.cpp
-    dprint/test_eth_cores.cpp
-    dprint/test_invalid_print_core.cpp
-    dprint/test_mute_device.cpp
-    dprint/test_mute_print_server.cpp
-    dprint/test_print_buffering.cpp
-    dprint/test_print_all_harts.cpp
-    dprint/test_print_before_finish.cpp
-    dprint/test_print_prepend_device_core_risc.cpp
-    dprint/test_print_tensix_dest.cpp
-    dprint/test_print_tile.cpp
-    dprint/test_print_tiles_multiple.cpp
-    dprint/test_print_config_register.cpp
     watcher/test_assert.cpp
     watcher/test_link_training.cpp
     watcher/test_mcast_wrap_around.cpp

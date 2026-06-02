@@ -101,6 +101,29 @@ CoreCoord metal_SocDescriptor::get_physical_dram_core_from_logical(const CoreCoo
     return dram_bank_endpoint_coords[logical_coord.x][logical_coord.y];
 }
 
+CoreCoord metal_SocDescriptor::get_logical_dram_core_for_subchannel(int dram_view, int subchannel) const {
+    const int channel = static_cast<int>(get_channel_for_dram_view(dram_view));
+    const tt::umd::CoreCoord phys_umd = get_dram_core_for_channel(channel, subchannel, tt::CoordSystem::TRANSLATED);
+    const CoreCoord phys{phys_umd.x, phys_umd.y};
+    TT_FATAL(
+        dram_view >= 0 && static_cast<size_t>(dram_view) < dram_bank_endpoint_coords.size(),
+        "dram_view {} out of range (num_views={})",
+        dram_view,
+        dram_bank_endpoint_coords.size());
+    const auto& endpoints = dram_bank_endpoint_coords[static_cast<size_t>(dram_view)];
+    for (size_t idx = 0; idx < endpoints.size(); ++idx) {
+        if (endpoints[idx] == phys) {
+            return CoreCoord{static_cast<uint32_t>(dram_view), static_cast<uint32_t>(idx)};
+        }
+    }
+    TT_THROW(
+        "DRAM subchannel {} on view {} (physical {}, {}) not found in dram_bank_endpoint_coords",
+        subchannel,
+        dram_view,
+        phys.x,
+        phys.y);
+}
+
 CoreCoord metal_SocDescriptor::get_physical_core_from_logical_core(
     const CoreCoord& logical_coord, const tt::CoreType& core_type) const {
     switch (core_type) {

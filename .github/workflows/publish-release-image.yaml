@@ -40,7 +40,7 @@ jobs:
       image_digest: ${{ steps.get-digest.outputs.IMAGE_DIGEST }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Extract Ubuntu version
         id: extract-version
         run: |
@@ -142,7 +142,7 @@ jobs:
         run: |
           apt-get update && apt-get install -y git
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end

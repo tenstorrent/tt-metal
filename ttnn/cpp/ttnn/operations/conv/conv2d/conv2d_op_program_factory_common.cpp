@@ -22,6 +22,7 @@ namespace ttnn::prim {
 
 using ttnn::operations::conv::conv_skip_mcast;
 using ttnn::operations::conv::is_1d_depthwise_conv;
+using ttnn::operations::conv::should_coalesce_1d_depthwise_conv_reads;
 using ttnn::operations::conv::SkipMcast;
 
 constexpr uint32_t l1_scratchpad_CB_size = 64;
@@ -162,7 +163,11 @@ std::vector<CBInfo> get_cb_info(
     const uint32_t per_core_out_ntiles =
         pconfig.per_core_out_matrix_height_ntile * pconfig.per_core_out_matrix_width_ntile;
 
-    const uint32_t num_blocks_act_w = weight_matrix_height_ntiles / block_config.act_block_w_ntiles;
+    const bool coalesce_1d_depthwise_kw_reads = should_coalesce_1d_depthwise_conv_reads(
+        is_1d_depthwise_conv, sharding_scheme, input_channels_padded, kernel_size[1], dilation[1], input_datatype);
+    const uint32_t num_blocks_act_w = is_1d_depthwise_conv
+                                          ? (coalesce_1d_depthwise_kw_reads ? 1 : kernel_size[0] * kernel_size[1])
+                                          : weight_matrix_height_ntiles / block_config.act_block_w_ntiles;
 
     const uint32_t conv_act_c_blocks = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
     const uint32_t in0_num_blocks_w =
@@ -175,10 +180,10 @@ std::vector<CBInfo> get_cb_info(
 
     {
         // Weights CB
-        // For 1D depthwise conv, the weight matrix inner dimension is act_block_h_ntiles * kernel_w,
-        // not act_block_w_ntiles (which is just padded_in_channels for depthwise).
         uint32_t weight_inner_dim_ntiles =
-            is_1d_depthwise_conv ? block_config.act_block_h_ntiles * kernel_size[1] : block_config.act_block_w_ntiles;
+            is_1d_depthwise_conv
+                ? block_config.act_block_h_ntiles * (coalesce_1d_depthwise_kw_reads ? kernel_size[1] : 1)
+                : block_config.act_block_w_ntiles;
         uint32_t weight_block_num_tiles = per_core_out_matrix_width_ntiles * weight_inner_dim_ntiles;
         if (sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
             // If activation reuse is enabled, we already have full inner dim
@@ -201,10 +206,11 @@ std::vector<CBInfo> get_cb_info(
             .data_format = weights_df});
     }
 
-    // Matmul partials CB
+    // Matmul partials CB. 1D depthwise compute uses dest-reuse accumulation, so the CB is unused
+    // for that path — emit a 0-page entry so allocate_cbs skips the device allocation.
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::MATMUL_PARTIALS,
-        .num_pages = is_1d_depthwise_conv ? 1 : per_core_out_ntiles,
+        .num_pages = is_1d_depthwise_conv ? 0 : per_core_out_ntiles,
         .page_size = partial_tile_size,
         .is_globally_allocated = (!untilize_out && partial_dtype == output_datatype && !is_1d_depthwise_conv),
         .data_format = partial_df});
@@ -246,13 +252,6 @@ std::vector<CBInfo> get_cb_info(
             .page_size = input_tile_size,
             .data_format = conv_input_df});
     }
-
-    // Temp sum CB (1d depthwise conv only)
-    cb_info.emplace_back(CBInfo{
-        .name = Conv2dCb::TEMP_SUM,
-        .num_pages = is_1d_depthwise_conv ? 1 : 0,
-        .page_size = output_tile_size,
-        .data_format = output_df});
 
     // Tilized act CB
     cb_info.emplace_back(CBInfo{
@@ -751,13 +750,7 @@ void post_conv2d_op_memory_checks(
         output_image_width,
         has_bias,
         is_1d_depthwise_conv(
-            groups,
-            input_tensor_shape[3],
-            output_channels,
-            kernel_dims[0],
-            kernel_dims[1],
-            input_tensor_shape[1],
-            has_bias),
+            groups, input_tensor_shape[3], output_channels, kernel_dims[0], input_tensor_shape[1], has_bias),
         input_channels_padded,
         skip_mcast.skip_activation_mcast,
         reader_indices_actual_page_size);

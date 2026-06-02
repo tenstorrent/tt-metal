@@ -40,3 +40,11 @@ runs:
         name: "triage_output_${{ job.check_run_id }}"
         path: /work/generated/triage_output.txt
         if-no-files-found: ignore
+
+    - name: Upload triage LLM output
+      if: ${{ env.TT_TRIAGE_LLM_OUTPUT_PATH != '' }}
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      with:
+        name: "triage_llm_output_${{ job.check_run_id }}"
+        path: ${{ env.TT_TRIAGE_LLM_OUTPUT_PATH }}
+        if-no-files-found: ignore

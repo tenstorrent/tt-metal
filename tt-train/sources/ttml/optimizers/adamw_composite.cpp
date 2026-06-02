@@ -103,6 +103,7 @@ void MorehAdamW::step() {
     state_dict[kFirstMoment] = m_first_moment;
     state_dict[kSecondMoment] = m_second_moment;
     state_dict[kSteps] = m_steps;
+    state_dict["lr"] = m_config.lr;
 
     return state_dict;
 }
@@ -111,6 +112,7 @@ void MorehAdamW::set_state_dict(const serialization::StateDict& dict) {
     m_first_moment = std::get<serialization::NamedParameters>(dict.at(kFirstMoment));
     m_second_moment = std::get<serialization::NamedParameters>(dict.at(kSecondMoment));
     m_steps = serialization::get_value_type<size_t>(dict, kSteps);
+    set_lr(serialization::get_value_type<float>(dict, "lr"));
 }
 
 [[nodiscard]] size_t MorehAdamW::get_steps() const {
@@ -256,6 +258,7 @@ void AdamWComposite::step() {
     state_dict[kMaxExpAvgSq] = m_max_exp_avg_sq;
     state_dict[kKahanCompensation] = m_kahan_compensation;
     state_dict[kSteps] = m_steps;
+    state_dict["lr"] = m_config.lr;
 
     return state_dict;
 }
@@ -266,6 +269,7 @@ void AdamWComposite::set_state_dict(const serialization::StateDict& dict) {
     m_max_exp_avg_sq = std::get<serialization::NamedParameters>(dict.at(kMaxExpAvgSq));
     m_kahan_compensation = std::get<serialization::NamedParameters>(dict.at(kKahanCompensation));
     m_steps = serialization::get_value_type<size_t>(dict, kSteps);
+    set_lr(serialization::get_value_type<float>(dict, "lr"));
 }
 
 [[nodiscard]] size_t AdamWComposite::get_steps() const {

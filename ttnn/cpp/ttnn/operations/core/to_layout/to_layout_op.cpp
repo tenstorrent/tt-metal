@@ -6,6 +6,7 @@
 
 #include <bit>
 #include <limits>
+#include <string_view>
 
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -33,6 +34,18 @@ bool requires_padding_change(const ttnn::Tensor& tensor, ttnn::Layout layout) {
         tt::tt_metal::TensorLayout(tensor.dtype(), tt::tt_metal::PageConfig(layout, tile), tensor.memory_config()));
     return tensor.padded_shape() != padded_spec.padded_shape();
 }
+
+bool is_allowed_row_major_dtype(ttnn::DataType tensor_dtype, std::optional<ttnn::DataType> requested_dtype) {
+    if (!requested_dtype.has_value() || requested_dtype.value() == tensor_dtype) {
+        return true;
+    }
+    // untilize / untilize_with_unpadding convert BFLOAT8_B -> BFLOAT16 natively as part of de-tiling.
+    return tensor_dtype == ttnn::DataType::BFLOAT8_B && requested_dtype.value() == ttnn::DataType::BFLOAT16;
+}
+
+constexpr std::string_view kRowMajorDtypeErrorMessage =
+    "dtype cannot be different from tensor dtype when converting to ROW_MAJOR_LAYOUT on device "
+    "(allowed exception: BFLOAT8_B -> BFLOAT16, which untilize handles natively)!";
 
 Tensor to_layout_impl(
     const ttnn::Tensor& tensor_arg,
@@ -103,7 +116,7 @@ Tensor to_layout_impl(
 
         if (not requires_padding_change(tensor, layout)) {
             if (layout == ttnn::ROW_MAJOR_LAYOUT) {
-                TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting to ROW_MAJOR_LAYOUT!");
+                TT_FATAL(is_allowed_row_major_dtype(tensor_arg.dtype(), dtype), "{}", kRowMajorDtypeErrorMessage);
                 return ttnn::untilize(tensor, output_memory_config, use_multicore_untilize, sub_core_grids);
             }
             if (layout == ttnn::TILE_LAYOUT) {
@@ -138,9 +151,7 @@ Tensor to_layout_impl(
             throw std::runtime_error("ttnn::to_layout: Unsupported layout!");
         }
         if (layout == ttnn::ROW_MAJOR_LAYOUT) {
-            TT_FATAL(
-                !dtype.has_value() || dtype.value() == tensor_arg.dtype(),
-                "dtype cannot be different from tensor dtype when converting to ROW_MAJOR_LAYOUT on device!");
+            TT_FATAL(is_allowed_row_major_dtype(tensor_arg.dtype(), dtype), "{}", kRowMajorDtypeErrorMessage);
 
             if (tensor.is_sharded()) {
                 output_memory_config =

@@ -261,7 +261,7 @@ jobs:
       toolchain: ${{ steps.parse.outputs.toolchain }}
       enable-lto: ${{ steps.parse.outputs.enable-lto }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
@@ -304,7 +304,7 @@ jobs:
       packages-artifact-name: ${{ steps.download.outputs.packages-artifact-name }}
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
@@ -447,7 +447,7 @@ jobs:
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
 
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           ref: ${{ inputs.ref || github.sha }}
@@ -473,7 +473,7 @@ jobs:
 
       - name: 📦 Restore CPM source cache
         id: cpm-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .cpmcache.tar.zst
           key: cpm-z22-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
@@ -531,7 +531,7 @@ jobs:
 
       - name: 📦 Save CPM source cache
         if: steps.cpm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .cpmcache.tar.zst
           key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
@@ -598,6 +598,7 @@ jobs:
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
           TRACY_SUFFIX="${{ (inputs.tracy && '_profiler') || '' }}"
           DIST_SUFFIX="${{ (inputs.distributed == false && '_no_distributed') || '' }}"
+          BUILD_TYPE="${{ inputs.build-type || 'Release' }}"
           VERSION="${{ env.VERSION }}"
           ARCH="${{ inputs.architecture }}"
           RUN_ID="${{ github.run_id }}"
@@ -605,7 +606,7 @@ jobs:
             "TTMetal_build_any"
             "${VERSION}"
             "${ARCH}"
-            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}"
+            "${TOOLCHAIN_CLEANED}${TRACY_SUFFIX}${DIST_SUFFIX}_${BUILD_TYPE}"
             "${SANITIZED_REF}"
             "${RUN_ID}"
           )
@@ -662,3 +663,4 @@ jobs:
       ref: ${{ inputs.wheel-ref || inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}
       enable-lto: ${{ inputs.enable-lto || false }}
+      build-type: ${{ inputs.build-type || 'Release' }}

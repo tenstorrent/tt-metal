@@ -36,3 +36,7 @@ function(CPMAddPackage)
 
     cmake_parse_arguments(CPM_ARGS "" "${oneValueArgs}" "${multiValueArgs}" "${ARGN}")
 endfunction()
+
+function(CPMRegisterPackage PACKAGE VERSION)
+    # no-op stub: when using cpm-stubs, packages are provided by the parent project
+endfunction()

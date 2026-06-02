@@ -7,6 +7,8 @@ Optimal matmul and SDPA configurations for the MLA module, keyed by local sequen
 and op_unit_tests/test_ring_joint_mla.py.
 
 Production local seq_len values:
+  - 128k total / 8 SP devices = 16384 per device
+  - 100k total / 8 SP devices = 12800 per device
   - 128k total / 32 SP devices = 4096 per device
   - 100k total / 32 SP devices = 3200 per device
 """
@@ -229,16 +231,26 @@ MLA_MATMUL_CONFIG = {
 
 
 MLA_SDPA_CONFIG = {
-    # From test_ring_joint_mla.py test_mla_sdpa_bh_galaxy
-    # 128k total seq_len → 4096 per device
-    4096: {
-        "q_chunk_size": 256,
-        "k_chunk_size": 128,
+    # Tuned for the Galaxy balanced MLA PCC path. The 8x4 max-sl cases hit the issue #45521 fallback.
+    # 128k total seq_len → 16384 per device on 8x4
+    16384: {
+        "q_chunk_size": 128,
+        "k_chunk_size": 320,
     },
-    # 100k total seq_len → 3200 per device
+    # 100k total seq_len → 12800 per device on 8x4
+    12800: {
+        "q_chunk_size": 160,
+        "k_chunk_size": 320,
+    },
+    # 128k total seq_len → 4096 per device on 32x4, or scaled 2x4
+    4096: {
+        "q_chunk_size": 128,
+        "k_chunk_size": 320,
+    },
+    # 100k total seq_len → 3200 per device on 32x4, or scaled 2x4
     3200: {
         "q_chunk_size": 160,
-        "k_chunk_size": 160,
+        "k_chunk_size": 320,
     },
 }
 

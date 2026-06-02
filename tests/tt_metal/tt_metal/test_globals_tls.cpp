@@ -66,22 +66,21 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
 
     // Three kernels split 6 user DMs as 3 + 2 + 1 to mirror the original 4 + 3 + 1 split
     // (preserving the "shared kernel binary across multiple DMs" + "single-DM kernel" mix).
-    auto make_dm_kernel_spec = [](const char* unique_id, uint32_t kernel_id, uint8_t num_threads) {
-        return experimental::metal2_host_api::KernelSpec{
+    auto make_dm_kernel_spec = [](const char* unique_id, uint32_t kernel_id, uint32_t num_threads) {
+        return experimental::KernelSpec{
             .unique_id = unique_id,
             .source =
-                experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                    OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_tls_check.cpp"},
+
+                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/simple_tls_check.cpp",
             .num_threads = num_threads,
-            .compile_time_arg_bindings = {{"kernel_id", kernel_id}},
-            .runtime_arguments_schema =
+            .compile_time_args = {{"kernel_id", kernel_id}},
+            .runtime_arg_schema =
                 {
-                    .named_runtime_args = {"signal_address", "dram_dst_address", "dram_dst_bank_id", "l1_result_addr"},
+                    .runtime_arg_names = {"signal_address", "dram_dst_address", "dram_dst_bank_id", "l1_result_addr"},
                 },
-            .config_spec =
-                experimental::metal2_host_api::DataMovementConfiguration{
-                    .gen2_data_movement_config =
-                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+            .hw_config =
+                experimental::DataMovementHardwareConfig{
+                    .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
         };
     };
 
@@ -89,26 +88,26 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
     auto k2 = make_dm_kernel_spec(DM_KERNEL_2, /*kernel_id=*/2, /*num_threads=*/2);
     auto k3 = make_dm_kernel_spec(DM_KERNEL_3, /*kernel_id=*/3, /*num_threads=*/1);
 
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
 
-    experimental::metal2_host_api::WorkUnitSpec main_wu{
-        .unique_id = "main",
+    experimental::WorkUnitSpec main_wu{
+        .name = "main",
         .kernels = {DM_KERNEL_1, DM_KERNEL_2, DM_KERNEL_3},
         .target_nodes = node,
     };
 
     // Total user-DM threads = 3 + 2 + 1 = 6, fitting within the default DM2..DM7 cap.
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "globals_and_tls",
+    experimental::ProgramSpec spec{
+        .name = "globals_and_tls",
         .kernels = {k1, k2, k3},
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     auto make_kernel_run_params = [&](const char* name) {
-        return experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        return experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = name,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args =
                       {{"signal_address", signal_address},
@@ -118,13 +117,13 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
         };
     };
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
         make_kernel_run_params(DM_KERNEL_1),
         make_kernel_run_params(DM_KERNEL_2),
         make_kernel_run_params(DM_KERNEL_3),
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);
@@ -303,40 +302,40 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
     constexpr const char* COMPUTE_KERNEL = "compute_tls";
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
 
-    experimental::metal2_host_api::KernelSpec compute_kernel_spec{
+    experimental::KernelSpec compute_kernel_spec{
         .unique_id = COMPUTE_KERNEL,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/simple_tls_check.cpp"},
+
+            OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/compute/simple_tls_check.cpp",
         .num_threads = QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER,
-        .runtime_arguments_schema =
+        .runtime_arg_schema =
             {
-                .named_runtime_args = {"l1_result_addr"},
+                .runtime_arg_names = {"l1_result_addr"},
             },
-        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec main_wu{
-        .unique_id = "main",
+    experimental::WorkUnitSpec main_wu{
+        .name = "main",
         .kernels = {COMPUTE_KERNEL},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "compute_kernel_tls",
+    experimental::ProgramSpec spec{
+        .name = "compute_kernel_tls",
         .kernels = {compute_kernel_spec},
         .work_units = {main_wu},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {{
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {{
         .kernel_spec_name = COMPUTE_KERNEL,
-        .named_runtime_args = {{.node = node, .args = {{"l1_result_addr", l1_result_addr}}}},
+        .runtime_arg_values = {{.node = node, .args = {{"l1_result_addr", l1_result_addr}}}},
     }};
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, true);

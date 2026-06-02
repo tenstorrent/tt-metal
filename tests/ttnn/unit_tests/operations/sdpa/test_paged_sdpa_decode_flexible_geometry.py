@@ -351,3 +351,74 @@ def test_negative_byte_count_mismatch(device):
             cur_pos_tensor=cur_pos_tt,
             block_size=view_block_size,
         )
+
+
+# ── Asymmetric num_kv_heads tests ──────────────────────────────────────────
+
+
+def _permute_view_general(t_alloc, view_kv, view_block_size, view_head_dim):
+    """Reinterpret cache memory under (view_kv, view_block_size, view_head_dim).
+
+    Generalises ``_permute_tile_grid`` to also reshape the kv-heads dim — needed when
+    sliding and full layers share one HMA buffer with asymmetric num_kv_heads (Gemma4
+    26B-A4B sliding kv=8 / full kv=2). Per-block tile counts must match between alloc
+    and view.
+    """
+    N, alloc_kv, alloc_bs, alloc_hd = t_alloc.shape
+    TILE = 32
+    assert alloc_bs % TILE == 0 and alloc_hd % TILE == 0
+    assert view_block_size % TILE == 0 and view_head_dim % TILE == 0
+    alloc_BR_t = alloc_bs // TILE
+    alloc_Wt = alloc_hd // TILE
+    view_BR_t = view_block_size // TILE
+    view_Wt = view_head_dim // TILE
+    alloc_total_tiles = alloc_kv * alloc_BR_t * alloc_Wt
+    view_total_tiles = view_kv * view_BR_t * view_Wt
+    assert alloc_total_tiles == view_total_tiles, "per-block tile count mismatch"
+
+    t = t_alloc.view(N, alloc_kv, alloc_BR_t, TILE, alloc_Wt, TILE)
+    t = t.permute(0, 1, 2, 4, 3, 5).contiguous()
+    t = t.reshape(N, alloc_total_tiles, TILE, TILE)
+    t = t.reshape(N, view_kv, view_BR_t, view_Wt, TILE, TILE)
+    t = t.permute(0, 1, 2, 4, 3, 5).contiguous()
+    return t.reshape(N, view_kv, view_block_size, view_head_dim)
+
+
+def test_negative_asymmetric_num_kv_heads_byte_count_mismatch(device):
+    """Different ``num_kv_heads`` between cache and call view *without* the per-block
+    element count being preserved must be rejected at validation.
+    """
+    torch.manual_seed(6)
+    B = 2
+    # Cache: 8 * 64 * 256 = 131072 elems/block.
+    cache_kv = 8
+    alloc_block_size = 64
+    alloc_head_dim = 256
+    # Override view: 4 * 128 * 512 = 262144 — twice the cache, mismatched.
+    view_kv = 4
+    view_head_dim = 512
+    view_block_size = 128
+    num_q_heads = view_kv
+    assert cache_kv * alloc_block_size * alloc_head_dim != view_kv * view_block_size * view_head_dim
+
+    max_num_blocks = B
+
+    k_tt, _ = _alloc_paged_cache_on_device(max_num_blocks, cache_kv, alloc_block_size, alloc_head_dim, device)
+    v_tt, _ = _alloc_paged_cache_on_device(max_num_blocks, cache_kv, alloc_block_size, alloc_head_dim, device)
+    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(B, 1)
+    page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
+    cur_pos_tt = ttnn.Tensor(torch.zeros(B, dtype=torch.int32), ttnn.int32).to(device)
+    q = torch.zeros(1, B, num_q_heads, view_head_dim).bfloat16().float()
+    q_padded = torch.nn.functional.pad(q, (0, 0, 0, 32 - num_q_heads), "constant", 0)
+    q_tt = ttnn.Tensor(q_padded, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+
+    with pytest.raises(RuntimeError, match="geometry mismatch"):
+        ttnn.transformer.paged_scaled_dot_product_attention_decode(
+            q_tt,
+            k_tt,
+            v_tt,
+            page_table_tensor=page_table_tt,
+            cur_pos_tensor=cur_pos_tt,
+            block_size=view_block_size,
+            num_kv_heads=view_kv,
+        )

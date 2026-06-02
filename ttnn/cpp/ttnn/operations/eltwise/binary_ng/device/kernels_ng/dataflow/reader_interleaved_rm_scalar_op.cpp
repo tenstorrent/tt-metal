@@ -123,7 +123,7 @@ void kernel_main() {
                             uint32_t curr_l1_a = l1_write_addr_src;
                             for (uint32_t k = 0; k < limit; ++k) {
                                 const uint32_t row_idx_a = row_block_a + k * s_h_a;
-                                const uint64_t addr_a = get_noc_addr(row_idx_a, src) + current_chunk_offset;
+                                const uint64_t addr_a = src.get_noc_addr(row_idx_a) + current_chunk_offset;
                                 noc_async_read(addr_a, curr_l1_a, current_read_len);
                                 curr_l1_a += current_chunk_bytes;
                             }

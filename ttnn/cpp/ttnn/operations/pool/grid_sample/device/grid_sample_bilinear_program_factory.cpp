@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <cstdint>
 #include <utility>
 #include "tt-metalium/kernel_types.hpp"
@@ -97,9 +98,37 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
         .buffer = is_sharded ? grid_tensor.buffer() : nullptr,
     });
 
+    // Resolve compute kernel config early: under fp32_dest_acc_en + half-sync, DEST holds only 4
+    // fp32 tiles, so each chunk must shrink to <= 4 tiles. When the user explicitly enables
+    // dst_full_sync_en, full-sync DEST holds 8 fp32 tiles and the 4-tile clamp would be a
+    // gratuitous slowdown — so we keep the full 8-tile chunk in that case. The compute kernel
+    // reads the same flag (ct_arg[16]) and recomputes its own MAX_TILES_PER_REDUCTION accordingly.
+    const auto [resolved_math_fidelity, resolved_math_approx, resolved_fp32_acc, resolved_l1_acc, user_dst_full_sync] =
+        ttnn::get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
+    (void)resolved_l1_acc;  // not consumed in this factory
+    const bool force_4_tile_chunk = resolved_fp32_acc && !user_dst_full_sync;
+    const uint32_t effective_max_tiles_per_reduction = force_4_tile_chunk ? 4U : MAX_TILES_PER_REDUCTION;
+
     const uint32_t in_ntiles_c =
         static_cast<uint32_t>(std::ceil(static_cast<float>(input_shape[-1]) / tt::constants::TILE_WIDTH));
-    const uint32_t input_cb_page_size = in_ntiles_c * tt::constants::TILE_HW * input_tensor.element_size();
+    // When in_ntiles_c exceeds effective_max_tiles_per_reduction the channel dimension is processed
+    // in chunks; the input CB only needs to hold one chunk at a time, keeping the per-core L1
+    // footprint bounded regardless of how wide the input stick is.
+    const uint32_t max_tiles_per_iter = std::min<uint32_t>(in_ntiles_c, effective_max_tiles_per_reduction);
+    const uint32_t in_nblocks_c =
+        static_cast<uint32_t>(std::ceil(static_cast<float>(in_ntiles_c) / effective_max_tiles_per_reduction));
+    const uint32_t input_chunk_nbytes =
+        effective_max_tiles_per_reduction * tt::constants::TILE_WIDTH * input_tensor.element_size();
+    const uint32_t input_cb_page_size = max_tiles_per_iter * tt::constants::TILE_HW * input_tensor.element_size();
+    // When the last channel chunk holds fewer than effective_max_tiles_per_reduction tiles, the
+    // reader must pack it with a tight write stride (== chunk_bytes) so the unpacker's
+    // tiles_to_reduce matches compute_pool_2d's `tilize_reconfig` path. We require
+    // !last_tile_is_partial — currently guaranteed by the padded-width % TILE_WIDTH == 0 check in
+    // grid_sample_device_operation.cpp — and window_size_hw (REDUCTION_SIZE=4) <= FACE_HEIGHT,
+    // which is a static property of bilinear.
+    const bool last_tile_is_partial = (input_shape[-1] % tt::constants::TILE_WIDTH) != 0;
+    const bool last_chunk_partial =
+        (in_nblocks_c > 1) && (in_ntiles_c % effective_max_tiles_per_reduction != 0) && !last_tile_is_partial;
     const uint32_t input_cb_index_0 = cb_idx++;
     desc.cbs.push_back(CBDescriptor{
         .total_size = BUFFERING_FACTOR * input_cb_page_size,
@@ -175,24 +204,28 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
 
     // Reader compile-time arguments - shared arguments first, then specific ones
     std::vector<uint32_t> reader_compile_time_args = {
-        input_cb_index_0,                            // ct_arg[0]: input_cb_index_0
-        grid_cb_index,                               // ct_arg[1]: grid_cb_index
-        scalar_cb_index_0,                           // ct_arg[2]: scalar_cb_index_0
-        input_stick_size,                            // ct_arg[3]: input_stick_size
-        grid_stick_size_arg,                         // ct_arg[4]: grid_stick_size
-        input_batch,                                 // ct_arg[5]: input_batch
-        input_height,                                // ct_arg[6]: input_height
-        input_width,                                 // ct_arg[7]: input_width
-        grid_batching_factor,                        // ct_arg[8]: grid_batching_factor (shared)
-        static_cast<uint32_t>(grid_tensor.dtype()),  // ct_arg[9]: grid_dtype (shared)
-        grid_hw,                                     // ct_arg[10]: grid_hw (shared)
-        use_precomputed_grid ? 1U : 0U               // ct_arg[11]: use_precomputed_grid (shared)
+        input_cb_index_0,                              // ct_arg[0]: input_cb_index_0
+        grid_cb_index,                                 // ct_arg[1]: grid_cb_index
+        scalar_cb_index_0,                             // ct_arg[2]: scalar_cb_index_0
+        input_stick_size,                              // ct_arg[3]: input_stick_size
+        grid_stick_size_arg,                           // ct_arg[4]: grid_stick_size
+        input_batch,                                   // ct_arg[5]: input_batch
+        input_height,                                  // ct_arg[6]: input_height
+        input_width,                                   // ct_arg[7]: input_width
+        grid_batching_factor,                          // ct_arg[8]: grid_batching_factor (shared)
+        static_cast<uint32_t>(grid_tensor.dtype()),    // ct_arg[9]: grid_dtype (shared)
+        grid_hw,                                       // ct_arg[10]: grid_hw (shared)
+        use_precomputed_grid ? 1U : 0U,                // ct_arg[11]: use_precomputed_grid (shared)
+        operation_attributes.align_corners ? 1U : 0U,  // ct_arg[12]: align_corners (shared)
+        in_nblocks_c,                                  // ct_arg[13]: in_nblocks_c (shared)
+        input_chunk_nbytes,                            // ct_arg[14]: input_chunk_nbytes (shared)
+        last_chunk_partial ? 1U : 0U                   // ct_arg[15]: last_chunk_partial (shared)
     };
 
     if (is_sharded) {
-        reader_compile_time_args.push_back(enable_split_reader ? 1U : 0U);  // ct_arg[12]: enable_split_reader
-        reader_compile_time_args.push_back(0U);  // ct_arg[13]: reader_id (will be set later per reader)
-        reader_compile_time_args.push_back(grid_nsticks_per_core);  // ct_arg[14]: grid_nsticks_per_core
+        reader_compile_time_args.push_back(enable_split_reader ? 1U : 0U);  // ct_arg[16]: enable_split_reader
+        reader_compile_time_args.push_back(0U);  // ct_arg[17]: reader_id (will be set later per reader)
+        reader_compile_time_args.push_back(grid_nsticks_per_core);  // ct_arg[18]: grid_nsticks_per_core
     }
 
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
@@ -209,7 +242,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
     KernelDescriptor reader1_desc;
     if (is_sharded) {
         auto reader0_compile_time_args = reader_compile_time_args;
-        reader0_compile_time_args[13] = 0;  // ct_arg[13]: reader_id = 0
+        reader0_compile_time_args[17] = 0;  // ct_arg[17]: reader_id = 0
 
         reader0_desc.kernel_source = reader_kernel_path;
         reader0_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -224,7 +257,7 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             auto reader1_compile_time_args = reader_compile_time_args;
             reader1_compile_time_args[0] = input_cb_index_1;   // ct_arg[0]: input_cb_index_1
             reader1_compile_time_args[2] = scalar_cb_index_1;  // ct_arg[2]: scalar_cb_index_1
-            reader1_compile_time_args[13] = 1;                 // ct_arg[13]: reader_id = 1
+            reader1_compile_time_args[17] = 1;                 // ct_arg[17]: reader_id = 1
 
             reader1_desc.kernel_source = reader_kernel_path;
             reader1_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -252,8 +285,6 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
 
     // Compute kernels
     const uint32_t channels_per_shard = input_shape[-1];
-    const uint32_t in_nblocks_c =
-        static_cast<uint32_t>(std::ceil(static_cast<float>(in_ntiles_c) / MAX_TILES_PER_REDUCTION));
 
     auto pool_defines_map = ttnn::operations::pool::get_defines(ttnn::operations::pool::Pool2DType::AVG_POOL2D);
 
@@ -276,27 +307,28 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
             pre_tilize_cb_id,                  // ct_arg[13]: pre_tilize_cb_id
             is_output_tiled ? 1U : 0U,         // ct_arg[14]: is_output_tiled
             is_output_block_format ? 1U : 0U,  // ct_arg[15]: is_output_block_format
-            DUMMY_CB_ID,                       // ct_arg[16]: unused (in_idx_cb_id for mpwi)
-            DUMMY_CB_ID,                       // ct_arg[17]: unused (pack_tmp_cb_id for mpwi)
-            DUMMY_CB_ID,                       // ct_arg[18]: unused (pack_idx_tmp_cb_id for mpwi)
-            DUMMY_CB_ID,                       // ct_arg[19]: unused (right_inc_cb_id for mpwi)
-            DUMMY_CB_ID,                       // ct_arg[20]: unused (down_left_wrap_inc_cb_id for mpwi)
-            DUMMY_CB_ID,                       // ct_arg[21]: unused (up_left_wrap_inc_cb_id for mpwi)
-            DUMMY_CB_ID,                       // ct_arg[22]: unused (out_idx_cb_id for mpwi)
-            1,                                 // ct_arg[23]: stride_h (unused by grid_sample)
-            1,                                 // ct_arg[24]: stride_w (unused by grid_sample)
-            1,                                 // ct_arg[25]: in_h_padded (unused by grid_sample)
-            1,                                 // ct_arg[26]: in_w_padded (unused by grid_sample)
-            1,                                 // ct_arg[27]: eff_kernel_h (unused by grid_sample)
-            1,                                 // ct_arg[28]: eff_kernel_w (unused by grid_sample)
-            1,                                 // ct_arg[29]: pad_l (unused by grid_sample)
-            DUMMY_CB_ID,                       // ct_arg[30]: intra_kernel_right_inc_cb_id (unused)
-            DUMMY_CB_ID,                       // ct_arg[31]: intra_kernel_down_left_wrap_inc_cb_id (unused)
-            DUMMY_CB_ID,                       // ct_arg[32]: compute_tmp_idx_cb_id (unused)
-            DUMMY_CB_ID,                       // ct_arg[33]: clear_value_cb_id (unused)
-            1,                                 // ct_arg[34]: kernel_h (unused by grid_sample)
-            1,                                 // ct_arg[35]: kernel_w (unused by grid_sample)
-            0,                                 // ct_arg[36]: indexes_32_bit (unused by grid_sample)
+            force_4_tile_chunk ? 1U : 0U,      // ct_arg[16]: force_max_tiles_per_reduction_4
+            DUMMY_CB_ID,                       // ct_arg[17]: unused (in_idx_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[18]: unused (pack_tmp_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[19]: unused (pack_idx_tmp_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[20]: unused (right_inc_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[21]: unused (down_left_wrap_inc_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[22]: unused (up_left_wrap_inc_cb_id for mpwi)
+            DUMMY_CB_ID,                       // ct_arg[23]: unused (out_idx_cb_id for mpwi)
+            1,                                 // ct_arg[24]: stride_h (unused by grid_sample)
+            1,                                 // ct_arg[25]: stride_w (unused by grid_sample)
+            1,                                 // ct_arg[26]: in_h_padded (unused by grid_sample)
+            1,                                 // ct_arg[27]: in_w_padded (unused by grid_sample)
+            1,                                 // ct_arg[28]: eff_kernel_h (unused by grid_sample)
+            1,                                 // ct_arg[29]: eff_kernel_w (unused by grid_sample)
+            1,                                 // ct_arg[30]: pad_l (unused by grid_sample)
+            DUMMY_CB_ID,                       // ct_arg[31]: intra_kernel_right_inc_cb_id (unused)
+            DUMMY_CB_ID,                       // ct_arg[32]: intra_kernel_down_left_wrap_inc_cb_id (unused)
+            DUMMY_CB_ID,                       // ct_arg[33]: compute_tmp_idx_cb_id (unused)
+            DUMMY_CB_ID,                       // ct_arg[34]: clear_value_cb_id (unused)
+            1,                                 // ct_arg[35]: kernel_h (unused by grid_sample)
+            1,                                 // ct_arg[36]: kernel_w (unused by grid_sample)
+            0,                                 // ct_arg[37]: indexes_32_bit (unused by grid_sample)
         };
 
         KernelDescriptor compute_desc;
@@ -306,9 +338,10 @@ ProgramDescriptor GridSampleBilinearProgramFactory::create_descriptor(
         compute_desc.compile_time_args = std::move(compute_compile_time_args);
         compute_desc.defines = {pool_defines_map.begin(), pool_defines_map.end()};
         compute_desc.config = ComputeConfigDescriptor{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .fp32_dest_acc_en = false,
-            .math_approx_mode = false,
+            .math_fidelity = resolved_math_fidelity,
+            .fp32_dest_acc_en = resolved_fp32_acc,
+            .dst_full_sync_en = user_dst_full_sync,
+            .math_approx_mode = resolved_math_approx,
         };
         return compute_desc;
     };

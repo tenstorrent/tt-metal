@@ -4,7 +4,7 @@
 
 #include <fmt/ranges.h>
 #include <tt_stl/fmt.hpp>
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include "impl/dataflow_buffer/dataflow_buffer.hpp"
 
 #include <algorithm>
 
@@ -360,6 +360,10 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
         TT_FATAL(
             it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
         const uint32_t alloc_addr = it->second.second;
+        TT_FATAL(
+            !this->borrows_memory() || alloc_addr != 0,
+            "DFB {} uses borrowed memory but set_borrowed_memory_base_addr() was not called before serialization",
+            this->id);
 
         std::vector<uint8_t> data;
         data.reserve(4 * sizeof(uint32_t));
@@ -377,6 +381,10 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
     auto it = this->core_lookup_.find(core);
     TT_FATAL(it != this->core_lookup_.end(), "DFB {} has no config for core ({}, {})", this->id, core.x, core.y);
     const auto& [group_idx, alloc_addr] = it->second;
+    TT_FATAL(
+        !this->borrows_memory() || alloc_addr != 0,
+        "DFB {} uses borrowed memory but set_borrowed_memory_base_addr() was not called before serialization",
+        this->id);
     const DfbGroup* core_group = &this->groups[group_idx];
 
     const auto& hw_risc_configs = core_group->hw_risc_configs;
@@ -626,7 +634,7 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
             config.pap == dfb::AccessPattern::STRIDED && config.cap == dfb::AccessPattern::STRIDED,
             "Intra-tensix DFBs require STRIDED access for both producer (packer) and consumer (unpacker)");
         TT_FATAL(
-            !config.enable_implicit_sync,
+            !config.enable_producer_implicit_sync && !config.enable_consumer_implicit_sync,
             "Intra-tensix DFBs do not support implicit sync (ISR-based credits)");
     }
 
@@ -1269,9 +1277,11 @@ void ProgramImpl::finalize_single_dfb_config(
     }
 
     // Allocate transaction IDs and compute ISR descriptor fields when implicit sync is enabled.
-    // Only done on the first core processed for this DFB because txn IDs are core-invariant
-    if (config.enable_implicit_sync && dfb->groups.empty()) {
-        if (!producer_is_tensix_only) {
+    // Only done on the first core processed for this DFB because txn IDs are core-invariant.
+    // Producer and consumer sides are checked independently — the underlying hardware mechanism
+    // is per-side (separate IE_1/IE_2 masks driving separate ISR handlers).
+    if (dfb->groups.empty()) {
+        if (config.enable_producer_implicit_sync && !producer_is_tensix_only) {
             uint8_t num_prod_txn_ids = compute_optimal_txn_id_count(
                 config.num_entries, config.num_producers, num_producer_tcs,
                 /*consumes_all=*/false);
@@ -1294,7 +1304,7 @@ void ProgramImpl::finalize_single_dfb_config(
                 dfb->producer_txn_descriptor.num_entries_per_txn_id_per_tc);
         }
 
-        if (!consumer_is_tensix_only) {
+        if (config.enable_consumer_implicit_sync && !consumer_is_tensix_only) {
             const bool consumes_all = (config.cap == ::dfb::AccessPattern::ALL);
             uint8_t num_cons_txn_ids = compute_optimal_txn_id_count(
                 config.num_entries, config.num_consumers, num_consumer_tcs,
@@ -1344,38 +1354,63 @@ void ProgramImpl::allocate_dataflow_buffers(const IDevice* device) {
 
     uint64_t base_dfb_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     for (auto& dfb : this->dataflow_buffers_) {
-        uint64_t computed_addr = base_dfb_address;
-        for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
-            // Need the max available address across all cores dataflow buffer is placed on
-            for (const CircularBufferAllocator& dfb_allocator : this->dfb_allocators_) {
-                if (dfb_allocator.core_range == core_range) {
-                    computed_addr = std::max(computed_addr, dfb_allocator.get_cb_region_end());
-                    break;
-                }
-            }
+        // Alias secondaries share the primary's L1 address; skip allocation here
+        // and propagate the address inline after the primary is processed below.
+        if (dfb->alias_primary_id.has_value()) {
+            continue;
         }
-        computed_addr = align(computed_addr, device->allocator()->get_alignment(BufferType::DRAM));
-        for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
-            for (CircularBufferAllocator& dfb_allocator : this->dfb_allocators_) {
-                if (dfb_allocator.core_range.intersects(core_range)) {
-                    if (dfb_allocator.core_range != core_range and computed_addr < dfb_allocator.get_cb_region_end()) {
-                        // Intersecting core range has already been marked to have allocation at this address. This
-                        // could have been marked by a dataflow buffer on a core range disjoint from current
-                        // `core_range` but also intersecting `dfb_allocator.core_range`
-                        continue;
+
+        uint32_t alloc_addr;
+        if (dfb->borrows_memory()) {
+            // Use the address latched by set_borrowed_memory_base_addr()
+            alloc_addr = dfb->borrowed_addr_;
+        } else {
+            uint64_t computed_addr = base_dfb_address;
+            for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
+                // Need the max available address across all cores dataflow buffer is placed on
+                for (const CircularBufferAllocator& dfb_allocator : this->dfb_allocators_) {
+                    if (dfb_allocator.core_range == core_range) {
+                        computed_addr = std::max(computed_addr, dfb_allocator.get_cb_region_end());
+                        break;
                     }
-                    dfb_allocator.mark_address(computed_addr, dfb->total_size(), base_dfb_address);
                 }
             }
+            computed_addr = align(computed_addr, device->allocator()->get_alignment(BufferType::DRAM));
+            for (const CoreRange& core_range : dfb->core_ranges.ranges()) {
+                for (CircularBufferAllocator& dfb_allocator : this->dfb_allocators_) {
+                    if (dfb_allocator.core_range.intersects(core_range)) {
+                        if (dfb_allocator.core_range != core_range and computed_addr < dfb_allocator.get_cb_region_end()) {
+                            // Intersecting core range has already been marked to have allocation at this address. This
+                            // could have been marked by a dataflow buffer on a core range disjoint from current
+                            // `core_range` but also intersecting `dfb_allocator.core_range`
+                            continue;
+                        }
+                        dfb_allocator.mark_address(computed_addr, dfb->total_size(), base_dfb_address);
+                    }
+                }
+            }
+            alloc_addr = static_cast<uint32_t>(computed_addr);
         }
-        // Fill alloc_addr per core in each group.  All cores of a DFB get the same computed_addr so the L1 buffer is at a uniform
+        // Fill alloc_addr per core in each group.  All cores of a DFB get the same alloc_addr so the L1 buffer is at a uniform
         // absolute address on every physical core.
-        uint32_t alloc_addr = static_cast<uint32_t>(computed_addr);
         dfb->core_lookup_.clear();
         for (size_t gi = 0; gi < dfb->groups.size(); gi++) {
             for (auto& [core, addr] : dfb->groups[gi].l1_by_core) {
                 addr = alloc_addr;
                 dfb->core_lookup_.emplace(core, std::make_pair(gi, alloc_addr));
+            }
+        }
+
+        // Propagate this primary's address to all alias secondaries immediately,
+        // so they share the same L1 region without an additional allocator call.
+        for (uint32_t sec_id : dfb->alias_secondary_ids) {
+            auto& sec = this->dataflow_buffers_[sec_id];
+            sec->core_lookup_.clear();
+            for (size_t gi = 0; gi < sec->groups.size(); gi++) {
+                for (auto& [core, addr] : sec->groups[gi].l1_by_core) {
+                    addr = alloc_addr;
+                    sec->core_lookup_.emplace(core, std::make_pair(gi, alloc_addr));
+                }
             }
         }
     }

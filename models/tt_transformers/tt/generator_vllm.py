@@ -148,6 +148,13 @@ class HybridAttentionForCausalLM(Generator):
     presence of ``get_kv_cache_spec`` on the model class.
     """
 
+    # Keep this in sync with get_kv_cache_spec below and with the TT vLLM
+    # worker's token-budget calculation. While SlidingWindowSpec is disabled,
+    # vLLM produces one full-attention KV group and the legacy single page_table
+    # path is sufficient. When SlidingWindowSpec is restored, flip this back so
+    # warmup also exercises the per-layer persistent page-table path.
+    _HYBRID_KV_CACHE_GROUPS_ENABLED = False
+
     @classmethod
     def get_kv_cache_spec(cls, vllm_config):
         """Build per-layer KVCacheSpec from HF config ``layer_types``.
@@ -158,7 +165,10 @@ class HybridAttentionForCausalLM(Generator):
         runner side can map each spec back to its model layer index.
         """
         from vllm.utils.torch_utils import STR_DTYPE_TO_TORCH_DTYPE
-        from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
+
+        # SlidingWindowSpec import intentionally dropped; restore alongside the
+        # branch below when re-enabling kv cache groups.
+        from vllm.v1.kv_cache_interface import FullAttentionSpec
 
         model_config = vllm_config.model_config
         cache_config = vllm_config.cache_config
@@ -172,8 +182,6 @@ class HybridAttentionForCausalLM(Generator):
                 "hf_config.text_config.layer_types (one of 'full_attention' / "
                 "'sliding_attention' per layer); none found on this model"
             )
-
-        sliding_window = getattr(text_config, "sliding_window", None)
         num_kv_heads = model_config.get_num_kv_heads(vllm_config.parallel_config)
         head_size = model_config.get_head_size()
         dtype = (
@@ -190,24 +198,24 @@ class HybridAttentionForCausalLM(Generator):
             dtype=dtype,
         )
 
+        # SlidingWindowSpec is temporarily disabled: TT-side decode passes the
+        # absolute position to paged_update_cache / paged_sdpa_decode, but vLLM
+        # zero-pads the sliding group's page_table past sliding_window/block_size
+        # entries, so positions beyond the sliding window collapse onto physical
+        # block 0 and silently corrupt the cache. Emit FullAttentionSpec for every
+        # layer so vLLM allocates a max_model_len cache per layer; the SDPA op's
+        # own sliding_window_size kwarg still trims attention correctly on the
+        # read side.
         spec_per_layer = {}
         for i, lt in enumerate(layer_types):
             name = f"model.layers.{i}.self_attn"
-            if lt == "sliding_attention":
-                if sliding_window is None:
-                    raise ValueError(
-                        f"layer_types[{i}] is 'sliding_attention' but "
-                        f"hf_config.sliding_window is None on {cls.__name__}"
-                    )
-                spec_per_layer[name] = SlidingWindowSpec(**common, sliding_window=sliding_window)
-            elif lt == "full_attention":
-                spec_per_layer[name] = FullAttentionSpec(**common)
-            else:
+            if lt not in ("sliding_attention", "full_attention"):
                 raise ValueError(
                     f"Unsupported layer_type {lt!r} at layer {i} on "
                     f"{cls.__name__}; expected 'full_attention' or "
                     "'sliding_attention'"
                 )
+            spec_per_layer[name] = FullAttentionSpec(**common)
         return spec_per_layer
 
     def prefill_forward(self, *args, **kwargs):
@@ -229,17 +237,17 @@ class HybridAttentionForCausalLM(Generator):
 
     def _ensure_page_tables_per_layer(self, page_tables_per_layer, page_table):
         """When invoked outside the vLLM hybrid plugin (e.g. by warmup
-        which only knows about the legacy single ``page_table``), broadcast
-        the single page table to a per-layer list. This is required so
-        trace capture exercises the per-layer code path inside
-        ``Transformer.forward`` — otherwise the trace specializes on the
-        legacy fallback branch and runtime per-layer updates are silently
-        ignored at replay (the trace reads from whatever address the
-        legacy single tensor lived at during capture). The persistent
-        device tensors allocated in ``Transformer._page_tables_to_ttnn``
-        are then bound at trace time and updated in place each call.
+        which only knows about the legacy single ``page_table``), optionally
+        broadcast the single page table to a per-layer list.
+
+        Broadcasting is only correct while hybrid KV cache groups are enabled:
+        trace capture then needs to exercise the per-layer code path inside
+        ``Transformer.forward`` so replay reads the persistent per-layer device
+        tensors updated before each call. While hybrid groups are temporarily
+        disabled, all layers use one full-attention KV group, so we intentionally
+        keep warmup/runtime on the legacy single-page-table path.
         """
-        if page_tables_per_layer is not None or page_table is None:
+        if page_tables_per_layer is not None or page_table is None or not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
             return page_tables_per_layer
         # Broadcast the same torch tensor across every layer in every
         # submesh — content is identical, persistent allocation gives each
@@ -938,6 +946,17 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
         return self.model_args[0].model_cache_path
 
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        # While hybrid KV cache groups are disabled (one full-attention group
+        # for every layer), the per-layer page-table routing inside this
+        # bridge is buggy for users_row_sharded models: it shards page tables
+        # naively by mesh row, which doesn't match the gpt-oss
+        # slot // max_local_batch_size → row mapping and produces null
+        # content on the rows whose page-table chunks point at the wrong
+        # KV blocks. Until a row-aware per-layer routing lands, skip the
+        # hybrid path entirely and let the legacy single page_table flow
+        # through Generator.prefill_forward_text reach the model untouched.
+        if not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
+            return super().prefill_forward_text(*args, **kwargs)
         page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
         # Push the per-layer block IDs into the persistent device buffers
@@ -953,6 +972,10 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
             return super().prefill_forward_text(**kwargs)
 
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        # See prefill_forward note above. Skip the hybrid path while
+        # _HYBRID_KV_CACHE_GROUPS_ENABLED is False.
+        if not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
+            return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
         page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
         if per_submesh is not None:
@@ -998,6 +1021,17 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
         super().__init__(*args, **kwargs)
 
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        # While hybrid KV cache groups are disabled (one full-attention group
+        # for every layer), the per-layer page-table routing inside this
+        # bridge is buggy for users_row_sharded models: it shards page tables
+        # naively by mesh row, which doesn't match the gpt-oss
+        # slot // max_local_batch_size → row mapping and produces null
+        # content on the rows whose page-table chunks point at the wrong
+        # KV blocks. Until a row-aware per-layer routing lands, skip the
+        # hybrid path entirely and let the legacy single page_table flow
+        # through Generator.prefill_forward_text reach the model untouched.
+        if not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
+            return super().prefill_forward_text(*args, **kwargs)
         page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
         # See ``Gemma3ForConditionalGeneration.prefill_forward`` for why
@@ -1010,6 +1044,10 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
             return super().prefill_forward_text(*args, **kwargs)
 
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        # See prefill_forward note above. Skip the hybrid path while
+        # _HYBRID_KV_CACHE_GROUPS_ENABLED is False.
+        if not self._HYBRID_KV_CACHE_GROUPS_ENABLED:
+            return super(HybridAttentionForCausalLM, self).decode_forward(*args, **kwargs)
         page_tables_per_layer = self._ensure_page_tables_per_layer(page_tables_per_layer, kwargs.get("page_table"))
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
         if per_submesh is not None:

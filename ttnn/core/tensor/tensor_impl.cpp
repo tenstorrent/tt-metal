@@ -30,6 +30,7 @@
 #include "tt-metalium/mesh_command_queue.hpp"
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/float8.hpp>
 
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/span.hpp>
@@ -53,6 +54,7 @@ std::ostream& operator<<(std::ostream& os, const DataType& dtype) {
         case DataType::UINT16: os << "uint16"; break;
         case DataType::UINT32: os << "uint32"; break;
         case DataType::INT32: os << "int32"; break;
+        case DataType::FP8_E4M3: os << "fp8_e4m3"; break;
         default: throw std::invalid_argument("Unknown data type");
     }
     return os;
@@ -256,6 +258,15 @@ std::string to_string_impl(const Tensor& tensor) {
     }
 
     auto get_row_major_tensor = [&](const Tensor& tensor) -> Tensor {
+        if (tensor.dtype() == DataType::FP8_E4M3) {
+            // FP8 is element-encoded and is already ROW_MAJOR (constrained in tensor_spec.cpp),
+            // but the downstream detail::to_string uses view_as<float> which would misinterpret
+            // FP8 bytes as floats. Pivot through FLOAT32 via host-side conversion
+            // (float8_e4m3::operator float) so print sees real float values. Checked before the
+            // ROW_MAJOR early return below because an FP8 tensor satisfies that early-return
+            // condition but still needs the dtype pivot.
+            return tt::tt_metal::to_dtype(tensor, DataType::FLOAT32);
+        }
         if (tensor.layout() == Layout::ROW_MAJOR) {
             return tensor;
         }
@@ -292,7 +303,7 @@ std::string to_string_impl(const Tensor& tensor) {
         return to_string_impl<T>(cpu_tensor);
     }
 
-    auto& mesh_device = storage.get_mesh_tensor().device();
+    const auto& mesh_device = storage.get_mesh_tensor().device();
     // TODO: Uncomment after the distributed tensors migration to tt-metal is complete.
     // if (mesh_device->num_devices() == 1) {
     //     return to_string<T>(ttnn::distributed::get_device_tensors(cpu_tensor).at(0));
@@ -324,6 +335,11 @@ std::string to_string_impl<bfloat8_b>(const Tensor& tensor) {
 
 template <>
 std::string to_string_impl<bfloat4_b>(const Tensor& tensor) {
+    return to_string_impl<float>(tensor);
+}
+
+template <>
+std::string to_string_impl<float8_e4m3>(const Tensor& tensor) {
     return to_string_impl<float>(tensor);
 }
 
@@ -447,6 +463,13 @@ Tensor extract_shard_impl<bfloat8_b>(const Tensor& tensor, const uint32_t& core_
 template <>
 Tensor extract_shard_impl<bfloat4_b>(const Tensor& tensor, const uint32_t& core_id) {
     return extract_shard_impl<uint32_t>(tensor, core_id);
+}
+
+template <>
+Tensor extract_shard_impl<float8_e4m3>(const Tensor&, const uint32_t&) {
+    // FP8_E4M3 sharded device tensors are not produced by any current op (combine emits
+    // interleaved output). Add a real implementation when a use case appears.
+    TT_THROW("extract_shard: FP8_E4M3 is not supported");
 }
 
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id) {

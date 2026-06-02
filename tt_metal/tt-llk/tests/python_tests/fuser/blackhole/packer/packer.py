@@ -46,13 +46,13 @@ class Packer(BasePacker):
         block: BlockData,
     ) -> str:
         dest_acc = config.dest_acc.cpp_enum_value
-        bh_tilize = operation.bh_tilize.cpp_enum_value
+        bh_pack_mode = operation.bh_tilize.pack_mode_value
         face_r_dim = operation.output.tile_shape.face_r_dim
         num_faces = operation.output.tile_shape.total_num_faces()
         dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
         return (
-            f"    _llk_pack_init_<false, false, {bh_tilize}>(\n"
-            f"        {config.sentinel.pack_src_format}, {face_r_dim}, TILE_C_DIM, {num_faces}, 1\n"
+            f"    _llk_pack_init_<{bh_pack_mode}, false /* zero_output */, false /* skip_addrmod_config */>(\n"
+            f"        {config.sentinel.pack_src_format}, {face_r_dim}, TILE_C_DIM, {num_faces}, 1 /* num_tiles */\n"
             f"    );\n"
             f"    _llk_pack_dest_init_<{dest_sync}, {dest_acc}>();\n"
         )
@@ -67,4 +67,4 @@ class Packer(BasePacker):
         dest_acc = config.dest_acc.cpp_enum_value
         dest_sync = f"DstSync::Sync{operation.dest_sync.name}"
         buffer = operation.output.cpp_name
-        return f"_llk_pack_<{dest_sync}, {dest_acc}, false>({block.tile_id_block}, L1_ADDRESS({buffer}[{block.tile_id_global}]));\n"
+        return f"_llk_pack_<{dest_sync}, {dest_acc}, ckernel::PackMode::Default>({block.tile_id_block}, L1_ADDRESS({buffer}[{block.tile_id_global}]));\n"

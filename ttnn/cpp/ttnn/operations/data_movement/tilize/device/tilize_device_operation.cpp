@@ -109,8 +109,12 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::FLOAT32 or
             input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::INT32 or
-            input_tensor_a.dtype() == DataType::UINT16,
-        "data type must be bfloat16, float32, uint32, int32, or uint16");
+            input_tensor_a.dtype() == DataType::UINT16 or input_tensor_a.dtype() == DataType::FP8_E4M3,
+        "data type must be bfloat16, float32, uint32, int32, uint16, or fp8_e4m3");
+    TT_FATAL(
+        input_tensor_a.dtype() != DataType::FP8_E4M3 || (operation_attributes.output_dtype == DataType::BFLOAT8_B),
+        "FP8_E4M3 input requires output_dtype=BFLOAT8_B for tilize; the default output dtype would produce an "
+        "invalid TILE output specification");
 
     uint32_t stick_size = stick_s * input_tensor_a.element_size();  // Assuming bfloat16 dataformat
 

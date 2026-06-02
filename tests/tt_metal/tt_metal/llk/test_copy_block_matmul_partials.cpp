@@ -72,11 +72,11 @@ static std::vector<uint32_t> generate_copy_block_stimulus(
     return src_vec;
 }
 
-void run_single_core_copy_block_matmul_partials_quasar(
+void run_single_core_copy_block_matmul_partials(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CopyBlockMatmulPartialsConfig& test_config) {
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
 
     uint32_t single_tile_size = test_config.single_tile_size;
     uint32_t num_tiles = test_config.num_tiles;
@@ -99,119 +99,124 @@ void run_single_core_copy_block_matmul_partials_quasar(
     constexpr const char* WRITER = "writer";
     constexpr const char* COMPUTE = "compute";
 
-    experimental::metal2_host_api::DataflowBufferSpec src0_dfb_spec{
+    experimental::DataflowBufferSpec src0_dfb_spec{
         .unique_id = SRC0_DFB,
         .entry_size = single_tile_size,
         .num_entries = num_input_tiles,
         .data_format_metadata = data_format,
-        // Match pre-migration behavior: legacy DataflowBufferConfig set enable_implicit_sync=false.
-        .disable_implicit_sync = true,
     };
-    experimental::metal2_host_api::DataflowBufferSpec dst_dfb_spec{
+    experimental::DataflowBufferSpec dst_dfb_spec{
         .unique_id = DST_DFB,
         .entry_size = single_tile_size,
         .num_entries = num_output_tiles,
         .data_format_metadata = data_format,
-        // Match pre-migration behavior: legacy DataflowBufferConfig set enable_implicit_sync=false.
-        .disable_implicit_sync = true,
     };
 
-    experimental::metal2_host_api::KernelSpec reader_spec{
+    experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = SRC0_DFB,
-            .local_accessor_name = "out",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_bindings = {experimental::ProducerOf(SRC0_DFB, "out")},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"src_addr", "src_dram_bank_id", "num_tiles", "ublock_size_tiles", "reader_only"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen1_config =
+                    experimental::DataMovementHardwareConfig::Gen1Config{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
+                .gen2_config =
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {SRC0_DFB}}},
     };
 
-    experimental::metal2_host_api::KernelSpec writer_spec{
+    experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_pop_n.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_pop_n.cpp",
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = DST_DFB,
-            .local_accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arguments_schema =
-            {.named_runtime_args = {"dst_addr", "dst_dram_bank_id", "num_tiles", "ublock_size_tiles", "writer_only"}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"dst_addr", "dst_dram_bank_id", "num_tiles", "ublock_size_tiles", "writer_only"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen1_config =
+                    experimental::DataMovementHardwareConfig::Gen1Config{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
+                .gen2_config =
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {DST_DFB}}},
     };
 
-    experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines compute_defines;
+    experimental::KernelSpec::CompilerOptions::Defines compute_defines;
     if (test_config.fp32_dest_acc_en) {
         compute_defines.emplace_back("DST_ACCUM_MODE", "1");
     }
 
-    experimental::metal2_host_api::KernelSpec compute_spec{
+    experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = compute_defines},
         .dfb_bindings =
             {{
                  .dfb_spec_name = SRC0_DFB,
-                 .local_accessor_name = "in",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "in",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = DST_DFB,
-                 .local_accessor_name = "out",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "out",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
-        .compile_time_arg_bindings = {{"num_tiles", num_tiles}, {"num_single_transfer", test_config.compute_ublock}},
-        .config_spec =
-            experimental::metal2_host_api::ComputeConfiguration{
+        .compile_time_args = {{"num_tiles", num_tiles}, {"num_single_transfer", test_config.compute_ublock}},
+        .hw_config =
+            experimental::ComputeHardwareConfig{
                 .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
                 .dst_full_sync_en = test_config.dst_full_sync_en,
+                // When fp32_dest_acc_en is true the src DFB is Float32 and the compute kernel
+                // consumes it, so the Metal 2.0 host API requires an explicit unpack_to_dest_mode entry.
+                // Default is unpack via SrcA/B, ~19-bit precision.
+                .unpack_to_dest_mode =
+                    test_config.fp32_dest_acc_en
+                        ? std::vector<experimental::ComputeHardwareConfig::
+                                          DFBUnpackToDestMode>{{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
+                        : std::vector<experimental::ComputeHardwareConfig::DFBUnpackToDestMode>{},
             },
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+    experimental::WorkUnitSpec wu{
+        .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "single_core_copy_block_matmul_partials",
+    experimental::ProgramSpec spec{
+        .name = "single_core_copy_block_matmul_partials",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {src0_dfb_spec, dst_dfb_spec},
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    distributed::MeshWorkload workload;
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    workload.add_program(device_range, std::move(program));
+    auto& program_run = workload.get_programs().at(device_range);
 
     std::vector<uint32_t> src_vec = generate_copy_block_stimulus(dram_buffer_size, test_config);
     distributed::WriteShard(cq, src_dram_buffer, src_vec, zero_coord);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args =
                       {{"src_addr", src_dram_buffer->address()},
@@ -220,9 +225,9 @@ void run_single_core_copy_block_matmul_partials_quasar(
                        {"ublock_size_tiles", test_config.reader_ublock},
                        {"reader_only", 0u}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args =
                       {{"dst_addr", dst_dram_buffer->address()},
@@ -231,14 +236,14 @@ void run_single_core_copy_block_matmul_partials_quasar(
                        {"ublock_size_tiles", test_config.writer_ublock},
                        {"writer_only", 0u}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = COMPUTE,
         },
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunArgs(program_run, params);
 
-    auto* dev = mesh_device->get_devices()[0];
-    tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     std::vector<uint32_t> result_vec;
     distributed::ReadShard(cq, result_vec, dst_dram_buffer, zero_coord);
@@ -247,145 +252,6 @@ void run_single_core_copy_block_matmul_partials_quasar(
     EXPECT_EQ(src_vec, result_vec);
 }
 
-void run_single_core_copy_block_matmul_partials_legacy(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CopyBlockMatmulPartialsConfig& test_config) {
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Application Setup
-    ////////////////////////////////////////////////////////////////////////////
-    auto& cq = mesh_device->mesh_command_queue();
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    distributed::MeshWorkload workload;
-    tt_metal::Program program = tt_metal::CreateProgram();
-    workload.add_program(device_range, std::move(program));
-    auto& program_ = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
-
-    CoreCoord core = {0, 0};
-    uint32_t single_tile_size = test_config.single_tile_size;
-    uint32_t num_tiles = test_config.num_tiles;
-    uint32_t dram_buffer_size = single_tile_size * num_tiles;
-
-    tt_metal::InterleavedBufferConfig dram_config{
-        .device = device,
-        .size = dram_buffer_size,
-        .page_size = dram_buffer_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
-
-    auto src_dram_buffer_bf16 = CreateBuffer(dram_config);
-    uint32_t dram_buffer_src_addr = src_dram_buffer_bf16->address();
-    auto dst_dram_buffer = CreateBuffer(dram_config);
-    uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-
-    uint32_t num_input_tiles = test_config.reader_ublock;
-    uint32_t num_output_tiles = test_config.writer_ublock;
-
-    uint32_t src0_cb_index = test_config.src0_cb_index;
-    uint32_t input_id = src0_cb_index;
-    tt_metal::CircularBufferConfig cb_src0_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(src0_cb_index, single_tile_size);
-
-    if (test_config.fp32_dest_acc_en) {
-        cb_src0_config = tt_metal::CircularBufferConfig(
-                             num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float32}})
-                             .set_page_size(src0_cb_index, single_tile_size);
-    }
-    tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
-
-    uint32_t ouput_cb_index = test_config.ouput_cb_index;
-    uint32_t output_id = ouput_cb_index;
-    tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(
-            num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
-            .set_page_size(ouput_cb_index, single_tile_size);
-    if (test_config.fp32_dest_acc_en) {
-        cb_output_config = tt_metal::CircularBufferConfig(
-                               num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float32}})
-                               .set_page_size(ouput_cb_index, single_tile_size);
-    }
-    tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
-
-    auto unary_reader_kernel = tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_n.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
-
-    auto unary_writer_kernel = tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_pop_n.cpp",
-        core,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
-
-    vector<uint32_t> compute_kernel_args = {
-        uint(num_tiles), uint(test_config.compute_ublock), uint(input_id), uint(output_id)};
-
-    std::map<std::string, std::string> defines;
-    if (test_config.fp32_dest_acc_en) {
-        defines["DST_ACCUM_MODE"] = "1";
-    }
-    tt_metal::CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp",
-        core,
-        tt_metal::ComputeConfig{
-            .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-            .dst_full_sync_en = test_config.dst_full_sync_en,
-            .compile_args = compute_kernel_args,
-            .defines = defines});
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Execute Application
-    ////////////////////////////////////////////////////////////////////////////
-    std::vector<uint32_t> src_vec = generate_copy_block_stimulus(dram_buffer_size, test_config);
-
-    tt_metal::detail::WriteToBuffer(src_dram_buffer_bf16, src_vec);
-
-    tt_metal::SetRuntimeArgs(
-        program_,
-        unary_reader_kernel,
-        core,
-        {dram_buffer_src_addr,
-         (uint32_t)0,  // dram bank id
-         num_tiles,
-         input_id,
-         test_config.reader_ublock,
-         false});
-
-    tt_metal::SetRuntimeArgs(
-        program_,
-        unary_writer_kernel,
-        core,
-        {dram_buffer_dst_addr,
-         (uint32_t)0,  // dram bank id
-         num_tiles,
-         output_id,
-         test_config.writer_ublock,
-         false});
-
-    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
-    distributed::Finish(cq);
-
-    std::vector<uint32_t> result_vec_bf16;
-    tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec_bf16);
-
-    ////////////////////////////////////////////////////////////////////////////
-    //                      Validation & Teardown
-    ////////////////////////////////////////////////////////////////////////////
-    EXPECT_EQ(src_vec.size(), result_vec_bf16.size());
-    EXPECT_EQ(src_vec, result_vec_bf16);
-}
-
-void run_single_core_copy_block_matmul_partials(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const CopyBlockMatmulPartialsConfig& test_config) {
-    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-        run_single_core_copy_block_matmul_partials_quasar(mesh_device, test_config);
-    } else {
-        run_single_core_copy_block_matmul_partials_legacy(mesh_device, test_config);
-    }
-}
 }  // namespace unit_tests::compute::matmul_partials
 
 ////////////////////////////////////////////////////////////////////////////

@@ -72,6 +72,13 @@ while IFS= read -r FILE; do
         tt_metal/tt-llk/tests/**/perf/**|tt_metal/tt-llk/tests/**/*perf*)
             LLK_PERF_CHANGED=true
             ;;
+        # Shared Python test harness (helpers/ and conftest.py) — imported by ALL arch-specific
+        # test suites including quasar. A break here causes quasar collection to fail even if no
+        # quasar-specific file changed, so treat it as a quasar change.
+        tt_metal/tt-llk/tests/python_tests/helpers/**|tt_metal/tt-llk/tests/python_tests/conftest.py)
+            LLK_QUASAR_CHANGED=true
+            LLK_TESTS_CHANGED=true
+            ;;
         tt_metal/tt-llk/tests/**)
             LLK_TESTS_CHANGED=true
             ;;

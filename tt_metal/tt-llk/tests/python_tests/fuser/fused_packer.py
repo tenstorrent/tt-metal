@@ -19,6 +19,24 @@ from .fused_loop import FusedLoop
 
 
 class Packer:
+    """Base class for fused test packer code generators.
+
+    Subclasses override methods to emit the C++ LLK calls that configure and
+    drive the Pack thread, plus a Python golden function for test validation.
+
+    The pack lifecycle is driven by FusedLoop.pack_loop(), which iterates
+    over tiles in the block and calls pack() for each one:
+        init() -> pack_loop() [which calls pack()] -> uninit()
+
+    To create a new packer:
+        1. Subclass Packer
+        2. Override get_headers() with the required LLK header files
+        3. Override init(), pack(), uninit() to emit the C++ LLK calls
+        4. Override golden() to compute the expected pack result,
+           calling _relu_golden() and _l1_acc_golden() as needed
+    """
+
+    # Controls the tile iteration pattern for the pack loop.
     loop: FusedLoop = FusedLoop()
 
     @staticmethod
@@ -27,6 +45,7 @@ class Packer:
         operation: "FusedOperation",
         config: "GlobalConfig",
     ) -> torch.Tensor:
+        """Golden helper: simulate L1 accumulation across blocks."""
         output_dims = operation.output.dimensions
         output_format = operation.output.data_format
         tile_size = operation.output.tile_shape.total_tile_size()
@@ -59,6 +78,7 @@ class Packer:
         operation: "FusedOperation",
         config: "GlobalConfig",
     ) -> torch.Tensor:
+        """Golden helper: apply packer ReLU activation."""
         intermediate_format = config.sentinel.golden_format.pack_src
         relu_config = PackGolden.generate_relu_config(
             operation.pack_relu, operation.relu_threshold, intermediate_format
@@ -66,6 +86,12 @@ class Packer:
         return PackGolden.apply_relu(tensor, relu_config, intermediate_format)
 
     def get_headers(self) -> List[str]:
+        """Return the list of C++ LLK header filenames required by this packer.
+
+        These headers are #included in the generated test source file. Override to
+        return the headers that declare the _llk_pack_*_ functions used by init(),
+        pack(), and uninit().
+        """
         return []
 
     def golden(
@@ -74,6 +100,12 @@ class Packer:
         operation: "FusedOperation",
         config: "GlobalConfig",
     ) -> torch.Tensor:
+        """Compute the golden pack result in Python.
+
+        Returns the tensor after applying pack transforms.
+        Override and call _relu_golden() or _l1_acc_golden()
+        as needed based on the operation config.
+        """
         return tensor
 
     def init(
@@ -83,6 +115,11 @@ class Packer:
         compute_unit: "ComputeNode",
         block: "BlockData",
     ) -> str:
+        """Return C++ code that initializes the packer before the pack loop.
+
+        Called once per block. Override to emit the _llk_pack_init_<>()
+        calls with the appropriate parameters
+        """
         return ""
 
     def pack(
@@ -92,6 +129,13 @@ class Packer:
         compute_unit: "ComputeNode",
         block: "BlockData",
     ) -> str:
+        """Return C++ code that packs a single tile from dest to L1.
+
+        Called inside the tile loop by FusedLoop.pack_loop(). Use
+        block.tile_id_block for the dest register index and
+        block.tile_id_global for the L1 output buffer index.
+        Override to emit the _llk_pack_<>() call.
+        """
         return ""
 
     def uninit(
@@ -101,4 +145,9 @@ class Packer:
         compute_unit: "ComputeNode",
         block: "BlockData",
     ) -> str:
+        """Return C++ code that uninitializes the packer after the pack loop.
+
+        Called once per block after the pack loop completes. Override if the
+        packer requires explicit cleanup.
+        """
         return ""

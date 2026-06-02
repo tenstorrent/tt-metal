@@ -382,6 +382,7 @@ int main() {
     // ex. Immediately after starting, we send a RUN_MSG_RESET_READ_PTR signal
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     noc_local_state_init(noc_index);
+    noc_clear_all_packet_tags();
     trigger_sync_register_init();
 
     DeviceProfilerInit();
@@ -557,6 +558,7 @@ int main() {
                         ASSERT(ncrisc_dynamic_noc_nonposted_writes_flushed(noc));
                         ASSERT(ncrisc_dynamic_noc_nonposted_atomics_flushed(noc));
                         ASSERT(ncrisc_dynamic_noc_posted_writes_sent(noc));
+                        ASSERT(ncrisc_noc_packet_tags_cleared(noc), DebugAssertNCriscNOCPacketTagClearedTripped);
                     }
                     WAYPOINT("NKFD");
                 }

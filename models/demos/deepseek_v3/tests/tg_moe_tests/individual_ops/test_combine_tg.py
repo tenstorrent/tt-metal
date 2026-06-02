@@ -235,7 +235,7 @@ def run_combine_test(
 
 @pytest.mark.requires_device("TG")
 @pytest.mark.skipif(
-    (os.getenv("USE_TORUS_MODE") is None),
+    (os.getenv("USE_TORUS_MODE", "0") == "0"),
     reason="Requires ring fabric",
 )
 @pytest.mark.parametrize(
@@ -244,7 +244,7 @@ def run_combine_test(
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 500000,
+            "trace_region_size": 0,
         },
     ],
     indirect=True,

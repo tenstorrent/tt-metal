@@ -207,7 +207,7 @@ void kernel_main() {
         cb_reserve_back(cb_gamma, block_w);
         for (uint32_t w = 0; w < block_w; w++) {
             uint32_t tile_id = gamma_tile_start_id + w;
-            uint64_t gamma_noc_addr = get_noc_addr(tile_id, gamma);
+            uint64_t gamma_noc_addr = gamma.get_noc_addr(tile_id);
             noc_async_read(gamma_noc_addr, l1_write_addr_gamma, bytes_in_two_facelines);
             gamma_noc_addr = get_noc_addr(l1_write_addr_gamma + bytes_in_faceline);
             noc_async_read_barrier();  // might be faster to do two separate read instead of barrier.

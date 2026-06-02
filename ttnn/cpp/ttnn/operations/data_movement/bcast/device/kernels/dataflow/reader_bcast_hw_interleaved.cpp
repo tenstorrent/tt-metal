@@ -48,7 +48,7 @@ void kernel_main() {
 #ifdef BCAST_SCALAR
     cb_reserve_back(cb_id_in1, onetile);
     l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-    noc_async_read_tile(i1, s1, l1_write_addr_in1);
+    noc_async_read_page(i1, s1, l1_write_addr_in1);
     noc_async_read_barrier();
     cb_push_back(cb_id_in1, onetile);
 #endif
@@ -59,7 +59,7 @@ void kernel_main() {
 #ifndef IN0_SHARDED
                 cb_reserve_back(cb_id_in0, onetile);
                 l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                noc_async_read_tile(i, s0, l1_write_addr_in0);
+                noc_async_read_page(i, s0, l1_write_addr_in0);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in0, onetile);
                 i++;  // input tile iterates over NC Ht Wt
@@ -70,7 +70,7 @@ void kernel_main() {
                 // but we don't advance the second tile index for H,W
                 cb_reserve_back(cb_id_in1, onetile);
                 l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                noc_async_read_tile(i1, s1, l1_write_addr_in1);
+                noc_async_read_page(i1, s1, l1_write_addr_in1);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in1, onetile);
 #endif

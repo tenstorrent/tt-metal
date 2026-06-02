@@ -13,6 +13,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 namespace ttnn::prim {
 
@@ -20,11 +21,11 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
     const SamplingParams& operation_attributes, const SamplingInputs& tensor_args, Tensor& output_tensor) {
     using namespace tt::tt_metal;
 
-    const auto& input_values_tensor = tensor_args.input_values;
-    const auto& input_indices_tensor = tensor_args.input_indices;
-    const auto& k = tensor_args.k;
-    const auto& p = tensor_args.p;
-    const auto& temp = tensor_args.temp;
+    const auto& input_values_tensor = tensor_args.input_values.mesh_tensor();
+    const auto& input_indices_tensor = tensor_args.input_indices.mesh_tensor();
+    const auto& k = tensor_args.k.mesh_tensor();
+    const auto& p = tensor_args.p.mesh_tensor();
+    const auto& temp = tensor_args.temp.mesh_tensor();
 
     const auto& seed = operation_attributes.seed;
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
@@ -43,14 +44,9 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
     uint32_t input_values_tile_size = tile_size(input_values_cb_data_format);
     uint32_t index_tile_size = tile_size(index_cb_data_format);
 
-    auto* input_values_buffer = input_values_tensor.buffer();
-    auto* input_indices_buffer = input_indices_tensor.buffer();
-    auto* k_buffer = k.buffer();
-    auto* p_buffer = p.buffer();
-    auto* temp_buffer = temp.buffer();
-    auto* output_buffer = output_tensor.buffer();
+    const auto& output_mesh = output_tensor.mesh_tensor();
 
-    auto* device = input_values_tensor.device();
+    auto* device = &input_values_tensor.mutable_device();
 
     auto input_shape = input_values_tensor.logical_shape();
     const uint32_t tile_height = input_values_tensor.tensor_spec().tile().get_height();
@@ -66,6 +62,14 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         core_grid = sub_core_grids.value();
     }
     auto cores = corerange_to_cores(core_grid, num_cores, true);
+
+    validate_reduce_op_program_grid(
+        "Sampling",
+        core_grid,
+        compute_with_storage_grid_size,
+        sub_core_grids.has_value() ? &sub_core_grids.value() : nullptr,
+        true,
+        {});
 
     if (seed.has_value()) {
         random_seed = seed.value();
@@ -253,7 +257,7 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
     });
 
     // Output sampling indices
-    uint32_t output_unit_size = output_tensor.element_size();
+    uint32_t output_unit_size = output_mesh.element_size();
     uint32_t aligned_out0_unit_size = Ht * tile_height * output_unit_size;
     uint32_t output_cb_index = tt::CBIndex::c_13;
     desc.cbs.push_back(CBDescriptor{
@@ -317,8 +321,8 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         Wt,
         aligned_final_indices_rm_unit_size,
         tile_height};
-    tt::tt_metal::TensorAccessorArgs(input_values_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(input_indices_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_values_tensor).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_indices_tensor).append_to(reader_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -332,8 +336,8 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         reader_desc.emplace_runtime_args(
             core,
             {
-                input_values_buffer,
-                input_indices_buffer,
+                input_values_tensor,
+                input_indices_tensor,
             });
     }
     desc.kernels.push_back(std::move(reader_desc));
@@ -343,10 +347,10 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         CoreRangeSet single_core{CoreRange(core, core)};
 
         std::vector<uint32_t> writer_compile_time_args;
-        tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(temp_buffer).append_to(writer_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);
-        tt::tt_metal::TensorAccessorArgs(p_buffer).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(output_mesh).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(temp).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(k).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(p).append_to(writer_compile_time_args);
         writer_compile_time_args.insert(
             writer_compile_time_args.end(),
             {
@@ -375,7 +379,7 @@ tt::tt_metal::ProgramDescriptor SamplingProgramFactory::create_descriptor(
         writer_desc.core_ranges = single_core;
         writer_desc.compile_time_args = writer_compile_time_args;
         writer_desc.config = WriterConfigDescriptor{};
-        writer_desc.emplace_runtime_args(core, {output_buffer, temp_buffer, k_buffer, p_buffer});
+        writer_desc.emplace_runtime_args(core, {output_mesh, temp, k, p});
         desc.kernels.push_back(std::move(writer_desc));
 
         std::vector<uint32_t> compute_args = {

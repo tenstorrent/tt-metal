@@ -80,7 +80,7 @@ void kernel_main() {
                             uint32_t l1_read_addr = cb_out.get_read_ptr();
                             for (uint32_t row = 0; row < limit; ++row) {
                                 const uint32_t row_abs_idx = row_block_base_row + row;
-                                const uint64_t dst_noc_addr = get_noc_addr(row_abs_idx, dst) + current_chunk_offset;
+                                const uint64_t dst_noc_addr = dst.get_noc_addr(row_abs_idx) + current_chunk_offset;
                                 noc_async_write(l1_read_addr, dst_noc_addr, current_write_len);
                                 l1_read_addr += current_chunk_bytes;
                             }

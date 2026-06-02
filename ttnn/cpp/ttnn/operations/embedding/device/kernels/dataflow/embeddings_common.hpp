@@ -28,19 +28,19 @@ FORCE_INLINE constexpr void prepare_local_cache(
     pad_token = get_arg_val<uint32_t>(pad_token_arg_idx);
     cb_reserve_back(local_cache_cb, 1);
     uint32_t local_pad_addr = get_write_ptr(local_cache_cb);
-    uint64_t src_noc_addr = get_noc_addr(pad_token, weights);
+    uint64_t src_noc_addr = weights.get_noc_addr(pad_token);
     noc_async_read(src_noc_addr, local_pad_addr, weight_stick_size);
     noc_async_read_barrier();
     pad_noc_addr = get_noc_addr(local_pad_addr);
 #elif defined BINARY
     cb_reserve_back(local_cache_cb, 2);
     uint32_t local_write_addr = get_write_ptr(local_cache_cb);
-    uint64_t src_noc_addr = get_noc_addr(0, weights);
+    uint64_t src_noc_addr = weights.get_noc_addr(0);
     noc_async_read(src_noc_addr, local_write_addr, weight_stick_size);
     zero_noc_addr = get_noc_addr(local_write_addr);
 
     local_write_addr += weight_stick_size;
-    src_noc_addr = get_noc_addr(1, weights);
+    src_noc_addr = weights.get_noc_addr(1);
     noc_async_read(src_noc_addr, local_write_addr, weight_stick_size);
     one_noc_addr = get_noc_addr(local_write_addr);
 
@@ -54,7 +54,7 @@ FORCE_INLINE uint64_t get_token_noc_addr(input_token_t token, const T& weights) 
     if (token == pad_token) {
         return pad_noc_addr;
     } else {
-        return get_noc_addr(token, weights);
+        return weights.get_noc_addr(token);
     }
 #elif defined BINARY
     if (token == 0) {
@@ -69,8 +69,8 @@ FORCE_INLINE uint64_t get_token_noc_addr(input_token_t token, const T& weights) 
     } u;
     u.u = (uint32_t)token << 16;
     uint32_t token_casted = static_cast<uint32_t>(u.f);
-    return get_noc_addr(token_casted, weights);
+    return weights.get_noc_addr(token_casted);
 #else
-    return get_noc_addr(token, weights);
+    return weights.get_noc_addr(token);
 #endif
 }

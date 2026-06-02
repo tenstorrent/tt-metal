@@ -22,8 +22,8 @@ from helpers.stimuli_generator import (
     apply_log_uniform_magnitudes,
     compute_safe_input_magnitude_range,
     format_elem_max,
+    generate_stimuli,
 )
-from helpers.stimuli_generator_v2 import generate_stimuli_v2
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
@@ -70,7 +70,7 @@ def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
 
     torch.manual_seed(42)
 
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,

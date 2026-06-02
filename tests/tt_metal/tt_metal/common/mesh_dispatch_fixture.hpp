@@ -6,7 +6,10 @@
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "gtest/gtest.h"
+#include <functional>
 #include <map>
+#include <memory>
+#include <vector>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "hostdevcommon/common_values.hpp"
@@ -20,11 +23,17 @@
 
 namespace tt::tt_metal {
 
+struct SharedDevices {
+    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device;
+    std::vector<std::shared_ptr<distributed::MeshDevice>> devices;
+    size_t l1_small_size {DEFAULT_L1_SMALL_SIZE};
+    size_t trace_region_size {DEFAULT_TRACE_REGION_SIZE};
+    bool initialized {false};
+    bool needs_recovery {false};
+};
+
 // A dispatch-agnostic test fixture
 class MeshDispatchFixture : public ::testing::Test {
-private:
-    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
-
 public:
     // A function to run a program, according to which dispatch mode is set.
     void RunProgram(
@@ -68,11 +77,16 @@ protected:
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) :
         l1_small_size_{l1_small_size}, trace_region_size_{trace_region_size} {};
 
-    void SetUp() override {
-        this->DetectDispatchMode();
-        // Must set up all available devices
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        init_max_cbs();
+    static SharedDevices& get_shared_devices() {
+        static SharedDevices devices;
+        return devices;
+    }
+
+    static void create_shared_devices(size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
+        auto& shared = get_shared_devices();
+        if (shared.initialized) {
+            return;
+        }
 
         std::vector<ChipId> ids;
         for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
@@ -80,25 +94,73 @@ protected:
         }
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        id_to_device_ = distributed::MeshDevice::create_unit_meshes(
-            ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config);
-        devices_.clear();
-        for (const auto& [device_id, device] : id_to_device_) {
-            devices_.push_back(device);
+        shared.id_to_device = distributed::MeshDevice::create_unit_meshes(
+            ids, l1_small_size, trace_region_size, 1, dispatch_core_config);
+        shared.devices.clear();
+        for (const auto& [device_id, device] : shared.id_to_device) {
+            shared.devices.push_back(device);
         }
+        shared.l1_small_size = l1_small_size;
+        shared.trace_region_size = trace_region_size;
+        shared.initialized = true;
+        shared.needs_recovery = false;
+    }
+
+    static void destroy_shared_devices() {
+        auto& shared = get_shared_devices();
+        if (!shared.initialized) {
+            shared.needs_recovery = false;
+            return;
+        }
+
+        for (auto& [device_id, device] : shared.id_to_device) {
+            device->close();
+            device.reset();
+        }
+        shared.id_to_device.clear();
+        shared.devices.clear();
+        shared.initialized = false;
+        shared.needs_recovery = false;
+    }
+
+    // Derived fixtures should override SetUpTestSuite/TearDownTestSuite and SetUp/TearDown if
+    // different device instantiation is needed
+    static void SetUpTestSuite() {
+        // Create a shared device to reduce individual test startup time
+        create_shared_devices();
+    }
+
+    static void TearDownTestSuite() {
+        destroy_shared_devices();
+    }
+
+    void SetUp() override {
+        auto& shared = get_shared_devices();
+        ASSERT_TRUE(shared.initialized) << "Shared devices not initialized, if this is a derived fixture then "
+                                           "MeshDispatchFixture::SetUpTestSuite may have been overridden but not "
+                                           "MeshDispatchFixture::SetUp";
+
+        if (shared.needs_recovery || shared.l1_small_size != l1_small_size_ || shared.trace_region_size != trace_region_size_) {
+            destroy_shared_devices();
+        }
+        if (!shared.initialized) {
+            create_shared_devices(l1_small_size_, trace_region_size_);
+        }
+        this->devices_ = shared.devices;
+
+        this->DetectDispatchMode();
+        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        init_max_cbs();
     }
 
     void TearDown() override {
-        // Checking if devices are empty because DPrintFixture.TensixTestPrintFinish already
-        // closed all devices
-        if (!id_to_device_.empty()) {
-            for (auto [device_id, device] : id_to_device_) {
-                device->close();
-                device.reset();
-            }
-
-            id_to_device_.clear();
-            devices_.clear();
+        ASSERT_TRUE(get_shared_devices().initialized)
+            << "Shared devices not initialized, if this is a derived fixture then "
+               "MeshDispatchFixture::SetUpTestSuite may have been overridden but not "
+               "MeshDispatchFixture::TearDown";
+        devices_.clear();
+        if (HasFailure()) {
+            get_shared_devices().needs_recovery = true;
         }
     }
 

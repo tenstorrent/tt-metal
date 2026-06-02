@@ -23,7 +23,7 @@ inline __attribute__((always_inline)) void dfb_tile_poster_irq_handler() {
             dfb::PackedTileCounter packed_tile_counter = txn_dfb_descriptor.tile_counters[i];
             uint8_t tensix_id = dfb::get_tensix_id(packed_tile_counter);
             uint8_t tc_id = dfb::get_counter_id(packed_tile_counter);
-            fast_llk_intf_inc_posted(tensix_id, tc_id, txn_dfb_descriptor.tiles_to_post);
+            overlay::fast_llk_intf_inc_posted(tensix_id, tc_id, txn_dfb_descriptor.tiles_to_post);
         }
 
         CMDBUF_CLEAR_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, trid);
@@ -52,7 +52,7 @@ inline __attribute__((always_inline)) void dfb_tile_acker_irq_handler() {
             dfb::PackedTileCounter packed_tile_counter = txn_dfb_descriptor.tile_counters[i];
             uint8_t tensix_id = dfb::get_tensix_id(packed_tile_counter);
             uint8_t tc_id = dfb::get_counter_id(packed_tile_counter);
-            fast_llk_intf_inc_acked(tensix_id, tc_id, txn_dfb_descriptor.tiles_to_ack);
+            overlay::fast_llk_intf_inc_acked(tensix_id, tc_id, txn_dfb_descriptor.tiles_to_ack);
         }
 
         CMDBUF_CLEAR_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, trid);

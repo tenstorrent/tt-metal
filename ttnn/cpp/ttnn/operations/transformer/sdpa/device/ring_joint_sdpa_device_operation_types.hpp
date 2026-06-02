@@ -29,6 +29,7 @@ struct RingJointSDPAParams {
     experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes;
     experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args;
     CoreCoord ccl_core_grid_offset;
+    std::optional<std::uint32_t> cache_batch_idx = std::nullopt;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -43,7 +44,8 @@ struct RingJointSDPAParams {
         DeviceComputeKernelConfig compute_kernel_config,
         experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes,
         experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args,
-        CoreCoord ccl_core_grid_offset) :
+        CoreCoord ccl_core_grid_offset,
+        std::optional<std::uint32_t> cache_batch_idx = std::nullopt) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
@@ -55,7 +57,8 @@ struct RingJointSDPAParams {
         compute_kernel_config(compute_kernel_config),
         all_gather_operation_attributes(std::move(all_gather_operation_attributes)),
         all_gather_tensor_args(std::move(all_gather_tensor_args)),
-        ccl_core_grid_offset(ccl_core_grid_offset) {}
+        ccl_core_grid_offset(ccl_core_grid_offset),
+        cache_batch_idx(cache_batch_idx) {}
 
     auto attributes() const {
         using ttsl::reflection::Attribute;
@@ -68,6 +71,9 @@ struct RingJointSDPAParams {
         attrs.emplace_back("output_memory_config", output_memory_config);
         attrs.emplace_back("compute_kernel_config", compute_kernel_config);
         attrs.emplace_back("ccl_core_grid_offset", ccl_core_grid_offset);
+        if (cache_batch_idx.has_value()) {
+            attrs.emplace_back("cache_batch_idx", cache_batch_idx.value());
+        }
         if (scale.has_value()) {
             attrs.emplace_back("scale", scale);
         }
@@ -80,17 +86,25 @@ struct RingJointSDPAParams {
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
     std::uint32_t get_k_chunk_size() const { return program_config.has_value() ? program_config->k_chunk_size : 32; }
+
+    bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
 };
 
 struct RingJointSDPAInputs {
     Tensor input_q;
     Tensor input_k;
     Tensor input_v;
-    Tensor joint_q;
-    Tensor joint_k;
-    Tensor joint_v;
+    std::optional<Tensor> joint_q;
+    std::optional<Tensor> joint_k;
+    std::optional<Tensor> joint_v;
     Tensor gathered_k;
     Tensor gathered_v;
+
+    // Chunked-prefill is signalled implicitly by Q being shorter than the per-device K shard:
+    // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.
+    uint32_t local_kv_seq_len() const { return static_cast<uint32_t>(input_k.logical_shape()[2]); }
+
+    bool is_chunked() const { return input_q.logical_shape()[2] < local_kv_seq_len(); }
 };
 
 // Index constants for RingJointSDPAResult vector

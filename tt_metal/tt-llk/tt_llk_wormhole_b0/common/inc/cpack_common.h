@@ -567,6 +567,7 @@ inline void reconfig_packer_data_format(
     const std::uint32_t num_faces  = 4,
     const bool partial_face        = false)
 {
+    // Packer strides for standard tiled dest layout (PackMode::Default). Untilize uses configure_pack with PackMode::Untilize.
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(
         is_packer_to_L1_conversion_supported(static_cast<DataFormat>(pack_src_format), static_cast<DataFormat>(pack_dst_format)),
@@ -674,7 +675,7 @@ inline void reconfig_packer_data_format(
     set_packer_strides(pack_src_format);
 }
 
-template <bool is_fp32_dest_acc_en, bool untilize>
+template <bool is_fp32_dest_acc_en, PackMode pack_mode>
 inline void configure_pack(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -685,6 +686,9 @@ inline void configure_pack(
     const bool narrow_tile          = false,
     const std::uint32_t relu_config = 0)
 {
+    static_assert(
+        pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
+        "Wormhole B0 pack hardware configuration supports only PackMode::Default and PackMode::Untilize");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(
         is_packer_to_L1_conversion_supported(static_cast<DataFormat>(pack_src_format), static_cast<DataFormat>(pack_dst_format)),
@@ -750,7 +754,7 @@ inline void configure_pack(
 
     // To untilize narrow tile (32x16) we just pack 2 faces back to back
     // Number of datums to pack per row
-    const std::uint32_t pack_x_dim = (narrow_tile || !untilize) ? face_dim : FACE_R_DIM;
+    const std::uint32_t pack_x_dim = (narrow_tile || pack_mode != PackMode::Untilize) ? face_dim : FACE_R_DIM;
 
     TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
 }

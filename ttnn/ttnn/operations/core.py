@@ -337,6 +337,18 @@ def from_torch(
         # float32 as an intermediate type is not used due to limited amount of L1 memory.
         tensor = torch.from_numpy(tensor)
 
+    # FP8_E4M3 host-side construction is narrowed to float32 input only. The FLOAT32 -> FP8_E4M3
+    # path is wired up in transform_buffers via static_cast<float8_e4m3>; other source dtypes
+    # either fail at the dlpack importer (torch.float8_e4m3fn, code 10 not yet handled) or hit
+    # "FP8_E4M3 cross-type conversion is only supported to/from FLOAT32" deeper in to_dtype.
+    # The float32 path is supported for unit tests.
+    fp8_target = dtype == ttnn.DataType.FP8_E4M3 or (spec is not None and spec.dtype == ttnn.DataType.FP8_E4M3)
+    if fp8_target and tensor.dtype != torch.float32:
+        raise RuntimeError(
+            f"ttnn.from_torch: source dtype {tensor.dtype} is not supported when target is "
+            "ttnn.fp8_e4m3; only float32 input is supported. Cast to torch.float32 first."
+        )
+
     return ttnn.Tensor(
         tensor=tensor,
         data_type=dtype,
@@ -393,6 +405,17 @@ def to_torch(
         torch.Tensor: The converted `torch` tensor.
     """
     import torch
+
+    if tensor.dtype == ttnn.DataType.FP8_E4M3:
+        # Torch ≤ 2.7's dlpack importer rejects code 10 (Float8_E4M3FN) and fails deep inside
+        # torch with "RuntimeError: Unsupported code 10". Preflight the version so users see a
+        # clear actionable message instead.
+        torch_major, torch_minor = (int(p) for p in torch.__version__.split("+", 1)[0].split(".")[:2])
+        if (torch_major, torch_minor) < (2, 8):
+            raise RuntimeError(
+                f"ttnn.to_torch: converting an FP8_E4M3 tensor requires torch >= 2.8 (dlpack code 10 support); "
+                f"got torch {torch.__version__}. Update torch in your environment."
+            )
 
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, queue_id=cq_id)

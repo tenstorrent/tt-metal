@@ -25,13 +25,19 @@ namespace {
 bool logical_cores_intersect(
     const std::vector<std::vector<tt::tt_metal::CoreCoord>>& previous_cores,
     const std::vector<std::vector<tt::tt_metal::CoreCoord>>& current_cores) {
-    // Build a set from previous_cores only, then probe with current_cores directly.
-    std::unordered_set<tt::tt_metal::CoreCoord> previous_cores_set;
-    for (const auto& core_group : previous_cores) {
-        previous_cores_set.insert(core_group.begin(), core_group.end());
-    }
-    for (const auto& core_group : current_cores) {
-        for (const auto& core : core_group) {
+    // The outer index is the programmable_core_type (TENSIX, DRAM, ETH, ...). Two CoreCoords
+    // with the same (x, y) but different programmable core types refer to physically distinct
+    // cores (e.g., DRAM (0,0) is bank 0; WORKER (0,0) is the bottom-left compute core), so we
+    // must only consider intersection WITHIN the same programmable core type.
+    const size_t shared = std::min(previous_cores.size(), current_cores.size());
+    for (size_t pct = 0; pct < shared; ++pct) {
+        const auto& prev_group = previous_cores[pct];
+        const auto& curr_group = current_cores[pct];
+        if (prev_group.empty() || curr_group.empty()) {
+            continue;
+        }
+        std::unordered_set<tt::tt_metal::CoreCoord> previous_cores_set(prev_group.begin(), prev_group.end());
+        for (const auto& core : curr_group) {
             if (previous_cores_set.contains(core)) {
                 return true;
             }
@@ -132,7 +138,10 @@ void SDMeshCommandQueue::read_shard_from_device(
     tt::tt_metal::detail::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
 }
 
-void SDMeshCommandQueue::submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>&, bool) {}
+void SDMeshCommandQueue::submit_memcpy_request(
+    std::unordered_map<IDevice*, uint32_t>& /*num_txns_per_device*/,
+    bool /*blocking*/,
+    std::vector<MemoryPin> /*memory_pins*/) {}
 
 WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*index*/) {
     TT_THROW("Not supported for slow dispatch");

@@ -51,28 +51,29 @@ void kernel_main() {
     constexpr uint32_t pre_tilize_cb_id = get_compile_time_arg_val(13);
     constexpr bool is_output_tiled = get_compile_time_arg_val(14);  // 1 = TILED, 0 = ROW_MAJOR
     constexpr bool is_output_block_format = (bool)get_compile_time_arg_val(15);
+    // ct_arg(16) is force_max_tiles_per_reduction_4 (consumed by compute_pool_2d.cpp only)
     // MPWI-specific args start here
-    constexpr uint32_t in_idx_cb_id = get_compile_time_arg_val(16);
-    constexpr uint32_t pack_tmp_cb_id = get_compile_time_arg_val(17);
-    constexpr uint32_t pack_idx_tmp_cb_id = get_compile_time_arg_val(18);
-    constexpr uint32_t right_inc_cb_id = get_compile_time_arg_val(19);
-    constexpr uint32_t down_left_wrap_inc_cb_id = get_compile_time_arg_val(20);
-    constexpr uint32_t up_left_wrap_inc_cb_id = get_compile_time_arg_val(21);
-    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(22);
-    constexpr uint32_t stride_h = get_compile_time_arg_val(23);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(24);
-    constexpr uint32_t in_h_padded = get_compile_time_arg_val(25);
-    constexpr uint32_t in_w_padded = get_compile_time_arg_val(26);
-    constexpr uint32_t eff_kernel_h = get_compile_time_arg_val(27);
-    constexpr uint32_t eff_kernel_w = get_compile_time_arg_val(28);
-    constexpr uint32_t pad_l = get_compile_time_arg_val(29);
-    constexpr uint32_t intra_kernel_right_inc_cb_id = get_compile_time_arg_val(30);
-    constexpr uint32_t intra_kernel_down_left_wrap_inc_cb_id = get_compile_time_arg_val(31);
-    constexpr uint32_t compute_tmp_idx_cb_id = get_compile_time_arg_val(32);
-    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(33);
-    constexpr uint32_t kernel_h = get_compile_time_arg_val(34);
-    constexpr uint32_t kernel_w = get_compile_time_arg_val(35);
-    constexpr uint32_t indexes_32_bit = get_compile_time_arg_val(36);
+    constexpr uint32_t in_idx_cb_id = get_compile_time_arg_val(17);
+    constexpr uint32_t pack_tmp_cb_id = get_compile_time_arg_val(18);
+    constexpr uint32_t pack_idx_tmp_cb_id = get_compile_time_arg_val(19);
+    constexpr uint32_t right_inc_cb_id = get_compile_time_arg_val(20);
+    constexpr uint32_t down_left_wrap_inc_cb_id = get_compile_time_arg_val(21);
+    constexpr uint32_t up_left_wrap_inc_cb_id = get_compile_time_arg_val(22);
+    constexpr uint32_t out_idx_cb_id = get_compile_time_arg_val(23);
+    constexpr uint32_t stride_h = get_compile_time_arg_val(24);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(25);
+    constexpr uint32_t in_h_padded = get_compile_time_arg_val(26);
+    constexpr uint32_t in_w_padded = get_compile_time_arg_val(27);
+    constexpr uint32_t eff_kernel_h = get_compile_time_arg_val(28);
+    constexpr uint32_t eff_kernel_w = get_compile_time_arg_val(29);
+    constexpr uint32_t pad_l = get_compile_time_arg_val(30);
+    constexpr uint32_t intra_kernel_right_inc_cb_id = get_compile_time_arg_val(31);
+    constexpr uint32_t intra_kernel_down_left_wrap_inc_cb_id = get_compile_time_arg_val(32);
+    constexpr uint32_t compute_tmp_idx_cb_id = get_compile_time_arg_val(33);
+    constexpr uint32_t clear_value_cb_id = get_compile_time_arg_val(34);
+    constexpr uint32_t kernel_h = get_compile_time_arg_val(35);
+    constexpr uint32_t kernel_w = get_compile_time_arg_val(36);
+    constexpr uint32_t indexes_32_bit = get_compile_time_arg_val(37);
 
     // experimental::CB wrappers for CB operations
     experimental::CB in_scalar_cb(in_scalar_cb_id_0);

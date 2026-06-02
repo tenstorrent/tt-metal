@@ -32,7 +32,6 @@ enum class Conv2dCb {
     L1_ARRAY,
     MATMUL_PARTIALS,
     OUT,
-    TEMP_SUM,
     COUNT
 };
 struct CBInfo {

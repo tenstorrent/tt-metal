@@ -29,7 +29,7 @@ void read_block_from_dram(
     for (uint32_t h = 0; h < block_h_t; ++h) {
         uint32_t tile_id = block_tile_id + h * tensor_width_in_tiles;
         for (uint32_t w = 0; w < block_w_t; ++w) {
-            noc_async_read_tile(tile_id + w, s1, l1_write_addr);
+            noc_async_read_page(tile_id + w, s1, l1_write_addr);
             l1_write_addr += tile_size_bytes;
         }
     }

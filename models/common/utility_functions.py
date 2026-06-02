@@ -256,39 +256,6 @@ def torch_to_tt_tensor(py_tensor, device):
     return tt_tensor
 
 
-### Padding / Unpadding ###
-def pad_by_zero(
-    x: torch.Tensor,
-    device=None,
-    tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED),
-    tt_dtype=ttnn.bfloat16,
-):
-    initial_shape = x.shape
-    pad_shape = list(x.shape)
-    while len(pad_shape) < 4:
-        pad_shape.insert(0, 1)
-    if pad_shape[-1] % 32 != 0 or pad_shape[-2] % 32 != 0:
-        # Pad in torch before creating TT tensor.
-        # Certain datatypes like BFP8_B requires inputs to already be a specific size when creating the tensor, so we need to pad first
-        x = torch.nn.functional.pad(
-            x.reshape(pad_shape),
-            (
-                0,
-                _nearest_32(pad_shape[-1]) - pad_shape[-1],
-                0,
-                _nearest_32(pad_shape[-2]) - pad_shape[-2],
-            ),
-        )
-        x = ttnn.Tensor(x, tt_dtype)
-        x = x.to(ttnn.TILE_LAYOUT)
-        if device is not None:
-            x = x.to(device, tt_memory_config)
-
-    else:
-        x = torch2tt_tensor(x, device, tt_memory_config=tt_memory_config, tt_dtype=tt_dtype)
-    return x, initial_shape
-
-
 def unpad_from_zero(x, desired_shape):
     if x.padded_shape[-1] == desired_shape[-1] and x.padded_shape[-2] == desired_shape[-2]:
         x = tt2torch_tensor(x)
@@ -541,14 +508,24 @@ def comp_pcc(golden, calculated, pcc=0.99):
     # For now, mask all infs and nans so that we check the rest... TODO
     # Skip this for integer types which don't have NaN/Inf values
     if golden.dtype.is_floating_point:
+        # Check if dtype is FP8 - they don't support isinf/isneginf/masked_fill operations
+        is_fp8 = golden.dtype in [torch.float8_e4m3fn, torch.float8_e5m2]
+
+        if is_fp8:
+            # Convert FP8 to float32 for comparison since FP8 doesn't support many operations
+            golden = golden.to(torch.float32)
+            calculated = calculated.to(torch.float32)
+
         golden = golden.clone()
+        calculated = calculated.clone()
+
+        # Mask NaN and inf values
         golden[
             torch.logical_or(
                 torch.isnan(golden),
                 torch.logical_or(torch.isinf(golden), torch.isneginf(golden)),
             )
         ] = 0
-        calculated = calculated.clone()
         calculated[
             torch.logical_or(
                 torch.isnan(calculated),

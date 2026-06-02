@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 
-#include "api/debug/device_print.h"
+#include "api/debug/dprint.h"
 
 #include <cstdint>
 
@@ -23,16 +23,16 @@ void kernel_main() {
     constexpr uint32_t one_tile = 1;
 
     // Read input value data
-    DEVICE_PRINT("1. READER 0: Reading input data to L1 src0 CB\n");
+    DPRINT("1. READER 0: Reading input data to L1 src0 CB\n");
     cb_reserve_back(src0_cb_index, one_tile);
     const uint32_t l1_write_addr = get_write_ptr(src0_cb_index);
-    noc_async_read_tile(0, interleaved_accessor, l1_write_addr);
+    noc_async_read_page(0, interleaved_accessor, l1_write_addr);
     noc_async_read_barrier();
 
     // Print data in buffer
     volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
-    DEVICE_PRINT(" > Data in buffer: {}\n", ptr[0]);
+    DPRINT(" > Data in buffer: {}\n", ptr[0]);
 
     cb_push_back(src0_cb_index, one_tile);
-    DEVICE_PRINT("2. READER 0: Data in src0 CB pushed from reader0\n");
+    DPRINT("2. READER 0: Data in src0 CB pushed from reader0\n");
 }

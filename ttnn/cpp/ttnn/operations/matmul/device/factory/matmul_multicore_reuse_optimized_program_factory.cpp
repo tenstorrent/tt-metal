@@ -9,7 +9,10 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
+#include <map>
+#include <string>
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 
 using namespace tt;
@@ -44,7 +47,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
 
     const auto& a = tensor_args.input_tensors.at(0);
     const auto& b = tensor_args.input_tensors.at(1);
-    auto& output = tensor_return_value.at(0);
+    const auto& output = tensor_return_value.at(0).mesh_tensor();
 
     bool bcast_batch = operation_attributes.bcast_batch.value();
     bool transpose_a = operation_attributes.transpose_a;
@@ -62,12 +65,14 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     auto in0_tile = operations::matmul::utilities::get_matmul_tile(a, transpose_a);
     auto in1_tile = operations::matmul::utilities::get_matmul_tile(b, transpose_b);
 
-    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
-    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
+    const auto& in0_buffer = a.mesh_tensor();
+    tt::DataFormat in0_data_format = tt_metal::datatype_to_dataformat_converter(in0_buffer.dtype());
+    const auto& in1_buffer = b.mesh_tensor();
+    tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(in1_buffer.dtype());
     tt::DataFormat output_data_format =
         tt_metal::datatype_to_dataformat_converter(operation_attributes.output_dtype.value());
 
-    tt_metal::IDevice* device = a.device();
+    tt_metal::IDevice* device = &in0_buffer.mutable_device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config.value());
@@ -118,11 +123,8 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    tt_metal::Buffer* in0_buffer = a.buffer();
-    tt_metal::Buffer* in1_buffer = b.buffer();
-    tt_metal::Buffer* out_buffer = output.buffer();
-    bool in0_is_sharded = a.is_sharded();
-    bool in1_is_sharded = b.is_sharded();
+    bool in0_is_sharded = in0_buffer.is_sharded();
+    bool in1_is_sharded = in1_buffer.is_sharded();
     bool output_is_sharded = output.is_sharded();
 
     // CB sizes
@@ -160,9 +162,9 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
 
     std::optional<tt::tt_metal::ShardSpec> shard_spec = std::nullopt;
     if (in0_is_sharded) {
-        shard_spec = a.shard_spec().value();
+        shard_spec = in0_buffer.shard_spec().value();
     } else if (in1_is_sharded) {
-        shard_spec = b.shard_spec().value();
+        shard_spec = in1_buffer.shard_spec().value();
     } else if (output_is_sharded) {
         shard_spec = output.shard_spec().value();
     }
@@ -188,7 +190,17 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         num_blocks_per_core_group_1 *= batch_scale_factor;
         num_blocks_per_core_group_2 *= batch_scale_factor;
     } else {
-        CoreCoord grid = program_config.compute_with_storage_grid_size;
+        if (!program_config.allowed_worker_cores.has_value()) {
+            log_warning(
+                tt::LogOp,
+                "MatmulMultiCoreReuseOptimizedProgramFactory: program_config.allowed_worker_cores not populated; "
+                "falling back to compute_with_storage_grid_size. Callers that bypass ttnn::prim::matmul() should "
+                "invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This "
+                "will become a hard error in a future release.");
+        }
+        CoreCoord grid = program_config.allowed_worker_cores.has_value()
+                             ? program_config.allowed_worker_cores.value().bounding_box().grid_size()
+                             : program_config.compute_with_storage_grid_size;
         std::tie(
             num_cores,
             all_cores,
@@ -224,7 +236,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         (std::uint32_t)bcast_batch,
         (std::uint32_t)M * K,
     };
-    tt::tt_metal::TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(reader_compile_time_args);
 
     // Compile time args for reader/writer
     std::vector<uint32_t> reader_writer_compile_time_args = {
@@ -248,8 +260,8 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         (std::uint32_t)out_num_subblocks_h,
         (std::uint32_t)M * N,
     };
-    tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(reader_writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*out_buffer).append_to(reader_writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(in1_buffer).append_to(reader_writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output).append_to(reader_writer_compile_time_args);
 
     // Reader defines
     KernelDescriptor::Defines reader_defines;
@@ -313,16 +325,22 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     };
 
     // Compute defines
-    KernelDescriptor::Defines compute_defines;
+    std::map<std::string, std::string> mm_kernel_defines;
     if (packer_l1_acc_en) {
-        compute_defines.emplace_back("PACKER_L1_ACC", "1");
+        mm_kernel_defines["PACKER_L1_ACC"] = "1";
     }
     if (fp32_dest_acc_en) {
-        compute_defines.emplace_back("FP32_DEST_ACC_EN", "1");
+        mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
     if (in1_transpose_tile) {
-        compute_defines.emplace_back("IN1_TRANSPOSE_TILE", "1");
+        mm_kernel_defines["IN1_TRANSPOSE_TILE"] = "1";
     }
+    const auto throttle_level = ttnn::get_throttle_level(operation_attributes.compute_kernel_config);
+    ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
+        device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+    KernelDescriptor::Defines compute_defines{mm_kernel_defines.begin(), mm_kernel_defines.end()};
 
     // Build per-core runtime args
     bool row_major = false;
@@ -391,7 +409,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
             {in1_buffer,
              in1_start_tile_id,
              num_output_blocks_per_core,
-             out_buffer,
+             output,
              num_blocks_written * num_tiles_per_block_out});
 
         // Compute kernels have no per-core runtime args
@@ -418,7 +436,10 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     compute_kernel_desc.defines = compute_defines;
     compute_kernel_desc.runtime_args = std::move(compute_runtime_args_g1);
     compute_kernel_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode};
     program_descriptor.kernels.push_back(std::move(compute_kernel_desc));
 
     // Core group 2 compute kernel (if needed)
@@ -455,7 +476,10 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         compute_kernel_desc_g2.defines = compute_defines;
         compute_kernel_desc_g2.runtime_args = std::move(compute_runtime_args_g2);
         compute_kernel_desc_g2.config = ComputeConfigDescriptor{
-            .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .math_approx_mode = math_approx_mode};
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+            .math_approx_mode = math_approx_mode};
         program_descriptor.kernels.push_back(std::move(compute_kernel_desc_g2));
     }
 
@@ -468,14 +492,14 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
                                   tt::DataFormat data_format,
                                   uint32_t page_size,
                                   const tt::tt_metal::Tile& tile,
-                                  Buffer* buffer = nullptr) {
+                                  const tt_metal::MeshTensor* tensor = nullptr) {
         CBDescriptor cb_desc;
         cb_desc.total_size = total_size;
         cb_desc.core_ranges = all_cores;
         tt::tt_metal::TileDescriptor tile_desc{tile};
         cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = buffer_index, .data_format = data_format, .page_size = page_size, .tile = tile_desc});
-        cb_desc.buffer = buffer;
+        cb_desc.tensor = tensor;
         return cb_desc;
     };
 
@@ -486,7 +510,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         in0_data_format,
         in0_single_tile_size,
         in0_tile,
-        in0_is_sharded ? in0_buffer : nullptr));
+        in0_is_sharded ? &in0_buffer : nullptr));
 
     // CB 1: Input B
     program_descriptor.cbs.push_back(make_cb_descriptor(
@@ -495,7 +519,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         in1_data_format,
         in1_single_tile_size,
         in1_tile,
-        in1_is_sharded ? in1_buffer : nullptr));
+        in1_is_sharded ? &in1_buffer : nullptr));
 
     // CB 4 and CB 5: Output and intermediate accumulator
     if ((interm0_data_format != output_data_format) || (untilize_out && (in1_num_subblocks > 1))) {
@@ -507,7 +531,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
             output_data_format,
             output_single_tile_size,
             output_tile,
-            output_is_sharded ? out_buffer : nullptr));
+            output_is_sharded ? &output : nullptr));
         program_descriptor.cbs.push_back(make_cb_descriptor(
             interm0_CB_size, tt::CBIndex::c_5, interm0_data_format, interm0_single_tile_size, output_tile));
     } else {
@@ -526,7 +550,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
             .data_format = interm0_data_format,
             .page_size = interm0_single_tile_size,
             .tile = output_tile_desc});
-        output_cb_desc.buffer = output_is_sharded ? out_buffer : nullptr;
+        output_cb_desc.tensor = output_is_sharded ? &output : nullptr;
         program_descriptor.cbs.push_back(std::move(output_cb_desc));
     }
 

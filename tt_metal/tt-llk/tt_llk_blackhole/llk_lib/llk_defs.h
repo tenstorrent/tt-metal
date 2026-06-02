@@ -11,7 +11,7 @@
 namespace ckernel
 {
 
-enum VectorMode
+enum class VectorMode : std::uint8_t
 {
     None      = 0,
     R         = 1,
@@ -21,20 +21,14 @@ enum VectorMode
     Invalid   = 0xFF,
 };
 
-enum ReduceDim
+enum class ReduceDim : std::uint8_t
 {
     REDUCE_ROW,
     REDUCE_COL,
     REDUCE_SCALAR,
 };
 
-enum TileDim
-{
-    R_IDX = 0,
-    C_IDX = 1,
-};
-
-enum PoolType
+enum class PoolType : std::uint8_t
 {
     SUM,
     AVG,
@@ -48,7 +42,7 @@ enum class DataCopyType : std::uint8_t
     B2D,
 };
 
-enum EltwiseBinaryType
+enum class EltwiseBinaryType : std::uint8_t
 {
     ELWMUL,
     ELWDIV,
@@ -70,7 +64,7 @@ enum DstSync
     SyncFull = 1,
 };
 
-enum BroadcastType
+enum class BroadcastType : std::uint8_t
 {
     NONE   = 0x0, // A - None || B - None
     COL    = 0x1, // A - None || B - Col Broadcast
@@ -84,33 +78,6 @@ enum class Transpose : std::uint8_t
     IntraFace = 1,
     InterFace = 2,
     Both      = 3,
-};
-
-enum src_op_id_e
-{
-    OP_SRC0 = 0,
-    OP_SRC1 = 1,
-    OP_SRC2 = 2,
-    OP_SRC3 = 3,
-    OP_SRC4 = 4,
-};
-
-enum local_op_id_e
-{
-    OP_LOCAL0 = 0,
-    OP_LOCAL1 = 1,
-    OP_LOCAL2 = 2,
-    OP_LOCAL3 = 3,
-    OP_LOCAL4 = 4,
-};
-
-enum out_op_id_e
-{
-    OUT_ID0 = 0,
-    OUT_ID1 = 1,
-    OUT_ID2 = 2,
-    OUT_ID3 = 3,
-    OUT_ID4 = 4,
 };
 
 enum ReluType
@@ -141,7 +108,7 @@ Stochastic rounding modes:
     is in data format conversion stage from pack_src_format to pack_dst_format.
     All: Enables fpu, pack and gasket rounding.
 */
-enum struct StochRndType
+enum class StochRndType : std::uint8_t
 {
     None = 0,
     Fpu  = 1,

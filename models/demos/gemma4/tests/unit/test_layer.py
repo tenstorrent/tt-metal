@@ -270,10 +270,23 @@ def test_layer_forward_decode(layer_idx, mesh_device, reset_seeds, request):
     )
     # Fill cache — on multi-device, each device gets its local KV heads
     if tp > 1:
-        local_kv = attn_cfg.num_key_value_heads // tp
+        # Mirror init_kv_cache / AttentionWeights: when num_kv_heads < tp each device
+        # holds exactly 1 KV head (GQA-replicated), otherwise heads are split evenly.
+        # GQA assignment formula matches weights.py:88 — for `num_q_heads / num_kv_heads
+        # / tp` of `16 / 2 / 8`, devices 0-3 take KV head 0 and 4-7 take head 1.
+        kv_replicated = attn_cfg.num_key_value_heads < tp
+        num_local_kv_heads = 1 if kv_replicated else attn_cfg.num_key_value_heads // tp
+        q_per_device = attn_cfg.num_attention_heads // tp
         for dev_idx in range(tp):
-            k_local = k_data[:, dev_idx * local_kv : (dev_idx + 1) * local_kv].to(torch.bfloat16)
-            v_local = v_data[:, dev_idx * local_kv : (dev_idx + 1) * local_kv].to(torch.bfloat16)
+            if kv_replicated:
+                kv_idx = (dev_idx * q_per_device) * attn_cfg.num_key_value_heads // attn_cfg.num_attention_heads
+                k_local = k_data[:, kv_idx : kv_idx + 1].to(torch.bfloat16)
+                v_local = v_data[:, kv_idx : kv_idx + 1].to(torch.bfloat16)
+            else:
+                start = dev_idx * num_local_kv_heads
+                end = start + num_local_kv_heads
+                k_local = k_data[:, start:end].to(torch.bfloat16)
+                v_local = v_data[:, start:end].to(torch.bfloat16)
             dev_k = ttnn.get_device_tensors(kv_cache[0])[dev_idx]
             dev_v = ttnn.get_device_tensors(kv_cache[1])[dev_idx]
             ttnn.fill_cache(

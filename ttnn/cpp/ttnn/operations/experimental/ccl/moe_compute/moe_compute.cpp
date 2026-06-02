@@ -19,15 +19,18 @@ std::vector<ttnn::Tensor> moe_compute(
     const ttnn::Tensor& matmul_w2_tensor,
     const uint32_t layer_id,
     const uint32_t output_height_shard_dim,
+    const uint32_t intermediate_size,
     const bool has_bias,
-    uint32_t cluster_axis,
+    const std::optional<uint32_t>& cluster_axis,
     const std::optional<tt::tt_fabric::Topology>& topology,
     const std::optional<uint32_t>& num_links,
     const std::optional<ttnn::CoreRangeSet>& mux_core_range_set,
     const std::optional<ttnn::MemoryConfig>& output_memory_config,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const std::optional<ttnn::GlobalSemaphore>& optional_cross_device_semaphore,
-    const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type) {
+    const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type,
+    const bool compute_only,
+    const std::optional<uint32_t>& bh_ring_size) {
     return ttnn::prim::moe_compute(
         tilize_input_tensor,
         tilize_expert_indices_tensor,
@@ -37,6 +40,7 @@ std::vector<ttnn::Tensor> moe_compute(
         matmul_w2_tensor,
         layer_id,
         output_height_shard_dim,
+        intermediate_size,
         has_bias,
         cluster_axis,
         topology,
@@ -45,7 +49,9 @@ std::vector<ttnn::Tensor> moe_compute(
         output_memory_config,
         optional_output_tensor,
         optional_cross_device_semaphore,
-        activation_type);
+        activation_type,
+        compute_only,
+        bh_ring_size);
 }
 
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(
@@ -53,5 +59,15 @@ std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     const uint32_t combine_token_parallel_cores,
     const uint32_t combine_data_parallel_cores) {
     return ttnn::prim::get_moe_combine_cores(mesh_device, combine_token_parallel_cores, combine_data_parallel_cores);
+}
+
+ttnn::CoreRange get_moe_worker_mcast_bounding_box(
+    ttnn::MeshDevice* mesh_device,
+    const uint32_t combine_token_parallel_cores,
+    const uint32_t combine_data_parallel_cores,
+    const uint32_t hidden_size,
+    const uint32_t bh_ring_size) {
+    return ttnn::prim::get_moe_worker_mcast_bounding_box(
+        mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, bh_ring_size);
 }
 }  // namespace ttnn::experimental

@@ -100,6 +100,7 @@ void __attribute__((noinline)) Application(void) {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
+    noc_clear_all_packet_tags();
     ncrisc_noc_full_sync();
     WAYPOINT("REW");
     uint32_t count = 0;

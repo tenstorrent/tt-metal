@@ -106,7 +106,17 @@ public:
     /**
      * Get the device the allocated device memory is on.
      */
-    distributed::MeshDevice& device() const;
+    const distributed::MeshDevice& device() const;
+
+    /**
+     * Get the mutable device the allocated device memory is on.
+     *
+     * This function is meant to be compatible with existing code and may be removed in the future,
+     * please consider this an internal function and use device() whenever possible.
+     *
+     * pre-condition: The device tensor must not be in a default constructed state.
+     */
+    distributed::MeshDevice& mutable_device() const;
 
     // Getters:
 
@@ -140,7 +150,7 @@ public:
     bool is_sharded() const;
 
     // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
-    const std::optional<ShardSpec>& legacy_shard_spec() const;
+    const std::optional<ShardSpec>& shard_spec() const;
     const std::optional<NdShardSpec>& nd_shard_spec() const;
 
     DeviceAddr address() const;

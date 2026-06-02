@@ -13,7 +13,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = 0;
 
-    //    DPRINT  << TSLICE(cb_id_in0, 0, SliceRange::h0_w0_32()) << ENDL() ;
+    // DPRINT("{}\n", TSLICE(cb_id_in0, 0, SliceRange::h0_w0_32()));
 
     for (uint32_t block = 0; block < num_blocks; block++) {
         cb_reserve_back(cb_id_in0, in0_block_tiles);

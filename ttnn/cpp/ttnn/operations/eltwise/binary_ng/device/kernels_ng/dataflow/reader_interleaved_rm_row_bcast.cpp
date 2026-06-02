@@ -140,13 +140,13 @@ void kernel_main() {
                             const uint32_t l1_write_addr_src_b = cb_src_b.get_write_ptr();
 
 #if SRC_BCAST
-                            const uint64_t addr_a = get_noc_addr(row_block_a, src) + current_chunk_offset;
+                            const uint64_t addr_a = src.get_noc_addr(row_block_a) + current_chunk_offset;
                             noc_async_read(addr_a, l1_write_addr_src, current_read_len_a);
 
                             uint32_t curr_l1_b = l1_write_addr_src_b;
                             for (uint32_t k = 0; k < limit; ++k) {
                                 const uint32_t row_idx_b = row_block_b + k * s_h_b;
-                                const uint64_t addr_b = get_noc_addr(row_idx_b, src_b) + current_chunk_offset;
+                                const uint64_t addr_b = src_b.get_noc_addr(row_idx_b) + current_chunk_offset;
                                 noc_async_read(addr_b, curr_l1_b, current_read_len_b);
                                 curr_l1_b += current_chunk_bytes;
                             }
@@ -156,12 +156,12 @@ void kernel_main() {
                             uint32_t curr_l1_a = l1_write_addr_src;
                             for (uint32_t k = 0; k < limit; ++k) {
                                 const uint32_t row_idx_a = row_block_a + k * s_h_a;
-                                const uint64_t addr_a = get_noc_addr(row_idx_a, src) + current_chunk_offset;
+                                const uint64_t addr_a = src.get_noc_addr(row_idx_a) + current_chunk_offset;
                                 noc_async_read(addr_a, curr_l1_a, current_read_len_a);
                                 curr_l1_a += current_chunk_bytes;
                             }
 
-                            const uint64_t addr_b = get_noc_addr(row_block_b, src_b) + current_chunk_offset;
+                            const uint64_t addr_b = src_b.get_noc_addr(row_block_b) + current_chunk_offset;
                             noc_async_read(addr_b, l1_write_addr_src_b, current_read_len_b);
 
                             noc.async_read_barrier();

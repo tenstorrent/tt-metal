@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3.tests.unit.utils import random_torch_tensor, run_test
+from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
 from tests.ttnn.utils_for_testing import assert_with_pcc, maybe_trace
 
@@ -115,7 +116,7 @@ DEEPSEEK_MEM_CONFIG_SHAPE_DTYPE_MEM_CONFIG = [
 
 @pytest.mark.requires_device(["TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}], indirect=True
+    "device_params", [{"fabric_config": get_fabric_config(), "trace_region_size": 0}], indirect=True
 )
 @pytest.mark.parametrize("test_config", DEEPSEEK_MEM_CONFIG_SHAPE_DTYPE_MEM_CONFIG)
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
@@ -163,7 +164,7 @@ def test_interleaved_to_sharded_deepseek(mesh_device, test_config, layout, enabl
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 10000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+    "device_params", [{"trace_region_size": 0, "fabric_config": get_fabric_config()}], indirect=True
 )
 def test_sharded_to_interleaved(mesh_device, shape, shard_type, cores, out_mem_config, dtype, layout, enable_trace):
     torch_input = random_torch_tensor(dtype, shape)

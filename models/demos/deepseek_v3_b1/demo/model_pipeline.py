@@ -54,6 +54,10 @@ class ModelPipeline:
         enable_speculative_decode: bool = True,
         enable_sram_hot_experts: bool = False,
         sram_hot_experts_ceiling: int = 64,
+        bspm_dir: Path | None = None,
+        bspm_variant: str = "B",
+        bspm_budget: float = 3.5,
+        enable_sram_bspm: bool = False,
     ):
         logger.info(
             "Initializing DeepSeek V3 B1 pod pipeline (weights={}, lm_head_fp32={}, lm_head_persistent_mode={}, speculative_decode={})",
@@ -86,7 +90,6 @@ class ModelPipeline:
             if model_path is None:
                 raise ValueError("weights_mode='real' requires model_path")
             if enable_sram_hot_experts:
-                from models.demos.deepseek_v3_b1.compressed_tensor.assigner import CompressedTensorAssigner
                 from models.demos.deepseek_v3_b1.weights.transforms.sram_experts import (
                     SramExpertCoreGrids,
                     _load_routing_frequencies,
@@ -109,20 +112,41 @@ class ModelPipeline:
                     model_path,
                     sram_hot_experts=sram_hot_experts,
                     sram_core_grids=SramExpertCoreGrids.shared_expert_mirror(),
-                    sram_assigner=CompressedTensorAssigner(formats=["bfp4"]),
                     worker_l1_size=_worker_l1_size_for_rank(
                         num_procs,
                         enable_speculative_decode=enable_speculative_decode,
                     ),
+                    bspm_dir=bspm_dir,
+                    bspm_variant=bspm_variant,
+                    bspm_budget=bspm_budget,
+                    enable_sram_bspm=enable_sram_bspm,
                 )
             else:
-                provider = CacheWeightProvider(cache_path, model_path)
+                provider = CacheWeightProvider(
+                    cache_path,
+                    model_path,
+                    bspm_dir=bspm_dir,
+                    bspm_variant=bspm_variant,
+                    bspm_budget=bspm_budget,
+                    enable_sram_bspm=enable_sram_bspm,
+                )
         elif weights_mode == "state_dict":
             if model_path is None:
                 raise ValueError("weights_mode='state_dict' requires model_path")
-            provider = StateDictWeightProvider(model_path)
+            provider = StateDictWeightProvider(
+                model_path,
+                bspm_dir=bspm_dir,
+                bspm_variant=bspm_variant,
+                bspm_budget=bspm_budget,
+                enable_sram_bspm=enable_sram_bspm,
+            )
         elif weights_mode == "synthetic":
-            provider = SyntheticWeightProvider()
+            provider = SyntheticWeightProvider(
+                bspm_dir=bspm_dir,
+                bspm_variant=bspm_variant,
+                bspm_budget=bspm_budget,
+                enable_sram_bspm=enable_sram_bspm,
+            )
         else:
             raise ValueError(f"Unknown weights_mode: {weights_mode!r}")
         config = create_pipeline_configuration_from_num_procs(
@@ -135,6 +159,7 @@ class ModelPipeline:
             enable_mtp=enable_speculative_decode,
             enable_speculative_decode=enable_speculative_decode,
             num_slots=num_slots,
+            enable_sram_bspm=enable_sram_bspm,
         )
         if config.num_stages != num_procs:
             raise RuntimeError(f"Pipeline configuration has {config.num_stages} stages but {num_procs} processes")
@@ -213,6 +238,9 @@ class ModelPipeline:
             user_id=0,
             position_id=self.position_id,
             token_type=TokenType.BASE,
+            temperature=self.temperature,
+            top_k=self.top_k,
+            probability_mass_threshold=self.top_p,
         )
         result = self.model.read_result()
         self.position_id += 1
@@ -282,18 +310,27 @@ class ModelPipeline:
         assert self.model is not None
 
         generated_tokens: list[int] = []
+        first_emit_time: float | None = None
+        last_emit_time: float | None = None
 
         def is_eos(token_id: int) -> bool:
             return eos_token_id is not None and token_id == eos_token_id
 
         def emit(token_id: int) -> None:
+            nonlocal first_emit_time, last_emit_time
             if on_token is not None:
                 on_token(token_id)
             generated_tokens.append(token_id)
+            now = time.time()
+            if first_emit_time is None:
+                first_emit_time = now
+            last_emit_time = now
 
+        prefill_start = time.time()
         pending: deque[DecodeResult] = deque(self.prefill_forward(prompt_token_ids))
+        prefill_end = time.time()
 
-        start_time = time.time()
+        decode_start = time.time()
         num_reads = 0
         num_writes = 0
         while len(generated_tokens) < max_new_tokens:
@@ -329,15 +366,33 @@ class ModelPipeline:
             )
             num_writes += 1
 
+        decode_end = time.time()
+
         while num_reads < num_writes:
             self.model.read_result()
             num_reads += 1
 
-        end_time = time.time()
-        elapsed = end_time - start_time
-        logger.debug(f"Time taken: {elapsed} seconds")
-        logger.debug(f"Tokens per second: {len(generated_tokens) / max(elapsed, 1e-9)}")
-        logger.debug("Base decode generation complete ({} tokens generated)", len(generated_tokens))
+        n_emitted = len(generated_tokens)
+        decode_elapsed = decode_end - decode_start
+        prefill_elapsed = prefill_end - prefill_start
+        ttft = (first_emit_time - prefill_start) if first_emit_time is not None else float("nan")
+        if first_emit_time is not None and last_emit_time is not None and n_emitted > 1:
+            tpot_elapsed = last_emit_time - first_emit_time
+            tps_steady = (n_emitted - 1) / max(tpot_elapsed, 1e-9)
+        else:
+            tps_steady = float("nan")
+        tps_avg = n_emitted / max(decode_elapsed, 1e-9)
+        logger.debug(
+            "Prefill: {:.2f}s ({} tokens, {:.1f} tok/s)",
+            prefill_elapsed,
+            len(prompt_token_ids),
+            len(prompt_token_ids) / max(prefill_elapsed, 1e-9),
+        )
+        logger.debug(f"TTFT (prefill + first decode token): {ttft:.3f}s")
+        logger.debug(f"Decode wall-time (excl. drain): {decode_elapsed:.2f}s")
+        logger.debug(f"Tokens per second (steady-state, inter-token): {tps_steady:.1f}")
+        logger.debug(f"Tokens per second (avg over decode loop): {tps_avg:.1f}")
+        logger.debug("Base decode generation complete ({} tokens generated)", n_emitted)
         return generated_tokens if return_generated_tokens else None
 
     def run_inference(
@@ -383,22 +438,32 @@ class ModelPipeline:
         else:
             think_open_id, think_close_id = None, None
 
+        first_emit_time: float | None = None
+        last_emit_time: float | None = None
+
         def is_eos(token_id: int) -> bool:
             """Returns True if a token is the EOS token"""
             return eos_token_id is not None and token_id == eos_token_id
 
         def emit(token_id: int) -> None:
             """Emit a token to the caller and update thinking-phase state."""
+            nonlocal first_emit_time, last_emit_time
             if on_token is not None:
                 on_token(token_id)
             generated_tokens.append(token_id)
+            now = time.time()
+            if first_emit_time is None:
+                first_emit_time = now
+            last_emit_time = now
             if token_id == think_open_id:
                 self._in_thinking_phase = True
             elif token_id == think_close_id:
                 self._in_thinking_phase = False
 
         # --- Prefill --------------------------------------------------------
+        prefill_start = time.time()
         prefill_results = self.prefill_forward(prompt_token_ids)
+        prefill_end = time.time()
 
         # Seed the state machine with both pages from the last prefill write,
         # then read from the pipeline for all subsequent results.
@@ -408,14 +473,11 @@ class ModelPipeline:
         base_reject = 0
         spec_reject = 0
         # --- Speculative decode state machine --------------------------------
-        iteration = 0
-        start_time = time.time()
-        num_emits = 0
+        decode_start = time.time()
         num_writes = 0
         num_reads = 0
         signal_to_exit = False
         while len(generated_tokens) < max_new_tokens or signal_to_exit:
-            iteration += 1
             if pending:
                 result = pending.popleft()
             else:
@@ -425,14 +487,12 @@ class ModelPipeline:
             if not unverified_spec_tokens and not verified_spec_tokens:
                 unverified_spec_tokens.append(result.token_1)
                 emit(result.token_0)
-                num_emits += 1
             else:
                 if result.token_0_type == TokenType.BASE:
                     if self.check_acceptance(unverified_spec_tokens[-1], result):
                         verified_spec_tokens.append(unverified_spec_tokens.pop())
                         emit(result.token_0)
                         base_accept += 1
-                        num_emits += 1
                         signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
                         continue
                     else:
@@ -440,7 +500,6 @@ class ModelPipeline:
                         unverified_spec_tokens.append(result.token_1)
                         emit(result.token_0)
                         base_reject += 1
-                        num_emits += 1
                         signal_to_exit = is_eos(result.token_0) or len(generated_tokens) >= max_new_tokens
 
                 if result.token_0_type == TokenType.SPEC:
@@ -453,7 +512,6 @@ class ModelPipeline:
 
                         emit(result.token_0)
                         spec_accept += 1
-                        num_emits += 1
                     else:
                         if signal_to_exit:
                             break
@@ -474,17 +532,38 @@ class ModelPipeline:
             )
             num_writes += 2
 
+        decode_end = time.time()
+
         while num_reads < num_writes:
             self.model.read_result()
             num_reads += 1
 
-        end_time = time.time()
-        logger.debug(f"Time taken: {end_time - start_time} seconds")
-        logger.debug(f"Tokens per second: {num_emits / (end_time - start_time)}")
+        n_emitted = len(generated_tokens)
+        decode_elapsed = decode_end - decode_start
+        # TTFT = prefill + time to first emitted decode token.
+        ttft = (first_emit_time - prefill_start) if first_emit_time is not None else float("nan")
+        # Steady-state inter-token throughput excludes the first emission.
+        if first_emit_time is not None and last_emit_time is not None and n_emitted > 1:
+            tpot_elapsed = last_emit_time - first_emit_time
+            tps_steady = (n_emitted - 1) / max(tpot_elapsed, 1e-9)
+        else:
+            tps_steady = float("nan")
+        tps_avg = n_emitted / max(decode_elapsed, 1e-9)
+        prefill_elapsed = prefill_end - prefill_start
+        logger.debug(
+            "Prefill: {:.2f}s ({} tokens, {:.1f} tok/s)",
+            prefill_elapsed,
+            len(prompt_token_ids),
+            len(prompt_token_ids) / max(prefill_elapsed, 1e-9),
+        )
+        logger.debug(f"TTFT (prefill + first decode token): {ttft:.3f}s")
+        logger.debug(f"Decode wall-time (excl. drain): {decode_elapsed:.2f}s")
+        logger.debug(f"Tokens per second (steady-state, inter-token): {tps_steady:.1f}")
+        logger.debug(f"Tokens per second (avg over decode loop): {tps_avg:.1f}")
         logger.debug(
             f"Base Accept: {base_accept}, Base Reject: {base_reject}, Spec Accept: {spec_accept}, Spec Reject: {spec_reject}, Base Accept Rate: {base_accept / (base_accept + base_reject + 1e-5)}, Spec Accept Rate: {spec_accept / (spec_accept + spec_reject + 1e-5)}"
         )
-        logger.debug("Generation complete ({} tokens generated)", len(generated_tokens))
+        logger.debug("Generation complete ({} tokens generated)", n_emitted)
         return generated_tokens if return_generated_tokens else None
 
     def barrier(self) -> None:

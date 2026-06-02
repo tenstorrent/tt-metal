@@ -27,7 +27,8 @@ ttnn::Tensor combine(
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology,
     bool init_zeros,
-    bool use_l1_small_for_semaphores) {
+    bool use_l1_small_for_semaphores,
+    bool use_fp8_combine) {
     // Get device and subdevice info
     auto* mesh_device = dispatched_buffer.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
@@ -71,7 +72,8 @@ ttnn::Tensor combine(
         memory_config_,
         subdevice_core_range_set,
         init_zeros,
-        use_l1_small_for_semaphores);
+        use_l1_small_for_semaphores,
+        use_fp8_combine);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine

@@ -24,7 +24,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_tiles; ++i) {
         cb_wait_front(output_cb_id, 1);
         uint32_t l1_read_addr = get_read_ptr(output_cb_id);
-        noc_async_write_tile(output_curr_id, s, l1_read_addr);
+        noc_async_write_page(output_curr_id, s, l1_read_addr);
         noc_async_write_barrier();
         cb_pop_front(output_cb_id, 1);
         output_curr_id++;
