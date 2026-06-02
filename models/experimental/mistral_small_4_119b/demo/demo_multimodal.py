@@ -4,32 +4,29 @@
 """
 Mistral-Small-4-119B multimodal generation demo.
 
-Drives the full vision + projector + language model pipeline end to end with
-unified single-phase loading — vision + projector + text are lazy-loaded
-together on the first ``encode_image`` call (with bfloat8_b vision weights so
-both stacks remain resident), then ``prefill_multimodal`` runs, then a decode
-loop.
+Drives the full vision + projector + language model pipeline end to end. Loading
+is unified: vision + projector + text are lazy-loaded together on the first
+``encode_image`` call, then ``prefill_multimodal`` runs, then the decode loop.
 
-The default 2 text + 2 vision layers makes this fast (~minutes total) and is
-intended for plumbing validation — the output will be gibberish. Bump to
-``--n-text-layers 36 --n-vision-layers 24`` for the full model.
+Supported hardware: P150x8 or a Blackhole Loud Box only. Set ``MESH_DEVICE``
+accordingly before running.
+
+Defaults run a real image (a sample battle scene) and prompt at 2 text + 2
+vision layers — fast (~minutes) but for plumbing only, so the output is
+gibberish. Pass ``--n-text-layers 36 --n-vision-layers 24`` for the full model.
 
 Run::
 
-    export MESH_DEVICE=T3K          # or P150x4, single, etc.
-    python models/experimental/mistral_small_4_119b/demo_multimodal.py \
-        --prompt "What's in this picture?" \
-        --max-new-tokens 16
+    export MESH_DEVICE=P150x8
+    python models/experimental/mistral_small_4_119b/demo_multimodal.py
 
-    # With a real image file:
+    # Override the default image (URL or local path) and prompt:
     python models/experimental/mistral_small_4_119b/demo_multimodal.py \
         --image /path/to/image.jpg \
         --prompt "Describe the scene."
 
-If ``--image`` is omitted, the demo generates a random pixel_values tensor so
-the pipeline still exercises end-to-end (the model can't see anything real,
-so don't expect a coherent answer — and at the default 2 layers, you won't
-get one even with a real image).
+Pass ``--image ""`` to fall back to a random pixel_values tensor — the pipeline
+still runs end to end, but the model can't see anything real.
 """
 
 from __future__ import annotations
@@ -59,13 +56,28 @@ from models.experimental.mistral_small_4_119b.tt.mistral3_for_conditional_genera
 )
 from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
 
+# ── Defaults ─────────────────────────────────────────────────────────────────
+
+DEFAULT_IMAGE_URL = (
+    "https://static.wikia.nocookie.net/essentialsdocs/images/7/70/Battle.png/" "revision/latest?cb=20220523172438"
+)
+DEFAULT_PROMPT = (
+    "What action do you think I should take in this situation? List all the "
+    "possible actions and explain why you think they are good or bad."
+)
+
 # ── Argument parsing ───────────────────────────────────────────────────────────
 
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Mistral-Small-4-119B multimodal demo")
-    p.add_argument("--image", type=str, default=None, help="Image file path (uses a random image if omitted)")
-    p.add_argument("--prompt", type=str, default="Describe this image.", help="Text prompt accompanying the image")
+    p.add_argument(
+        "--image",
+        type=str,
+        default=DEFAULT_IMAGE_URL,
+        help="Image file path or URL (defaults to a sample battle scene; pass an empty string to use a random image)",
+    )
+    p.add_argument("--prompt", type=str, default=DEFAULT_PROMPT, help="Text prompt accompanying the image")
     p.add_argument("--max-new-tokens", type=int, default=16, help="Tokens to generate after prefill")
     p.add_argument(
         "--n-text-layers",
@@ -221,22 +233,26 @@ def _build_chat_inputs(
     image_max_side: int,
 ):
     """
-    Build pixel_values + input_ids using HF ``AutoProcessor.apply_chat_template``.
+    Build pixel_values + input_ids via HF ``AutoProcessor.apply_chat_template``,
+    which applies the chat-template framing, image normalization/resize, and the
+    ``image_token_id`` slots the model was trained on.
 
-    The processor handles everything the model was trained to expect:
-      - chat-template framing: ``<s>[INST][IMG]…[IMG_BREAK]…[IMG_END] prompt [/INST]``
-      - CLIP-style image normalization, resize, and patch-aligned dimensions
-      - inserting the correct number of ``image_token_id`` slots into ``input_ids``
-        (with ``[IMG_BREAK]`` between patch rows — the orchestrator's
-        ``contiguous_runs`` helper handles those gaps)
-      - ``add_generation_prompt=True`` so the model knows it's the assistant's turn
+    ``image_path`` may be a local file or an http(s) URL.
 
     Returns ``(pixel_values [1,3,H,W] bf16, input_ids [1, seq_len] long, processor)``.
     """
     from PIL import Image
     from transformers import AutoProcessor
 
-    img = Image.open(image_path).convert("RGB")
+    if image_path.startswith(("http://", "https://")):
+        import io
+        import urllib.request
+
+        logger.info(f"Fetching image from URL: {image_path}")
+        with urllib.request.urlopen(image_path) as resp:
+            img = Image.open(io.BytesIO(resp.read())).convert("RGB")
+    else:
+        img = Image.open(image_path).convert("RGB")
     if max(img.size) > image_max_side:
         scale = image_max_side / max(img.size)
         new_w = max(VISION_PATCH_SIZE, int(round(img.size[0] * scale)))
@@ -274,7 +290,7 @@ def _build_random_inputs(img_patches: int, prompt: str, tokenizer, image_token_i
     almost certainly emit EOS right away since this isn't the trained format.
     """
     side = img_patches * VISION_PATCH_SIZE
-    logger.warning(f"No --image provided; using random {side}×{side} pixel_values + raw [IMG]+text layout")
+    logger.warning(f"Using random {side}×{side} pixel_values + raw [IMG]+text layout")
     pixel_values = torch.rand(1, 3, side, side, dtype=torch.bfloat16) * 2 - 1
     num_image_tokens = (img_patches // MMP_SPATIAL_MERGE_SIZE) ** 2
     text_ids = tokenizer(prompt, return_tensors="pt").input_ids[0]
@@ -360,9 +376,8 @@ def generate(
         tok_id = model.decode_next_token(cur, current_pos)
         decode_times.append((time.perf_counter() - t_dec) * 1000)
 
-        # The first decode step (step 1) compiles all decode kernels eagerly.
-        # Capture the trace once right after, so steps 2+ replay it instead of
-        # re-dispatching every op from host — the main decode speedup.
+        # Step 1 compiles the decode kernels eagerly; capture the trace right
+        # after so steps 2+ replay it instead of re-dispatching from host.
         if step == 1 and use_trace:
             model.capture_decode_trace()
 
@@ -464,8 +479,8 @@ def main() -> None:
         sys.exit(f"Tokenizer load failed: {e}")
 
     # Build pixel_values + input_ids.
-    #  - With --image: HF chat template + image processor (the format the model was trained on).
-    #  - Without --image, or with --no-chat-template: random/raw fallback (plumbing only).
+    #  - --image set (the default): HF chat template + image processor (the trained format).
+    #  - --image "" or --no-chat-template: random/raw fallback (plumbing only).
     if args.image and not args.no_chat_template:
         logger.info(f"Building chat-template inputs via HF AutoProcessor for {args.image!r}…")
         pixel_values, input_ids, _ = _build_chat_inputs(args.image, args.prompt, args.image_max_side)
@@ -474,7 +489,6 @@ def main() -> None:
             logger.warning("--no-chat-template set: skipping HF chat template, expect EOS-only output.")
         pixel_values, input_ids = _build_random_inputs(args.img_patches, args.prompt, tokenizer, image_token_id)
     logger.info(f"pixel_values: {tuple(pixel_values.shape)} bf16, input_ids: {tuple(input_ids.shape)} long")
-    num_image_tokens = int((input_ids[0] == image_token_id).sum().item())
 
     tt_text = None
     hf_text = None
