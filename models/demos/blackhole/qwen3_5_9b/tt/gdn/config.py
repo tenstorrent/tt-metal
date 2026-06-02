@@ -16,7 +16,6 @@ class GDNConfig:
     q_dim: int
     k_dim: int
     v_dim: int
-    prefill_chunk_size: int = 64
     long_prefill_chunk_size: int = 128
 
     @classmethod

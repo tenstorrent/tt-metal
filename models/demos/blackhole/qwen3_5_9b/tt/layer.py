@@ -76,7 +76,7 @@ class Qwen35DecoderLayer:
         cos=None,
         sin=None,
         mode="decode",
-        chunk_size=64,
+        chunk_size=128,  # = GDN long_prefill_chunk_size; the only size the chunk-seq prefill kernel supports
         position_tensor=None,
         page_table=None,
         chunk_page_table=None,

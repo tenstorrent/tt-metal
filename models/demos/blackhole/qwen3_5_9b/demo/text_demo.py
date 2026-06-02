@@ -261,13 +261,12 @@ def test_demo_text(
 
 def _should_use_chunked_trace(model):
     """Whether to capture ONE chunk's prefill forward and replay it per chunk (chunk-outer)
-    instead of one whole-sequence trace. True when the chunk-seq GDN prefill kernel is active
-    (QWEN9B_GDN_CHUNK_SEQ=1): chunk-outer keeps the captured trace small (under the 4 GiB
-    ceiling at long context) and every GDN call at <=2048 tokens.
+    instead of one whole-sequence trace. The chunk-seq GDN prefill kernel is always on, so
+    chunk-outer is always selected: it keeps the captured trace small (under the 4 GiB ceiling
+    at long context) with every GDN call at <=2048 tokens.
 
-    The flag lives on the GDN weights (``attn.weights.use_chunk_seq_prefill``) since the
-    tt/gdn/ reorg moved it off the old ``attn._use_chunk_seq_prefill`` attribute. Reading the
-    stale name silently fell back to the slow whole-sequence trace (~20x slower capture).
+    ``attn.weights.use_chunk_seq_prefill`` is always True; the gate stays data-driven off the
+    GDN weights so a future per-model toggle would flow through here unchanged.
     """
     return any(
         (not layer.is_full_attention)
