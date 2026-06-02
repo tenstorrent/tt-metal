@@ -2,23 +2,23 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// LLK companion to api/debug/dprint_tensix.h: a dprint_tensix_dest_reg that
-// works under DstSync::SyncHalf (Metal's halts on semaphore::MATH_PACK,
-// which deadlocks here) and configures the BH dest aperture format
-// registers that the LLK datacopy pipeline omits. Quasar unsupported.
+// Wrapper for dprint_tensix.h.
+// LLK needs its own dprint_tensix_dest_reg. It diverges from Metal in two ways:
+//   - Skips dbg_halt<MathThreadId>, as it would deadlock.
+//   - On Blackhole, programs RISC_DEST_ACCESS_CTRL_SEC1 before reading DEST as
+//     Float32 or Int32, so that tests don't have the burden of doing that themselves.
+//
+// Quasar is currently unsupported; Metal device print doesn't support arrays for Quasar.
 
 #pragma once
 
-#if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
+#if defined(ARCH_WORMHOLE) || defined(ARCH_BLACKHOLE)
 
 #include <cstdint>
 
 #include "api/debug/dprint_tensix.h"
 #include "cfg_defines.h"
 #include "dprint.h"
-
-namespace llk_dprint
-{
 
 inline void dprint_tensix_dest_reg(int tile_id = 0)
 {
@@ -29,21 +29,29 @@ inline void dprint_tensix_dest_reg(int tile_id = 0)
     {
         data_format = static_cast<uint32_t>(DataFormat::Float32);
 #if defined(ARCH_WORMHOLE)
-        DEVICE_PRINT("WARNING: Float32 on Wormhole displays limited precision (lower 16 mantissa bits are not shown)");
+        DEVICE_PRINT("WARNING: Float32 on Wormhole omits lower 16 bits of DEST");
 #endif
     }
+
+#if !defined(ARCH_BLACKHOLE)
+    if (data_format == static_cast<uint32_t>(DataFormat::Int32))
+    {
+        DEVICE_PRINT("Int32 format not supported on this architecture");
+        return;
+    }
+#endif
 
     DEVICE_PRINT("Tile ID = {}", tile_id);
 
 #ifdef ARCH_BLACKHOLE
-    // The BH RISC dest aperture's per-thread SEC1 registers are normally set
-    // by Metal's compute API but skipped by the LLK datacopy path; do it
-    // once here for the formats that read through the aperture.
+    // Blackhole returns garbage for Float32 and Int32 through dbg_get_array_row,
+    // so we read these via the memory-mapped DEST window at 0xFFBD8000.
+    // Informed by tt_llk_blackhole/common/inc/ckernel_debug.h:dbg_copy_dest_tile.
     if (data_format == static_cast<uint32_t>(DataFormat::Float32) || data_format == static_cast<uint32_t>(DataFormat::Int32))
     {
-        set_dest_fmt<MathThreadId>(data_format == static_cast<uint32_t>(DataFormat::Float32) ? RISC_DEST_FMT_FP32 : RISC_DEST_FMT_INT32);
+        const DataFormat fmt = static_cast<DataFormat>(data_format);
+        set_dest_fmt<MathThreadId>(fmt_to_dest_type(fmt));
         set_dest_enable_swizzling<MathThreadId>(true);
-        set_dest_int8_int16_signed<MathThreadId>(false);
         tensix_sync();
     }
 #endif
@@ -76,21 +84,20 @@ inline void dprint_tensix_dest_reg(int tile_id = 0)
                 DEVICE_PRINT("{}", dp_typed_array_t<16>(static_cast<uint16_t>(DataFormat::Float32), rd));
                 break;
             }
+#ifdef ARCH_BLACKHOLE
             case static_cast<uint32_t>(DataFormat::Int32):
             {
-#ifdef ARCH_BLACKHOLE
                 uint32_t rd[16];
                 const uint32_t* addr = reinterpret_cast<const uint32_t*>(0xFFBD8000);
                 for (int i = 0; i < 16; ++i)
                 {
                     rd[i] = addr[i + (row << 4)];
                 }
+
                 DEVICE_PRINT("{}", dp_typed_array_t<16>(static_cast<uint16_t>(DataFormat::Int32), rd));
-#else
-                DEVICE_PRINT("Int32 format not supported on this architecture");
-#endif
                 break;
             }
+#endif
             case static_cast<uint32_t>(DataFormat::UInt16):
             case static_cast<uint32_t>(DataFormat::Float16_b):
             case static_cast<uint32_t>(DataFormat::UInt8):
@@ -107,7 +114,5 @@ inline void dprint_tensix_dest_reg(int tile_id = 0)
         }
     }
 }
-
-} // namespace llk_dprint
 
 #endif // defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)

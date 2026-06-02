@@ -242,7 +242,6 @@ struct TileSlice : TileSliceHostDev<MAX_BYTES> {
         if (untilize) {
             // For tilized data, exponents are grouped by face
             uint32_t row_in_face = h % tile_info.face_dim_r;
-            uint32_t col_in_face = w % tile_info.face_dim_c;
             uint32_t face_idx_r = h / tile_info.face_dim_r;
             uint32_t face_idx_c = w / tile_info.face_dim_c;
             uint32_t num_faces_c = tile_info.tile_dim_c / tile_info.face_dim_c;

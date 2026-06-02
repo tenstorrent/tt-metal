@@ -453,16 +453,45 @@ _DF_FLOAT32 = 0
 _DF_FLOAT16 = 1
 _DF_TF32 = 4
 _DF_FLOAT16_B = 5
+_DF_BFP8_B = 6
+_DF_BFP4_B = 7
 _DF_INT32 = 8
 _DF_UINT16 = 9
 _DF_INT8 = 14
 _DF_UINT32 = 24
 _DF_UINT8 = 30
 
+
+def _bfp_b_decoder(mantissa_bits: int):
+    """Build a Bfp*_b decoder. Wire format is (shared_exp, sign|mantissa) pairs;
+    mirrors tt_metal/impl/data_format/blockfloat_common.cpp:convert_bfp_to_u32."""
+    mantissa_mask = (1 << mantissa_bits) - 1
+    leading_bit = 1 << (mantissa_bits - 1)
+    final_shift = 23 - mantissa_bits
+
+    def decode(d, i, f):
+        shared_exp = d[i * 2]
+        val = d[i * 2 + 1]
+        sign = val >> mantissa_bits
+        man = val & mantissa_mask
+        if man == 0:
+            return f(-0.0 if sign else 0.0)
+        shift_cnt = 0
+        while not (man & leading_bit):
+            man <<= 1
+            shift_cnt += 1
+        man = (man << 1) & mantissa_mask
+        exp = max(0, shared_exp - shift_cnt)
+        bit_val = (sign << 31) | (exp << 23) | (man << final_shift)
+        return f(struct.unpack("<f", struct.pack("<I", bit_val))[0])
+
+    return decode
+
+
 # Per-element decoder for each supported DataFormat: takes (data_bytes, i, fmt)
-# and returns the formatted element string. The byte layout is the same for
-# dp_typed_array_t and TileSliceHostDev — both store N elements packed
-# contiguously, little-endian — so this dispatch is shared by both records.
+# and returns the formatted element string. Non-Bfp formats store N elements
+# packed contiguously, little-endian; Bfp_b formats interleave (exp, mantissa)
+# byte pairs.
 _ELEMENT_DECODERS = {
     _DF_FLOAT32: lambda d, i, f: f(struct.unpack_from("<f", d, i * 4)[0]),
     _DF_INT32: lambda d, i, f: f(struct.unpack_from("<i", d, i * 4)[0]),
@@ -485,6 +514,8 @@ _ELEMENT_DECODERS = {
     _DF_UINT16: lambda d, i, f: f(struct.unpack_from("<H", d, i * 2)[0]),
     _DF_INT8: lambda d, i, f: f(struct.unpack_from("<b", d, i)[0]),
     _DF_UINT8: lambda d, i, f: f(d[i]),
+    _DF_BFP8_B: _bfp_b_decoder(7),
+    _DF_BFP4_B: _bfp_b_decoder(3),
 }
 
 _BYTES_PER_DATUM = {
@@ -521,9 +552,8 @@ def _render_typed_array(args_blob: bytes, offset: int, spec: str) -> str:
 # TileSliceHostDev<MAX_BYTES> header layout (dprint_common.h:117):
 # cb_ptr(u32) | slice_range(6×u8) | cb_id(u8) | data_format(u8) |
 # data_count(u8) | endl_rows(u8) | return_code(u8) | pad(u8).
-# `pad` carries MAX_BYTES so the host can size the trailing data[] section.
+# pad carries MAX_BYTES so the host can size the trailing data[] section.
 _TILE_SLICE_HEADER_STRUCT = struct.Struct("<I12B")
-_TILE_SLICE_HEADER_SIZE = 16
 _DPRINT_OK = 2
 _RETURN_CODE_MSGS = {4: "BAD TILE POINTER", 5: "unsupported data format"}
 
@@ -554,12 +584,13 @@ def _render_tile_slice(args_blob: bytes, offset: int, spec: str) -> str:
         return f"<TileSlice: unsupported DataFormat={data_format}>"
 
     data = args_blob[
-        offset + _TILE_SLICE_HEADER_SIZE : offset + _TILE_SLICE_HEADER_SIZE + max_bytes
+        offset
+        + _TILE_SLICE_HEADER_STRUCT.size : offset
+        + _TILE_SLICE_HEADER_STRUCT.size
+        + max_bytes
     ]
     fmt = ("{:" + spec + "}" if spec else "{}").format
 
-    # data_count < (slice cells) is a real case: producer hits MAX_BYTES before
-    # the slice ends. Stop the row mid-stream and emit Metal's truncation message.
     parts: list[str] = []
     i = 0
     for h in range(h0, h1, hs):
@@ -568,7 +599,7 @@ def _render_tile_slice(args_blob: bytes, offset: int, spec: str) -> str:
             if i >= data_count:
                 parts.append(" ".join(row))
                 parts.append(
-                    f"<TileSlice data truncated due to exceeding max count ({data_count})>\n"
+                    f"<TileSlice truncated (max is {data_count}, try bumping the tile slice template param)>\n"
                 )
                 return "".join(parts)
             row.append(decode(data, i, fmt))
