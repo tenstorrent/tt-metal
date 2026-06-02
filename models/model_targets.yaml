@@ -489,6 +489,21 @@ targets:
             accuracy:
               top1: 88
               top5: 97
+      # p300x2 == bh_quietbox_2 (2x P300 = 4 dies). Numbers measured on the
+      # BH migration branch CI run (workflow 26664009397, ci-token-matching).
+      p300x2:
+        entries:
+          - status: active
+            perf:
+              prefill_time_to_token: 0.053
+              decode_t/s/u: 23.0
+              decode_t/s: 23.0
+              decode_tolerance: 1.15
+            accuracy:
+              top1: 90.0
+              top5: 97.6
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
   # Active e2e combinations with no centralized target yet must remain explicit TODOs.
   llama3.1-8b-dp:
     aliases: ["llama3.1-8b-dp"]
@@ -676,6 +691,22 @@ targets:
             accuracy:
               top1: 95
               top5: 100
+      # p300x2 == bh_quietbox_2. Measured on workflow run 26785408151
+      # (ci-eval-32 invocation).
+      p300x2:
+        entries:
+          - batch_size: 32
+            status: active
+            perf:
+              prefill_time_to_token: 0.136
+              decode_t/s/u: 16.30
+              decode_t/s: 521.6
+              decode_tolerance: 1.15
+            accuracy:
+              top1: 96.0
+              top5: 100.0
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
   llama3.3-70b-dp-galaxy:
     aliases: ["llama3.3-70b-dp-galaxy"]
     skus:
@@ -942,6 +973,22 @@ targets:
             accuracy:
               top1: 89
               top5: 97
+      # p300x2 == bh_quietbox_2. Measured on workflow run 26785408151
+      # (ci-eval-32 invocation; decode_t/s = batch_size * decode_t/s/u).
+      p300x2:
+        entries:
+          - batch_size: 32
+            status: active
+            perf:
+              prefill_time_to_token: 0.207
+              decode_t/s/u: 8.7
+              decode_t/s: 278
+              decode_tolerance: 1.15
+            accuracy:
+              top1: 91.0
+              top5: 99.0
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
   qwen3-32b-galaxy:
     aliases: ["qwen3-32b-galaxy"]
     skus:
