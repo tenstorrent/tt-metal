@@ -50,6 +50,12 @@ inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const ds
     overlay::set_len_cmdbuf_0(size_bytes);
     overlay::issue_cmdbuf_0();
 
+    // cmdbuf 0 is now in the zero-borrowed configuration (AXI_OPT_1 in zero mode, AUTOINC
+    // enabling per-packet VC autoincrement). It is reset and reprogrammed to its write-ready
+    // default by write_zeros_l1_barrier() below, after the ack, so the reset there cannot
+    // disturb this transaction's pending iDMA ack. Do not issue other cmdbuf-0 NoC ops
+    // between this call and write_zeros_l1_barrier(): barrier first, then reuse cmdbuf 0.
+
     // TODO: this zero should record a NOC-debug write event (dst = local_addr, size_bytes) so
     // the NOC transaction debug tool flags zeroing a locked buffer (WRITE_TO_LOCKED_*). Not
     // wired up here yet: the RECORD_NOC_EVENT_WITH_ADDR machinery is currently only enabled for
@@ -62,4 +68,11 @@ inline void Noc::write_zeros_l1_barrier() const {
     while (!overlay::idma_acked_cmdbuf_0()) {
         // Spin until all per-backend split packets ack.
     }
+    // The zero borrowed cmd buffer 0 in a non-write configuration (iDMA zero mode + VC
+    // autoincrement). Now that every packet has acked, reset it and reprogram the standard
+    // write-ready config so the next noc_async_write on cmd buffer 0 behaves normally. This
+    // is done here, after the ack, rather than in async_write_zeros: init_wr_cmd_buf() resets
+    // cmd buffer 0, and resetting before the ack could disturb the pending iDMA ack we just
+    // waited on.
+    init_wr_cmd_buf(noc_local_xy());
 }
