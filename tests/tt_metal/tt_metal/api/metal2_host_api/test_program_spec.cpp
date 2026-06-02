@@ -741,7 +741,7 @@ TEST_F(ProgramSpecTestQuasar, RoleHintIgnoredOnGen2Succeeds) {
     ProgramSpec spec;
     spec.name = "test_program";
 
-    auto kernel = MakeMinimalRoleDMKernel("kernel", DataMovementHardwareConfig::RoleHint::READER);
+    auto kernel = MakeMinimalRoleDMKernel("kernel", DataMovementRoleHint::READER);
 
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
@@ -2654,8 +2654,8 @@ TEST_F(ProgramSpecTestGen1, ReaderAndWriterRolesOnSameNodeSucceed) {
     ProgramSpec spec;
     spec.name = "test_program";
 
-    auto reader = MakeMinimalRoleDMKernel("reader", DataMovementHardwareConfig::RoleHint::READER);
-    auto writer = MakeMinimalRoleDMKernel("writer", DataMovementHardwareConfig::RoleHint::WRITER);
+    auto reader = MakeMinimalRoleDMKernel("reader", DataMovementRoleHint::READER);
+    auto writer = MakeMinimalRoleDMKernel("writer", DataMovementRoleHint::WRITER);
 
     spec.kernels = {reader, writer};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"reader", "writer"})};
@@ -2672,8 +2672,8 @@ TEST_F(ProgramSpecTestGen1, TwoReaderRolesOnSameNodeConflict) {
     ProgramSpec spec;
     spec.name = "test_program";
 
-    auto r0 = MakeMinimalRoleDMKernel("r0", DataMovementHardwareConfig::RoleHint::READER);
-    auto r1 = MakeMinimalRoleDMKernel("r1", DataMovementHardwareConfig::RoleHint::READER);
+    auto r0 = MakeMinimalRoleDMKernel("r0", DataMovementRoleHint::READER);
+    auto r1 = MakeMinimalRoleDMKernel("r1", DataMovementRoleHint::READER);
 
     spec.kernels = {r0, r1};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"r0", "r1"})};
@@ -2691,7 +2691,7 @@ TEST_F(ProgramSpecTestGen1, RoleHintWithExplicitGen1ConfigFails) {
     ProgramSpec spec;
     spec.name = "test_program";
 
-    auto kernel = MakeMinimalRoleDMKernel("dm_kernel", DataMovementHardwareConfig::RoleHint::READER);
+    auto kernel = MakeMinimalRoleDMKernel("dm_kernel", DataMovementRoleHint::READER);
     auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
     dm_config.gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1};
 

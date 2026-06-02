@@ -167,13 +167,13 @@ inline bool is_gen1_arch() {
 DataMovementHardwareConfig::Gen1Config ResolveGen1Config(const DataMovementHardwareConfig& dm_config) {
     using Gen1Config = DataMovementHardwareConfig::Gen1Config;
     switch (dm_config.role) {
-        case DataMovementHardwareConfig::RoleHint::READER:
+        case DataMovementRoleHint::READER:
             return Gen1Config{
                 .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_0, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
-        case DataMovementHardwareConfig::RoleHint::WRITER:
+        case DataMovementRoleHint::WRITER:
             return Gen1Config{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_1, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
-        case DataMovementHardwareConfig::RoleHint::UNSPECIFIED: return dm_config.gen1_config.value();
+        case DataMovementRoleHint::UNSPECIFIED: return dm_config.gen1_config.value();
     }
     TT_THROW("Unhandled RoleHint in ResolveGen1Config");
 }
@@ -699,7 +699,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             // A role hint and an explicit Gen1 config are mutually exclusive: a READER/WRITER
             // hint already fills in the Gen1 config, so also supplying one is contradictory.
             TT_FATAL(
-                data_movement_config.role == DataMovementHardwareConfig::RoleHint::UNSPECIFIED ||
+                data_movement_config.role == DataMovementRoleHint::UNSPECIFIED ||
                     !data_movement_config.gen1_config.has_value(),
                 "KernelSpec '{}' sets both a READER/WRITER role hint and an explicit Gen1 config. "
                 "A role hint fills the Gen1 config for you; either drop the explicit config, or use "
@@ -712,7 +712,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             // absence is treated as "use defaults" (empty disable_implicit_sync_for).
             if (is_gen1_arch()) {
                 TT_FATAL(
-                    data_movement_config.role != DataMovementHardwareConfig::RoleHint::UNSPECIFIED ||
+                    data_movement_config.role != DataMovementRoleHint::UNSPECIFIED ||
                         data_movement_config.gen1_config.has_value(),
                     "KernelSpec '{}' targets Gen1 (WH/BH) but specifies neither a role hint "
                     "(READER/WRITER) nor an explicit Gen1 config. One is required.",

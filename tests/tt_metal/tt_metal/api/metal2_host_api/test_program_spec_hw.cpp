@@ -481,7 +481,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
         .semaphore_bindings = {{.semaphore_spec_name = "only_sem", .accessor_name = "signal"}},
         .hw_config =
             DataMovementHardwareConfig{
-                .role = DataMovementHardwareConfig::RoleHint::WRITER,
+                .role = DataMovementRoleHint::WRITER,
             },
     };
     KernelSpec consumer{
@@ -493,7 +493,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
         .semaphore_bindings = {{.semaphore_spec_name = "only_sem", .accessor_name = "waiter"}},
         .hw_config =
             DataMovementHardwareConfig{
-                .role = DataMovementHardwareConfig::RoleHint::READER,
+                .role = DataMovementRoleHint::READER,
             },
     };
 

@@ -66,4 +66,8 @@ struct DataMovementHardwareConfig {
     std::optional<Gen2Config> gen2_config = std::nullopt;
 };
 
+// Flat alias for the nested role enum, so common-path call sites stay readable:
+//   DataMovementHardwareConfig{.role = DataMovementRoleHint::READER}
+using DataMovementRoleHint = DataMovementHardwareConfig::RoleHint;
+
 }  // namespace tt::tt_metal::experimental
