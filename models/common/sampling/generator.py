@@ -13,14 +13,11 @@ from loguru import logger
 
 import ttnn
 
-from ._utils import (
-    clamp,
-    compact_debug_list as _compact_debug_list,
-    is_default_value,
-    is_llama33_70b_model,
-    log_sampling_debug as _log_sampling_debug,
-    split_list,
-)
+from ._utils import clamp
+from ._utils import compact_debug_list as _compact_debug_list
+from ._utils import is_default_value, is_llama33_70b_model
+from ._utils import log_sampling_debug as _log_sampling_debug
+from ._utils import split_list
 from .tt_penalties import TTPenalties
 from .tt_sampling import TTSampling
 

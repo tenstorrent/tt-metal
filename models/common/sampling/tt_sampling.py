@@ -10,14 +10,10 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.sampling._utils import (
-    compact_debug_list as _compact_debug_list,
-    is_default_value,
-    is_llama33_70b_model,
-    is_power_of_2,
-    log_sampling_debug as _log_sampling_debug,
-    upper_power_of_2,
-)
+from models.common.sampling._utils import compact_debug_list as _compact_debug_list
+from models.common.sampling._utils import is_default_value, is_llama33_70b_model, is_power_of_2
+from models.common.sampling._utils import log_sampling_debug as _log_sampling_debug
+from models.common.sampling._utils import upper_power_of_2
 from models.common.sampling.tt_log_probs import LogProbsCalculator
 
 

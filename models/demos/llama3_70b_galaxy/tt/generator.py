@@ -3,28 +3,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-
-import ttnn
-import torch
-from loguru import logger
-from typing import List
-
 from collections import defaultdict
 from dataclasses import fields, replace
+from typing import List
 
-from models.tt_transformers.tt.common import (
-    copy_host_to_device,
-    num_blocks_in_seq,
-    get_block_size,
-    InterleavedTextMedia,
-)
+import torch
+from loguru import logger
 
+import ttnn
 from models.common.llama_models import (
-    StopReason,
     ChatPrediction,
     CompletionPrediction,
+    StopReason,
 )
-
 from models.common.sampling import SamplingParams, broadcast_sampling_params, format_sampling_params
 from models.common.sampling._utils import (
     compact_debug_list as _compact_debug_list,
@@ -33,6 +24,12 @@ from models.common.sampling._utils import (
 )
 from models.common.warmup import WarmupForwardMixin
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
+from models.tt_transformers.tt.common import (
+    InterleavedTextMedia,
+    copy_host_to_device,
+    get_block_size,
+    num_blocks_in_seq,
+)
 
 
 # Position of the page table within the decode input tuple produced by

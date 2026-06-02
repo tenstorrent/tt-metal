@@ -14,11 +14,9 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.sampling._utils import (
-    compact_debug_list as _compact_debug_list,
-    is_llama33_70b_model,
-    log_sampling_debug as _log_sampling_debug,
-)
+from models.common.sampling._utils import compact_debug_list as _compact_debug_list
+from models.common.sampling._utils import is_llama33_70b_model
+from models.common.sampling._utils import log_sampling_debug as _log_sampling_debug
 
 
 @dataclass
