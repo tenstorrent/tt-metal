@@ -47,17 +47,16 @@
 
 - name: "Demo Test with Perf Metrics (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)"
   cmd: |
-    echo "============= SP1 superpod: using branch ttrun.py and rank files ============="
+    echo "============= SP1 superpod: using ttrun.py new mode with MGD ============="
     TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
-    SCALEOUT_CONFIG_DIR="${TT_METAL_HOME}/models/demos/deepseek_v3_b1/scaleout_configs/rev_c"
-    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_binding_single_pod.yaml" .
-    cp "${SCALEOUT_CONFIG_DIR}/rev_c_rank_file_single_pod" .
+    MGD_FILE="/ci/ttrun/mgd.textproto"
 
-    PIPELINE_HOSTS=$(awk '{printf "%s:4,", $1}' /ci/ttrun/hostfile | sed 's/,$//')
+    HOSTS=$(awk '{print $1}' /ci/ttrun/hostfile | paste -sd,)
     LOGURU_LEVEL=DEBUG TT_METAL_ALLOCATOR_MODE_HYBRID=1 TT_METAL_SLOW_DISPATCH_MODE=1 python3 "${TTRUN_PY}" \
       --tcp-interface ens5f0np0 \
-      --mpi-args "--host $PIPELINE_HOSTS --map-by rankfile:file=rev_c_rank_file_single_pod --bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
-      --rank-binding rev_c_rank_binding_single_pod.yaml \
+      --mesh-graph-descriptor "${MGD_FILE}" \
+      --hosts "${HOSTS}" \
+      --mpi-args "--bind-to hwt:overload-allowed --tag-output --wdir ${TT_METAL_HOME}" \
       python3 -m models.demos.deepseek_v3_b1.demo.cli \
         --max-new-tokens 4096 \
         --no-stop-at-eos \
