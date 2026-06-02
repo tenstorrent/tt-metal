@@ -278,7 +278,7 @@ static constexpr uint32_t NUM_COMPUTE_SLOTS =
     QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER * QUASAR_NUM_COMPUTE_PROCESSORS_PER_TENSIX_ENGINE;
 static constexpr uint32_t QUASAR_FIRST_COMPUTE_HARTID = 8;  // DM 0-7, compute 8-23
 
-TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
+TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     auto mesh_device = devices_[0];
     IDevice* device = mesh_device->get_devices()[0];
 

@@ -282,7 +282,7 @@ extern "C" uint32_t _start1() {
                 // Copies from L1 to IRAM on chips where NCRISC has IRAM
                 uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
 
-                for (uint32_t i = 0; i < MaxDMProcessorsPerCoreType; i++) {
+                for (uint32_t i = 0; i < MaxNumKernels; i++) {
                     mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
                     mailboxes->fw_shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
                 }
