@@ -218,6 +218,14 @@ When closing, post this comment before closing the issue:
 *Closed by BrAIn lifecycle review.*
 ```
 
+### Update Action (signature same, keep open)
+
+Post a comment:
+
+```markdown
+Issue still relevant. Last updated: YYYY-MM-DD HH:MM UTC.
+```
+
 ### Update Action (signature changed, keep open)
 
 When posting an update:
