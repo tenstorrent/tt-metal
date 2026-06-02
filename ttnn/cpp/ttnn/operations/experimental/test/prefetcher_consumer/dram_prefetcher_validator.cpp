@@ -65,6 +65,7 @@ tt::stl::hash::hash_t DramPrefetcherValidatorDeviceOperation::compute_program_ha
         ttsl::hash::type_hash<DramPrefetcherValidatorDeviceOperation>,
         attrs.num_layers,
         attrs.print_stride,
+        attrs.streaming,
         static_cast<uint64_t>(attrs.global_cb->config_address()),
         static_cast<uint64_t>(tensor_buffer != nullptr ? tensor_buffer->address() : 0),
         static_cast<uint32_t>(dataformat));
@@ -176,6 +177,7 @@ DramPrefetcherValidatorDeviceOperation::ProgramFactory::create_at(
         num_blocks,
         num_senders,
         operation_attributes.print_stride,
+        operation_attributes.streaming ? 1u : 0u,
     };
     TensorAccessorArgs(*tensor_buffer).append_to(compile_args);
 
@@ -244,12 +246,14 @@ void test_dram_prefetcher_validator(
     const ttnn::Tensor& source_tensor,
     uint32_t num_layers,
     uint32_t print_stride,
-    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb) {
+    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
+    bool streaming) {
     using OperationType = DramPrefetcherValidatorDeviceOperation;
     OperationType::operation_attributes_t attrs{
         .num_layers = num_layers,
         .print_stride = print_stride,
         .global_cb = global_cb,
+        .streaming = streaming,
     };
     OperationType::tensor_args_t tensor_args{.source_tensor = source_tensor};
     ttnn::device_operation::launch<OperationType>(attrs, tensor_args);

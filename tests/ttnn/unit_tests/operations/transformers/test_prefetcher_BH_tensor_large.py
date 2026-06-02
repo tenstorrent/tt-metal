@@ -782,3 +782,138 @@ def test_tensor_prefetcher_trace_replay(device, replay_count):
             assert passing, f"replay {i + 1} PCC failed: {msg}"
 
         ttnn.release_trace(device, trace_id)
+
+
+# ---------------------------------------------------------------------------
+# Streaming recv-contig matmul (PCC vs torch.matmul)
+# ---------------------------------------------------------------------------
+# End-to-end PCC check of the streaming path: the prefetcher delivers each
+# receiver's weight blocks in ring-rotated FIFO order (queue streaming=True) and
+# the matmul consumes them block-by-block (program_config.stream_in1=True),
+# starting before the whole tensor lands. This lets the GCB hold only a small
+# live window (`window_blocks`) instead of the full ring_size blocks/receiver.
+#
+# Uses the receiver-contiguous strided topology (the only one streaming supports):
+# shard m -> ring position m -> g_r = bank + bank_local*num_banks == matmul ring_idx.
+# `window_blocks is None` exercises streaming logic at full depth; the smaller
+# windows exercise the GCB shrink. The validator test already covers byte-for-byte
+# delivery parity; here we assert the streamed matmul output PCC-matches torch.
+@pytest.mark.parametrize(
+    "name,k_tiles_per_shard,n_tiles_per_receiver,recv_per_bank,dtype",
+    [
+        ("qkv_small_bf16", 1, 1, 2, ttnn.bfloat16),  # ring=16
+        ("ff1_bf8", 2, 7, 8, ttnn.bfloat8_b),  # FF1 ring=64
+        ("ring32_bf8", 2, 6, 4, ttnn.bfloat8_b),  # ring=32
+    ],
+    ids=["qkv_small_bf16", "ff1_bf8", "ring32_bf8"],
+)
+@pytest.mark.parametrize("window_blocks", [2, 4, None], ids=["win2", "win4", "winfull"])
+def test_dram_core_prefetcher_streaming_matmul(
+    device, name, k_tiles_per_shard, n_tiles_per_receiver, recv_per_bank, dtype, window_blocks
+):
+    num_dram_banks = device.dram_grid_size().x
+    num_receivers_per_bank = recv_per_bank
+    ring_size = num_dram_banks * num_receivers_per_bank
+    ring_cols = num_dram_banks
+    ring_rows = num_receivers_per_bank
+
+    receiver_core_range_set = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(ring_cols - 1, ring_rows - 1))}
+    )
+
+    M = 32
+    K = k_tiles_per_shard * ring_size * ttnn.TILE_SIZE
+    N = ring_size * n_tiles_per_receiver * ttnn.TILE_SIZE
+
+    # ---- Weight (B): receiver-contiguous ND-sharded (num_shards = ring_size), strided GCB ----
+    torch.manual_seed(zlib.crc32(name.encode()))
+    pt_weight = torch.randn(1, 1, K, N)
+    tt_weight = _make_recv_contig_weight(
+        device, pt_weight, num_dram_banks=num_dram_banks, ring_size=ring_size, dtype=dtype
+    )
+
+    # ---- Activation (A): width-sharded across the receiver grid; K split across the ring ----
+    pt_act = torch.randn(1, 1, M, K)
+    K_per_shard = _round_up(math.ceil(K / ring_size), ttnn.TILE_SIZE)
+    act_mem_config = ttnn.create_sharded_memory_config(
+        shape=(M, K_per_shard),
+        core_grid=receiver_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_act = ttnn.from_torch(
+        pt_act, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=act_mem_config
+    )
+
+    # ---- Matmul program config: gather_in0 + stream_in1 ----
+    out_block_h = M // ttnn.TILE_SIZE
+    out_block_w = N // ring_size // ttnn.TILE_SIZE
+    out_subblock_w = min(out_block_w, 8)
+    while out_subblock_w > 1 and out_block_w % out_subblock_w != 0:
+        out_subblock_w -= 1
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(ring_cols, ring_rows),
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        per_core_M=out_block_h,
+        per_core_N=out_block_w,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=False,
+        gather_in0=True,
+        hop_cores=ttnn.CoreRangeSet([]),
+        num_global_cb_receivers=num_receivers_per_bank,
+        untilize_out=False,
+        stream_in1=True,
+    )
+
+    # ---- Shallow GCB: window_blocks (or full ring_size) blocks/receiver ----
+    tile_bytes = _bytes_per_tile(dtype)
+    in1_block_size_bytes = k_tiles_per_shard * n_tiles_per_receiver * tile_bytes
+    blocks = window_blocks if window_blocks is not None else ring_size
+    gcb_size = blocks * in1_block_size_bytes
+
+    bank_to_receivers = [
+        (b, _bank_receivers_strided(b, num_receivers_per_bank, num_dram_banks, ring_cols=ring_cols))
+        for b in range(num_dram_banks)
+    ]
+    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
+
+    output_mem_config = ttnn.create_sharded_memory_config(
+        shape=(M, N // ring_size),
+        core_grid=receiver_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+        dst_full_sync_en=True,
+    )
+
+    ttnn.experimental.start_dram_core_prefetcher(device)
+    ttnn.experimental.queue_dram_core_prefetcher_request(
+        device, [(tt_weight, ring_size)], global_cb=gcb, streaming=True
+    )
+    tt_out = ttnn.linear(
+        tt_act,
+        tt_weight,
+        program_config=program_config,
+        memory_config=output_mem_config,
+        compute_kernel_config=compute_kernel_config,
+        dtype=ttnn.bfloat16,
+        global_cb=gcb,
+    )
+    ttnn.experimental.stop_dram_core_prefetcher(device)
+
+    out_torch = ttnn.to_torch(tt_out)
+    expected = pt_act.float() @ pt_weight.float()
+    pcc_threshold = 0.999 if dtype == ttnn.bfloat16 else 0.99
+    passing, output_str = comp_pcc(expected, out_torch, pcc_threshold)
+    logger.info(f"[{name} win={window_blocks}] {output_str}")
+    assert passing, f"[{name} win={window_blocks}] PCC check failed: {output_str}"

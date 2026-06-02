@@ -112,6 +112,19 @@ FORCE_INLINE void calculate_next_block_index_and_update_rd_ptr(
     *updated_rd_ptr = next_fifo_rd_ptr;
 }
 
+// Streaming in1: the prefetcher delivers blocks in ring-rotated FIFO order, so the
+// compute reads the local in1 CB front-to-back, advancing one block per ring step and
+// wrapping at the fifo limit. No ring-index jump, no tensor-split bookkeeping — the block
+// at the current rd_ptr is exactly the one needed at this ring step.
+FORCE_INLINE void advance_rd_ptr_streaming(uint32_t cb_id, uint32_t block_size_bytes) {
+    LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
+    uint32_t next = local_cb.fifo_rd_ptr + block_size_bytes / L1_ALIGNMENT;
+    if (next >= local_cb.fifo_limit) {
+        next -= local_cb.fifo_size;  // wrap to fifo start (fifo_size is a multiple of block size)
+    }
+    local_cb.fifo_rd_ptr = next;
+}
+
 FORCE_INLINE void update_rd_ptr_to_ring_index(
     uint32_t cb_id, uint32_t block_size_bytes, uint32_t ring_index, bool tensor_split) {
     LocalCBInterface& local_cb = get_local_cb_interface(cb_id);
@@ -257,7 +270,7 @@ void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb_id, in1_cb_id, mm_partials_cb_ids[0]);
     matmul_block_init(in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
-#ifdef ENABLE_GLOBAL_CB
+#if defined(ENABLE_GLOBAL_CB) && !defined(STREAMING_IN1)
         uint32_t in1_cb_start_addr = 0;
         uint32_t in1_rd_ptr_start_addr = 0;
         uint32_t curr_in1_block_index = 0;
@@ -291,12 +304,21 @@ void kernel_main() {
         }
 
         // Wait to receive in1
+#ifndef STREAMING_IN1
         sync2_buf.wait_front(1);
         sync2_buf.pop_front(1);
+#endif
 
         for (uint32_t block = 0; block < num_blocks; block++) {
             const uint32_t curr_ring_idx = (ring_idx + block) % ring_size;
             uint32_t unpadded_in0_block_w = unpadded_in0_shard_widths_in_tiles[curr_ring_idx];
+
+#ifdef STREAMING_IN1
+            // Streaming: wait for this block to arrive in the GCB (the reader posts one
+            // sync2 credit per delivered block, in ring-rotated FIFO order).
+            sync2_buf.wait_front(1);
+            sync2_buf.pop_front(1);
+#endif
 
             // Wait for in1 block
             if constexpr (in1_is_dram) {
@@ -321,7 +343,7 @@ void kernel_main() {
             }
             input0_cb.wait_front(in0_block_num_tiles);
 
-#ifdef ENABLE_GLOBAL_CB
+#if defined(ENABLE_GLOBAL_CB) && !defined(STREAMING_IN1)
             UNPACK((calculate_next_block_index_and_update_rd_ptr(
                 in1_cb_id,
                 num_blocks,
@@ -469,13 +491,20 @@ void kernel_main() {
             if constexpr (in1_is_dram) {
                 in1_cb.pop_front(in1_block_num_tiles);
             }
-#ifdef ENABLE_GLOBAL_CB
+#if defined(ENABLE_GLOBAL_CB) && !defined(STREAMING_IN1)
             curr_in1_block_index = next_in1_block_index;
             UNPACK((update_local_cb_rd_ptr(in1_cb_id, next_in1_rd_ptr_addr)));
 #endif
+#ifdef STREAMING_IN1
+            // Advance the local in1 rd_ptr to the next FIFO block, then release one credit
+            // so the reader can pop this block from the GCB and free its slot.
+            UNPACK((advance_rd_ptr_streaming(in1_cb_id, in1_block_size_bytes)));
+            sync_buf.reserve_back(1);
+            sync_buf.push_back(1);
+#endif
         }
 
-#ifdef ENABLE_GLOBAL_CB
+#if defined(ENABLE_GLOBAL_CB) && !defined(STREAMING_IN1)
         // Release in1
         sync_buf.reserve_back(1);
         sync_buf.push_back(1);

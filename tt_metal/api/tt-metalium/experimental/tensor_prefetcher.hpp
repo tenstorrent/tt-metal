@@ -102,6 +102,12 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 //     one request page is transparently split across pages.
 //   - Per-GCB ring-buffer state is preserved across requests, so successive
 //     Queue calls against the same GCB resume where the previous call left off.
+//   - `streaming` (receiver-contiguous layout only) makes the kernel deliver each
+//     receiver's K-blocks in ring-rotated order (physical block (g_r + p) mod
+//     block_count at push step p) so the consuming matmul can stream them in FIFO
+//     order and start before the whole tensor arrives, allowing a shallow GCB. The
+//     matmul must be built with the matching streaming flag, else it deadlocks.
+//     Default false = batched (whole-tensor) delivery.
 //   - `cq_id` is the command queue on which a trace may be recording. When that
 //     CQ is mid trace-capture, the request is captured into the trace instead of
 //     being sent immediately, and is (re)sent on every replay of that trace
@@ -116,6 +122,7 @@ void QueueTensorPrefetcherRequest(
     const GlobalCircularBuffer& gcb,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
+    bool streaming = false,
     std::optional<uint8_t> cq_id = std::nullopt);
 
 // Fence the prefetcher against command queue `cq_id`: every prefetch request queued

@@ -197,11 +197,23 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
     const uint32_t state_block_size = dram_sender_state_block_size(max_num_receivers_per_sender);
 
     // The receiver NOC XY table follows the fixed struct; config_ptr points at the
-    // sender config block embedded inside the struct.
+    // sender config block embedded inside the struct. The per-receiver g_r rotation table
+    // follows the (max-sized) NOC XY table at a fixed offset.
     const auto noc_xy_table_addr = static_cast<uint32_t>(sender_state_drisc_l1_base_) + sizeof(DramSenderStateBlock);
+    const uint32_t noc_xy_table_bytes = 2u * max_num_receivers_per_sender * sizeof(uint32_t);
+    const auto rotation_table_addr = noc_xy_table_addr + noc_xy_table_bytes;
     const auto config_block_addr =
         static_cast<uint32_t>(sender_state_drisc_l1_base_) + offsetof(DramSenderStateBlock, is_sender);
     const auto buffer_address = static_cast<uint32_t>(cb_buffer().address());
+
+    // Number of DRAM banks in use = max bank id + 1 (bank id == sender_logical.x). Matches
+    // the dram_prefetcher_validator derivation; used to build the strided ring-index (g_r)
+    // table: receiver at (bank, bank_local_recv) has ring index bank + bank_local_recv *
+    // num_dram_banks under the receiver-contiguous strided GCB topology that streaming uses.
+    uint32_t num_dram_banks = 0;
+    for (const auto& [sender_logical, _r] : sender_receiver_core_mapping_) {
+        num_dram_banks = std::max(num_dram_banks, static_cast<uint32_t>(sender_logical.x) + 1u);
+    }
 
     const uint32_t packed_num_recv_and_remote =
         remote_cb_pack(max_num_receivers_per_sender, static_cast<uint32_t>(pages_sent_worker_l1_base_));
@@ -220,8 +232,11 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
     hdr->num_receivers = max_num_receivers_per_sender;
     hdr->buffer_address = buffer_address;
     hdr->fifo_size_per_receiver = size_;
+    hdr->rotation_table_ptr = rotation_table_addr;
 
     auto* noc_xy_words = reinterpret_cast<uint32_t*>(block_bytes.data() + sizeof(DramSenderStateBlock));
+    auto* g_r_words =
+        reinterpret_cast<uint32_t*>(block_bytes.data() + sizeof(DramSenderStateBlock) + noc_xy_table_bytes);
 
     // Host writes to a DRAM core's L1 go over NOC and need the DRAM-L1 NOC offset
     // added on top of the local L1 address. (Worker L1 has local==NOC space so the
@@ -260,6 +275,9 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
             const auto& c = valid ? recv_phys[i] : CoreCoord{0, 0};
             noc_xy_words[2 * i + 0] = valid ? static_cast<uint32_t>(c.x) : 0u;
             noc_xy_words[2 * i + 1] = valid ? static_cast<uint32_t>(c.y) : 0u;
+            // g_r = matmul ring index of this receiver under the strided recv-contig
+            // topology. Garbage-but-unused for non-streaming / non-recv-contig GCBs.
+            g_r_words[i] = valid ? (bank + (recv_index_base + i) * num_dram_banks) : 0u;
         }
         recv_index_base += this_num_receivers;
         for (IDevice* dev : devices) {

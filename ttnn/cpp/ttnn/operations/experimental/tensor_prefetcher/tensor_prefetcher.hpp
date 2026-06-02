@@ -50,6 +50,7 @@ void queue_tensor_prefetcher_request(
     const std::vector<std::pair<ttnn::Tensor, uint32_t>>& tensors,
     const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
     const std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet>& device_subset = std::nullopt,
+    bool streaming = false,
     std::optional<uint8_t> cq_id = std::nullopt);
 
 // Fence the prefetcher against command queue `cq_id`: every prefetch request queued

@@ -1961,6 +1961,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     bool untilize_out,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers,
+    bool stream_in1,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<CoreRangeSet> restricted_cores,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
@@ -2305,6 +2306,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     if (use_global_cb) {
         mm_in1_kernel_defines["ENABLE_GLOBAL_CB"] = "1";
         mm_kernel_defines["ENABLE_GLOBAL_CB"] = "1";
+        if (stream_in1) {
+            // Consume in1 blocks in ring-rotated FIFO order as they arrive (matching a
+            // streaming prefetcher) instead of waiting for the whole tensor.
+            mm_in1_kernel_defines["STREAMING_IN1"] = "1";
+            mm_kernel_defines["STREAMING_IN1"] = "1";
+        }
+    } else {
+        TT_FATAL(!stream_in1, "stream_in1 requires a DRAM-sender global circular buffer (use_global_cb)");
     }
 
     if (fused_activation.has_value()) {
@@ -4773,6 +4782,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers,
+    bool stream_in1,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     uint32_t start_cb_index,
     std::optional<CoreRangeSet> restricted_cores) {
@@ -4946,6 +4956,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
             untilize_out,
             global_cb,
             num_global_cb_receivers,
+            stream_in1,
             sub_device_id,
             std::move(restricted_cores),
             fused_op_signaler);
@@ -5350,6 +5361,7 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
         fused_op_signaler,
         global_cb,
         config.num_global_cb_receivers,
+        config.stream_in1,
         sub_device_id,
         start_cb_index,
         std::move(restricted_cores));
@@ -5414,6 +5426,7 @@ MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory::create_mesh_workload(
                 empty_signaler,
                 attributes.global_cb,
                 pc.num_global_cb_receivers,
+                pc.stream_in1,
                 attributes.sub_device_id,
                 tt::CBIndex::c_0,
                 std::nullopt);

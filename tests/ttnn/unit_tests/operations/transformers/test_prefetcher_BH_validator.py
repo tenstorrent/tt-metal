@@ -384,6 +384,7 @@ def _setup_weight_and_gcb_recv_contig(
     return tt_weight, gcb, num_iters_total, push_page_size, ring_size
 
 
+@pytest.mark.parametrize("streaming", [False, True], ids=["batched", "streaming"])
 @pytest.mark.parametrize(
     "K,N,dtype,recv_per_bank,num_layers,dual_senders",
     [
@@ -397,18 +398,26 @@ def _setup_weight_and_gcb_recv_contig(
     ],
     ids=["multi_ksub", "ff1", "single_r4", "multi_ksub_dual", "ff1_dual", "odd_dual"],
 )
-def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, num_layers, dual_senders):
+def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, num_layers, dual_senders, streaming):
+    # streaming=True exercises the ring-rotated delivery order: the prefetcher reads each
+    # receiver's slab circularly from its ring index g_r, and the validator expects FIFO
+    # position p to hold physical block (ring_pos + p) mod ring_size. Same byte content as
+    # batched, reordered per receiver — a byte mismatch localizes a g_r/rotation bug here,
+    # before the matmul.
     tt_weight, gcb, num_iters_total, push_page_size, ring_size = _setup_weight_and_gcb_recv_contig(
         device, K, N, dtype, recv_per_bank, num_layers, dual_senders=dual_senders
     )
     with tensor_prefetcher_session(device, dual_senders_per_bank=dual_senders):
-        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)] * num_layers, global_cb=gcb)
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            device, [(tt_weight, ring_size)] * num_layers, global_cb=gcb, streaming=streaming
+        )
         ttnn.experimental.test_dram_prefetcher_validator(
             device,
             tt_weight,
             num_layers=num_layers,
             print_stride=max(1, ring_size // 4),
             global_cb=gcb,
+            streaming=streaming,
         )
 
 

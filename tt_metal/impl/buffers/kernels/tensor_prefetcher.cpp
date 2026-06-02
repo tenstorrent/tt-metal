@@ -287,6 +287,10 @@ void kernel_main() {
         // DRAM_PREFETCHER_CMD_PREFETCH
         const uint32_t req_num_entries = req->prefetch.num_entries;
         const uint32_t gcb_state_addr = req->prefetch.gcb_state_addr;
+        // Streaming (receiver-contiguous only): deliver each receiver's blocks in
+        // ring-rotated order so the matmul can consume them FIFO. Applies to every
+        // entry in this request.
+        const bool streaming = req->prefetch.streaming != 0;
         volatile tt_l1_ptr DramSenderStateBlock* state =
             reinterpret_cast<volatile tt_l1_ptr DramSenderStateBlock*>(gcb_state_addr);
 
@@ -311,6 +315,10 @@ void kernel_main() {
         // split a bank's receivers, the second core's local receiver r maps to bank-local
         // slab (recv_index_base + r). 0 for a single sender. Receiver-contiguous only.
         const uint32_t recv_index_base = state->recv_index_base;
+        // Per-receiver ring-index (g_r) table, used only in streaming mode to rotate each
+        // receiver's DRAM read so block (g_r + p) mod block_count lands at push step p.
+        volatile tt_l1_ptr uint32_t* rotation_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(state->rotation_table_ptr);
 
         // Entries follow the header (grow forward); the deduplicated layout table grows
         // backward from the end of the payload, so layout i lives at read_ptr +
@@ -544,6 +552,28 @@ void kernel_main() {
                     if (B > pages_to_wrap) {
                         B = pages_to_wrap;
                     }
+                    if (streaming) {
+                        // Streaming reads each receiver's slab circularly starting at its
+                        // ring index g_r, so receiver cr sources physical blocks
+                        // [(g_r+p) mod N ..]. A round's B blocks must be contiguous in DRAM
+                        // for each receiver, so clamp B to the nearest N->0 wrap across all
+                        // receivers (analogous to the fifo pages_to_wrap clamp). Distinct g_r
+                        // make this fire up to num_receivers extra times per tensor.
+                        uint32_t blocks_to_phys_wrap = t_block_count;
+                        for (uint32_t cr = 0; cr < num_receivers; ++cr) {
+                            uint32_t phys = rotation_ptr[cr] + pages_sent_global;
+                            if (phys >= t_block_count) {
+                                phys -= t_block_count;
+                            }
+                            const uint32_t dist = t_block_count - phys;
+                            if (dist < blocks_to_phys_wrap) {
+                                blocks_to_phys_wrap = dist;
+                            }
+                        }
+                        if (B > blocks_to_phys_wrap) {
+                            B = blocks_to_phys_wrap;
+                        }
+                    }
 
                     const uint32_t fifo_snapshot = iface.fifo_wr_ptr;
                     const uint32_t bytes_per_recv = B * t_page_bytes_per_recv;
@@ -574,8 +604,15 @@ void kernel_main() {
                         const uint32_t boff = civ * max_chunk_bytes;
                         const uint32_t rem = bytes_per_recv - boff;
                         const uint32_t cb = rem < max_chunk_bytes ? rem : max_chunk_bytes;
-                        const uint32_t src = tensor_base + (recv_index_base + cr) * t_recv_stride +
-                                             pages_sent_global * t_page_bytes_per_recv + boff;
+                        uint32_t blk = pages_sent_global;
+                        if (streaming) {
+                            blk += rotation_ptr[cr];
+                            if (blk >= t_block_count) {
+                                blk -= t_block_count;
+                            }
+                        }
+                        const uint32_t src =
+                            tensor_base + (recv_index_base + cr) * t_recv_stride + blk * t_page_bytes_per_recv + boff;
                         experimental::dma_async_read(/*stream=*/0, src, slot_addrs[c % 3u], cb);
                     };
 

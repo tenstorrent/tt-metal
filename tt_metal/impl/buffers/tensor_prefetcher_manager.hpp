@@ -88,6 +88,7 @@ public:
         const experimental::GlobalCircularBuffer& gcb,
         const std::optional<MeshCoordinateRangeSet>& device_subset,
         const std::vector<experimental::TensorPrefetcherInput>& tensors,
+        bool streaming,
         std::optional<uint8_t> cq_id = std::nullopt);
 
     // Re-queue every request captured under `trace_id` for immediate fan-out. No-op if no
@@ -139,7 +140,8 @@ private:
     // tensor layouts within each page and splitting when a page fills.
     std::vector<std::vector<uint8_t>> serialize_request_pages(
         const experimental::GlobalCircularBuffer& gcb,
-        const std::vector<experimental::TensorPrefetcherInput>& data_tensors) const;
+        const std::vector<experimental::TensorPrefetcherInput>& data_tensors,
+        bool streaming) const;
     MeshCoordinateRangeSet full_mesh_subset() const;
 
     MeshDevice* mesh_device_;

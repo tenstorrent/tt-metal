@@ -29,6 +29,10 @@ struct DramPrefetcherValidatorDeviceOperation {
         // optional<> because reflection-based profiler serialization needs a default-
         // constructible attribute struct, and GlobalCircularBuffer has no default ctor.
         std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb;
+        // When true, expect the streaming prefetcher's ring-rotated delivery: the block at
+        // FIFO position p for a receiver is physical block (ring_pos + p) mod num_blocks of
+        // its slab, consumed one page at a time. False = batched natural order 0..N-1.
+        bool streaming = false;
     };
 
     struct tensor_args_t {
@@ -71,6 +75,7 @@ void test_dram_prefetcher_validator(
     const ttnn::Tensor& source_tensor,
     uint32_t num_layers,
     uint32_t print_stride,
-    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb);
+    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb,
+    bool streaming = false);
 
 }  // namespace ttnn::operations::experimental::test

@@ -137,6 +137,28 @@ void kernel_main() {
     }
 
     for (uint32_t b = 0; b < batch; ++b) {
+#if defined(ENABLE_GLOBAL_CB) && defined(STREAMING_IN1)
+        // Streaming: the prefetcher delivers blocks in ring-rotated FIFO order. Hand each
+        // block to compute as it lands, then free its GCB slot once compute consumes it, so
+        // the GCB only needs to hold a small live window instead of the whole tensor.
+        // (in1 is never DRAM-resident on the GCB path, so this fully replaces the batched
+        // wait_front(num_blocks) gate below.)
+        for (uint32_t block = 0; block < num_blocks; ++block) {
+            cb_sync2.reserve_back(1);
+            experimental::remote_cb_wait_front(remote_cb_id, 1);
+            cb_sync2.push_back(1);
+
+            cb_sync.wait_front(1);
+            experimental::remote_cb_pop_front(remote_cb_id, 1);
+            cb_sync.pop_front(1);
+        }
+        if constexpr (needs_signaler) {
+            if (b == 0) {
+                do_signaling(noc, rt_args_idx);
+            }
+        }
+        continue;
+#endif
         cb_sync2.reserve_back(1);
 #ifdef ENABLE_GLOBAL_CB
         experimental::remote_cb_wait_front(remote_cb_id, num_blocks);

@@ -45,20 +45,34 @@ struct DramSenderStateBlock {
     // one bank's receiver set: the kernel reads slab (recv_index_base + r) for its local
     // receiver r. 0 for a single sender / the first of a pair.
     uint32_t recv_index_base;
+    // Absolute DRISC L1 address of the per-receiver g_r rotation table (see below). Stored
+    // explicitly (rather than computed from receiver_noc_xy_ptr + num_receivers) so it is
+    // correct even when num_receivers < max_num_receivers_per_sender (non-uniform dual
+    // senders): the noc_xy and g_r tables are both sized for max, at fixed offsets.
+    uint32_t rotation_table_ptr;
     // ----- Followed in L1 by the receiver NOC XY table -----
     // 2 * num_receivers uint32s (x0, y0, x1, y1, ...), appended by the caller after
     // this struct's bytes since its length is dynamic; pointed to by receiver_noc_xy_ptr.
+    //
+    // ----- Then the per-receiver ring-index (g_r) rotation table -----
+    // max_num_receivers_per_sender uint32s (g_0, g_1, ...) at a fixed offset right after
+    // the (also max-sized) NOC XY table; pointed to by rotation_table_ptr. g_r is the
+    // matmul ring index of receiver r (= bank_id + bank_local_recv * num_dram_banks for the
+    // strided receiver-contiguous topology), used only in streaming mode: at push step p
+    // the kernel sources physical block (g_r + p) mod block_count for receiver r so the
+    // matmul can consume in FIFO order. Stamped unconditionally by the host.
 } __attribute__((packed));
 
-static_assert(sizeof(DramSenderStateBlock) == 11 * sizeof(uint32_t), "DramSenderStateBlock layout drift");
+static_assert(sizeof(DramSenderStateBlock) == 12 * sizeof(uint32_t), "DramSenderStateBlock layout drift");
 static_assert(
     offsetof(DramSenderStateBlock, is_sender) == 6 * sizeof(uint32_t),
     "config block must stay contiguous right after the loaded interface fields");
 
 // Total L1 footprint of one block: the fixed struct plus the variable-length
-// receiver NOC XY table.
+// receiver NOC XY table (2 * num_receivers) plus the per-receiver g_r rotation
+// table (num_receivers).
 inline constexpr uint32_t dram_sender_state_block_size(uint32_t num_receivers) {
-    return sizeof(DramSenderStateBlock) + 2u * num_receivers * sizeof(uint32_t);
+    return sizeof(DramSenderStateBlock) + 3u * num_receivers * sizeof(uint32_t);
 }
 
 }  // namespace tt::tt_metal

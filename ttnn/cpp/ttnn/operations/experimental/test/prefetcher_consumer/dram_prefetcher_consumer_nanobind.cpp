@@ -59,6 +59,10 @@ void bind_test_dram_prefetcher_consumer(nb::module_& mod) {
                 num_layers (int): number of layers the prefetcher will push.
                 print_stride (int): DPRINT every Nth iter; first/last always logged. 0 = first/last only.
                 global_cb (GlobalCircularBuffer): worker-sender or DRAM-sender GCB.
+                streaming (bool): when True, expect the streaming prefetcher's ring-rotated
+                    delivery (block at FIFO position p is physical block (ring_pos + p) mod
+                    num_blocks). Must match the streaming flag passed to the prefetcher.
+                    Defaults to False.
         )doc",
         &test_dram_prefetcher_validator,
         nb::arg("mesh_device"),
@@ -66,7 +70,8 @@ void bind_test_dram_prefetcher_consumer(nb::module_& mod) {
         nb::arg("num_layers"),
         nb::arg("print_stride"),
         nb::kw_only(),
-        nb::arg("global_cb"));
+        nb::arg("global_cb"),
+        nb::arg("streaming") = false);
 }
 
 }  // namespace ttnn::operations::experimental::test

@@ -77,6 +77,11 @@ void bind_tensor_prefetcher(nb::module_& mod) {
                     ttnn.experimental.create_global_circular_buffer_with_dram_senders).
                 device_subset (Optional[MeshCoordinateRangeSet]): subset of the mesh that
                     processes this request. Defaults to the full mesh.
+                streaming (bool): receiver-contiguous layout only. When True, deliver each
+                    receiver's K-blocks in ring-rotated order so the consuming matmul can
+                    stream them FIFO (and start before the whole tensor lands, allowing a
+                    shallow GCB). The matmul must be built with the matching streaming flag,
+                    else it deadlocks. Defaults to False (batched whole-tensor delivery).
                 cq_id (Optional[int]): command queue that may be recording a trace. When that
                     CQ is mid trace-capture, the request is captured into the trace instead of
                     being sent immediately, and is re-sent on every execute_trace of that trace.
@@ -91,6 +96,7 @@ void bind_tensor_prefetcher(nb::module_& mod) {
         nb::arg("global_cb"),
         nb::kw_only(),
         nb::arg("device_subset") = std::nullopt,
+        nb::arg("streaming") = false,
         nb::arg("cq_id") = std::nullopt);
 
     ttnn::bind_function<"wait_for_cq_on_tensor_prefetcher", "ttnn.experimental.">(

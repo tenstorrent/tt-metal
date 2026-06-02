@@ -565,7 +565,8 @@ MeshCoordinateRangeSet TensorPrefetcherManager::full_mesh_subset() const {
 
 std::vector<std::vector<uint8_t>> TensorPrefetcherManager::serialize_request_pages(
     const experimental::GlobalCircularBuffer& gcb,
-    const std::vector<experimental::TensorPrefetcherInput>& data_tensors) const {
+    const std::vector<experimental::TensorPrefetcherInput>& data_tensors,
+    bool streaming) const {
     TT_FATAL(!data_tensors.empty(), "QueueTensorPrefetcherRequest requires at least one tensor");
 
     const ContextId context_id = mesh_device_->impl().get_context_id();
@@ -616,12 +617,23 @@ std::vector<std::vector<uint8_t>> TensorPrefetcherManager::serialize_request_pag
         header->prefetch.num_entries = static_cast<uint16_t>(num_entries);
         header->prefetch.num_layouts = num_layouts;
         header->prefetch.gcb_state_addr = gcb_state_addr;
+        header->prefetch.streaming = streaming ? 1u : 0u;
         pages.push_back(std::move(page));
     };
 
     begin_page();
     for (size_t tensor_idx = 0; tensor_idx < data_tensors.size(); ++tensor_idx) {
         const auto& input = data_tensors[tensor_idx];
+        // Streaming rotates each receiver's read by its ring index g_r in [0, ring_size),
+        // so the rotation (g_r + p) mod block_count is only a valid permutation when
+        // block_count == ring_size (== total_receivers). The consuming ring matmul always
+        // uses num_blocks = ring_size, so this holds for the intended use.
+        TT_FATAL(
+            !streaming || input.block_count == total_receivers,
+            "Streaming DRAM-core prefetcher requires block_count ({}) == ring_size ({}) for tensor {}",
+            input.block_count,
+            total_receivers,
+            tensor_idx);
         // block_count is per-tensor: it sets how many K-blocks the kernel pushes
         // (and how K is divided in compute_tensor_layout), replacing the GCB ring size.
         const TensorPrefetcherTensorLayout layout = compute_tensor_layout(
@@ -698,6 +710,7 @@ void TensorPrefetcherManager::queue(
     const experimental::GlobalCircularBuffer& gcb,
     const std::optional<MeshCoordinateRangeSet>& device_subset,
     const std::vector<experimental::TensorPrefetcherInput>& tensors,
+    bool streaming,
     std::optional<uint8_t> cq_id) {
     auto lock = lock_api_function_();
     TT_FATAL(active_, "QueueTensorPrefetcherRequest called before StartTensorPrefetcher");
@@ -714,7 +727,7 @@ void TensorPrefetcherManager::queue(
     // A Queue call may span more tensors than fit in one socket page; serialize into one
     // or more pages, each an independent request. The per-GCB fifo_wr_ptr persists across
     // requests, so the split is invisible to the receiver.
-    std::vector<std::vector<uint8_t>> pages = serialize_request_pages(gcb, tensors);
+    std::vector<std::vector<uint8_t>> pages = serialize_request_pages(gcb, tensors, streaming);
 
     // Target devices: subset if given, else full mesh. Caller is responsible
     // for keeping tensors and the GCB alive until stop() — see the public API doc.
@@ -987,9 +1000,10 @@ void QueueTensorPrefetcherRequest(
     const GlobalCircularBuffer& gcb,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
+    bool streaming,
     std::optional<uint8_t> cq_id) {
     auto& manager = mesh_device.impl().tensor_prefetcher(&mesh_device);
-    manager.queue(gcb, device_subset, input_tensors, cq_id);
+    manager.queue(gcb, device_subset, input_tensors, streaming, cq_id);
 }
 
 void WaitForCqOnTensorPrefetcher(

@@ -107,11 +107,16 @@ struct TensorPrefetcherBaseCmd {
     TensorPrefetcherCmdId cmd_id;  // 1 byte
 } __attribute__((packed));
 
-// PREFETCH payload. The leading pad keeps the 32-bit fields 4-byte aligned past the
+// PREFETCH payload. The leading byte keeps the 32-bit fields 4-byte aligned past the
 // one-byte base (mirrors the pad fields in cq_commands.hpp commands); the resulting
-// 12-byte header then keeps the entry table 4-byte aligned.
+// 12-byte header then keeps the entry table 4-byte aligned. That alignment byte doubles
+// as the streaming flag (receiver-contiguous only): when nonzero, the kernel reads each
+// receiver's slab in ring-rotated order — at push step p it sources physical block
+// (g_r + p) mod block_count (g_r from the sender state block's rotation table) instead of
+// natural order p. This delivers blocks in the order the matmul consumes them, so the
+// matmul can stream them FIFO instead of waiting for the whole tensor. 0 = batched.
 struct TensorPrefetcherPrefetchCmd {
-    uint8_t pad1;
+    uint8_t streaming;        // 0 = batched (default); nonzero = ring-rotated recv-contig delivery
     uint16_t num_entries;     // number of valid TensorPrefetcherEntry entries
     uint32_t num_layouts;     // number of valid TensorPrefetcherTensorLayout table entries
     uint32_t gcb_state_addr;  // DRISC L1 base of the target GCB's sender state block
