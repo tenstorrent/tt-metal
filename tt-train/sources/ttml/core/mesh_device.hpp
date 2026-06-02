@@ -5,13 +5,17 @@
 #pragma once
 
 #include <core/ttnn_all_includes.hpp>
+#include <hostdevcommon/common_values.hpp>
 #include <memory>
 
 namespace ttml::core {
 // should I implement pimpl or its fine
 class MeshDevice {
 public:
-    explicit MeshDevice(const tt::tt_metal::distributed::MeshShape& shape, const std::vector<int>& device_ids);
+    explicit MeshDevice(
+        const tt::tt_metal::distributed::MeshShape& shape,
+        const std::vector<int>& device_ids,
+        size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
     MeshDevice(MeshDevice&& device) = default;
     MeshDevice(const MeshDevice&) = delete;
 
