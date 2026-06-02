@@ -228,6 +228,9 @@ grid_12_9_configs = {
     # flux2 2048-res sweep rank-1 — 12×9 AGMM grid (2026-05-31, 2048.md)
     (4096, 6144, 4608): (11, 4, 10, (1, 2)),  # 1167.0 μs, 44.9% util  ff1 spatial
     (128, 6144, 4608): (8, 6, 8, (2, 2)),  # 355.5 μs,   4.6% util  ff1 prompt
+    # x_c_merged_fused: concat([spatial, prompt_sp_sharded], dim=1) → M=4096+128=4224
+    # Same M_per_core as (4096,…) on 9-row grid (ceil(132/9)=ceil(128/9)=15); same blocking.
+    (4224, 6144, 4608): (11, 4, 10, (1, 2)),
     # (4096, 6144,  768): (11, 4,  4, (1, 4)),  # 642.2 μs,  13.6% util  to_out spatial
     # (128,  6144,  768): ( 2, 12, 4, (2, 2)),  # 97.0 μs,    2.8% util  to_out prompt
 }
@@ -590,7 +593,7 @@ fused_mmrs_configs = {
         # 2048-resolution shapes — BH 4×8 ring sweep (2026-05-30, 2048.md)
         (4096, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 3, 8, 1, 2, None, 1),  # 1546.0 μs
         (128, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 6, 8, 1, 2, None, 1),  # 595.7 μs
-        (4096, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 4, 8, 2, 2, None, 1),  # 1642.1 μs
+        (4096, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 3, 8, 2, 2, None, 1),  # 1408.3 μs
         (128, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 6, 8, 1, 2, None, 1),  # 626.2 μs
     },
 }

@@ -204,7 +204,13 @@ class ColParallelLinear(Module):
             state["bias"] = bias
 
     def forward(
-        self, x: ttnn.Tensor, compute_kernel_config=None, default_block_size=None, parallel_config=None, dtype=None
+        self,
+        x: ttnn.Tensor,
+        compute_kernel_config=None,
+        default_block_size=None,
+        parallel_config=None,
+        dtype=None,
+        use_heuristic_mmcfg=False,
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
@@ -222,11 +228,12 @@ class ColParallelLinear(Module):
             weight = self.weight.data
 
         parallel_config_tp = parallel_config.tensor_parallel.factor if parallel_config is not None else 1
-        if parallel_config_tp > 1 and self.ccl_manager.topology == ttnn.Topology.Ring:
+        needs_gather = x.padded_shape[-1] != weight.padded_shape[-2]  # If gathered, switch to non fused AGMM
+        if parallel_config_tp > 1 and self.ccl_manager.topology == ttnn.Topology.Ring and needs_gather:
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
             core_grid = ttnn.CoreCoord(full_grid.x, full_grid.y - 1)
-            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
+            matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size, use_heuristic=use_heuristic_mmcfg)
 
             ag_persistent_buffer = self.ccl_manager.get_ag_ping_pong_buffer(
                 x.shape, -1, parallel_config.tensor_parallel.mesh_axis, dtype=x.get_dtype()
@@ -263,7 +270,7 @@ class ColParallelLinear(Module):
             core_grid = get_matmul_core_grid(self.mesh_device)
 
             # Gather if needed here. Helps cleanup upstream code
-            if K != weight.padded_shape[-2] and parallel_config_tp > 1:
+            if needs_gather:
                 x = self.ccl_manager.all_gather_persistent_buffer(
                     x, dim=-1, mesh_axis=parallel_config.tensor_parallel.mesh_axis, use_hyperparams=True
                 )
