@@ -28,7 +28,7 @@ void kernel_main() {
         const uint32_t page_id = chunk_offset + i;
         if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
-            noc.async_read<Noc::TxnIdMode::ENABLED>(tensor_accessor, dfb, {.page_id = page_id}, {});
+            noc.async_read<NocOptions::TXN_ID>(tensor_accessor, dfb, {.page_id = page_id}, {});
 #endif
         } else {
             dfb.reserve_back(1);

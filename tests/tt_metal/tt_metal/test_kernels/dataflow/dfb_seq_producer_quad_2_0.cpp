@@ -50,7 +50,7 @@ static inline void produce_one_dfb_impl_sync(
     uint32_t producer_idx) {
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; ++tile_id) {
         const uint32_t page_id = tile_id * num_producers + producer_idx;
-        noc.template async_read<Noc::TxnIdMode::ENABLED>(tensor_accessor, dfb, {.page_id = page_id}, {});
+        noc.template async_read<NocOptions::TXN_ID>(tensor_accessor, dfb, {.page_id = page_id}, {});
     }
     dfb.finish();
 }

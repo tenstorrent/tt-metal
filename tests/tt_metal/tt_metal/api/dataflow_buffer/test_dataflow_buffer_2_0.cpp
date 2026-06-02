@@ -5,7 +5,7 @@
 // Metal 2.0 (declarative API) parallel of test_dataflow_buffer.cpp.
 //
 // Pairs each functional test in the legacy suite with a _2_0 variant built
-// through MakeProgramFromSpec / ProgramRunParams / TensorParameter, exercising
+// through MakeProgramFromSpec / ProgramRunArgs / TensorParameter, exercising
 // the auto-generated kernel_args_generated.h + kernel_bindings_generated.h
 // path. Metal 2.0 kernel ports live alongside the legacy ones in
 // tests/.../test_kernels/{compute,dataflow}/ with a _2_0.cpp suffix.
@@ -38,7 +38,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
@@ -55,7 +55,7 @@
 
 namespace tt::tt_metal {
 
-namespace m2 = experimental::metal2_host_api;
+namespace m2 = experimental;
 
 // =====================================================================================
 // Helpers
@@ -92,7 +92,7 @@ static inline TensorSpec make_flat_dram_tensor_spec(uint32_t page_size_bytes, ui
 
 // Build a Gen2 DM KernelSpec. Optionally opt-out of implicit sync for specific
 // DFBs (post-DFBSpec API change: disable_implicit_sync moved from DataflowBufferSpec
-// to per-kernel Gen2DataMovementConfig::disable_implicit_sync_for).
+// to per-kernel Gen2Config::disable_implicit_sync_for).
 static inline m2::KernelSpec make_dm_kernel(
     const std::string& unique_id,
     const std::string& source_path,
@@ -102,24 +102,24 @@ static inline m2::KernelSpec make_dm_kernel(
         .unique_id = unique_id,
         .source = std::filesystem::path{source_path},
         .num_threads = num_threads,
-        .config_spec =
-            m2::DataMovementConfiguration{
-                .gen2_data_movement_config =
-                    m2::DataMovementConfiguration::Gen2DataMovementConfig{
+        .hw_config =
+            m2::DataMovementHardwareConfig{
+                .gen2_config =
+                    m2::DataMovementHardwareConfig::Gen2Config{
                         .disable_implicit_sync_for = std::move(disable_implicit_sync_for),
                     }},
     };
 }
 
 // Build a Gen2 compute KernelSpec. Compute kernels don't issue NoC ops directly
-// so they have no implicit-sync knob (the field lives on DataMovementConfiguration only).
+// so they have no implicit-sync knob (the field lives on DataMovementHardwareConfig only).
 static inline m2::KernelSpec make_compute_kernel(
     const std::string& unique_id, const std::string& source_path, uint8_t num_threads = 1) {
     return m2::KernelSpec{
         .unique_id = unique_id,
         .source = std::filesystem::path{source_path},
         .num_threads = num_threads,
-        .config_spec = m2::ComputeConfiguration{},
+        .hw_config = m2::ComputeHardwareConfig{},
     };
 }
 
@@ -127,8 +127,11 @@ static inline m2::KernelSpec make_compute_kernel(
 // Replaces the pre-migration `DataflowBufferSpec::disable_implicit_sync` field
 // (which forced both bound kernels to agree) with per-kernel opt-out.
 static inline void disable_implicit_sync_for(m2::KernelSpec& kernel, m2::DFBSpecName dfb_name) {
-    auto& dm_cfg = std::get<m2::DataMovementConfiguration>(kernel.config_spec);
-    dm_cfg.gen2_data_movement_config->disable_implicit_sync_for.push_back(std::move(dfb_name));
+    auto& dm_cfg = std::get<m2::DataMovementHardwareConfig>(kernel.hw_config);
+    if (!dm_cfg.gen2_config) {
+        dm_cfg.gen2_config.emplace();
+    }
+    dm_cfg.gen2_config->disable_implicit_sync_for.push_back(std::move(dfb_name));
 }
 
 // Conditional variant: only add the DFB to the disable list if the test wants
@@ -156,7 +159,7 @@ enum class A1Transform { Identity, Relu };
 
 static void run_a1_pipeline(const std::shared_ptr<distributed::MeshDevice>& mesh_device, A1Transform transform) {
     if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "M2 path is Quasar-only (Gen2DataMovementConfig)";
+        GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
     }
 
     IDevice* device = mesh_device->get_devices()[0];
@@ -195,12 +198,12 @@ static void run_a1_pipeline(const std::shared_ptr<distributed::MeshDevice>& mesh
     auto producer = make_dm_kernel(PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp");
     producer.dfb_bindings = {
         {.dfb_spec_name = DFB_IN,
-         .local_accessor_name = "out",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
          .access_pattern = m2::DFBAccessPattern::STRIDED}};
     producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
-    producer.compile_time_arg_bindings = {{"num_entries_per_producer", num_entries}, {"implicit_sync", 0u}};
-    producer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+    producer.compile_time_args = {{"num_entries_per_producer", num_entries}, {"implicit_sync", 0u}};
+    producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     // Compute kernel: dfb_in → (relu or identity) → dfb_out
     const std::string compute_source = (transform == A1Transform::Relu)
@@ -209,27 +212,27 @@ static void run_a1_pipeline(const std::shared_ptr<distributed::MeshDevice>& mesh
     auto compute = make_compute_kernel(COMPUTE, compute_source);
     compute.dfb_bindings = {
         {.dfb_spec_name = DFB_IN,
-         .local_accessor_name = "in",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = m2::DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB_OUT,
-         .local_accessor_name = "out",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
          .access_pattern = m2::DFBAccessPattern::STRIDED},
     };
-    compute.compile_time_arg_bindings = {{"per_core_tile_cnt", num_entries}};
+    compute.compile_time_args = {{"per_core_tile_cnt", num_entries}};
 
     // Consumer kernel: DFB_OUT → output tensor
     auto consumer = make_dm_kernel(CONSUMER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp");
     consumer.dfb_bindings = {
         {.dfb_spec_name = DFB_OUT,
-         .local_accessor_name = "in",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = m2::DFBAccessPattern::STRIDED}};
     consumer.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
-    consumer.compile_time_arg_bindings = {
+    consumer.compile_time_args = {
         {"num_entries_per_consumer", num_entries}, {"blocked_consumer", 0u}, {"implicit_sync", 0u}};
-    consumer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+    consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     // All-pass set dfb_in/dfb_out .disable_implicit_sync = true; #45160 moved that onto the
     // Gen2 DM config, so disable per DM endpoint (the compute stage is Tensix → no DM side).
@@ -237,13 +240,13 @@ static void run_a1_pipeline(const std::shared_ptr<distributed::MeshDevice>& mesh
     disable_implicit_sync_for(consumer, DFB_OUT);
 
     m2::WorkUnitSpec wu{
-        .unique_id = "wu",
+        .name = "wu",
         .kernels = {PRODUCER, CONSUMER, COMPUTE},
         .target_nodes = node,
     };
 
     m2::ProgramSpec spec{
-        .program_id = "a1_2_0",
+        .name = "a1_2_0",
         .kernels = {producer, consumer, compute},
         .dataflow_buffers = {dfb_in, dfb_out},
         .tensor_parameters =
@@ -256,23 +259,23 @@ static void run_a1_pipeline(const std::shared_ptr<distributed::MeshDevice>& mesh
 
     Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
 
-    m2::ProgramRunParams params;
-    params.kernel_run_params = {
-        m2::ProgramRunParams::KernelRunParams{
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        m2::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = PRODUCER,
-            .named_runtime_args = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}},
+            .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}},
         },
-        m2::ProgramRunParams::KernelRunParams{
+        m2::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = CONSUMER,
-            .named_runtime_args = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}},
+            .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}},
         },
-        m2::ProgramRunParams::KernelRunParams{.kernel_spec_name = COMPUTE},
+        m2::ProgramRunArgs::KernelRunArgs{.kernel_spec_name = COMPUTE},
     };
     params.tensor_args = {
         {.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)},
         {.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)},
     };
-    m2::SetProgramRunParameters(program, params);
+    m2::SetProgramRunArgs(program, params);
 
     // Stimulus
     const uint32_t total_bytes = entry_size * num_entries;
@@ -344,35 +347,35 @@ static void run_dm_dfb_dm_implicit_sync_2_0(
     auto producer = make_dm_kernel(PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp");
     producer.dfb_bindings = {
         {.dfb_spec_name = DFB,
-         .local_accessor_name = "out",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
          .access_pattern = m2::DFBAccessPattern::STRIDED}};
     producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
-    producer.compile_time_arg_bindings = {
+    producer.compile_time_args = {
         {"num_entries_per_producer", total_tiles}, {"implicit_sync", implicit_sync ? 1u : 0u}};
-    producer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+    producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     auto consumer = make_dm_kernel(CONSUMER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp");
     consumer.dfb_bindings = {
         {.dfb_spec_name = DFB,
-         .local_accessor_name = "in",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = m2::DFBAccessPattern::STRIDED}};
     consumer.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
-    consumer.compile_time_arg_bindings = {
+    consumer.compile_time_args = {
         {"num_entries_per_consumer", total_tiles},
         {"blocked_consumer", 0u},
         {"implicit_sync", implicit_sync ? 1u : 0u}};
-    consumer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+    consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     // All-pass: dfb.disable_implicit_sync = !implicit_sync (now per-DM-endpoint, post-#45160).
     maybe_disable_implicit_sync(producer, implicit_sync, DFB);
     maybe_disable_implicit_sync(consumer, implicit_sync, DFB);
 
-    m2::WorkUnitSpec wu{.unique_id = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
+    m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
 
     m2::ProgramSpec spec{
-        .program_id = "dm_dfb_dm",
+        .name = "dm_dfb_dm",
         .kernels = {producer, consumer},
         .dataflow_buffers = {dfb},
         .tensor_parameters =
@@ -385,22 +388,22 @@ static void run_dm_dfb_dm_implicit_sync_2_0(
 
     Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
 
-    m2::ProgramRunParams params;
-    params.kernel_run_params = {
-        m2::ProgramRunParams::KernelRunParams{
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        m2::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = PRODUCER,
-            .named_runtime_args = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", total_tiles}}}},
+            .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", total_tiles}}}},
         },
-        m2::ProgramRunParams::KernelRunParams{
+        m2::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = CONSUMER,
-            .named_runtime_args = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", total_tiles}}}},
+            .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", total_tiles}}}},
         },
     };
     params.tensor_args = {
         {.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)},
         {.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)},
     };
-    m2::SetProgramRunParameters(program, params);
+    m2::SetProgramRunArgs(program, params);
 
     const uint32_t total_words = entry_size * total_tiles / sizeof(uint32_t);
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 1000000, total_words);
@@ -485,54 +488,54 @@ TEST_F(MeshDeviceFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
     auto producer = make_dm_kernel(PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp");
     producer.dfb_bindings = {
         {.dfb_spec_name = DFB_IN,
-         .local_accessor_name = "out",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
          .access_pattern = m2::DFBAccessPattern::STRIDED}};
     producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
-    producer.compile_time_arg_bindings = {{"num_entries_per_producer", num_entries}, {"implicit_sync", 0u}};
-    producer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+    producer.compile_time_args = {{"num_entries_per_producer", num_entries}, {"implicit_sync", 0u}};
+    producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     auto compute = make_compute_kernel(COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_c2_pipeline_2_0.cpp");
     compute.dfb_bindings = {
         {.dfb_spec_name = DFB_IN,
-         .local_accessor_name = "in",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = m2::DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB_SELF,
-         .local_accessor_name = "self",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+         .accessor_name = "self",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
          .access_pattern = m2::DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB_SELF,
-         .local_accessor_name = "self",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+         .accessor_name = "self",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = m2::DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB_OUT,
-         .local_accessor_name = "out",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
          .access_pattern = m2::DFBAccessPattern::STRIDED},
     };
-    compute.compile_time_arg_bindings = {{"per_core_tile_cnt", num_entries}};
+    compute.compile_time_args = {{"per_core_tile_cnt", num_entries}};
 
     auto consumer = make_dm_kernel(CONSUMER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp");
     consumer.dfb_bindings = {
         {.dfb_spec_name = DFB_OUT,
-         .local_accessor_name = "in",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = m2::DFBAccessPattern::STRIDED}};
     consumer.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
-    consumer.compile_time_arg_bindings = {
+    consumer.compile_time_args = {
         {"num_entries_per_consumer", num_entries}, {"blocked_consumer", 0u}, {"implicit_sync", 0u}};
-    consumer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+    consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     // All-pass disabled dfb_in/dfb_self/dfb_out implicit sync; dfb_self is Tensix-only
     // (compute self-loop, no DM endpoint). Disable the two DM-side endpoints (post-#45160).
     disable_implicit_sync_for(producer, DFB_IN);
     disable_implicit_sync_for(consumer, DFB_OUT);
 
-    m2::WorkUnitSpec wu{.unique_id = "wu", .kernels = {PRODUCER, CONSUMER, COMPUTE}, .target_nodes = node};
+    m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER, COMPUTE}, .target_nodes = node};
 
     m2::ProgramSpec spec{
-        .program_id = "c2_2_0",
+        .name = "c2_2_0",
         .kernels = {producer, consumer, compute},
         .dataflow_buffers = {dfb_in, dfb_self, dfb_out},
         .tensor_parameters =
@@ -545,23 +548,23 @@ TEST_F(MeshDeviceFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
 
     Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
 
-    m2::ProgramRunParams params;
-    params.kernel_run_params = {
-        m2::ProgramRunParams::KernelRunParams{
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        m2::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = PRODUCER,
-            .named_runtime_args = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}},
+            .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}},
         },
-        m2::ProgramRunParams::KernelRunParams{
+        m2::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = CONSUMER,
-            .named_runtime_args = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}},
+            .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}},
         },
-        m2::ProgramRunParams::KernelRunParams{.kernel_spec_name = COMPUTE},
+        m2::ProgramRunArgs::KernelRunArgs{.kernel_spec_name = COMPUTE},
     };
     params.tensor_args = {
         {.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)},
         {.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)},
     };
-    m2::SetProgramRunParameters(program, params);
+    m2::SetProgramRunArgs(program, params);
 
     // Positive bf16 inputs → double-relu identity.
     const uint32_t total_bytes = entry_size * num_entries;
@@ -621,33 +624,33 @@ TEST_F(MeshDeviceFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
         make_dm_kernel(PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_with_tc_preload_2_0.cpp");
     producer.dfb_bindings = {
         {.dfb_spec_name = DFB,
-         .local_accessor_name = "out",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
          .access_pattern = m2::DFBAccessPattern::STRIDED}};
     producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
-    producer.compile_time_arg_bindings = {
+    producer.compile_time_args = {
         {"num_entries_per_producer", kPushTiles}, {"implicit_sync", 1u}, {"kPreloadPostedValue", kPreloadValue}};
-    producer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+    producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     auto consumer =
         make_dm_kernel(CONSUMER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_with_tc_preload_2_0.cpp");
     consumer.dfb_bindings = {
         {.dfb_spec_name = DFB,
-         .local_accessor_name = "in",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = m2::DFBAccessPattern::STRIDED}};
     consumer.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
-    consumer.compile_time_arg_bindings = {
+    consumer.compile_time_args = {
         {"num_entries_per_consumer", kPushTiles},
         {"blocked_consumer", 0u},
         {"implicit_sync", 1u},
         {"kPreloadAckedValue", kPreloadValue}};
-    consumer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+    consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
-    m2::WorkUnitSpec wu{.unique_id = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
+    m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
 
     m2::ProgramSpec spec{
-        .program_id = "d1_2_0",
+        .name = "d1_2_0",
         .kernels = {producer, consumer},
         .dataflow_buffers = {dfb},
         .tensor_parameters =
@@ -660,22 +663,22 @@ TEST_F(MeshDeviceFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
 
     Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
 
-    m2::ProgramRunParams params;
-    params.kernel_run_params = {
-        m2::ProgramRunParams::KernelRunParams{
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        m2::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = PRODUCER,
-            .named_runtime_args = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", kPushTiles}}}},
+            .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", kPushTiles}}}},
         },
-        m2::ProgramRunParams::KernelRunParams{
+        m2::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = CONSUMER,
-            .named_runtime_args = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", kPushTiles}}}},
+            .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", kPushTiles}}}},
         },
     };
     params.tensor_args = {
         {.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)},
         {.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)},
     };
-    m2::SetProgramRunParameters(program, params);
+    m2::SetProgramRunArgs(program, params);
 
     auto input = create_random_vector_of_bfloat16(kPushTiles * kEntrySize, 1.0f, 0xD1D1);
     detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), input);
@@ -817,50 +820,50 @@ TEST_F(MeshDeviceFixture, D3_2_0_MultiCoreDFB_TwoGroupsViaDecoy) {
         make_dm_kernel(DECOY_PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp");
     decoy_producer.dfb_bindings = {
         {.dfb_spec_name = DECOY_DFB,
-         .local_accessor_name = "out",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
          .access_pattern = m2::DFBAccessPattern::STRIDED}};
     decoy_producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
-    decoy_producer.compile_time_arg_bindings = {{"num_entries_per_producer", 0u}, {"implicit_sync", 0u}};
-    decoy_producer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+    decoy_producer.compile_time_args = {{"num_entries_per_producer", 0u}, {"implicit_sync", 0u}};
+    decoy_producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     auto decoy_consumer =
         make_dm_kernel(DECOY_CONSUMER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp");
     decoy_consumer.dfb_bindings = {
         {.dfb_spec_name = DECOY_DFB,
-         .local_accessor_name = "in",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = m2::DFBAccessPattern::STRIDED}};
     decoy_consumer.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
-    decoy_consumer.compile_time_arg_bindings = {
+    decoy_consumer.compile_time_args = {
         {"num_entries_per_consumer", 0u}, {"blocked_consumer", 0u}, {"implicit_sync", 0u}};
-    decoy_consumer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+    decoy_consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     // Real shared producer/consumer across A and B (uses dfb::shared kernel variant).
     auto producer =
         make_dm_kernel(PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_with_id_2_0.cpp");
     producer.dfb_bindings = {
         {.dfb_spec_name = SHARED_DFB,
-         .local_accessor_name = "shared",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+         .accessor_name = "shared",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
          .access_pattern = m2::DFBAccessPattern::STRIDED}};
     producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
-    producer.compile_time_arg_bindings = {{"num_entries_per_producer", entries_per_core}, {"implicit_sync", 0u}};
-    producer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+    producer.compile_time_args = {{"num_entries_per_producer", entries_per_core}, {"implicit_sync", 0u}};
+    producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     auto consumer = make_dm_kernel(CONSUMER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp");
     // NOTE: dfb_consumer.cpp uses dfb::in — rebinding it to the SHARED_DFB by
-    // local_accessor_name "in" is valid; the kernel doesn't care about the host
+    // accessor_name "in" is valid; the kernel doesn't care about the host
     // DFB's spec name.
     consumer.dfb_bindings = {
         {.dfb_spec_name = SHARED_DFB,
-         .local_accessor_name = "in",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = m2::DFBAccessPattern::STRIDED}};
     consumer.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
-    consumer.compile_time_arg_bindings = {
+    consumer.compile_time_args = {
         {"num_entries_per_consumer", entries_per_core}, {"blocked_consumer", 0u}, {"implicit_sync", 0u}};
-    consumer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+    consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     // All-pass disabled decoy_dfb/shared_dfb implicit sync (now per-DM-endpoint, post-#45160).
     disable_implicit_sync_for(decoy_producer, DECOY_DFB);
@@ -871,18 +874,18 @@ TEST_F(MeshDeviceFixture, D3_2_0_MultiCoreDFB_TwoGroupsViaDecoy) {
     // WUs: decoy on core A only; shared on both. WUs cannot overlap target_nodes,
     // so we put decoy on a single-core WU and shared on a disjoint range.
     m2::WorkUnitSpec decoy_wu{
-        .unique_id = "decoy_wu",
+        .name = "decoy_wu",
         .kernels = {DECOY_PRODUCER, DECOY_CONSUMER},
         .target_nodes = core_a,
     };
     m2::WorkUnitSpec shared_wu{
-        .unique_id = "shared_wu",
+        .name = "shared_wu",
         .kernels = {PRODUCER, CONSUMER},
         .target_nodes = core_b,  // start with core_b only, since decoy claims core_a
     };
 
     m2::ProgramSpec spec{
-        .program_id = "d3_2_0",
+        .name = "d3_2_0",
         .kernels = {decoy_producer, decoy_consumer, producer, consumer},
         .dataflow_buffers = {decoy_dfb, shared_dfb},
         .tensor_parameters =
@@ -895,24 +898,24 @@ TEST_F(MeshDeviceFixture, D3_2_0_MultiCoreDFB_TwoGroupsViaDecoy) {
 
     Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
 
-    m2::ProgramRunParams params;
-    params.kernel_run_params = {
-        m2::ProgramRunParams::KernelRunParams{
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
+        m2::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = DECOY_PRODUCER,
-            .named_runtime_args = {{.node = core_a, .args = {{"chunk_offset", 0u}, {"entries_per_core", 0u}}}},
+            .runtime_arg_values = {{.node = core_a, .args = {{"chunk_offset", 0u}, {"entries_per_core", 0u}}}},
         },
-        m2::ProgramRunParams::KernelRunParams{
+        m2::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = DECOY_CONSUMER,
-            .named_runtime_args = {{.node = core_a, .args = {{"chunk_offset", 0u}, {"entries_per_core", 0u}}}},
+            .runtime_arg_values = {{.node = core_a, .args = {{"chunk_offset", 0u}, {"entries_per_core", 0u}}}},
         },
-        m2::ProgramRunParams::KernelRunParams{
+        m2::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = PRODUCER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = core_b, .args = {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}}},
         },
-        m2::ProgramRunParams::KernelRunParams{
+        m2::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = CONSUMER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = core_b, .args = {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}}},
         },
     };
@@ -920,7 +923,7 @@ TEST_F(MeshDeviceFixture, D3_2_0_MultiCoreDFB_TwoGroupsViaDecoy) {
         {.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)},
         {.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)},
     };
-    m2::SetProgramRunParameters(program, params);
+    m2::SetProgramRunArgs(program, params);
 
     auto input = create_constant_vector_of_bfloat16(2 * entries_per_core * entry_size, 1.0f);
     detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), input);
@@ -1023,7 +1026,7 @@ static void run_single_dfb_program_2_0(
         producer = make_dm_kernel(
             PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp", p.num_producers);
         producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
-        producer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+        producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
     } else {
         // Tensix producer: num_threads must match num_producers so total credits
         // posted = num_producers * num_entries_per_producer = entries_per_core.
@@ -1034,10 +1037,10 @@ static void run_single_dfb_program_2_0(
     }
     producer.dfb_bindings = {
         {.dfb_spec_name = DFB,
-         .local_accessor_name = "out",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
          .access_pattern = p.pap}};
-    producer.compile_time_arg_bindings = {
+    producer.compile_time_args = {
         {"num_entries_per_producer", num_entries_per_producer}, {"implicit_sync", p.implicit_sync ? 1u : 0u}};
 
     // Consumer kernel
@@ -1046,22 +1049,22 @@ static void run_single_dfb_program_2_0(
         consumer = make_dm_kernel(
             CONSUMER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp", p.num_consumers);
         consumer.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
-        consumer.compile_time_arg_bindings = {
+        consumer.compile_time_args = {
             {"num_entries_per_consumer", num_entries_per_consumer},
             {"blocked_consumer", is_all ? 1u : 0u},
             {"implicit_sync", p.implicit_sync ? 1u : 0u}};
-        consumer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+        consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
     } else {
         consumer = make_compute_kernel(
             CONSUMER,
             "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer_2_0.cpp",
             static_cast<uint8_t>(p.num_consumers));
-        consumer.compile_time_arg_bindings = {{"num_entries_per_consumer", num_entries_per_consumer}};
+        consumer.compile_time_args = {{"num_entries_per_consumer", num_entries_per_consumer}};
     }
     consumer.dfb_bindings = {
         {.dfb_spec_name = DFB,
-         .local_accessor_name = "in",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = p.cap}};
 
     // Restore the all-pass `dfb_spec.disable_implicit_sync = !p.implicit_sync` semantics.
@@ -1076,7 +1079,7 @@ static void run_single_dfb_program_2_0(
         maybe_disable_implicit_sync(consumer, p.implicit_sync, DFB);
     }
 
-    m2::WorkUnitSpec wu{.unique_id = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
+    m2::WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
 
     std::vector<m2::TensorParameter> tensor_params;
     if (in_tensor) {
@@ -1087,7 +1090,7 @@ static void run_single_dfb_program_2_0(
     }
 
     m2::ProgramSpec spec{
-        .program_id = "single_dfb_2_0",
+        .name = "single_dfb_2_0",
         .kernels = {producer, consumer},
         .dataflow_buffers = {dfb_spec},
         .tensor_parameters = tensor_params,
@@ -1096,24 +1099,24 @@ static void run_single_dfb_program_2_0(
 
     Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
 
-    m2::ProgramRunParams params;
+    m2::ProgramRunArgs params;
     if (p.producer_type == M2PorCType::DM) {
-        params.kernel_run_params.push_back({
+        params.kernel_run_args.push_back({
             .kernel_spec_name = PRODUCER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}}},
         });
     } else {
-        params.kernel_run_params.push_back({.kernel_spec_name = PRODUCER});
+        params.kernel_run_args.push_back({.kernel_spec_name = PRODUCER});
     }
     if (p.consumer_type == M2PorCType::DM) {
-        params.kernel_run_params.push_back({
+        params.kernel_run_args.push_back({
             .kernel_spec_name = CONSUMER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}}},
         });
     } else {
-        params.kernel_run_params.push_back({.kernel_spec_name = CONSUMER});
+        params.kernel_run_args.push_back({.kernel_spec_name = CONSUMER});
     }
     if (in_tensor) {
         params.tensor_args.push_back({.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(*in_tensor)});
@@ -1121,7 +1124,7 @@ static void run_single_dfb_program_2_0(
     if (out_tensor) {
         params.tensor_args.push_back({.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(*out_tensor)});
     }
-    m2::SetProgramRunParameters(program, params);
+    m2::SetProgramRunArgs(program, params);
 
     // Stimulus
     const uint32_t total_words = p.entry_size * entries_per_core / sizeof(uint32_t);
@@ -1275,27 +1278,27 @@ static void run_single_dfb_multicore_2_0(
         make_dm_kernel(PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp", num_producers);
     producer.dfb_bindings = {
         {.dfb_spec_name = DFB,
-         .local_accessor_name = "out",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
          .access_pattern = pap}};
     producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
-    producer.compile_time_arg_bindings = {
+    producer.compile_time_args = {
         {"num_entries_per_producer", per_producer}, {"implicit_sync", implicit_sync ? 1u : 0u}};
-    producer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+    producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     auto consumer =
         make_dm_kernel(CONSUMER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp", num_consumers);
     consumer.dfb_bindings = {
         {.dfb_spec_name = DFB,
-         .local_accessor_name = "in",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = cap}};
     consumer.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
-    consumer.compile_time_arg_bindings = {
+    consumer.compile_time_args = {
         {"num_entries_per_consumer", per_consumer},
         {"blocked_consumer", is_all ? 1u : 0u},
         {"implicit_sync", implicit_sync ? 1u : 0u}};
-    consumer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+    consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     // All-pass: dfb.disable_implicit_sync = !implicit_sync (now per-DM-endpoint, post-#45160).
     maybe_disable_implicit_sync(producer, implicit_sync, DFB);
@@ -1303,13 +1306,13 @@ static void run_single_dfb_multicore_2_0(
 
     // Single WU covering both cores via NodeRange.
     m2::WorkUnitSpec wu{
-        .unique_id = "wu",
+        .name = "wu",
         .kernels = {PRODUCER, CONSUMER},
         .target_nodes = m2::NodeRange{core_a, core_b},
     };
 
     m2::ProgramSpec spec{
-        .program_id = "multicore_dfb_2_0",
+        .name = "multicore_dfb_2_0",
         .kernels = {producer, consumer},
         .dataflow_buffers = {dfb_spec},
         .tensor_parameters =
@@ -1322,14 +1325,14 @@ static void run_single_dfb_multicore_2_0(
 
     Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
 
-    m2::ProgramRunParams params;
-    params.kernel_run_params = {
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
         {.kernel_spec_name = PRODUCER,
-         .named_runtime_args =
+         .runtime_arg_values =
              {{.node = core_a, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}},
               {.node = core_b, .args = {{"chunk_offset", num_entries}, {"entries_per_core", num_entries}}}}},
         {.kernel_spec_name = CONSUMER,
-         .named_runtime_args =
+         .runtime_arg_values =
              {{.node = core_a, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}},
               {.node = core_b, .args = {{"chunk_offset", num_entries}, {"entries_per_core", num_entries}}}}},
     };
@@ -1337,7 +1340,7 @@ static void run_single_dfb_multicore_2_0(
         {.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)},
         {.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)},
     };
-    m2::SetProgramRunParameters(program, params);
+    m2::SetProgramRunArgs(program, params);
 
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(
         0, 1000000, 2 * num_entries * entry_size / sizeof(uint32_t));
@@ -1394,11 +1397,11 @@ static void run_concurrent_dfbs_program_2_0(
         auto prod = make_dm_kernel(prod_id, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_producer_2_0.cpp");
         prod.dfb_bindings = {
             {.dfb_spec_name = dfb_id,
-             .local_accessor_name = "out",
-             .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+             .accessor_name = "out",
+             .endpoint_type = m2::DFBEndpointType::PRODUCER,
              .access_pattern = m2::DFBAccessPattern::STRIDED}};
         prod.tensor_bindings = {{.tensor_parameter_name = "in_tensor", .accessor_name = "src_tensor"}};
-        prod.compile_time_arg_bindings = {
+        prod.compile_time_args = {
             {"num_entries_per_producer", entries_per_dfb},
             {"implicit_sync", implicit_sync ? 1u : 0u},
             {"chunk_offset", i * entries_per_dfb}};
@@ -1409,11 +1412,11 @@ static void run_concurrent_dfbs_program_2_0(
         auto cons = make_dm_kernel(cons_id, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_multi_consumer_2_0.cpp");
         cons.dfb_bindings = {
             {.dfb_spec_name = dfb_id,
-             .local_accessor_name = "in",
-             .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+             .accessor_name = "in",
+             .endpoint_type = m2::DFBEndpointType::CONSUMER,
              .access_pattern = m2::DFBAccessPattern::STRIDED}};
         cons.tensor_bindings = {{.tensor_parameter_name = "out_tensor", .accessor_name = "dst_tensor"}};
-        cons.compile_time_arg_bindings = {
+        cons.compile_time_args = {
             {"num_entries_per_consumer", entries_per_dfb},
             {"implicit_sync", implicit_sync ? 1u : 0u},
             {"chunk_offset", i * entries_per_dfb}};
@@ -1422,10 +1425,10 @@ static void run_concurrent_dfbs_program_2_0(
         kernel_names.push_back(cons_id);
     }
 
-    m2::WorkUnitSpec wu{.unique_id = "wu", .kernels = kernel_names, .target_nodes = node};
+    m2::WorkUnitSpec wu{.name = "wu", .kernels = kernel_names, .target_nodes = node};
 
     m2::ProgramSpec spec{
-        .program_id = "concurrent_dfbs_2_0",
+        .name = "concurrent_dfbs_2_0",
         .kernels = kernels,
         .dataflow_buffers = dfbs,
         .tensor_parameters =
@@ -1438,15 +1441,15 @@ static void run_concurrent_dfbs_program_2_0(
 
     Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
 
-    m2::ProgramRunParams params;
+    m2::ProgramRunArgs params;
     for (const auto& name : kernel_names) {
-        params.kernel_run_params.push_back({.kernel_spec_name = name});
+        params.kernel_run_args.push_back({.kernel_spec_name = name});
     }
     params.tensor_args = {
         {.tensor_parameter_name = "in_tensor", .tensor = std::cref(in_tensor)},
         {.tensor_parameter_name = "out_tensor", .tensor = std::cref(out_tensor)},
     };
-    m2::SetProgramRunParameters(program, params);
+    m2::SetProgramRunArgs(program, params);
 
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(
         0, 1000000, total_entries * entry_size / sizeof(uint32_t));
@@ -1726,12 +1729,12 @@ static void run_sequential_4_dfbs_2_0(
     for (uint32_t i = 0; i < 4; ++i) {
         producer.dfb_bindings.push_back(
             {.dfb_spec_name = DFB_NAMES[i],
-             .local_accessor_name = DFB_NAMES[i],
-             .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+             .accessor_name = DFB_NAMES[i],
+             .endpoint_type = m2::DFBEndpointType::PRODUCER,
              .access_pattern = m2::DFBAccessPattern::STRIDED});
         producer.tensor_bindings.push_back({.tensor_parameter_name = SRC_NAMES[i], .accessor_name = SRC_NAMES[i]});
     }
-    producer.compile_time_arg_bindings = {
+    producer.compile_time_args = {
         {"num_entries_per_producer", entries_per_producer}, {"implicit_sync", implicit_sync ? 1u : 0u}};
 
     auto consumer = make_dm_kernel(
@@ -1740,12 +1743,12 @@ static void run_sequential_4_dfbs_2_0(
         const auto cap = dfb_specs[i].cap;
         consumer.dfb_bindings.push_back(
             {.dfb_spec_name = DFB_NAMES[i],
-             .local_accessor_name = DFB_NAMES[i],
-             .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+             .accessor_name = DFB_NAMES[i],
+             .endpoint_type = m2::DFBEndpointType::CONSUMER,
              .access_pattern = cap});
         consumer.tensor_bindings.push_back({.tensor_parameter_name = DST_NAMES[i], .accessor_name = DST_NAMES[i]});
     }
-    consumer.compile_time_arg_bindings = {
+    consumer.compile_time_args = {
         {"implicit_sync", implicit_sync ? 1u : 0u},
         {"entries_per_consumer_strided", entries_per_consumer_strided},
         {"entries_per_consumer_all", entries_per_consumer_all},
@@ -1769,12 +1772,12 @@ static void run_sequential_4_dfbs_2_0(
     }
 
     m2::ProgramSpec spec{
-        .program_id = "seq_4dfb_2_0",
+        .name = "seq_4dfb_2_0",
         .kernels = {producer, consumer},
         .dataflow_buffers = dfbs,
         .tensor_parameters = tensor_parameters,
         .work_units = {m2::WorkUnitSpec{
-            .unique_id = "wu",
+            .name = "wu",
             .kernels = {PRODUCER, CONSUMER},
             .target_nodes = node,
         }},
@@ -1782,19 +1785,19 @@ static void run_sequential_4_dfbs_2_0(
 
     Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
 
-    m2::ProgramRunParams params;
-    // Kernels with no runtime args still need a KernelRunParams entry so the
+    m2::ProgramRunArgs params;
+    // Kernels with no runtime args still need a KernelRunArgs entry so the
     // framework actually launches them on each node. Without this, the kernels
     // are wired up but never start, and outputs stay at the initial value (0).
-    params.kernel_run_params = {
-        {.kernel_spec_name = PRODUCER, .named_runtime_args = {{.node = node, .args = {}}}},
-        {.kernel_spec_name = CONSUMER, .named_runtime_args = {{.node = node, .args = {}}}},
+    params.kernel_run_args = {
+        {.kernel_spec_name = PRODUCER, .runtime_arg_values = {{.node = node, .args = {}}}},
+        {.kernel_spec_name = CONSUMER, .runtime_arg_values = {{.node = node, .args = {}}}},
     };
     for (uint32_t i = 0; i < 4; ++i) {
         params.tensor_args.push_back({.tensor_parameter_name = SRC_NAMES[i], .tensor = std::cref(in_tensors[i])});
         params.tensor_args.push_back({.tensor_parameter_name = DST_NAMES[i], .tensor = std::cref(out_tensors[i])});
     }
-    m2::SetProgramRunParameters(program, params);
+    m2::SetProgramRunArgs(program, params);
 
     std::vector<std::vector<uint32_t>> inputs(4);
     for (uint32_t i = 0; i < 4; ++i) {
@@ -1890,11 +1893,11 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         producer.dfb_bindings.push_back(
             {.dfb_spec_name = DFB_NAMES[i],
-             .local_accessor_name = DFB_NAMES[i],
-             .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+             .accessor_name = DFB_NAMES[i],
+             .endpoint_type = m2::DFBEndpointType::PRODUCER,
              .access_pattern = m2::DFBAccessPattern::STRIDED});
     }
-    producer.compile_time_arg_bindings = {{"num_entries_per_producer", num_entries}};
+    producer.compile_time_args = {{"num_entries_per_producer", num_entries}};
 
     // 4 independent DM consumer kernels; each reuses dfb_consumer_2_0.cpp.
     std::vector<m2::KernelSpec> consumers;
@@ -1904,15 +1907,15 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
             make_dm_kernel(CONSUMER_NAMES[i], "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp");
         c.dfb_bindings = {
             {.dfb_spec_name = DFB_NAMES[i],
-             .local_accessor_name = "in",
-             .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+             .accessor_name = "in",
+             .endpoint_type = m2::DFBEndpointType::CONSUMER,
              .access_pattern = m2::DFBAccessPattern::STRIDED}};
         c.tensor_bindings = {{.tensor_parameter_name = DST_NAMES[i], .accessor_name = "dst_tensor"}};
-        c.compile_time_arg_bindings = {
+        c.compile_time_args = {
             {"num_entries_per_consumer", num_entries},
             {"blocked_consumer", 0u},
             {"implicit_sync", implicit_sync ? 1u : 0u}};
-        c.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+        c.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
         // All-pass: DFB .disable_implicit_sync = !implicit_sync. Producer is Tensix (no DM
         // side); disable on the DM consumer endpoint (post-#45160).
         maybe_disable_implicit_sync(c, implicit_sync, DFB_NAMES[i]);
@@ -1937,12 +1940,12 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
     }
 
     m2::ProgramSpec spec{
-        .program_id = "tensix_dm_4dfb_2_0",
+        .name = "tensix_dm_4dfb_2_0",
         .kernels = all_kernels,
         .dataflow_buffers = dfbs,
         .tensor_parameters = tensor_parameters,
         .work_units = {m2::WorkUnitSpec{
-            .unique_id = "wu",
+            .name = "wu",
             .kernels = wu_kernel_names,
             .target_nodes = node,
         }},
@@ -1950,21 +1953,21 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
 
     Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
 
-    m2::ProgramRunParams params;
-    // Producer has no runtime args but still needs a KernelRunParams entry to be
+    m2::ProgramRunArgs params;
+    // Producer has no runtime args but still needs a KernelRunArgs entry to be
     // launched. Without it, the kernel is wired up but never runs.
-    params.kernel_run_params.push_back(
-        {.kernel_spec_name = PRODUCER, .named_runtime_args = {{.node = node, .args = {}}}});
+    params.kernel_run_args.push_back(
+        {.kernel_spec_name = PRODUCER, .runtime_arg_values = {{.node = node, .args = {}}}});
     for (uint32_t i = 0; i < num_dfbs; ++i) {
-        params.kernel_run_params.push_back(
+        params.kernel_run_args.push_back(
             {.kernel_spec_name = CONSUMER_NAMES[i],
-             .named_runtime_args = {
+             .runtime_arg_values = {
                  {.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}}});
     }
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         params.tensor_args.push_back({.tensor_parameter_name = DST_NAMES[i], .tensor = std::cref(out_tensors[i])});
     }
-    m2::SetProgramRunParameters(program, params);
+    m2::SetProgramRunArgs(program, params);
 
     // Pre-fill each DFB's L1 ring directly via uniform_alloc_addr after manual
     // finalize+allocate. No borrowed_from / ring tensor needed; the compute
@@ -2002,7 +2005,7 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
 TEST_F(MeshDeviceFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup_2_0) {
     auto& mesh_device = this->devices_.at(0);
     if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "M2 path is Quasar-only (Gen2DataMovementConfig)";
+        GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
     }
     IDevice* device = mesh_device->get_devices()[0];
     CoreCoord grid = device->compute_with_storage_grid_size();
@@ -2035,23 +2038,23 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup_2_0) {
     auto producer = make_dm_kernel(PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp");
     producer.dfb_bindings = {
         {.dfb_spec_name = DFB,
-         .local_accessor_name = "out",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
          .access_pattern = m2::DFBAccessPattern::STRIDED}};
     producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
-    producer.compile_time_arg_bindings = {{"num_entries_per_producer", num_entries}, {"implicit_sync", 0u}};
-    producer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+    producer.compile_time_args = {{"num_entries_per_producer", num_entries}, {"implicit_sync", 0u}};
+    producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     auto consumer = make_dm_kernel(CONSUMER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp");
     consumer.dfb_bindings = {
         {.dfb_spec_name = DFB,
-         .local_accessor_name = "in",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = m2::DFBAccessPattern::STRIDED}};
     consumer.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
-    consumer.compile_time_arg_bindings = {
+    consumer.compile_time_args = {
         {"num_entries_per_consumer", num_entries}, {"blocked_consumer", 0u}, {"implicit_sync", 0u}};
-    consumer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+    consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     // All-pass disabled dfb implicit sync (now per-DM-endpoint, post-#45160). Set before the
     // ProgramSpec copies these kernels by value.
@@ -2059,7 +2062,7 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup_2_0) {
     disable_implicit_sync_for(consumer, DFB);
 
     m2::ProgramSpec spec{
-        .program_id = "homogeneous_grid_2_0",
+        .name = "homogeneous_grid_2_0",
         .kernels = {producer, consumer},
         .dataflow_buffers = {dfb_spec},
         .tensor_parameters =
@@ -2068,7 +2071,7 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup_2_0) {
                 {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()},
             },
         .work_units = {m2::WorkUnitSpec{
-            .unique_id = "wu",
+            .name = "wu",
             .kernels = {PRODUCER, CONSUMER},
             .target_nodes = grid_2x2,
         }},
@@ -2144,15 +2147,15 @@ static void run_intra_tensix_dfb_program_2_0(
         make_compute_kernel(COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_intra_2_0.cpp", num_threads);
     compute.dfb_bindings = {
         {.dfb_spec_name = DFB,
-         .local_accessor_name = "out",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
          .access_pattern = m2::DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB,
-         .local_accessor_name = "in",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+         .accessor_name = "in",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = m2::DFBAccessPattern::STRIDED},
     };
-    compute.compile_time_arg_bindings = {{"entries_per_neo", entries_per_neo}, {"words_per_entry", words_per_entry}};
+    compute.compile_time_args = {{"entries_per_neo", entries_per_neo}, {"words_per_entry", words_per_entry}};
 
     // target_nodes MUST be a NodeRangeSet (not a bare NodeCoord) to match the
     // working legacy M2 helper on main (run_intra_tensix_dfb_program). With a
@@ -2160,20 +2163,20 @@ static void run_intra_tensix_dfb_program_2_0(
     // exposes a PACK/UNPACK write race for some Neos' L1 slices.
     const m2::NodeRangeSet node_set{m2::NodeRange{m2::NodeCoord{0, 0}, m2::NodeCoord{0, 0}}};
     m2::ProgramSpec spec{
-        .program_id = "intra_tensix_2_0",
+        .name = "intra_tensix_2_0",
         .kernels = {compute},
         .dataflow_buffers = {dfb_spec},
         .tensor_parameters = {},
-        .work_units = {m2::WorkUnitSpec{.unique_id = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
+        .work_units = {m2::WorkUnitSpec{.name = "main", .kernels = {COMPUTE}, .target_nodes = node_set}},
     };
 
     Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
 
     // Kernel has no runtime args; pass kernel_spec_name only (matches legacy
     // pattern in main's run_intra_tensix_dfb_program).
-    m2::ProgramRunParams params;
-    params.kernel_run_params = {{.kernel_spec_name = COMPUTE}};
-    m2::SetProgramRunParameters(program, params);
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {{.kernel_spec_name = COMPUTE}};
+    m2::SetProgramRunArgs(program, params);
 
     // DFB is the first L1 allocation in the program → lands at the base L1
     // allocator address. Same trick the legacy intra test uses.
@@ -2224,7 +2227,7 @@ TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1S_2_0) {
 TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
     auto& mesh_device = this->devices_.at(0);
     if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
-        GTEST_SKIP() << "M2 path is Quasar-only (Gen2DataMovementConfig)";
+        GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
     }
     IDevice* device = mesh_device->get_devices()[0];
 
@@ -2264,12 +2267,12 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
     auto producer = make_dm_kernel(PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp");
     producer.dfb_bindings = {
         {.dfb_spec_name = DFB_REMAPPER,
-         .local_accessor_name = "out",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+         .accessor_name = "out",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
          .access_pattern = m2::DFBAccessPattern::STRIDED}};
     producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
-    producer.compile_time_arg_bindings = {{"num_entries_per_producer", num_entries}, {"implicit_sync", 1u}};
-    producer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+    producer.compile_time_args = {{"num_entries_per_producer", num_entries}, {"implicit_sync", 1u}};
+    producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     // Compute kernel: 4 Neo threads. Binds remapper as CONSUMER (ALL) and intra
     // DFB as PRODUCER+CONSUMER (PACK→UNPACK self-loop, infers INTRA scope).
@@ -2277,26 +2280,26 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
         COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_intra_and_consume_all_2_0.cpp", num_neos);
     compute.dfb_bindings = {
         {.dfb_spec_name = DFB_REMAPPER,
-         .local_accessor_name = "consume",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+         .accessor_name = "consume",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = m2::DFBAccessPattern::ALL},
         {.dfb_spec_name = DFB_INTRA,
-         .local_accessor_name = "intra",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+         .accessor_name = "intra",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
          .access_pattern = m2::DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB_INTRA,
-         .local_accessor_name = "intra",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+         .accessor_name = "intra",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = m2::DFBAccessPattern::STRIDED},
     };
-    compute.compile_time_arg_bindings = {
+    compute.compile_time_args = {
         {"num_entries_consumer", num_entries},
         {"entries_per_neo", entries_per_neo},
         {"words_per_entry", entry_size / sizeof(uint32_t)},
     };
 
     m2::ProgramSpec spec{
-        .program_id = "intra_and_remapper_2_0",
+        .name = "intra_and_remapper_2_0",
         .kernels = {producer, compute},
         .dataflow_buffers = {dfb_remapper, dfb_intra_spec},
         .tensor_parameters =
@@ -2304,7 +2307,7 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
                 {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
             },
         .work_units = {m2::WorkUnitSpec{
-            .unique_id = "wu",
+            .name = "wu",
             .kernels = {PRODUCER, COMPUTE},
             .target_nodes = node,
         }},
@@ -2312,13 +2315,13 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4B_2_0) {
 
     Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
 
-    m2::ProgramRunParams params;
-    params.kernel_run_params = {
+    m2::ProgramRunArgs params;
+    params.kernel_run_args = {
         {.kernel_spec_name = PRODUCER,
-         .named_runtime_args = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}}},
+         .runtime_arg_values = {{.node = node, .args = {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}}},
     };
     params.tensor_args = {{.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)}};
-    m2::SetProgramRunParameters(program, params);
+    m2::SetProgramRunArgs(program, params);
 
     // Fill DRAM input; DM NOC-reads this into the remapper ring's L1.
     auto input_remapper =
@@ -2405,13 +2408,13 @@ static inline Program build_single_dfb_program_2_0(
                 PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp", p.num_producers);
             k.dfb_bindings = {
                 {.dfb_spec_name = DFB,
-                 .local_accessor_name = "out",
-                 .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+                 .accessor_name = "out",
+                 .endpoint_type = m2::DFBEndpointType::PRODUCER,
                  .access_pattern = p.pap}};
             k.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
-            k.compile_time_arg_bindings = {
+            k.compile_time_args = {
                 {"num_entries_per_producer", per_producer}, {"implicit_sync", p.implicit_sync ? 1u : 0u}};
-            k.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+            k.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
             // All-pass: dfb.disable_implicit_sync = !p.implicit_sync (now per-DM-endpoint, post-#45160).
             maybe_disable_implicit_sync(k, p.implicit_sync, DFB);
             return k;
@@ -2420,10 +2423,10 @@ static inline Program build_single_dfb_program_2_0(
             PRODUCER, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer_2_0.cpp", p.num_producers);
         k.dfb_bindings = {
             {.dfb_spec_name = DFB,
-             .local_accessor_name = "out",
-             .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+             .accessor_name = "out",
+             .endpoint_type = m2::DFBEndpointType::PRODUCER,
              .access_pattern = p.pap}};
-        k.compile_time_arg_bindings = {{"num_entries_per_producer", per_producer}};
+        k.compile_time_args = {{"num_entries_per_producer", per_producer}};
         return k;
     };
 
@@ -2433,15 +2436,15 @@ static inline Program build_single_dfb_program_2_0(
                 CONSUMER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp", p.num_consumers);
             k.dfb_bindings = {
                 {.dfb_spec_name = DFB,
-                 .local_accessor_name = "in",
-                 .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+                 .accessor_name = "in",
+                 .endpoint_type = m2::DFBEndpointType::CONSUMER,
                  .access_pattern = p.cap}};
             k.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
-            k.compile_time_arg_bindings = {
+            k.compile_time_args = {
                 {"num_entries_per_consumer", per_consumer},
                 {"blocked_consumer", is_all ? 1u : 0u},
                 {"implicit_sync", p.implicit_sync ? 1u : 0u}};
-            k.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+            k.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
             // All-pass: dfb.disable_implicit_sync = !p.implicit_sync (now per-DM-endpoint, post-#45160).
             maybe_disable_implicit_sync(k, p.implicit_sync, DFB);
             return k;
@@ -2450,10 +2453,10 @@ static inline Program build_single_dfb_program_2_0(
             CONSUMER, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer_2_0.cpp", p.num_consumers);
         k.dfb_bindings = {
             {.dfb_spec_name = DFB,
-             .local_accessor_name = "in",
-             .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+             .accessor_name = "in",
+             .endpoint_type = m2::DFBEndpointType::CONSUMER,
              .access_pattern = p.cap}};
-        k.compile_time_arg_bindings = {{"num_entries_per_consumer", per_consumer}};
+        k.compile_time_args = {{"num_entries_per_consumer", per_consumer}};
         return k;
     };
 
@@ -2469,7 +2472,7 @@ static inline Program build_single_dfb_program_2_0(
     }
 
     m2::WorkUnitSpec wu{
-        .unique_id = "wu",
+        .name = "wu",
         .kernels = {PRODUCER, CONSUMER},
     };
     if (p.target_nodes.has_value()) {
@@ -2478,7 +2481,7 @@ static inline Program build_single_dfb_program_2_0(
         wu.target_nodes = node;
     }
     m2::ProgramSpec spec{
-        .program_id = "config_probe_2_0",
+        .name = "config_probe_2_0",
         .kernels = {producer, consumer},
         .dataflow_buffers = {dfb_spec},
         .tensor_parameters = tensor_parameters,
@@ -2952,22 +2955,22 @@ TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1SConfig_2_0) {
         COMPUTE, "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_intra_2_0.cpp", /*num_threads=*/1);
     compute.dfb_bindings = {
         {.dfb_spec_name = DFB,
-         .local_accessor_name = "self",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::PRODUCER,
+         .accessor_name = "self",
+         .endpoint_type = m2::DFBEndpointType::PRODUCER,
          .access_pattern = m2::DFBAccessPattern::STRIDED},
         {.dfb_spec_name = DFB,
-         .local_accessor_name = "self",
-         .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
+         .accessor_name = "self",
+         .endpoint_type = m2::DFBEndpointType::CONSUMER,
          .access_pattern = m2::DFBAccessPattern::STRIDED},
     };
-    compute.compile_time_arg_bindings = {{"entries_per_neo", 4u}, {"words_per_entry", 256u}};
+    compute.compile_time_args = {{"entries_per_neo", 4u}, {"words_per_entry", 256u}};
 
     m2::ProgramSpec spec{
-        .program_id = "intra_config_2_0",
+        .name = "intra_config_2_0",
         .kernels = {compute},
         .dataflow_buffers = {dfb_spec},
         .tensor_parameters = {},
-        .work_units = {m2::WorkUnitSpec{.unique_id = "wu", .kernels = {COMPUTE}, .target_nodes = node}},
+        .work_units = {m2::WorkUnitSpec{.name = "wu", .kernels = {COMPUTE}, .target_nodes = node}},
     };
     Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
     m2_config_test_helpers::validate_intra_tensix_dfb_2_0(program, CoreCoord(0, 0));

@@ -51,7 +51,7 @@ static inline void consume_one_dfb_impl_sync(
     uint32_t consumer_idx) {
     for (uint32_t tile_id = 0; tile_id < entries_per_consumer; ++tile_id) {
         const uint32_t page_id = is_blocked ? tile_id : tile_id * num_consumers + consumer_idx;
-        noc.template async_write<Noc::TxnIdMode::ENABLED>(dfb, tensor_accessor, {}, {.page_id = page_id});
+        noc.template async_write<NocOptions::TXN_ID>(dfb, tensor_accessor, {}, {.page_id = page_id});
     }
     dfb.finish();
     dfb.write_barrier(noc);

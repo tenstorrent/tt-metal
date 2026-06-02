@@ -10,7 +10,7 @@
 // increments each word by 1 before push_back; UNPACK TRISC increments by 1
 // before pop_front. Net per-word delta = +2.
 //
-// Both bindings must use DISTINCT local_accessor_names ("out" / "in"), even
+// Both bindings must use DISTINCT accessor_names ("out" / "in"), even
 // though they resolve to the same DFB — M2 maps duplicate names oddly for INTRA
 // (only one Neo's slice gets touched). Reference dfb::out only.
 
