@@ -1553,4 +1553,111 @@ The Δ reduction at pos=255/383 is curious but not the smoking gun — pos=511 (
 
 **Conclusion.** MOVD2B-to-ELWMUL pipeline hazard ruled out. The bug is not in the math pipe's read-after-write timing for SrcB.
 
+**Note on the apparent Δ reduction at pos=255/383.** Cross-referencing with later runs (Attempt 43 below, which produced bit-identical numbers without any Attempt-42 change), these are the **actual pristine** Δ values at pos=255/383. The "~1.13e-4" / "~2.10e-4" baselines I quoted above came from earlier bypass runs that had OTHER experimental changes affecting absolute PCC. The clean pristine baseline is: pos=255 = 6.51e-6, pos=383 = 3.00e-5, pos=511 = 2.29e-4 — a roughly 5×–7× super-linear scaling per additional `sdpa_tail` invocation.
+
+---
+
+## Attempt 43 — `reset_config_context()` before SRCB-reuse unpacks: **no effect**
+
+**Motivation.** Sibling kernel `_llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_` (`tt_llk/tt_llk_blackhole/llk_lib/llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h:144-145, 159-161`) **explicitly** calls `wait_for_next_context(1) + reset_config_context()` before and after the unpack mop. It forces `unp_cfg_context = 0` so the SrcB ping-pong stays in a single CFG slot. The vibe-coded `sdpa_bcast_col_reuse_tiles` (which uses two `llk_unpack_A` calls instead of a single `llk_unpack_AB`) does NOT do this — each `_llk_unpack_A_` toggles `unp_cfg_context` via `switch_config_context`. Hypothesis: if iter-1 enters the function with `unp_cfg_context` drifted from iter-0 (because the total unpack count earlier in the decoder is odd), the SrcB CFG slot used by the MOVD2B → ELWMUL chain doesn't match what MATH reads from.
+
+**What.** Added `UNPACK((ckernel::unpacker::wait_for_next_context(1))); UNPACK((ckernel::unpacker::reset_config_context()));` at the top of both `sdpa_bcast_col_reuse_preamble` and `sdpa_bcast_col_reuse_tiles` in `models/demos/deepseek_v3_b1/kernel_includes/tt_metal/include/compute_kernel_api/sdpa.h`. Math otherwise pristine. Verified the change compiled and ran (kernel build timestamps confirmed JIT rebuilds during the run).
+
+**Result.** Δ bit-identical to pristine at every position (0, 6.51e-6, 3.00e-5, 2.29e-4). `unp_cfg_context` drift hypothesis falsified — even if it's drifting, it isn't what produces the bank-asymmetric output.
+
+---
+
+## Attempt 44 — Mirror `high_fidelity`'s explicit `TTI_SETRWC(B=8, SET_BD)` between LoFi passes: **no effect**
+
+**Motivation.** `_llk_math_sdpa_bcast_col_srcb_reuse_` has two branches in the ELWMUL handling. The `high_fidelity` branch issues an explicit `TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 8, 0, p_setrwc::SET_BD)` between pass 1's `for tile_num: run()` and pass 2's `for tile_num: run()`. The `LoFi` branch (which `MathFidelity::LoFi` from `op.py:434` selects) relies entirely on `ADDR_MOD_3`'s `srcb.incr=8, dest.clr=1` to achieve the same transition implicitly. Hypothesis: the timing of the implicit ADDR_MOD-driven update differs from the explicit SETRWC in a way that's bank-conditional.
+
+**What.** Added `TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 8, 0, p_setrwc::SET_BD)` after the single LoFi `ckernel_template::run()`, before the second pass's `run()`. With `ADDR_MOD_3` already advancing srcb to 8 and clearing dest, this SETRWC re-asserts the same state — functional no-op IF the implicit and explicit paths are equivalent.
+
+**Result.** Δ bit-identical to Attempt 43 (and to pristine) at every position. `ADDR_MOD_3` and `TTI_SETRWC(B=8, SET_BD)` are functionally equivalent for the inter-pass transition; timing/pipeline-flush differences don't matter.
+
+---
+
+## Attempt 45 — Swap ELWMUL → ELWADD in `sdpa_mul_bcast_col_reuse_tiles`: **Δ persists with same scaling pattern**
+
+**Motivation.** Test whether the bank-asymmetric bug is specific to ELWMUL or sits in the 2-pass + SRCB-reuse machinery that ELWADD also goes through. Looking at `_llk_math_sdpa_bcast_col_srcb_reuse_`, both ELWADD/ELWSUB and ELWMUL (LoFi) take the **same** two `ckernel_template::run()` structure with the same `ADDR_MOD_3` srcb advance between them. The ELWADD path was likely vibe-coded by mirroring the ELWMUL structure — it does **two** runs even though there's no fidelity reason to (ELWADD has no math-fidelity passes), and with `acc_to_dest=0` pass 2 just overwrites pass 1.
+
+**What.** One-line change in `compute_kernel_api/sdpa.h`: `sdpa_bcast_col_reuse_tiles_init<ELWMUL, ...>` → `<ELWADD, ...>` and the same for the math call. Math becomes wrong (computes additive nonsense instead of `L1*P1 + L2*P2`), but |Δ| measurement remains valid — same wrong math executed twice across iters, asymmetry of the wrong output is still bank-conditional.
+
+**Result.**
+
+| position_id | num_iters=1 PCC | num_iters=2 PCC | \|Δ\| (ELWADD) | \|Δ\| (pristine ELWMUL) |
+|---|---|---|---|---|
+| 127 | 0.6632649072309682 | 0.6632649072309682 | 0 | 0 |
+| 255 | 0.5028377968381597 | 0.5022391995722258 | **5.99e-4** | 6.51e-6 |
+| 383 | 0.49558629320300657 | 0.4976348689398857 | **2.05e-3** | 3.00e-5 |
+| 511 | 0.38326109890147075 | 0.38698233379856284 | **3.72e-3** | 2.29e-4 |
+
+Δ persists. The bug is NOT ELWMUL-specific — it's in the broader **2-pass + SRCB-reuse** machinery exercised by both binary ops. ELWADD's Δ is larger in absolute terms because the (wrong) output structure is different, but the same super-linear-with-call-count scaling appears.
+
+---
+
+## Attempt 46 — Single-pass instead of 2-pass: **per-pass component ~3e-5, NO compounding**
+
+**Motivation.** Both ELWMUL and ELWADD show super-linear Δ scaling with `sdpa_tail` call count (pristine pos=255/383/511 → 6.5e-6 / 3.0e-5 / 2.3e-4, roughly 5×–7× per step). Isolate the contribution of the inter-pass transition versus the per-pass work by removing the second `ckernel_template::run()` entirely.
+
+**What.** Removed the second `llk_unpack_A` in `sdpa_bcast_col_reuse_tiles` AND the second `ckernel_template::run()` in `_llk_math_sdpa_bcast_col_srcb_reuse_`. Math is wrong (only the `L2 * P2` term is computed, no `L1 * P1`) but absolute PCC stays high (~0.97). |Δ| measurement remains valid.
+
+**Result.**
+
+| position_id | sdpa_tail calls | \|Δ\| (single-pass) | \|Δ\| (pristine 2-pass) |
+|---|---|---|---|
+| 127 | 0 | 0 | 0 |
+| 255 | 1 | 5.14e-5 | 6.51e-6 |
+| 383 | 2 | 2.48e-5 | 3.00e-5 |
+| 511 | 3 | 3.09e-5 | **2.29e-4** |
+
+**Key finding.** Single-pass Δ is roughly **flat** across multi-call positions (~3e-5), while pristine 2-pass Δ **scales super-linearly** with the number of sdpa_tail invocations. The per-pass machinery alone produces a fixed-amplitude bank-asymmetric perturbation (~3e-5). The **compounding** that drives Δ to 2.29e-4 at pos=511 originates in the **interaction between the two passes**.
+
+---
+
+## Attempt 47 — `ADDR_MOD_3` LoFi `srcb.incr` 8 → 0: **irregular scaling, math too disturbed for clean signal**
+
+**Motivation.** Single-pass eliminated the compounding (Attempt 46). The 2-pass structure introduces it. The inter-pass transition is `ADDR_MOD_3` with `srcb.incr=8, dest.clr=1`. If removing the srcb advance kills the compounding while keeping the 2-pass structure, the srcb advance via `ADDR_MOD_3` is the smoking gun.
+
+**What.** One-line change in `_llk_math_sdpa_bcast_col_srcb_reuse_`'s LoFi `ADDR_MOD_3` definition: `srcb = {.incr = 8}` → `{.incr = 0}`. Both passes now read the same SrcB column (col 0 broadcast). Math becomes `L2 * P2 + L1 * P2` (or rather, pass 2 overwrites pass 1 → just `L1 * P2`) — wrong, but bank-symmetric expectation should hold.
+
+**Result.**
+
+| position_id | sdpa_tail calls | \|Δ\| (srcb.incr=0) | \|Δ\| (pristine 2-pass) | \|Δ\| (single-pass) |
+|---|---|---|---|---|
+| 127 | 0 | 0 | 0 | 0 |
+| 255 | 1 | 1.51e-5 | 6.51e-6 | 5.14e-5 |
+| 383 | 2 | **4.21e-4** | 3.00e-5 | 2.48e-5 |
+| 511 | 3 | 6.80e-5 | 2.29e-4 | 3.09e-5 |
+
+**Result is irregular.** pos=383 is now the *worst* of the three multi-call positions (worse than pristine), but pos=511 is better than pristine. Single-pass had pos=383 at 2.48e-5, srcb.incr=0 has pos=383 at 4.21e-4 — **17× worse than single-pass**.
+
+**Interpretation.** Removing the srcb advance keeps the 2-pass structure but changes what pass 2 reads from SrcB. With pass 2 hitting col 0 instead of col 1, the (wrong) output structure is different, and absolute PCCs are degraded (~0.96 vs pristine ~0.99). The Δ measurement is therefore comparing a *different* wrong-math output between iters, and the bank-asymmetry of that different output has its own irregular pattern.
+
+Cannot cleanly conclude "srcb advance is the compounding source" from this — the math has been disturbed too much. The interpretation that DOES hold: **the 2-pass structure interacting with whatever SrcB state pass 2 reads is bank-conditional. The compounding involves more than just the ADDR_MOD_3 srcb increment in isolation.**
+
+---
+
+## Summary of Attempts 41-47 (root-cause localization)
+
+**Localization (high confidence).** The bank-asymmetric MLP-PCC alternation originates in the LoFi 2-pass + SRCB-reuse machinery of `_llk_math_sdpa_bcast_col_srcb_reuse_` (in the deepseek-local LLK copy at `models/demos/deepseek_v3_b1/kernel_includes/tt_llk/tt_llk_blackhole/llk_lib/llk_math_sdpa_bcast_col_srcb_reuse.h`). Bypassing the call entirely (Attempt 41) collapses |Δ| to 0 at every probed position with absolute PCC dropping to a meaningful ~0.94–0.97 (per-shard PCCs in the 0.94-0.97 range with normal spread — output retains structure, no degeneration).
+
+**Decomposition (Attempts 45-47).**
+1. **Not ELWMUL-specific.** ELWADD substitution exhibits the same iter-asymmetry scaling pattern (Attempt 45). The bug is in the structural machinery, not the multiplier specifically.
+2. **Per-pass component.** A single `ckernel_template::run()` alone produces a fixed ~3e-5 bank-asymmetric Δ that does not scale with `sdpa_tail` invocation count (Attempt 46). This is the *floor* of the bug.
+3. **Compounding component.** The full 2-pass structure introduces super-linear scaling: pos=255 (1 sdpa_tail call) Δ = 6.5e-6, pos=383 (2 calls) Δ = 3.0e-5, pos=511 (3 calls) Δ = 2.29e-4. The compounding originates in the second pass's consumption of state left by the first pass — but is NOT cleanly attributable to ADDR_MOD_3's srcb advance alone (Attempt 47).
+
+**Ruled out (Attempts 41-47).**
+- MOVD2B → ELWMUL pipeline read-after-write hazard (Attempt 42)
+- `unp_cfg_context` ping-pong / SrcB CFG slot drift (Attempt 43)
+- `ADDR_MOD_3` vs `TTI_SETRWC(B=8, SET_BD)` timing equivalence — implicit and explicit srcb advance give identical Δ (Attempt 44)
+- ELWMUL-specific bug (Attempt 45)
+
+**Reference: a working sibling.** `_llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_` (`tt_llk_blackhole/llk_lib/llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb.h`) implements SrcB-reuse-from-DEST in a structurally different way (single `llk_unpack_AB`, explicit `reset_config_context()`, single context, ADDR_MODs that use `c_to_cr=1` so pass 2's writes land on different DEST positions). The vibe-coded `_llk_math_sdpa_bcast_col_srcb_reuse_` uses two `llk_unpack_A` calls with `unp_cfg_context` ping-pong and ADDR_MODs where pass 2 overwrites pass 1's dest positions (with `dest.clr=1` in `ADDR_MOD_3`). Whether the sibling's structure is reproducibly bank-symmetric for the SDPA tail's specific input layout (P1 in tile 0, P2 in tile 1, requiring MOVD2B reads from DEST rows `{0, 4, 64, 68}` rather than `{0, 4, 8, 12}`) is the obvious next investigation.
+
+**Next-step candidates** for whoever picks this up:
+- Full restructure to use a CB-backed P1/P2 instead of MOVD2B-from-DEST, then drop `_llk_math_sdpa_bcast_col_srcb_reuse_` in favor of standard `mul_tiles_bcast_cols` (option (c) in the live debugging session). ~60-80 LoC across 5 files.
+- Look for code-level differences between the LoFi path and the sibling kernel's pattern. The LoFi `ADDR_MOD_2` lacks the `c_to_cr=1` flag that high_fidelity (and the sibling kernel) use; this might be relevant to how pass 1's DEST writes get carried into pass 2. Test by adding `c_to_cr=1` to LoFi `ADDR_MOD_2` and `ADDR_MOD_3` and updating `ADDR_MOD_0` to use `.cr=1` (mirroring high_fidelity's full address-mod chain).
+- The MOVD2B addresses `{0, 4, 64, 68}` (with the 60-row gap between dst=8 and dst=64) come from `fused_max_sub_exp_add_tile` writing exp_max_diff at `prev_max_base_idx=0` (DEST tile 0) and exp_max_diff_2 at `worker_max_base_idx=32` (which maps to DEST tile 1 starting at row 64). Rearranging the SFPI output to put both P values into sequential DEST rows would let us use the standard `move_d2b_fixed_face` helper directly — at which point the standard sibling kernel becomes a drop-in replacement.
+
 ---
