@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+#
+# Defaults for the SeamlessM4Tv2 S2TT (English speech -> Japanese text) benchmark.
+# Consumed informally; run_benchmark.py takes the same values as CLI flags.
+
+model_id: facebook/seamless-m4t-v2-large
+tgt_lang: jpn
+bucket_len: 96          # constant-shape decode length (Phase 6); cap on output tokens
+sampling_rate: 16000
+
+metrics:
+  # score backend auto-selects sacrebleu (BLEU ja-mecab + chrF) when importable,
+  # else built-in char-BLEU + chrF (see metrics.py). chrF is the primary metric
+  # for Japanese (tokenizer-free).
+  primary: chrf
+
+datasets:
+  smoke:
+    # synthetic audio + HF-derived references; measures TT-vs-HF agreement.
+    builder: make_smoke_manifest.py
+    manifest: smoke_manifest.json
+  fleurs_en_ja:
+    # real en->ja pairs: FLEURS English audio + Japanese transcription (parallel ids).
+    builder: build_fleurs_manifest.py
+    manifest: fleurs_en_ja/manifest.json
+    split: test
+    max_samples: 50
+
+# Targets: TT chrF/BLEU within ~1-2 points of the HF reference; RTF reported.

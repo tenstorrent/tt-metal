@@ -1,0 +1,7 @@
+# generated benchmark artifacts (reproducible via the builder scripts)
+evaluation/smoke_audio/
+evaluation/smoke_manifest.json
+evaluation/fleurs_en_ja/
+eval_results*.json
+__pycache__/
+*.pyc
