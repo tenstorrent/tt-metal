@@ -49,6 +49,7 @@ class Attention(Module):
 
     ring_sdpa_chunk_size_map: dict[tuple, tuple[int, int]] = {
         (False, 2, 4): (256, 256),
+        (False, 4, 8): (128, 512),
         (False, 8, 4): (256, 256),
         (True, 2, 2): (128, 512),
         (True, 4, 8): (128, 512),

@@ -27,6 +27,12 @@ grid_1d_configs: dict[tuple[int, int, int, int, int], tuple[int, int, int]] = {
     (32, 6144, 4608, 11, 10): (2, 2, 2),  # 149.9 μs,  6.1% FLOP util
     (32, 6144, 2304, 11, 10): (4, 2, 2),  # 76.6 μs,  11.9% FLOP util
     (32, 6144, 1536, 11, 10): (6, 2, 2),  # 51.6 μs,  17.6% FLOP util
+    # Flux2 M=32 shapes — WH 4×8 ring, 8×9 grid (2026-06-01, sweep_1d_matmul.py)
+    (32, 6144, 6144, 8, 9): (2, 3, 3),
+    (32, 6144, 4608, 8, 9): (1, 3, 3),
+    (32, 6144, 2304, 8, 9): (4, 3, 3),
+    (32, 6144, 1536, 8, 9): (4, 2, 2),
+    (32, 256, 6144, 8, 9): (4, 3, 3),
 }
 
 
@@ -102,6 +108,16 @@ grid_88_configs = {
     (512, 8192, 5120): (4, 16, 4),
     (512, 16384, 5120): (2, 16, 8),
     (512, 32768, 5120): (4, 16, 8),
+    # Flux2 WH Galaxy AGMM (sp=4, tp=8, 8x8 grid) — sweep 2026-06-01
+    (1024, 768, 4608): (20, 3, 6, (2, 2)),  # AGMM qkv — 355 us
+    (512, 768, 4608): (10, 3, 12, (1, 4)),  # AGMM qkv — 242 us
+    (1024, 768, 768): (4, 1, 16, (1, 4)),  # AGMM to_out — 190 us
+    (512, 768, 768): (2, 1, 16, (1, 4)),  # AGMM to_out — 132 us
+    # Flux2 WH Galaxy plain MM on 8x8 grid — sweep 2026-06-01
+    (1024, 6144, 4608): (4, 8, 10, (2, 2)),  # 792 us
+    (512, 6144, 4608): (2, 12, 6, (2, 2)),  # 721 us (K_block must divide K_tiles_per_device=24 for AGMM)
+    (1024, 6144, 768): (4, 4, 4, (1, 4)),  # 207 us
+    (512, 6144, 768): (2, 8, 5, (2, 1)),  # 151 us
 }
 
 
@@ -129,6 +145,15 @@ grid_89_configs = {
     (128, 5120, 1280): (2, 16, 2),
     (9472, 5120, 3456): (8, 8, 8),
     (9472, 3456, 5120): (8, 8, 8),
+    # Flux2 WH Galaxy (sp=4, tp=8) — sweep_mm_block_sizes.py 2026-05-31
+    (1024, 6144, 2304): (4, 6, 10, (2, 2)),  # 451 us
+    (512, 6144, 2304): (2, 8, 5, (2, 1)),  # 392 us
+    (512, 15360, 768): (3, 10, 3, (1, 3)),  # 357 us
+    (1024, 6144, 128): (2, 12, 1, (2, 1)),  # 170 us
+    # Flux2 WH Galaxy plain MM on 8x9 grid — sweep 2026-06-01
+    (1024, 6144, 4608): (4, 8, 10, (2, 2)),  # 818 us
+    (512, 6144, 4608): (2, 8, 9, (1, 3)),  # 750 us
+    (1024, 128, 768): (6, 2, 3, (1, 3)),  # 20 us
 }
 
 grid_13_9_configs = {
@@ -555,6 +580,11 @@ else:
 fused_mmrs_configs = {
     ttnn.CoreCoord(8, 9): {
         (9472, 5120, 1280): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 8, 8, 8, 2, 2, None, 1),
+        # Flux2 WH Galaxy MM+RS — sweep 2026-06-01
+        (1024, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 12, 6, 8, 1, 4, None, 1),  # 953 us
+        (512, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 10, 8, 8, 1, 4, None, 1),  # 662 us
+        (1024, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 10, 8, 8, 1, 4, None, 1),  # 1082 us
+        (512, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(8, 7), 10, 8, 8, 1, 4, None, 1),  # 787 us
     },
     ttnn.CoreCoord(12, 10): {
         (9472, 3456, 5120): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 8, 4, 8, 2, 1, None, 1),
