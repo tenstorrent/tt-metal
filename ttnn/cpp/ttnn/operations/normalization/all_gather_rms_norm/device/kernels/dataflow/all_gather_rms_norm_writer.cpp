@@ -27,10 +27,9 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
-#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
+#include "mux_common.hpp"  // worker-side fabric-mux connection helpers (same dir)
 using namespace tt::tt_fabric::linear::experimental;
 #endif
 
@@ -53,7 +52,16 @@ void kernel_main() {
     constexpr uint32_t start_hops_backward = get_compile_time_arg_val(14);
     constexpr uint32_t range_hops_backward = get_compile_time_arg_val(15);
     constexpr uint32_t gather_chunk = get_compile_time_arg_val(16);  // rows per batched fabric all-gather
-    constexpr auto dst_args = TensorAccessorArgs<17>();
+#if defined(RING_GT_1)
+    // Fabric-mux compile-time args (these slots are always present in the arg list; the single-device path
+    // simply never reads them, which is why the TensorAccessor offset below is fixed at 22 either way).
+    constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(17);
+    constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(18);
+    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(19);
+    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(20);
+    constexpr uint32_t num_mux_clients = get_compile_time_arg_val(21);
+#endif
+    constexpr auto dst_args = TensorAccessorArgs<22>();
 
     (void)cb_local_stats;
     (void)cb_gathered_stats;
@@ -79,37 +87,57 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_out);
 
 #if defined(RING_GT_1)
-    // ----- fabric stats all-gather (ring_size > 1) -----
+    // ----- batched fabric stats all-gather through the fabric mux (ring_size > 1) -----
     const uint32_t out_ready_sem_addr = get_arg_val<uint32_t>(ai++);
-    const uint32_t barrier_sem_addr = get_arg_val<uint32_t>(ai++);  // unused in the per-row scheme
-    const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(ai++);
+    const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(ai++);  // THIS core's own virtual coords
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(ai++);
-    const uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(ai++);  // = ring_size (one inc per peer/chunk)
-    const uint32_t num_connections = get_arg_val<uint32_t>(ai++);
-    const uint32_t stats_ready_sem_id = get_arg_val<uint32_t>(ai++);
-    (void)barrier_sem_addr;
-    (void)stats_ready_sem_id;
-    size_t arg_for_fab = ai;
+    const uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(ai++);  // = ring_size
+
+    // Connect to the fabric mux (forward then backward). build_and_connect blocks until the mux is ready.
+    auto mux_fwd =
+        parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(ai);
+    auto mux_bwd =
+        parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(ai);
+    auto* sender_fwd = mux_fwd.build_and_connect(fabric_mux_status_address);
+    auto* sender_bwd = mux_bwd.build_and_connect(fabric_mux_status_address);
 
     const uint32_t stat_tile_bytes = get_tile_size(cb_local_stats);
     const uint32_t NCHt = num_tiles / Wt;
 
-    auto unicast_route_id = PacketHeaderPool::allocate_header_n(num_connections);
-    auto sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
-    tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
-    open_connections(fabric_connection, num_connections, arg_for_fab);
-
-    uint8_t starts[] = {static_cast<uint8_t>(start_hops_forward), static_cast<uint8_t>(start_hops_backward)};
-    uint8_t ranges[] = {static_cast<uint8_t>(range_hops_forward), static_cast<uint8_t>(range_hops_backward)};
-    if (ranges[0] == 0) {
-        starts[0] = starts[1];
-        ranges[0] = ranges[1];
+    // One write header + one atomic-inc header per direction; each carries a line-multicast route so a
+    // single send reaches every ring peer in that direction (the mux just forwards the packet to the EDM).
+    auto* hdr_w_fwd = PacketHeaderPool::allocate_header();
+    auto* hdr_w_bwd = PacketHeaderPool::allocate_header();
+    auto* hdr_s_fwd = PacketHeaderPool::allocate_header();
+    auto* hdr_s_bwd = PacketHeaderPool::allocate_header();
+    if (sender_fwd != nullptr) {
+        fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+            hdr_w_fwd,
+            static_cast<uint8_t>(start_hops_forward),
+            static_cast<uint8_t>(range_hops_forward),
+            nullptr,
+            stat_tile_bytes);
+        fabric_multicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            hdr_s_fwd,
+            static_cast<uint8_t>(start_hops_forward),
+            static_cast<uint8_t>(range_hops_forward),
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, 1});
     }
-    fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
-        fabric_connection, unicast_route_id, starts, ranges, nullptr, stat_tile_bytes);
-    fabric_multicast_noc_unicast_atomic_inc_set_state<
-        UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
-        fabric_connection, sem_route_id, starts, ranges, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, 1});
+    if (sender_bwd != nullptr) {
+        fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+            hdr_w_bwd,
+            static_cast<uint8_t>(start_hops_backward),
+            static_cast<uint8_t>(range_hops_backward),
+            nullptr,
+            stat_tile_bytes);
+        fabric_multicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            hdr_s_bwd,
+            static_cast<uint8_t>(start_hops_backward),
+            static_cast<uint8_t>(range_hops_backward),
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, 1});
+    }
 
     volatile tt_l1_ptr uint32_t* out_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_addr);
     const uint64_t out_ready_sem_noc_addr_pkt =
@@ -121,36 +149,42 @@ void kernel_main() {
     for (uint32_t chunk_start = 0; chunk_start < NCHt; chunk_start += gather_chunk) {
         const uint32_t rows = (NCHt - chunk_start) < gather_chunk ? (NCHt - chunk_start) : gather_chunk;
 
-        // ----- batched fabric all-gather of the chunk's partials -----
+        // ----- batched fabric all-gather of the chunk's partials, through the mux -----
         cb_wait_front(cb_local_stats, rows);
         cb_reserve_back(cb_gathered_stats, ring_size * rows);
         const uint32_t local_base = get_read_ptr(cb_local_stats);
         const uint32_t gathered_base = get_write_ptr(cb_gathered_stats);
 
-        // For each row: copy our partial into our own slot and fabric-multicast it to the SAME slot on
-        // every ring peer. Slot layout per row is [ring_size] consecutive tiles (peer r at index r), so the
-        // compute kernel can SUM-reduce row(ring_size) directly. Issue all writes back-to-back.
+        // For each row: copy our partial into our own slot and line-multicast it (fwd + bwd) to the SAME
+        // slot on every ring peer. Slot layout per row is [ring_size] consecutive tiles (peer r at index r),
+        // so the compute kernel can SUM-reduce row(ring_size) directly. Issue all writes back-to-back.
         for (uint32_t r = 0; r < rows; r++) {
             const uint32_t my_partial_addr = local_base + r * stat_tile_bytes;
             const uint32_t my_slot_addr = gathered_base + (r * ring_size + ring_index) * stat_tile_bytes;
             const uint64_t my_slot_noc_addr = get_noc_addr(my_x[noc_index], my_y[noc_index], my_slot_addr);
             noc_async_write(my_partial_addr, my_slot_noc_addr, stat_tile_bytes);
-            fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
-                fabric_connection,
-                unicast_route_id,
-                my_partial_addr,
-                tt::tt_fabric::NocUnicastCommandHeader{my_slot_noc_addr});
+            if (sender_fwd != nullptr) {
+                fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                    sender_fwd, hdr_w_fwd, my_partial_addr, tt::tt_fabric::NocUnicastCommandHeader{my_slot_noc_addr});
+            }
+            if (sender_bwd != nullptr) {
+                fabric_multicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
+                    sender_bwd, hdr_w_bwd, my_partial_addr, tt::tt_fabric::NocUnicastCommandHeader{my_slot_noc_addr});
+            }
         }
         noc_async_writes_flushed();
 
-        // Single completion signal for the whole chunk: one atomic-inc to every ring peer (line multicast)
-        // plus a local inc. Fabric preserves per-connection ordering, so the inc lands after all the chunk's
-        // writes on each receiver. Each device therefore observes exactly ring_size incs once its peers are
-        // done -> one barrier per chunk instead of one per row.
-        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
-            fabric_connection,
-            sem_route_id,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_pkt, 0});
+        // One completion signal per direction for the whole chunk (line multicast) + a local inc. Each
+        // device observes exactly ring_size incs on its own out-ready sem once all peers are done -> one
+        // barrier per chunk. Targets THIS core's out-ready sem (peers' same-coord core sends here).
+        if (sender_fwd != nullptr) {
+            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                sender_fwd, hdr_s_fwd, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_pkt, 0});
+        }
+        if (sender_bwd != nullptr) {
+            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+                sender_bwd, hdr_s_bwd, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_pkt, 0});
+        }
         noc_semaphore_inc(out_ready_sem_noc_addr, 1);
 
         cb_pop_front(cb_local_stats, rows);
@@ -176,7 +210,32 @@ void kernel_main() {
             }
         }
     }
-    close_connections(fabric_connection);
+
+    // Teardown: disconnect from the mux; the elected termination master then signals the mux to stop.
+    if (mux_bwd.connection_valid) {
+        close_mux(
+            sender_bwd,
+            mux_bwd.is_termination_master,
+            mux_bwd.termination_sync_address,
+            num_mux_clients,
+            mux_bwd.fabric_mux_x,
+            mux_bwd.fabric_mux_y,
+            fabric_mux_termination_signal_address,
+            mux_bwd.termination_master_noc_x,
+            mux_bwd.termination_master_noc_y);
+    }
+    if (mux_fwd.connection_valid) {
+        close_mux(
+            sender_fwd,
+            mux_fwd.is_termination_master,
+            mux_fwd.termination_sync_address,
+            num_mux_clients,
+            mux_fwd.fabric_mux_x,
+            mux_fwd.fabric_mux_y,
+            fabric_mux_termination_signal_address,
+            mux_fwd.termination_master_noc_x,
+            mux_fwd.termination_master_noc_y);
+    }
     noc_async_write_barrier();
 #else
     // ----- single device (ring_size == 1): just write output -----

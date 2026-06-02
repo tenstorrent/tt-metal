@@ -143,25 +143,31 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     // bounds the gathered-stats L1 footprint: ring_size * gather_chunk tiles, double-buffered.
     const uint32_t gather_chunk = single_device ? 1u : std::min<uint32_t>(num_tile_rows, 8u);
 
-    auto subdevice_id = args.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    const uint32_t num_workers_per_link = 1;
+    const auto grid = mesh_device->compute_with_storage_grid_size();
+    const uint32_t num_links = args.num_links;
 
-    // Work split. Single device: fan the tile-rows across the whole compute grid (one core per row-slice),
-    // so the reduce/normalize run in parallel. Multi-device: keep a single fabric worker core for now (the
-    // per-core fabric all-gather across many cores needs a fabric mux, which is a follow-up).
+    // Work split: fan the tile-rows across the compute grid (one core per row-slice) so reduce/normalize run
+    // in parallel. Multi-device reserves the bottom grid row for the fabric mux cores and routes every
+    // worker's stats all-gather through the mux; each worker uses one mux channel per direction, so the
+    // worker count is capped by the mux channels-per-core budget.
+    static constexpr uint32_t kMaxMuxChannels = 8;  // full-size channels per mux core
     CoreRangeSet worker_core_range;
     std::vector<CoreCoord> worker_cores;
     if (single_device) {
-        const auto grid = mesh_device->compute_with_storage_grid_size();
-        const uint32_t num_cores = std::max<uint32_t>(1, std::min<uint32_t>(num_tile_rows, grid.x * grid.y));
-        worker_core_range = num_cores_to_corerangeset(num_cores, grid, /*row_wise=*/true);
-        worker_cores = corerange_to_cores(worker_core_range, num_cores, /*row_wise=*/true);
+        const uint32_t n = std::max<uint32_t>(1, std::min<uint32_t>(num_tile_rows, grid.x * grid.y));
+        worker_core_range = num_cores_to_corerangeset(n, grid, /*row_wise=*/true);
+        worker_cores = corerange_to_cores(worker_core_range, n, /*row_wise=*/true);
     } else {
-        auto wc = ::ttnn::ccl::choose_worker_cores(
-            args.num_links, num_workers_per_link, mesh_device, subdevice_id, CoreCoord(0, 0), std::nullopt);
-        worker_core_range = std::get<0>(wc);
-        worker_cores = std::get<1>(wc);
+        const CoreCoord worker_grid{grid.x, grid.y - 1};  // reserve bottom row for mux cores
+        const uint32_t max_worker_cores = static_cast<uint32_t>(worker_grid.x * worker_grid.y);
+        const uint32_t mux_cap = num_links * kMaxMuxChannels;
+        const uint32_t n = std::max<uint32_t>(1, std::min({num_tile_rows, max_worker_cores, mux_cap}));
+        worker_core_range = num_cores_to_corerangeset(n, worker_grid, /*row_wise=*/true);
+        worker_cores = corerange_to_cores(worker_core_range, n, /*row_wise=*/true);
     }
+    const uint32_t num_cores = worker_cores.size();
+    // One mux channel per worker per direction; with num_links links, workers are striped across links.
+    const uint32_t num_workers_per_link = single_device ? 1u : ((num_cores + num_links - 1) / num_links);
 
     // ----- Circular buffers -----
     const bool has_gamma = gamma_tensor.has_value();
@@ -233,6 +239,59 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         .core_ranges = worker_core_range,
         .initial_value = 0,
     });
+
+    // Per-worker fabric-mux handshake semaphores (one set of 5 per direction): termination_sync,
+    // local_status, local_flow_control, local_teardown, local_buffer_index. Declared with the SAME ids on
+    // every worker core (same L1 address) so the termination master's sync semaphore is reachable from peers.
+    // Forward uses ids [1..5], backward [6..10].
+    static constexpr uint32_t kMuxSemFwdBase = 1;  // ids 1..5
+    static constexpr uint32_t kMuxSemBwdBase = 6;  // ids 6..10
+    if (!single_device) {
+        for (uint32_t id = kMuxSemFwdBase; id < kMuxSemBwdBase + 5; ++id) {
+            desc.semaphores.push_back(SemaphoreDescriptor{
+                .id = id,
+                .core_type = tt::CoreType::WORKER,
+                .core_ranges = worker_core_range,
+                .initial_value = 0,
+            });
+        }
+    }
+
+    // ----- Fabric mux setup (multi-device) -----
+    // One mux core per direction opens the fabric EDM connection; every worker connects to it as a client
+    // (one full-size channel each). Mux cores live on the reserved bottom grid row, disjoint from workers.
+    static constexpr uint32_t kMuxNumBuffersPerChannel = 8;
+    std::optional<tt::tt_fabric::FabricMuxConfig> mux_cfg;
+    std::optional<tt::tt_fabric::FabricNodeId> sender_fabric_node_id;
+    std::optional<tt::tt_fabric::FabricNodeId> forward_node_id;
+    std::optional<tt::tt_fabric::FabricNodeId> backward_node_id;
+    CoreCoord mux_fwd_logical, mux_bwd_logical;
+    CoreCoord mux_fwd_virtual, mux_bwd_virtual;
+    (void)barrier_semaphore;  // workload init-barrier sem; not referenced by the mux path
+    if (!single_device) {
+        // A single mux pair (forward/backward) is placed; multi-link striping is future work.
+        TT_FATAL(num_links == 1, "all_gather_rms_norm mux path currently supports num_links == 1 (got {})", num_links);
+        sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+        if (forward_coord.has_value()) {
+            forward_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+        }
+        if (backward_coord.has_value()) {
+            backward_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+        }
+        const size_t mux_base_l1 = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+        const size_t mux_buf_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+        mux_cfg.emplace(
+            static_cast<uint8_t>(num_workers_per_link),      // num_full_size_channels
+            static_cast<uint8_t>(0),                         // num_header_only_channels
+            static_cast<uint8_t>(kMuxNumBuffersPerChannel),  // num_buffers_full_size_channel
+            static_cast<uint8_t>(0),                         // num_buffers_header_only_channel
+            mux_buf_bytes,                                   // buffer_size_bytes_full_size_channel
+            mux_base_l1);
+        mux_fwd_logical = CoreCoord(0, grid.y - 1);
+        mux_bwd_logical = CoreCoord(1, grid.y - 1);
+        mux_fwd_virtual = mesh_device->worker_core_from_logical_core(mux_fwd_logical);
+        mux_bwd_virtual = mesh_device->worker_core_from_logical_core(mux_bwd_logical);
+    }
 
     // ----- Kernels -----
     union {
@@ -308,7 +367,18 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         forward_coord.has_value() ? num_targets_forward : 0u,    // range_hops_forward
         backward_coord.has_value() ? 1u : 0u,                    // start_distance_in_hops_backward
         backward_coord.has_value() ? num_targets_backward : 0u,  // range_hops_backward
-        gather_chunk};
+        gather_chunk,
+        // Fabric-mux compile-time args (0 on single device; the writer reads them only under RING_GT_1).
+        // The TensorAccessor offset below stays fixed regardless, so these are always present.
+        mux_cfg
+            ? static_cast<uint32_t>(mux_cfg->get_num_buffers(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL))
+            : 0u,
+        mux_cfg ? static_cast<uint32_t>(
+                      mux_cfg->get_buffer_size_bytes(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL))
+                : 0u,
+        mux_cfg ? static_cast<uint32_t>(mux_cfg->get_status_address()) : 0u,
+        mux_cfg ? static_cast<uint32_t>(mux_cfg->get_termination_signal_address()) : 0u,
+        num_workers_per_link};  // num_mux_clients
     TensorAccessorArgs(output.buffer()).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
@@ -354,7 +424,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         .math_approx_mode = math_approx_mode,
     };
 
-    // Push kernels in a stable order; the index is the KernelHandle used by the fabric helper below.
+    // Push kernels in a stable order; the index is the KernelHandle.
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));
     desc.kernels.push_back(std::move(compute_desc));
@@ -362,31 +432,55 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     constexpr tt::tt_metal::KernelHandle writer_kernel_id = 1;
     constexpr tt::tt_metal::KernelHandle compute_kernel_id = 2;
 
-    // ----- Runtime args -----
-    // Fabric node ids touch the fabric context, which is uninitialized on a single-device run; only query
-    // them for the multi-device (ring_size > 1) path that actually opens fabric connections.
-    std::optional<tt::tt_fabric::FabricNodeId> sender_fabric_node_id;
-    std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
+    // Fabric mux kernel (multi-device): one kernel instance covering the (≤2) mux cores, each opening the
+    // fabric EDM connection toward its neighbor. Pushed AFTER reader/writer/compute so their handles stay 0/1/2.
     if (!single_device) {
-        sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
+        std::vector<CoreRange> mux_ranges;
         if (forward_coord.has_value()) {
-            dst_nodes.push_back(mesh_device->get_fabric_node_id(forward_coord.value()));
+            mux_ranges.emplace_back(mux_fwd_logical);
         }
         if (backward_coord.has_value()) {
-            dst_nodes.push_back(mesh_device->get_fabric_node_id(backward_coord.value()));
+            mux_ranges.emplace_back(mux_bwd_logical);
+        }
+        KernelDescriptor mux_desc;
+        mux_desc.kernel_source = "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp";
+        mux_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        mux_desc.core_ranges = CoreRangeSet(mux_ranges);
+        mux_desc.compile_time_args = mux_cfg->get_fabric_mux_compile_time_args();
+        mux_desc.config = DataMovementConfigDescriptor{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_1_default,
+        };
+        desc.kernels.push_back(std::move(mux_desc));
+        const tt::tt_metal::KernelHandle mux_kernel_id = desc.kernels.size() - 1;
+
+        auto set_mux_rt = [&](const CoreCoord& mux_logical, const tt::tt_fabric::FabricNodeId& dst) {
+            auto rt = mux_cfg->get_fabric_mux_run_time_args<tt::tt_metal::ProgramDescriptor>(
+                sender_fabric_node_id.value(), dst, /*link_idx=*/0, desc, mux_logical);
+            KernelDescriptor::RTArgList mux_rt;
+            mux_rt.reserve(rt.size());
+            for (uint32_t v : rt) {
+                mux_rt.push_back(v);
+            }
+            desc.kernels[mux_kernel_id].emplace_runtime_args(mux_logical, mux_rt);
+        };
+        if (forward_coord.has_value()) {
+            set_mux_rt(mux_fwd_logical, forward_node_id.value());
+        }
+        if (backward_coord.has_value()) {
+            set_mux_rt(mux_bwd_logical, backward_node_id.value());
         }
     }
-    const uint32_t num_connections = dst_nodes.size();
 
+    // ----- Runtime args -----
     // Fan the tile-rows across the worker cores: core c handles rows [c*rows_per_core, (c+1)*rows_per_core).
-    const uint32_t num_cores = worker_cores.size();
     const uint32_t rows_per_core = (num_tile_rows + num_cores - 1) / num_cores;
-    CoreCoord drain_sync_core;
+    // Termination master for the mux teardown handshake is worker core 0 (per direction).
+    const CoreCoord term_master_virtual =
+        single_device ? CoreCoord{} : mesh_device->worker_core_from_logical_core(worker_cores[0]);
     for (uint32_t c = 0; c < num_cores; ++c) {
         const CoreCoord core = worker_cores[c];
-        if (c == 0) {
-            drain_sync_core = mesh_device->worker_core_from_logical_core(core);
-        }
+        const CoreCoord core_virtual = mesh_device->worker_core_from_logical_core(core);
 
         const uint32_t row_start = std::min(c * rows_per_core, num_tile_rows);
         const uint32_t row_end = std::min((c + 1) * rows_per_core, num_tile_rows);
@@ -420,17 +514,43 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
             tile_offset,
         };
         if (!single_device) {
-            // ring_size > 1: append the stats-all-gather coordination + fabric connection args.
+            // Per-core out-ready handshake: peers' same-coord core multicasts an atomic-inc to THIS core's
+            // out-ready semaphore; wait value is ring_size (one inc per peer, including the local inc).
+            const uint32_t worker_id = c / num_links;  // mux channel index within the link
             writer_rt_args.push_back(out_ready_semaphore.address());
-            writer_rt_args.push_back(barrier_semaphore.address());
-            writer_rt_args.push_back(drain_sync_core.x);
-            writer_rt_args.push_back(drain_sync_core.y);
-            writer_rt_args.push_back(ring_size * args.num_links);  // out_ready_sem_wait_value
-            writer_rt_args.push_back(num_connections);
-            writer_rt_args.push_back(stats_ready_semaphore_id);
-            tt::tt_metal::KernelHandle writer_kernel_id_mut = writer_kernel_id;
-            tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
-                sender_fabric_node_id.value(), dst_nodes, {c}, desc, writer_kernel_id_mut, core, writer_rt_args);
+            writer_rt_args.push_back(core_virtual.x);
+            writer_rt_args.push_back(core_virtual.y);
+            writer_rt_args.push_back(ring_size);  // out_ready_sem_wait_value
+
+            // Mux connection args, forward then backward (17 each, matching parse_mux_connection_args).
+            using CT = tt::tt_fabric::FabricMuxChannelType;
+            auto push_mux_args = [&](bool valid, const CoreCoord& mux_virtual, uint32_t sem_base) {
+                writer_rt_args.push_back(valid ? 1u : 0u);   // mux_connection_valid
+                writer_rt_args.push_back(c == 0 ? 1u : 0u);  // is_termination_master
+                writer_rt_args.push_back(mux_virtual.x);     // fabric_mux_x
+                writer_rt_args.push_back(mux_virtual.y);     // fabric_mux_y
+                writer_rt_args.push_back(
+                    static_cast<uint32_t>(mux_cfg->get_channel_base_address(CT::FULL_SIZE_CHANNEL, worker_id)));
+                writer_rt_args.push_back(
+                    static_cast<uint32_t>(mux_cfg->get_connection_info_address(CT::FULL_SIZE_CHANNEL, worker_id)));
+                writer_rt_args.push_back(
+                    static_cast<uint32_t>(mux_cfg->get_connection_handshake_address(CT::FULL_SIZE_CHANNEL, worker_id)));
+                writer_rt_args.push_back(
+                    static_cast<uint32_t>(mux_cfg->get_flow_control_address(CT::FULL_SIZE_CHANNEL, worker_id)));
+                writer_rt_args.push_back(
+                    static_cast<uint32_t>(mux_cfg->get_buffer_index_address(CT::FULL_SIZE_CHANNEL, worker_id)));
+                writer_rt_args.push_back(
+                    static_cast<uint32_t>(mux_cfg->get_channel_credits_stream_id(CT::FULL_SIZE_CHANNEL, worker_id)));
+                writer_rt_args.push_back(sem_base + 0u);  // termination_sync id
+                writer_rt_args.push_back(sem_base + 1u);  // local_fabric_mux_status id
+                writer_rt_args.push_back(sem_base + 2u);  // local_flow_control id
+                writer_rt_args.push_back(sem_base + 3u);  // local_teardown id
+                writer_rt_args.push_back(sem_base + 4u);  // local_buffer_index id
+                writer_rt_args.push_back(term_master_virtual.x);
+                writer_rt_args.push_back(term_master_virtual.y);
+            };
+            push_mux_args(forward_coord.has_value(), mux_fwd_virtual, kMuxSemFwdBase);
+            push_mux_args(backward_coord.has_value(), mux_bwd_virtual, kMuxSemBwdBase);
         }
 
         KernelDescriptor::RTArgList writer_rt_args_builder;
