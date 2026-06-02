@@ -152,7 +152,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      sp-config: sp1_mgd
+      sp-config: sp1-mgd
 
   # todo)) proven to work by itself but mess up SP1 allocationp; disabled until issue (https://github.com/tenstorrent/tt-metal/issues/44917) is resolved
   # deepseek-single-galaxy-tests:

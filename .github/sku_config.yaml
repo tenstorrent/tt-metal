@@ -230,7 +230,7 @@ skus:
         exabox.tenstorrent.com/purpose: ci-metal
         exabox.tenstorrent.com/superpod: A29
 
-  bh_sp1_mgd:
+  bh_sp1-mgd:
     runs_on:
       - exabox-multihost-with-nfs
     allocation:
