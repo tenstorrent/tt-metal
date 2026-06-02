@@ -234,7 +234,7 @@ skus:
     runs_on:
       - exabox-multihost-with-nfs
     allocation:
-      type: mgd
+      type: MGD
       match_labels:
         exabox.tenstorrent.com/purpose: ci-metal
       topologyKeys:

@@ -58,7 +58,7 @@ jobs:
 
       - name: Extract MGD content from SKU
         id: extract-mgd
-        if: steps.extract-allocation.outputs.allocation_type == 'mgd'
+        if: steps.extract-allocation.outputs.allocation_type == 'MGD'
         run: |
           {
             echo "mgd_content<<EOF"
