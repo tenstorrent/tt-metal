@@ -2184,6 +2184,101 @@ git commit -m "test(opt_transfer): e2e on-device QKV-fusion bring-up passes PCC 
 
 ---
 
+## Phase J — Closures (generalization & full wiring)
+
+These close the open stubs so the system is general (any fused op), self-validating (model-shape tests), and self-repairing — not a QKV special case.
+
+### Task J1: General codegen dispatch (emitter registry, not QKV-only)
+
+**Files:**
+- Modify: `models/experimental/opt_transfer/codegen.py`
+- Test: `models/experimental/opt_transfer/tests/test_codegen_device.py`
+
+Replaces the hardcoded single `build_fused_qkv` call path with a registry: each `fused_op` has an emitter; `build_fused` dispatches by `proposal.fused_op`. Adding an op = registering an emitter (each verified by the J6 model-shape test), never editing the pipeline. A KB op with no emitter raises a clear error (routes to handoff), so coverage gaps are explicit, not silent.
+
+- [ ] **Step 1: Write the failing test** (CPU — dispatch logic only)
+
+```python
+# tests/test_codegen_device.py (append)
+import pytest
+from models.experimental.opt_transfer.codegen import register_emitter, build_fused
+from models.experimental.opt_transfer.schema import FusionProposal
+
+
+def test_build_fused_dispatches_by_fused_op():
+    @register_emitter("test.op")
+    def _e(proposal, entry, weights, device, dims):
+        return lambda x: ("ran", x)
+    p = FusionProposal("e", "test.op", ["n"], {}, None, "", "")
+    runner = build_fused(p, entry=None, weights={}, device=None, dims={})
+    assert runner(7) == ("ran", 7)
+
+
+def test_build_fused_unknown_op_raises():
+    p = FusionProposal("e", "ttnn.not_registered", ["n"], {}, None, "", "")
+    with pytest.raises(KeyError):
+        build_fused(p, None, {}, None, {})
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `pytest models/experimental/opt_transfer/tests/test_codegen_device.py::test_build_fused_dispatches_by_fused_op -v`
+Expected: FAIL (`register_emitter`/`build_fused` undefined)
+
+- [ ] **Step 3: Write minimal implementation**
+
+```python
+# codegen.py (append)
+_EMITTERS = {}
+
+
+def register_emitter(fused_op):
+    def deco(fn):
+        _EMITTERS[fused_op] = fn
+        return fn
+    return deco
+
+
+def build_fused(proposal, entry, weights, device, dims):
+    """Dispatch a resolved FusionProposal to its emitter -> callable(input)->output(s).
+    A KB op with no registered emitter raises (the graph routes that to handoff)."""
+    if proposal.fused_op not in _EMITTERS:
+        raise KeyError(
+            f"no codegen emitter for {proposal.fused_op}; KB knows the op but codegen "
+            f"can't emit it yet (register one + add a J6 model-shape test)")
+    return _EMITTERS[proposal.fused_op](proposal, entry, weights, device, dims)
+
+
+# the verified QKV emitter becomes the first registered emitter
+@register_emitter("ttnn.experimental.nlp_create_qkv_heads")
+def _emit_qkv(proposal, entry, weights, device, dims):
+    return build_fused_qkv(proposal, weights, device, dims)
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `pytest models/experimental/opt_transfer/tests/test_codegen_device.py -v`
+Expected: PASS (dispatch tests pass; device test from D3 still passes)
+
+- [ ] **Step 5: Update `RealImpl.codegen` to dispatch via `build_fused`**
+
+In `graph.py`, replace the direct `build_fused_qkv(...)` call in `RealImpl.codegen` with:
+```python
+from models.experimental.opt_transfer.codegen import build_fused
+# ...
+runners.append(build_fused(p, kb_by_id[p.entry_id], weights, self.device, dims))
+```
+(where `kb_by_id = {e.id: e for e in self.kb}`), so bring-up is emitter-agnostic.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add models/experimental/opt_transfer/codegen.py models/experimental/opt_transfer/graph.py models/experimental/opt_transfer/tests/test_codegen_device.py
+git commit -m "feat(opt_transfer): general codegen emitter registry + dispatch (not QKV-only)"
+```
+
+---
+
 ## Self-Review
 
 **Spec coverage:**
