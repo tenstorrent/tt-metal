@@ -39,3 +39,11 @@ def test_tensor_accessor_args(device):
     dram_accessor_crta = dram_accessor.get_common_runtime_args()
     assert len(dram_accessor_cta) == 2
     assert len(dram_accessor_crta) == 0
+
+
+def test_tensor_accessor_args_placeholder():
+    """Test no-arg constructor for optional tensor placeholders."""
+    placeholder = ttnn.TensorAccessorArgs()
+    cta = placeholder.get_compile_time_args()
+    assert len(cta) == 2
+    assert cta == [0, 0]
