@@ -151,7 +151,9 @@ inline void _llk_unpack_fast_untilize_bfp_block_(const std::uint32_t address, co
 
 inline void _llk_unpack_fast_untilize_uninit_()
 {
-    _llk_unpack_A_uninit_<BroadcastType::NONE>(FACE_R_DIM);
+    // Fast untilize reprograms the unpacker X counter during the block loop; restore the default
+    // full-tile x-start/x-end so the next operation starts from a clean transient state.
+    TTI_SETADCXX(p_setadc::UNP_A, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
 }
 
 } // namespace ckernel
