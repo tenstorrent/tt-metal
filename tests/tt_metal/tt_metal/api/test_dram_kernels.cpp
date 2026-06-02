@@ -684,7 +684,8 @@ struct DRISCNocModeParams {
     NOC tensix_noc;  // opposite NIU, left in NOC2AXI mode for the concurrent Tensix DRAM read
 };
 
-class DRISCNocModeFixture : public DramKernelFixture, public testing::WithParamInterface<DRISCNocModeParams> {};
+class DramKernelDRISCNocModeFixture : public DramKernelFixture,
+                                      public testing::WithParamInterface<DRISCNocModeParams> {};
 
 // Exercises both NIUs of a single DRISC simultaneously: its drisc_noc NIU runs in stream mode
 // (DRISC-initiated DMA reads from GDDR + multicast to a 4x3 Tensix grid) while its tensix_noc NIU
@@ -693,7 +694,7 @@ class DRISCNocModeFixture : public DramKernelFixture, public testing::WithParamI
 // A bank's read on tensix_noc deterministically routes to that bank's preferred DRAM endpoint for that
 // NOC (NOC0 and NOC1 use different endpoints), so the DRISC kernel is placed on that same endpoint,
 // guaranteeing both NIUs belong to one DRISC. The Tensix reader sits just below the mcast grid.
-TEST_P(DRISCNocModeFixture, DRISCNocModeMcastStress) {
+TEST_P(DramKernelDRISCNocModeFixture, DramKernelDRISCNocModeStress) {
     auto [drisc_noc, tensix_noc] = GetParam();
 
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
@@ -792,7 +793,7 @@ TEST_P(DRISCNocModeFixture, DRISCNocModeMcastStress) {
 
 INSTANTIATE_TEST_SUITE_P(
     NocModeSweep,
-    DRISCNocModeFixture,
+    DramKernelDRISCNocModeFixture,
     testing::Values(
         DRISCNocModeParams{NOC::NOC_0, NOC::NOC_1},   // NOC0 = stream, NOC1 = NOC2AXI
         DRISCNocModeParams{NOC::NOC_1, NOC::NOC_0}),  // NOC1 = stream, NOC0 = NOC2AXI
