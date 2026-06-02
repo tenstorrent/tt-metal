@@ -271,8 +271,7 @@ def test_voxtral_tts_pipeline_acoustic_forward_matches_reference(device, reset_s
 
     torch.manual_seed(12345)
     ref_out = ref.forward(llm_h, cfg_alpha)
-    torch.manual_seed(12345)
-    tt_raw = pipe.acoustic_codes_forward(llm_h, cfg_alpha)
+    tt_raw = pipe.acoustic_codes_forward(llm_h, cfg_alpha, noise_seed=12345)
     tt_out = _align_to_ref_shape(ref_out, tt_raw)
 
     assert (
@@ -280,19 +279,8 @@ def test_voxtral_tts_pipeline_acoustic_forward_matches_reference(device, reset_s
     ), f"forward shape mismatch after align: ref={tuple(ref_out.shape)} tt_raw={tuple(tt_raw.shape)}"
     assert torch.equal(ref_out[:, :1], tt_out[:, :1]), "semantic token mismatch"
 
-    _log_stage_header("ACOUSTIC MODEL - synced-RNG code agreement")
+    _log_stage_header("ACOUSTIC MODEL - semantic agreement (TT FM uses ttnn.randn)")
     logger.info(f"  semantic token exact: ref={ref_out[:, :1].tolist()} tt={tt_out[:, :1].tolist()}")
-    n_acoustic = ref_out.shape[1] - 1
-    if n_acoustic > 0:
-        acoustic_ok = ref_out[:, 1:] == tt_out[:, 1:]
-        match_frac = float(acoustic_ok.float().mean().item())
-        logger.info(
-            f"  acoustic code agreement: {match_frac:.4f}  "
-            f"target>={ACOUSTIC_MATCH_FRAC:.4f}  matched={int(acoustic_ok.sum().item())}/{n_acoustic}"
-        )
-        assert (
-            match_frac >= ACOUSTIC_MATCH_FRAC
-        ), f"acoustic code agreement {match_frac:.4f} < {ACOUSTIC_MATCH_FRAC} (TT vs CPU FM drift at round)"
 
 
 @torch.no_grad()
@@ -354,12 +342,11 @@ def _acoustic_codes_with_rng(
     cfg_alpha: torch.Tensor,
     rng_seed: int,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """CPU and TT acoustic forward on the same hidden with synced FM RNG."""
+    """CPU and TT acoustic forward on the same hidden (semantic exact; FM noise differs: torch vs ttnn)."""
     hidden_in = hidden_bf16.unsqueeze(0)
     torch.manual_seed(rng_seed)
     ref_codes = cpu.acoustic_transformer(hidden_in, cfg_alpha).long()
-    torch.manual_seed(rng_seed)
-    tt_codes = pipe.acoustic_codes_forward(hidden_in, cfg_alpha).long()
+    tt_codes = pipe.acoustic_codes_forward(hidden_in, cfg_alpha, noise_seed=rng_seed).long()
     tt_codes = _align_to_ref_shape(ref_codes, tt_codes)
     return ref_codes, tt_codes
 
@@ -450,12 +437,9 @@ def _run_pipeline_inference_pcc_loop(
     if acoustic_total > 0:
         match_frac = acoustic_matches / acoustic_total
         logger.info(
-            f"  acoustic code agreement summary: {match_frac:.4f}  "
-            f"target>={ACOUSTIC_MATCH_FRAC:.4f}  matched={acoustic_matches}/{acoustic_total}"
+            f"  acoustic code agreement vs CPU ref (informational; TT uses ttnn.randn): {match_frac:.4f}  "
+            f"matched={acoustic_matches}/{acoustic_total}"
         )
-        assert (
-            match_frac >= ACOUSTIC_MATCH_FRAC
-        ), f"acoustic code agreement {match_frac:.4f} < {ACOUSTIC_MATCH_FRAC} over {generate_steps} steps"
 
     stacked = torch.stack(stacked_codes, dim=0)
     eoa = (stacked[:, 0] == cpu.end_audio_id).nonzero(as_tuple=False)
