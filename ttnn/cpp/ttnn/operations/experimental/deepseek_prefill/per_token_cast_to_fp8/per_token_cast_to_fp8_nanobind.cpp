@@ -22,12 +22,13 @@ void bind_experimental_per_token_cast_to_fp8_operation(nb::module_& mod) {
               * an FP8_E4M3 tensor of the same shape, and
               * a FLOAT32 scale tensor of shape [..., M, H/128].
 
-            v0 currently emits scale = 1.0 for every group; real per-row amax
-            quantization is deferred.
+            Per 128-element group g of each token: scale = clamp(max(|x|), 1e-4) / 448 and the
+            e4m3 output is round(x / scale). The e4m3 packer rounds toward zero (truncates the
+            mantissa), so results are within one e4m3 ULP of a round-to-nearest reference.
 
             Args:
                 * :attr:`input_tensor`: BFLOAT16 or FLOAT32 ROW_MAJOR tensor of shape [..., M, H].
-                  Requires H % 128 == 0. Blackhole only.
+                  Requires M % 32 == 0 and H % 1024 == 0. Blackhole only.
                 * :attr:`memory_config`: optional output memory config (default: same as input).
 
             Returns:

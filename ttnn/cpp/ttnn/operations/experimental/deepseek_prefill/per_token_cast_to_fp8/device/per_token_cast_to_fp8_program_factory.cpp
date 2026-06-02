@@ -4,6 +4,8 @@
 
 #include "per_token_cast_to_fp8_program_factory.hpp"
 
+#include <bit>
+
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -11,11 +13,11 @@
 
 #include "ttnn/operations/experimental/deepseek_prefill/common/fp8_quant_common.hpp"
 
-// v0 of per_token_cast_to_fp8 uses a writer-side software conversion (bf16/fp32 -> fp8). The LLK
-// path (tilize bf16 RM -> bf16 TILE -> pack_untilize -> fp8 RM) was attempted and produced
-// incorrect results — the unpacker/packer state coordination between the two stages in one
-// compute kernel did not yield correct fp8 bytes on Blackhole. The software path is correct,
-// fast enough for v0, and isolates this op from LLK gaps.
+// per_token_cast_to_fp8: LLK implementation (promoted from the experiments/token-cast-to-fp8 spike).
+// Per (tile-row, 1024-col column-block) the compute kernel tilizes the input, computes a per-128
+// group amax = max(|x|), forms scale = clamp(amax, 1e-4) / 448 and 1/scale, divides, and untilizes
+// to e4m3. The writer extracts column 0 of the per-group scale tiles into the [.., H/128] scale
+// output. Requires H % 1024 == 0; work is split across cores over tile-rows.
 
 namespace ttnn::experimental::prim::per_token_cast_to_fp8 {
 
@@ -32,11 +34,25 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
     const auto& [output_e4m3, output_scale] = tensor_return_value;
 
     const auto& input_shape = input.logical_shape();
-    auto [M, H] = common::infer_M_H(input_shape);
+    auto [M, H] = common::infer_M_H(input_shape);  // M = rows, H = width (last dim)
     TT_FATAL(M % constants::TILE_HEIGHT == 0, "per_token_cast_to_fp8: M={} must be divisible by TILE_HEIGHT=32", M);
-    TT_FATAL(H % common::SCALE_GROUP_SIZE == 0, "per_token_cast_to_fp8: H={} must be a multiple of 128", H);
+    TT_FATAL(
+        H % common::COL_BLOCK_ELEMS == 0,
+        "per_token_cast_to_fp8: H={} must be a multiple of COL_BLOCK_ELEMS={}",
+        H,
+        common::COL_BLOCK_ELEMS);
+
+    constexpr uint32_t TILE_BYTES_FP32 = constants::TILE_HEIGHT * constants::TILE_WIDTH * 4;   // 4096
+    constexpr uint32_t COL_BLOCK_TILES = common::COL_BLOCK_ELEMS / constants::TILE_WIDTH;      // 32
+    constexpr uint32_t GROUPS_PER_BLOCK = common::COL_BLOCK_ELEMS / common::SCALE_GROUP_SIZE;  // 8
 
     const uint32_t tile_rows = M / constants::TILE_HEIGHT;
+    const uint32_t num_col_blocks = H / common::COL_BLOCK_ELEMS;
+    const uint32_t scale_groups = H / common::SCALE_GROUP_SIZE;
+    const uint32_t in_elem_bytes = input.element_size();
+    const uint32_t in_col_block_bytes = common::COL_BLOCK_ELEMS * in_elem_bytes;
+    const uint32_t e4m3_col_block_bytes = common::COL_BLOCK_ELEMS;  // 1 byte/elem
+    const uint32_t scale_aligned_page_bytes = output_scale.buffer()->aligned_page_size();
 
     auto* src_buffer = input.buffer();
     auto* dst_e4m3_buffer = output_e4m3.buffer();
@@ -50,35 +66,54 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
         split_work_to_cores(compute_grid, tile_rows);
 
     const DataFormat input_df = datatype_to_dataformat_converter(input.dtype());
+    const DataFormat fp32_df = DataFormat::Float32;
     const DataFormat fp8_df = DataFormat::Fp8_e4m3;
-    const DataFormat scale_df = DataFormat::Float32;
 
-    const uint32_t input_element_size = input.element_size();
-    const uint32_t stick_size_input = H * input_element_size;
-    const uint32_t stick_size_fp8 = H;
-    const uint32_t scale_write_size_bytes = dst_scale_buffer->aligned_page_size();
-    const uint32_t is_fp32 = (input.dtype() == DataType::FLOAT32) ? 1 : 0;
+    // CB indices mirror the generic_op spike (op.py).
+    constexpr uint32_t cb_in_idx = CBIndex::c_0;
+    constexpr uint32_t cb_tile_idx = CBIndex::c_1;
+    constexpr uint32_t cb_scaler_idx = CBIndex::c_3;
+    constexpr uint32_t cb_abs_idx = CBIndex::c_4;
+    constexpr uint32_t cb_scale_tiles_idx = CBIndex::c_5;
+    constexpr uint32_t cb_scale_scratch_idx = CBIndex::c_6;
+    constexpr uint32_t cb_inv_scale_tiles_idx = CBIndex::c_7;
+    constexpr uint32_t cb_out_tile_idx = CBIndex::c_8;
+    constexpr uint32_t cb_e4m3_idx = CBIndex::c_16;
 
-    constexpr uint32_t cb_in_rm_idx = CBIndex::c_0;
-    constexpr uint32_t cb_scratch_fp8_idx = CBIndex::c_1;
-    constexpr uint32_t cb_scale_const_idx = CBIndex::c_2;
+    auto make_fp32_tile_cb = [&](uint32_t cb_idx, uint32_t num_tiles) {
+        CircularBufferConfig cfg = CircularBufferConfig(num_tiles * TILE_BYTES_FP32, {{cb_idx, fp32_df}})
+                                       .set_page_size(cb_idx, TILE_BYTES_FP32);
+        CreateCircularBuffer(program, all_cores, cfg);
+    };
 
-    CircularBufferConfig cb_in_rm_cfg =
-        CircularBufferConfig(constants::TILE_HEIGHT * stick_size_input, {{cb_in_rm_idx, input_df}})
-            .set_page_size(cb_in_rm_idx, stick_size_input);
-    CreateCircularBuffer(program, all_cores, cb_in_rm_cfg);
+    // cb_in: input row-major, one column-block tile (1024 elems) per page; 2 col-blocks of staging.
+    CircularBufferConfig cb_in_cfg =
+        CircularBufferConfig(2 * COL_BLOCK_TILES * in_col_block_bytes, {{cb_in_idx, input_df}})
+            .set_page_size(cb_in_idx, in_col_block_bytes);
+    CreateCircularBuffer(program, all_cores, cb_in_cfg);
 
-    const uint32_t fp8_scratch_bytes = constants::TILE_HEIGHT * stick_size_fp8;
-    CircularBufferConfig cb_scratch_fp8_cfg = CircularBufferConfig(fp8_scratch_bytes, {{cb_scratch_fp8_idx, fp8_df}})
-                                                  .set_page_size(cb_scratch_fp8_idx, fp8_scratch_bytes);
-    CreateCircularBuffer(program, all_cores, cb_scratch_fp8_cfg);
+    make_fp32_tile_cb(cb_tile_idx, COL_BLOCK_TILES);                  // tilized input
+    make_fp32_tile_cb(cb_scaler_idx, 1);                              // reduce scaler (1.0), reader-filled
+    make_fp32_tile_cb(cb_abs_idx, 2 * common::SCALE_GROUP_TILES);     // per-group abs tiles
+    make_fp32_tile_cb(cb_scale_tiles_idx, 2 * GROUPS_PER_BLOCK);      // col0 = scale
+    make_fp32_tile_cb(cb_inv_scale_tiles_idx, 2 * GROUPS_PER_BLOCK);  // col0 = 1/scale
+    make_fp32_tile_cb(cb_out_tile_idx, COL_BLOCK_TILES);              // divided tiles -> untilize
 
-    CircularBufferConfig cb_scale_const_cfg =
-        CircularBufferConfig(scale_write_size_bytes, {{cb_scale_const_idx, scale_df}})
-            .set_page_size(cb_scale_const_idx, scale_write_size_bytes);
-    CreateCircularBuffer(program, all_cores, cb_scale_const_cfg);
+    // cb_e4m3: e4m3 row-major output, one column-block (1024 bytes) per page, double-buffered.
+    CircularBufferConfig cb_e4m3_cfg =
+        CircularBufferConfig(2 * COL_BLOCK_TILES * e4m3_col_block_bytes, {{cb_e4m3_idx, fp8_df}})
+            .set_page_size(cb_e4m3_idx, e4m3_col_block_bytes);
+    CreateCircularBuffer(program, all_cores, cb_e4m3_cfg);
 
-    std::vector<uint32_t> reader_ct_args = {cb_in_rm_idx, stick_size_input};
+    // cb_scale_scratch: writer-private staging for 32 tokens' full scale rows (page-aligned stride).
+    const uint32_t scale_scratch_bytes = constants::TILE_HEIGHT * scale_aligned_page_bytes;
+    CircularBufferConfig cb_scale_scratch_cfg =
+        CircularBufferConfig(scale_scratch_bytes, {{cb_scale_scratch_idx, fp32_df}})
+            .set_page_size(cb_scale_scratch_idx, scale_scratch_bytes);
+    CreateCircularBuffer(program, all_cores, cb_scale_scratch_cfg);
+
+    // Reader (RISCV_1): fills the reduce scaler, then column-block-major input reads.
+    std::vector<uint32_t> reader_ct_args = {cb_in_idx, in_col_block_bytes, cb_scaler_idx};
     TensorAccessorArgs(src_buffer).append_to(reader_ct_args);
     KernelHandle reader_kernel_id = CreateKernel(
         program,
@@ -88,16 +123,14 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
 
+    // Writer (RISCV_0): e4m3 col-block writes + scale extraction (col 0 of cb_scale_tiles) -> scale.
     std::vector<uint32_t> writer_ct_args = {
-        cb_in_rm_idx,
-        cb_scratch_fp8_idx,
-        cb_scale_const_idx,
-        input_element_size,
-        stick_size_input,
-        stick_size_fp8,
-        scale_write_size_bytes,
-        is_fp32,
-        H};
+        cb_e4m3_idx,
+        e4m3_col_block_bytes,
+        cb_scale_tiles_idx,
+        cb_scale_scratch_idx,
+        scale_groups,
+        scale_aligned_page_bytes};
     TensorAccessorArgs(dst_e4m3_buffer).append_to(writer_ct_args);
     TensorAccessorArgs(dst_scale_buffer).append_to(writer_ct_args);
     KernelHandle writer_kernel_id = CreateKernel(
@@ -108,6 +141,31 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_ct_args});
 
+    // Compute (TRISC): tilize -> per-group amax scale + 1/scale -> divide -> untilize to e4m3.
+    const uint32_t clamp_min_bits = std::bit_cast<uint32_t>(common::SCALE_CLAMP_MIN);
+    const uint32_t clamp_max_bits = std::bit_cast<uint32_t>(3.0e38f);
+    const uint32_t inv_e4m3_max_bits = std::bit_cast<uint32_t>(1.0f / common::E4M3_MAX_NORMAL);
+    std::vector<uint32_t> compute_ct_args = {
+        cb_in_idx,
+        cb_tile_idx,
+        cb_scaler_idx,
+        cb_abs_idx,
+        cb_scale_tiles_idx,
+        cb_inv_scale_tiles_idx,
+        cb_out_tile_idx,
+        cb_e4m3_idx,
+        clamp_min_bits,
+        clamp_max_bits,
+        inv_e4m3_max_bits};
+    // fp32_dest_acc_en=True is required whenever an 8-bit-float CB (e4m3) is on the core (DEST in
+    // 32-bit family-agnostic mode); it also gives fp32 precision for the reduce/divide stages.
+    KernelHandle compute_kernel_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/device/kernels/compute/"
+        "compute_per_token_cast_to_fp8.cpp",
+        all_cores,
+        ComputeConfig{.fp32_dest_acc_en = true, .compile_args = compute_ct_args});
+
     auto all_cores_vec = corerange_to_cores(all_cores, num_cores, true);
     uint32_t row_offset = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -115,17 +173,19 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
         uint32_t rows_for_core =
             core_group_1.contains(core) ? rows_per_core_g1 : (core_group_2.contains(core) ? rows_per_core_g2 : 0);
 
-        SetRuntimeArgs(program, reader_kernel_id, core, {src_buffer->address(), row_offset, rows_for_core});
+        SetRuntimeArgs(
+            program, reader_kernel_id, core, {src_buffer->address(), rows_for_core, num_col_blocks, row_offset});
         SetRuntimeArgs(
             program,
             writer_kernel_id,
             core,
-            {dst_e4m3_buffer->address(), dst_scale_buffer->address(), row_offset, rows_for_core});
+            {dst_e4m3_buffer->address(), dst_scale_buffer->address(), rows_for_core, num_col_blocks, row_offset});
+        SetRuntimeArgs(program, compute_kernel_id, core, {rows_for_core, num_col_blocks});
         row_offset += rows_for_core;
     }
 
     return cached_program_t{
-        std::move(program), {reader_kernel_id, writer_kernel_id, /*compute_kernel_id=*/0, std::move(all_cores_vec)}};
+        std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id, std::move(all_cores_vec)}};
 }
 
 void PerTokenCastToFp8ProgramFactory::override_runtime_arguments(

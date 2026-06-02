@@ -15,6 +15,10 @@ namespace ttnn::operations::experimental::deepseek_prefill::fp8_quant_common {
 inline constexpr uint32_t SCALE_GROUP_SIZE = 128;
 inline constexpr uint32_t SCALE_GROUP_TILES = 4;  // SCALE_GROUP_SIZE / TILE_WIDTH (=32)
 inline constexpr float E4M3_MAX_NORMAL = 448.0f;
+inline constexpr float SCALE_CLAMP_MIN = 1.0e-4f;  // DeepEP clamps amax to >= 1e-4 before /448
+// The LLK kernels process the width in fixed 1024-element column-blocks (32 tiles); H must be a
+// multiple of this. Covers the DeepSeek prefill hidden dim (7168 = 7 * 1024).
+inline constexpr uint32_t COL_BLOCK_ELEMS = 1024;
 
 inline std::tuple<uint32_t, uint32_t> infer_M_H(const ttnn::Shape& shape) {
     const auto rank = shape.size();

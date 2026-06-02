@@ -2,73 +2,110 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// per_token_cast_back, step 2 (grouped scale): out = decode(e4m3) * scale, where scale is one fp32
+// scalar per token (row) per group of SCALE_GROUP_SIZE=128 width elements. A 128-element group spans
+// 4 consecutive 32x32 tiles; within any tile the scale is a per-row scalar (constant across columns),
+// so we broadcast it with mul_tiles_bcast_cols (BroadcastType::COL = filled column 0, per notes §6).
+//
+// The reader builds, per group g, one bcast operand tile in cb_scale_bcast with column 0 =
+// scale[:, group_g] (face-aware). There is no in-kernel column-shift LLK on Blackhole (notes §6), so
+// the per-group column selection lives in the reader's data layout, not a shift here.
+//
+// Per (tile-row, column-block) = 32 tokens x 1024 width = 32 tiles = 8 groups of 4 tiles:
+//   Phase 1 : e4m3 RM -> fp32 RM            (copy_tile, index 0)
+//   Phase 2a: tilize fp32 RM input -> tile  (cb_in_tile)
+//   Phase 2c: for each group g, for its 4 tiles: cb_out_tile = cb_in_tile * bcast(scale_g)
+//   Phase 3 : untilize cb_out_tile -> fp32 RM output
+
 #include <cstdint>
 
-#include "api/compute/compute_kernel_api.h"
-#include "api/compute/cb_api.h"
+#include "api/compute/common.h"
+#include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "api/compute/untilize.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "tt-metalium/constants.hpp"
-
-// Compute kernel for per_token_cast_back.
-// For each tile-row (32 sticks of H elements):
-//   Phase 1: tilize_block(cb_in_fp8, H_tiles, cb_fp8_tile)
-//       -- fp8 ROW_MAJOR -> fp8 TILE (no dtype conversion, just layout)
-//   Phase 2: copy_tile + pack_tile  (per tile)
-//       -- fp8 TILE -> DST (unpacker fp8 -> bf16/fp32 at L1 boundary)
-//       -- DST -> cb_out_tile (bf16/fp32 TILE; packer just writes)
-//   Phase 3: untilize_block(cb_out_tile, H_tiles, cb_out_rm)
-//       -- bf16/fp32 TILE -> bf16/fp32 ROW_MAJOR
-//
-// v0 ignores the scale tensor (assumes scale == 1.0).
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/bcast.h"
 
 void kernel_main() {
-    constexpr uint32_t cb_in_fp8 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_fp8_tile = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_out_tile = get_compile_time_arg_val(2);
-    constexpr uint32_t cb_out_rm = get_compile_time_arg_val(3);
-    constexpr uint32_t H_tiles = get_compile_time_arg_val(4);
-
-    constexpr uint32_t TILE_HEIGHT = tt::constants::TILE_HEIGHT;
+    constexpr uint32_t cb_e4m3 = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_in_rm = get_compile_time_arg_val(1);
+    constexpr uint32_t cb_in_tile = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_scale_bcast = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_out_tile = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_out_fp32 = get_compile_time_arg_val(5);
+    constexpr uint32_t TILE_HEIGHT = 32;
+    constexpr uint32_t COL_BLOCK_TILES = 32;                                  // 32 tiles = 1024 cols per column-block
+    constexpr uint32_t TILES_PER_GROUP = 4;                                   // 128 / 32
+    constexpr uint32_t GROUPS_PER_BLOCK = COL_BLOCK_TILES / TILES_PER_GROUP;  // 8
 
     uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
+    uint32_t num_col_blocks = get_arg_val<uint32_t>(1);
 
-    compute_kernel_hw_startup(cb_in_fp8, cb_out_rm);
+    compute_kernel_hw_startup(cb_e4m3, cb_out_fp32);
 
-    for (uint32_t row = 0; row < num_tile_rows; ++row) {
-        // Phase 1: fp8 RM -> fp8 TILE (no dtype change).
-        tilize_init(cb_in_fp8, H_tiles, cb_fp8_tile);
-        cb_wait_front(cb_in_fp8, TILE_HEIGHT);
-        cb_reserve_back(cb_fp8_tile, H_tiles);
-        tilize_block(cb_in_fp8, H_tiles, cb_fp8_tile);
-        cb_push_back(cb_fp8_tile, H_tiles);
-        cb_pop_front(cb_in_fp8, TILE_HEIGHT);
-        tilize_uninit(cb_in_fp8, cb_fp8_tile);
+    for (uint32_t tr = 0; tr < num_tile_rows; ++tr) {
+        for (uint32_t c = 0; c < num_col_blocks; ++c) {
+            // ----- Phase 1: e4m3 row-major -> fp32 row-major (one tile at a time, index 0) -----
+            reconfig_data_format_srca(cb_e4m3);
+            pack_reconfig_data_format(cb_in_rm);
+            copy_tile_init(cb_e4m3);
+            for (uint32_t s = 0; s < TILE_HEIGHT; ++s) {
+                cb_wait_front(cb_e4m3, 1);
+                cb_reserve_back(cb_in_rm, 1);
+                tile_regs_acquire();
+                copy_tile(cb_e4m3, 0, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb_in_rm);
+                tile_regs_release();
+                cb_push_back(cb_in_rm, 1);
+                cb_pop_front(cb_e4m3, 1);
+            }
 
-        // Phase 2: fp8 TILE -> bf16/fp32 TILE via copy_tile + pack_tile.
-        // Unpacker reads fp8 from cb_fp8_tile and converts to SrcA -> DST (cb_out_tile's dtype).
-        // Packer writes DST -> cb_out_tile (same dtype, no conversion).
-        copy_tile_init(cb_fp8_tile);
-        cb_wait_front(cb_fp8_tile, H_tiles);
-        cb_reserve_back(cb_out_tile, H_tiles);
-        for (uint32_t t = 0; t < H_tiles; ++t) {
-            acquire_dst();
-            copy_tile(cb_fp8_tile, t, 0);
-            pack_tile(0, cb_out_tile);
-            release_dst();
+            // ----- Phase 2a: tilize fp32 input row-major -> tile -----
+            reconfig_data_format_srca(cb_in_rm);
+            pack_reconfig_data_format(cb_in_tile);
+            tilize_init(cb_in_rm, COL_BLOCK_TILES, cb_in_tile);
+            cb_wait_front(cb_in_rm, COL_BLOCK_TILES);
+            cb_reserve_back(cb_in_tile, COL_BLOCK_TILES);
+            tilize_block(cb_in_rm, COL_BLOCK_TILES, cb_in_tile);
+            cb_push_back(cb_in_tile, COL_BLOCK_TILES);
+            cb_pop_front(cb_in_rm, COL_BLOCK_TILES);
+            tilize_uninit(cb_in_rm, cb_in_tile);
+
+            // ----- Phase 2c: per-group broadcast multiply -----
+            // cb_scale_bcast holds GROUPS_PER_BLOCK tiles; tile g has column 0 = scale[:, group g].
+            reconfig_data_format(cb_in_tile, cb_scale_bcast);
+            pack_reconfig_data_format(cb_out_tile);
+            mul_bcast_cols_init_short(cb_in_tile, cb_scale_bcast);
+            cb_wait_front(cb_in_tile, COL_BLOCK_TILES);
+            cb_wait_front(cb_scale_bcast, GROUPS_PER_BLOCK);
+            cb_reserve_back(cb_out_tile, COL_BLOCK_TILES);
+            for (uint32_t g = 0; g < GROUPS_PER_BLOCK; ++g) {
+                for (uint32_t k = 0; k < TILES_PER_GROUP; ++k) {
+                    uint32_t in_idx = g * TILES_PER_GROUP + k;
+                    tile_regs_acquire();
+                    mul_tiles_bcast_cols(cb_in_tile, cb_scale_bcast, in_idx, g, 0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile(0, cb_out_tile);
+                    tile_regs_release();
+                }
+            }
+            cb_push_back(cb_out_tile, COL_BLOCK_TILES);
+            cb_pop_front(cb_in_tile, COL_BLOCK_TILES);
+            cb_pop_front(cb_scale_bcast, GROUPS_PER_BLOCK);
+
+            // ----- Phase 3: untilize cb_out_tile -> fp32 row-major output -----
+            reconfig_data_format_srca(cb_out_tile);
+            pack_reconfig_data_format(cb_out_fp32);
+            untilize_init(cb_out_tile);
+            cb_wait_front(cb_out_tile, COL_BLOCK_TILES);
+            cb_reserve_back(cb_out_fp32, COL_BLOCK_TILES);
+            untilize_block(cb_out_tile, COL_BLOCK_TILES, cb_out_fp32);
+            cb_push_back(cb_out_fp32, COL_BLOCK_TILES);
+            cb_pop_front(cb_out_tile, COL_BLOCK_TILES);
+            untilize_uninit(cb_out_tile);
         }
-        cb_push_back(cb_out_tile, H_tiles);
-        cb_pop_front(cb_fp8_tile, H_tiles);
-
-        // Phase 3: bf16/fp32 TILE -> bf16/fp32 RM.
-        untilize_init(cb_out_tile);
-        cb_wait_front(cb_out_tile, H_tiles);
-        cb_reserve_back(cb_out_rm, TILE_HEIGHT);
-        untilize_block(cb_out_tile, H_tiles, cb_out_rm);
-        cb_push_back(cb_out_rm, TILE_HEIGHT);
-        cb_pop_front(cb_out_tile, H_tiles);
-        untilize_uninit(cb_out_tile);
     }
 }

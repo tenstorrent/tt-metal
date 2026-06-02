@@ -4,6 +4,8 @@
 
 #include "per_token_cast_back_device_operation.hpp"
 
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/common/fp8_quant_common.hpp"
 
@@ -57,6 +59,18 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
         H,
         H_scale,
         common::SCALE_GROUP_SIZE);
+    TT_FATAL(
+        H % common::COL_BLOCK_ELEMS == 0,
+        "per_token_cast_back: e4m3 last dim ({}) must be a multiple of {} (LLK column-block width)",
+        H,
+        common::COL_BLOCK_ELEMS);
+
+    auto [M, _H] = common::infer_M_H(e4m3_shape);
+    TT_FATAL(
+        M % tt::constants::TILE_HEIGHT == 0,
+        "per_token_cast_back: row count M={} must be a multiple of TILE_HEIGHT={}",
+        M,
+        tt::constants::TILE_HEIGHT);
 }
 
 void PerTokenCastBackDeviceOperation::validate_on_program_cache_hit(

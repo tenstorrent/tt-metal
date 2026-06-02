@@ -4,6 +4,8 @@
 
 #include "per_token_cast_to_fp8_device_operation.hpp"
 
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/common/fp8_quant_common.hpp"
 
@@ -32,10 +34,15 @@ void PerTokenCastToFp8DeviceOperation::validate_on_program_cache_miss(
 
     auto [M, H] = common::infer_M_H(shape);
     TT_FATAL(
-        H % common::SCALE_GROUP_SIZE == 0,
-        "per_token_cast_to_fp8: hidden dim H={} must be a multiple of SCALE_GROUP_SIZE={}",
+        H % common::COL_BLOCK_ELEMS == 0,
+        "per_token_cast_to_fp8: hidden dim H={} must be a multiple of {} (LLK column-block width)",
         H,
-        common::SCALE_GROUP_SIZE);
+        common::COL_BLOCK_ELEMS);
+    TT_FATAL(
+        M % tt::constants::TILE_HEIGHT == 0,
+        "per_token_cast_to_fp8: row count M={} must be a multiple of TILE_HEIGHT={}",
+        M,
+        tt::constants::TILE_HEIGHT);
     TT_FATAL(M > 0, "per_token_cast_to_fp8: M must be > 0");
 }
 

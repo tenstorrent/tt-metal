@@ -2,153 +2,81 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Writer for per_token_cast_to_fp8 (step 4: real scale). Writes the e4m3 output column-block-major,
+// and builds the fp32 scale output [H, W/128] by extracting column 0 of the compute's per-chunk
+// scale tiles (cb_scale_tiles: GROUPS_PER_BLOCK tiles per col-block, tile g col 0 = scale[:, c*G+g]).
+//
+// The extracted per-row scales are accumulated (across all col-blocks of a tile-row) into a
+// page-strided scratch, then written as full scale rows (page-aligned source -> aligned DRAM page)
+// to satisfy NOC alignment (scale pages are round_up(W/128*4, 64); see notes §6).
+
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
 
-// Writer for per_token_cast_to_fp8 (v0).
-// Reads bf16/fp32 sticks from cb_in_rm, converts to fp8 row-major in software, and writes to DRAM.
-// Also writes 1.0f constants to the scale tensor for every stick.
-//
-// Conversion is done in this kernel (RISC-V software) rather than via the compute kernel because
-// the tilize -> pack_untilize LLK path on Blackhole produced wrong values when chained for our
-// row-major-to-row-major + bf16->fp8 use case (the unpacker/packer state coordination between
-// tilize and pack_untilize in a single compute kernel did not produce a correct round-trip).
-//
-// FP8 E4M3 conversion: round-to-nearest-even with clipping to ±448 (max normal); denormals on the
-// destination side are produced when the source is in the e4m3 subnormal range.
-
-inline uint8_t bf16_to_fp8(uint16_t bf16) {
-    uint16_t sign = bf16 >> 15;
-    int32_t bf16_exp = (bf16 >> 7) & 0xFF;
-    uint16_t bf16_mant_high = (bf16 >> 4) & 0x7;
-    uint16_t bf16_round_bit = (bf16 >> 3) & 0x1;
-    uint16_t bf16_sticky = (bf16 & 0x7);
-
-    if (bf16_exp == 0) {
-        return (uint8_t)(sign << 7);
-    }
-    if (bf16_exp == 0xFF) {
-        return (uint8_t)(0x7E | (sign << 7));
-    }
-
-    int32_t fp8_exp = bf16_exp - 120;
-
-    if (fp8_exp >= 15) {
-        return (uint8_t)(0x7E | (sign << 7));
-    }
-    if (fp8_exp <= 0) {
-        int32_t shift = 1 - fp8_exp;
-        if (shift > 4) {
-            return (uint8_t)(sign << 7);
-        }
-        uint32_t implicit_one_and_mant = (1u << 3) | bf16_mant_high;
-        uint32_t pre_round = implicit_one_and_mant >> (shift - 1);
-        uint8_t m = (uint8_t)((pre_round >> 1) & 0x7);
-        uint8_t round_bit = (uint8_t)(pre_round & 1);
-        uint32_t shifted_out_mask = (1u << (shift - 1)) - 1;
-        uint8_t sticky = ((implicit_one_and_mant & shifted_out_mask) != 0 || bf16_round_bit || bf16_sticky) ? 1 : 0;
-        uint8_t lsb = m & 1;
-        if (round_bit && (sticky || lsb)) {
-            m++;
-            if (m == 8) {
-                return (uint8_t)((sign << 7) | (1 << 3));
-            }
-        }
-        if (m == 0) {
-            return (uint8_t)(sign << 7);
-        }
-        return (uint8_t)((sign << 7) | m);
-    }
-
-    uint8_t m = (uint8_t)bf16_mant_high;
-    uint8_t round_bit = (uint8_t)bf16_round_bit;
-    uint8_t sticky = (bf16_sticky != 0) ? 1 : 0;
-    uint8_t lsb = m & 1;
-    if (round_bit && (sticky || lsb)) {
-        m++;
-        if (m == 8) {
-            m = 0;
-            fp8_exp++;
-            if (fp8_exp >= 15) {
-                return (uint8_t)(0x7E | (sign << 7));
-            }
-        }
-    }
-    if (fp8_exp == 15 && m == 7) {
-        m = 6;
-    }
-    return (uint8_t)((sign << 7) | ((uint8_t)fp8_exp << 3) | m);
-}
-
-inline uint8_t fp32_to_fp8(uint32_t fp32) {
-    uint16_t bf16 = (uint16_t)((fp32 + ((fp32 >> 16) & 1) + 0x7FFF) >> 16);
-    return bf16_to_fp8(bf16);
-}
-
 void kernel_main() {
-    uint32_t dst_e4m3_addr = get_arg_val<uint32_t>(0);
-    uint32_t dst_scale_addr = get_arg_val<uint32_t>(1);
-    uint32_t start_tile_row = get_arg_val<uint32_t>(2);
-    uint32_t num_tile_rows = get_arg_val<uint32_t>(3);
+    uint32_t e4m3_addr = get_arg_val<uint32_t>(0);
+    uint32_t scale_addr = get_arg_val<uint32_t>(1);
+    uint32_t num_tile_rows = get_arg_val<uint32_t>(2);
+    uint32_t num_col_blocks = get_arg_val<uint32_t>(3);
+    uint32_t start_tile_row = get_arg_val<uint32_t>(4);
 
-    constexpr uint32_t cb_in_rm = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_scratch_fp8 = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_scale_const = get_compile_time_arg_val(2);
-    constexpr uint32_t in_element_size = get_compile_time_arg_val(3);
-    constexpr uint32_t in_stick_size_bytes = get_compile_time_arg_val(4);
-    constexpr uint32_t e4m3_stick_size_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t scale_write_size_bytes = get_compile_time_arg_val(6);
-    constexpr uint32_t is_fp32 = get_compile_time_arg_val(7);
-    constexpr uint32_t H = get_compile_time_arg_val(8);
+    constexpr uint32_t cb_e4m3 = get_compile_time_arg_val(0);
+    constexpr uint32_t e4m3_col_block_bytes = get_compile_time_arg_val(1);  // 1024
+    constexpr uint32_t cb_scale_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t cb_scale_scratch = get_compile_time_arg_val(3);
+    constexpr uint32_t scale_groups = get_compile_time_arg_val(4);              // W / 128
+    constexpr uint32_t scale_aligned_page_bytes = get_compile_time_arg_val(5);  // per-row scratch stride
     constexpr uint32_t TILE_HEIGHT = 32;
-    constexpr auto e4m3_args = TensorAccessorArgs<9>();
+    constexpr uint32_t GROUPS_PER_BLOCK = 8;       // 1024 / 128
+    constexpr uint32_t FACE_FP32 = 16 * 16;        // fp32 per face
+    constexpr uint32_t TILE_FP32 = 4 * FACE_FP32;  // 1024 fp32 per tile
+    constexpr uint32_t scale_row_bytes = scale_groups * 4;
+    constexpr uint32_t scale_aligned_u32 = scale_aligned_page_bytes / 4;
+
+    constexpr auto e4m3_args = TensorAccessorArgs<6>();
     constexpr auto scale_args = TensorAccessorArgs<e4m3_args.next_compile_time_args_offset()>();
+    const auto e4m3 = TensorAccessor(e4m3_args, e4m3_addr);
+    const auto scale = TensorAccessor(scale_args, scale_addr);
 
-    const auto e4m3_dst = TensorAccessor(e4m3_args, dst_e4m3_addr);
-    const auto scale_dst = TensorAccessor(scale_args, dst_scale_addr);
+    uint32_t scratch = get_write_ptr(cb_scale_scratch);
+    volatile tt_l1_ptr uint32_t* scratch_u32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
 
-    constexpr uint32_t ONE_F32_BITS = 0x3f800000u;
-    constexpr uint32_t scale_write_elements = scale_write_size_bytes / 4;
-    const uint32_t scale_const_l1 = get_write_ptr(cb_scale_const);
-    {
-        volatile tt_l1_ptr uint32_t* scale_buf = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scale_const_l1);
-        for (uint32_t i = 0; i < scale_write_elements; ++i) {
-            scale_buf[i] = ONE_F32_BITS;
-        }
-    }
-
-    const uint32_t fp8_scratch_l1 = get_write_ptr(cb_scratch_fp8);
-
-    for (uint32_t row = 0; row < num_tile_rows; ++row) {
-        cb_wait_front(cb_in_rm, TILE_HEIGHT);
-        const uint32_t in_l1 = get_read_ptr(cb_in_rm);
-
-        if constexpr (is_fp32) {
-            const volatile tt_l1_ptr uint32_t* in_ptr = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(in_l1);
-            volatile tt_l1_ptr uint8_t* out_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(fp8_scratch_l1);
-            for (uint32_t i = 0; i < TILE_HEIGHT * H; ++i) {
-                out_ptr[i] = fp32_to_fp8(in_ptr[i]);
+    for (uint32_t tr = 0; tr < num_tile_rows; ++tr) {
+        for (uint32_t c = 0; c < num_col_blocks; ++c) {
+            // e4m3 output
+            cb_wait_front(cb_e4m3, TILE_HEIGHT);
+            uint32_t l1 = get_read_ptr(cb_e4m3);
+            uint32_t col_offset_bytes = c * e4m3_col_block_bytes;
+            for (uint32_t s = 0; s < TILE_HEIGHT; ++s) {
+                uint32_t page_id = (start_tile_row + tr) * TILE_HEIGHT + s;
+                noc_async_write(l1, e4m3.get_noc_addr(page_id) + col_offset_bytes, e4m3_col_block_bytes);
+                l1 += e4m3_col_block_bytes;
             }
-        } else {
-            const volatile tt_l1_ptr uint16_t* in_ptr = reinterpret_cast<const volatile tt_l1_ptr uint16_t*>(in_l1);
-            volatile tt_l1_ptr uint8_t* out_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(fp8_scratch_l1);
-            for (uint32_t i = 0; i < TILE_HEIGHT * H; ++i) {
-                out_ptr[i] = bf16_to_fp8(in_ptr[i]);
+            noc_async_write_barrier();
+            cb_pop_front(cb_e4m3, TILE_HEIGHT);
+
+            // extract column 0 of the 8 scale tiles into the per-row scratch
+            cb_wait_front(cb_scale_tiles, GROUPS_PER_BLOCK);
+            volatile tt_l1_ptr uint32_t* tiles =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_scale_tiles));
+            for (uint32_t g = 0; g < GROUPS_PER_BLOCK; ++g) {
+                uint32_t tile_base = g * TILE_FP32;
+                uint32_t global_group = c * GROUPS_PER_BLOCK + g;
+                for (uint32_t s = 0; s < TILE_HEIGHT; ++s) {
+                    // tile column 0 of row s: rows 0-15 in face 0, rows 16-31 in face 2.
+                    uint32_t col0_idx = (s < 16) ? (s * 16) : (2 * FACE_FP32 + (s - 16) * 16);
+                    scratch_u32[s * scale_aligned_u32 + global_group] = tiles[tile_base + col0_idx];
+                }
             }
+            cb_pop_front(cb_scale_tiles, GROUPS_PER_BLOCK);
         }
 
+        // write this tile-row's 32 scale rows (full row, aligned)
         for (uint32_t s = 0; s < TILE_HEIGHT; ++s) {
-            uint32_t stick_id = (start_tile_row + row) * TILE_HEIGHT + s;
-            noc_async_write(
-                fp8_scratch_l1 + s * e4m3_stick_size_bytes, e4m3_dst.get_noc_addr(stick_id), e4m3_stick_size_bytes);
+            uint32_t page_id = (start_tile_row + tr) * TILE_HEIGHT + s;
+            noc_async_write(scratch + s * scale_aligned_page_bytes, scale.get_noc_addr(page_id), scale_row_bytes);
         }
-        for (uint32_t s = 0; s < TILE_HEIGHT; ++s) {
-            uint32_t stick_id = (start_tile_row + row) * TILE_HEIGHT + s;
-            noc_async_write(scale_const_l1, scale_dst.get_noc_addr(stick_id), scale_write_size_bytes);
-        }
-
         noc_async_write_barrier();
-        cb_pop_front(cb_in_rm, TILE_HEIGHT);
     }
 }
