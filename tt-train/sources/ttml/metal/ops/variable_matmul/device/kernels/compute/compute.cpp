@@ -29,18 +29,7 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_
     }
 }
 
-// Transpose every tile of a block from src_cb into dst_cb. Modeled after ttnn::matmul's
-// transpose_tile_block in bmm_large_block_zm_fused_bias_activation.cpp. Streams the
-// src CB in chunks of ChunkSize tiles (default 4 = FP32-dest cap), calling
-// wait_front/pop_front per chunk so the matmul consumer of dst_cb can start reading as
-// soon as the first chunk is packed — overlapping transpose with subsequent state
-// reconfig and matmul tile fetches.
-//
-// IMPORTANT: forces the L1 packer accumulator OFF for the transpose packs, otherwise
-// the outer matmul loop's `llk_pack_reconfig_l1_acc(1)` (enabled after k=0 so matmul
-// accumulates into intermediate_cb) would also affect these packs and the transposed
-// tiles would accumulate in dst_cb across K-iterations, corrupting in0_transposed_cb.
-// Caller is responsible for restoring the accumulator state afterwards.
+// Transpose every tile of a block from src_cb into dst_cb.
 template <uint32_t NumTiles, uint32_t ChunkSize = 4>
 inline void transpose_in0_block_streamed(uint32_t src_cb, uint32_t dst_cb) {
     constexpr uint32_t kFullChunks = NumTiles / ChunkSize;
@@ -84,7 +73,6 @@ inline void transpose_in0_block_streamed(uint32_t src_cb, uint32_t dst_cb) {
     }
 }
 
-// Slightly modified from compute_common.hpp
 void matmul_blocks(
     const uint32_t in0_cb,
     const uint32_t in1_cb,
@@ -144,9 +132,11 @@ void matmul_blocks(
 }
 
 // Write zero tiles to `out_cb` for a single M×N output block. Used in the K=0 path
-// (empty K-axis OffsetsRole expert): without this the M×N pack would copy uninitialized
-// DST → garbage gradients added to weights downstream. fill_tile is an SFPU op that
-// writes the param0 value to every element of a DST tile.
+// (empty K-axis OffsetsRole expert): gradient wrt. weights is created even if
+// no tokens were routed to an expert.
+// In that case, no matmul is performed, but the gradient should naturally be zero.
+// Without this the M×N pack would copy uninitialized DST →
+// garbage gradients added to weights downstream.
 void zero_blocks(
     const uint32_t out_cb,
     const uint32_t M_block_tiles,
