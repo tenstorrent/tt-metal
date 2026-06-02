@@ -154,18 +154,22 @@ inline bool is_gen1_arch() {
 }
 
 // Resolve the effective Gen1 hardware knobs (processor, NOC, NOC mode) for a DM kernel.
-// When the user supplies a READER/WRITER role hint, the runtime fills in the conventional
-// triple, mirroring the legacy ReaderDataMovementConfig / WriterDataMovementConfig
-// convention (see kernel_types.cpp):
+// An explicit gen1_config takes precedence; the role hint is informational when one is set.
+// Otherwise, a READER/WRITER role fills in the conventional triple, mirroring the legacy
+// ReaderDataMovementConfig / WriterDataMovementConfig convention (see kernel_types.cpp):
 //   READER -> NCRISC (RISCV_1) on NOC_0
 //   WRITER -> BRISC  (RISCV_0) on NOC_1
-// NOC mode is always DM_DEDICATED_NOC; DM_DYNAMIC_NOC is a power-user knob reached only
-// via RoleHint::UNSPECIFIED + an explicit gen1_config, which is returned verbatim.
+// NOC mode is always DM_DEDICATED_NOC; DM_DYNAMIC_NOC is a power-user knob reached via an
+// explicit gen1_config.
 //
-// Precondition (guaranteed by validation on Gen1): exactly one of {a READER/WRITER role,
+// Precondition (guaranteed by validation on Gen1): at least one of {a READER/WRITER role,
 // an explicit gen1_config} is present.
 DataMovementHardwareConfig::Gen1Config ResolveGen1Config(const DataMovementHardwareConfig& dm_config) {
     using Gen1Config = DataMovementHardwareConfig::Gen1Config;
+    // Explicit config wins; the role hint is informational when a gen1_config is supplied.
+    if (dm_config.gen1_config.has_value()) {
+        return dm_config.gen1_config.value();
+    }
     switch (dm_config.role) {
         case DataMovementRoleHint::READER:
             return Gen1Config{
@@ -173,9 +177,10 @@ DataMovementHardwareConfig::Gen1Config ResolveGen1Config(const DataMovementHardw
         case DataMovementRoleHint::WRITER:
             return Gen1Config{
                 .processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_1, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};
-        case DataMovementRoleHint::UNSPECIFIED: return dm_config.gen1_config.value();
+        case DataMovementRoleHint::UNSPECIFIED:
+            break;  // no gen1_config and no role hint — validation rejects this on Gen1
     }
-    TT_THROW("Unhandled RoleHint in ResolveGen1Config");
+    TT_THROW("ResolveGen1Config: Gen1 DM kernel has neither an explicit gen1_config nor a role hint");
 }
 
 NodeRangeSet to_node_range_set(const Nodes& nodes) {
@@ -696,20 +701,11 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         if (kernel.is_data_movement_kernel()) {
             const auto& data_movement_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
 
-            // A role hint and an explicit Gen1 config are mutually exclusive: a READER/WRITER
-            // hint already fills in the Gen1 config, so also supplying one is contradictory.
-            TT_FATAL(
-                data_movement_config.role == DataMovementRoleHint::UNSPECIFIED ||
-                    !data_movement_config.gen1_config.has_value(),
-                "KernelSpec '{}' sets both a READER/WRITER role hint and an explicit Gen1 config. "
-                "A role hint fills the Gen1 config for you; either drop the explicit config, or use "
-                "RoleHint::UNSPECIFIED to take manual control.",
-                kernel.unique_id);
-
             // On Gen1 (WH/BH), the kernel must declare its placement: either a READER/WRITER role
-            // hint (the runtime fills in processor/NOC/NOC-mode), or an explicit Gen1 config. There
-            // is no safe default for reader-vs-writer — it is op-specific. Gen2 is fully optional:
-            // absence is treated as "use defaults" (empty disable_implicit_sync_for).
+            // hint (the runtime fills in processor/NOC/NOC-mode), or an explicit Gen1 config (which
+            // takes precedence — the role hint is then informational). There is no safe default for
+            // reader-vs-writer — it is op-specific. Gen2 is fully optional: absence is treated as
+            // "use defaults" (empty disable_implicit_sync_for).
             if (is_gen1_arch()) {
                 TT_FATAL(
                     data_movement_config.role != DataMovementRoleHint::UNSPECIFIED ||
