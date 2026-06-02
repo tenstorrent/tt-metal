@@ -1432,15 +1432,6 @@ class TestConfig:
             else timeout
         )
 
-        # On silicon every xdist worker shares one host<->device link, so a
-        # sleepless poll lets waiting workers saturate that link and starve the
-        # workers doing real work (this is what makes -n 4/8 consumer runs slower
-        # than -n 1). Back off between passes to free the channel. Skip on the
-        # simulator: there each read advances the sim clock, so the poll loop is
-        # what drives the kernel forward and sleeping would only waste wall time.
-        on_silicon = not TestConfig.TEST_TARGET.run_simulator
-        backoff = 0.0
-
         completed = set()
         end_time = time.time() + timeout
         while time.time() < end_time:
@@ -1456,13 +1447,6 @@ class TestConfig:
 
             if completed == mailboxes:
                 return
-
-            if on_silicon:
-                time.sleep(backoff)
-                # 50 us start, doubling, capped at 1 ms: kernels that finish in
-                # the first couple of passes pay ~nothing, while genuinely long
-                # waits stop hammering the shared link.
-                backoff = min(0.001, backoff * 2 or 0.00005)
 
         handle_if_assert_hit(
             self.temp_elfs,

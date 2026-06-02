@@ -51,34 +51,6 @@ KERNEL_COMPLETE = 0xFF
 # Must match BRISC_BOOT_READY_SENTINEL in tests/helpers/src/brisc.cpp.
 BRISC_BOOT_READY_SENTINEL = 0xB001CAFE
 
-# Poll backoff: a sleepless poll lets concurrent xdist workers saturate the
-# single shared host<->device link, which is what makes -n 4/8 consumer runs
-# slower than -n 1. Sleeping between passes frees the channel. Start at 50 us,
-# double each pass, cap at 1 ms (well under any of the poll timeouts). Mirrors
-# TestConfig.wait_for_tensix_operations_finished.
-_POLL_BACKOFF_START = 0.00005  # 50 us
-_POLL_BACKOFF_CAP = 0.001  # 1 ms
-
-
-def _on_silicon() -> bool:
-    # Deferred import: test_config imports this module, so importing it at module
-    # scope would be circular. By call time (during tests) it is fully loaded.
-    from .test_config import TestConfig
-
-    return not TestConfig.TEST_TARGET.run_simulator
-
-
-def _poll_backoff(backoff: float, on_silicon: bool) -> float:
-    """Sleep `backoff` seconds (silicon only), return the next, larger interval.
-
-    Skipped on the simulator: there each read advances the sim clock, so the
-    poll loop is what drives the device forward and sleeping would only waste
-    wall-clock time (and on TTSim, stall progress).
-    """
-    if on_silicon:
-        time.sleep(backoff)
-    return min(_POLL_BACKOFF_CAP, backoff * 2 or _POLL_BACKOFF_START)
-
 
 class BootMode(Enum):
     BRISC = "brisc"
@@ -204,8 +176,6 @@ def commit_tensix_soft_reset(
         "RISCV_DEBUG_REG_SOFT_RESET_0", soft_reset
     )
 
-    on_silicon = _on_silicon()
-    backoff = 0.0
     end_time = time.time() + 0.1  # 100ms
     while time.time() < end_time:
         temp_reg_value = get_register_store(location, device_id).read_register(
@@ -213,7 +183,6 @@ def commit_tensix_soft_reset(
         )
         if temp_reg_value == soft_reset:
             return
-        backoff = _poll_backoff(backoff, on_silicon)
 
     raise TimeoutError(
         f"Polling for committed soft reset value times out | Last read value: {temp_reg_value}"
@@ -234,14 +203,11 @@ def commit_brisc_command(
         write_words_to_device(location, Mailboxes.BriscCommand0.value, [command.value])
 
     common_counter += 1
-    on_silicon = _on_silicon()
-    backoff = 0.0
     end_time = time.time() + timeout
     while time.time() < end_time:
         temp_value = read_word_from_device(location, Mailboxes.BriscCounter.value, 0)
         if temp_value == common_counter:
             return
-        backoff = _poll_backoff(backoff, on_silicon)
 
     logger.error(f"{command.name} -> {hex(Mailboxes.BriscCommand0.value)}")
 
@@ -263,8 +229,6 @@ def wait_brisc_boot_ready(location: str = "0,0", timeout: float = 1.0):
     init sequence to the point where it is safe for the host to write the
     first command.
     """
-    on_silicon = _on_silicon()
-    backoff = 0.0
     end_time = time.time() + timeout
     while time.time() < end_time:
         if (
@@ -272,7 +236,6 @@ def wait_brisc_boot_ready(location: str = "0,0", timeout: float = 1.0):
             == BRISC_BOOT_READY_SENTINEL
         ):
             return
-        backoff = _poll_backoff(backoff, on_silicon)
 
     last_value = read_word_from_device(location, Mailboxes.BriscCounter.value, 0)
     soft_reset = get_register_store(location, 0).read_register(

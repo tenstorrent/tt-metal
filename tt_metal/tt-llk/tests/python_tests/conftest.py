@@ -100,7 +100,7 @@ def init_llk_home():
 init_llk_home()
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture()
 def regenerate_cpp(request):
     return not request.config.getoption("--skip-codegen")
 
