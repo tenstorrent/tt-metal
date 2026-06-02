@@ -78,7 +78,9 @@ void kernel_main() {
     constexpr uint32_t total_mask_tiles =
         1 + (diag_tile_enabled ? 1 : 0) + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
 
-    constexpr uint32_t q_start_idx_t = chunked_enabled ? (kv_local_padded_Nt - q_local_padded_Nt) * ring_size : 0;
+    // Chunked prefill masks against absolute Q/K coordinates. Use logical_nt as the populated
+    // cache boundary instead of deriving the Q start from the physical K cache extent.
+    constexpr uint32_t q_start_idx_t = chunked_enabled ? logical_nt - q_local_padded_Nt * ring_size : 0;
 
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
