@@ -2533,6 +2533,116 @@ def _run_and_log_chain_divergence(model_id: str, *, demo_dir: Optional[Path] = N
     _persist_chain_divergence(result, demo_dir=demo_dir)
 
 
+def _resolve_model_type(model_id: str) -> str:
+    """Best-effort: extract HF ``model_type`` for the family registry
+    key. Returns empty string on any failure (caller treats missing
+    family-key as "skip template lookup").
+
+    Reads :func:`probe.probe_model` cached config to avoid extra HF
+    network calls; falls back to ``AutoConfig.from_pretrained`` if the
+    probe never ran for this model.
+    """
+    try:
+        from .probe import probe_model
+
+        probe = probe_model(model_id)
+        mt = getattr(probe, "model_type", None) or ""
+        if isinstance(mt, str) and mt:
+            return mt
+    except Exception:
+        pass
+    try:
+        from transformers import AutoConfig
+
+        cfg = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+        return str(getattr(cfg, "model_type", "")) or ""
+    except Exception:
+        return ""
+
+
+def _list_graduated_components_for_orchestrator(demo_dir: Path) -> List[Dict[str, Any]]:
+    """Read bringup_status.json and render a list of graduated
+    component specs the orchestrator's synthesis prompt can consume.
+
+    Returns [] on any error (missing manifest, malformed JSON). The
+    orchestrator handles empty list gracefully.
+    """
+    if demo_dir is None:
+        return []
+    status_path = demo_dir / "bringup_status.json"
+    if not status_path.is_file():
+        return []
+    try:
+        data = json.loads(status_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    components = data.get("components", [])
+    if not isinstance(components, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for c in components:
+        if not isinstance(c, dict):
+            continue
+        name = c.get("name")
+        if not name:
+            continue
+        out.append(
+            {
+                "name": name,
+                "stub_path": str(c.get("stub_path") or f"_stubs/{name}.py"),
+                "hf_reference": str(c.get("hf_reference") or ""),
+                "class_name": str(c.get("class_name") or ""),
+            }
+        )
+    return out
+
+
+def _maybe_run_e2e_orchestrator(
+    *,
+    model_id: str,
+    demo_dir: Optional[Path],
+    chain_divergence_summary: str = "",
+) -> Optional[Any]:
+    """Conditional entry point for the Step 1->2->3 orchestrator.
+
+    Gated behind ``TT_HW_PLANNER_USE_E2E_ORCHESTRATOR=1`` so the
+    existing cli flow is unchanged by default. When the env var is
+    set, fires :func:`run_e2e_bringup` and returns its
+    ``E2EBringupResult`` for the caller to act on. When unset,
+    returns ``None`` (caller falls through to legacy logic).
+
+    Best-effort: every failure mode (couldn't resolve model_type,
+    couldn't read manifest, orchestrator raised) yields ``None`` so
+    Path A's existing logic runs as a safety net.
+
+    Returns the result so caller can map status → outcome label.
+    """
+    if os.environ.get("TT_HW_PLANNER_USE_E2E_ORCHESTRATOR") != "1":
+        return None
+    if not model_id or demo_dir is None:
+        return None
+    try:
+        from ._cli_helpers.e2e_orchestrator import run_e2e_bringup
+
+        model_type = _resolve_model_type(model_id)
+        components = _list_graduated_components_for_orchestrator(demo_dir)
+        return run_e2e_bringup(
+            model_id=model_id,
+            model_type=model_type,
+            demo_dir=demo_dir,
+            graduated_components=components,
+            chain_divergence_summary=chain_divergence_summary,
+        )
+    except Exception as exc:
+        print(
+            f"  [e2e-orchestrator] gated path failed: " f"{type(exc).__name__}: {exc} — falling through to legacy flow",
+            file=sys.stderr,
+        )
+        return None
+
+
 def _find_demo_dir_safe(model_id: str) -> Optional[Path]:
     """Resolve the demo dir for ``model_id``, returning ``None`` on any
     error.
@@ -9081,6 +9191,43 @@ def _cmd_up_core(args) -> int:
                 "so the user doesn't trust an unrunnable demo."
             )
 
+        # Step 1->2->3 e2e orchestrator (Item 8). Opt-in via
+        # TT_HW_PLANNER_USE_E2E_ORCHESTRATOR=1. When enabled, attempts
+        # template reuse / verify / synthesis BEFORE the legacy strict
+        # gate runs. Result feeds into _path_a_outcome below.
+        _path_a_outcome: Optional[str] = None
+        if _rc_loop == 0:
+            _orch_result = _maybe_run_e2e_orchestrator(
+                model_id=MODEL,
+                demo_dir=_find_demo_dir_safe(MODEL),
+            )
+            if _orch_result is not None:
+                from ._cli_helpers.e2e_orchestrator import (
+                    STATUS_ERROR,
+                    STATUS_SYNTHESIS_CONVERGED,
+                    STATUS_SYNTHESIS_FAILED,
+                    STATUS_TEMPLATE_REUSED,
+                    STATUS_VERIFY_PASSED,
+                )
+
+                print()
+                print("=" * 72)
+                print(f"  [e2e-orchestrator] status={_orch_result.status}")
+                for step in _orch_result.steps:
+                    print(f"    - {step}")
+                if _orch_result.promoted:
+                    print(f"  [e2e-orchestrator] template promoted (family={_orch_result.family_key})")
+                print("=" * 72)
+                # Translate orchestrator status to Path A outcome.
+                if _orch_result.status in (STATUS_TEMPLATE_REUSED, STATUS_VERIFY_PASSED, STATUS_SYNTHESIS_CONVERGED):
+                    pass  # _rc_loop stays 0; legacy gate below will re-verify
+                elif _orch_result.status == STATUS_SYNTHESIS_FAILED:
+                    _rc_loop = _PCC_FAIL_RC
+                    print(f"  [e2e-orchestrator] synthesis failed: {_orch_result.diagnostic}")
+                elif _orch_result.status == STATUS_ERROR:
+                    _path_a_outcome = OUTCOME_UNVERIFIED
+                    print(f"  [e2e-orchestrator] errored: {_orch_result.diagnostic}")
+
         # Gap 4 (2026-06-02 audit): per-component PCC + demo-runnable
         # are necessary but not sufficient. Spec: SUCCESS requires the
         # end-to-end strict PCC gate to also fire AND pass (logit-PCC
@@ -9089,7 +9236,6 @@ def _cmd_up_core(args) -> int:
         # UNVERIFIED — explicitly NOT a SUCCESS, but not a FAIL either.
         # Run prepare --execute to capture demo output, gate it via the
         # shared helper, then route the result into the outcome label.
-        _path_a_outcome: Optional[str] = None
         if _rc_loop == 0 and getattr(args, "auto", False) and getattr(args, "strict_pcc", True):
             try:
                 _path_a_prepare_argv = argparse.Namespace(
