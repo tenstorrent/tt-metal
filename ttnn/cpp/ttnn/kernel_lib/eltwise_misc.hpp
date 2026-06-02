@@ -13,6 +13,7 @@
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/eltwise_unary/typecast.h"
 #include "api/compute/mask.h"
+#include "api/compute/copy_dest_values.h"    // CopyDest (DST -> DST)
 #include "api/compute/compute_kernel_api.h"  // sign_tile, abs_tile, square_tile fallbacks
 
 namespace compute_kernel_lib {
@@ -45,6 +46,20 @@ template <Dst Slot = Dst::D0>
 struct Square : UnaryOp<Square<Slot>, Slot> {
     static ALWI void init() { square_tile_init(); }
     static ALWI void exec_impl(uint32_t slot_offset) { square_tile(to_u32(Slot) + slot_offset); }
+};
+
+// CopyDest — copy a tile's values from one DEST slot to another (copy_dest_values).
+// Two slots (In -> Out), no CB. Mirrors the original kernels' un-templated
+// copy_dest_values(in, out) form for bit-exact parity (the build allows the
+// deprecated overload via -Wno-error=deprecated-declarations).
+template <Dst In, Dst Out>
+struct CopyDest : DestOnlyTag {
+    static constexpr uint32_t lane_width = (to_u32(In) > to_u32(Out) ? to_u32(In) : to_u32(Out)) + 1;
+    static ALWI void init() { copy_dest_values_init(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        copy_dest_values(to_u32(In) + slot_offset, to_u32(Out) + slot_offset);
+    }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { exec_impl(slot_offset); }
 };
 
 // Typecast — compile-time in/out dtype encoded as numeric IDs (uint32_t form expected by LLK).
