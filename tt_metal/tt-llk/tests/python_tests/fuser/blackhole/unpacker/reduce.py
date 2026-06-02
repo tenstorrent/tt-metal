@@ -16,6 +16,10 @@ from fuser.fuser_config import GlobalConfig
 class ReduceUnpacker(Unpacker):
     loop: FusedLoop = LoopTileByTile()
 
+    def __init__(self, reduce_dim, reduce_pool):
+        self.reduce_dim = reduce_dim
+        self.reduce_pool = reduce_pool
+
     def get_headers(self) -> List[str]:
         return [
             "llk_unpack_AB.h",
@@ -69,8 +73,8 @@ class ReduceUnpacker(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        reduce_dim = compute_unit.reduce_dim.cpp_enum_value
-        pool_type = compute_unit.reduce_pool.cpp_enum_value
+        reduce_dim = self.reduce_dim.cpp_enum_value
+        pool_type = self.reduce_pool.cpp_enum_value
         enforce_fp32_accumulation = (
             compute_unit.enforce_fp32_accumulation.cpp_enum_value
         )
@@ -94,6 +98,6 @@ class ReduceUnpacker(Unpacker):
     ) -> str:
         buffer_a = compute_unit.src_a.cpp_name
         buffer_b = compute_unit.src_b.cpp_name
-        reduce_dim = compute_unit.reduce_dim.cpp_enum_value
-        pool_type = compute_unit.reduce_pool.cpp_enum_value
+        reduce_dim = self.reduce_dim.cpp_enum_value
+        pool_type = self.reduce_pool.cpp_enum_value
         return f"_llk_unpack_AB_reduce_<{pool_type}, {reduce_dim}>(L1_ADDRESS({buffer_a}[{block.tile_id_global}]), L1_ADDRESS({buffer_b}[{block.tile_id_global}]));\n"

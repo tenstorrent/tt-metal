@@ -10,15 +10,11 @@
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
-// Forward-declare *Name typedefs that AdvancedOptions members reference.
-// (Each is also declared in its owning spec header.)
-using DFBSpecName = std::string;
-
-//------------------------------------------------------------
+// ============================================================================
 // Advanced options for Metal 2.0 specs
-//------------------------------------------------------------
+// ============================================================================
 //
 // Each Metal 2.0 Spec (KernelSpec, DataflowBufferSpec, TensorParameter, ...) may
 // carry a *AdvancedOptions field at the end of its struct.
@@ -34,6 +30,12 @@ using DFBSpecName = std::string;
 //
 // Use the advanced options with caution!
 // The header comments for each field describe special considerations for use.
+//
+// ============================================================================
+
+// Forward-declare *Name typedefs that AdvancedOptions members reference.
+// (Each is also declared in its owning spec header.)
+using DFBSpecName = std::string;
 
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
@@ -77,11 +79,11 @@ struct KernelAdvancedOptions {
     // Runtime varargs
     //--------------------------------
     // Number of runtime varargs for the kernel.
-    // Set the vararg values (per node) via ProgramRunParams.
+    // Set the vararg values (per node) via ProgramRunArgs.
     uint32_t num_runtime_varargs = 0;
 
     // Number of common runtime varargs for the kernel.
-    // Set the vararg values via ProgramRunParams.
+    // Set the vararg values via ProgramRunArgs.
     // (The same argument values are broadcast to every node the kernel runs on.)
     uint32_t num_common_runtime_varargs = 0;
 
@@ -113,19 +115,21 @@ struct KernelAdvancedOptions {
     // Only the INTRA case is currently supported. INTER will trigger a validation error.
     // There are currently no known use cases for an INTER-thread self-loop. This option
     // is present in the API for completeness, to surface any use cases that may arise.
-    struct DFBComputeSelfLoopScope {
+    enum class DFBSelfLoopScope { INTRA, INTER };
+
+    struct DFBSelfLoopConnectivity {
         DFBSpecName dfb_spec_name;
-        enum class Scope { INTRA, INTER };
-        Scope scope = Scope::INTRA;
+        DFBSelfLoopScope scope = DFBSelfLoopScope::INTRA;
         // If the INTER case were enabled, we would need an additional field to describe
         // the inter-thread communication pattern here.
     };
-    // Self-loop DFBs on compute kernels — see DFBComputeSelfLoopScope above.
-    std::vector<DFBComputeSelfLoopScope> dfb_compute_self_loop_scopes;
+    // Self-loop DFBs on compute kernels — see DFBSelfLoopConnectivity above.
+    std::vector<DFBSelfLoopConnectivity> dfb_self_loop_connectivities;
 };
 
-// (Convenience alias for type)
-using DFBComputeSelfLoopScope = KernelAdvancedOptions::DFBComputeSelfLoopScope;
+// (Convenience aliases for nested types)
+using DFBSelfLoopScope = KernelAdvancedOptions::DFBSelfLoopScope;
+using DFBSelfLoopConnectivity = KernelAdvancedOptions::DFBSelfLoopConnectivity;
 
 struct DFBAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
@@ -148,7 +152,7 @@ struct DFBAdvancedOptions {
     std::vector<DFBSpecName> alias_with;
 };
 
-struct AdvancedKernelRunParams {
+struct AdvancedKernelRunArgs {
     ////////////////////////////////////////////////////////////////////////////////
     // Varargs
     ////////////////////////////////////////////////////////////////////////////////
@@ -212,4 +216,4 @@ struct TensorParameterAdvancedOptions {
     bool dynamic_tensor_shape = false;
 };
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental
