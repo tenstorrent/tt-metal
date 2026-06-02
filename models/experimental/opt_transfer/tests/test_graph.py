@@ -146,3 +146,15 @@ def test_repair_sets_diagnosis_and_match_consumes_it():
     assert f.seen_diag[0] is None  # first match: no diagnosis
     assert f.seen_diag[1] is not None  # second match: repair's diagnosis forwarded
     assert f.seen_diag[1]["node"] == "x" and f.seen_diag[1]["axis"] == "per_block_pcc"
+
+
+from langgraph.checkpoint.memory import MemorySaver
+
+
+def test_checkpointer_persists_state_under_thread():
+    f = Fakes(pcc_sequence=[0.999])  # the H2 Fakes (success on first verify)
+    g = build_graph(f, max_iterations=3, checkpointer=MemorySaver())
+    cfg = {"configurable": {"thread_id": "t1"}}
+    g.invoke({"model": "m", "iteration": 0}, cfg)
+    snap = g.get_state(cfg)
+    assert snap.values["status"] == "pass"  # state retrievable from the checkpoint

@@ -178,7 +178,7 @@ class RealImpl:
         return {"naive_ms": naive_ms, "fused_ms": fused_ms}
 
 
-def build_graph(impl, max_iterations: int = None):
+def build_graph(impl, max_iterations: int = None, checkpointer=None):
     """impl provides node callables: trace, match, gate, codegen, verify, repair.
     Kept injectable so the graph is testable without device/API."""
     from models.experimental.opt_transfer.verify import perf_gain_pct, perf_gate_pass
@@ -236,4 +236,4 @@ def build_graph(impl, max_iterations: int = None):
     wf.add_edge("repair", "match")
     wf.add_edge("perf", END)
     wf.add_edge("handoff", END)
-    return wf.compile()
+    return wf.compile(checkpointer=checkpointer)
