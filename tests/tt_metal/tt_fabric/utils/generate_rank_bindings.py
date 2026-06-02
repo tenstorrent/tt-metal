@@ -190,7 +190,6 @@ DEVICES_PER_SLICE = 8
 FABRIC_TEST_SLICE_MAPPINGS = {
     "2x4x4z": {0: [1, 2], 1: [0, 3]},
 }
-
 # CLI choices for --slice-config: single-host plus the quad split layout.
 
 SLICE_CONFIG_CHOICES = ["2x4x4z", "8x4x4z"]
