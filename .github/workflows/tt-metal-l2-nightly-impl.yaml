@@ -112,7 +112,6 @@ jobs:
           retention-days: 1
 
   l2-nightly-tests:
-    # `always() && ...` so HW-only matrices (where fetch-ttsim was skipped) still run.
     needs: [load-test-matrix, fetch-ttsim]
     if: ${{ always() && needs.load-test-matrix.outputs.matrix != '[]' && needs.load-test-matrix.result == 'success' && (needs.fetch-ttsim.result == 'success' || needs.fetch-ttsim.result == 'skipped') }}
     strategy:
@@ -136,11 +135,6 @@ jobs:
         # threaded through container.options below so sim_* SKUs on ubuntu-latest
         # can omit them.
         - ${{ github.workspace }}/docker-job:/work
-      # `--label runner-mode=sim` is a truthy no-op placeholder. It exists so the
-      # `&& '' || …` short-circuit doesn't fire: empty string is falsy in GHA
-      # expressions, which would cause the HW branch to be picked for sim entries
-      # and docker create would then try to mount /dev/tenstorrent on
-      # ubuntu-latest and fail.
       options: >-
         ${{ startsWith(matrix.test-group.sku, 'sim_')
             && '--label runner-mode=sim'
