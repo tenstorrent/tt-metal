@@ -34,6 +34,8 @@ inline void finalize_multitile_pack_tail()
     TTI_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, 0xf, 0, 1, 0, 1);
 }
 
+// Keep the multi-tile path out of line to share this pack sequence across call
+// sites and reduce TRISC code size. The single-tile hot path stays inline.
 static __attribute__((noinline, noclone)) void pack_multitile(const std::uint32_t tile_index, const std::uint32_t address)
 {
     set_dst_write_addr(tile_index);
