@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/operations/experimental/minimal_matmul/device/kernels/matmul_dataflow_common.hpp"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -31,9 +32,8 @@ void kernel_main() {
     // Fill the reduce scaler tile: zero, then 1.0 in row 0 of each face (reduce MAX layout).
     cb_reserve_back(cb_scaler, 1);
     volatile tt_l1_ptr uint32_t* sc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_scaler));
-    for (uint32_t i = 0; i < NUM_FACES * FACE_FP32; ++i) {
-        sc[i] = 0;
-    }
+    fill_zeros_async(get_write_ptr(cb_scaler), get_tile_size(cb_scaler));
+
     for (uint32_t f = 0; f < NUM_FACES; ++f) {
         for (uint32_t j = 0; j < FACE_ROW_FP32; ++j) {
             sc[f * FACE_FP32 + j] = ONE_F32_BITS;

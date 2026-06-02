@@ -38,6 +38,9 @@ void kernel_main() {
     constexpr uint32_t TILES_PER_GROUP = 4;                                   // 128 / 32
     constexpr uint32_t GROUPS_PER_BLOCK = COL_BLOCK_TILES / TILES_PER_GROUP;  // 8
 
+    constexpr uint32_t IDST0 = 0;
+    constexpr uint32_t IDST1 = 1;
+
     uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
     uint32_t num_col_blocks = get_arg_val<uint32_t>(1);
 
@@ -53,10 +56,10 @@ void kernel_main() {
                 cb_wait_front(cb_e4m3, 1);
                 cb_reserve_back(cb_in_rm, 1);
                 tile_regs_acquire();
-                copy_tile(cb_e4m3, 0, 0);
+                copy_tile(cb_e4m3, 0, IDST0);
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(0, cb_in_rm);
+                pack_tile(IDST0, cb_in_rm);
                 tile_regs_release();
                 cb_push_back(cb_in_rm, 1);
                 cb_pop_front(cb_e4m3, 1);
@@ -85,10 +88,10 @@ void kernel_main() {
                 for (uint32_t k = 0; k < TILES_PER_GROUP; ++k) {
                     uint32_t in_idx = g * TILES_PER_GROUP + k;
                     tile_regs_acquire();
-                    mul_tiles_bcast_cols(cb_in_tile, cb_scale_bcast, in_idx, g, 0);
+                    mul_tiles_bcast_cols(cb_in_tile, cb_scale_bcast, in_idx, g, IDST0);
                     tile_regs_commit();
                     tile_regs_wait();
-                    pack_tile(0, cb_out_tile);
+                    pack_tile(IDST0, cb_out_tile);
                     tile_regs_release();
                 }
             }

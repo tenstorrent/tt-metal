@@ -52,6 +52,9 @@ void kernel_main() {
     constexpr uint32_t clamp_max_bits = get_compile_time_arg_val(9);
     constexpr uint32_t inv_448_bits = get_compile_time_arg_val(10);
 
+    constexpr uint32_t IDST0 = 0;
+    constexpr uint32_t IDST1 = 1;
+
     uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
     uint32_t num_col_blocks = get_arg_val<uint32_t>(1);
 
@@ -85,14 +88,14 @@ void kernel_main() {
                 pack_reconfig_data_format(cb_abs);
                 copy_tile_init(cb_tile);
                 cb_reserve_back(cb_abs, TILES_PER_GROUP);
+                abs_tile_init();
                 for (uint32_t k = 0; k < TILES_PER_GROUP; ++k) {
                     tile_regs_acquire();
-                    copy_tile(cb_tile, g * TILES_PER_GROUP + k, 0);
-                    abs_tile_init();
-                    abs_tile(0);
+                    copy_tile(cb_tile, g * TILES_PER_GROUP + k, IDST0);
+                    abs_tile(IDST0);
                     tile_regs_commit();
                     tile_regs_wait();
-                    pack_tile(0, cb_abs);
+                    pack_tile(IDST0, cb_abs);
                     tile_regs_release();
                 }
                 cb_push_back(cb_abs, TILES_PER_GROUP);
@@ -109,22 +112,24 @@ void kernel_main() {
                     reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_abs, cb_scaler, k, 0, k);
                 }
                 reduce_uninit();
+
                 binary_max_tile_init();
-                binary_max_tile(0, 1, 0);
-                binary_max_tile(0, 2, 0);
-                binary_max_tile(0, 3, 0);  // slot 0 = amax
+                for (uint32_t i = 1; i < TILES_PER_GROUP; i++) {
+                    binary_max_tile(IDST0, i, IDST0);  // slot 0 = amax
+                }
+
                 clamp_tile_init();
-                clamp_tile(0, clamp_min_bits, clamp_max_bits);  // slot 0 = clamp(amax)
+                clamp_tile(IDST0, clamp_min_bits, clamp_max_bits);  // slot 0 = clamp(amax)
                 binop_with_scalar_tile_init();
-                mul_unary_tile(0, inv_448_bits);  // slot 0 = scale = clamp(amax)/448
+                mul_unary_tile(IDST0, inv_448_bits);  // slot 0 = scale = clamp(amax)/448
                 copy_dest_values_init();
-                copy_dest_values<DataFormat::Float32>(0, 1);  // slot 1 = scale
+                copy_dest_values<DataFormat::Float32>(IDST0, IDST1);  // slot 1 = scale
                 recip_tile_init();
-                recip_tile(1);  // slot 1 = 1/scale (col 0 valid; other cols = 1/0 = inf, unused by bcast)
+                recip_tile(IDST1);  // slot 1 = 1/scale (col 0 valid; other cols = 1/0 = inf, unused by bcast)
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(0, cb_scale_tiles);      // scale output
-                pack_tile(1, cb_inv_scale_tiles);  // 1/scale for the divide (same fp32 format)
+                pack_tile(IDST0, cb_scale_tiles);      // scale output
+                pack_tile(IDST1, cb_inv_scale_tiles);  // 1/scale for the divide (same fp32 format)
                 tile_regs_release();
                 cb_push_back(cb_scale_tiles, 1);
                 cb_push_back(cb_inv_scale_tiles, 1);
@@ -141,10 +146,10 @@ void kernel_main() {
             for (uint32_t g = 0; g < GROUPS_PER_BLOCK; ++g) {
                 for (uint32_t k = 0; k < TILES_PER_GROUP; ++k) {
                     tile_regs_acquire();
-                    mul_tiles_bcast_cols(cb_tile, cb_inv_scale_tiles, g * TILES_PER_GROUP + k, g, 0);
+                    mul_tiles_bcast_cols(cb_tile, cb_inv_scale_tiles, g * TILES_PER_GROUP + k, g, IDST0);
                     tile_regs_commit();
                     tile_regs_wait();
-                    pack_tile(0, cb_out_tile);
+                    pack_tile(IDST0, cb_out_tile);
                     tile_regs_release();
                 }
             }
