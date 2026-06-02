@@ -366,7 +366,7 @@ jobs:
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
               "mesh-device": "(1, 2)",
-              "tt-config": "{\"register_test_models\": true, \"sample_on_device_mode\": \"all\", \"input_queue_batching_delay\": 0}",
+              "tt-config": "{\"register_test_models\": true, \"input_queue_batching_delay\": 0}",
               "additional-server-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --async-scheduling",
               "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --temperature 0.0",
               "multimodal": false,
