@@ -71,7 +71,6 @@ struct DispatchInputs {
     Tensor weights_tensor;
     Tensor indices_tensor;
     Tensor expert_offsets_tensor;
-    Tensor expert_histograms_tensor;
     Tensor expert_dispatch_table_tensor;
 };
 

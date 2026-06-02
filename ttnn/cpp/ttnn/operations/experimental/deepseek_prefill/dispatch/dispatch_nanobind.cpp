@@ -44,14 +44,10 @@ void bind_dispatch(nb::module_& mod) {
             indices_tensor (ttnn.Tensor): Top-k expert indices for each token.
                 Shape per device: (1, seq_len_per_chip, num_experts_per_tok).
             expert_offsets_tensor (ttnn.Tensor): Starting token index per source device per
-                expert in the destination device's flat dispatch buffer. Consumed by u1
-                (left-to-right, increments).
+                expert in the destination device's flat dispatch buffer. All untilizers share
+                a single offsets[] counter (held on the owner core) and grow page_idx
+                left-to-right under a baton; no per-expert histogram is needed.
                 Shape per device: (1, num_routed_experts).
-            expert_histograms_tensor (ttnn.Tensor): Per-expert token count from this source
-                device. u2 (the right-to-left untilizer) computes its starting (exclusive end)
-                write pointer in L1 as expert_offsets_tensor[e] + expert_histograms_tensor[e],
-                so u1 and u2 grow page_idx from opposite ends of each expert's token range.
-                Shape per device: (1, num_routed_experts) or (num_routed_experts,).
             expert_dispatch_table_tensor (ttnn.Tensor): Maps each expert ID to the destination
                 chip ID within the dispatch group. Values >= 0 are destination chip IDs; -1
                 means the expert is absent from this dispatch group.
@@ -62,8 +58,9 @@ void bind_dispatch(nb::module_& mod) {
             experts_per_chip (int): Number of experts hosted on each destination device.
             num_routed_experts (int): Total number of routed experts across all devices.
             num_experts_per_tok (int): Number of experts each token is routed to (top-k).
-            metadata_len (int): Number of fields per token in the metadata buffer (5:
-                linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight).
+            metadata_len (int): Number of fields per token in the metadata buffer. The
+                kernel writes 5 (linearized_mesh_coord, token_idx, topk_idx, routed_expert,
+                weight); any extra fields are zero-padded.
             max_dispatch_buffer_token_size (int): Total token capacity of the flat dispatch
                 buffer per chip (shared across all local experts via dynamic offsets).
                 Used as the in-kernel bounds check ceiling.
@@ -81,12 +78,10 @@ void bind_dispatch(nb::module_& mod) {
                 (DRAM allocated as UINT8). Requires TILE input layout, not supported on
                 Wormhole_B0. Defaults to False.
             num_untilizers_per_sender (int, optional): Number of untilize cores per
-                sender on the tile-layout path. Must be 2; the device op asserts this
-                (reader_untilize_dispatch.cpp hardcodes a 2-core round-robin where only
-                core_id == 1 decrements from offsets+histograms, so any other value
-                would silently corrupt routing). u1 reads expert_offsets_tensor
-                incrementing; u2 reads expert_offsets_tensor and expert_histograms_tensor
-                and writes decrementing from offsets+histograms. Defaults to 2.
+                sender on the tile-layout path. Any N >= 1: untilizers share a single
+                offsets[] counter via a baton-ring, and the sender owns N private writer-CB
+                sets each with its own data_avail credit. No upper limit is enforced; large
+                N exhausts CB indices or semaphore ids at program build. Defaults to 2.
 
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -102,7 +97,6 @@ void bind_dispatch(nb::module_& mod) {
         nb::arg("weights_tensor").noconvert(),
         nb::arg("indices_tensor").noconvert(),
         nb::arg("expert_offsets_tensor").noconvert(),
-        nb::arg("expert_histograms_tensor").noconvert(),
         nb::arg("expert_dispatch_table_tensor").noconvert(),
         nb::kw_only(),
         nb::arg("dispatch_group_size"),

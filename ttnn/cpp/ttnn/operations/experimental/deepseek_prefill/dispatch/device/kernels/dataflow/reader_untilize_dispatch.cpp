@@ -5,21 +5,21 @@
 //
 // Untilize core RISCV_1 — input prefetch + per-token routing.
 //
-// Each sender owns 2 untilize cores (u1, u2). Both share the same expert subset
-// (filtered via dispatch_core_idx & core_mask) but split work by:
-//   * batches:  u1 (core_id=0) takes even batches, u2 (core_id=1) takes odd.
-//   * offsets:  u1 starts at tt_expert_offsets[e] and increments left→right;
-//               u2 starts at tt_expert_offsets[e] + expert_histograms[e] and
-//               decrements right→left. u2 derives its starting pointer in L1
-//               (offsets[e] += histograms[e]) instead of consuming a pre-summed
-//               tt_end_offsets tensor — saves an op + tensor on the host side.
-// Each core keeps its own L1 copy of offsets[]; they never collide because they
-// grow page_idx from opposite ends of each expert's token range — so no cross-
-// core synchronization is needed on the offsets[] array.
+// Each sender owns N untilize cores. They share the same expert subset (filtered via
+// dispatch_core_idx & core_mask) and split work by batch, round-robin: batch i is handled
+// by core i % total_workers.
 //
-// At startup: both cores load tt_expert_offsets[] into the lower half of c_3 and
-// the expert dispatch_table[] into c_9. u2 additionally loads expert_histograms[]
-// into the upper half of c_3 (scratch) and folds it into offsets[] in place.
+// offsets[] is a SINGLE shared counter array living on the owner (core_id==0) of the
+// sender group. All cores grow page_idx left→right from the same offsets[e]. Concurrent
+// access is serialized by a baton that circulates in global batch order: a core waits on
+// its own turn semaphore, assigns page_idx for its batch (pulling/pushing the owner's
+// offsets[] for non-owners; owner edits in place), then signals the core that owns the
+// next global batch. The baton is both the mutex and the ordering — no opposite-ends trick,
+// no per-expert histogram needed.
+//
+// At startup: only the owner loads tt_expert_offsets[] into c_3; every core loads the
+// expert dispatch_table[] into c_9 (read-only). The owner seeds its turn semaphore to 1
+// so batch 0 (always owned by core 0) starts without waiting.
 //
 // Per batch:
 //   1. Signal compute to untilize this batch.
@@ -103,9 +103,8 @@ void kernel_main() {
     constexpr uint32_t dispatch_core_idx = get_compile_time_arg_val(22);
     constexpr uint32_t num_dispatch_cores = get_compile_time_arg_val(23);
     constexpr uint32_t core_mask = num_dispatch_cores - 1;
-    // u1 (core_id=0): even batches, increments offset from start (left-to-right).
-    // u2 (core_id=1): odd batches, decrements offset from end  (right-to-left).
-    constexpr bool IS_RIGHT_UNTILIZER = (core_id == 1);
+    // Batches are assigned round-robin (batch i -> core i % total_workers); all cores
+    // grow offsets[] left-to-right from the single shared owner copy under the baton.
 
     constexpr uint32_t num_devices = get_compile_time_arg_val(24);
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(25);
@@ -118,7 +117,6 @@ void kernel_main() {
     constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto offsets_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
     constexpr auto dispatch_table_args = TensorAccessorArgs<offsets_args.next_compile_time_args_offset()>();
-    constexpr auto histograms_args = TensorAccessorArgs<dispatch_table_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t tiles_per_row = hidden_size / 32;
     constexpr uint32_t block_ct_dim = 8;
@@ -142,10 +140,17 @@ void kernel_main() {
     uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_idx++);
     uint32_t weights_tensor_address = get_arg_val<uint32_t>(rt_idx++);
     uint32_t offsets_tensor_address = get_arg_val<uint32_t>(rt_idx++);
-    uint32_t histograms_tensor_address = get_arg_val<uint32_t>(rt_idx++);
     uint32_t dispatch_table_tensor_address = get_arg_val<uint32_t>(rt_idx++);
     uint32_t token_start_idx = get_arg_val<uint32_t>(rt_idx++);
     uint32_t token_end_idx = get_arg_val<uint32_t>(rt_idx++);
+    // Baton-ring offset sync: offsets[] live only on the owner (core_id==0) of this
+    // sender group. Every core pulls/pushes the shared offsets[] under a baton that
+    // circulates in global batch order (core (b+1)%W signaled after batch b).
+    uint32_t owner_noc_x = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t owner_noc_y = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t next_noc_x = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t next_noc_y = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t turn_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
 
     const auto input_addr_gen = TensorAccessor(input_args, input_tensor_address, aligned_input_page_size);
     const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, aligned_indices_page_size);
@@ -153,21 +158,17 @@ void kernel_main() {
     const auto offsets_addr_gen = TensorAccessor(offsets_args, offsets_tensor_address);
     const auto dispatch_table_addr_gen = TensorAccessor(dispatch_table_args, dispatch_table_tensor_address);
 
-    // ===== Startup: load offsets[] and dispatch_table[] into local L1 =====
-    // Both u1 and u2 load tt_expert_offsets[] into the lower half of cb_offsets.
-    // u2 additionally loads expert_histograms[] into the upper half (scratch) and
-    // folds it into offsets[] so its counters start at offset[e] + histogram[e] and
-    // decrement right-to-left.
+    // ===== Startup: load offsets[] (owner only) and dispatch_table[] into local L1 =====
+    // offsets[] is a single shared counter array living on the owner (core_id==0) of this
+    // sender group. The owner loads tt_expert_offsets[] from DRAM; non-owners leave their
+    // local copy uninitialized and pull the owner's copy under the baton (per-batch loop).
+    // dispatch_table[] is read-only -> every core keeps its own copy.
+    constexpr bool IS_OWNER = (core_id == 0);
     cb_reserve_back(cb_offsets_id, offsets_pages);
     uint32_t offsets_base_addr = get_write_ptr(cb_offsets_id);
-    for (uint32_t i = 0; i < offsets_pages; i++) {
-        noc_async_read_page(i, offsets_addr_gen, offsets_base_addr + i * aligned_offsets_page_size);
-    }
-    uint32_t histograms_base_addr = offsets_base_addr + offsets_pages * aligned_offsets_page_size;
-    if constexpr (IS_RIGHT_UNTILIZER) {
-        const auto histograms_addr_gen = TensorAccessor(histograms_args, histograms_tensor_address);
+    if constexpr (IS_OWNER) {
         for (uint32_t i = 0; i < offsets_pages; i++) {
-            noc_async_read_page(i, histograms_addr_gen, histograms_base_addr + i * aligned_offsets_page_size);
+            noc_async_read_page(i, offsets_addr_gen, offsets_base_addr + i * aligned_offsets_page_size);
         }
     }
     cb_reserve_back(cb_dispatch_table_id, dispatch_table_pages);
@@ -178,13 +179,28 @@ void kernel_main() {
     }
     noc_async_read_barrier();
     tt_l1_ptr uint32_t* offsets = reinterpret_cast<tt_l1_ptr uint32_t*>(offsets_base_addr);
-    if constexpr (IS_RIGHT_UNTILIZER) {
-        tt_l1_ptr uint32_t* histograms = reinterpret_cast<tt_l1_ptr uint32_t*>(histograms_base_addr);
-        for (uint32_t e = 0; e < n_routed_experts; e++) {
-            offsets[e] += histograms[e];
-        }
-    }
     tt_l1_ptr int32_t* expert_dispatch_table = reinterpret_cast<tt_l1_ptr int32_t*>(dispatch_table_base_addr);
+
+    // ===== Baton-ring setup =====
+    // Each core waits on its own turn semaphore (local poll) and signals the next core's
+    // semaphore after finishing its batch. The owner seeds its own semaphore to 1 so the
+    // very first batch (batch 0, always owned by core 0) does not block.
+    const uint32_t offsets_bytes = offsets_pages * aligned_offsets_page_size;
+    volatile tt_l1_ptr uint32_t* turn_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(turn_semaphore_id));
+    uint64_t owner_offsets_noc_addr = get_noc_addr(owner_noc_x, owner_noc_y, offsets_base_addr);
+    uint64_t next_turn_sem_noc_addr = get_noc_addr(next_noc_x, next_noc_y, get_semaphore(turn_semaphore_id));
+    if constexpr (IS_OWNER) {
+        noc_semaphore_set(turn_sem_ptr, 1);
+    }
+    uint32_t turn_expected = 1;  // per-core baton counter; +1 for each batch this core handles
+    DPRINT_DISPATCH(
+        "[R s={} c={}] startup done; owner={} total_batches={} total_workers={}\n",
+        (uint32_t)dispatch_core_idx,
+        (uint32_t)core_id,
+        (uint32_t)IS_OWNER,
+        (uint32_t)total_batches,
+        (uint32_t)total_workers);
 
     // ===== Indices / weights scratch (overwritten per batch, single page slot used) =====
     cb_reserve_back(cb_indices_id, read_batch_size);
@@ -227,11 +243,34 @@ void kernel_main() {
         noc_async_read_barrier();
 
         // 4. Build per-batch route plan into c_14.
+        DPRINT_DISPATCH(
+            "[R s={} c={}] b={} reserving plan slot (blocks on writer drain)\n",
+            (uint32_t)dispatch_core_idx,
+            (uint32_t)core_id,
+            batch_idx);
         cb_reserve_back(cb_plan_id, 1);
         uint32_t plan_addr = get_write_ptr(cb_plan_id);
         volatile tt_l1_ptr uint32_t* plan = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(plan_addr);
         uint32_t entry_count = 0;
         uint32_t entry_off = 8;  // entries start at u32 offset 8 (32B header)
+
+        // Baton acquire: wait our turn, then pull the shared offsets[] from the owner.
+        // The offset assignment runs under the baton; the expensive DRAM reads above are
+        // outside it. (Owner edits its copy in place — no pull needed.)
+        DPRINT_DISPATCH(
+            "[R s={} c={}] b={} WAIT baton (turn_sem>={}, have={})\n",
+            (uint32_t)dispatch_core_idx,
+            (uint32_t)core_id,
+            batch_idx,
+            turn_expected,
+            (uint32_t)(*turn_sem_ptr));
+        noc_semaphore_wait_min(turn_sem_ptr, turn_expected);
+        DPRINT_DISPATCH("[R s={} c={}] b={} GOT baton\n", (uint32_t)dispatch_core_idx, (uint32_t)core_id, batch_idx);
+        turn_expected++;
+        if constexpr (!IS_OWNER) {
+            noc_async_read(owner_offsets_noc_addr, offsets_base_addr, offsets_bytes);
+            noc_async_read_barrier();
+        }
 
         for (uint32_t t = 0; t < batch_count; t++) {
             tt_l1_ptr int32_t* indices_t =
@@ -250,27 +289,13 @@ void kernel_main() {
                     continue;
                 }
 
+                // Single shared counter, all cores grow left-to-right from offsets[e].
                 uint32_t& offset = offsets[routed_expert];
-                uint32_t page_idx;
-                if constexpr (IS_RIGHT_UNTILIZER) {
-                    // Decrement before use: end is exclusive, so first write is at end-1.
-                    // Guard: if offset is 0 it would wrap to UINT32_MAX; if the result
-                    // exceeds the buffer it is out-of-bounds — both are skipped.
-                    if (offset == 0) {
-                        continue;
-                    }
-                    page_idx = --offset;
-                    if (page_idx >= max_dispatch_buffer_token_size) {
-                        offset++;
-                        continue;
-                    }
-                } else {
-                    if (offset >= max_dispatch_buffer_token_size) {
-                        offset++;
-                        continue;
-                    }
-                    page_idx = offset++;
+                if (offset >= max_dispatch_buffer_token_size) {
+                    offset++;
+                    continue;
                 }
+                uint32_t page_idx = offset++;
 
                 uint32_t expert_chip = device_begin_idx + (uint32_t)expert_chip_og * device_stride;
                 bool is_local = (expert_chip == linearized_mesh_coord);
@@ -305,12 +330,34 @@ void kernel_main() {
             }
         }
 
+        // Baton release: push updated offsets[] back to the owner (non-owner only; owner
+        // edited in place), then hand the baton to the core owning the next global batch.
+        if constexpr (!IS_OWNER) {
+            noc_async_write(offsets_base_addr, owner_offsets_noc_addr, offsets_bytes);
+            noc_async_write_barrier();
+        }
+        if (batch_idx + 1 < total_batches) {
+            noc_semaphore_inc(next_turn_sem_noc_addr, 1);
+            DPRINT_DISPATCH(
+                "[R s={} c={}] b={} RELEASE baton -> signaled next (entries={})\n",
+                (uint32_t)dispatch_core_idx,
+                (uint32_t)core_id,
+                batch_idx,
+                entry_count);
+        } else {
+            DPRINT_DISPATCH(
+                "[R s={} c={}] b={} RELEASE baton -> LAST batch, no signal (entries={})\n",
+                (uint32_t)dispatch_core_idx,
+                (uint32_t)core_id,
+                batch_idx,
+                entry_count);
+        }
+
         plan[0] = entry_count;
         cb_push_back(cb_plan_id, 1);
-
-        DPRINT_DISPATCH("Reader untilize batch={} entries={}\n", batch_idx, entry_count);
     }
 
+    DPRINT_DISPATCH("[R s={} c={}] loop DONE -> pushing sentinels\n", (uint32_t)dispatch_core_idx, (uint32_t)core_id);
     // Send sentinel to compute so it breaks out of its loop
     cb_reserve_back(cb_signal_id, 1);
     volatile tt_l1_ptr uint32_t* signal_ptr =

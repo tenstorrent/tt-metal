@@ -357,7 +357,7 @@ def test_ttnn_dispatch_combine(
         num_links=num_links,
         experts_per_chip=experts_per_chip,
     )
-    tt_dispatch_offsets, tt_expert_token_counts, tt_expert_region_offsets, expert_histograms = tt_moe_routing_setup(
+    tt_dispatch_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = tt_moe_routing_setup(
         ttnn_top_k_experts_indices=indices,
         num_routed_experts=num_routed_experts,
         seq_len_per_chip=seq_len_per_chip,
@@ -410,13 +410,9 @@ def test_ttnn_dispatch_combine(
     # Run TTNN dispatch
     logger.debug("Running TTNN dispatch...")
     tt_expert_offsets = tt_dispatch_offsets
-    # The right-to-left untilizer in dispatch derives its exclusive end pointer per expert
-    # (offset[e] + histogram[e]) in L1, so dispatch consumes the histogram directly.
-    # Reshape to match the (1, num_routed_experts) layout of tt_expert_offsets.
-    tt_expert_histograms = ttnn.reshape(expert_histograms, (1, -1))
     tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
     tt_dispatched_buffer, tt_metadata = tt_dispatch_module(
-        tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_histograms, tt_expert_dispatch_table
+        tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_dispatch_table
     )
     ttnn.synchronize_device(mesh_device)
     logger.debug("Dispatch complete!")
@@ -691,7 +687,7 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overfl
         num_links=num_links,
         experts_per_chip=experts_per_chip,
     )
-    tt_dispatch_offsets, tt_expert_token_counts, tt_expert_region_offsets, expert_histograms = tt_moe_routing_setup(
+    tt_dispatch_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = tt_moe_routing_setup(
         ttnn_top_k_experts_indices=indices,
         num_routed_experts=num_routed_experts,
         seq_len_per_chip=seq_len_per_chip,
@@ -713,12 +709,10 @@ def test_ttnn_dispatch_combine_overflow(mesh_device, num_links, topology, overfl
         topology=topology,
     )
     tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
-    # Dispatch's right-to-left untilizer needs the per-expert histogram (offset[e] + histogram[e]).
-    tt_expert_histograms = ttnn.reshape(expert_histograms, (1, -1))
 
     logger.info(f"[overflow test / {overflow_mode}] Running dispatch...")
     tt_dispatched_buffer, tt_metadata = tt_dispatch_module(
-        tt_x, tt_weights, tt_indices, tt_dispatch_offsets, tt_expert_histograms, tt_expert_dispatch_table
+        tt_x, tt_weights, tt_indices, tt_dispatch_offsets, tt_expert_dispatch_table
     )
     ttnn.synchronize_device(mesh_device)
     logger.info(f"[overflow test / {overflow_mode}] Dispatch completed (did not hang)")

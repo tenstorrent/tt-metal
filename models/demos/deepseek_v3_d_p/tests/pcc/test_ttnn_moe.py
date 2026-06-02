@@ -425,30 +425,15 @@ def test_ttnn_moe(
             all_passed = False
 
     if gate_fallback_mode == GateComputeMode.HOST_ALL:
-        # Slot order within each (chip, expert) bucket diverges from the torch reference
-        # (dispatch uses two untilizers writing from both ends). The buffer/expert_outputs
-        # validators take the metadata so they can sort each bucket by (coord, token, topk)
-        # before comparing.
-        tt_metadata_host = (
-            ttnn.to_torch(tt_intermediates.metadata, mesh_composer=get_ep_mesh_composer(mesh_device))
-            if tt_intermediates.metadata is not None
-            else None
-        )
-        align_kwargs = (
-            {"torch_metadata": torch_intermediates.metadata, "ttnn_metadata": tt_metadata_host}
-            if tt_metadata_host is not None and torch_intermediates.metadata is not None
-            else {}
-        )
-
         # Sparse tensor validation using slot-aware comparisons
         # fmt: off
         sparse_checks = [
             ("dispatched_buffer", tt_intermediates.dispatched_buffer, torch_intermediates.dispatched_buffer,
-            get_ep_mesh_composer(mesh_device), torch.bfloat16, validate_dispatch_buffer, align_kwargs),
+            get_ep_mesh_composer(mesh_device), torch.bfloat16, validate_dispatch_buffer, {}),
             ("dispatch_metadata", tt_intermediates.metadata, torch_intermediates.metadata,
             get_ep_mesh_composer(mesh_device), None, validate_dispatch_metadata, {}),
             ("expert_outputs", tt_intermediates.expert_outputs, torch_intermediates.expert_outputs,
-            get_ep_mesh_composer(mesh_device), torch.bfloat16, validate_dispatch_buffer_pcc, {"pcc_threshold": 0.95, **align_kwargs}),
+            get_ep_mesh_composer(mesh_device), torch.bfloat16, validate_dispatch_buffer_pcc, {"pcc_threshold": 0.95}),
         ]
         # fmt: on
 

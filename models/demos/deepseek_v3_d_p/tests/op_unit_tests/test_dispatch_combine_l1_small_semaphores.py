@@ -94,7 +94,7 @@ def run_dispatch_op(mesh_device, use_l1_small):
         num_dispatch_groups=num_dispatch_groups,
     )
 
-    expert_offsets, expert_token_counts, expert_region_offsets, expert_counter = get_gate_outputs(
+    expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
         num_routed_experts,
@@ -128,22 +128,11 @@ def run_dispatch_op(mesh_device, use_l1_small):
     )
     tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
 
-    # The dispatch kernel's right-to-left untilizer derives its exclusive end pointer per expert
-    # as offset[e] + histogram[e], so the op consumes the per-chip histogram (expert_counter).
-    tt_expert_histograms = ttnn.from_torch(
-        expert_counter,
-        mesh_mapper=ep_mesh_mapper,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
-        dtype=ttnn.int32,
-    )
-
     dispatched_buffer, dispatch_metadata = ttnn.experimental.deepseek_prefill.dispatch(
         input_tensor=tt_x,
         weights_tensor=tt_weights,
         indices_tensor=tt_indices,
         expert_offsets_tensor=tt_expert_offsets,
-        expert_histograms_tensor=tt_expert_histograms,
         expert_dispatch_table_tensor=tt_expert_dispatch_table,
         dispatch_group_size=dispatch_group_size,
         experts_per_chip=experts_per_chip,
@@ -169,7 +158,7 @@ def run_dispatch_op(mesh_device, use_l1_small):
         num_experts_per_tok,
         seq_len_per_chip,
         sp_axis,
-        [tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_histograms, tt_expert_dispatch_table],
+        [tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_dispatch_table],
     )
 
 

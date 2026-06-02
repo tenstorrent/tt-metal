@@ -87,12 +87,13 @@ void create_tensor_cb(
 
 namespace {
 
-// Tile-layout path: TILE inputs, fused untilize across exactly 2 untilize cores per
-// sender (u1 and u2); sender is fabric-only.  Per-entry handshake on the writer CBs
-// lets each untilize core feed its sender writer in lockstep:
+// Tile-layout path: TILE inputs, fused untilize across N untilize cores per sender
+// (num_untilizers_per_sender, u1..uN); sender is fabric-only.  Per-entry handshake on
+// the writer CBs lets each untilize core feed its sender writer in lockstep, e.g.:
 //   u1 (local_core_id=0): drives c_4/c_5/c_6    (sender writer's first  CB set)
 //   u2 (local_core_id=1): drives c_16/c_17/c_18 (sender writer's second CB set)
-// Sender writer (RISCV_0) consumes both CB sets round-robin and fans out via fabric.
+//   ...one 3-CB set per untilizer.
+// Sender writer (RISCV_0) consumes all N CB sets round-robin and fans out via fabric.
 tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     const DispatchParams& operation_attributes,
     const MeshCoordinate& mesh_coordinate,
@@ -107,7 +108,6 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     auto indices_tensor = tensor_args.indices_tensor;
     auto weights_tensor = tensor_args.weights_tensor;
     auto offsets_tensor = tensor_args.expert_offsets_tensor;
-    auto histograms_tensor = tensor_args.expert_histograms_tensor;
     auto dispatch_table_tensor = tensor_args.expert_dispatch_table_tensor;
 
     const auto& output_tensor = tensor_return_value.at(0);
@@ -161,8 +161,8 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
 
     // ==================== Core layout: senders + untilize cores ====================
     // Collect all cores in the first row (y == subdevice_cores[0].y), sorted by x.
-    // Each sender owns exactly 2 consecutive untilize cores (u1, u2): cores are laid
-    // out [sender, u1, u2] consecutively along x per sender group.
+    // Each sender owns num_untilizers consecutive untilize cores (u1..uN): cores are
+    // laid out [sender, u1, ..., uN] consecutively along x per sender group.
     uint32_t sender_row_y = subdevice_cores.at(0).y;
     std::vector<CoreCoord> all_row_cores;
     for (const auto& core : subdevice_cores) {
@@ -174,7 +174,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         all_row_cores.begin(), all_row_cores.end(), [](const CoreCoord& a, const CoreCoord& b) { return a.x < b.x; });
 
     uint32_t total_row_cores = static_cast<uint32_t>(all_row_cores.size());
-    uint32_t cores_per_sender = 1 + num_untilizers;  // 1 sender + 2 untilize cores (u1, u2)
+    uint32_t cores_per_sender = 1 + num_untilizers;  // 1 sender + N untilize cores (u1..uN)
     TT_FATAL(
         total_row_cores >= cores_per_sender * num_cores,
         "Same-row has only {} cores for {} senders — need {} cores per sender (>= {} required)",
@@ -216,16 +216,6 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     }
     CoreRangeSet untilize_core_grid(untilize_ranges_set);
 
-    // Combined grid for shared semaphores
-    std::set<CoreRange> sender_and_untilize_ranges;
-    for (const auto& cr : sender_core_grid.ranges()) {
-        sender_and_untilize_ranges.insert(cr);
-    }
-    for (const auto& cr : untilize_core_grid.ranges()) {
-        sender_and_untilize_ranges.insert(cr);
-    }
-    CoreRangeSet sender_and_untilize_grid(sender_and_untilize_ranges);
-
     log_debug(
         tt::LogOp,
         "Dispatch program: num_links: {} num_cores(senders): {} num_untilize_cores: {} tokens_per_device: {}",
@@ -244,9 +234,10 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     //   data_avail  (sender L1, init=0):                untilize → sender, "entry ready".
     //   space_avail (untilize L1, init=writer_cb_size): sender → untilize, "slot freed".
     //   Seeding space_avail with the CB depth lets untilize prefill all slots cold-start.
-    // Boot-time address handshake: sender writes its c_4/c_5/c_6 base addresses into
-    // cross_c{4,5,6}_addr scratch slots on untilize, then noc-incs addr_ready.
-    // u2 mirrors the same protocol on c_16/c_17/c_18 with a separate semaphore set.
+    // Boot-time address handshake: for each untilizer the sender inline-writes that ring's
+    // three writer-CB base addresses into the untilizer's single cross_addr mailbox (words
+    // 0..2), then noc-incs that untilizer's addr_ready slot. addr_ready/cross_addr are shared
+    // single ids (id scheme detailed below), one per-core slot on each untilizer.
     // SemaphoreDescriptor takes an explicit .id; add_sema feeds it from a monotonic counter.
     constexpr uint32_t writer_cb_size = read_batch_size;  // 32 slots — one batch deep
     uint32_t next_sema_id = 0;
@@ -256,20 +247,31 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             .id = id, .core_type = tt::CoreType::WORKER, .core_ranges = crs, .initial_value = init_val});
         return id;
     };
-    // u1 (drives c_4/c_5/c_6)
-    auto data_avail_semaphore_id = add_sema(sender_and_untilize_grid);
-    auto space_avail_semaphore_id = add_sema(sender_and_untilize_grid, writer_cb_size);
-    auto addr_ready_semaphore_id = add_sema(sender_and_untilize_grid);
-    auto cross_c4_addr_semaphore_id = add_sema(sender_and_untilize_grid);
-    auto cross_c5_addr_semaphore_id = add_sema(sender_and_untilize_grid);
-    auto cross_c6_addr_semaphore_id = add_sema(sender_and_untilize_grid);
-    // u2 (drives c_16/c_17/c_18)
-    auto data_avail_u2_semaphore_id = add_sema(sender_and_untilize_grid);
-    auto space_avail_u2_semaphore_id = add_sema(sender_and_untilize_grid, writer_cb_size);
-    auto addr_ready_u2_semaphore_id = add_sema(sender_and_untilize_grid);
-    auto cross_c16_addr_semaphore_id = add_sema(sender_and_untilize_grid);
-    auto cross_c17_addr_semaphore_id = add_sema(sender_and_untilize_grid);
-    auto cross_c18_addr_semaphore_id = add_sema(sender_and_untilize_grid);
+    // Grid placement is by *consumer*: a semaphore only needs an initialized L1 slot on the
+    // core that waits on it. get_semaphore(id) = sem_l1_base + id*L1_ALIGNMENT is purely
+    // id-based, so a producer's remote noc_semaphore_inc addresses the consumer's slot
+    // regardless of whether the producer reserves a local slot.
+    //
+    // With N untilizers per sender, the id budget is asymmetric:
+    //   data_avail  — ALL N copies coexist on the SENDER (it waits on each ring's credit),
+    //                 so they need N DISTINCT ids, placed on sender_core_grid.
+    //   space_avail — one copy per untilizer, each on a DIFFERENT untilize core; the sender
+    //   addr_ready    addresses untilizer s's slot by (coords, id), so a SINGLE shared id
+    //   cross_addr    suffices for all N (each core has its own private slot at that id).
+    //                 All three live on untilize_core_grid only.
+    //   turn        — baton, one shared id on untilize_core_grid; owner (core_id==0) seeds
+    //                 its own copy to 1 in-kernel.
+    // Total ids = N + 4 (vs 4N+1 if every set got private ids), and the untilize bank stays
+    // constant at 4 regardless of N. The sender inline_dw-writes its three CB base addresses
+    // into each untilizer's single cross_addr mailbox slot (L1_ALIGNMENT = 16B holds 3 addrs).
+    std::vector<uint32_t> data_avail_semaphore_ids(num_untilizers);
+    for (uint32_t s = 0; s < num_untilizers; s++) {
+        data_avail_semaphore_ids[s] = add_sema(sender_core_grid);
+    }
+    auto space_avail_semaphore_id = add_sema(untilize_core_grid, writer_cb_size);
+    auto addr_ready_semaphore_id = add_sema(untilize_core_grid);
+    auto cross_addr_semaphore_id = add_sema(untilize_core_grid);
+    auto turn_semaphore_id = add_sema(untilize_core_grid);
 
     // ==================== Circular Buffers for untilize cores ====================
     // Routing decisions and offsets[] live on the untilize core — sender is fabric-only.
@@ -297,15 +299,15 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         /*buffering_factor=*/read_batch_size,
         /*cb_id=*/tt::CBIndex::c_2,
         "untilize_weights_scratch");
-    // c_3: offsets (full tensor, loaded once at startup, mutated in place per batch).
-    // Sized for 2× num_pages: the lower half holds expert_offsets[] (consumed by both u1 and
-    // u2); the upper half is u2-only scratch where the histograms tensor is staged so u2 can
-    // compute its right-to-left starting pointers as expert_offsets[e] + histogram[e] in L1.
+    // c_3: offsets (full tensor, mutated in place per batch as the shared running counter).
+    // The owner untilize core (local_core_id==0) loads expert_offsets[] here once at startup;
+    // non-owners leave it uninitialized and pull/push the owner's copy under the baton each
+    // batch (see reader_untilize_dispatch.cpp). One copy per core — no extra scratch.
     detail::create_tensor_cb(
         desc,
         untilize_core_grid,
         offsets_tensor,
-        /*buffering_factor=*/2 * detail::get_num_pages(offsets_tensor),
+        /*buffering_factor=*/detail::get_num_pages(offsets_tensor),
         /*cb_id=*/tt::CBIndex::c_3,
         "untilize_offsets_tensor");
     // c_9: dispatch_table (full tensor, loaded once at startup)
@@ -389,67 +391,61 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     }
 
     // ==================== Circular Buffers for SENDER cores ====================
-    // Direct-consume pipeline on sender:
-    //   c_4/c_5/c_6    = u1's data CBs (route_info, payload, metadata).
-    //   c_16/c_17/c_18 = u2's data CBs (same layout, same depth).
-    // Untilize cores NOC-write per-entry directly into the relevant CB set;
-    // sender writer (RISCV_0) consumes them round-robin.
+    // Direct-consume pipeline on sender: one writer-CB set (route_info, payload, metadata)
+    // per untilizer. Set s is fed by the untilizer with local_core_id == s; the sender
+    // writer (RISCV_0) polls all N sets round-robin. Untilize cores NOC-write per-entry
+    // directly into the relevant set (addresses learned via the boot-time handshake).
+    //
+    // CB index layout: set 0 keeps the legacy c_4/c_5/c_6, set 1 keeps c_16/c_17/c_18, and
+    // further sets take consecutive free indices from c_19 up. Large N runs out of CB indices
+    // and CB creation asserts — that is the intended "breaks if too many" behaviour.
+    std::vector<std::array<uint32_t, 3>> writer_cb_ids(num_untilizers);  // {route, payload, metadata}
     {
         uint32_t route_info_page_size = l1_alignment;
+        uint32_t next_free_cb = static_cast<uint32_t>(tt::CBIndex::c_19);
+        for (uint32_t s = 0; s < num_untilizers; s++) {
+            std::array<uint32_t, 3> ids;
+            if (s == 0) {
+                ids = {
+                    static_cast<uint32_t>(tt::CBIndex::c_4),
+                    static_cast<uint32_t>(tt::CBIndex::c_5),
+                    static_cast<uint32_t>(tt::CBIndex::c_6)};
+            } else if (s == 1) {
+                ids = {
+                    static_cast<uint32_t>(tt::CBIndex::c_16),
+                    static_cast<uint32_t>(tt::CBIndex::c_17),
+                    static_cast<uint32_t>(tt::CBIndex::c_18)};
+            } else {
+                ids = {next_free_cb, next_free_cb + 1, next_free_cb + 2};
+                next_free_cb += 3;
+            }
+            writer_cb_ids[s] = ids;
 
-        // u1 set
-        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = writer_cb_size * route_info_page_size,
-            .core_ranges = sender_core_grid,
-            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
-                .data_format = tt::DataFormat::UInt32,
-                .page_size = route_info_page_size,
-            }}},
-        });
-
-        detail::create_tensor_cb(
-            desc,
-            sender_core_grid,
-            output_tensor,
-            /*buffering_factor=*/writer_cb_size,
-            /*cb_id=*/tt::CBIndex::c_5,
-            "payload_for_writer");
-
-        detail::create_tensor_cb(
-            desc,
-            sender_core_grid,
-            metadata_tensor,
-            /*buffering_factor=*/writer_cb_size,
-            /*cb_id=*/tt::CBIndex::c_6,
-            "metadata_for_writer");
-
-        // u2 set — identical layout, separate L1 slots.
-        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = writer_cb_size * route_info_page_size,
-            .core_ranges = sender_core_grid,
-            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_16),
-                .data_format = tt::DataFormat::UInt32,
-                .page_size = route_info_page_size,
-            }}},
-        });
-
-        detail::create_tensor_cb(
-            desc,
-            sender_core_grid,
-            output_tensor,
-            /*buffering_factor=*/writer_cb_size,
-            /*cb_id=*/tt::CBIndex::c_17,
-            "payload_for_writer_2");
-
-        detail::create_tensor_cb(
-            desc,
-            sender_core_grid,
-            metadata_tensor,
-            /*buffering_factor=*/writer_cb_size,
-            /*cb_id=*/tt::CBIndex::c_18,
-            "metadata_for_writer_2");
+            // route_info CB (UInt32, one L1_ALIGNMENT page per slot).
+            desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+                .total_size = writer_cb_size * route_info_page_size,
+                .core_ranges = sender_core_grid,
+                .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(ids[0]),
+                    .data_format = tt::DataFormat::UInt32,
+                    .page_size = route_info_page_size,
+                }}},
+            });
+            detail::create_tensor_cb(
+                desc,
+                sender_core_grid,
+                output_tensor,
+                /*buffering_factor=*/writer_cb_size,
+                /*cb_id=*/static_cast<tt::CBIndex>(ids[1]),
+                "payload_for_writer_" + std::to_string(s));
+            detail::create_tensor_cb(
+                desc,
+                sender_core_grid,
+                metadata_tensor,
+                /*buffering_factor=*/writer_cb_size,
+                /*cb_id=*/static_cast<tt::CBIndex>(ids[2]),
+                "metadata_for_writer_" + std::to_string(s));
+        }
     }
 
     const auto [neighbors, directions] =
@@ -583,18 +579,19 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
 
     // ==================== Sender writer kernel ====================
     // Tile-layout: no sender reader RISC. The writer (RISCV_0) owns:
-    //   * Startup address handshake to untilize (publishes c_4/c_5/c_6 + c_16/c_17/c_18 base L1
-    //     addresses, NOC-incs untilize addr_ready / addr_ready_u2).
+    //   * Startup address handshake to each of the N untilizers (publishes that set's
+    //     route/payload/metadata base L1 addresses, NOC-incs the untilizer's addr_ready).
     //   * Fabric init + per-entry fabric send.
-    //   * Per-entry direct credit to untilize space_avail{,_u2} after each fabric send.
+    //   * Per-entry direct credit to the untilizer's space_avail after each fabric send.
+    // Per-set CB ids + per-untilizer NOC coords + data_avail ids are passed as RUNTIME args
+    // (they vary per sender / are id-arrays); only writer_cb_size and num_untilizers (needed
+    // to size the kernel's fixed arrays) are compile-time.
     auto writer_defines = fabric_defines;
     writer_defines["IS_TILE_LAYOUT"] = "1";
 
     std::vector<uint32_t> writer_compile_time_args = compile_time_args;
-    writer_compile_time_args.push_back(writer_cb_size);                            // sender writer CB depth
-    writer_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_16));  // cb_route_info_2_id
-    writer_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_17));  // cb_payload_for_writer_2_id
-    writer_compile_time_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_18));  // cb_metadata_for_writer_2_id
+    writer_compile_time_args.push_back(writer_cb_size);  // sender writer CB depth
+    writer_compile_time_args.push_back(num_untilizers);  // N: sizes the kernel's per-ring arrays
 
     tt::tt_metal::KernelDescriptor writer_kd;
     writer_kd.kernel_source =
@@ -615,17 +612,16 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     // Reader (RISCV_1): routing decisions, DRAM reads for input/indices/weights/offsets/dispatch_table,
     //                   publishes per-batch route plan to writer via c_14.
     // Writer (RISCV_0): drains c_14 plan, executes local DRAM writes for the local path and direct
-    //                   NOC writes into the owning sender's c_4/c_5/c_6 (u1) or c_16/c_17/c_18 (u2) for the
-    //                   cross-device path.  Per-entry handshake via data_avail / space_avail.
+    //                   NOC writes into the owning sender's writer-CB set for local_core_id (set s)
+    //                   for the cross-device path.  Per-entry handshake via data_avail / space_avail.
     std::vector<tt::tt_metal::KernelHandle> reader_untilize_kernel_ids;
     std::vector<tt::tt_metal::KernelHandle> writer_untilize_kernel_ids;
     reader_untilize_kernel_ids.reserve(num_untilize_cores);
     writer_untilize_kernel_ids.reserve(num_untilize_cores);
     for (uint32_t j = 0; j < num_untilize_cores; j++) {
         uint32_t s = untilize_sender_map[j];
-        // Each sender has exactly 2 untilize cores; local_core_id alternates per batch:
-        // u1 (core_id=0): even batches, increments offset from start.
-        // u2 (core_id=1): odd  batches, decrements offset from end.
+        // Each sender owns num_untilizers cores; they split batches round-robin by local_core_id
+        // (batch i handled by core i % total_workers) and share one offsets[] counter via a baton.
         uint32_t local_core_id = j % num_untilizers;
         uint32_t total_workers = num_untilizers;
 
@@ -666,9 +662,6 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         tt::tt_metal::TensorAccessorArgs(weights_tensor.buffer()).append_to(untilize_reader_compile_args);
         tt::tt_metal::TensorAccessorArgs(offsets_tensor.buffer()).append_to(untilize_reader_compile_args);
         tt::tt_metal::TensorAccessorArgs(dispatch_table_tensor.buffer()).append_to(untilize_reader_compile_args);
-        // histograms_args: u2 (core_id=1) additionally loads expert_histograms[] and computes
-        // its end-of-region pointers in L1 as expert_offsets[e] + expert_histograms[e].
-        tt::tt_metal::TensorAccessorArgs(histograms_tensor.buffer()).append_to(untilize_reader_compile_args);
 
         // ===== Writer compile args =====
         std::vector<uint32_t> untilize_writer_compile_args = {
@@ -802,26 +795,9 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
 
     uint32_t core_idx = 0;
     for (const auto& sender_core : sender_cores) {
-        // Find u1 (local_core_id=0) and u2 (local_core_id=1) untilize cores for this sender.
-        uint32_t untilize_u1_j = 0, untilize_u2_j = 0, found_count = 0;
-        for (uint32_t j = 0; j < num_untilize_cores; j++) {
-            if (untilize_sender_map[j] == core_idx) {
-                if (found_count == 0) {
-                    untilize_u1_j = j;
-                } else if (found_count == 1) {
-                    untilize_u2_j = j;
-                }
-                if (++found_count == 2) {
-                    break;
-                }
-            }
-        }
-        auto u1_noc =
-            mesh_device->virtual_core_from_logical_core(all_untilize_cores[untilize_u1_j], tt::CoreType::WORKER);
-        auto u2_noc =
-            mesh_device->virtual_core_from_logical_core(all_untilize_cores[untilize_u2_j], tt::CoreType::WORKER);
-        uint32_t untilize_noc_x = (uint32_t)u1_noc.x;
-        uint32_t untilize_noc_y = (uint32_t)u1_noc.y;
+        // This sender's N untilizers, ordered by local_core_id: group[s] has local_core_id == s
+        // (all_untilize_cores is built sender-major, so j = s*num_untilizers + u → local id u).
+        const auto& group = sender_untilize_groups[core_idx];
 
         std::vector<uint32_t> writer_runtime_args = base_runtime_args;
         writer_runtime_args[11] = core_idx;  // dispatch_core_idx
@@ -830,24 +806,21 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         writer_runtime_args.push_back((uint32_t)exit_semaphore.address());
 
         // ===== Sender writer (tile-layout): handshake + per-entry fabric send + credit =====
-        // u1 address handshake + credit semaphores
+        // Shared single-id semaphores (one per-core slot on each untilizer): pushed once.
         writer_runtime_args.push_back(addr_ready_semaphore_id);
-        writer_runtime_args.push_back(cross_c4_addr_semaphore_id);
-        writer_runtime_args.push_back(cross_c5_addr_semaphore_id);
-        writer_runtime_args.push_back(cross_c6_addr_semaphore_id);
-        writer_runtime_args.push_back(untilize_noc_x);
-        writer_runtime_args.push_back(untilize_noc_y);
-        writer_runtime_args.push_back(data_avail_semaphore_id);
+        writer_runtime_args.push_back(cross_addr_semaphore_id);
         writer_runtime_args.push_back(space_avail_semaphore_id);
-        // u2 address handshake + credit semaphores (c_16/c_17/c_18 CB set)
-        writer_runtime_args.push_back(addr_ready_u2_semaphore_id);
-        writer_runtime_args.push_back(cross_c16_addr_semaphore_id);
-        writer_runtime_args.push_back(cross_c17_addr_semaphore_id);
-        writer_runtime_args.push_back(cross_c18_addr_semaphore_id);
-        writer_runtime_args.push_back((uint32_t)u2_noc.x);
-        writer_runtime_args.push_back((uint32_t)u2_noc.y);
-        writer_runtime_args.push_back(data_avail_u2_semaphore_id);
-        writer_runtime_args.push_back(space_avail_u2_semaphore_id);
+        // Per-ring group s: {route_cb, payload_cb, metadata_cb, untilize_noc_x, untilize_noc_y,
+        // data_avail_id}. The kernel reads exactly num_untilizers such groups.
+        for (uint32_t s = 0; s < num_untilizers; s++) {
+            auto u_noc = mesh_device->virtual_core_from_logical_core(group[s], tt::CoreType::WORKER);
+            writer_runtime_args.push_back(writer_cb_ids[s][0]);
+            writer_runtime_args.push_back(writer_cb_ids[s][1]);
+            writer_runtime_args.push_back(writer_cb_ids[s][2]);
+            writer_runtime_args.push_back((uint32_t)u_noc.x);
+            writer_runtime_args.push_back((uint32_t)u_noc.y);
+            writer_runtime_args.push_back(data_avail_semaphore_ids[s]);
+        }
 
         if (operation_attributes.num_links > 0) {
             uint32_t core_link = core_idx % num_links;
@@ -885,7 +858,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     // ==================== Runtime args for untilize cores ====================
     // Reader: tensor base addresses + token range (Buffer* slots → BufferBindings on cache hit).
     // Writer: sender NOC coords + addr-handshake + data_avail/space_avail semaphores + output/metadata buffers.
-    //   u1 (local_core_id=0) → c_4/c_5/c_6 set; u2 → c_16/c_17/c_18 set.
+    //   writer-CB set per local_core_id: 0 → c_4/c_5/c_6, 1 → c_16/c_17/c_18, rest → c_19+.
     for (uint32_t j = 0; j < num_untilize_cores; j++) {
         uint32_t s = untilize_sender_map[j];
 
@@ -895,36 +868,38 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         untilize_reader_rt_args.push_back(indices_tensor.buffer());
         untilize_reader_rt_args.push_back(weights_tensor.buffer());
         untilize_reader_rt_args.push_back(offsets_tensor.buffer());
-        // histograms_tensor is always passed (consumed unconditionally by rt_idx++);
-        // u1 reads the address but ignores it; u2 uses it to load expert_histograms[] and
-        // compute its end-of-region pointers in L1.
-        untilize_reader_rt_args.push_back(histograms_tensor.buffer());
         untilize_reader_rt_args.push_back(dispatch_table_tensor.buffer());
         untilize_reader_rt_args.push_back(0u);                           // token_start_idx
         untilize_reader_rt_args.push_back((uint32_t)tokens_per_device);  // token_end_idx
+        // Baton-ring offset sync: owner (group[0]) holds the shared offsets[]; the next core
+        // in the ring ((local_u_id+1) % num_untilizers) receives the baton after this batch.
+        {
+            const auto& group = sender_untilize_groups[s];
+            uint32_t local_u_id = j % num_untilizers;
+            CoreCoord owner_core = group[0];
+            CoreCoord next_core = group[(local_u_id + 1) % num_untilizers];
+            auto owner_noc = mesh_device->virtual_core_from_logical_core(owner_core, tt::CoreType::WORKER);
+            auto next_noc = mesh_device->virtual_core_from_logical_core(next_core, tt::CoreType::WORKER);
+            untilize_reader_rt_args.push_back((uint32_t)owner_noc.x);
+            untilize_reader_rt_args.push_back((uint32_t)owner_noc.y);
+            untilize_reader_rt_args.push_back((uint32_t)next_noc.x);
+            untilize_reader_rt_args.push_back((uint32_t)next_noc.y);
+            untilize_reader_rt_args.push_back(turn_semaphore_id);
+        }
         desc.kernels[reader_untilize_kernel_ids[j]].emplace_runtime_args(
             all_untilize_cores[j], untilize_reader_rt_args);
 
-        // Writer RT args
+        // Writer RT args. addr_ready / cross_addr / space_avail are shared single-id semaphores
+        // (this untilizer uses its own per-core slot at each); data_avail is this ring's private
+        // id (the sender waits on its matching slot). Arg order unchanged from the kernel's view.
         uint32_t local_u_id = j % num_untilizers;
         tt::tt_metal::KernelDescriptor::RTArgList untilize_writer_rt_args;
         untilize_writer_rt_args.push_back(sender_noc_coords[s].first);
         untilize_writer_rt_args.push_back(sender_noc_coords[s].second);
-        if (local_u_id == 0) {
-            untilize_writer_rt_args.push_back(addr_ready_semaphore_id);
-            untilize_writer_rt_args.push_back(cross_c4_addr_semaphore_id);
-            untilize_writer_rt_args.push_back(cross_c5_addr_semaphore_id);
-            untilize_writer_rt_args.push_back(cross_c6_addr_semaphore_id);
-            untilize_writer_rt_args.push_back(data_avail_semaphore_id);
-            untilize_writer_rt_args.push_back(space_avail_semaphore_id);
-        } else {
-            untilize_writer_rt_args.push_back(addr_ready_u2_semaphore_id);
-            untilize_writer_rt_args.push_back(cross_c16_addr_semaphore_id);
-            untilize_writer_rt_args.push_back(cross_c17_addr_semaphore_id);
-            untilize_writer_rt_args.push_back(cross_c18_addr_semaphore_id);
-            untilize_writer_rt_args.push_back(data_avail_u2_semaphore_id);
-            untilize_writer_rt_args.push_back(space_avail_u2_semaphore_id);
-        }
+        untilize_writer_rt_args.push_back(addr_ready_semaphore_id);
+        untilize_writer_rt_args.push_back(cross_addr_semaphore_id);
+        untilize_writer_rt_args.push_back(data_avail_semaphore_ids[local_u_id]);
+        untilize_writer_rt_args.push_back(space_avail_semaphore_id);
         untilize_writer_rt_args.push_back(output_tensor.buffer());
         untilize_writer_rt_args.push_back(metadata_tensor.buffer());
         desc.kernels[writer_untilize_kernel_ids[j]].emplace_runtime_args(

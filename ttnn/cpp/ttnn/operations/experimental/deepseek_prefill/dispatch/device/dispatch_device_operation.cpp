@@ -46,14 +46,6 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
         "Expert offsets tensor must be INT32 or UINT32, got {}",
         tensor_args.expert_offsets_tensor.dtype());
     TT_FATAL(
-        tensor_args.expert_histograms_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR,
-        "Expert histograms tensor must be ROW_MAJOR layout");
-    TT_FATAL(
-        tensor_args.expert_histograms_tensor.dtype() == DataType::INT32 ||
-            tensor_args.expert_histograms_tensor.dtype() == DataType::UINT32,
-        "Expert histograms tensor must be INT32 or UINT32, got {}",
-        tensor_args.expert_histograms_tensor.dtype());
-    TT_FATAL(
         tensor_args.expert_dispatch_table_tensor.dtype() == DataType::INT32,
         "Expert dispatch table tensor must be INT32, got {}",
         tensor_args.expert_dispatch_table_tensor.dtype());
@@ -73,15 +65,14 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
         !operation_attributes.output_mem_config.is_sharded(),
         "Output memory config must be DRAM interleaved, not sharded");
 
-    // The untilizer kernel hardcodes a 2-core round-robin: core_id == 0 increments from
-    // expert_offsets[e]; core_id == 1 folds in the histogram and decrements from the end.
-    // Any core_id >= 2 falls into the "left untilizer" branch and collides with core 0,
-    // silently corrupting dispatched tokens. Supporting N > 2 requires kernel changes.
+    // num_untilizers_per_sender is now general: the reader uses a baton-ring over a shared
+    // offsets[] counter, and the sender owns N private writer-CB sets each with its own
+    // data_avail credit (space_avail/addr_ready/cross_addr are shared single-id semaphores
+    // since each untilizer lives on its own core). No upper limit is enforced here — large N
+    // simply runs out of CB indices (3N sets) or semaphore ids and fails at program build.
     TT_FATAL(
-        operation_attributes.num_untilizers_per_sender == 2,
-        "num_untilizers_per_sender must be 2; got {}. The untilizer kernel is hardcoded for "
-        "a 2-core round-robin (one left-to-right, one right-to-left). Supporting other values "
-        "requires changes to reader_untilize_dispatch.cpp.",
+        operation_attributes.num_untilizers_per_sender >= 1,
+        "num_untilizers_per_sender must be >= 1; got {}.",
         operation_attributes.num_untilizers_per_sender);
 }
 
@@ -160,7 +151,6 @@ prefill_dispatch(
     const ttnn::Tensor& weights_tensor,
     const ttnn::Tensor& indices_tensor,
     const ttnn::Tensor& expert_offsets_tensor,
-    const ttnn::Tensor& expert_histograms_tensor,
     const ttnn::Tensor& expert_dispatch_table_tensor,
     uint32_t dispatch_group_size,
     uint32_t experts_per_chip,
@@ -198,7 +188,6 @@ prefill_dispatch(
             .weights_tensor = weights_tensor,
             .indices_tensor = indices_tensor,
             .expert_offsets_tensor = expert_offsets_tensor,
-            .expert_histograms_tensor = expert_histograms_tensor,
             .expert_dispatch_table_tensor = expert_dispatch_table_tensor});
 }
 }  // namespace ttnn::prim

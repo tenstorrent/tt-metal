@@ -49,7 +49,6 @@ prefill_dispatch(
     const ttnn::Tensor& weights_tensor,
     const ttnn::Tensor& indices_tensor,
     const ttnn::Tensor& expert_offsets_tensor,
-    const ttnn::Tensor& expert_histograms_tensor,
     const ttnn::Tensor& expert_dispatch_table_tensor,
     uint32_t dispatch_group_size,
     uint32_t experts_per_chip,

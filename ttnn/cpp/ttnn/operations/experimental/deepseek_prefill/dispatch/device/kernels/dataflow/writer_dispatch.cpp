@@ -112,9 +112,9 @@ void kernel_main() {
     // Writer-only tile-layout extras appended after the shared TensorAccessorArgs prefix.
     constexpr uint32_t writer_extra_args_base = dispatch_table_args.next_compile_time_args_offset();
     constexpr uint32_t writer_cb_size = get_compile_time_arg_val(writer_extra_args_base + 0);
-    constexpr uint32_t cb_route_info_2_id = get_compile_time_arg_val(writer_extra_args_base + 1);
-    constexpr uint32_t cb_payload_for_writer_2_id = get_compile_time_arg_val(writer_extra_args_base + 2);
-    constexpr uint32_t cb_metadata_for_writer_2_id = get_compile_time_arg_val(writer_extra_args_base + 3);
+    // N untilize cores feed this sender; sizes the per-ring arrays below. Each ring's CB ids,
+    // untilizer NOC coords, and data_avail id arrive as runtime args (6 per ring).
+    constexpr uint32_t num_untilizers = get_compile_time_arg_val(writer_extra_args_base + 1);
     constexpr uint32_t route_info_slot_stride = l1_alignment;
 #endif
 
@@ -140,24 +140,28 @@ void kernel_main() {
     uint32_t exit_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
 
 #ifdef IS_TILE_LAYOUT
-    // u1 handshake + credit semaphores (c_4/c_5/c_6)
+    // Shared single-id semaphores: every untilizer has its own per-core slot at these ids, so one
+    // id each covers all N rings (cross_addr is the 16B mailbox holding 3 base addrs at words 0-2).
     uint32_t addr_ready_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t cross_c4_addr_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t cross_c5_addr_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t cross_c6_addr_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t untilize_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t untilize_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t data_avail_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t cross_addr_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t space_avail_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
-    // u2 handshake + credit semaphores (c_16/c_17/c_18)
-    uint32_t addr_ready_u2_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t cross_c16_addr_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t cross_c17_addr_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t cross_c18_addr_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t untilize_u2_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t untilize_u2_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t data_avail_u2_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t space_avail_u2_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
+    // Per-ring runtime args: num_untilizers groups of {route_cb, payload_cb, metadata_cb,
+    // untilize_noc_x, untilize_noc_y, data_avail_id}. data_avail is per-ring (all N coexist on
+    // this sender); the rest index the matching untilizer core for the shared semaphores.
+    uint32_t ring_route_cb[num_untilizers];
+    uint32_t ring_payload_cb[num_untilizers];
+    uint32_t ring_meta_cb[num_untilizers];
+    uint32_t ring_noc_x[num_untilizers];
+    uint32_t ring_noc_y[num_untilizers];
+    uint32_t ring_data_avail_id[num_untilizers];
+    for (uint32_t s = 0; s < num_untilizers; s++) {
+        ring_route_cb[s] = get_arg_val<uint32_t>(rt_args_idx++);
+        ring_payload_cb[s] = get_arg_val<uint32_t>(rt_args_idx++);
+        ring_meta_cb[s] = get_arg_val<uint32_t>(rt_args_idx++);
+        ring_noc_x[s] = get_arg_val<uint32_t>(rt_args_idx++);
+        ring_noc_y[s] = get_arg_val<uint32_t>(rt_args_idx++);
+        ring_data_avail_id[s] = get_arg_val<uint32_t>(rt_args_idx++);
+    }
 #endif
 
 #ifdef AXIS
@@ -175,70 +179,29 @@ void kernel_main() {
         dispatch_devices);
 
 #ifdef IS_TILE_LAYOUT
-    // ---- u1 address handshake (c_4/c_5/c_6) ----
-    uint32_t writer_route_base = get_write_ptr(cb_route_info_id);
-    uint32_t writer_payload_base = get_write_ptr(cb_payload_for_writer_id);
-    uint32_t writer_metadata_base = get_write_ptr(cb_metadata_for_writer_id);
-
+    // ---- Address handshake: publish each ring's three CB base L1 addresses to its untilizer ----
+    // addr_ready / cross_addr are shared ids, so get_semaphore() gives the same L1 offset on every
+    // untilizer; we target untilizer s's own slot via its NOC coords. The three base addresses go
+    // straight into untilizer s's cross_addr mailbox (words [0],[1],[2]) with inline_dw writes —
+    // no sender-side source buffer. ring_*_base[] are kept for the drain loop below.
+    uint32_t ring_route_base[num_untilizers];
+    uint32_t ring_payload_base[num_untilizers];
+    uint32_t ring_meta_base[num_untilizers];
     uint32_t addr_ready_sem_l1_offset = get_semaphore(addr_ready_semaphore_id);
-    uint32_t cross_c4_addr_sem_l1_offset = get_semaphore(cross_c4_addr_semaphore_id);
-    uint32_t cross_c5_addr_sem_l1_offset = get_semaphore(cross_c5_addr_semaphore_id);
-    uint32_t cross_c6_addr_sem_l1_offset = get_semaphore(cross_c6_addr_semaphore_id);
-
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cross_c4_addr_sem_l1_offset) = writer_route_base;
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cross_c5_addr_sem_l1_offset) = writer_payload_base;
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cross_c6_addr_sem_l1_offset) = writer_metadata_base;
-    noc_async_write(
-        cross_c4_addr_sem_l1_offset,
-        get_noc_addr(untilize_noc_x, untilize_noc_y, cross_c4_addr_sem_l1_offset),
-        sizeof(uint32_t));
-    noc_async_write(
-        cross_c5_addr_sem_l1_offset,
-        get_noc_addr(untilize_noc_x, untilize_noc_y, cross_c5_addr_sem_l1_offset),
-        sizeof(uint32_t));
-    noc_async_write(
-        cross_c6_addr_sem_l1_offset,
-        get_noc_addr(untilize_noc_x, untilize_noc_y, cross_c6_addr_sem_l1_offset),
-        sizeof(uint32_t));
-    noc_async_write_barrier();
-    noc_semaphore_inc(get_noc_addr(untilize_noc_x, untilize_noc_y, addr_ready_sem_l1_offset), 1);
-    noc_async_atomic_barrier();
-
-    // ---- u2 address handshake (c_16/c_17/c_18) ----
-    uint32_t writer_route_base_2 = get_write_ptr(cb_route_info_2_id);
-    uint32_t writer_payload_base_2 = get_write_ptr(cb_payload_for_writer_2_id);
-    uint32_t writer_metadata_base_2 = get_write_ptr(cb_metadata_for_writer_2_id);
-
-    uint32_t addr_ready_u2_sem_l1_offset = get_semaphore(addr_ready_u2_semaphore_id);
-    uint32_t cross_c16_addr_sem_l1_offset = get_semaphore(cross_c16_addr_semaphore_id);
-    uint32_t cross_c17_addr_sem_l1_offset = get_semaphore(cross_c17_addr_semaphore_id);
-    uint32_t cross_c18_addr_sem_l1_offset = get_semaphore(cross_c18_addr_semaphore_id);
-
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cross_c16_addr_sem_l1_offset) = writer_route_base_2;
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cross_c17_addr_sem_l1_offset) = writer_payload_base_2;
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cross_c18_addr_sem_l1_offset) = writer_metadata_base_2;
-    noc_async_write(
-        cross_c16_addr_sem_l1_offset,
-        get_noc_addr(untilize_u2_noc_x, untilize_u2_noc_y, cross_c16_addr_sem_l1_offset),
-        sizeof(uint32_t));
-    noc_async_write(
-        cross_c17_addr_sem_l1_offset,
-        get_noc_addr(untilize_u2_noc_x, untilize_u2_noc_y, cross_c17_addr_sem_l1_offset),
-        sizeof(uint32_t));
-    noc_async_write(
-        cross_c18_addr_sem_l1_offset,
-        get_noc_addr(untilize_u2_noc_x, untilize_u2_noc_y, cross_c18_addr_sem_l1_offset),
-        sizeof(uint32_t));
-    noc_async_write_barrier();
-    noc_semaphore_inc(get_noc_addr(untilize_u2_noc_x, untilize_u2_noc_y, addr_ready_u2_sem_l1_offset), 1);
-    noc_async_atomic_barrier();
-
-    DPRINT_DISPATCH(
-        "Sender writer: addr handshake done u1=({},{}) u2=({},{})\n",
-        untilize_noc_x,
-        untilize_noc_y,
-        untilize_u2_noc_x,
-        untilize_u2_noc_y);
+    uint32_t cross_addr_sem_l1_offset = get_semaphore(cross_addr_semaphore_id);
+    for (uint32_t s = 0; s < num_untilizers; s++) {
+        ring_route_base[s] = get_write_ptr(ring_route_cb[s]);
+        ring_payload_base[s] = get_write_ptr(ring_payload_cb[s]);
+        ring_meta_base[s] = get_write_ptr(ring_meta_cb[s]);
+        uint64_t mailbox = get_noc_addr(ring_noc_x[s], ring_noc_y[s], cross_addr_sem_l1_offset);
+        noc_inline_dw_write(mailbox + 0 * sizeof(uint32_t), ring_route_base[s]);
+        noc_inline_dw_write(mailbox + 1 * sizeof(uint32_t), ring_payload_base[s]);
+        noc_inline_dw_write(mailbox + 2 * sizeof(uint32_t), ring_meta_base[s]);
+        noc_async_write_barrier();  // all three addresses must land before addr_ready wakes untilizer s
+        noc_semaphore_inc(get_noc_addr(ring_noc_x[s], ring_noc_y[s], addr_ready_sem_l1_offset), 1);
+        noc_async_atomic_barrier();
+        DPRINT_DISPATCH("Sender writer: addr handshake done ring={} u=({},{})\n", s, ring_noc_x[s], ring_noc_y[s]);
+    }
 #endif
 
 #ifdef DEST_CHIP_ID
@@ -278,98 +241,73 @@ void kernel_main() {
     const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address);
 
 #ifdef IS_TILE_LAYOUT
-    volatile tt_l1_ptr uint32_t* data_avail_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(data_avail_semaphore_id));
-    uint64_t untilize_space_avail_noc_addr =
-        get_noc_addr(untilize_noc_x, untilize_noc_y, get_semaphore(space_avail_semaphore_id));
-    volatile tt_l1_ptr uint32_t* data_avail_u2_sem_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(data_avail_u2_semaphore_id));
-    uint64_t untilize_u2_space_avail_noc_addr =
-        get_noc_addr(untilize_u2_noc_x, untilize_u2_noc_y, get_semaphore(space_avail_u2_semaphore_id));
+    // Per-ring drain state. data_avail is each ring's private credit, read locally on the sender
+    // (the producer untilizer remote-incs it). space_avail is the shared id on every untilizer;
+    // we credit untilizer s's own slot by its NOC coords after fabric-sending one of its entries.
+    volatile tt_l1_ptr uint32_t* ring_data_avail_ptr[num_untilizers];
+    uint64_t ring_space_avail_noc[num_untilizers];
+    uint32_t consumed[num_untilizers];
+    bool done[num_untilizers];
+    uint32_t num_done = 0;
+    uint32_t space_avail_sem_l1_offset = get_semaphore(space_avail_semaphore_id);
+    for (uint32_t s = 0; s < num_untilizers; s++) {
+        ring_data_avail_ptr[s] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ring_data_avail_id[s]));
+        ring_space_avail_noc[s] = get_noc_addr(ring_noc_x[s], ring_noc_y[s], space_avail_sem_l1_offset);
+        consumed[s] = 0;
+        done[s] = false;
+    }
 
-    uint32_t consumed_1 = 0;
-    uint32_t consumed_2 = 0;
-    bool done_1 = false;
-    bool done_2 = false;
-
-    while (!done_1 || !done_2) {
-        // ---- u1 entry ----
-        if (!done_1) {
-            noc_semaphore_wait_min(data_avail_sem_ptr, consumed_1 + 1);
-            uint32_t slot = consumed_1 % writer_cb_size;
-            volatile tt_l1_ptr uint32_t* route_info =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_route_base + slot * route_info_slot_stride);
-            if (route_info[0] == ROUTE_INFO_SENTINEL) {
-                done_1 = true;
-            } else {
-                uint32_t distance = route_info[1];
-                uint32_t page_idx = route_info[2];
-                uint32_t payload_addr = writer_payload_base + slot * aligned_output_page_size;
-                uint32_t metadata_addr = writer_metadata_base + slot * aligned_metadata_page_size;
-                DPRINT_DISPATCH("u1 send: route={} page={}\n", route_info[0], page_idx);
-#ifdef DEST_CHIP_ID
-
-                fabric_set_unicast_route<false>(
-                    (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
-                fabric_send_noc_unicast<fabric_max_packet_size>(
-                    output_addr_gen,
-                    fabric_connections[route_info[0]],
-                    unicast_packet_header,
-                    payload_addr,
-                    page_idx,
-                    (int)aligned_output_page_size,
-                    l1_alignment);
-                fabric_send_noc_unicast<fabric_max_packet_size>(
-                    metadata_addr_gen,
-                    fabric_connections[route_info[0]],
-                    unicast_packet_header,
-                    metadata_addr,
-                    page_idx,
-                    (int)aligned_metadata_page_size,
-                    l1_alignment);
-                noc_async_writes_flushed();
-#endif
-                noc_semaphore_inc<true>(untilize_space_avail_noc_addr, 1);
-                consumed_1++;
+    DPRINT_DISPATCH("[SND] drain loop start (rings={})\n", num_untilizers);
+    // Non-blocking poll across all N rings: consume whichever ring currently has data ready, never
+    // blocking on a single one. The reader-side baton serializes the untilizers in global batch
+    // order, so a strictly-ordered blocking drain can deadlock — if ring A fills its CB while the
+    // next entry belongs to a not-yet-produced (baton-gated) ring B, blocking on B stalls A's drain
+    // → A's CB stays full → A's reader can't pass the baton → B never produces. Polling every ring
+    // keeps each drainable one flowing. Each entry carries its own page_idx (route_info[2]), so
+    // consumption order has no effect on placement in the output buffer.
+    while (num_done < num_untilizers) {
+        for (uint32_t s = 0; s < num_untilizers; s++) {
+            if (done[s]) {
+                continue;
             }
-        }
-        // ---- u2 entry ----
-        if (!done_2) {
-            noc_semaphore_wait_min(data_avail_u2_sem_ptr, consumed_2 + 1);
-            uint32_t slot = consumed_2 % writer_cb_size;
-            volatile tt_l1_ptr uint32_t* route_info =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_route_base_2 + slot * route_info_slot_stride);
-            if (route_info[0] == ROUTE_INFO_SENTINEL) {
-                done_2 = true;
-            } else {
-                uint32_t distance = route_info[1];
-                uint32_t page_idx = route_info[2];
-                uint32_t payload_addr = writer_payload_base_2 + slot * aligned_output_page_size;
-                uint32_t metadata_addr = writer_metadata_base_2 + slot * aligned_metadata_page_size;
-                DPRINT_DISPATCH("u2 send: route={} page={}\n", route_info[0], page_idx);
+            if (*ring_data_avail_ptr[s] >= consumed[s] + 1) {
+                uint32_t slot = consumed[s] % writer_cb_size;
+                volatile tt_l1_ptr uint32_t* route_info =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ring_route_base[s] + slot * route_info_slot_stride);
+                if (route_info[0] == ROUTE_INFO_SENTINEL) {
+                    done[s] = true;
+                    num_done++;
+                    DPRINT_DISPATCH("[SND] ring={} SENTINEL (consumed={})\n", s, consumed[s]);
+                } else {
+                    uint32_t distance = route_info[1];
+                    uint32_t page_idx = route_info[2];
+                    uint32_t payload_addr = ring_payload_base[s] + slot * aligned_output_page_size;
+                    uint32_t metadata_addr = ring_meta_base[s] + slot * aligned_metadata_page_size;
+                    DPRINT_DISPATCH("ring={} send: route={} page={}\n", s, route_info[0], page_idx);
 #ifdef DEST_CHIP_ID
-                fabric_set_unicast_route<false>(
-                    (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
-                fabric_send_noc_unicast<fabric_max_packet_size>(
-                    output_addr_gen,
-                    fabric_connections[route_info[0]],
-                    unicast_packet_header,
-                    payload_addr,
-                    page_idx,
-                    (int)aligned_output_page_size,
-                    l1_alignment);
-                fabric_send_noc_unicast<fabric_max_packet_size>(
-                    metadata_addr_gen,
-                    fabric_connections[route_info[0]],
-                    unicast_packet_header,
-                    metadata_addr,
-                    page_idx,
-                    (int)aligned_metadata_page_size,
-                    l1_alignment);
-                noc_async_writes_flushed();
+                    fabric_set_unicast_route<false>(
+                        (volatile tt_l1_ptr LowLatencyPacketHeader*)unicast_packet_header, distance);
+                    fabric_send_noc_unicast<fabric_max_packet_size>(
+                        output_addr_gen,
+                        fabric_connections[route_info[0]],
+                        unicast_packet_header,
+                        payload_addr,
+                        page_idx,
+                        (int)aligned_output_page_size,
+                        l1_alignment);
+                    fabric_send_noc_unicast<fabric_max_packet_size>(
+                        metadata_addr_gen,
+                        fabric_connections[route_info[0]],
+                        unicast_packet_header,
+                        metadata_addr,
+                        page_idx,
+                        (int)aligned_metadata_page_size,
+                        l1_alignment);
+                    noc_async_writes_flushed();
 #endif
-                noc_semaphore_inc<true>(untilize_u2_space_avail_noc_addr, 1);
-                consumed_2++;
+                    noc_semaphore_inc<true>(ring_space_avail_noc[s], 1);
+                    consumed[s]++;
+                }
             }
         }
     }
@@ -449,7 +387,10 @@ void kernel_main() {
 
             volatile tt_l1_ptr uint32_t* exit_sem_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(exit_semaphore_address);
+            DPRINT_DISPATCH(
+                "[SND] drain DONE; WAIT exit_sem=={} (have={})\n", dispatch_devices - 1, (uint32_t)(*exit_sem_ptr));
             noc_semaphore_wait(exit_sem_ptr, dispatch_devices - 1);
+            DPRINT_DISPATCH("[SND] exit handshake done\n");
             noc_semaphore_set(exit_sem_ptr, 0);
         }
 

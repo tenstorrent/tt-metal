@@ -82,9 +82,7 @@ void kernel_main() {
     uint32_t sender_noc_x = get_arg_val<uint32_t>(rt_idx++);
     uint32_t sender_noc_y = get_arg_val<uint32_t>(rt_idx++);
     uint32_t addr_ready_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
-    uint32_t cross_c4_addr_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
-    uint32_t cross_c5_addr_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
-    uint32_t cross_c6_addr_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t cross_addr_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
     uint32_t data_avail_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
     uint32_t space_avail_semaphore_id = get_arg_val<uint32_t>(rt_idx++);
     uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_idx++);
@@ -99,12 +97,12 @@ void kernel_main() {
     noc_semaphore_wait(addr_ready_sem_ptr, 1);
     noc_semaphore_set(addr_ready_sem_ptr, 0);
 
-    uint32_t sender_c4_l1_addr =
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(cross_c4_addr_semaphore_id));
-    uint32_t sender_c5_l1_addr =
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(cross_c5_addr_semaphore_id));
-    uint32_t sender_c6_l1_addr =
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(cross_c6_addr_semaphore_id));
+    // All three base addresses arrive packed in the single mailbox slot (words [0],[1],[2]).
+    volatile tt_l1_ptr uint32_t* cross_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(cross_addr_semaphore_id));
+    uint32_t sender_c4_l1_addr = cross_addr_ptr[0];
+    uint32_t sender_c5_l1_addr = cross_addr_ptr[1];
+    uint32_t sender_c6_l1_addr = cross_addr_ptr[2];
 
     uint64_t sender_c4_base_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, sender_c4_l1_addr);
     uint64_t sender_c5_base_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, sender_c5_l1_addr);
@@ -144,6 +142,12 @@ void kernel_main() {
         uint32_t plan_addr = get_read_ptr(cb_plan_id);
         volatile tt_l1_ptr uint32_t* plan = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(plan_addr);
         uint32_t entry_count = plan[0];
+        DPRINT_DISPATCH(
+            "[W c={}] b={} draining plan entries={} produced_so_far={}\n",
+            (uint32_t)core_id,
+            batch_idx,
+            entry_count,
+            produced_count);
 
         {
             for (uint32_t e = 0; e < entry_count; e++) {
@@ -182,6 +186,13 @@ void kernel_main() {
 
                     // Per-entry credit: wait until the sender has fabric-sent the slot we're
                     // about to overwrite (sender writer inc's space_avail once per slot freed).
+                    DPRINT_DISPATCH(
+                        "[W c={}] b={} WAIT space_avail>={} (have={}) for xdev entry route={}\n",
+                        (uint32_t)core_id,
+                        batch_idx,
+                        produced_count + 1,
+                        (uint32_t)(*space_avail_sem_ptr),
+                        route);
                     noc_semaphore_wait_min(space_avail_sem_ptr, produced_count + 1);
 
                     uint32_t slot = produced_count % writer_cb_size;
@@ -243,7 +254,13 @@ void kernel_main() {
     cb_wait_front(cb_plan_id, 1);
     cb_pop_front(cb_plan_id, 1);
 
+    DPRINT_DISPATCH(
+        "[W c={}] loop DONE; WAIT space_avail>={} (have={}) to send SENTINEL\n",
+        (uint32_t)core_id,
+        produced_count + 1,
+        (uint32_t)(*space_avail_sem_ptr));
     noc_semaphore_wait_min(space_avail_sem_ptr, produced_count + 1);
+    DPRINT_DISPATCH("[W c={}] sending SENTINEL (produced total={})\n", (uint32_t)core_id, produced_count);
 
     uint32_t sentinel_slot = produced_count % writer_cb_size;
     route_info_scratch[0] = ROUTE_INFO_SENTINEL;

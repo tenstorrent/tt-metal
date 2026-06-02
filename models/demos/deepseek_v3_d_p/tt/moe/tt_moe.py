@@ -428,17 +428,15 @@ class TtMoe(LightweightModule):
         scores, indices, gate_logits = self.gate(ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2])))
 
         signpost(header="moe_gate_calculate_dispatch_offsets")
-        tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, expert_histograms = self.routing_setup(
+        # Dispatch no longer consumes the per-expert histogram (a single shared offsets[]
+        # counter + baton replaced the opposite-ends scheme), so it is discarded here.
+        tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _expert_histograms = self.routing_setup(
             ttnn_top_k_experts_indices=indices,
             num_routed_experts=self.num_routed_experts,
             seq_len_per_chip=self.seq_len_per_chip,
             num_experts_per_tok=self.num_experts_per_tok,
         )
         signpost(header="moe_gate_calculate_dispatch_offsets")
-        # The right-to-left untilizer in dispatch derives its exclusive end pointer per expert
-        # (offset[e] + histogram[e]) in L1, so the dispatch op consumes the histogram tensor
-        # directly. Reshape to match the (1, num_routed_experts) layout of tt_expert_offsets.
-        tt_expert_histograms = ttnn.reshape(expert_histograms, (1, -1))
 
         gate_logits = (
             ttnn.to_memory_config(gate_logits, ttnn.DRAM_MEMORY_CONFIG)
@@ -520,7 +518,6 @@ class TtMoe(LightweightModule):
             scores,
             indices,
             tt_expert_offsets,
-            tt_expert_histograms,
             self.tt_expert_dispatch_table,
         )
         if self.overlap_shared_expert_with_dispatch:

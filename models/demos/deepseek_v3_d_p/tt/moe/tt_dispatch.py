@@ -11,8 +11,9 @@ and TtRoutedExpert (which processes the tokens after they arrive).
 
 For each token and each of its top-k experts, the dispatch kernel:
   1. Looks up which destination device hosts that expert via the expert_dispatch_table.
-  2. Reads the write position (global_dispatch_offset) for this source device and expert
-     from tt_expert_offsets (produced by TtMoERoutingSetup).
+  2. Reads the starting write position for this source device and expert from
+     tt_expert_offsets (global_dispatch_offsets, produced by TtMoERoutingSetup), then
+     advances a running per-expert counter from it as tokens are packed.
   3. Writes the token embedding into the destination device's local dispatch buffer at that
      position: locally via NOC if the expert is on the same device, or remotely via fabric
      if it is on a different device in the dispatch group.
@@ -77,8 +78,9 @@ class TtDispatchModule(LightweightModule):
             experts_per_chip: Number of experts hosted on each destination device.
             num_routed_experts: Total number of routed experts across all devices.
             num_experts_per_tok: Number of experts each token is routed to (top-k).
-            metadata_len: Number of fields in per-token metadata (5: chip, token, topk_idx,
-                routed_expert, weight).
+            metadata_len: Number of fields in per-token metadata. The kernel writes 5
+                (chip, token, topk_idx, routed_expert, weight); any extra fields are
+                zero-padded.
             max_dispatch_buffer_token_size: Total token capacity of the flat dispatch
                 buffer per chip. Tokens that would push the total past this cap are
                 silently dropped by the kernel (prevents out-of-bounds DRAM writes).
@@ -88,15 +90,14 @@ class TtDispatchModule(LightweightModule):
             num_links: Number of fabric links for remote token writes.
             topology: Fabric topology for remote token writes.
             fp8_output: Output dtype for the dispatched buffer.
-            num_untilizers_per_sender: Number of untilizer cores per sender. Must be 2;
-                other values are rejected by the device op (reader_untilize_dispatch.cpp
-                hardcodes a 2-core round-robin and core_id >= 2 would silently corrupt
-                routing). u1 (core_id=0) reads even batches (0,2,4,...) starting from
-                tt_expert_offsets and increments; u2 (core_id=1) reads odd batches
-                (1,3,5,...) starting from tt_expert_offsets + tt_expert_histograms
-                (computed in L1 from the same two tensors u1 and the routing setup
-                already produce) and decrements. Eliminates synchronization on the offset
-                tensor since the two cores write into non-overlapping halves.
+            num_untilizers_per_sender: Number of untilizer cores per sender (any N >= 1).
+                Untilizers process batches round-robin and share a single offsets[] counter
+                (held on the owner core, core_id=0), advancing page_idx left-to-right under a
+                baton. The sender owns N private writer-CB sets, each polled non-blockingly with
+                its own data_avail credit; space_avail/addr_ready/cross_addr are shared single-id
+                semaphores (one per-core slot each). No upper limit is enforced — large N simply
+                exhausts CB indices (3N sets) or semaphore ids at program build. The layout needs
+                1 + N cores per sender in the same row.
         """
         if fp8_output and "blackhole" not in ttnn.get_arch_name():
             raise ValueError("fp8_output requires Blackhole hardware")
@@ -206,7 +207,6 @@ class TtDispatchModule(LightweightModule):
         weights: ttnn.Tensor,
         indices: ttnn.Tensor,
         tt_expert_offsets: ttnn.Tensor,
-        tt_expert_histograms: ttnn.Tensor,
         tt_expert_dispatch_table: ttnn.Tensor,
     ):
         """
@@ -227,12 +227,9 @@ class TtDispatchModule(LightweightModule):
                 Shape per device: (1, seq_len_per_chip, num_experts_per_tok)
             tt_expert_offsets: Starting token index per source device per expert in the
                 destination device's flat dispatch buffer. Produced by TtMoERoutingSetup.forward().
+                All untilizers share a single offsets[] counter (held on the owner core) and
+                grow page_idx left-to-right under a baton; no per-expert histogram is needed.
                 Shape per device: (1, num_routed_experts)
-            tt_expert_histograms: Per-expert token count from this source device (the same
-                histogram TtMoERoutingSetup.forward() emits). The dispatch kernel's right-to-left
-                untilizer derives its starting (exclusive end) pointer in L1 as
-                tt_expert_offsets[e] + tt_expert_histograms[e].
-                Shape per device: (1, num_routed_experts) or (num_routed_experts,)
             tt_expert_dispatch_table: Maps each expert ID to the destination chip ID within the
                 dispatch group. Produced by shard_expert_dispatch_table().
                 Shape per device: (1, num_routed_experts)
@@ -255,20 +252,19 @@ class TtDispatchModule(LightweightModule):
                 reconstruct the origin device and token index, then scatters the weighted result
                 back. There is no secondary index structure.
 
-                With two untilizers (round-robin): each untilizer must write the token embedding
-                and its metadata to the same write_pos it computed. u1 writes even batches
-                (0,2,4,...) at write_pos = start + (batch/2)*batch_size + k, incrementing;
-                u2 writes odd batches (1,3,5,...) at write_pos = end - ((batch+1)/2)*batch_size + k,
-                decrementing. Both local (NOC) and remote (fabric) writes must target the same
-                write_pos for token and metadata — the address is embedded in each packet by the
-                sending untilizer core.
+                With N untilizers (round-robin by batch): each untilizer must write the token
+                embedding and its metadata to the same write_pos it computed. page_idx comes from
+                a single shared offsets[] counter (held on the owner core) that all untilizers
+                advance left-to-right under a baton, so token blocks are packed densely in
+                lock-acquisition order. Both local (NOC) and remote (fabric) writes target the
+                same write_pos for token and metadata — the address is embedded in each packet
+                by the sending untilizer core.
         """
         logger.debug(f"[TtDispatchModule.forward] INPUT SHAPES:")
         logger.debug(f"  x.shape={x.shape}")
         logger.debug(f"  weights.shape={weights.shape}")
         logger.debug(f"  indices.shape={indices.shape}")
         logger.debug(f"  tt_expert_offsets.shape={tt_expert_offsets.shape}")
-        logger.debug(f"  tt_expert_histograms.shape={tt_expert_histograms.shape}")
         logger.debug(f"  tt_expert_dispatch_table.shape={tt_expert_dispatch_table.shape}")
         logger.debug(f"[TtDispatchModule.forward] CONFIG:")
         logger.debug(f"  dispatch_group_size={self.dispatch_group_size}, experts_per_chip={self.experts_per_chip}")
@@ -286,7 +282,6 @@ class TtDispatchModule(LightweightModule):
             weights_tensor=weights,
             indices_tensor=indices,
             expert_offsets_tensor=tt_expert_offsets,
-            expert_histograms_tensor=tt_expert_histograms,
             expert_dispatch_table_tensor=tt_expert_dispatch_table,
             dispatch_group_size=self.dispatch_group_size,
             experts_per_chip=self.experts_per_chip,

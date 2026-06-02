@@ -599,25 +599,6 @@ def validate_replication(
     )
 
 
-def _sort_perm_by_metadata_key(meta_slot: torch.Tensor) -> torch.Tensor:
-    """Sort permutation by (linearized_mesh_coord, token_idx, topk_idx) — fields 0,1,2.
-
-    The kernel's two untilizers fill each (chip, expert) bucket from both ends, so the
-    slot order diverges from the torch reference's single-forward-scan order. Sorting
-    both sides by the unique routed-entry key aligns them back up before per-slot
-    comparison. Returns indices that produce ascending key order; an empty tensor is
-    safe when count == 0.
-    """
-    count = meta_slot.shape[0]
-    if count == 0:
-        return torch.empty(0, dtype=torch.long)
-    coord = meta_slot[:, 0].long()
-    token = meta_slot[:, 1].long()
-    topk = meta_slot[:, 2].long()
-    key = (coord << 32) | (token << 16) | topk
-    return torch.argsort(key)
-
-
 def _get_valid_slots(
     expert_dispatch_table: torch.Tensor,
     num_dispatch_groups: int,
@@ -656,8 +637,6 @@ def validate_dispatch_data(
     compare_fn: DispatchComparator,
     name: str = "data",
     verbose: bool = True,
-    torch_metadata: Optional[torch.Tensor] = None,
-    ttnn_metadata: Optional[torch.Tensor] = None,
 ) -> ValidationResult:
     """
     Generic dispatch data validation.
@@ -719,15 +698,6 @@ def validate_dispatch_data(
                 torch_slot = torch_data[r, dst_chip_id, start : start + count]
                 ttnn_slot = ttnn_data[r, dst_chip_id, start : start + count]
 
-                # Align by metadata key when metadata is provided. The dispatch kernel's two
-                # untilizers write each (chip, expert) bucket from both ends, so positional
-                # comparison is meaningless; sort both sides by (coord, token, topk).
-                if torch_metadata is not None and ttnn_metadata is not None and count > 0:
-                    torch_meta_slot = torch_metadata[r, dst_chip_id, start : start + count]
-                    ttnn_meta_slot = ttnn_metadata[r, dst_chip_id, start : start + count]
-                    torch_slot = torch_slot[_sort_perm_by_metadata_key(torch_meta_slot)]
-                    ttnn_slot = ttnn_slot[_sort_perm_by_metadata_key(ttnn_meta_slot)]
-
                 match, error_detail = compare_fn(torch_slot, ttnn_slot, r, dst_chip_id, expert_id)
 
                 if match:
@@ -771,8 +741,6 @@ def validate_dispatch_buffer(
     dispatch_group_size: int,
     experts_per_chip: int,
     verbose: bool = True,
-    torch_metadata: Optional[torch.Tensor] = None,
-    ttnn_metadata: Optional[torch.Tensor] = None,
 ) -> ValidationResult:
     """
     Validate dispatch buffer against torch reference.
@@ -817,8 +785,6 @@ def validate_dispatch_buffer(
         compare_fn=compare_buffer,
         name="buffer",
         verbose=verbose,
-        torch_metadata=torch_metadata,
-        ttnn_metadata=ttnn_metadata,
     )
 
 
@@ -833,8 +799,6 @@ def validate_dispatch_buffer_pcc(
     experts_per_chip: int,
     pcc_threshold: float = 0.99,
     verbose: bool = True,
-    torch_metadata: Optional[torch.Tensor] = None,
-    ttnn_metadata: Optional[torch.Tensor] = None,
 ) -> ValidationResult:
     """
     Validate dispatch buffer against torch reference using PCC (for data with numerical differences).
@@ -884,8 +848,6 @@ def validate_dispatch_buffer_pcc(
         compare_fn=compare_pcc,
         name="buffer_pcc",
         verbose=verbose,
-        torch_metadata=torch_metadata,
-        ttnn_metadata=ttnn_metadata,
     )
 
 
@@ -955,27 +917,23 @@ def validate_dispatch_metadata(
                 # expert_region_offsets directly gives the expert region start position
                 start = int(expert_region_offsets[r, dst_chip_id, global_expert_idx].item())
 
-                # Align both sides by metadata key — kernel's two-untilizer layout permutes
-                # slot order within each (chip, expert) bucket vs the torch reference.
-                ttnn_meta_slot = ttnn_metadata[r, dst_chip_id, start : start + count]
-                torch_meta_slot = torch_metadata[r, dst_chip_id, start : start + count]
-                if count > 0:
-                    ttnn_meta_slot = ttnn_meta_slot[_sort_perm_by_metadata_key(ttnn_meta_slot)]
-                    torch_meta_slot = torch_meta_slot[_sort_perm_by_metadata_key(torch_meta_slot)]
-
                 # Compare fields 1-3 directly
-                out = ttnn_meta_slot[:, 1:4]
-                ref = torch_meta_slot[:, 1:4]
+                out = ttnn_metadata[r, dst_chip_id, start : start + count, 1:4]
+                ref = torch_metadata[r, dst_chip_id, start : start + count, 1:4]
 
                 # Both Torch and TTNN now embed linearized mesh coord in field 0
-                out_linearized_mesh_coord = ttnn_meta_slot[:, 0]
-                ref_linearized_mesh_coord = torch_meta_slot[:, 0]
+                out_linearized_mesh_coord = ttnn_metadata[r, dst_chip_id, start : start + count, 0]
+                ref_linearized_mesh_coord = torch_metadata[r, dst_chip_id, start : start + count, 0]
 
                 # Compare weights (metadata[4]):
                 # TTNN stores raw bfloat16 bits as uint16 in int32 - convert to bfloat16
-                out_weight_bf16 = ttnn_meta_slot[:, 4].to(torch.int16).view(torch.bfloat16)
+                out_weight_bf16 = (
+                    ttnn_metadata[r, dst_chip_id, start : start + count, 4].to(torch.int16).view(torch.bfloat16)
+                )
                 # Torch stores bfloat16 value directly
-                ref_weight_bf16 = torch_meta_slot[:, 4].to(torch.int16).view(torch.bfloat16)
+                ref_weight_bf16 = (
+                    torch_metadata[r, dst_chip_id, start : start + count, 4].to(torch.int16).view(torch.bfloat16)
+                )
 
                 metadata_match = torch.allclose(out, ref, atol=1e-6)
                 coord_match = torch.allclose(
@@ -994,8 +952,8 @@ def validate_dispatch_metadata(
 
                     if verbose:
                         for slot in range(count):
-                            torch_data = torch_meta_slot[slot, :4]
-                            kernel_data = ttnn_meta_slot[slot, :4]
+                            torch_data = torch_metadata[r, dst_chip_id, start + slot, :4]
+                            kernel_data = ttnn_metadata[r, dst_chip_id, start + slot, :4]
                             slot_data_match = torch.allclose(torch_data, kernel_data, atol=1e-6)
                             if not slot_data_match:
                                 logger.error(
