@@ -388,6 +388,9 @@ def _w2_shard_tiles(Ht: int, core_id: int, Nt: int, n_cores: int) -> int:
 def effective_matmul_ring_size(mesh_device, bh_ring_size: int = 12) -> int:
     """Matmul ring N used by ``moe_compute`` on this device (12 on WH; ``bh_ring_size`` on BH)."""
     if mesh_device.arch() == ttnn.Arch.BLACKHOLE:
+        assert (
+            bh_ring_size in _BH_SUPPORTED_RING_SIZES
+        ), f"bh_ring_size={bh_ring_size} not in supported set {_BH_SUPPORTED_RING_SIZES}"
         return bh_ring_size
     return 12
 

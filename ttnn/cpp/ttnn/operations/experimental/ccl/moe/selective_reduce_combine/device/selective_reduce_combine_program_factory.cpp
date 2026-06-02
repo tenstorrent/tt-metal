@@ -478,6 +478,11 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     // here is only correct when num_workers_per_link == num_data_parallel_cores (e.g. WH layouts);
     // on layouts where a link spans multiple token-parallel groups (e.g. BH num_links=2) the
     // semaphore overshoots that smaller target and an exact-match wait deadlocks.
+    TT_FATAL(
+        num_worker_cores % num_links == 0,
+        "num_worker_cores ({}) must be divisible by num_links ({})",
+        num_worker_cores,
+        num_links);
     const uint32_t num_workers_per_link = num_worker_cores / num_links;
 
     std::unordered_map<std::string, uint32_t> writer_named_ct_args = {

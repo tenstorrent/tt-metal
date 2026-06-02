@@ -534,8 +534,7 @@ def test_moe_compute_single_card_deepseek(mesh_device, mesh_shape, has_bias, bh_
 # GPT-OSS canonical config from the GPT-OSS entry in `_MODELS_1x8` (test_moe_compute_6U.py):
 #   experts_per_device=4, has_bias=True, activation=SWIGLU.
 # Ring-aware width dim: N=12 → width=3; N=8/16 → width=2 (90%3==0 but 8%3≠0).
-_GPT_BH_RING_SIZES = [12]
-_GPT_BH_RING_SIZES += [8, 16]  # comment this line to skip N=8 and N=16 sweep
+_GPT_BH_RING_SIZES = [12, 8, 16]  # remove 8, 16 to limit sweep to ring_n=12
 
 
 @pytest.mark.parametrize(
