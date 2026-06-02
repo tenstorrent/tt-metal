@@ -235,7 +235,7 @@ target_sources(
             slice/slice_nanobind.hpp
             slice/device/slice_device_operation.hpp
             slice/device/slice_device_operation_types.hpp
-            slice/device/slice_program_factory_rm.hpp
+            slice/device/slice_program_factory_rm_default.hpp
             slice/device/slice_program_factory_rm_sharded.hpp
             slice/device/slice_program_factory_rm_stride.hpp
             slice/device/slice_program_factory_tile.hpp

@@ -10,6 +10,8 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
 
+#include <ttnn/tensor/types.hpp>
+
 namespace ttnn {
 
 template <typename T>
@@ -171,6 +173,34 @@ ttnn::Tensor slice(
                     tt::tt_metal::ShardSpec(shard_spec_val.grid, new_shard_shape, shard_spec_val.orientation);
                 output_memory_config = MemoryConfig(
                     output_memory_config.memory_layout(), output_memory_config.buffer_type(), new_shard_spec);
+            }
+        } else if (
+            output_memory_config.created_with_nd_shard_spec() && output_memory_config.nd_shard_spec().has_value()) {
+            const auto& in_nd = output_memory_config.nd_shard_spec().value();
+            ttnn::SmallVector<uint32_t> output_dims(input_rank);
+            for (size_t i = 0; i < input_rank; i++) {
+                output_dims[i] = output_dim_i(i, modified_ends);
+            }
+            if (!rm_only) {
+                output_dims[input_rank - 2] =
+                    std::max(tt::round_up(output_dims[input_rank - 2], tile_shape[0]), tile_shape[0]);
+                output_dims[input_rank - 1] =
+                    std::max(tt::round_up(output_dims[input_rank - 1], tile_shape[1]), tile_shape[1]);
+            }
+            ttnn::SmallVector<uint32_t> new_shard_vec(input_rank);
+            for (size_t d = 0; d < input_rank; d++) {
+                const uint32_t in_shard = in_nd.shard_shape[d];
+                const uint32_t in_dim = input_shape[d];
+                const uint32_t out_dim = output_dims[d];
+                const uint32_t num_shards = tt::div_up(in_dim, in_shard);
+                new_shard_vec[d] = tt::div_up(out_dim, num_shards);
+            }
+            tt::tt_metal::Shape new_shard_shape(std::move(new_shard_vec));
+            if (new_shard_shape != in_nd.shard_shape) {
+                output_memory_config = MemoryConfig(
+                    output_memory_config.buffer_type(),
+                    tt::tt_metal::NdShardSpec{
+                        std::move(new_shard_shape), in_nd.grid, in_nd.orientation, in_nd.shard_distribution_strategy});
             }
         }
     }

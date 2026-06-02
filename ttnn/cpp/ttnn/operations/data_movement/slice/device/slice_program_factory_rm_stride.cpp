@@ -10,9 +10,39 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/buffer_types.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+
+namespace {
+
+uint32_t get_shard_width_elems(const Tensor& t) {
+    if (!t.is_sharded()) {
+        return t.logical_shape()[-1];
+    }
+    if (t.shard_spec().has_value()) {
+        return t.shard_spec()->shape[1];
+    }
+    return t.nd_shard_spec()->shard_shape[-1];
+}
+
+void get_rm_page_params_for_tensor(
+    const Tensor& t, uint32_t& num_pages_in_row, uint32_t& page_size_bytes, uint32_t& size_valid_last_page_bytes) {
+    const uint32_t unpadded_row_bytes = t.logical_shape()[-1] * t.element_size();
+    if (!t.is_sharded() || t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        num_pages_in_row = 1;
+        page_size_bytes = unpadded_row_bytes;
+        size_valid_last_page_bytes = unpadded_row_bytes;
+        return;
+    }
+    page_size_bytes = t.buffer()->page_size();
+    const uint32_t shard_w = get_shard_width_elems(t);
+    num_pages_in_row = tt::div_up(t.logical_shape()[-1], shard_w);
+    size_valid_last_page_bytes = unpadded_row_bytes - (num_pages_in_row - 1) * page_size_bytes;
+}
+
+}  // namespace
 
 namespace ttnn::prim {
 
@@ -68,10 +98,21 @@ SliceRmStrideProgramFactory::cached_program_t SliceRmStrideProgramFactory::creat
             .set_page_size(in_cb, cb_page_size_aligned);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    std::vector<uint32_t> reader_compile_time_args = {in_cb, element_size};
+    uint32_t num_pages_in_row_in = 1;
+    uint32_t page_size_in = 0;
+    uint32_t size_valid_last_in = 0;
+    get_rm_page_params_for_tensor(input_tensor, num_pages_in_row_in, page_size_in, size_valid_last_in);
+    uint32_t num_pages_in_row_out = 1;
+    uint32_t page_size_out = 0;
+    uint32_t size_valid_last_out = 0;
+    get_rm_page_params_for_tensor(output, num_pages_in_row_out, page_size_out, size_valid_last_out);
+
+    std::vector<uint32_t> reader_compile_time_args = {
+        in_cb, element_size, num_pages_in_row_in, page_size_in, size_valid_last_in};
     TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {in_cb, element_size};
+    std::vector<uint32_t> writer_compile_time_args = {
+        in_cb, element_size, num_pages_in_row_out, page_size_out, size_valid_last_out};
     TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(

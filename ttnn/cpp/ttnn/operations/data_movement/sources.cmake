@@ -110,7 +110,7 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_program_factory.cpp
     sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial.cpp
     slice/device/slice_device_operation.cpp
-    slice/device/slice_program_factory_rm.cpp
+    slice/device/slice_program_factory_rm_default.cpp
     slice/device/slice_program_factory_rm_sharded.cpp
     slice/device/slice_program_factory_rm_stride.cpp
     slice/device/slice_program_factory_tile.cpp
