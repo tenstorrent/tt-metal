@@ -212,6 +212,23 @@ def create_mesh_device(
     # compute cores are available. ETH takes priority over the env-var
     # because the op cannot run at all without the full grid.
     if needs_row_only:
+        # Prefer WORKER ROW dispatch (compute grid 8x9 -> x in [0,7]) which
+        # provides the x=7 cores these configs need, and is a superset of ETH's
+        # 8x8 grid. Try it BEFORE DispatchCoreType.ETH: on Galaxies where ETH
+        # dispatch cores cannot be allocated ("No more available dispatch cores
+        # on device 0"), the failed ETH open + MetalContext re-init leaves the
+        # command queue in a broken state and the next op's readback hangs
+        # (observed for add/gelu/layer_norm/softmax/transpose). ROW WORKER opens
+        # cleanly and avoids that; ETH stays as a fallback. Dispatch-core
+        # placement does not affect op results, only which cores are usable.
+        try:
+            return ttnn.open_mesh_device(
+                mesh_shape=ttnn.MeshShape(*mesh_shape),
+                l1_small_size=l1_small_size,
+                dispatch_core_config=ttnn.DispatchCoreConfig(axis=ttnn.DispatchCoreAxis.ROW),
+            )
+        except Exception:
+            pass
         try:
             return ttnn.open_mesh_device(
                 mesh_shape=ttnn.MeshShape(*mesh_shape),
