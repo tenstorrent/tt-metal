@@ -736,7 +736,14 @@ IDevice* MeshDeviceImpl::get_device(ChipId physical_device_id) const {
 
 std::vector<IDevice*> MeshDeviceImpl::get_devices() const {
     auto devices = view_->get_devices();
-    TT_ASSERT(!devices.empty(), "Mesh Device should have at least 1 IDevice");
+    // A mesh legitimately returns no *local* devices when its view spans device slots that
+    // are all remote — e.g. a create_submeshes() tile whose devices live on another host/rank.
+    // Various teardown paths iterate get_devices() over such submeshes, so only assert when
+    // the view has no device slots at all (a genuinely malformed mesh). Note: is_remote_only()
+    // is NOT usable here — it requires is_internal_state_initialized, which is already false by
+    // the time some teardown callers reach this. view_->num_devices() is the shape-based total
+    // (local + remote) and stays valid regardless of init/teardown state.
+    TT_ASSERT(!devices.empty() || view_->num_devices() > 0, "Mesh Device should have at least 1 IDevice");
     return devices;
 }
 
