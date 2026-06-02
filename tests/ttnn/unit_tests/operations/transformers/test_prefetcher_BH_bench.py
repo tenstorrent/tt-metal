@@ -681,12 +681,10 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
     ttnn.end_trace_capture(device, bench_trace, cq_id=0)
     assert bench_output is not None
 
-    aiclk_pre = device.get_clock_rate_mhz()
     t0 = time.perf_counter()
     ttnn.execute_trace(device, bench_trace, cq_id=0, blocking=False)
     ttnn.synchronize_device(device)
     elapsed = time.perf_counter() - t0
-    aiclk_post = device.get_clock_rate_mhz()
     ttnn.release_trace(device, bench_trace)
 
     ttnn.experimental.stop_dram_core_prefetcher(device)
@@ -695,8 +693,7 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
     tflops = _flops_per_matmul(_K) * trace_repeats / elapsed / 1e12
     logger.info(
         f"[dram_core_rc][{op_name}] dual_senders={dual_senders} trace_elapsed={elapsed * 1e3:.2f}ms "
-        f"repeats={trace_repeats} per_matmul={per_matmul_us:.2f}us aiclk_pre={aiclk_pre}MHz "
-        f"aiclk_post={aiclk_post}MHz -> {tflops:.4f} TFLOP/s"
+        f"repeats={trace_repeats} per_matmul={per_matmul_us:.2f}us -> {tflops:.4f} TFLOP/s"
     )
 
 
