@@ -1210,11 +1210,12 @@ class TtMistral4MoELayer(LightweightModule):
             gu_pc = self._expert_1d_mcast_pc(1, H // 32, 2 * I // 32)
             d_pc = self._expert_1d_mcast_pc(1, I // 32, H // 32)
 
-            # Untile routing_weights once: per-expert ttnn.slice on the TILE [1,1,1,EPD]
-            # tensor would internally untile→slice→retile every iteration (3 ops each).
-            # Doing one untile + per-expert (rm_slice + scalar_tilize) drops the per-step
-            # UntilizeWithUnpadding count from EPD to 1.
-            routing_weights_rm = ttnn.to_layout(routing_weights, ttnn.ROW_MAJOR_LAYOUT, memory_config=_mem)
+            # Permute routing weights once so each expert's column moves to the batch
+            # dim: [1,1,1,EPD] → [EPD,1,1,1]. Per-expert weight is then a dim-0 slice,
+            # which stays TILE-aligned and needs no re-tilize — vs the prior untile +
+            # per-iter (rm_slice + scalar_tilize) that emitted EPD TilizeWithValPadding
+            # ops. Same op forward() uses.
+            routing_weights_perm = ttnn.permute(routing_weights, [3, 0, 2, 1], memory_config=_mem)
             ttnn.deallocate(routing_weights)
 
             partial = None
@@ -1248,9 +1249,7 @@ class TtMistral4MoELayer(LightweightModule):
                     program_config=d_pc,
                 )
                 ttnn.deallocate(hidden_i)
-                w_i_rm = ttnn.slice(routing_weights_rm, [0, 0, 0, i], [1, 1, 1, i + 1], memory_config=_mem)
-                w_i = ttnn.to_layout(w_i_rm, ttnn.TILE_LAYOUT, memory_config=_mem)
-                ttnn.deallocate(w_i_rm)
+                w_i = ttnn.slice(routing_weights_perm, [i, 0, 0, 0], [i + 1, 1, 1, 1], memory_config=_mem)
                 weighted_i = ttnn.multiply(out_i, w_i, memory_config=_mem)
                 ttnn.deallocate(out_i)
                 ttnn.deallocate(w_i)
@@ -1261,7 +1260,7 @@ class TtMistral4MoELayer(LightweightModule):
                     ttnn.deallocate(partial)
                     ttnn.deallocate(weighted_i)
                     partial = new_partial
-            ttnn.deallocate(routing_weights_rm)
+            ttnn.deallocate(routing_weights_perm)
             partial = ttnn.to_memory_config(partial, ttnn.DRAM_MEMORY_CONFIG)
         else:
             x_exp = ttnn.repeat(x, ttnn.Shape([self.experts_per_device, 1, 1, 1]), memory_config=_mem)
