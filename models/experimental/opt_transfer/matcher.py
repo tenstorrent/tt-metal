@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from models.experimental.opt_transfer.schema import FusionProposal
 from models.experimental.opt_transfer.config import CONFIG
 
@@ -13,6 +14,20 @@ SYSTEM = (
 )
 
 
+def _extract_json(text: str):
+    """Tolerate ```json fences / surrounding prose: parse the first JSON array/object found."""
+    t = text.strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```(?:json)?\s*|\s*```$", "", t).strip()
+    try:
+        return json.loads(t)
+    except json.JSONDecodeError:
+        m = re.search(r"(\[.*\]|\{.*\})", t, re.DOTALL)
+        if not m:
+            raise
+        return json.loads(m.group(1))
+
+
 class _AnthropicTransport:
     def __init__(self, model):
         import anthropic
@@ -23,26 +38,6 @@ class _AnthropicTransport:
     def create(self, **kwargs):
         msg = self._client.messages.create(model=self._model, max_tokens=4096, **kwargs)
         return {"content": [{"type": "text", "text": b.text} for b in msg.content if b.type == "text"]}
-
-
-class Matcher:
-    def __init__(self, transport=None, model=None):
-        self.transport = transport or _AnthropicTransport(model or CONFIG.matcher_model)
-
-    def propose(self, graph_summary: list, kb: list) -> list:
-        kb_text = json.dumps([e.to_dict() for e in kb], indent=2)
-        system = [
-            {"type": "text", "text": SYSTEM},
-            {
-                "type": "text",
-                "text": "KNOWLEDGE BASE:\n" + kb_text,
-                "cache_control": {"type": "ephemeral"},
-            },
-        ]
-        user = [{"role": "user", "content": "OP GRAPH:\n" + json.dumps(graph_summary, indent=2)}]
-        resp = self.transport.create(system=system, messages=user)
-        text = resp["content"][0]["text"]
-        return [FusionProposal(**d) for d in json.loads(text)]
 
 
 EXTRACT_SYSTEM = (
@@ -75,7 +70,7 @@ class LLMClient:
             },
             indent=2,
         )
-        return json.loads(self._complete(sys, user))
+        return _extract_json(self._complete(sys, user))
 
     def propose(self, graph_summary, kb, diagnosis=None):
         kb_text = json.dumps([e.to_dict() for e in kb], indent=2)
@@ -90,4 +85,4 @@ class LLMClient:
         payload = {"op_graph": graph_summary}
         if diagnosis:
             payload["prior_failure_diagnosis"] = diagnosis  # re-propose using KB applicability_notes
-        return [FusionProposal(**d) for d in json.loads(self._complete(sys, json.dumps(payload, indent=2)))]
+        return [FusionProposal(**d) for d in _extract_json(self._complete(sys, json.dumps(payload, indent=2)))]

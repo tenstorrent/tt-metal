@@ -76,6 +76,8 @@ class RealImpl:
         # Per-block: compare fused QKV against the reference's separate-projection split.
         # Both sides must consume the SAME input the q/k/v projections see in the reference
         # forward, i.e. the post-attn_norm hidden state h — not raw x.
+        # NOTE: tf_pcc / drift metrics are intentionally not produced here (prefill QKV slice
+        # only); the long_decode_drift axis is offline-tested only and a decode-time follow-on.
         import torch
         from models.experimental.opt_transfer.verify import pcc
 

@@ -1,5 +1,5 @@
 import json
-from models.experimental.opt_transfer.matcher import Matcher
+from models.experimental.opt_transfer.matcher import LLMClient
 from models.experimental.opt_transfer.schema import KBEntry, PatternKind, FusionProposal
 
 
@@ -41,7 +41,7 @@ class FakeTransport:
 
 def test_matcher_returns_proposals():
     t = FakeTransport()
-    m = Matcher(transport=t)
+    m = LLMClient(transport=t)
     graph_summary = [
         {"name": "q_proj", "kind": "linear", "inputs": ["h"]},
         {"name": "k_proj", "kind": "linear", "inputs": ["h"]},
@@ -53,12 +53,9 @@ def test_matcher_returns_proposals():
 
 def test_matcher_marks_kb_for_prompt_caching():
     t = FakeTransport()
-    Matcher(transport=t).propose([], _kb())
+    LLMClient(transport=t).propose([], _kb())
     sys_blocks = t.last_request["system"]
     assert any(b.get("cache_control", {}).get("type") == "ephemeral" for b in sys_blocks)
-
-
-from models.experimental.opt_transfer.matcher import LLMClient
 
 
 class FakeT:
