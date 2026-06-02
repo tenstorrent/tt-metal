@@ -349,20 +349,25 @@ class VoxtralCPUReference:
         for step_idx in range(max_tokens):
             if debug is not None:
                 debug.set(f"step.{step_idx}.text.hidden_in", hidden.squeeze(0))
-            torch.manual_seed(acoustic_fm_noise_seed(seed, step_idx))
             if tt_acoustic is not None:
                 hc = hidden.detach().to(dtype=torch.bfloat16)
                 ca = cfg_alpha.to(device=hc.device, dtype=hc.dtype)
-                audio_codes = tt_acoustic.acoustic_codes_forward(hc, ca).to(torch.long)
-            elif debug is not None:
-                ac_out = self.acoustic_transformer(hidden, cfg_alpha, collect_semantic_logits=True)
-                assert isinstance(ac_out, tuple)
-                audio_codes, ac_debug = ac_out
-                audio_codes = audio_codes.to(torch.long)
-                for k, v in ac_debug.items():
-                    debug.set(f"step.{step_idx}.acoustic.{k}", v.squeeze() if v.dim() > 1 and v.shape[0] == 1 else v)
+                audio_codes = tt_acoustic.acoustic_codes_forward(
+                    hc, ca, noise_seed=acoustic_fm_noise_seed(seed, step_idx)
+                ).to(torch.long)
             else:
-                audio_codes = self.acoustic_transformer(hidden, cfg_alpha).to(torch.long)
+                torch.manual_seed(acoustic_fm_noise_seed(seed, step_idx))
+                if debug is not None:
+                    ac_out = self.acoustic_transformer(hidden, cfg_alpha, collect_semantic_logits=True)
+                    assert isinstance(ac_out, tuple)
+                    audio_codes, ac_debug = ac_out
+                    audio_codes = audio_codes.to(torch.long)
+                    for k, v in ac_debug.items():
+                        debug.set(
+                            f"step.{step_idx}.acoustic.{k}", v.squeeze() if v.dim() > 1 and v.shape[0] == 1 else v
+                        )
+                else:
+                    audio_codes = self.acoustic_transformer(hidden, cfg_alpha).to(torch.long)
             if debug is not None:
                 debug.set(f"step.{step_idx}.acoustic.codes", audio_codes.squeeze(0))
             generated_codes.append(audio_codes[0].detach().cpu())
