@@ -20,6 +20,7 @@ from models.common.utils import top_k_top_p_filtering
 from models.demos.falcon7b_common.tests.test_utils import get_num_devices, initialize_kv_cache, load_hf_model
 from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.falcon7b_common.tt.model_config import get_model_config
+from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import check_tokens_match, create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import get_hf_tt_cache_path
@@ -560,6 +561,8 @@ def run_falcon_demo_kv(
 
     # Verify output or perf if expected values are provided
     assert expected_perf_metrics is None or expected_greedy_output_path is None
+    if sku is None:
+        sku = get_current_device_sku_name()
     if expected_perf_metrics is not None or (model_name and sku):
         expected_measurements = {
             "prefill_t/s": True,

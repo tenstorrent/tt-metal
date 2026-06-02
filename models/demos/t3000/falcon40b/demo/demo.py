@@ -21,6 +21,7 @@ from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconConf
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_common import PytorchFalconCausalLM
 from models.demos.t3000.falcon40b.tt.model_config import get_model_config, model_config_entries
+from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -198,14 +199,13 @@ def run_falcon_demo_kv(
         logger.info("Running in performance measurement mode (invalid outputs)!")
 
         N_warmup_iter = {"inference_prefill": 5, "inference_decode": 5}
-        verify_sku = "wh_llmbox_perf" if determine_device_name(mesh_device) in {"T3K", "P150x8"} else None
-        if verify_sku:
-            resolved_perf_targets = resolve_perf_targets(
-                model_name="falcon-40b",
-                sku=verify_sku,
-                batch_size=batch_size,
-                seq_len=max_seq_len,
-            )
+        verify_sku = get_current_device_sku_name()
+        resolved_perf_targets = resolve_perf_targets(
+            model_name="falcon-40b",
+            sku=verify_sku,
+            batch_size=batch_size,
+            seq_len=max_seq_len,
+        )
         if resolved_perf_targets:
             if resolved_perf_targets.get("prefill_t/s") is not None:
                 perf_targets["prefill_t/s"] = float(resolved_perf_targets["prefill_t/s"])
@@ -636,7 +636,7 @@ def run_falcon_demo_kv(
         input_sequence_length=num_input_tokens,
         output_sequence_length=1 if perf_mode else output_token_index + 1,
     )
-    if perf_mode and resolved_perf_targets and verify_sku:
+    if perf_mode and resolved_perf_targets:
         verify_perf(
             measurements,
             expected_measurements={k: True for k in ("prefill_t/s", "decode_t/s", "decode_t/s/u") if k in perf_targets},

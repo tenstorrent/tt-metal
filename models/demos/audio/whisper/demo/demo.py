@@ -38,6 +38,7 @@ from models.demos.audio.whisper.tt.ttnn_optimized_functional_whisper import (
 )
 from models.demos.audio.whisper.tt.whisper_generator import GenerationParams, WhisperGenerator
 from models.demos.utils.common_demo_utils import get_mesh_mappers
+from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import verify_perf
 
 available_devices = len(ttnn.get_device_ids()) if ttnn.get_device_ids() else 1
@@ -880,7 +881,7 @@ def test_demo_for_conditional_generation(
 
     if should_check_perf:
         # Whisper perf targets are maintained for N150 and P150 only.
-        sku = "bh_p150" if is_blackhole() else "wh_n150"
+        sku = get_current_device_sku_name()
 
         total_batch = mesh_device.get_num_devices() * batch_size_per_device
         measurements = {

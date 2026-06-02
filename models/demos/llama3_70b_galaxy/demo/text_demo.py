@@ -23,6 +23,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.common.utility_functions import (
     comp_pcc,
 )
+from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
 
@@ -1458,7 +1459,7 @@ def test_demo_text(
 
     test_id = request.node.callspec.id
     if "repeat2" in test_id:
-        sku = "wh_galaxy_perf" if model_args.device_name == "TG" else model_args.device_name
+        sku = get_current_device_sku_name()
         resolved_targets = resolve_perf_targets(
             model_name=model_args.base_model_name,
             sku=sku,

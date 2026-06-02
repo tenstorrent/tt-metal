@@ -18,6 +18,7 @@ from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.multimodal.gemma3.tt.gemma_e2e_model import TtGemmaModel
 from models.demos.multimodal.gemma3.tt.gemma_multimodal_generator import GemmaMultimodalGenerator as Generator
+from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_accuracy, verify_perf
 from models.demos.utils.model_targets import resolve_accuracy_targets, resolve_perf_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -1370,33 +1371,34 @@ def test_demo_text(
 
         # check measurements against CI performance targets -- for batch size 32
         if global_batch_size == 32:
+            perf_sku = get_current_device_sku_name()
             logger.info(
-                f"Checking measurements against CI performance targets for batch size 32 of {model_name} on {tt_device_name}"
+                f"Checking measurements against CI performance targets for batch size 32 of {model_name} on {tt_device_name}, sku={perf_sku}"
             )
             resolved_ci_targets = resolve_perf_targets(
                 model_name=model_name,
-                sku=tt_device_name,
+                sku=perf_sku,
                 batch_size=global_batch_size,
                 seq_len=max(prefill_lens),
             )
             if not resolved_ci_targets:
                 resolved_ci_targets = resolve_perf_targets(
                     model_name=model_name,
-                    sku=tt_device_name,
+                    sku=perf_sku,
                     batch_size=global_batch_size,
                     seq_len=max_seq_len,
                 )
             if not resolved_ci_targets and max_seq_len != 1024:
                 resolved_ci_targets = resolve_perf_targets(
                     model_name=model_name,
-                    sku=tt_device_name,
+                    sku=perf_sku,
                     batch_size=global_batch_size,
                     seq_len=1024,
                 )
             if not resolved_ci_targets:
                 resolved_ci_targets = resolve_perf_targets(
                     model_name=model_name,
-                    sku=tt_device_name,
+                    sku=perf_sku,
                     batch_size=global_batch_size,
                     seq_len=None,
                 )
@@ -1418,7 +1420,7 @@ def test_demo_text(
                     measurements,
                     expected_measurements=expected_measurements,
                     model_name=model_name,
-                    sku=tt_device_name,
+                    sku=perf_sku,
                     batch_size=global_batch_size,
                     seq_len=max(prefill_lens),
                 )

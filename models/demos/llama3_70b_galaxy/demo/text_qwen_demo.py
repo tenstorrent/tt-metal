@@ -19,6 +19,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.common.utility_functions import (
     comp_pcc,
 )
+from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
 
@@ -1125,7 +1126,7 @@ def test_qwen_demo_text(
 
     # Test batch-32, ISL=128, OSL=128 TTFT and decode throughput
     if batch_size == 32 and len(input_prompts[0]) == 507:
-        sku = "wh_galaxy_perf" if model_args.device_name == "TG" else model_args.device_name
+        sku = get_current_device_sku_name()
         resolved_targets = resolve_perf_targets(
             model_name="qwen3-32b-galaxy",
             sku=sku,
