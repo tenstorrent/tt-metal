@@ -2,37 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// SFPU-backed CB hash for DEBUG_CB_HASH (Blackhole).
+// Blackhole SFPU-backed CB hash for DEBUG_CB_HASH.
 //
-// SFPU counterpart to the plain RISC-V scalar hash in
-// tt_metal/hw/ckernels/{arch}/metal/llk_api/debug/llk_hash_cb_api.h. Blackhole's
-// integer multiply is SFPMUL24 — actually a 23b × 23b → 23b op per
-// BlackholeA0/SFPMUL24.md — so an exact FNV-1a-32 would need ~5–7 SFPU ops per
-// step plus UPPER+LOWER recombination. Instead this is an honestly-23-bit
-// lanewise multiplicative hash ("FNV23"): the low 23 bits of FNV-32 run in
-// parallel across all 32 SFPU lanes, with a tree-XOR reduction to lane 0.
+// Computes a 23-bit FNV-like ("FNV23") lanewise multiplicative hash, then writes
+// the result back into DEST so the standard packer can move it to L1. Blackhole
+// has SFPMUL24 (a 23b × 23b → 23b multiply), so the per-step multiply is a single
+// instruction (vs the shift-and-add decomposition on Wormhole).
 //
-//   Per-lane per-word: h_lane = (h_lane ^ w) * 0x000193    (truncated to 23b)
-//   Init:              h_lane = 0x1C9DC5                   (= 0x811C9DC5 & 0x7FFFFF)
-//   Final reduction:   h = XOR of all 32 lanes              (single u32, 23b wide)
+//   Per-lane per-word:  h_lane = (h_lane ^ w) * 0x000193  (truncated to 23 bits)
+//   Init:               h_lane = 0x1C9DC5                 (= 0x811C9DC5 & 0x7FFFFF)
 //
-// The hash is NOT bit-equal to the scalar variant — only compare SFPU-hashes
-// to SFPU-hashes.
+// Read-back design (see the Wormhole header for the full rationale):
+//   - All DEST access uses the proven copy_dest_values idiom: raw INT32
+//     SFPLOAD/SFPSTORE with ADDR_MOD_3 + sfpi::dst_reg++. Hand-rolled ADDR_MOD_7
+//     + explicit offsets do NOT round-trip 32-bit DEST datums through the packer.
+//   - _store_to_dest zeroes the whole tile, then writes the 32 per-lane
+//     accumulators into DEST row 0; the host XOR-folds the packed tile and the
+//     zeroed rows cancel, leaving XOR(32 accumulators).
+//   - The DEST debug-bus read-back (dbg_get_array_row) is intentionally NOT used.
 //
-// Caller responsibility (see hash_cb_sfpu in api/compute/debug/cb_hash.h):
-//   UNPACK puts INT32 tiles into DEST, MATH calls _init/_tile/_finish_to_l1,
-//   UNPACK polls and DPRINTs from L1.
-//
-// STATUS: draft. Inner SFPU loop and DEST-row read-back follow the BH ISA
-// docs (SFPMUL24, SFPSHFT2, SFPLOAD/SFPSTORE INT32, dbg_get_array_row) but
-// have not been hardware-validated. Expect iteration on SFPSHFT2 lane-shift
-// ordering and the SFPU/DEST drain before the debug-bus read on first run.
+// STATUS: structure mirrors the hardware-validated Wormhole path; Blackhole SFPU
+// sequence is pending on-device bring-up.
 
 #pragma once
 
 #include <cstdint>
 
-#include "ckernel_debug.h"  // dbg_get_array_row(dbg_array_id::DEST, ...)
 #include "ckernel_globals.h"
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
@@ -40,29 +35,38 @@
 #include "llk_defs.h"
 #include "llk_math_common.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_load_config.h" // _init_sfpu_config_reg
 
 using namespace ckernel;
 
 namespace ckernel::sfpu
 {
 
-// Constants for the 23-bit FNV variant. Both fit in SFPMUL24_MOD1_LOWER's 23-bit input window.
 static constexpr std::uint32_t FNV23_INIT  = 0x1C9DC5u; // 0x811C9DC5 & 0x7FFFFF
 static constexpr std::uint32_t FNV23_PRIME = 0x000193u; // 0x01000193 & 0x7FFFFF
 
-// LReg assignments. LReg7 reserved as per ISA for indirect-mode encodings; use 0..6.
+// A 32x32 INT32 tile occupies 32 SFPU rows (32 lanes each). dst_reg++ walks them.
+static constexpr int DEST_ROWS = 32;
+
+// LReg assignments. LReg7 reserved per ISA for indirect-mode encodings; use 0..6.
 static constexpr int LREG_W     = 0; // scratch / word load
 static constexpr int LREG_PRIME = 1; // FNV23 prime constant
-static constexpr int LREG_H     = 2; // per-lane accumulator
-static constexpr int LREG_TMP   = 3; // reduction scratch
+static constexpr int LREG_H     = 2; // per-lane accumulator (persists across tiles)
+static constexpr int LREG_ZERO  = 3; // 0 constant, for clearing dest rows
 
-// DEST addressing on SFPU is in 16B strides; an INT32 row of 32 elements
-// (128B) is 2 × 16B units.
-static constexpr int DEST_ROW_STRIDE_INT32 = 2;
-
-// Initialise the SFPU accumulator. Call once before any _llk_math_hash_cb_tile_ call.
 inline void _llk_math_hash_cb_init_()
 {
+    // Configure the SFPU like the standard eltwise-unary-SFPU init so DEST
+    // addressing via ADDR_MOD_3 + dst_reg++ is well-defined.
+    sfpu::_init_sfpu_config_reg();
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 0},
+    }
+        .set(ADDR_MOD_3);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+
     // Load FNV23 init constant into LREG_H (broadcast across all 32 lanes).
     TTI_SFPLOADI(LREG_H, sfpi::SFPLOADI_MOD0_LOWER, FNV23_INIT & 0xFFFFu);
     TTI_SFPLOADI(LREG_H, sfpi::SFPLOADI_MOD0_UPPER, (FNV23_INIT >> 16) & 0xFFFFu);
@@ -72,76 +76,52 @@ inline void _llk_math_hash_cb_init_()
     TTI_SFPLOADI(LREG_PRIME, sfpi::SFPLOADI_MOD0_UPPER, (FNV23_PRIME >> 16) & 0xFFFFu);
 }
 
-// Accumulate one DEST tile into the running per-lane hash. The tile must
-// already be unpacked to DEST at `dst_tile_idx` in INT32 format (32×32 u32).
-//
-//   LREG_W = SFPLOAD<INT32>(row offset)             — 32 u32, one per lane
-//   LREG_H = LREG_H XOR LREG_W                       — per-lane, 32b
-//   LREG_H = SFPMUL24_LOWER(LREG_H, LREG_PRIME)      — per-lane, masks to 23b
-inline void _llk_math_hash_cb_tile_(std::uint32_t dst_tile_idx)
+// Fold one DEST tile (already populated by the datacopy) into the 32 per-lane
+// accumulators in LREG_H. Walks all 32 SFPU rows of the tile with dst_reg++.
+inline void _llk_math_hash_cb_tile_(std::uint32_t /*dst_tile_idx*/)
 {
-    const int tile_base = int(dst_tile_idx) * 32 * DEST_ROW_STRIDE_INT32;
+    math::reset_counters(p_setrwc::SET_ABD_F);
 
 #pragma GCC unroll 0
-    for (int row = 0; row < 32; ++row)
+    for (int row = 0; row < DEST_ROWS; ++row)
     {
-        const int offset = tile_base + row * DEST_ROW_STRIDE_INT32;
-
-        // INT32 mode reads 32 bits verbatim, subject to the Dst UnshuffleFP32
-        // that applies to every 32b SFPLOAD. Any golden comparison must mirror
-        // that permutation.
-        TT_SFPLOAD(LREG_W, InstrModLoadStore::INT32, ADDR_MOD_7, offset);
+        // INT32 mode reads 32 bits verbatim (subject to the Dst UnshuffleFP32
+        // that applies to every 32b SFPLOAD).
+        TT_SFPLOAD(LREG_W, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
 
         // h ^= w  (per-lane 32b XOR; top 9 bits dropped by next mul)
         TTI_SFPXOR(0, LREG_W, LREG_H, 0);
 
         // h *= prime (SFPMUL24_MOD1_LOWER masks operands and result to 23b)
         TTI_SFPMUL24(LREG_H, LREG_PRIME, p_sfpu::LCONST_0, LREG_H, sfpi::SFPMUL24_MOD1_LOWER);
+
+        sfpi::dst_reg++;
     }
 }
 
-// Reduce 32 lanes → 1, drain SFPU, read the hash out of DEST via the debug
-// array path, and publish it via a single u32 write to L1 followed by a
-// ready-flag write. Caller (hash_cb_sfpu) supplies both L1 addresses.
-//
-// dst_tile_idx is implicitly 0 — the orchestration in cb_hash.h always
-// accumulates into DEST slot 0, and the SFPSTORE here writes row 0 of that
-// slot, so the dbg_get_array_row call reads from the same row.
-inline void _llk_math_hash_cb_finish_to_l1_(std::uint32_t l1_hash_addr, std::uint32_t l1_ready_addr)
+// Write the per-lane accumulators back into DEST for the packer: zero the whole
+// tile, then store the 32 accumulators into row 0. See the Wormhole header for
+// why the host-side whole-tile XOR-fold then recovers XOR(32 accumulators).
+inline void _llk_math_hash_cb_store_to_dest_()
 {
-    // ---- Tree-XOR reduction across 32 lanes into lane 0. ----
-    // After each stage lane 0 carries the XOR of the lanes folded in so far.
-    // TODO(HW): the SFPSHFT2 mod-4 encoding here is a placeholder — the
-    // immediate-form unroll pattern in horizontal_reduce_max
-    // (ckernel_sfpu_reduce.h) is the production-quality reference. Validate
-    // on device before relying on cross-run comparisons.
-    for (int stage = 4; stage >= 0; --stage)
+    TTI_SFPLOADI(LREG_ZERO, sfpi::SFPLOADI_MOD0_LOWER, 0u);
+    TTI_SFPLOADI(LREG_ZERO, sfpi::SFPLOADI_MOD0_UPPER, 0u);
+
+    // Zero every row of the tile.
+    math::reset_counters(p_setrwc::SET_ABD_F);
+#pragma GCC unroll 0
+    for (int row = 0; row < DEST_ROWS; ++row)
     {
-        TTI_SFPMOV(0, LREG_H, LREG_TMP, 0);
-        TTI_SFPSHFT2(0, LREG_TMP, LREG_TMP, 4);
-        TTI_SFPXOR(0, LREG_TMP, LREG_H, 0);
+        TT_SFPSTORE(LREG_ZERO, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
+        sfpi::dst_reg++;
     }
 
-    // ---- Stash lane 0 of LREG_H in DEST[0][row 0] so MATH can read it. ----
-    TT_SFPSTORE(LREG_H, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+    // Overwrite row 0 with the 32 per-lane accumulators.
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    TT_SFPSTORE(LREG_H, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
 
-    // ---- Drain SFPU + DEST writes before reading DEST from scalar code. ----
-    // SFPSTORE goes through the SFPU pipeline; without this, dbg_get_array_row
-    // can race the pending DEST write and return the previous tile's value.
+    // Drain the SFPU pipeline so the packer sees the final dest contents.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
-
-    // ---- Read DEST row 0 via debug array path (8 dwords). ----
-    // Lane 0's value lives at rd_data[0] for INT32 DEST rows.
-    std::uint32_t rd_data[8];
-    dbg_get_array_row(dbg_array_id::DEST, /*row_addr=*/0, rd_data);
-    const std::uint32_t h = rd_data[0];
-
-    // ---- Publish to L1: hash first, then ready flag. ----
-    // Two volatile writes to distinct addresses are not reorderable w.r.t.
-    // each other, and the L1 cache is write-through on BH, so UNPACK's poll
-    // (with invalidate_l1_cache()) observes hash before ready.
-    *reinterpret_cast<volatile std::uint32_t*>(l1_hash_addr)  = h;
-    *reinterpret_cast<volatile std::uint32_t*>(l1_ready_addr) = 1u;
 }
 
 } // namespace ckernel::sfpu

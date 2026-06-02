@@ -3,17 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // Tests for the DEBUG_CB_HASH compute API:
-//   - hash_cb_trisc(): TRISC scalar FNV-1a-32 over a CB.
-//   - hash_cb_sfpu():  SFPU lanewise FNV23 with MATH → L1 → UNPACK round trip.
+//   - hash_cb_trisc(): TRISC scalar FNV-1a-32 over a CB, printed via DPRINT.
+//   - hash_cb_sfpu():  SFPU lanewise FNV23 over a CB, left in DEST for the
+//                      caller to pack out; the host XOR-folds the result tile.
 //
 // Each test launches a tiny single-core program that reads a tile from DRAM
-// into an input CB, invokes the hash probe (which DPRINTs the result), then
-// copies the tile through to an output CB. The test asserts:
-//   1. DPRINT contains the expected "hash[0x<label>] cb=<id> tiles=<n> = 0x*"
-//      line — i.e. the probe ran and emitted output in the diff-friendly
-//      format.
-//   2. Two back-to-back runs on the same input produce the same hash —
-//      the deterministic-fingerprint property that makes the probe useful.
+// into an input CB, invokes the hash probe, then copies the result through to
+// an output CB / DRAM. The tests assert, per variant:
+//   1. The probe produced a non-zero fingerprint (scalar: parsed from DPRINT;
+//      SFPU: host XOR-fold of the packed result tile).
+//   2. Two back-to-back runs on the same input produce the same fingerprint.
+//   3. Distinct inputs produce distinct fingerprints (discrimination).
 
 #include <cstdint>
 #include <fstream>
@@ -157,6 +157,53 @@ uint32_t run_once(
     return extract_hash(fixture->dprint_file_name, LABEL, INPUT_CB, NUM_TILES);
 }
 
+// Launch one run of the SFPU hash kernel and return the host XOR-fold of the
+// packed result tile. hash_cb_sfpu leaves the 32 per-lane accumulators in DEST
+// row 0 (rest zeroed); the kernel packs that tile to OUTPUT_CB, the writer
+// shuttles it to DRAM, and folding the whole tile recovers XOR(32 accumulators).
+uint32_t run_once_sfpu(
+    DevicePrintFixture* fixture,
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const std::vector<uint32_t>& input) {
+    Setup s(mesh_device, tt::DataFormat::Int32);
+    auto& cq = mesh_device->mesh_command_queue();
+
+    auto reader = CreateKernel(
+        *s.program,
+        READER_KERNEL,
+        s.core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = {INPUT_CB, 0}});
+    auto writer = CreateKernel(
+        *s.program,
+        WRITER_KERNEL,
+        s.core,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = {OUTPUT_CB, 0}});
+    CreateKernel(
+        *s.program,
+        "tests/tt_metal/tt_metal/test_kernels/compute/cb_hash_sfpu.cpp",
+        s.core,
+        ComputeConfig{.compile_args = {static_cast<uint32_t>(NUM_TILES)}});
+
+    SetRuntimeArgs(
+        *s.program, reader, s.core, {static_cast<uint32_t>(s.input_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES)});
+    SetRuntimeArgs(
+        *s.program, writer, s.core, {static_cast<uint32_t>(s.output_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES)});
+
+    distributed::WriteShard(cq, s.input_dram, const_cast<std::vector<uint32_t>&>(input), s.zero);
+    fixture->RunProgram(mesh_device, s.workload);
+
+    std::vector<uint32_t> result(NUM_TILES * 1024, 0u);
+    distributed::ReadShard(cq, result, s.output_dram, s.zero);
+
+    uint32_t h = 0u;
+    for (uint32_t w : result) {
+        h ^= w;
+    }
+    return h;
+}
+
 }  // namespace
 
 class CbHashTest : public DevicePrintFixture {};
@@ -192,7 +239,7 @@ TEST_F(CbHashTest, HashCbTriscDeterminism) {
 
 // ---------- hash_cb_sfpu: SFPU FNV23, INT32 ----------
 
-TEST_F(CbHashTest, HashCbSfpuEmitsLine) {
+TEST_F(CbHashTest, HashCbSfpuProducesHash) {
     this->RunTestOnDevice(
         [](DevicePrintFixture* f, const std::shared_ptr<distributed::MeshDevice>& d) {
             // INT32 tile = 32*32*4 = 4096 bytes = 1024 u32s.
@@ -200,9 +247,8 @@ TEST_F(CbHashTest, HashCbSfpuEmitsLine) {
             for (size_t i = 0; i < input.size(); ++i) {
                 input[i] = 0xDEAD0000u | static_cast<uint32_t>(i);
             }
-            uint32_t h = run_once(
-                f, d, "tests/tt_metal/tt_metal/test_kernels/compute/cb_hash_sfpu.cpp", tt::DataFormat::Int32, input);
-            EXPECT_NE(h, 0u) << "hash_cb_sfpu did not emit a hash line we could parse";
+            uint32_t h = run_once_sfpu(f, d, input);
+            EXPECT_NE(h, 0u) << "hash_cb_sfpu produced a zero fingerprint";
         },
         this->devices_[0]);
 }
@@ -214,10 +260,8 @@ TEST_F(CbHashTest, HashCbSfpuDeterminism) {
             for (size_t i = 0; i < input.size(); ++i) {
                 input[i] = 0xC0FFEE00u + static_cast<uint32_t>(i);
             }
-            uint32_t h1 = run_once(
-                f, d, "tests/tt_metal/tt_metal/test_kernels/compute/cb_hash_sfpu.cpp", tt::DataFormat::Int32, input);
-            uint32_t h2 = run_once(
-                f, d, "tests/tt_metal/tt_metal/test_kernels/compute/cb_hash_sfpu.cpp", tt::DataFormat::Int32, input);
+            uint32_t h1 = run_once_sfpu(f, d, input);
+            uint32_t h2 = run_once_sfpu(f, d, input);
             EXPECT_NE(h1, 0u);
             EXPECT_EQ(h1, h2) << "hash_cb_sfpu is not deterministic across runs";
         },
@@ -249,10 +293,8 @@ TEST_F(CbHashTest, HashCbSfpuDiscriminates) {
         [](DevicePrintFixture* f, const std::shared_ptr<distributed::MeshDevice>& d) {
             std::vector<uint32_t> a(NUM_TILES * 1024, 0xAAAA5555u);
             std::vector<uint32_t> b(NUM_TILES * 1024, 0x12345678u);
-            uint32_t ha = run_once(
-                f, d, "tests/tt_metal/tt_metal/test_kernels/compute/cb_hash_sfpu.cpp", tt::DataFormat::Int32, a);
-            uint32_t hb = run_once(
-                f, d, "tests/tt_metal/tt_metal/test_kernels/compute/cb_hash_sfpu.cpp", tt::DataFormat::Int32, b);
+            uint32_t ha = run_once_sfpu(f, d, a);
+            uint32_t hb = run_once_sfpu(f, d, b);
             EXPECT_NE(ha, 0u);
             EXPECT_NE(hb, 0u);
             EXPECT_NE(ha, hb) << "hash_cb_sfpu returned the same value for distinct inputs: 0x" << std::hex << ha;

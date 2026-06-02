@@ -15,15 +15,11 @@
 // ===========================================================================
 // LLK-API entrypoints for the DEBUG_CB_HASH compute-API surface.
 //
-//   - llk_hash_cb_trisc            : scalar FNV-1a-32 over a CB's L1 bytes.
-//                                    Pure RISC-V, no Tensix Engine state.
-//   - llk_hash_cb_sfpu_reset_ready : UNPACK side: clear the L1 ready flag
-//                                    before the SFPU variant starts.
-//   - llk_hash_cb_sfpu_print_from_l1: UNPACK side: poll the L1 ready flag,
-//                                    then read the hash u32 and DPRINT.
+//   - llk_hash_cb_trisc : scalar FNV-1a-32 over a CB's L1 bytes, printed via
+//                         DPRINT. Pure RISC-V, no Tensix Engine state.
 //
-// The SFPU variant's MATH side lives in debug/llk_math_hash_cb_api.h;
-// orchestration is in api/compute/debug/cb_hash.h::hash_cb_sfpu.
+// The SFPU variant's MATH side lives in debug/llk_math_hash_cb_api.h; its result
+// is left in DEST for the packer (see api/compute/debug/cb_hash.h::hash_cb_sfpu).
 //
 // All entrypoints expand to empty inlines when DEBUG_CB_HASH is undefined.
 // ===========================================================================
@@ -56,38 +52,6 @@ inline void llk_hash_cb_trisc(uint32_t cb_id, uint32_t num_tiles, uint32_t label
     // completed — no concurrent L1 access conflicts.
     DPRINT("hash[0x{:x}] cb={} tiles={} = 0x{:x}\n", label, cb_id, num_tiles, h);
 #else
-    (void)cb_id;
-    (void)num_tiles;
-    (void)label;
-#endif
-}
-
-// UNPACK-side helper for hash_cb_sfpu. Clears the L1 ready flag before MATH
-// publishes a new hash, so the post-compute poll cannot return early on a
-// stale flag from a previous probe.
-inline void llk_hash_cb_sfpu_reset_ready(uint32_t l1_ready_addr) {
-#ifdef DEBUG_CB_HASH
-    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_ready_addr) = 0u;
-#else
-    (void)l1_ready_addr;
-#endif
-}
-
-// UNPACK-side helper for hash_cb_sfpu. Polls the L1 ready flag set by MATH,
-// then reads the hash u32 out of L1 and prints in the same line format as
-// llk_hash_cb_trisc so the two variants diff cleanly side by side.
-inline void llk_hash_cb_sfpu_print_from_l1(
-    uint32_t l1_hash_addr, uint32_t l1_ready_addr, uint32_t cb_id, uint32_t num_tiles, uint32_t label) {
-#ifdef DEBUG_CB_HASH
-    volatile tt_l1_ptr uint32_t* const ready_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_ready_addr);
-    while (*ready_ptr == 0u) {
-        invalidate_l1_cache();
-    }
-    const uint32_t h = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_hash_addr);
-    DPRINT("hash[0x{:x}] cb={} tiles={} = 0x{:x}\n", label, cb_id, num_tiles, h);
-#else
-    (void)l1_hash_addr;
-    (void)l1_ready_addr;
     (void)cb_id;
     (void)num_tiles;
     (void)label;

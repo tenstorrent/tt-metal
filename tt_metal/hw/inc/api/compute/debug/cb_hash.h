@@ -55,27 +55,6 @@ namespace ckernel {
 //     hash[<label hex>] cb=<cb_id dec> tiles=<n dec> = <hash hex>
 // ===========================================================================
 
-// ---------------------------------------------------------------------------
-// L1 hand-off slot for hash_cb_sfpu (MATH → UNPACK).
-//
-// hash_cb_sfpu has MATH stash the reduced hash at a fixed offset inside the
-// reserved MEM_LLK_DEBUG region, then UNPACK polls a ready flag and DPRINTs.
-// Using the existing debug region avoids requiring callers to allocate an
-// output CB. The slot is placed at offset 64 to stay clear of the checkpoint
-// state (api/debug/checkpoint.h, ~16 bytes at offset 0). hash_cb_sfpu and
-// DEBUG_CHECKPOINT are both debug-only tools and should not be needed
-// concurrently.
-// ---------------------------------------------------------------------------
-constexpr uint32_t DEBUG_HASH_L1_OFFSET = 64;
-constexpr uint32_t DEBUG_HASH_L1_HASH_ADDR = MEM_LLK_DEBUG_BASE + DEBUG_HASH_L1_OFFSET;
-constexpr uint32_t DEBUG_HASH_L1_READY_ADDR = MEM_LLK_DEBUG_BASE + DEBUG_HASH_L1_OFFSET + 4;
-
-// Compile-time guard: if the debug region shrinks or the offset moves, this
-// fires instead of silently corrupting adjacent memory.
-static_assert(
-    DEBUG_HASH_L1_OFFSET + 8 <= MEM_LLK_DEBUG_SIZE,
-    "DEBUG_HASH_L1 slot (hash u32 + ready u32) exceeds the MEM_LLK_DEBUG region");
-
 // clang-format off
 /**
  * Scalar (TRISC-side) CB hash. Runs FNV-1a-32 over the L1 bytes of `cb_id` on
@@ -120,30 +99,25 @@ ALWI void hash_cb_trisc(uint32_t cb_id, uint32_t num_tiles, uint32_t label) {
  * SFPU-side CB hash. Computes a 23-bit ("FNV23") lanewise multiplicative hash
  * over the tile data of `in_cb` after it has been unpacked/moved to DEST (not
  * the raw L1 bytes — the values are subject to the INT32 SFPLOAD UnshuffleFP32
- * permutation). Routes the single-u32 result through L1 (MATH writes the
- * reduced hash to a fixed slot in the MEM_LLK_DEBUG region, UNPACK polls a
- * ready flag and reads it back) before printing via DPRINT in the same format
- * as hash_cb_trisc:
- *     hash[0x<label>] cb=<cb_id> tiles=<n> = 0x<hash>
+ * permutation), then leaves the result in DEST slot 0 for the caller to pack
+ * out: DEST row 0 holds the 32 per-lane accumulators and the rest of the tile
+ * is zeroed. The caller packs that tile to its output CB; a host/scalar consumer
+ * XOR-folds the whole tile, which yields XOR(32 accumulators) — a deterministic,
+ * input-sensitive fingerprint independent of the SFPU lane <-> tile-position
+ * permutation. See the tt-llk standalone test (tests/sources/hash_cb_test.cpp)
+ * and its pytest for the end-to-end fold.
  *
- * The L1 round trip is deliberate: it exercises the same MATH → L1 → UNPACK
- * handoff that production compute kernels use, so this variant can flag
- * cross-TRISC races that the engine-neutral hash_cb hides.
+ * This routes through the proven SFPU -> DEST -> PACK -> L1 path; it does NOT
+ * use the DEST debug-bus read-back (which does not round-trip 32-bit DEST).
  *
  * Trade-offs versus hash_cb_trisc:
- *   - Touches SFPU LReg state and DEST slot 0. Wrap the call in
- *     tile_regs_acquire / tile_regs_commit, and expect DEST slot 0 to be
- *     clobbered.
+ *   - Touches SFPU LReg state and clobbers DEST slot 0. Wrap the call in
+ *     tile_regs_acquire and pack DEST slot 0 afterwards (tile_regs_commit/wait).
  *   - Input CB must hold INT32 tiles; the kernel must be built with the
- *     unpack-to-dest path enabled for 32-bit formats (the standard config
- *     for INT32). See the tt-llk standalone test for an end-to-end example.
- *   - Hash value is NOT bit-equal to hash_cb_trisc's FNV-1a-32. Compare SFPU
- *     hashes only to other SFPU hashes.
- *
- * No caller-side output buffer is required — the L1 slot lives at a fixed
- * address inside the reserved MEM_LLK_DEBUG region (see DEBUG_HASH_L1_*
- * constants above). hash_cb_sfpu and DEBUG_CHECKPOINT share that region and
- * are not safe to invoke concurrently.
+ *     unpack-to-dest path enabled for 32-bit formats (the standard config for
+ *     INT32).
+ *   - Produces a tile (not a printed line): the caller packs DEST and folds the
+ *     result host-side. Hash value is NOT bit-equal to hash_cb_trisc's FNV-1a-32.
  *
  * Return value: None
  *
@@ -151,16 +125,11 @@ ALWI void hash_cb_trisc(uint32_t cb_id, uint32_t num_tiles, uint32_t label) {
  * |-----------|----------------------------------------------------------|----------|-------------|----------|
  * | in_cb     | CB holding the tiles to hash (INT32 format expected)     | uint32_t | 0 to 31     | True     |
  * | num_tiles | The number of tiles from the front of in_cb to include   | uint32_t | >= 1        | True     |
- * | label     | A caller-chosen tag to identify this probe in the output | uint32_t | any         | True     |
  */
 // clang-format on
 #ifndef ARCH_QUASAR
-ALWI void hash_cb_sfpu(uint32_t in_cb, uint32_t num_tiles, uint32_t label) {
+ALWI void hash_cb_sfpu(uint32_t in_cb, uint32_t num_tiles) {
 #ifdef DEBUG_CB_HASH
-    // UNPACK pre-clears the ready flag so the post-compute poll only fires on
-    // MATH's write for *this* call.
-    UNPACK((llk_hash_cb_sfpu_reset_ready(DEBUG_HASH_L1_READY_ADDR)));
-
     MATH((llk_math_hash_cb_init()));
     cb_wait_front(in_cb, num_tiles);
 
@@ -174,25 +143,18 @@ ALWI void hash_cb_sfpu(uint32_t in_cb, uint32_t num_tiles, uint32_t label) {
 
     cb_pop_front(in_cb, num_tiles);
 
-    // MATH reduces to lane 0, reads the result out of DEST, stashes it in L1,
-    // then publishes the ready flag.
-    MATH((llk_math_hash_cb_finish_to_l1(DEBUG_HASH_L1_HASH_ADDR, DEBUG_HASH_L1_READY_ADDR)));
-
-    // UNPACK polls the ready flag, reads the hash back out of L1, and prints
-    // in the same line format as hash_cb_trisc for diff-tool parity.
-    UNPACK((llk_hash_cb_sfpu_print_from_l1(
-        DEBUG_HASH_L1_HASH_ADDR, DEBUG_HASH_L1_READY_ADDR, in_cb, num_tiles, label)));
+    // Write the 32 per-lane accumulators back into DEST slot 0 (rest zeroed)
+    // so the caller can pack the result tile to L1 and fold it host-side.
+    MATH((llk_math_hash_cb_store_to_dest()));
 #else
     (void)in_cb;
     (void)num_tiles;
-    (void)label;
 #endif
 }
 #else
-ALWI void hash_cb_sfpu(uint32_t in_cb, uint32_t num_tiles, uint32_t label) {
+ALWI void hash_cb_sfpu(uint32_t in_cb, uint32_t num_tiles) {
     (void)in_cb;
     (void)num_tiles;
-    (void)label;
 }
 #endif  // !ARCH_QUASAR
 

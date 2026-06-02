@@ -22,9 +22,10 @@
 //   1. llk_math_hash_cb_init()                — seed per-lane accumulators
 //   2. llk_math_hash_cb_tile(dst_tile_idx)    — fold one DEST tile in
 //      (per input tile)
-//   3. llk_math_hash_cb_finish_to_l1(...)     — reduce 32 → 1, read out of
-//                                              DEST, write u32 + ready flag
-//                                              to L1 for UNPACK to consume
+//   3. llk_math_hash_cb_store_to_dest()       — write the 32 per-lane
+//                                              accumulators back into DEST
+//                                              (row 0; rest zeroed) for the
+//                                              packer to move to L1
 // ===========================================================================
 
 inline void llk_math_hash_cb_init() {
@@ -43,16 +44,11 @@ inline void llk_math_hash_cb_tile(uint32_t dst_tile_idx) {
 #endif
 }
 
-// Reduce the 32 per-lane accumulators to a single u32, drain the SFPU
-// pipeline, read the result out of DEST via the debug array path, write it
-// to `l1_hash_addr`, then publish `l1_ready_addr = 1` to release the UNPACK
-// reader. l1_*_addr both live inside the MEM_LLK_DEBUG region — see the
-// DEBUG_HASH_L1_* constants in api/compute/debug/cb_hash.h.
-inline void llk_math_hash_cb_finish_to_l1(uint32_t l1_hash_addr, uint32_t l1_ready_addr) {
+// Write the 32 per-lane accumulators back into DEST (row 0; the rest of the
+// tile zeroed) so the standard packer can move the result tile to L1, where a
+// scalar consumer XOR-folds it. See api/compute/debug/cb_hash.h.
+inline void llk_math_hash_cb_store_to_dest() {
 #ifdef DEBUG_CB_HASH
-    ckernel::sfpu::_llk_math_hash_cb_finish_to_l1_(l1_hash_addr, l1_ready_addr);
-#else
-    (void)l1_hash_addr;
-    (void)l1_ready_addr;
+    ckernel::sfpu::_llk_math_hash_cb_store_to_dest_();
 #endif
 }

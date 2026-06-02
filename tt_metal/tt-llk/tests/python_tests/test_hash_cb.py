@@ -3,26 +3,25 @@
 #
 # Standalone LLK test for the SFPU-backed CB hash (23-bit FNV23).
 #
-# Tests run on both Blackhole and Wormhole B0. The kernel exercises SFPLOAD,
-# SFPMUL24 (BH) / shift-and-add (WH), SFPXOR, and SFPSHFT2 reduction, then
-# MATH publishes the reduced hash to a fixed slot in the MEM_LLK_DEBUG L1
-# region. The UNPACK thread polls the ready flag, reads the hash back out of
-# L1, and writes it into buffer_Res[0] so this test can pick it up via the
-# usual result-buffer path.
+# The kernel folds each INT32 tile into 32 per-lane FNV23 accumulators on the
+# SFPU (SFPLOAD / SFPXOR / shift-and-add, masked to 23 bits), then writes the
+# accumulators back into DEST row 0 (the rest of the tile zeroed) and lets the
+# standard packer move the tile to L1. The host XOR-folds the whole result tile:
+# the zeroed rows contribute nothing, so the fold equals XOR(32 accumulators) —
+# a deterministic, input-sensitive fingerprint that is independent of the SFPU
+# lane <-> tile-position permutation. This uses only the proven
+# SFPU -> DEST -> PACK -> L1 path (no DEST debug-bus read-back).
 #
 # The tests verify:
-#   1. The kernel runs without asserts and produces a valid 23-bit hash.
+#   1. The kernel runs and produces a non-zero 23-bit fingerprint.
 #   2. Two runs on the same input produce bit-identical results (determinism).
+#   3. Distinct inputs produce distinct fingerprints (discrimination).
 #
-# A Python golden is intentionally omitted: DEST face ordering, the
-# UnshuffleFP32 permutation on SFPLOAD INT32, and SFPMUL24 / shift-and-add
-# truncation semantics need hardware calibration before a golden can be
-# trusted. The determinism test still validates the property that matters
-# for bisection debugging.
+# A bit-exact Python golden is intentionally omitted: the SFPU lane ordering and
+# the DEST/pack datum handling are hardware-specific. The properties above are
+# what matter for nondeterminism bisection.
 #
-# STATUS: WH SFPU sequence is hardware-validated (WH B0 n150) via the
-# sibling tt-metal gtest at tests/tt_metal/tt_metal/llk/test_cb_hash.cpp.
-# BH SFPU sequence is still pending hardware bring-up.
+# STATUS: hardware-validated on WH B0 (n150). BH SFPU sequence pending bring-up.
 
 import pytest
 import torch
@@ -69,14 +68,16 @@ def _run_hash_kernel(
         unpack_to_dest=formats.input_format.is_32_bit(),
     )
     res_from_L1 = configuration.run().result
-    torch_dtype = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_dtype).flatten()
-    return int(res_tensor[0].item())
+    # The result tile holds the 32 per-lane accumulators (DEST row 0) plus an
+    # even number of identical packer-transformed zero words (rows 1..31). XOR-
+    # folding the whole tile cancels the zero words and yields XOR(32 accumulators)
+    # — a deterministic, input-sensitive fingerprint independent of lane layout.
+    h = 0
+    for v in res_from_L1:
+        h ^= int(v) & 0xFFFFFFFF
+    return h
 
 
-@pytest.mark.skip(
-    reason="SFPU hash pending hardware validation — kernel hangs Tensix while waiting for MATH→L1 ready flag, corrupting subsequent tests"
-)
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
     num_tiles=[1],
@@ -101,16 +102,14 @@ def test_hash_cb_sfpu(formats, num_tiles, seed, dest_acc):
         formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, dest_acc
     )
 
-    # Sanity: hash should be non-zero and fit in 23 bits.
+    # Sanity: hash should be non-zero and fit in 23 bits (each lane accumulator
+    # is masked to 23 bits in the kernel, and the zeroed rows cancel under XOR).
     assert (
         hw_hash != 0
     ), "SFPU hash returned zero — kernel likely did not execute correctly"
     assert hw_hash <= MASK23, f"SFPU hash {hex(hw_hash)} exceeds 23-bit range"
 
 
-@pytest.mark.skip(
-    reason="SFPU hash pending hardware validation — kernel hangs Tensix while waiting for MATH→L1 ready flag, corrupting subsequent tests"
-)
 @parametrize(
     formats=input_output_formats([DataFormat.Int32]),
     num_tiles=[1],
@@ -137,3 +136,35 @@ def test_hash_cb_sfpu_determinism(formats, num_tiles, seed, dest_acc):
         formats, input_dimensions, src_A, src_B, tile_cnt_A, tile_cnt_B, dest_acc
     )
     assert h1 == h2, f"SFPU hash non-deterministic across runs: {hex(h1)} vs {hex(h2)}"
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32]),
+    num_tiles=[1],
+    seed=[42],
+    dest_acc=[DestAccumulation.Yes],
+)
+def test_hash_cb_sfpu_discriminates(formats, num_tiles, seed, dest_acc):
+    """Distinct inputs must produce distinct fingerprints."""
+    _skip_if_unsupported()
+
+    input_dimensions = [32 * num_tiles, 32]
+
+    torch.manual_seed(seed)
+    a_A, a_tc_A, a_B, a_tc_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+    torch.manual_seed(seed + 1)
+    b_A, b_tc_A, b_B, b_tc_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+
+    ha = _run_hash_kernel(formats, input_dimensions, a_A, a_B, a_tc_A, a_tc_B, dest_acc)
+    hb = _run_hash_kernel(formats, input_dimensions, b_A, b_B, b_tc_A, b_tc_B, dest_acc)
+    assert ha != hb, f"SFPU hash collided on distinct inputs: {hex(ha)}"
