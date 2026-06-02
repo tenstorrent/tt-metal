@@ -345,6 +345,15 @@ bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions directio
     if (topology_ == Topology::Ring) {
         return true;
     }
+    // Linear (FABRIC_1D) topologies require deadlock avoidance because CCL operations
+    // (e.g. ring reduce-scatter / all-gather) generate simultaneous bidirectional traffic
+    // on the line. Without bubble flow control, all ETH TX buffers can fill simultaneously
+    // causing a circular deadlock. This manifests as the ERISC receiver's
+    // WriteTransactionIdTracker::transaction_flushed() spin never completing because the
+    // forward write to the downstream ETH buffer never gets an ack.
+    if (topology_ == Topology::Linear) {
+        return true;
+    }
     if (topology_ == Topology::Torus) {
         const auto fabric_type = get_fabric_type(fabric_config_, is_ubb_galaxy_);
         // if we are not torused along a dimension, we dont need deadlock avoidance for that direction
