@@ -95,6 +95,12 @@ class RealImpl:
         state["full_pcc"] = worst
         return state
 
+    def perf(self, state):
+        # Times the fused build vs an all-fallback baseline on the traced path.
+        # Implementation follows the `perf` skill (capture a reusable metal trace, measure both).
+        state["perf"] = self._measure_fused_vs_naive(state)  # -> {"naive_ms": float, "fused_ms": float}
+        return state
+
     def repair(self, state):
         state["iteration"] = state.get("iteration", 0) + 1
         return state
@@ -103,13 +109,29 @@ class RealImpl:
 def build_graph(impl, max_iterations: int = None):
     """impl provides node callables: trace, match, gate, codegen, verify, repair.
     Kept injectable so the graph is testable without device/API."""
+    from models.experimental.opt_transfer.verify import perf_gain_pct, perf_gate_pass
+
     max_it = max_iterations or CONFIG.gates["max_iterations"]
     thr = CONFIG.gates["full_pcc"]
 
     def verify_node(state):
         return impl.verify(state)
 
+    def _drift_ok(state) -> bool:
+        d = state.get("drift")
+        if not d:
+            return True
+        return d["first_divergence_step"] >= CONFIG.gates["drift_first_divergence_min_frac"] * d["horizon"]
+
     def perf_node(state):
+        state = impl.perf(state)
+        p = state.get("perf")
+        if p:
+            p["gain_pct"] = perf_gain_pct(p["naive_ms"], p["fused_ms"])
+            if not perf_gate_pass(p["naive_ms"], p["fused_ms"], CONFIG.gates["min_perf_gain_pct"]):
+                state.setdefault("perf_warnings", []).append(
+                    f"gain {p['gain_pct']:.1f}% < {CONFIG.gates['min_perf_gain_pct']}% — correct but kept-and-flagged"
+                )
         state["status"] = "pass"
         return state
 
@@ -119,11 +141,9 @@ def build_graph(impl, max_iterations: int = None):
         return state
 
     def route(state) -> str:
-        if state.get("full_pcc", 0.0) >= thr:
+        if state.get("full_pcc", 0.0) >= thr and _drift_ok(state):
             return "perf"
-        if state.get("iteration", 0) >= max_it:
-            return "handoff"
-        return "repair"
+        return "handoff" if state.get("iteration", 0) >= max_it else "repair"
 
     wf = StateGraph(BringupState)
     wf.add_node("trace", impl.trace)

@@ -88,6 +88,7 @@ class BringupState(TypedDict, total=False):
     full_pcc: float
     drift: dict
     perf: dict
+    perf_warnings: list
     diagnosis: dict
     iteration: int
     max_iterations: int
