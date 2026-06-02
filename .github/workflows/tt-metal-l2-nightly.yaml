@@ -130,7 +130,6 @@ jobs:
       skip-tt-train: false
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
-      use-artifacts-from-run: 26805351771
   generate-arch-matrix:
     runs-on: ubuntu-latest
     outputs:
