@@ -7,7 +7,7 @@
 # Each entry must carry:
 #   sku                  — matches a key under skus: in .github/sku_config.yaml
 #   name                 — workflow_dispatch system-type display name
-#   weights-cache-mode   — one of: local-disk, cloud-mlperf, lfc
+#   weights-cache-mode   — one of: local-disk, cloud-mlperf, lfc, yyz4-mnt-models
 #   num_devices          — informational; for run-page disambiguation only
 
 systems:
@@ -41,5 +41,5 @@ systems:
     num_devices: 2
   - sku: bh_quietbox_2
     name: "QuietBox 2 (2xP300)"
-    weights-cache-mode: local-disk
+    weights-cache-mode: yyz4-mnt-models
     num_devices: 4

@@ -56,11 +56,11 @@ on:
         type: boolean
         default: true
         description: "Run tests on P300-viommu"
-      bh-runner-qb-ge:
+      bh-runner-quietbox-2:
         required: false
         type: boolean
         default: true
-        description: "Run tests on BH-QB-GE"
+        description: "Run tests on BH-Quietbox-2"
 
 jobs:
   # Wormhole N300 - Fabric tests
@@ -265,8 +265,8 @@ jobs:
             runner_items+=('{"name":"P300 unit tests","runner-label":"P300-viommu"}')
           fi
 
-          if [[ "${{ inputs.bh-runner-qb-ge }}" == "true" ]]; then
-            runner_items+=('{"name":"QuietBox Global Edition unit tests","runner-label":"BH-QB-GE"}')
+          if [[ "${{ inputs.bh-runner-quietbox-2 }}" == "true" ]]; then
+            runner_items+=('{"name":"Quietbox 2 unit tests","runner-label":"BH-Quietbox-2"}')
           fi
 
           # If no runners selected, fail the job with an error
