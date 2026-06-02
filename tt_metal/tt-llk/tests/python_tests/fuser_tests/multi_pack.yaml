@@ -1,13 +1,18 @@
+dest_acc: true
+
 operands:
   - name: "input_A"
-    dims: [256, 256]
+    dims: [64, 64]
     format: "Float16_b"
   - name: "input_B"
-    dims: [256, 256]
+    dims: [64, 64]
     format: "Float16_b"
-  - name: "elwadd_out"
-    dims: [256, 256]
+  - name: "out_plain"
+    dims: [64, 64]
     format: "Float16_b"
+  - name: "out_relu"
+    dims: [64, 64]
+    format: "Float32"
 
 operations:
   - math:
@@ -17,7 +22,10 @@ operations:
         operation: "Elwadd"
         unpacker: "UnpackerAB"
         math_fidelity: "LoFi"
-    block_size: [64, 128]
+    block_size: [32, 32]
     pack:
-      - output: "elwadd_out"
+      - output: "out_plain"
         packer: "Packer"
+      - output: "out_relu"
+        packer: "Packer"
+        pack_relu: "ZERO_RELU"

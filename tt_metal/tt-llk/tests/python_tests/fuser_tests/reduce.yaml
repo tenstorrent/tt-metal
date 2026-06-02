@@ -11,8 +11,7 @@ operands:
     format: "Float16_b"
 
 operations:
-  - output: "reduced_output"
-    math:
+  - math:
       - type: "Fpu"
         src_a: "input_A"
         src_b: "input_B"
@@ -21,4 +20,6 @@ operations:
         reduce_pool: "MAX"
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi2"
-    packer: "Packer"
+    pack:
+      - output: "reduced_output"
+        packer: "Packer"
