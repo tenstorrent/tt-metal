@@ -42,7 +42,13 @@ if(ENABLE_DISTRIBUTED AND EXISTS ${ULFM_PREFIX}/lib/libmpi.so.40)
     )
 elseif(ENABLE_DISTRIBUTED)
     # Try to find system MPI if distributed is enabled
-    find_package(MPI QUIET COMPONENTS C CXX)
+    find_package(
+        MPI
+        QUIET
+        COMPONENTS
+            C
+            CXX
+    )
     if(MPI_FOUND)
         message(STATUS "ULFM MPI not found, using system MPI")
         add_library(OpenMPI::MPI ALIAS MPI::MPI_C)
