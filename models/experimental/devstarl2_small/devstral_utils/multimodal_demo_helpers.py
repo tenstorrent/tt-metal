@@ -484,9 +484,16 @@ def tt_capture_decode_trace(
     *,
     tt_lm_head: Optional[LMHead] = None,
     sampling: Optional[SamplingGenerator] = None,
+    page_table: Optional[ttnn.Tensor] = None,
 ) -> TtDecodeTraceContext:
-    """Capture decode (+ optional LM head / sampling trace); prime buffers first."""
-    _warm_hidden = tt_lm.forward_decode_from_device_tensors(buffers.token_ids, buffers.pos_uint32, buffers.pos_int32)
+    """Capture decode (+ optional LM head / sampling trace); prime buffers first.
+
+    ``page_table`` (constant for the run) routes decode through the paged KV cache; it is captured
+    into the trace as a fixed input (only the per-step token/position buffers are updated).
+    """
+    _warm_hidden = tt_lm.forward_decode_from_device_tensors(
+        buffers.token_ids, buffers.pos_uint32, buffers.pos_int32, page_table=page_table
+    )
     if tt_lm_head is not None:
         _warm_logits = _tt_decode_lm_head_logits(_warm_hidden, model_args, tt_lm_head)
         ttnn.deallocate(_warm_logits)
@@ -494,7 +501,9 @@ def tt_capture_decode_trace(
     ttnn.synchronize_device(mesh_device)
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    hidden = tt_lm.forward_decode_from_device_tensors(buffers.token_ids, buffers.pos_uint32, buffers.pos_int32)
+    hidden = tt_lm.forward_decode_from_device_tensors(
+        buffers.token_ids, buffers.pos_uint32, buffers.pos_int32, page_table=page_table
+    )
     if tt_lm_head is None:
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         return TtDecodeTraceContext(trace_id=trace_id, buffers=buffers, output_hidden=hidden)

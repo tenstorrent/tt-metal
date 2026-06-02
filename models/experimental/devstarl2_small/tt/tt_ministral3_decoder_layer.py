@@ -36,6 +36,7 @@ class TtMinistral3DecoderLayer(LightweightModule):
         configuration,
         llama_4_scaling_beta=None,
         original_max_position_embeddings=None,
+        paged_attention_config=None,
     ):
         super().__init__()
         self.layer_num = layer_num
@@ -78,6 +79,7 @@ class TtMinistral3DecoderLayer(LightweightModule):
             configuration=configuration,
             llama_4_scaling_beta=llama_4_scaling_beta,
             original_max_position_embeddings=original_max_position_embeddings,
+            paged_attention_config=paged_attention_config,
         )
         self.post_attention_layernorm = TtMinistralRMSNorm(
             mesh_device,
@@ -104,11 +106,23 @@ class TtMinistral3DecoderLayer(LightweightModule):
         x_11SH: ttnn.Tensor,
         rot_mats,
         position_ids: ttnn.Tensor | None = None,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        user_id: int = 0,
     ) -> ttnn.Tensor:
         """``x_11SH``: ``[batch, 1, seq, hidden]`` (same layout as :meth:`TtMinistralAttention.forward_prefill`)."""
         residual = x_11SH
         h = self.input_layernorm(x_11SH, Mode.PREFILL)
-        attn_out = self.self_attn.forward_prefill(h, rot_mats, position_ids=position_ids)
+        attn_out = self.self_attn.forward_prefill(
+            h,
+            rot_mats,
+            user_id=user_id,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
+            position_ids=position_ids,
+        )
         if self.self_attn.num_devices > 1:  # gather attn output before residual add
             attn_out = ttnn.all_gather(
                 attn_out,

@@ -42,7 +42,7 @@ from models.experimental.devstarl2_small.devstral_utils import (
 )
 from models.experimental.devstarl2_small.tt.pipeline.tt_devstral2_small_model import TtDevstral2SmallModel
 from models.tt_transformers.tt.ccl import TT_CCL
-from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.common import Mode, PagedAttentionConfig
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import (
     DecodersPrecision,
@@ -203,6 +203,91 @@ def _tt_prefill_from_merged_embeds(
         ttnn.deallocate(h_tt)
 
 
+def _pad_page_table_blocks(table: torch.Tensor) -> torch.Tensor:
+    """Pad a ``[1, n_blocks]`` page-table slice up to a multiple of 8 blocks with -1 (paged kernels
+    expect 8-block alignment); matches the generic Generator's chunked-prefill page-table padding."""
+    n = int(table.shape[1])
+    aligned = ((n + 7) // 8) * 8
+    if aligned == n:
+        return table
+    pad = torch.full((1, aligned - n), -1, dtype=table.dtype)
+    return torch.cat([table, pad], dim=1)
+
+
+def _tt_prefill_paged_chunked(
+    merged_embeds_bsh: torch.Tensor,
+    pad_row_1d: torch.Tensor,
+    mesh_device,
+    tt_language_model,
+    real_seq_len: int,
+    chunk_size: int,
+    block_size: int,
+    page_table_host: torch.Tensor,
+    page_table_tt: ttnn.Tensor,
+) -> tuple[ttnn.Tensor, int]:
+    """Chunked + paged prefill from merged embeddings (long-context path past the single-shot L1 wall).
+
+    Splits the prompt into ``chunk_size`` chunks so each chunk's KV-cache fill stays well under the
+    single-shot ``interleaved_to_sharded`` L1 ceiling (~168k). Each chunk fills the paged KV cache and
+    attends to all previously-cached chunks via ``chunked_scaled_dot_product_attention``. Only the chunk
+    holding the last real token is returned (for sampling); earlier chunks run for their KV-fill side
+    effect and are discarded. Returns ``(last_chunk_output [1,1,chunk_size,D], sample_idx_within_chunk)``.
+    """
+    hidden = int(merged_embeds_bsh.shape[-1])
+    s = int(real_seq_len)
+    n_chunks = (s + chunk_size - 1) // chunk_size
+    s_pad = n_chunks * chunk_size
+    if s_pad > s:
+        pr = pad_row_1d.to(device=merged_embeds_bsh.device, dtype=merged_embeds_bsh.dtype).view(1, 1, -1)
+        merged = torch.cat([merged_embeds_bsh, pr.expand(1, s_pad - s, hidden)], dim=1)
+    else:
+        merged = merged_embeds_bsh
+
+    last_chunk_start = ((s - 1) // chunk_size) * chunk_size
+    sample_idx = (s - 1) - last_chunk_start
+
+    replicate = ttnn.ReplicateTensorToMesh(mesh_device)
+    tt_out_last: ttnn.Tensor | None = None
+    for chunk_start in range(0, s_pad, chunk_size):
+        chunk = merged[:, chunk_start : chunk_start + chunk_size, :].unsqueeze(1).contiguous()  # [1,1,chunk,D]
+        h_tt = ttnn.from_torch(
+            chunk,
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=replicate,
+        )
+        positions = torch.arange(chunk_start, chunk_start + chunk_size, dtype=torch.int32).view(1, -1)
+        pos_tt = ttnn.from_torch(
+            positions, device=mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=replicate
+        )
+        cpt = _pad_page_table_blocks(
+            page_table_host[:, chunk_start // block_size : (chunk_start + chunk_size) // block_size]
+        )
+        cpt_tt = ttnn.from_torch(
+            cpt, device=mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=replicate
+        )
+        out = tt_language_model.forward_prefill_from_embeddings(
+            h_tt,
+            None,
+            pos_tt,
+            rope_start_pos=chunk_start,
+            page_table=page_table_tt,
+            chunk_page_table=cpt_tt,
+            chunk_start_idx=chunk_start,
+        )
+        ttnn.deallocate(h_tt)
+        ttnn.deallocate(pos_tt)
+        ttnn.deallocate(cpt_tt)
+        if chunk_start == last_chunk_start:
+            tt_out_last = out
+        else:
+            ttnn.deallocate(out)
+    assert tt_out_last is not None
+    return tt_out_last, sample_idx
+
+
 def run_hf(
     model_id: str,
     image_path: Path,
@@ -286,6 +371,7 @@ def run_tt(
     vision_max_edge: int,
     vision_square_pixels: int | None,
     cpu_sampling: bool,
+    prefill_chunk_size: int = 8192,
     clear_weight_cache: bool = False,
     perf: bool = False,
 ) -> None:
@@ -341,9 +427,29 @@ def run_tt(
     extra_tokens = max(0, max_new_tokens)
     need = prompt_len + extra_tokens + 2048
     max_seq = max(4096, need)
+
+    # Long prompts overflow the single-shot prefill KV-cache L1 shard (~168k); above one chunk we switch
+    # to chunked + paged-attention prefill (and paged decode). Reserve headroom so the prompt padded up to
+    # a chunk multiple still fits the KV cache / paged block pool.
+    chunk_size = int(prefill_chunk_size)
+    use_paged = prompt_len > chunk_size
+    if use_paged:
+        max_seq += chunk_size
     max_seq = ((max_seq + 511) // 512) * 512  # SDPA decode k_chunk_size needs seq aligned to 512
 
+    paged_attention_config = None
+    if use_paged:
+        _paged_block_size = 64
+        _max_num_blocks = (max_seq + _paged_block_size - 1) // _paged_block_size
+        _max_num_blocks = ((_max_num_blocks + 7) // 8) * 8  # paged kernels expect 8-block alignment
+        paged_attention_config = PagedAttentionConfig(block_size=_paged_block_size, max_num_blocks=_max_num_blocks)
+        logger.info(
+            f"Chunked+paged prefill: prompt {prompt_len} tok, chunk_size {chunk_size}, "
+            f"block_size {_paged_block_size}, max_num_blocks {_max_num_blocks}, max_seq {max_seq}."
+        )
+
     mesh_device = _tt_demo.open_devstral_demo_mesh(max(1, min(mesh_width, ttnn.get_num_devices())))
+    page_table_tt = None  # bound here so the cleanup `finally` is safe if model build raises early
     try:
         dtype_tt = ttnn.bfloat16
         lm_head_dtype = ttnn.bfloat8_b  # embedding stays bfloat16 (ROW_MAJOR; BFP8 is TILE-only)
@@ -401,6 +507,7 @@ def run_tt(
             vision_config=vision_cfg,
             vision_n_layers=None,
             embed_dtype=embed_dtype,
+            paged_attention_config=paged_attention_config,
         )
 
         pos_vision = _vision_position_ids(hf_inner, pixel_values, image_sizes_list)
@@ -502,6 +609,21 @@ def run_tt(
 
         tt_lm = tt_devstral.language_model
 
+        # Paged KV cache page table (identity block map, single user). Constant for the whole run; used by
+        # both chunked prefill and traced decode. None when paging is off (short prompt -> contiguous cache).
+        page_table_host: torch.Tensor | None = None
+        page_table_tt: ttnn.Tensor | None = None
+        if use_paged:
+            assert paged_attention_config is not None
+            page_table_host = torch.arange(paged_attention_config.max_num_blocks, dtype=torch.int32).reshape(1, -1)
+            page_table_tt = ttnn.from_torch(
+                page_table_host,
+                device=mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+
         stats = {
             "merge_s": 0.0,
             "prefill_s": 0.0,
@@ -574,13 +696,28 @@ def run_tt(
         stats["merge_s"] = time.perf_counter() - t0
 
         t0 = time.perf_counter()
-        tt_out = _tt_prefill_from_merged_embeds(
-            current_ids, merged_bf, pad_row, pad_token_id, mesh_device, tt_lm, model_args, sl
-        )
+        if use_paged:
+            assert page_table_tt is not None and page_table_host is not None and paged_attention_config is not None
+            tt_out, sample_idx = _tt_prefill_paged_chunked(
+                merged_bf,
+                pad_row,
+                mesh_device,
+                tt_lm,
+                sl,
+                chunk_size,
+                paged_attention_config.block_size,
+                page_table_host,
+                page_table_tt,
+            )
+        else:
+            tt_out = _tt_prefill_from_merged_embeds(
+                current_ids, merged_bf, pad_row, pad_token_id, mesh_device, tt_lm, model_args, sl
+            )
+            sample_idx = sl - 1
         stats["prefill_s"] = time.perf_counter() - t0
 
         t0 = time.perf_counter()
-        next_id = _sample_from_tt_out(tt_out, sl - 1)
+        next_id = _sample_from_tt_out(tt_out, sample_idx)
         stats["first_sample_s"] = time.perf_counter() - t0
         _profiler_signpost("prefill-end")
 
@@ -605,6 +742,7 @@ def run_tt(
                 decode_buffers,
                 tt_lm_head=None if lm_head_cpu else tt_lm_head,
                 sampling=sampling,
+                page_table=page_table_tt,
             )
             stats["trace_capture_s"] = time.perf_counter() - t_capture
             _profiler_signpost("trace-capture-end")
@@ -717,6 +855,8 @@ def run_tt(
         answer_text = tokenizer.decode(answer_ids.tolist(), skip_special_tokens=False)
         print(answer_text)
     finally:
+        if page_table_tt is not None:
+            ttnn.deallocate(page_table_tt)
         _tt_demo.close_devstral_demo_mesh(mesh_device)
 
 
@@ -736,6 +876,15 @@ def main() -> None:
         type=Path,
         default=_sample_image_path(),
         help="Image path (default: resource/sample.jpeg).",
+    )
+    parser.add_argument(
+        "--prefill-chunk-size",
+        type=int,
+        default=8192,
+        metavar="N",
+        help="TT only: chunk size (tokens) for chunked + paged-attention prefill. Prompts longer than "
+        "this are prefilled in N-token chunks (paged KV cache) to clear the single-shot ~168k L1 wall, "
+        "enabling up to 256k context. Must be a positive multiple of 512. Smaller = safer L1, slower.",
     )
     parser.add_argument("--max-new-tokens", type=int, default=100)
     parser.add_argument("--seed", type=int, default=None)
@@ -783,6 +932,9 @@ def main() -> None:
     if args.vision_square_pixels is not None and args.vision_square_pixels <= 0:
         parser.error("--vision-square-pixels must be a positive integer when set.")
 
+    if args.prefill_chunk_size <= 0 or args.prefill_chunk_size % 512 != 0:
+        parser.error("--prefill-chunk-size must be a positive multiple of 512.")
+
     if args.backend == "hf":
         run_hf(
             args.model_id,
@@ -807,6 +959,7 @@ def main() -> None:
             vision_max_edge=args.vision_max_edge,
             vision_square_pixels=args.vision_square_pixels,
             cpu_sampling=args.cpu_sampling,
+            prefill_chunk_size=args.prefill_chunk_size,
             clear_weight_cache=args.clear_weight_cache,
             perf=args.perf,
         )
