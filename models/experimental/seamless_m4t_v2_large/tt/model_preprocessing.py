@@ -1970,7 +1970,7 @@ def create_seamless_m4t_v2_model_parameters(model: torch.nn.Module, *, device: t
         tp = 1
 
     mm = _replicate_mapper(device)
-    w_lm_torch = model.lm_head.weight.detach().T.contiguous().to(torch.bfloat16)
+    w_lm_torch = model.lm_head.weight.detach().T.contiguous().to(torch.bfloat16)  # [H, V]
     w_lm = ttnn.from_torch(
         w_lm_torch,
         dtype=ttnn.bfloat8_b,
@@ -1979,11 +1979,49 @@ def create_seamless_m4t_v2_model_parameters(model: torch.nn.Module, *, device: t
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=mm,
     )
+    lm_head_dict = {"weight": w_lm}
+
+    # Width-sharded ``lm_head`` for the traced greedy-decode step: split the V=256k vocab columns
+    # across the mesh so each device computes (and reads weights for) only ``V / tp`` of the matmul —
+    # ~4× less work per device at M=1 decode (memory-bound on the 256k-wide weight). The per-device
+    # logits slice feeds the per-shard chunked argmax (see ``_decode_argmax_token``); only the tiny
+    # per-chunk results are gathered, so no full-vocab all-gather is needed. The replicated ``weight``
+    # above is kept unchanged for the seed / non-traced paths. ``tp == 1`` (P150) degenerates to the
+    # replicated case (just tile-padded), so the path is general.
+    h_dim, v_size = int(w_lm_torch.shape[0]), int(w_lm_torch.shape[1])
+    v_pad = ((v_size + 32 * tp - 1) // (32 * tp)) * (32 * tp)  # per-device shard stays tile-aligned
+    w_lm_pad = torch.zeros(h_dim, v_pad, dtype=torch.bfloat16)
+    w_lm_pad[:, :v_size] = w_lm_torch
+    # Bias masks the padding columns (>= V) to -1e9 so they can never win the argmax — fused into the
+    # matmul, no extra op. Real columns get 0 (lm_head is bias-free in HF).
+    bias_torch = torch.zeros(1, v_pad, dtype=torch.bfloat16)
+    bias_torch[:, v_size:] = -1e9
+    shard_n = ttnn.ShardTensorToMesh(device, dim=1)
+    lm_head_dict["weight_sharded"] = ttnn.from_torch(
+        w_lm_pad,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=shard_n,
+    )
+    lm_head_dict["bias_sharded"] = ttnn.from_torch(
+        bias_torch,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=shard_n,
+    )
+    lm_head_dict["vocab_size"] = v_size
+    lm_head_dict["padded_vocab_size"] = v_pad
+    lm_head_dict["local_vocab_size"] = v_pad // tp
+
     out = {
         "text_encoder": create_text_encoder_parameters(model.text_encoder, device=device, tp=tp),
         "text_decoder": create_text_decoder_parameters(model.text_decoder, device=device, tp=tp),
         "speech_encoder": create_speech_encoder_parameters(model.speech_encoder, device=device, tp=tp),
-        "lm_head": make_parameter_dict({"weight": w_lm}),
+        "lm_head": make_parameter_dict(lm_head_dict),
         "t2u": create_text_to_unit_condgen_parameters(model.t2u_model, device=device, tp=tp),
         "vocoder": create_code_hifigan_parameters(model.vocoder, device=device),
     }
