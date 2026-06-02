@@ -16,6 +16,8 @@ from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import
     vision_mlp_block_shard_matmul_progcfg,
     vision_mlp_block_shard_out_memcfg,
     vision_mlp_prepare_block_shard_input,
+    vision_rms_norm_block_shard_eligible,
+    vision_rms_norm_block_shard_memcfg,
     vision_seq_memcfg,
 )
 
@@ -88,7 +90,13 @@ class MistralTTVisionMLP(LightweightModule):
             return tensor
         return ttnn.reshape(tensor, [1, 1, seq_len, -1])
 
-    def _combine_w2_multidevice(self, w2_out: ttnn.Tensor, seq_len: int) -> ttnn.Tensor:
+    def _combine_w2_multidevice(
+        self,
+        w2_out: ttnn.Tensor,
+        seq_len: int,
+        *,
+        ag_out_mem: ttnn.MemoryConfig | None = None,
+    ) -> ttnn.Tensor:
         """Sum partial down-proj outputs (w2 is K-sharded across mesh)."""
         if not self.use_dram_width_shard or self.tt_ccl is None:
             return w2_out
@@ -101,6 +109,7 @@ class MistralTTVisionMLP(LightweightModule):
             seq_len,
             self.vision_dim,
             self.args,
+            ag_out_mem=ag_out_mem,
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -194,7 +203,10 @@ class MistralTTVisionMLP(LightweightModule):
             ttnn.deallocate(w2_in)
 
             if self.use_dram_width_shard:
-                return self._combine_w2_multidevice(w2_out, chunk_seq_len)
+                ag_out_mem = None
+                if use_bs_w2 and vision_rms_norm_block_shard_eligible(chunk_seq_len, self.vision_dim, 8, 8):
+                    ag_out_mem = vision_rms_norm_block_shard_memcfg(chunk_seq_len, self.vision_dim, 8, 8)
+                return self._combine_w2_multidevice(w2_out, chunk_seq_len, ag_out_mem=ag_out_mem)
             return w2_out
 
         if seq_len <= mm_seq_len:

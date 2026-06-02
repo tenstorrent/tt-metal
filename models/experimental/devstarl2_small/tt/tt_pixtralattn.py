@@ -14,6 +14,8 @@ from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import
     pixtral_effective_mm_seq_len,
     trim_seq_dim2,
     vision_nlp_concat_input_memcfg,
+    vision_rms_norm_block_shard_eligible,
+    vision_rms_norm_block_shard_memcfg,
     vision_rms_norm_prepare_block_shard_input,
     vision_rope_memcfg,
     vision_seq_memcfg,
@@ -47,10 +49,20 @@ def _pixtral_sdpa_program_config(
         )
 
     if seq_len < 2048:
-        chunk = 128
-    else:
-        num_chunks = max(1, (seq_len + max_mm_seq_len - 1) // max_mm_seq_len)
-        chunk = min(256, max(64, nearest_32(32 * num_chunks)))
+        # Sweep winner (tests/matmul/test_sdpa_vision_sweep.py) for the [1, 4, 1024, 64]
+        # vision SDPA: q_chunk=64, k_chunk=256 on an 8x8 grid. The small q_chunk gives
+        # 4 heads * (1024/64) = 64 q work units to fill the 8x8 = 64-core grid (vs only
+        # 32 units at q_chunk=128, which left ~2/3 of the cores idle).
+        gx, gy = int(grid_size[0]), int(grid_size[1])
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=(min(8, gx), min(8, gy)),
+            q_chunk_size=64,
+            k_chunk_size=256,
+            exp_approx_mode=False,
+        )
+
+    num_chunks = max(1, (seq_len + max_mm_seq_len - 1) // max_mm_seq_len)
+    chunk = min(256, max(64, nearest_32(32 * num_chunks)))
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=grid_size,
         q_chunk_size=chunk,
@@ -471,6 +483,9 @@ class TtMistralImageAttention(LightweightModule):
         if self.num_devices > 1:
             if not (len(output_11SH.shape) == 4 and int(output_11SH.shape[0]) == 1 and int(output_11SH.shape[1]) == 1):
                 output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
+            ag_out_mem = None
+            if vision_rms_norm_block_shard_eligible(seq_len, self.hidden_size, 8, 8):
+                ag_out_mem = vision_rms_norm_block_shard_memcfg(seq_len, self.hidden_size, 8, 8)
             output_11SH = vision_sum_all_reduce(
                 output_11SH,
                 self.mesh_device,
@@ -478,6 +493,7 @@ class TtMistralImageAttention(LightweightModule):
                 seq_len,
                 self.hidden_size,
                 self.configuration,
+                ag_out_mem=ag_out_mem,
             )
         return output_11SH
 
