@@ -335,6 +335,51 @@ def test_all_gather_rms_norm_ltx_shapes(mesh_device, seq_len, hidden_dim, has_we
 
 
 # ---------------------------------------------------------------------------------------------------------
+# Head-split: num_heads > 1 reshapes the normalized (1, B, N, F) output to (1, num_heads, B*N, F/num_heads),
+# matching how LTX's Q/K norm (wan_fused_rmsnorm_post_allgather with num_heads_per_device) splits heads
+# before RoPE. Single-device (1x1) isolates the head-split math (no fabric): normalize over F, then split.
+# ---------------------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)
+@pytest.mark.parametrize("num_heads", [2, 4, 8, 16], ids=lambda h: f"H{h}")
+@pytest.mark.parametrize("seq_len", [128, 1024], ids=["seq128", "seq1k"])
+@pytest.mark.parametrize("hidden_dim", [2048, 4096], ids=["h2048", "h4096"])
+def test_all_gather_rms_norm_head_split_single_device(mesh_device, num_heads, seq_len, hidden_dim):
+    eps = 1e-6
+    head_dim = hidden_dim // num_heads
+    assert head_dim % 32 == 0
+    torch.manual_seed(1234)
+    x = (torch.randn(1, 1, seq_len, hidden_dim) * 4 - 1).to(torch.bfloat16)
+    gamma = (torch.rand(hidden_dim) * 2 - 1).to(torch.bfloat16)
+
+    # Golden: RMSNorm over F (+ gamma), then head-split (1,1,N,F) -> (1,H,N,E), out[0,h,n,e]=normed[0,0,n,h*E+e].
+    normed = torch_rms_norm(x, gamma, None, eps)
+    golden = normed.reshape(1, seq_len, num_heads, head_dim).permute(0, 2, 1, 3).contiguous()
+
+    def to_dev(t):
+        return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
+    out = ttnn.all_gather_rms_norm(
+        to_dev(x),
+        cluster_axis=1,
+        mesh_device=mesh_device,
+        global_semaphore=_make_ccl_semaphore(mesh_device),
+        weight=to_dev(gamma.reshape(1, 1, 1, hidden_dim)),
+        epsilon=eps,
+        num_links=1,
+        compute_kernel_config=compute_kernel_config,
+        num_heads=num_heads,
+    )
+    out_torch = ttnn.to_torch(out).to(golden.dtype)
+    assert list(out_torch.shape) == [1, num_heads, seq_len, head_dim], f"shape {tuple(out_torch.shape)}"
+    assert_with_pcc(golden, out_torch, pcc=0.99)
+    max_abs = (out_torch.float() - golden.float()).abs().max().item()
+    logger.info(f"head_split[H{num_heads} {seq_len}x{hidden_dim}] shape ok, max_abs_err={max_abs:.4f}")
+
+
+# ---------------------------------------------------------------------------------------------------------
 # LTX 2D-mesh geometry: the real LTX layout shards hidden over the tensor-parallel (TP) axis and the
 # sequence over the sequence-parallel (SP) axis, and the RMS-norm stats all-gather runs over the TP axis
 # only (ring = TP). On a (2,4) mesh with cluster_axis=1 -> TP=4 (LTX's actual TP), SP=2: each SP row is an

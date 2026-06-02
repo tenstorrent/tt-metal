@@ -378,7 +378,12 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
                 : 0u,
         mux_cfg ? static_cast<uint32_t>(mux_cfg->get_status_address()) : 0u,
         mux_cfg ? static_cast<uint32_t>(mux_cfg->get_termination_signal_address()) : 0u,
-        num_workers_per_link};  // num_mux_clients
+        num_workers_per_link,  // num_mux_clients
+        // Head-split: the writer scatters each row's Wt output tiles into the (1, num_heads, M, head_dim)
+        // output. head_dim_tiles = Wt/num_heads (per-head width in tiles), m_tiles = global tile-row count.
+        // num_heads == 1 -> head_dim_tiles == Wt -> the scatter reduces to a contiguous write.
+        Wt / args.num_heads,  // head_dim_tiles
+        num_tile_rows};       // m_tiles (global)
     TensorAccessorArgs(output.buffer()).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;

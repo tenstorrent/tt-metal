@@ -61,7 +61,14 @@ void kernel_main() {
     constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(20);
     constexpr uint32_t num_mux_clients = get_compile_time_arg_val(21);
 #endif
-    constexpr auto dst_args = TensorAccessorArgs<22>();
+    // Head-split output addressing (always present). The normalized (1, B, N, F) row tiles are scattered
+    // into the (1, num_heads, M, head_dim) output: width-tile w of global tile-row gr -> head h = w /
+    // head_dim_tiles, within-head tile e = w % head_dim_tiles, output page = h*(m_tiles*head_dim_tiles) +
+    // gr*head_dim_tiles + e. With head_dim_tiles == Wt (num_heads == 1) this is the contiguous gr*Wt + w.
+    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(22);
+    constexpr uint32_t m_tiles = get_compile_time_arg_val(23);
+    constexpr auto dst_args = TensorAccessorArgs<24>();
+    constexpr uint32_t per_head_stride = m_tiles * head_dim_tiles;
 
     (void)cb_local_stats;
     (void)cb_gathered_stats;
@@ -145,7 +152,7 @@ void kernel_main() {
     const uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_addr);
 
-    uint32_t out_tile_id = tile_offset;
+    uint32_t gr = tile_offset / Wt;  // global tile-row index of this worker's first row (for head-split)
     for (uint32_t chunk_start = 0; chunk_start < NCHt; chunk_start += gather_chunk) {
         const uint32_t rows = (NCHt - chunk_start) < gather_chunk ? (NCHt - chunk_start) : gather_chunk;
 
@@ -195,19 +202,23 @@ void kernel_main() {
         cb_push_back(cb_gathered_stats, ring_size * rows);
 
         // ----- drain this chunk's output rows back to DRAM (compute pass 2 produced them) -----
-        // cb_out is block-sized and filled/drained in `blk`-tile blocks, so wait/write/pop per block.
+        // cb_out is block-sized and filled/drained in `blk`-tile blocks, so wait/write/pop per block. Each
+        // width-tile is scattered to its head-split position in the (1, num_heads, M, head_dim) output.
         for (uint32_t r = 0; r < rows; r++) {
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
                 cb_wait_front(cb_out, blk);
                 uint32_t write_offset = 0;
                 for (uint32_t j = 0; j < blk; j++) {
-                    noc_async_write_tile(out_tile_id, s, get_read_ptr(cb_out) + write_offset);
-                    out_tile_id++;
+                    const uint32_t w = wt + j;
+                    const uint32_t h = w / head_dim_tiles;
+                    const uint32_t out_id = h * per_head_stride + gr * head_dim_tiles + (w - h * head_dim_tiles);
+                    noc_async_write_tile(out_id, s, get_read_ptr(cb_out) + write_offset);
                     write_offset += tile_bytes;
                 }
                 noc_async_write_barrier();
                 cb_pop_front(cb_out, blk);
             }
+            gr++;
         }
     }
 
@@ -238,14 +249,19 @@ void kernel_main() {
     }
     noc_async_write_barrier();
 #else
-    // ----- single device (ring_size == 1): just write output -----
-    uint32_t tile_id = tile_offset;
+    // ----- single device (ring_size == 1): write output, scattering each width-tile to its head-split
+    // position in the (1, num_heads, M, head_dim) output (blk divides Wt, so a block stays within one row).
     for (uint32_t i = 0; i < num_tiles; i += blk) {
+        const uint32_t gl0 = tile_offset + i;  // global linear tile index of this block's first tile
+        const uint32_t gr = gl0 / Wt;          // global tile-row
+        const uint32_t w0 = gl0 - gr * Wt;     // width-tile of the block start
         cb_wait_front(cb_out, blk);
         uint32_t write_offset = 0;
         for (uint32_t j = 0; j < blk; j++) {
-            noc_async_write_tile(tile_id, s, get_read_ptr(cb_out) + write_offset);
-            tile_id++;
+            const uint32_t w = w0 + j;
+            const uint32_t h = w / head_dim_tiles;
+            const uint32_t out_id = h * per_head_stride + gr * head_dim_tiles + (w - h * head_dim_tiles);
+            noc_async_write_tile(out_id, s, get_read_ptr(cb_out) + write_offset);
             write_offset += tile_bytes;
         }
         noc_async_write_barrier();

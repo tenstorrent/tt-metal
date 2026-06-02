@@ -23,7 +23,8 @@ ttnn::Tensor all_gather_rms_norm(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const DataType>& dtype,
-    const std::optional<ttnn::Tensor>& persistent_stats_tensor) {
+    const std::optional<ttnn::Tensor>& persistent_stats_tensor,
+    uint32_t num_heads) {
     return ttnn::prim::all_gather_rms_norm(
         input_tensor,
         cluster_axis,
@@ -39,7 +40,8 @@ ttnn::Tensor all_gather_rms_norm(
         memory_config,
         compute_kernel_config,
         dtype,
-        persistent_stats_tensor);
+        persistent_stats_tensor,
+        num_heads);
 }
 
 }  // namespace ttnn

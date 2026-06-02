@@ -25,6 +25,9 @@ struct AllGatherRMSNormParams {
     const uint32_t ring_size;
     const uint32_t cluster_axis;
     const bool has_beta;
+    // Fuse a per-head reshape (head-split) into the output: the normalized (1, B, N, F) result is written as
+    // (1, num_heads, B*N, F/num_heads). num_heads == 1 is the plain norm (output keeps the input shape).
+    const uint32_t num_heads;
     const GlobalSemaphore semaphore;  // Not default-constructible.
     const std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
 
@@ -39,6 +42,7 @@ struct AllGatherRMSNormParams {
         uint32_t ring_size,
         uint32_t cluster_axis,
         bool has_beta,
+        uint32_t num_heads,
         GlobalSemaphore semaphore,
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id) :
         eps(eps),
@@ -50,6 +54,7 @@ struct AllGatherRMSNormParams {
         ring_size(ring_size),
         cluster_axis(cluster_axis),
         has_beta(has_beta),
+        num_heads(num_heads),
         semaphore(std::move(semaphore)),
         sub_device_id(sub_device_id) {}
 
@@ -66,6 +71,7 @@ struct AllGatherRMSNormParams {
         attrs.emplace_back("ring_size", ring_size);
         attrs.emplace_back("cluster_axis", cluster_axis);
         attrs.emplace_back("has_beta", has_beta);
+        attrs.emplace_back("num_heads", num_heads);
         attrs.emplace_back("semaphore", semaphore);
         return attrs;
     }

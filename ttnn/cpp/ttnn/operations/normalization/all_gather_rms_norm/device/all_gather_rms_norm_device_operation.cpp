@@ -51,6 +51,19 @@ void AllGatherRMSNormDeviceOperation::validate_on_program_cache_miss(
     // ring_size == 1 (single device) is allowed: the reduce runs entirely locally with no fabric.
     TT_FATAL(args.ring_size >= 1, "ring_size must be >= 1 but got {}", args.ring_size);
 
+    // Head-split: the normalized (1, B, N, F) output is reshaped to (1, num_heads, B*N, F/num_heads). The
+    // per-head width F/num_heads must be a whole number of tiles (head-split is a writer tile remap).
+    TT_FATAL(args.num_heads >= 1, "num_heads must be >= 1 but got {}", args.num_heads);
+    TT_FATAL(
+        a.padded_shape()[-1] % (tile_width * args.num_heads) == 0,
+        "Input last dim ({}) must be a multiple of tile_width * num_heads ({} * {}) for the head-split",
+        a.padded_shape()[-1],
+        tile_width,
+        args.num_heads);
+    TT_FATAL(
+        args.num_heads == 1 || !b.has_value(),
+        "residual (FUSE_PRE_ADD) is not supported together with the head-split (num_heads > 1)");
+
     if (b.has_value()) {
         TT_FATAL(b.value().layout() == Layout::TILE, "Residual tensor layout must be TILE");
         TT_FATAL(a.padded_shape() == b.value().padded_shape(), "Residual shape must match input shape");
@@ -80,9 +93,18 @@ TensorSpec AllGatherRMSNormDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     // Note: preallocated_stats (if provided) is the intermediate gathered-stats buffer, not the output.
     const auto& input_tensor = tensor_args.input;
-    return TensorSpec(
-        input_tensor.logical_shape(),
-        TensorLayout(args.dtype.value_or(input_tensor.dtype()), PageConfig(Layout::TILE), args.output_mem_config));
+    const auto out_dtype = args.dtype.value_or(input_tensor.dtype());
+    const TensorLayout layout(out_dtype, PageConfig(Layout::TILE), args.output_mem_config);
+
+    if (args.num_heads > 1) {
+        // Head-split: (1, B, N, F) -> (1, num_heads, B*N, F/num_heads). Same element count, last dim split
+        // into heads and the head index promoted to a leading axis.
+        const auto& in_shape = input_tensor.logical_shape();
+        const uint32_t F = in_shape[-1];
+        const uint32_t M = input_tensor.logical_volume() / F;  // product of leading dims (B*N)
+        return TensorSpec(ttnn::Shape({1, args.num_heads, M, F / args.num_heads}), layout);
+    }
+    return TensorSpec(input_tensor.logical_shape(), layout);
 }
 
 Tensor AllGatherRMSNormDeviceOperation::create_output_tensors(
@@ -108,6 +130,7 @@ ttsl::hash::hash_t AllGatherRMSNormDeviceOperation::compute_program_hash(
         args.ring_size,
         args.cluster_axis,
         args.has_beta,
+        args.num_heads,
         subdevice_core_range_set,
         tensor_args);
 }
@@ -127,7 +150,8 @@ ttnn::Tensor all_gather_rms_norm(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const DataType>& dtype,
-    const std::optional<ttnn::Tensor>& persistent_stats_tensor) {
+    const std::optional<ttnn::Tensor>& persistent_stats_tensor,
+    uint32_t num_heads) {
     using OperationType = AllGatherRMSNormDeviceOperation;
 
     auto arch = is_device_tensor(input_tensor) ? input_tensor.device()->arch() : ttnn::GetDefaultDevice()->arch();
@@ -153,6 +177,7 @@ ttnn::Tensor all_gather_rms_norm(
         num_devices,
         cluster_axis,
         bias.has_value(),
+        num_heads,
         global_semaphore,
         subdevice_id);
 

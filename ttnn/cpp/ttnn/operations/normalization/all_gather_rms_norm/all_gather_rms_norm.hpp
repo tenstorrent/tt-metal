@@ -21,8 +21,9 @@ namespace ttnn {
 // fused residual add.
 //
 // Unlike `ttnn::fused_rms_minimal` (the LLaMA-decode "minimal" variant), this op is generic: it supports
-// arbitrary M (long sequences), TILE layout, INTERLEAVED memory. It does NOT fuse RoPE or a head-split;
-// those are expected to run as separate ops afterward.
+// arbitrary M (long sequences), TILE layout, INTERLEAVED memory. It optionally fuses a per-head reshape
+// (`num_heads` > 1: output (1, B, N, F) -> (1, num_heads, B*N, F/num_heads)) so it can replace a
+// distributed Q/K norm that head-splits; RoPE still runs as a separate op afterward.
 ttnn::Tensor all_gather_rms_norm(
     const ttnn::Tensor& input_tensor,
     uint32_t cluster_axis,
@@ -38,6 +39,7 @@ ttnn::Tensor all_gather_rms_norm(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<const DataType>& dtype = std::nullopt,
-    const std::optional<ttnn::Tensor>& persistent_stats_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& persistent_stats_tensor = std::nullopt,
+    uint32_t num_heads = 1);
 
 }  // namespace ttnn

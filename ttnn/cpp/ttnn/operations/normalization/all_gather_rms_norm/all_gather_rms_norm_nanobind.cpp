@@ -25,8 +25,10 @@ void bind_all_gather_rms_norm(nb::module_& mod) {
             ``bias`` (beta) and optional fused residual add.
 
             Unlike ``ttnn.fused_rms_minimal`` (the LLaMA-decode "minimal" variant), this op is generic:
-            it supports arbitrary M (long sequences), TILE layout and INTERLEAVED memory. It does NOT
-            fuse RoPE or a head-split; run those as separate ops afterward.
+            it supports arbitrary M (long sequences), TILE layout and INTERLEAVED memory. It optionally
+            fuses a per-head reshape (``num_heads`` > 1: output (1, B, N, F) -> (1, num_heads, B*N,
+            F/num_heads)) so it can replace a distributed Q/K norm that head-splits; RoPE still runs as a
+            separate op afterward.
         )doc",
         &ttnn::all_gather_rms_norm,
         nb::arg("input_tensor"),
@@ -44,7 +46,8 @@ void bind_all_gather_rms_norm(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("dtype") = nb::none(),
-        nb::arg("persistent_stats_tensor") = nb::none());
+        nb::arg("persistent_stats_tensor") = nb::none(),
+        nb::arg("num_heads") = 1);
 }
 
 }  // namespace ttnn::operations::normalization::detail

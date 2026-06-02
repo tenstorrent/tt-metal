@@ -46,6 +46,7 @@ ttnn::Tensor all_gather_rms_norm(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const DataType>& dtype,
-    const std::optional<ttnn::Tensor>& persistent_stats_tensor);
+    const std::optional<ttnn::Tensor>& persistent_stats_tensor,
+    uint32_t num_heads = 1);
 
 }  // namespace ttnn::prim
