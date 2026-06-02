@@ -340,7 +340,7 @@ class MochiPipeline(PipelineAPIMixin):
                 is_fsdp=True,
             )
             self._tracer = Tracer(
-                self._transformer.forward, device=self._device, prep_run=True, clone_prep_inputs=False
+                self._transformer.forward, device=self._device, prep_run=False, clone_prep_inputs=False
             )
 
             logger.info("Loading MochiTransformer3DModel state_dict")

@@ -102,6 +102,7 @@ class TextEncoder:
             )
 
         prompt_embeds = self.text_encoder(text_input_ids.to(device), attention_mask=prompt_attention_mask)[0]
+        prompt_embeds = prompt_embeds * prompt_attention_mask.unsqueeze(-1).to(prompt_embeds.dtype)
         prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
 
         _, seq_len, _ = prompt_embeds.shape
