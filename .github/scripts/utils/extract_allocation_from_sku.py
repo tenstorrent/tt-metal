@@ -24,9 +24,7 @@ def main():
 
     # Verify the file exists
     if not os.path.exists(sku_config_path):
-        print(
-            f"::error::SKU config file not found at {sku_config_path}", file=sys.stderr
-        )
+        print(f"::error::SKU config file not found at {sku_config_path}", file=sys.stderr)
         sys.exit(1)
 
     # Open and parse the YAML file
@@ -41,9 +39,7 @@ def main():
         sys.exit(1)
 
     if not isinstance(config, dict):
-        print(
-            f"::error::SKU config file must contain a YAML dictionary", file=sys.stderr
-        )
+        print(f"::error::SKU config file must contain a YAML dictionary", file=sys.stderr)
         sys.exit(1)
 
     skus = config.get("skus", {})
@@ -73,15 +69,15 @@ def main():
             else:
                 lines.append(f"  {key}: {value}")
 
-    if "topology_keys" in allocation:
+    if "topologyKeys" in allocation:
         lines.append("topologyKeys:")
-        for key in allocation["topology_keys"]:
+        for key in allocation["topologyKeys"]:
             lines.append(f"  - {key}")
 
     # Add MGD section if present
-    if "mgd" in skus[sku_name]:
+    if "mgd" in allocation:
         lines.append("mgd: |")
-        mgd_content = skus[sku_name]["mgd"]
+        mgd_content = allocation["mgd"]
         # Add 2-space indentation to each line of MGD content
         for line in mgd_content.splitlines():
             lines.append(f"  {line}")
