@@ -32,8 +32,8 @@ from models.tt_transformers.tt.prefetcher import make_prefetcher
 pytestmark = [
     run_for_blackhole("DRAM prefetcher benchmark requires Blackhole"),
     pytest.mark.skipif(
-        "Llama-3.2-3B" not in os.environ.get("HF_MODEL", ""),
-        reason="HF_MODEL must point to Llama-3.2-3B for this test",
+        not any(m in os.environ.get("HF_MODEL", "") for m in ("Llama-3.2-3B", "Llama-3.1-8B")),
+        reason="HF_MODEL must point to a supported prefetcher model (Llama-3.2-3B or Llama-3.1-8B)",
     ),
 ]
 
