@@ -1347,14 +1347,14 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         reader_compile_time_args[sem_args_offset + 7] = k_mcast_enabled ? 1 : 0;
     }
 
-    log_info(tt::LogOp, "V chain mode: head ({})", head_mcast_enabled ? "mcast" : "unicast");
+    log_debug(tt::LogOp, "V chain mode: head ({})", head_mcast_enabled ? "mcast" : "unicast");
     if (k_uses_batch_chain) {
-        log_info(
+        log_debug(
             tt::LogOp,
             "K chain mode: batch ({})",
             k_mcast_enabled ? "mcast" : fmt::format("unicast, {}", k_mcast_fallback_reason));
     } else {
-        log_info(tt::LogOp, "K chain mode: head (NHK != 1, {})", head_mcast_enabled ? "mcast" : "unicast");
+        log_debug(tt::LogOp, "K chain mode: head (NHK != 1, {})", head_mcast_enabled ? "mcast" : "unicast");
     }
 
     // Convert std::map<string,string> defines to KernelDescriptor::Defines vector form.
