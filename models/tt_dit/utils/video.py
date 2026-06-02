@@ -5,11 +5,21 @@
 from __future__ import annotations
 
 import subprocess
+from dataclasses import dataclass
 from fractions import Fraction
 
 import numpy as np
 import torch
 from loguru import logger
+
+
+@dataclass(frozen=True)
+class Audio:
+    """Decoded audio: waveform + sampling rate. Produced by the LTX audio decode and
+    consumed by ``export_video_audio`` (and stage-1 wav dumps)."""
+
+    waveform: torch.Tensor
+    sampling_rate: int
 
 
 def export_to_video(
@@ -83,7 +93,7 @@ def export_to_video(
     return output_video_path
 
 
-def export_video_audio(video_pixels: torch.Tensor, output_path: str, fps: int = 24, audio=None) -> None:
+def export_video_audio(video_pixels: torch.Tensor, output_path: str, fps: int = 24, audio: Audio | None = None) -> None:
     """Export decoded video (and optionally audio) to MP4.
 
     Matches reference ltx_pipelines.utils.media_io.encode_video exactly:
@@ -95,7 +105,7 @@ def export_video_audio(video_pixels: torch.Tensor, output_path: str, fps: int = 
         video_pixels: (B, C, F, H, W) from decode_latents(), range [-1, 1]
         output_path: output .mp4 path
         fps: frame rate
-        audio: object with .waveform (torch.Tensor) and .sampling_rate (int), or None
+        audio: decoded ``Audio`` (waveform + sampling rate), or None
     """
     import av
 

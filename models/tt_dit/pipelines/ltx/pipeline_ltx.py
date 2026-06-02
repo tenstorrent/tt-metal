@@ -3,13 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-LTX-2 Video Generation Pipeline for tt_dit.
+LTX-2 audio-video generation pipeline for tt_dit.
 
-Implements the text-to-video inference pipeline:
-1. Text encoding (Gemma, torch-only)
-2. Sigma schedule computation (LTX2Scheduler)
-3. Denoising loop (Euler first-order steps with CFG)
-4. VAE decoding (future)
+Implements the text-to-AV inference pipeline:
+1. Text encoding (on-device Gemma-3 + embeddings connectors)
+2. Sigma schedule computation (LTX-2 shift schedule)
+3. Joint audio-video denoising loop (Euler steps + multi-modal guidance)
+4. On-device VAE video decode + audio decode (mel-VAE + vocoder)
 
 Reference: LTX-2/packages/ltx-pipelines/ + Wan pipeline_wan.py
 """
@@ -21,7 +21,6 @@ import hashlib
 import json
 import math
 import os
-import sys
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -36,13 +35,12 @@ from transformers import AutoTokenizer
 import ttnn
 
 from ...encoders.gemma.embeddings_connector import EmbeddingsConnector
-from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
 from ...encoders.gemma.feature_extractor import GemmaFeatureExtractor
 from ...encoders.gemma.model_gemma import GemmaConfig, GemmaEncoder
 from ...models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
 from ...models.upsampler.latent_upsampler_ltx import LTXLatentUpsampler
-from ...models.vae.vae_ltx import LTXVideoDecoder, LTXVideoDecoderTorch
+from ...models.vae.vae_ltx import LTXVideoDecoder
 from ...parallel.config import (
     AudioTCParallelConfig,
     DiTParallelConfig,
@@ -65,7 +63,7 @@ from ...utils.ltx import (
 from ...utils.mochi import get_rot_transformation_mat
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from ...utils.tracing import Tracer
-from ...utils.video import export_video_audio
+from ...utils.video import Audio, export_video_audio
 
 LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
 
@@ -75,22 +73,33 @@ LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safet
 TEMPORAL_COMPRESSION = 8
 SPATIAL_COMPRESSION = 32
 
+# Gemma text-encoder + embeddings-connector output shapes. Fixed config, known at
+# construction — warmup builds dummy prompt embeddings at these shapes without loading the
+# encoder (loading it would coresident-evict the DiT being warmed).
+GEMMA_SEQUENCE_LENGTH = 1024
+VIDEO_EMBED_DIM = 4096
+AUDIO_EMBED_DIM = 2048
+
 # Distilled sigma schedules shared by the distilled and two-stage subclasses.
 DISTILLED_SIGMA_VALUES = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]
 STAGE_2_DISTILLED_SIGMA_VALUES = [0.909375, 0.725, 0.421875, 0.0]
 
-# LTX-2 reference packages (vendored under repo root) needed for the host torch
-# reference paths (prompt encoding, constants).
-_LTX_REFERENCE_PATHS = ("LTX-2/packages/ltx-core/src", "LTX-2/packages/ltx-pipelines/src")
-
-
-def _ensure_ltx_reference_on_path() -> None:
-    """Put the LTX-2 reference packages on ``sys.path`` (idempotent) and stub out
-    ``torch.cuda.synchronize`` (no CUDA on the TT host) so reference code runs."""
-    for p in _LTX_REFERENCE_PATHS:
-        if p not in sys.path:
-            sys.path.insert(0, p)
-    torch.cuda.synchronize = lambda *a, **kw: None  # noqa: ARG005
+# Default negative prompt (inlined from the LTX-2 reference
+# ``ltx_pipelines.utils.constants.DEFAULT_NEGATIVE_PROMPT`` so the pipeline has no
+# runtime dependency on the reference package).
+DEFAULT_NEGATIVE_PROMPT = (
+    "blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, "
+    "grainy texture, poor lighting, flickering, motion blur, distorted proportions, unnatural skin tones, "
+    "deformed facial features, asymmetrical face, missing facial features, extra limbs, disfigured hands, "
+    "wrong hand count, artifacts around text, inconsistent perspective, camera shake, incorrect depth of "
+    "field, background too sharp, background clutter, distracting reflections, harsh shadows, inconsistent "
+    "lighting direction, color banding, cartoonish rendering, 3D CGI look, unrealistic materials, uncanny "
+    "valley effect, incorrect ethnicity, wrong gender, exaggerated expressions, wrong gaze direction, "
+    "mismatched lip sync, silent or muted audio, distorted voice, robotic voice, echo, background noise, "
+    "off-sync audio, incorrect dialogue, added dialogue, repetitive speech, jittery movement, awkward "
+    "pauses, incorrect timing, unnatural transitions, inconsistent framing, tilted camera, flat lighting, "
+    "inconsistent tone, cinematic oversaturation, stylized filters, or AI artifacts."
+)
 
 
 def latent_grid(num_frames: int, height: int, width: int) -> tuple[int, int, int]:
@@ -115,12 +124,6 @@ BASE_SHIFT_ANCHOR = 1024
 MAX_SHIFT_ANCHOR = 4096
 
 
-def on_device_audio_enabled() -> bool:
-    """On-device audio decode is the default; set ``LTX_ON_DEVICE_AUDIO=0`` (or
-    ``false``/``no``) to force the host reference path."""
-    return os.environ.get("LTX_ON_DEVICE_AUDIO", "1").strip().lower() not in ("0", "false", "no")
-
-
 def compute_sigmas(
     steps: int,
     num_tokens: int = MAX_SHIFT_ANCHOR,
@@ -129,23 +132,8 @@ def compute_sigmas(
     stretch: bool = True,
     terminal: float = 0.1,
 ) -> torch.FloatTensor:
-    """
-    Compute the LTX-2 sigma schedule.
-
-    Generates a sequence of noise levels (sigmas) from high noise (~1.0)
-    to low noise (~terminal) with token-count-dependent shifting.
-
-    Args:
-        steps: Number of denoising steps
-        num_tokens: Number of spatial tokens (affects sigma shift)
-        max_shift: Maximum shift factor
-        base_shift: Base shift factor
-        stretch: Whether to stretch schedule to terminal value
-        terminal: Final sigma value
-
-    Returns:
-        Tensor of shape (steps + 1,) with sigma values
-    """
+    """Compute the LTX-2 sigma schedule: noise levels from ~1.0 down to ~``terminal``
+    with a token-count-dependent shift. Returns a ``(steps + 1,)`` tensor."""
     sigmas = torch.linspace(1.0, 0.0, steps + 1)
 
     # Adaptive shift based on token count
@@ -183,21 +171,8 @@ def euler_step(
     sigma: float,
     sigma_next: float,
 ) -> torch.Tensor:
-    """
-    First-order Euler diffusion step.
-
-    x_{t+1} = x_t + velocity * dt
-    where velocity = (x_t - denoised) / sigma, dt = sigma_next - sigma
-
-    Args:
-        sample: Current noisy latent
-        denoised: Model's denoised prediction
-        sigma: Current noise level
-        sigma_next: Next noise level
-
-    Returns:
-        Updated latent at next noise level
-    """
+    """First-order Euler diffusion step:
+    ``x_next = x + (x - denoised) / sigma * (sigma_next - sigma)``."""
     dt = sigma_next - sigma
     velocity = (sample.float() - denoised.float()) / sigma
     return (sample.float() + velocity * dt).to(sample.dtype)
@@ -210,7 +185,7 @@ def euler_step(
 
 class LTXPipeline:
     """
-    LTX-2 text-to-video generation pipeline.
+    LTX-2 text-to-audio-video generation pipeline.
 
     Usage:
         pipeline = LTXPipeline.create_pipeline(
@@ -221,7 +196,7 @@ class LTXPipeline:
             height=480,
             width=832,
         )
-        output = pipeline(prompt="A cat playing piano", num_frames=33, height=480, width=832)
+        output_path = pipeline.generate(prompt="A cat playing piano", output_path="out.mp4")
     """
 
     HAS_UPSAMPLER: bool = False
@@ -257,6 +232,12 @@ class LTXPipeline:
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        # Text-encoder TP spans the full width of mesh axis 1 (T5 encoder pattern):
+        # TP=1 on 1x1, 4 on 2x4, 8 on 4x8. Shared by the Gemma encoder and the
+        # embeddings connectors so both shard identically.
+        self.encoder_parallel_config = EncoderParallelConfig(
+            tensor_parallel=ParallelFactor(factor=self.mesh_device.shape[1], mesh_axis=1),
+        )
         # When True, the denoise loop captures the DiT forward as a ttnn trace on the
         # first step and replays it thereafter (collapses per-op dispatch overhead).
         self._traced = traced
@@ -306,20 +287,24 @@ class LTXPipeline:
         self._init_height = height
         self._init_width = width
 
-        self.text_encoder: GemmaTokenizerEncoderPair | None = None
         self.gemma_encoder = None
         self.gemma_tokenizer = None
+        self.feature_extractor = None
         self.video_connector = None
         self.audio_connector = None
+        self._enc_ccl = None
+        # Set at construction so warmup can shape dummy embeddings before the encoder loads.
+        self._gemma_sequence_length = GEMMA_SEQUENCE_LENGTH
+        self._video_embed_dim = VIDEO_EMBED_DIM
+        self._audio_embed_dim = AUDIO_EMBED_DIM
 
         self.checkpoint_name: str | None = (
             LTXPipeline._resolve_checkpoint_file(checkpoint_name) if checkpoint_name else None
         )
         self.gemma_path: str | None = LTXPipeline._resolve_gemma_dir(gemma_path) if gemma_path else None
 
-        # ``self.transformer`` always points at the active variant. Production paths
-        # set it via ``_prepare_transformer(idx)``; the random-weights test path
-        # (``load_transformer(state_dict)``) sets it directly.
+        # ``self.transformer`` always points at the active variant, set via
+        # ``_prepare_transformer(idx)``.
         self.transformer: LTXTransformerModel | None = None
         self.transformer_states: list[TransformerState] = []
         self.vae_decoder = None
@@ -364,7 +349,7 @@ class LTXPipeline:
 
     @staticmethod
     def _resolve_checkpoint_file(checkpoint: str, default_filename: str = "ltx-2.3-22b-dev.safetensors") -> str:
-        """Resolve a checkpoint reference to a local file path.ß"""
+        """Resolve a checkpoint reference to a local file path."""
         if os.path.exists(checkpoint):
             return checkpoint
         if ":" in checkpoint:
@@ -681,12 +666,10 @@ class LTXPipeline:
         DRAM after ``__init__`` (matches Wan's reverse-use-order priming)."""
         for idx in range(len(self.transformer_states) - 1, 0, -1):
             self._prepare_transformer(idx)
-        if self.vae_decoder is not None:
-            self._prepare_vae()
-        if self.upsampler is not None:
-            self._prepare_upsampler()
-        if on_device_audio_enabled():
-            self._prepare_audio_decoder()
+        # Each _prepare_* no-ops when its module isn't present (None), so no call-site guards.
+        self._prepare_vae()
+        self._prepare_upsampler()
+        self._prepare_audio_decoder()
         self._prepare_transformer(0)
 
     def _prepare_transformer(self, idx: int = 0) -> None:
@@ -701,43 +684,6 @@ class LTXPipeline:
             get_torch_state_dict=state.state_dict_provider,
         )
         self.transformer = state.model
-
-    def load_transformer(self, state_dict: dict[str, torch.Tensor]) -> None:
-        """Direct state-dict load for tests with random weights (no caching)."""
-        self._has_gate = any("to_gate_logits" in k for k in state_dict)
-        # 9-output (22B): adaln_single.linear.weight has shape (9*dim, dim).
-        # 6-output (19B distilled): shape (6*dim, dim).
-        adaln_weight = state_dict.get("adaln_single.linear.weight")
-        self._cross_attention_adaln = True if adaln_weight is None else adaln_weight.shape[0] > 6 * self.inner_dim
-        self.transformer = self._new_transformer()
-        self.transformer.load_torch_state_dict(state_dict)
-        logger.info(f"Loaded LTX transformer ({self.mode} mode) with {self.num_layers} layers")
-
-    def load_text_encoder(
-        self,
-        checkpoint: str = "google/gemma-3-12b-it",
-        *,
-        sequence_length: int = 1024,
-        hidden_layer_index: int = -1,
-    ) -> None:
-        """Load Gemma text encoder (torch-only). Fallback when reference encode_prompts is not available."""
-        self.text_encoder = GemmaTokenizerEncoderPair(
-            checkpoint=checkpoint,
-            sequence_length=sequence_length,
-            embedding_dim=self.cross_attention_dim,
-            hidden_layer_index=hidden_layer_index,
-        )
-        logger.info(f"Loaded Gemma text encoder from {checkpoint}")
-
-    def _encoder_parallel_config(self) -> EncoderParallelConfig:
-        """TP across the full width of mesh axis 1 (T5 encoder pattern): TP=1 on 1x1, 4 on 2x4,
-        8 on 4x8. The text encoder does no sequence-parallelism, so — unlike the DiT, which
-        reserves axis 1 for SP — it uses that axis entirely for TP. No FSDP (weights replicate
-        on axis 0). Shared by the Gemma encoder and the embeddings connectors so both shard
-        identically."""
-        return EncoderParallelConfig(
-            tensor_parallel=ParallelFactor(factor=self.mesh_device.shape[1], mesh_axis=1),
-        )
 
     def load_gemma_encoder(
         self,
@@ -755,53 +701,64 @@ class LTXPipeline:
             hidden_layer_index: Which layer's hidden states to extract (-1 = last)
             sequence_length: Max token sequence length
         """
-        config = GemmaConfig(
-            num_hidden_layers=num_layers,
-            hidden_layer_index=hidden_layer_index,
-            max_position_embeddings=sequence_length,
+        # Build the encoder + its CCLManager once. Under dynamic_load a later DiT/VAE load
+        # evicts the encoder weights (coresident exclusion), so this is called again per
+        # cache-missing prompt to reload them — the module and CCLManager are reused, since a
+        # fresh CCLManager would leak its global semaphores and orphan the exclusion refs.
+        if self.gemma_encoder is None:
+            config = GemmaConfig(
+                num_hidden_layers=num_layers,
+                hidden_layer_index=hidden_layer_index,
+                max_position_embeddings=sequence_length,
+            )
+            enc_ccl = CCLManager(self.mesh_device, topology=ttnn.Topology.Linear)
+            self.gemma_encoder = GemmaEncoder(config, self.mesh_device, enc_ccl, self.encoder_parallel_config)
+
+            # Register coresident exclusions BEFORE loading so the encoder load auto-evicts
+            # the DiT (and the later DiT reload auto-evicts the encoder).
+            self._register_encoder_exclusions(self.gemma_encoder)
+
+            # Left-padding matches the reference FeatureExtractorV2 pipeline:
+            # [PAD, ..., PAD, BOS, real tokens]. With causal SDPA the real tokens attend to
+            # the padding; both sides zero padded hidden states out via attention_mask.
+            self.gemma_tokenizer = AutoTokenizer.from_pretrained(gemma_path)
+            self._gemma_sequence_length = sequence_length
+
+        # Load through the shared weight cache (same path as the DiT/VAE): the first run
+        # tilizes from safetensors and writes a pre-tilized cache; reloads read that cache
+        # instead of re-tilizing 12B params. The encoder is evicted after every encode under
+        # dynamic_load, so reloads are the common case. The state-dict read is lazy — only a
+        # cache miss touches safetensors.
+        def _gemma_state_dict() -> dict[str, torch.Tensor]:
+            weight_files = sorted(glob.glob(f"{gemma_path}/model-*.safetensors")) or sorted(
+                glob.glob(f"{gemma_path}/*.safetensors")
+            )
+            sd = {}
+            for f in weight_files:
+                sd.update(load_file(f))
+            return sd
+
+        t0 = time.time()
+        cache_module.load_model(
+            self.gemma_encoder,
+            model_name=os.path.basename(os.path.normpath(gemma_path)),
+            subfolder="text_encoder",
+            parallel_config=self.encoder_parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=_gemma_state_dict,
         )
-
-        enc_parallel = self._encoder_parallel_config()
-        enc_ccl = CCLManager(self.mesh_device, topology=ttnn.Topology.Linear)
-
-        self.gemma_encoder = GemmaEncoder(config, self.mesh_device, enc_ccl, enc_parallel)
-
-        # dynamic_load: register the encoder coresident-excluded with the DiT variants +
-        # VAE BEFORE loading, so its load_torch_state_dict auto-evicts the DiT (and the
-        # later DiT reload auto-evicts the encoder) — the same mechanism the DiT/VAE use.
-        self._register_encoder_exclusions(self.gemma_encoder)
-
-        weight_files = sorted(glob.glob(f"{gemma_path}/model-*.safetensors"))
-        if not weight_files:
-            weight_files = sorted(glob.glob(f"{gemma_path}/*.safetensors"))
-        state_dict = {}
-        for f in weight_files:
-            state_dict.update(load_file(f))
-
-        t0 = __import__("time").time()
-        self.gemma_encoder.load_torch_state_dict(state_dict)
-        del state_dict
-        logger.info(f"Loaded TTNN Gemma encoder ({num_layers}L) in {__import__('time').time()-t0:.0f}s")
-
-        self.gemma_tokenizer = AutoTokenizer.from_pretrained(gemma_path)
-        # Use left-padding matching the reference FeatureExtractorV2 pipeline.
-        # Left-padding: [PAD, ..., PAD, BOS, real tokens]. With causal SDPA,
-        # real tokens at the end attend to everything including padding positions.
-        # The reference handles this the same way (padding hidden states are zeroed
-        # out after encoding via attention_mask).
-        self._gemma_hidden_layer_index = hidden_layer_index
-        self._gemma_sequence_length = sequence_length
+        logger.info(f"Loaded TTNN Gemma encoder ({num_layers}L) in {time.time()-t0:.0f}s")
 
     def load_embeddings_connectors(
         self,
-        checkpoint_state: dict[str, torch.Tensor],
+        checkpoint_state: dict[str, torch.Tensor] | Callable[[], dict[str, torch.Tensor]],
         *,
         gemma_hidden_size: int = 3840,
         gemma_num_layers: int = 49,  # embedding layer + 48 decoder layers
         video_num_blocks: int = 8,
         audio_num_blocks: int = 8,
-        video_dim: int = 4096,
-        audio_dim: int = 2048,
+        video_dim: int = VIDEO_EMBED_DIM,
+        audio_dim: int = AUDIO_EMBED_DIM,
         num_heads: int = 32,
     ) -> None:
         """Load video and audio embeddings connectors from the LTX-2 checkpoint.
@@ -813,89 +770,108 @@ class LTXPipeline:
         - model.diffusion_model.audio_embeddings_connector.* → audio connector blocks + norm
         """
         input_dim = gemma_hidden_size * gemma_num_layers
+        # Connector weights come from the LTX checkpoint, so cache them under its name
+        # alongside the transformer/VAE caches.
+        ckpt_name = (
+            os.path.basename(self.checkpoint_name).removesuffix(".safetensors")
+            if self.checkpoint_name
+            else "ltx-connectors"
+        )
+
+        # checkpoint_state may be a dict or a zero-arg callable returning it. Resolved once and
+        # only on a cache miss, so an all-cache-hit reload reads neither the checkpoint nor the
+        # tilizer.
+        _resolved: dict = {}
+
+        def _ckpt() -> dict[str, torch.Tensor]:
+            if "sd" not in _resolved:
+                _resolved["sd"] = checkpoint_state() if callable(checkpoint_state) else checkpoint_state
+            return _resolved["sd"]
 
         # Same TP as the Gemma encoder (T5 pattern: full axis-1 width) so the two stages
         # shard identically and the connector cos/sin head-shard lines up with the blocks.
-        enc_parallel = self._encoder_parallel_config()
-        enc_ccl = CCLManager(self.mesh_device, topology=ttnn.Topology.Linear)
+        # Build the modules + their shared CCLManager once; weights load through the shared
+        # cache. Under dynamic_load the DiT reload after each encode evicts these, so reloads
+        # are the common case — the modules/CCLManager are reused (a fresh CCLManager would
+        # leak its global semaphores), and the cache skips re-tilizing on every reload.
+        enc_parallel = self.encoder_parallel_config
+        if self._enc_ccl is None:
+            self._enc_ccl = CCLManager(self.mesh_device, topology=ttnn.Topology.Linear)
 
         # --- Feature extractor (per-token RMS + rescale + dual aggregate_embed) ---
         # Mirrors FeatureExtractorV2: owns the aggregate_embed weights; connectors consume
         # its projected output. The aggregate weight is permuted D-major→layer-major to match
         # the on-device layer-major concat (see GemmaFeatureExtractor._weight_to_layer_major).
-        self.feature_extractor = GemmaFeatureExtractor(
-            input_dim=input_dim,
-            embedding_dim=gemma_hidden_size,
-            video_dim=video_dim,
-            audio_dim=audio_dim if self.mode == "av" else None,
-            mesh_device=self.mesh_device,
-        )
-        fe_sd = {}
-        for axis in ("video", "audio") if self.mode == "av" else ("video",):
-            agg_prefix = f"text_embedding_projection.{axis}_aggregate_embed."
-            for k, v in checkpoint_state.items():
-                if k.startswith(agg_prefix):
-                    sub = k[len(agg_prefix) :]
-                    if sub == "weight":
-                        v = GemmaFeatureExtractor._weight_to_layer_major(v, gemma_hidden_size, gemma_num_layers)
-                    fe_sd[f"{axis}_aggregate_embed.{sub}"] = v
-        self._register_encoder_exclusions(self.feature_extractor)
-        fe_res = self.feature_extractor.load_torch_state_dict(fe_sd, strict=False)
-        if fe_res.missing_keys or fe_res.unexpected_keys:
-            logger.warning(f"Feature extractor: missing={fe_res.missing_keys} unexpected={fe_res.unexpected_keys}")
-
-        def _load_connector(axis: str, output_dim: int, num_blocks: int) -> EmbeddingsConnector:
-            connector = EmbeddingsConnector(
-                output_dim=output_dim,
-                num_blocks=num_blocks,
-                num_heads=num_heads,
+        if self.feature_extractor is None:
+            self.feature_extractor = GemmaFeatureExtractor(
+                input_dim=input_dim,
+                embedding_dim=gemma_hidden_size,
+                video_dim=video_dim,
+                audio_dim=audio_dim if self.mode == "av" else None,
                 mesh_device=self.mesh_device,
-                ccl_manager=enc_ccl,
-                parallel_config=enc_parallel,
             )
-            conn_prefix = f"model.diffusion_model.{axis}_embeddings_connector."
+            self._register_encoder_exclusions(self.feature_extractor)
+
+        def _fe_state_dict() -> dict[str, torch.Tensor]:
             sd = {}
-            for k, v in checkpoint_state.items():
-                if k.startswith(conn_prefix):
-                    sub = k[len(conn_prefix) :]
-                    if sub.startswith("transformer_1d_blocks."):
-                        if int(sub.split(".")[1]) >= num_blocks:  # drop blocks beyond num_blocks
-                            continue
-                    sd[sub] = v
-            self._register_encoder_exclusions(connector)
-            res = connector.load_torch_state_dict(sd, strict=False)
-            if res.missing_keys or res.unexpected_keys:
-                logger.warning(f"{axis} connector: missing={res.missing_keys} unexpected={res.unexpected_keys}")
+            for axis in ("video", "audio") if self.mode == "av" else ("video",):
+                agg_prefix = f"text_embedding_projection.{axis}_aggregate_embed."
+                for k, v in _ckpt().items():
+                    if k.startswith(agg_prefix):
+                        sub = k[len(agg_prefix) :]
+                        if sub == "weight":
+                            v = GemmaFeatureExtractor._weight_to_layer_major(v, gemma_hidden_size, gemma_num_layers)
+                        sd[f"{axis}_aggregate_embed.{sub}"] = v
+            return sd
+
+        cache_module.load_model(
+            self.feature_extractor,
+            model_name=ckpt_name,
+            subfolder="feature_extractor",
+            parallel_config=enc_parallel,
+            mesh_shape=tuple(self.mesh_device.shape),
+            get_torch_state_dict=_fe_state_dict,
+        )
+
+        def _load_connector(axis: str, output_dim: int, num_blocks: int, connector) -> EmbeddingsConnector:
+            if connector is None:
+                connector = EmbeddingsConnector(
+                    output_dim=output_dim,
+                    num_blocks=num_blocks,
+                    num_heads=num_heads,
+                    mesh_device=self.mesh_device,
+                    ccl_manager=self._enc_ccl,
+                    parallel_config=enc_parallel,
+                )
+                self._register_encoder_exclusions(connector)
+
+            def _conn_state_dict() -> dict[str, torch.Tensor]:
+                conn_prefix = f"model.diffusion_model.{axis}_embeddings_connector."
+                sd = {}
+                for k, v in _ckpt().items():
+                    if k.startswith(conn_prefix):
+                        sub = k[len(conn_prefix) :]
+                        if sub.startswith("transformer_1d_blocks."):
+                            if int(sub.split(".")[1]) >= num_blocks:  # drop blocks beyond num_blocks
+                                continue
+                        sd[sub] = v
+                return sd
+
+            cache_module.load_model(
+                connector,
+                model_name=ckpt_name,
+                subfolder=f"{axis}_connector",
+                parallel_config=enc_parallel,
+                mesh_shape=tuple(self.mesh_device.shape),
+                get_torch_state_dict=_conn_state_dict,
+            )
             logger.info(f"Loaded {axis} embeddings connector ({num_blocks} blocks, dim={output_dim})")
             return connector
 
-        self.video_connector = _load_connector("video", video_dim, video_num_blocks)
-        self.audio_connector = _load_connector("audio", audio_dim, audio_num_blocks) if self.mode == "av" else None
-
-    @staticmethod
-    def _norm_and_concat_per_token_rms(
-        hidden_states: list[torch.Tensor],
-        attention_mask: torch.Tensor,
-    ) -> torch.Tensor:
-        """Per-token RMS normalization matching FeatureExtractorV2.
-
-        Args:
-            hidden_states: List of L tensors, each (B, T, D)
-            attention_mask: (B, T) binary mask
-
-        Returns:
-            (B, T, D*L) normalized and flattened tensor with padding zeroed.
-        """
-        # Stack: [B, T, D, L]
-        encoded = torch.stack(hidden_states, dim=-1)
-        B, T, D, L = encoded.shape
-        # Per-token RMS norm over D dimension per layer
-        variance = torch.mean(encoded**2, dim=2, keepdim=True)  # [B,T,1,L]
-        normed = encoded * torch.rsqrt(variance + 1e-6)
-        normed = normed.reshape(B, T, D * L)
-        # Zero out padding positions
-        mask_3d = attention_mask.bool().unsqueeze(-1)  # [B, T, 1]
-        return torch.where(mask_3d, normed, torch.zeros_like(normed))
+        self.video_connector = _load_connector("video", video_dim, video_num_blocks, self.video_connector)
+        self.audio_connector = (
+            _load_connector("audio", audio_dim, audio_num_blocks, self.audio_connector) if self.mode == "av" else None
+        )
 
     @staticmethod
     def _replace_padded_with_registers(
@@ -922,18 +898,12 @@ class LTXPipeline:
             real_tokens = hidden_states[b, mask_binary[b], :]  # (n_real, dim)
             n_real = real_tokens.shape[0]
             pad_length = seq_len - n_real
-            # Pack real tokens first, then registers
             padded = torch.nn.functional.pad(real_tokens, (0, 0, 0, pad_length))
             # Flip: registers at the beginning (where attention_mask was 0 = left-padded)
             flipped_mask = torch.flip(mask_binary[b : b + 1], dims=[1]).squeeze(0).unsqueeze(-1).int()
             result[b] = flipped_mask.float() * padded + (1 - flipped_mask.float()) * registers.to(padded)
 
         return result
-
-    @staticmethod
-    def _rescale_norm(x: torch.Tensor, target_dim: int, source_dim: int) -> torch.Tensor:
-        """Rescale normalization: x * sqrt(target_dim / source_dim)."""
-        return x * math.sqrt(target_dim / source_dim)
 
     def _device_embed_cache_path(self, prompts: list[str]) -> str:
         """Disk-cache path for on-device prompt embeddings. Separate namespace from the
@@ -1038,7 +1008,6 @@ class LTXPipeline:
                     rope_sin = bf16_tensor(sin_freq, device=self.mesh_device, **shard_kw)
                     trans_mat = self._prepare_trans_mat()
 
-                    # Push projected back to device and run transformer blocks with RoPE
                     tt_x = ttnn.from_torch(
                         projected.bfloat16(),
                         device=self.mesh_device,
@@ -1067,93 +1036,11 @@ class LTXPipeline:
                     audio_embeds = _run_connector(self.audio_connector, audio_feats, tokens.attention_mask)
 
                 results.append((video_embeds, audio_embeds))
-            else:
-                # Fallback: return raw hidden states from specified layer
-                hs = all_hidden_states[self._gemma_hidden_layer_index]
-                hs_torch = ttnn.to_torch(ttnn.get_device_tensors(hs)[0]).float()
-                mask = tokens.attention_mask.unsqueeze(-1).float()
-                hs_torch = hs_torch * mask
-                results.append((hs_torch, None))
 
         if use_cache:
             torch.save(results, cache_path)
             logger.info(f"Cached device embeddings to {cache_path}")
         return results
-
-    def encode_prompts_reference(self, prompts: list[str]) -> list:
-        """Encode prompts using the official LTX-2 reference pipeline (recommended for AV mode)."""
-        assert self.checkpoint_name is not None, "checkpoint_name must be set before encode_prompts_reference"
-        assert self.gemma_path is not None, "gemma_path must be set before encode_prompts_reference"
-        try:
-            _ensure_ltx_reference_on_path()
-            from ltx_pipelines.utils.blocks import PromptEncoder
-        except ImportError as e:
-            raise ImportError(
-                "encode_prompts_reference() requires the LTX-2 reference package. "
-                "Use load_text_encoder() + __call__() for standalone text encoding."
-            ) from e
-
-        cache_dir = os.environ.get("TT_DIT_CACHE_DIR") or os.path.expanduser("~/.cache/tt-dit")
-        embed_cache_dir = os.path.join(cache_dir, "ltx-embeddings")
-        os.makedirs(embed_cache_dir, exist_ok=True)
-
-        cache_key = hashlib.md5("||".join(prompts).encode()).hexdigest()
-        cache_path = os.path.join(embed_cache_dir, f"{cache_key}.pt")
-
-        if os.path.exists(cache_path):
-            logger.info(f"Loading cached embeddings from {cache_path}")
-            return torch.load(cache_path, weights_only=False)
-
-        # PromptEncoder owns Gemma text encoder + embeddings processor lifecycle:
-        # builds Gemma, encodes, frees, then builds the embeddings processor.
-        prompt_encoder = PromptEncoder(
-            checkpoint_path=self.checkpoint_name,
-            gemma_root=self.gemma_path,
-            dtype=torch.bfloat16,
-            device=torch.device("cpu"),
-        )
-        results = prompt_encoder(prompts)
-        del prompt_encoder
-
-        torch.save(results, cache_path)
-        logger.info(f"Cached embeddings to {cache_path}")
-        return results
-
-    def load_vae_decoder(
-        self,
-        state_dict: dict[str, torch.Tensor],
-        decoder_blocks: list[tuple[str, dict]],
-        *,
-        use_ttnn: bool = True,
-        patch_size: int = 4,
-        base_channels: int = 128,
-    ) -> None:
-        """Load VAE decoder weights.
-
-        Args:
-            state_dict: PyTorch state dict for the decoder
-            decoder_blocks: Block configuration list
-            use_ttnn: If True, use TTNN decoder; if False, use torch-only wrapper
-        """
-        if use_ttnn:
-            self.vae_decoder = LTXVideoDecoder(
-                decoder_blocks=decoder_blocks,
-                in_channels=self.in_channels,
-                out_channels=3,
-                patch_size=patch_size,
-                base_channels=base_channels,
-                mesh_device=self.mesh_device,
-                parallel_config=self.vae_parallel_config,
-                ccl_manager=self.vae_ccl_manager,
-            )
-            self.vae_decoder.load_torch_state_dict(state_dict)
-            logger.info("Loaded TTNN VAE decoder")
-        else:
-            self.vae_decoder = LTXVideoDecoderTorch.from_config(
-                decoder_blocks, in_channels=self.in_channels, patch_size=patch_size, base_channels=base_channels
-            )
-            self.vae_decoder.load_state_dict(state_dict)
-            logger.info("Loaded torch-only VAE decoder")
 
     def _prepare_vae(self) -> None:
         """Push VAE decoder weights onto the mesh. Module was constructed in
@@ -1168,9 +1055,9 @@ class LTXPipeline:
             vae_state = {}
             for k, v in raw.items():
                 if k.startswith("vae.decoder."):
-                    vae_state[k[len("vae.decoder.") :]] = v
+                    vae_state[k.removeprefix("vae.decoder.")] = v
                 elif k.startswith("vae.per_channel_statistics."):
-                    short_key = k[len("vae.") :]
+                    short_key = k.removeprefix("vae.")
                     if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
                         vae_state[short_key] = v
             return vae_state
@@ -1332,9 +1219,13 @@ class LTXPipeline:
             prompt = prompt[..., : self.cross_attention_dim]
         return bf16_tensor(prompt, device=self.mesh_device)
 
-    def _ensure_device_encoder(self) -> None:
-        """Lazily load the on-device Gemma encoder + video/audio connectors (once)."""
-        if self.gemma_encoder is not None:
+    def _prepare_encoder(self) -> None:
+        """Build the on-device Gemma encoder + video/audio connectors once, and reload their
+        weights if a prior DiT/VAE load evicted them. The encoder is coresident-excluded with
+        the DiT, so generate()'s _prepare_transformer(0) deallocates it after every encode —
+        a second cache-missing prompt must reload before encoding. load_gemma_encoder /
+        load_embeddings_connectors reuse the existing modules and only reload weights."""
+        if self.gemma_encoder is not None and self.gemma_encoder.is_loaded():
             return
 
         connector_prefixes = (
@@ -1343,13 +1234,18 @@ class LTXPipeline:
             "model.diffusion_model.video_embeddings_connector.",
             "model.diffusion_model.audio_embeddings_connector.",
         )
-        self.load_gemma_encoder(self.gemma_path, num_layers=48, sequence_length=1024)
-        conn_state = {}
-        with safe_open(self.checkpoint_name, "pt") as f:
-            for k in f.keys():
-                if k.startswith(connector_prefixes):
-                    conn_state[k] = f.get_tensor(k)
-        self.load_embeddings_connectors(conn_state)
+        self.load_gemma_encoder(self.gemma_path, num_layers=48, sequence_length=GEMMA_SEQUENCE_LENGTH)
+
+        # Lazy — only read on a connector cache miss; a cache hit skips the checkpoint entirely.
+        def _read_connector_state() -> dict[str, torch.Tensor]:
+            conn_state = {}
+            with safe_open(self.checkpoint_name, "pt") as f:
+                for k in f.keys():
+                    if k.startswith(connector_prefixes):
+                        conn_state[k] = f.get_tensor(k)
+            return conn_state
+
+        self.load_embeddings_connectors(_read_connector_state)
 
     def warmup_buffers(
         self,
@@ -1365,11 +1261,13 @@ class LTXPipeline:
         t0 = time.time()
         logger.info(f"warmup (AV): {num_frames}f@{height}x{width}, {num_inference_steps} steps")
 
-        results = self.encode_prompts_reference(["warmup", "warmup"])
-        v_p = results[0].video_encoding.float()
-        a_p = results[0].audio_encoding.float()
-        v_n = results[1].video_encoding.float()
-        a_n = results[1].audio_encoding.float()
+        # Dummy zero embeddings at the real shapes — warmup only needs to compile the
+        # (shape-driven) call_av kernels, not real prompt content. This avoids loading
+        # the encoder here, which would coresident-evict the DiT; the encoder kernels
+        # compile on the first generate().
+        v_p = torch.zeros(1, self._gemma_sequence_length, self._video_embed_dim)
+        a_p = torch.zeros(1, self._gemma_sequence_length, self._audio_embed_dim)
+        v_n, a_n = v_p, a_p
 
         self.call_av(
             video_prompt_embeds=v_p,
@@ -1407,33 +1305,16 @@ class LTXPipeline:
         rescale_scale: float = 0.7,
         stg_block: int = 28,
         seed: int = 10,
-        ge_gamma: float | None = None,
+        ge_gamma: float = 0.0,
         fps: int = 24,
     ) -> str:
-        """Run the full LTX-2.3 Pro AV generation pipeline and write an MP4."""
-        if ge_gamma is None:
-            # Official LTX gradient-estimation sampling; enable on BH by default for quality.
-            ge_gamma = 2.0 if ttnn.device.is_blackhole() else 0.0
-            logger.info(f"ge_gamma={ge_gamma} (arch default)")
+        """Run the full LTX-2.3 Pro AV generation pipeline and write an MP4.
 
-        _ensure_ltx_reference_on_path()
-        from ltx_pipelines.utils.constants import DEFAULT_NEGATIVE_PROMPT
-
+        Guidance defaults match the reference ``LTX_2_3_PARAMS``. ``ge_gamma`` enables
+        gradient-estimation sampling (off by default, as in the reference); pass a
+        non-zero value (the reference uses 2.0) to turn it on.
+        """
         neg = negative_prompt if negative_prompt is not None else DEFAULT_NEGATIVE_PROMPT
-
-        def _env_float(name: str, default: float) -> float:
-            val = os.environ.get(name)
-            return float(val) if val is not None else default
-
-        video_cfg_scale = _env_float("VIDEO_CFG_SCALE", video_cfg_scale)
-        audio_cfg_scale = _env_float("AUDIO_CFG_SCALE", audio_cfg_scale)
-        video_stg_scale = _env_float("VIDEO_STG_SCALE", video_stg_scale)
-        audio_stg_scale = _env_float("AUDIO_STG_SCALE", audio_stg_scale)
-        video_modality_scale = _env_float("VIDEO_MODALITY_SCALE", video_modality_scale)
-        audio_modality_scale = _env_float("AUDIO_MODALITY_SCALE", audio_modality_scale)
-        rescale_scale = _env_float("RESCALE_SCALE", rescale_scale)
-        if os.environ.get("GE_GAMMA") is not None:
-            ge_gamma = float(os.environ["GE_GAMMA"])
 
         total_t0 = time.time()
 
@@ -1442,7 +1323,7 @@ class LTXPipeline:
         # them and _prepare_transformer(0) evicts the encoder back. Only load on a cache miss —
         # a cached prompt skips the encoder entirely.
         if not os.path.exists(self._device_embed_cache_path([prompt, neg])):
-            self._ensure_device_encoder()
+            self._prepare_encoder()
         enc = self.encode_prompts_device([prompt, neg])
         v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
         neg_v, neg_a = enc[1][0].float(), enc[1][1].float()
@@ -1485,7 +1366,7 @@ class LTXPipeline:
         logger.info(f"VAE decode: {time.time() - t0:.1f}s — {video_pixels.shape}")
 
         audio_obj = self.decode_audio(audio_latent, num_frames, fps=fps)
-        self.export_video(video_pixels, output_path, fps=fps, audio=audio_obj)
+        export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
 
         total_time = time.time() - total_t0
         logger.info(f"Total: {total_time:.1f}s | Output: {output_path}")
@@ -1606,28 +1487,20 @@ class LTXPipeline:
         return (v_q_cos, v_q_sin, a_q_cos, a_q_sin, v_k_cos, v_k_sin, a_k_cos, a_k_sin)
 
     @staticmethod
-    def _zero_audio_padding(t: torch.Tensor, audio_N_real: int) -> torch.Tensor:
-        """Zero SP-padded audio token slots so they do not affect guidance or GE."""
-        if t.shape[1] <= audio_N_real:
+    def _zero_sp_padding(t: torch.Tensor, n_real: int) -> torch.Tensor:
+        """Zero SP-padded token slots (video or audio) so they do not affect guidance or GE."""
+        if t.shape[1] <= n_real:
             return t
         out = t.clone()
-        out[:, audio_N_real:, :] = 0.0
+        out[:, n_real:, :] = 0.0
         return out
 
-    @staticmethod
-    def _zero_video_padding(t: torch.Tensor, video_N_real: int) -> torch.Tensor:
-        """Zero SP-padded video token slots (mirrors _zero_audio_padding)."""
-        if t.shape[1] <= video_N_real:
-            return t
-        out = t.clone()
-        out[:, video_N_real:, :] = 0.0
-        return out
-
-    def _video_sp_pad_len(self, video_N_real: int) -> int:
-        """Round video seq len up to ttnn.TILE_SIZE * sp_factor (ring-SDPA / SP requirement)."""
+    def _sp_pad_len(self, n_real: int) -> int:
+        """Round a seq len up to ttnn.TILE_SIZE * sp_factor (ring-SDPA / SP requirement).
+        Shared by the video and audio token grids."""
         sp_factor = self.parallel_config.sequence_parallel.factor
         divisor = ttnn.TILE_SIZE * sp_factor
-        return ((video_N_real + divisor - 1) // divisor) * divisor
+        return ((n_real + divisor - 1) // divisor) * divisor
 
     def _pad_video_rope_sp(self, cos_freq: torch.Tensor, sin_freq: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Right-pad video RoPE cos/sin on dim=2 to the SP boundary.
@@ -1636,7 +1509,7 @@ class LTXPipeline:
         RoPE padding in ``_prepare_audio_rope`` / ``_prepare_av_cross_pe``.
         """
         video_N_real = cos_freq.shape[2]
-        video_N = self._video_sp_pad_len(video_N_real)
+        video_N = self._sp_pad_len(video_N_real)
         if video_N == video_N_real:
             return cos_freq, sin_freq
         pad = video_N - video_N_real
@@ -1771,7 +1644,7 @@ class LTXPipeline:
         rescale_scale: float = 0.7,
         stg_block: int = 28,
         seed: int | None = None,
-        ge_gamma: float = 2.0,
+        ge_gamma: float = 0.0,
         profiler=None,
         profiler_iteration: int = 0,
         sigmas: torch.Tensor | None = None,
@@ -1791,13 +1664,12 @@ class LTXPipeline:
         video_N_real = latent_frames * latent_h * latent_w
         # SP padding: round seq dim up to TILE_SIZE * sp_factor so ring SDPA's
         # N_local % TILE_HEIGHT == 0 and N_global == N_local * ring_size checks pass.
-        video_N = self._video_sp_pad_len(video_N_real)
+        video_N = self._sp_pad_len(video_N_real)
 
         vps = VideoPixelShape(batch=B, frames=num_frames, height=height, width=width, fps=24)
         als = AudioLatentShape.from_video_pixel_shape(vps)
         audio_N_real = als.frames
-        sp_factor = self.parallel_config.sequence_parallel.factor
-        audio_N = ((audio_N_real + 32 * sp_factor - 1) // (32 * sp_factor)) * (32 * sp_factor)
+        audio_N = self._sp_pad_len(audio_N_real)
 
         logger.info(
             f"AV: {num_frames}f@{height}x{width}, "
@@ -1938,7 +1810,7 @@ class LTXPipeline:
                 ).squeeze(0)
                 vd = (video_lat.bfloat16().float() - vv.float() * sigma).bfloat16()
                 ad = (audio_lat.bfloat16().float() - av.float() * sigma).bfloat16()
-                return self._zero_video_padding(vd, video_N_real), self._zero_audio_padding(ad, audio_N_real)
+                return self._zero_sp_padding(vd, video_N_real), self._zero_sp_padding(ad, audio_N_real)
 
             v_den, a_den = _run(tt_vp, tt_ap)
 
@@ -2009,8 +1881,8 @@ class LTXPipeline:
                 video_lat_new = euler_step(video_lat, v_den.float(), sigma, sigma_next).bfloat16().float()
                 audio_lat_new = euler_step(audio_lat, a_den.float(), sigma, sigma_next).bfloat16().float()
             # Re-zero padded slots after each step to keep the latent clean.
-            video_lat = self._zero_video_padding(video_lat_new, video_N_real)
-            audio_lat = self._zero_audio_padding(audio_lat_new, audio_N_real)
+            video_lat = self._zero_sp_padding(video_lat_new, video_N_real)
+            audio_lat = self._zero_sp_padding(audio_lat_new, audio_N_real)
 
             if (step_idx + 1) % 5 == 0 or step_idx == 0:
                 logger.info(f"Step {step_idx+1}/{num_inference_steps}: σ {sigma:.4f}→{sigma_next:.4f}")
@@ -2021,89 +1893,12 @@ class LTXPipeline:
         )
         return video_lat[:, :video_N_real, :], audio_lat[:, :audio_N_real, :]
 
-    def decode_audio(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0):
-        """Production audio-decode entry point used by every LTX pipeline.
-
-        Defaults to the on-device path (it falls back to the host reference on
-        failure); set ``LTX_ON_DEVICE_AUDIO=0`` to force the host path. Single
-        dispatcher so all pipelines decode audio the same way.
-        """
-        if on_device_audio_enabled():
-            return self.decode_audio_device(audio_latent, num_frames, fps=fps)
-        return self.decode_audio_reference(audio_latent, num_frames, fps=fps)
-
-    def decode_audio_reference(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0):
-        """Decode audio latent using reference audio VAE + vocoder (CPU torch).
-
-        Args:
-            audio_latent: (1, audio_N, 128) raw audio latent from call_av()
-            num_frames: video frame count (for duration trimming)
-            fps: video frame rate
-
-        Returns:
-            Audio object with .waveform and .sampling_rate, or None on failure
-        """
-        assert self.checkpoint_name is not None, "checkpoint_name must be set before decode_audio_reference"
-        try:
-            _ensure_ltx_reference_on_path()
-            from ltx_core.types import Audio
-            from ltx_pipelines.utils.blocks import AudioDecoder
-
-            # Unpatchify: (1, N, 128) → (1, 8, N, 16).  Match the fp32 audio
-            # decoder dtype to avoid a bias-dtype mismatch at the first conv.
-            audio_N = audio_latent.shape[1]
-            audio_spatial = audio_latent.reshape(1, audio_N, 8, 16).permute(0, 2, 1, 3).float()
-
-            # AudioDecoder block owns both the audio VAE decoder and the
-            # vocoder lifecycle (build → decode → free), replacing the old
-            # `ModelLedger.audio_decoder()` + `ledger.vocoder()` +
-            # `vae_decode_audio(...)` triplet from LTX-2 pre-1.1.
-            #
-            # NOTE: must build in fp32 on CPU.  LTX-2 main's `VocoderWithBWE.forward`
-            # wraps itself in `torch.autocast(dtype=torch.float32)` and feeds the
-            # vocoder `mel_spec.float()`.  On GPU autocast handles the bf16-weight ↔
-            # fp32-input mismatch per-op; on CPU `autocast(dtype=fp32)` is silently
-            # disabled (a UserWarning is logged at import time), so the fp32 input
-            # collides with bf16 conv biases and the decode aborts with
-            # "Input type (float) and bias type (c10::BFloat16) should be the same".
-            # Loading both audio_decoder and vocoder in fp32 sidesteps this; the
-            # audio VAE + vocoder are small relative to the 22B transformer.
-            audio_block = AudioDecoder(
-                checkpoint_path=self.checkpoint_name,
-                dtype=torch.float32,
-                device=torch.device("cpu"),
-            )
-            with torch.no_grad():
-                audio_obj = audio_block(audio_spatial)
-
-            # Trim to video duration
-            video_duration = num_frames / fps
-            target_samples = int(video_duration * audio_obj.sampling_rate)
-            if audio_obj.waveform.shape[-1] > target_samples:
-                audio_obj = Audio(
-                    waveform=audio_obj.waveform[..., :target_samples], sampling_rate=audio_obj.sampling_rate
-                )
-
-            logger.info(
-                f"Audio decoded: {audio_obj.waveform.shape} "
-                f"({audio_obj.waveform.shape[-1]/audio_obj.sampling_rate:.2f}s @ {audio_obj.sampling_rate}Hz)"
-            )
-            return audio_obj
-        except Exception as e:
-            import traceback
-
-            logger.warning(f"Audio decode failed: {e}")
-            logger.warning(f"Audio decode traceback:\n{traceback.format_exc()}")
-            return None
-
     def _new_audio_decoder(self) -> None:
         """Construct audio decoder module shells from checkpoint config.
 
         No weights are loaded — ``_prepare_audio_decoder`` handles that via the
         disk cache the same way ``_prepare_vae`` does for the video VAE.
         """
-        _ensure_ltx_reference_on_path()
-
         from ...models.audio_vae.audio_decoder_ltx import LTXAudioDecoder
         from ...models.audio_vae.bwe_ltx import LTXMelSTFT, LTXVocoderWithBWE
         from ...models.audio_vae.vocoder_ltx import LTXVocoder
@@ -2160,20 +1955,24 @@ class LTXPipeline:
             dtype=ttnn.bfloat16,
         )
 
+        # Architecture params come from the checkpoint config; LTXVocoder owns the
+        # defaults for anything it omits (its defaults are the LTX-2 main-vocoder values).
+        voc_keys = (
+            "resblock_kernel_sizes",
+            "upsample_rates",
+            "upsample_kernel_sizes",
+            "resblock_dilation_sizes",
+            "upsample_initial_channel",
+            "resblock",
+            "activation",
+            "use_tanh_at_final",
+            "use_bias_at_final",
+        )
+
         def _tt_vocoder(cfg: dict, *, apply_final_activation: bool, parallel_config) -> LTXVocoder:
             return LTXVocoder(
-                resblock_kernel_sizes=cfg.get("resblock_kernel_sizes", [3, 7, 11]),
-                upsample_rates=cfg.get("upsample_rates", [6, 5, 2, 2, 2]),
-                upsample_kernel_sizes=cfg.get("upsample_kernel_sizes", [16, 15, 8, 4, 4]),
-                resblock_dilation_sizes=cfg.get("resblock_dilation_sizes", [[1, 3, 5], [1, 3, 5], [1, 3, 5]]),
-                upsample_initial_channel=cfg.get("upsample_initial_channel", 1024),
-                resblock=cfg.get("resblock", "AMP1"),
-                activation=cfg.get("activation", "snakebeta"),
-                use_tanh_at_final=cfg.get("use_tanh_at_final", True),
+                **{k: cfg[k] for k in voc_keys if k in cfg},
                 apply_final_activation=apply_final_activation,
-                use_bias_at_final=cfg.get("use_bias_at_final", True),
-                in_channels=128,
-                out_channels=2,
                 mesh_device=self.mesh_device,
                 dtype=ttnn.float32,
                 parallel_config=parallel_config,
@@ -2215,68 +2014,56 @@ class LTXPipeline:
             cfg_desc = "replicated"
         logger.info(f"Constructed audio decoder shells (mesh {mesh_shape}, vocoder {cfg_desc})")
 
+    def _audio_decoder_state_provider(self) -> dict[str, torch.Tensor]:
+        """Audio mel-VAE decoder weights from the checkpoint, prefix-stripped to the module keys."""
+        logger.info("Audio decoder cache miss — loading from checkpoint")
+        state: dict[str, torch.Tensor] = {}
+        with safe_open(self.checkpoint_name, framework="pt") as f:
+            for k in f.keys():
+                if k.startswith("audio_vae.decoder."):
+                    state[k.removeprefix("audio_vae.decoder.")] = f.get_tensor(k).float()
+                elif k.startswith("audio_vae.per_channel_statistics."):
+                    state[k.removeprefix("audio_vae.")] = f.get_tensor(k).float()
+        return state
+
+    def _vocoder_state_provider(self) -> dict[str, torch.Tensor]:
+        """Vocoder (+ BWE) weights from the checkpoint, prefix-stripped to the module keys."""
+        logger.info("Audio vocoder cache miss — loading from checkpoint")
+        state: dict[str, torch.Tensor] = {}
+        with safe_open(self.checkpoint_name, framework="pt") as f:
+            for k in f.keys():
+                if k.startswith("vocoder."):
+                    state[k.removeprefix("vocoder.")] = f.get_tensor(k).float()
+        return state
+
     def _prepare_audio_decoder(self) -> None:
-        """Load audio decoder + vocoder weights from disk cache or LTX-2 Builders.
+        """Load audio decoder + vocoder weights via the disk cache (mirrors ``_prepare_vae``).
 
-        Mirrors ``_prepare_vae``: first call populates the cache (slow — runs the
-        reference Builders to extract state dicts); subsequent calls load from the
-        binary cache in seconds. The blocking-hash subfolder invalidates the cache
-        when ``_FP32_BLOCKINGS`` changes.
-
-        The mel-VAE per-channel denormalize stats are non-Parameter host buffers
-        (only set by ``LTXAudioDecoder._prepare_torch_state`` on a fresh state-dict
-        load). ``Module.load`` (binary cache path) carries no non-Parameter state,
-        so a cold cache load would leave them as ``torch.empty`` garbage and the
-        denormalised mel — hence the whole audio track — is garbage. They are
-        re-injected from the checkpoint after every load: two ``(ch,)`` tensors,
-        correct on both the fresh and cache paths.
+        The per-channel denormalize stats are re-injected separately after load: they are
+        non-Parameter buffers, so the binary cache path doesn't carry them and would
+        otherwise leave garbage stats (and a garbage audio track).
         """
         if self.tt_audio_decoder is None or self.tt_vocoder_with_bwe is None:
             return
         if self.tt_audio_decoder.is_loaded() and self.tt_vocoder_with_bwe.is_loaded():
             return
 
-        _ensure_ltx_reference_on_path()
-        from ltx_pipelines.utils.blocks import AudioDecoder as RefAudioDecoderBlock
-
         model_name = os.path.basename(self.checkpoint_name).removesuffix(".safetensors")
         blocking_key = conv3d_blocking_hash(self.tt_vocoder_with_bwe)
         dec_subfolder = f"audio_dec_{blocking_key}" if blocking_key else "audio_dec"
         voc_subfolder = f"audio_voc_{blocking_key}" if blocking_key else "audio_voc"
 
-        block = RefAudioDecoderBlock(
-            checkpoint_path=self.checkpoint_name,
-            dtype=torch.float32,
-            device=torch.device("cpu"),
-        )
-
         if not self.tt_audio_decoder.is_loaded():
-
-            def _decoder_state() -> dict:
-                logger.info("Audio decoder cache miss — loading from checkpoint")
-                m = block._decoder_builder.build(device=torch.device("cpu"), dtype=torch.float32).eval()
-                sd = m.state_dict()
-                del m
-                return sd
-
             cache_module.load_model(
                 self.tt_audio_decoder,
                 model_name=model_name,
                 subfolder=dec_subfolder,
                 parallel_config=self.parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
-                get_torch_state_dict=_decoder_state,
+                get_torch_state_dict=self._audio_decoder_state_provider,
             )
 
         if not self.tt_vocoder_with_bwe.is_loaded():
-
-            def _vocoder_state() -> dict:
-                logger.info("Audio vocoder cache miss — loading from checkpoint")
-                m = block._vocoder_builder.build(device=torch.device("cpu"), dtype=torch.float32).eval()
-                sd = m.state_dict()
-                del m
-                return sd
-
             # The resampler's Hann filter is a non-persistent reference buffer, so
             # it is held as a plain device tensor (not a Parameter) and recomputed
             # at init — the strict state-dict load neither expects nor receives it.
@@ -2286,7 +2073,7 @@ class LTXPipeline:
                 subfolder=voc_subfolder,
                 parallel_config=self.parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
-                get_torch_state_dict=_vocoder_state,
+                get_torch_state_dict=self._vocoder_state_provider,
             )
 
         # Re-inject the mel-VAE per-channel stats from the checkpoint — see docstring.
@@ -2298,76 +2085,49 @@ class LTXPipeline:
 
         logger.info("Loaded TTNN audio decoder + vocoder")
 
-    def decode_audio_device(
-        self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0, *, fallback: bool = True
-    ):
-        """On-device counterpart of ``decode_audio_reference``.
+    def decode_audio(self, audio_latent: torch.Tensor, num_frames: int, fps: float = 24.0) -> Audio:
+        """Decode an audio latent ``(1, audio_N, 128)`` to a waveform, fully on device.
 
-        Routes the audio latent through the tt-dit ``LTXAudioDecoder`` (mel-VAE)
-        and ``LTXVocoderWithBWE`` (vocoder + bandwidth extension). Both modules
-        accept torch input and return torch output, uploading/downloading
-        internally.
-
-        Args:
-            audio_latent: (1, audio_N, 128) raw audio latent from call_av()
-            num_frames: video frame count (for duration trimming)
-            fps: video frame rate
-            fallback: when True (production default) a device failure falls back
-                to the host reference path so a broken device build never drops
-                the audio track. Tests set this False so device failures surface.
-
-        Returns:
-            Audio object with .waveform and .sampling_rate, or None on failure
+        The single audio-decode entry point for every LTX pipeline: routes the latent
+        through ``LTXAudioDecoder`` (mel-VAE) then ``LTXVocoderWithBWE`` (vocoder + BWE).
+        Both take and return torch tensors, handling device upload/download internally.
+        ``num_frames``/``fps`` trim the output to the clip duration.
         """
-        assert self.checkpoint_name is not None, "checkpoint_name must be set before decode_audio_device"
-        try:
-            _ensure_ltx_reference_on_path()
-            from ltx_core.types import Audio
+        assert self.checkpoint_name is not None, "checkpoint_name must be set before decode_audio"
 
-            # VAE and audio modules can't be L1-coresident on BH-LB. With
-            # dynamic_load the audio (re)load below evicts the VAE via the
-            # coresident exclusions registered in `_register_coresident_exclusions`;
-            # without dynamic_load nothing evicts, so free the VAE explicitly.
-            if not self.dynamic_load and self.vae_decoder is not None and self.vae_decoder.is_loaded():
-                self.vae_decoder.deallocate_weights()
+        # VAE and audio modules can't be L1-coresident on BH-LB. With
+        # dynamic_load the audio (re)load below evicts the VAE via the
+        # coresident exclusions registered in `_register_coresident_exclusions`;
+        # without dynamic_load nothing evicts, so free the VAE explicitly.
+        if not self.dynamic_load and self.vae_decoder is not None and self.vae_decoder.is_loaded():
+            self.vae_decoder.deallocate_weights()
 
-            # Shells are built by `_new_audio_decoder` at instantiation time; this
-            # method only loads weights into them.
-            assert self.tt_audio_decoder is not None and self.tt_vocoder_with_bwe is not None, (
-                "audio decoder shells not built — _new_audio_decoder() must run first "
-                "(it does, via _instantiate_modules, when checkpoint_name is set at construction)"
-            )
-            self._prepare_audio_decoder()
+        # Shells are built by `_new_audio_decoder` at instantiation time; this
+        # method only loads weights into them.
+        assert self.tt_audio_decoder is not None and self.tt_vocoder_with_bwe is not None, (
+            "audio decoder shells not built — _new_audio_decoder() must run first "
+            "(it does, via _instantiate_modules, when checkpoint_name is set at construction)"
+        )
+        self._prepare_audio_decoder()
 
-            # Unpatchify: (1, audio_N, 128) -> (1, z, audio_N, 128 // z), matching
-            # `decode_audio_reference` (z=z_channels, 128 // z is the patchify freq).
-            audio_N = audio_latent.shape[1]
-            z = self.tt_audio_decoder.z_channels
-            audio_spatial = audio_latent.reshape(1, audio_N, z, audio_latent.shape[2] // z).permute(0, 2, 1, 3).float()
+        # Unpatchify: (1, audio_N, 128) -> (1, z, audio_N, 128 // z)
+        # (z=z_channels, 128 // z is the patchify freq).
+        audio_N = audio_latent.shape[1]
+        z = self.tt_audio_decoder.z_channels
+        audio_spatial = audio_latent.reshape(1, audio_N, z, audio_latent.shape[2] // z).permute(0, 2, 1, 3).float()
 
-            mel = self.tt_audio_decoder(audio_spatial)
-            waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
-            sampling_rate = self.tt_vocoder_with_bwe.output_sampling_rate
+        mel = self.tt_audio_decoder(audio_spatial)
+        waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
+        sampling_rate = self.tt_vocoder_with_bwe.output_sampling_rate
 
-            # Trim to video duration (mirrors the reference path).
-            video_duration = num_frames / fps
-            target_samples = int(video_duration * sampling_rate)
-            if waveform.shape[-1] > target_samples:
-                waveform = waveform[..., :target_samples]
-            audio_obj = Audio(waveform=waveform, sampling_rate=sampling_rate)
+        # Trim to video duration.
+        video_duration = num_frames / fps
+        target_samples = int(video_duration * sampling_rate)
+        if waveform.shape[-1] > target_samples:
+            waveform = waveform[..., :target_samples]
 
-            logger.info(
-                f"Audio decoded on device: {tuple(audio_obj.waveform.shape)} "
-                f"({audio_obj.waveform.shape[-1]/audio_obj.sampling_rate:.2f}s @ {audio_obj.sampling_rate}Hz)"
-            )
-            return audio_obj
-        except Exception as e:
-            if not fallback:
-                raise
-            logger.warning(f"On-device audio decode failed ({e}); falling back to host reference path")
-            return self.decode_audio_reference(audio_latent, num_frames, fps=fps)
-
-    def export_video(self, video_pixels: torch.Tensor, output_path: str, fps: int = 24, audio=None) -> None:
-        """Export decoded video (and optionally audio) to MP4. Thin wrapper over
-        ``utils.video.export_video_audio`` kept for back-compat with existing callers."""
-        export_video_audio(video_pixels, output_path, fps=fps, audio=audio)
+        logger.info(
+            f"Audio decoded on device: {tuple(waveform.shape)} "
+            f"({waveform.shape[-1] / sampling_rate:.2f}s @ {sampling_rate}Hz)"
+        )
+        return Audio(waveform=waveform, sampling_rate=sampling_rate)

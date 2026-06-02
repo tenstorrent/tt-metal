@@ -112,7 +112,7 @@ Override generation settings with environment variables: `PROMPT`, `NUM_FRAMES`,
 - 8-chip Loud Box (`2×4` mesh, `sp_axis=1`, `tp_axis=0`)
 - 32-chip Galaxy (`4×8` mesh, Ring topology, `FABRIC_1D_RING`)
 
-The DiT uses sequence parallel (ring attention) and tensor parallel sharding. Text encoding runs on-device by default — Gemma-3-12B tensor-parallel across the mesh's wide axis (TP=4 on 2×4, TP=8 on 4×8), with embeddings disk-cached so repeated prompts skip the encoder; the reference CPU path (`encode_prompts_reference`) is kept for warmup and validation. The VAE decoder currently runs without spatial mesh sharding (see `vae_ltx.py`).
+The DiT uses sequence parallel (ring attention) and tensor parallel sharding. Text encoding runs fully on-device — Gemma-3-12B tensor-parallel across the mesh's wide axis (TP=4 on 2×4, TP=8 on 4×8), with embeddings disk-cached so repeated prompts skip the encoder. The audio VAE + vocoder also run on device (weights loaded straight from the checkpoint safetensors); there is no host/CPU reference path in the pipeline anymore. The VAE decoder currently runs without spatial mesh sharding (see `vae_ltx.py`).
 
 ## Model Variants
 
