@@ -2110,3 +2110,32 @@ def test_bridge_alias_handles_distinct_source_page_tables():
     # Source layers themselves stay self-pointing.
     assert out[13] is page_tables[13]
     assert out[14] is page_tables[14]
+
+
+def test_bridge_rejects_swapped_runtime_kv_cache_allocation():
+    """The Gemma4 vLLM bridge should pin the first runtime KV allocation.
+
+    The issue is not that callers pass ``kv_cache`` at all; the shared Generator
+    API still threads it through. The issue is that after trace capture the
+    bridge should treat the first harness-owned cache allocation as sticky
+    runtime state and reject a later call that swaps in different cache leaves.
+
+    Re-wrapping the same leaves in fresh Python lists must stay allowed, since
+    the Generator / bridge stack does that naturally. Swapping the leaves
+    themselves must fail loudly.
+    """
+    from models.demos.gemma4.tt.generator_vllm import Gemma4ForCausalLM
+
+    bridge = Gemma4ForCausalLM.__new__(Gemma4ForCausalLM)
+    bridge._runtime_kv_cache_identity = None
+
+    leaf_a0 = object()
+    leaf_a1 = object()
+    first_handle = [[leaf_a0, leaf_a1]]
+    bridge._remember_runtime_kv_cache_identity(first_handle)
+
+    # Same leaves, freshly wrapped: valid compatibility path.
+    bridge._remember_runtime_kv_cache_identity([[leaf_a0, leaf_a1]])
+
+    with pytest.raises(ValueError, match="different kv_cache allocation after initialization"):
+        bridge._remember_runtime_kv_cache_identity([[object(), leaf_a1]])

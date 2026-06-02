@@ -58,6 +58,33 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
         # on every step. Defaults to on; flip ``GEMMA4_BOUNDED_SLIDING_KV_CACHE=0``
         # to fall back to the legacy unbounded path through the paged ops.
         self._bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", "1") != "0"
+        self._runtime_kv_cache_identity = None
+
+    def _kv_cache_identity_tree(self, kv_cache):
+        if isinstance(kv_cache, (list, tuple)):
+            return tuple(self._kv_cache_identity_tree(entry) for entry in kv_cache)
+        return id(kv_cache)
+
+    def _remember_runtime_kv_cache_identity(self, kv_cache):
+        """Treat the first explicit vLLM cache allocation as sticky runtime state.
+
+        Gemma4's traced vLLM path may re-wrap the same cache leaves in fresh
+        Python lists as calls move through Generator / bridge helpers, but it
+        must not silently swap in a different cache allocation later. The
+        authoritative per-step mutation is the page-table refresh into the
+        model-owned persistent buffers, not a new ``kv_cache`` object graph.
+        """
+        if kv_cache is None:
+            return
+        identity_tree = self._kv_cache_identity_tree(kv_cache)
+        if self._runtime_kv_cache_identity is None:
+            self._runtime_kv_cache_identity = identity_tree
+            return
+        if identity_tree != self._runtime_kv_cache_identity:
+            raise ValueError(
+                "Gemma4 vLLM bridge saw a different kv_cache allocation after initialization. "
+                "Reuse the same harness-owned cache and refresh page tables instead of swapping kv_cache handles."
+            )
 
     def _get_prefill_user_page_table(
         self,
@@ -383,6 +410,7 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
         return self.model_args[0].weight_cache_path(ttnn.bfloat16)
 
     def prefill_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        self._remember_runtime_kv_cache_identity(kwargs.get("kv_cache"))
         page_tables_per_layer = self._build_per_layer_page_tables(page_tables_per_layer, kwargs.get("page_table"))
         page_tables_per_layer = self._pad_sliding_page_tables_for_bounded(page_tables_per_layer, kwargs.get("kv_cache"))
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
@@ -405,6 +433,7 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
             return super().prefill_forward_text(**kwargs)
 
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        self._remember_runtime_kv_cache_identity(kwargs.get("kv_cache"))
         page_tables_per_layer = self._build_per_layer_page_tables(page_tables_per_layer, kwargs.get("page_table"))
         page_tables_per_layer = self._pad_sliding_page_tables_for_bounded(page_tables_per_layer, kwargs.get("kv_cache"))
         per_submesh = self._chunk_page_tables_per_dp(page_tables_per_layer)
