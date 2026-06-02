@@ -501,7 +501,6 @@ class TtMoe(LightweightModule):
         # ========================================
         # Dispatch expects full emb_dim on each device (x already has this)
         logger.debug(f"[TtMoe.forward] {x.shape=} {x.memory_config()=}")
-
         dispatched_buffer, metadata = self.dispatch_module(
             x,
             scores,

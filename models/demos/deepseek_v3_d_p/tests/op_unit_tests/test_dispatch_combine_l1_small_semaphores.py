@@ -86,7 +86,7 @@ def run_dispatch_op(mesh_device, use_l1_small):
     )
     # #44928: dispatch consumes UINT16 indices directly from moe_grouped_topk.
     tt_indices = ttnn.from_torch(
-        indices.to(torch.int16),
+        indices,
         mesh_mapper=mesh_mapper,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,

@@ -159,7 +159,7 @@ def test_ttnn_reduce(
         dims=(0, None),
     )
     tt_indices = ttnn.from_torch(
-        torch_indices.to(torch.int16),
+        torch_indices,
         mesh_mapper=indices_mapper,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,

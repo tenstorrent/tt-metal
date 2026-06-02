@@ -224,7 +224,7 @@ def test_ttnn_dispatch(
     )
 
     tt_indices = ttnn.from_torch(
-        indices.to(torch.int16),
+        indices,
         mesh_mapper=mesh_mapper_replicated,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
