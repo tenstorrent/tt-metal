@@ -1,5 +1,4 @@
 # models/demos/blackhole/qwen3_5_9b/tests/unit/test_generator_contract.py
-import os
 
 import pytest
 import torch
@@ -130,22 +129,15 @@ def test_generator_decode_traced_matches_baseline(device):
 @run_for_blackhole()
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 def test_chunk_seq_flag_selects_chunk_outer(device):
-    """Regression (GDN reorg 7d431c86e01): QWEN9B_GDN_CHUNK_SEQ=1 must drive the demo's
-    chunk-outer trace selection. The reorg moved the flag from attn._use_chunk_seq_prefill
-    to attn.weights.use_chunk_seq_prefill but left the demo reading the old name, so the
-    demo silently fell back to the slow whole-sequence trace. The demo's gate is now the
-    helper _should_use_chunked_trace, which must read the flag's new home.
+    """The demo's chunk-outer trace selection must be driven by the GDN weights'
+    use_chunk_seq_prefill (always True now that chunk-seq is the only prefill path). Guards the
+    demo gate _should_use_chunked_trace against regressing to the slow whole-sequence trace.
     """
     from models.demos.blackhole.qwen3_5_9b.demo.text_demo import _should_use_chunked_trace
 
-    os.environ["QWEN9B_GDN_CHUNK_SEQ"] = "1"
-    try:
-        model = _build(device)  # n_layers=4; flag read during GDN weight load
-        gdn = [layer.attention for layer in model.layers if not layer.is_full_attention]
-        assert gdn, "expected at least one GDN (linear-attention) layer"
-        # Flag reaches the weights (its post-reorg home).
-        assert all(a.weights.use_chunk_seq_prefill for a in gdn)
-        # The demo's gate must select chunk-outer when the flag is on.
-        assert _should_use_chunked_trace(model) is True
-    finally:
-        os.environ.pop("QWEN9B_GDN_CHUNK_SEQ", None)
+    model = _build(device)  # n_layers=4
+    gdn = [layer.attention for layer in model.layers if not layer.is_full_attention]
+    assert gdn, "expected at least one GDN (linear-attention) layer"
+    # Chunk-seq prefill is always on now; the demo's gate must select chunk-outer.
+    assert all(a.weights.use_chunk_seq_prefill for a in gdn)
+    assert _should_use_chunked_trace(model) is True

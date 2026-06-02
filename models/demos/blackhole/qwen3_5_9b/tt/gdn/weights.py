@@ -9,8 +9,6 @@ constants, cached chunk masks). Behavior-preserving extraction of the original
 `Qwen35GatedDeltaNet.__init__` weight code — every dtype / layout / memory_config
 and every env-var read is preserved verbatim.
 """
-import math
-import os
 from dataclasses import dataclass
 
 import torch
@@ -19,7 +17,6 @@ import torch
 import models.demos.blackhole.qwen3_5_9b.tt.gdn._experimental_path  # noqa: F401
 import ttnn
 from models.demos.blackhole.qwen3_5_9b.tt.gdn.config import GDNConfig
-from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import create_chunk_masks
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import create_chunk_masks_seq
 
 
@@ -62,21 +59,9 @@ class GDNWeights:
     mega_a_dim: object
     mega_b_dim: object
     mega_g_dim: object
-    # Cached chunk masks
-    cached_masks: object
-    cached_masks_long: object
-    # Derived flags
-    use_prefill_kernel: bool
+    # Chunk-parallel prefill kernel (gated_delta_attn_seq) — always on
     use_chunk_seq_prefill: bool
-    use_decode_kernel: bool
     chunk_seq_masks_long: object
-    # Prefill-kernel constants (None unless use_prefill_kernel)
-    kernel_neg_exp_A: object = None
-    kernel_dt_bias: object = None
-    kernel_norm_w: object = None
-    kernel_scale_tt: object = None
-    kernel_rms_scale_tt: object = None
-    kernel_rms_eps_tt: object = None
 
 
 def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_path=None) -> GDNWeights:
@@ -274,95 +259,12 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
         mega_b_dim = None
         mega_g_dim = None
 
-    # Pre-cache chunk masks for prefill (shared across all calls)
-    cached_masks = create_chunk_masks(config.prefill_chunk_size, mesh_device)
-
-    # The Neumann approximation overflows at chunk_size=256, but we now use
-    # exact forward substitution (LAPACK triangular solve) which is numerically
-    # stable at any chunk size. chunk_size=128 balances device compute (128x128
-    # matmuls) vs sub-chunk count (8 per 1024-token outer chunk) vs LAPACK
-    # solve cost ([256, 128, 128] = 16MB transfer).
-    # NOTE: chunk_size=64 is ~39% faster per-layer but compounds PCC errors
-    # across 32 layers (PCC drops from 0.999 single-layer to 0.87 full-model).
-    cached_masks_long = create_chunk_masks(config.long_prefill_chunk_size, mesh_device)
-
-    # Prefill kernel constants (precomputed once, reused across all prefill calls)
-    use_prefill_kernel = not os.environ.get("GDN_DISABLE_PREFILL_KERNEL", "")
-    kernel_consts = {}
-    if use_prefill_kernel:
-        Nv = num_v_heads
-        Dk = head_k_dim
-        Dv = head_v_dim
-
-        # neg_exp_A: [1, 1, Nv] — already have A_neg but need correct shape
-        neg_exp_A_torch = ttnn.to_torch(A_neg).float().reshape(1, 1, Nv)
-        kernel_consts["kernel_neg_exp_A"] = ttnn.from_torch(
-            neg_exp_A_torch.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # dt_bias: [1, 1, Nv]
-        dt_bias_torch = ttnn.to_torch(dt_bias).float().reshape(1, 1, Nv)
-        kernel_consts["kernel_dt_bias"] = ttnn.from_torch(
-            dt_bias_torch.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # norm_w: [1, 1, Dv] — RMS norm weight (reader loads Vt tiles, not used by compute)
-        norm_w_torch = ttnn.to_torch(o_norm_weight).float().reshape(1, 1, Dv)
-        kernel_consts["kernel_norm_w"] = ttnn.from_torch(
-            norm_w_torch.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # scale_tt: Dk^(-0.5) as [1, 1, 1] scalar
-        kernel_consts["kernel_scale_tt"] = ttnn.from_torch(
-            torch.tensor([[[Dk**-0.5]]], dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # rms_scale_tt: sqrt(Dv) as [1, 1, 1] — loaded by reader, not used by compute
-        kernel_consts["kernel_rms_scale_tt"] = ttnn.from_torch(
-            torch.tensor([[[math.sqrt(Dv)]]], dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # rms_eps_tt: Dv * eps as [1, 1, 1] — loaded by reader, not used by compute
-        kernel_consts["kernel_rms_eps_tt"] = ttnn.from_torch(
-            torch.tensor([[[Dv * norm_eps]]], dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-    # Chunk-parallel prefill via the C++ gated_delta_attn_seq kernel (float32),
-    # opt-in via QWEN9B_GDN_CHUNK_SEQ=1. Replaces the per-token prefill kernel.
-    # The kernel hardcodes Ct=4 diagonal blocks, so it ONLY supports
-    # chunk_size=128 (= long_prefill_chunk_size). Precompute its float32 masks
-    # (incl. eye_32) once; other chunk sizes fall back to the per-token kernel.
-    use_chunk_seq_prefill = bool(os.environ.get("QWEN9B_GDN_CHUNK_SEQ", ""))
-    chunk_seq_masks_long = None
-    if use_chunk_seq_prefill:
-        chunk_seq_masks_long = create_chunk_masks_seq(config.long_prefill_chunk_size, mesh_device)
-
-    # Decode recurrence kernel: opt-in fused on-device kernel for T=1 decode.
-    use_decode_kernel = bool(os.environ.get("QWEN9B_GDN_DECODE_KERNEL", ""))
+    # Chunk-parallel prefill via the C++ gated_delta_attn_seq kernel (float32) is
+    # the default prefill path. The kernel hardcodes Ct=4 diagonal blocks, so it
+    # ONLY supports chunk_size=128 (= long_prefill_chunk_size). Precompute its
+    # float32 masks (incl. eye_32) once.
+    use_chunk_seq_prefill = True
+    chunk_seq_masks_long = create_chunk_masks_seq(config.long_prefill_chunk_size, mesh_device)
 
     return GDNWeights(
         qkv_proj_weight=qkv_proj_weight,
@@ -397,11 +299,6 @@ def load_gdn_weights(mesh_device, config: GDNConfig, state_dict, tensor_cache_pa
         mega_a_dim=mega_a_dim,
         mega_b_dim=mega_b_dim,
         mega_g_dim=mega_g_dim,
-        cached_masks=cached_masks,
-        cached_masks_long=cached_masks_long,
-        use_prefill_kernel=use_prefill_kernel,
         use_chunk_seq_prefill=use_chunk_seq_prefill,
-        use_decode_kernel=use_decode_kernel,
         chunk_seq_masks_long=chunk_seq_masks_long,
-        **kernel_consts,
     )

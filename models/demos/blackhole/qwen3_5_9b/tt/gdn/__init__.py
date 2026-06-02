@@ -10,7 +10,6 @@ import ttnn
 
 from models.demos.blackhole.qwen3_5_9b.tt.gdn.config import GDNConfig
 from models.demos.blackhole.qwen3_5_9b.tt.gdn.decode import recurrent_forward
-from models.demos.blackhole.qwen3_5_9b.tt.gdn.prefill import prefill_kernel_forward
 from models.demos.blackhole.qwen3_5_9b.tt.gdn.state import init_recurrent_state, restore_split_conv_from_fused
 from models.demos.blackhole.qwen3_5_9b.tt.gdn.weights import load_gdn_weights
 
@@ -38,7 +37,6 @@ class Qwen35GatedDeltaNet:
         self.head_v_dim = config.head_v_dim
         self.conv_kernel_size = config.conv_kernel_size
         self.norm_eps = config.norm_eps
-        self.prefill_chunk_size = config.prefill_chunk_size
         self.long_prefill_chunk_size = config.long_prefill_chunk_size
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -72,18 +70,12 @@ class Qwen35GatedDeltaNet:
         # execute_trace() replays (each replay re-runs the same baked buffer addresses).
         # Eager prefill keeps the reassign path. See Qwen35Model.capture_prefill_trace_chunked.
         self._chunk_inplace_state = False
-        # Optional persistent buffer for GDN kernel output. When set, forward_prefill_kernel
-        # writes here instead of allocating fresh — required for trace replay.
+        # Optional persistent buffer used by the (now-superseded) whole-sequence
+        # paged prefill trace path in model.py. Unused by the default chunk-outer path.
         self._trace_prefill_output = None
-        # Persistent [num_pairs, 1, Dv] output buffer for the decode kernel
-        # (trace-safe); lazily allocated on the first T=1 decode call.
-        self._decode_kernel_output = None
 
     def forward(self, x, mode="recurrent", chunk_size=None):
         return recurrent_forward(self, x, mode=mode, chunk_size=chunk_size)
-
-    def forward_prefill_kernel(self, x, prefill_output=None):
-        return prefill_kernel_forward(self, x, prefill_output=prefill_output)
 
     def set_external_state(self, recurrent_state, conv_state):
         """Point layer at externally-allocated state buffers.

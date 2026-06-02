@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """TDD: chunk-outer per-chunk-replay prefill must match the non-traced reference.
 
-Background: the chunk-seq GDN kernel (QWEN9B_GDN_CHUNK_SEQ=1) is correct only at
+Background: the chunk-seq GDN kernel (now the only prefill path) is correct only at
 <=16 sub-chunks (2048 tokens) per call, and a single whole-sequence trace of the
 chunk-seq prefill exceeds tt-metal's 4 GiB uint32 trace-size ceiling at 128K. The
 fix is to capture ONE 2048-token chunk's full-layer forward and replay it per chunk,
@@ -15,7 +15,7 @@ replay path (prefill_traced_chunked) must match the trusted non-traced layer-out
 reference (prefill_paged), with chunk-seq enabled, across multiple chunks.
 
 Run:
-  QWEN9B_GDN_CHUNK_SEQ=1 pytest models/demos/blackhole/qwen3_5_9b/tests/test_prefill_trace_chunked.py -v -s
+  pytest models/demos/blackhole/qwen3_5_9b/tests/test_prefill_trace_chunked.py -v -s
 """
 import os
 
@@ -55,7 +55,6 @@ def test_chunked_replay_matches_reference(device, actual_len):
     padded bucket but must extract the next-token logit at position actual_len-1, unaffected
     by the padding (causal).
     """
-    os.environ["QWEN9B_GDN_CHUNK_SEQ"] = "1"
     device.enable_program_cache()
 
     from models.demos.blackhole.qwen3_5_9b.tt.model import Qwen35Model
