@@ -71,6 +71,11 @@ The high-level path should be a thin deterministic loop over the low-level metho
 
 The generator should own tokenizer loading, page-table setup, KV-cache reset, and any trace-side state reset needed between runs. Keep vLLM-facing low-level methods explicit enough that `generator_vllm.py` can delegate to them rather than duplicating model logic.
 
+There are two modes of allocating kv cache:
+- When running with just the generator (no vllm), the generator fully owns the cache. When using the low level api, kv_cache arg should be None.
+- When running with vllm, kv cache is allocated through allocate_vllm_kv_cache. Even though it’s passed through the low level api kv_cache arg, it’s only valid for it to be the same tensor generator_vllm allocated previously.
+When designing the generator, make sure both modes of running are supported.
+
 Decode tracing should be maintained as a fully-traced decode path that does not need host involvement within a forward pass. If necessary you may do a nominal amount of host work between steps e.g. copying the output tensor to the input, incrementing the position, but it should not be necessary to move tensors back to the host for this and where possible they should be part of the trace. If in doubt check what models/tt_transformers does.
 
 ## vLLM Adapter

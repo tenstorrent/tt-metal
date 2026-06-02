@@ -20,6 +20,11 @@ The generator must expose two API levels:
 
 The high-level generation path should be a thin deterministic loop over the low-level prefill/decode methods. Add `models/autoports/<model_name>/tt/generator_vllm.py` as a serving-facing adapter that delegates to the same low-level methods wherever possible rather than duplicating model logic, and register the new architecture in `vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py::register_tt_models` via `_register_model_if_missing(...)` — without that line vLLM cannot discover the adapter.
 
+There are two modes of allocating kv cache:
+- When running with just the generator (no vllm), the generator fully owns the cache. When using the low level api, kv_cache arg should be None.
+- When running with vllm, kv cache is allocated through allocate_vllm_kv_cache. Even though it’s passed through the low level api kv_cache arg, it’s only valid for it to be the same tensor generator_vllm allocated previously.
+When designing the generator, make sure both modes of running are supported.
+
 Correctness requirements:
 
 - Fully-traced decode path that does not need host involvement within each forward pass. If necessary you may do a nominal amount of host work between steps e.g. copying the output tensor to the input, incrementing the position, but it should not be necessary to move tensors back to the host for this and where possible they should be part of the trace. If in doubt check what models/tt_transformers does.
