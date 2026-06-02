@@ -9,18 +9,6 @@ on:
         required: false
         default: "notify"
 
-      # ── Notify inputs ────────────────────────────────────────────────────────
-      full-lifecycle:
-        description: "[notify] Run full AI-powered lifecycle (slow, burns LLM quota). Default: false = fast check-passing-only mode."
-        required: false
-        default: "false"
-        type: string
-      skip-lifecycle:
-        description: "[notify] Skip the lifecycle run entirely. Default: false."
-        required: false
-        default: "false"
-        type: string
-
       # ── Lifecycle inputs ─────────────────────────────────────────────────────
       close-issues:
         description: "[lifecycle] Actually close resolved issues (false = dry-run)"
@@ -82,54 +70,40 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: .github/scripts/triage
+          sparse-checkout-cone-mode: true
+
+      - name: Eastern calendar date
+        id: eastern-date
+        run: echo "date=$(TZ=America/New_York date +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Check if lifecycle was already included today
+        id: lifecycle-sent-today
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: /tmp/ping-brain-lifecycle-sent
+          key: ping-brain-lifecycle-${{ steps.eastern-date.outputs.date }}
+          lookup-only: true
+
       - name: Send triage instructions to BrAIn
+        id: send
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          FULL_LIFECYCLE:  ${{ inputs.full-lifecycle || 'false' }}
-          SKIP_LIFECYCLE:  ${{ inputs.skip-lifecycle || 'false' }}
-        run: |
-          python3 << 'PYEOF'
-          import json, os, urllib.request
+          INCLUDE_LIFECYCLE: ${{ steps.lifecycle-sent-today.outputs.cache-hit != 'true' }}
+        run: python3 .github/scripts/triage/ping_brain_slack.py
 
-          SLACK_TOKEN    = os.environ["SLACK_BOT_TOKEN"]
-          BRAIN_UID      = "U0AK4BVCFM0"
-          CHANNEL        = "C0B1F8Z7GQM"
-          full_lifecycle = os.environ.get("FULL_LIFECYCLE", "false").lower() == "true"
-          skip_lifecycle = os.environ.get("SKIP_LIFECYCLE", "false").lower() == "true"
+      - name: Record daily lifecycle instruction sent
+        if: steps.send.outputs.included_lifecycle == 'true'
+        run: mkdir -p /tmp/ping-brain-lifecycle-sent && touch /tmp/ping-brain-lifecycle-sent/sent
 
-          if skip_lifecycle:
-              lifecycle_line = "1. ~~`/run-lifecycle`~~ _(skipped this run)_\n"
-          elif full_lifecycle:
-              lifecycle_line = "1. `/run-lifecycle false true copilot` _(full AI-powered lifecycle — slow)_\n"
-          else:
-              lifecycle_line = "1. `/run-lifecycle true true copilot` _(fast: close only jobs now passing)_\n"
-
-          text = (
-              f"<@{BRAIN_UID}> Run the full triage pipeline in order:\n\n"
-              + lifecycle_line +
-              "2. `/make-new-issues 1`\n"
-              "3. `/assign-issue`\n"
-              "4. `/draft-slack-message` (include pings for the owners you found)\n\n"
-              "Combine steps 3-4 into a *single Slack message* -- one concise summary of "
-              "what the issue is and who should take care of it. No separate messages per step."
-          )
-
-          data = json.dumps({"channel": CHANNEL, "text": text}).encode()
-          req = urllib.request.Request(
-              "https://slack.com/api/chat.postMessage",
-              data=data,
-              headers={
-                  "Authorization": f"Bearer {SLACK_TOKEN}",
-                  "Content-Type": "application/json"
-              }
-          )
-          with urllib.request.urlopen(req, timeout=30) as r:
-              resp = json.loads(r.read())
-
-          if not resp.get("ok"):
-              raise RuntimeError(f"Slack post failed: {resp.get('error')}")
-          print("BrAIn notified.")
-          PYEOF
+      - name: Save daily lifecycle cache
+        if: steps.send.outputs.included_lifecycle == 'true'
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: /tmp/ping-brain-lifecycle-sent
+          key: ping-brain-lifecycle-${{ steps.eastern-date.outputs.date }}
 
   lifecycle:
     if: ${{ inputs.mode == 'lifecycle' }}
