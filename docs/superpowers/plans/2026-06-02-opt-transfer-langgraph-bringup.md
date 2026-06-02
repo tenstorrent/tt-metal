@@ -543,8 +543,9 @@ Expected: FAIL with `ModuleNotFoundError`
 import re
 from pathlib import Path
 
-# Matches ANY ttnn op call: ttnn.foo( or ttnn.experimental.bar( — no hardcoded allowlist.
-OP_CALL_RE = re.compile(r"ttnn\.(?:experimental\.)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\(")
+# Matches ANY ttnn op call: ttnn.foo(, ttnn.experimental.bar(, ttnn.transformer.baz( — no allowlist.
+# (transformer namespace is required: scaled_dot_product_attention lives under ttnn.transformer.)
+OP_CALL_RE = re.compile(r"ttnn\.(?:experimental\.|transformer\.)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\(")
 
 
 def _iter_py(base: Path):
