@@ -65,8 +65,8 @@ class LTXDistilledPipeline(LTXPipeline):
         # Dummy zero embeddings at the real shapes — the denoise warmup below only needs
         # to compile the (shape-driven) kernels, not real prompt content. The encoder is
         # warmed separately at the end of this method (it coresident-evicts the DiT/VAE).
-        v_p = torch.zeros(1, self._gemma_sequence_length, self._video_embed_dim)
-        a_p = torch.zeros(1, self._gemma_sequence_length, self._audio_embed_dim)
+        v_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.video_dim)
+        a_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.audio_dim)
 
         # Allocate both stages' persistent trace I/O before any capture, so all held inputs
         # sit below both traces' activation regions and neither trace's replay can overwrite
@@ -133,8 +133,8 @@ class LTXDistilledPipeline(LTXPipeline):
 
         # Warm the encoder last: it coresident-evicts the DiT/VAE, so gen #0 then re-loads the DiT.
         # use_cache=False forces a real encode so the Gemma/connector kernels actually compile.
-        self._prepare_encoder()
-        self.encode_prompts_device(["warmup"], use_cache=False)
+        self.gemma_encoder_pair.ensure_loaded()
+        self.encode_prompts(["warmup"], use_cache=False)
 
         logger.info(f"warmup (distilled 2-stage) done in {time.time() - t0:.1f}s")
 
@@ -152,8 +152,7 @@ class LTXDistilledPipeline(LTXPipeline):
         vps = VideoPixelShape(batch=B, frames=num_frames, height=height, width=width, fps=24)
         als = AudioLatentShape.from_video_pixel_shape(vps)
         audio_N_real = als.frames
-        sp_factor = self.parallel_config.sequence_parallel.factor
-        audio_N = ((audio_N_real + 32 * sp_factor - 1) // (32 * sp_factor)) * (32 * sp_factor)
+        audio_N = self._sp_pad_len(audio_N_real)
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
 
         if trace_key not in self._trace_consts:
@@ -239,7 +238,7 @@ class LTXDistilledPipeline(LTXPipeline):
         als = AudioLatentShape.from_video_pixel_shape(vps)
         audio_N_real = als.frames
         sp_factor = self.parallel_config.sequence_parallel.factor
-        audio_N = ((audio_N_real + 32 * sp_factor - 1) // (32 * sp_factor)) * (32 * sp_factor)
+        audio_N = self._sp_pad_len(audio_N_real)
 
         logger.info(
             f"  shapes: vN={video_N}(real={video_N_real}), aN={audio_N}(real={audio_N_real}) " f"[sp={sp_factor}]"
@@ -569,8 +568,8 @@ class LTXDistilledPipeline(LTXPipeline):
         # On-device Gemma encode (coresident-excluded with the DiT/VAE, so it auto-evicts
         # them and _prepare_transformer(0) evicts the encoder back). Only load on a cache miss.
         if not os.path.exists(self._device_embed_cache_path([prompt])):
-            self._prepare_encoder()
-        enc = self.encode_prompts_device([prompt])
+            self.gemma_encoder_pair.ensure_loaded()
+        enc = self.encode_prompts([prompt])
         v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
 
         self._prepare_transformer(0)
@@ -619,8 +618,8 @@ class LTXDistilledPipeline(LTXPipeline):
         # On-device Gemma encode. Only load the encoder (coresident-evicts DiT/VAE) on a cache
         # miss — a cached prompt skips the encoder entirely.
         if not os.path.exists(self._device_embed_cache_path([prompt])):
-            self._prepare_encoder()
-        enc = self.encode_prompts_device([prompt])
+            self.gemma_encoder_pair.ensure_loaded()
+        enc = self.encode_prompts([prompt])
         v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
         logger.info(f"Encoding (device): {time.time() - t0:.1f}s")
 

@@ -5,7 +5,7 @@
 """
 End-to-end validation of the on-device Gemma encode path for LTX AV.
 
-Compares ``encode_prompts_device`` (TTNN GemmaEncoder + on-device video/audio
+Compares ``encode_prompts`` (TTNN GemmaEncoder + on-device video/audio
 embeddings connectors) against the official LTX-2 CPU ``PromptEncoder`` reference
 (wrapped locally in ``_encode_prompts_reference``) for the same prompt, reporting
 PCC of the final video (4096-dim) and audio (2048-dim) context embeddings.
@@ -104,7 +104,7 @@ def _encode_prompts_reference(checkpoint_path: str, gemma_root: str, prompts: li
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_encode_prompts_device_vs_reference(*, mesh_device):
+def test_encode_prompts_vs_reference(*, mesh_device):
     gemma = _gemma_path()
     ckpt = _ltx_ckpt()
     if not os.path.isdir(gemma):
@@ -117,7 +117,7 @@ def test_encode_prompts_device_vs_reference(*, mesh_device):
 
     # On-device Gemma encoder (full 48 layers). TP follows the T5 pattern (axis-1 width):
     # TP=1 on 1x1, TP=4 on 2x4 — set inside the loader, no override needed.
-    pipe.load_gemma_encoder(gemma, num_layers=48, sequence_length=1024)
+    pipe.gemma_encoder_pair.load_gemma_encoder(gemma, num_layers=48, sequence_length=1024)
 
     # Load only the connector weights from the 46GB checkpoint.
     conn_state = {}
@@ -126,7 +126,7 @@ def test_encode_prompts_device_vs_reference(*, mesh_device):
             if k.startswith(CONNECTOR_PREFIXES):
                 conn_state[k] = f.get_tensor(k)
     logger.info(f"connector weights: {len(conn_state)} tensors")
-    pipe.load_embeddings_connectors(conn_state, audio_num_blocks=8)
+    pipe.gemma_encoder_pair.load_embeddings_connectors(conn_state, audio_num_blocks=8)
 
     # Reference embeds (official CPU PromptEncoder), local to this test.
     ref = _encode_prompts_reference(ckpt, gemma, [PROMPT])
@@ -137,9 +137,9 @@ def test_encode_prompts_device_vs_reference(*, mesh_device):
     # and is the one we time. use_cache=False to measure the real encode, not a cache load.
     import time
 
-    pipe.encode_prompts_device([PROMPT], use_cache=False)
+    pipe.encode_prompts([PROMPT], use_cache=False)
     t0 = time.perf_counter()
-    dev = pipe.encode_prompts_device([PROMPT], use_cache=False)
+    dev = pipe.encode_prompts([PROMPT], use_cache=False)
     t_warm_ms = (time.perf_counter() - t0) * 1e3
 
     v_dev = torch.as_tensor(dev[0][0]).float()

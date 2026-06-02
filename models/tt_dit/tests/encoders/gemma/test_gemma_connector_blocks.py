@@ -25,6 +25,8 @@ from safetensors import safe_open
 
 import ttnn
 from models.tt_dit.encoders.gemma.embeddings_connector import _rms_norm_cc
+from models.tt_dit.encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
+from models.tt_dit.models.transformers.ltx.rope_ltx import reshape_interleaved_to_bhnd
 from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
 
 VIDEO_PREFIX = "model.diffusion_model.video_embeddings_connector."
@@ -76,7 +78,7 @@ def test_connector_blocks_isolated(*, mesh_device):
                 ref_sd[k[len(VIDEO_PREFIX) :]] = f.get_tensor(k)  # keep bf16 (matches reference)
             elif k.startswith(AGG_PREFIXES):
                 conn_state[k] = f.get_tensor(k)
-    pipe.load_embeddings_connectors(conn_state, audio_num_blocks=8)
+    pipe.gemma_encoder_pair.load_embeddings_connectors(conn_state, audio_num_blocks=8)
 
     # --- reference connector (CPU) ---
     ref = (
@@ -114,8 +116,12 @@ def test_connector_blocks_isolated(*, mesh_device):
         ref_out = ref(x.float().clone(), additive_mask)[0].float()
 
     # device: replicate _run_connector — register replacement -> rope -> blocks -> final norm
-    registers = ttnn.to_torch(ttnn.get_device_tensors(pipe.video_connector.learnable_registers.data)[0]).float()
-    x_replaced = LTXPipeline._replace_padded_with_registers(x.float(), binary_mask, registers, 128).bfloat16()
+    registers = ttnn.to_torch(
+        ttnn.get_device_tensors(pipe.gemma_encoder_pair.video_connector.learnable_registers.data)[0]
+    ).float()
+    x_replaced = GemmaTokenizerEncoderPair._replace_padded_with_registers(
+        x.float(), binary_mask, registers, 128
+    ).bfloat16()
 
     # Device blocks now take head-split (BHND) interleaved cos/sin + a trans_mat and run the
     # on-device rotary_embedding_llama kernel (Q/K permuted at load). Mirror _run_connector.
@@ -130,20 +136,20 @@ def test_connector_blocks_isolated(*, mesh_device):
         freq_grid_generator=generate_freq_grid_pytorch,
     )  # (1, seq, dim)
     rope_cos = ttnn.from_torch(
-        pipe._reshape_interleaved_to_bhnd(rope_cos, 32).bfloat16(),
+        reshape_interleaved_to_bhnd(rope_cos, 32).bfloat16(),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
     )
     rope_sin = ttnn.from_torch(
-        pipe._reshape_interleaved_to_bhnd(rope_sin, 32).bfloat16(),
+        reshape_interleaved_to_bhnd(rope_sin, 32).bfloat16(),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.bfloat16,
     )
     trans_mat = pipe._prepare_trans_mat()
     tt_x = ttnn.from_torch(x_replaced, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    for block in pipe.video_connector.transformer_1d_blocks:
+    for block in pipe.gemma_encoder_pair.video_connector.transformer_1d_blocks:
         tt_x = block(tt_x, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat)
     tt_x = ttnn.experimental.dit_rms_norm_unary_fused(
         tt_x, weight=None, epsilon=1e-6, compute_kernel_config=_rms_norm_cc(mesh_device)

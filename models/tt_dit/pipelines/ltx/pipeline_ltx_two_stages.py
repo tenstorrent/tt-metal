@@ -104,8 +104,8 @@ class LTXTwoStagesPipeline(LTXPipeline):
         # (shape-driven) call_av kernels, not real prompt content. Avoids loading the
         # encoder here (it would coresident-evict the DiT just loaded above); the encoder
         # kernels compile on the first generate().
-        v_p = torch.zeros(1, self._gemma_sequence_length, self._video_embed_dim)
-        a_p = torch.zeros(1, self._gemma_sequence_length, self._audio_embed_dim)
+        v_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.video_dim)
+        a_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.audio_dim)
         v_n, a_n = v_p, a_p
 
         logger.info(f"warmup stage 1: {s1_h}x{s1_w}")
@@ -236,8 +236,8 @@ class LTXTwoStagesPipeline(LTXPipeline):
         #    Only load on a cache miss — a cached prompt skips the encoder entirely.
         t0 = time.time()
         if not os.path.exists(self._device_embed_cache_path([prompt, neg])):
-            self._prepare_encoder()
-        enc = self.encode_prompts_device([prompt, neg])
+            self.gemma_encoder_pair.ensure_loaded()
+        enc = self.encode_prompts([prompt, neg])
         logger.info(f"Encoding (device): {time.time() - t0:.1f}s")
         v_p, a_p = enc[0][0].float(), enc[0][1].float()
         v_n, a_n = enc[1][0].float(), enc[1][1].float()

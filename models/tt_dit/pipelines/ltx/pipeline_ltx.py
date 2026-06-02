@@ -16,7 +16,6 @@ Reference: LTX-2/packages/ltx-pipelines/ + Wan pipeline_wan.py
 
 from __future__ import annotations
 
-import glob
 import hashlib
 import json
 import math
@@ -30,14 +29,11 @@ from huggingface_hub import hf_hub_download, snapshot_download
 from loguru import logger
 from safetensors import safe_open
 from safetensors.torch import load_file
-from transformers import AutoTokenizer
 
 import ttnn
 
-from ...encoders.gemma.embeddings_connector import EmbeddingsConnector
-from ...encoders.gemma.feature_extractor import GemmaFeatureExtractor
-from ...encoders.gemma.model_gemma import GemmaConfig, GemmaEncoder
-from ...models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis
+from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
+from ...models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis, reshape_interleaved_to_bhnd
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
 from ...models.upsampler.latent_upsampler_ltx import LTXLatentUpsampler
 from ...models.vae.vae_ltx import LTXVideoDecoder
@@ -60,8 +56,7 @@ from ...utils.ltx import (
     get_pixel_coords,
     video_get_patch_grid_bounds,
 )
-from ...utils.mochi import get_rot_transformation_mat
-from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
+from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard, prepare_rot_transformation_mat
 from ...utils.tracing import Tracer
 from ...utils.video import Audio, export_video_audio
 
@@ -72,13 +67,6 @@ LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safet
 # is a separate concept — do NOT replace `32 * sp_factor` padding math with these.
 TEMPORAL_COMPRESSION = 8
 SPATIAL_COMPRESSION = 32
-
-# Gemma text-encoder + embeddings-connector output shapes. Fixed config, known at
-# construction — warmup builds dummy prompt embeddings at these shapes without loading the
-# encoder (loading it would coresident-evict the DiT being warmed).
-GEMMA_SEQUENCE_LENGTH = 1024
-VIDEO_EMBED_DIM = 4096
-AUDIO_EMBED_DIM = 2048
 
 # Distilled sigma schedules shared by the distilled and two-stage subclasses.
 DISTILLED_SIGMA_VALUES = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]
@@ -287,21 +275,22 @@ class LTXPipeline:
         self._init_height = height
         self._init_width = width
 
-        self.gemma_encoder = None
-        self.gemma_tokenizer = None
-        self.feature_extractor = None
-        self.video_connector = None
-        self.audio_connector = None
-        self._enc_ccl = None
-        # Set at construction so warmup can shape dummy embeddings before the encoder loads.
-        self._gemma_sequence_length = GEMMA_SEQUENCE_LENGTH
-        self._video_embed_dim = VIDEO_EMBED_DIM
-        self._audio_embed_dim = AUDIO_EMBED_DIM
-
         self.checkpoint_name: str | None = (
             LTXPipeline._resolve_checkpoint_file(checkpoint_name) if checkpoint_name else None
         )
         self.gemma_path: str | None = LTXPipeline._resolve_gemma_dir(gemma_path) if gemma_path else None
+
+        # On-device Gemma text encoder + embeddings connectors. Lazy: no modules are built
+        # until the first ensure_loaded(). Coresident peers (DiT/VAE) are registered in
+        # _register_coresident_exclusions once those modules exist.
+        self.gemma_encoder_pair = GemmaTokenizerEncoderPair(
+            self.gemma_path,
+            mesh_device=self.mesh_device,
+            parallel_config=self.encoder_parallel_config,
+            checkpoint_name=self.checkpoint_name,
+            mode=self.mode,
+            dynamic_load=self.dynamic_load,
+        )
 
         # ``self.transformer`` always points at the active variant, set via
         # ``_prepare_transformer(idx)``.
@@ -641,25 +630,15 @@ class LTXPipeline:
             self.vae_decoder.register_coresident_exclusions(self.upsampler)
             self.upsampler.register_coresident_exclusions(self.vae_decoder)
 
+        # The on-device Gemma encoder modules are bidirectionally excluded with the DiT
+        # variants + VAE; the pair wires the exclusions on each module at its first build.
+        encoder_peers = [*models] + ([self.vae_decoder] if self.vae_decoder is not None else [])
+        self.gemma_encoder_pair.register_coresident_peers(encoder_peers)
+
         # Audio decoder/vocoder are intentionally NOT excluded against the VAE:
         # measured coresident on BH-LB 2x4 (the tightest BH config) with no OOM,
         # even with the fp32 vocoder's conv3d activations live. Excluding them only
         # forces a redundant audio reload at decode (~6s warm) for no memory gain.
-
-    def _register_encoder_exclusions(self, module) -> None:
-        """Register a lazily-built Gemma encoder/connector coresident-excluded with the
-        DiT variants + VAE (bidirectional). Called from load_gemma_encoder /
-        load_embeddings_connectors BEFORE their load, so the encoder's load_torch_state_dict
-        auto-evicts the DiT (and the later DiT/VAE reload auto-evicts the encoder).
-        No-op unless dynamic_load is enabled."""
-        if not self.dynamic_load:
-            return
-        peers = [s.model for s in self.transformer_states]
-        if self.vae_decoder is not None:
-            peers.append(self.vae_decoder)
-        module.register_coresident_exclusions(*peers)
-        for p in peers:
-            p.register_coresident_exclusions(module)
 
     def _prime_caches(self) -> None:
         """Load every module in reverse use order so variant 0 is resident in
@@ -685,226 +664,6 @@ class LTXPipeline:
         )
         self.transformer = state.model
 
-    def load_gemma_encoder(
-        self,
-        gemma_path: str,
-        *,
-        num_layers: int = 48,
-        hidden_layer_index: int = -1,
-        sequence_length: int = 1024,
-    ) -> None:
-        """Load TTNN Gemma-3 text encoder on device. 13x faster than CPU torch.
-
-        Args:
-            gemma_path: HuggingFace model path or local directory
-            num_layers: Number of Gemma layers (48 for 12B)
-            hidden_layer_index: Which layer's hidden states to extract (-1 = last)
-            sequence_length: Max token sequence length
-        """
-        # Build the encoder + its CCLManager once. Under dynamic_load a later DiT/VAE load
-        # evicts the encoder weights (coresident exclusion), so this is called again per
-        # cache-missing prompt to reload them — the module and CCLManager are reused, since a
-        # fresh CCLManager would leak its global semaphores and orphan the exclusion refs.
-        if self.gemma_encoder is None:
-            config = GemmaConfig(
-                num_hidden_layers=num_layers,
-                hidden_layer_index=hidden_layer_index,
-                max_position_embeddings=sequence_length,
-            )
-            enc_ccl = CCLManager(self.mesh_device, topology=ttnn.Topology.Linear)
-            self.gemma_encoder = GemmaEncoder(config, self.mesh_device, enc_ccl, self.encoder_parallel_config)
-
-            # Register coresident exclusions BEFORE loading so the encoder load auto-evicts
-            # the DiT (and the later DiT reload auto-evicts the encoder).
-            self._register_encoder_exclusions(self.gemma_encoder)
-
-            # Left-padding matches the reference FeatureExtractorV2 pipeline:
-            # [PAD, ..., PAD, BOS, real tokens]. With causal SDPA the real tokens attend to
-            # the padding; both sides zero padded hidden states out via attention_mask.
-            self.gemma_tokenizer = AutoTokenizer.from_pretrained(gemma_path)
-            self._gemma_sequence_length = sequence_length
-
-        # Load through the shared weight cache (same path as the DiT/VAE): the first run
-        # tilizes from safetensors and writes a pre-tilized cache; reloads read that cache
-        # instead of re-tilizing 12B params. The encoder is evicted after every encode under
-        # dynamic_load, so reloads are the common case. The state-dict read is lazy — only a
-        # cache miss touches safetensors.
-        def _gemma_state_dict() -> dict[str, torch.Tensor]:
-            weight_files = sorted(glob.glob(f"{gemma_path}/model-*.safetensors")) or sorted(
-                glob.glob(f"{gemma_path}/*.safetensors")
-            )
-            sd = {}
-            for f in weight_files:
-                sd.update(load_file(f))
-            return sd
-
-        t0 = time.time()
-        cache_module.load_model(
-            self.gemma_encoder,
-            model_name=os.path.basename(os.path.normpath(gemma_path)),
-            subfolder="text_encoder",
-            parallel_config=self.encoder_parallel_config,
-            mesh_shape=tuple(self.mesh_device.shape),
-            get_torch_state_dict=_gemma_state_dict,
-        )
-        logger.info(f"Loaded TTNN Gemma encoder ({num_layers}L) in {time.time()-t0:.0f}s")
-
-    def load_embeddings_connectors(
-        self,
-        checkpoint_state: dict[str, torch.Tensor] | Callable[[], dict[str, torch.Tensor]],
-        *,
-        gemma_hidden_size: int = 3840,
-        gemma_num_layers: int = 49,  # embedding layer + 48 decoder layers
-        video_num_blocks: int = 8,
-        audio_num_blocks: int = 8,
-        video_dim: int = VIDEO_EMBED_DIM,
-        audio_dim: int = AUDIO_EMBED_DIM,
-        num_heads: int = 32,
-    ) -> None:
-        """Load video and audio embeddings connectors from the LTX-2 checkpoint.
-
-        Checkpoint keys:
-        - text_embedding_projection.video_aggregate_embed.{weight,bias} → video connector aggregate_embed
-        - text_embedding_projection.audio_aggregate_embed.{weight,bias} → audio connector aggregate_embed
-        - model.diffusion_model.video_embeddings_connector.* → video connector blocks + norm
-        - model.diffusion_model.audio_embeddings_connector.* → audio connector blocks + norm
-        """
-        input_dim = gemma_hidden_size * gemma_num_layers
-        # Connector weights come from the LTX checkpoint, so cache them under its name
-        # alongside the transformer/VAE caches.
-        ckpt_name = (
-            os.path.basename(self.checkpoint_name).removesuffix(".safetensors")
-            if self.checkpoint_name
-            else "ltx-connectors"
-        )
-
-        # checkpoint_state may be a dict or a zero-arg callable returning it. Resolved once and
-        # only on a cache miss, so an all-cache-hit reload reads neither the checkpoint nor the
-        # tilizer.
-        _resolved: dict = {}
-
-        def _ckpt() -> dict[str, torch.Tensor]:
-            if "sd" not in _resolved:
-                _resolved["sd"] = checkpoint_state() if callable(checkpoint_state) else checkpoint_state
-            return _resolved["sd"]
-
-        # Same TP as the Gemma encoder (T5 pattern: full axis-1 width) so the two stages
-        # shard identically and the connector cos/sin head-shard lines up with the blocks.
-        # Build the modules + their shared CCLManager once; weights load through the shared
-        # cache. Under dynamic_load the DiT reload after each encode evicts these, so reloads
-        # are the common case — the modules/CCLManager are reused (a fresh CCLManager would
-        # leak its global semaphores), and the cache skips re-tilizing on every reload.
-        enc_parallel = self.encoder_parallel_config
-        if self._enc_ccl is None:
-            self._enc_ccl = CCLManager(self.mesh_device, topology=ttnn.Topology.Linear)
-
-        # --- Feature extractor (per-token RMS + rescale + dual aggregate_embed) ---
-        # Mirrors FeatureExtractorV2: owns the aggregate_embed weights; connectors consume
-        # its projected output. The aggregate weight is permuted D-major→layer-major to match
-        # the on-device layer-major concat (see GemmaFeatureExtractor._weight_to_layer_major).
-        if self.feature_extractor is None:
-            self.feature_extractor = GemmaFeatureExtractor(
-                input_dim=input_dim,
-                embedding_dim=gemma_hidden_size,
-                video_dim=video_dim,
-                audio_dim=audio_dim if self.mode == "av" else None,
-                mesh_device=self.mesh_device,
-            )
-            self._register_encoder_exclusions(self.feature_extractor)
-
-        def _fe_state_dict() -> dict[str, torch.Tensor]:
-            sd = {}
-            for axis in ("video", "audio") if self.mode == "av" else ("video",):
-                agg_prefix = f"text_embedding_projection.{axis}_aggregate_embed."
-                for k, v in _ckpt().items():
-                    if k.startswith(agg_prefix):
-                        sub = k[len(agg_prefix) :]
-                        if sub == "weight":
-                            v = GemmaFeatureExtractor._weight_to_layer_major(v, gemma_hidden_size, gemma_num_layers)
-                        sd[f"{axis}_aggregate_embed.{sub}"] = v
-            return sd
-
-        cache_module.load_model(
-            self.feature_extractor,
-            model_name=ckpt_name,
-            subfolder="feature_extractor",
-            parallel_config=enc_parallel,
-            mesh_shape=tuple(self.mesh_device.shape),
-            get_torch_state_dict=_fe_state_dict,
-        )
-
-        def _load_connector(axis: str, output_dim: int, num_blocks: int, connector) -> EmbeddingsConnector:
-            if connector is None:
-                connector = EmbeddingsConnector(
-                    output_dim=output_dim,
-                    num_blocks=num_blocks,
-                    num_heads=num_heads,
-                    mesh_device=self.mesh_device,
-                    ccl_manager=self._enc_ccl,
-                    parallel_config=enc_parallel,
-                )
-                self._register_encoder_exclusions(connector)
-
-            def _conn_state_dict() -> dict[str, torch.Tensor]:
-                conn_prefix = f"model.diffusion_model.{axis}_embeddings_connector."
-                sd = {}
-                for k, v in _ckpt().items():
-                    if k.startswith(conn_prefix):
-                        sub = k[len(conn_prefix) :]
-                        if sub.startswith("transformer_1d_blocks."):
-                            if int(sub.split(".")[1]) >= num_blocks:  # drop blocks beyond num_blocks
-                                continue
-                        sd[sub] = v
-                return sd
-
-            cache_module.load_model(
-                connector,
-                model_name=ckpt_name,
-                subfolder=f"{axis}_connector",
-                parallel_config=enc_parallel,
-                mesh_shape=tuple(self.mesh_device.shape),
-                get_torch_state_dict=_conn_state_dict,
-            )
-            logger.info(f"Loaded {axis} embeddings connector ({num_blocks} blocks, dim={output_dim})")
-            return connector
-
-        self.video_connector = _load_connector("video", video_dim, video_num_blocks, self.video_connector)
-        self.audio_connector = (
-            _load_connector("audio", audio_dim, audio_num_blocks, self.audio_connector) if self.mode == "av" else None
-        )
-
-    @staticmethod
-    def _replace_padded_with_registers(
-        hidden_states: torch.Tensor,
-        attention_mask: torch.Tensor,
-        learnable_registers: torch.Tensor,
-        num_registers: int,
-    ) -> torch.Tensor:
-        """Replace padded tokens with tiled learnable registers.
-
-        Matching reference Embeddings1DConnector._replace_padded_with_learnable_registers:
-        - Non-padded tokens are kept and left-packed
-        - Remaining positions filled with tiled learnable registers
-        """
-        seq_len = hidden_states.shape[1]
-        num_duplications = seq_len // num_registers
-        registers = learnable_registers.repeat(num_duplications, 1)  # (seq_len, dim)
-
-        # Binary mask: 1 = real token, 0 = padding
-        mask_binary = attention_mask.bool()  # (B, T)
-
-        result = hidden_states.clone()
-        for b in range(hidden_states.shape[0]):
-            real_tokens = hidden_states[b, mask_binary[b], :]  # (n_real, dim)
-            n_real = real_tokens.shape[0]
-            pad_length = seq_len - n_real
-            padded = torch.nn.functional.pad(real_tokens, (0, 0, 0, pad_length))
-            # Flip: registers at the beginning (where attention_mask was 0 = left-padded)
-            flipped_mask = torch.flip(mask_binary[b : b + 1], dims=[1]).squeeze(0).unsqueeze(-1).int()
-            result[b] = flipped_mask.float() * padded + (1 - flipped_mask.float()) * registers.to(padded)
-
-        return result
-
     def _device_embed_cache_path(self, prompts: list[str]) -> str:
         """Disk-cache path for on-device prompt embeddings. Separate namespace from the
         reference cache (different format) — lets a repeated prompt skip the encoder."""
@@ -914,128 +673,18 @@ class LTXPipeline:
         key = hashlib.md5(("device||" + "||".join(prompts)).encode()).hexdigest()
         return os.path.join(embed_cache_dir, f"{key}.device.pt")
 
-    def encode_prompts_device(
+    def encode_prompts(
         self, prompts: list[str], *, use_cache: bool = True
     ) -> list[tuple[torch.Tensor, torch.Tensor | None]]:
-        """Encode prompts via the TTNN Gemma encoder + embeddings connectors.
-
-        Gemma forward (49 hidden states) → feature extractor (RMS + aggregate) → connectors.
-        Returns list of (video_embeds, audio_embeds) tuples per prompt. A cache hit returns
-        saved embeddings without running the encoder; ``use_cache=False`` forces a real encode
-        (used by warmup to compile the kernels).
-        """
+        """Encode prompts on device via the Gemma encoder pair, with a prompt-embedding disk
+        cache (orchestration kept here). A cache hit returns saved embeddings without running
+        the encoder; ``use_cache=False`` forces a real encode (used by warmup)."""
         cache_path = self._device_embed_cache_path(prompts)
         if use_cache and os.path.exists(cache_path):
             logger.info(f"Loading cached device embeddings from {cache_path}")
             return torch.load(cache_path, weights_only=False)
 
-        assert self.gemma_encoder is not None, "Call load_gemma_encoder() first"
-
-        results = []
-        for prompt in prompts:
-            tokens = self.gemma_tokenizer(
-                prompt,
-                return_tensors="pt",
-                padding="max_length",
-                max_length=self._gemma_sequence_length,
-                truncation=True,
-            )
-
-            tt_ids = ttnn.from_torch(
-                tokens.input_ids,
-                device=self.mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-
-            all_hidden_states = self.gemma_encoder(tt_ids, attention_mask=tokens.attention_mask)
-
-            if self.video_connector is not None:
-                # The 49 states FeatureExtractorV2 consumes match HF output_hidden_states:
-                # [embed, L0..L46, final_norm] — the last entry is post-final-norm, not the raw
-                # last layer. The encoder emits [embed, L0..L47, final_norm], so drop index -2.
-                hs_list = list(all_hidden_states[:-2]) + [all_hidden_states[-1]]
-
-                # FeatureExtractorV2 (on device): per-token RMS + rescale + dual aggregate_embed
-                # → video/audio features at the connector input dims.
-                video_feats, audio_feats = self.feature_extractor(hs_list, tokens.attention_mask)
-                for hs in all_hidden_states:
-                    ttnn.deallocate(hs)
-
-                def _run_connector(connector, features, attn_mask):
-                    """Register replacement → on-device RoPE transformer blocks → final norm,
-                    on the aggregate_embed features from the feature extractor."""
-                    dim = connector.output_dim
-                    projected = ttnn.to_torch(ttnn.get_device_tensors(features)[0])
-                    ttnn.deallocate(features)
-
-                    # Replace padded tokens with learnable registers (on host, matching reference)
-                    if connector.num_learnable_registers > 0:
-                        registers = ttnn.to_torch(ttnn.get_device_tensors(connector.learnable_registers.data)[0])
-                        projected = self._replace_padded_with_registers(
-                            projected,
-                            attn_mask,
-                            registers,
-                            connector.num_learnable_registers,
-                        )
-
-                    # Connector RoPE on device. Checkpoint is rope_type=SPLIT, but the block's
-                    # Q/K (and q_norm/k_norm) weights were permuted at load (SPLIT→INTERLEAVED),
-                    # so the fast on-device rotary_embedding_llama interleaved kernel is
-                    # equivalent — no per-block host round-trip. cos/sin use the same fp32 freq
-                    # grid as the reference (rope_ltx.generate_freq_grid is fp64-internally→fp32,
-                    # matching generate_freq_grid_np). Computed once per connector, replicated.
-                    seq_len = projected.shape[1]
-                    num_heads = connector.transformer_1d_blocks[0].num_heads
-                    indices_grid = torch.arange(seq_len, dtype=torch.float32).reshape(1, seq_len, 1)
-                    cos_freq, sin_freq = precompute_freqs_cis(
-                        indices_grid,
-                        dim=dim,
-                        out_dtype=torch.float32,
-                        theta=10000.0,
-                        max_pos=[4096],
-                        num_attention_heads=num_heads,
-                        rope_type=LTXRopeType.INTERLEAVED,
-                    )  # (1, seq, dim)
-                    cos_freq = self._reshape_interleaved_to_bhnd(cos_freq, num_heads)
-                    sin_freq = self._reshape_interleaved_to_bhnd(sin_freq, num_heads)
-                    # Shard the head dim on the connector's TP axis so cos/sin match the
-                    # per-device local-head count that rotary_embedding_llama sees (the rope is
-                    # per-head-varying, so it can't be broadcast as num_heads=1). TP=1 → no-op.
-                    conn_tp = connector.transformer_1d_blocks[0].parallel_config.tensor_parallel
-                    shard_kw = {"mesh_axis": conn_tp.mesh_axis, "shard_dim": 1} if conn_tp.factor > 1 else {}
-                    rope_cos = bf16_tensor(cos_freq, device=self.mesh_device, **shard_kw)
-                    rope_sin = bf16_tensor(sin_freq, device=self.mesh_device, **shard_kw)
-                    trans_mat = self._prepare_trans_mat()
-
-                    tt_x = ttnn.from_torch(
-                        projected.bfloat16(),
-                        device=self.mesh_device,
-                        layout=ttnn.TILE_LAYOUT,
-                        dtype=ttnn.bfloat16,
-                    )
-                    for block in connector.transformer_1d_blocks:
-                        tt_x = block(tt_x, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat)
-
-                    tt_x = ttnn.experimental.dit_rms_norm_unary_fused(
-                        tt_x, weight=None, epsilon=1e-6, compute_kernel_config=connector.rmsnorm_cc
-                    )
-                    result = ttnn.to_torch(ttnn.get_device_tensors(tt_x)[0]).float()
-
-                    # NOTE: Do NOT zero out register positions here. The reference
-                    # FeatureExtractorV2 replaces padding with learnable registers
-                    # and then sets attention_mask to all-zeros (= no masking), so
-                    # all 1024 tokens (real + register) carry information after the
-                    # connector blocks.
-                    return result
-
-                video_embeds = _run_connector(self.video_connector, video_feats, tokens.attention_mask)
-
-                audio_embeds = None
-                if self.audio_connector is not None:
-                    audio_embeds = _run_connector(self.audio_connector, audio_feats, tokens.attention_mask)
-
-                results.append((video_embeds, audio_embeds))
+        results = self.gemma_encoder_pair.encode(prompts)
 
         if use_cache:
             torch.save(results, cache_path)
@@ -1159,13 +808,6 @@ class LTXPipeline:
         self._prepare_vae()
         self.decode_latents(dummy, latent_frames, latent_h, latent_w)
 
-    @staticmethod
-    def _reshape_interleaved_to_bhnd(t: torch.Tensor, num_heads: int) -> torch.Tensor:
-        """Reshape interleaved (B, N, dim) to (B, num_heads, N, head_dim) for rotary_embedding_llama."""
-        B, N, dim = t.shape
-        head_dim = dim // num_heads
-        return t.reshape(B, N, num_heads, head_dim).permute(0, 2, 1, 3).contiguous()
-
     def _prepare_rope(
         self, num_frames: int, latent_height: int, latent_width: int, fps: float = 24.0
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -1189,8 +831,8 @@ class LTXPipeline:
             rope_type=LTXRopeType.INTERLEAVED,
         )  # (1, N, dim)
 
-        cos_freq = self._reshape_interleaved_to_bhnd(cos_freq, self.num_attention_heads)
-        sin_freq = self._reshape_interleaved_to_bhnd(sin_freq, self.num_attention_heads)
+        cos_freq = reshape_interleaved_to_bhnd(cos_freq, self.num_attention_heads)
+        sin_freq = reshape_interleaved_to_bhnd(sin_freq, self.num_attention_heads)
 
         # Pad seq dim to ttnn.TILE_SIZE * sp_factor; padded slots use cos=1, sin=0
         # (identity rotation) — SDPA still masks them via logical_n.
@@ -1203,10 +845,9 @@ class LTXPipeline:
         return tt_cos, tt_sin
 
     def _prepare_trans_mat(self) -> ttnn.Tensor:
-        """Per-tile (1,1,32,32) rotation matrix for ttnn.experimental.rotary_embedding_llama.
-        Cached on the pipeline; replicated across the mesh."""
+        """Cached per-tile rotation matrix for rotary_embedding_llama (shared builder)."""
         if getattr(self, "_cached_trans_mat", None) is None:
-            self._cached_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=self.mesh_device)
+            self._cached_trans_mat = prepare_rot_transformation_mat(self.mesh_device)
         return self._cached_trans_mat
 
     def _prepare_prompt(self, prompt_embeds: torch.Tensor) -> ttnn.Tensor:
@@ -1218,34 +859,6 @@ class LTXPipeline:
         elif prompt.shape[-1] > self.cross_attention_dim:
             prompt = prompt[..., : self.cross_attention_dim]
         return bf16_tensor(prompt, device=self.mesh_device)
-
-    def _prepare_encoder(self) -> None:
-        """Build the on-device Gemma encoder + video/audio connectors once, and reload their
-        weights if a prior DiT/VAE load evicted them. The encoder is coresident-excluded with
-        the DiT, so generate()'s _prepare_transformer(0) deallocates it after every encode —
-        a second cache-missing prompt must reload before encoding. load_gemma_encoder /
-        load_embeddings_connectors reuse the existing modules and only reload weights."""
-        if self.gemma_encoder is not None and self.gemma_encoder.is_loaded():
-            return
-
-        connector_prefixes = (
-            "text_embedding_projection.video_aggregate_embed.",
-            "text_embedding_projection.audio_aggregate_embed.",
-            "model.diffusion_model.video_embeddings_connector.",
-            "model.diffusion_model.audio_embeddings_connector.",
-        )
-        self.load_gemma_encoder(self.gemma_path, num_layers=48, sequence_length=GEMMA_SEQUENCE_LENGTH)
-
-        # Lazy — only read on a connector cache miss; a cache hit skips the checkpoint entirely.
-        def _read_connector_state() -> dict[str, torch.Tensor]:
-            conn_state = {}
-            with safe_open(self.checkpoint_name, "pt") as f:
-                for k in f.keys():
-                    if k.startswith(connector_prefixes):
-                        conn_state[k] = f.get_tensor(k)
-            return conn_state
-
-        self.load_embeddings_connectors(_read_connector_state)
 
     def warmup_buffers(
         self,
@@ -1323,8 +936,8 @@ class LTXPipeline:
         # them and _prepare_transformer(0) evicts the encoder back. Only load on a cache miss —
         # a cached prompt skips the encoder entirely.
         if not os.path.exists(self._device_embed_cache_path([prompt, neg])):
-            self._prepare_encoder()
-        enc = self.encode_prompts_device([prompt, neg])
+            self.gemma_encoder_pair.ensure_loaded()
+        enc = self.encode_prompts([prompt, neg])
         v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
         neg_v, neg_a = enc[1][0].float(), enc[1][1].float()
         logger.info(f"Encoding (device): {time.time() - t0:.1f}s")
@@ -1388,8 +1001,8 @@ class LTXPipeline:
             num_attention_heads=32,
             rope_type=LTXRopeType.INTERLEAVED,
         )  # (1, N, 2048)
-        a_cos = self._reshape_interleaved_to_bhnd(a_cos, num_heads=32)  # (1, 32, N, 64)
-        a_sin = self._reshape_interleaved_to_bhnd(a_sin, num_heads=32)
+        a_cos = reshape_interleaved_to_bhnd(a_cos, num_heads=32)  # (1, 32, N, 64)
+        a_sin = reshape_interleaved_to_bhnd(a_sin, num_heads=32)
 
         if audio_N > audio_N_real:
             head_dim = a_cos.shape[-1]
@@ -1454,10 +1067,10 @@ class LTXPipeline:
         # Positions MUST stay fp32 — bf16 randomizes the top half of head_dim.
         v_cos, v_sin = precompute_freqs_cis(v_temporal, **rope_kwargs)  # (1, video_N, 2048)
         a_cos, a_sin = precompute_freqs_cis(a_positions, **rope_kwargs)  # (1, audio_N_real, 2048)
-        v_cos = self._reshape_interleaved_to_bhnd(v_cos, num_heads=32)  # (1, 32, video_N, 64)
-        v_sin = self._reshape_interleaved_to_bhnd(v_sin, num_heads=32)
-        a_cos = self._reshape_interleaved_to_bhnd(a_cos, num_heads=32)
-        a_sin = self._reshape_interleaved_to_bhnd(a_sin, num_heads=32)
+        v_cos = reshape_interleaved_to_bhnd(v_cos, num_heads=32)  # (1, 32, video_N, 64)
+        v_sin = reshape_interleaved_to_bhnd(v_sin, num_heads=32)
+        a_cos = reshape_interleaved_to_bhnd(a_cos, num_heads=32)
+        a_sin = reshape_interleaved_to_bhnd(a_sin, num_heads=32)
 
         v_cos, v_sin = self._pad_video_rope_sp(v_cos, v_sin)
 
