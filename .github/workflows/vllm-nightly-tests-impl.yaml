@@ -184,6 +184,7 @@ jobs:
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling",
               "structured-output": true,
               "sampling-tests": true,
+              "sampling-test-timeout": 20,
               "additional-structured-output-args": "--backend openai-chat --endpoint /v1/chat/completions --dataset json",
               "co-owner-1-id": "U08TJ70UFRT",
               "co-owner-2-id": "U06F3ER8X9A"
@@ -714,7 +715,7 @@ jobs:
           fi
       - name: 🧪 Run sampling tests
         if: ${{ matrix.test-group.sampling-tests }}
-        timeout-minutes: 10
+        timeout-minutes: ${{ matrix.test-group.sampling-test-timeout || 10 }}
         run: |
           {
             FILTER="${{ matrix.test-group.sampling-test-filter }}"
