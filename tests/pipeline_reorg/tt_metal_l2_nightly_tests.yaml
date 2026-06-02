@@ -27,13 +27,13 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150:
-      timeout: 10
+      timeout: 150
     wh_n300:
-      timeout: 10
+      timeout: 150
     bh_p100:
-      timeout: 10
+      timeout: 150
     bh_p150b_civ2:
-      timeout: 10
+      timeout: 150
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   category: conv
@@ -42,13 +42,13 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150:
-      timeout: 10
+      timeout: 50
     wh_n300:
-      timeout: 10
+      timeout: 50
     bh_p100:
-      timeout: 10
+      timeout: 50
     bh_p150b_civ2:
-      timeout: 10
+      timeout: 50
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
   category: matmul
@@ -57,13 +57,13 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/fused -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150:
-      timeout: 15
+      timeout: 65
     wh_n300:
-      timeout: 15
+      timeout: 65
     bh_p100:
-      timeout: 15
+      timeout: 65
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 65
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
   category: fused
@@ -72,13 +72,13 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/reduction -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150:
-      timeout: 10
+      timeout: 45
     wh_n300:
-      timeout: 10
+      timeout: 45
     bh_p100:
-      timeout: 10
+      timeout: 45
     bh_p150b_civ2:
-      timeout: 10
+      timeout: 45
   owner_id: U084B1CES7M # Borys Bradel
   team: ttnn
   category: reduction
@@ -88,9 +88,9 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance and not test_moe_grouped_topk" --timeout=600'
   skus:
     wh_n150:
-      timeout: 15
+      timeout: 65
     wh_n300:
-      timeout: 15
+      timeout: 65
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
   category: experimental
@@ -99,9 +99,9 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/experimental -xv -k "not performance" --timeout=600'
   skus:
     bh_p100:
-      timeout: 15
+      timeout: 35
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 35
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
   category: experimental
@@ -110,13 +110,13 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150:
-      timeout: 10
+      timeout: 90
     wh_n300:
-      timeout: 10
+      timeout: 90
     bh_p100:
-      timeout: 10
+      timeout: 90
     bh_p150b_civ2:
-      timeout: 10
+      timeout: 90
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   category: pool
@@ -125,13 +125,13 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 1 -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150:
-      timeout: 15
+      timeout: 50
     wh_n300:
-      timeout: 15
+      timeout: 50
     bh_p100:
-      timeout: 15
+      timeout: 50
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 50
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
   category: eltwise
@@ -140,13 +140,13 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 2 -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150:
-      timeout: 15
+      timeout: 30
     wh_n300:
-      timeout: 15
+      timeout: 30
     bh_p100:
-      timeout: 15
+      timeout: 30
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 30
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
   category: eltwise
@@ -155,13 +155,13 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 3 -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150:
-      timeout: 15
+      timeout: 30
     wh_n300:
-      timeout: 15
+      timeout: 30
     bh_p100:
-      timeout: 15
+      timeout: 30
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 30
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
   category: eltwise
@@ -170,13 +170,13 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/eltwise --splits 4 --group 4 -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150:
-      timeout: 15
+      timeout: 35
     wh_n300:
-      timeout: 15
+      timeout: 35
     bh_p100:
-      timeout: 15
+      timeout: 35
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 35
   owner_id: U09BX3N0N95 # Mateusz Nowak
   team: ttnn
   category: eltwise
@@ -185,13 +185,13 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150:
-      timeout: 15
+      timeout: 30
     wh_n300:
-      timeout: 15
+      timeout: 30
     bh_p100:
-      timeout: 15
+      timeout: 30
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 30
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: ttnn
   category: transformers
@@ -200,13 +200,13 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/moreh -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150:
-      timeout: 10
+      timeout: 25
     wh_n300:
-      timeout: 10
+      timeout: 25
     bh_p100:
-      timeout: 10
+      timeout: 25
     bh_p150b_civ2:
-      timeout: 10
+      timeout: 25
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
   category: moreh
@@ -215,13 +215,13 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/rand tests/ttnn/nightly/unit_tests/operations/ssm -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150:
-      timeout: 5
+      timeout: 15
     wh_n300:
-      timeout: 5
+      timeout: 15
     bh_p100:
-      timeout: 5
+      timeout: 15
     bh_p150b_civ2:
-      timeout: 5
+      timeout: 15
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
   category: misc
@@ -236,11 +236,11 @@
       -xv --timeout=600
   skus:
     wh_n150:
-      timeout: 15
+      timeout: 90
     wh_n300:
-      timeout: 15
+      timeout: 90
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 90
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   category: sdpa
@@ -252,11 +252,11 @@
            -xv --timeout=600
   skus:
     wh_n150:
-      timeout: 30
+      timeout: 55
     wh_n300:
-      timeout: 30
+      timeout: 55
     bh_p150b_civ2:
-      timeout: 30
+      timeout: 55
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
   category: sdpa
@@ -265,13 +265,13 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150:
-      timeout: 15
+      timeout: 40
     wh_n300:
-      timeout: 15
+      timeout: 40
     bh_p100:
-      timeout: 15
+      timeout: 40
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 40
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   category: data_movement
@@ -282,13 +282,13 @@
   cmd: 'pytest tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point --splits 3 --group 1 -xv -m "not disable_fast_runtime_mode" --timeout=300'
   skus:
     wh_n150:
-      timeout: 15
+      timeout: 35
     wh_n300:
-      timeout: 15
+      timeout: 35
     bh_p100:
-      timeout: 15
+      timeout: 35
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 35
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   category: data_movement
@@ -297,13 +297,13 @@
   cmd: 'pytest tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point --splits 3 --group 2 -xv -m "not disable_fast_runtime_mode" --timeout=300'
   skus:
     wh_n150:
-      timeout: 15
+      timeout: 35
     wh_n300:
-      timeout: 15
+      timeout: 35
     bh_p100:
-      timeout: 15
+      timeout: 35
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 35
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   category: data_movement
@@ -312,13 +312,13 @@
   cmd: 'pytest tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point --splits 3 --group 3 -xv -m "not disable_fast_runtime_mode" --timeout=300'
   skus:
     wh_n150:
-      timeout: 15
+      timeout: 35
     wh_n300:
-      timeout: 15
+      timeout: 35
     bh_p100:
-      timeout: 15
+      timeout: 35
     bh_p150b_civ2:
-      timeout: 15
+      timeout: 35
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   category: data_movement
@@ -328,13 +328,13 @@
   cmd: 'pytest tests/ttnn/docs_examples -xv -m "not disable_fast_runtime_mode" --timeout=600'
   skus:
     wh_n150_civ2:
-      timeout: 15
+      timeout: 20
     wh_n300_civ2:
-      timeout: 15
+      timeout: 20
     bh_p100a_civ2_viommu:
-      timeout: 15
+      timeout: 20
     bh_p150b_civ2_viommu:
-      timeout: 15
+      timeout: 20
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   team: ttnn
   category: docs_examples
@@ -350,9 +350,9 @@
     pytest models/demos/stable_diffusion_xl_base/lora/tests/test_lora_rollback.py -xv -m "not disable_fast_runtime_mode" --timeout=600
   skus:
     wh_n150:
-      timeout: 30
+      timeout: 90
     wh_n300:
-      timeout: 30
+      timeout: 90
   owner_id: U0837MYG788 # Marko Radosavljevic
   team: models
   category: sdxl
@@ -363,7 +363,7 @@
     pytest models/demos/stable_diffusion_xl_base/refiner/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode" --timeout=600
   skus:
     bh_p150b_civ2:
-      timeout: 30
+      timeout: 70
   owner_id: U0837MYG788 # Marko Radosavljevic
   team: models
   category: sdxl
@@ -372,7 +372,7 @@
   cmd: 'pytest models/demos/stable_diffusion_xl_base/demo/demo.py -k "device_vae and device_encoders and with_trace and use_cfg_parallel" --timeout=600'
   skus:
     wh_n300:
-      timeout: 30
+      timeout: 25
   owner_id: U0837MYG788 # Marko Radosavljevic
   team: models
   category: sdxl
@@ -386,13 +386,13 @@
   cmd: 'ENABLE_NIGHTLY_TT_TRAIN_TESTS=1 build/tt-train/tests/ttml_tests --gtest_filter=*NIGHTLY_*'
   skus:
     wh_n150:
-      timeout: 30
+      timeout: 40
     wh_n300:
-      timeout: 30
+      timeout: 40
     bh_p100:
-      timeout: 30
+      timeout: 40
     bh_p150b_civ2:
-      timeout: 30
+      timeout: 40
   owner_id: U07K00A281X # Kevin Wu
   team: train
   category: train
@@ -405,9 +405,9 @@
   cmd: 'pytest tests/ttnn/nightly/unit_tests/operations_compute_only/fused -xv --timeout=600'
   skus:
     sim_wormhole_b0:
-      timeout: 20
+      timeout: 15
     sim_blackhole:
-      timeout: 20
+      timeout: 15
   owner_id: U076Z1JJUQZ # Edwin Lee
   team: ttsim
   category: compute_fused

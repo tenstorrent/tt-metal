@@ -20,7 +20,7 @@ on:
         required: false
         type: string
         default: ''
-        description: "Comma-separated category filter. Empty = run all entries; otherwise keep only entries whose `category` field appears in this list."
+        description: "Comma-separated category filter. Keep only entries whose `category` field appears in this list."
       ttsim-version:
         required: false
         type: string
@@ -71,11 +71,7 @@ jobs:
         run: |
           matrix='${{ steps.build-matrix.outputs.matrix }}'
           categories='${{ inputs.additional_test_categories }}'
-          if [ -z "$categories" ]; then
-            filtered="$matrix"
-          else
-            filtered=$(echo "$matrix" | jq -c --arg cats ",$categories," '[.[] | .category as $c | select($cats | contains(",\($c),"))]')
-          fi
+          filtered=$(echo "$matrix" | jq -c --arg cats ",$categories," '[.[] | .category as $c | select($cats | contains(",\($c),"))]')
           if echo "$filtered" | jq -e 'any(.sku | startswith("sim_"))' > /dev/null; then
             has_sim=true
           else

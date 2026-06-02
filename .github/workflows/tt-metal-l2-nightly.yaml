@@ -71,7 +71,9 @@ on:
         type: boolean
         default: false
       additional_test_categories:
-        description: 'Additional test categories to run (comma-separated, e.g., conv,pool,sdxl,train,sdpa,eltwise,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,reduction,data_movement,transformers,compute_fused)'
+        description: |
+          Additional test categories to run (comma-separated, e.g.,\
+          conv,pool,sdxl,train,sdpa,eltwise,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,reduction,data_movement,transformers,compute_fused)
         required: false
         type: string
         default: ""
@@ -285,23 +287,7 @@ jobs:
     needs: [build-artifact, generate-arch-matrix]
     if: |
       needs.generate-arch-matrix.outputs.l2-nightly-skus != '' && (
-        github.event_name == 'schedule' ||
-        contains(inputs.additional_test_categories, 'conv') ||
-        contains(inputs.additional_test_categories, 'matmul') ||
-        contains(inputs.additional_test_categories, 'fused') ||
-        contains(inputs.additional_test_categories, 'reduction') ||
-        contains(inputs.additional_test_categories, 'experimental') ||
-        contains(inputs.additional_test_categories, 'pool') ||
-        contains(inputs.additional_test_categories, 'eltwise') ||
-        contains(inputs.additional_test_categories, 'transformers') ||
-        contains(inputs.additional_test_categories, 'moreh') ||
-        contains(inputs.additional_test_categories, 'misc') ||
-        contains(inputs.additional_test_categories, 'sdpa') ||
-        contains(inputs.additional_test_categories, 'data_movement') ||
-        contains(inputs.additional_test_categories, 'docs_examples') ||
-        contains(inputs.additional_test_categories, 'sdxl') ||
-        contains(inputs.additional_test_categories, 'train') ||
-        contains(inputs.additional_test_categories, 'compute_fused')
+        github.event_name == 'schedule' || inputs.additional_test_categories != ''
       )
     secrets: inherit
     uses: ./.github/workflows/tt-metal-l2-nightly-impl.yaml
@@ -310,7 +296,9 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
-      additional_test_categories: ${{ github.event_name == 'schedule' && '' || inputs.additional_test_categories }}
+      additional_test_categories: ${{ github.event_name == 'schedule' && \
+        'conv,matmul,fused,reduction,experimental,pool,eltwise,transformers,moreh,misc,sdpa,data_movement,docs_examples,sdxl,train,compute_fused' || \
+        inputs.additional_test_categories }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ttnn-ops-docs-check:
     needs: [build-artifact, generate-arch-matrix]
