@@ -23,17 +23,31 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 
-// Stream `count` contiguous interleaved tiles starting at `start_tile` into cb_inp (one tile at a time).
+// Stream `count` contiguous interleaved tiles starting at `start_tile` into cb in batches of `batch`
+// tiles: reserve a batch, issue all `batch` page reads back-to-back into the reserved region (each at its
+// own L1 offset), then a SINGLE barrier. Batching the reads lets the NoC pipeline them (one barrier per
+// batch instead of one per tile) — the per-tile barrier was the reader's bottleneck. `batch` must divide
+// `count` and be <= the CB depth.
 template <typename SrcAccessor>
 FORCE_INLINE void stream_tiles(
-    const SrcAccessor& src, CircularBuffer& cb, Noc& noc, uint32_t tile_bytes, uint32_t start_tile, uint32_t count) {
+    const SrcAccessor& src,
+    CircularBuffer& cb,
+    Noc& noc,
+    uint32_t tile_bytes,
+    uint32_t start_tile,
+    uint32_t count,
+    uint32_t batch) {
     uint32_t idx = start_tile;
-    for (uint32_t i = 0; i < count; i++) {
-        cb.reserve_back(1);
-        noc.async_read(src, cb, tile_bytes, {.page_id = idx}, {.offset_bytes = 0});
-        idx++;
+    for (uint32_t base = 0; base < count; base += batch) {
+        cb.reserve_back(batch);
+        uint32_t off = 0;
+        for (uint32_t i = 0; i < batch; i++) {
+            noc.async_read(src, cb, tile_bytes, {.page_id = idx}, {.offset_bytes = off});
+            idx++;
+            off += tile_bytes;
+        }
         noc.async_read_barrier();
-        cb.push_back(1);
+        cb.push_back(batch);
     }
 }
 
@@ -106,39 +120,30 @@ void kernel_main() {
     Noc noc;
     CircularBuffer cb_inp_buf(cb_inp);
 
-    // Read gamma / beta once (TILE layout: each is a row of Wt tiles, reused across all NCHt rows).
+    // Read gamma / beta once (TILE layout: each is a row of Wt tiles, reused across all NCHt rows). The
+    // whole Wt-tile row is issued back-to-back with a single barrier (batch = Wt = the CB depth).
 #if FUSE_GAMMA
     {
         const auto src_gamma = TensorAccessor(gamma_args, gamma_addr);
-        const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
         CircularBuffer cb_gamma_buf(cb_gamma);
-        for (uint32_t wt = 0; wt < Wt; wt++) {
-            cb_gamma_buf.reserve_back(1);
-            noc.async_read(src_gamma, cb_gamma_buf, gamma_tile_bytes, {.page_id = wt}, {.offset_bytes = 0});
-            noc.async_read_barrier();
-            cb_gamma_buf.push_back(1);
-        }
+        stream_tiles(
+            src_gamma, cb_gamma_buf, noc, get_tile_size(cb_gamma), /*start_tile=*/0, /*count=*/Wt, /*batch=*/Wt);
     }
 #endif
 #if FUSE_BETA
     {
         const auto src_beta = TensorAccessor(beta_args, beta_addr);
-        const uint32_t beta_tile_bytes = get_tile_size(cb_beta);
         CircularBuffer cb_beta_buf(cb_beta);
-        for (uint32_t wt = 0; wt < Wt; wt++) {
-            cb_beta_buf.reserve_back(1);
-            noc.async_read(src_beta, cb_beta_buf, beta_tile_bytes, {.page_id = wt}, {.offset_bytes = 0});
-            noc.async_read_barrier();
-            cb_beta_buf.push_back(1);
-        }
+        stream_tiles(src_beta, cb_beta_buf, noc, get_tile_size(cb_beta), /*start_tile=*/0, /*count=*/Wt, /*batch=*/Wt);
     }
 #endif
 
-    // Stream the input rows assigned to this worker.
+    // Stream the input rows assigned to this worker, batching a full row (Wt tiles) per barrier. cb_inp's
+    // depth is Wt, so batch = Wt is the largest single-buffered read window.
     if constexpr (ring_size == 1) {
         // Single device: stream every row once; the compute kernel keeps each row resident for both x^2
         // and the normalize step.
-        stream_tiles(src_a, cb_inp_buf, noc, src_tile_bytes, tile_offset, NCHt * Wt);
+        stream_tiles(src_a, cb_inp_buf, noc, src_tile_bytes, tile_offset, NCHt * Wt, Wt);
     } else {
         // Multi device: the compute kernel runs a chunked two-pass scheme (x^2 -> gather -> normalize) and
         // does NOT keep the input resident across the gather, so we re-stream each chunk's rows a second
@@ -146,8 +151,8 @@ void kernel_main() {
         for (uint32_t chunk_start = 0; chunk_start < NCHt; chunk_start += gather_chunk) {
             const uint32_t rows = (NCHt - chunk_start) < gather_chunk ? (NCHt - chunk_start) : gather_chunk;
             const uint32_t chunk_first_tile = tile_offset + chunk_start * Wt;
-            stream_tiles(src_a, cb_inp_buf, noc, src_tile_bytes, chunk_first_tile, rows * Wt);  // pass 1
-            stream_tiles(src_a, cb_inp_buf, noc, src_tile_bytes, chunk_first_tile, rows * Wt);  // pass 2
+            stream_tiles(src_a, cb_inp_buf, noc, src_tile_bytes, chunk_first_tile, rows * Wt, Wt);  // pass 1
+            stream_tiles(src_a, cb_inp_buf, noc, src_tile_bytes, chunk_first_tile, rows * Wt, Wt);  // pass 2
         }
     }
 }
