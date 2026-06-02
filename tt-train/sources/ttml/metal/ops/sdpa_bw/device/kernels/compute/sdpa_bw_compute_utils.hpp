@@ -22,61 +22,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh_dest.h"
 #include "tt-train/sources/ttml/metal/common/compute_utils.hpp"
-
-#ifdef TRISC_MATH
-
-// TTI-based full-tile exp (no scale): exp(x) over 4 faces.
-// Mirrors the FW pattern in sdpa_compute_utils.hpp, with SCALE_EN=false since
-// backward exp(scores - lse) has no fused scale (1/sqrt(d_k) is applied separately
-// in compute_grad_scores via mul_unary_tile).
-template <int ITERATIONS, bool CLAMP_NEGATIVE, bool is_fp32_dest_acc_en>
-void calculate_exponential_full_face_no_scale() {
-    ckernel::sfpu::_sfpu_exp_21f_bf16_tti_</*SCALE_EN*/ false, is_fp32_dest_acc_en, CLAMP_NEGATIVE, ITERATIONS>(
-        /*unused scale*/ 0);
-}
-
-inline void calculate_exponential_full_face_init() {
-#ifdef ARCH_BLACKHOLE
-    // _calculate_exponential_tti_bf16_() path:
-    // Auto-increment Dest on ADDR_MOD_6
-    addr_mod_t{
-        .srca = {.incr = 0},
-        .srcb = {.incr = 0},
-        .dest = {.incr = 2},
-    }
-        .set(ADDR_MOD_6);
-#endif  // ARCH_BLACKHOLE
-
-    // LREG12 = 1/ln2
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x3fb8);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xaa3b);
-    TTI_SFPCONFIG(0, p_sfpu::LREG12, 0);
-
-    // LREG13 = c2 = 4.791750143340323e-15f (0x27aca418)
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_UPPER, 0x27ac);
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_LOWER, 0xa418);
-    TTI_SFPCONFIG(0, p_sfpu::LREG13, 0);
-}
-
-#endif  // TRISC_MATH
-
-inline void exp_full_tile(uint32_t idst) {
-#ifdef TRISC_MATH
-    _llk_math_eltwise_unary_sfpu_params_(
-        calculate_exponential_full_face_no_scale<
-            /*ITERATIONS*/ 8,
-            /*CLAMP_NEGATIVE*/ false,
-            DST_ACCUM_MODE>,
-        idst,
-        VectorMode::RC);
-#endif
-}
-
-inline void exp_full_tile_init() {
-#ifdef TRISC_MATH
-    ::ckernel::llk_math_eltwise_unary_sfpu_init<::SfpuType::exponential>(calculate_exponential_full_face_init);
-#endif
-}
+#include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
 
 // now we have to multiply result by scaler factor and then apply mask
 // we need to transform the attention mask for use in softmax:
@@ -140,8 +86,8 @@ void apply_statistics_inplace(const uint32_t cb_attention_weights, const uint32_
     sub_bcast_cols_init_short(cb_attention_weights, cb_intermediates);
     sub_tiles_bcast_cols(cb_attention_weights, cb_intermediates, /* tile_idx */ 0, /* tile_idx */ 0, working_reg);
 
-    exp_full_tile_init();
-    exp_full_tile(working_reg);
+    sdpa_exp_tile_init();
+    sdpa_exp_tile(working_reg);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -177,8 +123,8 @@ void apply_softmax_statistics_on_dst(const uint32_t scores_reg, const uint32_t c
     sub_binary_tile_init();
     sub_binary_tile(scores_reg, lse_reg, scores_reg);
 
-    exp_full_tile_init();
-    exp_full_tile(scores_reg);
+    sdpa_exp_tile_init();
+    sdpa_exp_tile(scores_reg);
 }
 
 // Transposes a single tile using the FPU transpose_wh path (reads via SrcA).
