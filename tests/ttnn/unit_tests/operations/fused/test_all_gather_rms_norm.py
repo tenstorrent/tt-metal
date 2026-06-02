@@ -76,6 +76,7 @@ def run_all_gather_rms_norm(
     has_weight,
     has_bias,
     has_residual=False,
+    sp_axis=None,
     dtype=ttnn.bfloat16,
     pcc=0.99,
     mag_tol=0.05,
@@ -84,6 +85,10 @@ def run_all_gather_rms_norm(
     seed=1234,
 ):
     """End-to-end harness: build sharded inputs, run the fused op, compare to a torch golden.
+
+    The stats all-gather is over ``cluster_axis`` (the reduction/hidden axis). When ``sp_axis`` is given
+    (2D mesh, the LTX layout), the sequence is additionally sharded over ``sp_axis`` while hidden is sharded
+    over ``cluster_axis`` -- so the gather happens within each ``sp_axis`` row's ``cluster_axis`` ring.
 
     Always checks PCC (>= ``pcc``) and the output-magnitude ratio (within ``mag_tol`` of 1.0 -- catches
     uniform-scale errors that PCC misses). When ``allclose_rtol``/``allclose_atol`` are given, also asserts
@@ -106,22 +111,33 @@ def run_all_gather_rms_norm(
     golden_input = torch_input.float() + (torch_residual.float() if has_residual else 0.0)
     torch_output = torch_rms_norm(golden_input, torch_weight, torch_bias, eps)
 
-    # Shard input/residual/gamma/beta on the reduction (last) dim across the cluster axis, so each device
-    # holds its local hidden_dim/num_devices slice. The fused op gathers only the stats; the output stays
-    # sharded on the last dim, so we reassemble with ConcatMeshToTensor(dim=-1).
-    def to_dev(t):
-        return ttnn.from_torch(
-            t,
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-        )
+    # Sharding. 1D (sp_axis is None): shard hidden over the cluster axis (each device holds hidden/ring).
+    # 2D (sp_axis set, the LTX layout): shard sequence (tensor dim 2) over sp_axis AND hidden (dim 3) over
+    # cluster_axis; gamma/beta shard hidden over cluster_axis and replicate over sp_axis. The fused op
+    # gathers only the stats over the cluster axis; the output keeps the input's sharding, so we reassemble
+    # with the matching composer.
+    mesh_shape = tuple(mesh_device.shape)
+    if sp_axis is None:
+        in_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+        gb_mapper = in_mapper
+        composer = ttnn.ConcatMeshToTensor(mesh_device, dim=-1)
+    else:
+        in_dims = [0, 0]
+        in_dims[sp_axis] = 2  # sequence
+        in_dims[cluster_axis] = 3  # hidden
+        gb_dims = [None, None]
+        gb_dims[cluster_axis] = 3  # gamma/beta: shard hidden over the cluster (TP) axis, replicate over SP
+        in_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(in_dims), mesh_shape=mesh_shape)
+        gb_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=tuple(gb_dims), mesh_shape=mesh_shape)
+        composer = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=tuple(in_dims))
 
-    ttnn_input = to_dev(torch_input)
-    ttnn_residual = to_dev(torch_residual) if has_residual else None
-    ttnn_weight = to_dev(torch_weight.reshape(1, 1, 1, hidden_dim)) if has_weight else None
-    ttnn_bias = to_dev(torch_bias.reshape(1, 1, 1, hidden_dim)) if has_bias else None
+    def to_dev(t, mapper):
+        return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper)
+
+    ttnn_input = to_dev(torch_input, in_mapper)
+    ttnn_residual = to_dev(torch_residual, in_mapper) if has_residual else None
+    ttnn_weight = to_dev(torch_weight.reshape(1, 1, 1, hidden_dim), gb_mapper) if has_weight else None
+    ttnn_bias = to_dev(torch_bias.reshape(1, 1, 1, hidden_dim), gb_mapper) if has_bias else None
 
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(),
@@ -148,8 +164,8 @@ def run_all_gather_rms_norm(
         compute_kernel_config=compute_kernel_config,
     )
 
-    # Output stays sharded on the last dim; concat the per-device slices back to the full hidden_dim.
-    ttnn_output_torch = ttnn.to_torch(ttnn_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    # Reassemble the per-device output slices back to the full tensor (1D: concat hidden; 2D: concat both).
+    ttnn_output_torch = ttnn.to_torch(ttnn_output, mesh_composer=composer)
     actual = ttnn_output_torch.to(torch_output.dtype)
 
     # Functional check: PCC (raises on failure).
@@ -312,6 +328,39 @@ def test_all_gather_rms_norm_ltx_shapes(mesh_device, seq_len, hidden_dim, has_we
         seq_len=seq_len,
         hidden_dim=hidden_dim,
         cluster_axis=1,
+        eps=1e-6,
+        has_weight=has_weight,
+        has_bias=has_bias,
+    )
+
+
+# ---------------------------------------------------------------------------------------------------------
+# LTX 2D-mesh geometry: the real LTX layout shards hidden over the tensor-parallel (TP) axis and the
+# sequence over the sequence-parallel (SP) axis, and the RMS-norm stats all-gather runs over the TP axis
+# only (ring = TP). On a (2,4) mesh with cluster_axis=1 -> TP=4 (LTX's actual TP), SP=2: each SP row is an
+# independent 4-device gather ring. This exercises the sub-axis gather on a 2D mesh (vs the 1x8 full line).
+# ---------------------------------------------------------------------------------------------------------
+LTX_2D_SHAPES = [
+    (1024, 4096),  # video, TP=4 -> local Wt=32 (matches LTX video per-device width)
+    (4864, 2048),  # audio, NCHt-per-SP-row=76
+]
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+# cluster_axis=1 (TP) / sp_axis=0 (SP): (2,4) -> TP=4, (4,2) -> TP=2, spanning LTX's TP=2-4 range.
+@pytest.mark.parametrize("mesh_device", [(2, 4), (4, 2)], ids=["2x4_tp4", "4x2_tp2"], indirect=True)
+@pytest.mark.parametrize("seq_len, hidden_dim", LTX_2D_SHAPES, ids=[f"seq{s}_h{h}" for s, h in LTX_2D_SHAPES])
+@pytest.mark.parametrize("has_weight, has_bias", [(True, False), (True, True)], ids=["gamma", "gamma_beta"])
+def test_all_gather_rms_norm_ltx_2d_mesh(mesh_device, seq_len, hidden_dim, has_weight, has_bias):
+    if mesh_device.get_num_devices() < 8:
+        pytest.skip("needs 8 devices for a 2D mesh")
+    run_all_gather_rms_norm(
+        mesh_device,
+        batch_size=1,
+        seq_len=seq_len,
+        hidden_dim=hidden_dim,
+        cluster_axis=1,  # TP axis: the norm gathers stats over this axis
+        sp_axis=0,  # sequence-parallel axis
         eps=1e-6,
         has_weight=has_weight,
         has_bias=has_bias,
