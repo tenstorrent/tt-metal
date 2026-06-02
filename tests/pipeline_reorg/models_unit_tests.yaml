@@ -279,9 +279,6 @@
     bh_quietbox_2:
       timeout: 15
       tier: 2
-    bh_loudbox:
-      timeout: 15
-      tier: 2
     # bh_galaxy: temporarily disabled — sliding-1x32 path hits an unrecoverable
     # ethernet / fabric hang on Blackhole Galaxy that surfaces during
     # `test_experts[blackhole-decode-1x32]` and cascades across all 32 devices.
@@ -308,9 +305,6 @@
       timeout: 15
       tier: 2
     bh_quietbox_2:
-      timeout: 15
-      tier: 2
-    bh_loudbox:
       timeout: 15
       tier: 2
     # bh_galaxy: temporarily disabled — same Blackhole Galaxy ethernet / fabric
@@ -452,6 +446,9 @@
   model: whisper
   skus:
     wh_n150:
+      timeout: 10
+      tier: 1
+    bh_p150:
       timeout: 10
       tier: 1
     # wh_n300:
