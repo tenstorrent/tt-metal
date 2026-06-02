@@ -20,8 +20,6 @@ class DiTParallelConfig(NamedTuple):
 
 class EncoderParallelConfig(NamedTuple):
     tensor_parallel: ParallelFactor
-    # Optional FSDP axis: weights additionally sharded on this axis and gathered per-op.
-    # None → no FSDP (default; leaves t5/clip/qwen/umt5 encoders unaffected).
     sequence_parallel: ParallelFactor | None = None
 
 
@@ -35,14 +33,6 @@ class VaeHWParallelConfig(NamedTuple):
 
 
 class AudioTParallelConfig(NamedTuple):
-    """Combined 2-axis T-sharding for the audio vocoder on a 2D mesh.
-
-    Shards the T (time) dimension across both mesh axes simultaneously so all
-    chips do distinct work. axis0 and axis1 together give factor=axis0.factor *
-    axis1.factor total shards. Uses two-entry neighbor_pad_async for a single
-    two-axis halo exchange per conv.
-    """
-
     axis0: ParallelFactor
     axis1: ParallelFactor
 
@@ -52,14 +42,6 @@ class AudioTParallelConfig(NamedTuple):
 
 
 class AudioTCParallelConfig(NamedTuple):
-    """T-halo + channel-TP for the audio vocoder on a 2D mesh.
-
-    Shards T (time) on ``time_parallel`` (halo exchange between contiguous
-    chips) and channels on ``channel_parallel`` (tensor-parallel). Unlike the
-    T+T :class:`AudioTParallelConfig`, this is sound on a 2D mesh: channels have
-    no sequence boundary, so the channel axis needs no halo.
-    """
-
     time_parallel: ParallelFactor
     channel_parallel: ParallelFactor
 

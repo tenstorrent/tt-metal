@@ -90,9 +90,9 @@ pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx.py -k "2x4sp0tp1" -s --t
 # Scheduler primitives (no device)
 pytest models/tt_dit/tests/models/ltx/test_pipeline_ltx.py -k "sigma_schedule or euler_step" -v
 
-# Consolidated audio test suites
+# Audio test suites (decode components + integration)
 pytest models/tt_dit/tests/models/ltx/test_audio_components_ltx.py \
-  models/tt_dit/tests/models/ltx/test_audio_integration_ltx.py -q
+  models/tt_dit/tests/models/ltx/test_audio_ltx.py -q
 ```
 
 Override generation settings with environment variables: `PROMPT`, `NUM_FRAMES`, `HEIGHT`, `WIDTH`, `NUM_STEPS`, `SEED`, `OUTPUT_PATH`.

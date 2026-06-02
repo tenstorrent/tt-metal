@@ -4,12 +4,18 @@
 
 """
 Tests for LTX-2 Video VAE components.
+
+Torch references use diffusers LTX-2 VAE modules (mirrors test_vae_wan2_1.py / test_audio_components_ltx.py).
 """
 
-import sys
+from __future__ import annotations
+
+import os
+from typing import Any
 
 import pytest
 import torch
+import torch.nn as nn
 from loguru import logger
 
 import ttnn
@@ -18,6 +24,229 @@ from models.tt_dit.parallel.config import ParallelFactor, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.conv3d import conv_pad_in_channels
+
+
+def _require_diffusers_ltx_vae():
+    """Return diffusers LTX-2 VAE building blocks (preferred) or LTX-Video fallbacks."""
+    pytest.importorskip("diffusers")
+    try:
+        from diffusers.models.autoencoders.autoencoder_kl_ltx2 import (
+            LTX2VideoCausalConv3d,
+            LTX2VideoResnetBlock3d,
+            LTX2VideoUpsampler3d,
+            PerChannelRMSNorm,
+        )
+
+        return {
+            "causal_conv": LTX2VideoCausalConv3d,
+            "resnet": LTX2VideoResnetBlock3d,
+            "upsample": LTX2VideoUpsampler3d,
+            "pixel_norm": PerChannelRMSNorm,
+            "ltx2": True,
+        }
+    except ImportError:
+        from diffusers.models.autoencoders.autoencoder_kl_ltx import (
+            LTXVideoCausalConv3d,
+            LTXVideoResnetBlock3d,
+            LTXVideoUpsampler3d,
+        )
+        from diffusers.models.normalization import RMSNorm
+
+        return {
+            "causal_conv": LTXVideoCausalConv3d,
+            "resnet": LTXVideoResnetBlock3d,
+            "upsample": LTXVideoUpsampler3d,
+            "pixel_norm": RMSNorm,
+            "ltx2": False,
+        }
+
+
+def _diffusers_resnet_state_to_tt(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Remap diffusers LTX-2 resnet keys to the TT/ltx_core layout."""
+    out = dict(state)
+    if "conv_shortcut.weight" in out:
+        out["conv_shortcut.conv.weight"] = out.pop("conv_shortcut.weight")
+        if "conv_shortcut.bias" in out:
+            out["conv_shortcut.conv.bias"] = out.pop("conv_shortcut.bias")
+    return out
+
+
+def _run_diffusers_causal_conv(conv: nn.Module, x: torch.Tensor, *, causal: bool, ltx2: bool) -> torch.Tensor:
+    if ltx2:
+        return conv(x, causal=causal)
+    return conv(x)
+
+
+def _run_diffusers_resnet(block: nn.Module, x: torch.Tensor, *, causal: bool, ltx2: bool) -> torch.Tensor:
+    if ltx2:
+        return block(x, causal=causal)
+    return block(x)
+
+
+def _run_diffusers_upsample(block: nn.Module, x: torch.Tensor, *, causal: bool, ltx2: bool) -> torch.Tensor:
+    if ltx2:
+        return block(x, causal=causal)
+    return block(x)
+
+
+class _PerChannelStatistics(nn.Module):
+    """Minimal per-channel latent stats (ltx_core key names for TT weight load)."""
+
+    def __init__(self, latent_channels: int) -> None:
+        super().__init__()
+        self.register_buffer("mean-of-means", torch.zeros(latent_channels))
+        self.register_buffer("std-of-means", torch.ones(latent_channels))
+
+    def un_normalize(self, x: torch.Tensor) -> torch.Tensor:
+        mean = self.get_buffer("mean-of-means").view(1, -1, 1, 1, 1)
+        std = self.get_buffer("std-of-means").view(1, -1, 1, 1, 1)
+        return x * std + mean
+
+
+def _diffusers_decoder_state_to_tt(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Remap diffusers LTX-2 decoder keys (incl. nested resnets) to TT layout."""
+    out: dict[str, torch.Tensor] = {}
+    for key, value in state.items():
+        if key.endswith("conv_shortcut.weight"):
+            out[key.replace("conv_shortcut.weight", "conv_shortcut.conv.weight")] = value
+        elif key.endswith("conv_shortcut.bias"):
+            out[key.replace("conv_shortcut.bias", "conv_shortcut.conv.bias")] = value
+        else:
+            out[key] = value
+    return out
+
+
+class _TorchUNetMidBlock3D(nn.Module):
+    def __init__(
+        self,
+        *,
+        in_channels: int,
+        num_layers: int,
+        resnet_cls: type,
+        ltx2: bool,
+        spatial_padding_mode: str = "zeros",
+    ) -> None:
+        super().__init__()
+        kwargs: dict[str, Any] = {"in_channels": in_channels, "out_channels": in_channels}
+        if ltx2 and spatial_padding_mode != "zeros":
+            kwargs["spatial_padding_mode"] = spatial_padding_mode
+        self.res_blocks = nn.ModuleList([resnet_cls(**kwargs) for _ in range(num_layers)])
+
+    def forward(self, x: torch.Tensor, *, causal: bool, ltx2: bool) -> torch.Tensor:
+        for block in self.res_blocks:
+            x = _run_diffusers_resnet(block, x, causal=causal, ltx2=ltx2)
+        return x
+
+
+def _unpatchify(x: torch.Tensor, *, patch_size_hw: int = 4, patch_size_t: int = 1) -> torch.Tensor:
+    batch_size, num_channels, num_frames, height, width = x.shape
+    p = patch_size_hw
+    p_t = patch_size_t
+    x = x.reshape(batch_size, -1, p_t, p, p, num_frames, height, width)
+    return x.permute(0, 1, 5, 2, 6, 4, 7, 3).flatten(6, 7).flatten(4, 5).flatten(2, 3)
+
+
+class _TorchLTXVideoDecoder(nn.Module):
+    """Block-list LTX decoder built from diffusers VAE primitives (matches TT/ltx_core layout)."""
+
+    def __init__(
+        self,
+        *,
+        decoder_blocks: list[tuple[str, dict | int]],
+        in_channels: int = 128,
+        out_channels: int = 3,
+        patch_size: int = 4,
+        base_channels: int = 128,
+        causal: bool = False,
+        spatial_padding_mode: str = "zeros",
+        vae_mods: dict,
+    ) -> None:
+        super().__init__()
+        self.patch_size = patch_size
+        self.causal = causal
+        self.ltx2 = vae_mods["ltx2"]
+        causal_conv = vae_mods["causal_conv"]
+        resnet_cls = vae_mods["resnet"]
+        upsample_cls = vae_mods["upsample"]
+        pixel_norm = vae_mods["pixel_norm"]
+
+        out_channels_patched = out_channels * patch_size**2
+        feature_channels = base_channels * 8
+
+        conv_kwargs: dict[str, Any] = {}
+        if self.ltx2:
+            if spatial_padding_mode != "zeros":
+                conv_kwargs["spatial_padding_mode"] = spatial_padding_mode
+        else:
+            conv_kwargs["is_causal"] = causal
+
+        self.per_channel_statistics = _PerChannelStatistics(in_channels)
+        self.conv_in = causal_conv(
+            in_channels=in_channels,
+            out_channels=feature_channels,
+            kernel_size=3,
+            stride=1,
+            **conv_kwargs,
+        )
+
+        stride_map = {
+            "compress_all": (2, 2, 2),
+            "compress_space": (1, 2, 2),
+            "compress_time": (2, 1, 1),
+        }
+
+        self.up_blocks = nn.ModuleList()
+        ch = feature_channels
+        for block_name, block_params in reversed(decoder_blocks):
+            block_config = {"num_layers": block_params} if isinstance(block_params, int) else block_params
+            if block_name == "res_x":
+                self.up_blocks.append(
+                    _TorchUNetMidBlock3D(
+                        in_channels=ch,
+                        num_layers=block_config["num_layers"],
+                        resnet_cls=resnet_cls,
+                        ltx2=self.ltx2,
+                        spatial_padding_mode=spatial_padding_mode,
+                    )
+                )
+            elif block_name in stride_map:
+                multiplier = block_config.get("multiplier", 1)
+                upsample_kwargs: dict[str, Any] = {
+                    "in_channels": ch,
+                    "stride": stride_map[block_name],
+                    "residual": block_config.get("residual", False),
+                    "upscale_factor": multiplier,
+                }
+                self.up_blocks.append(upsample_cls(**upsample_kwargs))
+                ch = ch // multiplier
+            else:
+                raise ValueError(f"Unknown decoder block: {block_name}")
+
+        self.conv_norm_out = pixel_norm()
+        self.conv_act = nn.SiLU()
+        self.conv_out = causal_conv(
+            in_channels=ch,
+            out_channels=out_channels_patched,
+            kernel_size=3,
+            stride=1,
+            **conv_kwargs,
+        )
+
+    def forward(self, sample: torch.Tensor) -> torch.Tensor:
+        sample = self.per_channel_statistics.un_normalize(sample)
+        sample = _run_diffusers_causal_conv(self.conv_in, sample, causal=self.causal, ltx2=self.ltx2)
+        for up_block in self.up_blocks:
+            if isinstance(up_block, _TorchUNetMidBlock3D):
+                sample = up_block(sample, causal=self.causal, ltx2=self.ltx2)
+            else:
+                sample = _run_diffusers_upsample(up_block, sample, causal=self.causal, ltx2=self.ltx2)
+        if self.ltx2:
+            sample = self.conv_norm_out(sample)
+        else:
+            sample = self.conv_norm_out(sample.movedim(1, -1)).movedim(-1, 1)
+        sample = self.conv_act(sample)
+        sample = _run_diffusers_causal_conv(self.conv_out, sample, causal=self.causal, ltx2=self.ltx2)
+        return _unpatchify(sample, patch_size_hw=self.patch_size)
 
 
 def _vae_parallel_kwargs(mesh_device: ttnn.MeshDevice) -> dict:
@@ -35,17 +264,94 @@ def _vae_parallel_kwargs(mesh_device: ttnn.MeshDevice) -> dict:
     return {"parallel_config": parallel_config, "ccl_manager": ccl_manager}
 
 
-sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+# Fabric required for multi-device decoder tests (mirrors wan2_2 VAE tests).
+_LTX_VAE_FABRIC_DEVICE_PARAMS = [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}]
+_LTX_SKIP_SMALL_MESH_FABRIC = os.environ.get("LTX_VAE_FORCE_SMALL_MESH_FABRIC", "0") != "1"
 
 # Single-chip: no fabric (avoids BH fabric router handshake when only one device is opened).
-# 2x4: production target for LTX-Fast AV; halo exchange uses Linear-fabric CCL.
+# Stand-alone conv/res/upsample tests use raw (unsharded) tensors — 1x1 only.
 _LTX_VAE_MESH_DEVICE_PARAMS = [
     ((1, 1), {}),
 ]
+_LTX_VAE_MESH_DEVICE_IDS = ["1x1"]
 
-# Shape sanity for the small per-op tests below — they construct stand-alone
-# LTXCausalConv3d / LTXResnetBlock3D / LTXDepthToSpaceUpsample with raw inputs
-# (no sharding), so they only make sense on a single chip.
+# Multi-mesh configs for full LTXVideoDecoder parity (mirrors test_vae_wan2_1.py).
+_LTX_DECODER_MESH_PARAMS = [
+    pytest.param(
+        (1, 1),
+        0,
+        1,
+        1,
+        marks=pytest.mark.skipif(
+            _LTX_SKIP_SMALL_MESH_FABRIC,
+            reason=("Known flaky fabric handshake on 1x1 mesh; set " "LTX_VAE_FORCE_SMALL_MESH_FABRIC=1 to force-run."),
+        ),
+    ),
+    ((2, 4), 0, 1, 1),
+    ((2, 4), 1, 0, 1),
+    ((1, 8), 0, 1, 1),
+    pytest.param(
+        (1, 4),
+        1,
+        0,
+        1,
+        marks=pytest.mark.skipif(
+            _LTX_SKIP_SMALL_MESH_FABRIC,
+            reason=("Known flaky fabric handshake on 1x4 mesh; set " "LTX_VAE_FORCE_SMALL_MESH_FABRIC=1 to force-run."),
+        ),
+    ),
+    ((4, 8), 0, 1, 2),
+]
+_LTX_DECODER_MESH_IDS = [
+    "1x1_h0_w1",
+    "2x4_h0_w1",
+    "2x4_h1_w0",
+    "1x8_h0_w1",
+    "1x4_h1_w0",
+    "4x8_h0_w1",
+]
+
+# 2K decode does not fit on a single device — multi-device meshes only.
+_LTX_DECODER_MESH_MULTI_ONLY_PARAMS = [
+    ((2, 4), 0, 1, 1),
+    ((2, 4), 1, 0, 1),
+    ((4, 8), 0, 1, 2),
+]
+_LTX_DECODER_MESH_MULTI_ONLY_IDS = [
+    "2x4_h0_w1",
+    "2x4_h1_w0",
+    "4x8_h0_w1",
+]
+
+# (num_frames, height, width): H/W divisible by 64; (num_frames - 1) % 8 == 0 for VAE.
+_LTX_DECODER_SHAPE_PARAMS = [
+    pytest.param(17, 128, 256, id="17f_128x256"),  # smoke — fast on 2x4
+    pytest.param(9, 512, 832, id="9f_512x832"),  # ~480p latent grid
+    pytest.param(17, 544, 960, id="17f_544x960"),  # stage-1 half of 1080p (544x960)
+    pytest.param(9, 1088, 1920, id="9f_1088x1920"),  # 1080p production (modest T)
+]
+
+_LTX_DECODER_2K_SHAPE_PARAMS = [
+    pytest.param(9, 1088, 2048, id="9f_1088x2048"),  # 2K (1088x2048, latent 34x64)
+]
+
+# Smoke resolution — only shape exercised on a 1x1 mesh in test_ltx_video_decoder.
+_LTX_DECODER_1X1_MAX_HW = (256, 256)
+
+
+def _skip_ltx_decoder_if_single_chip_too_large(mesh_device: ttnn.MeshDevice, height: int, width: int) -> None:
+    if tuple(mesh_device.shape) == (1, 1) and (
+        height > _LTX_DECODER_1X1_MAX_HW[0] or width > _LTX_DECODER_1X1_MAX_HW[1]
+    ):
+        pytest.skip(f"{height}x{width} LTX decode requires a multi-device mesh")
+
+
+def _unwrap_tt_output(tt_out):
+    if isinstance(tt_out, (tuple, list)):
+        # Newer TT path may return auxiliary tensors alongside the primary output.
+        return tt_out[0]
+    return tt_out
+
 
 # Full-decoder test — exercises the production decoder_blocks under sharding.
 _LTX_PROD_DECODER_BLOCKS = [
@@ -64,36 +370,65 @@ _LTX_PROD_DECODER_BLOCKS = [
 @pytest.mark.parametrize(
     "in_c, out_c, kernel_size, stride, T, H, W",
     [
-        (128, 128, 3, 1, 3, 16, 16),  # Standard residual block conv
-        (128, 256, 3, 1, 3, 16, 16),  # Channel expansion
+        (128, 128, 3, 1, 3, 16, 16),  # small residual block conv
+        (128, 256, 3, 1, 3, 16, 16),  # channel expansion
         (48, 128, 3, 1, 5, 32, 32),  # conv_in (after patchify)
+        (128, 1024, 3, 1, 21, 17, 15),  # ltx_s0_conv_in @ 2x4 per-device (1080p path)
+        (1024, 1024, 3, 1, 21, 17, 15),  # ltx_s0_res
+        (1024, 4096, 3, 1, 21, 17, 15),  # ltx_s0_up (upsample projection)
+        (512, 512, 3, 1, 39, 34, 30),  # ltx_s1_res
+        (128, 48, 3, 1, 147, 136, 120),  # ltx_s4_out
     ],
-    ids=["res_128_128", "expand_128_256", "conv_in_48_128"],
+    ids=[
+        "res_128_128",
+        "expand_128_256",
+        "conv_in_48_128",
+        "ltx_s0_conv_in",
+        "ltx_s0_res",
+        "ltx_s0_up",
+        "ltx_s1_res",
+        "ltx_s4_out",
+    ],
 )
+@pytest.mark.parametrize("mean, std", [(0, 1), (2, 3)], ids=["std1", "std3"])
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     _LTX_VAE_MESH_DEVICE_PARAMS,
-    ids=["1x1"],
+    ids=_LTX_VAE_MESH_DEVICE_IDS,
     indirect=["mesh_device", "device_params"],
 )
 def test_ltx_causal_conv3d(
-    mesh_device: ttnn.MeshDevice, in_c: int, out_c: int, kernel_size: int, stride: int, T: int, H: int, W: int
+    mesh_device: ttnn.MeshDevice,
+    in_c: int,
+    out_c: int,
+    kernel_size: int,
+    stride: int,
+    T: int,
+    H: int,
+    W: int,
+    mean: float,
+    std: float,
 ):
     """
-    Test LTXCausalConv3d against PyTorch CausalConv3d reference.
+    Test LTXCausalConv3d against diffusers LTX causal conv reference.
     """
-    from ltx_core.model.video_vae.convolution import CausalConv3d as TorchCausalConv3d
+    vae_mods = _require_diffusers_ltx_vae()
+    TorchCausalConv3d = vae_mods["causal_conv"]
+    ltx2 = vae_mods["ltx2"]
 
     B = 1
     torch.manual_seed(42)
 
-    # PyTorch reference
-    torch_model = TorchCausalConv3d(
-        in_channels=in_c,
-        out_channels=out_c,
-        kernel_size=kernel_size,
-        stride=stride,
-    )
+    conv_kwargs: dict[str, Any] = {
+        "in_channels": in_c,
+        "out_channels": out_c,
+        "kernel_size": kernel_size,
+        "stride": stride if ltx2 else (stride, stride, stride),
+    }
+    if not ltx2:
+        conv_kwargs["is_causal"] = True
+
+    torch_model = TorchCausalConv3d(**conv_kwargs)
     torch_model.eval()
 
     # TT model
@@ -108,18 +443,18 @@ def test_ltx_causal_conv3d(
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
     # Input
-    x = torch.randn(B, in_c, T, H, W, dtype=torch.float32)
+    x = torch.randn(B, in_c, T, H, W, dtype=torch.float32) * std + mean
 
     # PyTorch forward (BCTHW format)
     with torch.no_grad():
-        torch_out = torch_model(x)  # (B, out_c, T_out, H_out, W_out)
+        torch_out = _run_diffusers_causal_conv(torch_model, x, causal=True, ltx2=ltx2)
 
     # TT forward (BTHWC format)
     x_bthwc = x.permute(0, 2, 3, 4, 1)  # (B, T, H, W, C)
     x_bthwc = conv_pad_in_channels(x_bthwc)  # Pad C to alignment
     x_tt = ttnn.from_torch(x_bthwc, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
 
-    tt_out = tt_model(x_tt)
+    tt_out = _unwrap_tt_output(tt_model(x_tt))
     tt_out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])  # (B, T_out, H_out, W_out, C_out)
     tt_out_torch = tt_out_torch[:, :, :, :, :out_c]  # Trim padded channels
     tt_out_torch = tt_out_torch.permute(0, 4, 1, 2, 3)  # Back to BCTHW
@@ -132,34 +467,43 @@ def test_ltx_causal_conv3d(
 @pytest.mark.parametrize(
     "in_c, out_c, T, H, W",
     [
-        (128, 128, 3, 16, 16),  # Same channels (no shortcut)
-        (128, 256, 3, 16, 16),  # Channel expansion (with shortcut)
+        (128, 128, 3, 16, 16),  # same channels (no shortcut)
+        (128, 256, 3, 16, 16),  # channel expansion (with shortcut)
+        (1024, 1024, 21, 17, 15),  # ltx_s0_res @ 2x4 per-device
+        (512, 512, 39, 34, 30),  # ltx_s1_res
+        (256, 256, 147, 70, 66),  # ltx_s3_res @ 2K per-device
+        (128, 128, 147, 138, 130),  # ltx_s4_res @ 2K per-device
     ],
-    ids=["same_channels", "expand_channels"],
+    ids=[
+        "same_channels",
+        "expand_channels",
+        "ltx_s0_res",
+        "ltx_s1_res",
+        "ltx_s3_res_2k",
+        "ltx_s4_res_2k",
+    ],
 )
+@pytest.mark.parametrize("mean, std", [(0, 1), (2, 3)], ids=["std1", "std3"])
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     _LTX_VAE_MESH_DEVICE_PARAMS,
-    ids=["1x1"],
+    ids=_LTX_VAE_MESH_DEVICE_IDS,
     indirect=["mesh_device", "device_params"],
 )
-def test_ltx_resnet_block(mesh_device: ttnn.MeshDevice, in_c: int, out_c: int, T: int, H: int, W: int):
+def test_ltx_resnet_block(
+    mesh_device: ttnn.MeshDevice, in_c: int, out_c: int, T: int, H: int, W: int, mean: float, std: float
+):
     """
-    Test LTXResnetBlock3D against PyTorch ResnetBlock3D reference.
+    Test LTXResnetBlock3D against diffusers LTX ResnetBlock3D reference.
     """
-    from ltx_core.model.video_vae.enums import NormLayerType
-    from ltx_core.model.video_vae.resnet import ResnetBlock3D as TorchResnetBlock3D
+    vae_mods = _require_diffusers_ltx_vae()
+    TorchResnetBlock3D = vae_mods["resnet"]
+    ltx2 = vae_mods["ltx2"]
 
     B = 1
     torch.manual_seed(42)
 
-    # PyTorch reference
-    torch_model = TorchResnetBlock3D(
-        dims=3,
-        in_channels=in_c,
-        out_channels=out_c,
-        norm_layer=NormLayerType.PIXEL_NORM,
-    )
+    torch_model = TorchResnetBlock3D(in_channels=in_c, out_channels=out_c)
     torch_model.eval()
 
     # TT model
@@ -169,21 +513,21 @@ def test_ltx_resnet_block(mesh_device: ttnn.MeshDevice, in_c: int, out_c: int, T
         mesh_device=mesh_device,
         **_vae_parallel_kwargs(mesh_device),
     )
-    tt_model.load_torch_state_dict(torch_model.state_dict())
+    tt_model.load_torch_state_dict(_diffusers_resnet_state_to_tt(torch_model.state_dict()))
 
     # Input
-    x = torch.randn(B, in_c, T, H, W, dtype=torch.float32)
+    x = torch.randn(B, in_c, T, H, W, dtype=torch.float32) * std + mean
 
     # PyTorch forward
     with torch.no_grad():
-        torch_out = torch_model(x)
+        torch_out = _run_diffusers_resnet(torch_model, x, causal=True, ltx2=ltx2)
 
     # TT forward
     x_bthwc = x.permute(0, 2, 3, 4, 1)
     x_bthwc = conv_pad_in_channels(x_bthwc)
     x_tt = ttnn.from_torch(x_bthwc, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
 
-    tt_out = tt_model(x_tt)
+    tt_out = _unwrap_tt_output(tt_model(x_tt))
     tt_out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
     tt_out_torch = tt_out_torch[:, :, :, :, :out_c]
     tt_out_torch = tt_out_torch.permute(0, 4, 1, 2, 3)
@@ -198,26 +542,41 @@ def test_ltx_resnet_block(mesh_device: ttnn.MeshDevice, in_c: int, out_c: int, T
 @pytest.mark.parametrize(
     "in_c, stride, T, H, W",
     [
-        (128, (2, 2, 2), 4, 8, 8),  # Full 3D upsample (compress_all)
-        (128, (1, 2, 2), 3, 8, 8),  # Spatial only (compress_space)
-        (128, (2, 1, 1), 4, 8, 8),  # Temporal only (compress_time)
+        (128, (2, 2, 2), 4, 8, 8),  # full 3D upsample (compress_all)
+        (128, (1, 2, 2), 3, 8, 8),  # spatial only (compress_space)
+        (128, (2, 1, 1), 4, 8, 8),  # temporal only (compress_time)
+        (512, (2, 2, 2), 39, 34, 30),  # compress_all @ ltx_s1 stage
+        (1024, (1, 2, 2), 21, 17, 15),  # compress_space @ ltx_s0 stage
+        (256, (2, 1, 1), 75, 68, 60),  # compress_time @ ltx_s2 stage
     ],
-    ids=["upsample_all", "upsample_space", "upsample_time"],
+    ids=[
+        "upsample_all",
+        "upsample_space",
+        "upsample_time",
+        "upsample_all_s1",
+        "upsample_space_s0",
+        "upsample_time_s2",
+    ],
 )
+@pytest.mark.parametrize("mean, std", [(0, 1), (2, 3)], ids=["std1", "std3"])
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     _LTX_VAE_MESH_DEVICE_PARAMS,
-    ids=["1x1"],
+    ids=_LTX_VAE_MESH_DEVICE_IDS,
     indirect=["mesh_device", "device_params"],
 )
-def test_ltx_depth_to_space_upsample(mesh_device: ttnn.MeshDevice, in_c: int, stride: tuple, T: int, H: int, W: int):
-    """Test LTXDepthToSpaceUpsample against PyTorch reference."""
-    from ltx_core.model.video_vae.sampling import DepthToSpaceUpsample as TorchDTS
+def test_ltx_depth_to_space_upsample(
+    mesh_device: ttnn.MeshDevice, in_c: int, stride: tuple, T: int, H: int, W: int, mean: float, std: float
+):
+    """Test LTXDepthToSpaceUpsample against diffusers LTX upsampler reference."""
+    vae_mods = _require_diffusers_ltx_vae()
+    TorchUpsample = vae_mods["upsample"]
+    ltx2 = vae_mods["ltx2"]
 
     B = 1
     torch.manual_seed(42)
 
-    torch_model = TorchDTS(dims=3, in_channels=in_c, stride=stride)
+    torch_model = TorchUpsample(in_channels=in_c, stride=stride, upscale_factor=1)
     torch_model.eval()
 
     tt_model = LTXDepthToSpaceUpsample(
@@ -228,15 +587,15 @@ def test_ltx_depth_to_space_upsample(mesh_device: ttnn.MeshDevice, in_c: int, st
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
-    x = torch.randn(B, in_c, T, H, W, dtype=torch.float32)
+    x = torch.randn(B, in_c, T, H, W, dtype=torch.float32) * std + mean
     with torch.no_grad():
-        torch_out = torch_model(x)
+        torch_out = _run_diffusers_upsample(torch_model, x, causal=True, ltx2=ltx2)
 
     x_bthwc = x.permute(0, 2, 3, 4, 1)
     x_bthwc = conv_pad_in_channels(x_bthwc)
     x_tt = ttnn.from_torch(x_bthwc, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
 
-    tt_out = tt_model(x_tt)
+    tt_out = _unwrap_tt_output(tt_model(x_tt))
     tt_out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
     out_c = torch_out.shape[1]
     tt_out_torch = tt_out_torch[:, :, :, :, :out_c].permute(0, 4, 1, 2, 3)
@@ -264,8 +623,9 @@ def _run_ltx_decoder_parity(
     and the 2K decoder test. The TT decoder is given num_frames/height/width so the
     dim walker fires and ``_BLOCKINGS`` gets an exact-match lookup for every conv3d.
     """
-    from ltx_core.model.video_vae.enums import NormLayerType, PaddingModeType
-    from ltx_core.model.video_vae.video_vae import VideoDecoder as TorchVideoDecoder
+    vae_mods = _require_diffusers_ltx_vae()
+    if not vae_mods["ltx2"]:
+        pytest.skip("Full decoder parity requires diffusers autoencoder_kl_ltx2 (runtime causal= support)")
 
     B = 1
     torch.manual_seed(42)
@@ -274,18 +634,16 @@ def _run_ltx_decoder_parity(
     latent_h = height // spatial_compression
     latent_w = width // spatial_compression
 
-    # PyTorch reference — full production decoder shape.
-    torch_decoder = TorchVideoDecoder(
-        convolution_dimensions=3,
+    # PyTorch reference — full production decoder shape (diffusers primitives).
+    torch_decoder = _TorchLTXVideoDecoder(
+        decoder_blocks=_LTX_PROD_DECODER_BLOCKS,
         in_channels=128,
         out_channels=3,
-        decoder_blocks=_LTX_PROD_DECODER_BLOCKS,
         patch_size=4,
-        norm_layer=NormLayerType.PIXEL_NORM,
-        causal=False,  # 22B distilled uses causal_decoder=False
-        timestep_conditioning=False,
         base_channels=128,
-        decoder_spatial_padding_mode=PaddingModeType.ZEROS,  # matches LTXCausalConv3d
+        causal=False,
+        spatial_padding_mode="zeros",
+        vae_mods=vae_mods,
     )
     torch_decoder.eval()
 
@@ -319,7 +677,7 @@ def _run_ltx_decoder_parity(
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
     )
-    tt_decoder.load_torch_state_dict(torch_decoder.state_dict())
+    tt_decoder.load_torch_state_dict(_diffusers_decoder_state_to_tt(torch_decoder.state_dict()))
 
     # Latent shape matches what the pipeline would produce at this resolution.
     latent = torch.randn(B, 128, latent_frames, latent_h, latent_w, dtype=torch.float32) * std + mean
@@ -334,29 +692,15 @@ def _run_ltx_decoder_parity(
     logger.info("PASSED: LTXVideoDecoder matches PyTorch reference")
 
 
-@pytest.mark.parametrize(
-    ("num_frames, height, width"),
-    [
-        (17, 128, 256),  # latent (1, 128, 3, 4, 8) — fast for 2x4 (H=2 W=2 per device)
-    ],
-    ids=["17f_128x256"],
-)
-@pytest.mark.parametrize("mean, std", [(0, 1)])
+@pytest.mark.parametrize("num_frames, height, width", _LTX_DECODER_SHAPE_PARAMS)
+@pytest.mark.parametrize("mean, std", [(0, 1), (2, 3)], ids=["std1", "std3"])
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis, num_links",
-    [
-        ((1, 1), 0, 1, 1),
-        ((2, 4), 0, 1, 1),
-        ((2, 4), 1, 0, 1),
-    ],
-    ids=[
-        "1x1_h0_w1",
-        "2x4_h0_w1",
-        "2x4_h1_w0",
-    ],
+    _LTX_DECODER_MESH_PARAMS,
+    ids=_LTX_DECODER_MESH_IDS,
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", _LTX_VAE_FABRIC_DEVICE_PARAMS, indirect=True)
 def test_ltx_video_decoder(
     mesh_device: ttnn.MeshDevice,
     num_frames: int,
@@ -376,44 +720,26 @@ def test_ltx_video_decoder(
     For 2x4 this validates the parallel halo-exchange path end-to-end, which
     is otherwise only covered by the slow pipeline-level test.
     """
+    _skip_ltx_decoder_if_single_chip_too_large(mesh_device, height, width)
     _run_ltx_decoder_parity(mesh_device, h_axis, w_axis, num_links, num_frames, height, width, mean=mean, std=std)
 
 
-@pytest.mark.parametrize(
-    "num_frames, height, width",
-    # 2K = DCI 2048x1080. LTX requires H/W divisible by 64, so 1080 rounds up to
-    # 1088; the VAE therefore sees 1088x2048 (latent 34x64). Frame count is kept
-    # modest so the torch reference decode stays tractable — this validates 2K
-    # *spatial* sharding/halo/blocking-lookup. Per-layer perf at the full 145-frame
-    # production shape is covered by `test_bruteforce_sweep_ltx_h2w4_2k`.
-    [
-        (9, 1088, 2048),  # latent (1, 128, 2, 34, 64)
-    ],
-    ids=["9f_1088x2048"],
-)
+@pytest.mark.parametrize("num_frames, height, width", _LTX_DECODER_2K_SHAPE_PARAMS)
+@pytest.mark.parametrize("mean, std", [(0, 1)])
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis, num_links",
-    # Multi-device only: 2x4 is the production layout (latent 34/2=17, 64/4=16 per
-    # device); 4x8 also exercised. 1x1 is omitted — a single device cannot hold a
-    # full 1088x2048 decode.
-    [
-        ((2, 4), 0, 1, 1),
-        ((2, 4), 1, 0, 1),
-        ((4, 8), 0, 1, 2),
-    ],
-    ids=[
-        "2x4_h0_w1",
-        "2x4_h1_w0",
-        "4x8_h0_w1",
-    ],
+    _LTX_DECODER_MESH_MULTI_ONLY_PARAMS,
+    ids=_LTX_DECODER_MESH_MULTI_ONLY_IDS,
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", _LTX_VAE_FABRIC_DEVICE_PARAMS, indirect=True)
 def test_ltx_video_decoder_2k(
     mesh_device: ttnn.MeshDevice,
     num_frames: int,
     height: int,
     width: int,
+    mean: float,
+    std: float,
     h_axis: int,
     w_axis: int,
     num_links: int,
@@ -425,4 +751,4 @@ def test_ltx_video_decoder_2k(
     table (they OOM a 2x4 mesh at full production T), so at 2K they fall back to the
     generic blockings — correct, but not yet perf-tuned. See conv3d.py.
     """
-    _run_ltx_decoder_parity(mesh_device, h_axis, w_axis, num_links, num_frames, height, width)
+    _run_ltx_decoder_parity(mesh_device, h_axis, w_axis, num_links, num_frames, height, width, mean=mean, std=std)
