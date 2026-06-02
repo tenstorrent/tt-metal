@@ -699,7 +699,8 @@ class FakeClient:
 
 def test_build_kb_captures_available_used_and_provenance(tmp_path):
     client = FakeClient()
-    entries = build_kb(client=client, cache_root=tmp_path / "c", kb_root=tmp_path / "kb", limit_ops=40)
+    # full build (no limit) so a specific op is guaranteed present, not cut by alpha-sort
+    entries = build_kb(client=client, cache_root=tmp_path / "c", kb_root=tmp_path / "kb")
     by_id = {e.id: e for e in entries}
     # comprehensive: many ops, not just a couple
     assert len(by_id) > 25
