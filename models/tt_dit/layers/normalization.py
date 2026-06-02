@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import ClassVar
 
 import torch
@@ -203,6 +204,33 @@ class DistributedRMSNorm(Module):
                 f"embedding_dim / mesh_width = {expected_dim}"
             )
             raise ValueError(msg)
+
+        # Optional fused single-op path: ttnn.all_gather_rms_norm fuses pre-stats -> all-gather -> post into
+        # one op. Only valid for the plain norm (no fused RoPE / head-split), which is exactly how the LTX
+        # block norms (norm1/2/3, audio_norm*) are called. Gated by env so it can be A/B'd against the
+        # wan pre/AG/post path. (Op currently supports num_links==1, so it always uses a single fabric link.)
+        if (
+            os.environ.get("LTX_FUSED_AGRMS") in ("1", "true", "True")
+            and self.mesh_width > 1
+            and rope_cos is None
+            and rope_sin is None
+            and trans_mat is None
+            and num_heads_per_device == 1
+        ):
+            if getattr(self, "_agrms_sem", None) is None:
+                self._agrms_sem = ttnn.create_global_semaphore(self.mesh_device, self.ccl_manager.ccl_cores, 0)
+            return ttnn.all_gather_rms_norm(
+                x,
+                cluster_axis=self.mesh_axis,
+                mesh_device=self.mesh_device,
+                global_semaphore=self._agrms_sem,
+                weight=self.weight.data if self.weight is not None else None,
+                bias=None,
+                epsilon=self.norm_eps,
+                topology=self.ccl_manager.topology,
+                num_links=1,
+                compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
+            )
 
         stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
             x, dtype=ttnn.float32, compute_kernel_config=compute_kernel_config or self.compute_kernel_config
