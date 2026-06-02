@@ -43,3 +43,51 @@ class Matcher:
         resp = self.transport.create(system=system, messages=user)
         text = resp["content"][0]["text"]
         return [FusionProposal(**d) for d in json.loads(text)]
+
+
+EXTRACT_SYSTEM = (
+    "Given a ttnn op, its registered golden source (if any), unit-test examples, and model "
+    "call sites, emit KBEntry JSON dicts. The torch_pattern MUST be taken from the golden/test "
+    "source (the unoptimized subsequence the op replaces) — do not invent it. Fill pattern_kind, "
+    "config_template (use {DIM} placeholders), weight_transform, category. Return a JSON list only."
+)
+
+
+class LLMClient:
+    """Production client for BOTH the KB miner (extract_entries) and the matcher (propose),
+    sharing prompt-cached context. Transport is injectable for offline tests."""
+
+    def __init__(self, transport=None, model=None):
+        self.transport = transport or _AnthropicTransport(model or CONFIG.matcher_model)
+
+    def _complete(self, system_blocks, user_text):
+        resp = self.transport.create(system=system_blocks, messages=[{"role": "user", "content": user_text}])
+        return resp["content"][0]["text"]
+
+    def extract_entries(self, op, available, used, golden_src):
+        sys = [{"type": "text", "text": EXTRACT_SYSTEM}]
+        user = json.dumps(
+            {
+                "op": op,
+                "golden_src": golden_src,
+                "test_examples": available.get("examples", []),
+                "call_sites": [u["snippet"] for u in used],
+            },
+            indent=2,
+        )
+        return json.loads(self._complete(sys, user))
+
+    def propose(self, graph_summary, kb, diagnosis=None):
+        kb_text = json.dumps([e.to_dict() for e in kb], indent=2)
+        sys = [
+            {"type": "text", "text": SYSTEM},
+            {
+                "type": "text",
+                "text": "KNOWLEDGE BASE:\n" + kb_text,
+                "cache_control": {"type": "ephemeral"},
+            },  # reused across blocks + repair iters
+        ]
+        payload = {"op_graph": graph_summary}
+        if diagnosis:
+            payload["prior_failure_diagnosis"] = diagnosis  # re-propose using KB applicability_notes
+        return [FusionProposal(**d) for d in json.loads(self._complete(sys, json.dumps(payload, indent=2)))]

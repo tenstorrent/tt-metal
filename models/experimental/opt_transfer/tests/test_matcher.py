@@ -56,3 +56,46 @@ def test_matcher_marks_kb_for_prompt_caching():
     Matcher(transport=t).propose([], _kb())
     sys_blocks = t.last_request["system"]
     assert any(b.get("cache_control", {}).get("type") == "ephemeral" for b in sys_blocks)
+
+
+from models.experimental.opt_transfer.matcher import LLMClient
+
+
+class FakeT:
+    def __init__(self, text):
+        self.text = text
+        self.last = None
+
+    def create(self, **kw):
+        self.last = kw
+        return {"content": [{"type": "text", "text": self.text}]}
+
+
+def test_llmclient_extract_entries_parses_json():
+    payload = [
+        {
+            "id": "rms_norm",
+            "fused_op": "ttnn.rms_norm",
+            "category": "norm",
+            "pattern_kind": "chain",
+            "torch_pattern": ["pow", "mean", "rsqrt", "mul"],
+            "signature": {},
+            "config_template": {},
+            "weight_transform": None,
+            "source": "golden",
+        }
+    ]
+    c = LLMClient(transport=FakeT(json.dumps(payload)))
+    out = c.extract_entries("rms_norm", {"tests": [], "examples": []}, [], "def g(): ...")
+    assert out[0]["id"] == "rms_norm"
+
+
+def test_llmclient_propose_caches_kb_and_forwards_diagnosis():
+    payload = [FusionProposal("rms_norm", "ttnn.rms_norm", ["n"], {}, None, "", "").__dict__]
+    t = FakeT(json.dumps(payload))
+    c = LLMClient(transport=t)
+    kb = [KBEntry("rms_norm", "ttnn.rms_norm", "norm", PatternKind.CHAIN, ["x"], {}, {}, None, "s")]
+    props = c.propose([{"name": "n"}], kb, diagnosis={"node": "n", "axis": "per_block_pcc"})
+    assert props[0].entry_id == "rms_norm"
+    assert any(b.get("cache_control", {}).get("type") == "ephemeral" for b in t.last["system"])
+    assert "per_block_pcc" in json.dumps(t.last["messages"])

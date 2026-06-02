@@ -37,7 +37,7 @@ class RealImpl:
         return state
 
     def match(self, state):
-        props = self.matcher.propose(state["graph_summary"], self.kb)
+        props = self.matcher.propose(state["graph_summary"], self.kb, diagnosis=state.get("diagnosis"))
         self._proposals = props
         state["proposals"] = [p.__dict__ for p in props]
         return state
