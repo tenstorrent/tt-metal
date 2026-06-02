@@ -2385,6 +2385,109 @@ git add models/experimental/opt_transfer/matcher.py models/experimental/opt_tran
 git commit -m "feat(opt_transfer): real LLMClient (extract_entries + diagnosis-aware propose)"
 ```
 
+### Task J3: Wire drift + perf gates into LangGraph routing
+
+**Files:**
+- Modify: `models/experimental/opt_transfer/graph.py`
+- Test: `models/experimental/opt_transfer/tests/test_graph.py`
+
+The H2 `route()` only checked `full_pcc`. Now: a fusion passes only if `full_pcc >= thr` **and** the long-decode drift gate holds; otherwise repair (or handoff when exhausted). The perf node measures fused-vs-naive and **flags (does not block)** a fusion that's correct but not faster — "logged, not silently kept" per spec.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# tests/test_graph.py (append)
+from models.experimental.opt_transfer.graph import build_graph
+
+
+class GateFakes:
+    def __init__(self, pcc, drift, gain=50.0):
+        self.pcc, self.drift, self.gain = pcc, drift, gain
+    def trace(self, s): s["graph_summary"] = [{"name": "q_proj"}]; return s
+    def match(self, s): s["proposals"] = [{"entry_id": "x"}]; return s
+    def gate(self, s): s["applied"] = ["x"]; return s
+    def codegen(self, s): return s
+    def verify(self, s):
+        s["full_pcc"] = self.pcc
+        s["drift"] = {"first_divergence_step": self.drift, "horizon": 100}
+        return s
+    def perf(self, s):
+        s["perf"] = {"naive_ms": 100.0, "fused_ms": 100.0 - self.gain}; return s
+    def repair(self, s): s["iteration"] = s.get("iteration", 0) + 1; return s
+
+
+def test_drift_failure_routes_to_repair_then_handoff(tmp_path):
+    # pcc passes but divergence at step 20 of 100 (< 90% threshold) -> repair, exhaust -> handoff
+    g = build_graph(GateFakes(pcc=0.999, drift=20), max_iterations=2)
+    out = g.invoke({"model": "m", "iteration": 0, "run_dir": str(tmp_path)})
+    assert out["status"] == "handoff"
+
+
+def test_pass_records_perf_and_flags_weak_gain():
+    g = build_graph(GateFakes(pcc=0.999, drift=100, gain=0.5))  # gain 0.5% < threshold
+    out = g.invoke({"model": "m", "iteration": 0})
+    assert out["status"] == "pass"
+    assert out["perf"]["gain_pct"] < 2.0
+    assert out.get("perf_warnings")  # flagged, not blocked
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `pytest models/experimental/opt_transfer/tests/test_graph.py::test_drift_failure_routes_to_repair_then_handoff -v`
+Expected: FAIL (drift not consulted; `perf` node doesn't record gain)
+
+- [ ] **Step 3: Write minimal implementation** (replace `route`/`perf_node` in `build_graph`)
+
+```python
+# graph.py — inside build_graph, replace perf_node + route
+from models.experimental.opt_transfer.verify import perf_gain_pct, perf_gate_pass
+
+def _drift_ok(state) -> bool:
+    d = state.get("drift")
+    if not d:
+        return True
+    return d["first_divergence_step"] >= CONFIG.gates["drift_first_divergence_min_frac"] * d["horizon"]
+
+def perf_node(state):
+    state = impl.perf(state)
+    p = state.get("perf")
+    if p:
+        p["gain_pct"] = perf_gain_pct(p["naive_ms"], p["fused_ms"])
+        if not perf_gate_pass(p["naive_ms"], p["fused_ms"], CONFIG.gates["min_perf_gain_pct"]):
+            state.setdefault("perf_warnings", []).append(
+                f"gain {p['gain_pct']:.1f}% < {CONFIG.gates['min_perf_gain_pct']}% — correct but kept-and-flagged")
+    state["status"] = "pass"
+    return state
+
+def route(state) -> str:
+    if state.get("full_pcc", 0.0) >= thr and _drift_ok(state):
+        return "perf"
+    return "handoff" if state.get("iteration", 0) >= max_it else "repair"
+```
+
+Add `RealImpl.perf` (uses the `perf` skill's traced-path procedure — reusable metal trace + tracy):
+```python
+# graph.py — RealImpl
+def perf(self, state):
+    # Times the fused build vs an all-fallback baseline on the traced path.
+    # Implementation follows the `perf` skill (capture a reusable metal trace, measure both).
+    state["perf"] = self._measure_fused_vs_naive(state)   # -> {"naive_ms": float, "fused_ms": float}
+    return state
+```
+(`_measure_fused_vs_naive` builds the two runners and times them on device; exercised by the e2e, not the offline graph test.)
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `pytest models/experimental/opt_transfer/tests/test_graph.py -v`
+Expected: PASS (all)
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add models/experimental/opt_transfer/graph.py models/experimental/opt_transfer/tests/test_graph.py
+git commit -m "feat(opt_transfer): wire drift + perf gates into routing (pass needs PCC+drift; perf flags)"
+```
+
 ---
 
 ## Self-Review
