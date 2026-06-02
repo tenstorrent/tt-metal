@@ -158,19 +158,6 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
 
     auto mesh_buffer = device_tensor.impl().raw_mesh_buffer();
     const auto& distributed_host_buffer = host_tensor.buffer();
-    const size_t expected_per_shard_size_bytes = device_tensor.tensor_spec().compute_packed_buffer_size_bytes();
-
-    for (const auto& coord : distributed_host_buffer.shard_coords()) {
-        auto buf = distributed_host_buffer.get_shard(coord);
-        if (buf) {
-            TT_FATAL(
-                buf->view_bytes().size() == expected_per_shard_size_bytes,
-                "Host shard for device shard {} has invalid size: {} != {}",
-                coord,
-                buf->view_bytes().size(),
-                expected_per_shard_size_bytes);
-        }
-    }
 
     size_t total_size = 0;
     for (const auto& coord : distributed_host_buffer.shard_coords()) {
@@ -423,19 +410,6 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
 
     auto mesh_buffer = device_tensor.impl().raw_mesh_buffer();
     const auto& distributed_host_buffer = host_tensor.buffer();
-    const size_t expected_per_shard_size_bytes = device_tensor.tensor_spec().compute_packed_buffer_size_bytes();
-
-    for (const auto& coord : distributed_host_buffer.shard_coords()) {
-        auto buf = distributed_host_buffer.get_shard(coord);
-        if (buf) {
-            TT_FATAL(
-                buf->view_bytes().size() == expected_per_shard_size_bytes,
-                "Host shard for device shard {} has invalid size: {} != {}",
-                coord,
-                buf->view_bytes().size(),
-                expected_per_shard_size_bytes);
-        }
-    }
 
     size_t total_size = 0;
     for (const auto& coord : distributed_host_buffer.shard_coords()) {
