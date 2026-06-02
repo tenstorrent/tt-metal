@@ -53,16 +53,13 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-- name: Llama 3.3-70B seqlen sweep
+- name: Llama 3.3-70B seqlen sweep (Galaxy)
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct MESH_DEVICE=TG
-    pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance-seqlen-sweep" 
+    pytest --timeout 7200 models/demos/llama3_70b_galaxy/demo/text_demo.py -k "seqlen-sweep"
   model: llama3.3-70b
   skus:
     wh_galaxy_perf:
-      timeout: 60
-      tier: 1
-    bh_galaxy:
       timeout: 60
       tier: 1
   owner_id: U09LTAPEU2U # Viktor Pus
