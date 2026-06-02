@@ -20,18 +20,25 @@ namespace tt::tt_metal::experimental {
 
 namespace table_detail {
 
-// The default storage backend for Table: a vector of key/value pairs providing
-// iteration, lookup (find), and insert-if-absent. Plug a different type into
-// Table's third template parameter to change the backing representation.
+template <typename K, typename V>
+struct TableTypes {
+    using key_type = K;
+    using mapped_type = V;
+    using value_type = std::pair<const K, V>;
+    using size_type = std::size_t;
+};
+
+// Default vector<value_type> based storage strategy
 template <typename K, typename V>
 class VectorBackedTableBase {
+    using Types = TableTypes<K, V>;
     using Storage = std::vector<std::pair<K, V>>;
 
 public:
-    using key_type = K;
-    using mapped_type = V;
-    using value_type = std::pair<K, V>;
-    using size_type = std::size_t;
+    using key_type = typename Types::key_type;
+    using mapped_type = typename Types::mapped_type;
+    using value_type = typename Types::value_type;
+    using size_type = typename Types::size_type;
 
     using iterator = typename Storage::iterator;
     using const_iterator = typename Storage::const_iterator;
@@ -79,6 +86,20 @@ public:
         return {std::prev(entries_.end()), true};
     }
 
+    // Order-independent equality: equal iff both hold the same key/value pairs.
+    [[nodiscard]] bool operator==(const VectorBackedTableBase& other) const {
+        if (entries_.size() != other.entries_.size()) {
+            return false;
+        }
+        for (const auto& [key, value] : entries_) {
+            const auto it = other.find(key);
+            if (it == other.end() || !(it->second == value)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
 private:
     Storage entries_;
 };
@@ -95,34 +116,43 @@ private:
 //  - The interface mirrors std::map: find() / get() look a key up, insert() and
 //    emplace() add an entry only if the key is absent, and operator[] inserts a
 //    key or overwrites the existing value.
-template <typename K, typename V, typename TableBase = table_detail::VectorBackedTableBase<K, V>>
-class Table : private TableBase {
+template <typename K, typename V, typename StorageT = table_detail::VectorBackedTableBase<K, V>>
+class Table : private StorageT {
+    using Types = table_detail::TableTypes<K, V>;
+
 public:
-    using typename TableBase::const_iterator;
-    using typename TableBase::iterator;
-    using typename TableBase::key_type;
-    using typename TableBase::mapped_type;
-    using typename TableBase::size_type;
-    using typename TableBase::value_type;
+    // Public types are fixed by K and V (from TableTypes); iterators come from
+    // the storage backend.
+    using key_type = typename Types::key_type;
+    using mapped_type = typename Types::mapped_type;
+    using value_type = typename Types::value_type;
+    using size_type = typename Types::size_type;
+
+    using typename StorageT::const_iterator;
+    using typename StorageT::iterator;
 
     // Iterates the entries as std::pair<K, V>.
-    using TableBase::begin;
-    using TableBase::cbegin;
-    using TableBase::cend;
-    using TableBase::end;
+    using StorageT::begin;
+    using StorageT::cbegin;
+    using StorageT::cend;
+    using StorageT::end;
 
-    using TableBase::clear;
-    using TableBase::empty;
-    using TableBase::size;
+    using StorageT::clear;
+    using StorageT::empty;
+    using StorageT::size;
 
     // Returns an iterator to the entry for `key`, or end() if the key is absent.
-    using TableBase::find;
+    using StorageT::find;
 
     // Inserts an entry only if its key is absent. Returns {iterator to the entry,
     // true} when inserted, or {iterator to the existing entry, false} otherwise.
-    using TableBase::insert;
+    using StorageT::insert;
 
-    Table() = default;
+    Table() noexcept = default;
+    Table(const Table&) = default;
+    Table(Table&&) noexcept = default;
+    Table& operator=(const Table&) = default;
+    Table& operator=(Table&&) noexcept = default;
 
     // Builds from a `{{k, v}, {k, v}, ...}` list. Throws if a key appears more than once.
     Table(std::initializer_list<value_type> entries) {
@@ -142,8 +172,9 @@ public:
     }
 
     // Returns a reference to the value for `key`, inserting a default-constructed
-    // value if the key is absent (so `table[key] = value;` works). The K&& form
-    // avoids copying the key on insert. (Requires V to be default-constructible.)
+    // value if the key is absent (so `table[key] = value;` works). Overwrite an
+    // existing value by assigning through the reference. (Requires V to be
+    // default-constructible.)
     V& operator[](const K& key) {
         if (auto it = this->find(key); it != this->end()) {
             return it->second;
@@ -176,17 +207,10 @@ public:
     }
 
     // Equal iff both hold the same key/value pairs (iteration order is ignored).
+    // The comparison itself lives in the backing base, which implements it
+    // optimally for its storage.
     [[nodiscard]] friend bool operator==(const Table& a, const Table& b) {
-        if (a.size() != b.size()) {
-            return false;
-        }
-        for (const auto& [key, value] : a) {
-            const auto found = b.get(key);
-            if (!found || !(*found == value)) {
-                return false;
-            }
-        }
-        return true;
+        return static_cast<const StorageT&>(a) == static_cast<const StorageT&>(b);
     }
 };
 

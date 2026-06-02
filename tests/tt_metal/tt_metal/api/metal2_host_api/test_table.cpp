@@ -24,7 +24,7 @@
 
 namespace {
 
-namespace m2 = tt::tt_metal::experimental::metal2_host_api;
+namespace m2 = tt::tt_metal::experimental;
 
 // A user-defined alternative backing (std::unordered_map), defined here in the test
 // rather than shipped in the public header. Plugging it into Table's third template
@@ -57,6 +57,10 @@ public:
 
     std::pair<iterator, bool> insert(const value_type& entry) { return entries_.insert(entry); }
     std::pair<iterator, bool> insert(value_type&& entry) { return entries_.insert(std::move(entry)); }
+
+    // Order-independent equality via std::unordered_map::operator== (the more
+    // optimal implementation this backing exists to demonstrate).
+    [[nodiscard]] bool operator==(const UnorderedMapBackedTableBase& other) const { return entries_ == other.entries_; }
 
 private:
     Storage entries_;
