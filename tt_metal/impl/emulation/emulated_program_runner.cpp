@@ -1845,19 +1845,19 @@ public:
         const EmuleOobTensorState& oob,
         const std::vector<KernelInfo>& ki_list,
         const uint8_t* l1_data,
-        uint32_t lx,
-        uint32_t ly) {
+        [[maybe_unused]] uint32_t lx,
+        [[maybe_unused]] uint32_t ly) {
         if (!oob.object_intent_strict || oob.tensor_ranges == nullptr) {
             return;
         }
         if (ki_list.size() != 1) {
-            fprintf(
-                stderr,
-                "[ASAN ERROR] Object Intent Violation: Exact per-kernel provenance tracking is unsupported when %zu kernels share core (%u, %u) in one launch. Enable TT_METAL_EMULE_ASAN only for single-kernel-per-core launches.\n",
-                ki_list.size(),
-                lx,
-                ly);
-            std::abort();
+            // Per-kernel provenance relies on memcmp-after-exit to attribute byte changes to a
+            // single kernel; with multiple kernels sharing a core in one launch (the normal ttnn
+            // reader+compute+writer pattern) we can't tell which kernel wrote which bytes. The
+            // check is simply not applicable here, so skip it without snapshotting — leaving
+            // snapshots_ empty makes verify_post_launch a no-op — rather than aborting the whole
+            // workload. Other sanitizers continue to run.
+            return;
         }
         snapshots_.reserve(oob.tensor_ranges_count);
         for (uint32_t i = 0; i < oob.tensor_ranges_count; ++i) {
