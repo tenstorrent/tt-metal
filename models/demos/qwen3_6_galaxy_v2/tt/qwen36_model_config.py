@@ -795,42 +795,70 @@ class TtQwen36ModelArgs(TtModelArgs):
         )
         self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"] = self.create_sharded_norm_config(self.lm_head_core_grid)
 
-        # LM-head ring grid (re-use qwen3-32B's 32-core / output / input layouts —
-        # all cores are within the 60-core sub_core_grids).
-        from models.demos.qwen3_6_galaxy_v2.tt.model_config import (
-            LM_HEAD_16_GRID,
-            LM_HEAD_32_GRID,
-            LM_HEAD_INPUT_GRID,
-            LM_HEAD_OUTPUT_GRID,
-        )
+        # LM-head ring grid.  The ring matmul splits the per-col vocab across
+        # LM_HEAD_RING_SIZE cores.  This config was hard-coded to 24 cores
+        # (qwen3-32B's coordinate lists, inside the old 60-core band) and is now
+        # PARAMETRIC + dynamic so it can be widened on the post-60->110 grid via
+        # the QWEN36_LM_HEAD_RING_SIZE knob.
+        #
+        # Sizing math: per-col vocab = padded_vocab/4 = 62208 = 1944 tiles
+        # (=2^3 * 3^5).  For ZERO padding the ring size must divide 1944.  The
+        # 1D-ring matmul lays its compute cores out on the rectangular
+        # num_to_coregrid(N) grid, which is only valid for multiples of 8 (plus
+        # 12/20) — so among the clean divisors {54,72,81,108} only 72 = 8x9 is
+        # realizable (3x the old 24, exact 1944/72 = 27 tiles/core, no vocab
+        # padding, fits inside (12,10)).  81/108/54 are rejected by
+        # num_to_coregrid (not 8-multiples) and don't form a rectangle in the
+        # grid with col-0 reserved.
+        #
+        # MEASURED (BH galaxy, ISL-128, identical build): 24 cores = 20.53
+        # tok/s/user (48.71 ms/step), 72 cores = 20.53 tok/s/user (48.72
+        # ms/step) — IDENTICAL.  128k demo: both 18.5 tok/s/user, coherent.
+        # The LM-head is DRAM-weight-bandwidth-bound (the ~80 MB bf8
+        # 1280x62208 weight read per token across 8 DRAM banks), NOT
+        # core-count-bound, so widening the ring buys nothing.  Default kept at
+        # 24 (fewer cores, no contention with neighbouring ops); set
+        # QWEN36_LM_HEAD_RING_SIZE=72 to use the wide ring (validated coherent).
+        from models.demos.qwen3_6_galaxy_v2.tt.model_config import LM_HEAD_16_GRID, LM_HEAD_32_GRID
 
-        LM_HEAD_RING_SIZE = 24
-        # Per-col padded vocab: pad to multiple of LM_HEAD_RING_SIZE * tile = 768.
+        LM_HEAD_RING_SIZE = int(os.environ.get("QWEN36_LM_HEAD_RING_SIZE", "24"))
+        # Per-col padded vocab: pad to multiple of LM_HEAD_RING_SIZE * tile.
         per_col_vocab = self.padded_vocab_size // self.cluster_shape[1]  # 62208
-        RING_TILE_ALIGN = LM_HEAD_RING_SIZE * self.tile_size  # 768
+        RING_TILE_ALIGN = LM_HEAD_RING_SIZE * self.tile_size  # 24->768, 72->2304
         per_col_vocab_padded = (
             (per_col_vocab + RING_TILE_ALIGN - 1) // RING_TILE_ALIGN
-        ) * RING_TILE_ALIGN  # 62208 (no padding needed)
+        ) * RING_TILE_ALIGN  # 62208 (clean for 24 & 72: 1944 = 24*81 = 72*27 tiles)
         self.lm_head_shape = (self.dim_per_tp, per_col_vocab_padded)  # (1280, 62208)
 
+        # Input/output ring shards live on LM_HEAD_RING_SIZE cores carved from
+        # the live (widened) sub_core_grids (cols 1..grid.x-1, col 0 reserved).
+        # The 1D-ring matmul itself places compute on num_to_coregrid(RING_SIZE)
+        # (= 8x9 for 72), starting at (0,0); ttnn reshards in0/out to these
+        # explicit shard grids, so the exact coords here only need to be
+        # RING_SIZE distinct cores with tile-aligned shard widths.
+        lm_head_ring_core_input_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            self.start_core, LM_HEAD_RING_SIZE, self.sub_core_grids, row_wise=True
+        )
+        lm_head_ring_core_output_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            self.start_core, LM_HEAD_RING_SIZE, self.sub_core_grids, row_wise=True
+        )
+        # RESHARD + 16-core input layouts stay on their original (fixed) grids —
+        # the post-ring all-reduce uses 32 cores independent of RING_SIZE.
         lm_head_ring_core_range_set = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in LM_HEAD_32_GRID]
-        )
-        lm_head_ring_core_input_range_set = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in LM_HEAD_INPUT_GRID]
-        )
-        lm_head_ring_core_output_range_set = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in LM_HEAD_OUTPUT_GRID]
         )
         lm_head_ring_16_core_range_set = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in LM_HEAD_16_GRID]
         )
 
-        # Input shard: 1280 / 24 = 53.33 (not tile-aligned).  Pad to (1280 + 511) //
-        # 512 * 512 = 1536 then /24 = 64.
-        lm_head_in_padded = self.dim_padded_24_cores // 4  # 1536
+        # Input shard: dim_per_tp=1280 padded up to a multiple of
+        # RING_SIZE*tile so the K-shard is tile-aligned.  At 72: 2304 / 72 = 32
+        # (1 tile/core).  At 24 this was 1536 / 24 = 64 (2 tiles/core).
+        lm_head_in_padded = (
+            (self.dim_per_tp + RING_TILE_ALIGN - 1) // RING_TILE_ALIGN
+        ) * RING_TILE_ALIGN  # 24->1536, 72->2304
         self.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-            shape=(32, lm_head_in_padded // LM_HEAD_RING_SIZE),  # (32, 64)
+            shape=(32, lm_head_in_padded // LM_HEAD_RING_SIZE),  # 24->(32,64), 72->(32,32)
             core_grid=lm_head_ring_core_input_range_set,
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -844,7 +872,7 @@ class TtQwen36ModelArgs(TtModelArgs):
             use_height_and_width_as_shard_shape=True,
         )
         self.model_config["LM_HEAD_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-            shape=(32, per_col_vocab_padded // LM_HEAD_RING_SIZE),  # (32, 2592)
+            shape=(32, per_col_vocab_padded // LM_HEAD_RING_SIZE),  # 24->(32,2592), 72->(32,864)
             core_grid=lm_head_ring_core_output_range_set,
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,

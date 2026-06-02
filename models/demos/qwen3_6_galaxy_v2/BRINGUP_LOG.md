@@ -242,3 +242,22 @@ After V2-decode lands and eager decode is PCC-verified vs HF reference:
   plumbing through trace). Both CPU-buildable with mocks. Then V2-7
   block tests on BH GLX (strictly sequential — one device session at
   a time, `tt-smi -r` between failures).
+
+- **LM-head ring parametric/widen attempt** (`qwen36_model_config.py`):
+  Made `LM_HEAD_RING_SIZE` parametric (env `QWEN36_LM_HEAD_RING_SIZE`,
+  default 24) + derive the ring in/out shard grids dynamically from the
+  live `sub_core_grids` instead of the old hard-coded 24-core coordinate
+  lists. Widened candidate = 72 (only clean divisor of the 1944-tile
+  per-col vocab that `num_to_coregrid` can realize as a rectangle: 8x9;
+  81/108/54 rejected — not 8-multiples). Added shape-math unit test
+  `test_lm_head_ring_size.py` (24 & 72 both PASS).
+  - **Finding (measured A/B, identical build):** ring 24 vs 72 give the
+    SAME decode rate — ISL-128 20.53 tok/s/user (48.71 vs 48.72 ms/step),
+    128k demo 18.5 tok/s/user, both coherent (token 248068). The LM-head
+    is DRAM-WEIGHT-BANDWIDTH-bound (~80 MB bf8 1280x62208 read/token over
+    8 banks), NOT core-count-bound — widening the ring buys nothing.
+  - **Decision:** default stays 24 (fewer cores, no contention); 72 is a
+    validated-coherent opt-in. The real LM-head lever is weight bandwidth
+    (e.g. bf4 weights / fewer DRAM reads), not ring width.
+  - Status: DONE_WITH_CONCERNS (correct + coherent, perf-neutral).
+    PCC: identical math, token 248068 at both sizes. Block hash: n/a.
