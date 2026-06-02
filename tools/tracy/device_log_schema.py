@@ -2,14 +2,21 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Schema contract for profile_log_device.csv (device-side profiler output)."""
+"""Contract for profile_log_device.csv (device-side profiler output).
+
+The file is written by the tt-metal device profiler (C++), not by Tracy. Tracy copies
+it into performance report folders alongside ops_perf_results_*.csv.
+
+Line 1 (ARCH metadata) is the primary consumer for tools that only need chip identity
+and frequency (e.g. TTNN Visualizer). Lines 2+ are the column header and per-zone rows.
+"""
 
 from __future__ import annotations
 
 import csv
 import re
 from pathlib import Path
-from typing import Union
+from typing import NamedTuple, Union
 
 import pandas as pd
 
@@ -32,20 +39,6 @@ DEVICE_LOG_COLUMN_HEADERS = [
     "meta data",
 ]
 
-DEVICE_LOG_REQUIRED_COLUMNS = frozenset(
-    {
-        "PCIe slot",
-        "core_x",
-        "core_y",
-        "RISC processor type",
-        "time[cycles since reset]",
-        "trace id",
-        "trace id counter",
-        "zone name",
-        "type",
-    }
-)
-
 ARCH_LINE_PATTERN = re.compile(r"^ARCH:\s*.+,\s*CHIP_FREQ\[MHz\]:\s*\d+,\s*Max Compute Cores:\s*\d+\s*$")
 
 GRAYSKULL_ARCH_LINE_PREFIX = "Chip clock is at "
@@ -55,6 +48,12 @@ PathLike = Union[str, Path]
 
 class DeviceLogSchemaError(ValueError):
     """Raised when profile_log_device.csv does not match the expected schema."""
+
+
+class DeviceArchMetadata(NamedTuple):
+    arch: str
+    freq_mhz: int
+    max_compute_cores: int | None
 
 
 def _read_text_lines(log_path: Path) -> list[str]:
@@ -68,6 +67,26 @@ def _read_text_lines(log_path: Path) -> list[str]:
         raise DeviceLogSchemaError(f"Device log is empty: {log_path}")
 
     return lines
+
+
+def parse_device_arch_metadata(log_path: PathLike) -> DeviceArchMetadata:
+    """Parse line 1 of profile_log_device.csv (ARCH / legacy Grayskull metadata)."""
+    arch_line = _read_text_lines(Path(log_path))[0].rstrip("\n")
+
+    if GRAYSKULL_ARCH_LINE_PREFIX in arch_line:
+        return DeviceArchMetadata(arch="grayskull", freq_mhz=1200, max_compute_cores=None)
+
+    if "ARCH" not in arch_line:
+        raise DeviceLogSchemaError(f"Unrecognized ARCH metadata line: {arch_line!r}")
+
+    parts = [segment.strip() for segment in arch_line.split(",")]
+    if len(parts) < 3:
+        raise DeviceLogSchemaError(f"ARCH metadata line has too few fields: {arch_line!r}")
+
+    arch = parts[0].split(":")[-1].strip()
+    freq_mhz = int(parts[1].split(":")[-1].strip())
+    max_compute_cores = int(parts[2].split(":")[-1].strip())
+    return DeviceArchMetadata(arch=arch, freq_mhz=freq_mhz, max_compute_cores=max_compute_cores)
 
 
 def validate_arch_line(arch_line: str) -> None:
@@ -93,11 +112,8 @@ def validate_column_headers(header_line: str) -> list[str]:
     return headers
 
 
-def validate_profile_log_device_csv(log_path: PathLike, *, require_data_rows: bool = True) -> None:
-    """Validate profile_log_device.csv header and row shape.
-
-    Raises DeviceLogSchemaError when the file does not match the schema.
-    """
+def validate_profile_log_device_arch_and_headers(log_path: PathLike) -> DeviceArchMetadata:
+    """Validate ARCH metadata and column headers only (fast; no data-row scan)."""
     path = Path(log_path)
     lines = _read_text_lines(path)
 
@@ -105,10 +121,17 @@ def validate_profile_log_device_csv(log_path: PathLike, *, require_data_rows: bo
     if len(lines) < 2:
         raise DeviceLogSchemaError(f"Device log missing column header line: {path}")
 
-    headers = validate_column_headers(lines[1].rstrip("\n"))
-    missing_required = DEVICE_LOG_REQUIRED_COLUMNS - set(headers)
-    if missing_required:
-        raise DeviceLogSchemaError(f"Missing required columns: {sorted(missing_required)}")
+    validate_column_headers(lines[1].rstrip("\n"))
+    return parse_device_arch_metadata(path)
+
+
+def validate_profile_log_device_csv(log_path: PathLike, *, require_data_rows: bool = True) -> None:
+    """Validate ARCH metadata, headers, and optionally every data row."""
+    validate_profile_log_device_arch_and_headers(log_path)
+
+    path = Path(log_path)
+    lines = _read_text_lines(path)
+    headers = [field.strip() for field in next(csv.reader([lines[1].rstrip("\n")]))]
 
     data_rows = list(csv.reader(lines[2:]))
     if require_data_rows and not data_rows:
@@ -156,7 +179,7 @@ def parse_profile_log_device_csv(log_path: PathLike, *, validate: bool = True) -
     """Load profile_log_device.csv as a DataFrame with named columns."""
     path = Path(log_path)
     if validate:
-        validate_profile_log_device_csv(path)
+        validate_profile_log_device_arch_and_headers(path)
 
     df = pd.read_csv(path, skiprows=1, header=0, na_filter=False)
     df.columns = [str(column).strip() for column in df.columns]

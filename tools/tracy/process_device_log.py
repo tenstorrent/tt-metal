@@ -19,7 +19,11 @@ from loguru import logger
 
 from tracy.common import PROFILER_ARTIFACTS_DIR
 import tracy.device_post_proc_config as device_post_proc_config
-from tracy.device_log_schema import parse_profile_log_device_csv, validate_profile_log_device_csv
+from tracy.device_log_schema import (
+    parse_device_arch_metadata,
+    parse_profile_log_device_csv,
+    validate_profile_log_device_arch_and_headers,
+)
 
 SUM_MARKER_ID_START = 3000
 
@@ -117,20 +121,8 @@ def print_help():
 
 
 def extract_device_info(logPath):
-    line = ""
-    with open(logPath, "r") as f:
-        line = f.readline()
-
-    if "Chip clock is at " in line:
-        return "grayskull", 1200, None
-    elif "ARCH" in line:
-        info = line.split(",")
-        arch = info[0].split(":")[-1].strip(" \n")
-        freq = info[1].split(":")[-1].strip(" \n")
-        max_compute_cores = info[2].split(":")[-1].strip(" \n")
-        return arch, int(freq), int(max_compute_cores)
-    else:
-        raise Exception
+    metadata = parse_device_arch_metadata(logPath)
+    return metadata.arch, metadata.freq_mhz, metadata.max_compute_cores
 
 
 def import_device_profile_log(logPath):
@@ -138,7 +130,7 @@ def import_device_profile_log(logPath):
     arch, freq, max_compute_cores = extract_device_info(logPath)
     devicesData.update(dict(deviceInfo=dict(arch=arch, freq=freq, max_compute_cores=max_compute_cores)))
 
-    validate_profile_log_device_csv(logPath)
+    validate_profile_log_device_arch_and_headers(logPath)
     df = parse_profile_log_device_csv(logPath, validate=False)
 
     for record in df.to_dict(orient="records"):
