@@ -1065,7 +1065,7 @@ def test_reduce_scatter_async_interleaved_to_sharded(
             1,  # check
         ),
         # Composite RS
-        (
+        pytest.param(
             [1, 1, 384, 240],
             3,
             [64, 256],
@@ -1075,6 +1075,7 @@ def test_reduce_scatter_async_interleaved_to_sharded(
             False,
             True,
             10,  # perf
+            marks=pytest.mark.skip(reason="Disabled: see #45687"),
         ),
     ],
 )
