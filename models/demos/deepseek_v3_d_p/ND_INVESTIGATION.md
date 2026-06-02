@@ -32,13 +32,33 @@ First divergence: `BLK_2_mla_out` / `MLA_2_attn_out_postSDPA` (attn_norm is dete
 forward is bit-deterministic across processes** (iter0 layer-60 `06_final_output` SHA identical
 across ~7 processes; iter1 ×4 all token 2845). **Trade-off:** fp32 non-streaming SDPA is slower.
 
-**SECONDARY RESIDUAL (open):** at 61L/iter25 the per-iteration output is non-idempotent — even
-with the fp32 fix, iters 1..24 diverge across processes and vary within a process
-(iter0≠iter1≠iter2). The ring SDPA reuses `persistent_k_output_buffer`/`persistent_v_output_buffer`
-(`mla.py:304/315`, passed at 700/701) across every forward WITHOUT reset; stale carry-over is
-the likely cause. The test reports the LAST iteration's token, so this still makes the reported
-iter25 token vary. Needs: reset the persistent buffers per call (or confirm the iter loop's
-intended KV-state semantics). Not yet fixed.
+**FIX (2) — persistent-buffer reset (default-on, `mla.py`):** reset
+`persistent_k/v_output_buffer = ttnn.zeros_like(...)` before each ring SDPA call
+(`TT_DS_ND_RESET_PBUF=0` to disable). This moved the **reported 61L/iter25 token from
+divergent (260/14) to deterministic + correct (2845) across 7 processes.** Both fixes are
+now DEFAULT-ON (fix (1) via `TT_DS_SDPA_FAST=1` escape; fix (2) via `TT_DS_ND_RESET_PBUF=0`).
+
+**STATUS: user-observable symptom RESOLVED.** A fresh process / single prefill (= real usage,
+= iter0) is **bit-deterministic and correct (2845)** across processes; the reported iter25
+token is **2845 deterministically across 7 processes.** Clean first-token-logit signal
+(`TT_DS_ND_LOGIT_FP=1`): argmax = 2845 for 24/25 iters across 3 processes; iter0 bit-identical.
+
+**REMAINING bit-level residual (does NOT affect the reported token; needs kernel-level work):**
+when the SAME process re-runs the prefill (iter1+ of the soak loop — e.g. a server reusing a
+process across requests), some iters drift at the logit level and one (iter1) shows non-finite
+garbage that flips that iter's argmax. Ruled OUT as causes: KV cache (resetting it per iter did
+NOT help; `ttnn.mul_` on the paged cache segfaults — use realloc), and it is NOT a per-op
+reduction-order issue (iter0 is bit-perfect, so all reductions are deterministic given equal
+inputs). The garbage originates in the **ROUTED-EXPERT dispatch/combine buffers**, which are
+allocated uninitialized (`create_device_tensor`) inside the C++ `dispatch`/`combine` ops — the
+long-standing "masked H1/H2 garbage" surfacing on DRAM re-use. `TT_DS_ND_COMBINE_INIT_ZEROS=1`
+is NOT a clean fix (it removed the non-finite values but introduced iter0 drift). A proper fix
+must zero-init the dispatch/combine output (or its padding) inside the C++ op, plus make the
+reused per-call workspace deterministic. Out of scope of the attention (ring-SDPA) fix.
+
+--- (original "persistent buffer" framing of the secondary residual was partially right:
+the buffer reset helped the token; the deeper bit-level residual is the dispatch/combine
+uninitialized DRAM in the routed-expert path.) ---
 
 ---
 
