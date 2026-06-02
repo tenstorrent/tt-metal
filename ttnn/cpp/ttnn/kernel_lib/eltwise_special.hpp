@@ -17,7 +17,7 @@
 #include "api/compute/eltwise_unary/digamma.h"
 #include "api/compute/eltwise_unary/tanh_derivative.h"
 #include "api/compute/eltwise_unary/where.h"
-// Note: lgamma uses `lgamma_stirling_tile` (multi-tile) — wrap separately when needed.
+#include "api/compute/eltwise_unary/lgamma.h"
 
 namespace compute_kernel_lib {
 
@@ -72,6 +72,53 @@ struct Where : DestOnlyTag {
     static ALWI void exec_impl(uint32_t slot_offset) {
         where_tile<DF>(
             to_u32(Cond) + slot_offset, to_u32(A) + slot_offset, to_u32(B) + slot_offset, to_u32(Out) + slot_offset);
+    }
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { exec_impl(slot_offset); }
+};
+
+// ---------------------------------------------------------------------------
+// lgamma family (DEST-internal SFPU). Three forms used by the lgamma kernels:
+//   - LgammaStirling      unary   : lgamma_stirling_tile(idst)
+//   - LgammaStirlingFloat binary  : lgamma_stirling_float_tile(x, log_z, out)
+//   - LgammaAdjusted      4-slot  : lgamma_adjusted_tile(stirling, logsin, x, out)
+// ---------------------------------------------------------------------------
+
+template <Dst Slot = Dst::D0>
+struct LgammaStirling : UnaryOp<LgammaStirling<Slot>, Slot> {
+    static ALWI void init() { lgamma_stirling_tile_init(); }
+    static ALWI void exec_impl(uint32_t slot_offset) { lgamma_stirling_tile(to_u32(Slot) + slot_offset); }
+};
+
+template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst Out = Dst::D0>
+struct LgammaStirlingFloat : BinaryOp<LgammaStirlingFloat<In0, In1, Out>, In0, In1, Out> {
+    static ALWI void init() { lgamma_stirling_float_tile_init(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        lgamma_stirling_float_tile(to_u32(In0) + slot_offset, to_u32(In1) + slot_offset, to_u32(Out) + slot_offset);
+    }
+};
+
+// lgamma_adjusted_tile takes 4 explicit DEST args (stirling, logsin, x, out); Out
+// may alias an input (the kernel uses (D0,D1,D2,D0)). Hand-rolled DestOnlyTag like
+// Where so the 4th arg is the output slot directly (no CRTP single-Out shape).
+template <Dst In0 = Dst::D0, Dst In1 = Dst::D1, Dst In2 = Dst::D2, Dst Out = Dst::D0>
+struct LgammaAdjusted : DestOnlyTag {
+    static constexpr uint32_t lane_width = []() {
+        uint32_t m = to_u32(In0);
+        if (to_u32(In1) > m) {
+            m = to_u32(In1);
+        }
+        if (to_u32(In2) > m) {
+            m = to_u32(In2);
+        }
+        if (to_u32(Out) > m) {
+            m = to_u32(Out);
+        }
+        return m + 1;
+    }();
+    static ALWI void init() { lgamma_adjusted_tile_init(); }
+    static ALWI void exec_impl(uint32_t slot_offset) {
+        lgamma_adjusted_tile(
+            to_u32(In0) + slot_offset, to_u32(In1) + slot_offset, to_u32(In2) + slot_offset, to_u32(Out) + slot_offset);
     }
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { exec_impl(slot_offset); }
 };

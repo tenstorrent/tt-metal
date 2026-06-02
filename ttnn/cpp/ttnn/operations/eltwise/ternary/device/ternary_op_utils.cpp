@@ -482,6 +482,14 @@ std::map<std::string, std::string> make_dataflow_defines(
 std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, DataType dtype) {
     std::map<std::string, std::string> defines;
 
+    // DataFormat token shared by the legacy TERNARY_SFPU_OP_FUNC macro and the
+    // eltwise_chain element selectors (TERNARY_DF). where supports an int path;
+    // the other ops are float-only (Float32 vs Float16_b).
+    const char* df = (dtype == DataType::FLOAT32) ? "DataFormat::Float32"
+                     : (dtype == DataType::INT32) ? "DataFormat::Int32"
+                                                  : "DataFormat::Float16_b";
+    defines["TERNARY_DF"] = df;
+
     switch (op_type) {
         case TernaryOpType::WHERE:
             defines["TERNARY_SFPU_OP_INIT"] = "where_tile_init";
@@ -492,26 +500,31 @@ std::map<std::string, std::string> get_compute_defines(TernaryOpType op_type, Da
             } else {
                 defines["TERNARY_SFPU_OP_FUNC"] = "where_tile<DataFormat::Float16_b>";
             }
+            defines["TERNARY_OP_SEL"] = "0";
             break;
         case TernaryOpType::LERP:
             defines["TERNARY_SFPU_OP_INIT"] = "lerp_tile_init";
             defines["TERNARY_SFPU_OP_FUNC"] =
                 (dtype == DataType::FLOAT32) ? "lerp_tile<DataFormat::Float32>" : "lerp_tile<DataFormat::Float16_b>";
+            defines["TERNARY_OP_SEL"] = "1";
             break;
         case TernaryOpType::ADDCMUL:
             defines["TERNARY_SFPU_OP_INIT"] = "addcmul_tile_init";
             defines["TERNARY_SFPU_OP_FUNC"] = (dtype == DataType::FLOAT32) ? "addcmul_tile<DataFormat::Float32>"
                                                                            : "addcmul_tile<DataFormat::Float16_b>";
+            defines["TERNARY_OP_SEL"] = "2";
             break;
         case TernaryOpType::ADDCDIV:
             defines["TERNARY_SFPU_OP_INIT"] = "addcdiv_tile_init";
             defines["TERNARY_SFPU_OP_FUNC"] = (dtype == DataType::FLOAT32) ? "addcdiv_tile<DataFormat::Float32>"
                                                                            : "addcdiv_tile<DataFormat::Float16_b>";
+            defines["TERNARY_OP_SEL"] = "3";
             break;
         case TernaryOpType::SNAKE_BETA:
             defines["TERNARY_SFPU_OP_INIT"] = "snake_beta_tile_init";
             defines["TERNARY_SFPU_OP_FUNC"] = (dtype == DataType::FLOAT32) ? "snake_beta_tile<DataFormat::Float32>"
                                                                            : "snake_beta_tile<DataFormat::Float16_b>";
+            defines["TERNARY_OP_SEL"] = "4";
             break;
         default: TT_FATAL(false, "Unsupported ternary operation type");
     }

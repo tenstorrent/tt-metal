@@ -3,106 +3,82 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/common.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "api/compute/eltwise_unary/lgamma.h"
-#include "api/compute/eltwise_unary/fill.h"
-#include "api/compute/eltwise_unary/rounding.h"
-#include "api/compute/eltwise_unary/trigonometry.h"
-#include "api/compute/eltwise_unary/where.h"
-#include "api/compute/compute_kernel_api.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"         // FillScalar
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // MulBinary, EqBinary
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_special.hpp"      // Where, LgammaStirling, LgammaAdjusted
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_trig.hpp"         // Sin
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_rounding.hpp"     // Floor, Frac
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Abs
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Log
 #include "api/dataflow/circular_buffer.h"
+
+// lgamma (fast): unary stirling on x directly (no reflection preamble), then the
+// same log|sin(pi*x)| adjustment as the slow kernel. cb_input is read 5 times:
+// first HeldStream (owns wait), middle CallerManaged, last NoWaitPop (owns pop).
+// where_tile is Float16_b here (matches the original fast kernel).
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
     constexpr auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_output = tt::CBIndex::c_2;
-
     constexpr float M_PI = 3.14159265358979323846f;
-
-    CircularBuffer cb_in(cb_input);
-    CircularBuffer cb_out(cb_output);
 
     init_sfpu(cb_input, cb_output);
 
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        tile_regs_acquire();
-        cb_in.wait_front(1);
-        cb_out.reserve_back(1);
-
-        // copy input to dst 0 and 1
-        copy_tile_to_dst_init_short(cb_input);
-        copy_tile(cb_input, 0, 0);  // x
-        copy_tile(cb_input, 0, 1);  // x
-
-        // tile 0 = res_stirling
-        lgamma_stirling_tile_init();
-        lgamma_stirling_tile(0);
-
-        // fill tile 2 with M_PI
-        fill_tile_init();
-        fill_tile(2, M_PI);
-
-        // tile 1 = frac (x)
-        rounding_op_tile_init();
-        frac_tile(1);
-
-        // tile 1 = frac (x) * M_PI
-        mul_binary_tile_init();
-        mul_binary_tile(1, 2, 1);
-
-        // tile 1 =  sin(frac (x) * M_PI)
-        sin_tile_init();
-        sin_tile(1);
-
-        copy_tile_to_dst_init_short(cb_input);
-        copy_tile(cb_input, 0, 2);  // x
-        copy_tile(cb_input, 0, 3);  // x
-
-        // tile 3 = floor(x)
-        rounding_op_tile_init();
-        floor_tile(3);
-
-        // tile 2 = ( x == floor(x)) condition
-        eq_binary_tile_init();
-        eq_binary_tile(2, 3, 2);
-
-        // fill tile 3 with 0.0f
-        fill_tile_init();
-        fill_tile(3, 0.0f);
-
-        // tile 1 = 0 if x == floor(x), otherwise sin(frac (x) * M_PI)
-        where_tile_init();
-        where_tile<DataFormat::Float16_b>(2, 3, 1, 1);
-
-        // abs(integer adjusted sin(frac (x) * M_PI))
-        abs_tile_init();
-        abs_tile(1);
-
-        // log|sin(pi*x)|. Zero sin(pi*x) at integers handled
-        log_tile_init();
-        log_tile(1);
-
-        copy_tile_to_dst_init_short(cb_input);
-        copy_tile(cb_input, 0, 2);  // x
-
-        lgamma_adjusted_tile_init();
-        lgamma_adjusted_tile(0, 1, 2, 0);
-
-        tile_regs_commit();
-
-        tile_regs_wait();
-
-        pack_tile(0, cb_output);
-
-        cb_in.pop_front(1);
-        cb_out.push_back(1);
-
-        tile_regs_release();
-    }
+    ckl::eltwise_chain(
+        num_tiles,
+        // x -> D0 (owns the wait), x -> D1.
+        ckl::CopyTile<
+            cb_input,
+            ckl::Dst::D0,
+            ckl::InputLifecycle::HeldStream,
+            ckl::OperandKind::Scalar,
+            ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<
+            cb_input,
+            ckl::Dst::D1,
+            ckl::InputLifecycle::CallerManaged,
+            ckl::OperandKind::Scalar,
+            ckl::CopyTileReconfig::None>{},
+        // D0 = stirling(x)
+        ckl::LgammaStirling<ckl::Dst::D0>{},
+        // D2 = M_PI ; D1 = sin(frac(x) * M_PI)
+        ckl::FillScalar<ckl::Dst::D2>{M_PI},
+        ckl::Frac<ckl::Dst::D1>{},
+        ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D1>{},
+        ckl::Sin<ckl::Dst::D1>{},
+        // reload x -> D2, D3 ; D3 = floor(x) ; D2 = (x == floor(x))
+        ckl::CopyTile<
+            cb_input,
+            ckl::Dst::D2,
+            ckl::InputLifecycle::CallerManaged,
+            ckl::OperandKind::Scalar,
+            ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<
+            cb_input,
+            ckl::Dst::D3,
+            ckl::InputLifecycle::CallerManaged,
+            ckl::OperandKind::Scalar,
+            ckl::CopyTileReconfig::None>{},
+        ckl::Floor<ckl::Dst::D3>{},
+        ckl::EqBinary<ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D2>{},
+        // D3 = 0 ; D1 = where(cond=D2, a=0, b=sin) -> 0 at integers else sin
+        ckl::FillScalar<ckl::Dst::D3>{0.0f},
+        ckl::Where<DataFormat::Float16_b, ckl::Dst::D2, ckl::Dst::D3, ckl::Dst::D1, ckl::Dst::D1>{},
+        // D1 = log|D1|
+        ckl::Abs<ckl::Dst::D1>{},
+        ckl::Log<ckl::Approx::Exact, ckl::Dst::D1>{},
+        // reload x -> D2 (owns the pop) ; D0 = adjusted(stirling=D0, logsin=D1, x=D2)
+        ckl::CopyTile<
+            cb_input,
+            ckl::Dst::D2,
+            ckl::InputLifecycle::NoWaitPop,
+            ckl::OperandKind::Scalar,
+            ckl::CopyTileReconfig::None>{},
+        ckl::LgammaAdjusted<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
+        ckl::PackTile<cb_output, ckl::Dst::D0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 }

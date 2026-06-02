@@ -5,12 +5,22 @@
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/binop_with_scalar.h"
-#include "api/compute/eltwise_unary/addcmul.h"
-#include "api/compute/eltwise_unary/addcdiv.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_ternary.hpp"   // Addcmul, Addcdiv
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"  // OptionalChainElement
+
+// addcmul / addcdiv (SFPU): out = in0 + value * (in1 OP in2).
+//   copy in0/in1/in2 -> D0/D1/D2 ; addc{mul,div}_tile<DF>(0,1,2,0,value) ; pack D0.
+// The op + dtype were a string macro (TERNARY_SFPU_OP_FUNC); now the program
+// factory emits TERNARY_OP_SEL (2=addcmul, 3=addcdiv) + TERNARY_DF, and the
+// kernel selects the concrete chain element via OptionalChainElement. Lifecycle:
+// 3 Streaming inputs (wait1/pop1) + 1 Streaming output — matches the original.
+#ifndef TERNARY_OP_SEL
+#error "ternary_addc_ops_sfpu requires TERNARY_OP_SEL/TERNARY_DF from get_compute_defines"
+#endif
+
+namespace ckl = compute_kernel_lib;
+constexpr int kSel = TERNARY_OP_SEL;
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -22,39 +32,40 @@ void kernel_main() {
     constexpr auto cb_in2 = tt::CBIndex::c_2;  // input_c
     constexpr auto cb_out = tt::CBIndex::c_3;
 
-    unary_op_init_common(cb_in0, cb_out);
+    unary_op_init_common(cb_in0, cb_out);  // caller-owned BIG init
 
-    for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        cb_wait_front(cb_in0, num_tiles_per_cycle);
-        cb_wait_front(cb_in1, num_tiles_per_cycle);
-        cb_wait_front(cb_in2, num_tiles_per_cycle);
-
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
-
-        tile_regs_acquire();
-
-        copy_tile_init(cb_in0);
-        copy_tile(cb_in0, 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
-
-        copy_tile_init(cb_in1);
-        copy_tile(cb_in1, 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
-
-        copy_tile_init(cb_in2);
-        copy_tile(cb_in2, 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
-
-        TERNARY_SFPU_OP_INIT();
-        TERNARY_SFPU_OP_FUNC(0, 1, 2, 0, scalar_arg);
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_out);
-
-        tile_regs_release();
-
-        cb_push_back(cb_out, num_tiles_per_cycle);
-        cb_pop_front(cb_in0, num_tiles_per_cycle);
-        cb_pop_front(cb_in1, num_tiles_per_cycle);
-        cb_pop_front(cb_in2, num_tiles_per_cycle);
-    }
+    ckl::eltwise_chain(
+        num_tiles,
+        ckl::CopyTile<
+            cb_in0,
+            ckl::Dst::D0,
+            ckl::InputLifecycle::Streaming,
+            ckl::OperandKind::Scalar,
+            ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<
+            cb_in1,
+            ckl::Dst::D1,
+            ckl::InputLifecycle::Streaming,
+            ckl::OperandKind::Scalar,
+            ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<
+            cb_in2,
+            ckl::Dst::D2,
+            ckl::InputLifecycle::Streaming,
+            ckl::OperandKind::Scalar,
+            ckl::CopyTileReconfig::None>{},
+        // exactly one active (the inactive folds to a no-op tag, swallowing scalar_arg).
+        ckl::OptionalChainElement < kSel == 2,
+        ckl::Addcmul < TERNARY_DF,
+        ckl::Dst::D0,
+        ckl::Dst::D1,
+        ckl::Dst::D2,
+        ckl::Dst::D0 >> {scalar_arg},
+        ckl::OptionalChainElement < kSel == 3,
+        ckl::Addcdiv < TERNARY_DF,
+        ckl::Dst::D0,
+        ckl::Dst::D1,
+        ckl::Dst::D2,
+        ckl::Dst::D0 >> {scalar_arg},
+        ckl::PackTile<cb_out, ckl::Dst::D0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 }

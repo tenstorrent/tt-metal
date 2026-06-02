@@ -1,14 +1,22 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/fill.h"
-#include "api/compute/mul_int_sfpu.h"
-#include "api/compute/add_int_sfpu.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_fill.hpp"         // FillInt
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // MulIntBinary, AddIntBinary
+
+// addcmul (integer): out = in0 + scalar * (in1 * in2), all int32 (ADDCMUL_DATA_FORMAT).
+//   copy in0/in1/in2 -> D0/D1/D2 ; D3 = scalar ; D3 = D3*in1 ; D2 = D3*in2 ;
+//   D0 = in0 + D2 ; pack D0.
+// All LLK already have chain elements — no new helper additions. Each CopyTile uses
+// CopyTileReconfig::None, which emits copy_tile_init(Cb) — identical to the original's
+// per-input copy_tile_init(cb_inX). Lifecycle: 3 Streaming inputs (wait1/pop1) + 1
+// Streaming output (reserve1/push1) per iter — matches the original counts exactly.
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -20,46 +28,31 @@ void kernel_main() {
     constexpr auto cb_in2 = tt::CBIndex::c_2;  // input_c
     constexpr auto cb_out = tt::CBIndex::c_3;
 
-    unary_op_init_common(cb_in0, cb_out);
+    unary_op_init_common(cb_in0, cb_out);  // caller-owned BIG init
 
-    for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        cb_wait_front(cb_in0, num_tiles_per_cycle);
-        cb_wait_front(cb_in1, num_tiles_per_cycle);
-        cb_wait_front(cb_in2, num_tiles_per_cycle);
-
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
-
-        tile_regs_acquire();
-
-        copy_tile_init(cb_in0);
-        copy_tile(cb_in0, 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
-
-        copy_tile_init(cb_in1);
-        copy_tile(cb_in1, 0 /*in_tile_index*/, 1 /*dst_tile_index*/);
-
-        copy_tile_init(cb_in2);
-        copy_tile(cb_in2, 0 /*in_tile_index*/, 2 /*dst_tile_index*/);
-
-        fill_tile_init();
-        fill_tile_int<ADDCMUL_DATA_FORMAT>(3, scalar_arg);
-
-        mul_int_tile_init<ADDCMUL_DATA_FORMAT>();
-        mul_int_tile<ADDCMUL_DATA_FORMAT>(3, 1, 3);
-        mul_int_tile<ADDCMUL_DATA_FORMAT>(3, 2, 2);
-
-        add_int_tile_init();
-        add_int_tile<ADDCMUL_DATA_FORMAT>(0, 2, 0);
-
-        tile_regs_commit();
-        tile_regs_wait();
-
-        pack_tile(0, cb_out);
-
-        tile_regs_release();
-
-        cb_push_back(cb_out, num_tiles_per_cycle);
-        cb_pop_front(cb_in0, num_tiles_per_cycle);
-        cb_pop_front(cb_in1, num_tiles_per_cycle);
-        cb_pop_front(cb_in2, num_tiles_per_cycle);
-    }
+    ckl::eltwise_chain(
+        num_tiles,
+        ckl::CopyTile<
+            cb_in0,
+            ckl::Dst::D0,
+            ckl::InputLifecycle::Streaming,
+            ckl::OperandKind::Scalar,
+            ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<
+            cb_in1,
+            ckl::Dst::D1,
+            ckl::InputLifecycle::Streaming,
+            ckl::OperandKind::Scalar,
+            ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<
+            cb_in2,
+            ckl::Dst::D2,
+            ckl::InputLifecycle::Streaming,
+            ckl::OperandKind::Scalar,
+            ckl::CopyTileReconfig::None>{},
+        ckl::FillInt<ADDCMUL_DATA_FORMAT, ckl::Dst::D3>{scalar_arg},
+        ckl::MulIntBinary<ADDCMUL_DATA_FORMAT, ckl::Dst::D3, ckl::Dst::D1, ckl::Dst::D3>{},  // D3 = scalar*in1
+        ckl::MulIntBinary<ADDCMUL_DATA_FORMAT, ckl::Dst::D3, ckl::Dst::D2, ckl::Dst::D2>{},  // D2 = D3*in2
+        ckl::AddIntBinary<ADDCMUL_DATA_FORMAT, ckl::Dst::D0, ckl::Dst::D2, ckl::Dst::D0>{},  // D0 = in0 + D2
+        ckl::PackTile<cb_out, ckl::Dst::D0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 }
