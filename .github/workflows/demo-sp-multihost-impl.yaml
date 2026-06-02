@@ -25,6 +25,7 @@ jobs:
     outputs:
       matrix: ${{ steps.filter-tests.outputs.matrix }}
       allocation_spec: ${{ steps.extract-allocation.outputs.allocation_spec }}
+      mgd_content: ${{ steps.extract-mgd.outputs.mgd_content }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/demo_sp_multihost_tests.yaml
     steps:
@@ -48,6 +49,15 @@ jobs:
           {
             echo "allocation_spec<<EOF"
             python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_${{ inputs.sp-config }}"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      - name: Extract MGD content from SKU
+        id: extract-mgd
+        run: |
+          {
+            echo "mgd_content<<EOF"
+            python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_${{ inputs.sp-config }}" --mgd-only
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
@@ -157,7 +167,7 @@ jobs:
         timeout-minutes: 5
         with:
           directory: /ci/ttrun
-          mgdFile: /tmp/dummy/doesnotexist.textproto
+          mgd: ${{ needs.load-test-matrix.outputs.mgd_content }}
           copyToWorkers: false
           ranksData: ${{ steps.get-allocation-data.outputs.ranksData }}
 

@@ -4,17 +4,20 @@
 import yaml
 import sys
 import os
+import argparse
 
 
 def main():
-    if len(sys.argv) != 2:
-        print(
-            "Usage: extract_allocation_from_sku.py <sku_name>",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Extract allocation configuration from SKU config file.")
+    parser.add_argument("sku_name", help="Name of the SKU to extract")
+    parser.add_argument(
+        "--mgd-only",
+        action="store_true",
+        help="Extract only MGD content (without YAML wrapper)",
+    )
+    args = parser.parse_args()
 
-    sku_name = sys.argv[1]
+    sku_name = args.sku_name
 
     # Hardcoded path to SKU config file
     # Script is in .github/scripts/utils/
@@ -46,6 +49,13 @@ def main():
     if sku_name not in skus:
         print(f"::error::SKU '{sku_name}' not found in config file", file=sys.stderr)
         sys.exit(1)
+
+    # If --mgd-only flag is set, extract and print only MGD content
+    if args.mgd_only:
+        allocation = skus[sku_name].get("allocation", {})
+        mgd_content = allocation.get("mgd", "")
+        print(mgd_content)
+        sys.exit(0)
 
     if "allocation" not in skus[sku_name]:
         print(f"::error::SKU '{sku_name}' has no 'allocation' field", file=sys.stderr)
