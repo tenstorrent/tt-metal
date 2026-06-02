@@ -288,6 +288,19 @@ def _get_char_ids(
     return out
 
 
+# T2U encoder sequence-length bucket. The T2U encoder runs at ``enc_seq == padded_dec_seq`` (the
+# text-decoder hidden length, only tile-aligned), which jitters run-to-run with S2ST's variable target
+# text → the encoder (and char-domain) recompile every task. Rounding the T2U encoder input to a coarse
+# grid collapses the jitter onto a fixed program set (disk-warm rebuild), matching the committed
+# ``_T2U_UNIT_SEQ_BUCKET`` decoder fix. Padded rows are masked in self-attn and get char-count 0, so
+# they vanish in the char upsample → output unchanged.
+_T2U_ENC_SEQ_BUCKET = 256
+
+
+def _t2u_padded_enc_seq(seq: int) -> int:
+    return ((int(seq) + _T2U_ENC_SEQ_BUCKET - 1) // _T2U_ENC_SEQ_BUCKET) * _T2U_ENC_SEQ_BUCKET
+
+
 def _t2u_attention_mask_uncached(real_len: int, padded_dec_seq: int, device: ttnn.Device) -> ttnn.Tensor:
     """``[1, padded_dec_seq]`` uint32 mask: 1 where ``i < real_len`` else 0.
 
@@ -2223,17 +2236,30 @@ class TTSeamlessM4Tv2Model:
         t2u_ids = [pad_token_id if t == eos_id else int(t) for t in seq_full_ints[2:-1]]
         subwords = _indices_to_subwords(gc, t2u_ids)
         cc_inner = _char_count_per_subword(t2u_ids, subwords, pad_token_id=pad_token_id)
-        # Pad with one zero each side (for the stripped lang + EOS columns) then pad to padded_dec_seq.
+        # Bucket the T2U encoder sequence length so its programs don't recompile on S2ST text jitter.
+        t2u_enc_seq = _t2u_padded_enc_seq(padded_dec_seq)
+        # Pad with one zero each side (for the stripped lang + EOS columns) then pad to the bucket.
         cc_list = [0] + cc_inner + [0]
-        if len(cc_list) < padded_dec_seq:
-            cc_list = cc_list + [0] * (padded_dec_seq - len(cc_list))
+        if len(cc_list) < t2u_enc_seq:
+            cc_list = cc_list + [0] * (t2u_enc_seq - len(cc_list))
         char_ids = _get_char_ids(gc, t2u_ids, subwords, cc_inner, pad_token_id=pad_token_id)
 
-        # On-device tensors for T2U: char_input_ids and the T2U attention mask.
+        # On-device tensors for T2U: char_input_ids and the T2U attention mask (built at the bucket;
+        # positions >= real_dec_len are masked, covering both the real padding and the bucket padding).
         char_ids_tt = _ttnn_ids_from_list([char_ids], self.device)
-        t2u_mask_2d = self._cached_t2u_attention_mask(real_dec_len, padded_dec_seq)
+        t2u_mask_2d = self._cached_t2u_attention_mask(real_dec_len, t2u_enc_seq)
         t2u_mask_4d = build_encoder_self_mask_4d(t2u_mask_2d, device=self.device)
         # ``t2u_mask_2d`` is owned by ``_t2u_attn_mask_cache``; do not deallocate here.
+        # Pad the T2U encoder input (text-decoder hidden) to the bucket; padded rows are masked above
+        # and have char-count 0 in ``cc_list`` so they vanish in the char upsample (output unchanged).
+        if t2u_enc_seq != padded_dec_seq:
+            dec_hidden_bucketed = ttnn.pad(
+                dec_hidden_padded,
+                [(0, 0), (0, t2u_enc_seq - padded_dec_seq), (0, 0)],
+                value=0.0,
+            )
+            ttnn.deallocate(dec_hidden_padded)
+            dec_hidden_padded = dec_hidden_bucketed
 
         t2u_logits_tt, padding_tt = self.t2u.forward(
             dec_hidden_padded,
