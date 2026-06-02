@@ -72,6 +72,17 @@ def _t2u_padded_unit_seq(unit_seq: int) -> int:
     return ((int(unit_seq) + _T2U_UNIT_SEQ_BUCKET - 1) // _T2U_UNIT_SEQ_BUCKET) * _T2U_UNIT_SEQ_BUCKET
 
 
+# The duration predictor (2 conv1d over the char domain) is shape-specialized by ``char_len`` (a sum of
+# per-token char counts), which jitters run-to-run with S2ST text → cold conv recompiles. Bucket the
+# char length the predictor runs at (same idea as the unit/enc buckets); padded rows are masked + the
+# durations are sliced back to ``char_len``, so the predicted durations are unchanged.
+_T2U_CHAR_LEN_BUCKET = 256
+
+
+def _t2u_padded_char_len(char_len: int) -> int:
+    return ((int(char_len) + _T2U_CHAR_LEN_BUCKET - 1) // _T2U_CHAR_LEN_BUCKET) * _T2U_CHAR_LEN_BUCKET
+
+
 def _linear_token_rows(x: ttnn.Tensor) -> int:
     if len(x.shape) == 3:
         return int(x.shape[0]) * int(x.shape[1])
@@ -2332,9 +2343,22 @@ class TTSeamlessM4Tv2TextToUnitForConditionalGeneration:
         char_pad_tt = ttnn.reshape(char_pad, (batch, char_len, 1))
 
         if reference_discrete_durations is None:
-            log_dur = self._duration_predictor(char_h, char_pad_tt, seq=char_len)
-            dur_list = _discrete_duration_counts(log_dur, batch=batch, seq=char_len)
+            # Run the duration predictor at a bucketed char length so its conv1d programs don't recompile
+            # on char_len jitter. Pad char_h + mask with zeros past char_len (masked inside the predictor;
+            # the conv at the char_len boundary sees zeros either way — same as same-padding), then slice
+            # the durations back to char_len. Output for [0, char_len) is unchanged.
+            dp_seq = _t2u_padded_char_len(char_len)
+            if dp_seq != char_len:
+                char_h_dp = ttnn.pad(char_h, [(0, 0), (0, dp_seq - char_len), (0, 0)], value=0.0)
+                char_pad_dp = ttnn.pad(char_pad_tt, [(0, 0), (0, dp_seq - char_len), (0, 0)], value=0.0)
+            else:
+                char_h_dp, char_pad_dp = char_h, char_pad_tt
+            log_dur = self._duration_predictor(char_h_dp, char_pad_dp, seq=dp_seq)
+            dur_list = _discrete_duration_counts(log_dur, batch=batch, seq=dp_seq)[:char_len]
             ttnn.deallocate(log_dur)
+            if dp_seq != char_len:
+                ttnn.deallocate(char_h_dp)
+                ttnn.deallocate(char_pad_dp)
         else:
             dur_list = [int(x) for x in reference_discrete_durations]
             if len(dur_list) != char_len:
