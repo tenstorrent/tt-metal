@@ -66,7 +66,6 @@ void kernel_main() {
     // OFFSET_IN0_K / OFFSET_IN1_K overrides K_tiles from on-device offsets[start..start+2].
     uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 5);
 
-#ifdef OFFSETS_ACTIVE
     // EP path: read offsets from a 1-D UINT32 ROW_MAJOR device tensor. Each flag is independent.
     //   OFFSET_M_AXIS:   re-derives per-core M_start / M_end / M_blocks_per_core locally
     //                    (matches dm_in0_sender's compute so both kernels agree).
@@ -135,7 +134,6 @@ void kernel_main() {
         K_tiles = (row_end - row_start) / 32U;
 #endif  // OFFSET_IN1_K / OFFSET_IN0_K
     }
-#endif  // OFFSETS_ACTIVE
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
 
     // Storage layout: without transpose_b the weight is stored as [K, N]; with it, as [N, K].

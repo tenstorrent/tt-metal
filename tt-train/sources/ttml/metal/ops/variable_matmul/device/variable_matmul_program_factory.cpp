@@ -246,7 +246,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         tt::tt_metal::CreateCircularBuffer(program, core_grid, cb_ctrl_cfg);
     }
 
-    // OFFSETS_ACTIVE / OFFSET_* are the only kernel defines variable_matmul uses today.
+    // OFFSET_* are the only kernel defines variable_matmul uses today.
     std::map<std::string, std::string> defines;
 
     // EP is mandatory: the dataflow kernels always read offsets_tensor[start..start+2] and
@@ -279,7 +279,6 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         }
     };
     for (auto* m : {&in0_defines, &in1_defines, &compute_offsets_defines}) {
-        set_flag(*m, "OFFSETS_ACTIVE", true);
         set_flag(*m, "OFFSET_M_AXIS", offset_m_axis);
         set_flag(*m, "OFFSET_IN0_ROW", offset_in0_row);
         set_flag(*m, "OFFSET_OUT_ROW", offset_out_row);

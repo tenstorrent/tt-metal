@@ -193,12 +193,11 @@ void kernel_main() {
     // OFFSET_IN0_K / OFFSET_IN1_K overrides K_tiles from cb_ctrl[3].
     uint32_t K_tiles = get_arg_val<uint32_t>(argidx++);
 
-#ifdef OFFSETS_ACTIVE
     // cb_ctrl payload, packed by whichever dm kernel owns the publish (see dataflow kernels):
     //   OFFSET_M_AXIS:                       ctrl[0..2] = (M_start, M_end, M_blocks_per_core)
     //   OFFSET_IN0_K or OFFSET_IN1_K:        ctrl[3]    = K_tiles
-    // M-axis and K-axis are not currently combined in a single role, so the cb_ctrl publish
-    // is exclusive — exactly one of the two payloads is written per invocation.
+    // M-axis and K-axis are not currently combined in a single role, so exactly one of the
+    // two payloads is written per invocation.
     {
         constexpr uint32_t cb_ctrl_id = tt::CBIndex::c_8;
         cb_wait_front(cb_ctrl_id, 1U);
@@ -211,7 +210,6 @@ void kernel_main() {
 #endif
         cb_pop_front(cb_ctrl_id, 1U);
     }
-#endif  // OFFSETS_ACTIVE
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
     const uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
 

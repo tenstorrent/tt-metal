@@ -72,7 +72,6 @@ void kernel_main() {
     // OFFSET_IN0_K / OFFSET_IN1_K overrides K_tiles from on-device offsets[start..start+2].
     uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 6);
 
-#ifdef OFFSETS_ACTIVE
     // EP path: read on-device offsets and override the matching host-derived values. Each flag
     // is independent; they compose freely.
     //   OFFSET_M_AXIS:   offsets[start..start+2] → M_tiles + per-core M; publishes M on cb_ctrl.
@@ -149,7 +148,6 @@ void kernel_main() {
         K_tiles = (row_end - row_start) / 32U;
 #endif  // OFFSET_IN0_K / OFFSET_IN1_K
     }
-#endif  // OFFSETS_ACTIVE
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
 
     // Storage layout: without transpose_a the input is stored as [M, K]; with it, as [K, M].
