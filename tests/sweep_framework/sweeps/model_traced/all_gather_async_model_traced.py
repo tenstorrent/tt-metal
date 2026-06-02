@@ -124,6 +124,29 @@ def _parse_shard_dims_from_placement(tensor_placement):
 _ABSENT = "__ABSENT__"
 
 
+def _coerce_subdevice_id(sid):
+    """Normalize a traced subdevice_id into a ttnn.SubDeviceId.
+
+    Vectors serialize it as {'type': 'SubDeviceId', 'value': 'SubDeviceId(0)'},
+    which the sweep deserializer does not recognize (it expects a 'data' key),
+    so it arrives here as a plain dict. Passing that dict straight to the op
+    breaks pybind overload resolution ("incompatible function arguments").
+    Convert dict/str/int forms to a real ttnn.SubDeviceId; return None if the
+    value is absent or unparseable.
+    """
+    if sid is None or sid == _ABSENT:
+        return None
+    if isinstance(sid, ttnn.SubDeviceId):
+        return sid
+    if isinstance(sid, bool):
+        return None
+    if isinstance(sid, int):
+        return ttnn.SubDeviceId(sid)
+    text = sid.get("value", "") if isinstance(sid, dict) else str(sid)
+    m = re.search(r"(\d+)", str(text))
+    return ttnn.SubDeviceId(int(m.group(1))) if m else None
+
+
 def _was_traced(value):
     """Return True if the loader marker indicates the kwarg WAS originally traced.
 
@@ -154,12 +177,21 @@ def _torch_dtype_from_string(dtype_str):
 
 def _ttnn_dtype_from_string(dtype_str):
     s = str(dtype_str)
+    # Block-float formats first (BFLOAT8_B / BFLOAT4_B must not fall through to
+    # the BFLOAT16 default, or a persistent_output_buffer built as bf16 trips
+    # the op's `output_tensor.dtype() == dtype` assert).
+    if "BFLOAT8" in s:
+        return ttnn.bfloat8_b
+    if "BFLOAT4" in s:
+        return ttnn.bfloat4_b
     if "FLOAT32" in s:
         return ttnn.float32
     if "BFLOAT16" in s:
         return ttnn.bfloat16
     if "FLOAT16" in s:
         return ttnn.float16
+    if "UINT16" in s:
+        return ttnn.uint16
     if "INT32" in s:
         return ttnn.int32
     if "UINT32" in s:
@@ -172,6 +204,41 @@ def _ttnn_layout_from_string(layout_str):
     if "ROW_MAJOR" in s:
         return ttnn.ROW_MAJOR_LAYOUT
     return ttnn.TILE_LAYOUT
+
+
+def _shard_grid_max_xy(mem_config):
+    """Return (max_x, max_y) of a memory config's shard grid, or None if unsharded."""
+    try:
+        ss = getattr(mem_config, "shard_spec", None)
+        if ss is None:
+            return None
+        bb = ss.grid.bounding_box()
+        return (bb.end.x, bb.end.y)
+    except Exception:
+        return None
+
+
+def _dispatch_axis_for_shard_specs(*mem_configs):
+    """Choose a dispatch-core axis so sharded grids don't land on dispatch cores.
+
+    The default ROW dispatch yields an 8x9 compute grid (valid y in [0, 8]); a
+    traced shard grid that uses y=9 then overlaps a dispatch core and the
+    sharded reshard fails with "Kernels cannot be placed on dispatch cores".
+    COL dispatch yields a 7x10 grid (valid y in [0, 9], x in [0, 6]). So a shard
+    grid needing y=9 must use COL; one needing x=7 must use ROW. Returns None
+    (use the system default) when no sharded grid needs the wide axis.
+    """
+    max_x = max_y = -1
+    for mc in mem_configs:
+        xy = _shard_grid_max_xy(mc)
+        if xy is not None:
+            max_x = max(max_x, xy[0])
+            max_y = max(max_y, xy[1])
+    if max_y >= 9:
+        return ttnn.DispatchCoreAxis.COL
+    if max_x >= 7:
+        return ttnn.DispatchCoreAxis.ROW
+    return None
 
 
 def _parse_shape_str(s):
@@ -312,6 +379,17 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         if input_shape and isinstance(input_shape, (list, tuple)):
             if len(input_shape) == 0:
                 return True, "Empty input shape"
+
+        # Skip 4x4 meshes for now: on this Galaxy the 4x4 submesh (physical
+        # devices 16-31) stalls fabric router sync on Device 19 ethernet
+        # channels e0-8..e0-11 (boundary links to the excluded half), so fabric
+        # bring-up times out before any op runs. The full-mesh 4x8/8x4 shapes
+        # are unaffected. Tracked separately (hardware/submesh fabric).
+        _tp = test_vector.get("input_a_tensor_placement") or test_vector.get("input_tensor_tensor_placement")
+        _mesh_shape = _parse_mesh_shape(_tp.get("mesh_device_shape")) if isinstance(_tp, dict) else None
+        if _mesh_shape == (4, 4):
+            return True, "Skipped 4x4: fabric router sync timeout on this Galaxy (Device 19 ETH ch e0-8..e0-11)"
+
         return False, None
 
     # Original validation for generality/lead_model suites
@@ -422,6 +500,10 @@ def run(
     )
     if not persistent_output_buffer_was_provided:
         persistent_output_buffer = None
+
+    # Traced subdevice_id arrives as a dict (deserializer doesn't recognize its
+    # serialized form); coerce to a real ttnn.SubDeviceId so the op call binds.
+    subdevice_id = _coerce_subdevice_id(subdevice_id)
 
     # Some traced overloads name the gathered tensor `input_tensor` instead of
     # `input`, so the loader emits the input_tensor_* kwarg family rather than
@@ -599,8 +681,23 @@ def run(
     _prev_op_timeout = os.environ.get("TT_METAL_OPERATION_TIMEOUT_SECONDS")
     os.environ["TT_METAL_OPERATION_TIMEOUT_SECONDS"] = "30"
 
+    # Open the mesh with a dispatch-core axis that keeps sharded grids off the
+    # dispatch cores. device_context otherwise uses the system default (ROW),
+    # whose 8x9 compute grid makes y=9 a dispatch core and breaks sharded
+    # reshards whose traced shard grid uses y=9.
+    _device_params = None
+    if is_model_traced:
+        _pob_mem_cfg = kwargs.get("persistent_output_buffer_memory_config")
+        if _pob_mem_cfg in (None, _ABSENT):
+            _pob_mem_cfg = None
+        _dispatch_axis = _dispatch_axis_for_shard_specs(
+            target_sharded_config, output_memory_config, _pob_mem_cfg
+        )
+        if _dispatch_axis is not None:
+            _device_params = {"dispatch_core_axis": _dispatch_axis}
+
     try:
-        with device_context(mesh_shape, fabric_config) as (device, device_err):
+        with device_context(mesh_shape, fabric_config, _device_params) as (device, device_err):
             assert tuple(device.shape) == mesh_shape
 
             if device_err is not None:
@@ -748,7 +845,14 @@ def run(
                             op_kwargs["persistent_output_buffer"] = None
 
                         if subdevice_id is not None or "subdevice_id" not in absent_keys:
-                            op_kwargs["subdevice_id"] = subdevice_id
+                            # The model may have used a multi-sub-device layout
+                            # (e.g. SubDeviceId(1)); the sweep loads a single
+                            # worker sub-device, so a traced index >= 1 is out of
+                            # bounds. Run on the sweep's worker sub-device — the
+                            # gather result is independent of the sub-device the
+                            # workers are placed on (same rationale as creating
+                            # fresh semaphores rather than the traced ones).
+                            op_kwargs["subdevice_id"] = worker_sub_device_id
                         # Ensure input tensor topology matches master trace
                         if input_a_tensor_placement:
                             from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
