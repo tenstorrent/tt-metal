@@ -29,7 +29,7 @@
 // See the Metal 2.0 Host API documentation and programming examples for
 // recommended patterns for constructing ProgramSpec objects in production code.
 
-namespace tt::tt_metal::experimental::metal2_host_api::test_helpers {
+namespace tt::tt_metal::experimental::test_helpers {
 
 // ============================================================================
 // Test environment helpers
@@ -81,9 +81,9 @@ inline KernelSpec MakeMinimalDMKernel(const std::string& name, uint32_t num_thre
         .unique_id = name,
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
-        .config_spec =
-            DataMovementConfiguration{
-                .gen2_data_movement_config = DataMovementConfiguration::Gen2DataMovementConfig{},
+        .hw_config =
+            DataMovementHardwareConfig{
+                .gen2_config = DataMovementHardwareConfig::Gen2Config{},
             },
     };
 }
@@ -96,10 +96,10 @@ inline KernelSpec MakeMinimalGen1DMKernel(
         .unique_id = name,
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = 1,
-        .config_spec =
-            DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    DataMovementConfiguration::Gen1DataMovementConfig{
+        .hw_config =
+            DataMovementHardwareConfig{
+                .gen1_config =
+                    DataMovementHardwareConfig::Gen1Config{
                         .processor = processor,
                     },
             },
@@ -112,7 +112,7 @@ inline KernelSpec MakeMinimalComputeKernel(const std::string& name, uint32_t num
         .unique_id = name,
         .source = KernelSpec::SourceCode{MINIMAL_KERNEL_SOURCE},
         .num_threads = num_threads,
-        .config_spec = ComputeConfiguration{},
+        .hw_config = ComputeHardwareConfig{},
     };
 }
 
@@ -130,25 +130,10 @@ inline DataflowBufferSpec MakeMinimalDFB(
 inline WorkUnitSpec MakeMinimalWorkUnit(
     const std::string& name, const Nodes& nodes, const std::vector<KernelSpecName>& kernels) {
     return WorkUnitSpec{
-        .unique_id = name,
+        .name = name,
         .kernels = kernels,
         .target_nodes = nodes,
     };
-}
-
-// Helper to bind a DFB to a kernel as producer or consumer
-inline void BindDFBToKernel(
-    KernelSpec& kernel,
-    const std::string& dfb_name,
-    const std::string& accessor_name,
-    KernelSpec::DFBEndpointType endpoint_type,
-    DFBAccessPattern access_pattern = DFBAccessPattern::STRIDED) {
-    kernel.dfb_bindings.push_back(KernelSpec::DFBBinding{
-        .dfb_spec_name = dfb_name,
-        .local_accessor_name = accessor_name,
-        .endpoint_type = endpoint_type,
-        .access_pattern = access_pattern,
-    });
 }
 
 // Helper to create a minimal valid TensorParameter.
@@ -170,7 +155,7 @@ inline TensorParameter MakeMinimalTensorParameter(
 // Helper to add a TensorBinding to a kernel.
 inline void BindTensorParameterToKernel(
     KernelSpec& kernel, const std::string& tensor_parameter_name, const std::string& accessor_name) {
-    kernel.tensor_bindings.push_back(KernelSpec::TensorBinding{
+    kernel.tensor_bindings.push_back(TensorBinding{
         .tensor_parameter_name = tensor_parameter_name,
         .accessor_name = accessor_name,
     });
@@ -205,7 +190,7 @@ inline ProgramSpec MakeMinimalGen1ValidProgramSpec() {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel", tt::tt_metal::DataMovementProcessor::RISCV_0);
     auto compute_kernel = MakeMinimalComputeKernel("compute_kernel");
@@ -213,8 +198,8 @@ inline ProgramSpec MakeMinimalGen1ValidProgramSpec() {
     auto dfb = MakeMinimalDFB("dfb_0");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    BindDFBToKernel(dm_kernel, "dfb_0", "input_dfb", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(compute_kernel, "dfb_0", "input_dfb", KernelSpec::DFBEndpointType::CONSUMER);
+    dm_kernel.dfb_bindings.push_back(ProducerOf("dfb_0", "input_dfb"));
+    compute_kernel.dfb_bindings.push_back(ConsumerOf("dfb_0", "input_dfb"));
 
     spec.kernels = {dm_kernel, compute_kernel};
     spec.dataflow_buffers = {dfb};
@@ -228,7 +213,7 @@ inline ProgramSpec MakeMinimalValidProgramSpec() {
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
-    spec.program_id = "test_program";
+    spec.name = "test_program";
 
     // Create a DM kernel (producer) and compute kernel (consumer)
     auto dm_kernel = MakeMinimalDMKernel("dm_kernel");
@@ -239,8 +224,8 @@ inline ProgramSpec MakeMinimalValidProgramSpec() {
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
     // Bind the DFB
-    BindDFBToKernel(dm_kernel, "dfb_0", "input_dfb", KernelSpec::DFBEndpointType::PRODUCER);
-    BindDFBToKernel(compute_kernel, "dfb_0", "input_dfb", KernelSpec::DFBEndpointType::CONSUMER);
+    dm_kernel.dfb_bindings.push_back(ProducerOf("dfb_0", "input_dfb"));
+    compute_kernel.dfb_bindings.push_back(ConsumerOf("dfb_0", "input_dfb"));
 
     spec.kernels = {dm_kernel, compute_kernel};
     spec.dataflow_buffers = {dfb};
@@ -251,4 +236,4 @@ inline ProgramSpec MakeMinimalValidProgramSpec() {
     return spec;
 }
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api::test_helpers
+}  // namespace tt::tt_metal::experimental::test_helpers

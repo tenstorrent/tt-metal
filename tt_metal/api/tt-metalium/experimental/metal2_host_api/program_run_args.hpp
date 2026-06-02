@@ -18,50 +18,65 @@
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
+
+// ============================================================================
+//  ProgramRunArgs API
+// ============================================================================
+//
+// A ProgramRunArgs object is a descriptor for the mutable properties of a
+// Metalium Program, which can be specified anew with each Program execution
+// (enqueue).
+//
+// ProgramRunArgs is the partner object to ProgramSpec, which describes the
+// immutable properties of a Program. A ProgramRunArgs object can only be
+// understood in the context of its corresponding ProgramSpec (program_spec.hpp).
+// The ProgramSpec provides the schema for the mutable Program properties; the
+// ProgramRunArgs provides the values.
+//
+// ============================================================================
 
 //------------------------------------------------
-// ProgramRunParams
+// ProgramRunArgs
 //------------------------------------------------
-// Describes the mutable properties of a Program, specified anew for each Program execution.
-//   (analogous to function arguments)
-struct ProgramRunParams {
+
+struct ProgramRunArgs {
     ////////////////////////////////////////////////////////////////////////
     // Kernel runtime arguments
     ////////////////////////////////////////////////////////////////////////
-    struct KernelRunParams {
+    struct KernelRunArgs {
         // Kernel identifier
         KernelSpecName kernel_spec_name;
 
-        // Named Runtime Argument settings
-        // Every argument in this kernel's RuntimeArgSchema::named_runtime_args must be set,
+        // Runtime argument values (per-node).
+        // Every argument in this kernel's RuntimeArgSchema::runtime_arg_names must be set,
         // for every node the kernel runs on.
         // Missing arguments or superfluous arguments will trigger validation errors.
         //
         // NOTE: If a kernel runtime argument always has the same value for all nodes, passing
         // a common runtime argument would provide better dispatch efficiency.
-        struct NodeNamedRTAs {
+        struct NodeRuntimeArgs {
             NodeCoord node;
             std::unordered_map<std::string, uint32_t> args;
         };
-        std::vector<NodeNamedRTAs> named_runtime_args;
+        std::vector<NodeRuntimeArgs> runtime_arg_values;
 
-        // Named Common Runtime Argument settings
-        // Every arg in this kernel's RuntimeArgSchema::named_common_runtime_args must be set.
-        std::unordered_map<std::string, uint32_t> named_common_runtime_args;
+        // Common runtime argument values (broadcast to every node).
+        // Every argument in this kernel's RuntimeArgSchema::common_runtime_arg_names must be set.
+        std::unordered_map<std::string, uint32_t> common_runtime_arg_values;
 
         // Advanced options (see advanced_options.hpp).
         // Companion to KernelAdvancedOptions on the schema side; holds
-        // unnamed-vararg RTA/CRTA values.
-        AdvancedKernelRunParams advanced_options;
+        // positional vararg values.
+        AdvancedKernelRunArgs advanced_options;
     };
-    // KernelRunParams must be specified for ALL kernels in the ProgramSpec.
-    std::vector<KernelRunParams> kernel_run_params;
+    // KernelRunArgs must be specified for ALL kernels in the ProgramSpec.
+    std::vector<KernelRunArgs> kernel_run_args;
 
     ////////////////////////////////////////////////////////////////////////
     // Tensor arguments
     ////////////////////////////////////////////////////////////////////////
-    struct TensorArg {
+    struct TensorArgument {
         // Tensor identifier (matches a TensorParameter::unique_id in the ProgramSpec)
         TensorParameterName tensor_parameter_name;
 
@@ -69,14 +84,14 @@ struct ProgramRunParams {
         // (Non-owning reference. Will become MeshTensorView when available; existing callsites won't change.)
         std::reference_wrapper<const MeshTensor> tensor;
     };
-    // A TensorArg must be specified for EVERY TensorParameter declared in the ProgramSpec.
+    // A TensorArgument must be specified for EVERY TensorParameter declared in the ProgramSpec.
     // The argument's TensorSpec must match the TensorParameter's TensorSpec (shape, layout, data type).
-    std::vector<TensorArg> tensor_args;
+    std::vector<TensorArgument> tensor_args;
 
     ////////////////////////////////////////////////////////////////////////
     // DFB parameters (optional, advanced use cases)
     ////////////////////////////////////////////////////////////////////////
-    struct DFBRunParams {
+    struct DFBRunOverrides {
         // DFB identifier
         DFBSpecName dfb_spec_name;
 
@@ -89,32 +104,30 @@ struct ProgramRunParams {
         // Note: borrowed-memory DFBs update their backing L1 SRAM address from
         // the corresponding tensor_arg.
     };
-    // DFBRunParams is optional. Provide entries only when overriding DFB sizes.
-    std::vector<DFBRunParams> dfb_run_params;
+    // DFBRunOverrides is optional. Provide entries only when overriding DFB sizes.
+    std::vector<DFBRunOverrides> dfb_run_overrides;
 };
 
 //------------------------------------------------
-// ProgramRunParamsView (for advanced users)
+// ProgramRunArgsView (for advanced users)
 //------------------------------------------------
+//
+// NOTE: ProgramRunArgsView is not yet supported! It is included here as a sketch only.
+//
 // Non-owning view into a Program's command buffers.
 // Enables in-place modification of mutable Program parameters.
-// (WIP -- this is a sketch only)
 //
-// STATEFULNESS: Program command buffers are stateful. Parameters retain their previous value unless modified.
-// (Q: How does this work for back-to-back enqueues?)
-// (A: TBD. There is definitely foot-shooting potential if you overwrite parameters for a previous enqueue...
-//     This API is "unsafe", intended for advanced users who will synchronize correctly.)
+// STATEFULNESS: Program command buffers are stateful.
+//   Parameters retain their previously specified value unless modified.
 //
 // LIFETIME: This view is valid for the lifetime of the Program.
-// Accessing the view after the Program is destroyed is undefined behavior.
+//   Accessing the view after the Program is destroyed is undefined behavior.
 //
 // THREAD SAFETY: Modifications through this view are not synchronized;
-// the caller must ensure exclusive access when modifying.
+//   the caller must ensure exclusive access when modifying.
 //
-// TODO: This will need rethinking for typed runtime arguments.
-//
-struct ProgramRunParamsView {
-    struct KernelRunParamsView {
+struct ProgramRunArgsView {
+    struct KernelRunArgsView {
         // Direct views into per-node vararg runtime args
         std::vector<std::pair<NodeCoord, std::span<uint32_t>>> runtime_varargs;
 
@@ -125,9 +138,9 @@ struct ProgramRunParamsView {
     //       Would eliminate the lookup indirection.
     //       ...But would mess up all the implicit RTAs....
     //       Look into this when implementing.
-    std::unordered_map<KernelSpecName, KernelRunParamsView> kernel_run_params;
+    std::unordered_map<KernelSpecName, KernelRunArgsView> kernel_run_args;
 
-    struct DFBRunParamsView {
+    struct DFBRunOverridesView {
         // DFB size overrides
         // DFB sizes specified in the ProgramSpec may be overridden per Program execution.
         // (This is seldom used in practice)
@@ -137,9 +150,9 @@ struct ProgramRunParamsView {
         // Note: borrowed-memory DFBs update their backing L1 SRAM address from
         // the corresponding tensor_arg.
     };
-    std::unordered_map<DFBSpecName, DFBRunParamsView> dfb_run_params;
+    std::unordered_map<DFBSpecName, DFBRunOverridesView> dfb_run_overrides;
 };
 
 // TODO: Consider a const version of the view object, for debug/test use?
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

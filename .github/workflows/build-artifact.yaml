@@ -480,7 +480,7 @@ jobs:
 
       - name: 📦 Restore CPM source cache
         id: cpm-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .cpmcache.tar.zst
           key: cpm-z22-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
@@ -538,7 +538,7 @@ jobs:
 
       - name: 📦 Save CPM source cache
         if: steps.cpm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .cpmcache.tar.zst
           key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
