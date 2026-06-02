@@ -34,7 +34,13 @@ RmPlan make_rm_plan(
     plan.Wt = tt::div_up(padded_shape[3], tile_width);
     plan.Ht_rm = tt::div_up(plan.H_logical, plan.rm_rows_per_tile);
 
-    // Only supports ReduceOpDim::W or ReduceOpDim::H
+    // Only supports ReduceOpDim::W or ReduceOpDim::H.
+    //
+    // k_rm_max_tiles_per_chunk caps the reduction-axis chunk size (wt_tiles_per_chunk for W
+    // reduce, ht_tiles_per_chunk for H reduce). It's an L1 staging-buffer budget on the reduction
+    // axis. 8 was picked experimentally — the staging CB page lands at ~32 KB for bf16 and
+    // ~64 KB for fp32 at chunk=8, which fits L1 comfortably alongside the other CBs. Tune later
+    // if a different perf / L1-utilization trade-off is needed.
     constexpr uint32_t k_rm_max_tiles_per_chunk = 8;
     if (dim == tt::tt_metal::ReduceOpDim::W) {
         plan.wt_tiles_per_chunk = std::clamp(plan.Wt, 1u, k_rm_max_tiles_per_chunk);
