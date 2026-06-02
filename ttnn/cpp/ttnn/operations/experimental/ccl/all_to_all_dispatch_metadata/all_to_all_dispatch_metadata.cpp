@@ -35,8 +35,7 @@ std::array<ttnn::Tensor, 3> all_to_all_dispatch_metadata(
     log_debug(tt::LogOp, "num_links: {}", num_links_);
 
     // Always derive topology from mesh - only RING topology is functional
-    tt::tt_fabric::Topology topology_ =
-        tt::tt_fabric::Topology::Linear;  //::ttnn::ccl::get_usable_topology(input_tensor, std::nullopt, axis);
+    tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, std::nullopt, axis);
 
     // Resolve drain_sync_tilizer_core:
     // - If explicitly provided, use it

@@ -43,62 +43,6 @@ void zero_buffer_async(uint32_t write_addr, int bytes) {
 
 void zero_buffer_barrier() { noc_async_read_barrier(); }
 
-// Bidirectional fabric multicast atomic increment - sends to both positive and negative directions
-// For a 1D ring with even number of devices, we multicast in both directions to cover all devices
-// with just 2 packets instead of (dispatch_devices - 1) unicast packets
-template <
-    uint32_t LinearizedSrcMeshCoord,
-    uint32_t MeshRows,
-    uint32_t MeshCols,
-    ttnn::operations::ccl::common::ReplicateGroup Axis,
-    uint32_t DispatchDevices,
-    bool DoubleAntipodalAtomicInc = false,
-    typename FabricConnectionsType>
-FORCE_INLINE void fabric_multicast_bidirectional_atomic_inc_ring_1d(
-    FabricConnectionsType& fabric_connections,
-    volatile PACKET_HEADER_TYPE* packet_header_pos,
-    volatile PACKET_HEADER_TYPE* packet_header_neg,
-    uint64_t semaphore_noc_addr) {
-    using ttnn::operations::ccl::common::ReplicateGroup;
-    const auto cmd_header = tt::tt_fabric::NocUnicastAtomicIncCommandHeader{semaphore_noc_addr, 1, true};
-
-    // Split the ring: positive direction gets half, negative direction gets the other half
-    // For dispatch_devices = 16: positive gets 8, negative gets 7 (total 15 = dispatch_devices - 1) if
-    // DoubleAntipodalAtomicInc is false For dispatch_devices = 16: positive gets 8, negative gets 8 (total 16 =
-    // dispatch_devices) if DoubleAntipodalAtomicInc is true
-    constexpr uint32_t positive_range = DoubleAntipodalAtomicInc ? (DispatchDevices + 1) / 2 : DispatchDevices / 2;
-    constexpr uint32_t negative_range =
-        DoubleAntipodalAtomicInc ? DispatchDevices - positive_range : (DispatchDevices - 1) - positive_range;
-
-    // Determine directions based on axis:
-    // COLS (axis=0): dispatch along column → SOUTH is positive, NORTH is negative
-    // ROWS (axis=1): dispatch along row → EAST is positive, WEST is negative
-    constexpr uint32_t positive_direction =
-        Axis == ReplicateGroup::COLS ? eth_chan_directions::SOUTH : eth_chan_directions::EAST;
-    constexpr uint32_t negative_direction =
-        Axis == ReplicateGroup::COLS ? eth_chan_directions::NORTH : eth_chan_directions::WEST;
-
-    // Send multicast in positive direction (start_distance=1, range=positive_range)
-    if constexpr (positive_range > 0) {
-        tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
-            &fabric_connections[positive_direction],
-            packet_header_pos,
-            cmd_header,
-            static_cast<uint8_t>(1),
-            static_cast<uint8_t>(positive_range));
-    }
-
-    // Send multicast in negative direction (start_distance=1, range=negative_range)
-    if constexpr (negative_range > 0) {
-        tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
-            &fabric_connections[negative_direction],
-            packet_header_neg,
-            cmd_header,
-            static_cast<uint8_t>(1),
-            static_cast<uint8_t>(negative_range));
-    }
-}
-
 // Bidirectional multicast write - sends same payload to all devices on ring via multicast in both directions
 // Handles payloads larger than max packet size by splitting into multiple packets
 template <
@@ -188,10 +132,10 @@ FORCE_INLINE void fabric_multicast_bidirectional_write_ring_1d_async(
 // Similar to fabric_multicast_bidirectional_atomic_inc_ring_1d but for scatter writes
 template <
     uint32_t LinearizedSrcMeshCoord,
+    tt::tt_fabric::Topology Topology,
     uint32_t MeshRows,
     uint32_t MeshCols,
     ttnn::operations::ccl::common::ReplicateGroup Axis,
-    uint32_t DispatchDevices,
     typename FabricConnectionsType>
 FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_ring_1d_async(
     FabricConnectionsType& fabric_connections,
@@ -202,10 +146,16 @@ FORCE_INLINE void fabric_multicast_bidirectional_scatter_write_ring_1d_async(
     const std::array<uint16_t, 2>& chunk_sizes) {
     using ttnn::operations::ccl::common::ReplicateGroup;
 
-    // Split the ring: positive direction gets half, negative direction gets the other half
-    // For dispatch_devices = 16: positive gets 8, negative gets 7 (total 15 = dispatch_devices - 1)
-    constexpr uint32_t positive_range = DispatchDevices / 2;
-    constexpr uint32_t negative_range = (DispatchDevices - 1) - positive_range;
+    constexpr uint32_t dispatch_devices =
+        Axis == ttnn::operations::ccl::common::ReplicateGroup::COLS ? MeshRows : MeshCols;
+
+    constexpr uint32_t axis_position =
+        Axis == ReplicateGroup::COLS ? (LinearizedSrcMeshCoord / MeshCols) : (LinearizedSrcMeshCoord % MeshCols);
+
+    constexpr uint32_t positive_range =
+        (Topology == tt::tt_fabric::Topology::Linear) ? (dispatch_devices - 1) - axis_position : dispatch_devices / 2;
+    constexpr uint32_t negative_range =
+        (Topology == tt::tt_fabric::Topology::Linear) ? axis_position : (dispatch_devices - 1) - positive_range;
 
     constexpr uint32_t positive_direction =
         Axis == ReplicateGroup::COLS ? eth_chan_directions::SOUTH : eth_chan_directions::EAST;
@@ -393,6 +343,7 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
     using ttnn::operations::ccl::common::is_configured_target;
 
     bool needs_barrier = false;
+    bool sent_local = false;
 
     // Collect all unique remote destinations for this token
     uint32_t remote_token_destinations[NumDevices];
@@ -408,9 +359,12 @@ FORCE_INLINE bool dispatch_token_sparse_multicast(
             send_preparation_buffer[(local_token - token_start_idx) * NumDevices + target_device] = 1;
 
             if (target_device == LinearizedSrcMeshCoord) {
-                // If the expert lives on the current device, dispatch locally
-                noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
-                needs_barrier = true;
+                if (!sent_local) {
+                    // If the expert lives on the current device, dispatch locally
+                    noc_async_write(input_token_read_addr, output_token_write_addr, output_page_size);
+                    needs_barrier = true;
+                    sent_local = true;
+                }
             } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(target_device)) {
                 // Add to remote destinations list
                 remote_token_destinations[num_remote_token_destinations++] = target_device;
@@ -522,29 +476,42 @@ FORCE_INLINE bool dispatch_token_sparse_multicast_bidirectional(
                 sent_local = true;
             }
         } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(target_device)) {
-            // Remote device on our axis - calculate distance in both directions
-            // pos_distance: going EAST/SOUTH (ascending, with wrap)
-            // neg_distance: going WEST/NORTH (descending, with wrap)
-
+            // Remote device on our axis - select the direction(s) used to reach it.
             uint32_t intra_cluster_target_device_id =
                 get_intra_cluster_id_from_linearized_mesh_coord<MeshRows, MeshCols, Axis>(target_device);
 
-            uint32_t pos_distance =
-                (intra_cluster_target_device_id - intra_cluster_src_device_id + DispatchDevices) % DispatchDevices;
-            uint32_t neg_distance =
-                (intra_cluster_src_device_id - intra_cluster_target_device_id + DispatchDevices) % DispatchDevices;
-            // Determine shortest path direction
-            if (pos_distance < neg_distance) {
-                // Shorter via positive direction (EAST/SOUTH)
-                pos_hop_mask |= (1 << (pos_distance - 1));
-            } else if (neg_distance < pos_distance) {
-                // Shorter via negative direction (WEST/NORTH)
-                neg_hop_mask |= (1 << (neg_distance - 1));
+            if constexpr (ttnn::operations::ccl::common::has_wrap_around<Topology>()) {
+                // Ring/Torus: target is reachable in both directions (one wraps around).
+                // pos_distance: going EAST/SOUTH (ascending, with wrap)
+                // neg_distance: going WEST/NORTH (descending, with wrap)
+                uint32_t pos_distance =
+                    (intra_cluster_target_device_id - intra_cluster_src_device_id + DispatchDevices) % DispatchDevices;
+                uint32_t neg_distance =
+                    (intra_cluster_src_device_id - intra_cluster_target_device_id + DispatchDevices) % DispatchDevices;
+                // Determine shortest path direction
+                if (pos_distance < neg_distance) {
+                    // Shorter via positive direction (EAST/SOUTH)
+                    pos_hop_mask |= (1 << (pos_distance - 1));
+                } else if (neg_distance < pos_distance) {
+                    // Shorter via negative direction (WEST/NORTH)
+                    neg_hop_mask |= (1 << (neg_distance - 1));
+                } else {
+                    // Antipodal tie - use provided polarity
+                    if (antipodal_polarity == Polarity::POSITIVE) {
+                        pos_hop_mask |= (1 << (pos_distance - 1));
+                    } else {
+                        neg_hop_mask |= (1 << (neg_distance - 1));
+                    }
+                }
             } else {
-                // Antipodal tie - use provided polarity
-                if (antipodal_polarity == Polarity::POSITIVE) {
+                // Linear: no wrap-around, so exactly one direction reaches the target.
+                // Targets ahead of the source (larger id) go positive (EAST/SOUTH); targets
+                // behind (smaller id) go negative (WEST/NORTH). No antipodal tie is possible.
+                if (intra_cluster_target_device_id > intra_cluster_src_device_id) {
+                    uint32_t pos_distance = intra_cluster_target_device_id - intra_cluster_src_device_id;
                     pos_hop_mask |= (1 << (pos_distance - 1));
                 } else {
+                    uint32_t neg_distance = intra_cluster_src_device_id - intra_cluster_target_device_id;
                     neg_hop_mask |= (1 << (neg_distance - 1));
                 }
             }
@@ -1300,10 +1267,10 @@ void kernel_main() {
         uint32_t base_metadata_addr = get_read_ptr(metadata_buffer_id);
         detail::fabric_multicast_bidirectional_scatter_write_ring_1d_async<
             linearized_mesh_coord,
+            topology,
             mesh_rows,
             mesh_cols,
-            axis,
-            dispatch_devices>(
+            axis>(
             fabric_connections,
             metadata_packet_header_pos,
             metadata_packet_header_neg,
@@ -1313,13 +1280,13 @@ void kernel_main() {
         cb_pop_front(metadata_buffer_id, tokens_per_device);
         // Use DoubleAntipodalAtomicInc=true to increment semaphore on all devices including twice on the antipodal
         // device
-        detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<
+        fabric_multicast_bidirectional_atomic_inc_1d<
             linearized_mesh_coord,
+            topology,
             mesh_rows,
             mesh_cols,
             axis,
-            dispatch_devices,
-            true>(
+            /*DoubleAntipodalAtomicInc=*/(topology == tt::tt_fabric::Topology::Ring)>(
             fabric_connections,
             atomic_inc_packet_header_pos,
             atomic_inc_packet_header_neg,

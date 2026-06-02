@@ -30,6 +30,8 @@ void kernel_main() {
 
     constexpr uint32_t tokens_per_device = get_compile_time_arg_val(21);
 
+    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(23);
+
     constexpr uint32_t src_mesh_id = get_compile_time_arg_val(24);
     constexpr uint32_t src_chip_id = get_compile_time_arg_val(25);
 
@@ -174,7 +176,10 @@ void kernel_main() {
         // Wait for all other devices to finish dispatching their input tokens and metadata.
         // The writer now writes metadata directly to the sharded output tensor on the drain sync tilizer core,
         // so we no longer need to copy from the intermediate buffer to the final output here.
-        noc_semaphore_wait((uint32_t*)global_semaphore_address, dispatch_devices);
-        noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
+        constexpr uint32_t expected_dispatch_device_inc =
+            (topology == tt::tt_fabric::Topology::Linear) ? (dispatch_devices - 1) : dispatch_devices;
+        auto* global_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_address);
+        noc_semaphore_wait(global_semaphore_ptr, expected_dispatch_device_inc);
+        noc_semaphore_set(global_semaphore_ptr, 0);
     }
 }
