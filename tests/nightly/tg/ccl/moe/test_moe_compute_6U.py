@@ -292,6 +292,7 @@ def _run_model_test(
     experts_per_device,
     activation_type,
     topology=None,
+    num_links=None,
 ):
     if test_mode == "perf":
         selected_experts_k = 1
@@ -320,6 +321,7 @@ def _run_model_test(
         activation_type=activation_type,
         has_bias=has_bias,
         topology=topology,
+        num_links=num_links,
     )
 
 
@@ -2110,9 +2112,11 @@ def test_moe_compute(
 )
 @pytest.mark.parametrize("device_params", [MOE_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 8), (1, 8))], indirect=["mesh_device"])
-@pytest.mark.parametrize("model_cfg, test_mode, has_bias, experts_per_device, activation_type", MODELS_BH_LB_1x8)
+@pytest.mark.parametrize(
+    "model_cfg, test_mode, has_bias, experts_per_device, activation_type, enable_trace", MODELS_BH_LB_1x8
+)
 def test_moe_compute_bh_lb_1x8(
-    mesh_device, mesh_shape, model_cfg, test_mode, has_bias, experts_per_device, activation_type
+    mesh_device, mesh_shape, model_cfg, test_mode, has_bias, experts_per_device, activation_type, enable_trace
 ):
     """BH single Loudbox EP=8 every-chip-active end-to-end MoE test (#43444).
 
@@ -2129,23 +2133,15 @@ def test_moe_compute_bh_lb_1x8(
     num_links=2 reflects the BH LB descriptor's `channels { count: 2 }` (vs WH 6U's 4).
     The op's hardcoded default is 4 (matches WH 6U), so BH callers must override.
     """
-    run_moe_compute_test(
+    _run_model_test(
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
-        cluster_axis=1,
-        experts_per_device=experts_per_device,
-        tokens_per_device=model_cfg.tokens_per_device,
-        selected_experts_k=model_cfg.selected_experts_k,
-        num_layers=model_cfg.num_layers,
-        num_iterations=model_cfg.num_iterations,
-        N=model_cfg.N,
-        hidden_size=model_cfg.hidden_size,
-        output_height_shard_dim=model_cfg.output_height_shard_dim,
-        output_width_shard_dim=auto_output_width_shard_dim(model_cfg.hidden_size),
-        dtype=ttnn.bfloat16,
-        enable_trace=False,
-        activation_type=activation_type,
+        enable_trace=enable_trace,
+        model_cfg=model_cfg,
+        test_mode=test_mode,
         has_bias=has_bias,
+        experts_per_device=experts_per_device,
+        activation_type=activation_type,
         topology=ttnn.Topology.Linear,  # BH LB has no chassis wraparound; 1x8 view is still LINE
         num_links=2,  # BH LB has 2 eth channels per adjacent-chip link (vs 4 on WH 6U)
     )
