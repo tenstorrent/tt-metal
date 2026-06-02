@@ -15,6 +15,7 @@
 namespace ttnn::prim {
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 uint32_t find_greatest_common_page_size(std::vector<uint32_t>& stick_sizes, uint32_t alignment) {
     TT_FATAL(!stick_sizes.empty(), "Need at least one stick size to find page size");
@@ -26,12 +27,18 @@ uint32_t find_greatest_common_page_size(std::vector<uint32_t>& stick_sizes, uint
     return page_size;
 }
 
+uint32_t get_buffer_alignment(const tt::tt_metal::MeshTensor& t) {
+    return t.mesh_buffer().get_reference_buffer()->alignment();
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
     const ConcatParams& operation_attributes, const ConcatInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
 
     const auto& input_tensors = tensor_args.input_tensors;
     Tensor& output = tensor_return_value;
@@ -46,7 +53,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
 
     // Assume inputs and output have the same element size and alignment.
     const uint32_t element_size = input_tensors[0].element_size();
-    const uint32_t alignment = input_tensors[0].mesh_tensor().mesh_buffer().get_reference_buffer()->alignment();
+    const uint32_t alignment = get_buffer_alignment(input_tensors[0].mesh_tensor());
 
     uint32_t page_size;
     uint32_t elements_per_page_width;
@@ -95,7 +102,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
                 .data_format = cb_data_format,
                 .page_size = page_size,
             }}},
-            .tensor = &input_tensors[input_id].mesh_tensor(),
+            .buffer = input_tensors[input_id].mesh_tensor().mesh_buffer().get_reference_buffer(),
         });
 
         curr_input_write_offset +=
@@ -114,7 +121,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
             .data_format = cb_data_format,
             .page_size = page_size,
         }}},
-        .tensor = &output.mesh_tensor(),
+        .buffer = output.mesh_tensor().mesh_buffer().get_reference_buffer(),
     });
 
     const uint32_t output_stride = page_size * output_num_pages_per_stick;

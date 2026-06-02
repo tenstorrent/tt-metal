@@ -99,7 +99,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2STiledProgramFactory::create_descriptor(
                 .data_format = datatype_to_dataformat_converter(input_tensor.dtype()),
                 .page_size = tt::tile_size(datatype_to_dataformat_converter(input_tensor.dtype())),
             }}},
-            .tensor = &input_tensor.mesh_tensor(),
+            .buffer = input_tensor.mesh_tensor().mesh_buffer().get_reference_buffer(),
         });
     }
 
@@ -113,7 +113,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2STiledProgramFactory::create_descriptor(
             .data_format = datatype_to_dataformat_converter(output.dtype()),
             .page_size = tt::tile_size(datatype_to_dataformat_converter(output.dtype())),
         }}},
-        .tensor = &output.mesh_tensor(),
+        .buffer = output.mesh_tensor().mesh_buffer().get_reference_buffer(),
     });
 
     tt::DataFormat cb_data_format = data_format;

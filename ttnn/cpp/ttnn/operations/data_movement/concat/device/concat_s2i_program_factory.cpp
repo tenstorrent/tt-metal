@@ -42,7 +42,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2IProgramFactory::create_descriptor(
                 .data_format = cb_data_format,
                 .page_size = input_page_size,
             }}},
-            .tensor = &input_tensors[input_id].mesh_tensor(),
+            .buffer = input_tensors[input_id].mesh_tensor().mesh_buffer().get_reference_buffer(),
         });
     }
 
@@ -78,19 +78,21 @@ tt::tt_metal::ProgramDescriptor ConcatS2IProgramFactory::create_descriptor(
 
         std::vector<uint32_t> reader_runtime_args;
         reader_runtime_args.reserve(num_input_tensors * 2);
-        std::vector<uint32_t> writer_runtime_args = {
-            output.mesh_tensor().address(),
-            core_id,
-            curr_num_output_rows,
-            num_input_tensors * input_shard_spec.shape[0],
-            input_shard_spec.shape[0]};
+        // Writer arg 0 is the destination-buffer base address; bind the output tensor so the
+        // framework resolves and patches the address.
+        KernelDescriptor::RTArgList writer_runtime_args;
+        writer_runtime_args.push_back(output.mesh_tensor());
+        writer_runtime_args.push_back(core_id);
+        writer_runtime_args.push_back(curr_num_output_rows);
+        writer_runtime_args.push_back(num_input_tensors * input_shard_spec.shape[0]);
+        writer_runtime_args.push_back(input_shard_spec.shape[0]);
         for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
             reader_runtime_args.push_back(input_id);
             reader_runtime_args.push_back(input_shard_spec.shape[0]);
             writer_runtime_args.push_back(input_id);
         }
         reader_desc.runtime_args.emplace_back(core, std::move(reader_runtime_args));
-        writer_desc.runtime_args.emplace_back(core, std::move(writer_runtime_args));
+        writer_desc.emplace_runtime_args(core, writer_runtime_args);
         core_id++;
     }
 

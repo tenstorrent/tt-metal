@@ -14,6 +14,14 @@
 
 namespace ttnn::prim {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+uint32_t get_buffer_alignment(const tt::tt_metal::MeshTensor& t) {
+    return t.mesh_buffer().get_reference_buffer()->alignment();
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
 tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
     const ConcatParams& operation_attributes, const ConcatInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt::constants;
@@ -22,6 +30,7 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
     const auto& input_tensors = tensor_args.input_tensors;
     const uint32_t dim = operation_attributes.dim;
     Tensor& output = tensor_return_value;
+    const MeshTensor& c = tensor_return_value.mesh_tensor();
     const auto& sub_core_grids = operation_attributes.sub_core_grids;
 
     ProgramDescriptor desc;
@@ -34,8 +43,8 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
     uint32_t num_output_pages;
     uint32_t single_page_size;
     const uint32_t common_align_len = std::max(
-        input_tensors[0].mesh_tensor().mesh_buffer().get_reference_buffer()->alignment(),
-        output.mesh_tensor().mesh_buffer().get_reference_buffer()->alignment());
+        CMAKE_UNIQUE_NAMESPACE::get_buffer_alignment(input_tensors[0].mesh_tensor()),
+        CMAKE_UNIQUE_NAMESPACE::get_buffer_alignment(c));
     if (rm_layout) {
         num_output_pages = output.physical_volume() / output.padded_shape()[-1];
         single_page_size = tt::align(output.element_size() * output.padded_shape()[-1], common_align_len);
@@ -106,7 +115,6 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
     }
 
     const uint32_t num_input_tensors = input_tensors.size();
-    Buffer* dst_buffer = output.mesh_tensor().mesh_buffer().get_reference_buffer();
 
     const uint32_t src0_cb_index = 0;
     // Depth=2 is a prefetch optimization; fall back to depth=1 when it would overflow L1.
@@ -136,7 +144,6 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
 
     const uint32_t num_dims = output.padded_shape().rank();
 
-    std::vector<uint32_t> src_addr(num_input_tensors);
     std::vector<uint32_t> num_pages_per_block(num_input_tensors);
     std::vector<uint32_t> page_id_per_tensor(num_input_tensors);
     std::vector<uint32_t> page_size_per_tensor(num_input_tensors);
@@ -173,7 +180,6 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
     if (rm_layout) {
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
             const auto& input_tensor = input_tensors[i].mesh_tensor();
-            src_addr[i] = input_tensor.address();
             page_size_per_tensor[i] = input_tensor.mesh_buffer().page_size();
             if (dim == num_dims - 1) {
                 num_pages_per_block[i] = num_accum_pages;
@@ -189,17 +195,12 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
     } else {
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
             const auto& input_tensor = input_tensors[i].mesh_tensor();
-            src_addr[i] = input_tensor.address();
             page_size_per_tensor[i] = input_tensor.mesh_buffer().page_size();
             uint32_t dim_pages = input_tensors[i].padded_shape()[dim] / scale_factor;
             num_pages_per_block[i] = num_accum_pages * dim_pages;
             num_output_pages_per_block += num_accum_pages * dim_pages;
         }
     }
-    std::vector<uint32_t> common_reader_kernel_args = {0, 0, 0};
-    common_reader_kernel_args.insert(common_reader_kernel_args.end(), src_addr.cbegin(), src_addr.cend());
-    common_reader_kernel_args.insert(
-        common_reader_kernel_args.end(), num_pages_per_block.cbegin(), num_pages_per_block.cend());
 
     // Reader compile-time args
     // Data is 32 byte aligned
@@ -217,11 +218,11 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
 
     KernelDescriptor::CompileTimeArgs writer_compile_time_args;
     if (rm_layout) {
-        writer_compile_time_args = {(std::uint32_t)src0_cb_index, dst_buffer->page_size()};
+        writer_compile_time_args = {(std::uint32_t)src0_cb_index, c.mesh_buffer().page_size()};
     } else {
         writer_compile_time_args = {(std::uint32_t)src0_cb_index};
     }
-    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(c).append_to(writer_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source = rm_layout ? "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
@@ -273,22 +274,23 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
             }
         }
 
-        std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
-        reader_kernel_args[0] = num_pages_per_core;
-        reader_kernel_args[1] = curr_tensor;
-        reader_kernel_args[2] = curr_tensor_id;
-        reader_kernel_args.insert(reader_kernel_args.end(), page_id_per_tensor.begin(), page_id_per_tensor.end());
-
-        std::vector<uint32_t> writer_kernel_args;
-        if (rm_layout) {
-            writer_kernel_args = {
-                dst_buffer->address(), output.buffer()->page_size(), num_pages_per_core, num_pages_written};
-        } else {
-            writer_kernel_args = {dst_buffer->address(), num_pages_per_core, num_pages_written};
+        KernelDescriptor::RTArgList reader_kernel_args;
+        reader_kernel_args.push_back(num_pages_per_core);
+        reader_kernel_args.push_back(curr_tensor);
+        reader_kernel_args.push_back(curr_tensor_id);
+        for (uint32_t j = 0; j < num_input_tensors; ++j) {
+            reader_kernel_args.push_back(input_tensors[j].mesh_tensor());
         }
+        reader_kernel_args.append(num_pages_per_block);
+        reader_kernel_args.append(page_id_per_tensor);
 
-        reader_desc.runtime_args.emplace_back(core, std::move(reader_kernel_args));
-        writer_desc.runtime_args.emplace_back(core, std::move(writer_kernel_args));
+        reader_desc.emplace_runtime_args(core, reader_kernel_args);
+        if (rm_layout) {
+            writer_desc.emplace_runtime_args(
+                core, {c, c.mesh_buffer().page_size(), num_pages_per_core, num_pages_written});
+        } else {
+            writer_desc.emplace_runtime_args(core, {c, num_pages_per_core, num_pages_written});
+        }
         num_pages_written += num_pages_per_core;
     }
 

@@ -66,7 +66,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SRMProgramFactory::create_descriptor(
                 .data_format = cb_data_format,
                 .page_size = input_page_size,
             }}},
-            .tensor = &input_tensors[input_id].mesh_tensor(),
+            .buffer = input_tensors[input_id].mesh_buffer().get_reference_buffer(),
         });
         cb_ids[input_id] = input_id;
     }
@@ -83,7 +83,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2SRMProgramFactory::create_descriptor(
             .data_format = cb_data_format,
             .page_size = output_page_size,
         }}},
-        .tensor = &output.mesh_tensor(),
+        .buffer = output.mesh_buffer().get_reference_buffer(),
     });
 
     const ShardSpec output_shard_spec = output.shard_spec().value();
