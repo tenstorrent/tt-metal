@@ -88,19 +88,22 @@ def is_dram_core_prefetcher_supported(
     def _tiles_divide(n: int) -> bool:
         return (n % TILE == 0) and ((n // TILE) % ring_size == 0)
 
-    # K of each op must divide ring too (gather_in0 K split).
-    if not _tiles_divide(dim):  # FF1/FF3 K, attn input K
+    def _pad_to_ring(n: int) -> int:
+        # Pad a per-device N up to a ring multiple (elements). ModelArgs pads hidden_dim/qkv_size
+        # the same way so the recv-contig path is transparently ring-aligned (see model_config.py).
+        quantum = ring_size * TILE
+        return ((n + quantum - 1) // quantum) * quantum
+
+    # dim and the WO K (n_heads*head_dim/num_devices) are NOT padded by the model's recv-contig
+    # hooks, so they must tile-divide the ring on their own. hidden_dim (FF N / FF2 K) and qkv_size
+    # (QKV N) ARE padded transparently, so we check L1 at their padded sizes below.
+    if not _tiles_divide(dim):  # FF1/FF3 K, attn input K, FF2/WO N
         return False
-    if not _tiles_divide(hidden_dim // num_devices):  # FF2 K
+    if not _tiles_divide(wo_in_per_dev):  # WO K
         return False
-    if not _tiles_divide(n_hidden_per_dev):  # FF1/FF3 N
-        return False
-    if not _tiles_divide(n_dim_per_dev):  # FF2 N, WO N
-        return False
-    if not _tiles_divide(qkv_size_per_dev):
-        return False
-    if not _tiles_divide(wo_in_per_dev):
-        return False
+
+    n_hidden_pad = _pad_to_ring(n_hidden_per_dev)
+    qkv_pad = _pad_to_ring(qkv_size_per_dev)
 
     # Per-receiver GCB footprint must fit worker L1. The factory allocates
     # ``num_blocks * in1_block_size = ring_size * (K_per_shard_tiles * N_per_recv_tiles)
@@ -113,10 +116,10 @@ def is_dram_core_prefetcher_supported(
     BYTES_PER_TILE_BFP8 = 1088
     L1_BUDGET = 1300000
     op_shapes = [
-        (dim, n_hidden_per_dev),  # FF1/FF3: K=dim, N=hidden_dim/num_devices
-        (hidden_dim // num_devices, n_dim_per_dev),  # FF2: K=hidden_dim/num_devices, N=dim
-        (dim, qkv_size_per_dev),  # attn QKV: K=dim, N=qkv_size/num_devices
-        (n_heads * head_dim // num_devices, n_dim_per_dev),  # attn WO: K=n_heads*head_dim/num_devices, N=dim
+        (dim, n_hidden_pad),  # FF1/FF3: K=dim, N=hidden_dim/num_devices (padded)
+        (n_hidden_pad, n_dim_per_dev),  # FF2: K=hidden_dim/num_devices (padded), N=dim
+        (dim, qkv_pad),  # attn QKV: K=dim, N=qkv_size/num_devices (padded)
+        (wo_in_per_dev, n_dim_per_dev),  # attn WO: K=n_heads*head_dim/num_devices, N=dim
     ]
     for k_dim, n_dim in op_shapes:
         k_tiles = k_dim // TILE
