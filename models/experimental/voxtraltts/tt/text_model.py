@@ -261,15 +261,20 @@ class VoxtralTTTextModel:
         # One ttnn.from_torch for the full sequence — no per-step DMA.
         if isinstance(inputs_embeds, ttnn.Tensor):
             S = int(inputs_embeds.shape[0])
-            owns_embeds_tt = False
+            owns_embeds_tt = False  # caller owns the original; updated below if we create new tensors
             # Need ROW_MAJOR for non-tile-aligned per-token slicing.
             if inputs_embeds.layout != ttnn.ROW_MAJOR_LAYOUT:
                 embeds_tt = ttnn.to_layout(inputs_embeds, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                owns_embeds_tt = True  # new tensor created; we own it
             else:
                 embeds_tt = inputs_embeds
             # Ensure shape is [S, 1, 1, dim] for uniform slice coordinates.
             if len(embeds_tt.shape) != 4:
-                embeds_tt = ttnn.reshape(embeds_tt, (S, 1, 1, dim))
+                reshaped = ttnn.reshape(embeds_tt, (S, 1, 1, dim))
+                if owns_embeds_tt and embeds_tt.is_allocated():
+                    ttnn.deallocate(embeds_tt)  # free intermediate layout-converted tensor
+                embeds_tt = reshaped
+                owns_embeds_tt = True  # new tensor created; we own it
         else:
             S = int(inputs_embeds.shape[0])
             owns_embeds_tt = True
