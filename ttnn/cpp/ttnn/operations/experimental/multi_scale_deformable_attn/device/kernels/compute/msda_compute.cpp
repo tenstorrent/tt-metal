@@ -27,6 +27,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
+#include "api/dataflow/circular_buffer.h"
 
 constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
 constexpr uint32_t scalar_cb_index = get_compile_time_arg_val(1);
@@ -36,11 +37,15 @@ constexpr uint32_t reduction_size = get_compile_time_arg_val(3);  // = 4 * P
 void kernel_main() {
     const uint32_t num_output_tiles = get_arg_val<uint32_t>(0);
 
+    CircularBuffer input_cb(input_cb_index);
+    CircularBuffer scalar_cb(scalar_cb_index);
+    CircularBuffer output_cb(output_cb_index);
+
     init_bcast<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(input_cb_index, scalar_cb_index, output_cb_index);
 
     for (uint32_t out = 0; out < num_output_tiles; ++out) {
         // Reserve one output tile slot; we accumulate into it via L1 acc.
-        cb_reserve_back(output_cb_index, 1);
+        output_cb.reserve_back(1);
 
         for (uint32_t i = 0; i < reduction_size; ++i) {
             if (i == 0) {
@@ -49,8 +54,8 @@ void kernel_main() {
                 pack_reconfig_l1_acc(1);  // subsequent: accumulate into L1
             }
 
-            cb_wait_front(input_cb_index, 1);
-            cb_wait_front(scalar_cb_index, 1);
+            input_cb.wait_front(1);
+            scalar_cb.wait_front(1);
 
             tile_regs_acquire();
             mul_tiles_bcast<BroadcastType::COL>(input_cb_index, scalar_cb_index, 0, 0, 0);
@@ -65,12 +70,12 @@ void kernel_main() {
             pack_tile<true>(0, output_cb_index, 0);
             tile_regs_release();
 
-            cb_pop_front(input_cb_index, 1);
-            cb_pop_front(scalar_cb_index, 1);
+            input_cb.pop_front(1);
+            scalar_cb.pop_front(1);
         }
 
         // Reset L1-acc mode for the next output tile.
         pack_reconfig_l1_acc(0);
-        cb_push_back(output_cb_index, 1);
+        output_cb.push_back(1);
     }
 }

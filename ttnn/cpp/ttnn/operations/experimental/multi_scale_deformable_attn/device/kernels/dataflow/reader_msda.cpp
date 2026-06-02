@@ -160,10 +160,8 @@ void kernel_main() {
         for (uint32_t p = 0; p < P; ++p) {
             // Precompute per-row geometry for this p.
             for (uint32_t r = 0; r < v_rows; ++r) {
-                volatile tt_l1_ptr uint16_t* grid_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(grid_scratch_l1 + (r * P + p) * grid_stick_nbytes);
-                volatile tt_l1_ptr uint16_t* attn_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(attn_scratch_l1 + r * attn_stick_nbytes);
+                CoreLocalMem<volatile uint16_t> grid_ptr(grid_scratch_l1 + (r * P + p) * grid_stick_nbytes);
+                CoreLocalMem<volatile uint16_t> attn_ptr(attn_scratch_l1 + r * attn_stick_nbytes);
 
                 const float gx = bf16_to_float(grid_ptr[0]);
                 const float gy = bf16_to_float(grid_ptr[1]);
@@ -231,13 +229,10 @@ void kernel_main() {
                     if (!(yv_arr[r] && xv_arr[r])) {
                         continue;
                     }
-                    const uint32_t src = value_scratch_l1 + r * value_stick_nbytes;
                     const auto off = msda_tile_layout::tile_row_offsets(r);
-                    const uint32_t dst_lo = tile_l1 + off.lo;
-                    const uint32_t dst_hi = tile_l1 + off.hi;
-                    volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src);
-                    volatile tt_l1_ptr uint32_t* dl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_lo);
-                    volatile tt_l1_ptr uint32_t* dh = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_hi);
+                    CoreLocalMem<volatile uint32_t> s(value_scratch_l1 + r * value_stick_nbytes);
+                    CoreLocalMem<volatile uint32_t> dl(tile_l1 + off.lo);
+                    CoreLocalMem<volatile uint32_t> dh(tile_l1 + off.hi);
                     for (uint32_t i = 0; i < HALF_WORDS; ++i) {
                         dl[i] = s[i];
                     }
@@ -272,8 +267,7 @@ void kernel_main() {
                     // Rows ≥ v_rows OR invalid corners: bf stays 0 — explicitly
                     // overwrite col 0 because the CB slot may contain non-zero
                     // bf16 left by a previous tile where this row was valid.
-                    volatile tt_l1_ptr uint16_t* p16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
-                        s_tile_l1 + msda_tile_layout::tile_col0_offset(r));
+                    CoreLocalMem<volatile uint16_t> p16(s_tile_l1 + msda_tile_layout::tile_col0_offset(r));
                     p16[0] = bf;
                 }
                 scalar_tile_cb.push_back(1);

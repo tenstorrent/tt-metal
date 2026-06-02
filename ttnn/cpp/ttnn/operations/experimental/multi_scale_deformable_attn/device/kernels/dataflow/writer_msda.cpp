@@ -59,9 +59,9 @@ void kernel_main() {
             const uint32_t src_lo = tile_l1 + off.lo;
             const uint32_t src_hi = tile_l1 + off.hi;
 
-            volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1);
-            volatile tt_l1_ptr uint32_t* sl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_lo);
-            volatile tt_l1_ptr uint32_t* sh = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_hi);
+            CoreLocalMem<volatile uint32_t> dst(scratch_l1);
+            CoreLocalMem<volatile uint32_t> sl(src_lo);
+            CoreLocalMem<volatile uint32_t> sh(src_hi);
             for (uint32_t i = 0; i < HALF_WORDS; ++i) {
                 dst[i] = sl[i];
             }
