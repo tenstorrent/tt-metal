@@ -46,3 +46,44 @@ def test_perf_gain_pct():
 def test_perf_gate_rejects_regression():
     assert perf_gate_pass(naive_ms=100.0, fused_ms=99.5, min_gain_pct=2.0) is False
     assert perf_gate_pass(naive_ms=100.0, fused_ms=80.0, min_gain_pct=2.0) is True
+
+
+import ast
+
+from models.experimental.opt_transfer.verify import emit_shape_test
+from models.experimental.opt_transfer.schema import KBEntry, PatternKind, FusionProposal
+
+
+def test_emit_shape_test_writes_runnable_artifact(tmp_path):
+    e = KBEntry(
+        "nlp_create_qkv_heads",
+        "ttnn.experimental.nlp_create_qkv_heads",
+        "attention.qkv",
+        PatternKind.HORIZONTAL_MERGE,
+        ["linear"],
+        {},
+        {},
+        "concat_qkv",
+        "s",
+    )
+    p = FusionProposal(
+        "nlp_create_qkv_heads",
+        "ttnn.experimental.nlp_create_qkv_heads",
+        ["q", "k", "v"],
+        {"num_heads": 16},
+        "concat_qkv",
+        "",
+        "s",
+    )
+    path = emit_shape_test(
+        e,
+        p,
+        {"q": {"weight": torch.randn(4, 4), "bias": None}},
+        {"H": 16},
+        torch.randn(2, 2),
+        torch.randn(2, 2),
+        tmp_path,
+    )
+    assert path.exists()
+    ast.parse(path.read_text())
+    assert list((tmp_path / "fixtures").glob("*.pt"))

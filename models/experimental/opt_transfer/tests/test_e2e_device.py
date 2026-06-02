@@ -8,7 +8,7 @@ class StubMatcher:
     """Stands in for the LLM during the device acceptance test so the gate is
     deterministic and key-free."""
 
-    def propose(self, graph_summary, kb):
+    def propose(self, graph_summary, kb, diagnosis=None):
         return [
             FusionProposal(
                 entry_id="qkv_merge",
