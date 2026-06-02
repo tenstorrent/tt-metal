@@ -65,7 +65,7 @@ DEVICE_PRINT("p={}\n",  static_cast<Perm>(24)); // p=(Perm)24    (unknown bits)
 
 ## Tests that assert on prints
 
-`TestConfig.run()` returns a `TestOutcome` whose `device_print_lines` field holds every line emitted by `DEVICE_PRINT()` during that run, in order. When device print isn't on for the session the list is empty.
+`TestConfig.run()` returns a `TestOutcome` whose `device_print_lines` field holds every line emitted by `DEVICE_PRINT()` during that run, in order. When device print isn't on for the session, the list is empty.
 
 ```python
 def test_my_kernel():
@@ -75,17 +75,15 @@ def test_my_kernel():
 
 ### Self-enabling a test in CI
 
-CI runs the LLK suite at `LOGURU_LEVEL=INFO`, which leaves `TestConfig.DEVICE_PRINT_ENABLED = False`. A test that just asserts on `outcome.device_print_lines` would see an empty list by default.
+CI runs the LLK suite at `LOGURU_LEVEL=INFO`, which leaves the global `TestConfig.DEVICE_PRINT_ENABLED = False`. A test that just asserts on `outcome.device_print_lines` would see an empty list by default.
 
-`test_device_print.py` works around this with a module-scoped autouse fixture that forces `TestConfig.DEVICE_PRINT_ENABLED = True` for the duration of the module and restores it on teardown:
+Pass `requires_device_print=True` to `TestConfig(...)` to opt that variant into device print regardless of logging level:
 
 ```python
-@pytest.fixture(scope="module", autouse=True)
-def _force_device_print_enabled():
-    prev = TestConfig.DEVICE_PRINT_ENABLED
-    TestConfig.DEVICE_PRINT_ENABLED = True
-    yield
-    TestConfig.DEVICE_PRINT_ENABLED = prev
+outcome = TestConfig(
+    "sources/my_kernel_test.cpp",
+    formats,
+    requires_device_print=True,
+).run()
+assert "expected output" in "".join(outcome.device_print_lines)
 ```
-
-Use this same pattern for any other test that asserts on device print output.

@@ -3,6 +3,7 @@
 
 import pytest
 import torch
+from conftest import skip_for_coverage
 from helpers.bfp_format_utils import bfp4b_to_float16b, bfp8b_to_float16b
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -17,6 +18,8 @@ from helpers.test_variant_parameters import (
     TILIZE,
     generate_input_dim,
 )
+
+pytestmark = skip_for_coverage
 
 
 def _extract_floats(lines: list[str]) -> list[float]:
@@ -48,7 +51,10 @@ def test_device_print():
     formats = input_output_formats([DataFormat.Int32])[0]
 
     configuration = TestConfig(
-        "sources/device_print_test.cpp", formats, dest_acc=DestAccumulation.Yes
+        "sources/device_print_test.cpp",
+        formats,
+        dest_acc=DestAccumulation.Yes,
+        requires_device_print=True,  # Required for this test to pass in CI.
     )
     outcome = configuration.run()
     lines = outcome.device_print_lines
@@ -153,6 +159,7 @@ def test_dprint_tile(formats):
             tile_count_B=tile_cnt_A,
             tile_count_res=tile_cnt_A,
         ),
+        requires_device_print=True,
     ).run()
     records = _records(outcome.device_print_lines)
 
@@ -220,6 +227,7 @@ def test_dprint_tensix(dest_acc):
         ),
         dest_acc=dest_acc,
         unpack_to_dest=False,
+        requires_device_print=True,
     ).run()
 
     # bf16 round-trips through DEST exactly: DestAcc.Yes widens to fp32 with

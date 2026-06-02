@@ -17,9 +17,12 @@
 
 #include <cstdint>
 
+// Metal dprint_tensix.h needs DPRINT defined.
+#include "dprint.h"
+#define DPRINT(fmt, ...) DEVICE_PRINT(fmt, ##__VA_ARGS__)
+
 #include "api/debug/dprint_tensix.h"
 #include "cfg_defines.h"
-#include "dprint.h"
 
 inline void dprint_tensix_dest_reg(int tile_id = 0)
 {

@@ -553,6 +553,7 @@ class TestConfig:
         l1_acc: L1Accumulation = L1Accumulation.No,
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
+        requires_device_print: bool = False,
     ):
         self.coverage_build = (
             CoverageBuild.Yes if TestConfig.WITH_COVERAGE else CoverageBuild.No
@@ -584,6 +585,7 @@ class TestConfig:
         self.skip_build_header = skip_build_header
         self.compile_time_formats = compile_time_formats
         self.dest_acc = dest_acc
+        self.requires_device_print = requires_device_print
 
         TILE_SIZES = {
             DataFormat.Bfp8_b: 68,
@@ -858,9 +860,6 @@ class TestConfig:
 
         if self.profiler_build == ProfilerBuild.Yes:
             OPTIONS_COMPILE += "-DLLK_PROFILER "
-
-        if TestConfig.DEVICE_PRINT_ENABLED:
-            OPTIONS_COMPILE += "-DDEBUG_PRINT_ENABLED "
 
         if os.environ.get("TT_METAL_DISABLE_SFPLOADMACRO") == "1":
             OPTIONS_COMPILE += "-DDISABLE_SFPLOADMACRO "
@@ -1189,7 +1188,7 @@ class TestConfig:
                 )
                 trisc_define = "ISOLATE_SFPU" if name == "sfpu" else name.upper()
                 device_print_flags = ""
-                if TestConfig.DEVICE_PRINT_ENABLED:
+                if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
                     risc_id, _ = TestConfig.RISC_INFO[name]
                     # Quasar: kernel addresses the buffer through the uncached alias
                     # (see device_print.h:get_lock_atomic).
@@ -1197,6 +1196,7 @@ class TestConfig:
                         0x400000 if TestConfig.ARCH == ChipArchitecture.QUASAR else 0
                     )
                     device_print_flags = (
+                        "-DDEBUG_PRINT_ENABLED "
                         f"-DLLK_DEVICE_PRINT_BUFFER_BASE={kernel_buffer_base:#x} "
                         f"-DLLK_RUNTIME_ARGS_START={TestConfig.DEVICE_PRINT_RUNTIME_ARGS_START:#x} "
                         f"-DDPRINT_BUFFER_SIZE={TestConfig.DEVICE_PRINT_PER_THREAD_SIZE} "
@@ -1290,7 +1290,7 @@ class TestConfig:
 
         # Zero the device print buffer header before each kernel run so the
         # first DEVICE_PRINT() observes wpos=rpos=0 and a free lock.
-        if TestConfig.DEVICE_PRINT_ENABLED:
+        if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
             write_words_to_device(
                 TestConfig.TENSIX_LOCATION,
                 TestConfig.DEVICE_PRINT_BUFFER_BASE,
@@ -1500,7 +1500,7 @@ class TestConfig:
         dprint_parser = None
         dprint_lines: list[str] = []
         wrapped_poll_callback = poll_callback
-        if TestConfig.DEVICE_PRINT_ENABLED:
+        if TestConfig.DEVICE_PRINT_ENABLED or self.requires_device_print:
             from .device_print import make_device_print_parser
 
             dprint_parser = make_device_print_parser(self)
