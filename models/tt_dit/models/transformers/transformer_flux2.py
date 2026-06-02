@@ -151,6 +151,198 @@ class Flux2SingleTransformerBlock(Module):
                 device_count=self._tp_factor,
             )
 
+    def x_c_agmm_fused(
+        self,
+        spatial,
+        prompt,
+        spatial_rope,
+        prompt_rope,
+        spatial_sequence_length,
+        compute_prompt_output,
+        temb_mod_params,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        shift_msa, scale_msa, gate_msa = temb_mod_params
+        x = ttnn.squeeze(self.norm(ttnn.unsqueeze(spatial, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0)
+        c = ttnn.squeeze(self.norm(ttnn.unsqueeze(prompt, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0)
+        # No gather force agmm
+        x_mlp = self.proj_mlp(x, parallel_config=self._parallel_config, use_heuristic_mmcfg=True)
+        c_mlp = (
+            self.proj_mlp(c, parallel_config=self._parallel_config, use_heuristic_mmcfg=True)
+            if compute_prompt_output
+            else None
+        )
+
+        # Ensure attention is setting the parallel config for agmm.
+        x, c = self.attn.forward(
+            spatial=x,
+            prompt=c,
+            spatial_rope=spatial_rope,
+            prompt_rope=prompt_rope,
+            spatial_sequence_length=spatial_sequence_length,
+        )
+        spatial, prompt = self.post_mm_common(spatial, prompt, x, x_mlp, c, c_mlp, compute_prompt_output, gate_msa)
+        return spatial, prompt
+
+    def x_c_agmm(
+        self,
+        spatial,
+        prompt,
+        spatial_rope,
+        prompt_rope,
+        spatial_sequence_length,
+        compute_prompt_output,
+        temb_mod_params,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        shift_msa, scale_msa, gate_msa = temb_mod_params
+
+        x = ttnn.squeeze(self.norm(ttnn.unsqueeze(spatial, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0)
+        c = ttnn.squeeze(self.norm(ttnn.unsqueeze(prompt, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0)
+
+        x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+        c = self._ccl_manager.all_gather_persistent_buffer(c, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+
+        x_mlp = self.proj_mlp(x)
+        c_mlp = self.proj_mlp(c) if compute_prompt_output else None
+
+        x, c = self.attn.forward(
+            spatial=x,
+            prompt=c,
+            spatial_rope=spatial_rope,
+            prompt_rope=prompt_rope,
+            spatial_sequence_length=spatial_sequence_length,
+        )
+
+        # return x, c, x_mlp, c_mlp
+
+        spatial, prompt = self.post_mm_common(spatial, prompt, x, x_mlp, c, c_mlp, compute_prompt_output, gate_msa)
+        return spatial, prompt
+
+    def post_mm_common(self, spatial, prompt, x, x_mlp, c, c_mlp, compute_prompt_output, gate_msa):
+        x = ttnn.concat([x, x_mlp], dim=-1)
+        # del x_mlp
+
+        is_ring = self._ccl_manager.topology == ttnn.Topology.Ring
+        # Ring: fuse RS + addcmul at the final write step (spatial + proj_out(x) * gate_msa).
+        if is_ring:
+            spatial = self.proj_out.forward_fused_addcmul(x, spatial, gate_msa, scalar=1.0)
+        else:
+            spatial = ttnn.addcmul(spatial, self.proj_out(x), gate_msa)
+
+        if not compute_prompt_output:
+            return spatial, None
+
+        c = ttnn.concat([c, c_mlp], dim=-1)
+        # del c_mlp
+        if is_ring:
+            prompt = self.proj_out.forward_fused_addcmul(c, prompt, gate_msa, scalar=1.0)
+        else:
+            prompt = ttnn.addcmul(prompt, self.proj_out(c), gate_msa)
+
+        return spatial, prompt
+
+    def x_c_merged(
+        self,
+        spatial,
+        prompt,
+        spatial_rope,
+        prompt_rope,
+        spatial_sequence_length,
+        compute_prompt_output,
+        temb_mod_params,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        # skip for compute_prompt_output = False
+        if not compute_prompt_output:
+            return self.x_c_agmm(
+                spatial,
+                prompt,
+                spatial_rope,
+                prompt_rope,
+                spatial_sequence_length,
+                compute_prompt_output,
+                temb_mod_params,
+            )
+
+        shift_msa, scale_msa, gate_msa = temb_mod_params
+
+        x = ttnn.squeeze(self.norm(ttnn.unsqueeze(spatial, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0)
+        c = ttnn.squeeze(self.norm(ttnn.unsqueeze(prompt, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0)
+
+        x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+        c = self._ccl_manager.all_gather_persistent_buffer(c, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+
+        x_c = ttnn.concat([x, c], dim=1)
+        x_c_mlp = self.proj_mlp(x_c)
+
+        x, c = self.attn.forward(
+            spatial=x,
+            prompt=c,
+            spatial_rope=spatial_rope,
+            prompt_rope=prompt_rope,
+            spatial_sequence_length=spatial_sequence_length,
+        )
+
+        # concatnate and reshard x_c again
+        x_c = ttnn.concat([x, c], dim=1)
+
+        spatial_prompt = ttnn.concat([spatial, prompt], dim=1)
+
+        # now concatenate on -1 dimension.
+        spatial_prompt, _ = self.post_mm_common(spatial_prompt, None, x_c, x_c_mlp, None, None, False, gate_msa)
+        # Gather and slice the output for both.
+        spatial = spatial_prompt[:, : spatial.shape[1], :]
+        prompt = spatial_prompt[:, spatial.shape[1] :, :]
+        return spatial, prompt
+
+    def x_c_merged_fused(
+        self,
+        spatial,
+        prompt,
+        spatial_rope,
+        prompt_rope,
+        spatial_sequence_length,
+        compute_prompt_output,
+        temb_mod_params,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
+        # skip for compute_prompt_output = False
+        if not compute_prompt_output:
+            return self.x_c_agmm(
+                spatial,
+                prompt,
+                spatial_rope,
+                prompt_rope,
+                spatial_sequence_length,
+                compute_prompt_output,
+                temb_mod_params,
+            )
+
+        shift_msa, scale_msa, gate_msa = temb_mod_params
+
+        x = ttnn.squeeze(self.norm(ttnn.unsqueeze(spatial, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0)
+        c = ttnn.squeeze(self.norm(ttnn.unsqueeze(prompt, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0)
+
+        x_c = ttnn.concat([x, c], dim=1)
+        x_c_mlp = self.proj_mlp(x_c, parallel_config=self._parallel_config, use_heuristic_mmcfg=True)
+
+        x, c = self.attn.forward(
+            spatial=x,
+            prompt=c,
+            spatial_rope=spatial_rope,
+            prompt_rope=prompt_rope,
+            spatial_sequence_length=spatial_sequence_length,
+        )
+
+        # concatnate and reshard x_c again
+        x_c = ttnn.concat([x, c], dim=1)
+
+        spatial_prompt = ttnn.concat([spatial, prompt], dim=1)
+
+        # now concatenate on -1 dimension.
+        spatial_prompt, _ = self.post_mm_common(spatial_prompt, None, x_c, x_c_mlp, None, None, False, gate_msa)
+        # Gather and slice the output for both.
+        spatial = spatial_prompt[:, : spatial.shape[1], :]
+        prompt = spatial_prompt[:, spatial.shape[1] :, :]
+        return spatial, prompt
+
     # Since we do not have operations to concatenate and slice a tensor along a sharded dimension,
     # we keep the spatial and prompt tensors separate for now.
     def forward(
@@ -174,48 +366,9 @@ class Flux2SingleTransformerBlock(Module):
         and ``None`` is returned for the prompt. Used by the final single block, whose prompt
         output is discarded by the transformer.
         """
-        if not skip_time_embed_activation_fn:
-            time_embed = ttnn.silu(time_embed)
-
-        shift_msa, scale_msa, gate_msa = temb_mod_params
-
-        x = ttnn.squeeze(self.norm(ttnn.unsqueeze(spatial, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0)
-        c = ttnn.squeeze(self.norm(ttnn.unsqueeze(prompt, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0)
-
-        x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
-        c = self._ccl_manager.all_gather_persistent_buffer(c, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
-
-        x_mlp = self.proj_mlp(x)
-        c_mlp = self.proj_mlp(c) if compute_prompt_output else None
-
-        x, c = self.attn.forward(
-            spatial=x,
-            prompt=c,
-            spatial_rope=spatial_rope,
-            prompt_rope=prompt_rope,
-            spatial_sequence_length=spatial_sequence_length,
+        spatial, prompt = self.x_c_merged_fused(
+            spatial, prompt, spatial_rope, prompt_rope, spatial_sequence_length, compute_prompt_output, temb_mod_params
         )
-
-        x = ttnn.concat([x, x_mlp], dim=-1)
-        del x_mlp
-
-        is_ring = self._ccl_manager.topology == ttnn.Topology.Ring
-        # Ring: fuse RS + addcmul at the final write step (spatial + proj_out(x) * gate_msa).
-        if is_ring:
-            spatial = self.proj_out.forward_fused_addcmul(x, spatial, gate_msa, scalar=1.0)
-        else:
-            spatial = ttnn.addcmul(spatial, self.proj_out(x), gate_msa)
-
-        if not compute_prompt_output:
-            return spatial, None
-
-        c = ttnn.concat([c, c_mlp], dim=-1)
-        del c_mlp
-        if is_ring:
-            prompt = self.proj_out.forward_fused_addcmul(c, prompt, gate_msa, scalar=1.0)
-        else:
-            prompt = ttnn.addcmul(prompt, self.proj_out(c), gate_msa)
-
         return spatial, prompt
 
 
