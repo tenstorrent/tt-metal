@@ -35,6 +35,12 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp>
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 
 #include "gtest/gtest.h"
@@ -62,12 +68,10 @@ TensorSpec make_flat_dram_tensor_spec(uint32_t page_size_bytes, uint32_t num_pag
     return TensorSpec(Shape{num_pages, page_size_words}, tensor_layout);
 }
 
-experimental::metal2_host_api::DataMovementConfiguration make_dm_config(DataMovementProcessor processor, NOC noc) {
-    return experimental::metal2_host_api::DataMovementConfiguration{
-        .gen1_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
-                .processor = processor, .noc = noc},
-        .gen2_data_movement_config = experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{
+experimental::DataMovementHardwareConfig make_dm_config(DataMovementProcessor processor, NOC noc) {
+    return experimental::DataMovementHardwareConfig{
+        .gen1_config = experimental::DataMovementHardwareConfig::Gen1Config{.processor = processor, .noc = noc},
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{
             .disable_implicit_sync_for = {SCRATCH_DFB},
         }};
 }
@@ -85,7 +89,7 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApi) {
     constexpr uint32_t page_size_bytes = 4 * 1024;
     constexpr uint32_t total_words = num_pages * (page_size_bytes / sizeof(uint32_t));
     constexpr uint32_t flag_addr = 100 * 1024;  // fixed L1 scratch addr for the status word
-    const experimental::metal2_host_api::NodeCoord node{0, 0};
+    const experimental::NodeCoord node{0, 0};
 
     // ----- Host stamps -----
     // L1 status flag: sentinel that the kernel demotes to kStatusOk on success.
@@ -107,7 +111,7 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApi) {
     }
 
     // ----- Program spec -----
-    experimental::metal2_host_api::DataflowBufferSpec scratch_spec{
+    experimental::DataflowBufferSpec scratch_spec{
         .unique_id = SCRATCH_DFB,
         .entry_size = scratch_bytes,
         .num_entries = 1,
@@ -115,59 +119,59 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApi) {
     };
 
     // Producer: tests overload (1) on the DFB, then push_backs the now-zero entry.
-    experimental::metal2_host_api::KernelSpec producer_spec{
+    experimental::KernelSpec producer_spec{
         .unique_id = L1_PRODUCER,
         .source =
             std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_l1_producer.cpp"},
         .num_threads = 1,
         .dfb_bindings =
             {{.dfb_spec_name = SCRATCH_DFB,
-              .local_accessor_name = "scratch",
-              .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-              .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED}},
-        .runtime_arguments_schema = {.named_runtime_args = {"total_bytes", "flag_addr"}},
-        .config_spec = make_dm_config(DataMovementProcessor::RISCV_0, NOC::RISCV_0_default),
+              .accessor_name = "scratch",
+              .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+              .access_pattern = experimental::DFBAccessPattern::STRIDED}},
+        .runtime_arg_schema = {.runtime_arg_names = {"total_bytes", "flag_addr"}},
+        .hw_config = make_dm_config(DataMovementProcessor::RISCV_0, NOC::RISCV_0_default),
     };
 
     // Consumer: wait_fronts on the L1-zeroed DFB entry, uses it as DRAM scratch for overload (2).
-    experimental::metal2_host_api::KernelSpec consumer_spec{
+    experimental::KernelSpec consumer_spec{
         .unique_id = DRAM_CONSUMER,
         .source =
             std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_dram_consumer.cpp"},
         .num_threads = 1,
         .dfb_bindings =
             {{.dfb_spec_name = SCRATCH_DFB,
-              .local_accessor_name = "scratch",
-              .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-              .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED}},
+              .accessor_name = "scratch",
+              .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+              .access_pattern = experimental::DFBAccessPattern::STRIDED}},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "out"}},
-        .runtime_arguments_schema = {.named_runtime_args = {"page_start", "page_end", "page_size"}},
-        .config_spec = make_dm_config(DataMovementProcessor::RISCV_1, NOC::RISCV_1_default),
+        .runtime_arg_schema = {.runtime_arg_names = {"page_start", "page_end", "page_size"}},
+        .hw_config = make_dm_config(DataMovementProcessor::RISCV_1, NOC::RISCV_1_default),
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "zero_memory_api_end_to_end",
+    experimental::ProgramSpec spec{
+        .name = "zero_memory_api_end_to_end",
         .kernels = {producer_spec, consumer_spec},
         .dataflow_buffers = {scratch_spec},
         .tensor_parameters = {{.unique_id = OUT_TENSOR, .spec = tensor.tensor_spec()}},
-        .work_units = {{.unique_id = "main", .kernels = {L1_PRODUCER, DRAM_CONSUMER}, .target_nodes = node}},
+        .work_units = {{.name = "main", .kernels = {L1_PRODUCER, DRAM_CONSUMER}, .target_nodes = node}},
     };
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = L1_PRODUCER,
-            .named_runtime_args = {{.node = node, .args = {{"total_bytes", scratch_bytes}, {"flag_addr", flag_addr}}}},
+            .runtime_arg_values = {{.node = node, .args = {{"total_bytes", scratch_bytes}, {"flag_addr", flag_addr}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = DRAM_CONSUMER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node, .args = {{"page_start", 0u}, {"page_end", num_pages}, {"page_size", page_size_bytes}}}},
         },
     };
     params.tensor_args = {{.tensor_parameter_name = OUT_TENSOR, .tensor = tensor}};
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device.shape());
