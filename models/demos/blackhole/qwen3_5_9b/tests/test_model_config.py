@@ -1,13 +1,7 @@
 # models/demos/blackhole/qwen3_5_9b/tests/test_model_config.py
 """Tests for Qwen3.5-9B model config loading."""
-import os
 
 import pytest
-
-# HF_MODEL (hub name or local path) is the single source of truth. The run command
-# usually exports it; fall back to the local checkpoint so the test is runnable standalone.
-CHECKPOINT_DIR = os.environ.get("HF_MODEL", "/local/ttuser/atupe/Qwen9b")
-os.environ.setdefault("HF_MODEL", CHECKPOINT_DIR)
 
 
 class TestQwen35ModelArgs:
