@@ -76,8 +76,8 @@ class TTSmiReset(BaseModel):
     final_status: str = Field(
         description="Final reset status for this reset attempt: SUCCESS or FAILURE."
     )
-    total_reset_time_sec: float = Field(
-        description="Total time spent in this reset attempt in seconds."
+    total_reset_time_sec: Optional[float] = Field(
+        None, description="Total time spent in this reset attempt in seconds."
     )
     error_summary: Optional[str] = Field(
         None, description="Summary of reset-related error messages extracted from logs."
