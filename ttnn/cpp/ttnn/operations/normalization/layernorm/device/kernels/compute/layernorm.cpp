@@ -25,20 +25,37 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/debug/dprint.h"
 
 #include "experimental/kernel_args.h"
 
 #include "layernorm_compute_utils.h"
+
+// Restrict debug prints to math thread only to avoid multi-TRISC print backpressure
+// perturbing synchronization while debugging hangs.
+#undef DPRINT
+#define DPRINT DPRINT_MATH
 
 namespace generic = norm::kernel_util::generic;
 namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
 namespace policies = kutil::compute::policies;
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+ALWI void ACQ() {
+    tile_regs_acquire();
+    tile_regs_wait();
+}
+ALWI void REL() {
+    WAYPOINT("RL1");
+    tile_regs_commit();
+    WAYPOINT("RL2");
+    tile_regs_release();
+    WAYPOINT("RL3");
+    WAYPOINT("RL4");
+}
 
 void kernel_main() {
+    WAYPOINT("LC0");
     auto NCHt = get_arg(args::NCHt);
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto block_size = get_arg(args::block_size);
@@ -133,6 +150,7 @@ void kernel_main() {
 #endif
 
     cb_eps_obj.wait_front(1);  // comes from the reader
+    WAYPOINT("LC1");
 
     // cb_im_or_out: cb_fusion when gamma/beta fuse; otherwise cb_out. Gated by #ifdef
     // because cb_fusion only exists when host bound it (FUSE_GAMMA||FUSE_BETA).
@@ -148,6 +166,8 @@ void kernel_main() {
     const auto total_buffer_size = generic::blocks(Wt, block_size).total_with_remainder();
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
+        WAYPOINT("LC2");
+        DPRINT("[layernorm_compute] LOOP_BEGIN ncht ncht={} NCHt={}\n", ncht, NCHt);
 #ifdef TILIZE_IN
         tilize_all_blocks_to_cb<block_size>(cb_in_rm, cb_in, Wt);
         // Re-init binary ops after tilize hardware reconfiguration.
@@ -167,6 +187,12 @@ void kernel_main() {
         pack_reconfig_data_format(cb_x);
         add_tiles_init(cb_in, cb_inb);
         for (auto block : generic::blocks(Wt, block_size)) {
+            DPRINT(
+                "[layernorm_compute] LOOP_BEGIN pre_add_block ncht={} start={} size={} full={}\n",
+                ncht,
+                block.start(),
+                block.size(),
+                block.full_block_size());
             ACQ();
             // In/inb come from the reader and need to be
             // synced on full block size. Keep cb_x aligned
@@ -176,13 +202,21 @@ void kernel_main() {
             cb_inb_obj.wait_front(block.full_block_size());
             cb_x_obj.reserve_back(block.full_block_size());
             for (auto i : block.local()) {
+                DPRINT("[layernorm_compute] LOOP_BEGIN pre_add_i ncht={} start={} i={}\n", ncht, block.start(), i);
                 add_tiles(cb_in, cb_inb, i, i, i);
                 pack_tile(i, cb_x);
+                DPRINT("[layernorm_compute] LOOP_END pre_add_i ncht={} start={} i={}\n", ncht, block.start(), i);
             }
             REL();
             cb_x_obj.push_back(block.full_block_size());  // push the sum into the same buffer
             cb_in_obj.pop_front(block.full_block_size());
             cb_inb_obj.pop_front(block.full_block_size());
+            DPRINT(
+                "[layernorm_compute] LOOP_END pre_add_block ncht={} start={} size={} full={}\n",
+                ncht,
+                block.start(),
+                block.size(),
+                block.full_block_size());
         }
 #ifndef RMSNORM
         reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
@@ -204,17 +238,67 @@ void kernel_main() {
 
         // x - E[x]
         reconfig_data_format(cb_x, cb_ex);
+        cb_ex_obj.wait_front(1);
         cb_xmm_obj.reserve_back(total_buffer_size);
         sub_bcast_cols_init_short(cb_x, cb_ex);
         for (auto block : generic::blocks(Wt, block_size)) {
+            WAYPOINT("S00");
+            cb_x_obj.wait_front(block.start() + block.full_block_size());
+            WAYPOINT("S01");
+            DPRINT(
+                "[layernorm_compute] LOOP_BEGIN sub_block ncht={} start={} size={} full={}\n",
+                ncht,
+                block.start(),
+                block.size(),
+                block.full_block_size());
+            WAYPOINT("S0A");
             ACQ();
-            for (auto i : block.local()) {
-                sub_tiles_bcast_cols(cb_x, cb_ex, i, 0, i);
+            WAYPOINT("S0B");
+            WAYPOINT("S02");
+            for (uint32_t i = 0; i < block.full_block_size(); ++i) {
+                const uint32_t src_i = (i < block.size()) ? i : 0;
+                DPRINT(
+                    "[layernorm_compute] LOOP_BEGIN sub_i ncht={} start={} i={} src_i={}\n",
+                    ncht,
+                    block.start(),
+                    i,
+                    src_i);
+                WAYPOINT("S03");
+                sub_tiles_bcast_cols(cb_x, cb_ex, src_i, 0, i);
+                WAYPOINT("S04");
+                DPRINT(
+                    "[layernorm_compute] LOOP_END sub_i ncht={} start={} i={} src_i={}\n",
+                    ncht,
+                    block.start(),
+                    i,
+                    src_i);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            WAYPOINT("S05");
+            pack_reconfig_data_format(cb_xmm);
+            for (uint32_t i = 0; i < block.full_block_size(); ++i) {
                 pack_tile(i, cb_xmm);
             }
+            // Release tile regs before any potentially blocking CB operations.
+            // Quasar appears more sensitive to holding tile regs across CB waits.
+            WAYPOINT("S54");
+            tile_regs_release();
+            WAYPOINT("S55");
+            WAYPOINT("S51");
             cb_xmm_obj.push_back(block.full_block_size());
+            WAYPOINT("S52");
+            WAYPOINT("S56");
             cb_x_obj.pop_front(block.full_block_size());
-            REL();
+            WAYPOINT("S53");
+            WAYPOINT("S57");
+            WAYPOINT("S06");
+            DPRINT(
+                "[layernorm_compute] LOOP_END sub_block ncht={} start={} size={} full={}\n",
+                ncht,
+                block.start(),
+                block.size(),
+                block.full_block_size());
         }
         cb_ex_obj.pop_front(1);
 
@@ -228,6 +312,12 @@ void kernel_main() {
          */
         mul_tiles_init(cb_xmm, cb_xmm);
         for (auto block : generic::blocks(Wt, block_size)) {
+            DPRINT(
+                "[layernorm_compute] LOOP_BEGIN varmul_block ncht={} start={} size={} full={}\n",
+                ncht,
+                block.start(),
+                block.size(),
+                block.full_block_size());
 #ifndef RMSNORM
             cb_xmm_obj.wait_front(block.start() + block.size());
 #else
@@ -236,12 +326,20 @@ void kernel_main() {
             cb_xmm2_obj.reserve_back(block.full_block_size());
             ACQ();
             for (auto i : block.local()) {
+                DPRINT("[layernorm_compute] LOOP_BEGIN varmul_i ncht={} start={} i={}\n", ncht, block.start(), i);
                 const auto global_i = block.to_global(i);
                 mul_tiles(cb_xmm, cb_xmm, global_i, global_i, i);
                 pack_tile(i, cb_xmm2);
+                DPRINT("[layernorm_compute] LOOP_END varmul_i ncht={} start={} i={}\n", ncht, block.start(), i);
             }
             cb_xmm2_obj.push_back(block.full_block_size());
             REL();
+            DPRINT(
+                "[layernorm_compute] LOOP_END varmul_block ncht={} start={} size={} full={}\n",
+                ncht,
+                block.start(),
+                block.size(),
+                block.full_block_size());
         }
 #if defined RMSNORM and not defined FUSED_PRE_ADD
         reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
@@ -270,12 +368,19 @@ void kernel_main() {
         // (x-E[x]) / sqrt(Var[x] + eps) * gamma + beta
         cb_ex2pe_obj.wait_front(1);
         for (auto block : generic::blocks(Wt, block_size)) {
+            DPRINT(
+                "[layernorm_compute] LOOP_BEGIN norm_block ncht={} start={} size={} full={}\n",
+                ncht,
+                block.start(),
+                block.size(),
+                block.full_block_size());
             reconfig_data_format(cb_xmm, cb_ex2pe);
 #if defined FUSE_GAMMA || defined FUSE_BETA
             pack_reconfig_data_format(cb_fusion);
 #else
             pack_reconfig_data_format(cb_out);
 #endif
+            WAYPOINT("CO0");
             cb_im_or_out_obj.reserve_back(block.full_block_size());
 #if defined RMSNORM and not defined FUSE_PRE_ADD && (defined FUSE_GAMMA || defined FUSE_BETA)
             reconfig_data_format_srca(cb_fusion, cb_xmm);
@@ -283,6 +388,7 @@ void kernel_main() {
             ACQ();
             mul_bcast_cols_init_short(cb_xmm, cb_ex2pe);
             for (auto i : block.local()) {
+                DPRINT("[layernorm_compute] LOOP_BEGIN norm_i ncht={} start={} i={}\n", ncht, block.start(), i);
                 mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, block.to_global(i), 0, i);
 #ifdef SFPU_OP_INIT_ACTIVATION
                 if constexpr (!(do_gamma == 1 || do_beta == 1)) {
@@ -291,8 +397,10 @@ void kernel_main() {
                 }
 #endif
                 pack_tile(i, cb_im_or_out);
+                DPRINT("[layernorm_compute] LOOP_END norm_i ncht={} start={} i={}\n", ncht, block.start(), i);
             }
             cb_im_or_out_obj.push_back(block.full_block_size());
+            WAYPOINT("CO1");
             REL();
 
 #if defined FUSE_GAMMA || defined FUSE_BETA
@@ -319,6 +427,7 @@ void kernel_main() {
                 cb_gamma_obj.wait_front(block.start() + block.full_block_size());
                 cb_fusion_obj.wait_front(block.full_block_size());
                 for (auto i : block.local()) {
+                    DPRINT("[layernorm_compute] LOOP_BEGIN gamma_i ncht={} start={} i={}\n", ncht, block.start(), i);
                     mul_tiles_bcast_rows(cb_fusion, cb_gamma, i, block.to_global(i), i);
 #ifdef SFPU_OP_INIT_ACTIVATION
                     if constexpr (!(do_beta == 1)) {
@@ -327,6 +436,7 @@ void kernel_main() {
                     }
 #endif
                     pack_tile(i, cb_outg);
+                    DPRINT("[layernorm_compute] LOOP_END gamma_i ncht={} start={} i={}\n", ncht, block.start(), i);
                 }
                 cb_fusion_obj.pop_front(block.full_block_size());
                 cb_outg_obj.push_back(block.full_block_size());
@@ -347,18 +457,26 @@ void kernel_main() {
                 cb_beta_obj.wait_front(block.start() + block.full_block_size());
                 cb_fusion_obj.wait_front(block.full_block_size());
                 for (auto i : block.local()) {
+                    DPRINT("[layernorm_compute] LOOP_BEGIN beta_i ncht={} start={} i={}\n", ncht, block.start(), i);
                     add_tiles_bcast_rows(cb_fusion, cb_beta, i, block.to_global(i), i);
 #ifdef SFPU_OP_INIT_ACTIVATION
                     SFPU_OP_INIT_ACTIVATION
                     SFPU_OP_FUNC_ACTIVATION
 #endif
                     pack_tile(i, cb_out);
+                    DPRINT("[layernorm_compute] LOOP_END beta_i ncht={} start={} i={}\n", ncht, block.start(), i);
                 }
                 cb_fusion_obj.pop_front(block.full_block_size());
                 cb_out_obj.push_back(block.full_block_size());
                 REL();
             }
 #endif
+            DPRINT(
+                "[layernorm_compute] LOOP_END norm_block ncht={} start={} size={} full={}\n",
+                ncht,
+                block.start(),
+                block.size(),
+                block.full_block_size());
         }
         cb_ex2pe_obj.pop_front(1);
         cb_xmm_obj.pop_front(total_buffer_size);
@@ -367,5 +485,6 @@ void kernel_main() {
         constexpr uint32_t cb_out_rm = dfb::cb_out_rm;
         untilize_all_blocks_from_cb<block_size>(cb_out, cb_out_rm, Wt);
 #endif
+        DPRINT("[layernorm_compute] LOOP_END ncht ncht={} NCHt={}\n", ncht, NCHt);
     }  // NCHt loop
 }

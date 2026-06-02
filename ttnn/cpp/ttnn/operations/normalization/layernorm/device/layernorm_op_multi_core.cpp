@@ -193,6 +193,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
     uint32_t Ht = Hp / tile_height;
 
     uint32_t block_size = fp32_dest_acc_en ? 4 : 8;
+    // Quasar appears sensitive to layernorm partial-block execution when Wt < block_size
+    // (e.g., Wt=1, block_size=4). Clamp to Wt to avoid padded-tail micro-op deadlocks.
+    if (device->arch() == tt::ARCH::QUASAR && Wt < block_size) {
+        block_size = Wt;
+    }
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());

@@ -291,12 +291,12 @@ void kernel_main() {
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h, 1),
         compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
     reconfig_data_format(cb_xmm2, cb_scaler);
-    cb_pop_front(cb_xmm2, num_tiles_per_block);
+    cb_xmm2_obj.pop_front(num_tiles_per_block);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {
         reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW, FP32_DEST_ACC>(cb_ex_external2, cb_scaler_global, cb_ex2);
-        cb_reserve_back(cb_ex2, num_tiles_per_allgather_worker);
+        cb_ex2_obj.reserve_back(num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
             cb_scaler_global_obj.wait_front(1);

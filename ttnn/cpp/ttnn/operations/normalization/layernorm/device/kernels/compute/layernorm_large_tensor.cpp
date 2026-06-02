@@ -203,7 +203,7 @@ void kernel_main() {
                     cb_xmm2, cb_scaler, i, scaler_tile_idx, dst0);
             }
 
-            cb_pop_front(cb_xmm2, block.full_block_size());
+            cb_xmm2_obj.pop_front(block.full_block_size());
 
             const auto final_iter = block.last() == Wt;
             const auto pack_cb = final_iter ? cb_ex2 : cb_accumulate;

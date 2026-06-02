@@ -178,7 +178,7 @@ void kernel_main() {
             compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
             compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
     reconfig_data_format(cb_x2, cb_scaler);
-    cb_pop_front(cb_x2, num_tiles_per_block);
+    cb_x2_obj.pop_front(num_tiles_per_block);
 
     // global reduce, cb_ex <-- cb_ex_external2, cb_ex_partial2
     if constexpr (is_allgather_worker) {

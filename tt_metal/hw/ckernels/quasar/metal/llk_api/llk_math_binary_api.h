@@ -82,15 +82,19 @@ inline void llk_math_eltwise_binary(uint dst_index, const bool clear_fp32_dst_ac
 
     WAYPOINT("MBIW");
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
+        WAYPOINT("MBN0");
         const bool clear_in_fp32_mode = is_fp32_dest_acc_en && clear_fp32_dst_acc;
         ASSERT(!clear_in_fp32_mode);  // Quasar: FP32 dest clear before reuse not implemented on NONE path yet.
         _llk_math_eltwise_binary_<eltwise_binary_type, binary_reuse_dest>(
             dst_index, ckernel::DEFAULT_TENSOR_SHAPE, false);
+        WAYPOINT("MBN1");
     } else {
+        WAYPOINT("MBB0");
         static_assert(
             binary_reuse_dest == EltwiseBinaryReuseDestType::NONE,
             "Quasar: dest reuse (binary_reuse_dest) is not supported on the broadcast eltwise binary path");
         _llk_math_eltwise_binary_broadcast_(dst_index);
+        WAYPOINT("MBB1");
     }
     WAYPOINT("MBID");
 }
@@ -127,16 +131,20 @@ inline void llk_math_eltwise_binary(
     const bool clear_fp32_dst_acc) {
     WAYPOINT("MBIW");
     if constexpr (src_b_bcast_type == BroadcastType::NONE) {
+        WAYPOINT("MBN2");
         const std::uint32_t operand_id = get_operand_id(operand_A);
         const ckernel::TensorShape tensor_shape_A = get_operand_tensor_shape(operand_id);
         const bool clear_in_fp32_mode = is_fp32_dest_acc_en && clear_fp32_dst_acc;
         ASSERT(!clear_in_fp32_mode);  // Quasar: FP32 dest clear before reuse not implemented on NONE path yet.
         _llk_math_eltwise_binary_<eltwise_binary_type, binary_reuse_dest>(dst_index, tensor_shape_A, false);
+        WAYPOINT("MBN3");
     } else {
+        WAYPOINT("MBB2");
         static_assert(
             binary_reuse_dest == EltwiseBinaryReuseDestType::NONE,
             "Quasar: dest reuse (binary_reuse_dest) is not supported on the broadcast eltwise binary path");
         _llk_math_eltwise_binary_broadcast_(dst_index);
+        WAYPOINT("MBB3");
     }
     WAYPOINT("MBID");
 }

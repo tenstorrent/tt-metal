@@ -16,6 +16,7 @@
 #include "internal/hw_thread.h"
 #include "hostdev/dev_msgs.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/debug/dprint.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/stack_usage.h"
 #include <kernel_includes.hpp>
@@ -93,6 +94,13 @@ uint32_t _start() {
         // Setup after the go signal so the previous kernel has completed.
         num_sw_threads = launch_msg->kernel_config.num_sw_threads[hartid];
         my_thread_id = launch_msg->kernel_config.kernel_thread_id[hartid];
+        DPRINT(
+            "[dmk] launch hart={} thread0={} my_kt={} sw_threads={} thread_id={}\n",
+            hartid,
+            thread_0_hartid,
+            my_kt,
+            num_sw_threads,
+            my_thread_id);
 
         // Paint stack after all thread_local writes and CRT init are done.
         mark_stack_usage();
@@ -100,7 +108,9 @@ uint32_t _start() {
         EARLY_RETURN_FOR_DEBUG
 
         WAYPOINT("K");
+        DPRINT("[dmk] entering kernel_main hart={} thread_id={}\n", hartid, my_thread_id);
         kernel_main();
+        DPRINT("[dmk] exited kernel_main hart={} thread_id={}\n", hartid, my_thread_id);
         WAYPOINT("KD");
         if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
             WAYPOINT("NKFW");
