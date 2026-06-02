@@ -140,6 +140,10 @@ struct KernelSpec {
         std::string accessor_name;   // DFB accessor name (used in the kernel source code)
         EndpointType endpoint_type;  // producer or consumer
         AccessPattern access_pattern = AccessPattern::STRIDED;
+        // Tiles per block; meaningful (and required) only when access_pattern == BLOCKED.
+        // A block is the contiguous strip of entries a thread accesses before striding by
+        // block_size * num_threads. Must be 0 for STRIDED/ALL.
+        uint32_t block_size = 0;
     };
     Group<DFBBinding> dfb_bindings;
 

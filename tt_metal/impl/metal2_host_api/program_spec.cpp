@@ -1306,6 +1306,16 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                     first_kernel,
                     records[i].kernel->unique_id);
                 TT_FATAL(
+                    records[i].binding->block_size == records[0].binding->block_size,
+                    "DFB '{}' has multiple {} bindings with mismatched block_size (kernel '{}' = {} vs kernel '{}' = "
+                    "{})",
+                    dfb.unique_id,
+                    role,
+                    first_kernel,
+                    records[0].binding->block_size,
+                    records[i].kernel->unique_id,
+                    records[i].binding->block_size);
+                TT_FATAL(
                     records[i].kernel->num_threads == first_threads,
                     "DFB '{}' has multiple {} KernelSpecs with mismatched num_threads (kernel '{}' = {} vs kernel '{}' "
                     "= {})",
@@ -1333,6 +1343,26 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             check_role_uniformity(endpoints.producers, "PRODUCER");
             check_role_uniformity(endpoints.consumers, "CONSUMER");
         }
+
+        // block_size is meaningful only for the BLOCKED access pattern: it must be > 0 iff
+        // BLOCKED, and 0 for STRIDED/ALL. (Divisibility of num_entries by block_size*threads
+        // is enforced device-side in the capacity switch alongside the STRIDED/ALL checks.)
+        auto check_block_size_validity = [&](const auto& records, std::string_view role) {
+            for (const auto& rec : records) {
+                const bool is_blocked = rec.binding->access_pattern == DFBAccessPattern::BLOCKED;
+                TT_FATAL(
+                    (rec.binding->block_size > 0) == is_blocked,
+                    "DFB '{}' {} binding (kernel '{}'): block_size must be > 0 iff access_pattern == BLOCKED "
+                    "(got block_size={}, access_pattern={})",
+                    dfb.unique_id,
+                    role,
+                    rec.kernel->unique_id,
+                    rec.binding->block_size,
+                    is_blocked ? "BLOCKED" : "STRIDED/ALL");
+            }
+        };
+        check_block_size_validity(endpoints.producers, "PRODUCER");
+        check_block_size_validity(endpoints.consumers, "CONSUMER");
 
         // (1)/(2) Placement — per-node census. A local DFB lives in shared SRAM on each node, so
         // every node it is instantiated on must run exactly one producer instance and exactly one
@@ -2609,9 +2639,11 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .producer_risc_mask = producer_risc_mask,
         .num_producers = static_cast<uint8_t>(producer->num_threads),
         .pap = producer_access_pattern,
+        .producer_block_size = producer_binding->block_size,
         .consumer_risc_mask = consumer_risc_mask,
         .num_consumers = static_cast<uint8_t>(consumer->num_threads),
         .cap = consumer_access_pattern,
+        .consumer_block_size = consumer_binding->block_size,
         .enable_producer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.producers),
         .enable_consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers),
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
