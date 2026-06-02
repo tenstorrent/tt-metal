@@ -12,33 +12,46 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+// Allocator-aligned page size of the tensor's storage (Buffer-only attribute).
+uint32_t get_buffer_aligned_page_size(const MeshTensor& tensor) {
+    return static_cast<uint32_t>(tensor.mesh_buffer().get_reference_buffer()->aligned_page_size());
+}
+
+// Distribution spec of the tensor's storage (the cores and shards that hold its data).
+const BufferDistributionSpec& get_buffer_distribution_spec(const MeshTensor& tensor) {
+    return tensor.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec().value();
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
 template <bool local_is_input>
 ProgramDescriptor NdReshardCopyLocalShardFactory<local_is_input>::create_descriptor(
     const ReshardParams& /*operation_attributes*/, const ReshardInputs& tensor_args, Tensor& output_tensor) {
-    const auto& input = tensor_args.input;
-    auto& output = output_tensor;
+    const auto& input = tensor_args.input.mesh_tensor();
+    const auto& output = output_tensor.mesh_tensor();
 
-    auto* input_buffer = input.buffer();
-    auto* output_buffer = output.buffer();
+    const auto input_accessor_args = TensorAccessorArgs(input);
+    const auto output_accessor_args = TensorAccessorArgs(output);
 
-    const auto input_accessor_args = TensorAccessorArgs(*input_buffer);
-    const auto output_accessor_args = TensorAccessorArgs(*output_buffer);
-
-    // Choose buffer and aligned page size based on local_is_input flag
-    auto* local_buffer = local_is_input ? input_buffer : output_buffer;
-    auto aligned_page_size = local_buffer->aligned_page_size();
-    auto other_aligned_page_size =
-        local_is_input ? output_buffer->aligned_page_size() : input_buffer->aligned_page_size();
+    // Choose local/other tensor based on local_is_input flag
+    const auto& local_tensor = local_is_input ? input : output;
+    const auto& other_tensor = local_is_input ? output : input;
+    auto aligned_page_size = CMAKE_UNIQUE_NAMESPACE::get_buffer_aligned_page_size(local_tensor);
+    auto other_aligned_page_size = CMAKE_UNIQUE_NAMESPACE::get_buffer_aligned_page_size(other_tensor);
 
     // This implementation assumes that input and output grids are the same.
-    auto cores_vec = local_buffer->buffer_distribution_spec()->cores_with_data();
+    const auto& local_distribution_spec = CMAKE_UNIQUE_NAMESPACE::get_buffer_distribution_spec(local_tensor);
+    auto cores_vec = local_distribution_spec.cores_with_data();
     auto grid = CoreRangeSet(cores_vec);
 
-    uint32_t num_shards = static_cast<uint32_t>(local_buffer->buffer_distribution_spec()->num_shards());
+    uint32_t num_shards = static_cast<uint32_t>(local_distribution_spec.num_shards());
 
     // num cores with data * 2 because we have two kernels
-    uint32_t shard_id_stride =
-        static_cast<uint32_t>(local_buffer->buffer_distribution_spec()->num_cores_with_data()) * 2u;
+    uint32_t shard_id_stride = static_cast<uint32_t>(local_distribution_spec.num_cores_with_data()) * 2u;
 
     // Prepare compile time arguments
     auto logical_size = input.logical_shape();
@@ -52,15 +65,15 @@ ProgramDescriptor NdReshardCopyLocalShardFactory<local_is_input>::create_descrip
         auto output_buffer_type = output.memory_config().memory_layout();
 
         // for block sharded
-        CoreCoord input_shard_grid = input_buffer->shard_spec().grid().ranges()[0].grid_size();
+        CoreCoord input_shard_grid = input.shard_spec()->grid.ranges()[0].grid_size();
         uint32_t input_num_shard_cores = input_shard_grid.x;
-        if (input_buffer->shard_spec().orientation() == ShardOrientation::COL_MAJOR) {
+        if (input.shard_spec()->orientation == ShardOrientation::COL_MAJOR) {
             input_num_shard_cores = input_shard_grid.y;
         }
 
-        CoreCoord output_shard_grid = output_buffer->shard_spec().grid().ranges()[0].grid_size();
+        CoreCoord output_shard_grid = output.shard_spec()->grid.ranges()[0].grid_size();
         uint32_t output_num_shard_cores = output_shard_grid.x;
-        if (output_buffer->shard_spec().orientation() == ShardOrientation::COL_MAJOR) {
+        if (output.shard_spec()->orientation == ShardOrientation::COL_MAJOR) {
             output_num_shard_cores = output_shard_grid.y;
         }
         // for width sharded
@@ -71,11 +84,11 @@ ProgramDescriptor NdReshardCopyLocalShardFactory<local_is_input>::create_descrip
         }
 
         source_width =
-            static_cast<uint32_t>(input_buffer->shard_spec().shape()[1] * input.element_size() * input_num_shard_cores);
-        destination_width = static_cast<uint32_t>(
-            output_buffer->shard_spec().shape()[1] * output.element_size() * output_num_shard_cores);
-        uint32_t input_page_size = input_buffer->page_size();
-        uint32_t output_page_size = output_buffer->page_size();
+            static_cast<uint32_t>(input.shard_spec()->shape[1] * input.element_size() * input_num_shard_cores);
+        destination_width =
+            static_cast<uint32_t>(output.shard_spec()->shape[1] * output.element_size() * output_num_shard_cores);
+        uint32_t input_page_size = input.mesh_buffer().page_size();
+        uint32_t output_page_size = output.mesh_buffer().page_size();
         base_page_size = std::gcd(input_page_size, output_page_size);
     }
     auto compile_time_args = input_accessor_args.get_compile_time_args();
@@ -113,9 +126,9 @@ ProgramDescriptor NdReshardCopyLocalShardFactory<local_is_input>::create_descrip
     ncrisc_desc.compile_time_args = std::move(compile_time_args);
 
     // Common runtime args: [input_addr, output_addr, num_shards, shard_id_stride]
-    // arg 0 / arg 1 are the buffer base addresses (binding via Buffer*).
-    brisc_desc.emplace_common_runtime_args({input_buffer, output_buffer, num_shards, shard_id_stride});
-    ncrisc_desc.emplace_common_runtime_args({input_buffer, output_buffer, num_shards, shard_id_stride});
+    // arg 0 / arg 1 are the buffer base addresses (binding via MeshTensor).
+    brisc_desc.emplace_common_runtime_args({input, output, num_shards, shard_id_stride});
+    ncrisc_desc.emplace_common_runtime_args({input, output, num_shards, shard_id_stride});
 
     // Per-core unique runtime args: [start_shard_id]
     // brisc copies shards [0, num_data_cores*2, num_data_cores*4, num_data_cores*6, ...]
