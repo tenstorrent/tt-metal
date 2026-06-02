@@ -51,7 +51,7 @@ from .math_perf_env import (
     ace_step_nlp_concat_heads,
     ace_step_permute_kwargs,
     ace_step_reshape_kwargs,
-    ace_step_rms_norm_width_sharded,
+    ace_step_rms_norm_block_sharded,
     ace_step_safe_deallocate,
     ace_step_sdpa_activation_kwargs,
     ace_step_sdpa_mask_memory_config,
@@ -617,10 +617,10 @@ class _TtQwen3EncoderLayer:
         _rms_kw = ace_step_cond_rms_norm_kwargs(ttnn, _act_mc, device=self.device)
         x = ace_step_ensure_tile_layout(ttnn, hidden_b1sh)
         res = x
-        # input_layernorm: WIDTH_SHARDED across hidden dim K=1024 ([1,1,256,1024], block_h=8).
+        # input_layernorm: BLOCK_SHARDED on 8×4 L1 grid ([1,1,256,K], block_h=2, block_w=K/256tiles/8).
         _bf8 = self._proj_dtype
         _ln_act_dtype = _bf8 if _bf8 != self.dtype else None
-        x = ace_step_rms_norm_width_sharded(
+        x = ace_step_rms_norm_block_sharded(
             ttnn,
             x,
             self.input_ln_w,
@@ -735,7 +735,15 @@ class _TtQwen3EncoderLayer:
         h2 = ace_step_ensure_tile_layout(ttnn, h)
         if self._act_l1 is None and self.mem is not None:
             h2 = ace_step_ensure_dram_activation(ttnn, h2, self.mem)
-        h2 = ttnn.rms_norm(h2, weight=self.post_ln_w, epsilon=self.eps, **_rms_kw)
+        h2 = ace_step_rms_norm_block_sharded(
+            ttnn,
+            h2,
+            self.post_ln_w,
+            self.eps,
+            device=self.device,
+            l1_mc=_l1_mc,
+            compute_kernel_config=self._rms_norm_ck,
+        )
         ff = self.mlp(h2)
         return ttnn.add(res2, ff, memory_config=_act_mc)
 
@@ -942,7 +950,14 @@ class TtQwen3EmbeddingEncoder:
 
         h = ace_step_ensure_tile_layout(ttnn, h)
         _fn_mc = ace_step_linear_l1_memory_config(ttnn) or self.mem
-        h = ttnn.rms_norm(h, weight=self.final_norm_w, epsilon=float(cfg.rms_norm_eps), memory_config=_fn_mc)
+        h = ace_step_rms_norm_block_sharded(
+            ttnn,
+            h,
+            self.final_norm_w,
+            float(cfg.rms_norm_eps),
+            device=self.device,
+            l1_mc=_fn_mc,
+        )
         return h
 
 

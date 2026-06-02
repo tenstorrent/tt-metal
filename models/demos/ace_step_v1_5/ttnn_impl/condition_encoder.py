@@ -35,6 +35,7 @@ from .math_perf_env import (
     ace_step_linear_l1_memory_config,
     ace_step_linear_weight_dtype,
     ace_step_reshape_kwargs,
+    ace_step_rms_norm_block_sharded,
     ace_step_sdpa_mask_memory_config,
     ace_step_to_layout_kwargs,
     ace_step_upload_f32_np_as_bf16_tile,
@@ -328,7 +329,15 @@ class _TtAceStepTinyEncoder:
             # ``bias_cache`` entries point at ``self._attn_bias_cache`` — do not deallocate.
             pass
         h = ace_step_ensure_tile_layout(ttnn, h, l1_mc=self._linear_out_l1)
-        h = ttnn.rms_norm(h, weight=self.norm_w, epsilon=float(1e-6), **self._rms_norm_kw)
+        h = ace_step_rms_norm_block_sharded(
+            ttnn,
+            h,
+            self.norm_w,
+            float(1e-6),
+            device=self.device,
+            l1_mc=self._linear_out_l1,
+            compute_kernel_config=self._rms_norm_kw.get("compute_kernel_config"),
+        )
         if output_first_token:
             return ttnn.slice(h, (0, 0, 0, 0), (b, 1, 1, self.hidden_size))
         return h
@@ -364,7 +373,14 @@ class _TtAceStepTinyEncoder:
             bias_tt = bias_sliding if use_sliding else bias_full
             h = layer(h, cos_tt, sin_tt, bias_tt)
         h = ace_step_ensure_tile_layout(ttnn, h, l1_mc=self._linear_out_l1)
-        h = ttnn.rms_norm(h, weight=self.norm_w, epsilon=float(1e-6), memory_config=self._linear_out_l1 or self.mem)
+        h = ace_step_rms_norm_block_sharded(
+            ttnn,
+            h,
+            self.norm_w,
+            float(1e-6),
+            device=self.device,
+            l1_mc=self._linear_out_l1,
+        )
         if output_first_token:
             return ttnn.slice(h, (0, 0, 0, 0), (b, 1, 1, self.hidden_size))
         return h

@@ -20,7 +20,12 @@ from typing import Any, Callable, Iterator
 import ttnn
 from models.tt_transformers.tt.common import Mode
 
-from .math_perf_env import ace_step_linear_l1_memory_config
+from .math_perf_env import (
+    ace_step_build_prefill_block_sharded_norm_config,
+    ace_step_encoder_matmul_program_config,
+    ace_step_linear_l1_memory_config,
+    ace_step_prefill_block_sharded_norm_enabled,
+)
 
 # ModelArgs getters that return ``DRAM_MEMORY_CONFIG`` for ``Mode.PREFILL``.
 _PREFILL_DRAM_MEMCFG_GETTERS: tuple[str, ...] = (
@@ -54,6 +59,15 @@ def _ensure_l1(ttnn_module: Any, tensor: Any, *, l1_mc: Any) -> Any:
     if tensor.memory_config() == l1_mc:
         return tensor
     return ttnn_module.to_memory_config(tensor, l1_mc)
+
+
+def _ensure_dram_interleaved(ttnn_module: Any, tensor: Any, *, dram_mc: Any) -> Any:
+    """Mcast matmul sweeps use DRAM interleaved weights; ``create_dram_sharded_mem_config`` weights crash CB setup."""
+    if tensor is None or dram_mc is None or not hasattr(ttnn_module, "to_memory_config"):
+        return tensor
+    if tensor.memory_config() == dram_mc:
+        return tensor
+    return ttnn_module.to_memory_config(tensor, dram_mc)
 
 
 def _swap_dram_kwarg(kwargs: dict, *, dram_mc: Any, l1_mc: Any) -> None:
@@ -128,15 +142,25 @@ def ace_step_patch_model_args_prefill_l1(model_args: Any) -> None:
 
 
 def _patch_distributed_norm_prefill_l1(norm_mod: Any, *, l1_mc: Any) -> None:
-    """Prefill ``DistributedNorm`` uses DRAM for ``to_memory_config`` / gather — switch to L1."""
+    """Prefill ``DistributedNorm``: L1 activations + BLOCK-sharded ``LayerNormDeviceOperation``."""
     orig_forward = norm_mod.forward
+    i2s = getattr(ttnn, "interleaved_to_sharded", None)
 
     def forward(x, mode: Mode, norm_config=None):
         if getattr(norm_mod, "TG", False) or mode != Mode.PREFILL:
             return orig_forward(x, mode, norm_config)
 
-        sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
         input_mem_cfg = l1_mc
+        inner = norm_mod.norm
+        use_block = (
+            ace_step_prefill_block_sharded_norm_enabled()
+            and i2s is not None
+            and not norm_mod.args.is_distributed_norm(mode)
+            and not (getattr(inner, "is_distributed", None) and inner.is_distributed(mode))
+        )
+        blk_cfg = (
+            ace_step_build_prefill_block_sharded_norm_config(ttnn, x, norm_mod.args.mesh_device) if use_block else None
+        )
 
         if norm_mod.args.is_multichip and not norm_mod.args.is_distributed_norm(mode):
             x = ttnn.experimental.all_gather_async(
@@ -156,7 +180,11 @@ def _patch_distributed_norm_prefill_l1(norm_mod: Any, *, l1_mc: Any) -> None:
         else:
             x = ttnn.to_memory_config(x, input_mem_cfg)
 
-        x = norm_mod.norm(x, mode=mode, in_sharded=False, out_sharded=False, norm_config=norm_config)
+        if blk_cfg is not None:
+            x = i2s(x, blk_cfg["sharded_output_config"])
+            x = norm_mod.norm(x, mode=mode, in_sharded=True, out_sharded=False, norm_config=blk_cfg)
+        else:
+            x = norm_mod.norm(x, mode=mode, in_sharded=False, out_sharded=False, norm_config=norm_config)
 
         if norm_mod.args.is_distributed_norm(mode) and norm_mod.enable_all_gather:
             x = ttnn.experimental.all_gather_async(
@@ -202,52 +230,111 @@ def _patch_decoder_l1_residual(decoder_layer: Any, *, l1_mc: Any) -> None:
     decoder_layer.forward = forward  # type: ignore[method-assign]
 
 
-# Tuned ``MinimalMatmulConfig`` for the two SLOW Qwen3 prefill ``minimal_matmul`` ops at
-# seq_len=256 (M=256). Both the fused QKV (K=1024, N=4096) and MLP down/FF2 (K=3072, N=1024)
-# matmuls win on the SAME block/grid: M_block=2, K_block=8, N_block=8 on a 8x4 (32-core) grid.
-# Device sweep (BF16/BFP8 x BFP8, LoFi, in-process kernel-duration, PCC 0.9999/0.9998):
-#   qkv  : stock g8x10 m8k8n8 = 45.45us  ->  g8x4 m2k8n8 = 38.69us  (~1.17x)
-#   ff2  : stock ~39us         ->  g8x4 m2k8n8 = 32.02us  (~1.22x)
-# Stock returns an 80-core (8x10) MinimalMatmulConfig with a literal "FIXME: optimize this
-# config for prefill" in tt_transformers/model_config.py; this overrides it WITHOUT editing
-# upstream.  Gated to 128 < seq_len <= 256 (the conditioning/caption prefill band we measured);
-# any other seq_len defers to the stock getter.
-_ACE_STEP_QWEN_PREFILL_MM_TUNED = dict(M_block_size=2, K_block_size=8, N_block_size=8)
-_ACE_STEP_QWEN_PREFILL_MM_GRID = (8, 4)
 _ACE_STEP_QWEN_PREFILL_MM_SEQ_MAX = 256
 
 
-def _ace_step_tuned_minimal_matmul_config():
-    cfg_cls = getattr(ttnn, "MinimalMatmulConfig", None)
-    coord = getattr(ttnn, "CoreCoord", None)
-    if cfg_cls is None or coord is None:
+def _ace_step_prefill_seq_active(seq_len: int) -> bool:
+    return 128 < int(seq_len) <= _ACE_STEP_QWEN_PREFILL_MM_SEQ_MAX
+
+
+def _ace_step_qkv_out_dim(model_args: Any) -> int:
+    cluster = getattr(model_args, "cluster_shape", (1, 1))
+    cols = int(cluster[1]) if len(cluster) > 1 else 1
+    return int(model_args.qkv_size) // max(1, cols)
+
+
+def _ace_step_is_mcast_matmul_program_config(pc: Any) -> bool:
+    if pc is None:
+        return False
+    name = type(pc).__name__
+    return name in (
+        "MatmulMultiCoreReuseMultiCast1DProgramConfig",
+        "MatmulMultiCoreReuseMultiCastProgramConfig",
+    )
+
+
+def _ace_step_prefill_qkv_program_config(model_args: Any, seq_len: int) -> Any:
+    device = getattr(model_args, "mesh_device", None) or getattr(model_args, "device", None)
+    if device is None:
         return None
-    gx, gy = _ACE_STEP_QWEN_PREFILL_MM_GRID
-    return cfg_cls(compute_with_storage_grid_size=coord(gx, gy), **_ACE_STEP_QWEN_PREFILL_MM_TUNED)
+    return ace_step_encoder_matmul_program_config(
+        device,
+        seq_len=int(seq_len),
+        in_dim=int(model_args.dim),
+        out_dim=_ace_step_qkv_out_dim(model_args),
+    )
 
 
-def _patch_prefill_minimal_matmul_getter(model_args: Any, name: str) -> None:
-    """Override a ``get_*_program_config`` getter to return the tuned config for PREFILL seq<=256."""
+def _ace_step_prefill_ff2_program_config(model_args: Any, seq_len: int) -> Any:
+    device = getattr(model_args, "mesh_device", None) or getattr(model_args, "device", None)
+    if device is None:
+        return None
+    cluster = getattr(model_args, "cluster_shape", (1, 1))
+    cols = int(cluster[1]) if len(cluster) > 1 else 1
+    k = int(model_args.hidden_dim) // max(1, cols)
+    return ace_step_encoder_matmul_program_config(
+        device,
+        seq_len=int(seq_len),
+        in_dim=k,
+        out_dim=int(model_args.dim),
+    )
+
+
+def _patch_prefill_matmul_program_getter(
+    model_args: Any,
+    name: str,
+    *,
+    builder: Callable[[Any, int], Any],
+) -> None:
     original: Callable | None = getattr(model_args, name, None)
     if original is None:
         return
-    tuned = _ace_step_tuned_minimal_matmul_config()
-    if tuned is None:
-        return
+    if hasattr(original, "cache_clear"):
+        original.cache_clear()
 
     @functools.wraps(original)
     def patched(mode, seq_len=1, *args, **kwargs):
-        if mode == Mode.PREFILL and 128 < int(seq_len) <= _ACE_STEP_QWEN_PREFILL_MM_SEQ_MAX:
-            return tuned
+        if mode == Mode.PREFILL and _ace_step_prefill_seq_active(seq_len):
+            pc = builder(model_args, int(seq_len))
+            if pc is not None:
+                return pc
         return original(mode, seq_len, *args, **kwargs)
 
+    if hasattr(original, "cache_clear"):
+        patched = functools.lru_cache(maxsize=None)(patched)  # type: ignore[assignment]
     setattr(model_args, name, patched)
 
 
+def _rehome_mcast_matmul_weights_to_dram_interleaved(tt_model: Any) -> None:
+    """One-time: ``MatmulMultiCoreReuseMultiCast*`` expects DRAM-interleaved weights (sweep ``l1/dram/*``)."""
+    dram_mc = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+    if dram_mc is None:
+        return
+    for layer in getattr(tt_model, "layers", []):
+        attn = getattr(layer, "attention", None)
+        if attn is not None and getattr(attn, "wqkv", None) is not None:
+            wqkv = _ensure_dram_interleaved(ttnn, attn.wqkv, dram_mc=dram_mc)
+            if wqkv is not attn.wqkv:
+                attn.wqkv = wqkv
+        mlp = getattr(layer, "feed_forward", None)
+        if mlp is not None and getattr(mlp, "w2", None) is not None:
+            w2 = _ensure_dram_interleaved(ttnn, mlp.w2, dram_mc=dram_mc)
+            if w2 is not mlp.w2:
+                mlp.w2 = w2
+
+
 def ace_step_apply_qwen_prefill_matmul_configs(model_args: Any) -> None:
-    """Pin tuned ``MinimalMatmulConfig`` for the SLOW Qwen3 prefill qkv + FF2 matmuls (seq<=256)."""
-    _patch_prefill_minimal_matmul_getter(model_args, "get_attn_qkv_program_config")
-    _patch_prefill_minimal_matmul_getter(model_args, "get_mlp_ff2_prg_config")
+    """Pin swept 1D/2D mcast matmul configs for Qwen3 prefill qkv + FF2 (replaces MinimalMatmul)."""
+    _patch_prefill_matmul_program_getter(
+        model_args,
+        "get_attn_qkv_program_config",
+        builder=_ace_step_prefill_qkv_program_config,
+    )
+    _patch_prefill_matmul_program_getter(
+        model_args,
+        "get_mlp_ff2_prg_config",
+        builder=_ace_step_prefill_ff2_program_config,
+    )
 
 
 # --------------------------------------------------------------------------------------------------
@@ -263,23 +350,29 @@ def ace_step_apply_qwen_prefill_matmul_configs(model_args: Any) -> None:
 # (per_core_N=24..48).  The 1D mcast_in0 kernel keeps all M tiles per core and splits N: with
 # Nt=192 and per_core_N=2 it fills exactly 96 cores (structural optimum on the 11x10=110-core BH
 # grid).  Device sweep (test_matmul_256x1024x6144_gateup_sweep.py, LoFi BF16xBFP8=>BF16, fp32 acc,
-# in-process kernel-duration) winner: 1D grid (11,10), per_core_N=2, in0_block_w=8 (~beats the
-# ibw=4 heuristic baseline of ~21.5us).  Gated to 128 < seq_len <= 256 and the non-galaxy path
-# (the TG reduce_scatter logic operates on separate w1_out/w3_out and is not fused here).
+# in-process kernel-duration) winner: 1D l1/dram/ws grid (11,10), per_core_N=2, ibw=8 = 23.34μs
+# (vs 26.49μs ibw=8 L1 interleaved baseline; 1.13×).  WIDTH_SHARDED out breaks ``ttnn.slice``;
+# keep L1 interleaved out here (sweep ws win not usable without a de-shard).
+# Gated to 128 < seq_len <= 256 and the non-galaxy path.
 _ACE_STEP_QWEN_GATEUP_GRID = (11, 10)
 _ACE_STEP_QWEN_GATEUP_TARGET_CORES = 96
 _ACE_STEP_QWEN_GATEUP_IBW = 8
 
 
-def _ace_step_gateup_subblock(per_core_m: int, per_core_n: int) -> tuple[int, int]:
+def _ace_step_gateup_subblock(per_core_m: int, per_core_n: int, *, out_sharded: bool = False) -> tuple[int, int]:
     """Largest (out_subblock_h, out_subblock_w) with h*w<=4 (fp32 dest acc)."""
+    if out_sharded:
+        for w in (4, 3, 2, 1):
+            if per_core_n % w == 0:
+                return 1, w
+        return 1, 1
     for h, w in ((2, 2), (4, 1), (1, 4), (2, 1), (1, 2), (1, 1)):
         if per_core_m % h == 0 and per_core_n % w == 0:
             return h, w
     return 1, 1
 
 
-def _ace_step_gateup_1d_config(seq_len: int, k: int, fused_n: int):
+def _ace_step_gateup_1d_config(seq_len: int, k: int, fused_n: int, *, out_sharded: bool = True):
     cfg_cls = getattr(ttnn, "MatmulMultiCoreReuseMultiCast1DProgramConfig", None)
     coord = getattr(ttnn, "CoreCoord", None)
     if cfg_cls is None or coord is None:
@@ -298,7 +391,7 @@ def _ace_step_gateup_1d_config(seq_len: int, k: int, fused_n: int):
     per_core_n = max(1, math.ceil(nt / _ACE_STEP_QWEN_GATEUP_TARGET_CORES))
     if math.ceil(nt / per_core_n) > gx * gy:
         per_core_n = math.ceil(nt / (gx * gy))
-    sh, sw = _ace_step_gateup_subblock(mt, per_core_n)
+    sh, sw = _ace_step_gateup_subblock(mt, per_core_n, out_sharded=out_sharded)
     return cfg_cls(
         compute_with_storage_grid_size=coord(gx, gy),
         in0_block_w=ibw,
@@ -360,7 +453,7 @@ def _patch_mlp_fused_gate_up(mlp_mod: Any) -> None:
         ff1_3_mc = mlp_mod.args.get_mlp_ff1_3_mem_config(mode, mlp_mod.prefetcher)
 
         hidden = mlp_mod.args.hidden_dim
-        fused_pc = _ace_step_gateup_1d_config(int(seq_len), mlp_mod.args.dim, 2 * hidden)
+        fused_pc = _ace_step_gateup_1d_config(int(seq_len), mlp_mod.args.dim, 2 * hidden, out_sharded=False)
 
         w13_out = ttnn.linear(
             x,
@@ -447,15 +540,16 @@ def ace_step_apply_qwen_prefill_l1(tt_model: Any, model_args: Any) -> None:
 
     ace_step_patch_model_args_prefill_l1(model_args)
     ace_step_apply_qwen_prefill_matmul_configs(model_args)
+    _rehome_mcast_matmul_weights_to_dram_interleaved(tt_model)
     ace_step_apply_qwen_prefill_gate_up_fusion(tt_model)
 
     _patch_embd_l1_output(tt_model.embd, l1_mc=l1_mc)
     for layer in tt_model.layers:
         _patch_decoder_l1_residual(layer, l1_mc=l1_mc)
-        if hasattr(layer, "attention_norm"):
-            _patch_distributed_norm_prefill_l1(layer.attention_norm, l1_mc=l1_mc)
-        if hasattr(layer, "ff_norm"):
-            _patch_distributed_norm_prefill_l1(layer.ff_norm, l1_mc=l1_mc)
+        for norm_attr in ("attention_norm", "ff_norm", "pre_ff_norm", "post_ff_norm"):
+            norm_mod = getattr(layer, norm_attr, None)
+            if norm_mod is not None:
+                _patch_distributed_norm_prefill_l1(norm_mod, l1_mc=l1_mc)
 
     if hasattr(tt_model, "norm"):
         _patch_distributed_norm_prefill_l1(tt_model.norm, l1_mc=l1_mc)
@@ -509,7 +603,13 @@ def ace_step_qwen_prefill_l1_op_context() -> Iterator[None]:
 
         return wrapper
 
-    for op_name in ("linear", "add", "mul", "multiply", "pad", "reshape", "permute", "typecast"):
+    # linear: move in0 (activation) AND output to L1 so all MatmulDeviceOperation calls
+    # see L1-resident in0, eliminating the "in0:dram_interleaved" bucket entirely.
+    if hasattr(ttnn, "linear"):
+        saved["ttnn.linear"] = ttnn.linear
+        ttnn.linear = _wrap_l1_unary("linear", ttnn.linear)
+
+    for op_name in ("add", "mul", "multiply", "pad", "reshape", "permute", "typecast"):
         if hasattr(ttnn, op_name):
             saved[f"ttnn.{op_name}"] = getattr(ttnn, op_name)
             setattr(ttnn, op_name, _wrap_l1_compute(op_name, getattr(ttnn, op_name)))
@@ -544,11 +644,45 @@ def ace_step_qwen_prefill_l1_op_context() -> Iterator[None]:
                 setattr(transformer, op_name, _wrap_l1_unary(op_name, getattr(transformer, op_name)))
 
     if experimental is not None:
-        for op_name in ("minimal_matmul", "nlp_create_qkv_heads", "all_gather_async"):
+        for op_name in ("nlp_create_qkv_heads", "all_gather_async"):
             if hasattr(experimental, op_name):
                 key = f"experimental.{op_name}"
                 saved[key] = getattr(experimental, op_name)
                 setattr(experimental, op_name, _wrap_l1_compute(op_name, getattr(experimental, op_name)))
+        if hasattr(experimental, "minimal_matmul"):
+            _orig_mm = experimental.minimal_matmul
+            saved["experimental.minimal_matmul"] = _orig_mm
+
+            @functools.wraps(_orig_mm)
+            def _patched_minimal_matmul(*args, **kwargs):
+                config = kwargs.get("config")
+                if _ace_step_is_mcast_matmul_program_config(config) and len(args) >= 2:
+                    in0_orig = args[0]
+                    in0 = _ensure_l1(ttnn, in0_orig, l1_mc=l1_mc)
+                    weight_orig = args[1]
+                    weight = _ensure_dram_interleaved(ttnn, weight_orig, dram_mc=dram_mc)
+                    if in0 is not in0_orig or weight is not weight_orig:
+                        args = (in0, weight) + args[2:]
+                    out_mc = kwargs.get("memory_config") or l1_mc
+                    matmul_kw = {k: v for k, v in kwargs.items() if k not in ("config", "memory_config")}
+                    return ttnn.matmul(
+                        args[0],
+                        args[1],
+                        program_config=config,
+                        memory_config=out_mc,
+                        **matmul_kw,
+                    )
+                # Stock MinimalMatmul: L1 activations + L1 output; weights may stay in DRAM.
+                if kwargs.get("memory_config") is None:
+                    kwargs["memory_config"] = l1_mc
+                if args:
+                    in0_orig = args[0]
+                    in0 = _ensure_l1(ttnn, in0_orig, l1_mc=l1_mc)
+                    if in0 is not in0_orig:
+                        args = (in0,) + args[1:]
+                return _orig_mm(*args, **kwargs)
+
+            experimental.minimal_matmul = _patched_minimal_matmul
         if hasattr(experimental, "nlp_concat_heads"):
             saved["experimental.nlp_concat_heads"] = experimental.nlp_concat_heads
             experimental.nlp_concat_heads = _wrap_l1_unary("nlp_concat_heads", experimental.nlp_concat_heads)
