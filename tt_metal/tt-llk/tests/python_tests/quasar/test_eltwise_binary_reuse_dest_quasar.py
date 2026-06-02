@@ -324,13 +324,6 @@ def test_eltwise_binary_reuse_dest_quasar(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    # Quantize golden tensor if output format is MX format. Feed the native
-    # (fp16 or bf16) values directly.
-    if formats.output_format.is_mx_format():
-        golden_tensor = quantize_mx_tensor_chunked(
-            golden_tensor, formats.output_format
-        ).to(torch_format)
-
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
     ), "Assert against golden failed"
