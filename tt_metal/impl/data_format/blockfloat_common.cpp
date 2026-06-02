@@ -988,23 +988,41 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     // tile/face shapes where the per-tile divisibility invariants do not
     // hold (production formats - 32x32 tile, 16x16 face - always satisfy
     // both invariants and use the optimized path above).
+    //
+    // All scratch vectors used by this path are sized / hoisted up-front so
+    // the inner loops pay zero allocation cost: `packed_result` is reserved
+    // to its final output size; the small accumulators (`exponents`, `data`)
+    // are reserved to their flush-threshold capacity; and the per-row /
+    // per-tile scratch (`single_row`, `packed_data`) are hoisted outside the
+    // inner loops and `clear()`-reused instead of being re-constructed each
+    // iteration (clear() preserves capacity, so reserve() is paid once total).
     // ------------------------------------------------------------------
-    std::vector<uint32_t> packed_result;
-    std::vector<uint8_t> exponents;
-    std::vector<uint32_t> data;
-    int fp32_element_index = 0;
     const uint32_t subtile_rows = face_H;
     const uint32_t subtile_cols = face_W;
-    const int num_exponents_in_dword = 4;
+    constexpr int num_exponents_in_dword = 4;
+
+    std::vector<uint32_t> packed_result;
+    packed_result.reserve(static_cast<size_t>(num_tiles) * bfp_dwords_per_tile);
+    std::vector<uint8_t> exponents;
+    exponents.reserve(num_exponents_in_dword);
+    std::vector<uint32_t> data;
+    data.reserve(num_mantissas_in_dword);
+    std::vector<uint32_t> single_row;
+    single_row.reserve(subtile_cols);
+    std::vector<uint32_t> packed_data;
+    packed_data.reserve(num_data_dwords_per_tile);
+    std::vector<uint8_t> exponents_with_padding;
+    exponents_with_padding.reserve(l1_alignment * subtiles_in_tile_row * subtiles_in_tile_col);
+
+    int fp32_element_index = 0;
 
     for (uint32_t tile_index = 0; tile_index < num_tiles; ++tile_index) {
-        std::vector<uint32_t> packed_data;
-        std::vector<uint8_t> exponents_with_padding;
-        exponents_with_padding.reserve(l1_alignment * subtiles_in_tile_row * subtiles_in_tile_col);
+        packed_data.clear();
+        exponents_with_padding.clear();
         for (uint32_t tr = 0; tr < subtiles_in_tile_row; ++tr) {
             for (uint32_t tc = 0; tc < subtiles_in_tile_col; ++tc) {
                 for (uint32_t i = 0; i < subtile_rows; ++i) {
-                    std::vector<uint32_t> single_row;
+                    single_row.clear();
                     for (uint32_t j = 0; j < subtile_cols; ++j) {
                         int data_index;
                         if (row_major_input) {
@@ -1042,9 +1060,11 @@ std::vector<uint32_t> pack_as_bfp_tiles(
             }
         }
         if (exponent_padding) {
-            std::vector<uint8_t> pads(
-                tt::round_up(exponents_with_padding.size(), l1_alignment) - exponents_with_padding.size(), 0);
-            exponents_with_padding.insert(exponents_with_padding.end(), pads.begin(), pads.end());
+            // Zero-pad in place instead of allocating a temporary `pads` vector
+            // each tile just to copy zeros across.
+            const size_t pad_count =
+                tt::round_up(exponents_with_padding.size(), l1_alignment) - exponents_with_padding.size();
+            exponents_with_padding.insert(exponents_with_padding.end(), pad_count, static_cast<uint8_t>(0));
             std::vector<uint32_t> packed = pack_exponents(exponents_with_padding, num_exponents_in_dword);
             packed_result.insert(packed_result.end(), packed.begin(), packed.end());
         }
