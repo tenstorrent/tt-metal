@@ -451,6 +451,7 @@ class TTSeamlessM4Tv2Model:
         self._lm_local_vocab = int(getattr(parameters.lm_head, "local_vocab_size", 0) or 0)
         self._lm_num_devices = max(1, self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1)
         self._kv_decode_rt: Optional[TextDecoderKvDecodeRuntime] = None
+        self._decode_h2d_cache: dict = {}  # per-batch reusable host staging buffers for per-step uploads
         self._decode_trace_kernels_warmed = False
         self._t2u_attn_mask_cache: dict[tuple[int, int], ttnn.Tensor] = {}
 
@@ -879,20 +880,36 @@ class TTSeamlessM4Tv2Model:
         )
         return self._kv_decode_rt
 
-    def _reset_kv_decode_cur_pos(self, position: int, batch_size: int) -> None:
+    def _decode_h2d_staging(self, batch_size: int) -> dict:
+        """Reusable host staging buffers for the per-step decode H2D uploads — filled in place each step
+        (``fill_``) instead of re-allocating ``torch.tensor`` lists every step."""
+        st = self._decode_h2d_cache.get(batch_size)
+        if st is None:
+            st = {
+                "tok_cpu": torch.zeros((batch_size, 1), dtype=torch.int32),
+                "pos_cpu": torch.zeros((batch_size, 1), dtype=torch.int32),
+                "curpos_cpu": torch.zeros((batch_size,), dtype=torch.int32),
+            }
+            self._decode_h2d_cache[batch_size] = st
+        return st
+
+    def _reset_kv_decode_cur_pos(self, position: int, batch_size: int, *, cq_id: int = 0) -> None:
         rt = self._ensure_kv_decode_runtime(batch_size)
-        pos_cpu = torch.full((batch_size,), position, dtype=torch.int32)
+        st = self._decode_h2d_staging(batch_size)
+        st["curpos_cpu"].fill_(position)
         ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(pos_cpu, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT),
+            ttnn.from_torch(st["curpos_cpu"], dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT),
             rt.cur_pos_tt,
+            cq_id=cq_id,
         )
 
     def _upload_single_token_to_decode_rt(self, token_id: int, batch_size: int) -> None:
         """Upload one greedy-decode token id into the pre-allocated ``[B, 1]`` decode buffer."""
         rt = self._ensure_kv_decode_runtime(batch_size)
-        tok_cpu = torch.tensor([[int(token_id)]] * batch_size, dtype=torch.int32)
+        st = self._decode_h2d_staging(batch_size)
+        st["tok_cpu"].fill_(int(token_id))
         ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(tok_cpu, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
+            ttnn.from_torch(st["tok_cpu"], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
             rt.token_tt,
         )
 
@@ -906,18 +923,19 @@ class TTSeamlessM4Tv2Model:
     ) -> None:
         """Upload decode token + position (host-only; safe while a decode trace is active)."""
         rt = self._ensure_kv_decode_runtime(batch_size)
-        tok_cpu = torch.tensor([[int(token_id)]] * batch_size, dtype=torch.int32)
+        st = self._decode_h2d_staging(batch_size)
+        st["tok_cpu"].fill_(int(token_id))
         ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(tok_cpu, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
+            ttnn.from_torch(st["tok_cpu"], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
             rt.token_tt,
             cq_id=cq_id,
         )
         # HF ``create_position_ids_from_input_ids`` for a non-pad ``[B,1]`` decode token:
         # ``(cumsum(mask) + position) * mask + pad_id`` → ``1 + position + pad_id``.
         pos_val = 1 + position + self.pad_token_id
-        pos_cpu = torch.full((batch_size, 1), pos_val, dtype=torch.int32)
+        st["pos_cpu"].fill_(pos_val)
         ttnn.copy_host_to_device_tensor(
-            ttnn.from_torch(pos_cpu, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
+            ttnn.from_torch(st["pos_cpu"], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
             rt.pos_tt,
             cq_id=cq_id,
         )
@@ -1520,7 +1538,7 @@ class TTSeamlessM4Tv2Model:
         dec_len: int,
         *,
         repetition_penalty: float = 1.0,
-        prev_token_ids: Optional[List[int]] = None,
+        prev_token_ids: Optional["Collection[int]"] = None,
         tok_tt: Optional[tuple[ttnn.Tensor, ttnn.Tensor]] = None,
     ) -> int:
         """Greedy next-token id for traced KV decode.
@@ -1551,7 +1569,8 @@ class TTSeamlessM4Tv2Model:
             flat = int(chunk_max.reshape(-1).argmax())
             d, c = flat // nch, flat % nch
             token = d * v_loc + c * chunk_w + int(local_idx[d, c])
-            if not (repetition_penalty > 1.0 and prev_token_ids and token in set(prev_token_ids)):
+            # ``prev_token_ids`` is the persistent decode set → O(1) membership, no per-step rebuild.
+            if not (repetition_penalty > 1.0 and prev_token_ids and token in prev_token_ids):
                 return token
             host = self._logits_row_to_host(logits, dec_len, sharded=True)
         else:
@@ -1917,6 +1936,10 @@ class TTSeamlessM4Tv2Model:
             if _decode_step_profile:
                 import time as _t_prof
 
+            # Persistent prev-token set for the rep-penalty membership test (updated on append) so the
+            # traced decode path doesn't rebuild ``set(seq_host)`` (O(n)) every step.
+            seq_host_set = set(seq_host)
+
             for _decode_step in range(decode_steps_remaining):
                 if _decode_step_profile:
                     _t_step_start = _t_prof.perf_counter()
@@ -1948,12 +1971,14 @@ class TTSeamlessM4Tv2Model:
                             # CQ1 waits until CQ0 has finished the previous trace
                             # (decode input buffers are free to be overwritten).
                             ttnn.wait_for_event(1, _2cq_op_event)
-                            # Upload next-step token + position on CQ1 while CQ0 is idle.
+                            # Upload next-step token + position + cur_pos all on CQ1 while CQ0 is idle, so
+                            # the ``write_event`` covers every input and CQ0's only work is the trace
+                            # (cur_pos was previously uploaded on CQ0, on the critical path).
                             self._upload_kv_decode_step_inputs_cq1(cur_tok, cur_pos, batch_size)
+                            self._reset_kv_decode_cur_pos(cur_pos, batch_size, cq_id=1)
                             write_event = ttnn.record_event(self.device, 1)
                             # CQ0 waits for CQ1 uploads before executing the trace.
                             ttnn.wait_for_event(0, write_event)
-                            self._reset_kv_decode_cur_pos(cur_pos, batch_size)
                             if _decode_step_profile:
                                 _t_setup_end = _t_prof.perf_counter()
                             ttnn.execute_trace(self.device, trace_id, cq_id=0, blocking=True)
@@ -2033,7 +2058,7 @@ class TTSeamlessM4Tv2Model:
                         logits,
                         1,
                         repetition_penalty=repetition_penalty,
-                        prev_token_ids=seq_host,
+                        prev_token_ids=seq_host_set,
                         tok_tt=self._kv_decode_rt.tok_tt if self._kv_decode_rt is not None else None,
                     )
                 else:
@@ -2046,6 +2071,7 @@ class TTSeamlessM4Tv2Model:
                 if not (use_decode_trace and decode_trace_ready and not do_sample):
                     ttnn.deallocate(logits)
                 seq_host.append(next_id)
+                seq_host_set.add(next_id)
                 cur_pos += 1
                 if not cross_valid:
                     cross_valid = True
