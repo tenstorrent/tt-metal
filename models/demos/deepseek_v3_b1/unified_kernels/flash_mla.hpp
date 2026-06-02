@@ -747,6 +747,7 @@ struct FlashMLADecode {
             pack_reconfig_data_format<true>(cb_out_o);
             PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
             PACK(SFPU_TEMPLATE_INIT_KERNEL(exponential, sfpu::exp_init, true, scale_fp32, true, DST_ACCUM_MODE));
+            PACK(init_fast_approx_exp_constants<scale_fp32>());
             sdpa_custom_mm_block_init_pack_short();
 
             uint32_t cur_pos = args.local_cur_pos;
