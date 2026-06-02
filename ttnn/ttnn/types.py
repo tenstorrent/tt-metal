@@ -115,5 +115,6 @@ cb_descriptor_from_sharded_tensor = ttnn._ttnn.program_descriptor.cb_descriptor_
 get_cb_address = ttnn._ttnn.program_descriptor.get_cb_address
 UnpackToDestMode = ttnn._ttnn.program_descriptor.UnpackToDestMode
 compute_program_descriptor_hash = ttnn._ttnn.operations.generic.compute_program_descriptor_hash
+precompile_program_descriptor = ttnn._ttnn.operations.generic.precompile_program_descriptor
 
 TensorAccessorArgs = ttnn._ttnn.tensor_accessor_args.TensorAccessorArgs

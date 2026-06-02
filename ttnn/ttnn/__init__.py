@@ -281,6 +281,7 @@ from ttnn.types import (
     get_cb_address,
     UnpackToDestMode,
     compute_program_descriptor_hash,
+    precompile_program_descriptor,
     TensorAccessorArgs,
 )
 

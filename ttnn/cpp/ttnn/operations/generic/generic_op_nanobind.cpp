@@ -13,6 +13,9 @@
 #include "generic_op.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::generic {
@@ -69,6 +72,40 @@ void bind_generic_operation(nb::module_& mod) {
             Hashes kernel sources, compile-time args, core ranges, CB structure,
             and semaphores. Excludes runtime arg values and buffer addresses,
             making it suitable as a cache key for structural equivalence.
+        )pbdoc");
+
+    mod.def(
+        "precompile_program_descriptor",
+        [](tt::tt_metal::distributed::MeshDevice* device, const tt::tt_metal::ProgramDescriptor& program_descriptor) {
+            TT_FATAL(device != nullptr, "precompile_program_descriptor: device must not be null");
+            const auto devices = device->get_devices();
+            TT_FATAL(!devices.empty(), "precompile_program_descriptor: MeshDevice has no devices");
+            // Build the program from the descriptor and JIT-compile its kernels WITHOUT
+            // enqueueing it. CompileProgram populates the on-disk JIT cache (hash-keyed
+            // per kernel); a later ttnn.generic_op with a structurally-equal descriptor
+            // reads those binaries back as a warm cache hit. Compiling for devices[0] is
+            // sufficient: a homogeneous mesh shares one build_key, so one compile warms
+            // the cache for the whole mesh. No command queue / program-cache state is
+            // touched, so this is safe to call concurrently for distinct descriptors.
+            tt::tt_metal::Program program{program_descriptor};
+            tt::tt_metal::detail::CompileProgram(devices.front(), program);
+        },
+        nb::arg("device"),
+        nb::arg("program_descriptor"),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"pbdoc(
+            JIT-compile a ProgramDescriptor's kernels up front, without enqueuing.
+
+            Builds the program from the descriptor and compiles its kernels into the
+            on-disk JIT cache (keyed per kernel hash). Does NOT enqueue to any command
+            queue and does NOT touch the device program cache, so it is safe to call
+            concurrently from multiple Python threads (the GIL is released for the
+            duration of the C++ compile). A subsequent ttnn.generic_op with a
+            structurally-equal descriptor then hits the warm cache.
+
+            Args:
+                device (ttnn.MeshDevice): device whose build environment to compile for.
+                program_descriptor (ttnn.ProgramDescriptor): descriptor to compile.
         )pbdoc");
 }
 
