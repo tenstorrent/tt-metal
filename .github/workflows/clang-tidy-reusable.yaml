@@ -96,6 +96,7 @@ jobs:
             echo "CTCACHE_KEEP_COMMENTS=1"
             echo "CTCACHE_DEBUG=1"
             echo "CTCACHE_LOG_LEVEL=DEBUG"
+            echo "CTCACHE_IGNORE_OUTPUT=1"
             # Note: CTCACHE_SAVE_OUTPUT is intentionally NOT set — S3 store_in_cache_with_data
             # is a TODO no-op in ctcache 1.2.0, so saving output would silently write nothing.
             echo "AWS_ACCESS_KEY_ID=${{ secrets.GARAGE_S3_ACCESS_KEY }}"
