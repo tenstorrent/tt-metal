@@ -16,7 +16,6 @@ import torch
 from loguru import logger
 
 import ttnn
-
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -37,7 +36,14 @@ KVPE_HEAD_DIM = 576
 )
 @pytest.mark.timeout(0)
 def test_update_padded_kv_cache_single_iteration_prefill(
-    mesh_device, config_name, num_users, num_layers, new_isl_tiles_per_dev, cache_tokens_per_dev, is_ci_env, is_ci_v2_env
+    mesh_device,
+    config_name,
+    num_users,
+    num_layers,
+    new_isl_tiles_per_dev,
+    cache_tokens_per_dev,
+    is_ci_env,
+    is_ci_v2_env,
 ):
     """Single-iteration (non-padded) prefill: write one chunk-aligned slab per (user, layer)
     at offset 0, gather the whole cache, and PCC each slot's valid data against what was sent."""
@@ -124,7 +130,10 @@ def test_update_padded_kv_cache_single_iteration_prefill(
             # Each chip's slab-0 prefix [0:chunk_local] holds its share of the chunk;
             # concat across chips to rebuild natural global order.
             written = torch.cat(
-                [cache_host[batch_idx, 0, c * cache_tokens_per_dev : c * cache_tokens_per_dev + chunk_local, :] for c in range(sp)],
+                [
+                    cache_host[batch_idx, 0, c * cache_tokens_per_dev : c * cache_tokens_per_dev + chunk_local, :]
+                    for c in range(sp)
+                ],
                 dim=0,
             )
             _, msg = assert_with_pcc(sent[(u, l)], written, 0.99)
@@ -169,7 +178,15 @@ def _rotated_chip_positions(kv_actual, sp, chunk_local):
 @pytest.mark.parametrize("scenario", ["non_padded", "padded_partial"], ids=["non_padded", "padded_partial"])
 @pytest.mark.timeout(0)
 def test_update_padded_kv_cache_multi_iteration_prefill(
-    mesh_device, config_name, num_users, num_layers, new_isl_tiles_per_dev, cache_tokens_per_dev, scenario, is_ci_env, is_ci_v2_env
+    mesh_device,
+    config_name,
+    num_users,
+    num_layers,
+    new_isl_tiles_per_dev,
+    cache_tokens_per_dev,
+    scenario,
+    is_ci_env,
+    is_ci_v2_env,
 ):
     """Multi-iteration prefill, multi-user / multi-layer.
 
@@ -280,7 +297,9 @@ def test_update_padded_kv_cache_multi_iteration_prefill(
     cache_host = ttnn.to_torch(
         kv_cache,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=tuple(concat_dims), mesh_shape=mesh_device.shape),
-    ).to(torch.bfloat16)[:, :1, :, :]  # [users*layers, 1, cache_global, KVPE_HEAD_DIM]
+    ).to(torch.bfloat16)[
+        :, :1, :, :
+    ]  # [users*layers, 1, cache_global, KVPE_HEAD_DIM]
 
     # cache cell (chip c, local row lr) holds global position (lr//C)*chunk_global + c*C + (lr%C);
     # invert for every valid position to rebuild natural order from the chip-concatenated gather.
