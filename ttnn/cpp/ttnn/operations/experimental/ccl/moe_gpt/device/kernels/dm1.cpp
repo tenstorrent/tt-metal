@@ -312,8 +312,13 @@ void kernel_main() {
         }
     }
 
-    // Signal combine cores that all expert data is written
+    // Signal combine cores that all expert data is written.
+    // Tag the cross-chip semaphore increments with TRID 0x4 and reset to 0 afterwards so
+    // the ERISC receiver's WriteTransactionIdTracker does not accumulate stale counts
+    // across kernel invocations (same root-cause fixed for DeepSeek in PR #44425).
     uint32_t combine_semaphore_addr = get_semaphore(combine_semaphore_id);
+    constexpr uint32_t combine_trid = 0x4;
+    noc_async_write_set_trid(combine_trid, /*noc=*/1);
     for (uint32_t y = 0; y < height_shard_dim; ++y) {
         uint32_t idx = combine_core_x + y * width_shard_dim;
         uint64_t dest_sem_noc_addr =
@@ -321,4 +326,5 @@ void kernel_main() {
         noc_semaphore_inc(dest_sem_noc_addr, 1, 1, vchannel);
     }
     noc_async_atomic_barrier(1);
+    noc_async_write_set_trid(0, /*noc=*/1);
 }

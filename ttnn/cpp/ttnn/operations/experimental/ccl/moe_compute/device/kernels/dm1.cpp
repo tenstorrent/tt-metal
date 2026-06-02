@@ -193,8 +193,14 @@ void kernel_main() {
     uint64_t matmul_chunk_available_semaphore_noc_addr = get_noc_addr(
         tilize_drain_core_noc_x, tilize_drain_core_noc_y, get_semaphore(matmul_chunk_available_semaphore_id));
 
-    // Signal to combine cores that chunk is available
+    // Signal to combine cores that chunk is available.
+    // Use an explicit TRID (0x4) so each batch of cross-chip posted semaphore writes is
+    // tracked and flushed independently.  Without resetting to TRID 0 afterwards the ERISC
+    // receiver's WriteTransactionIdTracker can accumulate stale counts across kernel
+    // invocations (same root-cause fixed for DeepSeek in PR #44425).
     auto combine_semaphore_inc = [&](const uint32_t inc = 1) {
+        constexpr uint32_t semaphore_trid = 0x4;
+        noc_async_write_set_trid(semaphore_trid, /*noc=*/1);
         for (uint32_t y = 0; y < height_shard_dim; ++y) {
             const uint32_t idx = combine_core_x + y * width_shard_dim;
             const uint64_t dest_sem_noc_addr = safe_get_noc_addr(
@@ -204,7 +210,8 @@ void kernel_main() {
                 /*noc_id=*/1);
             noc_semaphore_inc</*posted=*/true>(dest_sem_noc_addr, inc, /*noc_id=*/1, vchannel);
         };
-        noc_async_posted_writes_flushed(/*noc=*/1);
+        noc_async_write_flushed_with_trid(semaphore_trid, /*noc=*/1);
+        noc_async_write_set_trid(0, /*noc=*/1);
     };
 
     //-------------------------------------------------------------------------
