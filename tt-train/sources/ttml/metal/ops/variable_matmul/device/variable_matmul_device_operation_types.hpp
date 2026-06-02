@@ -21,38 +21,21 @@ struct VariableMatmulConfig {
     tt::tt_metal::CoreCoord compute_with_storage_grid_size = {0, 0};
 };
 
-// EP-friendly on-device offsets: instead of host-supplied scalars, the kernel reads
-// offsets[start_index..start_index+2] from a device tensor at runtime and derives the
-// matching row/K offsets. Lets moe_ffn avoid offsets.to_vector() under MeshDevice EP.
+// EP-friendly on-device offsets: the kernel reads offsets[start_index..start_index+2]
+// from a device tensor at runtime and derives the matching row/K offsets. Lets moe_ffn
+// avoid offsets.to_vector() under MeshDevice EP.
 enum class OffsetsRole : uint32_t {
     None = 0,
-    // Reads offsets[start_index] and uses (value / TILE_HEIGHT) as the output write-at-offset
-    // row (matmul writes into rows [offset, offset + actual_M) of the parent output tensor).
-    OutputRow = 1,
-    // Reads BOTH offsets[start_index] and offsets[start_index+1]. The kernel processes
-    // M-rows [offsets[start_index], offsets[start_index+1]) of the input tensor, treating
-    // it as a parent buffer. Sets effective_M_tiles and the derived per-core M_start_tile /
-    // M_end_tile / M_blocks_per_core values used by both dataflow and compute kernels.
-    InputRow = 2,
-    // Reads offsets[start_index] and uses (value / TILE_HEIGHT) as in0_k_offset_tiles
-    // (matmul-K start offset on the input parent). Matmul-K extent comes from the other
-    // input's shape via the existing variable-K path; only the parent-K start is overridden.
-    InputK = 3,
-    // Reads offsets[start_index] and uses (value / TILE_HEIGHT) as in1_k_offset_tiles
-    // (matmul-K start offset on the weight parent). Same shape rules as InputK on the in1 side.
-    WeightK = 4,
-    // Combined InputRow + OutputRow: reads offsets[start..start+2] and uses the same range
-    // for BOTH the in0 read window AND the output write window. Lets moe_ffn use a single
-    // shared output tensor of shape [T_cap, N] instead of E per-expert intermediates —
-    // each expert's matmul reads grouped[offsets[e]:offsets[e+1]] and writes into the
-    // corresponding row range of the shared output. The upper-bound constraint on per-expert
-    // size disappears: every expert's actual rows fit naturally into its slice of the
-    // shared [T_cap, N] tensor.
+    // Reads offsets[start..start+2] and uses the same range for BOTH the in0 read window
+    // AND the output write window. Lets moe_ffn use a single shared output tensor of shape
+    // [T_cap, N] instead of E per-expert intermediates — each expert's matmul reads
+    // grouped[offsets[e]:offsets[e+1]] and writes into the corresponding row range of the
+    // shared output. The upper-bound constraint on per-expert size disappears: every
+    // expert's actual rows fit naturally into its slice of the shared [T_cap, N] tensor.
     InputAndOutputRow = 5,
-    // Combined InputK + WeightK: reads offsets[start..start+2] and uses the same range
-    // for BOTH the in0 K-slice and the in1 K-slice. Used in moe_ffn backward dW matmuls
-    // where both operands are shared [T_cap, *] tensors and only the expert's K-row range
-    // should participate in the K-reduce.
+    // Reads offsets[start..start+2] and uses the same range for BOTH the in0 K-slice and
+    // the in1 K-slice. Used in moe_ffn backward dW matmuls where both operands are shared
+    // [T_cap, *] tensors and only the expert's K-row range should participate in the K-reduce.
     InputAndWeightK = 6,
 };
 

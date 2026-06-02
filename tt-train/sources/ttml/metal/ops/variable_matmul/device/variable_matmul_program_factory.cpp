@@ -237,11 +237,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     constexpr uint32_t cb_ctrl_id = tt::CBIndex::c_8;
     constexpr uint32_t cb_ctrl_bytes = 16U;
     const bool cb_ctrl_active = tensor_args.offsets_tensor.has_value() &&
-                                (operation_attributes.offsets_role == OffsetsRole::OutputRow ||
-                                 operation_attributes.offsets_role == OffsetsRole::InputRow ||
-                                 operation_attributes.offsets_role == OffsetsRole::InputK ||
-                                 operation_attributes.offsets_role == OffsetsRole::WeightK ||
-                                 operation_attributes.offsets_role == OffsetsRole::InputAndOutputRow ||
+                                (operation_attributes.offsets_role == OffsetsRole::InputAndOutputRow ||
                                  operation_attributes.offsets_role == OffsetsRole::InputAndWeightK);
     if (cb_ctrl_active) {
         tt::tt_metal::CircularBufferConfig cb_ctrl_cfg =
@@ -263,14 +259,11 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     // Orthogonal offset flags derived from the role. Each kernel branch keys off these (not
     // off the role enum), so future role combinations are just a matter of listing flags here.
     const auto role = operation_attributes.offsets_role;
-    const bool offset_m_axis = offsets_active && (role == OffsetsRole::OutputRow || role == OffsetsRole::InputRow ||
-                                                  role == OffsetsRole::InputAndOutputRow);
-    const bool offset_in0_row =
-        offsets_active && (role == OffsetsRole::InputRow || role == OffsetsRole::InputAndOutputRow);
-    const bool offset_out_row =
-        offsets_active && (role == OffsetsRole::OutputRow || role == OffsetsRole::InputAndOutputRow);
-    const bool offset_in0_k = offsets_active && (role == OffsetsRole::InputK || role == OffsetsRole::InputAndWeightK);
-    const bool offset_in1_k = offsets_active && (role == OffsetsRole::WeightK || role == OffsetsRole::InputAndWeightK);
+    const bool offset_m_axis = offsets_active && role == OffsetsRole::InputAndOutputRow;
+    const bool offset_in0_row = offsets_active && role == OffsetsRole::InputAndOutputRow;
+    const bool offset_out_row = offsets_active && role == OffsetsRole::InputAndOutputRow;
+    const bool offset_in0_k = offsets_active && role == OffsetsRole::InputAndWeightK;
+    const bool offset_in1_k = offsets_active && role == OffsetsRole::InputAndWeightK;
     // `use_offset` / `use_offset_in1` — when true, the dm kernel adds the row/K offset to
     // the per-tile address. Computed once and shared across all four dm kernel CTA lists
     // (in0 sender + in0 receiver, in1 sender + in1 receiver). Sender and receiver MUST
