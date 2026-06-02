@@ -61,13 +61,27 @@ class JobStatus(str, Enum):
     action_required = "action_required"
 
 
-class TtSmiReset(BaseModel):
-    github_job_id: int
-    workflow_attempt: Optional[int] = None
-    tt_smi_reset_attempt: int
-    final_status: Optional[str] = None
-    total_reset_time_sec: Optional[float] = None
-    error_summary: Optional[str] = None
+class TTSmiReset(BaseModel):
+    """
+    Tracks tt-smi reset behavior per CI/CD job attempt.
+
+    ``github_job_id`` lives on the parent :class:`Job`; the wrangler copies it when
+    inserting into ``tt_smi_reset``.
+    """
+
+    workflow_attempt: int = Field(description="Workflow run attempt number.")
+    tt_smi_reset_attempt: int = Field(
+        description="Sequential tt-smi reset attempt number within the job."
+    )
+    final_status: str = Field(
+        description="Final reset status for this reset attempt: SUCCESS or FAILURE."
+    )
+    total_reset_time_sec: float = Field(
+        description="Total time spent in this reset attempt in seconds."
+    )
+    error_summary: Optional[str] = Field(
+        None, description="Summary of reset-related error messages extracted from logs."
+    )
 
 
 class Job(BaseModel):
@@ -86,10 +100,6 @@ class Job(BaseModel):
     github_job_link: Optional[str] = Field(
         None,
         description="Link to the Github Actions CI job, for pipelines orchestrated and " "executed by Github.",
-    )
-    workflow_attempt: Optional[int] = Field(
-        None,
-        description="GitHub workflow rerun attempt number.",
     )
     name: str = Field(description="Name of the job.")
     job_submission_ts: datetime = Field(description="Timestamp with timezone when the job was submitted.")
@@ -122,7 +132,10 @@ class Job(BaseModel):
     tt_smi_version: Optional[str] = Field(
         None, description="Version of the tt-smi tool in order to check consistency across CI fleets."
     )
-    tt_smi_reset: List[TtSmiReset] = []
+    tt_smi_reset: Optional[List[TTSmiReset]] = Field(
+        None,
+        description="tt-smi reset attempts for this job, if any.",
+    )
 
     # Model validator to check the unique combination constraint
     @model_validator(mode="before")
@@ -167,6 +180,10 @@ class Pipeline(BaseModel):
     github_pipeline_link: Optional[str] = Field(
         None,
         description="Link to the Github Actions CI pipeline, for pipelines " "orchestrated and executed by Github.",
+    )
+    workflow_attempt: Optional[int] = Field(
+        None,
+        description="GitHub workflow rerun attempt number.",
     )
     pipeline_submission_ts: datetime = Field(
         description="Timestamp with timezone when the pipeline was submitted for " "execution.",

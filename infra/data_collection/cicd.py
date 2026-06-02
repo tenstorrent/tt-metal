@@ -19,7 +19,7 @@ from infra.data_collection.github.workflows import (
 )
 from infra.data_collection import pydantic_models
 from infra.data_collection.pydantic_models import Step
-from infra.data_collection.pydantic_models import TtSmiReset
+from infra.data_collection.pydantic_models import TTSmiReset
 
 
 def get_cicd_json_filename(pipeline):
@@ -46,6 +46,7 @@ def create_cicd_json_for_data_analysis(
     github_pipeline_id = raw_pipeline["github_pipeline_id"]
     github_pipeline_start_ts = raw_pipeline["pipeline_start_ts"]
     workflow_attempt = github_pipeline_json["run_attempt"]
+    raw_pipeline["workflow_attempt"] = workflow_attempt
 
     github_job_id_to_annotations = get_github_job_id_to_annotations(workflow_outputs_dir, github_pipeline_id)
 
@@ -66,7 +67,6 @@ def create_cicd_json_for_data_analysis(
         workflow_attempt,
     )
     jobs = []
-    tt_smi_resets = []
 
     for raw_job in raw_jobs:
         github_job_id = int(raw_job["github_job_id"])
@@ -96,25 +96,26 @@ def create_cicd_json_for_data_analysis(
 
         # Remove 'steps' from raw_job to avoid double-passing of 'steps'
         raw_job = dict(raw_job)
-        raw_job["workflow_attempt"] = workflow_attempt
         raw_job.pop("steps", None)
         raw_job.pop("tt_smi_reset", None)
+        raw_job.pop("workflow_attempt", None)
 
         reset_data = github_job_id_to_smi_resets.get(github_job_id)
-        tt_smi_resets = []
+
+        tt_smi_resets = None
         if reset_data:
+            tt_smi_resets = []
             for tt_smi_reset_attempt in reset_data:
                 tt_smi_reset_attempt = dict(tt_smi_reset_attempt)
-                tt_smi_reset_attempt["github_job_id"] = github_job_id
                 tt_smi_reset_attempt["workflow_attempt"] = workflow_attempt
-                tt_smi_resets.append(TtSmiReset(**tt_smi_reset_attempt))
+                tt_smi_resets.append(TTSmiReset(**tt_smi_reset_attempt))
 
         job = pydantic_models.Job(
             **raw_job,
             tt_smi_version=github_job_id_to_smi_versions.get(github_job_id),
+            tt_smi_reset=tt_smi_resets,
             tests=tests,
             steps=steps,
-            tt_smi_reset=tt_smi_resets,
         )
         jobs.append(job)
 
