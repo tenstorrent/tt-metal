@@ -2277,6 +2277,114 @@ git add models/experimental/opt_transfer/codegen.py models/experimental/opt_tran
 git commit -m "feat(opt_transfer): general codegen emitter registry + dispatch (not QKV-only)"
 ```
 
+### Task J2: Real `LLMClient` (KB extraction + diagnosis-aware matching)
+
+**Files:**
+- Modify: `models/experimental/opt_transfer/matcher.py`
+- Test: `models/experimental/opt_transfer/tests/test_matcher.py`
+
+One production client used by **both** the KB miner (`extract_entries`) and the bring-up matcher (`propose`), sharing the prompt-cached system/KB context. `propose` accepts an optional `diagnosis` so the repair loop can bias re-proposal (Task J4). Tested offline with a fake transport.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# tests/test_matcher.py (append)
+import json
+from models.experimental.opt_transfer.matcher import LLMClient
+from models.experimental.opt_transfer.schema import KBEntry, PatternKind, FusionProposal
+
+
+class FakeT:
+    def __init__(self, text): self.text = text; self.last = None
+    def create(self, **kw): self.last = kw; return {"content": [{"type": "text", "text": self.text}]}
+
+
+def test_llmclient_extract_entries_parses_json():
+    payload = [{"id": "rms_norm", "fused_op": "ttnn.rms_norm", "category": "norm",
+                "pattern_kind": "chain", "torch_pattern": ["pow", "mean", "rsqrt", "mul"],
+                "signature": {}, "config_template": {}, "weight_transform": None, "source": "golden"}]
+    c = LLMClient(transport=FakeT(json.dumps(payload)))
+    out = c.extract_entries("rms_norm", {"tests": [], "examples": []}, [], "def g(): ...")
+    assert out[0]["id"] == "rms_norm"
+
+
+def test_llmclient_propose_caches_kb_and_forwards_diagnosis():
+    payload = [FusionProposal("rms_norm", "ttnn.rms_norm", ["n"], {}, None, "", "").__dict__]
+    t = FakeT(json.dumps(payload)); c = LLMClient(transport=t)
+    kb = [KBEntry("rms_norm", "ttnn.rms_norm", "norm", PatternKind.CHAIN, ["x"], {}, {}, None, "s")]
+    props = c.propose([{"name": "n"}], kb, diagnosis={"node": "n", "axis": "per_block_pcc"})
+    assert props[0].entry_id == "rms_norm"
+    assert any(b.get("cache_control", {}).get("type") == "ephemeral" for b in t.last["system"])
+    assert "per_block_pcc" in json.dumps(t.last["messages"])
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `pytest models/experimental/opt_transfer/tests/test_matcher.py::test_llmclient_extract_entries_parses_json -v`
+Expected: FAIL (`LLMClient` undefined)
+
+- [ ] **Step 3: Write minimal implementation**
+
+```python
+# matcher.py (append)
+import json
+
+EXTRACT_SYSTEM = (
+    "Given a ttnn op, its registered golden source (if any), unit-test examples, and model "
+    "call sites, emit KBEntry JSON dicts. The torch_pattern MUST be taken from the golden/test "
+    "source (the unoptimized subsequence the op replaces) — do not invent it. Fill pattern_kind, "
+    "config_template (use {DIM} placeholders), weight_transform, category. Return a JSON list only."
+)
+
+
+class LLMClient:
+    """Production client for BOTH the KB miner (extract_entries) and the matcher (propose),
+    sharing prompt-cached context. Transport is injectable for offline tests."""
+
+    def __init__(self, transport=None, model=None):
+        self.transport = transport or _AnthropicTransport(model or CONFIG.matcher_model)
+
+    def _complete(self, system_blocks, user_text):
+        resp = self.transport.create(
+            system=system_blocks, messages=[{"role": "user", "content": user_text}])
+        return resp["content"][0]["text"]
+
+    def extract_entries(self, op, available, used, golden_src):
+        sys = [{"type": "text", "text": EXTRACT_SYSTEM}]
+        user = json.dumps({"op": op, "golden_src": golden_src,
+                           "test_examples": available.get("examples", []),
+                           "call_sites": [u["snippet"] for u in used]}, indent=2)
+        return json.loads(self._complete(sys, user))
+
+    def propose(self, graph_summary, kb, diagnosis=None):
+        kb_text = json.dumps([e.to_dict() for e in kb], indent=2)
+        sys = [
+            {"type": "text", "text": SYSTEM},
+            {"type": "text", "text": "KNOWLEDGE BASE:\n" + kb_text,
+             "cache_control": {"type": "ephemeral"}},   # reused across blocks + repair iters
+        ]
+        payload = {"op_graph": graph_summary}
+        if diagnosis:
+            payload["prior_failure_diagnosis"] = diagnosis   # re-propose using KB applicability_notes
+        return [FusionProposal(**d) for d in json.loads(self._complete(sys, json.dumps(payload, indent=2)))]
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `pytest models/experimental/opt_transfer/tests/test_matcher.py -v`
+Expected: PASS (all)
+
+- [ ] **Step 5: Wire `LLMClient` as the production client**
+
+`run.py`: build one `client = LLMClient()`; pass it to both `build_kb(client=client, ...)` and `RealImpl(..., matcher=client, ...)`. `RealImpl.match` calls `self.matcher.propose(state["graph_summary"], self.kb, diagnosis=state.get("diagnosis"))`. (The Task C2 `Matcher` remains as the minimal reference; `LLMClient` supersedes it in production.)
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add models/experimental/opt_transfer/matcher.py models/experimental/opt_transfer/run.py models/experimental/opt_transfer/graph.py models/experimental/opt_transfer/tests/test_matcher.py
+git commit -m "feat(opt_transfer): real LLMClient (extract_entries + diagnosis-aware propose)"
+```
+
 ---
 
 ## Self-Review
