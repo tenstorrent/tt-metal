@@ -181,10 +181,6 @@ class Pipeline(BaseModel):
         None,
         description="Link to the Github Actions CI pipeline, for pipelines " "orchestrated and executed by Github.",
     )
-    workflow_attempt: Optional[int] = Field(
-        None,
-        description="GitHub workflow rerun attempt number.",
-    )
     pipeline_submission_ts: datetime = Field(
         description="Timestamp with timezone when the pipeline was submitted for " "execution.",
     )

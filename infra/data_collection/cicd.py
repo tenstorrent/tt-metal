@@ -46,7 +46,6 @@ def create_cicd_json_for_data_analysis(
     github_pipeline_id = raw_pipeline["github_pipeline_id"]
     github_pipeline_start_ts = raw_pipeline["pipeline_start_ts"]
     workflow_attempt = github_pipeline_json["run_attempt"]
-    raw_pipeline["workflow_attempt"] = workflow_attempt
 
     github_job_id_to_annotations = get_github_job_id_to_annotations(workflow_outputs_dir, github_pipeline_id)
 
