@@ -165,10 +165,10 @@ def infer_unpack_out(
             raise ValueError(
                 f"register_format_hint={register_format_hint.name} is not compatible with input_format={input_format.name}."
             )
-        # The hint is family-compatible with the output format, so it's a valid configuration.
         return register_format_hint
 
     # MX formats can only exist in L1, not in registers. Hardware unpacks MX to bfloat16 for math.
+    # it can also unpack into float16 and TF32 but bfloat16 is the default for MX inputs and default in metal in general.
     if input_format.is_mx_format():
         return DataFormat.Float16_b
 

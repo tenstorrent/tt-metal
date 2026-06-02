@@ -221,8 +221,8 @@ def test_reduce_quasar(
 
 # 2x-packed FP4 register-format variants for the reduce-GAPOOL pipeline. L1 stays MxFp4;
 # the unpacker produces MxFp4_2x_A/B in src registers. GAPOOL is one of the op_mmul-gated
-# instructions (alongside MVMUL/MVMULDI per tt_instruction_issue.sv), so the FP4-2xIn this file the existing reduce test uses formats as the InputOutputFormat argument name, but the new GAPOOL 2x test uses format, which shadows Python’s built-in format() and is inconsistent with the rest of the file. Renaming the parameter (e.g., to formats or io_format) will avoid shadowing and make the tests easier to read/grep.
-# sub-datum expansion in the SrcA format-mux fires correctly for Sum/Average pool types.
+# instructions (alongside MVMUL/MVMULDI per tt_instruction_issue.sv).
+# Sub-datum expansion in the SrcA format-mux fires correctly for Sum/Average pool types.
 # Max pool uses GMPOOL which is NOT in the op_mmul list and is therefore excluded.
 #
 # Only reduce_dim=Column is exercised here. MXFP4_2x is op_mmul-family-only on Quasar
@@ -230,24 +230,21 @@ def test_reduce_quasar(
 # designed. The row/scalar paths in llk_math_reduce.h commit per-face results via
 # MOVD2B -> ZEROSRC -> ELWADDDI, and ELWADDDI is not op_mmul, so it reads SrcB through
 # the FP4 zf mux while srca_fmt_spec is still MXFP4_2x -- producing all-zero Dest.
-# Re-enabling row/scalar requires a kernel-side srca_fmt_spec override before the ELWADDDI commit.
-REDUCE_QSR_MXFP4_2X_FORMATS = [
-    InputOutputFormat(
-        DataFormat.MxFp4,
-        DataFormat.Float16,
-        register_format_hint=DataFormat.MxFp4_2x_A,
-    ),
-    InputOutputFormat(
-        DataFormat.MxFp4,
-        DataFormat.Float16_b,
-        register_format_hint=DataFormat.MxFp4_2x_B,
-    ),
-]
-
-
 @pytest.mark.quasar
 @parametrize(
-    formats=REDUCE_QSR_MXFP4_2X_FORMATS,
+    register_format_hint=[DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B],
+    formats=lambda register_format_hint: [
+        InputOutputFormat(
+            DataFormat.MxFp4,
+            DataFormat.Float16,
+            register_format_hint=register_format_hint,
+        ),
+        InputOutputFormat(
+            DataFormat.MxFp4,
+            DataFormat.Float16_b,
+            register_format_hint=register_format_hint,
+        ),
+    ],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     reduce_dim=[ReduceDimension.Column],
     pool_type=[ReducePool.Sum, ReducePool.Average],
@@ -255,6 +252,7 @@ REDUCE_QSR_MXFP4_2X_FORMATS = [
     dest_sync_mode=[DestSync.Half, DestSync.Full],
 )
 def test_reduce_quasar_mxfp4_2x_gapool(
+    register_format_hint,
     formats,
     dest_acc,
     reduce_dim,
@@ -264,7 +262,7 @@ def test_reduce_quasar_mxfp4_2x_gapool(
 ):
     input_dimensions = [64, 64]
 
-    src_A, tile_cnt, _, _ = generate_stimuli_v2(
+    src_A, tile_cnt, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,

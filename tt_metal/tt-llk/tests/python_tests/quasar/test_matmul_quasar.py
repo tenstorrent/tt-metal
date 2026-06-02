@@ -118,20 +118,14 @@ def test_matmul(
 
     torch_format = format_dict[format.output_format]
 
-    # Seed the operand stimuli so inputs are reproducible and independent of the
-    # parametrize sweep order. The defaults draw from the global torch RNG, whose
-    # position depends on how many prior variants ran -- harmless for high-precision
-    # formats but flaky for FP4-coarse MxFp4, where a different draw can tip the
-    # relaxed mismatch tolerance. Distinct seeds for A/B avoid a degenerate A==B matmul.
-    spec_A = StimuliSpec.uniform(low=0.0, high=1.0, seed=0)
-    spec_B = StimuliSpec.uniform(low=0.0, high=1.0, seed=1)
+    sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=format.input_format,
         input_dimensions_A=input_A_dimensions,
         stimuli_format_B=format.input_format,
         input_dimensions_B=input_B_dimensions,
-        spec_A=spec_A,
-        spec_B=spec_B,
+        spec_A=sfpu_false_spec,
+        spec_B=sfpu_false_spec,
         output_format=format.output_format,
     )
 
