@@ -690,6 +690,17 @@ class ttMLA:
             _ndm(self.layer_idx, 0, "MLA_0_q_preSDPA", tt_q, allshards=True)
             _ndm(self.layer_idx, 0, "MLA_1_vemb_preSDPA", tt_v_embedding, allshards=True)
 
+        # [ND-FIX] Reset the ring-SDPA persistent K/V output buffers before each
+        # call. The ring all-gather does not fully overwrite these buffers, so
+        # stale K/V from a previous forward leaks into the unused/padding tiles
+        # and is read by attention — making repeated forwards non-idempotent and
+        # non-deterministic across processes (the iter1+ residual at 61L/iter25).
+        # Zeroing per call makes the attention output depend only on this call's
+        # inputs. Set TT_DS_ND_RESET_PBUF=0 to restore the old (leaky) behavior.
+        if _os.getenv("TT_DS_ND_RESET_PBUF", "1").lower() in ("1", "true", "yes"):
+            self.persistent_k_output_buffer = ttnn.zeros_like(self.persistent_k_output_buffer)
+            self.persistent_v_output_buffer = ttnn.zeros_like(self.persistent_v_output_buffer)
+
         attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tt_q,
             tt_kvpe,

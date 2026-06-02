@@ -291,6 +291,25 @@ class TtPrefillTransformer(LightweightModule):
         # LM Head: extract logits for last real token
         logits_host, first_token_logits = self._lm_head_and_extract(h, number_of_non_padded_tokens)
 
+        # [ND-DEBUG] Clean logit-determinism signal: SHA of the REAL first-token
+        # logits (finite, no padding garbage — unlike per-layer allshards probes).
+        # Gated by TT_DS_ND_LOGIT_FP=1. This is the authoritative cross-process
+        # determinism check (compare across two processes at the same iter index).
+        import os as _os_fp
+
+        if _os_fp.getenv("TT_DS_ND_LOGIT_FP", "0").lower() in ("1", "true", "yes"):
+            import hashlib as _hl
+
+            _ftl = first_token_logits.detach().to(torch.float32).contiguous()
+            _sha = _hl.sha1(_ftl.cpu().numpy().tobytes()).hexdigest()[:16]
+            _amax = int(_ftl.reshape(-1, _ftl.shape[-1])[0].argmax().item())
+            _nnf = int((~torch.isfinite(_ftl)).sum().item())
+            logger.info(
+                f"[NDPROBE-LOGIT] iter={getattr(self, '_nd_logit_iter', 0)} "
+                f"sha={_sha} argmax={_amax} nonfinite={_nnf} norm={_ftl.float().norm().item():.6f}"
+            )
+            self._nd_logit_iter = getattr(self, "_nd_logit_iter", 0) + 1
+
         if return_intermediates:
             intermediates["lm_head"] = logits_host
             intermediates["logits"] = first_token_logits
