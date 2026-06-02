@@ -39,16 +39,18 @@ MESH_GRAPH_DESC_1x16 = (
 MESH_GRAPH_DESC_1x8 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
 )
+# MESH_GRAPH_DESC_BH_LB_1x8 = (
+#    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_lb_1x8_torus_graph_descriptor.textproto"
+# )
 MESH_GRAPH_DESC_1x16_LINEAR = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_linear_graph_descriptor.textproto"
 )
 MESH_GRAPH_DESC_1x8_LINEAR = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_linear_graph_descriptor.textproto"
 )
-# BH single Loudbox exposed as a 1x8 LINE — every chip hosts experts (EP=8), the natural
-# BH analog of the WH single-galaxy `test_moe_compute_1x8`. Topology is LINE because
-# BH LB has no chassis-level wraparound.
-MESH_GRAPH_DESC_BH_LB_1x8 = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_lb_1x8_line_graph_descriptor.textproto"
+MESH_GRAPH_DESC_BH_LB_1x8_LINEAR = (
+    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_lb_1x8_line_graph_descriptor.textproto"
+)
 # FYI: These tests also work in a MESH_GRAPH_DESC_1x4 setting (~1 minute to set up), but not in a 1x2 setting.
 
 
@@ -84,6 +86,7 @@ class MoEMeshConfig:
     model_configs: tuple
     device_params: dict
     use_linear_topology: bool = False
+    num_links: int = 4
 
     @property
     def mesh_shape(self):
@@ -250,33 +253,19 @@ _MODELS_1x8 = [
     MoEModelConfig("gpt_oss",      N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), test_modes=("perf", "correctness"), activation_types=(MoEActivationFunction.SWIGLU,)),
 ]
 
-_MOE_MESH_CONFIGS = [
-    MoEMeshConfig("1x8-torus", 8, MESH_GRAPH_DESC_1x8, _MODELS_1x8, MOE_DEVICE_PARAMS),
-    MoEMeshConfig("1x16-torus", 16, MESH_GRAPH_DESC_1x16, _MODELS_1x16, MOE_DEVICE_PARAMS),
-    MoEMeshConfig(
-        "1x8-linear", 8, MESH_GRAPH_DESC_1x8_LINEAR, _MODELS_1x8, MOE_DEVICE_PARAMS_LINEAR, use_linear_topology=True
-    ),
-    MoEMeshConfig(
-        "1x16-linear",
-        16,
-        MESH_GRAPH_DESC_1x16_LINEAR,
-        _MODELS_1x16,
-        MOE_DEVICE_PARAMS_LINEAR,
-        use_linear_topology=True,
-    ),
-]
-
-# BH single Loudbox 1x8 LINE — every chip hosts experts (EP=8). Same model shapes as the
-# WH _MODELS_1x8 / _MODELS_1x16 entries (gpt_oss matches _MODELS_1x8.gpt_oss; deepseek_v3
-# matches _MODELS_1x16.deepseek_v3). BH-specific overrides: tokens_per_device=8 to keep
-# host-side golden-compute fast on real hardware, num_layers=1 because num_layers>1 hits
-# a DRAM->L1 reshard hang on BH LB (deferred follow-up).
 _MODELS_BH_LB_1x8 = [
     MoEModelConfig("gpt_oss",     N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), tokens_per_device=8, num_layers=1, num_iterations=2, activation_types=(MoEActivationFunction.SWIGLU,)),
     MoEModelConfig("deepseek_v3", N=2048, hidden_size=7168, selected_experts_k=8, has_bias_values=(False, True), tokens_per_device=8, num_layers=1, num_iterations=2),
 ]
 
-MODELS_BH_LB_1x8 = _expand_model_configs(_MODELS_BH_LB_1x8)
+_MOE_MESH_CONFIGS = [
+    MoEMeshConfig("1x8-torus",        8, MESH_GRAPH_DESC_1x8,              _MODELS_1x8,       MOE_DEVICE_PARAMS),
+    MoEMeshConfig("1x16-torus",      16, MESH_GRAPH_DESC_1x16,             _MODELS_1x16,      MOE_DEVICE_PARAMS),
+    #MoEMeshConfig("1x8-torus-bh_lb",  8, MESH_GRAPH_DESC_BH_LB_1x8,        _MODELS_BH_LB_1x8, MOE_DEVICE_PARAMS, num_links=2),
+    MoEMeshConfig("1x8-linear",       8, MESH_GRAPH_DESC_1x8_LINEAR,       _MODELS_1x8,       MOE_DEVICE_PARAMS_LINEAR, use_linear_topology=True),
+    MoEMeshConfig("1x16-linear",     16, MESH_GRAPH_DESC_1x16_LINEAR,      _MODELS_1x16,      MOE_DEVICE_PARAMS_LINEAR, use_linear_topology=True,),
+    MoEMeshConfig("1x8-linear-bh_lb", 8, MESH_GRAPH_DESC_BH_LB_1x8_LINEAR, _MODELS_BH_LB_1x8, MOE_DEVICE_PARAMS_LINEAR, use_linear_topology=True, num_links=2),
+]
 # fmt: on
 
 MOE_COMPUTE_MODEL_TEST_CASES = _expand_mesh_model_test_cases(_MOE_MESH_CONFIGS)
@@ -291,8 +280,8 @@ def _run_model_test(
     has_bias,
     experts_per_device,
     activation_type,
+    num_links,
     topology=None,
-    num_links=None,
 ):
     if test_mode == "perf":
         selected_experts_k = 1
@@ -1473,8 +1462,8 @@ def _run_moe_compute_impl(
     enable_trace,
     activation_type,
     has_bias,
+    num_links,
     topology=None,
-    num_links=None,
 ):
     """Run MoE compute E2E validation. Called from test_moe_compute via _run_model_test."""
     torch.manual_seed(2003)
@@ -2100,50 +2089,7 @@ def test_moe_compute(
         experts_per_device,
         activation_type,
         topology=topology,
-    )
-
-
-# ---------------------------------------------------------------------------
-# BH single Loudbox 1x8 LINE bring-up (EP=8) - #43444
-# ---------------------------------------------------------------------------
-@pytest.mark.skipif(
-    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_BH_LB_1x8),
-    reason=f"BH Loudbox 1x8 LINE test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_BH_LB_1x8}",
-)
-@pytest.mark.parametrize("device_params", [MOE_DEVICE_PARAMS], indirect=True)
-@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 8), (1, 8))], indirect=["mesh_device"])
-@pytest.mark.parametrize(
-    "model_cfg, test_mode, has_bias, experts_per_device, activation_type, enable_trace", MODELS_BH_LB_1x8
-)
-def test_moe_compute_bh_lb_1x8(
-    mesh_device, mesh_shape, model_cfg, test_mode, has_bias, experts_per_device, activation_type, enable_trace
-):
-    """BH single Loudbox EP=8 every-chip-active end-to-end MoE test (#43444).
-
-    Activate with
-    `TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_lb_1x8_line_graph_descriptor.textproto`.
-
-    BH LB (8x p150b) exposed as (1, 8) LINE so every chip hosts experts. Topology is LINE
-    because BH LB has no chassis-level wraparound — natural BH analog of WH's
-    `test_moe_compute_1x8` (which uses 1x8 RING). Models covered: gpt_oss (hidden=N=2880,
-    width_dim=3) and deepseek_v3 (hidden=7168, N=2048, width_dim=4); the latter is the
-    only BH coverage of width_dim=4. The hidden=7168 L1 budget is fixed by the
-    `num_buffers 15→14` BH trim in `launch_mux_workers`.
-
-    num_links=2 reflects the BH LB descriptor's `channels { count: 2 }` (vs WH 6U's 4).
-    The op's hardcoded default is 4 (matches WH 6U), so BH callers must override.
-    """
-    _run_model_test(
-        mesh_device=mesh_device,
-        mesh_shape=mesh_shape,
-        enable_trace=enable_trace,
-        model_cfg=model_cfg,
-        test_mode=test_mode,
-        has_bias=has_bias,
-        experts_per_device=experts_per_device,
-        activation_type=activation_type,
-        topology=ttnn.Topology.Linear,  # BH LB has no chassis wraparound; 1x8 view is still LINE
-        num_links=2,  # BH LB has 2 eth channels per adjacent-chip link (vs 4 on WH 6U)
+        num_links=mesh_cfg.num_links,
     )
 
 
