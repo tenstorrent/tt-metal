@@ -18,8 +18,6 @@ from ...utils.conv3d import ConvDims, conv_pad_height, conv_pad_width
 from ...utils.tensor import fast_device_to_host, typed_tensor_2dshard
 from ..vae.vae_ltx import LTXCausalConv3d
 
-LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
-
 
 def _all_gather_hw(x: ttnn.Tensor, pc: VaeHWParallelConfig, ccl: CCLManager) -> ttnn.Tensor:
     if pc.height_parallel.factor > 1:

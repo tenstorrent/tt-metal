@@ -179,7 +179,7 @@ class LTXAttention(Module):
         rename_substate(state, "k_norm", "norm_k")
 
         # Permute Q/K (and norm_q/norm_k) channels per head from checkpoint SPLIT rotation to
-        # the INTERLEAVED layout rotary_embedding_llama expects. See BRINGUP.md.
+        # the INTERLEAVED layout rotary_embedding_llama expects.
         D = self.head_dim
         D_half = D // 2
         perm = torch.empty(D, dtype=torch.long)
@@ -433,7 +433,7 @@ class LTXAttention(Module):
             # STG perturbation: skip Q/K attention, use V passthrough.
             spatial_BHNE = v_BHNE
         elif prompt_1BLP is None:
-            if sp_factor > 1 and attn_mask is None and is_blackhole():
+            if sp_factor > 1 and attn_mask is None:
                 spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                     q_BHNE,
                     k_BHNE,

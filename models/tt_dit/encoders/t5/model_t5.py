@@ -202,11 +202,7 @@ class T5RMSNorm(RMSNorm):
         return super().forward(x, compute_kernel_config=self.compute_kernel_config)
 
     def reference(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # Avoid ttnn.pow for the same reason as gelu_tanh in layers/linear.py:
-        # pow may be implemented as exp(n*log(x)) which is NaN for x<0. Even
-        # exponents may happen to be correct depending on the backend, but
-        # explicit ``x*x`` is unambiguous and bf16-cheap.
-        variance = ttnn.mean(x * x, dim=-1, keepdim=True)
+        variance = ttnn.mean(ttnn.pow(x, 2), dim=-1, keepdim=True)
         x_normed = x * ttnn.rsqrt(variance + self.norm_eps)
         return self.weight.data * x_normed
 

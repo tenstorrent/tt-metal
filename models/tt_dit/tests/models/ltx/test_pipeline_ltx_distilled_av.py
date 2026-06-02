@@ -9,30 +9,12 @@ import pytest
 from loguru import logger
 
 import ttnn
-from models.tt_dit.pipelines.ltx.pipeline_ltx import on_device_audio_enabled
 from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline
 from models.tt_dit.utils.test import line_params, ring_params
 
-
-def _with_audio_dev_l1(base: dict) -> dict:
-    """Reserve an L1_SMALL region when on-device audio decode is enabled.
-
-    The on-device audio chain's ``ttnn.conv2d``/``ttnn.conv1d`` paths require an
-    L1_SMALL allocator region; the default LTX device params open with
-    ``l1_small_size=0``. On-device audio is the default, so we add it unless
-    ``LTX_ON_DEVICE_AUDIO=0`` forces the host path.
-    """
-    if on_device_audio_enabled():
-        return {**base, "l1_small_size": 32768}
-    return base
-
-
-_line_params = _with_audio_dev_l1(line_params)
-_ring_params = _with_audio_dev_l1(ring_params)
-
 # Trace region for LTX_TRACED=1. Holds both stage traces' command streams (s1 + larger-seq
 # s2); measured need is ~236 MB at 1080p (get_trace_buffers_size), so 300 MB gives headroom.
-ring_trace_params = {**_ring_params, "trace_region_size": 300_000_000}
+ring_trace_params = {**ring_params, "trace_region_size": 300_000_000}
 
 
 def _default_checkpoint() -> str:
@@ -68,17 +50,17 @@ def _default_gemma() -> str:
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(2, 2), (2, 2), 0, 1, 2, False, _line_params, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 0, 1, 1, True, _line_params, ttnn.Topology.Linear, True],
+        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
         # BH on 2x4
-        [(2, 4), (2, 4), 1, 0, 2, True, _line_params, ttnn.Topology.Linear, False],
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, _ring_params, ttnn.Topology.Ring, True],
+        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, _line_params, ttnn.Topology.Linear, False],
+        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
         # BH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 2, False, ring_trace_params, ttnn.Topology.Ring, False],
-        [(4, 32), (4, 32), 1, 0, 2, False, _ring_params, ttnn.Topology.Ring, False],
+        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
     ],
     ids=[
         "2x2sp0tp1",

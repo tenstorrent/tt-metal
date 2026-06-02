@@ -16,6 +16,7 @@ from ....layers.normalization import DistributedLayerNorm, DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.substate import pop_substate, rename_substate
+from ....utils.tensor import bf16_tensor
 from .attention_ltx import LTXAttention
 
 
@@ -688,8 +689,6 @@ class LTXTransformerModel(Module):
         video_padding_mask: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         """Host entry: upload torch latents/timestep, then run the device-only inner_step."""
-        from ....utils.tensor import bf16_tensor
-
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
         video_1BNI = bf16_tensor(video_1BNI_torch, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=-2)
         B_size = video_1BNI_torch.shape[1]

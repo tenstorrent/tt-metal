@@ -97,6 +97,13 @@ def generate_freqs(
     return freqs
 
 
+def reshape_interleaved_to_bhnd(t: torch.Tensor, num_heads: int) -> torch.Tensor:
+    """Reshape interleaved (B, N, dim) to (B, num_heads, N, head_dim) for rotary_embedding_llama."""
+    B, N, dim = t.shape
+    head_dim = dim // num_heads
+    return t.reshape(B, N, num_heads, head_dim).permute(0, 2, 1, 3).contiguous()
+
+
 def interleaved_freqs_cis(freqs: torch.Tensor, pad_size: int) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Compute cos/sin with interleaved repeat for rotary embedding.

@@ -28,14 +28,15 @@ from loguru import logger
 
 import ttnn
 
-from ...utils.lora import LoraSpec
-from ...utils.ltx import AudioLatentShape, VideoPixelShape
+from ...utils.fuse_loras import LoraSpec
+from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
+from ...utils.video import export_video_audio
 from .pipeline_ltx import (
+    DEFAULT_NEGATIVE_PROMPT,
     SPATIAL_COMPRESSION,
     STAGE_2_DISTILLED_SIGMA_VALUES,
     TEMPORAL_COMPRESSION,
     LTXPipeline,
-    _ensure_ltx_reference_on_path,
     latent_grid,
 )
 
@@ -99,11 +100,13 @@ class LTXTwoStagesPipeline(LTXPipeline):
         s1_h, s1_w = height // 2, width // 2
         self._prepare_transformer(0)
 
-        results = self.encode_prompts_reference(["warmup", "warmup"])
-        v_p = results[0].video_encoding.float()
-        a_p = results[0].audio_encoding.float()
-        v_n = results[1].video_encoding.float()
-        a_n = results[1].audio_encoding.float()
+        # Dummy zero embeddings at the real shapes — warmup only needs to compile the
+        # (shape-driven) call_av kernels, not real prompt content. Avoids loading the
+        # encoder here (it would coresident-evict the DiT just loaded above); the encoder
+        # kernels compile on the first generate().
+        v_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.video_dim)
+        a_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.audio_dim)
+        v_n, a_n = v_p, a_p
 
         logger.info(f"warmup stage 1: {s1_h}x{s1_w}")
         self.call_av(
@@ -194,7 +197,7 @@ class LTXTwoStagesPipeline(LTXPipeline):
         audio_modality_scale: float = 3.0,
         rescale_scale: float = 0.7,
         stg_block: int = 28,
-        ge_gamma: float | None = None,
+        ge_gamma: float = 0.0,
         # Stage 2 (refine) knobs.
         stage_2_sigma_values: list[float] | None = None,
         seed: int = 10,
@@ -207,25 +210,6 @@ class LTXTwoStagesPipeline(LTXPipeline):
         s1_h, s1_w = height // 2, width // 2
         s2_sigma_values = list(stage_2_sigma_values) if stage_2_sigma_values else STAGE_2_DISTILLED_SIGMA_VALUES
 
-        if ge_gamma is None:
-            ge_gamma = 2.0 if ttnn.device.is_blackhole() else 0.0
-            logger.info(f"ge_gamma={ge_gamma} (arch default)")
-
-        # Env overrides — match LTXPipeline.generate semantics.
-        def _env_float(name: str, default: float) -> float:
-            val = os.environ.get(name)
-            return float(val) if val is not None else default
-
-        video_cfg_scale = _env_float("VIDEO_CFG_SCALE", video_cfg_scale)
-        audio_cfg_scale = _env_float("AUDIO_CFG_SCALE", audio_cfg_scale)
-        video_stg_scale = _env_float("VIDEO_STG_SCALE", video_stg_scale)
-        audio_stg_scale = _env_float("AUDIO_STG_SCALE", audio_stg_scale)
-        video_modality_scale = _env_float("VIDEO_MODALITY_SCALE", video_modality_scale)
-        audio_modality_scale = _env_float("AUDIO_MODALITY_SCALE", audio_modality_scale)
-        rescale_scale = _env_float("RESCALE_SCALE", rescale_scale)
-        if os.environ.get("GE_GAMMA") is not None:
-            ge_gamma = float(os.environ["GE_GAMMA"])
-
         if len(self.transformer_states) < 2:
             raise RuntimeError("Variant 1 (LoRA-fused) not registered — pass distilled_lora_path to create_pipeline")
         if distilled_lora_path is not None and distilled_lora_path != self._distilled_lora_path:
@@ -235,15 +219,11 @@ class LTXTwoStagesPipeline(LTXPipeline):
             )
         if distilled_lora_strength is None:
             distilled_lora_strength = self._distilled_lora_strength
-        distilled_lora_strength = _env_float("DISTILLED_LORA_STRENGTH", distilled_lora_strength)
         if distilled_lora_strength != self._distilled_lora_strength:
             raise ValueError(
                 f"distilled_lora_strength mismatch: generate got {distilled_lora_strength}, "
                 f"__init__ used {self._distilled_lora_strength}"
             )
-
-        _ensure_ltx_reference_on_path()
-        from ltx_pipelines.utils.constants import DEFAULT_NEGATIVE_PROMPT
 
         neg = negative_prompt if negative_prompt is not None else DEFAULT_NEGATIVE_PROMPT
 
@@ -251,13 +231,16 @@ class LTXTwoStagesPipeline(LTXPipeline):
 
         # 1) Encode prompts once — same context is reused by both stages, matching
         #    the reference which uses the same ``ctx_p`` for stage 1 and stage 2.
+        #    On-device Gemma encode; coresident-excluded with the DiT/VAE, so it
+        #    auto-evicts them and _prepare_transformer(0) evicts the encoder back.
+        #    Only load on a cache miss — a cached prompt skips the encoder entirely.
         t0 = time.time()
-        results = self.encode_prompts_reference([prompt, neg])
-        logger.info(f"Encoding: {time.time() - t0:.1f}s")
-        v_p = results[0].video_encoding.float()
-        a_p = results[0].audio_encoding.float()
-        v_n = results[1].video_encoding.float()
-        a_n = results[1].audio_encoding.float()
+        if not os.path.exists(self._device_embed_cache_path([prompt, neg])):
+            self.gemma_encoder_pair.ensure_loaded()
+        enc = self.encode_prompts([prompt, neg])
+        logger.info(f"Encoding (device): {time.time() - t0:.1f}s")
+        v_p, a_p = enc[0][0].float(), enc[0][1].float()
+        v_n, a_n = enc[1][0].float(), enc[1][1].float()
 
         # Stage 1: variant 0 (base), half-res, full guidance.
         self._prepare_transformer(0)
@@ -338,7 +321,7 @@ class LTXTwoStagesPipeline(LTXPipeline):
         logger.info(f"VAE decode: {time.time() - t0:.1f}s — {video_pixels.shape}")
 
         audio_obj = self.decode_audio(s2_audio, num_frames, fps=fps)
-        self.export_video(video_pixels, output_path, fps=fps, audio=audio_obj)
+        export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
 
         total_time = time.time() - total_t0
         logger.info(f"Total: {total_time:.1f}s | Output: {output_path}")

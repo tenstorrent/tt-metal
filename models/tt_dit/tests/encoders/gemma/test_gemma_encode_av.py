@@ -5,10 +5,10 @@
 """
 End-to-end validation of the on-device Gemma encode path for LTX AV.
 
-Compares ``encode_prompts_device`` (TTNN GemmaEncoder + on-device video/audio
-embeddings connectors) against ``encode_prompts_reference`` (official LTX-2 CPU
-PromptEncoder) for the same prompt, reporting PCC of the final video (4096-dim)
-and audio (2048-dim) context embeddings.
+Compares ``encode_prompts`` (TTNN GemmaEncoder + on-device video/audio
+embeddings connectors) against the official LTX-2 CPU ``PromptEncoder`` reference
+(wrapped locally in ``_encode_prompts_reference``) for the same prompt, reporting
+PCC of the final video (4096-dim) and audio (2048-dim) context embeddings.
 
 Parametrized over two meshes (Blackhole): 1x1 (TP=1, no fabric) and 2x4 (TP=4,
 FABRIC_1D). Asserts video PCC > 0.999 and audio PCC > 0.998, and logs warm encode
@@ -73,6 +73,27 @@ def pcc(a, b):
     return ((a_m * b_m).sum() / d).item() if d > 0 else 0.0
 
 
+def _encode_prompts_reference(checkpoint_path: str, gemma_root: str, prompts: list[str]) -> list:
+    """Official LTX-2 CPU ``PromptEncoder`` reference, kept here for validation only —
+    the production pipeline no longer depends on the reference package."""
+    for p in ("LTX-2/packages/ltx-core/src", "LTX-2/packages/ltx-pipelines/src"):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+    torch.cuda.synchronize = lambda *a, **kw: None  # noqa: ARG005 — no CUDA on the TT host
+    from ltx_pipelines.utils.blocks import PromptEncoder
+
+    encoder = PromptEncoder(
+        checkpoint_path=checkpoint_path,
+        gemma_root=gemma_root,
+        dtype=torch.bfloat16,
+        device=torch.device("cpu"),
+    )
+    try:
+        return encoder(prompts)
+    finally:
+        del encoder
+
+
 # 2x4 drives the encoder's TP all-gathers over CCL, which needs the 1D fabric up;
 # 1x1 is single-chip with no CCL, so it must run without fabric.
 @pytest.mark.parametrize(
@@ -83,7 +104,7 @@ def pcc(a, b):
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_encode_prompts_device_vs_reference(*, mesh_device):
+def test_encode_prompts_vs_reference(*, mesh_device):
     gemma = _gemma_path()
     ckpt = _ltx_ckpt()
     if not os.path.isdir(gemma):
@@ -96,7 +117,7 @@ def test_encode_prompts_device_vs_reference(*, mesh_device):
 
     # On-device Gemma encoder (full 48 layers). TP follows the T5 pattern (axis-1 width):
     # TP=1 on 1x1, TP=4 on 2x4 — set inside the loader, no override needed.
-    pipe.load_gemma_encoder(gemma, num_layers=48, sequence_length=1024)
+    pipe.gemma_encoder_pair.load_gemma_encoder(gemma, num_layers=48, sequence_length=1024)
 
     # Load only the connector weights from the 46GB checkpoint.
     conn_state = {}
@@ -105,11 +126,10 @@ def test_encode_prompts_device_vs_reference(*, mesh_device):
             if k.startswith(CONNECTOR_PREFIXES):
                 conn_state[k] = f.get_tensor(k)
     logger.info(f"connector weights: {len(conn_state)} tensors")
-    pipe.load_embeddings_connectors(conn_state, audio_num_blocks=8)
+    pipe.gemma_encoder_pair.load_embeddings_connectors(conn_state, audio_num_blocks=8)
 
-    # Reference embeds (official CPU PromptEncoder; cached to ~/.cache/tt-dit after first run).
-    pipe.checkpoint_name = ckpt
-    ref = pipe.encode_prompts_reference([PROMPT])
+    # Reference embeds (official CPU PromptEncoder), local to this test.
+    ref = _encode_prompts_reference(ckpt, gemma, [PROMPT])
     v_ref = ref[0].video_encoding.float()
     a_ref = ref[0].audio_encoding.float()
 
@@ -117,9 +137,9 @@ def test_encode_prompts_device_vs_reference(*, mesh_device):
     # and is the one we time. use_cache=False to measure the real encode, not a cache load.
     import time
 
-    pipe.encode_prompts_device([PROMPT], use_cache=False)
+    pipe.encode_prompts([PROMPT], use_cache=False)
     t0 = time.perf_counter()
-    dev = pipe.encode_prompts_device([PROMPT], use_cache=False)
+    dev = pipe.encode_prompts([PROMPT], use_cache=False)
     t_warm_ms = (time.perf_counter() - t0) * 1e3
 
     v_dev = torch.as_tensor(dev[0][0]).float()

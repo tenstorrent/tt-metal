@@ -17,6 +17,7 @@ import ttnn
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
+from ...utils.video import export_video_audio
 from .pipeline_ltx import (
     DISTILLED_SIGMA_VALUES,
     SPATIAL_COMPRESSION,
@@ -25,7 +26,6 @@ from .pipeline_ltx import (
     LTXPipeline,
     euler_step,
     latent_grid,
-    on_device_audio_enabled,
 )
 
 
@@ -36,7 +36,6 @@ class LTXDistilledPipeline(LTXPipeline):
 
     @staticmethod
     def create_pipeline(mesh_device: ttnn.MeshDevice, **kwargs) -> "LTXDistilledPipeline":
-        kwargs.setdefault("mode", "av")
         kwargs["pipeline_class"] = LTXDistilledPipeline
         return LTXPipeline.create_pipeline(mesh_device, **kwargs)
 
@@ -63,9 +62,11 @@ class LTXDistilledPipeline(LTXPipeline):
             f"stages={stages}, {num_inference_steps} steps/stage"
         )
 
-        results = self.encode_prompts_reference(["warmup"])
-        v_p = results[0].video_encoding.float()
-        a_p = results[0].audio_encoding.float()
+        # Dummy zero embeddings at the real shapes — the denoise warmup below only needs
+        # to compile the (shape-driven) kernels, not real prompt content. The encoder is
+        # warmed separately at the end of this method (it coresident-evicts the DiT/VAE).
+        v_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.video_dim)
+        a_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.audio_dim)
 
         # Allocate both stages' persistent trace I/O before any capture, so all held inputs
         # sit below both traces' activation regions and neither trace's replay can overwrite
@@ -125,16 +126,15 @@ class LTXDistilledPipeline(LTXPipeline):
             # Build + JIT-compile the on-device audio decode on the exact latent
             # shape generate() produces, so the first real audio decode loads
             # from cache instead of building from the checkpoint (cold ~64s).
-            if on_device_audio_enabled():
-                logger.info("warmup audio decode (on-device)")
-                self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
+            logger.info("warmup audio decode (on-device)")
+            self.decode_audio(torch.zeros(1, als.frames, self.in_channels), num_frames, fps=24.0)
 
             self._prepare_transformer(0)
 
         # Warm the encoder last: it coresident-evicts the DiT/VAE, so gen #0 then re-loads the DiT.
         # use_cache=False forces a real encode so the Gemma/connector kernels actually compile.
-        self._ensure_device_encoder()
-        self.encode_prompts_device(["warmup"], use_cache=False)
+        self.gemma_encoder_pair.ensure_loaded()
+        self.encode_prompts(["warmup"], use_cache=False)
 
         logger.info(f"warmup (distilled 2-stage) done in {time.time() - t0:.1f}s")
 
@@ -148,12 +148,11 @@ class LTXDistilledPipeline(LTXPipeline):
         B = 1
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
         video_N_real = latent_frames * latent_h * latent_w
-        video_N = self._video_sp_pad_len(video_N_real)
+        video_N = self._sp_pad_len(video_N_real)
         vps = VideoPixelShape(batch=B, frames=num_frames, height=height, width=width, fps=24)
         als = AudioLatentShape.from_video_pixel_shape(vps)
         audio_N_real = als.frames
-        sp_factor = self.parallel_config.sequence_parallel.factor
-        audio_N = ((audio_N_real + 32 * sp_factor - 1) // (32 * sp_factor)) * (32 * sp_factor)
+        audio_N = self._sp_pad_len(audio_N_real)
         sp_axis = self.parallel_config.sequence_parallel.mesh_axis
 
         if trace_key not in self._trace_consts:
@@ -233,13 +232,13 @@ class LTXDistilledPipeline(LTXPipeline):
         video_N_real = latent_frames * latent_h * latent_w
         # SP padding: round video seq dim up to TILE_SIZE * sp_factor so ring SDPA's
         # N_local % TILE_HEIGHT and N_global == N_local * ring_size checks pass.
-        video_N = self._video_sp_pad_len(video_N_real)
+        video_N = self._sp_pad_len(video_N_real)
 
         vps = VideoPixelShape(batch=B, frames=num_frames, height=height, width=width, fps=24)
         als = AudioLatentShape.from_video_pixel_shape(vps)
         audio_N_real = als.frames
         sp_factor = self.parallel_config.sequence_parallel.factor
-        audio_N = ((audio_N_real + 32 * sp_factor - 1) // (32 * sp_factor)) * (32 * sp_factor)
+        audio_N = self._sp_pad_len(audio_N_real)
 
         logger.info(
             f"  shapes: vN={video_N}(real={video_N_real}), aN={audio_N}(real={audio_N_real}) " f"[sp={sp_factor}]"
@@ -518,7 +517,7 @@ class LTXDistilledPipeline(LTXPipeline):
                 tp_already_gathered=True,
             ).squeeze(0)
             # Zero padded velocity slots so they don't drift the latent in the padded region.
-            v_vel = self._zero_video_padding(v_vel, video_N_real)
+            v_vel = self._zero_sp_padding(v_vel, video_N_real)
 
             v_den = (video_lat.bfloat16().float() - v_vel.float() * sigma).bfloat16()
             a_den = (audio_lat.bfloat16().float() - a_vel.float() * sigma).bfloat16()
@@ -531,8 +530,8 @@ class LTXDistilledPipeline(LTXPipeline):
                 a_new = euler_step(audio_lat, a_den.float(), sigma, sigma_next).bfloat16().float()
 
             # Re-zero padded slots in both modalities after each step.
-            video_lat = self._zero_video_padding(v_new, video_N_real)
-            audio_lat = self._zero_audio_padding(a_new, audio_N_real)
+            video_lat = self._zero_sp_padding(v_new, video_N_real)
+            audio_lat = self._zero_sp_padding(a_new, audio_N_real)
             logger.info(f"  Step {step_idx + 1}/{num_steps}: σ {sigma:.4f} → {sigma_next:.4f}")
 
         # Traces are kept resident across generate() calls and freed by release_traces().
@@ -566,9 +565,12 @@ class LTXDistilledPipeline(LTXPipeline):
         assert width % 64 == 0, f"Width must be divisible by 64 (got {width})"
 
         s1_height, s1_width = height // 2, width // 2
-        results = self.encode_prompts_reference([prompt])
-        v_embeds = results[0].video_encoding.float()
-        a_embeds = results[0].audio_encoding.float()
+        # On-device Gemma encode (coresident-excluded with the DiT/VAE, so it auto-evicts
+        # them and _prepare_transformer(0) evicts the encoder back). Only load on a cache miss.
+        if not os.path.exists(self._device_embed_cache_path([prompt])):
+            self.gemma_encoder_pair.ensure_loaded()
+        enc = self.encode_prompts([prompt])
+        v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
 
         self._prepare_transformer(0)
 
@@ -586,7 +588,7 @@ class LTXDistilledPipeline(LTXPipeline):
             "LTX_DUMP_STAGE1_AUDIO", ""
         ).lower() in ("1", "true", "yes"):
             s1_path = output_path.replace(".mp4", "_s1.wav")
-            audio_obj = self.decode_audio_reference(s1_audio, num_frames, fps=fps)
+            audio_obj = self.decode_audio(s1_audio, num_frames, fps=fps)
             if audio_obj is not None:
                 self._write_stage1_wav(audio_obj, s1_path)
                 logger.info(f"Stage-1 audio dump: wrote {s1_path}")
@@ -616,8 +618,8 @@ class LTXDistilledPipeline(LTXPipeline):
         # On-device Gemma encode. Only load the encoder (coresident-evicts DiT/VAE) on a cache
         # miss — a cached prompt skips the encoder entirely.
         if not os.path.exists(self._device_embed_cache_path([prompt])):
-            self._ensure_device_encoder()
-        enc = self.encode_prompts_device([prompt])
+            self.gemma_encoder_pair.ensure_loaded()
+        enc = self.encode_prompts([prompt])
         v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
         logger.info(f"Encoding (device): {time.time() - t0:.1f}s")
 
@@ -643,7 +645,7 @@ class LTXDistilledPipeline(LTXPipeline):
 
         if os.environ.get("LTX_DECODE_S1_AUDIO", "").lower() in ("1", "true", "yes"):
             s1_path = output_path.replace(".mp4", "_s1.wav")
-            audio_obj = self.decode_audio_reference(s1_audio, num_frames, fps=fps)
+            audio_obj = self.decode_audio(s1_audio, num_frames, fps=fps)
             if audio_obj is not None:
                 self._write_stage1_wav(audio_obj, s1_path)
                 logger.info(f"LTX_DECODE_S1_AUDIO: wrote {s1_path}")
@@ -690,7 +692,7 @@ class LTXDistilledPipeline(LTXPipeline):
         logger.info(f"Audio decode: {time.time() - t0:.1f}s")
 
         t0 = time.time()
-        self.export_video(video_pixels, output_path, fps=fps, audio=audio_obj)
+        export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
         logger.info(f"Video export: {time.time() - t0:.1f}s")
 
         logger.info(f"Total: {time.time() - total_t0:.1f}s | Output: {output_path}")

@@ -75,7 +75,7 @@ def test_aggregate_embed_isolated(*, mesh_device):
                 conn_state[k] = f.get_tensor(k)
                 if k.startswith("text_embedding_projection.video_aggregate_embed."):
                     raw[k] = f.get_tensor(k)
-    pipe.load_embeddings_connectors(conn_state, audio_num_blocks=8)
+    pipe.gemma_encoder_pair.load_embeddings_connectors(conn_state, audio_num_blocks=8)
 
     # The device aggregate_embed weight is permuted D-major→layer-major at load, so the
     # reference must use the same permuted weight to be an apples-to-apples linear check.
@@ -93,7 +93,7 @@ def test_aggregate_embed_isolated(*, mesh_device):
 
     # device aggregate_embed (now owned by the feature extractor)
     tt_x = ttnn.from_torch(x, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    tt_y = pipe.feature_extractor.video_aggregate_embed(tt_x)
+    tt_y = pipe.gemma_encoder_pair.feature_extractor.video_aggregate_embed(tt_x)
     dev = ttnn.to_torch(ttnn.get_device_tensors(tt_y)[0]).float()
 
     logger.info(f"aggregate_embed: ref={tuple(ref.shape)} dev={tuple(dev.shape)}  PCC={pcc(dev, ref):.4f}")
