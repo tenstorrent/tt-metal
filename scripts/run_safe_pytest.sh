@@ -37,11 +37,11 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DISPATCH_TIMEOUT=5
 TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
 WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
-TRIAGE_JSON_DIR="${REPO_DIR}/generated/tt-triage"
+TRIAGE_OUT_DIR="${REPO_DIR}/generated/tt-triage"
 LOCK_FILE="/tmp/tt-device.lock"
 DIRTY_FLAG="/tmp/tt-device.dirty"
 TRIAGE_LOG="/tmp/safe-pytest-triage-$$.log"
-TRIAGE_JSON="${TRIAGE_JSON_DIR}/triage.json"
+TRIAGE_REPORT="${TRIAGE_OUT_DIR}/triage.txt"
 
 # --- Device-lock contention profiling ---
 # When $TT_DEVICE_TIMING_LOG is set, on EXIT we append one JSON line:
@@ -193,11 +193,11 @@ fi
 # zero overhead for passing tests. On sim there is no hang detection because
 # wall-clock timeouts are meaningless at kHz clock speeds.
 rm -f "$TRIAGE_LOG"
-# Also clear any stale triage JSON from a previous run. Downstream consumers
-# (hooks, CI) treat the JSON's presence as the hang signal — leaving a stale
+# Also clear any stale triage report from a previous run. Downstream consumers
+# (hooks, CI) treat the report's presence as the hang signal — leaving a stale
 # file around causes false-positive "hang detected" classification on the
 # next ordinary test failure.
-rm -f "$TRIAGE_JSON"
+rm -f "$TRIAGE_REPORT"
 MISSING_TTEXALENS=false
 if [[ "$SIM_MODE" == false ]]; then
     export TT_METAL_OPERATION_TIMEOUT_SECONDS="$DISPATCH_TIMEOUT"
@@ -207,8 +207,8 @@ if [[ "$SIM_MODE" == false ]]; then
     if ! python3 -c "import ttexalens" 2>/dev/null; then
         MISSING_TTEXALENS=true
     fi
-    mkdir -p "${TRIAGE_JSON_DIR}"
-    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --json-path=${TRIAGE_JSON} > ${TRIAGE_LOG} 2>&1"
+    mkdir -p "${TRIAGE_OUT_DIR}"
+    export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --llm-output --llm-output-path=${TRIAGE_REPORT} > ${TRIAGE_LOG} 2>&1"
 fi
 
 emit_missing_ttexalens_warning() {
@@ -370,9 +370,9 @@ if [[ "$IS_HANG" == true ]]; then
         echo ""
     fi
 
-    # Print the JSON triage path as the last line so machine-readers can find it.
-    if [[ -f "$TRIAGE_JSON" ]]; then
-        echo "SAFE_PYTEST: JSON triage: ${TRIAGE_JSON}"
+    # Print the triage report path as the last line so machine-readers can find it.
+    if [[ -f "$TRIAGE_REPORT" ]]; then
+        echo "SAFE_PYTEST: triage report: ${TRIAGE_REPORT}"
     fi
 
     rm -f "$TRIAGE_LOG"
