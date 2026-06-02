@@ -18,7 +18,8 @@
 #include "ckernel_sfpu_exp.h"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_silu.h"
-#include "llk_math_eltwise_binary_sfpu_binop.h"
+#include "ckernel_sfpu_binary.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
 #include "ckernel_sfpu_gelu.h"
 
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
@@ -60,8 +61,24 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
     PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
     PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
 
-    PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
-    PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+    PACK((SFPU_BINARY_CALL_MODE(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (true /* APPROXIMATE */, ckernel::BinaryOp::MUL, 8 /* ITERATIONS */),
+        RC,
+        0,
+        1,
+        0)));
+    PACK((SFPU_BINARY_CALL_MODE(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (true /* APPROXIMATE */, ckernel::BinaryOp::MUL, 8 /* ITERATIONS */),
+        RC,
+        2,
+        3,
+        2)));
 };
 
 template <>
@@ -80,8 +97,24 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
     PACK((llk_math_eltwise_unary_sfpu_gelu<true, false>(0)));
     PACK((llk_math_eltwise_unary_sfpu_gelu<true, false>(2)));
 
-    PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
-    PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+    PACK((SFPU_BINARY_CALL_MODE(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (true /* APPROXIMATE */, ckernel::BinaryOp::MUL, 8 /* ITERATIONS */),
+        RC,
+        0,
+        1,
+        0)));
+    PACK((SFPU_BINARY_CALL_MODE(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (true /* APPROXIMATE */, ckernel::BinaryOp::MUL, 8 /* ITERATIONS */),
+        RC,
+        2,
+        3,
+        2)));
 };
 
 }  // namespace detail
