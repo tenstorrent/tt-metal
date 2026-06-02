@@ -57,6 +57,7 @@ class DataFormat(Enum):
     Bfp8 = DataFormatInfo("Bfp8", 1)  # WH/BH specific
     Bfp8_b = DataFormatInfo("Bfp8_b", 1)  # WH/BH specific
     Bfp4_b = DataFormatInfo("Bfp4_b", 1)  # WH/BH specific
+    Bfp2_b = DataFormatInfo("Bfp2_b", 1)  # WH/BH specific
     Float32 = DataFormatInfo("Float32", 4)
     Int32 = DataFormatInfo("Int32", 4)
     Tf32 = DataFormatInfo("Tf32", 3)
@@ -110,6 +111,7 @@ class DataFormat(Enum):
             DataFormat.Float16_b,
             DataFormat.Bfp8_b,
             DataFormat.Bfp4_b,
+            DataFormat.Bfp2_b,
             DataFormat.Tf32,
             DataFormat.Float32,
         }
@@ -122,6 +124,9 @@ class DataFormat(Enum):
         elif self in {DataFormat.Bfp4_b}:
             num_exponents = num_datums // 16
             return (num_datums // 2) + num_exponents
+        elif self in {DataFormat.Bfp2_b}:
+            num_exponents = num_datums // 16
+            return (num_datums // 4) + num_exponents
         elif self.is_mx_format():
             # MX formats: 1 scale (E8M0, 8 bits) per 32 elements
             num_scales = num_datums // MX_FORMAT_BLOCK_SIZE
@@ -496,6 +501,7 @@ WORMHOLE_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.Float16_b: 5,
     DataFormat.Bfp8_b: 6,
     DataFormat.Bfp4_b: 7,
+    DataFormat.Bfp2_b: 15,
     DataFormat.Int32: 8,
     DataFormat.UInt16: 9,
     DataFormat.Int8: 14,
@@ -511,6 +517,7 @@ BLACKHOLE_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.Float16_b: 5,
     DataFormat.Bfp8_b: 6,
     DataFormat.Bfp4_b: 7,
+    DataFormat.Bfp2_b: 15,
     DataFormat.Int32: 8,
     DataFormat.UInt16: 9,
     DataFormat.Int8: 14,
@@ -642,6 +649,11 @@ def is_dest_acc_needed(format: InputOutputFormat) -> bool:
     """
     return (
         format.input_format
-        in [DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Float16_b]
+        in [
+            DataFormat.Bfp8_b,
+            DataFormat.Bfp4_b,
+            DataFormat.Bfp2_b,
+            DataFormat.Float16_b,
+        ]
         and format.output_format == DataFormat.Float16
     )
