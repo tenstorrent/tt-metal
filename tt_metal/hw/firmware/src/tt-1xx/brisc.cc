@@ -435,6 +435,13 @@ int main() {
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
             DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
+            // Done/go worker-side marker. Fires right after the GO spin exits
+            // (the worker has observed the new GO multicast). Pair with
+            // DISP_DONE_OBSERVED on dispatch_s (same chip clock domain) to
+            // compute the full done/go interval:
+            //   "dispatch sees all workers done -> worker observes new GO"
+            // which on BH is dominated by NoC MCAST MANY L1 latency (~561 ns).
+            DeviceTimestampedData("WORKER_GO_OBSERVED", launch_msg_address->kernel_config.host_assigned_id);
 
             uint32_t enables = launch_msg_address->kernel_config.enables;
             // Trigger the NCRISC to start loading CBs and IRAM as soon as possible.

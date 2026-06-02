@@ -229,7 +229,7 @@ FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 }
 
 FORCE_INLINE
-void process_go_signal_mcast_cmd() {
+void process_go_signal_mcast_cmd(uint32_t profiler_program_id = 0) {
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
     uint32_t sync_index = cmd->mcast.wait_stream - first_stream_used;
     // Get semaphore that will be update by dispatch_d, signalling that it's safe to send a go signal
@@ -276,10 +276,18 @@ void process_go_signal_mcast_cmd() {
         noc_increment_nonposted_writes_acked(noc_index, num_dests);
 
         wait_for_workers(wait_count, wait_stream);
+        // Done/go window START: wait_for_workers just observed all workers done.
+        DeviceTimestampedData("DISP_DONE_OBSERVED", profiler_program_id);
         cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
         noc_increment_nonposted_writes_issued(noc_index, 1);
+        // Done/go window END: MCAST GO write has been issued to NOC.
+        // Delta(END - START) = dispatch-side "MCAST GO issue cost"; pair with
+        // WORKER_GO_OBSERVED on a worker to also include MCAST propagation.
+        DeviceTimestampedData("DISP_GO_ISSUED", profiler_program_id);
     } else {
         wait_for_workers(wait_count, wait_stream);
+        DeviceTimestampedData("DISP_DONE_OBSERVED", profiler_program_id);
+        DeviceTimestampedData("DISP_GO_ISSUED", profiler_program_id);
     }
 
     *aligned_go_signal_storage = go_signal_value;
@@ -447,7 +455,7 @@ void kernel_main() {
             write_buffer_id(rt_profiler_msg, buffer_id);
         }
         switch (cmd->base.cmd_id) {
-            case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: process_go_signal_mcast_cmd(); break;
+            case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: process_go_signal_mcast_cmd(popped_pid); break;
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS: set_num_worker_sems(); break;
             case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
             case CQ_DISPATCH_CMD_WAIT: process_dispatch_s_wait_cmd(); break;

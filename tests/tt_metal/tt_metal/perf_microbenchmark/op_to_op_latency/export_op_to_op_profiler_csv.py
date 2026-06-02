@@ -97,9 +97,109 @@ def walk_core_markers(df: pd.DataFrame) -> tuple[dict, dict, pd.DataFrame]:
     return pack_finish, unpack_tile0_start, pd.DataFrame(tile_rows)
 
 
+def walk_done_to_go(df: pd.DataFrame, freq_mhz: float, min_prog_id: int) -> pd.DataFrame:
+    """Done/go decomposition: "MCAST GO issue cost + done counting in dispatch
+    core". On BH this materialises as the NoC-propagation interval "dispatch
+    sees workers done -> a worker observes the new GO multicast".
+
+    We have three event markers (all on the same chip clock domain):
+      - DISP_DONE_OBSERVED (dispatch_s):   wait_for_workers spin exits.
+      - DISP_GO_ISSUED    (dispatch_s):    MCAST GO write fired to NoC
+                                            (registers programmed, returns
+                                             before propagation completes).
+      - WORKER_GO_OBSERVED (per worker):   GO spin exits + scope start +
+                                            host_assigned_id read.
+
+    Reported per (chip, dispatch DISP_DONE timestamp):
+      dg_issue_ns    = DISP_GO_ISSUED - DISP_DONE_OBSERVED on dispatch_s.
+                        Pure single-write fire cost (~30 cycles on BH).
+      dg_first_ns    = min over workers of
+                       (WORKER_GO_OBSERVED - DISP_DONE_OBSERVED).
+                        Nearest worker observes GO.
+      dg_median_ns   = median over workers (typical worker)
+      dg_last_ns     = max over workers (farthest worker; ~= our old
+                        brisc_fw_done_to_go_us upper bound)
+
+    Requires TT_METAL_DEVICE_PROFILER_DISPATCH=1 at runtime so dispatch_s
+    markers land in profile_log_device.csv.
+
+    `min_prog_id` filters the dispatch program-id tag (popped_pid). Trace
+    boundaries (>3 us idle) are dropped automatically.
+    """
+    disp_done = df[df["zone name"] == "DISP_DONE_OBSERVED"].copy()
+    disp_go = df[df["zone name"] == "DISP_GO_ISSUED"].copy()
+    worker_go = df[df["zone name"] == "WORKER_GO_OBSERVED"].copy()
+    if disp_done.empty or worker_go.empty:
+        return pd.DataFrame()
+    # The dispatch_s core appears in both DISP_* and (sometimes, on startup)
+    # WORKER_GO_OBSERVED if FW happens to log it. Identify dispatch cores per chip
+    # and exclude them from the worker pool.
+    dispatch_cores = disp_done.groupby("PCIe slot")[["core_x", "core_y"]].agg(lambda s: list(s.unique())).reset_index()
+    worker_go = worker_go.copy()
+    # Drop rows where worker is actually a dispatch core for the same chip.
+    dispatch_set: set[tuple] = set()
+    for _, r in disp_done[["PCIe slot", "core_x", "core_y"]].drop_duplicates().iterrows():
+        dispatch_set.add((int(r["PCIe slot"]), int(r["core_x"]), int(r["core_y"])))
+    worker_go = worker_go[
+        ~worker_go.apply(lambda r: (int(r["PCIe slot"]), int(r["core_x"]), int(r["core_y"])) in dispatch_set, axis=1)
+    ]
+
+    # 10 us window cap (in cycles). Anything beyond is a trace boundary, not a real transition.
+    window_cycles = int(3000.0 / 1000.0 * freq_mhz)  # 3 us = ~4050 cycles @ 1.35 GHz
+
+    rows: list[dict] = []
+    for chip, dd_chip in disp_done.groupby("PCIe slot"):
+        dd_chip = dd_chip.sort_values("time[cycles since reset]").reset_index(drop=True)
+        dg_chip = disp_go[disp_go["PCIe slot"] == chip].sort_values("time[cycles since reset]").reset_index(drop=True)
+        wg_chip = worker_go[worker_go["PCIe slot"] == chip].copy()
+        wg_t = wg_chip["time[cycles since reset]"].astype("int64").values
+        for i, drow in dd_chip.iterrows():
+            d_t = int(drow["time[cycles since reset]"])
+            d_pid = int(drow["data"])
+            if d_pid < min_prog_id:
+                continue
+            # Worker events RIGHT AFTER this DISP_DONE, within window.
+            lo, hi = d_t, d_t + window_cycles
+            mask = (wg_t > lo) & (wg_t < hi)
+            deltas = wg_t[mask] - d_t
+            if len(deltas) == 0:
+                continue
+            # Find DISP_GO_ISSUED that immediately follows.
+            dg_after = dg_chip[dg_chip["time[cycles since reset]"] > d_t]
+            if len(dg_after) > 0:
+                go_t = int(dg_after.iloc[0]["time[cycles since reset]"])
+                issue_cycles = go_t - d_t
+            else:
+                go_t = pd.NA
+                issue_cycles = pd.NA
+            rows.append(
+                {
+                    "chip": chip,
+                    "program_id": d_pid,
+                    "done_observed_cycles": d_t,
+                    "n_workers_responded": int(len(deltas)),
+                    "dg_issue_cycles": issue_cycles,
+                    "dg_issue_ns": (issue_cycles / freq_mhz * 1000.0) if issue_cycles is not pd.NA else pd.NA,
+                    "dg_first_cycles": int(deltas.min()),
+                    "dg_first_ns": float(deltas.min()) / freq_mhz * 1000.0,
+                    "dg_median_cycles": int(pd.Series(deltas).median()),
+                    "dg_median_ns": float(pd.Series(deltas).median()) / freq_mhz * 1000.0,
+                    "dg_last_cycles": int(deltas.max()),
+                    "dg_last_ns": float(deltas.max()) / freq_mhz * 1000.0,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def walk_barrier_markers(df: pd.DataFrame) -> dict[str, dict[tuple, int]]:
-    """Per (chip, core_x, core_y, prog_id) timestamps for reader/writer barriers and go/done."""
-    zones = [
+    """Per (chip, core_x, core_y, prog_id) timestamps for reader/writer barriers and go/done.
+
+    BRISC-FW zone (firmware scope around each program's kernel launch path) is also
+    captured, separately from the user BRISC_GO/BRISC_DONE markers emitted from
+    inside our writer kernel. The FW.start fires before PROG_ID is read, so we
+    forward-tag pending FW.start with the next PROG_ID we see.
+    """
+    user_zones = [
         "PROG_ID",
         "READ_BEFORE_BARRIER",
         "READ_AFTER_BARRIER",
@@ -110,7 +210,10 @@ def walk_barrier_markers(df: pd.DataFrame) -> dict[str, dict[tuple, int]]:
         "NCRISC_GO",
         "NCRISC_DONE",
     ]
-    markers = df[(df["zone name"].isin(zones)) & (df["RISC processor type"].isin(DATAFLOW_RISC_TYPES))].copy()
+    fw_zones = ["BRISC-FW", "NCRISC-FW"]
+    markers = df[
+        (df["zone name"].isin(user_zones + fw_zones)) & (df["RISC processor type"].isin(DATAFLOW_RISC_TYPES))
+    ].copy()
     markers = markers.sort_values(["PCIe slot", "core_x", "core_y", "RISC processor type", "time[cycles since reset]"])
 
     keys = [
@@ -122,6 +225,10 @@ def walk_barrier_markers(df: pd.DataFrame) -> dict[str, dict[tuple, int]]:
         "brisc_done",
         "ncrisc_go",
         "ncrisc_done",
+        "brisc_fw_start",
+        "brisc_fw_end",
+        "ncrisc_fw_start",
+        "ncrisc_fw_end",
     ]
     out: dict[str, dict[tuple, int]] = {k: {} for k in keys}
     group_cols = ["PCIe slot", "core_x", "core_y", "RISC processor type"]
@@ -131,11 +238,28 @@ def walk_barrier_markers(df: pd.DataFrame) -> dict[str, dict[tuple, int]]:
         is_reader = risc in READ_RISC_TYPES
         is_writer = risc in WRITE_RISC_TYPES
         current_prog: int | None = None
+        pending_fw_start: int | None = None
         for _, row in group.iterrows():
             zone = row["zone name"]
             time_cycles = int(row["time[cycles since reset]"])
+            zone_type = row.get("type", "")
+            if zone == "BRISC-FW" and zone_type == "ZONE_START" and is_writer:
+                pending_fw_start = time_cycles
+                current_prog = None
+                continue
+            if zone == "NCRISC-FW" and zone_type == "ZONE_START" and is_reader:
+                pending_fw_start = time_cycles
+                current_prog = None
+                continue
             if zone == "PROG_ID":
                 current_prog = int(row["data"])
+                if pending_fw_start is not None:
+                    tkey = (chip, core_x, core_y, current_prog)
+                    if is_writer:
+                        out["brisc_fw_start"][tkey] = pending_fw_start
+                    elif is_reader:
+                        out["ncrisc_fw_start"][tkey] = pending_fw_start
+                    pending_fw_start = None
                 continue
             if current_prog is None:
                 continue
@@ -156,6 +280,12 @@ def walk_barrier_markers(df: pd.DataFrame) -> dict[str, dict[tuple, int]]:
                 out["ncrisc_go"][tkey] = time_cycles
             elif zone == "NCRISC_DONE" and is_reader:
                 out["ncrisc_done"][tkey] = time_cycles
+            elif zone == "BRISC-FW" and zone_type == "ZONE_END" and is_writer:
+                out["brisc_fw_end"][tkey] = time_cycles
+                current_prog = None
+            elif zone == "NCRISC-FW" and zone_type == "ZONE_END" and is_reader:
+                out["ncrisc_fw_end"][tkey] = time_cycles
+                current_prog = None
 
     return out
 
@@ -348,11 +478,25 @@ def build_timeline(gaps: pd.DataFrame, barriers: dict[str, dict[tuple, int]], fr
         rec["brisc_go_cycles"] = barriers["brisc_go"].get(k_start)
         rec["ncrisc_done_cycles"] = barriers["ncrisc_done"].get(k_end)
         rec["ncrisc_go_cycles"] = barriers["ncrisc_go"].get(k_start)
+        # FW-level zone bounds: FW.start fires BEFORE our user BRISC_GO marker
+        # (FW kernel-launch dispatch path runs in between). FW done->go is a
+        # tighter "done/go" interval: prev FW signaled done -> next FW received
+        # GO and entered scope. Excludes our pre-marker user code (~75 ns) and
+        # the FW kernel-launch prelude (~0.5-1 us) that inflates user done->go.
+        rec["brisc_fw_start_cycles"] = barriers["brisc_fw_start"].get(k_start)
+        rec["brisc_fw_end_cycles"] = barriers["brisc_fw_end"].get(k_end)
+        rec["ncrisc_fw_start_cycles"] = barriers["ncrisc_fw_start"].get(k_start)
+        rec["ncrisc_fw_end_cycles"] = barriers["ncrisc_fw_end"].get(k_end)
         bd = rec.get("brisc_done_cycles")
         bg = rec.get("brisc_go_cycles")
         if bd is not None and bg is not None and not (pd.isna(bd) or pd.isna(bg)):
             rec["brisc_done_to_go_cycles"] = int(bg) - int(bd)
             rec["brisc_done_to_go_us"] = rec["brisc_done_to_go_cycles"] / freq_mhz
+        bfs = rec.get("brisc_fw_start_cycles")
+        bfe = rec.get("brisc_fw_end_cycles")
+        if bfs is not None and bfe is not None and not (pd.isna(bfs) or pd.isna(bfe)):
+            rec["brisc_fw_done_to_go_cycles"] = int(bfs) - int(bfe)
+            rec["brisc_fw_done_to_go_us"] = rec["brisc_fw_done_to_go_cycles"] / freq_mhz
         rb = rec.get("read_before_barrier_cycles")
         ra = rec.get("read_after_barrier_cycles")
         if rb is not None and ra is not None and not (pd.isna(rb) or pd.isna(ra)):
@@ -583,8 +727,32 @@ def print_done_go_validation_summary(
         if not bg.empty:
             bg_ns = bg * 1000.0
             print(
-                f"  brisc_done_to_go (per-core device): median={bg.median():.3f} us ({bg_ns.median():.1f} ns) "
+                f"  brisc_done_to_go (per-core USER markers, includes ~0.5-1us FW prelude): "
+                f"median={bg.median():.3f} us ({bg_ns.median():.1f} ns) "
                 f"min={bg.min():.3f} max={bg.max():.3f} n={len(bg)}"
+            )
+    if not timeline.empty and "brisc_fw_done_to_go_us" in timeline.columns:
+        fbg = pd.to_numeric(timeline["brisc_fw_done_to_go_us"], errors="coerce").dropna()
+        if not fbg.empty:
+            fbg_ns = fbg * 1000.0
+            print(
+                f"  brisc_FW_done_to_go (per-core FW worker round-trip): "
+                f"median={fbg.median():.3f} us ({fbg_ns.median():.1f} ns) "
+                f"min={fbg.min():.3f} max={fbg.max():.3f} n={len(fbg)}"
+            )
+    if not timeline.empty and "dg_first_ns" in timeline.columns:
+        for col, label in [
+            ("dg_issue_ns", "dispatch issue only  "),
+            ("dg_first_ns", "first worker sees GO "),
+            ("dg_median_ns", "median worker sees GO"),
+            ("dg_last_ns", "last worker sees GO  "),
+        ]:
+            v = pd.to_numeric(timeline[col], errors="coerce").dropna()
+            if v.empty:
+                continue
+            print(
+                f"  done_to_go [{label}]: "
+                f"median={v.median():.0f} ns  min={v.min():.0f}  max={v.max():.0f}  n={len(v)}"
             )
     if not timeline.empty and "gap_us" in timeline.columns:
         gap = pd.to_numeric(timeline["gap_us"], errors="coerce").dropna()
@@ -770,6 +938,20 @@ def main() -> int:
     rt_gaps, rt_skipped = build_rt_dispatch_gaps(rt_df, freq_mhz, args.min_prog_id)
     rt_programs = build_rt_program_table(rt_df, args.min_prog_id, freq_mhz)
     timeline = merge_dispatch_into_timeline(timeline, rt_gaps, rt_df, freq_mhz)
+    dg_table = walk_done_to_go(df, freq_mhz, args.min_prog_id)
+    if not dg_table.empty and not timeline.empty:
+        # Map per (chip, to_prog_id) -> done/go for that transition's GO.
+        # We surface four columns:
+        #  - dg_issue_ns   : dispatch-only MCAST issue cost (~30 ns BH)
+        #  - dg_first_ns   : nearest worker observes GO
+        #  - dg_median_ns  : median worker observes GO
+        #  - dg_last_ns    : farthest worker observes GO
+        lookup = {(int(r.chip), int(r.program_id)): r for _, r in dg_table.iterrows()}
+        for col in ["dg_issue_ns", "dg_first_ns", "dg_median_ns", "dg_last_ns"]:
+            timeline[col] = timeline.apply(
+                lambda r: lookup.get((int(r["chip"]), int(r["to_prog_id"])), pd.Series()).get(col, pd.NA),
+                axis=1,
+            )
     timeline = add_buffering_context_columns(
         timeline,
         freq_mhz,

@@ -124,14 +124,15 @@ struct BenchmarkConfig {
     uint32_t input_cb_depth_tiles = 0;
     // 0 = default 2 tiles (compute->writer still pops 1 at a time).
     uint32_t output_cb_depth_tiles = 0;
-    // 0 = reserve N then read+push one tile at a time; 1 = reserve N, read all, push N.
+    // 0 = reserve N then read+push one tile at a time; 1 = reserve N, read all, push N;
+    // 2 = per-trid double-buffer (N reads in flight per TRID).
     uint32_t reader_mode = 0;
+    // Reads in flight per TRID for reader_mode 2. CB depth must be
+    // >= 2 * reader_trid_in_flight * page_size_tiles.
+    uint32_t reader_trid_in_flight = 2;
     // DRAM page size in tiles. Larger pages = fewer, larger NoC transactions
     // per program. CB pages stay 1 tile each so compute kernel is unchanged.
     uint32_t page_size_tiles = 1;
-    // Writer barrier mode: 0 = per-tile barrier (default, mirrors current ops);
-    //                     1 = single barrier at end of all writes.
-    uint32_t write_barrier_mode = 0;
     // Cap active core count. 0 = use full grid (default). Used to test whether
     // brisc_done_to_go scales with core count.
     uint32_t num_active_cores = 0;
@@ -166,9 +167,8 @@ BenchmarkConfig parse_args(const std::vector<std::string>& args) {
         cfg.reader_mode = 2;
     }
     cfg.page_size_tiles = test_args::get_command_option_uint32(args, "--page-size-tiles", cfg.page_size_tiles);
-    if (test_args::has_command_option(args, "--writer-barrier-at-end")) {
-        cfg.write_barrier_mode = 1;
-    }
+    cfg.reader_trid_in_flight =
+        test_args::get_command_option_uint32(args, "--reader-trid-in-flight", cfg.reader_trid_in_flight);
     cfg.num_active_cores = test_args::get_command_option_uint32(args, "--num-active-cores", cfg.num_active_cores);
     if (test_args::has_command_option(args, "--buffer-tune")) {
         cfg.buffer_tune = true;
@@ -418,21 +418,21 @@ struct BuiltProgram {
     uint32_t tiles_per_core_group_2 = 0;
     uint32_t reader_push_tile_count = 2;
     uint32_t reader_mode = 0;
+    uint32_t reader_trid_in_flight = 2;
     uint32_t input_cb_depth_tiles = 0;
     uint32_t output_cb_depth_tiles = 2;
     uint32_t page_size_tiles = 1;
-    uint32_t write_barrier_mode = 0;
 };
 
-// Set reader/writer/compute runtime args (including program_id) on every active core.
+// Set reader/writer/compute runtime args (only the truly per-launch ones; kernel knobs
+// like reader_mode / push_tile_count / tiles_per_page / trid_in_flight are compile-time
+// args on the kernel so they fold into constants and dead code gets eliminated).
 void set_program_launch_args(
     Program& program,
     const BuiltProgram& built,
     uint32_t input_buffer_addr,
     uint32_t output_buffer_addr,
-    uint32_t program_id,
-    uint32_t reader_push_tile_count,
-    uint32_t reader_mode) {
+    uint32_t program_id) {
     const auto work_groups = {
         std::make_pair(built.core_group_1, built.tiles_per_core_group_1),
         std::make_pair(built.core_group_2, built.tiles_per_core_group_2)};
@@ -444,26 +444,12 @@ void set_program_launch_args(
         for (const auto& range : group.ranges()) {
             for (const auto& core : range) {
                 SetRuntimeArgs(
-                    program,
-                    built.reader_kernel,
-                    core,
-                    {input_buffer_addr,
-                     tiles_per_core,
-                     start_tile_id,
-                     program_id,
-                     reader_push_tile_count,
-                     reader_mode,
-                     built.page_size_tiles});
+                    program, built.reader_kernel, core, {input_buffer_addr, tiles_per_core, start_tile_id, program_id});
                 SetRuntimeArgs(
                     program,
                     built.writer_kernel,
                     core,
-                    {output_buffer_addr,
-                     tiles_per_core,
-                     start_tile_id,
-                     program_id,
-                     built.page_size_tiles,
-                     built.write_barrier_mode});
+                    {output_buffer_addr, tiles_per_core, start_tile_id, program_id});
                 SetRuntimeArgs(program, built.compute_kernel, core, {tiles_per_core, program_id});
                 start_tile_id += tiles_per_core;
             }
@@ -479,14 +465,7 @@ void configure_program_launch(
     uint32_t output_buffer_addr,
     uint32_t profiler_program_id,
     uint32_t host_runtime_id) {
-    set_program_launch_args(
-        program,
-        built,
-        input_buffer_addr,
-        output_buffer_addr,
-        profiler_program_id,
-        built.reader_push_tile_count,
-        built.reader_mode);
+    set_program_launch_args(program, built, input_buffer_addr, output_buffer_addr, profiler_program_id);
     program.set_runtime_id(host_runtime_id);
 }
 
@@ -560,12 +539,23 @@ BuiltProgram build_program(
         "output CB depth ({}) must be >= --page-size-tiles ({}) so the writer can accumulate a full page",
         output_cb_depth,
         page_size_tiles);
+    const uint32_t trid_in_flight = cfg.reader_trid_in_flight > 0 ? cfg.reader_trid_in_flight : 2;
     if (cfg.reader_mode == 2) {
         TT_FATAL(
-            input_cb_depth >= 2 * page_size_tiles,
-            "per-trid DB needs input CB depth ({}) >= 2 * --page-size-tiles ({})",
+            trid_in_flight >= 2,
+            "--reader-trid-in-flight ({}) must be >= 2 for mode 2 (per-trid double-buffer needs both sides active)",
+            trid_in_flight);
+        TT_FATAL(
+            input_cb_depth >= 2 * trid_in_flight * page_size_tiles,
+            "per-trid DB needs input CB depth ({}) >= 2 * --reader-trid-in-flight ({}) * --page-size-tiles ({})",
             input_cb_depth,
-            2 * page_size_tiles);
+            trid_in_flight,
+            page_size_tiles);
+        TT_FATAL(
+            cfg.num_pages_per_core / page_size_tiles >= 1,
+            "--num-pages-per-core ({}) / --page-size-tiles ({}) must be >= 1 for reader_mode 2",
+            cfg.num_pages_per_core,
+            page_size_tiles);
     } else if (page_size_tiles > 1) {
         TT_FATAL(
             false,
@@ -575,12 +565,13 @@ BuiltProgram build_program(
 
     log_info(
         LogTest,
-        "Reader: push_tiles={}, input_cb_depth={}, output_cb_depth={}, page_size_tiles={} (compute->writer still 1 "
-        "tile at a time), reader_mode={} (0=incremental read+push, 1=batch read then push, 2=per-trid double-buffer)",
+        "Reader: push_tiles={}, input_cb_depth={}, output_cb_depth={}, page_size_tiles={}, trid_in_flight={} "
+        "(reader_mode={}: 0=incremental, 1=batch, 2=per-trid DB with N reads in flight per TRID)",
         push_tiles,
         input_cb_depth,
         output_cb_depth,
         page_size_tiles,
+        trid_in_flight,
         cfg.reader_mode);
 
     CircularBufferConfig cb_in_config =
@@ -594,7 +585,11 @@ BuiltProgram build_program(
     CreateCircularBuffer(program, all_cores, cb_out_config);
 
     // Reader: NOC1 / RISCV1, pulls from interleaved DRAM via TensorAccessor.
-    std::vector<uint32_t> reader_compile_time_args = {kInputCbId};
+    // Compile-time args order MUST match reader_interleaved.cpp:
+    //   [0]=cb_in, [1]=READER_MODE, [2]=PUSH_TILE_COUNT, [3]=TILES_PER_PAGE,
+    //   [4]=TRID_IN_FLIGHT, then TensorAccessorArgs starting at index 5.
+    std::vector<uint32_t> reader_compile_time_args = {
+        kInputCbId, cfg.reader_mode, push_tiles, page_size_tiles, trid_in_flight};
     TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
     auto reader_kernel = CreateKernel(
         program,
@@ -606,7 +601,9 @@ BuiltProgram build_program(
             .compile_args = reader_compile_time_args});
 
     // Writer: NOC0 / RISCV0, pushes to interleaved DRAM.
-    std::vector<uint32_t> writer_compile_time_args = {kOutputCbId};
+    // Compile-time args order MUST match writer_interleaved.cpp:
+    //   [0]=cb_out, [1]=TILES_PER_PAGE, then TensorAccessorArgs starting at index 2.
+    std::vector<uint32_t> writer_compile_time_args = {kOutputCbId, page_size_tiles};
     TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
     auto writer_kernel = CreateKernel(
         program,
@@ -637,26 +634,9 @@ BuiltProgram build_program(
         for (const auto& range : group.ranges()) {
             for (const auto& core : range) {
                 SetRuntimeArgs(
-                    program,
-                    reader_kernel,
-                    core,
-                    {input_buffer->address(),
-                     tiles_per_core,
-                     start_tile_id,
-                     0,
-                     push_tiles,
-                     cfg.reader_mode,
-                     page_size_tiles});
+                    program, reader_kernel, core, {input_buffer->address(), tiles_per_core, start_tile_id, 0});
                 SetRuntimeArgs(
-                    program,
-                    writer_kernel,
-                    core,
-                    {output_buffer->address(),
-                     tiles_per_core,
-                     start_tile_id,
-                     0,
-                     page_size_tiles,
-                     cfg.write_barrier_mode});
+                    program, writer_kernel, core, {output_buffer->address(), tiles_per_core, start_tile_id, 0});
                 SetRuntimeArgs(program, compute_kernel, core, {tiles_per_core, 0});
                 start_tile_id += tiles_per_core;
             }
@@ -679,10 +659,10 @@ BuiltProgram build_program(
     built.tiles_per_core_group_2 = num_tiles_per_core_group_2;
     built.reader_push_tile_count = push_tiles;
     built.reader_mode = cfg.reader_mode;
+    built.reader_trid_in_flight = trid_in_flight;
     built.input_cb_depth_tiles = input_cb_depth;
     built.output_cb_depth_tiles = output_cb_depth;
     built.page_size_tiles = page_size_tiles;
-    built.write_barrier_mode = cfg.write_barrier_mode;
     return built;
 }
 

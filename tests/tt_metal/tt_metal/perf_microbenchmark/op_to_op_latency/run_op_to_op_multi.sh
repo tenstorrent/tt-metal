@@ -13,7 +13,8 @@
 #   TILES_PER_CORE - tiles/core for export buffering breakdown (default: 2)
 #   INPUT_CB_DEPTH - input CB depth for export buffering breakdown (default: 2)
 #   READER_PUSH    - reader push tiles for export (default: 1)
-set -euo pipefail
+set -uo pipefail
+# Intentionally NOT -e: a failing run shouldn't kill all subsequent runs.
 
 NUM_RUNS="${1:-5}"
 CONFIG_LABEL="${CONFIG_LABEL:-default}"
