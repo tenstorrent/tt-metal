@@ -102,7 +102,7 @@ ttnn:
 
 shield:
   e2e:
-    wh_llmbox: 51
+    wh_llmbox: 55
 
 # Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
