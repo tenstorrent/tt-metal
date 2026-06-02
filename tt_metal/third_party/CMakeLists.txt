@@ -63,8 +63,44 @@ set(BUILD_SHARED_LIBS OFF CACHE BOOL "Create shared libraries" FORCE)
 # Disable Tracy's -march=native for portable CLI binaries in CI.
 set(NO_ISA_EXTENSIONS ON CACHE BOOL "Disable Tracy -march=native for portable CLI tools" FORCE)
 
+# The Tracy CLI dependency tree (PPQSort via packageProject, zstd's build/cmake, etc.)
+# calls install() unconditionally and exposes no toggle to disable it. Those install()
+# calls register CPack components (PPQSort_Development, Development, headers, pkgconfig)
+# into the global COMPONENTS property the moment they execute at configure time, so they
+# leak into CPACK_COMPONENTS_ALL (see cmake/packaging.cmake) and CPack tries to package
+# them. CMAKE_SKIP_INSTALL_RULES does NOT help here: it only suppresses generation of the
+# cmake_install.cmake scripts, the install() calls still run and still register components.
+#
+# To stop them registering in the first place, neutralise install() for just this subtree.
+# CMake command (re)definitions are global once defined, so instead of overriding and
+# restoring (the builtin can't be reliably recovered after shadowing), we forward to the
+# real builtin (_install) and gate on a normal variable. The variable is directory-scoped
+# and never set outside this region, so every other install() in the project still runs.
+macro(install)
+    if(_tt_suppress_tracy_cli_install)
+        # no-op: drop the dependency's install rule + component registration
+    else()
+        _install(${ARGV})
+    endif()
+endmacro()
+
+# export() must be neutralised too: deps like zstd create their export set via
+# install(TARGETS ... EXPORT zstdExports) (now a no-op) and then call export(EXPORT
+# zstdExports ...) standalone, which would error with "Export set not found". Tracy links
+# the dependency targets directly (not via the generated package files), so dropping these
+# is safe.
+macro(export)
+    if(_tt_suppress_tracy_cli_install)
+        # no-op
+    else()
+        _export(${ARGV})
+    endif()
+endmacro()
+
+set(_tt_suppress_tracy_cli_install TRUE)
 add_subdirectory(tracy/csvexport)
 add_subdirectory(tracy/capture)
+set(_tt_suppress_tracy_cli_install FALSE)
 
 # Restore global shared-lib preference after Tracy CLI configuration.
 set(BUILD_SHARED_LIBS "${_tt_tracy_saved_build_shared_libs}" CACHE BOOL "Create shared libraries" FORCE)
