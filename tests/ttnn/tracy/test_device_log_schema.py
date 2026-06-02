@@ -4,58 +4,140 @@
 
 """Tests for profile_log_device.csv schema (ARCH metadata + column headers)."""
 
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
 
+from models.common.utility_functions import skip_for_blackhole
+from tracy.common import (
+    PROFILER_DEVICE_SIDE_LOG,
+    PROFILER_LOGS_DIR,
+    TT_METAL_HOME,
+    clear_profiler_runtime_artifacts,
+    generate_logs_folder,
+)
 from tracy.device_log_schema import (
     DEVICE_LOG_COLUMN_HEADERS,
     DeviceLogSchemaError,
-    parse_device_arch_metadata,
     parse_profile_log_device_csv,
     validate_profile_log_device_arch_and_headers,
     validate_profile_log_device_csv,
 )
 from tracy.process_device_log import extract_device_info, import_device_profile_log
+from tracy.process_model_log import get_profiler_folder, run_device_profiler
 
-FIXTURE_PATH = Path(__file__).parent / "fixtures" / "profile_log_device_minimal.csv"
-
-
-def test_parse_device_arch_metadata_from_fixture():
-    metadata = parse_device_arch_metadata(FIXTURE_PATH)
-    assert metadata.arch == "wormhole_b0"
-    assert metadata.freq_mhz == 1000
-    assert metadata.max_compute_cores == 64
-
-
-def test_extract_device_info_matches_schema_parser():
-    arch, freq, max_cores = extract_device_info(FIXTURE_PATH)
-    assert arch == "wormhole_b0"
-    assert freq == 1000
-    assert max_cores == 64
+# Same binary used by test_custom_cycle_count in test_device_profiler.py.
+PROFILER_EXAMPLE = TT_METAL_HOME / "build/programming_examples/profiler/test_custom_cycle_count"
+TRACY_MATMUL_COMMAND = (
+    "pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_matmul.py"
+    "::test_run_matmul_test[BFLOAT16-input_shapes0]"
+)
+TRACY_OUTPUT_NAME = "DeviceLogSchema"
 
 
-def test_validate_profile_log_device_arch_and_headers_accepts_fixture():
-    metadata = validate_profile_log_device_arch_and_headers(FIXTURE_PATH)
-    assert metadata.arch == "wormhole_b0"
+def _device_contention_message() -> str | None:
+    """Return a message if another process likely holds the device."""
+    lock_files = list(Path("/tmp").glob("CHIP_IN_USE*"))
+    if lock_files:
+        return (
+            "Device PCIe lock is held. Kill the blocking process and retry. "
+            f"Lock files: {[str(p) for p in lock_files]}"
+        )
+
+    try:
+        proc = subprocess.run(
+            ["pgrep", "-af", "capture-release|python3 -m tracy|python -m tracy"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+
+    lines = [
+        line
+        for line in proc.stdout.splitlines()
+        if line.strip() and str(os.getpid()) not in line and "pgrep" not in line
+    ]
+    if lines:
+        preview = "\n  ".join(lines[:5])
+        return "Device may be held by a stale Tracy capture session. " f"Kill these processes and retry:\n  {preview}"
+    return None
 
 
-def test_validate_profile_log_device_csv_accepts_fixture():
-    validate_profile_log_device_csv(FIXTURE_PATH)
+def _generate_profile_log_device_csv(tmp_path: Path, timeout_s: int = 90) -> Path:
+    """Run a minimal profiler workload and return the generated CSV path."""
+    contention = _device_contention_message()
+    if contention:
+        pytest.fail(contention)
+
+    clear_profiler_runtime_artifacts()
+
+    if PROFILER_EXAMPLE.is_file():
+        workload_log = tmp_path / "test_custom_cycle_count.log"
+        cmd = f"cd {TT_METAL_HOME} && TT_METAL_DEVICE_PROFILER=1 {PROFILER_EXAMPLE}"
+        with workload_log.open("w") as log_f:
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    shell=True,
+                    timeout=timeout_s,
+                    stdout=log_f,
+                    stderr=subprocess.STDOUT,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                tail = workload_log.read_text()[-4000:]
+                pytest.fail(
+                    "Profiler example timed out opening or using the device. "
+                    "Another process may hold the PCIe lock; check for stale "
+                    f"`tracy` / `capture-release` sessions.\nLog tail:\n{tail}"
+                )
+        assert proc.returncode == 0, f"Profiler example failed:\n{workload_log.read_text()}"
+        return PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
+
+    run_device_profiler(
+        TRACY_MATMUL_COMMAND,
+        TRACY_OUTPUT_NAME,
+        op_support_count=1000,
+    )
+    return generate_logs_folder(get_profiler_folder(TRACY_OUTPUT_NAME)) / PROFILER_DEVICE_SIDE_LOG
 
 
-def test_parse_profile_log_device_csv_returns_named_columns():
-    df = parse_profile_log_device_csv(FIXTURE_PATH)
+def _validate_generated_device_log(csv_path: Path) -> None:
+    metadata = validate_profile_log_device_arch_and_headers(csv_path)
+    assert metadata.arch
+    assert metadata.freq_mhz > 0
+    assert metadata.max_compute_cores is not None
+    assert metadata.max_compute_cores > 0
+
+    validate_profile_log_device_csv(csv_path)
+
+    arch, freq, max_cores = extract_device_info(csv_path)
+    assert arch == metadata.arch
+    assert freq == metadata.freq_mhz
+    assert max_cores == metadata.max_compute_cores
+
+    df = parse_profile_log_device_csv(csv_path)
     assert list(df.columns) == DEVICE_LOG_COLUMN_HEADERS
-    assert len(df) == 10
+    assert len(df) > 0
 
-
-def test_import_device_profile_log_accepts_fixture():
-    devices_data = import_device_profile_log(FIXTURE_PATH)
-    assert devices_data["deviceInfo"]["arch"] == "wormhole_b0"
-    assert devices_data["deviceInfo"]["freq"] == 1000
+    devices_data = import_device_profile_log(csv_path)
+    assert devices_data["deviceInfo"]["arch"] == metadata.arch
+    assert devices_data["deviceInfo"]["freq"] == metadata.freq_mhz
     assert 0 in devices_data["devices"]
-    assert (1, 1) in devices_data["devices"][0]["cores"]
+
+
+@pytest.mark.timeout(600)
+@skip_for_blackhole()
+def test_profile_log_device_csv_from_device_profiler(tmp_path):
+    """Generate profile_log_device.csv via device profiler and validate schema."""
+    csv_path = _generate_profile_log_device_csv(tmp_path)
+    assert csv_path.is_file(), f"Expected device log at {csv_path}"
+    _validate_generated_device_log(csv_path)
 
 
 def test_validate_rejects_missing_arch_line(tmp_path):

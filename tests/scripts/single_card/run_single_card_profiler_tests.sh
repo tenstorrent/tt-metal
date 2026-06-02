@@ -66,13 +66,12 @@ run_device_profiler_test() {
 }
 
 run_perf_op_report_test() {
-    run_device_log_schema_test
     remove_default_log_locations
     TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/tracy/test_perf_op_report.py --noconftest -k "not TestOpSupportCount"
 }
 
 run_device_log_schema_test() {
-    pytest tests/ttnn/tracy/test_device_log_schema.py --noconftest
+    pytest tests/ttnn/tracy/test_device_log_schema.py --noconftest --timeout 600
 }
 
 run_realtime_profiler_test() {
@@ -92,6 +91,7 @@ run_realtime_profiler_test() {
 run_profiling_test() {
     run_mid_run_data_dump
     run_device_profiler_test
+    run_device_log_schema_test
     run_perf_op_report_test
     run_realtime_profiler_test
 }
