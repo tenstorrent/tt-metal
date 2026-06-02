@@ -357,35 +357,25 @@ class TtMistral4Attention(LightweightModule):
             cache_file_name=_cf(p + "q_a_layernorm.weight"),
         )  # [1, 1, Q_LORA_RANK / TILE, TILE]
 
-        # Pre-split q_b_proj into nope/rope sub-weights, used by both prefill and
-        # decode. The full q_b_proj is never materialised on device — latent
-        # caching only needs the per-head q_nope/q_rope projections.
+        # Fused q_b_proj weight [Q_LORA_RANK, N_HEADS*HEAD_DIM] in per-head [nope|rope]
+        # column layout (rope columns already deinterleaved for the rotary convention).
+        # One matmul + a last-dim split feeds both q_nope and q_rope; the previously
+        # split q_nope_w/q_rope_w were just the two HEAD_DIM column-halves of this tensor,
+        # so this is memory-neutral and removes one matmul per prefill/decode call.
         _q_b_scale = state_dict.get((p + "q_b_proj.weight").replace(".weight", ".weight_scale_inv"))
         _q_b = _deinterleave_q_b_proj(
             _torch_for_ttnn_upload(state_dict[p + "q_b_proj.weight"], _q_b_scale).T.contiguous()
-        )
-        _q_b3 = _q_b.reshape(Q_LORA_RANK, N_HEADS, HEAD_DIM)
-        _q_nope = _q_b3[:, :, :QK_NOPE_HEAD_DIM].reshape(Q_LORA_RANK, N_HEADS * QK_NOPE_HEAD_DIM).contiguous()
-        _q_rope = _q_b3[:, :, QK_NOPE_HEAD_DIM:].reshape(Q_LORA_RANK, N_HEADS * QK_ROPE_HEAD_DIM).contiguous()
-        self.q_nope_w = ttnn.as_tensor(
-            _q_nope,
+        )  # [Q_LORA_RANK, N_HEADS * HEAD_DIM]
+        self.q_b_w = ttnn.as_tensor(
+            _q_b,
             dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            cache_file_name=_cf(p + "q_nope_w"),
+            cache_file_name=_cf(p + "q_b_w"),
         )
-        self.q_rope_w = ttnn.as_tensor(
-            _q_rope,
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            cache_file_name=_cf(p + "q_rope_w"),
-        )
-        del _q_b, _q_b3, _q_nope, _q_rope
+        del _q_b
 
         self.kv_a_proj = _load_weight(
             state_dict,
@@ -527,8 +517,7 @@ class TtMistral4Attention(LightweightModule):
         return {
             "q_a": _pc(H // 32, Q_LORA_RANK // 32),  # [4096,1024]: K=128, N=32
             "kv_a": _pc(H // 32, KV_A_PROJ_OUT // 32),  # [4096,320]: K=128, N=10
-            "q_nope": _pc(Q_LORA_RANK // 32, N_HEADS * QK_NOPE_HEAD_DIM // 32),  # [1024,2048]: K=32, N=64
-            "q_rope": _pc(Q_LORA_RANK // 32, N_HEADS * QK_ROPE_HEAD_DIM // 32),  # [1024,2048]: K=32, N=64
+            "q_b": _pc(Q_LORA_RANK // 32, N_HEADS * HEAD_DIM // 32),  # [1024,4096]: K=32, N=128
         }
 
     # ------------------------------------------------------------------
@@ -733,41 +722,35 @@ class TtMistral4Attention(LightweightModule):
         )  # [1, 1, seq, Q_LORA_RANK]
         q_latent = ttnn.rms_norm(q_latent, weight=self.q_a_norm, epsilon=NORM_EPS, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # PC sweep winner (P150x8, M=1 tile): 8x4=32 cores, in0_block_w=8 (19 → ~7 µs
-        # each). q_nope/q_rope share the N=N_HEADS*64=2048 shape, so one PC covers both.
-        _q_b_pc = self._mcast_pc(8, 4, 8, (self.n_heads * self.qk_nope_head_dim) // 32, m_tiles)
-        q_nope_flat = ttnn.linear(
+        # Fused q_b projection (one matmul, N=N_HEADS*HEAD_DIM=4096 → 128 tiles, 32 cores,
+        # in0_block_w=8). Reshape+transpose to per-head, then split the HEAD_DIM into
+        # nope/rope on the last dim (both tile-aligned) — replaces the two q_nope/q_rope
+        # matmuls + their reshapes/transposes with one matmul + one reshape/transpose.
+        _q_b_pc = self._mcast_pc(8, 4, 8, (self.n_heads * self.head_dim) // 32, m_tiles)
+        q_b_flat = ttnn.linear(
             q_latent,
-            self.q_nope_w,
+            self.q_b_w,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=reshape_mem,
             program_config=_q_b_pc,
-        )  # [1, 1, seq, N_HEADS * QK_NOPE_HEAD_DIM]
-        q_rope_flat = ttnn.linear(
-            q_latent,
-            self.q_rope_w,
-            compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
-            memory_config=reshape_mem,
-            program_config=_q_b_pc,
-        )  # [1, 1, seq, N_HEADS * QK_ROPE_HEAD_DIM]
+        )  # [1, 1, seq, N_HEADS * HEAD_DIM]
         ttnn.deallocate(q_latent)
 
-        q_nope = ttnn.transpose(
-            ttnn.reshape(q_nope_flat, [1, seq_len, self.n_heads, self.qk_nope_head_dim]),
+        q_b = ttnn.transpose(
+            ttnn.reshape(q_b_flat, [1, seq_len, self.n_heads, self.head_dim]),
             1,
             2,
             memory_config=reshape_mem,
+        )  # [1, N_HEADS, seq, HEAD_DIM]
+        ttnn.deallocate(q_b_flat)
+        q_nope = ttnn.slice(
+            q_b, [0, 0, 0, 0], [1, self.n_heads, seq_len, self.qk_nope_head_dim], memory_config=reshape_mem
         )  # [1, N_HEADS, seq, QK_NOPE_HEAD_DIM]
-        ttnn.deallocate(q_nope_flat)
-        q_rope = ttnn.transpose(
-            ttnn.reshape(q_rope_flat, [1, seq_len, self.n_heads, self.qk_rope_head_dim]),
-            1,
-            2,
-            memory_config=reshape_mem,
+        q_rope = ttnn.slice(
+            q_b, [0, 0, 0, self.qk_nope_head_dim], [1, self.n_heads, seq_len, self.head_dim], memory_config=reshape_mem
         )  # [1, N_HEADS, seq, QK_ROPE_HEAD_DIM]
-        ttnn.deallocate(q_rope_flat)
+        ttnn.deallocate(q_b)
 
         q_rope_rotated = ttnn.experimental.rotary_embedding_hf(
             q_rope, cos, sin, is_decode_mode=False, compute_kernel_config=self.rope_compute_kernel_config
@@ -986,28 +969,25 @@ class TtMistral4Attention(LightweightModule):
         )
         q_latent = ttnn.rms_norm(q_latent, weight=self.q_a_norm, epsilon=NORM_EPS, memory_config=_mem)
 
-        q_nope_flat = ttnn.matmul(
+        # Fused q_b projection: one matmul → [1,1,1,N_HEADS*HEAD_DIM], then split the
+        # per-head HEAD_DIM into nope/rope on the last dim (both tile-aligned).
+        q_b_flat = ttnn.matmul(
             q_latent,
-            self.q_nope_w,
+            self.q_b_w,
             compute_kernel_config=self.compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=_mem,
-            program_config=pcs["q_nope"],
-        )  # [1, 1, 1, N_HEADS * QK_NOPE_HEAD_DIM]
-        q_rope_flat = ttnn.matmul(
-            q_latent,
-            self.q_rope_w,
-            compute_kernel_config=self.compute_kernel_config,
-            dtype=ttnn.bfloat16,
-            memory_config=_mem,
-            program_config=pcs["q_rope"],
-        )  # [1, 1, 1, N_HEADS * QK_ROPE_HEAD_DIM]
+            program_config=pcs["q_b"],
+        )  # [1, 1, 1, N_HEADS * HEAD_DIM]
         ttnn.deallocate(q_latent)
 
-        q_nope = ttnn.reshape(q_nope_flat, [1, self.n_heads, 1, self.qk_nope_head_dim])
-        ttnn.deallocate(q_nope_flat)
-        q_rope = ttnn.reshape(q_rope_flat, [1, self.n_heads, 1, self.qk_rope_head_dim])
-        ttnn.deallocate(q_rope_flat)
+        q_b = ttnn.reshape(q_b_flat, [1, self.n_heads, 1, self.head_dim])
+        ttnn.deallocate(q_b_flat)
+        q_nope = ttnn.slice(q_b, [0, 0, 0, 0], [1, self.n_heads, 1, self.qk_nope_head_dim], memory_config=_mem)
+        q_rope = ttnn.slice(
+            q_b, [0, 0, 0, self.qk_nope_head_dim], [1, self.n_heads, 1, self.head_dim], memory_config=_mem
+        )
+        ttnn.deallocate(q_b)
 
         q_rope_rotated = ttnn.experimental.rotary_embedding_hf(
             q_rope, cos, sin, is_decode_mode=False, compute_kernel_config=self.lofi_compute_kernel_config
@@ -1049,7 +1029,6 @@ class TtMistral4Attention(LightweightModule):
         k_rope_rotated = ttnn.experimental.rotary_embedding_hf(
             k_rope_raw, cos, sin, is_decode_mode=False, compute_kernel_config=self.rope_compute_kernel_config
         )  # [1, 1, seq, QK_ROPE_HEAD_DIM]
-        ttnn.deallocate(k_rope_raw)
         ttnn.deallocate(k_rope_raw)
 
         kvpe = ttnn.concat([kv_latent_normed, k_rope_rotated], dim=-1, memory_config=_mem)
