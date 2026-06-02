@@ -45,8 +45,8 @@ FORCE_INLINE void wait_all_tcs_initialized(volatile uint8_t* shared_layout_ptr, 
             volatile dfb_initializer_per_risc_t* per_risc_base =
                 reinterpret_cast<volatile dfb_initializer_per_risc_t*>(base_ptr + sizeof(dfb_initializer_t));
 
-            uint8_t producers_done = 0;
-            for (uint8_t i = 0; i < num_riscs; i++) {
+            int producers_done = 0;
+            for (int i = 0; i < num_riscs; i++) {
                 if (per_risc_base[i].flags.is_producer && per_risc_base[i].num_tcs_and_init.tc_init_done) {
                     producers_done++;
                 }
@@ -121,7 +121,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 
     // DM1-only: remapper accumulator and timing.
     bool enable_remapper   = false;
-    uint8_t remapper_hwm   = 0;   // one past the highest pair_index configured
+    uint32_t remapper_hwm  = 0;   // one past the highest pair_index configured
     uint32_t end_remapper_config_time  = 0;
     uint32_t t_after_write_pairs_up_to = 0;
 
@@ -159,7 +159,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 
             const dfb_dm1_remapper_entry_header_t* local_hdr =
                 reinterpret_cast<const dfb_dm1_remapper_entry_header_t*>(local_rmp);
-            uint8_t num_rmp = local_hdr->num_remapper_slots;
+            int num_rmp = local_hdr->num_remapper_slots;
 
             uint32_t entry_bytes = sizeof(dfb_dm1_remapper_entry_header_t)
                                  + num_rmp * sizeof(dfb_dm0_remapper_slot_t);
@@ -172,12 +172,12 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 reinterpret_cast<const dfb_dm0_remapper_slot_t*>(
                     reinterpret_cast<const uint8_t*>(local_rmp) + sizeof(dfb_dm1_remapper_entry_header_t));
 
-            for (uint8_t s = 0; s < num_rmp; s++) {
+            for (int s = 0; s < num_rmp; s++) {
                 const dfb_dm0_remapper_slot_t& slot = slots[s];
                 enable_remapper = true;
                 g_remapper_configurator.load_pair_raw(
                     static_cast<uint32_t>(slot.pair_index), slot.clientR_val, slot.clientL_val);
-                uint8_t hwm = static_cast<uint8_t>(slot.pair_index + 1);
+                uint32_t hwm = slot.pair_index + 1u;
                 if (hwm > remapper_hwm) { remapper_hwm = hwm; }
             }
             t_rmp_pass[logical_dfb_id] = rdcycle();
@@ -224,31 +224,45 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     reinterpret_cast<const uint8_t*>(local_isr) + sizeof(dfb_dm0_isr_entry_header_t));
             const dfb_dm0_txn_entry_t* cons_txns = prod_txns + num_prod;
 
-            for (uint8_t i = 0; i < num_prod; i++) {
+            for (int i = 0; i < num_prod; i++) {
                 const dfb_dm0_txn_entry_t& e = prod_txns[i];
-                producer_txn_id_mask |= (1u << e.txn_id);
-                volatile TxnDFBDescriptor& dst = g_txn_dfb_descriptor[e.txn_id];
-                dst.num_counters = e.num_tcs;
-                for (uint8_t j = 0; j < e.num_tcs; j++) {
+                // Hoist all fields used after (or inside) the TC copy inner loop into
+                // dedicated uint32_t locals. This prevents the compiler from clobbering
+                // the source register (e.g. a2 used for txn_id then overwritten by
+                // txn_id<<5 for the descriptor index) and reloading from memory for each
+                // ROCC instruction and the loop guard — eliminating 3 redundant lbu loads
+                // per transaction.
+                const uint32_t txn_id        = e.txn_id;
+                const int      num_tcs       = e.num_tcs;
+                const uint32_t threshold     = e.threshold;
+                const uint32_t tiles_to_post = e.tiles_to_post_or_ack;
+                producer_txn_id_mask |= (1u << txn_id);
+                volatile TxnDFBDescriptor& dst = g_txn_dfb_descriptor[txn_id];
+                dst.num_counters = num_tcs;
+                for (int j = 0; j < num_tcs; j++) {
                     dst.tile_counters[j] = e.tile_counters[j];
                 }
-                dst.tiles_to_post = e.tiles_to_post_or_ack;
-                CMDBUF_CLEAR_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, e.txn_id);
+                dst.tiles_to_post = tiles_to_post;
+                CMDBUF_CLEAR_TILES_TO_PROCESS_TR_ACK(OVERLAY_RD_CMD_BUF, txn_id);
                 asm volatile("nop");
-                SET_TILES_TO_PROCESS_THRES_TR_ACK(e.txn_id, e.threshold);
+                SET_TILES_TO_PROCESS_THRES_TR_ACK(txn_id, threshold);
             }
-            for (uint8_t i = 0; i < num_cons; i++) {
+            for (int i = 0; i < num_cons; i++) {
                 const dfb_dm0_txn_entry_t& e = cons_txns[i];
-                consumer_txn_id_mask |= (1u << e.txn_id);
-                volatile TxnDFBDescriptor& dst = g_txn_dfb_descriptor[e.txn_id];
-                dst.num_counters = e.num_tcs;
-                for (uint8_t j = 0; j < e.num_tcs; j++) {
+                const uint32_t txn_id       = e.txn_id;
+                const int      num_tcs      = e.num_tcs;
+                const uint32_t threshold    = e.threshold;
+                const uint32_t tiles_to_ack = e.tiles_to_post_or_ack;
+                consumer_txn_id_mask |= (1u << txn_id);
+                volatile TxnDFBDescriptor& dst = g_txn_dfb_descriptor[txn_id];
+                dst.num_counters = num_tcs;
+                for (int j = 0; j < num_tcs; j++) {
                     dst.tile_counters[j] = e.tile_counters[j];
                 }
-                CMDBUF_CLEAR_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, e.txn_id);
+                CMDBUF_CLEAR_TILES_TO_PROCESS_WR_SENT(OVERLAY_WR_CMD_BUF, txn_id);
                 asm volatile("nop");
-                dst.tiles_to_ack = e.tiles_to_post_or_ack;
-                SET_TILES_TO_PROCESS_THRES_WR_SENT(e.txn_id, e.threshold);
+                dst.tiles_to_ack = tiles_to_ack;
+                SET_TILES_TO_PROCESS_THRES_WR_SENT(txn_id, threshold);
             }
             t_subpassB[logical_dfb_id] = rdcycle();
 
@@ -304,7 +318,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                 dfb_interface.stride_size = dfb_interface.entry_size * init_ptr->stride_in_entries;
 #endif
 
-                for (uint8_t i = 0; i < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; i++) {
+                for (int i = 0; i < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; i++) {
                     uint32_t base = per_risc_ptr->tc_addrs[i].base_addr >> cb_addr_shift;
                     uint32_t limit_s = per_risc_ptr->tc_addrs[i].limit >> cb_addr_shift;
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
@@ -342,7 +356,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     dfb_interface.num_entries_per_txn_id = init_ptr->producer_txn_descriptor.num_entries_per_txn_id;
                     dfb_interface.num_entries_per_txn_id_per_tc =
                         init_ptr->producer_txn_descriptor.num_entries_per_txn_id_per_tc;
-                    for (uint8_t i = 0; i < dfb_interface.num_txn_ids; i++) {
+                    for (int i = 0; i < dfb_interface.num_txn_ids; i++) {
                         dfb_interface.txn_ids[i] = init_ptr->producer_txn_descriptor.txn_ids[i];
                     }
                 } else {
@@ -351,7 +365,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     dfb_interface.num_entries_per_txn_id = init_ptr->consumer_txn_descriptor.num_entries_per_txn_id;
                     dfb_interface.num_entries_per_txn_id_per_tc =
                         init_ptr->consumer_txn_descriptor.num_entries_per_txn_id_per_tc;
-                    for (uint8_t i = 0; i < dfb_interface.num_txn_ids; i++) {
+                    for (int i = 0; i < dfb_interface.num_txn_ids; i++) {
                         dfb_interface.txn_ids[i] = init_ptr->consumer_txn_descriptor.txn_ids[i];
                     }
                 }
@@ -362,7 +376,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
                 if (per_risc_ptr->flags.is_producer) {
                     while (per_risc_ptr->flags.remapper_en && !overlay::RemapperAPI::is_remapper_enabled());
-                    for (uint8_t tc = 0; tc < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; tc++) {
+                    for (int tc = 0; tc < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; tc++) {
                         dfb::PackedTileCounter ptc = per_risc_ptr->packed_tile_counter[tc];
                         uint8_t tc_id = dfb::get_counter_id(ptc);
                         ckernel::trisc::tile_counters[tc_id].f.reset = 1;
@@ -447,7 +461,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     // spinwait  = t_before_tc_writes - t_after_merged_loop
                     // tc_writes = t_after_tc_init_loop - t_before_tc_writes
                     if (!t_before_tc_writes) { t_before_tc_writes = rdcycle(); }
-                    for (uint8_t tc = 0; tc < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; tc++) {
+                    for (int tc = 0; tc < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; tc++) {
                         dfb::PackedTileCounter ptc = per_risc_ptr->packed_tile_counter[tc];
                         uint8_t tensix_id = dfb::get_tensix_id(ptc);
                         uint8_t tc_id = dfb::get_counter_id(ptc);

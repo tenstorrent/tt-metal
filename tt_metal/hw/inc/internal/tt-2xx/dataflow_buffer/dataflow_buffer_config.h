@@ -97,7 +97,9 @@ struct dfb_global_header_t {
     uint32_t dm1_remapper_blob_offset;  // → DM1 remapper blob (dfb_dm1_remapper_entry_header_t + slots per DFB)
     uint32_t dm0_isr_blob_offset;       // → DM0 ISR blob (dfb_dm0_isr_entry_header_t + txn entries per DFB)
     uint32_t per_dfb_layout_offset;     // → shared per-DFB layout (dfb_initializer_t + per_risc entries)
-} __attribute__((packed));
+    // No __attribute__((packed)): three naturally-aligned uint32_t fields need no packing,
+    // and packed forces byte-by-byte lbu loads instead of single lw instructions.
+};
 struct dfb_txn_id_descriptor_t {
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
     uint8_t num_entries_to_process_threshold; // entries each txn ID tracks before posting/acking
@@ -106,14 +108,19 @@ struct dfb_txn_id_descriptor_t {
     uint8_t num_entries_per_txn_id_per_tc;
 } __attribute__((packed));
 
-struct dfb_initializer_t {  // 32 bytes
+// No __attribute__((packed)): every field is naturally aligned at its current offset —
+// entry_size/stride_in_entries (u32) at 0/4, capacity (u16) at 8, risc_mask_bits (u16 bitfield) at 10,
+// producer/consumer txn descriptors (packed, alignment 1) at 12/20, trailing u8 fields at 28-31.
+// Without packed the compiler emits lw for entry_size and stride_in_entries (1 instr vs. 10 lbu+shift+or),
+// and lhu for capacity (1 instr vs. 2 lbu). Layout and sizeof are identical — static_assert guards.
+struct dfb_initializer_t {
     uint32_t entry_size;
     uint32_t stride_in_entries;
     uint16_t capacity;
     struct {
-        uint16_t dm_mask : 8;         // bits 0-7: DM RISC mask
-        uint16_t tensix_mask : 4;     // bits 8-11: Neo RISC mask
-        uint16_t tensix_trisc_mask : 4;        // bits 12-15: indicates which triscs use the DFB (tensix producer uses trisc2 and tensix consumer can use trisc0 or trisc3)
+        uint16_t dm_mask : 8;             // bits 0-7: DM RISC mask
+        uint16_t tensix_mask : 4;         // bits 8-11: Neo RISC mask
+        uint16_t tensix_trisc_mask : 4;   // bits 12-15: which TRISCs use the DFB
     } risc_mask_bits;
     // For DM-to-DM DFBs, producer and consumer would have different set of transaction ids
     dfb_txn_id_descriptor_t producer_txn_descriptor;
@@ -121,15 +128,22 @@ struct dfb_initializer_t {  // 32 bytes
     uint8_t num_producers;
     uint8_t implicit_sync_configured; // 0: init state, 1: configured
     uint8_t _pad[2];                  // reserved (was dm0_blob_size; DM0 blob is now a separate global region)
-} __attribute__((packed));
+};
+static_assert(sizeof(dfb_initializer_t) == 32, "dfb_initializer_t size changed — check field alignment");
 
 // AoS layout: base_addr and limit for the same TC slot are adjacent in memory,
 // improving spatial locality in the TC-init loop that accesses both per iteration.
+// No __attribute__((packed)): both fields are naturally-aligned uint32_t; packed would force
+// byte-by-byte lbu loads (10 instructions per field) instead of single lw instructions.
 struct TCAddressEntry {
     uint32_t base_addr;
     uint32_t limit;
-} __attribute__((packed));
+};
 
+// No __attribute__((packed)) on the outer struct: all fields are naturally aligned
+// (tc_addrs at offset 0 is 4-byte aligned; packed_tile_counter/bitfield structs are 1-byte
+// types at byte offsets). Removing packed allows lw for tc_addrs[i].base_addr and .limit
+// (2 lw vs. 20 byte-load instructions per slot). Layout is identical — static_assert guards.
 struct dfb_initializer_per_risc_t {  // 64 bytes (power-of-2; array index = risc_index << 6)
     TCAddressEntry tc_addrs[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];  // 48 bytes
     dfb::PackedTileCounter packed_tile_counter[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];  // 6 bytes
@@ -145,7 +159,7 @@ struct dfb_initializer_per_risc_t {  // 64 bytes (power-of-2; array index = risc
         uint8_t is_producer : 1; // bit 7: indicates if this RISC is a producer
     } __attribute__((packed)) flags;
     uint8_t _pad[8];  // pad to 64 bytes; per_risc_base[i] = base + (i << 6)
-} __attribute__((packed));
+};
 
 // intra tensix dfb
 // (24 * 16) * 4 = 1,536 bytes
