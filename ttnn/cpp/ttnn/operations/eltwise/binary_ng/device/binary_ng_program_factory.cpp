@@ -834,6 +834,14 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         } else {
             compute_kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";
         }
+        // where_tile<DataFormat::X> selector — mirrors get_sfpu_init_fn(WHERE, a_dtype)
+        // in binary_ng_utils.cpp so the eltwise_chain `Where` element can pick the
+        // exact same DataFormat the legacy BINARY_SFPU_OP macro baked in.
+        const char* where_df = (a_dtype == DataType::INT32)     ? "Int32"
+                               : (a_dtype == DataType::UINT32)  ? "UInt32"
+                               : (a_dtype == DataType::FLOAT32) ? "Float32"
+                                                                : "Float16_b";
+        compute_kernel_defines["WHERE_DATA_FORMAT"] = where_df;
     }
     compute_kernel_defines["WHERE_TTS"] = (op_type == BinaryOpType::WHERE_TTS) ? "1" : "0";
     compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
