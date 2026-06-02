@@ -302,6 +302,7 @@ def test_to_from_01d(device, shape):
     assert_equal(torch_input, ttnn_input)
 
 
+# POTENTIAL OOB
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
 def test_to_layout_sharded(dtype, device):
     core_grid = ttnn.CoreRangeSet(
