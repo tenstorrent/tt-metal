@@ -11,7 +11,6 @@ memory_config, and the `gated_deltanet_forward_ttnn` kwargs are verbatim.
 # Install the experimental backend on sys.path BEFORE importing its ops.
 import models.demos.blackhole.qwen3_5_9b.tt.gdn._experimental_path  # noqa: F401
 import ttnn
-from models.demos.blackhole.qwen3_5_9b.tt.gdn.prefill import prefill_kernel_forward
 from models.demos.blackhole.qwen3_5_9b.tt.gdn.state import init_recurrent_state, split_fused_conv_state
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
 
@@ -22,21 +21,14 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None):
     gdn's recurrent + conv state in place or by reassignment per the trace-capture flags."""
     w = gdn.weights
     if chunk_size is None:
-        chunk_size = gdn.prefill_chunk_size if mode == "chunk" else 64
+        chunk_size = gdn.long_prefill_chunk_size if mode == "chunk" else 64
 
     if gdn.recurrent_state is None:
         shape = x.shape
         batch_size = shape[0] if len(shape) == 3 else 1
         init_recurrent_state(gdn, batch_size)
 
-    # Use kernel-based prefill when available (replaces chunked delta rule).
-    # The chunk-seq path (opt-in) takes precedence over the per-token kernel,
-    # but ONLY at chunk_size=128 (the kernel hardcodes Ct=4). Other chunk
-    # sizes keep using the per-token kernel.
     T = x.shape[1]
-    use_chunk_seq = mode == "chunk" and T > 1 and w.use_chunk_seq_prefill and chunk_size == gdn.long_prefill_chunk_size
-    if mode == "chunk" and T > 1 and w.use_prefill_kernel and not use_chunk_seq:
-        return prefill_kernel_forward(gdn, x, prefill_output=gdn._trace_prefill_output)
 
     # After prefill, fuse separate conv states into one for efficient decode
     if T == 1 and gdn.fused_conv_state is None and gdn.conv_state_q is not None:
@@ -44,31 +36,8 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None):
         gdn.fused_conv_state = ttnn.to_layout(gdn.fused_conv_state, ttnn.TILE_LAYOUT)
         split_fused_conv_state(gdn)
 
-    # Use cached masks for chunk mode with matching chunk_size
-    if mode == "chunk" and chunk_size == gdn.prefill_chunk_size:
-        masks = w.cached_masks
-    elif mode == "chunk" and chunk_size == gdn.long_prefill_chunk_size:
-        masks = w.cached_masks_long
-    else:
-        masks = None
-
-    # Chunk-parallel prefill (C++ gated_delta_attn_seq kernel) — opt-in, float32.
-    # use_chunk_seq was computed above (only true at chunk_size=128).
-    seq_masks = w.chunk_seq_masks_long if use_chunk_seq else None
-
-    # Fused on-device recurrence kernel for single-token decode (opt-in).
-    # Lazily allocate the persistent [num_pairs, 1, Dv] output buffer once so
-    # its address is stable across traced decode steps.
-    use_decode_kernel = mode == "recurrent" and T == 1 and w.use_decode_kernel
-    if use_decode_kernel and gdn._decode_kernel_output is None:
-        num_pairs = gdn.recurrent_state.shape[0] * gdn.num_v_heads
-        gdn._decode_kernel_output = ttnn.zeros(
-            [num_pairs, 1, gdn.head_v_dim],
-            device=gdn.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+    # Chunk-parallel prefill via the C++ gated_delta_attn_seq kernel (float32, chunk_size=128).
+    seq_masks = w.chunk_seq_masks_long
 
     output, new_state, new_conv_q, new_conv_k, new_conv_v, new_fused_conv = gated_deltanet_forward_ttnn(
         hidden_states=x,
@@ -123,11 +92,7 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None):
         mega_a_dim=w.mega_a_dim,
         mega_b_dim=w.mega_b_dim,
         mega_g_dim=w.mega_g_dim,
-        cached_masks=masks,
         use_inplace_state=gdn.use_inplace_state,
-        use_decode_kernel=use_decode_kernel,
-        decode_kernel_output=gdn._decode_kernel_output,
-        use_chunk_seq=use_chunk_seq,
         chunk_seq_masks=seq_masks,
     )
 

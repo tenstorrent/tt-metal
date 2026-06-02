@@ -12,8 +12,6 @@ from tt.ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_ttnn,
     recurrent_gated_delta_rule_decode_ttnn,
     recurrent_gated_delta_rule_decode_inplace_ttnn,
-    recurrent_gated_delta_rule_decode_kernel,
-    chunk_gated_delta_rule_ttnn,
 )
 from tt.ttnn_delta_rule_seq import chunk_gated_delta_rule_seq_adapter
 
@@ -437,15 +435,9 @@ def gated_deltanet_forward_ttnn(
     mega_a_dim=None,
     mega_b_dim=None,
     mega_g_dim=None,
-    # Pre-cached mask matrices for chunk mode (avoids recreating per call)
-    cached_masks=None,
     # Trace capture support: inplace state updates via ttnn.copy()
     use_inplace_state=False,
-    # Fused on-device GDN recurrence kernel for T=1 decode (opt-in via flag).
-    use_decode_kernel=False,
-    decode_kernel_output=None,
-    # Chunk-parallel prefill via the C++ gated_delta_attn_seq kernel (opt-in via flag).
-    use_chunk_seq=False,
+    # Pre-cached float32 masks for the chunk-parallel prefill kernel (gated_delta_attn_seq).
     chunk_seq_masks=None,
 ):
     """
@@ -775,44 +767,20 @@ def gated_deltanet_forward_ttnn(
     # implementation already handles T < chunk_size via padding.
     # For decode (T=1), use optimized decode path (fewer ops, no loop).
     if mode == "chunk" and T > 1:
-        if use_chunk_seq:
-            # Chunk-parallel prefill via the C++ gated_delta_attn_seq kernel (float32).
-            o, new_state = chunk_gated_delta_rule_seq_adapter(
-                q=q,
-                k=k,
-                v=v,
-                beta=beta,
-                g=g,
-                chunk_size=chunk_size,
-                initial_state=recurrent_state,
-                device=device,
-                cached_masks=chunk_seq_masks,
-            )
-        else:
-            o, new_state = chunk_gated_delta_rule_ttnn(
-                q=q,
-                k=k,
-                v=v,
-                beta=beta,
-                g=g,
-                chunk_size=chunk_size,
-                initial_state=recurrent_state,
-                device=device,
-                cached_masks=cached_masks,
-            )
+        # Chunk-parallel prefill via the C++ gated_delta_attn_seq kernel (float32).
+        o, new_state = chunk_gated_delta_rule_seq_adapter(
+            q=q,
+            k=k,
+            v=v,
+            beta=beta,
+            g=g,
+            chunk_size=chunk_size,
+            initial_state=recurrent_state,
+            device=device,
+            cached_masks=chunk_seq_masks,
+        )
     elif T == 1:
-        if use_decode_kernel and recurrent_state is not None:
-            o, new_state = recurrent_gated_delta_rule_decode_kernel(
-                q=q,
-                k=k,
-                v=v,
-                beta=beta,
-                g=g,
-                state_buffer=recurrent_state,
-                device=device,
-                decode_output=decode_kernel_output,
-            )
-        elif use_inplace_state and recurrent_state is not None:
+        if use_inplace_state and recurrent_state is not None:
             o, new_state = recurrent_gated_delta_rule_decode_inplace_ttnn(
                 q=q,
                 k=k,
