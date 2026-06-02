@@ -19,6 +19,30 @@
 
 #include "api/dataflow/dataflow_api.h"
 
+template <
+    uint32_t face_h,
+    uint32_t face_w,
+    uint32_t FACE_W_BYTES,
+    uint32_t FACE_ROWS,
+    uint32_t FACE_ROW_STRIDE_BYTES,
+    uint32_t scale_aligned_page_bytes>
+static inline void append_first_column_to_tile(uint32_t scratch, uint32_t page, uint32_t global_group) {
+    // tile column 0 walked face-row by face-row: col0_off is purely additive (no div/mod).
+    uint32_t s = 0;
+    uint32_t face_base_off = 0;  // = face_row * FACE_ROW_STRIDE_BYTES
+    for (uint32_t fr = 0; fr < FACE_ROWS; ++fr) {
+        uint32_t col0_off = face_base_off;  // in-face row 0, col 0
+        for (uint32_t r = 0; r < face_h; ++r) {
+            uint32_t val = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                scratch + s * scale_aligned_page_bytes + global_group * 4);
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page + col0_off) = val;
+            col0_off += FACE_W_BYTES;
+            ++s;
+        }
+        face_base_off += FACE_ROW_STRIDE_BYTES;
+    }
+}
+
 void kernel_main() {
     uint32_t e4m3_addr = get_arg_val<uint32_t>(0);
     uint32_t scale_addr = get_arg_val<uint32_t>(1);
@@ -37,10 +61,12 @@ void kernel_main() {
     constexpr uint32_t tile_w = get_compile_time_arg_val(7);
     constexpr uint32_t face_h = get_compile_time_arg_val(8);
     constexpr uint32_t face_w = get_compile_time_arg_val(9);
-    constexpr uint32_t FP32_BYTES = 4;
     constexpr uint32_t face_elems = face_h * face_w;     // fp32 per face
     constexpr uint32_t faces_per_row = tile_w / face_w;  // face columns per tile
-    constexpr uint32_t TILE_BYTES = tile_h * tile_w * FP32_BYTES;
+    constexpr uint32_t TILE_BYTES = tile_h * tile_w * sizeof(float);
+    constexpr uint32_t FACE_ROWS = tile_h / face_h;                                         // face rows per tile
+    constexpr uint32_t FACE_ROW_STRIDE_BYTES = faces_per_row * face_elems * sizeof(float);  // per face row
+    constexpr uint32_t FACE_W_BYTES = face_w * sizeof(float);                               // per in-face row
 
     constexpr auto e4m3_args = TensorAccessorArgs<10>();
     constexpr auto scale_args = TensorAccessorArgs<e4m3_args.next_compile_time_args_offset()>();
@@ -79,14 +105,13 @@ void kernel_main() {
             for (uint32_t g = 0; g < groups_per_block; ++g) {
                 uint32_t page = bcast_base + g * TILE_BYTES;
                 uint32_t global_group = c * groups_per_block + g;
-                for (uint32_t s = 0; s < tile_h; ++s) {
-                    uint32_t val = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                        scratch + s * scale_aligned_page_bytes + global_group * 4);
-                    // tile column 0 of row s: face (s/face_h, 0) at in-face row (s % face_h), col 0.
-                    uint32_t col0_off =
-                        ((s / face_h) * faces_per_row * face_elems + (s % face_h) * face_w) * FP32_BYTES;
-                    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page + col0_off) = val;
-                }
+                append_first_column_to_tile<
+                    face_h,
+                    face_w,
+                    FACE_W_BYTES,
+                    FACE_ROWS,
+                    FACE_ROW_STRIDE_BYTES,
+                    scale_aligned_page_bytes>(scratch, page, global_group);
             }
             cb_push_back(cb_scale_bcast, groups_per_block);
         }

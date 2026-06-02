@@ -14,6 +14,26 @@
 
 #include "api/dataflow/dataflow_api.h"
 
+template <uint32_t face_h, uint32_t face_w, uint32_t FACE_ROWS, uint32_t FACE_ROW_STRIDE, uint32_t scale_aligned_u32>
+static inline void append_first_column_to_tile(
+    volatile tt_l1_ptr uint32_t* scratch_u32,
+    volatile tt_l1_ptr uint32_t* tiles,
+    uint32_t global_group,
+    uint32_t tile_base) {
+    // tile column 0 walked face-row by face-row: col0_idx is purely additive (no div/mod).
+    uint32_t s = 0;
+    uint32_t face_base = 0;  // = face_row * FACE_ROW_STRIDE
+    for (uint32_t fr = 0; fr < FACE_ROWS; ++fr) {
+        uint32_t col0_idx = face_base;  // in-face row 0, col 0
+        for (uint32_t r = 0; r < face_h; ++r) {
+            scratch_u32[s * scale_aligned_u32 + global_group] = tiles[tile_base + col0_idx];
+            col0_idx += face_w;
+            ++s;
+        }
+        face_base += FACE_ROW_STRIDE;
+    }
+}
+
 void kernel_main() {
     uint32_t e4m3_addr = get_arg_val<uint32_t>(0);
     uint32_t scale_addr = get_arg_val<uint32_t>(1);
@@ -38,6 +58,8 @@ void kernel_main() {
     constexpr uint32_t face_elems = face_h * face_w;                           // fp32 per face
     constexpr uint32_t faces_per_row = tile_w / face_w;                        // face columns per tile
     constexpr uint32_t TILE_FP32 = tile_h * tile_w;                            // fp32 per tile
+    constexpr uint32_t FACE_ROWS = tile_h / face_h;                            // face rows per tile
+    constexpr uint32_t FACE_ROW_STRIDE = faces_per_row * face_elems;           // fp32 stride per face row
     constexpr uint32_t scale_row_bytes = scale_groups * 4;
     constexpr uint32_t scale_aligned_u32 = scale_aligned_page_bytes / 4;
 
@@ -70,11 +92,8 @@ void kernel_main() {
             for (uint32_t g = 0; g < GROUPS_PER_BLOCK; ++g) {
                 uint32_t tile_base = g * TILE_FP32;
                 uint32_t global_group = c * GROUPS_PER_BLOCK + g;
-                for (uint32_t s = 0; s < tile_h; ++s) {
-                    // tile column 0 of row s: face (s/face_h, 0) at in-face row (s % face_h), col 0.
-                    uint32_t col0_idx = (s / face_h) * faces_per_row * face_elems + (s % face_h) * face_w;
-                    scratch_u32[s * scale_aligned_u32 + global_group] = tiles[tile_base + col0_idx];
-                }
+                append_first_column_to_tile<face_h, face_w, FACE_ROWS, FACE_ROW_STRIDE, scale_aligned_u32>(
+                    scratch_u32, tiles, global_group, tile_base);
             }
             cb_pop_front(cb_scale_tiles, GROUPS_PER_BLOCK);
         }
