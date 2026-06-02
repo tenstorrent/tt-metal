@@ -90,7 +90,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<float> scale = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
-    std::optional<uint32_t> cache_batch_idx = std::nullopt);
+    std::optional<uint32_t> cache_batch_idx = std::nullopt,
+    std::optional<uint32_t> kv_actual_isl = std::nullopt);
 
 struct ExecuteExpRingJointAttention {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
