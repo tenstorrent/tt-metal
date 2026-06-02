@@ -14,6 +14,7 @@
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
+#include "metal/ops/polynorm_bw/polynorm_bw.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
@@ -61,6 +62,7 @@ void py_module_types(nb::module_& m) {
     m.def_submodule("multi_head_utils");
     m.def_submodule("attention");
     m.def_submodule("reshape");
+    m.def_submodule("polynorm");
     m.def_submodule("rmsnorm");
     m.def_submodule("sample");
     m.def_submodule("swiglu");
@@ -368,6 +370,27 @@ void py_module(nb::module_& m) {
             },
             nb::arg("tensor"),
             nb::arg("shape"));
+    }
+
+    {
+        auto py_polynorm = static_cast<nb::module_>(m.attr("polynorm"));
+        py_polynorm.def(
+            "polynorm3_bw",
+            [](const autograd::TensorPtr& input,
+               const autograd::TensorPtr& dL_dout,
+               const autograd::TensorPtr& weight,
+               float epsilon) -> std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> {
+                auto [dL_dx, dL_dw, dL_db] =
+                    ttml::metal::polynorm3_bw(input->get_value(), dL_dout->get_value(), weight->get_value(), epsilon);
+                return std::make_tuple(
+                    autograd::create_tensor(std::move(dL_dx)),
+                    autograd::create_tensor(std::move(dL_dw)),
+                    autograd::create_tensor(std::move(dL_db)));
+            },
+            nb::arg("input"),
+            nb::arg("dL_dout"),
+            nb::arg("weight"),
+            nb::arg("epsilon") = 1e-5F);
     }
 
     {
