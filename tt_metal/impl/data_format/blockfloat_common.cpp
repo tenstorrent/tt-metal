@@ -13,6 +13,10 @@
 #include <vector>
 #include <simde/x86/avx2.h>
 
+#if defined(TT_BFP_HOST_TILIZER_OPENMP) && TT_BFP_HOST_TILIZER_OPENMP
+#include <omp.h>
+#endif
+
 #include <tt_stl/assert.hpp>
 #include "blockfloat_common.hpp"
 #include "constants.hpp"
@@ -829,6 +833,23 @@ inline uint32_t pick_num_pack_threads(uint32_t num_tiles, uint32_t num_float_in_
     return std::max<uint32_t>(threads, 1);
 }
 
+// Runtime A/B switch between the std::thread and OpenMP dispatch paths.
+// Returns true only if (a) the build was configured with
+// TT_BFP_HOST_TILIZER_OPENMP=ON, and (b) the env var
+// TT_BFP_HOST_TILIZER_USE_OPENMP is set to a non-empty, non-"0" value.
+// Evaluated once per process via a static; no per-call cost.
+inline bool host_tilizer_use_openmp() {
+#if defined(TT_BFP_HOST_TILIZER_OPENMP) && TT_BFP_HOST_TILIZER_OPENMP
+    static const bool enabled = []() {
+        const char* env = std::getenv("TT_BFP_HOST_TILIZER_USE_OPENMP");
+        return env != nullptr && env[0] != '\0' && env[0] != '0';
+    }();
+    return enabled;
+#else
+    return false;
+#endif
+}
+
 template <tt::DataFormat BfpFormat, typename T>
 std::vector<uint32_t> pack_as_bfp_tiles(
     tt::stl::Span<const T> input_data,
@@ -920,15 +941,53 @@ std::vector<uint32_t> pack_as_bfp_tiles(
                 num_tiles,
                 output_base);
         } else {
-            // Parallel path. Each worker owns a disjoint, contiguous range of
-            // tiles - inputs and outputs do not overlap so no synchronization
-            // is needed. We use std::thread directly (rather than the metal
-            // device-bound thread pool) because the host tilizer is callable
-            // without a device being present.
+            const uint32_t tiles_per_thread = (num_tiles + num_threads - 1) / num_threads;
+
+#if defined(TT_BFP_HOST_TILIZER_OPENMP) && TT_BFP_HOST_TILIZER_OPENMP
+            if (host_tilizer_use_openmp()) {
+                // OpenMP dispatch path. Same per-thread tile-range partitioning
+                // as the std::thread path below, but workers are drawn from
+                // OpenMP's persistent thread pool (no per-call pthread_create)
+                // and woken up in parallel rather than spawned serially. Used
+                // to A/B against the std::thread path at small tile counts,
+                // where per-call spawn overhead dominates.
+                omp_set_num_threads(static_cast<int>(num_threads));
+#pragma omp parallel for schedule(static)
+                for (int32_t t = 0; t < static_cast<int32_t>(num_threads); ++t) {
+                    const uint32_t begin = static_cast<uint32_t>(t) * tiles_per_thread;
+                    if (begin >= num_tiles) {
+                        continue;
+                    }
+                    const uint32_t end = std::min(begin + tiles_per_thread, num_tiles);
+                    pack_tile_range<BfpFormat, T>(
+                        input_base,
+                        row_major_input,
+                        is_exp_a,
+                        tile_W,
+                        face_H,
+                        face_W,
+                        subtiles_in_tile_row,
+                        subtiles_in_tile_col,
+                        num_exp_dwords_per_tile,
+                        exponent_padding,
+                        l1_alignment,
+                        num_float_in_tile,
+                        bfp_dwords_per_tile,
+                        begin,
+                        end,
+                        output_base);
+                }
+                return packed_result;
+            }
+#endif
+            // Default parallel path: std::thread. Each worker owns a disjoint,
+            // contiguous range of tiles - inputs and outputs do not overlap so
+            // no synchronization is needed. We use std::thread directly
+            // (rather than the metal device-bound thread pool) because the
+            // host tilizer is callable without a device being present.
             std::vector<std::thread> workers;
             workers.reserve(num_threads - 1);
 
-            const uint32_t tiles_per_thread = (num_tiles + num_threads - 1) / num_threads;
             for (uint32_t t = 1; t < num_threads; ++t) {
                 const uint32_t begin = t * tiles_per_thread;
                 if (begin >= num_tiles) {

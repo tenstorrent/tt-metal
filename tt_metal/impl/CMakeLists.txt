@@ -1,5 +1,22 @@
 include(sources.cmake)
 
+# Optional: enable an OpenMP-based dispatch path in the host BFP tilizer.
+#
+# When ON, the host BFP packer (`pack_as_bfp_tiles` in
+# `data_format/blockfloat_common.cpp`) gains a second worker-dispatch
+# implementation that uses `#pragma omp parallel for` and OpenMP's
+# persistent thread pool, in addition to the existing `std::thread` path.
+# The runtime choice between the two is made by the env var
+# `TT_BFP_HOST_TILIZER_USE_OPENMP=1` -- this lets us A/B the two dispatch
+# strategies in the same binary without rebuilding.
+#
+# Default: OFF. The std::thread path remains the production code path.
+option(
+    TT_BFP_HOST_TILIZER_OPENMP
+    "Build the host BFP tilizer with an optional OpenMP dispatch path (runtime toggle: TT_BFP_HOST_TILIZER_USE_OPENMP=1)"
+    OFF
+)
+
 # Include helper functions and generate headers from flatbuffer schemas
 include(flatbuffers)
 
@@ -85,9 +102,17 @@ endif()
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
 
-# Enable unity builds for faster compilation
-TT_ENABLE_UNITY_BUILD(impl)
-target_precompile_headers(impl REUSE_FROM metal_common_pch)
+# Enable unity builds and PCH reuse for faster compilation. When the optional
+# OpenMP dispatch path in the host BFP tilizer is enabled, we have to skip
+# the shared PCH: the PCH is built across the whole project without
+# `-fopenmp`, and clang refuses to reuse a PCH whose OpenMP support level
+# differs from the current TU. Unity builds are disabled at the same time
+# to keep each source file in its own TU, which makes the OpenMP-affected
+# source easy to isolate.
+if(NOT TT_BFP_HOST_TILIZER_OPENMP)
+    TT_ENABLE_UNITY_BUILD(impl)
+    target_precompile_headers(impl REUSE_FROM metal_common_pch)
+endif()
 
 target_link_libraries(
     impl
@@ -123,6 +148,18 @@ target_include_directories(impl SYSTEM PUBLIC ${CMAKE_CURRENT_BINARY_DIR}/experi
 
 # Set KJ_NO_EXCEPTIONS=0 to enable exceptions in Cap'n Proto code due to a detection bug with g++-12.
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast PRIVATE -DKJ_NO_EXCEPTIONS=0)
+
+# Optional OpenMP dispatch path for the host BFP tilizer. Linked privately so
+# downstream targets are unaffected; the runtime path is selected by env var.
+if(TT_BFP_HOST_TILIZER_OPENMP)
+    find_package(OpenMP REQUIRED COMPONENTS CXX)
+    target_link_libraries(impl PRIVATE OpenMP::OpenMP_CXX)
+    target_compile_definitions(impl PRIVATE TT_BFP_HOST_TILIZER_OPENMP=1)
+    message(
+        STATUS
+        "Host BFP tilizer: OpenMP dispatch path enabled (runtime toggle: TT_BFP_HOST_TILIZER_USE_OPENMP=1)"
+    )
+endif()
 
 if(TT_METAL_USE_EMULE)
     get_target_property(_EMULE_JIT_DIR tt_emule_headers TT_EMULE_JIT_INCLUDE_DIR)
