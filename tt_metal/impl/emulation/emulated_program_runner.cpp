@@ -317,8 +317,6 @@ struct KernelInfo {
     // the launcher iterates and sets __emule_trisc_id per variant.
     std::vector<std::function<void()>> variants;
     bool run_all_variants = false;
-    std::vector<uint32_t> rt_args;
-    std::vector<uint32_t> common_rt_args;
     uint8_t processor_id = 0;  // RISC-V processor ID (mhartid); used for DFB role resolution
     uint8_t thread_idx = 0;    // Index within this kernel's processor list → __emule_my_thread_id
     bool is_tensix = false;    // true for Tensix/compute kernels (DFB mask uses bits 8-23)
@@ -387,8 +385,6 @@ struct PendingKernelInfo {
     // Parallels KernelInfo::variants but holds cache keys pending compile-resolution.
     std::vector<std::string> variant_cache_keys;
     bool run_all_variants = false;
-    std::vector<uint32_t> rt_args;
-    std::vector<uint32_t> common_rt_args;
     uint8_t processor_id = 0;
     uint8_t thread_idx = 0;    // Index within this kernel's processor list
     bool is_tensix = false;
@@ -902,6 +898,11 @@ static void populate_bank_mapping(
     // Populate bank mapping arrays using metal_SocDescriptor (matches host write path).
     auto& metal_soc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
     num_dram_channels_out = static_cast<uint32_t>(metal_soc.get_num_dram_views());
+    TT_FATAL(
+        num_dram_channels_out <= MAX_NUM_BANKS,
+        "emule: num_dram_channels ({}) exceeds MAX_NUM_BANKS ({}); bump the constant or implement dynamic backing",
+        num_dram_channels_out,
+        MAX_NUM_BANKS);
 
     // noc_xy encoding: (y << 6) | x (matching Blackhole firmware encoding).
     // Populate per-NOC preferred coords separately. On Wormhole the NOC-0 and
@@ -943,6 +944,11 @@ static void populate_bank_mapping(
     if (device) {
         const auto& allocator = device->allocator();
         num_l1_banks_out = allocator->get_num_banks(BufferType::L1);
+        TT_FATAL(
+            num_l1_banks_out <= MAX_NUM_BANKS,
+            "emule: num_l1_banks ({}) exceeds MAX_NUM_BANKS ({}); bump the constant or implement dynamic backing",
+            num_l1_banks_out,
+            MAX_NUM_BANKS);
         for (uint32_t b = 0; b < num_l1_banks_out && b < MAX_NUM_BANKS; ++b) {
             auto logical = allocator->get_logical_core_from_bank_id(b);
             auto virt = device->virtual_core_from_logical_core(logical, CoreType::WORKER);
@@ -1248,8 +1254,6 @@ static void collect_kernels(
                 *kernel, impl, num_dram_channels, num_l1_banks,
                 worker_col_map_str, worker_row_map_str, emule_sem_base);
 
-            auto& common_rt = kernel->common_runtime_args();
-
             // Tensix/compute kernels use bits 8+ in the DFB RISC mask (TENSIX_RISC_OFFSET),
             // while DM kernels use bits 0-7 directly.
             bool is_tensix = (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE);
@@ -1391,14 +1395,11 @@ static void collect_kernels(
                             rta_off = rta.rta_offset();
                             crta_off = rta.crta_offset();
                         }
-                        auto& rt_args_data = kernel->runtime_args(logical_core);
                         uint8_t tidx = 0;
                         for (uint8_t proc_id : procs.proc_ids) {
                             pending_core_kernels[logical_core].push_back(PendingKernelInfo{
                                 variant_cache_keys,
                                 run_all_variants,
-                                rt_args_data,
-                                common_rt,
                                 proc_id,
                                 tidx++,
                                 is_tensix,
@@ -1899,8 +1900,8 @@ static void launch_cores(
 
                             log_debug(
                                 tt::LogMetal,
-                                "  Launching kernel[{}] on logical ({},{}) phys ({},{}) rt_args={} common_rt_args={}",
-                                kidx, lx, ly, px, py, ki.rt_args.size(), ki.common_rt_args.size());
+                                "  Launching kernel[{}] on logical ({},{}) phys ({},{}) rta_off=0x{:x} crta_off=0x{:x}",
+                                kidx, lx, ly, px, py, ki.rta_offset_in_kc, ki.crta_offset_in_kc);
 
                             try {
                                 for (size_t t = 0; t < ki.variants.size(); ++t) {
@@ -2025,7 +2026,7 @@ void execute_program_emulated(IDevice* device, Program& program) {
     for (auto& [logical_core, pending_list] : pending_core_kernels) {
         for (auto& pk : pending_list) {
             KernelInfo ki{
-                {}, pk.run_all_variants, pk.rt_args, pk.common_rt_args, pk.processor_id, pk.thread_idx,
+                {}, pk.run_all_variants, pk.processor_id, pk.thread_idx,
                 pk.is_tensix, pk.num_threads,
                 pk.kernel_config_base, pk.rta_offset_in_kc, pk.crta_offset_in_kc};
             ki.variants.reserve(pk.variant_cache_keys.size());
