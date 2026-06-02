@@ -601,9 +601,14 @@ void RunTestOnCore(
                 (eth_dest_overflow_addr_words << 4));
         } break;
         case SanitizeNOCMulticastInvalidRange: {
+            // The watcher device reader formats multicast coords using CoreCoord::str() +
+            // "-" + CoreCoord::str(), which (since UMD bump) produces "X1-Y1-X2-Y2".
+            // Build the expected string the same way to stay format-agnostic.
+            CoreCoord mcast_start_coord = output_buf_noc_xy;
+            CoreCoord mcast_end_coord = {mcast_dst_end_x, mcast_dst_end_y};
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to multicast write 4 "
-                "bytes from local L1[{:#08x}] to DRAM core range w/ virtual coords (x={},y={})-(x={},y={}) "
+                "bytes from local L1[{:#08x}] to DRAM core range w/ virtual coords {}-{} "
                 "DRAM[addr=0x{:08x}] (multicast invalid range).",
                 device->id(),
                 core_name,
@@ -614,10 +619,8 @@ void RunTestOnCore(
                 risc_name,
                 noc,
                 0,  // l1_addr is 0 for address-only sanitization
-                output_buf_noc_xy.x,
-                output_buf_noc_xy.y,
-                mcast_dst_end_x,
-                mcast_dst_end_y,
+                mcast_start_coord.str(),
+                mcast_end_coord.str(),
                 output_buffer_addr);
         } break;
         default:

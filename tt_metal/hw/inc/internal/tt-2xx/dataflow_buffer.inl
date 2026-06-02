@@ -293,7 +293,7 @@ inline void DataflowBuffer::write_barrier_impl(const Noc &noc) const {
         return;
     } else {
         for (uint8_t i = 0; i < local_dfb_interface_.num_txn_ids; i++) {
-            noc.async_write_barrier<Noc::BarrierMode::TXN_ID>(local_dfb_interface_.txn_ids[i]);
+            noc.async_write_barrier<NocOptions::TXN_ID>({.trid = local_dfb_interface_.txn_ids[i]});
         }
     }
 }
@@ -362,8 +362,8 @@ inline void DataflowBuffer::commit_implicit_write() {
 // These are member functions of Noc but must be defined here because they need the complete
 // DataflowBuffer type (circular dependency: dataflow_buffer.h includes noc.h, not vice versa).
 
-template <Noc::TxnIdMode txn_id_mode, typename Src>
-std::enable_if_t<txn_id_mode == Noc::TxnIdMode::ENABLED>
+template <NocOptions opts, typename Src>
+std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
 Noc::async_read(
     const Src& src,
     DataflowBuffer& dst,
@@ -382,8 +382,8 @@ Noc::async_read(
     dst.commit_implicit_read();
 }
 
-template <Noc::TxnIdMode txn_id_mode, typename Dst>
-std::enable_if_t<txn_id_mode == Noc::TxnIdMode::ENABLED>
+template <NocOptions opts, typename Dst>
+std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
 Noc::async_write(
     DataflowBuffer& src,
     const Dst& dst,
@@ -406,7 +406,7 @@ Noc::async_write(
         false,   // linked
         1,       // num_dests
         true,    // multicast_path_reserve
-        false,   // posted == false (Noc::ResponseMode::NON_POSTED)
+        false,   // posted == false (NocOptions::POSTED not set)
         txn_id);
     src.commit_implicit_write();
 }
