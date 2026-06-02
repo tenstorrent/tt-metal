@@ -21,8 +21,8 @@ enum
 template <bool APPROXIMATION_MODE, int BINOP_MODE, int ITERATIONS = 8>
 void calculate_binop_with_scalar(std::uint32_t param)
 {
+    static_assert(BINOP_MODE == MUL, "Quasar binop_with_scalar currently supports MUL (mode=2) only");
     const sfpi::vFloat parameter = __builtin_bit_cast(float, param);
-
     for (int d = 0; d < ITERATIONS; d++)
     {
         sfpi::vFloat val    = sfpi::dst_reg[0];
