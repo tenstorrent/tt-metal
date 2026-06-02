@@ -183,6 +183,13 @@ Prove the whole loop end-to-end on one motivated case before investing in breadt
     Exactly the config/variant judgment the LLM matcher + KB usage-examples is meant to resolve,
     with PCC as the backstop. A meaningful proof, not a trivial one.
 
+**Verified (2026-06-02, on-device):** `nlp_create_qkv_heads` reproduces SeamlessMHA's naive
+head-split at **PCC = 1.0** for the per-projection pure-split form, with two concrete API facts:
+(1) the op **requires a 4D input** `[B, 1, S, hidden]` (3D throws `ShapeBase[] index out of range`);
+(2) the separate full-width projection is split with **`num_kv_heads=0`**. Still unverified: the
+"fuse all three projections into one QKV matmul + single split" variant (the larger win), the
+`nlp_concat_heads` output side, the full real-weight MHA forward, and the perf delta.
+
 ## Scope decomposition
 
 Three sub-projects; **build a thin vertical slice through all three first** (the named slice
