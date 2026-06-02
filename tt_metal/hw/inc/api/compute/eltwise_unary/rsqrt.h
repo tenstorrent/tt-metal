@@ -6,7 +6,8 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_rsqrt.h"
+#include "ckernel_sfpu_rsqrt.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
@@ -16,7 +17,7 @@ namespace ckernel {
  */
 template <bool legacy_compat = false>
 ALWI void rsqrt_tile_init() {
-    MATH((llk_math_eltwise_unary_sfpu_rsqrt_init<APPROX, legacy_compat>()));
+    MATH(SFPU_INIT_CB(rsqrt, sfpu::rsqrt_init, (APPROX, legacy_compat)));
 }
 
 // clang-format off
@@ -35,7 +36,13 @@ ALWI void rsqrt_tile_init() {
 // clang-format on
 template <bool legacy_compat = false, bool FAST_APPROX = false>
 ALWI void rsqrt_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_rsqrt<APPROX, DST_ACCUM_MODE, FAST_APPROX, legacy_compat>(idst)));
+    MATH(SFPU_CALL_MODE(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_rsqrt,
+        (APPROX, 8 /* ITERATIONS */, DST_ACCUM_MODE, FAST_APPROX, legacy_compat),
+        RC,
+        idst));
 }
 
 }  // namespace ckernel

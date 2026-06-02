@@ -20,7 +20,8 @@
 #include "api/compute/experimental/pack_block.h"
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
-#include "llk_math_eltwise_unary_sfpu_silu.h"
+#include "ckernel_sfpu_silu.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
 #endif
@@ -280,7 +281,7 @@ struct DRAMStreamingMatmul {
             }
 
             if constexpr (CTArgs::fuse_silu) {
-                PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+                PACK(SFPU_INIT_CB(silu, sfpu::silu_init, (true /* APPROXIMATE */)));
             } else {
                 pack_block_contiguous_init(CTArgs::cb_out);
             }
@@ -324,14 +325,29 @@ struct DRAMStreamingMatmul {
                             DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
 
                         if constexpr (CTArgs::tile_r_dim <= 4) {
-                            PACK((llk_math_eltwise_unary_sfpu_silu<true, false, 2 /*ITER*/>(
-                                0 /*dst_index*/, VectorMode::R)));
+                            PACK(SFPU_CALL_MODE(
+                                DST_SYNC_MODE,
+                                DST_ACCUM_MODE,
+                                calculate_silu,
+                                (false /* is_fp32_dest_acc_en */, 2 /* ITER */),
+                                R,
+                                0 /* dst_index */));
                         } else if constexpr (CTArgs::tile_r_dim == 8) {
-                            PACK((llk_math_eltwise_unary_sfpu_silu<true, false, 4 /*ITER*/>(
-                                0 /*dst_index*/, VectorMode::R)));
+                            PACK(SFPU_CALL_MODE(
+                                DST_SYNC_MODE,
+                                DST_ACCUM_MODE,
+                                calculate_silu,
+                                (false /* is_fp32_dest_acc_en */, 4 /* ITER */),
+                                R,
+                                0 /* dst_index */));
                         } else {
-                            PACK((llk_math_eltwise_unary_sfpu_silu<true, false, 8 /*ITER*/>(
-                                0 /*dst_index*/, VectorMode::R)));
+                            PACK(SFPU_CALL_MODE(
+                                DST_SYNC_MODE,
+                                DST_ACCUM_MODE,
+                                calculate_silu,
+                                (false /* is_fp32_dest_acc_en */, 8 /* ITER */),
+                                R,
+                                0 /* dst_index */));
                         }
 
                         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));

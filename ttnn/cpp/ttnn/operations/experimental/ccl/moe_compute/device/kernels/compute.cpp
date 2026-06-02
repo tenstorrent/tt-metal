@@ -17,16 +17,11 @@
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
-#include "llk_math_eltwise_unary_sfpu_silu.h"
+#include "ckernel_sfpu_silu.h"
 #include "ckernel_sfpu_binary.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #include "ckernel_sfpu_gelu.h"
-
-template <bool APPROXIMATE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
-inline void llk_math_eltwise_unary_sfpu_gelu(uint dst_index, VectorMode vector_mode = VectorMode::RC) {
-    _llk_math_eltwise_unary_sfpu_params_(
-        ckernel::sfpu::calculate_gelu<APPROXIMATE, is_fp32_dest_acc_en, ITERATIONS>, dst_index, vector_mode);
-}
 #endif
 
 namespace detail {
@@ -50,7 +45,7 @@ inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivation
 
 template <>
 inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>() {
-    PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+    PACK(SFPU_INIT_CB(silu, sfpu::silu_init, (true /* APPROXIMATE */)));
 };
 
 template <ttnn::experimental::prim::detail::MoEActivationFunction activation>
@@ -58,8 +53,10 @@ inline void pack_compute_activation() {};
 
 template <>
 inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>() {
-    PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
-    PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
+    PACK(SFPU_CALL_MODE(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (false /* is_fp32_dest_acc_en */, 8 /* ITERATIONS */), RC, 0));
+    PACK(SFPU_CALL_MODE(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_silu, (false /* is_fp32_dest_acc_en */, 8 /* ITERATIONS */), RC, 2));
 
     PACK((SFPU_BINARY_CALL_MODE(
         DST_SYNC_MODE,
@@ -94,8 +91,20 @@ inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivation
 
 template <>
 inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivationFunction::GELU>() {
-    PACK((llk_math_eltwise_unary_sfpu_gelu<true, false>(0)));
-    PACK((llk_math_eltwise_unary_sfpu_gelu<true, false>(2)));
+    PACK(SFPU_CALL_MODE(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_gelu,
+        (true /* APPROXIMATE */, false /* is_fp32_dest_acc_en */, 8 /* ITERATIONS */),
+        RC,
+        0));
+    PACK(SFPU_CALL_MODE(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_gelu,
+        (true /* APPROXIMATE */, false /* is_fp32_dest_acc_en */, 8 /* ITERATIONS */),
+        RC,
+        2));
 
     PACK((SFPU_BINARY_CALL_MODE(
         DST_SYNC_MODE,
