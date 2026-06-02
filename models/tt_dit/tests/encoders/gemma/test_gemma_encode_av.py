@@ -30,7 +30,7 @@ from loguru import logger
 from safetensors import safe_open
 
 import ttnn
-from models.tt_dit.pipelines.ltx.pipeline_ltx_av import LTXAVPipeline
+from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
 
 PROMPT = "A plump orange tabby cat sits on a piano bench playing keys with its paws."
 
@@ -92,7 +92,7 @@ def test_encode_prompts_device_vs_reference(*, mesh_device):
         pytest.skip("LTX checkpoint not found")
 
     # Bare pipeline: checkpoint_name=None skips the heavy transformer/VAE load.
-    pipe = LTXAVPipeline.create_pipeline(mesh_device, checkpoint_name=None, gemma_path=gemma, mode="av")
+    pipe = LTXPipeline.create_pipeline(mesh_device, checkpoint_name=None, gemma_path=gemma, mode="av")
 
     # On-device Gemma encoder (full 48 layers). TP follows the T5 pattern (axis-1 width):
     # TP=1 on 1x1, TP=4 on 2x4 — set inside the loader, no override needed.

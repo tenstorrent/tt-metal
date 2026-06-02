@@ -25,7 +25,7 @@ from safetensors import safe_open
 
 import ttnn
 from models.tt_dit.encoders.gemma.embeddings_connector import _rms_norm_cc
-from models.tt_dit.pipelines.ltx.pipeline_ltx_av import LTXAVPipeline
+from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
 
 VIDEO_PREFIX = "model.diffusion_model.video_embeddings_connector."
 AGG_PREFIXES = ("text_embedding_projection.video_aggregate_embed.", "text_embedding_projection.audio_aggregate_embed.")
@@ -66,7 +66,7 @@ def test_connector_blocks_isolated(*, mesh_device):
     from ltx_core.text_encoders.gemma.embeddings_connector import Embeddings1DConnector
 
     # --- device connector (load video connector weights) ---
-    pipe = LTXAVPipeline.create_pipeline(mesh_device, checkpoint_name=None, gemma_path=gemma, mode="av")
+    pipe = LTXPipeline.create_pipeline(mesh_device, checkpoint_name=None, gemma_path=gemma, mode="av")
     conn_state = {}
     ref_sd = {}
     with safe_open(ckpt, "pt") as f:
@@ -115,7 +115,7 @@ def test_connector_blocks_isolated(*, mesh_device):
 
     # device: replicate _run_connector — register replacement -> rope -> blocks -> final norm
     registers = ttnn.to_torch(ttnn.get_device_tensors(pipe.video_connector.learnable_registers.data)[0]).float()
-    x_replaced = LTXAVPipeline._replace_padded_with_registers(x.float(), binary_mask, registers, 128).bfloat16()
+    x_replaced = LTXPipeline._replace_padded_with_registers(x.float(), binary_mask, registers, 128).bfloat16()
 
     # Device blocks now take head-split (BHND) interleaved cos/sin + a trans_mat and run the
     # on-device rotary_embedding_llama kernel (Q/K permuted at load). Mirror _run_connector.

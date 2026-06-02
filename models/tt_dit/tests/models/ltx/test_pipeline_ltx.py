@@ -3,29 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Test the LTX-2 pipeline denoising loop.
-
-Uses standalone references (no ltx_core dependency):
-- Sigma schedule computation
-- Euler step formula
-- CFG blending
-- Device↔host data flow in denoising loop
-- VAE decode
-- Full AV pipeline with device Gemma encoding + connectors
+LTX-2 pipeline tests:
+- Scheduler primitives (no device needed): sigma schedule, Euler step
+- End-to-end one-stage AV generation (LTXPipeline) on a multi-chip mesh
 """
+
+import itertools
+import os
 
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
-from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline, compute_sigmas, euler_step
-
-# ---------------------------------------------------------------------------
-# Scheduler tests (no device needed)
-# ---------------------------------------------------------------------------
+from models.tt_dit.utils.test import line_params, ring_params
 
 
 def test_sigma_schedule():
@@ -65,164 +57,155 @@ def test_euler_step():
 
 
 # ---------------------------------------------------------------------------
-# Pipeline tests (need device)
+# End-to-end one-stage AV generation (requires device + checkpoint)
 # ---------------------------------------------------------------------------
 
 
-def _fill_module_random(module, prefix=""):
-    """Recursively fill all Parameters in a Module tree with random data."""
+def _default_checkpoint() -> str:
+    """Resolve LTX checkpoint: env var > local file > HF repo string default."""
+    explicit = os.environ.get("LTX_CHECKPOINT")
+    if explicit:
+        return explicit
+    local = os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.3-22b-dev.safetensors")
+    if os.path.exists(local):
+        return local
+    return "Lightricks/LTX-2.3:ltx-2.3-22b-dev.safetensors"
 
-    for name, param in module.named_parameters():
-        param.load_torch_tensor(torch.randn(param.total_shape))
-    for name, child in module.named_children():
-        _fill_module_random(child, prefix=f"{prefix}{name}.")
+
+def _default_gemma() -> str:
+    """Resolve Gemma path: env var > local HF snapshot > HF repo string default."""
+    explicit = os.environ.get("GEMMA_PATH")
+    if explicit:
+        return explicit
+    import glob
+
+    candidates = glob.glob(
+        os.path.expanduser("~/.cache/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized/snapshots/*/")
+    )
+    if candidates:
+        return candidates[0].rstrip("/")
+    return "google/gemma-3-12b-it-qat-q4_0-unquantized"
 
 
-def _make_pipeline_with_random_weights(
+@pytest.mark.parametrize(
+    "no_prompt",
+    [{"1": True, "0": False}.get(os.environ.get("NO_PROMPT"), True)],
+)
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    [
+        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
+        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
+        # BH on 2x4
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
+        # WH (ring) on 4x8
+        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
+        # BH (linear) on 4x8
+        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        # BH (ring) on 4x8
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+        [(4, 32), (4, 32), 1, 0, 2, False, ring_params, ttnn.Topology.Ring, False],
+    ],
+    ids=[
+        "2x2sp0tp1",
+        "2x4sp0tp1",
+        "bh_2x4sp1tp0",
+        "wh_4x8sp1tp0",
+        "bh_4x8sp1tp0_linear",
+        "bh_4x8sp1tp0_ring",
+        "bh_4x32sp1tp0",
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "width, height",
+    [
+        (768, 512),
+    ],
+    ids=[
+        "resolution_512p",
+    ],
+)
+def test_pipeline_inference(
     mesh_device,
-    num_layers=1,
-    dim=4096,
-    num_heads=32,
-    in_channels=128,
-    out_channels=128,
+    mesh_shape,
+    sp_axis,
+    tp_axis,
+    num_links,
+    dynamic_load,
+    topology,
+    width,
+    height,
+    is_fsdp,
+    no_prompt,
 ):
-    """Create an LTXPipeline with random transformer weights (no ltx_core dependency)."""
-    from models.tt_dit.models.transformers.ltx.transformer_ltx import LTXTransformerModel
+    ckpt = _default_checkpoint()
+    gemma = _default_gemma()
+    # ckpt / gemma always resolve (env var → local → HF repo string fallback). The pipeline's
+    # resolver downloads from HF if needed.
 
-    sp_axis, tp_axis = 0, 1
-    parallel_config = DiTParallelConfig(
-        cfg_parallel=ParallelFactor(factor=1, mesh_axis=0),
-        sequence_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[sp_axis], mesh_axis=sp_axis),
-        tensor_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[tp_axis], mesh_axis=tp_axis),
-    )
-    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
-    pipeline = LTXPipeline(
+    num_frames = int(os.environ.get("NUM_FRAMES", "121"))
+    num_inference_steps = int(os.environ.get("NUM_STEPS", "30"))
+    width = int(os.environ.get("WIDTH", width))
+    height = int(os.environ.get("HEIGHT", height))
+
+    run_warmup = os.environ.get("RUN_WARMUP", "0") in ("1", "true", "True")
+
+    pipeline = LTXPipeline.create_pipeline(
         mesh_device=mesh_device,
-        parallel_config=parallel_config,
-        ccl_manager=ccl_manager,
-        num_layers=num_layers,
-        cross_attention_dim=dim,
-    )
-
-    # Create TTNN model and fill with random weights
-    head_dim = dim // num_heads
-    pipeline.transformer = LTXTransformerModel(
-        num_attention_heads=num_heads,
-        attention_head_dim=head_dim,
-        in_channels=in_channels,
-        out_channels=out_channels,
-        num_layers=num_layers,
-        cross_attention_dim=dim,
-        mesh_device=mesh_device,
-        ccl_manager=ccl_manager,
-        parallel_config=parallel_config,
-    )
-    torch.manual_seed(0)
-    _fill_module_random(pipeline.transformer)
-    logger.info(f"Created pipeline with {num_layers}L random-weight transformer")
-    return pipeline
-
-
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [((1, 1), {})],
-    ids=["1x1"],
-    indirect=["mesh_device", "device_params"],
-)
-def test_pipeline_denoising_loop(mesh_device: ttnn.MeshDevice):
-    """Test the full pipeline denoising loop with a 1-layer model."""
-    num_layers = 1
-    out_channels = 128
-    num_inference_steps = 3
-
-    pipeline = _make_pipeline_with_random_weights(mesh_device, num_layers=num_layers)
-
-    num_frames = 17
-    px_height, px_width = 256, 256
-    output = pipeline(
-        prompt=["test"],
+        checkpoint_name=ckpt,
+        gemma_path=gemma,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        dynamic_load=dynamic_load,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        run_warmup=run_warmup,
         num_frames=num_frames,
-        height=px_height,
-        width=px_width,
-        num_inference_steps=num_inference_steps,
-        guidance_scale=1.0,
-        seed=42,
+        height=height,
+        width=width,
     )
 
-    latent_frames = (num_frames - 1) // 8 + 1
-    latent_h = px_height // 32
-    latent_w = px_width // 32
-    expected_tokens = latent_frames * latent_h * latent_w
-    assert output.shape == (
-        1,
-        expected_tokens,
-        out_channels,
-    ), f"Output shape {output.shape} != expected (1, {expected_tokens}, {out_channels})"
-    assert torch.isfinite(output).all(), "Output contains NaN/Inf"
-    logger.info(f"Pipeline output: {output.shape}, range: [{output.min():.3f}, {output.max():.3f}]")
-    logger.info("PASSED: Pipeline denoising loop works end-to-end")
-
-
-@pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [((1, 1), {})],
-    ids=["1x1"],
-    indirect=["mesh_device", "device_params"],
-)
-def test_pipeline_with_vae_decode(mesh_device: ttnn.MeshDevice):
-    """Test pipeline with TTNN VAE decoder: denoise → decode to video."""
-    from models.tt_dit.utils.vae_reference import VideoDecoder as TorchVideoDecoder
-
-    num_layers = 1
-    num_inference_steps = 2
-
-    decoder_blocks = [
-        ("compress_all", {"multiplier": 2}),
-        ("compress_all", {"multiplier": 2}),
-        ("compress_time", {"multiplier": 2}),
-        ("compress_space", {"multiplier": 2}),
-    ]
-    torch_decoder = TorchVideoDecoder(
-        convolution_dimensions=3,
-        in_channels=128,
-        out_channels=3,
-        decoder_blocks=decoder_blocks,
-        patch_size=4,
-        norm_layer="pixel_norm",
-        causal=True,
-        base_channels=128,
-    )
-    torch_decoder.eval()
-    dec_state = torch_decoder.state_dict()
-    dec_state["per_channel_statistics.mean-of-means"] = torch.zeros(128)
-    dec_state["per_channel_statistics.std-of-means"] = torch.ones(128)
-    torch_decoder.load_state_dict(dec_state)
-
-    pipeline = _make_pipeline_with_random_weights(mesh_device, num_layers=num_layers)
-    pipeline.load_vae_decoder(
-        state_dict=torch_decoder.state_dict(),
-        decoder_blocks=decoder_blocks,
+    prompt = os.environ.get(
+        "PROMPT",
+        "a cat playing piano",
     )
 
-    num_frames = 17
-    px_height, px_width = 256, 256
-    output = pipeline(
-        prompt=["test"],
-        num_frames=num_frames,
-        height=px_height,
-        width=px_width,
-        num_inference_steps=num_inference_steps,
-        guidance_scale=1.0,
-        seed=42,
-    )
+    def run(*, prompt, number, seed):
+        logger.info(f"Running inference with prompt: '{prompt}'")
+        logger.info(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps")
 
-    assert output.shape[1] == 3, f"Expected 3 channels (RGB), got {output.shape[1]}"
-    assert output.shape[2] == num_frames, f"Expected {num_frames} frames, got {output.shape[2]}"
-    assert output.shape[3] == px_height, f"Expected height {px_height}, got {output.shape[3]}"
-    assert output.shape[4] == px_width, f"Expected width {px_width}, got {output.shape[4]}"
-    logger.info(f"Pipeline+VAE output: {output.shape}")
-    logger.info("PASSED: Pipeline with TTNN VAE decoder")
+        output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_pro_{width}x{height}_{number}.mp4")
+
+        pipeline.generate(
+            prompt,
+            output_path=output_filename,
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            num_inference_steps=num_inference_steps,
+            seed=seed,
+        )
+
+        if int(ttnn.distributed_context_get_rank()) == 0:
+            logger.info(f"Saved video to: {output_filename}")
+        else:
+            logger.info(f"Skipping video export on rank {ttnn.distributed_context_get_rank()}")
+
+    if no_prompt:
+        run(prompt=prompt, number=0, seed=42)
+    else:
+        for i in itertools.count():
+            new_prompt = input("Enter the input prompt, or q to exit: ")
+            if new_prompt:
+                prompt = new_prompt
+            if prompt[0] == "q":
+                break
+            run(prompt=prompt, number=i, seed=i)
 
 
 if __name__ == "__main__":

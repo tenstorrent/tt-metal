@@ -10,8 +10,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_dit.pipelines.ltx.pipeline_ltx_fast import LTXFastPipeline
-from models.tt_dit.tests.models.ltx.test_pipeline_ltx_fast_av import _default_checkpoint, _default_gemma
+from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline
+from models.tt_dit.tests.models.ltx.test_pipeline_ltx_distilled_av import _default_checkpoint, _default_gemma
 from models.tt_dit.utils.test import line_params
 
 _DEFAULT_PROMPT = (
@@ -61,7 +61,7 @@ def test_pipeline_av_fast_stage1_only(
 
     # In-init warmup off: stage-1-only test never runs s2, so skip the
     # full-res s2 compile. We warm s1 explicitly below.
-    pipeline = LTXFastPipeline.create_pipeline(
+    pipeline = LTXDistilledPipeline.create_pipeline(
         mesh_device=mesh_device,
         checkpoint_name=_default_checkpoint(),
         gemma_path=_default_gemma(),
