@@ -14,6 +14,7 @@
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
+#include "metal/ops/rmsnorm_bw/rmsnorm_bw.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
@@ -66,6 +67,7 @@ void py_module_types(nb::module_& m) {
     m.def_submodule("swiglu");
     m.def_submodule("unary");
     m.def_submodule("metal");
+    m.def_submodule("detail");
 }
 
 void py_module(nb::module_& m) {
@@ -379,6 +381,46 @@ void py_module(nb::module_& m) {
             nb::arg("tensor"),
             nb::arg("gamma"),
             nb::arg("epsilon"));
+    }
+
+    {
+        auto py_detail = static_cast<nb::module_>(m.attr("detail"));
+
+        // Private benchmark hook: ttml.ops.detail._rmsnorm_bw (not public TTML API).
+        // For TT-Lang vs TTML microbenchmarking only; model/training code must use autograd RMSNorm.
+        py_detail.def(
+            "_rmsnorm_bw",
+            [](const autograd::TensorPtr& input,
+               const autograd::TensorPtr& gamma,
+               const autograd::TensorPtr& rms,
+               const autograd::TensorPtr& dL_dout) -> std::tuple<autograd::TensorPtr, autograd::TensorPtr> {
+                auto grads = ttml::metal::rmsnorm_bw(
+                    input->get_value(), gamma->get_value(), rms->get_value(), dL_dout->get_value());
+                if (grads.size() != 2U) {
+                    throw std::runtime_error("_rmsnorm_bw: unexpected number of tensors from metal rmsnorm_bw");
+                }
+                if (!grads[0].has_value() || !grads[1].has_value()) {
+                    throw std::runtime_error("_rmsnorm_bw: expected gradients for input and gamma");
+                }
+                return std::make_tuple(
+                    autograd::create_tensor(std::move(grads[0].value())),
+                    autograd::create_tensor(std::move(grads[1].value())));
+            },
+            nb::arg("input"),
+            nb::arg("gamma"),
+            nb::arg("rms"),
+            nb::arg("dL_dout"),
+            R"doc(
+            Low-level RMSNorm backward (``ttml::metal::rmsnorm_bw``).
+
+            .. warning::
+                **Private API — benchmarking only.** Exposed as ``ttml.ops.detail._rmsnorm_bw`` for
+                TT-Lang vs TTML microbenchmarks. This is not part of the public TTML API surface.
+                Do not call from model or training code; use the autograd RMSNorm path instead.
+
+            Returns:
+                ``(dL_dinput, dL_dgamma)`` autograd tensors.
+            )doc");
     }
 
     m.def(
