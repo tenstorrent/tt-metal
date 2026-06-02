@@ -3,6 +3,7 @@ project(ttml)
 set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/auto_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/autocast_tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/autograd/callback.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/graph.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/clip_grad_norm.cpp

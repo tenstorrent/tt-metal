@@ -242,6 +242,7 @@ MODEL_CONFIGS = generate_model_configs(MESH_CONFIG)
 # Accuracy threshold constants
 DEFAULT_PCC_THRESHOLD = 0.994
 DEFAULT_RMSE_THRESHOLD = 0.05
+NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 
 from tests.nightly.sdpa_perf_utils import (
     ARCH_CONSTANTS,
@@ -264,7 +265,7 @@ def fa_rand(*shape):
     return normal_1 + normal_2 * bernoulli
 
 
-def torch_joint_sdpa_reference(q, k, v, joint_q, joint_k, joint_v, is_causal=False):
+def torch_sdpa_reference(q, k, v, is_causal=False):
     """
     Memory-efficient PyTorch reference for ring joint attention.
 
@@ -275,14 +276,8 @@ def torch_joint_sdpa_reference(q, k, v, joint_q, joint_k, joint_v, is_causal=Fal
     SEQ_CHUNK = 4096
     HEAD_CHUNK = 16
 
-    main_seq_len = q.size(2)
-
-    combined_q = torch.cat([q, joint_q], dim=2)
-    combined_k = torch.cat([k, joint_k], dim=2)
-    combined_v = torch.cat([v, joint_v], dim=2)
-
-    B, H, total_seq, _ = combined_q.shape
-    Dv = combined_v.shape[-1]
+    B, H, total_seq, _ = q.shape
+    Dv = v.shape[-1]
 
     def take_heads(t, h_start, h_end):
         # MLA broadcasts a single KV head across all Q heads via expand (no copy).
@@ -292,18 +287,18 @@ def torch_joint_sdpa_reference(q, k, v, joint_q, joint_k, joint_v, is_causal=Fal
 
     if total_seq <= SEQ_CHUNK and H <= HEAD_CHUNK:
         attn_out = torch.nn.functional.scaled_dot_product_attention(
-            combined_q,
-            take_heads(combined_k, 0, H),
-            take_heads(combined_v, 0, H),
+            q,
+            take_heads(k, 0, H),
+            take_heads(v, 0, H),
             is_causal=is_causal,
         )
     else:
-        attn_out = torch.empty(B, H, total_seq, Dv, dtype=combined_q.dtype)
+        attn_out = torch.empty(B, H, total_seq, Dv, dtype=q.dtype)
         for h_start in range(0, H, HEAD_CHUNK):
             h_end = min(h_start + HEAD_CHUNK, H)
-            q_heads = combined_q[:, h_start:h_end]
-            k_heads = take_heads(combined_k, h_start, h_end)
-            v_heads = take_heads(combined_v, h_start, h_end)
+            q_heads = q[:, h_start:h_end]
+            k_heads = take_heads(k, h_start, h_end)
+            v_heads = take_heads(v, h_start, h_end)
             for seq_start in range(0, total_seq, SEQ_CHUNK):
                 seq_end = min(seq_start + SEQ_CHUNK, total_seq)
                 q_chunk = q_heads[:, :, seq_start:seq_end]
@@ -318,7 +313,21 @@ def torch_joint_sdpa_reference(q, k, v, joint_q, joint_k, joint_v, is_causal=Fal
                     out = torch.nn.functional.scaled_dot_product_attention(q_chunk, k_heads, v_heads)
                 attn_out[:, h_start:h_end, seq_start:seq_end] = out
 
-    return attn_out[:, :, :main_seq_len], attn_out[:, :, main_seq_len:]
+    return attn_out
+
+
+def nd_sharded_dram_memory_config(device, head_dim):
+    num_dram_banks = device.dram_grid_size().x
+    core_ranges = [
+        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(num_dram_banks)
+    ]
+    nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim],
+        grid=ttnn.CoreRangeSet(core_ranges),
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    return ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=nd_shard_spec)
 
 
 # ============================================================================
@@ -377,6 +386,80 @@ def generate_test_configs(mesh_config: MeshConfig, model_configs: Dict[str, Mode
 def create_global_semaphores(mesh_device, cores, initial_value):
     """Create global semaphore handles for CCL coordination."""
     return [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
+
+
+def to_balanced_growing_cache_layout(src_full, sp_size, chunk_size, last_uploaded_chunk):
+    """Pack a growing chunked K/V cache into the per-device slab layout expected by ring joint SDPA.
+
+    "Balanced" here names the chunked cache storage layout, not the causal zigzag work balancing
+    controlled by the is_balanced flag.
+    """
+    n_populated = last_uploaded_chunk + 1
+    slab_rows = chunk_size // sp_size
+    K_local_curr = n_populated * slab_rows
+    populated_len = n_populated * chunk_size
+    b, nh, _, d = src_full.shape
+    perm = torch.zeros(b, nh, populated_len, d, dtype=src_full.dtype, device=src_full.device)
+    for dev in range(sp_size):
+        for chunk in range(n_populated):
+            local_start = dev * K_local_curr + chunk * slab_rows
+            global_start = chunk * chunk_size + dev * slab_rows
+            perm[:, :, local_start : local_start + slab_rows, :] = src_full[
+                :, :, global_start : global_start + slab_rows, :
+            ]
+    return perm
+
+
+def call_sdpa(
+    tt_q,
+    tt_k,
+    tt_v,
+    logical_n,
+    is_causal,
+    is_balanced,
+    p_buf_k,
+    p_buf_v,
+    program_config,
+    compute_kernel_config,
+    ccl_semaphore_handles,
+    num_links,
+    sp_axis,
+    mesh_device,
+    topology,
+    worker_sub_device_id,
+    ccl_column,
+    *,
+    scale=None,
+    cache_batch_idx=None,
+):
+    tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+        tt_q,
+        tt_k,
+        tt_v,
+        None,
+        None,
+        None,
+        persistent_output_buffer_k=p_buf_k,
+        persistent_output_buffer_v=p_buf_v,
+        joint_strategy="rear",
+        logical_n=logical_n,
+        is_causal=is_causal,
+        is_balanced=is_balanced,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
+        dim=2,
+        multi_device_global_semaphore=ccl_semaphore_handles,
+        num_links=num_links,
+        cluster_axis=sp_axis,
+        mesh_device=mesh_device,
+        topology=topology,
+        subdevice_id=worker_sub_device_id,
+        ccl_core_grid_offset=(ccl_column, 0),
+        use_column_major_ccl=True,
+        scale=scale,
+        cache_batch_idx=cache_batch_idx,
+    )
+    return tt_out
 
 
 def run_ring_joint_sdpa(
@@ -474,8 +557,6 @@ def run_ring_joint_sdpa(
     sp_axis = 1  # Column axis for sequence parallel (ring axis)
     tp_axis = 0  # Row axis for tensor parallel (head axis)
 
-    joint_seq_len = 0  # Use empty joint sequence (WAN 2.2 compatible)
-
     if mesh_config.sp_size < 2:
         pytest.skip(f"Ring joint attention requires at least 2 devices in ring, got SP={mesh_config.sp_size}")
 
@@ -523,11 +604,6 @@ def run_ring_joint_sdpa(
         Q = fa_rand(b, nhq, sq, d_q)
         K = fa_rand(b, nhk, sq, d_k)
         V = fa_rand(b, nhv, sq, d_v)
-
-        # Joint tensors - Use dummy tensors like WAN 2.2 (empty sequence, zero-filled)
-        joint_Q = torch.zeros((b, nhq, joint_seq_len, d_q), dtype=torch.bfloat16)
-        joint_K = torch.zeros((b, nhk, joint_seq_len, d_k), dtype=torch.bfloat16)
-        joint_V = torch.zeros((b, nhv, joint_seq_len, d_v), dtype=torch.bfloat16)
 
         # Keep original tensors for reference comparison (before any reordering)
         Q_original, K_original, V_original = Q, K, V
@@ -602,14 +678,6 @@ def run_ring_joint_sdpa(
         if mesh_config.tp_size > 1 and nhk != 1:
             sdpa_k_shard_dims[tp_axis] = 1
 
-        sdpa_joint_shard_dims = [None, None]
-        if mesh_config.tp_size > 1:
-            sdpa_joint_shard_dims[tp_axis] = 1
-
-        sdpa_joint_k_shard_dims = [None, None]
-        if mesh_config.tp_size > 1 and nhk != 1:
-            sdpa_joint_k_shard_dims[tp_axis] = 1
-
         # Q tensor uses q_dtype
         tt_Q = ttnn.from_torch(
             Q,
@@ -639,33 +707,6 @@ def run_ring_joint_sdpa(
                 mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
             ),
         )
-        tt_joint_Q = ttnn.from_torch(
-            joint_Q,
-            dtype=q_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_joint_shard_dims
-            ),
-        )
-        tt_joint_K = ttnn.from_torch(
-            joint_K,
-            dtype=kv_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_joint_k_shard_dims
-            ),
-        )
-        tt_joint_V = ttnn.from_torch(
-            joint_V,
-            dtype=kv_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_joint_shard_dims
-            ),
-        )
 
         # Set logical_n to the original full sequence length
         corrected_logical_n = sq
@@ -677,30 +718,24 @@ def run_ring_joint_sdpa(
         # Run ring joint attention
         reference_output = None
         for i in range(num_iterations):
-            tt_out, tt_joint_out, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            tt_out = call_sdpa(
                 tt_Q,
                 tt_K,
                 tt_V,
-                tt_joint_Q,
-                tt_joint_K,
-                tt_joint_V,
-                persistent_output_buffer_k=persistent_output_buffer_k,
-                persistent_output_buffer_v=persistent_output_buffer_v,
-                joint_strategy="rear",
-                logical_n=corrected_logical_n,
+                corrected_logical_n,
                 is_causal=is_causal,
                 is_balanced=is_balanced,
+                p_buf_k=persistent_output_buffer_k,
+                p_buf_v=persistent_output_buffer_v,
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
-                dim=2,
-                multi_device_global_semaphore=ccl_semaphore_handles,
+                ccl_semaphore_handles=ccl_semaphore_handles,
                 num_links=num_links,
-                cluster_axis=sp_axis,
+                sp_axis=sp_axis,
                 mesh_device=mesh_device,
                 topology=topology,
-                subdevice_id=worker_sub_device_id,
-                ccl_core_grid_offset=(ccl_column, 0),  # Point to CCL column
-                use_column_major_ccl=True,
+                worker_sub_device_id=worker_sub_device_id,
+                ccl_column=ccl_column,
             )
 
             # Convert main output to torch and slice out tile-padding
@@ -736,35 +771,8 @@ def run_ring_joint_sdpa(
         if not do_check:
             return
 
-        # Convert and verify joint output (only if joint_seq_len > 0)
-        if joint_seq_len > 0:
-            if mesh_config.arch_type.startswith("galaxy"):
-                joint_row_dim = sdpa_joint_shard_dims[0] if sdpa_joint_shard_dims[0] is not None else -1
-                joint_col_dim = sdpa_joint_shard_dims[1] if sdpa_joint_shard_dims[1] is not None else -1
-                tt_joint_out_torch = ttnn.to_torch(
-                    tt_joint_out,
-                    mesh_composer=ttnn.create_mesh_composer(
-                        mesh_device, ttnn.MeshComposerConfig(joint_row_dim, joint_col_dim)
-                    ),
-                )
-            else:
-                tt_joint_out_torch = ttnn.to_torch(
-                    tt_joint_out,
-                    mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig(1, -1)),
-                )
-
-            if tt_joint_out_torch.shape[3] != d_v:
-                tt_joint_out_torch = tt_joint_out_torch[:, :, :, :d_v]
-            if tt_joint_out_torch.shape[0] > 1:
-                tt_joint_out_torch = tt_joint_out_torch[0:1, :, :, :]
-            tt_joint_out_torch = tt_joint_out_torch[:, :, :joint_seq_len, :]
-        else:
-            logger.info("Joint output - Dummy tensors (seq_len=0), skipping accuracy check (wan2.2 compatible)")
-
         # Compute PyTorch reference on ORIGINAL data (before balanced reordering)
-        gt_main, gt_joint = torch_joint_sdpa_reference(
-            Q_original, K_original, V_original, joint_Q, joint_K, joint_V, is_causal=is_causal
-        )
+        gt_main = torch_sdpa_reference(Q_original, K_original, V_original, is_causal=is_causal)
 
         # Verify accuracy for main output
         out_pass_main, out_pcc_main = comp_pcc(gt_main, tt_out_torch, pcc_threshold)
@@ -774,15 +782,6 @@ def run_ring_joint_sdpa(
         if rmse_threshold is not None:
             assert rmse_main < rmse_threshold, f"Main RMSE {rmse_main:.6f} exceeds threshold {rmse_threshold}"
         assert out_pass_main, f"Main PCC {out_pcc_main} below threshold {pcc_threshold}"
-
-        # Verify accuracy for joint output
-        if joint_seq_len > 0:
-            out_pass_joint, out_pcc_joint = comp_pcc(gt_joint, tt_joint_out_torch, pcc_threshold)
-            rmse_joint = torch.sqrt(((gt_joint - tt_joint_out_torch) ** 2).mean()).item()
-            logger.info(f"Joint output - PCC: {out_pcc_joint}, RMSE: {rmse_joint:.6f}")
-            if rmse_threshold is not None:
-                assert rmse_joint < rmse_threshold, f"Joint RMSE {rmse_joint:.6f} exceeds threshold {rmse_threshold}"
-            assert out_pass_joint, f"Joint PCC {out_pcc_joint} below threshold {pcc_threshold}"
 
     finally:
         # Clean up mesh device
@@ -814,9 +813,13 @@ def run_ring_joint_sdpa_chunked(
     chunk_size: int = CHUNKED_PREFILL_CHUNK_SIZE,
     total_seq: int = CHUNKED_PREFILL_TOTAL_SEQ,
     pcc_threshold: float = CHUNKED_PREFILL_PCC_THRESHOLD,
+    rmse_threshold: float = None,
     q_chunk_size: int = None,
     k_chunk_size: int = None,
     num_iterations: int = 1,
+    indexed_nd_sharded_kv_cache: bool = False,
+    cache_batch_idx: int = 1,
+    cache_batch: int = 2,
 ):
     """
     Validate ring joint SDPA chunked-prefill against a full-sequence torch oracle.
@@ -837,6 +840,9 @@ def run_ring_joint_sdpa_chunked(
     assert total_seq % sp_size == 0, f"total_seq {total_seq} must divide sp_size {sp_size}"
     assert chunk_size % sp_size == 0, f"chunk_size {chunk_size} must divide sp_size {sp_size}"
     assert total_seq % chunk_size == 0, f"total_seq {total_seq} must be a multiple of chunk_size {chunk_size}"
+    if indexed_nd_sharded_kv_cache:
+        assert BATCH_SIZE == 1, "Indexed K/V cache test path assumes query batch is 1"
+        assert 0 <= cache_batch_idx < cache_batch, f"cache_batch_idx {cache_batch_idx} must be in [0, {cache_batch})"
 
     n_chunks = total_seq // chunk_size
 
@@ -870,7 +876,6 @@ def run_ring_joint_sdpa_chunked(
 
     sp_axis = 1
     tp_axis = 0
-    joint_seq_len = 0
     num_links = 2
 
     mesh_shape = ttnn.MeshShape(mesh_config.tp_size, sp_size)
@@ -892,15 +897,11 @@ def run_ring_joint_sdpa_chunked(
 
         ccl_semaphore_handles = create_global_semaphores(mesh_device, ccl_sub_device_crs, 0)
 
-        joint_Q = torch.zeros((b, nhq, joint_seq_len, d_q), dtype=torch.bfloat16)
-        joint_K = torch.zeros((b, nhk, joint_seq_len, d_k), dtype=torch.bfloat16)
-        joint_V = torch.zeros((b, nhv, joint_seq_len, d_v), dtype=torch.bfloat16)
-
         torch.manual_seed(CHUNKED_PREFILL_SEED)
         Q_full = fa_rand(b, nhq, total_seq, d_q)
         K_full = fa_rand(b, nhk, total_seq, d_k)
         V_full = fa_rand(b, nhv, total_seq, d_v)
-        ref_full, _ = torch_joint_sdpa_reference(Q_full, K_full, V_full, joint_Q, joint_K, joint_V, is_causal=True)
+        ref_full = torch_sdpa_reference(Q_full, K_full, V_full, is_causal=True)
 
         sdpa_input_shard_dims = [None, None]
         sdpa_input_shard_dims[sp_axis] = 2
@@ -911,14 +912,6 @@ def run_ring_joint_sdpa_chunked(
         sdpa_k_shard_dims[sp_axis] = 2
         if mesh_config.tp_size > 1 and nhk != 1:
             sdpa_k_shard_dims[tp_axis] = 1
-
-        sdpa_joint_shard_dims = [None, None]
-        if mesh_config.tp_size > 1:
-            sdpa_joint_shard_dims[tp_axis] = 1
-
-        sdpa_joint_k_shard_dims = [None, None]
-        if mesh_config.tp_size > 1 and nhk != 1:
-            sdpa_joint_k_shard_dims[tp_axis] = 1
 
         persistent_k_shard_dims = [None, None]
         if mesh_config.tp_size > 1 and nhk != 1:
@@ -957,7 +950,10 @@ def run_ring_joint_sdpa_chunked(
                 ),
             )
 
-        def upload_k(k_host):
+        def upload_k(k_host, memory_config=None):
+            kwargs = {}
+            if memory_config is not None:
+                kwargs["memory_config"] = memory_config
             return ttnn.from_torch(
                 k_host,
                 dtype=kv_dtype,
@@ -966,9 +962,13 @@ def run_ring_joint_sdpa_chunked(
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_k_shard_dims
                 ),
+                **kwargs,
             )
 
-        def upload_v(v_host):
+        def upload_v(v_host, memory_config=None):
+            kwargs = {}
+            if memory_config is not None:
+                kwargs["memory_config"] = memory_config
             return ttnn.from_torch(
                 v_host,
                 dtype=kv_dtype,
@@ -977,63 +977,8 @@ def run_ring_joint_sdpa_chunked(
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_input_shard_dims
                 ),
+                **kwargs,
             )
-
-        tt_joint_Q = ttnn.from_torch(
-            joint_Q,
-            dtype=q_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_joint_shard_dims
-            ),
-        )
-        tt_joint_K = ttnn.from_torch(
-            joint_K,
-            dtype=kv_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_joint_k_shard_dims
-            ),
-        )
-        tt_joint_V = ttnn.from_torch(
-            joint_V,
-            dtype=kv_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_joint_shard_dims
-            ),
-        )
-
-        def call_sdpa(tt_Q, tt_K, tt_V, logical_n, is_causal, p_buf_k, p_buf_v):
-            tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
-                tt_Q,
-                tt_K,
-                tt_V,
-                tt_joint_Q,
-                tt_joint_K,
-                tt_joint_V,
-                persistent_output_buffer_k=p_buf_k,
-                persistent_output_buffer_v=p_buf_v,
-                joint_strategy="rear",
-                logical_n=logical_n,
-                is_causal=is_causal,
-                is_balanced=is_balanced,
-                program_config=program_config,
-                compute_kernel_config=compute_kernel_config,
-                dim=2,
-                multi_device_global_semaphore=ccl_semaphore_handles,
-                num_links=num_links,
-                cluster_axis=sp_axis,
-                mesh_device=mesh_device,
-                topology=topology,
-                subdevice_id=worker_sub_device_id,
-                ccl_core_grid_offset=(ccl_column, 0),
-                use_column_major_ccl=True,
-            )
-            return tt_out
 
         def to_host(tt_out, expected_q_len):
             out = ttnn.to_torch(
@@ -1047,33 +992,19 @@ def run_ring_joint_sdpa_chunked(
         logger.info(
             f"Chunked prefill: model={model.name}, total_seq={total_seq}, "
             f"sp_size={sp_size}, per-device Q seq_len={total_seq // sp_size}, "
-            f"q_chunk={q_chunk_size}, k_chunk={k_chunk_size}"
+            f"q_chunk={q_chunk_size}, k_chunk={k_chunk_size}, "
+            f"indexed_nd_sharded_kv_cache={indexed_nd_sharded_kv_cache}"
         )
 
-        # Balanced K/V layout: device d's local slab c holds global rows
-        # [c*chunk_size + d*slab_rows, c*chunk_size + (d+1)*slab_rows). Cache grows one
-        # chunk per call → program cache forks one entry per chunk.
+        # Chunked K/V cache layout: device d's local slab c holds global rows
+        # [c*chunk_size + d*slab_rows, c*chunk_size + (d+1)*slab_rows). This packing is
+        # independent of the is_balanced causal zigzag mode; the cache grows one chunk per call.
         slab_rows = chunk_size // sp_size
         assert chunk_size % sp_size == 0, f"chunk_size {chunk_size} not divisible by sp_size {sp_size}"
         assert slab_rows % 32 == 0, f"slab_rows {slab_rows} not tile-aligned (TILE_HEIGHT=32)"
 
-        def to_balanced_growing(src_full, last_uploaded_chunk):
-            """Permute src_full into balanced per-device layout for the populated prefix
-            [0..last_uploaded_chunk]; returns length (last_uploaded_chunk + 1) * chunk_size.
-            """
-            n_populated = last_uploaded_chunk + 1
-            K_local_curr = n_populated * slab_rows
-            populated_len = n_populated * chunk_size
-            b_, nh_, _, d_ = src_full.shape
-            perm = torch.zeros(b_, nh_, populated_len, d_, dtype=src_full.dtype, device=src_full.device)
-            for dev in range(sp_size):
-                for c in range(n_populated):
-                    local_start = dev * K_local_curr + c * slab_rows
-                    global_start = c * chunk_size + dev * slab_rows
-                    perm[:, :, local_start : local_start + slab_rows, :] = src_full[
-                        :, :, global_start : global_start + slab_rows, :
-                    ]
-            return perm
+        k_memory_config = nd_sharded_dram_memory_config(mesh_device, d_k) if indexed_nd_sharded_kv_cache else None
+        v_memory_config = nd_sharded_dram_memory_config(mesh_device, d_v) if indexed_nd_sharded_kv_cache else None
 
         # SUT: per-chunk calls with growing K/V cache + growing logical_n.
         # In determinism mode (num_iterations > 1), the entire n_chunks sequence is
@@ -1085,17 +1016,30 @@ def run_ring_joint_sdpa_chunked(
             for i in range(n_chunks):
                 s, e = i * chunk_size, (i + 1) * chunk_size
 
-                K_balanced = to_balanced_growing(K_full, i)
-                V_balanced = to_balanced_growing(V_full, i)
+                K_balanced = to_balanced_growing_cache_layout(K_full, sp_size, chunk_size, i)
+                V_balanced = to_balanced_growing_cache_layout(V_full, sp_size, chunk_size, i)
                 Q_chunk = Q_full[:, :, s:e, :].contiguous()
+                kv_buffer_batch = b
+                cache_batch_idx_arg = None
+
+                if indexed_nd_sharded_kv_cache:
+                    kv_buffer_batch = cache_batch
+                    cache_batch_idx_arg = cache_batch_idx
+                    K_input = torch.randn(cache_batch, nhk, e, d_k, dtype=K_balanced.dtype) * 100
+                    V_input = torch.randn(cache_batch, nhv, e, d_v, dtype=V_balanced.dtype) * 100
+                    K_input[cache_batch_idx : cache_batch_idx + 1] = K_balanced
+                    V_input[cache_batch_idx : cache_batch_idx + 1] = V_balanced
+                else:
+                    K_input = K_balanced
+                    V_input = V_balanced
 
                 tt_Q = upload_q(Q_chunk)
-                tt_K = upload_k(K_balanced)
-                tt_V = upload_v(V_balanced)
+                tt_K = upload_k(K_input, memory_config=k_memory_config)
+                tt_V = upload_v(V_input, memory_config=v_memory_config)
 
                 # AllGather output buffer sized to post-gather K/V: N_global == (i+1) * chunk_size.
                 persistent_output_buffer_k = ttnn.from_torch(
-                    torch.zeros(b, nhk, e, d_k),
+                    torch.zeros(kv_buffer_batch, nhk, e, d_k),
                     dtype=kv_dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=mesh_device,
@@ -1104,7 +1048,7 @@ def run_ring_joint_sdpa_chunked(
                     ),
                 )
                 persistent_output_buffer_v = ttnn.from_torch(
-                    torch.zeros(b, nhv, e, d_v),
+                    torch.zeros(kv_buffer_batch, nhv, e, d_v),
                     dtype=kv_dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=mesh_device,
@@ -1120,8 +1064,19 @@ def run_ring_joint_sdpa_chunked(
                         tt_V,
                         e,
                         is_causal=True,
+                        is_balanced=is_balanced,
                         p_buf_k=persistent_output_buffer_k,
                         p_buf_v=persistent_output_buffer_v,
+                        program_config=program_config,
+                        compute_kernel_config=compute_kernel_config,
+                        ccl_semaphore_handles=ccl_semaphore_handles,
+                        num_links=num_links,
+                        sp_axis=sp_axis,
+                        mesh_device=mesh_device,
+                        topology=topology,
+                        worker_sub_device_id=worker_sub_device_id,
+                        ccl_column=ccl_column,
+                        cache_batch_idx=cache_batch_idx_arg,
                     )
                 except Exception as exc:
                     pytest.fail(
@@ -1138,11 +1093,12 @@ def run_ring_joint_sdpa_chunked(
                 expected_i = ref_full[:, :, s:e, :]
                 passed, pcc = comp_pcc(expected_i, out_i, pcc_threshold)
                 rmse = torch.sqrt(((expected_i - out_i) ** 2).mean()).item()
+                rmse_passed = rmse_threshold is None or rmse < rmse_threshold
                 logger.info(
                     f"Chunk {i:2d} [{s:6d}, {e:6d}) logical_n={e}: PCC={pcc} RMSE={rmse:.6f} "
-                    f"-> {'PASS' if passed else 'FAIL'}"
+                    f"-> {'PASS' if passed and rmse_passed else 'FAIL'}"
                 )
-                per_chunk_results.append((i, e, passed, pcc, rmse))
+                per_chunk_results.append((i, e, passed, pcc, rmse_passed, rmse))
 
             if num_iterations > 1:
                 if reference_outputs is None:
@@ -1165,16 +1121,60 @@ def run_ring_joint_sdpa_chunked(
             )
             return
 
-        failures = [(i, e, pcc, rmse) for i, e, passed, pcc, rmse in per_chunk_results if not passed]
+        failures = [
+            (i, e, pcc, rmse)
+            for i, e, passed, pcc, rmse_passed, rmse in per_chunk_results
+            if not passed or not rmse_passed
+        ]
         if failures:
             details = "; ".join(
                 f"chunk {i} (logical_n={e}): PCC={pcc}, RMSE={rmse:.6f}" for i, e, pcc, rmse in failures
             )
-            pytest.fail(f"Chunked prefill PCC failures (threshold={pcc_threshold}): {details}")
+            pytest.fail(
+                f"Chunked prefill PCC/RMSE failures "
+                f"(pcc_threshold={pcc_threshold}, rmse_threshold={rmse_threshold}): {details}"
+            )
 
     finally:
         ttnn.close_mesh_device(mesh_device)
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+@pytest.mark.timeout(600)
+def test_ring_joint_attention_chunked_nd_sharded_indexed_kv_cache_accuracy():
+    """Validate chunked direct ND-sharded K/V cache inputs selected by cache_batch_idx."""
+    mesh_config = MESH_CONFIG
+    local_heads = 4
+    chunk_seq_len = 64
+    total_seq_len = 128
+    model = ModelConfig(
+        name="mla_indexed_nd_sharded_kv",
+        nhq=local_heads,
+        nhk=1,
+        nhv=local_heads,
+        d_q=64,
+        d_k=64,
+        d_v=32,
+        is_causal=True,
+        is_balanced=False,
+        q_dtype=ttnn.bfloat16,
+        kv_dtype=ttnn.bfloat16,
+        q_chunk_sizes=[32],
+        k_chunk_sizes=[32],
+        seq_len=total_seq_len,
+    )
+
+    run_ring_joint_sdpa_chunked(
+        mesh_config,
+        model,
+        chunk_size=chunk_seq_len * mesh_config.sp_size,
+        total_seq=total_seq_len * mesh_config.sp_size,
+        pcc_threshold=DEFAULT_PCC_THRESHOLD,
+        rmse_threshold=DEFAULT_RMSE_THRESHOLD,
+        q_chunk_size=model.q_chunk_sizes[0],
+        k_chunk_size=model.k_chunk_sizes[0],
+        indexed_nd_sharded_kv_cache=True,
+    )
 
 
 # Generate test parameters dynamically based on detected hardware for different models (WAN, MLA, VideGen...)
