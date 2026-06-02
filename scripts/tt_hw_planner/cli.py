@@ -2257,7 +2257,193 @@ def _run_prepare_capture(
     return rc, captured
 
 
+def _weights_in_default_cache(model_id: str) -> bool:
+    """Best-effort check whether ``model_id``'s weights are already in
+    the default HuggingFace cache (or wherever ``HF_HOME`` points).
+
+    Used purely for the startup info banner — *not* to auto-set offline
+    mode. The HuggingFace library already checks the cache before any
+    network call, so the cache hit is already used automatically; we
+    just print a hint so the user knows the run will be fast (and
+    won't be silently re-downloading on a flaky network).
+
+    Returns ``False`` on any import / scan failure (treats as
+    "couldn't tell"). Never raises.
+    """
+    try:
+        from huggingface_hub import scan_cache_dir
+    except Exception:
+        return False
+    try:
+        cache = scan_cache_dir()
+    except Exception:
+        return False
+    for repo in getattr(cache, "repos", []):
+        if getattr(repo, "repo_id", "") == model_id and getattr(repo, "size_on_disk", 0) > 0:
+            return True
+    return False
+
+
+def _resolve_local_weights_env(args: argparse.Namespace) -> Dict[str, str]:
+    """Translate the user's --local-dir / --offline-hf flags into the
+    env-var overrides that should be applied for subprocess pytest
+    runs.
+
+    Pure decision logic — no side effects, returns a dict. Caller is
+    responsible for actually setting the env. Kept pure so unit tests
+    can pin the contract without mutating ``os.environ``.
+
+    Rules:
+      * ``--local-dir <path>``  →  HF_HOME=<path>, HF_HUB_OFFLINE=1
+        (the user explicitly pointed at a directory; force HF to use
+        it and never touch the network)
+      * ``--offline-hf``        →  HF_HUB_OFFLINE=1
+        (default cache, but no network — useful for sealed CI)
+      * neither                 →  {}
+        (HF library's default behavior: cache-first then network)
+
+    NOTE: We do NOT auto-enable HF_HUB_OFFLINE just because the cache
+    has the model. A partial / corrupted cache + offline mode would
+    raise LocalEntryNotFoundError instead of completing the missing
+    download. Offline mode is opt-in.
+    """
+    overrides: Dict[str, str] = {}
+    local_dir = getattr(args, "local_dir", None)
+    if local_dir:
+        from pathlib import Path as _PathForExpand
+
+        resolved = str(_PathForExpand(local_dir).expanduser().resolve())
+        overrides["HF_HOME"] = resolved
+        overrides["HF_HUB_OFFLINE"] = "1"
+    elif getattr(args, "offline_hf", False):
+        overrides["HF_HUB_OFFLINE"] = "1"
+    return overrides
+
+
+def _apply_local_weights_env(args: argparse.Namespace, model_id: str) -> None:
+    """Apply ``_resolve_local_weights_env`` overrides to ``os.environ``
+    so all subsequent subprocess pytest runs inherit them, and print
+    an info banner so the user knows what was applied.
+
+    Also surfaces an "auto-detected cached weights" line when
+    ``_weights_in_default_cache`` returns True and no explicit local-
+    weights flag was passed — that's informational, not a behavior
+    change (HF lib was going to use the cache anyway).
+    """
+    overrides = _resolve_local_weights_env(args)
+    if overrides:
+        print()
+        print("=" * 72)
+        print("  [local-weights] applying user-specified weights resolution:")
+        for k, v in overrides.items():
+            os.environ[k] = v
+            print(f"    {k}={v}")
+        print("=" * 72)
+        return
+    # No explicit flag — print an info line if the cache already has
+    # the model. Helps the user understand that the rerun will be fast.
+    if _weights_in_default_cache(model_id):
+        print(
+            f"  [local-weights] found cached weights for {model_id} in the "
+            f"default HF cache; HuggingFace will load from there automatically "
+            f"(no network attempt unless a file is missing). To force "
+            f"offline-only, re-run with --offline-hf."
+        )
+
+
+def _exit_if_hf_weight_failure(model_id: str, captured_output: str) -> None:
+    """Short-circuit the bring-up flow if captured pytest output shows
+    an HF weight download/load failure.
+
+    HF failures (gated repo without login, network unavailable,
+    corrupted .safetensors, wrong model id, etc.) are ENVIRONMENTAL —
+    no amount of LLM iteration on TT code will fix them. Detecting
+    them at the capture point and exiting with a clear "please
+    download the weights locally and re-run" message saves the user's
+    iter budget and gives them actionable remediation up front.
+
+    Wired at every ``_run_prepare_capture`` call site (Path 2 / Path B
+    / Path A post-success verification). Returns silently when no
+    match — the caller then handles the failure through the normal
+    repair / escalation path.
+
+    Pattern matching lives in ``_cli_helpers/error_patterns.py``
+    (generic across models, single source of truth alongside the
+    other failure-signature regexes).
+    """
+    from ._cli_helpers.error_patterns import (
+        detect_hf_weight_failure,
+        format_hf_weight_failure_message,
+    )
+
+    failure = detect_hf_weight_failure(captured_output)
+    if failure is None:
+        return
+    sys.stderr.write(format_hf_weight_failure_message(model_id, failure))
+    sys.stderr.flush()
+    # rc=2 distinguishes "tool bailed for setup reasons" from rc=1
+    # (per-component PCC failure) and rc=0 (success). CI/downstream
+    # can route on this code.
+    sys.exit(2)
+
+
 from ._cli_helpers.runtime_repair import _runtime_repair_loop, _PCC_FAIL_RC  # noqa: F401
+
+
+def _run_strict_pcc_gate(
+    args: argparse.Namespace,
+    model_id: str,
+    captured_output: str,
+    auto_mode: bool,
+) -> Tuple[Optional[Any], Optional[str]]:
+    """Run the strict end-to-end PCC gate via the correctness dispatcher.
+
+    Centralizes the gate-running block that Path 2 (ALREADY-SUPPORTED)
+    and Path B (cold-start) historically duplicated, and adds the Path A
+    (per-component graduate → re-verify end-to-end) wiring point.
+
+    Returns ``(validation_result, repair_prompt)`` from
+    :func:`.correctness.run_gate`. Returns ``(None, None)`` when the
+    gate should NOT run for this invocation:
+
+      * ``auto_mode`` is False (legacy non-auto invocations don't gate).
+      * ``args.strict_pcc`` is False (operator opted out).
+      * ``captured_output`` is empty (no demo run to gate on).
+
+    Callers translate ``result.ok == False`` into their own escalation /
+    outcome-downgrade logic. The gate intentionally does NOT mutate rc
+    or the outcome banner — that belongs at the call site, where the
+    routing decision (escalate to Path A, mark UNVERIFIED, etc.) lives.
+
+    Category probe is best-effort: if probe fails, defaults to ``"LLM"``
+    (the broad-cover comparator) rather than skipping the gate. Lets the
+    text comparator run for LLMs/VLMs even when the probe can't classify.
+    """
+    if not (auto_mode and getattr(args, "strict_pcc", True)):
+        return None, None
+    if not captured_output:
+        return None, None
+    from .correctness import run_gate as _correctness_run_gate
+
+    _gate_category = "LLM"
+    try:
+        from .probe import probe_model as _probe_for_gate
+
+        _gp = _probe_for_gate(model_id)
+        _gate_category = getattr(_gp, "category", None) or "LLM"
+        if _gate_category == "Unknown":
+            _gate_category = "LLM"
+    except Exception:
+        pass
+    return _correctness_run_gate(
+        category=_gate_category,
+        model_id=model_id,
+        captured_output=captured_output,
+        args=args,
+        engine=getattr(args, "pcc_engine", "legacy"),
+        compare_tokens=getattr(args, "strict_pcc_tokens", None),
+        instruct=not getattr(args, "no_instruct", False),
+    )
 
 
 def _run_pcc_gate(
@@ -2396,12 +2582,31 @@ def _run_pcc_gate(
 # escalation call sites.
 
 
+# Outcome labels emitted by ``_final_outcome_banner``. Kept as module
+# constants (not an enum) so they grep cleanly out of CI logs and stay
+# stable references for downstream tooling that scrapes the banner.
+#
+# - ``SUCCESS``         — model verified end-to-end; both gates fired and passed
+# - ``SUCCESS-PARTIAL`` — components graduated but some on CPU fallback
+#                         (KERNEL_MISSING); kernel gap report attached
+# - ``UNVERIFIED``      — bring-up completed but strict gate did NOT fire
+#                         (logits not captured, comparison incomplete, etc.).
+#                         The run is NOT a confirmed SUCCESS — downstream
+#                         consumers should treat it as needing re-verification.
+# - ``FAIL``            — bring-up did not converge / strict gate failed
+OUTCOME_SUCCESS = "SUCCESS"
+OUTCOME_SUCCESS_PARTIAL = "SUCCESS-PARTIAL"
+OUTCOME_UNVERIFIED = "UNVERIFIED"
+OUTCOME_FAIL = "FAIL"
+
+
 def _final_outcome_banner(
     *,
     rc: int,
     model_id: str,
     path_label: str,
     extra: Optional[List[str]] = None,
+    outcome: Optional[str] = None,
 ) -> None:
     """2026-05-23 (bugfix B3): always emit a single, machine-grep-able
     final-outcome banner before cmd_up returns. The previous
@@ -2414,16 +2619,30 @@ def _final_outcome_banner(
 
     Lines emitted:
       ===
-      TT_HW_PLANNER OUTCOME: SUCCESS|FAIL  rc=<int>  model=<id>  path=<label>
+      TT_HW_PLANNER OUTCOME: SUCCESS|SUCCESS-PARTIAL|UNVERIFIED|FAIL  rc=<int>  model=<id>  path=<label>
       Suggested next steps:
         - <line>
         - <line>
       ===
+
+    Parameters
+    ----------
+    outcome
+        Explicit outcome label. When ``None`` (default), falls back to
+        the legacy rc-derived label (``rc==0`` → SUCCESS, else FAIL).
+        Pass an explicit value (e.g. ``OUTCOME_UNVERIFIED`` or
+        ``OUTCOME_SUCCESS_PARTIAL``) when the rc alone can't express
+        the verdict — e.g. per-component PCC passed but the end-to-end
+        strict gate could not fire, which is NOT a clean SUCCESS even
+        though rc is 0.
     """
     sep = "=" * 72
     print()
     print(sep)
-    label = "SUCCESS" if rc == 0 else "FAIL"
+    if outcome is not None:
+        label = outcome
+    else:
+        label = OUTCOME_SUCCESS if rc == 0 else OUTCOME_FAIL
     print(f"  TT_HW_PLANNER OUTCOME: {label}  rc={rc}  " f"model={model_id}  path={path_label}")
     if extra:
         print(f"  Suggested next steps:")
@@ -4182,10 +4401,31 @@ def _classify_failure(summary: str, details: str) -> str:
         "BFloat16" in text or "bfloat16" in text or "Float" in text or "Half" in text
     ):
         return "DTYPE_MISMATCH"
+    from ._cli_helpers.error_patterns import (
+        matches_state_dict_key_error as _matches_state_dict_key,
+        extract_unexpected_kwarg as _extract_unexpected_kwarg,
+        extract_missing_args_description as _extract_missing_args,
+        matches_tt_fatal_with_predicate as _matches_tt_fatal_pred,
+    )
+
+    if _matches_state_dict_key(text):
+        return "STATE_DICT_KEY"
+    if _extract_unexpected_kwarg(text):
+        return "UNEXPECTED_KWARG"
+    if _extract_missing_args(text):
+        return "MISSING_KWARG"
     if "incompatible function arguments" in text or "TypeError:" in text:
         return "API_SIGNATURE"
     if "AssertionError: PCC" in text:
         return "PCC_ONLY"
+    # TT_FATAL with parseable predicate must precede the generic SHAPE
+    # bucket so layernorm/matmul/etc. shape-assertion failures get
+    # the structured diagnosis (op + predicate) instead of the generic
+    # "check reshape/transpose" hint. Caught the 2026-06-01 Qwen2.5-14B
+    # decoder_layer rabbit-hole where LLM iter 1→2 saw the same
+    # TT_FATAL layernorm shape mismatch and made no targeted fix.
+    if _matches_tt_fatal_pred(text):
+        return "TT_FATAL_SHAPE"
     if "shape" in text or "dimension" in text:
         return "SHAPE"
 
@@ -5000,6 +5240,35 @@ def _diagnose_failure(failure_class: str, traceback_excerpt: str, ops_used: List
             "device L1 memory exhausted",
             "reduce intermediate buffer sizes via smaller tiles or different sharding",
         )
+    if failure_class == "TT_FATAL_SHAPE":
+        from ._cli_helpers.error_patterns import extract_tt_fatal_op_and_predicate
+
+        _info = extract_tt_fatal_op_and_predicate(traceback_excerpt or "") or {}
+        _op = _info.get("op") or "(unknown op)"
+        _predicate = _info.get("predicate") or "(see traceback)"
+        _file = _info.get("cpp_file") or ""
+        return (
+            f"`ttnn.{_op}` failed a device-side shape/dtype assertion. "
+            f"The assertion text says EXACTLY what's wrong: `{_predicate}`. "
+            f"Translate the predicate to what your stub must produce: a "
+            f"comparison like `a.logical_shape()[-1] == gamma.logical_shape()[-1]` "
+            f"means the LAST dim of the LHS tensor (the one you pass as `a`/`input`) "
+            f"must match the LAST dim of the RHS tensor (the one you pass as "
+            f"`gamma`/`weight`/etc.). Cpp source: {_file}",
+            f"Step-by-step fix for {_op}-class shape asserts:\n"
+            f"  (1) In your stub, print/log the shape of EVERY tensor you pass to "
+            f"`ttnn.{_op}(...)` immediately before the call. Identify the two "
+            f"named in the predicate `{_predicate}`.\n"
+            f"  (2) If the LHS tensor is wrong shape, fix the upstream op: usually a "
+            f"missing reshape (e.g. (B,S,H) -> (1,B,S,H) for 4D-required ttnn "
+            f"layernorm, or (S,B,H) -> (B,S,H) layout swap).\n"
+            f"  (3) If the RHS tensor (gamma/weight/etc.) is wrong shape, fix "
+            f"weight loading: load the right slice from state_dict (e.g. "
+            f"`state_dict['input_layernorm.weight']` for RMSNorm gamma should "
+            f"be `(hidden_size,)` = `(args.dim,)`).\n"
+            f"  (4) Do NOT randomly try transposes — the predicate names the "
+            f"exact mismatch. Match the named dim, that's it.",
+        )
     if failure_class == "SHAPE":
         return (
             "tensor shape mismatch between produced and expected output",
@@ -5013,10 +5282,105 @@ def _diagnose_failure(failure_class: str, traceback_excerpt: str, ops_used: List
             "many ttnn ops require explicit memory_config",
         )
     if failure_class == "PCC_ONLY":
+        # Specialize the diagnosis by PCC value when available. The
+        # "structurally correct, numerically close" regime
+        # (auto_iterate.py:488, agentic/convergence.py:288) already
+        # gets CAP RELAXATION via PCC_STUCK_THRESHOLD — but the
+        # diagnosis text was generic regardless of PCC. Reuse the
+        # existing `_extract_pcc_from_failure` parser (cli.py:4299) to
+        # pick the value out of the traceback, then route to the
+        # specialized HIGH-PCC hint when PCC >= 0.85 (close enough that
+        # the structural code is right; only numerical tuning remains).
+        _pcc_val = _extract_pcc_from_failure(traceback_excerpt or "", "")
+        if _pcc_val is not None and _pcc_val >= 0.85:
+            return (
+                f"PCC {_pcc_val:.4f} is in the late-stage numerical "
+                f"refinement zone (>= 0.85). The wiring is correct; the "
+                f"remaining gap is precision/scaling, NOT structural code. "
+                f"At this PCC level, broad rewrites usually REGRESS the "
+                f"trajectory — make ONE targeted change per iter and "
+                f"observe whether PCC moves up.",
+                "Targeted candidates (try ONE per iter, smallest first): "
+                "(a) intermediate accumulator dtype: bf16 -> fp32 for any "
+                "softmax / sum / mean / scaled-dot-product step "
+                "(`compute_kernel_config=ttnn.WormholeComputeKernelConfig"
+                "(math_fidelity=ttnn.MathFidelity.HiFi4)` or fp32 dest acc "
+                "where supported); (b) scaling factor placement — "
+                "Q*K^T scaling must be done BEFORE softmax, not after "
+                "(some Llama-family canonicals fold scale into rotary; "
+                "verify which); (c) weight transpose order — `(out, in)` "
+                "vs `(in, out)` mismatch flips PCC into the 0.7-0.95 "
+                "range; (d) RoPE theta — Qwen2 uses `rope_theta=1_000_000` "
+                "but standard rotary defaults to 10_000, off by 100x in "
+                "the position frequencies; (e) bias/residual omission — "
+                "if the model HAS attention.q_proj.bias but the wrapper "
+                "ignored it, PCC lands in the 0.85-0.95 region.",
+            )
         return (
             "ttnn output is numerically wrong vs torch reference (PCC < 0.99)",
             "check dtype (bf16 vs fp32), weight transpose order, missing scaling factor, "
             "or a missed bias/residual term",
+        )
+    if failure_class == "STATE_DICT_KEY":
+        from ._cli_helpers.error_patterns import extract_missing_state_dict_key
+
+        missing_key = extract_missing_state_dict_key(traceback_excerpt or "") or "<unknown>"
+        return (
+            f"state_dict does NOT contain the key the canonical class is "
+            f"looking up: {missing_key!r}. The canonical class expects its "
+            f"sibling-model's naming convention (Llama/Meta-style e.g. "
+            f"`layers.N.attention.wq.weight`); the wrapper passed HF naming "
+            f"(`q_proj.weight` / `gate_proj.weight` / etc.) without remapping",
+            f"in `build()`, BEFORE calling the canonical constructor, REMAP "
+            f"the state_dict keys: (a) call the right `convert_hf_to_meta` "
+            f"helper from `models.tt_transformers.tt.load_checkpoints` to "
+            f"swap HF projection names (q_proj→wq, k_proj→wk, v_proj→wv, "
+            f"o_proj→wo, gate_proj→w1, up_proj→w3, down_proj→w2) and (b) "
+            f"prefix the remapped keys with `layers.{{layer_num}}.<module>.` "
+            f"(e.g. `layers.0.attention.` for Attention, `layers.0.feed_forward.` "
+            f"for MLP). Pass the remapped dict as `state_dict=`. The canonical "
+            f"class's `__init__` will then find {missing_key!r} (or its remapped "
+            f"equivalent) and load weights",
+        )
+    if failure_class == "UNEXPECTED_KWARG":
+        from ._cli_helpers.error_patterns import extract_unexpected_kwarg
+
+        bad_kwarg = extract_unexpected_kwarg(traceback_excerpt or "") or "<unknown>"
+        return (
+            f"the canonical class's `__init__` does NOT accept the kwarg "
+            f"{bad_kwarg!r}. The canonical-wrapper template passes a generic "
+            f"set of kwargs (mesh_device, args, state_dict, layer_num, dtype) "
+            f"that fits Attention/MLP-style classes — but the wrapped class "
+            f"may have a totally different signature (e.g. RMSNorm takes "
+            f"`device` not `mesh_device`; RotaryEmbedding takes `dim, "
+            f"max_position_embeddings, base, device` and no `args`/`state_dict` "
+            f"at all)",
+            f"REMOVE {bad_kwarg!r} from the canonical constructor call AND "
+            f"replace the rest of the call with the canonical's actual "
+            f"`__init__` signature. Read the canonical class's `def __init__` "
+            f"DEFINITION line first (grep `^    def __init__` in the "
+            f"`tt_reuse_target` file) to see the exact arg list. Some "
+            f"components have NO learned weights (e.g. RotaryEmbedding "
+            f"computes cos/sin tables from scratch) — for those, drop "
+            f"state_dict / torch_module entirely",
+        )
+    if failure_class == "MISSING_KWARG":
+        from ._cli_helpers.error_patterns import extract_missing_args_description
+
+        missing = extract_missing_args_description(traceback_excerpt or "") or "<see traceback>"
+        return (
+            f"the canonical class's `__init__` needs additional positional "
+            f"arguments that the wrapper template did not pass: {missing}",
+            f"add the missing args to the canonical constructor call. Common "
+            f"ones for tt_transformers classes: `tt_ccl=get_tt_ccl(device)` "
+            f"(import from `models.common.modules.tt_ccl`), "
+            f"`weight_cache_path=Path(args.weight_cache_path)`, "
+            f"`transformation_mats=args.get_rot_mat()` or "
+            f"`transformation_mats={{}}` for stubs that don't yet need RoPE, "
+            f"`configuration=args` (the ModelArgs instance), "
+            f"`model_config=args.model_config`. Read the canonical's full "
+            f"`def __init__` signature (grep `^    def __init__` in the "
+            f"`tt_reuse_target` file) before guessing",
         )
     return (
         f"failure class={failure_class}; see traceback",
@@ -5082,6 +5446,7 @@ def _write_attempt_log(
     traceback_excerpt: str,
     diagnosis_override: Optional[str] = None,
     next_step_override: Optional[str] = None,
+    agent_result_text: Optional[str] = None,
 ) -> None:
     try:
         ops_used = _extract_ops_used(stub_path)
@@ -5111,6 +5476,7 @@ def _write_attempt_log(
             "next_step": next_step,
             "failing_line": failing_line,
             "failing_line_excerpt": failing_line_excerpt,
+            "agent_result_text": (agent_result_text or "").strip()[:1500],
         }
         log_dir = _attempt_log_dir(demo_dir, component_name)
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -5148,7 +5514,8 @@ def _format_attempt_history_block(history: List[Dict[str, object]]) -> str:
         fc = entry.get("failure_class", "?")
         diag = entry.get("diagnosis", "(no diagnosis)")
         nxt = entry.get("next_step", "")
-        lines.append(
+        agent_said = str(entry.get("agent_result_text") or "").strip()
+        block = (
             f"  Iter {it} (model={mdl}, exemplar={ex}):\n"
             f"    ttnn ops used   : {ops}\n"
             f"    sharding tried  : {shard}\n"
@@ -5156,6 +5523,10 @@ def _format_attempt_history_block(history: List[Dict[str, object]]) -> str:
             f"    diagnosis       : {diag}\n"
             f"    next step hint  : {nxt}"
         )
+        if agent_said:
+            preview = agent_said[:400].replace("\n", " ")
+            block += f"\n    prior agent said: {preview}{'…' if len(agent_said) > 400 else ''}"
+        lines.append(block)
     if history:
         last = history[-1]
         prior_ops = sorted({op for h in history for op in (h.get("ops_used") or [])})
@@ -6258,12 +6629,34 @@ def _refinement_directive(tt_reuse_target: str, pcc_value: Optional[float] = Non
         "  wrong constructor args, missing tt_ccl / transformation_mats /\n"
         "  configuration, wrong dtype, etc.).\n"
         "\n"
-        "YOUR JOB — make a MINIMAL EDIT to fix the wiring:\n"
-        "  1. Look at the stub's `build(device, torch_module)` function.\n"
-        "  2. Find which arg the canonical constructor needs that's missing\n"
-        "     or wrong, or which ModelArgs config value needs Qwen2-specific\n"
-        "     override.\n"
-        "  3. Make a tiny edit — usually 1-3 lines. The diff should be small.\n"
+        "INVESTIGATION ORDER — DO NOT read the canonical file end-to-end:\n"
+        f"  1. FIRST, grep the canonical file for its `__init__` signature\n"
+        f"     so you know what kwargs it accepts:\n"
+        f'        Bash: `grep -nE "^    def __init__" {tt_reuse_target}`\n'
+        f"     Read the matched lines + the next ~20 lines (the args + their\n"
+        f"     immediate usage). DO NOT read the whole file.\n"
+        f"  2. If the failure is a `KeyError` on a state_dict key, grep for\n"
+        f"     where the canonical reads state_dict:\n"
+        f'        Bash: `grep -nE "state_dict\\\\[" {tt_reuse_target}`\n'
+        f"     This reveals the EXACT key format the canonical expects\n"
+        f"     (typically Llama/Meta-style: `layers.N.<module>.wq.weight`,\n"
+        f"     `feed_forward.w1.weight`, etc.). HF naming (`q_proj`,\n"
+        f"     `gate_proj`, etc.) must be REMAPPED before passing as\n"
+        f"     `state_dict=` — see `models/tt_transformers/tt/load_checkpoints.py`\n"
+        f"     for `convert_hf_to_meta(...)`.\n"
+        f"  3. If the failure is `unexpected keyword argument 'X'`, the\n"
+        f"     canonical does NOT accept `X` — remove it from the call.\n"
+        f"     Some components (e.g. `RotaryEmbedding`) take a totally\n"
+        f"     different signature `(dim, max_position_embeddings, base,\n"
+        f"     device)` with no `mesh_device`/`args`/`state_dict` at all.\n"
+        f"  4. ONLY THEN, write the fix to `_synth_responses/<target>.py`.\n"
+        f"     Edits should be 1-15 lines.\n"
+        "\n"
+        "WRITE-FIRST DISCIPLINE: spending more than ~2 minutes reading\n"
+        "before writing means you are exploring instead of refining. If\n"
+        "the prior-attempts log includes a `prior agent said:` field, that\n"
+        "agent's diff already partially fixed the wiring — DO NOT redo it,\n"
+        "build on it.\n"
         "\n"
         "ABSOLUTELY FORBIDDEN:\n"
         f"  - Do NOT write a new class to replace `{tt_reuse_target}`'s impl.\n"
@@ -6865,6 +7258,16 @@ def _capture_worktree_deltas_as_overlay(worktree_path, model_id):
 
 
 def cmd_up(args) -> int:
+    # Resolve local-weights handling BEFORE any subprocess is spawned.
+    # Sets HF_HOME / HF_HUB_OFFLINE in os.environ when the user passed
+    # --local-dir or --offline-hf; prints an info line when cached
+    # weights are auto-detected. Inheriting via os.environ means every
+    # pytest subprocess (_run_focused_pytest, _run_prepare_capture,
+    # _emit_and_verify_runnable_demo) sees the resolved settings
+    # without each call site needing to know.
+    _model_id = getattr(args, "model_id", "") or ""
+    if _model_id:
+        _apply_local_weights_env(args, _model_id)
     if not getattr(args, "isolation", "none") == "worktree":
         return _cmd_up_core(args)
     return _cmd_up_isolated(args)
@@ -7430,6 +7833,13 @@ def _cmd_up_core(args) -> int:
             )
             _rc_supp = 2
 
+        # HF weight failures are environmental — bail with a clear
+        # remediation message BEFORE the runtime-repair / escalation
+        # logic kicks in. Saves the user's iter budget and gives
+        # actionable next steps. Returns silently when not matched.
+        if _auto_mode and _captured_output:
+            _exit_if_hf_weight_failure(MODEL, _captured_output)
+
         if _rc_supp != 0 and _auto_mode and _captured_output:
             _rc_supp = _runtime_repair_loop(
                 model_id=MODEL,
@@ -7445,42 +7855,15 @@ def _cmd_up_core(args) -> int:
                 model_heavy=_repair_model_heavy,
             )
 
-        if _rc_supp == 0 and _auto_mode and getattr(args, "strict_pcc", True):
-            from .correctness import run_gate as _correctness_run_gate
-
-            _gate_category = "LLM"
-            try:
-                from .probe import probe_model as _probe_for_gate
-
-                _gp = _probe_for_gate(MODEL)
-                _gate_category = getattr(_gp, "category", None) or "LLM"
-                if _gate_category == "Unknown":
-                    _gate_category = "LLM"
-            except Exception:
-                pass
-            _pcc_result, _pcc_prompt = _correctness_run_gate(
-                category=_gate_category,
-                model_id=MODEL,
-                captured_output=_captured_output,
-                args=args,
-                engine=getattr(args, "pcc_engine", "legacy"),
-                compare_tokens=getattr(args, "strict_pcc_tokens", None),
-                instruct=not getattr(args, "no_instruct", False),
-            )
+        if _rc_supp == 0:
+            # Strict end-to-end PCC gate. _run_strict_pcc_gate returns
+            # (None, None) when not in auto-mode or strict_pcc is off,
+            # in which case we preserve legacy behavior (skip gate).
+            # When the gate runs and fails, escalate to Path A via
+            # _maybe_escalate_pcc_fail — the per-component iterate
+            # flow that brought up Qwen.
+            _pcc_result, _pcc_prompt = _run_strict_pcc_gate(args, MODEL, _captured_output, _auto_mode)
             if _pcc_result is not None and not _pcc_result.ok:
-                # 2026-05-31 REWIRE: removed _pcc_repair_loop. The
-                # whole-model retry loop was the wrong abstraction —
-                # for ALREADY-SUPPORTED models that fail PCC, the
-                # right path is to escalate directly to Path 1's
-                # per-component scaffold + iterate flow (SAM2 pattern).
-                # _maybe_escalate_pcc_fail (with the short-circuit
-                # added today) does exactly this: detects "exact"
-                # backend match and re-enters cmd_up with
-                # _escalated_already=True, which bypasses the
-                # ALREADY-SUPPORTED detection so cmd_up takes the
-                # scaffold path. The brain's full per-component
-                # primitives then handle Qwen the same way SAM2 was
-                # brought up.
                 _esc_rc = _maybe_escalate_pcc_fail(args, MODEL, _PCC_FAIL_RC, _auto_mode)
                 _rc_supp = _esc_rc if _esc_rc is not None else _PCC_FAIL_RC
         if _rc_supp == 0:
@@ -7758,6 +8141,12 @@ def _cmd_up_core(args) -> int:
                 file=sys.stderr,
             )
             _rc_cold = 2
+
+        # HF weight failure short-circuit (cold-start variant). See
+        # the equivalent guard at the Path 2 call site above.
+        if _auto_mode and _captured_output:
+            _exit_if_hf_weight_failure(MODEL, _captured_output)
+
         if _rc_cold != 0 and _auto_mode and _captured_output:
             _rc_cold = _runtime_repair_loop(
                 model_id=MODEL,
@@ -7773,34 +8162,12 @@ def _cmd_up_core(args) -> int:
                 model_heavy=_repair_model_heavy,
             )
 
-        if _rc_cold == 0 and _auto_mode and getattr(args, "strict_pcc", True):
-            from .correctness import run_gate as _correctness_run_gate
-
-            _gate_category = "LLM"
-            try:
-                from .probe import probe_model as _probe_for_gate
-
-                _gp = _probe_for_gate(MODEL)
-                _gate_category = getattr(_gp, "category", None) or "LLM"
-                if _gate_category == "Unknown":
-                    _gate_category = "LLM"
-            except Exception:
-                pass
-            _pcc_result, _pcc_prompt = _correctness_run_gate(
-                category=_gate_category,
-                model_id=MODEL,
-                captured_output=_captured_output,
-                args=args,
-                engine=getattr(args, "pcc_engine", "legacy"),
-                compare_tokens=getattr(args, "strict_pcc_tokens", None),
-                instruct=not getattr(args, "no_instruct", False),
-            )
+        if _rc_cold == 0:
+            # Strict end-to-end PCC gate (cold-start variant). Same
+            # contract as the ALREADY-SUPPORTED site above — escalate
+            # to Path A on fail, preserve legacy non-auto bypass.
+            _pcc_result, _pcc_prompt = _run_strict_pcc_gate(args, MODEL, _captured_output, _auto_mode)
             if _pcc_result is not None and not _pcc_result.ok:
-                # 2026-05-31 REWIRE: replaced _pcc_repair_loop with
-                # direct escalation. Same rationale as the ALREADY-
-                # SUPPORTED call site above — the whole-model retry
-                # loop was the wrong abstraction. Escalation routes
-                # through Path 1 (scaffold + per-component iterate).
                 _esc_rc_cold = _maybe_escalate_pcc_fail(args, MODEL, _PCC_FAIL_RC, _auto_mode)
                 _rc_cold = _esc_rc_cold if _esc_rc_cold is not None else _PCC_FAIL_RC
         if _rc_cold == 0:
@@ -8504,6 +8871,73 @@ def _cmd_up_core(args) -> int:
                 "so the user doesn't trust an unrunnable demo."
             )
 
+        # Gap 4 (2026-06-02 audit): per-component PCC + demo-runnable
+        # are necessary but not sufficient. Spec: SUCCESS requires the
+        # end-to-end strict PCC gate to also fire AND pass (logit-PCC
+        # ≥0.99 vs HF reference on the stitched pipeline). If the gate
+        # can't fire (e.g. logits not captured) the verdict is
+        # UNVERIFIED — explicitly NOT a SUCCESS, but not a FAIL either.
+        # Run prepare --execute to capture demo output, gate it via the
+        # shared helper, then route the result into the outcome label.
+        _path_a_outcome: Optional[str] = None
+        if _rc_loop == 0 and getattr(args, "auto", False) and getattr(args, "strict_pcc", True):
+            try:
+                _path_a_prepare_argv = argparse.Namespace(
+                    model_id=MODEL,
+                    box=BOX,
+                    format="text",
+                    write_script=None,
+                    execute=True,
+                    strict=False,
+                    download_first=False,
+                )
+                _path_a_rc, _path_a_captured = _run_prepare_capture(_path_a_prepare_argv)
+                # Same environmental short-circuit as the Path 2 / B sites.
+                # Per-component PCC passed, so weight failures would be a
+                # surprise — but if HF auth/network broke between the
+                # iterate loop and this verification, bail cleanly rather
+                # than mis-stamp UNVERIFIED for the wrong reason.
+                if _path_a_captured:
+                    _exit_if_hf_weight_failure(MODEL, _path_a_captured)
+                if _path_a_rc != 0 or not _path_a_captured:
+                    _path_a_outcome = OUTCOME_UNVERIFIED
+                    print(
+                        f"  [Path A] post-success demo run rc={_path_a_rc} or "
+                        f"empty capture — strict end-to-end PCC gate did NOT "
+                        f"fire. Per-component PCC passed but end-to-end "
+                        f"numerical correctness is not confirmed."
+                    )
+                else:
+                    _pcc_a, _pcc_a_prompt = _run_strict_pcc_gate(args, MODEL, _path_a_captured, auto_mode=True)
+                    if _pcc_a is None:
+                        _path_a_outcome = OUTCOME_UNVERIFIED
+                        print(
+                            "  [Path A] strict end-to-end PCC gate could not "
+                            "produce a verdict (probe/extract returned None). "
+                            "Stamping UNVERIFIED."
+                        )
+                    elif not _pcc_a.ok:
+                        _rc_loop = _PCC_FAIL_RC
+                        print(
+                            f"  [Path A] strict end-to-end PCC gate FAILED "
+                            f"after per-component graduation:\n    "
+                            f"{_pcc_a.reason}\n  Components individually "
+                            f"passed PCC≥0.99 but the stitched pipeline "
+                            f"diverged from HF reference."
+                        )
+            except Exception as _gate_exc:
+                # Defensive: post-success gate runs are diagnostic, not
+                # gating in the legacy sense. A crash here shouldn't
+                # erase the per-component graduation work, but we
+                # should NOT silently claim full SUCCESS either.
+                print(
+                    f"  [Path A] strict end-to-end gate run raised "
+                    f"{type(_gate_exc).__name__}: {_gate_exc}. "
+                    f"Stamping UNVERIFIED (per-component PCC still passed).",
+                    file=sys.stderr,
+                )
+                _path_a_outcome = OUTCOME_UNVERIFIED
+
         if _rc_loop == 0:
             _register_bringup_success(
                 MODEL,
@@ -8516,11 +8950,17 @@ def _cmd_up_core(args) -> int:
             _success_extra = []
             if _demo_emit_declined:
                 _success_extra.append(f"brain G8 declined to emit demo: {_demo_emit_decline_reason}")
+            if _path_a_outcome == OUTCOME_UNVERIFIED:
+                _success_extra.append(
+                    "end-to-end strict PCC gate did not produce a verdict — "
+                    "re-run with logits capture enabled to confirm numerical correctness"
+                )
             _final_outcome_banner(
                 rc=0,
                 model_id=MODEL,
                 path_label="A. Template + iterate (all components graduated to native TTNN)",
                 extra=_success_extra or None,
+                outcome=_path_a_outcome,
             )
         else:
             _final_outcome_banner(
@@ -8706,6 +9146,29 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--download-first",
         action="store_true",
         help="pre-download HuggingFace weights before executing (pairs with --execute)",
+    )
+    pup.add_argument(
+        "--local-dir",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Directory containing locally-downloaded HuggingFace weights. "
+            "When set, the tool exports HF_HOME=PATH and HF_HUB_OFFLINE=1 for "
+            "every subprocess pytest run, so HF loads from the local directory "
+            "and never attempts a network call. Use after `huggingface-cli "
+            "download <model_id> --local-dir <path>` for weights in a "
+            "non-standard location. For the default cache (~/.cache/huggingface/hub/), "
+            "no flag is needed — HF will pick it up automatically."
+        ),
+    )
+    pup.add_argument(
+        "--offline-hf",
+        action="store_true",
+        help=(
+            "Force HuggingFace offline mode (HF_HUB_OFFLINE=1) without changing "
+            "HF_HOME. Useful for reruns where the weights are already in the "
+            "default cache and you want to guarantee no network attempt is made."
+        ),
     )
     pup.add_argument(
         "--strict",

@@ -174,13 +174,21 @@ class TextComparator(Comparator):
                 "must carry a prompt; check extract()."
             )
 
-        want_logits = getattr(evidence, "_tt_logits_path", None) is not None
+        # Always request step-0 logits from HF. The strict logit-PCC
+        # gate in compare() requires them, and a missing-logits result
+        # now fail-closes (UNVERIFIED) so SUCCESS can't be stamped
+        # without numerical comparison. Previously this was gated on
+        # whether TT-side had captured (which cascaded the env-var
+        # opt-in problem in instrumentation.py:_install_logit_dump);
+        # decoupling them means each side captures independently and
+        # the gate is the single source of truth for whether logits
+        # are usable.
         return generate_hf_reference(
             model_id,
             prompt,
             max_new_tokens=DEFAULT_COMPARE_TOKENS,
             instruct=True,
-            return_logits=want_logits,
+            return_logits=True,
         )
 
     def compare(
@@ -215,18 +223,52 @@ class TextComparator(Comparator):
             compare_tokens=DEFAULT_COMPARE_TOKENS,
         )
 
+        # Strict logit-PCC gate — MUST always fire. A SUCCESS verdict
+        # requires both gates (token-overlap heuristic AND numerical
+        # PCC >= 0.99) to fire AND pass. If logits are missing on
+        # either side, or the comparison cannot be computed, that is
+        # a verification gap, NOT a free pass — flip result.ok to
+        # False so _maybe_escalate_pcc_fail routes the run to Path A's
+        # per-component iterate loop. Fail-closed, never fail-open.
         tt_logits_path = getattr(evidence, "_tt_logits_path", None)
         hf_logits = getattr(reference, "step0_logits", None)
-        if tt_logits_path and hf_logits is not None:
+        if not tt_logits_path:
+            result.ok = False
+            result.reason = (
+                f"LOGIT-PCC UNVERIFIED: TT-side step-0 logits not captured "
+                f"(no `==LOGITS PATH:` marker emitted by the demo). The "
+                f"strict gate requires both heuristic AND numerical "
+                f"PCC>={_LOGIT_PCC_MIN:.2f}; token-overlap alone is not a "
+                f"SUCCESS criterion. Token-overlap verdict (informational): "
+                f"{result.reason}"
+            )
+        elif hf_logits is None:
+            result.ok = False
+            result.reason = (
+                f"LOGIT-PCC UNVERIFIED: HF reference did not return step-0 "
+                f"logits (return_logits path missing or HF generation failed). "
+                f"The strict gate requires both heuristic AND numerical "
+                f"PCC>={_LOGIT_PCC_MIN:.2f}. Token-overlap verdict "
+                f"(informational): {result.reason}"
+            )
+        else:
             pcc = _compute_step0_logit_pcc(tt_logits_path, hf_logits)
             if pcc is None:
-                result.reason = f"{result.reason} [logit-PCC: SKIPPED -- could not " f"compute from {tt_logits_path}]"
-            elif pcc < _LOGIT_PCC_MIN and result.ok:
+                result.ok = False
+                result.reason = (
+                    f"LOGIT-PCC UNVERIFIED: could not compute PCC from "
+                    f"{tt_logits_path} (file missing, shape mismatch, or "
+                    f"numpy/torch unavailable). The strict gate requires a "
+                    f"numerical PCC>={_LOGIT_PCC_MIN:.2f}; treating as "
+                    f"unverified rather than pass. Token-overlap verdict "
+                    f"(informational): {result.reason}"
+                )
+            elif pcc < _LOGIT_PCC_MIN:
                 result.ok = False
                 result.reason = (
                     f"LOGIT-PCC FAIL: step-0 PCC={pcc:.4f} < "
-                    f"{_LOGIT_PCC_MIN:.2f} (token-overlap would have "
-                    f"passed: {result.reason})"
+                    f"{_LOGIT_PCC_MIN:.2f} (token-overlap verdict, "
+                    f"informational: {result.reason})"
                 )
             else:
                 result.reason = f"{result.reason} [logit-PCC: {pcc:.4f}]"

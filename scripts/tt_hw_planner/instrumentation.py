@@ -148,8 +148,30 @@ def _install_trace_disable() -> None:
     _log("test_demo_text wrapped to force enable_trace=False")
 
 
+# The step-0 logit dump is REQUIRED for the strict end-to-end PCC gate
+# in correctness/text.py to fire. Default-on: capture always installs.
+# Disabling is opt-OUT only — set the env var to one of the falsy values
+# below (case-insensitive) to skip the patch. Disabling means the strict
+# gate will fail-closed (UNVERIFIED) because it has no logits to compare.
+LOGITS_DUMP_ENV_VAR = "TT_HW_PLANNER_DUMP_LOGITS"
+_LOGITS_DUMP_DISABLE_VALUES = frozenset({"0", "false", "no", "off"})
+
+
+def _should_install_logit_dump() -> bool:
+    """Pure check: should the step-0 logit dump patch fire?
+
+    Default-on. Returns False iff the env var ``TT_HW_PLANNER_DUMP_LOGITS``
+    is explicitly set to a falsy value (0/false/no/off, case-insensitive).
+
+    Pure (no side effects) so the unit tests can pin the decision logic
+    without needing the ``ttnn``/``Generator`` import chain.
+    """
+    val = os.environ.get(LOGITS_DUMP_ENV_VAR, "").strip().lower()
+    return val not in _LOGITS_DUMP_DISABLE_VALUES
+
+
 def _install_logit_dump() -> None:
-    if not os.environ.get("TT_HW_PLANNER_DUMP_LOGITS"):
+    if not _should_install_logit_dump():
         return
     try:
         from models.tt_transformers.tt.generator import Generator
