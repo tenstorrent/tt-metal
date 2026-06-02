@@ -18,6 +18,21 @@ For each open issue labelled `CI auto triage` in `tenstorrent/tt-metal`:
 
 ---
 
+## Fundamental Principle — Issue Body Accuracy
+
+While an issue is open, the following fields **must always reflect the current failure on `main`** (or the last known failure before a disable PR landed):
+
+- **Title** — must name the current failing test or subsystem
+- **Job name** — in the `**Job:**` line, `### Affected jobs`, and `Auto-triage-job-name` metadata
+- **Error excerpt** — must show the current error, not the original one if it has changed
+- **Failing test path(s)** — must match the currently failing test(s)
+- **Reproduction steps** — must reproduce the current failure
+- **Failing job URLs** — must link to recent failing runs
+
+If none of these can be determined (e.g. the job no longer exists and no recent run data is available), **close the issue** rather than leaving it open with stale information.
+
+---
+
 ## Step 0 — Load All Issues
 
 Fetch all open issues with label `CI auto triage`:
@@ -112,7 +127,7 @@ curl -s -H "Authorization: token $GITHUB_TOKEN" \
 - Found (even in a comment) → `DISABLED`
 - Not found anywhere → `REMOVED`
 
-**DISABLED — additional check (job renamed vs. truly gated):** When a job is classified `DISABLED`, also search recent run job lists for any job whose name contains the key model/subsystem words from `job_name` (e.g. "GPT-OSS 120B", "Wan2.2", "Gemma-3"). If a closely-named job is found and running, the job was **renamed**, not disabled. Treat it as `STILL_FAILING` and process normally with the renamed job's data.
+**DISABLED — additional check (job renamed vs. truly gated):** When a job is classified `DISABLED`, also search recent run job lists for any job whose name contains the key model/subsystem words from `job_name` (e.g. "GPT-OSS 120B", "Wan2.2", "Gemma-3"). If a closely-named job is found and running, the job was **renamed**, not disabled. Treat it as `STILL_FAILING` and process normally with the renamed job's data. Additionally, **update the issue body** to replace all occurrences of the old job name with the new name, and update the `Auto-triage-job-name` metadata field to the new job name.
 
 **For `DISABLED`, `SKIPPED`, `UNKNOWN`:** Keep open. If the issue has not been updated in more than 14 days, post a comment: `"Job appears to be conditionally gated or disabled. No new run data available as of YYYY-MM-DD. Manual review may be needed."` so the issue does not go silently stale.
 
@@ -232,7 +247,7 @@ Issue still relevant. Last updated: YYYY-MM-DD HH:MM UTC.
 
 The issue body must always reflect the **current** error, not the original one. When the error signature has changed:
 
-1. **Edit the issue body** to replace the "Error excerpt", "Error signature", and "Notes" fields with the current error details. Also update the "Failing job URLs" section with the new failing run URLs.
+1. **Edit the issue body** to replace all stale fields with current data: "Error excerpt", "Error signature", "Notes", title, job name in the `**Job:**` line, `Auto-triage-job-name` metadata, "Failing test path(s)", "Reproduction steps", and the "Failing job URLs" section.
 
 2. **Post a comment** recording what the previous error was:
 
@@ -294,6 +309,7 @@ For each approved URL update (from Step 5):
 - **Never guess fix PRs.** Only provide a URL if you found it literally in the log evidence.
 - **Respect `do-not-auto-close`.** If the label is present, skip the issue entirely.
 - **Minimum data.** If fewer than `threshold` runs have occurred since the issue was last modified, skip it.
+- **Keep the issue body current.** Stale job names, old test paths, and outdated error excerpts are not acceptable in an open issue. When any of these have changed, update them before leaving the issue open.
 
 ---
 
@@ -303,3 +319,4 @@ For each approved URL update (from Step 5):
 - With many issues × many runs × log fetches, this can get tight. Add `sleep 0.2` between job-list calls.
 - Log fetches are the most expensive. Fetch the last 300 lines only when possible by using byte-range or grepping the first error pattern after download.
 - If rate limited (HTTP 403/429), stop and report how far you got.
+
