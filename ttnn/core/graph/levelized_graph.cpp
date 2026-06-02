@@ -395,6 +395,38 @@ void LevelizedGraph::populate_output_shape(const nlohmann::json& trace) {
             });
 
         vertex.output_shape.insert(vertex.output_shape.end(), shapes.begin(), shapes.end());
+
+        // Composite scope vertices (e.g. TT_OP_SCOPE wrappers like "ttnn::add") close
+        // their own function_end with no output tensor, so the loop above yields nothing.
+        // In that case inherit the output shape(s) from the operation(s) nested inside the
+        // scope: tensors produced within (function_start, function_end) that are not consumed
+        // by another op in the same scope (i.e. the tensors that escape the scope as its result).
+        if (vertex.output_shape.empty()) {
+            std::vector<int> escaping_tensors;
+            for (const auto& [tensor_counter, producer_end] : tensor_to_producer_end) {
+                if (producer_end <= function_start_counter || producer_end >= function_end_counter) {
+                    continue;  // not produced inside this scope
+                }
+                const auto& tensor_node = trace[tensor_counter];
+                if (!tensor_node.contains(kParams) || !tensor_node[kParams].contains(kShape)) {
+                    continue;
+                }
+                const bool consumed_inside = std::ranges::any_of(
+                    get_valid_connections(tensor_node, trace),
+                    [&](int conn) { return conn > function_start_counter && conn < function_end_counter; });
+                if (!consumed_inside) {
+                    escaping_tensors.push_back(tensor_counter);
+                }
+            }
+            // Deterministic order (tensor_to_producer_end is unordered).
+            std::ranges::sort(escaping_tensors);
+            for (int tensor_counter : escaping_tensors) {
+                auto shape_str = trace[tensor_counter][kParams][kShape].template get<std::string>();
+                if (std::ranges::find(vertex.output_shape, shape_str) == vertex.output_shape.end()) {
+                    vertex.output_shape.push_back(shape_str);
+                }
+            }
+        }
     });
 }
 

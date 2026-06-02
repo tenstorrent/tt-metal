@@ -5,6 +5,7 @@
 #include "ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/deepseek_moe_gate.hpp"
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/device/deepseek_moe_gate_device_operation.hpp"
 
 namespace ttnn::experimental::deepseek::moe {
@@ -18,6 +19,7 @@ std::tuple<tt::tt_metal::Tensor, tt::tt_metal::Tensor> deepseek_moe_gate(
     float eps,
     float scaling_factor,
     bool enable_sigmoid) {
+    TT_OP_SCOPE("ttnn::experimental::deepseek::moe::deepseek_moe_gate");
     auto [operation_attributes, tensors_args] =
         ttnn::operations::experimental::deepseek::moe::deepseek_moe_gate::DeepseekMoeGateDeviceOperation::invoke(
             input_tensor,

@@ -12,6 +12,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/graph/composite_trace.hpp"
 
 namespace ttnn::experimental::reduction {
 
@@ -27,6 +28,7 @@ std::vector<ttnn::Tensor> deepseek_moe_fast_reduce_nc_fused(
     uint32_t num_shared_experts,
     float shared_expert_scale,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    TT_OP_SCOPE("ttnn::experimental::deepseek_moe_fast_reduce_nc_fused");
     if (!scores_tensor.has_value()) {
         // Fallback path: expert_indices / expert_mapping / cluster_axis are unused without scores.
         return deepseek_moe_fast_reduce_nc(

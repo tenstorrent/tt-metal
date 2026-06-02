@@ -209,7 +209,7 @@ Tensor where(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    TT_OP_SCOPE("ttnn::where");
+    TT_OP_SCOPE("ttnn::where", predicate);
     return std::visit(
         [&](const auto& true_val, const auto& false_val) {
             return invoke_impl(predicate, true_val, false_val, memory_config, output, sub_core_grids);
@@ -227,7 +227,7 @@ Tensor where(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    TT_OP_SCOPE("ttnn::where");
+    TT_OP_SCOPE("ttnn::where", predicate);
     return ttnn::where_tss(predicate, value_true, value_false, memory_config, output, sub_core_grids);
 }
 
@@ -253,7 +253,7 @@ Tensor addcmul(
     operations::ternary::ScalarVariant value,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    TT_OP_SCOPE("ttnn::addcmul");
+    TT_OP_SCOPE("ttnn::addcmul", input_a, input_b, input_c);
     log_debug(tt::LogOp, "Addcmul LLK - TTT");
 
     bool is_supported_dtype =
@@ -308,7 +308,7 @@ Tensor addcdiv(
     float value,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    TT_OP_SCOPE("ttnn::addcdiv");
+    TT_OP_SCOPE("ttnn::addcdiv", input_a, input_b, input_c);
     log_debug(tt::LogOp, "Addcdiv LLK - TTT");
 
     // Only TTT variant is supported for addcdiv
@@ -347,7 +347,7 @@ Tensor lerp(
     float weight,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    TT_OP_SCOPE("ttnn::lerp");
+    TT_OP_SCOPE("ttnn::lerp", input, end);
     auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape());
 
     bool is_any_input_block_format = is_block_float(input.dtype()) || is_block_float(end.dtype());
@@ -379,7 +379,7 @@ Tensor lerp(
     const Tensor& weight,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
-    TT_OP_SCOPE("ttnn::lerp");
+    TT_OP_SCOPE("ttnn::lerp", input, end, weight);
     auto broadcast_type = get_broadcast_type(input.logical_shape(), end.logical_shape(), weight.logical_shape());
 
     bool is_any_input_block_format =
@@ -413,6 +413,7 @@ Tensor snake_beta(
     const Tensor& beta,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    TT_OP_SCOPE("ttnn::snake_beta", input_tensor, alpha, beta);
     auto lift_to_rank2 = [](const Tensor& t) { return t.logical_shape().rank() < 2 ? ttnn::unsqueeze(t, 0) : t; };
     return ttnn::prim::ternary(
         TernaryOpType::SNAKE_BETA,

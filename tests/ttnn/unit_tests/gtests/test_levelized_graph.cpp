@@ -583,11 +583,10 @@ TEST_F(TestLevelizedGraphCapture, JoinTest) {
     const auto& vertex_0 = *tensor_vertices[0];
     const auto& vertex_1 = *tensor_vertices[1];
 
-    // Find the add operation (should be a device operation now)
-    auto add_op_it = std::ranges::find_if(levelized_graph.vertices(), [](const auto& v) {
-        return v.name.find("BinaryNg") != std::string::npos || v.name.find("Binary") != std::string::npos;
-    });
-    EXPECT_NE(add_op_it, levelized_graph.vertices().end());
+    // Find the add operation (TT_OP_SCOPE outer scope at level 1)
+    auto add_op_it =
+        std::ranges::find_if(levelized_graph.vertices(), [](const auto& v) { return v.name == "ttnn::add"; });
+    ASSERT_NE(add_op_it, levelized_graph.vertices().end());
     const auto& vertex_2 = *add_op_it;
 
     // Basic structure checks - both tensors should join into the operation
@@ -660,23 +659,21 @@ TEST_F(TestLevelizedGraphCapture, OrderOfArgs) {
     const auto& tensor_a_vertex = *tensor_vertices[0];
     const auto& tensor_b_vertex = *tensor_vertices[1];
 
-    // Find subtract operations (should be BinaryNgDeviceOperation now)
+    // Find subtract operations (TT_OP_SCOPE outer scopes at level 1)
     auto binary_ops = std::vector<decltype(levelized_graph.vertices().begin())>();
     for (auto it = levelized_graph.vertices().begin(); it != levelized_graph.vertices().end(); ++it) {
-        if (it->name.find("BinaryNg") != std::string::npos || it->name.find("Binary") != std::string::npos) {
+        if (it->name == "ttnn::subtract") {
             binary_ops.push_back(it);
         }
     }
-    EXPECT_GE(binary_ops.size(), 2);  // At least two subtract operations
+    ASSERT_GE(binary_ops.size(), 2);  // At least two subtract operations
     const auto& subtract_ab = *binary_ops[0];
     const auto& subtract_ba = *binary_ops[1];
 
     EXPECT_TRUE(tensor_a_vertex.name.find("tensor") != std::string::npos);
     EXPECT_TRUE(tensor_b_vertex.name.find("tensor") != std::string::npos);
-    EXPECT_TRUE(
-        subtract_ab.name.find("BinaryNg") != std::string::npos || subtract_ab.name.find("Binary") != std::string::npos);
-    EXPECT_TRUE(
-        subtract_ba.name.find("BinaryNg") != std::string::npos || subtract_ba.name.find("Binary") != std::string::npos);
+    EXPECT_EQ(subtract_ab.name, "ttnn::subtract");
+    EXPECT_EQ(subtract_ba.name, "ttnn::subtract");
 
     EXPECT_TRUE(tensor_a_vertex.in_edges.empty());
     EXPECT_TRUE(tensor_b_vertex.in_edges.empty());
@@ -750,10 +747,10 @@ TEST_F(TestLevelizedGraphCapture, OrderOfArgsIntermediateTensorTest) {
     EXPECT_TRUE(std::ranges::all_of(
         levelized_graph.vertices(), [&](const auto& vertex) { return vertex.stacking_level == 1; }));
 
-    // Find binary operations (add and subtract are both BinaryNgDeviceOperation now)
+    // Find binary operations (add and subtract TT_OP_SCOPE outer scopes at level 1)
     auto binary_ops = std::vector<decltype(levelized_graph.vertices().begin())>();
     for (auto it = levelized_graph.vertices().begin(); it != levelized_graph.vertices().end(); ++it) {
-        if (it->name.find("BinaryNg") != std::string::npos || it->name.find("Binary") != std::string::npos) {
+        if (it->name == "ttnn::add" || it->name == "ttnn::subtract") {
             binary_ops.push_back(it);
         }
     }
@@ -847,15 +844,14 @@ TEST_F(TestLevelizedGraphCapture, SameTensorMultipleTimes) {
     EXPECT_NE(tensor_it, levelized_graph.vertices().end());
     const auto& tensor_a_vertex = *tensor_it;
 
-    // Find add operation (should be BinaryNgDeviceOperation now)
-    auto add_op_it = std::ranges::find_if(levelized_graph.vertices(), [](const auto& v) {
-        return v.name.find("BinaryNg") != std::string::npos || v.name.find("Binary") != std::string::npos;
-    });
-    EXPECT_NE(add_op_it, levelized_graph.vertices().end());
+    // Find add operation (TT_OP_SCOPE outer scope at level 1)
+    auto add_op_it =
+        std::ranges::find_if(levelized_graph.vertices(), [](const auto& v) { return v.name == "ttnn::add"; });
+    ASSERT_NE(add_op_it, levelized_graph.vertices().end());
     const auto& add_aa = *add_op_it;
 
     EXPECT_TRUE(tensor_a_vertex.name.find("tensor") != std::string::npos);
-    EXPECT_TRUE(add_aa.name.find("BinaryNg") != std::string::npos || add_aa.name.find("Binary") != std::string::npos);
+    EXPECT_EQ(add_aa.name, "ttnn::add");
 
     EXPECT_TRUE(tensor_a_vertex.in_edges.empty());
     EXPECT_GE(tensor_a_vertex.out_edges.size(), 1);
@@ -933,7 +929,7 @@ TEST_F(TestLevelizedGraphCapture, TernaryOpDifferentOrder) {
             ternary_ops.push_back(it);
         }
     }
-    EXPECT_GE(ternary_ops.size(), 2);
+    ASSERT_GE(ternary_ops.size(), 2);
     const auto& addcmul_abc = *ternary_ops[0];
     const auto& addcmul_cba = *ternary_ops[1];
 
@@ -1032,7 +1028,7 @@ TEST_F(TestLevelizedGraphCapture, TernaryOpRepeatedTensors) {
             ternary_ops.push_back(it);
         }
     }
-    EXPECT_GE(ternary_ops.size(), 2);
+    ASSERT_GE(ternary_ops.size(), 2);
     const auto& addcmul_aba = *ternary_ops[0];
     const auto& addcmul_baa = *ternary_ops[1];
 
@@ -1141,7 +1137,7 @@ TEST_F(TestLevelizedGraphCapture, MatmulDifferentOrders) {
         // Collect tensor IDs
         std::vector<decltype(tensor_a_vertex.id)> tensor_ids;
         tensor_ids.reserve(tensor_vertices.size());
-for (auto t : tensor_vertices) {
+        for (auto t : tensor_vertices) {
             tensor_ids.push_back(t->id);
         }
         for (auto it = levelized_graph.vertices().begin(); it != levelized_graph.vertices().end(); ++it) {
@@ -1264,9 +1260,10 @@ TEST_F(TestLevelizedGraphCapture, ExtractLevelizedGraphJsonTest) {
     EXPECT_TRUE(levelized_graph_json[0][ttnn::graph::kOutputShape].is_array());
     EXPECT_FALSE(levelized_graph_json[0][ttnn::graph::kOutputShape].empty());
 
-    // Find the BinaryNgDeviceOperation vertex by name (index may vary with dedup removed)
-    auto binary_json_it = std::ranges::find_if(
-        levelized_graph_json, [](const auto& v) { return v[ttnn::graph::kName] == "BinaryNgDeviceOperation"; });
+    // Find the add operation: with TT_OP_SCOPE the level-1 vertex is the "ttnn::add"
+    // outer scope (the BinaryNgDeviceOperation device op is nested at level 2).
+    auto binary_json_it =
+        std::ranges::find_if(levelized_graph_json, [](const auto& v) { return v[ttnn::graph::kName] == "ttnn::add"; });
     ASSERT_NE(binary_json_it, levelized_graph_json.end());
     const auto& binary_json = *binary_json_it;
 
@@ -1291,10 +1288,11 @@ TEST_F(TestLevelizedGraphCapture, ExtractLevelizedGraphJsonTest) {
     EXPECT_TRUE(levelized_graph_json_2.is_array());
     EXPECT_GE(levelized_graph_json_2.size(), 3);  // At least 3 vertices at level 2
 
-    // Verify that BinaryNgDeviceOperation vertex has internals at level 2
+    // Verify that the "ttnn::add" scope vertex has internals at level 2 (it now contains
+    // the nested BinaryNgDeviceOperation device op).
     auto add_vertex_it = std::ranges::find_if(
-        levelized_graph_json_2, [](const auto& v) { return v[ttnn::graph::kName] == "BinaryNgDeviceOperation"; });
-    EXPECT_NE(add_vertex_it, levelized_graph_json_2.end());
+        levelized_graph_json_2, [](const auto& v) { return v[ttnn::graph::kName] == "ttnn::add"; });
+    ASSERT_NE(add_vertex_it, levelized_graph_json_2.end());
     const auto& add_vertex = *add_vertex_it;
     EXPECT_TRUE(add_vertex.contains(ttnn::graph::kInternals));
     EXPECT_TRUE(add_vertex[ttnn::graph::kInternals].is_array());
@@ -1358,19 +1356,16 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddTest) {
         return vertex.output_shape.empty() && vertex.name.find("deallocate") == std::string::npos;
     }));
 
-    // Find the BinaryNgDeviceOperation vertices by name (indices may vary)
-    std::vector<size_t> binary_op_ids;
-    for (size_t i = 0; i < levelized_graph.size(); ++i) {
-        const auto& v = levelized_graph.get_vertex(i);
-        if (v.name == "BinaryNgDeviceOperation") {
-            binary_op_ids.push_back(i);
-        }
-    }
-    ASSERT_EQ(binary_op_ids.size(), 2);
-
-    // The first binary op (in graph order) is multiply, the second is add
-    const auto& v_multiply = levelized_graph.get_vertex(binary_op_ids[0]);
-    const auto& v_add = levelized_graph.get_vertex(binary_op_ids[1]);
+    // multiply has no TT_OP_SCOPE wrapper, so its device op (BinaryNgDeviceOperation)
+    // is the level-1 vertex.  add is wrapped by TT_OP_SCOPE, so its level-1 vertex is
+    // the "ttnn::add" scope (the device op is nested at level 2).
+    auto multiply_it = std::ranges::find_if(
+        levelized_graph.vertices(), [](const auto& v) { return v.name == "BinaryNgDeviceOperation"; });
+    ASSERT_NE(multiply_it, levelized_graph.vertices().end());
+    auto add_it = std::ranges::find_if(levelized_graph.vertices(), [](const auto& v) { return v.name == "ttnn::add"; });
+    ASSERT_NE(add_it, levelized_graph.vertices().end());
+    const auto& v_multiply = *multiply_it;
+    const auto& v_add = *add_it;
 
     // Multiply should have 2 tensor inputs (b and c)
     // Motivated by this issue: https://github.com/tenstorrent/tt-mlir/issues/5929
@@ -1459,8 +1454,7 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddWithCapturedTensorsTest) {
     // Categorize vertices by type
     std::vector<size_t> create_tensor_ids;
     std::vector<size_t> tensor_ids;
-    std::vector<size_t> binary_op_ids;  // All BinaryNgDeviceOperation instances
-    size_t multiply_id = 0, add_id = 0;
+    size_t multiply_id = SIZE_MAX, add_id = SIZE_MAX;
 
     for (size_t i = 0; i < levelized_graph.size(); ++i) {
         const auto& v = levelized_graph.get_vertex(i);
@@ -1469,18 +1463,19 @@ TEST_F(TestLevelizedGraphCapture, MultiplyAndAddWithCapturedTensorsTest) {
         } else if (v.name.find("tensor[") != std::string::npos) {
             tensor_ids.push_back(i);
         } else if (v.name == "BinaryNgDeviceOperation") {
-            // BinaryNgDeviceOperation
-            binary_op_ids.push_back(i);
+            // multiply has no TT_OP_SCOPE wrapper -> device op at level 1
+            multiply_id = i;
+        } else if (v.name == "ttnn::add") {
+            // add is wrapped by TT_OP_SCOPE -> "ttnn::add" scope at level 1
+            add_id = i;
         }
     }
 
     EXPECT_EQ(create_tensor_ids.size(), 3);
     EXPECT_GE(tensor_ids.size(), 3);
-    EXPECT_EQ(binary_op_ids.size(), 2);
+    ASSERT_NE(multiply_id, SIZE_MAX);
+    ASSERT_NE(add_id, SIZE_MAX);
 
-    // The first binary op (in graph order) is multiply, the second is add
-    multiply_id = binary_op_ids[0];
-    add_id = binary_op_ids[1];
     const auto& v_multiply = levelized_graph.get_vertex(multiply_id);
     const auto& v_add = levelized_graph.get_vertex(add_id);
 
@@ -1563,14 +1558,15 @@ TEST_F(TestLevelizedGraphCapture, SubtractArgumentOrderWithCapturedTensorsTest) 
             create_tensor_ids.push_back(i);
         } else if (v.name.find("tensor[") != std::string::npos) {
             tensor_ids.push_back(i);
-        } else if (v.name == "BinaryNgDeviceOperation") {
+        } else if (v.name == "ttnn::subtract") {
+            // subtract is wrapped by TT_OP_SCOPE -> "ttnn::subtract" scope at level 1
             subtract_ids.push_back(i);
         }
     }
 
     EXPECT_EQ(create_tensor_ids.size(), 2);
     EXPECT_GE(tensor_ids.size(), 2);
-    EXPECT_EQ(subtract_ids.size(), 2);
+    ASSERT_EQ(subtract_ids.size(), 2);
 
     const auto& subtract_1 = levelized_graph.get_vertex(subtract_ids[0]);
     const auto& subtract_2 = levelized_graph.get_vertex(subtract_ids[1]);
