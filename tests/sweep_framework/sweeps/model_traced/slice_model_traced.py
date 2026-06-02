@@ -205,9 +205,11 @@ def run(
     else:
         input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=input_a_dtype, layout=input_a_layout)
 
-    # Pre-allocate output tensor if the master config recorded one
+    # Pre-allocate output tensor if the master config recorded one (and the
+    # recorded shape is fully concrete — some traces have a None dim, which
+    # would crash torch.zeros; skip pre-allocation and let the op allocate).
     output_tensor_info = extract_named_tensor_kwargs(kwargs, "output_tensor")
-    if output_tensor_info and output_tensor_info.get("shape"):
+    if output_tensor_info and output_tensor_info.get("shape") and None not in tuple(output_tensor_info["shape"]):
         ot_shape = tuple(output_tensor_info["shape"])
         ot_dtype = output_tensor_info.get("dtype") or input_a_dtype
         if isinstance(ot_dtype, dict):
