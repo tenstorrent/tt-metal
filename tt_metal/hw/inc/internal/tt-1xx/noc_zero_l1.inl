@@ -24,10 +24,10 @@ inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const ds
     uint32_t remaining = size_bytes;
 
     if (remaining >= (uint32_t)MEM_ZEROS_SIZE) {
-        set_async_read_state<VcSelection::DEFAULT, MEM_ZEROS_SIZE>(zeros_ep, MEM_ZEROS_SIZE, zeros_src);
+        set_async_read_state<NocOptions::DEFAULT, MEM_ZEROS_SIZE>(zeros_ep, MEM_ZEROS_SIZE, zeros_src);
 
         do {
-            async_read_with_state<VcSelection::DEFAULT, 1>(zeros_ep, dst, 0, zeros_src, chunk_args);
+            async_read_with_state<NocOptions::DEFAULT, 1>(zeros_ep, dst, 0, zeros_src, chunk_args);
             chunk_args.offset_bytes += MEM_ZEROS_SIZE;
             remaining -= MEM_ZEROS_SIZE;
         } while (remaining >= (uint32_t)MEM_ZEROS_SIZE);
