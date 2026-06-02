@@ -14,7 +14,9 @@ LLK notes reflected in the tolerances:
     forward output is checked to be within one e4m3 ULP of the torch reference, not bit-equal;
   * the scale / divide run in fp32 on the FPU (operands truncated to ~19-bit), so scale and the
     dequant are checked with a small relative tolerance + PCC, not bit-equal.
-Constraints: M % 32 == 0, H % 1024 == 0 (the LLK kernels use 1024-element column-blocks).
+Constraints: M arbitrary (>= 1); H % 128 == 0. M and H need not be multiples of the tile height (32)
+or the 1024-element column-block: the kernels zero-pad the partial last tile-row / column-block and
+write back only the real rows/columns.
 """
 
 import pytest
@@ -31,14 +33,20 @@ E4M3_MAX = 448.0
 
 # (M, H) shapes exercised by most tests.
 # 7168 = 7 * 1024 = EMB_SIZE for both DeepSeek V3 and Kimi K2.6.
+# The unaligned shapes (M not a multiple of 32, H a multiple of 128 but not 1024) exercise the
+# partial-tile-row / partial-column-block padding paths.
 SHAPES = [
+    (1, 1024),  # single row (partial tile-row)
     (32, 1024),  # minimal
     (32, 2048),  # medium width
     (64, 1024),  # taller batch
     (32, 7168),  # DeepSeek V3 / Kimi K2.6 hidden dim
+    (30, 1152),  # partial tile-row + 9 groups (partial last col-block)
+    (50, 896),  # partial tile-row spanning 2 tile-rows + single partial col-block (7 groups)
+    (33, 1280),  # partial tile-row spanning 2 tile-rows + 10 groups (partial last col-block)
 ]
 
-ROUNDTRIP_SHAPES = [(32, 1024), (64, 2048), (32, 7168)]
+ROUNDTRIP_SHAPES = [(32, 1024), (64, 2048), (32, 7168), (30, 1152), (50, 896)]
 
 
 @pytest.fixture(autouse=True)
