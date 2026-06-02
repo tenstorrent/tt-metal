@@ -10,7 +10,6 @@
 #include <iterator>
 #include <optional>
 #include <span>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -34,56 +33,15 @@ public:
     using value_type = std::pair<K, V>;
     using size_type = std::size_t;
 
-    // A forward iterator over the entries; dereferences to std::pair<K, V>.
-    template <bool Const>
-    class Iterator {
-        using inner_t = std::conditional_t<Const, typename Storage::const_iterator, typename Storage::iterator>;
-        inner_t it_{};
-        friend class VectorBackedTableBase;
-        template <bool>
-        friend class Iterator;
-        explicit Iterator(inner_t it) : it_(it) {}
+    using iterator = typename Storage::iterator;
+    using const_iterator = typename Storage::const_iterator;
 
-    public:
-        using iterator_concept = std::forward_iterator_tag;
-        using iterator_category = std::forward_iterator_tag;
-        using value_type = VectorBackedTableBase::value_type;
-        using difference_type = std::ptrdiff_t;
-        using reference = std::conditional_t<Const, const value_type&, value_type&>;
-        using pointer = std::conditional_t<Const, const value_type*, value_type*>;
-
-        Iterator() = default;
-        // An iterator is implicitly convertible to a const_iterator (not the reverse).
-        template <bool OtherConst>
-            requires(Const && !OtherConst)
-        Iterator(const Iterator<OtherConst>& other) : it_(other.it_) {}
-
-        reference operator*() const { return *it_; }
-        pointer operator->() const { return &*it_; }
-        Iterator& operator++() {
-            ++it_;
-            return *this;
-        }
-        Iterator operator++(int) {
-            Iterator tmp = *this;
-            ++it_;
-            return tmp;
-        }
-        friend bool operator==(const Iterator& a, const Iterator& b) { return a.it_ == b.it_; }
-    };
-    using iterator = Iterator<false>;
-    using const_iterator = Iterator<true>;
-
-    // iterator and const_iterator satisfy std::forward_iterator.
-    static_assert(std::forward_iterator<iterator>);
-    static_assert(std::forward_iterator<const_iterator>);
-
-    [[nodiscard]] iterator begin() { return iterator(entries_.begin()); }
-    [[nodiscard]] iterator end() { return iterator(entries_.end()); }
-    [[nodiscard]] const_iterator begin() const { return const_iterator(entries_.begin()); }
-    [[nodiscard]] const_iterator end() const { return const_iterator(entries_.end()); }
-    [[nodiscard]] const_iterator cbegin() const { return begin(); }
-    [[nodiscard]] const_iterator cend() const { return end(); }
+    [[nodiscard]] iterator begin() { return entries_.begin(); }
+    [[nodiscard]] iterator end() { return entries_.end(); }
+    [[nodiscard]] const_iterator begin() const { return entries_.begin(); }
+    [[nodiscard]] const_iterator end() const { return entries_.end(); }
+    [[nodiscard]] const_iterator cbegin() const { return entries_.cbegin(); }
+    [[nodiscard]] const_iterator cend() const { return entries_.cend(); }
 
     [[nodiscard]] bool empty() const noexcept { return entries_.empty(); }
     [[nodiscard]] size_type size() const noexcept { return entries_.size(); }
@@ -92,18 +50,18 @@ public:
     [[nodiscard]] iterator find(const K& key) {
         for (auto it = entries_.begin(); it != entries_.end(); ++it) {
             if (it->first == key) {
-                return iterator(it);
+                return it;
             }
         }
-        return end();
+        return entries_.end();
     }
     [[nodiscard]] const_iterator find(const K& key) const {
         for (auto it = entries_.begin(); it != entries_.end(); ++it) {
             if (it->first == key) {
-                return const_iterator(it);
+                return it;
             }
         }
-        return end();
+        return entries_.end();
     }
 
     std::pair<iterator, bool> insert(const value_type& entry) {
@@ -111,14 +69,14 @@ public:
             return {it, false};
         }
         entries_.push_back(entry);
-        return {iterator(std::prev(entries_.end())), true};
+        return {std::prev(entries_.end()), true};
     }
     std::pair<iterator, bool> insert(value_type&& entry) {
         if (auto it = find(entry.first); it != end()) {
             return {it, false};
         }
         entries_.push_back(std::move(entry));
-        return {iterator(std::prev(entries_.end())), true};
+        return {std::prev(entries_.end()), true};
     }
 
 private:
@@ -191,12 +149,6 @@ public:
             return it->second;
         }
         return this->insert(value_type{key, V{}}).first->second;
-    }
-    V& operator[](K&& key) {
-        if (auto it = this->find(key); it != this->end()) {
-            return it->second;
-        }
-        return this->insert(value_type{std::move(key), V{}}).first->second;
     }
 
     // Builds a value_type from `args` and inserts it only if its key is absent.
