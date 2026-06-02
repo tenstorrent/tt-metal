@@ -57,6 +57,7 @@ using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalDMKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalGen1ValidProgramSpec;
+using test_helpers::MakeMinimalRoleDMKernel;
 using test_helpers::MakeMinimalTensorParameter;
 using test_helpers::MakeMinimalValidProgramSpec;
 using test_helpers::MakeMinimalWorkUnit;
@@ -712,14 +713,16 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithoutGen2ConfigSucceeds) {
     EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
-TEST_F(ProgramSpecTestQuasar, DMKernelWithNoConfigAtAllFails) {
+TEST_F(ProgramSpecTestQuasar, DMKernelWithNoConfigAtAllSucceeds) {
+    // On Gen2 a DM kernel needs no config at all: the role hint is moot (Gen2 has a unified
+    // NOC and fully automated DM placement), and gen2_config is optional (absence = defaults).
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
     spec.name = "test_program";
 
     auto kernel = MakeMinimalDMKernel("kernel");
-    // Remove both Gen1 and Gen2 configs
+    // Remove both Gen1 and Gen2 configs, leaving a default (UNSPECIFIED role) config.
     auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
     dm_config.gen1_config = std::nullopt;
     dm_config.gen2_config = std::nullopt;
@@ -727,10 +730,23 @@ TEST_F(ProgramSpecTestQuasar, DMKernelWithNoConfigAtAllFails) {
     spec.kernels = {kernel};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
 
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("KernelSpec 'kernel' must specify a DM config for Gen1, Gen2, or both")));
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+}
+
+TEST_F(ProgramSpecTestQuasar, RoleHintIgnoredOnGen2Succeeds) {
+    // A READER/WRITER role hint is a Gen1 concept; on Gen2 it is informational and imposes no
+    // requirement (no explicit Gen1Config needed, gen2_config still optional).
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto kernel = MakeMinimalRoleDMKernel("kernel", DataMovementHardwareConfig::RoleHint::READER);
+
+    spec.kernels = {kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"kernel"})};
+
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
 // Remote DFBs are part of the API surface but not yet supported by the runtime.
@@ -2594,13 +2610,14 @@ TEST_F(ProgramSpecTestGen1, MultiThreadedComputeKernelFails) {
 }
 
 TEST_F(ProgramSpecTestGen1, DMKernelWithGen2ConfigFails) {
-    // On gen1, a DM kernel that only has Gen2Config must be rejected
+    // On Gen1, a DM kernel that declares neither a role hint nor an explicit Gen1Config must be
+    // rejected: it has no way to resolve its processor/NOC placement.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
     spec.name = "test_program";
 
-    // MakeMinimalDMKernel produces a gen2 (Quasar) DM config
+    // MakeMinimalDMKernel produces a gen2 (Quasar) DM config (UNSPECIFIED role, no Gen1Config).
     auto kernel = MakeMinimalDMKernel("dm_kernel");
 
     spec.kernels = {kernel};
@@ -2608,7 +2625,7 @@ TEST_F(ProgramSpecTestGen1, DMKernelWithGen2ConfigFails) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must specify a Gen1 DM config")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("specifies neither a role hint")));
 }
 
 TEST_F(ProgramSpecTestGen1, ProcessorConflictFails) {
@@ -2627,6 +2644,64 @@ TEST_F(ProgramSpecTestGen1, ProcessorConflictFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("both claim the same DM processor")));
+}
+
+TEST_F(ProgramSpecTestGen1, ReaderAndWriterRolesOnSameNodeSucceed) {
+    // A READER and a WRITER role resolve to distinct processors (RISCV_1 and RISCV_0
+    // respectively), so two role-driven DM kernels coexist on one node without conflict.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto reader = MakeMinimalRoleDMKernel("reader", DataMovementHardwareConfig::RoleHint::READER);
+    auto writer = MakeMinimalRoleDMKernel("writer", DataMovementHardwareConfig::RoleHint::WRITER);
+
+    spec.kernels = {reader, writer};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"reader", "writer"})};
+
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+}
+
+TEST_F(ProgramSpecTestGen1, TwoReaderRolesOnSameNodeConflict) {
+    // Both READER kernels resolve to the same processor (RISCV_1), so placing them on the
+    // same node is a conflict — confirming the role hint resolves to a fixed, deterministic
+    // processor (the same uniqueness rule as explicit configs).
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto r0 = MakeMinimalRoleDMKernel("r0", DataMovementHardwareConfig::RoleHint::READER);
+    auto r1 = MakeMinimalRoleDMKernel("r1", DataMovementHardwareConfig::RoleHint::READER);
+
+    spec.kernels = {r0, r1};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"r0", "r1"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("both claim the same DM processor")));
+}
+
+TEST_F(ProgramSpecTestGen1, RoleHintWithExplicitGen1ConfigFails) {
+    // A role hint and an explicit Gen1Config are mutually exclusive: the hint already fills
+    // in the config, so supplying both is contradictory and must be rejected.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto kernel = MakeMinimalRoleDMKernel("dm_kernel", DataMovementHardwareConfig::RoleHint::READER);
+    auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
+    dm_config.gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1};
+
+    spec.kernels = {kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("sets both a READER/WRITER role hint and an explicit Gen1 config")));
 }
 
 // WH N150 mock grid reference (wormhole_N150.yaml, harvest_mask=0x40 = 1 row harvested):
