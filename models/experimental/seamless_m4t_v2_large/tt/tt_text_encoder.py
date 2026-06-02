@@ -12,8 +12,9 @@ import ttnn
 
 from models.experimental.seamless_m4t_v2_large.tt.common import (
     TILE,
-    all_reduce_sum_replicate,
     build_ln_sharded_config,
+    encoder_all_reduce_sum_replicate,
+    encoder_tp_activation_memory_config,
     dram_linear_input_mem_config,
     dram_matmul_program_config,
     encoder_tp_block_sharded_matmul,
@@ -465,7 +466,7 @@ class TTSeamlessM4Tv2Encoder:
 
         Used when weights are ``ShardTensorToMesh`` distributed across devices.
         Each device computes a local partial result; the caller applies
-        ``all_reduce_sum_replicate`` after row-parallel layers.
+        ``encoder_all_reduce_sum_replicate`` after row-parallel layers.
 
         For the hot per-device shapes (QKV / out_proj / fc1 / fc2 at M=batch*seq) this uses
         the tuned 2D block-sharded program config (see ``encoder_tp_block_sharded_matmul`` /
@@ -595,11 +596,11 @@ class TTSeamlessM4Tv2Encoder:
             )
             ttnn.deallocate(merged_4d)
             # all_reduce: sum partial [B, S, H] across TP devices → replicated [B, S, H].
-            proj = all_reduce_sum_replicate(
+            proj = encoder_all_reduce_sum_replicate(
                 proj,
                 self.device,
                 cluster_axis=self._cluster_axis,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=getattr(self, "_activation_mc", ttnn.L1_MEMORY_CONFIG),
             )
             return proj
         else:
@@ -690,10 +691,11 @@ class TTSeamlessM4Tv2Encoder:
         n_tiles = hidden_size // 32
         ffn_dim = 8 * hidden_size
         token_rows = batch * seq
+        if tp > 1:
+            self._activation_mc = encoder_tp_activation_memory_config(token_rows)
 
         if tp > 1:
-            # TP path: standard interleaved activations; DRAM-sharded not used.
-            sharded_hidden_mem = ttnn.L1_MEMORY_CONFIG
+            sharded_hidden_mem = self._activation_mc
             self._long_seq_mc = None
             long_seq = False
         else:
@@ -753,11 +755,11 @@ class TTSeamlessM4Tv2Encoder:
                 ff = self._linear_tp(normed, layer.ffn.fc1.weight, layer.ffn.fc1.bias, activation="relu")
                 ttnn.deallocate(normed)
                 ff = self._linear_tp(ff, layer.ffn.fc2.weight, layer.ffn.fc2.bias)
-                ff = all_reduce_sum_replicate(
+                ff = encoder_all_reduce_sum_replicate(
                     ff,
                     self.device,
                     cluster_axis=self._cluster_axis,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    memory_config=self._activation_mc,
                 )
             else:
                 ff = self._linear(
