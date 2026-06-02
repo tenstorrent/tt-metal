@@ -20,8 +20,7 @@ using input_token_t = uint16_t;
 using input_token_t = uint32_t;
 #endif
 
-// Local-L1 cached pad/zero/one weights. Set by prepare_local_cache, read by read_token_async.
-// Stored as plain L1 addresses; the kernel's own NoC coordinates are looked up at read time.
+// TODO: Can probably make this not global
 uint32_t pad_token;
 uint32_t pad_local_addr;
 uint32_t zero_local_addr;
