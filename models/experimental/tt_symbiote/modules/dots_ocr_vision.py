@@ -1470,6 +1470,16 @@ class TTNNDotsVisionAttention(TTNNModule):
             # With BFP8 V + k=1024 the scores CB exceeds L1 by ~7 KB.
             q_chunk = 256
             k_chunk = 1024
+            # The k=1024 config is tuned to within ~7 KB of L1's ceiling on
+            # single-device, so it has almost no headroom. Multi-device (TP/DP)
+            # carries marginally more resident L1, which tips this razor-thin
+            # config over ("Statically allocated CBs clash with L1 buffers").
+            # Worker L1 is identical across fabric modes (measured), so this is
+            # allocation pressure, not a fabric reservation. Fall back to k=512
+            # (the test baseline that fit with L1 output and ample headroom).
+            num_dev = int(self.device.get_num_devices()) if hasattr(self.device, "get_num_devices") else 1
+            if num_dev > 1:
+                k_chunk = 512
         # q_chunk = 512
         # k_chunk = 512   -- same product (256K), overflow..
         return SDPAProgramConfig(
@@ -1526,6 +1536,7 @@ class TTNNDotsVisionAttention(TTNNModule):
         # _concat_heads accepts DRAM input; the extra DRAM round-trip on the
         # 22 MB context tensor (~80 us at 250 GB/s) is repaid by the larger
         # k_chunk savings.
+        # print(f"q.shape: {q.shape}, k.shape: {k.shape}, v.shape: {v.shape}, attn_mask.shape: {attn_mask.shape}")
         ctx = ttnn.transformer.scaled_dot_product_attention(
             q,
             k,
@@ -2004,7 +2015,17 @@ class TTNNDotsPatchMerger(TTNNModule):
         fc1_bs_pc = _vision_merger_fc1_bs_program_config(self.device)
         fc2_bs_pc = _vision_merger_fc2_bs_program_config(self.device)
         bs_mem = _vision_block_sharded_mem(self.device, new_r, int(self.mlp_size))
-        if fc1_bs_pc is None or fc2_bs_pc is None or bs_mem is None:
+        # Multi-device (TP/DP) fall back to a plain DRAM-output matmul: the
+        # block-sharded full-grid fc1 needs ~555 KB of *contiguous* L1 for its
+        # static CBs, but once the decoder's first reduce_scatter/all_gather runs
+        # the TT-Fabric relay-mux leaves a persistent ~92 KB L1 buffer resident
+        # that fragments the low L1 region and blocks that allocation. The merger
+        # runs once per image, so the auto-config DRAM path's small perf cost is
+        # in the noise; it also sidesteps the fixed-M (3072) block-sharded config
+        # mismatch for non-bucket sequence lengths.
+        num_devices = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
+        use_bs = num_devices == 1
+        if use_bs and (fc1_bs_pc is None or fc2_bs_pc is None or bs_mem is None):
             raise RuntimeError(
                 f"PatchMerger block-sharded path requires an 8x8 grid and folded M={new_r} "
                 "divisible by the shard grid; got an incompatible device/shape."
@@ -2022,26 +2043,45 @@ class TTNNDotsPatchMerger(TTNNModule):
 
         compute_kc = getattr(self, "compute_kernel_config", None)
 
-        # fc1: L1-interleaved BF8 in0 -> BLOCK_SHARDED out, GELU fused via program config.
-        hidden_states = ttnn.linear(
-            hidden_states,
-            self.tt_w1,
-            bias=self.tt_w1_bias,
-            dtype=ttnn.bfloat4_b,
-            memory_config=bs_mem,
-            program_config=fc1_bs_pc,
-            compute_kernel_config=compute_kc,
-        )
-        # fc2: consumes the fc1 output shard directly -> L1 interleaved out.
-        hidden_states = ttnn.linear(
-            hidden_states,
-            self.tt_w2,
-            bias=self.tt_w2_bias,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-            program_config=fc2_bs_pc,
-            compute_kernel_config=compute_kc,
-        )
+        if use_bs:
+            # fc1: L1-interleaved BF8 in0 -> BLOCK_SHARDED out, GELU fused via program config.
+            hidden_states = ttnn.linear(
+                hidden_states,
+                self.tt_w1,
+                bias=self.tt_w1_bias,
+                dtype=ttnn.bfloat4_b,
+                memory_config=bs_mem,
+                program_config=fc1_bs_pc,
+                compute_kernel_config=compute_kc,
+            )
+            # fc2: consumes the fc1 output shard directly -> L1 interleaved out.
+            hidden_states = ttnn.linear(
+                hidden_states,
+                self.tt_w2,
+                bias=self.tt_w2_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                program_config=fc2_bs_pc,
+                compute_kernel_config=compute_kc,
+            )
+        else:
+            hidden_states = ttnn.linear(
+                hidden_states,
+                self.tt_w1,
+                bias=self.tt_w1_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                activation="gelu",
+                compute_kernel_config=compute_kc,
+            )
+            hidden_states = ttnn.linear(
+                hidden_states,
+                self.tt_w2,
+                bias=self.tt_w2_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=compute_kc,
+            )
 
         return hidden_states
 

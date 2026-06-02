@@ -1121,18 +1121,30 @@ class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
 
     def move_weights_to_device_impl(self):
         weight_dtype = getattr(self, "_weight_dtype", ttnn.bfloat4_b)
+        # The DRAM-width-sharded weight only pairs with the single-device
+        # DRAM-sharded matmul kernel. Under TP/CCL the forward falls back to the
+        # adaptive 1D-mcast config (per-device N=768 never matches the fixed
+        # DRAM-sharded program config), which needs a DRAM_INTERLEAVED operand B
+        # -- a DRAM_WIDTH_SHARDED weight there trips "Only L1 buffers can have an
+        # associated circular buffer". Mirrors the QKV class's _qkv_use_dram_sharded.
+        ccl = _tp_requires_ccl(self.device)
         if isinstance(self.tt_weight_host, torch.Tensor):
             weight = self.tt_weight_host.T.contiguous()
             mesh_shape = list(self.device.shape) if hasattr(self.device, "shape") else [1, 1]
             num_tp = int(mesh_shape[-1]) if mesh_shape else 1
             weight_n_per_device = math.ceil(int(weight.shape[-1]) / num_tp)
+            weight_mem_cfg = (
+                ttnn.DRAM_MEMORY_CONFIG
+                if ccl
+                else _dram_sharded_mem_config_2d(self.device, k=int(weight.shape[-2]), n=weight_n_per_device)
+            )
             self.tt_weight = ttnn.as_tensor(
                 weight,
                 device=self.device,
                 dtype=weight_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
-                memory_config=_dram_sharded_mem_config_2d(self.device, k=int(weight.shape[-2]), n=weight_n_per_device),
+                memory_config=weight_mem_cfg,
             )
         else:
             self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
@@ -1141,13 +1153,18 @@ class TTNNLinearLLamaIReplicatedWColSharded(TTNNLinearIReplicatedWColSharded):
             mesh_shape = list(self.device.shape) if hasattr(self.device, "shape") else [1, 1]
             num_tp = int(mesh_shape[-1]) if mesh_shape else 1
             bias_n_per_device = math.ceil(int(bias.shape[-1]) / num_tp)
+            bias_mem_cfg = (
+                ttnn.DRAM_MEMORY_CONFIG
+                if ccl
+                else _dram_sharded_mem_config_2d(self.device, k=ttnn.TILE_SIZE, n=bias_n_per_device)
+            )
             self.tt_bias = ttnn.as_tensor(
                 bias,
                 device=self.device,
                 dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=_tp_mesh_mapper(self.device, self.weight_dim),
-                memory_config=_dram_sharded_mem_config_2d(self.device, k=ttnn.TILE_SIZE, n=bias_n_per_device),
+                memory_config=bias_mem_cfg,
             )
         else:
             self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
