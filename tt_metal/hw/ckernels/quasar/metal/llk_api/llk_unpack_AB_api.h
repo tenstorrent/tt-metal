@@ -58,23 +58,31 @@ inline void llk_unpack_AB(
     const std::uint32_t tile_index_a,
     const std::uint32_t tile_index_b,
     [[maybe_unused]] const std::uint32_t bcast_row_idx = 0) {
+    WAYPOINT("UA00");
     // TODO (tt-metal #42916): Once runtime asserts are added for Quasar, assert that bcast_row_idx is unused
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
+    WAYPOINT("UA01");
 
     const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
+    WAYPOINT("UA02");
 
     const std::uint32_t l1_tile_idx_a =
         local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].rd_entry_idx + tile_index_a;
     const std::uint32_t l1_tile_idx_b =
         local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx + tile_index_b;
+    WAYPOINT("UA03");
 
     WAYPOINT("UABW");
     if constexpr (BType == BroadcastType::NONE) {
+        WAYPOINT("UA1N");
         _llk_unpack_binary_operands_(l1_tile_idx_a, l1_tile_idx_b);
+        WAYPOINT("UA2N");
     } else {
+        WAYPOINT("UA1B");
         _llk_unpack_binary_broadcast_operands_(l1_tile_idx_a, l1_tile_idx_b);
+        WAYPOINT("UA2B");
     }
     WAYPOINT("UABD");
 }

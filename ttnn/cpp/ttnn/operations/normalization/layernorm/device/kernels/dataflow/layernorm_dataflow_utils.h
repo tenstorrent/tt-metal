@@ -172,14 +172,19 @@ inline void read_block_to_cb(
     // Need to reserve/push on intervals that nicely
     // divide the CB size. The CB and block size has been
     // configured to ensure this in the program setup
+    WAYPOINT("RB0");
     cb.reserve_back(block.full_block_size());
+    WAYPOINT("RB1");
     uint32_t idx = 0;
     for (auto r : block.local()) {
         noc.async_read(addr, cb, tile_bytes, {.page_id = offset + r}, {.offset_bytes = idx * tile_bytes});
         idx++;
     }
+    WAYPOINT("RB2");
     noc.async_read_barrier();
+    WAYPOINT("RB3");
     cb.push_back(block.full_block_size());
+    WAYPOINT("RB4");
 }
 
 /**
@@ -242,7 +247,7 @@ inline void write_row_major_block_from_cb(
 
     for (uint32_t r = 0; r < num_valid_rows; r++) {
         noc.async_write(
-            use<CircularBuffer::AddrSelector::READ_PTR>(cb_out_rm),
+            cb_out_rm,
             dst_a,
             valid_bytes,
             {.offset_bytes = r * block_row_stride_bytes},
