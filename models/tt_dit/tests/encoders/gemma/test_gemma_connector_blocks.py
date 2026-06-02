@@ -24,8 +24,7 @@ from loguru import logger
 from safetensors import safe_open
 
 import ttnn
-from models.tt_dit.encoders.gemma.embeddings_connector import _rms_norm_cc
-from models.tt_dit.encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
+from models.tt_dit.encoders.gemma.encoder_pair import _replace_padded_with_registers
 from models.tt_dit.models.transformers.ltx.rope_ltx import reshape_interleaved_to_bhnd
 from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
 
@@ -119,9 +118,7 @@ def test_connector_blocks_isolated(*, mesh_device):
     registers = ttnn.to_torch(
         ttnn.get_device_tensors(pipe.gemma_encoder_pair.video_connector.learnable_registers.data)[0]
     ).float()
-    x_replaced = GemmaTokenizerEncoderPair._replace_padded_with_registers(
-        x.float(), binary_mask, registers, 128
-    ).bfloat16()
+    x_replaced = _replace_padded_with_registers(x.float(), binary_mask, registers, 128).bfloat16()
 
     # Device blocks now take head-split (BHND) interleaved cos/sin + a trans_mat and run the
     # on-device rotary_embedding_llama kernel (Q/K permuted at load). Mirror _run_connector.
@@ -152,7 +149,7 @@ def test_connector_blocks_isolated(*, mesh_device):
     for block in pipe.gemma_encoder_pair.video_connector.transformer_1d_blocks:
         tt_x = block(tt_x, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat)
     tt_x = ttnn.experimental.dit_rms_norm_unary_fused(
-        tt_x, weight=None, epsilon=1e-6, compute_kernel_config=_rms_norm_cc(mesh_device)
+        tt_x, weight=None, epsilon=1e-6, compute_kernel_config=pipe.gemma_encoder_pair.video_connector.rmsnorm_cc
     )
     dev_out = ttnn.to_torch(ttnn.get_device_tensors(tt_x)[0]).float()
 

@@ -70,14 +70,6 @@ def float32_tensor(
     return typed_tensor(x, ttnn.float32, device, mesh_axis, shard_dim, layout)
 
 
-def prepare_rot_transformation_mat(device: ttnn.Device) -> ttnn.Tensor:
-    """The (1,1,32,32) per-tile rotation matrix ttnn.experimental.rotary_embedding_llama needs,
-    as a bf16 device tensor replicated across the mesh. Constant — callers should cache it."""
-    from .mochi import get_rot_transformation_mat
-
-    return bf16_tensor(get_rot_transformation_mat(), device=device)
-
-
 def bf16_tensor_host(
     x: torch.Tensor, device: ttnn.Device | None = None, mesh_axis=None, shard_dim=None, layout=ttnn.TILE_LAYOUT
 ) -> ttnn.Tensor:

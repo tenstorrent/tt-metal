@@ -21,7 +21,6 @@ import ttnn
 
 from ...layers.linear import Linear
 from ...layers.module import Module
-from .embeddings_connector import _rms_norm_cc
 
 
 class GemmaFeatureExtractor(Module):
@@ -41,7 +40,14 @@ class GemmaFeatureExtractor(Module):
         self.video_dim = video_dim
         self.audio_dim = audio_dim
         self.mesh_device = mesh_device
-        self.rmsnorm_cc = _rms_norm_cc(mesh_device)
+        # HiFi4 + fp32 dest-acc for the per-token RMS norms (native default fidelity costs ~1e-3 PCC).
+        self.rmsnorm_cc = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
 
         self.video_aggregate_embed = Linear(input_dim, video_dim, bias=True, mesh_device=mesh_device)
         self.audio_aggregate_embed = (

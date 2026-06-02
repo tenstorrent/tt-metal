@@ -18,15 +18,11 @@ from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
 from ...utils.video import export_video_audio
-from .pipeline_ltx import (
-    DISTILLED_SIGMA_VALUES,
-    SPATIAL_COMPRESSION,
-    STAGE_2_DISTILLED_SIGMA_VALUES,
-    TEMPORAL_COMPRESSION,
-    LTXPipeline,
-    euler_step,
-    latent_grid,
-)
+from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, euler_step, latent_grid
+
+# Distilled sigma schedules for the two stages.
+DISTILLED_SIGMA_VALUES = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]
+STAGE_2_DISTILLED_SIGMA_VALUES = [0.909375, 0.725, 0.421875, 0.0]
 
 
 class LTXDistilledPipeline(LTXPipeline):

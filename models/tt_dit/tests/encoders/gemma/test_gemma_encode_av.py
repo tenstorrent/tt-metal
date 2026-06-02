@@ -117,7 +117,7 @@ def test_encode_prompts_vs_reference(*, mesh_device):
 
     # On-device Gemma encoder (full 48 layers). TP follows the T5 pattern (axis-1 width):
     # TP=1 on 1x1, TP=4 on 2x4 — set inside the loader, no override needed.
-    pipe.gemma_encoder_pair.load_gemma_encoder(gemma, num_layers=48, sequence_length=1024)
+    pipe.gemma_encoder_pair.load_gemma_encoder(gemma)
 
     # Load only the connector weights from the 46GB checkpoint.
     conn_state = {}
