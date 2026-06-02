@@ -412,8 +412,9 @@ class GemmaEncoder(Module):
     """
     TTNN Gemma-3 text encoder.
 
-    Runs the full decoder stack on input tokens and returns hidden states
-    from the specified layer (default: last layer before final norm).
+    Runs the full decoder stack and returns the list of all hidden states
+    (input embedding, each decoder layer, then the final norm). Layer selection
+    is the caller's responsibility.
 
     Usage:
         encoder = GemmaEncoder(config, mesh_device, ccl_manager, parallel_config)
@@ -480,7 +481,8 @@ class GemmaEncoder(Module):
                            no position attends to padding tokens.
 
         Returns:
-            List of hidden states tensors, one per layer + final norm.
+            List of hidden states: the input embedding, one per decoder layer, and the
+            final-norm output.
         """
         # Embed tokens
         hidden_states = self.embed_tokens(token_ids)
