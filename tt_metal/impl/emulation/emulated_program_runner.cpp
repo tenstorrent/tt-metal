@@ -1972,6 +1972,7 @@ inline void abort_if_dirty_cb(
     uint32_t cb_id,
     const tt_emule::CBSyncState& cb,
     uint32_t occupied,
+    uint32_t popped,
     uint32_t lx,
     uint32_t ly,
     uint32_t processor_id_or_zero,
@@ -1980,16 +1981,27 @@ inline void abort_if_dirty_cb(
         fprintf(
             stderr,
             "[ASAN ERROR] Dirty CB Detected: Core (%u, %u) CB %u was not flushed! "
-            "Kernel (processor %u) ended with %u/%u pages still on the CB "
-            "(push > pop) — would back-pressure the next program launch on silicon.\n",
-            lx, ly, cb_id, processor_id_or_zero, occupied, cb.num_pages);
+            "Kernel (processor %u) left %u/%u pages on the CB after the consumer popped %u "
+            "(pushed > popped) — would back-pressure the next program launch on silicon.\n",
+            lx,
+            ly,
+            cb_id,
+            processor_id_or_zero,
+            occupied,
+            cb.num_pages,
+            popped);
     } else {
         fprintf(
             stderr,
             "[ASAN ERROR] Dirty CB Detected: Core (%u, %u) CB %u was not flushed! "
-            "%u/%u pages remain after program exit (push > pop) — would back-pressure "
-            "the next program launch on silicon.\n",
-            lx, ly, cb_id, occupied, cb.num_pages);
+            "%u/%u pages remain after program exit; the consumer popped %u (pushed > popped) — "
+            "would back-pressure the next program launch on silicon.\n",
+            lx,
+            ly,
+            cb_id,
+            occupied,
+            cb.num_pages,
+            popped);
     }
     std::abort();
 }
@@ -2010,8 +2022,14 @@ inline void sweep_per_kernel_dirty_cbs(
             continue;
         }
         uint32_t occupied = cb.occupied.load(std::memory_order_acquire);
-        if (occupied > 0) {
-            abort_if_dirty_cb(cb_id, cb, occupied, lx, ly, processor_id, /*per_kernel=*/true);
+        uint32_t popped = cb.total_popped.load(std::memory_order_acquire);
+        // A non-empty CB at exit is only a real leak if a consumer actually
+        // drained it but under-popped (popped > 0). popped == 0 means the CB had
+        // no consumer at all — a globally-allocated/sharded output CB, or a
+        // producer-only single-kernel program that DMAs its result out — where
+        // leftover pages are by design, not a back-pressure hazard.
+        if (occupied > 0 && popped > 0) {
+            abort_if_dirty_cb(cb_id, cb, occupied, popped, lx, ly, processor_id, /*per_kernel=*/true);
         }
     }
 }
@@ -2073,11 +2091,16 @@ inline void sweep_program_dirty_cbs(
                 continue;
             }
             uint32_t occupied = cb.occupied.load(std::memory_order_acquire);
-            if (occupied > 0) {
+            uint32_t popped = cb.total_popped.load(std::memory_order_acquire);
+            // Only a real leak if a consumer existed (popped > 0) but under-drained;
+            // popped == 0 => no consumer (sharded/global output or producer-only
+            // single-kernel program), leftover is by design. See per-kernel sweep.
+            if (occupied > 0 && popped > 0) {
                 abort_if_dirty_cb(
                     cb_id,
                     cb,
                     occupied,
+                    popped,
                     static_cast<uint32_t>(cs.logical_core.x),
                     static_cast<uint32_t>(cs.logical_core.y),
                     /*processor_id_or_zero=*/0,
