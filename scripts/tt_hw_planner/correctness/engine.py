@@ -315,12 +315,18 @@ def run_evidence_gate(
         f"'first N tokens fine, then garbage' pattern that the "
         f"legacy gate misses."
     )
+    # Always request return_logits=True so the strict logit-PCC gate
+    # (see below) has the HF step-0 logits to compare against. Without
+    # this, the strict gate flips to fail-closed UNVERIFIED — which is
+    # safer than a false-green but defeats the comparison the user
+    # wanted.
     try:
         hf = generate_hf_reference(
             model_id,
             prompt,
             max_new_tokens=scan_limit,
             instruct=instruct,
+            return_logits=True,
         )
     except Exception as exc:
         print(
@@ -366,6 +372,24 @@ def run_evidence_gate(
     legacy_result.ok = evidence_ok
 
     setattr(legacy_result, "_text_evidence", evidence_record)
+
+    # Strict logit-PCC ≥ 0.99 gate — MUST fire on every LLM/VLM
+    # bring-up. Without this, the evidence engine stamps SUCCESS on
+    # token-overlap alone (which tolerates up to 70% mismatch by
+    # design). The check is fail-closed: missing TT logits, missing
+    # HF logits, or PCC < threshold all flip ok=False.
+    from .text import _TT_LOGITS_PATH_RE, apply_strict_logit_pcc_gate
+
+    _tt_logits_match = _TT_LOGITS_PATH_RE.search(captured_output)
+    _tt_logits_path = _tt_logits_match.group("path") if _tt_logits_match else None
+    _hf_step0_logits = getattr(hf, "step0_logits", None)
+    _token_reason_pre_strict = legacy_result.reason
+    apply_strict_logit_pcc_gate(
+        legacy_result,
+        _tt_logits_path,
+        _hf_step0_logits,
+        informational_token_reason=_token_reason_pre_strict,
+    )
 
     print(f"  {legacy_result.summary()}")
     if evidence_record.collapse_position is not None:

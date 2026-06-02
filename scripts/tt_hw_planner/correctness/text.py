@@ -82,6 +82,79 @@ def _compute_step0_logit_pcc(tt_logits_path: str, hf_logits: Any) -> Optional[fl
     return _ad_pcc(tt_t, hf_t)
 
 
+def apply_strict_logit_pcc_gate(
+    result: Any,
+    tt_logits_path: Optional[str],
+    hf_logits: Any,
+    *,
+    informational_token_reason: Optional[str] = None,
+) -> None:
+    """In-place mutate a token-overlap ``ValidationResult`` to enforce
+    the strict numerical-PCC ≥ 0.99 gate.
+
+    Centralizes the fail-closed logic so BOTH code paths that produce
+    a ``ValidationResult`` for LLM/VLM models (the registered
+    :class:`TextComparator` AND the standalone ``run_evidence_gate``)
+    apply identical strict semantics. Without this, the evidence-engine
+    path silently dropped the logit-PCC requirement and stamped SUCCESS
+    on the basis of token overlap alone.
+
+    Decision table:
+      * ``tt_logits_path is None``   → ok=False, "LOGIT-PCC UNVERIFIED"
+      * ``hf_logits is None``        → ok=False, "LOGIT-PCC UNVERIFIED"
+      * compute returns ``None``     → ok=False, "LOGIT-PCC UNVERIFIED"
+      * computed PCC < threshold     → ok=False, "LOGIT-PCC FAIL"
+      * computed PCC ≥ threshold     → ok preserved, reason augmented
+
+    ``informational_token_reason`` is the pre-strict-check token-overlap
+    reason string (for reference in the new reason). Falls back to
+    the current ``result.reason`` when not provided.
+    """
+    ref_reason = informational_token_reason if informational_token_reason is not None else getattr(result, "reason", "")
+    if not tt_logits_path:
+        result.ok = False
+        result.reason = (
+            f"LOGIT-PCC UNVERIFIED: TT-side step-0 logits not captured "
+            f"(no `==LOGITS PATH:` marker emitted by the demo). The "
+            f"strict gate requires both heuristic AND numerical "
+            f"PCC>={_LOGIT_PCC_MIN:.2f}; token-overlap alone is not a "
+            f"SUCCESS criterion. Token-overlap verdict (informational): "
+            f"{ref_reason}"
+        )
+        return
+    if hf_logits is None:
+        result.ok = False
+        result.reason = (
+            f"LOGIT-PCC UNVERIFIED: HF reference did not return step-0 "
+            f"logits (return_logits path missing or HF generation failed). "
+            f"The strict gate requires both heuristic AND numerical "
+            f"PCC>={_LOGIT_PCC_MIN:.2f}. Token-overlap verdict "
+            f"(informational): {ref_reason}"
+        )
+        return
+    pcc = _compute_step0_logit_pcc(tt_logits_path, hf_logits)
+    if pcc is None:
+        result.ok = False
+        result.reason = (
+            f"LOGIT-PCC UNVERIFIED: could not compute PCC from "
+            f"{tt_logits_path} (file missing, shape mismatch, or "
+            f"numpy/torch unavailable). The strict gate requires a "
+            f"numerical PCC>={_LOGIT_PCC_MIN:.2f}; treating as "
+            f"unverified rather than pass. Token-overlap verdict "
+            f"(informational): {ref_reason}"
+        )
+        return
+    if pcc < _LOGIT_PCC_MIN:
+        result.ok = False
+        result.reason = (
+            f"LOGIT-PCC FAIL: step-0 PCC={pcc:.4f} < "
+            f"{_LOGIT_PCC_MIN:.2f} (token-overlap verdict, "
+            f"informational: {ref_reason})"
+        )
+        return
+    result.reason = f"{ref_reason} [logit-PCC: {pcc:.4f}]"
+
+
 class TextComparator(Comparator):
     """Comparator for tt_transformers-style text-generation demos.
 
@@ -225,53 +298,12 @@ class TextComparator(Comparator):
 
         # Strict logit-PCC gate — MUST always fire. A SUCCESS verdict
         # requires both gates (token-overlap heuristic AND numerical
-        # PCC >= 0.99) to fire AND pass. If logits are missing on
-        # either side, or the comparison cannot be computed, that is
-        # a verification gap, NOT a free pass — flip result.ok to
-        # False so _maybe_escalate_pcc_fail routes the run to Path A's
-        # per-component iterate loop. Fail-closed, never fail-open.
+        # PCC >= 0.99) to fire AND pass. Delegates to the shared
+        # helper so the standalone run_evidence_gate enforces the
+        # exact same strict semantics.
         tt_logits_path = getattr(evidence, "_tt_logits_path", None)
         hf_logits = getattr(reference, "step0_logits", None)
-        if not tt_logits_path:
-            result.ok = False
-            result.reason = (
-                f"LOGIT-PCC UNVERIFIED: TT-side step-0 logits not captured "
-                f"(no `==LOGITS PATH:` marker emitted by the demo). The "
-                f"strict gate requires both heuristic AND numerical "
-                f"PCC>={_LOGIT_PCC_MIN:.2f}; token-overlap alone is not a "
-                f"SUCCESS criterion. Token-overlap verdict (informational): "
-                f"{result.reason}"
-            )
-        elif hf_logits is None:
-            result.ok = False
-            result.reason = (
-                f"LOGIT-PCC UNVERIFIED: HF reference did not return step-0 "
-                f"logits (return_logits path missing or HF generation failed). "
-                f"The strict gate requires both heuristic AND numerical "
-                f"PCC>={_LOGIT_PCC_MIN:.2f}. Token-overlap verdict "
-                f"(informational): {result.reason}"
-            )
-        else:
-            pcc = _compute_step0_logit_pcc(tt_logits_path, hf_logits)
-            if pcc is None:
-                result.ok = False
-                result.reason = (
-                    f"LOGIT-PCC UNVERIFIED: could not compute PCC from "
-                    f"{tt_logits_path} (file missing, shape mismatch, or "
-                    f"numpy/torch unavailable). The strict gate requires a "
-                    f"numerical PCC>={_LOGIT_PCC_MIN:.2f}; treating as "
-                    f"unverified rather than pass. Token-overlap verdict "
-                    f"(informational): {result.reason}"
-                )
-            elif pcc < _LOGIT_PCC_MIN:
-                result.ok = False
-                result.reason = (
-                    f"LOGIT-PCC FAIL: step-0 PCC={pcc:.4f} < "
-                    f"{_LOGIT_PCC_MIN:.2f} (token-overlap verdict, "
-                    f"informational: {result.reason})"
-                )
-            else:
-                result.reason = f"{result.reason} [logit-PCC: {pcc:.4f}]"
+        apply_strict_logit_pcc_gate(result, tt_logits_path, hf_logits)
         return result
 
     def build_repair_prompt(
