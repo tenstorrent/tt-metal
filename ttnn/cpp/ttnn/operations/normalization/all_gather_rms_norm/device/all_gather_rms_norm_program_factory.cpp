@@ -138,10 +138,30 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     const uint32_t num_tile_rows = a.physical_volume() / shape[-1] / TILE_HEIGHT;
     const uint32_t block_size = std::min<uint32_t>(Wt, 4);  // streaming block; tuned later
 
+    // Rows per batched fabric all-gather (ring>1). The compute/writer kernels gather a whole chunk of rows
+    // with a SINGLE fabric barrier instead of one barrier per row (the dominant multi-device cost). The cap
+    // bounds the gathered-stats L1 footprint: ring_size * gather_chunk tiles, double-buffered.
+    const uint32_t gather_chunk = single_device ? 1u : std::min<uint32_t>(num_tile_rows, 8u);
+
     auto subdevice_id = args.sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
     const uint32_t num_workers_per_link = 1;
-    const auto [worker_core_range, worker_cores] = ::ttnn::ccl::choose_worker_cores(
-        args.num_links, num_workers_per_link, mesh_device, subdevice_id, CoreCoord(0, 0), std::nullopt);
+
+    // Work split. Single device: fan the tile-rows across the whole compute grid (one core per row-slice),
+    // so the reduce/normalize run in parallel. Multi-device: keep a single fabric worker core for now (the
+    // per-core fabric all-gather across many cores needs a fabric mux, which is a follow-up).
+    CoreRangeSet worker_core_range;
+    std::vector<CoreCoord> worker_cores;
+    if (single_device) {
+        const auto grid = mesh_device->compute_with_storage_grid_size();
+        const uint32_t num_cores = std::max<uint32_t>(1, std::min<uint32_t>(num_tile_rows, grid.x * grid.y));
+        worker_core_range = num_cores_to_corerangeset(num_cores, grid, /*row_wise=*/true);
+        worker_cores = corerange_to_cores(worker_core_range, num_cores, /*row_wise=*/true);
+    } else {
+        auto wc = ::ttnn::ccl::choose_worker_cores(
+            args.num_links, num_workers_per_link, mesh_device, subdevice_id, CoreCoord(0, 0), std::nullopt);
+        worker_core_range = std::get<0>(wc);
+        worker_cores = std::get<1>(wc);
+    }
 
     // ----- Circular buffers -----
     const bool has_gamma = gamma_tensor.has_value();
@@ -157,8 +177,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         desc.cbs.push_back(make_cb(cb::reduce_one, 1, tt::DataFormat::Float16_b, worker_core_range));
     }
     desc.cbs.push_back(make_cb(cb::x_squared, Wt, interm_df, worker_core_range));
-    desc.cbs.push_back(make_cb(cb::local_stats, 1, interm_df, worker_core_range));
-    desc.cbs.push_back(make_cb(cb::gathered_stats, ring_size, interm_df, worker_core_range));
+    // Stats CBs hold a chunk of per-row partials, double-buffered so a peer's fabric write of chunk k+1
+    // cannot land on a region the compute kernel is still consuming for chunk k.
+    desc.cbs.push_back(make_cb(cb::local_stats, gather_chunk * 2, interm_df, worker_core_range));
+    desc.cbs.push_back(make_cb(cb::gathered_stats, ring_size * gather_chunk * 2, interm_df, worker_core_range));
     desc.cbs.push_back(make_cb(cb::eps, 1, tt::DataFormat::Float16_b, worker_core_range));
     if (has_gamma) {
         desc.cbs.push_back(make_cb(cb::gamma, Wt, gamma_df, worker_core_range));
@@ -249,7 +271,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         static_cast<uint32_t>(has_beta),
         reduce_factor,
         cb::reduce_one,
-        ring_size};
+        ring_size,
+        gather_chunk};
     TensorAccessorArgs(a.buffer()).append_to(reader_ct_args);
     if (has_gamma) {
         TensorAccessorArgs(gamma_tensor.value().buffer()).append_to(reader_ct_args);
@@ -281,10 +304,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         ring_index,
         num_targets_forward,
         num_targets_backward,
-        forward_coord.has_value() ? 1u : 0u,                      // start_distance_in_hops_forward
-        forward_coord.has_value() ? num_targets_forward : 0u,     // range_hops_forward
-        backward_coord.has_value() ? 1u : 0u,                     // start_distance_in_hops_backward
-        backward_coord.has_value() ? num_targets_backward : 0u};  // range_hops_backward
+        forward_coord.has_value() ? 1u : 0u,                     // start_distance_in_hops_forward
+        forward_coord.has_value() ? num_targets_forward : 0u,    // range_hops_forward
+        backward_coord.has_value() ? 1u : 0u,                    // start_distance_in_hops_backward
+        backward_coord.has_value() ? num_targets_backward : 0u,  // range_hops_backward
+        gather_chunk};
     TensorAccessorArgs(output.buffer()).append_to(writer_ct_args);
 
     KernelDescriptor writer_desc;
@@ -316,7 +340,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         static_cast<uint32_t>(has_gamma),
         static_cast<uint32_t>(has_beta),
         static_cast<uint32_t>(fp32_dest_acc_en),
-        cb::reduce_one};
+        cb::reduce_one,
+        gather_chunk};
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = std::string(kKernelDir) + "compute/all_gather_rms_norm_compute.cpp";
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -353,17 +378,18 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     }
     const uint32_t num_connections = dst_nodes.size();
 
+    // Fan the tile-rows across the worker cores: core c handles rows [c*rows_per_core, (c+1)*rows_per_core).
+    const uint32_t num_cores = worker_cores.size();
+    const uint32_t rows_per_core = (num_tile_rows + num_cores - 1) / num_cores;
     CoreCoord drain_sync_core;
-    for (uint32_t link = 0; link < args.num_links; ++link) {
-        const CoreCoord core = worker_cores[link];
-        if (link == 0) {
+    for (uint32_t c = 0; c < num_cores; ++c) {
+        const CoreCoord core = worker_cores[c];
+        if (c == 0) {
             drain_sync_core = mesh_device->worker_core_from_logical_core(core);
         }
 
-        // Per-core row range for the reduction work.
-        const uint32_t rows_per_worker = (num_tile_rows + args.num_links - 1) / args.num_links;
-        const uint32_t row_start = std::min(link * rows_per_worker, num_tile_rows);
-        const uint32_t row_end = std::min((link + 1) * rows_per_worker, num_tile_rows);
+        const uint32_t row_start = std::min(c * rows_per_core, num_tile_rows);
+        const uint32_t row_end = std::min((c + 1) * rows_per_core, num_tile_rows);
         const uint32_t num_rows_this_worker = row_end - row_start;
         const uint32_t tile_offset = row_start * Wt;
 
@@ -404,7 +430,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
             writer_rt_args.push_back(stats_ready_semaphore_id);
             tt::tt_metal::KernelHandle writer_kernel_id_mut = writer_kernel_id;
             tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
-                sender_fabric_node_id.value(), dst_nodes, {link}, desc, writer_kernel_id_mut, core, writer_rt_args);
+                sender_fabric_node_id.value(), dst_nodes, {c}, desc, writer_kernel_id_mut, core, writer_rt_args);
         }
 
         KernelDescriptor::RTArgList writer_rt_args_builder;

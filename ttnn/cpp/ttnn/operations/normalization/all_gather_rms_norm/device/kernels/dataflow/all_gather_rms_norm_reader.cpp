@@ -23,6 +23,20 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 
+// Stream `count` contiguous interleaved tiles starting at `start_tile` into cb_inp (one tile at a time).
+template <typename SrcAccessor>
+FORCE_INLINE void stream_tiles(
+    const SrcAccessor& src, CircularBuffer& cb, Noc& noc, uint32_t tile_bytes, uint32_t start_tile, uint32_t count) {
+    uint32_t idx = start_tile;
+    for (uint32_t i = 0; i < count; i++) {
+        cb.reserve_back(1);
+        noc.async_read(src, cb, tile_bytes, {.page_id = idx}, {.offset_bytes = 0});
+        idx++;
+        noc.async_read_barrier();
+        cb.push_back(1);
+    }
+}
+
 void kernel_main() {
     // Compile-time args (order must match all_gather_rms_norm_program_factory.cpp: reader_ct_args).
     constexpr uint32_t cb_inp = get_compile_time_arg_val(0);
@@ -37,8 +51,9 @@ void kernel_main() {
     constexpr uint32_t reduce_factor = get_compile_time_arg_val(9);
     constexpr uint32_t cb_reduce_one = get_compile_time_arg_val(10);  // SUM scaler CB (for ring_size > 1)
     constexpr uint32_t ring_size = get_compile_time_arg_val(11);
+    constexpr uint32_t gather_chunk = get_compile_time_arg_val(12);  // rows per batched gather (ring>1)
 
-    constexpr auto src_args = TensorAccessorArgs<12>();
+    constexpr auto src_args = TensorAccessorArgs<13>();
 #if FUSE_GAMMA
     constexpr auto gamma_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 #endif
@@ -120,16 +135,19 @@ void kernel_main() {
 #endif
 
     // Stream the input rows assigned to this worker.
-    uint32_t inp_tile_idx = tile_offset;
-    for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            for (uint32_t r = 0; r < blk; r++) {
-                cb_inp_buf.reserve_back(1);
-                noc.async_read(src_a, cb_inp_buf, src_tile_bytes, {.page_id = inp_tile_idx}, {.offset_bytes = 0});
-                inp_tile_idx++;
-                noc.async_read_barrier();
-                cb_inp_buf.push_back(1);
-            }
+    if constexpr (ring_size == 1) {
+        // Single device: stream every row once; the compute kernel keeps each row resident for both x^2
+        // and the normalize step.
+        stream_tiles(src_a, cb_inp_buf, noc, src_tile_bytes, tile_offset, NCHt * Wt);
+    } else {
+        // Multi device: the compute kernel runs a chunked two-pass scheme (x^2 -> gather -> normalize) and
+        // does NOT keep the input resident across the gather, so we re-stream each chunk's rows a second
+        // time for pass 2.
+        for (uint32_t chunk_start = 0; chunk_start < NCHt; chunk_start += gather_chunk) {
+            const uint32_t rows = (NCHt - chunk_start) < gather_chunk ? (NCHt - chunk_start) : gather_chunk;
+            const uint32_t chunk_first_tile = tile_offset + chunk_start * Wt;
+            stream_tiles(src_a, cb_inp_buf, noc, src_tile_bytes, chunk_first_tile, rows * Wt);  // pass 1
+            stream_tiles(src_a, cb_inp_buf, noc, src_tile_bytes, chunk_first_tile, rows * Wt);  // pass 2
         }
     }
 }
