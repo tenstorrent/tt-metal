@@ -40,6 +40,10 @@ import pytest
 from tests.nightly.sdpa_perf_utils import MeshConfig
 
 MESH_CONFIG = MeshConfig.detect()
+# TEMP sweep override: force sp=4 ring (tp=2) on the 8-device box for the 1280/1248 seq sweeps.
+MESH_CONFIG = MeshConfig(
+    is_galaxy=False, num_devices=MESH_CONFIG.num_devices, sp_size=4, tp_size=2, grid_cols=12, grid_rows=10
+)
 
 # ============================================================================
 # MODEL CONFIGURATIONS
@@ -983,7 +987,7 @@ def run_ring_mla_sdpa(
 # ============================================================================
 # CHUNKED-PREFILL VALIDATION
 # ============================================================================
-CHUNKED_PREFILL_PER_DEVICE_CHUNK = 640
+CHUNKED_PREFILL_PER_DEVICE_CHUNK = 1280
 CHUNKED_PREFILL_N_CHUNKS = 11
 CHUNKED_PREFILL_CHUNK_SIZE = CHUNKED_PREFILL_PER_DEVICE_CHUNK * MESH_CONFIG.sp_size
 CHUNKED_PREFILL_TOTAL_SEQ = CHUNKED_PREFILL_CHUNK_SIZE * CHUNKED_PREFILL_N_CHUNKS
@@ -994,6 +998,9 @@ CHUNKED_PREFILL_PCC_THRESHOLD = 0.99
 # galaxy 4x8), matching the per-ring convention used by the sweep configs.
 CHUNKED_PREFILL_HEADS_PER_RING = 16
 CHUNKED_PREFILL_SEED = 1234
+# TEMP sweep toggle: run the chunked path with V in latent space (rematerialized on-device
+# from the first d_v columns of K; no separate V tensor / V all-gather).
+CHUNKED_LATENT_V = True
 
 
 def run_ring_joint_sdpa_chunked(
@@ -1062,7 +1069,13 @@ def run_ring_joint_sdpa_chunked(
     num_links = 2
 
     mesh_shape = ttnn.MeshShape(mesh_config.tp_size, sp_size)
-    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+    # P150_X8 is a cube graph (Q3), not a 2x4 grid: row-major [0,1,2,3] is NOT a 4-cycle.
+    # For sp=4 rings, pin physical ids so each sp-row is a real cube face (and tp links exist).
+    open_kwargs = {}
+    if mesh_config.tp_size == 2 and sp_size == 4:
+        # Ring A: 0-1-3-2 (wrap 2-0); Ring B: 4-5-7-6 (wrap 6-4); tp links 0-4,1-5,3-7,2-6.
+        open_kwargs["physical_device_ids"] = [0, 1, 3, 2, 4, 5, 7, 6]
+    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **open_kwargs)
 
     try:
         sdpa_compute_grid = (mesh_config.sdpa_cols, mesh_config.grid_rows)
@@ -1080,14 +1093,21 @@ def run_ring_joint_sdpa_chunked(
 
         ccl_semaphore_handles = create_global_semaphores(mesh_device, ccl_sub_device_crs, 0)
 
+        latent_v = CHUNKED_LATENT_V
+        # In latent mode V shares K's single head (V == K[..., :d_v]); otherwise V is a
+        # separate nhv-head tensor.
+        v_heads = nhk if latent_v else nhv
+
         joint_Q = torch.zeros((b, nhq, joint_seq_len, d_q), dtype=torch.bfloat16)
         joint_K = torch.zeros((b, nhk, joint_seq_len, d_k), dtype=torch.bfloat16)
-        joint_V = torch.zeros((b, nhv, joint_seq_len, d_v), dtype=torch.bfloat16)
+        joint_V = torch.zeros((b, v_heads, joint_seq_len, d_v), dtype=torch.bfloat16)
 
         torch.manual_seed(CHUNKED_PREFILL_SEED)
         Q_full = fa_rand(b, nhq, total_seq, d_q)
         K_full = fa_rand(b, nhk, total_seq, d_k)
-        V_full = fa_rand(b, nhv, total_seq, d_v)
+        # Latent V: V is the first d_v columns of the single-head latent K, rematerialized
+        # on-device from K (no separate V tensor and no V all-gather).
+        V_full = K_full[:, :, :, :d_v].contiguous() if latent_v else fa_rand(b, nhv, total_seq, d_v)
         ref_full, _ = torch_joint_sdpa_reference(Q_full, K_full, V_full, joint_Q, joint_K, joint_V, is_causal=True)
 
         sdpa_input_shard_dims = [None, None]
@@ -1185,14 +1205,18 @@ def run_ring_joint_sdpa_chunked(
                 mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_joint_k_shard_dims
             ),
         )
-        tt_joint_V = ttnn.from_torch(
-            joint_V,
-            dtype=kv_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_joint_shard_dims
-            ),
+        tt_joint_V = (
+            None
+            if latent_v
+            else ttnn.from_torch(
+                joint_V,
+                dtype=kv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=sdpa_joint_shard_dims
+                ),
+            )
         )
 
         def call_sdpa(tt_Q, tt_K, tt_V, logical_n, is_causal, p_buf_k, p_buf_v):
@@ -1220,6 +1244,7 @@ def run_ring_joint_sdpa_chunked(
                 subdevice_id=worker_sub_device_id,
                 ccl_core_grid_offset=(ccl_column, 0),
                 use_column_major_ccl=True,
+                head_dim_v=(d_v if latent_v else None),
             )
             return tt_out
 
@@ -1274,12 +1299,12 @@ def run_ring_joint_sdpa_chunked(
                 s, e = i * chunk_size, (i + 1) * chunk_size
 
                 K_balanced = to_balanced_growing(K_full, i)
-                V_balanced = to_balanced_growing(V_full, i)
                 Q_chunk = Q_full[:, :, s:e, :].contiguous()
 
                 tt_Q = upload_q(Q_chunk)
                 tt_K = upload_k(K_balanced)
-                tt_V = upload_v(V_balanced)
+                # Latent V is rematerialized on-device from K; no separate V upload.
+                tt_V = None if latent_v else upload_v(to_balanced_growing(V_full, i))
 
                 # AllGather output buffer sized to post-gather K/V: N_global == (i+1) * chunk_size.
                 persistent_output_buffer_k = ttnn.from_torch(
@@ -1291,14 +1316,18 @@ def run_ring_joint_sdpa_chunked(
                         mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_k_shard_dims
                     ),
                 )
-                persistent_output_buffer_v = ttnn.from_torch(
-                    torch.zeros(b, nhv, e, d_v),
-                    dtype=kv_dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=mesh_device,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(
-                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_persistent_shard_dims
-                    ),
+                persistent_output_buffer_v = (
+                    None
+                    if latent_v
+                    else ttnn.from_torch(
+                        torch.zeros(b, nhv, e, d_v),
+                        dtype=kv_dtype,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=mesh_device,
+                        mesh_mapper=ttnn.ShardTensor2dMesh(
+                            mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_persistent_shard_dims
+                        ),
+                    )
                 )
 
                 try:
@@ -2053,7 +2082,7 @@ CHUNKED_PREFILL_MODEL_CONFIGS = {
         q_dtype=ttnn.bfloat16,
         kv_dtype=ttnn.bfloat8_b,
         q_chunk_sizes=[64],
-        k_chunk_sizes=[128, 256, 512],
+        k_chunk_sizes=[256, 384, 512, 640, 768],
         seq_len=CHUNKED_PREFILL_CHUNK_SIZE,  # unused by chunked path
     ),
 }
