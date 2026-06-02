@@ -53,6 +53,82 @@ def vision_rms_norm_memcfg(seq_len: int, feature_dim: int = 1) -> ttnn.MemoryCon
     return vision_seq_memcfg(seq_len, feature_dim)
 
 
+def _vision_rms_norm_block_shard_enabled() -> bool:
+    return os.environ.get("PIXTRAL_VISION_RMS_NORM_BLOCK_SHARD", "1").strip() not in ("0", "false", "False")
+
+
+def _rms_norm_subblock_w(block_w: int) -> int:
+    for s in (4, 3, 2, 1):
+        if block_w % s == 0:
+            return s
+    return 1
+
+
+def vision_rms_norm_block_shard_eligible(
+    seq_len: int,
+    feature_dim: int,
+    grid_x: int = 8,
+    grid_y: int = 8,
+) -> bool:
+    """True when 2D block-sharded RMSNorm matches 1024² sweep winner (8x8, bh=4, bw=4, sbw=4)."""
+    if not _vision_rms_norm_block_shard_enabled():
+        return False
+    m, n = int(seq_len), int(feature_dim)
+    if m % TILE or n % TILE:
+        return False
+    mt, nt = m // TILE, n // TILE
+    if grid_x < 2 or mt % grid_y or nt % grid_x:
+        return False
+    return True
+
+
+def vision_rms_norm_block_shard_memcfg(
+    seq_len: int,
+    feature_dim: int,
+    grid_x: int = 8,
+    grid_y: int = 8,
+) -> ttnn.MemoryConfig:
+    return ttnn.create_sharded_memory_config(
+        (1, 1, int(seq_len), int(feature_dim)),
+        core_grid=ttnn.CoreGrid(y=grid_y, x=grid_x),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+
+def vision_rms_norm_block_shard_program_config(
+    seq_len: int,
+    feature_dim: int,
+    grid_x: int = 8,
+    grid_y: int = 8,
+) -> ttnn.LayerNormShardedMultiCoreProgramConfig:
+    mt, nt = int(seq_len) // TILE, int(feature_dim) // TILE
+    block_h = mt // grid_y
+    block_w = nt // grid_x
+    return ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[grid_x, grid_y],
+        subblock_w=_rms_norm_subblock_w(block_w),
+        block_h=block_h,
+        block_w=block_w,
+        inplace=False,
+    )
+
+
+def vision_rms_norm_prepare_block_shard_input(
+    tensor: ttnn.Tensor,
+    seq_len: int,
+    feature_dim: int,
+    grid_x: int = 8,
+    grid_y: int = 8,
+) -> ttnn.Tensor:
+    mem = vision_rms_norm_block_shard_memcfg(seq_len, feature_dim, grid_x, grid_y)
+    if tensor.is_sharded():
+        if tensor.memory_config() == mem:
+            return tensor
+        return ttnn.to_memory_config(tensor, mem)
+    return ttnn.interleaved_to_sharded(tensor, mem)
+
+
 def vision_rope_memcfg(seq_len: int, head_dim: int = 1) -> ttnn.MemoryConfig:
     """L1 for RoPE embed + rotary_embedding when seq×head fits."""
     rope_cap_raw = os.environ.get("PIXTRAL_VISION_L1_ROPE_SEQ_CAP", os.environ.get("PIXTRAL_VISION_L1_SEQ_CAP", "4096"))
