@@ -5,7 +5,7 @@ import pytest
 import torch
 from helpers.bfp_format_utils import bfp4b_to_float16b, bfp8b_to_float16b
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, Tilize
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
@@ -186,12 +186,15 @@ def test_dprint_tile(formats):
     ), f"Expected truncated={fit_cells < 64} for {formats.input_format}, got {truncated}"
 
 
-@parametrize(formats=input_output_formats([DataFormat.Float16_b], same=True))
-def test_dprint_tensix(formats):
+@parametrize(
+    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
+)
+def test_dprint_tensix(dest_acc):
     if get_chip_architecture() == ChipArchitecture.QUASAR:
         pytest.skip("dprint_tensix_dest_reg is unsupported on Quasar")
 
-    formats = formats[0]
+    dest_acc = dest_acc[0]
+    formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     src_A, _, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=[32, 32],
@@ -215,12 +218,13 @@ def test_dprint_tensix(formats):
             tile_count_res=1,
             num_faces=4,
         ),
-        dest_acc=DestAccumulation.Yes,
+        dest_acc=dest_acc,
         unpack_to_dest=False,
     ).run()
 
-    # bf16 widened to fp32 in DEST is bit-exact, so decoded rows must equal the
-    # stimulus. Skip the "Tile ID = 0" header, its trailing "0" parses as a float.
+    # bf16 round-trips through DEST exactly: DestAcc.Yes widens to fp32 with
+    # zero low bits; DestAcc.No keeps it as Float16_b. Skip the "Tile ID = 0"
+    # header, its trailing "0" parses as a float.
     expected = src_A.to(torch.float32).flatten().tolist()
     decoded = _extract_floats(
         [line for line in outcome.device_print_lines if "Tile ID" not in line]
