@@ -46,7 +46,9 @@ enum class SenderCoreType : uint8_t {
 // (the free subchannel plus the bank's NOC1-endpoint subchannel, both on NOC0); the
 // bank's receivers are split ceil/floor across them. This is only valid for the
 // receiver-contiguous DRAM layout and must match the DramCorePrefetcherConfig flag used
-// at StartDramCorePrefetcher. A bank with a single receiver keeps one sender.
+// at StartDramCorePrefetcher. Every bank must then have at least two receivers (one
+// receiver cannot be split across two senders); a single-receiver bank is rejected with
+// a TT_FATAL — use `dual_senders_per_bank = false` for such topologies.
 //
 // MeshDevice-only: the arena that backs this GCB's pages_sent allocation lives on
 // MeshDeviceImpl, so a bare IDevice cannot construct one.

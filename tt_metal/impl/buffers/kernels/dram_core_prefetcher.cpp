@@ -41,10 +41,9 @@ using tt::tt_metal::kNumCqSignalSlots;
 using tt::tt_metal::kRequestPageBytes;
 
 // Per-stage cycle profiling — gated on watcher ring-buffer being enabled so
-// production builds pay zero. Decode tags ("0xA1 .. 0xAA") match the dump
-// reader in dram_core_prefetcher_drisc_profile.md.
-// Per-stage cycle profiling — gated on watcher ring-buffer being enabled so
-// production builds pay zero (variables and timestamp reads don't exist).
+// production builds pay zero (the variables and timestamp reads don't exist).
+// Decode tags ("0xA1 .. 0xAA") match the dump reader in
+// dram_core_prefetcher_drisc_profile.md.
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_RING_BUFFER) && !defined(FORCE_WATCHER_OFF)
 #include "api/debug/ring_buffer.h"
 #include "internal/tt-1xx/risc_common.h"

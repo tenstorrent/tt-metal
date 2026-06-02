@@ -336,12 +336,18 @@ DramCorePrefetcherTensorLayout compute_tensor_layout(
     uint32_t stage_third,
     ContextId context_id) {
     const auto* ref_buffer = t.mesh_buffer().get_reference_buffer();
-    (void)num_banks;
     const LayoutMode mode = detect_layout_mode(t, *ref_buffer, total_receivers);
     if (mode == LayoutMode::KRowMajor) {
         // KRowMajor is single-sender-per-bank only, so receivers_per_bank is the bank's
-        // full receiver count. (Receiver-contiguous derives its geometry from the shard
-        // shape and ignores the receiver count entirely.)
+        // full receiver count and the bank receiver counts must be uniform. (Receiver-
+        // contiguous derives its geometry from the shard shape and ignores the receiver
+        // count entirely, and tolerates non-uniform per-bank receivers.)
+        TT_FATAL(
+            num_banks > 0 && total_receivers % num_banks == 0,
+            "DRAM-core prefetcher (K-row-major): total receivers ({}) must divide evenly across {} banks. "
+            "Non-uniform per-bank receiver counts are only supported by the receiver-contiguous layout.",
+            total_receivers,
+            num_banks);
         return compute_tensor_layout_krow_major(t, block_count, receivers_per_bank, ring_half, context_id);
     }
     return compute_tensor_layout_recv_contig(t, block_count, stage_third, context_id);
@@ -567,11 +573,11 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
     for (const auto& [_sender, receivers] : mapping) {
         total_receivers += receivers.num_cores();
     }
-    TT_FATAL(
-        num_banks_ > 0 && total_receivers % num_banks_ == 0,
-        "DRAM-core prefetcher: total receivers ({}) must divide evenly across {} banks",
-        total_receivers,
-        num_banks_);
+    TT_FATAL(num_banks_ > 0, "DRAM-core prefetcher: num_banks must be > 0");
+    // receivers_per_bank is only consumed by the K-row-major layout (single sender per
+    // bank). Recv-contig derives its geometry from the shard shape and ignores it, and
+    // its receivers need not be uniform per bank — so the even-divisibility requirement
+    // is enforced per-tensor in compute_tensor_layout(), only for K-row-major tensors.
     const uint32_t receivers_per_bank = total_receivers / num_banks_;
     const uint32_t gcb_state_addr = static_cast<uint32_t>(experimental::sender_state_drisc_l1_base(gcb));
 
