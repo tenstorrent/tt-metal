@@ -71,8 +71,8 @@ on:
         type: boolean
         default: false
       additional_test_categories:
-        description: |
-          Additional test categories to run (comma-separated, e.g.,\
+        description: >
+          Additional test categories to run (comma-separated, e.g.,
           conv,pool,sdxl,train,sdpa,eltwise,matmul,experimental,docs_examples,ops_docs_check,misc,moreh,fused,reduction,data_movement,transformers,compute_fused)
         required: false
         type: string
@@ -296,9 +296,10 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.generate-arch-matrix.outputs.l2-nightly-skus }}
-      additional_test_categories: ${{ github.event_name == 'schedule' && \
-        'conv,matmul,fused,reduction,experimental,pool,eltwise,transformers,moreh,misc,sdpa,data_movement,docs_examples,sdxl,train,compute_fused' || \
-        inputs.additional_test_categories }}
+      additional_test_categories: >-
+        ${{ github.event_name == 'schedule' &&
+        'conv,matmul,fused,reduction,experimental,pool,eltwise,transformers,moreh,misc,sdpa,data_movement,docs_examples,sdxl,train,compute_fused'
+        || inputs.additional_test_categories }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ttnn-ops-docs-check:
     needs: [build-artifact, generate-arch-matrix]
