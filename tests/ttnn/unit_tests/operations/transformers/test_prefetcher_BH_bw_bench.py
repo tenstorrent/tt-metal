@@ -377,6 +377,101 @@ def test_bw_tensor_prefetcher_recv_contig(device, op_name, shape):
     indirect=True,
 )
 @pytest.mark.parametrize("op_name,shape", LLAMA_SHAPES)
+def test_bw_dram_core_prefetcher_streaming(device, op_name, shape):
+    """DRAM-core prefetcher in **streaming** receiver-contiguous mode → discard receiver.
+
+    Same recv-contig weight + topology as test_bw_dram_core_prefetcher_recv_contig, but
+    the request is queued with streaming=True (each receiver's blocks read circularly from
+    its ring index g_r) and the GCB is sized to a small window of BENCH_GCB_WINDOW_BLOCKS
+    blocks/receiver (default 4) instead of a full layer. This measures the prefetcher-side
+    cost of streaming — the per-round physical-wrap clamp fragmentation plus the shallower
+    GCB backpressure — against the batched recv-contig and K-row-major push-BW numbers.
+    The discard consumer drains FIFO order regardless of block content, so the rotated
+    delivery is BW-neutral; byte correctness is covered by the validator + matmul PCC tests.
+    """
+    _apply_shape(shape)
+
+    trace_repeats = _bench_trace_repeats()
+    num_prefetch_layers = trace_repeats + 1
+
+    num_dram_banks = device.dram_grid_size().x
+    num_receivers = num_dram_banks * _NUM_RECV_PER_BANK
+    page_size = _per_receiver_page_size_bytes()
+    pages_per_layer = num_receivers  # = ring_size
+
+    tt_weight = _build_weight_recv_contig(device, num_dram_banks)
+
+    bank_to_receivers = [
+        (
+            b,
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, _NUM_RECV_PER_BANK - 1))}),
+        )
+        for b in range(num_dram_banks)
+    ]
+    # Shallow GCB: a small live window instead of a full layer (the streaming win).
+    window_blocks = int(os.environ.get("BENCH_GCB_WINDOW_BLOCKS", "4"))
+    window_blocks = min(window_blocks, pages_per_layer)
+    gcb_size = window_blocks * page_size
+    dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
+    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(
+        device, bank_to_receivers, gcb_size, dual_senders_per_bank=dual_senders
+    )
+
+    logger.info(
+        f"[dram_core_bw_stream][{op_name}] dual_senders={dual_senders} window_blocks={window_blocks} "
+        f"K={_K_ORIG} K_padded={_K} N={_N_ORIG} N_padded={_N} ring={num_receivers} page_size={page_size} "
+        f"pages_per_layer={pages_per_layer} gcb_size={gcb_size} trace_repeats={trace_repeats}"
+    )
+
+    ttnn.experimental.start_dram_core_prefetcher(device, dual_senders_per_bank=dual_senders)
+    ttnn.experimental.queue_dram_core_prefetcher_request(
+        device, [(tt_weight, num_receivers)] * num_prefetch_layers, global_cb=gcb, streaming=True
+    )
+
+    ttnn.experimental.test_dram_prefetcher_consumer(
+        device, num_iters=pages_per_layer, page_size_bytes=page_size, global_cb=gcb
+    )
+    ttnn.synchronize_device(device)
+
+    bench_trace = ttnn.begin_trace_capture(device, cq_id=0)
+    for _ in range(trace_repeats):
+        ttnn.experimental.test_dram_prefetcher_consumer(
+            device, num_iters=pages_per_layer, page_size_bytes=page_size, global_cb=gcb
+        )
+    ttnn.end_trace_capture(device, bench_trace, cq_id=0)
+
+    aiclk_pre = device.get_clock_rate_mhz()
+    t0 = time.perf_counter()
+    ttnn.execute_trace(device, bench_trace, cq_id=0, blocking=False)
+    ttnn.synchronize_device(device)
+    elapsed = time.perf_counter() - t0
+    aiclk_post = device.get_clock_rate_mhz()
+    ttnn.release_trace(device, bench_trace)
+    ttnn.experimental.stop_dram_core_prefetcher(device)
+
+    if os.environ.get("TT_METAL_WATCHER", "0") == "1":
+        time.sleep(3)
+
+    bytes_per_recv = trace_repeats * pages_per_layer * page_size
+    bytes_total = bytes_per_recv * num_receivers
+    bw_total = _gbps(bytes_total, elapsed)
+    bw_per_recv = bw_total / num_receivers
+    bw_at_ref = bw_total * 1350.0 / max(aiclk_post, 1)
+    logger.info(
+        f"[dram_core_bw_stream][{op_name}] dual_senders={dual_senders} window_blocks={window_blocks} "
+        f"trace_elapsed={elapsed * 1e3:.2f}ms bytes_per_recv={bytes_per_recv / 1e6:.1f}MB "
+        f"total_bytes={bytes_total / 1e9:.2f}GB aggregate_bw={bw_total:.2f} GB/s "
+        f"per_recv_bw={bw_per_recv:.3f} GB/s aiclk_pre={aiclk_pre}MHz aiclk_post={aiclk_post}MHz "
+        f"bw@1.35GHz={bw_at_ref:.2f} GB/s"
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}],
+    indirect=True,
+)
+@pytest.mark.parametrize("op_name,shape", LLAMA_SHAPES)
 def test_bw_workercore_prefetcher(device, op_name, shape):
     """Worker-core prefetcher → discard receiver. Same shape as test_bw_dram_core:
     prefetcher enqueued ONCE outside the trace with `num_layers = trace_repeats + 1`,
