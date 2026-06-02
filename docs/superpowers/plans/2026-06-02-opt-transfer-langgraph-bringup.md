@@ -2488,6 +2488,93 @@ git add models/experimental/opt_transfer/graph.py models/experimental/opt_transf
 git commit -m "feat(opt_transfer): wire drift + perf gates into routing (pass needs PCC+drift; perf flags)"
 ```
 
+### Task J4: Diagnosis-driven repair (localize culprit, build diagnosis, re-propose)
+
+**Files:**
+- Modify: `models/experimental/opt_transfer/graph.py` (`RealImpl.repair`)
+- Test: `models/experimental/opt_transfer/tests/test_graph.py`
+
+H2's repair just incremented a counter. Now repair **localizes the culprit fusion** (Task G1, fallback toggling), **builds a `Diagnosis`** (Task G2, per-block vs accumulation axis), stores it in `state["diagnosis"]`, and increments. `RealImpl.match` (Task J2) already forwards `state["diagnosis"]` to `LLMClient.propose`, closing the learn-from-failure loop.
+
+- [ ] **Step 1: Write the failing test** (graph-level wiring, offline)
+
+```python
+# tests/test_graph.py (append)
+from models.experimental.opt_transfer.graph import build_graph
+from models.experimental.opt_transfer.repair import build_diagnosis
+
+
+class RepairFakes:
+    def __init__(self): self.seen_diag = []; self.calls = 0
+    def trace(self, s): s["graph_summary"] = [{"name": "q"}]; return s
+    def match(self, s): self.seen_diag.append(s.get("diagnosis")); s["proposals"] = [{"entry_id": "x"}]; return s
+    def gate(self, s): s["applied"] = ["x"]; return s
+    def codegen(self, s): return s
+    def verify(self, s):
+        self.calls += 1
+        s["full_pcc"] = 0.999 if self.calls >= 2 else 0.80     # fails once, then passes
+        s["drift"] = {"first_divergence_step": 100, "horizon": 100}
+        return s
+    def perf(self, s): s["perf"] = {"naive_ms": 100.0, "fused_ms": 60.0}; return s
+    def repair(self, s):
+        s["diagnosis"] = build_diagnosis(node="x", per_block_pcc=s["full_pcc"], tf_pcc=None,
+                                         free_run_divergence_frac=None, config_tried={}).__dict__
+        s["iteration"] = s.get("iteration", 0) + 1
+        return s
+
+
+def test_repair_sets_diagnosis_and_match_consumes_it():
+    f = RepairFakes()
+    out = build_graph(f, max_iterations=3).invoke({"model": "m", "iteration": 0})
+    assert out["status"] == "pass"
+    assert f.seen_diag[0] is None              # first match: no diagnosis
+    assert f.seen_diag[1] is not None          # second match: repair's diagnosis forwarded
+    assert f.seen_diag[1]["node"] == "x" and f.seen_diag[1]["axis"] == "per_block_pcc"
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `pytest models/experimental/opt_transfer/tests/test_graph.py::test_repair_sets_diagnosis_and_match_consumes_it -v`
+Expected: PASS already at the graph level *if* the H2 `repair`→`match` edge exists — but the production `RealImpl.repair` must do the real work. Implement it next; this test guards the wiring contract.
+
+- [ ] **Step 3: Write `RealImpl.repair`** (production; device parts run at bring-up)
+
+```python
+# graph.py — RealImpl
+def repair(self, state):
+    from models.experimental.opt_transfer.repair import localize_culprit, build_diagnosis
+    applied = state.get("applied", [])
+    # localize: which single fusion, reverted to fallback, restores full PCC?
+    culprit = localize_culprit(
+        applied,
+        pcc_with=lambda disabled: self._full_pcc_with(state, disabled),  # re-runs verify on device
+        threshold=CONFIG.gates["full_pcc"],
+    )
+    node = culprit or (applied[0] if applied else "?")
+    drift = state.get("drift") or {}
+    frac = (drift.get("first_divergence_step", 1) / drift["horizon"]) if drift.get("horizon") else None
+    state["diagnosis"] = build_diagnosis(
+        node=node, per_block_pcc=state.get("full_pcc", 0.0),
+        tf_pcc=state.get("tf_pcc"), free_run_divergence_frac=frac,
+        config_tried=state.get("last_config", {}),
+        drift_min_frac=CONFIG.gates["drift_first_divergence_min_frac"]).__dict__
+    state["iteration"] = state.get("iteration", 0) + 1
+    return state
+```
+(`_full_pcc_with(state, disabled)` rebuilds the block runners with the named fusions reverted to their naive fallback and re-measures full PCC — reuses the codegen fallbacks and the J6 model-shape verify; on-device, exercised by the e2e.)
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `pytest models/experimental/opt_transfer/tests/test_graph.py -v`
+Expected: PASS (all)
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add models/experimental/opt_transfer/graph.py models/experimental/opt_transfer/tests/test_graph.py
+git commit -m "feat(opt_transfer): diagnosis-driven repair (localize culprit -> diagnose -> re-propose)"
+```
+
 ---
 
 ## Self-Review
