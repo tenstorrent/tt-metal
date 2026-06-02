@@ -394,13 +394,15 @@ class VoxtralTTAcousticModel:
 
     def fm_noise_tt(self, bsz: int, seed: int) -> ttnn.Tensor:
         """Device-resident FM initial noise ``[bsz, 1, n_acoustic]``."""
-        return ttnn.randn(
-            (bsz, 1, self.n_acoustic_out),
+        # FM noise on CPU: ttnn.randn(seed) != torch.randn(seed); CPU ref uses torch, so upload for E2E/step parity.
+        torch.manual_seed(seed)
+        x_0 = torch.randn(bsz, self.n_acoustic_out, dtype=torch.bfloat16)
+        return ttnn.from_torch(
+            x_0.unsqueeze(1).contiguous(),
             device=self.mesh_device,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=self._fm_dram_mem_config,
-            seed=seed,
         )
 
     def fm_pre_round_scaled_tt(self, sampled_tt: ttnn.Tensor) -> ttnn.Tensor:
