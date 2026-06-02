@@ -740,7 +740,7 @@ TEST_F(SDPABackwardTest, DISABLED_SmallBatch) {
 
 TEST_F(SDPABackwardTest, NIGHTLY_NanoGPTConfig) {
     // D=128 needs wider tolerance: 2x inner dim accumulation depth in BF16 matmul
-    // causes larger forward-to-backward precision cascade for dQ/dK.
+    // causes larger forward-to-backward precision cascade for dQ/dK
     SDPABackwardTestConfig config{
         .batch_size = 64U,
         .sequence_length = 256U,

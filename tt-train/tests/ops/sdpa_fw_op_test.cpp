@@ -713,12 +713,6 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_SmallBatch_12Heads_6Group) {
         .num_query_heads = 12U,
         .num_key_heads = 6U,
         .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
-        // bf16 exp polynomial widens result envelope at S=1024 with grouped heads.
-        .result_atol = 6e-2F,
-        .result_rtol = 6e-2F,
-        // logsumexp uses the bf16 exp; widen intermediate tolerance accordingly.
-        .intermediate_atol = 7e-2F,
-        .intermediate_rtol = 7e-2F,
         .test_name = "SmallBatch_12H_6KV_Grouped"};
     run_sdpa_test(config);
 }
@@ -732,11 +726,6 @@ TEST_F(SDPAForwardTest, NIGHTLY_SDPAForwardTest_Batch_12Heads_6Group) {
         .num_query_heads = 12U,
         .num_key_heads = 6U,
         .mask_type = ttml::metal::AttentionMaskType::Arbitrary,
-        // bf16 exp shifts numerical envelope; bump result + intermediate tolerances.
-        .result_atol = 7e-2F,
-        .result_rtol = 7e-2F,
-        .intermediate_atol = 7e-2F,
-        .intermediate_rtol = 7e-2F,
         .test_name = "Batch_16B_12H_6KV_Production"};
     run_sdpa_test(config);
 }
