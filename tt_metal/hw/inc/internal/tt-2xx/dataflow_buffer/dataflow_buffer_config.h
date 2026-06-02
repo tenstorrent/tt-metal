@@ -22,6 +22,7 @@ namespace dfb {
 enum AccessPattern : uint8_t {
     STRIDED,
     ALL,
+    BLOCKED,
     UNKNOWN,
 };
 
