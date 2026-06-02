@@ -25,6 +25,12 @@
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -380,6 +386,72 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddress) {
         UpdateDynamicCircularBufferAddress(program_, cb_ids[0], *l1_buffer);
         golden_addresses_per_core[core0][0] = l1_buffer->address();
         validate_cb_address(workload, this->devices_.at(id), cr_set, golden_addresses_per_core);
+    }
+}
+
+// Verifies that the MeshTensor overloads of CircularBufferConfig::set_globally_allocated_address[_and_total_size]
+// produce a CircularBufferConfig with identical state to the underlying Buffer overload. CircularBufferConfig's
+// operator== compares total_size, globally_allocated_address, data_formats, page_sizes, tiles, and
+// shadow_global_buffer.
+TEST_F(MeshDeviceFixture, TensixTestSetGloballyAllocatedAddressFromMeshTensorMatchesBuffer) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        auto& mesh_device = devices_.at(id);
+        CBConfig cb_config;
+
+        // Single-tile BFLOAT16 tensor → exactly one L1 page of cb_config.page_size (2048 B) bytes in one bank,
+        // matching the CB's total_size and satisfying the dynamic-CB bank-size validation.
+        auto tensor_layout = TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::TILE),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
+        auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
+        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec, TensorTopology());
+
+        Buffer* underlying_buffer = tensor.mesh_buffer().get_reference_buffer();
+        ASSERT_NE(underlying_buffer, nullptr);
+
+        CircularBufferConfig config_via_buffer = CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
+                                                     .set_page_size(0, cb_config.page_size)
+                                                     .set_globally_allocated_address(*underlying_buffer);
+        CircularBufferConfig config_via_tensor = CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
+                                                     .set_page_size(0, cb_config.page_size)
+                                                     .set_globally_allocated_address(tensor);
+
+        EXPECT_EQ(config_via_buffer, config_via_tensor);
+    }
+}
+
+TEST_F(MeshDeviceFixture, TensixTestSetGloballyAllocatedAddressAndTotalSizeFromMeshTensorMatchesBuffer) {
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        auto& mesh_device = devices_.at(id);
+        CBConfig cb_config;
+
+        auto tensor_layout = TensorLayout(
+            DataType::BFLOAT16,
+            PageConfig(Layout::TILE),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1});
+        auto spec = TensorSpec(Shape{32, 32}, tensor_layout);
+        auto tensor = MeshTensor::allocate_on_device(*mesh_device, spec, TensorTopology());
+
+        Buffer* underlying_buffer = tensor.mesh_buffer().get_reference_buffer();
+        ASSERT_NE(underlying_buffer, nullptr);
+
+        const uint32_t new_total_size = cb_config.page_size / 2;
+
+        CircularBufferConfig config_via_buffer =
+            CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
+                .set_page_size(0, cb_config.page_size)
+                .set_globally_allocated_address_and_total_size(*underlying_buffer, new_total_size);
+        CircularBufferConfig config_via_tensor =
+            CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}})
+                .set_page_size(0, cb_config.page_size)
+                .set_globally_allocated_address_and_total_size(tensor, new_total_size);
+
+        EXPECT_EQ(config_via_buffer, config_via_tensor);
+        EXPECT_EQ(config_via_buffer.total_size(), new_total_size);
+        EXPECT_EQ(config_via_tensor.total_size(), new_total_size);
+        EXPECT_EQ(config_via_buffer.globally_allocated_address(), underlying_buffer->address());
+        EXPECT_EQ(config_via_tensor.globally_allocated_address(), underlying_buffer->address());
     }
 }
 

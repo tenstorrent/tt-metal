@@ -1,3 +1,5 @@
+include(sources.cmake)
+
 add_library(ttnn_op_experimental_deepseek_prefill_offset_cumsum ${LIB_TYPE})
 add_library(
     TTNN::Ops::Experimental::DeepSeekPrefill::OffsetCumsum
@@ -22,24 +24,16 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES
+        FILES ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_OFFSET_CUMSUM_API_HEADERS}
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        device/offset_cumsum_device_operation.cpp
-        device/offset_cumsum_program_factory.cpp
-        offset_cumsum.cpp
+        ${TTNN_OP_EXPERIMENTAL_DEEPSEEK_PREFILL_OFFSET_CUMSUM_SRCS}
 )
 
-target_include_directories(ttnn_op_experimental_deepseek_prefill_offset_cumsum PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
-    ttnn_op_experimental_deepseek_prefill_offset_cumsum
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
-)
+target_link_libraries(ttnn_op_experimental_deepseek_prefill_offset_cumsum PRIVATE TT::Metalium PUBLIC TTNN::Core)
 
 install(
     TARGETS
@@ -51,4 +45,12 @@ install(
         COMPONENT ttnn-runtime
 )
 
-install(TARGETS ttnn_op_experimental_deepseek_prefill_offset_cumsum LIBRARY COMPONENT tar)
+install(
+    TARGETS
+        ttnn_op_experimental_deepseek_prefill_offset_cumsum
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
+    LIBRARY
+        COMPONENT tar
+)

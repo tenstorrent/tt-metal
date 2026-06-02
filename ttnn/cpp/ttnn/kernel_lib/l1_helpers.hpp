@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "experimental/circular_buffer.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 namespace dataflow_kernel_lib {
 
@@ -34,7 +34,7 @@ FORCE_INLINE volatile tt_l1_ptr uint32_t* addr_to_l1_ptr(uint32_t addr) {
  * @return UnicastEndpoint src_args_type with this core's NOC coordinates and the given address
  */
 FORCE_INLINE auto local_noc_addr(uint32_t addr, uint8_t noc_id = noc_index) {
-    return ::experimental::noc_traits_t<::experimental::UnicastEndpoint>::src_args_type{
+    return noc_traits_t<UnicastEndpoint>::src_args_type{
         .noc_x = my_x[noc_id], .noc_y = my_y[noc_id], .addr = addr};
 }
 
@@ -50,15 +50,15 @@ FORCE_INLINE void zero_tile(uint32_t write_addr) {
     static_assert(bytes_to_zero % MEM_ZEROS_SIZE == 0, "CB tile size must be a multiple of MEM_ZEROS_SIZE");
     constexpr uint32_t num_zeros_reads = bytes_to_zero / MEM_ZEROS_SIZE;
 
-    ::experimental::Noc noc;
-    ::experimental::UnicastEndpoint ep;
+    Noc noc;
+    UnicastEndpoint ep;
     const auto zeros_src = local_noc_addr(MEM_ZEROS_BASE, noc.get_noc_id());
 
-    noc.set_async_read_state<::experimental::Noc::VcSelection::DEFAULT, MEM_ZEROS_SIZE>(ep, MEM_ZEROS_SIZE, zeros_src);
+    noc.set_async_read_state<Noc::VcSelection::DEFAULT, MEM_ZEROS_SIZE>(ep, MEM_ZEROS_SIZE, zeros_src);
 
     for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc.async_read_with_state<::experimental::Noc::VcSelection::DEFAULT, 1>(
-            ep, ::experimental::CoreLocalMem<uint32_t>(write_addr), 0, zeros_src, {});
+        noc.async_read_with_state<Noc::VcSelection::DEFAULT, 1>(
+            ep, ::CoreLocalMem<uint32_t>(write_addr), 0, zeros_src, {});
         write_addr += MEM_ZEROS_SIZE;
     }
     noc.async_read_barrier();
@@ -71,7 +71,7 @@ FORCE_INLINE void zero_tile(uint32_t write_addr) {
  */
 template <uint32_t cb_id>
 FORCE_INLINE void prepare_zero_tile() {
-    ::experimental::CircularBuffer cb(cb_id);
+    ::CircularBuffer cb(cb_id);
     cb.reserve_back(1);
     zero_tile<cb_id>(cb.get_write_ptr());
     cb.push_back(1);

@@ -45,6 +45,7 @@ class Buffer;
 class GlobalSemaphore;
 class CoreRange;
 class CoreRangeSet;
+class MeshTensor;
 
 // ==================================================
 //                  HOST API: Device management
@@ -292,6 +293,9 @@ void UpdateDynamicCircularBufferAddress(
 // clang-format on
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
+
+void UpdateDynamicCircularBufferAddressAndTotalSize(
+    Program& program, CBHandle cb_handle, const MeshTensor& tensor, uint32_t total_size);
 
 // clang-format off
 /**

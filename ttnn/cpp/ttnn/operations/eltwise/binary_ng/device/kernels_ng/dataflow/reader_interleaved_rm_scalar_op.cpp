@@ -5,8 +5,8 @@
 
 #include "api/alignment.h"
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -40,9 +40,9 @@ void kernel_main() {
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
     constexpr auto src_args = TensorAccessorArgs<0>();
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_src(cb_id_src);
-    experimental::CircularBuffer cb_src_b(cb_id_src_b);
+    Noc noc;
+    CircularBuffer cb_src(cb_id_src);
+    CircularBuffer cb_src_b(cb_id_src_b);
 
     constexpr uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     constexpr uint32_t tile_hw = get_tile_hw(cb_id_src);

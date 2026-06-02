@@ -7,7 +7,7 @@
 
 #include <cmath>
 #include "llk_defs.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
@@ -247,7 +247,7 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
     // Unused for REDUCE_SCALAR (which always fills the full tile).
     constexpr uint32_t full_dim = (reduce_dim == ReduceDim::REDUCE_COL) ? tile_r_dim : tile_c_dim;
 
-    ::experimental::CircularBuffer cb(cb_id);
+    CircularBuffer cb(cb_id);
 
     cb.reserve_back(1);
     uint32_t write_addr = cb.get_write_ptr();

@@ -263,9 +263,10 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             TT_FATAL(
                 (int32_t)param0 == (int32_t)VecMode::C || (int32_t)param0 == (int32_t)VecMode::RC,
                 "Invalid Vector mode value. Expected vector mode C (2) or RC (4) for sigmoid");
+            const char* vec_mode_sym = (int32_t)param0 == (int32_t)VecMode::C ? "VectorMode::C" : "VectorMode::RC";
             return {
                 fmt::format("sigmoid_tile_init<{}u>();", param1),
-                fmt::format("sigmoid_tile<{1}, {2}u>({0});", idst, (int32_t)param0, param1)};
+                fmt::format("sigmoid_tile<{}, {}u>({});", vec_mode_sym, param1, idst)};
         }
         case UnaryOpType::ERF:
             return {

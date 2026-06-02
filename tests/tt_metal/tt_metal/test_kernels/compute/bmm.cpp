@@ -7,9 +7,9 @@
 #include "api/compute/matmul.h"
 #ifdef ARCH_QUASAR
 #include "api/kernel_thread_globals.h"
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #else
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #endif
 
 using std::uint32_t;
@@ -35,15 +35,15 @@ void kernel_main() {
     // uint32_t compute_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
     compute_id = get_my_thread_id();
     num_threads = get_num_threads();
-    experimental::DataflowBuffer dfb0(0);
-    experimental::DataflowBuffer dfb1(1);
-    experimental::DataflowBuffer dfb_out(2);
+    DataflowBuffer dfb0(0);
+    DataflowBuffer dfb1(1);
+    DataflowBuffer dfb_out(2);
 
     mm_init(dfb0.get_id(), dfb1.get_id(), dfb_out.get_id());
 #else
-    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb1(tt::CBIndex::c_1);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+    CircularBuffer cb0(tt::CBIndex::c_0);
+    CircularBuffer cb1(tt::CBIndex::c_1);
+    CircularBuffer cb16(tt::CBIndex::c_16);
 
     mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
 #endif

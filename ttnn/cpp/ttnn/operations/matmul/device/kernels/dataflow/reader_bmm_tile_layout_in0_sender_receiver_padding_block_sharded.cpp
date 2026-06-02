@@ -8,11 +8,11 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 void kernel_main() {
     constexpr bool core_has_output_block_work = (bool)get_compile_time_arg_val(0);
@@ -65,14 +65,14 @@ void kernel_main() {
     constexpr uint32_t shard_read_width = in0_single_tile_size_bytes * in0_block_w;
     constexpr uint32_t in0_tensor_next_h_dim_block_stride = shard_read_stride * in0_block_h;
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer cb_in2(cb_id_in2);
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_in2(cb_id_in2);
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
-    experimental::Semaphore<> sender_sem(get_compile_time_arg_val(9));
+    Semaphore<> sender_sem(get_compile_time_arg_val(9));
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    experimental::Semaphore<> receiver_sem(get_compile_time_arg_val(10));
+    Semaphore<> receiver_sem(get_compile_time_arg_val(10));
 
     constexpr uint32_t num_remote_senders = (num_blocks_inner_dim + num_blocks_per_shard - 1) / num_blocks_per_shard;
     uint32_t remote_sender_noc_x[num_remote_senders];
@@ -149,13 +149,13 @@ void kernel_main() {
                             in0_tensor_read_addr = in0_tensor_local_l1_write_addr;
 
                             uint32_t l1_write_extract_shard_in0 = in0_tensor_local_l1_write_addr;
-                            experimental::UnicastEndpoint self_ep;
+                            UnicastEndpoint self_ep;
                             uint32_t noc_shard_read_l1_addr = in0_tensor_current_inner_dim_block_start_addr;
 
                             for (uint32_t i = 0; i < out_block_h; i++) {
                                 noc.async_read(
                                     self_ep,
-                                    experimental::CoreLocalMem<uint32_t>(l1_write_extract_shard_in0),
+                                    CoreLocalMem<uint32_t>(l1_write_extract_shard_in0),
                                     shard_read_width,
                                     {.noc_x = my_x[0], .noc_y = my_y[0], .addr = noc_shard_read_l1_addr},
                                     {});
@@ -236,9 +236,9 @@ void kernel_main() {
                                 // Skip if there are no other cores since this core already has the data.
                                 // Note: noc_async_write_multicast[_loopback_src] may hang if called with 0 cores.
                                 if constexpr (in0_mcast_num_cores > 1) {
-                                    experimental::MulticastEndpoint mcast_dst;
+                                    MulticastEndpoint mcast_dst;
                                     noc.async_write_multicast(
-                                        experimental::CoreLocalMem<uint32_t>(in0_tensor_read_addr),
+                                        CoreLocalMem<uint32_t>(in0_tensor_read_addr),
                                         mcast_dst,
                                         in0_block_size_bytes,
                                         in0_mcast_num_cores - 1,
@@ -255,9 +255,9 @@ void kernel_main() {
                             else {
                                 if constexpr (in0_mcast_num_cores == 1) {
                                     // noc_async_write if we only want to copy data between CB locally
-                                    experimental::UnicastEndpoint ucast_dst;
+                                    UnicastEndpoint ucast_dst;
                                     noc.async_write(
-                                        experimental::CoreLocalMem<uint32_t>(in0_tensor_read_addr),
+                                        CoreLocalMem<uint32_t>(in0_tensor_read_addr),
                                         ucast_dst,
                                         in0_block_size_bytes,
                                         {},
@@ -266,9 +266,9 @@ void kernel_main() {
                                          .addr = in0_tensor_local_l1_write_addr});
                                 } else {
                                     // multicast to every core in receiver grid
-                                    experimental::MulticastEndpoint mcast_dst;
-                                    noc.async_write_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
-                                        experimental::CoreLocalMem<uint32_t>(in0_tensor_read_addr),
+                                    MulticastEndpoint mcast_dst;
+                                    noc.async_write_multicast<Noc::McastMode::INCLUDE_SRC>(
+                                        CoreLocalMem<uint32_t>(in0_tensor_read_addr),
                                         mcast_dst,
                                         in0_block_size_bytes,
                                         in0_mcast_num_cores,
@@ -285,7 +285,7 @@ void kernel_main() {
                             // We should also multicast the flag to destinations
                             receiver_sem.set(VALID);
                             if constexpr (in0_mcast_num_cores > 1) {
-                                receiver_sem.set_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
+                                receiver_sem.set_multicast<Noc::McastMode::INCLUDE_SRC>(
                                     noc,
                                     in0_mcast_dest_noc_start_x,
                                     in0_mcast_dest_noc_start_y,
@@ -296,9 +296,9 @@ void kernel_main() {
                         } else {
                             // If we are not part of receiver grid, always do a regular noc_async_write_multicast to all
                             // cores in receiver grid
-                            experimental::MulticastEndpoint mcast_dst;
+                            MulticastEndpoint mcast_dst;
                             noc.async_write_multicast(
-                                experimental::CoreLocalMem<uint32_t>(in0_tensor_read_addr),
+                                CoreLocalMem<uint32_t>(in0_tensor_read_addr),
                                 mcast_dst,
                                 in0_block_size_bytes,
                                 in0_mcast_num_cores,

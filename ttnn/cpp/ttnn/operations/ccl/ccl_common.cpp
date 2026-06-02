@@ -1896,4 +1896,42 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(termination_master_virtual_core.y);                   // termination_master_noc_y 16
 }
 
+namespace {  // anonymous namespace for internal helpers
+
+// Fabric bandwidth is based on raw hardware capability
+double lookup_fabric_bw(tt::ARCH arch) {
+    switch (arch) {
+        // WH: 100 Gbps per link = 12.5 GB/s
+        case tt::ARCH::WORMHOLE_B0: return 12.5;
+        // BH: 400 Gbps per link = 50 GB/s
+        case tt::ARCH::BLACKHOLE: return 50.0;
+        default: TT_FATAL(false, "Fabric perf model: unsupported arch {}", arch);
+    }
+}
+
+// Fabric latency was obtained by averaging empirical data across various machines,
+// topologies, and unicast_write vs scatter_write.
+double lookup_fabric_hop_latency_ns(tt::ARCH arch) {
+    switch (arch) {
+        // WH: mean = 1528.6 ns, std dev = 57.5 ns (3.8%)
+        case tt::ARCH::WORMHOLE_B0: return 1528.6;
+        // BH: mean = 859.5 ns, std dev = 30.6 ns (3.6%)
+        case tt::ARCH::BLACKHOLE: return 859.5;
+        default: TT_FATAL(false, "Fabric perf model: unsupported arch {}", arch);
+    }
+}
+
+}  // namespace
+
+double estimate_fabric_transfer_ns(tt::ARCH arch, uint64_t data_bytes, uint32_t num_links, uint32_t num_hops) {
+    const double bw_per_link = lookup_fabric_bw(arch);
+    const double total_bw = bw_per_link * num_links;
+    const double transfer_ns = (total_bw > 0.0) ? static_cast<double>(data_bytes) / total_bw : 0.0;
+
+    const double hop_lat = lookup_fabric_hop_latency_ns(arch);
+    const double latency_ns = hop_lat * num_hops;
+
+    return transfer_ns + latency_ns;
+}
+
 }  // namespace ttnn::ccl

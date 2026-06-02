@@ -476,16 +476,6 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
             }
         }
 
-        // Build ASIC positions map (required if pinnings are used)
-        if (!config.pinnings.empty()) {
-            const auto& asic_descriptors = physical_system_descriptor_.get_asic_descriptors();
-            for (const auto& [asic_id, _] : asic_descriptors) {
-                auto tray_id = physical_system_descriptor_.get_tray_id(asic_id);
-                auto asic_location = physical_system_descriptor_.get_asic_location(asic_id);
-                config.asic_positions[asic_id] = std::make_pair(tray_id, asic_location);
-            }
-        }
-
         // Set per-mesh validation modes based on mesh graph policy
         for (const auto& mesh_id : mesh_graph_.get_all_mesh_ids()) {
             config.mesh_validation_modes[mesh_id] = mesh_graph_.is_intra_mesh_policy_relaxed(mesh_id)
@@ -505,9 +495,10 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
         // Disable rank bindings if we're generating mapping locally (single host, single mesh)
         config.disable_rank_bindings = generate_mapping_locally_;
 
-        // Provide hostname_to_asics for host consistency constraint
+        // Hostname grouping and discovery ASIC positions (pinnings + logical-mesh-0 anchor preferences).
         for (const auto& [asic_id, desc] : physical_system_descriptor_.get_asic_descriptors()) {
             config.hostname_to_asics[desc.host_name].insert(asic_id);
+            config.asic_positions[asic_id] = std::make_pair(desc.tray_id, desc.asic_location);
         }
 
         // Use multi-mesh topology solver to map all meshes at once

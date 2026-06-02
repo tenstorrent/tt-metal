@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     bool read_single_h_block_per_core = get_arg_val<uint32_t>(0) == 1;
@@ -22,8 +22,8 @@ void kernel_main() {
     constexpr uint32_t cb_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(2);
 
-    experimental::CircularBuffer cb_in(cb_in0);
-    experimental::CircularBuffer cb_out(cb_out0);
+    CircularBuffer cb_in(cb_in0);
+    CircularBuffer cb_out(cb_out0);
 
     if (read_single_h_block_per_core) {
         uint32_t write_stick_stride = stick_size_bytes * num_cores_read;

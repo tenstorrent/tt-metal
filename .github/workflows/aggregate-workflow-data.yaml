@@ -23,8 +23,8 @@ on:
         description: 'TEST MODE. When set to N>0, discards real regressions and replaces them with N currently-stayed-failing JOBS (not pipelines). Produces exactly N top-level Slack messages, suppresses the "X other pipelines are failing" footer. Empty/0 = normal production behavior.'
         required: false
         default: ''
-      max-auto-triage-dispatches:
-        description: 'Hard cap on total auto-triage dispatches per run. Empty = unlimited. Pair with failures-to-elevate for safe dispatch-driven testing.'
+      max-regression-analysis-dispatches:
+        description: 'Hard cap on total regression-analysis dispatches per run. Empty = unlimited. Pair with failures-to-elevate for safe dispatch-driven testing.'
         required: false
         default: ''
 
@@ -42,7 +42,7 @@ jobs:
       other-logs-index-path: ${{ steps.fetch.outputs.other-logs-index-path }}
       last-success-timestamps-path: ${{ steps.fetch.outputs.last-success-timestamps-path }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
@@ -161,7 +161,7 @@ jobs:
       has_failed_workflows: ${{ steps.set-outputs.outputs.has_failed_workflows }}
       has_regressions: ${{ steps.set-outputs.outputs.has_regressions }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
@@ -285,7 +285,7 @@ jobs:
       slack_ts_map: ${{ steps.slack-report.outputs.slack_ts_map }}
       slack_notification_status: ${{ steps.slack-status.outputs.status }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
@@ -321,7 +321,7 @@ jobs:
             echo "status=failed" >> "$GITHUB_OUTPUT"
           fi
 
-  trigger-auto-triage:
+  trigger-regression-analysis:
     needs: [analyze-data, handle-failures]
     if: ${{ always() && needs.analyze-data.result == 'success' && needs.analyze-data.outputs.has_regressions == 'true' && needs.handle-failures.outputs.slack_notification_status == 'success' }}
     runs-on: ubuntu-latest
@@ -329,20 +329,20 @@ jobs:
       actions: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
       - name: Install dependencies
-        working-directory: .github/actions/trigger-auto-triage-for-regressions
+        working-directory: .github/actions/trigger-regression-analysis-for-regressions
         run: npm install
       - name: Download regression notification inputs
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: workflow-regression-notification-inputs
           path: ${{ github.workspace }}/regression-notification-inputs
-      - name: Trigger auto-triage for regressed jobs
-        uses: ./.github/actions/trigger-auto-triage-for-regressions
+      - name: Trigger regression-analysis for regressed jobs
+        uses: ./.github/actions/trigger-regression-analysis-for-regressions
         with:
           regressed_workflows_path: ${{ github.workspace }}/regression-notification-inputs/regressed-workflows.json
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -351,4 +351,4 @@ jobs:
           slack_channel_id: ${{ github.event.inputs.slack-channel-id || secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
           slack_bot_token: ${{ secrets.SLACK_BOT_TOKEN }}
           send-slack-message: true
-          max_dispatches: ${{ github.event.inputs.max-auto-triage-dispatches || '' }}
+          max_dispatches: ${{ github.event.inputs.max-regression-analysis-dispatches || '' }}

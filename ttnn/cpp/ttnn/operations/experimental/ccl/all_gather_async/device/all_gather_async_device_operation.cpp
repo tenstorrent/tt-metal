@@ -11,6 +11,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"  // for roofline calculation
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
 #include <algorithm>
@@ -335,6 +336,115 @@ std::tuple<AllGatherAsyncParams, AllGatherAsyncInputs> all_gather_async_build_op
             reverse_order,
             sub_core_grid),
         AllGatherAsyncInputs{.input_tensor = input_tensor, .persistent_output_buffer = persistent_output_buffer}};
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<AllGatherAsyncDeviceOperation::tensor_return_value_t>
+AllGatherAsyncDeviceOperation::create_op_performance_model(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
+    // =========================================================================
+    // AllGather Roofline Performance Model (First-Principles)
+    //
+    // AllGather is pure data movement — no compute. The roofline is the
+    // hardware ceiling: the minimum time given the physical topology and
+    // memory bandwidth, independent of any particular algorithm.
+    //
+    // Performance is bounded by:
+    //   ideal_cycles = max(DRAM_bw_cycles, fabric_bw_cycles) + pipeline_latency
+    //
+    // --- Fabric term (bottleneck link analysis) ---
+    //
+    // For any topology the roofline is set by the most-loaded link.
+    // N devices, each contributing S bytes. Every device must receive
+    // the other (N-1) chunks.
+    //
+    // LINE topology:
+    //   The edge device has a single link to the rest of the network.
+    //   All (N-1) chunks must pass through that one link — no topology
+    //   can avoid this.
+    //   bottleneck_bytes = (N-1) * S.  Max hops = N-1.
+    //
+    // RING topology:
+    //   A bisection cut crosses 2 links. Data from N/2 devices on one
+    //   side must reach N/2 devices on the other, and vice-versa. Each
+    //   direction carries at most half the total load.
+    //   bottleneck_bytes = ceil((N-1) * S / 2).  Max hops = ceil((N-1)/2).
+    //
+    // --- DRAM term (memory bandwidth ceiling) ---
+    //
+    // Each device reads S bytes and writes N*S bytes. The roofline
+    // assumes all compute cores can drive DRAM concurrently (hardware
+    // maximum parallelism), so DRAM time = bytes / peak_aggregate_BW.
+    // =========================================================================
+
+    const auto& input_tensor = tensor_args.input_tensor;
+
+    // Architecture and clock detection
+    tt::ARCH arch = tt::ARCH::WORMHOLE_B0;
+    float clock_rate_ghz = 1.0f;
+    if (input_tensor.storage_type() == StorageType::DEVICE) {
+        arch = input_tensor.device()->arch();
+        clock_rate_ghz = input_tensor.device()->get_clock_rate_mhz() / 1000.0f;
+    }
+
+    // Data size: bytes each device contributes
+    const uint64_t input_size_bytes = input_tensor.physical_volume() * input_tensor.element_size();
+
+    const uint32_t N = args.ring_size;
+    const uint32_t num_links = args.num_links;
+    double fabric_time_ns = 0.0f;
+    if (N <= 1) {
+        // Single device: no fabric communication
+        fabric_time_ns = 0.0f;
+    } else if (tt::tt_fabric::is_ring_or_torus(args.topology)) {
+        // Ring topology: bisection cuts 2 links, so each direction carries
+        // at most half the total data. Bottleneck per direction = ceil((N-1)*S/2).
+        const uint64_t bottleneck_bytes = tt::div_up((N - 1) * input_size_bytes, 2);
+        fabric_time_ns =
+            ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, tt::div_up(N - 1, 2u));
+    } else {
+        // Line/Linear/Mesh topology: edge device has one link and must
+        // receive all (N-1) slices through it.
+        const uint64_t bottleneck_bytes = (N - 1) * input_size_bytes;
+        fabric_time_ns = ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, N - 1);
+    }
+
+    // Convert fabric time (ns) to device clock cycles.
+    // clock_rate_ghz cycles/ns * ns = cycles
+    const int fabric_cycles = static_cast<int>(std::ceil(fabric_time_ns * clock_rate_ghz));
+
+    // --- Local DRAM bandwidth ceiling (first-principles) ---
+    // Read: device reads S bytes from DRAM.  Write: device writes N*S bytes.
+    // Roofline assumes all device compute cores drive DRAM concurrently
+    // (hardware max parallelism). BW competes with fabric (max); latencies
+    // are additive (pipeline fill/drain).
+    const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
+    const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
+    const uint32_t read_page_size = input_tensor.buffer()->page_size();
+    const uint32_t write_page_size = output_tensor.buffer()->page_size();
+
+    // Hardware ceiling: total compute cores available to drive DRAM
+    const uint32_t device_rows = input_tensor.device()->compute_with_storage_grid_size().x;
+    const uint32_t device_cols = input_tensor.device()->compute_with_storage_grid_size().y;
+    const uint32_t num_cores = device_rows * device_cols;
+
+    const int64_t output_size_bytes = N * input_size_bytes;
+    const uint32_t read_pages = tt::div_up(input_size_bytes, read_page_size);
+    const uint32_t write_pages = tt::div_up(output_size_bytes, write_page_size);
+    const uint32_t read_pages_per_core = tt::div_up(read_pages, num_cores);
+    const uint32_t write_pages_per_core = tt::div_up(write_pages, num_cores);
+
+    auto [read_bw_cycles, read_latency_cycles] = ttnn::operations::data_movement::get_cycles_for_transaction_size(
+        read_page_size, input_is_dram, /*is_local=*/false, read_pages_per_core, arch, /*is_read=*/true);
+    auto [write_bw_cycles, write_latency_cycles] = ttnn::operations::data_movement::get_cycles_for_transaction_size(
+        write_page_size, output_is_dram, /*is_local=*/false, write_pages_per_core, arch, /*is_read=*/false);
+
+    const int local_bw_cycles = static_cast<int>(std::max(read_bw_cycles, write_bw_cycles));
+    const int pipeline_latency_cycles = static_cast<int>(read_latency_cycles + write_latency_cycles);
+    const int ideal_dev_clock_cycles = std::max(local_bw_cycles, fabric_cycles) + pipeline_latency_cycles;
+
+    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+        {input_tensor}, {output_tensor}, ideal_dev_clock_cycles);
+    return result;
 }
 
 }  // namespace ttnn::experimental::prim

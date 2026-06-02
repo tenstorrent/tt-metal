@@ -21,7 +21,7 @@
 // The scalar page is zeroed so the interpolation weight is 0, making the
 // padded output harmless (written to the shard but masked by valid_sticks).
 template <uint32_t scalar_cb_index>
-ALWI void push_noop_sticks(experimental::Noc noc, experimental::CB input_cb, experimental::CB scalar_cb) {
+ALWI void push_noop_sticks(Noc noc, experimental::CB input_cb, experimental::CB scalar_cb) {
     input_cb.reserve_back(1);
     input_cb.push_back(1);
 
@@ -88,7 +88,7 @@ void kernel_main() {
     const uint32_t starting_batch = global_grid_stick_start / grid_hw;
 
     // Zero out input CB to handle invalid coordinates properly
-    experimental::Noc noc;
+    Noc noc;
     experimental::CB input_cb(input_cb_index);
     experimental::CB scalar_cb(scalar_cb_index);
     zero_out_tiles<input_cb_index>(noc, input_cb);

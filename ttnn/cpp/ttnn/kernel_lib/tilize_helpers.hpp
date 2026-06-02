@@ -53,6 +53,13 @@ enum class Fp32Mode : uint8_t {
     Lossless  // Forces standard tilize path for fp32 data (exact, no truncation)
 };
 
+// Controls whether BH fast tilize configures DEST remap during init.
+// Use AssumeConfigured only when the caller configured remap once before entering a hot loop.
+enum class RemapMode : uint8_t {
+    Configure,        // Default: init configures remap when the selected tilize path needs it
+    AssumeConfigured  // Caller already configured remap for this kernel
+};
+
 }  // namespace tilize_config
 
 /**
@@ -75,10 +82,13 @@ enum class Fp32Mode : uint8_t {
  *   output_cb        — Output circular buffer index (0–31, tiled output, must differ from input_cb).
  *   init_uninit_mode — Init/uninit lifecycle control (default: InitAndUninit).
  *   wait_mode        — How to synchronize on input data (default: WaitBlock).
- *   reconfig_mode    — Register datatype reconfiguration (default: UnpackAndPackReconfigure).
+ *   reconfig_mode     — Register datatype reconfiguration (default: UnpackAndPackReconfigure).
  *   fp32_mode        — Float32 precision control (default: Fast).
  *                       Fast: uses fast_tilize when possible (lossy for fp32 — truncates to tf32 precision).
  *                       Lossless: forces standard tilize path, preserving exact fp32 values.
+ *   remap_mode       — BH DEST remap setup control (default: Configure).
+ *                       Configure: helper configures remap when the selected tilize path needs it.
+ *                       AssumeConfigured: caller already enabled BH DEST remap and no intervening code changes it.
  *
  * ── Block Geometry ─────────────────────────────────────────────────────────
  *
@@ -149,7 +159,8 @@ template <
     tilize_config::WaitMode wait_mode = tilize_config::WaitMode::WaitBlock,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
         tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
-    tilize_config::Fp32Mode fp32_mode = tilize_config::Fp32Mode::Fast>
+    tilize_config::Fp32Mode fp32_mode = tilize_config::Fp32Mode::Fast,
+    tilize_config::RemapMode remap_mode = tilize_config::RemapMode::Configure>
 ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt);
 
 }  // namespace compute_kernel_lib

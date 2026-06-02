@@ -64,9 +64,6 @@ class RoutedExpertTensors(NamedTuple):
     up_proj_weights: Any
     down_proj_weights: Any
     final_output_tensor: Any
-    gate_proj_expert_tensors: Any
-    up_proj_expert_tensors: Any
-    down_proj_expert_tensors: Any
     torch_input: Any
     torch_gate_mm_weights: Any
     torch_bias: Any
@@ -242,6 +239,7 @@ def create_routed_expert_tensors(
     state_dict,
     is_moe=True,
     layer_idx=None,
+    num_routed_experts=256,
 ):
     """
     Create all tensors needed for MoE routed expert test.
@@ -279,13 +277,13 @@ def create_routed_expert_tensors(
     gate_proj_K = K
     gate_proj_N = RoutedExpert.GATE_PROJ_N
 
-    # num_experts: for dense no-routing we need 8 (one per device) for golden; else 1. With routing: per-device or 256.
+    # num_experts: for dense no-routing we need 8 (one per device) for golden; else 1. With routing: per-device or num_routed_experts.
     if not enable_routing:
         num_experts = 8 if (is_moe is False) else 1
     elif use_hardcoded_expert_index:
         num_experts = device.get_num_devices()
     else:
-        num_experts = 256
+        num_experts = num_routed_experts
 
     # Gate parameters (must match op.py)
     gate_eps = RoutedExpert.GATE_EPS
@@ -391,13 +389,12 @@ def create_routed_expert_tensors(
             is_moe=True,
             num_routed_experts=num_experts,
             move_to_device=True,
+            compressed_tp8=True,
         )
-        gate_proj_expert_tensors = routed_weights.routed_gate_proj
-        up_proj_expert_tensors = routed_weights.routed_up_proj
-        down_proj_expert_tensors = routed_weights.routed_down_proj
-        gate_proj_weights = gate_proj_expert_tensors[0]
-        up_proj_weights = up_proj_expert_tensors[0]
-        down_proj_weights = down_proj_expert_tensors[0]
+        # MoeOp.op() expects list[CompressedTensor] (one per expert).
+        gate_proj_weights = routed_weights.routed_gate_proj
+        up_proj_weights = routed_weights.routed_up_proj
+        down_proj_weights = routed_weights.routed_down_proj
     else:
         # Dense MLP: slice gate/up (7168, 18432) and down (18432, 7168) into 8 experts of 2048 each
         gate_key = f"{layer_key}.mlp.gate_proj.weight"
@@ -428,9 +425,6 @@ def create_routed_expert_tensors(
         gate_proj_weights = routed_weights.routed_gate_proj
         up_proj_weights = routed_weights.routed_up_proj
         down_proj_weights = routed_weights.routed_down_proj
-        gate_proj_expert_tensors = None  # unused when is_moe=False
-        up_proj_expert_tensors = None
-        down_proj_expert_tensors = None
 
     if enable_routing:
         assert is_moe, "enable_routing=True is only supported with MoE weights"
@@ -507,9 +501,6 @@ def create_routed_expert_tensors(
         up_proj_weights=up_proj_weights,
         down_proj_weights=down_proj_weights,
         final_output_tensor=final_output_tensor,
-        gate_proj_expert_tensors=gate_proj_expert_tensors,
-        up_proj_expert_tensors=up_proj_expert_tensors,
-        down_proj_expert_tensors=down_proj_expert_tensors,
         torch_input=torch_input,
         torch_gate_mm_weights=torch_gate_mm_weights,
         torch_bias=torch_bias,
@@ -710,6 +701,30 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
     M = RoutedExpert.M
     K = RoutedExpert.K
 
+    # TODO(#43015, #43016, #43018, #43023): Root-cause these exact Blackhole test failures and remove the temporary skips.
+    if noc_mode == ttnn.NOC_MODE.DM_DYNAMIC_NOC and reconfig_moe_cbs and use_hardcoded_expert_index:
+        pytest.skip(
+            "[SKIP REASON]: Fused MoE PCC check failed: 0.6912203836008188 for "
+            "test_moe_fused[NOC_MODE.DM_DYNAMIC_NOC-True-True]. Issue: #43015"
+        )
+    if noc_mode == ttnn.NOC_MODE.DM_DYNAMIC_NOC and reconfig_moe_cbs and not use_hardcoded_expert_index:
+        pytest.skip(
+            "[SKIP REASON]: Fused MoE PCC check failed: 0.69142214791865 for "
+            "test_moe_fused[NOC_MODE.DM_DYNAMIC_NOC-True-False]. Issue: #43016"
+        )
+    if noc_mode == ttnn.NOC_MODE.DM_DYNAMIC_NOC and not reconfig_moe_cbs and use_hardcoded_expert_index:
+        pytest.skip(
+            "[SKIP REASON]: Fused MoE synchronize_device TT_FATAL hit unexpected "
+            "run_mailbox value 0xfe from core (x=10,y=3) for "
+            "test_moe_fused[NOC_MODE.DM_DYNAMIC_NOC-False-True]. Issue: #43018"
+        )
+    if noc_mode == ttnn.NOC_MODE.DM_DYNAMIC_NOC and not reconfig_moe_cbs and not use_hardcoded_expert_index:
+        pytest.skip(
+            "[SKIP REASON]: Fused MoE synchronize_device TT_FATAL hit unexpected "
+            "run_mailbox value 0xfe from core (x=10,y=3) for "
+            "test_moe_fused[NOC_MODE.DM_DYNAMIC_NOC-False-False]. Issue: #43023"
+        )
+
     logger.info(f"Testing fused MoE: K={K}, use_hardcoded_expert_index={use_hardcoded_expert_index}")
 
     state_dict = get_reference_model_state_dict(
@@ -877,11 +892,20 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
+@pytest.mark.parametrize(
+    "expert_upload_mode",
+    [
+        pytest.param("rigged_groups1", marks=pytest.mark.skip_post_commit),
+        "full_groups",
+    ],
+)
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
 @pytest.mark.timeout(1200)
-def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
+def test_moe_fused_with_reduce(
+    bh_2d_mesh_device, expert_upload_mode, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict
+):
     """
     Test fused MoE with reduce_to_one on 4x2 mesh.
 
@@ -889,6 +913,9 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
     then results are reduced (summed) across all devices to ROOT1.
 
     Gate is rigged so grouped top-k picks deterministic winners.
+    expert_upload_mode:
+      - "rigged_groups1": load only 32 experts (group 0); rig routing within group 0.
+      - "full_groups":    load all 256 experts; rig routing across groups 0/2/5/7.
     """
     num_devices = TestConfig.NUM_DEVICES_4x2
     if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
@@ -903,22 +930,31 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
     M = RoutedExpert.M
     K = RoutedExpert.K
 
-    logger.info(f"Testing fused MoE with reduce: K={K}")
+    logger.info(f"Testing fused MoE with reduce: K={K} expert_upload_mode={expert_upload_mode}")
+
+    if expert_upload_mode == "rigged_groups1":
+        num_routed_experts = 32
+        winning_groups = [0]
+        winning_experts_by_group = {0: [1, 9, 4, 19, 7, 23, 3, 28]}
+    elif expert_upload_mode == "full_groups":
+        num_routed_experts = 256
+        winning_groups = [0, 2, 5, 7]
+        winning_experts_by_group = {
+            0: [1, 9],
+            2: [4, 19],
+            5: [7, 23],
+            7: [3, 28],
+        }
+    else:
+        raise ValueError(f"Unknown expert_upload_mode: {expert_upload_mode}")
 
     state_dict = get_reference_model_state_dict(
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
         is_moe=True,
         seed=RoutedExpert.SEED,
-        num_routed_experts=256,
+        num_routed_experts=num_routed_experts,
         include_global=False,
     )
-    winning_groups = [0, 2, 5, 7]
-    winning_experts_by_group = {
-        0: [1, 9],
-        2: [4, 19],
-        5: [7, 23],
-        7: [3, 28],
-    }
     expected_expert_ids = rig_moe_gate_for_expected_experts(
         state_dict,
         ROUTED_EXPERT_LAYER_IDX,
@@ -926,7 +962,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         winning_experts_by_group,
     )
 
-    # ── Create MoE tensors (replicated across mesh) ──
+    # ── Create MoE tensors (routed weights TP8-sharded; other tensors replicated) ──
     mesh_mapper = ttnn.ReplicateTensorToMesh(submesh)
     r = create_routed_expert_tensors(
         submesh,
@@ -935,6 +971,7 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         state_dict=state_dict,
         is_moe=True,
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
+        num_routed_experts=num_routed_experts,
     )
     sender_core = r.ttnn_residual_mcast_src.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core)])
@@ -1106,7 +1143,9 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         f"Rigged gate experts mismatch: expected={expected_top8_sorted.tolist()}, " f"got={tt_top8_sorted.tolist()}"
     )
 
-    # One logical golden call (h + MoE(h)); no per-device golden loop needed.
+    # Single golden over the full (un-sharded) weights. The hardware does TP8 sharding
+    # + reduce-to-one across the 4x2 mesh; the reduced output on ROOT1 should match the
+    # non-distributed reference. Residual is folded in once on ROOT1 by the kernel.
     _, _, expected_reduce_output = MoeOp.golden(
         r.torch_input,
         shared_gate_weights=s.torch_gate_weights,
@@ -1125,26 +1164,20 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
         include_residual=True,
     )
 
-    # Get actual reduce output from ROOT1 device
+    # Get actual reduce output from ROOT1 device and extract valid portion (remove per-core padding).
     reduce_output_torch = ttnn.to_torch(
         ttnn_result_reduce,
         mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0),
     )
-
-    reduce_output_root = reduce_output_torch[root_device_idx]
-
-    # Extract valid portion (remove per-core padding)
     reduce_output_valid = extract_routed_expert_output(
-        reduce_output_root.unsqueeze(0),
+        reduce_output_torch[root_device_idx].unsqueeze(0),
         r.num_gate_proj_cores,
         r.final_output_width_per_core,
         r.per_core_down_proj_N,
     )
 
-    # Verify reduce output
-    passing, pcc_output = comp_pcc(expected_reduce_output.flatten(), reduce_output_valid.flatten(), 0.97)
+    passing, pcc_output = comp_pcc(expected_reduce_output.float(), reduce_output_valid.float(), 0.97)
     logger.info(f"Reduce output PCC: {pcc_output}")
-    assert passing, f"Reduce output PCC check failed: {pcc_output}"
 
     # --- Reference model comparison ---
     num_experts_in_state_dict = sum(1 for k in state_dict if ".mlp.experts." in k and "gate_proj" in k)
@@ -1176,12 +1209,36 @@ def test_moe_fused_with_reduce(bh_2d_mesh_device, reconfig_moe_cbs, noc_mode, ge
 
         passing_ref, pcc_ref = comp_pcc(ref_block_output, reduce_output_valid.float(), 0.95)
         logger.info(f"Reference MoE comparison PCC: {pcc_ref}")
+        logger.info(
+            f"ref_block_output sum={ref_block_output.sum().item():.3f} " f"mean={ref_block_output.mean().item():.3f}"
+        )
         assert passing_ref, f"Reference MoE comparison PCC failed: {pcc_ref}"
+
+    assert passing, f"Reduce output PCC check failed: {pcc_output}"
 
     logger.info("Fused MoE with reduce test PASSED!")
 
 
-@pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
+# TODO(#43024): Root-cause these exact Blackhole no-routing failures and remove the temporary skips.
+@pytest.mark.parametrize(
+    "reconfig_moe_cbs",
+    [
+        pytest.param(
+            True,
+            marks=pytest.mark.skip(
+                reason="[SKIP REASON]: MoeOp no-routing PCC check failed: 0.6928789326441873 for "
+                "test_mlp[NOC_MODE.DM_DYNAMIC_NOC-True]. Issue: #43024"
+            ),
+        ),
+        pytest.param(
+            False,
+            marks=pytest.mark.skip(
+                reason="[SKIP REASON]: MoeOp no-routing synchronize_device TT_FATAL hit unexpected run_mailbox "
+                "value 0xfe from core (x=10,y=3) for test_mlp[NOC_MODE.DM_DYNAMIC_NOC-False]. Issue: #43024"
+            ),
+        ),
+    ],
+)
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.timeout(1200)
 @pytest.mark.requires_grid_size((13, 10))

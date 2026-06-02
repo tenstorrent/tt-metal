@@ -44,7 +44,7 @@ void kernel_main() {
 
     const volatile tt_l1_ptr uint32_t* const output_end = (tt_l1_ptr uint32_t*)(output_end_addr);
 
-    experimental::Noc noc;
+    Noc noc;
     experimental::CB cb_untilized(cb_untilized_id);
     experimental::CB cb_out(cb_out_id);
     experimental::CB cb_padding(cb_padding_id);
@@ -107,7 +107,7 @@ void kernel_main() {
 
     const uint32_t output_end_width_in_input = output_end[1] + output_start_in_input[1];
     uint32_t row_count = 0;
-    experimental::UnicastEndpoint self_ep;
+    UnicastEndpoint self_ep;
     while (tiles_read < total_num_tiles && rows_remaining > 0) {
         uint32_t width_start_in_input = output_start_in_input[1] + output_coord[1];
         uint32_t width_tile_start_in_input = round_down(width_start_in_input, ckernel::TILE_HEIGHT);

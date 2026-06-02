@@ -21,8 +21,11 @@
 
 namespace ttnn::operations::pool {
 
-// Helper function for max_pool2d nanobind that handles the return type conversion
-static nb::object max_pool2d_nanobind_wrapper(
+// Helper function for max_pool2d nanobind that handles the return type conversion.
+// Returns a std::variant whose nanobind caster does the Python conversion at the
+// wrapper boundary (GIL held); the body runs with the GIL released (call_guard
+// applied by bind_function) and returns only C++ values.
+static std::variant<ttnn::Tensor, std::vector<ttnn::Tensor>> max_pool2d_nanobind_wrapper(
     const ttnn::Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,
@@ -63,11 +66,10 @@ static nb::object max_pool2d_nanobind_wrapper(
         output_layout,
         config_tensor_in_dram);
 
-    // Return single tensor or tuple based on vector size
     if (result.size() == 1) {
-        return nb::cast(std::move(result[0]));
+        return std::move(result[0]);
     }
-    return nb::cast(std::move(result));
+    return std::move(result);
 }
 
 void bind_max_pool2d_operation(nb::module_& mod) {

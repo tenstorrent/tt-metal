@@ -13,6 +13,7 @@
 // TODO: Switch to using fast dispatch once the MeshWorkload code paths are added.
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 #include <cstdint>
 #include <vector>
 
@@ -22,6 +23,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_params.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -31,6 +34,7 @@ namespace tt::tt_metal::experimental::metal2_host_api {
 namespace {
 
 using test_helpers::BindDFBToKernel;
+using test_helpers::BindTensorParameterToKernel;
 using test_helpers::MakeMinimalComputeKernel;
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1DMKernel;
@@ -506,6 +510,179 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
     Program program = MakeProgramFromSpec(*mesh_device, spec);
     detail::LaunchProgram(device, program);
     // If we got here, both kernels resolved their sem accessors to the same ID.
+}
+
+// ============================================================================
+// TensorAccessor Binding End-to-End Loopback Test
+// ============================================================================
+//
+// Proves that the Metal 2.0 TensorAccessor binding feature works end-to-end on real WH/BH:
+//   1. Spec → MakeProgramFromSpec resolves the binding's TensorSpec into a correct CTA payload
+//      (page size, args_config, bank coords, alignment).
+//   2. Each binding's slot in the kernel's TensorBinding address section is filled with
+//      MeshTensor::address() at enqueue.
+//   3. kernel_bindings_generated.h emits a `ta::` namespace with a working type alias + token.
+//   4. TensorAccessor(ta::name) constructs an accessor whose get_noc_addr returns
+//      addresses that NoC reads/writes actually use correctly.
+//
+// Pipeline:
+//   Host writes known data → input MeshTensor (DRAM)
+//   Producer DM kernel (BRISC):  input MeshTensor → DFB,  via TensorAccessor(ta::input_tensor)
+//   Consumer DM kernel (NCRISC): DFB → output MeshTensor, via TensorAccessor(ta::output_tensor)
+//   Host reads output MeshTensor and verifies match
+//
+// DM-only on purpose. The TensorAccessor library is currently DM-only (TRISC builds don't
+// compile its NoC-using includes); compute-kernel TA bindings are out of scope for this PR.
+
+TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
+    auto mesh_device = devices_.at(0);
+    IDevice* device = mesh_device->get_devices()[0];
+
+    // Tensor: 8 pages × 1024 bytes (BFLOAT16, ROW_MAJOR, shape {8, 512} → page = row = 1024 B)
+    constexpr uint32_t num_pages = 8;
+    constexpr uint32_t page_size = 1024;
+    constexpr uint32_t total_bytes = num_pages * page_size;
+    constexpr uint32_t num_dfb_entries = 4;
+
+    const NodeCoord node{0, 0};
+
+    // -------------------------------------------------------
+    // Allocate input + output MeshTensors (DRAM, interleaved)
+    // -------------------------------------------------------
+    auto page_config = PageConfig(Layout::ROW_MAJOR);
+    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
+    auto tensor_spec = TensorSpec(Shape{num_pages, 512}, tensor_layout);
+
+    MeshTensor input_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    MeshTensor output_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+
+    // -------------------------------------------------------
+    // Build ProgramSpec: 2 DM kernels + 1 DFB + 2 TensorParameters
+    // -------------------------------------------------------
+    ProgramSpec spec;
+    spec.program_id = "ta_binding_loopback";
+
+    // Producer (BRISC): reads input tensor via TA binding, pushes to DFB
+    auto producer = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);
+    producer.source = KernelSpec::SourceFilePath{
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/tensor_accessor_loopback_producer.cpp"};
+    producer.runtime_arguments_schema.num_runtime_varargs = 1;
+
+    // Consumer (NCRISC): pops from DFB, writes output tensor via TA binding
+    auto consumer = MakeMinimalGen1DMKernel("consumer", DataMovementProcessor::RISCV_1);
+    consumer.source = KernelSpec::SourceFilePath{
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/tensor_accessor_loopback_consumer.cpp"};
+    consumer.runtime_arguments_schema.num_runtime_varargs = 1;
+
+    // DFB connecting the two kernels
+    auto dfb = MakeMinimalDFB("input_dfb", page_size, num_dfb_entries);
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    BindDFBToKernel(producer, "input_dfb", "input_dfb", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "input_dfb", "input_dfb", KernelSpec::DFBEndpointType::CONSUMER);
+
+    // TensorAccessor bindings: each kernel sees its own tensor under its accessor name
+    BindTensorParameterToKernel(producer, "input_tensor", "input_tensor");
+    BindTensorParameterToKernel(consumer, "output_tensor", "output_tensor");
+
+    spec.kernels = {producer, consumer};
+    spec.dataflow_buffers = {dfb};
+    spec.tensor_parameters = {
+        TensorParameter{.unique_id = "input_tensor", .spec = tensor_spec},
+        TensorParameter{.unique_id = "output_tensor", .spec = tensor_spec},
+    };
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
+
+    // -------------------------------------------------------
+    // Create Program
+    // -------------------------------------------------------
+    Program program = MakeProgramFromSpec(*mesh_device, spec);
+
+    // -------------------------------------------------------
+    // Set runtime args
+    // -------------------------------------------------------
+    ProgramRunParams params;
+    params.kernel_run_params = {
+        ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = "producer",
+            .runtime_varargs = {{node, {num_pages}}},
+        },
+        ProgramRunParams::KernelRunParams{
+            .kernel_spec_name = "consumer",
+            .runtime_varargs = {{node, {num_pages}}},
+        },
+    };
+    params.tensor_args = {
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "input_tensor", .tensor = std::cref(input_tensor)},
+        ProgramRunParams::TensorArg{.tensor_parameter_name = "output_tensor", .tensor = std::cref(output_tensor)},
+    };
+    SetProgramRunParameters(program, params);
+
+    // -------------------------------------------------------
+    // Fill input tensor with known data
+    // -------------------------------------------------------
+    std::vector<uint32_t> input_data(total_bytes / sizeof(uint32_t));
+    for (size_t i = 0; i < input_data.size(); i++) {
+        input_data[i] = static_cast<uint32_t>(i);
+    }
+    detail::WriteToBuffer(*input_tensor.mesh_buffer().get_reference_buffer(), input_data);
+
+    // -------------------------------------------------------
+    // Dispatch
+    // -------------------------------------------------------
+    detail::LaunchProgram(device, program);
+
+    // -------------------------------------------------------
+    // Verify
+    // -------------------------------------------------------
+    std::vector<uint32_t> output_data;
+    detail::ReadFromBuffer(*output_tensor.mesh_buffer().get_reference_buffer(), output_data);
+
+    ASSERT_EQ(output_data.size(), input_data.size());
+    EXPECT_EQ(output_data, input_data);
+}
+
+// ============================================================================
+// Multi-binding RISC-mask Uniformity (Gen1)
+// ============================================================================
+//
+// On Gen1 (WH/BH) the per-kernel risc_mask is a deterministic function of the
+// KernelSpec's config_spec. Multi-binding requires all same-role KernelSpecs to
+// share that mask; mismatched processor placement on the producer (or consumer)
+// side is a user error and must be rejected with an actionable message.
+TEST_F(ProgramSpecHWTest, MultiBindingProducerMaskMismatchFails) {
+    auto mesh_device = devices_.at(0);
+
+    NodeCoord node0{0, 0};
+    NodeCoord node1{0, 1};
+
+    auto producer_g1 = MakeMinimalGen1DMKernel("producer_g1", DataMovementProcessor::RISCV_0);
+    auto producer_g2 = MakeMinimalGen1DMKernel("producer_g2", DataMovementProcessor::RISCV_1);
+    auto consumer = MakeMinimalComputeKernel("consumer");
+
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+
+    BindDFBToKernel(producer_g1, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(producer_g2, "dfb", "out", KernelSpec::DFBEndpointType::PRODUCER);
+    BindDFBToKernel(consumer, "dfb", "in", KernelSpec::DFBEndpointType::CONSUMER);
+
+    ProgramSpec spec;
+    spec.program_id = "multi_binding_mask_mismatch";
+    spec.kernels = {producer_g1, producer_g2, consumer};
+    spec.dataflow_buffers = {dfb};
+    // consumer in both WUs (single-KernelSpec multi-WU membership) → consumer-side mask is fine.
+    // producer_g1 in wu_g1 (RISCV_0); producer_g2 in wu_g2 (RISCV_1) → mismatched producer masks.
+    spec.work_units = std::vector<WorkUnitSpec>{
+        MakeMinimalWorkUnit("wu_g1", node0, {"producer_g1", "consumer"}),
+        MakeMinimalWorkUnit("wu_g2", node1, {"producer_g2", "consumer"}),
+    };
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("DFB 'dfb' has multiple PRODUCER KernelSpecs ('producer_g1', 'producer_g2') with "
+                                 "mismatched processor placement")));
 }
 
 }  // namespace

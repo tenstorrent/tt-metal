@@ -109,7 +109,66 @@ def _infer_board_type_from_arch(arch_str):
     return None
 
 
-def get_machine_info():
+def _get_tt_smi_snapshot_json():
+    """Return parsed ``tt-smi -s --snapshot_no_tty`` JSON, or ``None``."""
+    try:
+        result = subprocess.run(
+            ["tt-smi", "-s", "--snapshot_no_tty"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return json.loads(result.stdout)
+    except Exception:
+        logger.debug("tt-smi JSON snapshot failed.", exc_info=True)
+    return None
+
+
+def _extract_tt_software_versions(tt_smi_snapshot):
+    """Extract tt-kmd, tt-smi, and tt-firmware versions from tt-smi snapshot JSON."""
+    if not isinstance(tt_smi_snapshot, dict):
+        return None
+
+    versions = {}
+
+    driver = (tt_smi_snapshot.get("host_info") or {}).get("Driver")
+    if driver:
+        versions["tt_kmd"] = driver
+
+    tt_smi_version = (tt_smi_snapshot.get("host_sw_vers") or {}).get("tt_smi")
+    if tt_smi_version:
+        versions["tt_smi"] = tt_smi_version
+
+    firmware_versions = set()
+    for device in tt_smi_snapshot.get("device_info", []) or []:
+        fw_bundle = ((device.get("firmwares") or {}).get("fw_bundle_version") or "").strip()
+        if not fw_bundle:
+            # Fallback for snapshots where normalized "firmwares" block is absent.
+            fw_bundle = ((device.get("smbus_telem") or {}).get("FW_BUNDLE_VERSION") or "").strip()
+        if fw_bundle:
+            firmware_versions.add(fw_bundle)
+
+    if firmware_versions:
+        versions["tt_firmware"] = (
+            sorted(firmware_versions)[0] if len(firmware_versions) == 1 else sorted(firmware_versions)
+        )
+
+    return versions or None
+
+
+def _has_required_machine_fields(machine_info):
+    """Return True when machine_info contains required hardware identity fields."""
+    if not isinstance(machine_info, dict):
+        return False
+    return bool(
+        machine_info.get("board_type")
+        and machine_info.get("device_series")
+        and machine_info.get("card_count") is not None
+    )
+
+
+def get_machine_info(tt_smi_snapshot=None):
     """Get machine info (board type, device series, card count, and device count).
 
     Tries the pyluwen Python API first (authoritative PCI-level arch
@@ -139,17 +198,14 @@ def get_machine_info():
         logger.debug("pyluwen-based arch detection failed; falling back to tt-smi.", exc_info=True)
 
     # --- Step 2: device series & card count via tt-smi JSON snapshot ---------
+    tt_smi_snapshot = tt_smi_snapshot or _get_tt_smi_snapshot_json()
+    tt_versions = _extract_tt_software_versions(tt_smi_snapshot)
+
     try:
         from collections import Counter
 
-        result = subprocess.run(
-            ["tt-smi", "-s", "--snapshot_no_tty"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            data = json.loads(result.stdout)
+        data = tt_smi_snapshot
+        if data:
             devices = data.get("device_info", [])
 
             if board_type is None and devices:
@@ -167,12 +223,15 @@ def get_machine_info():
                 board_series_raw, card_count = series_counts.most_common(1)[0]
                 device_series = board_series_raw.rstrip(" LR").strip()
 
-                return {
+                machine_info = {
                     "board_type": board_type,
                     "device_series": device_series,
                     "card_count": card_count,
                     "device_count": device_count,
                 }
+                if tt_versions:
+                    machine_info.update(tt_versions)
+                return machine_info
             # series_counts is empty — card_count cannot be determined.
             # Fall through rather than returning a partial dict.
     except Exception:
@@ -295,14 +354,74 @@ def is_valid_operation(op_name, valid_operations, excluded_operations):
     return normalized_op in valid_operations
 
 
-def collect_operation_jsons(trace_dir):
-    """Collect all operation JSON files from the trace directory"""
+def collect_operation_jsons(trace_dir, include_failed=False):
+    """Collect all operation JSON files from the trace directory.
+
+    Supports two layouts:
+    1. Flat: JSON files directly in trace_dir (legacy / standalone scripts).
+    2. Per-test subdirs: each subdirectory contains a ``_status.json`` sidecar
+       written by the conftest ``_per_test_trace_dir`` fixture.  Only traces
+       from subdirectories whose status is ``"passed"`` are collected; failed
+       and skipped tests are excluded so that partial / invalid configs do not
+       pollute the master JSON.
+
+    Args:
+        trace_dir: Path to the trace directory.
+        include_failed: If True, also collect traces from failed tests.
+    """
     trace_path = Path(trace_dir)
     if not trace_path.exists():
         return []
 
-    # Find all JSON files in the operation_parameters directory
-    json_files = sorted(trace_path.glob("*.json"))
+    # Check if per-test subdirectories exist (look for _status.json in any subdir)
+    subdirs_with_status = []
+    for child in sorted(trace_path.iterdir()):
+        if child.is_dir() and (child / "_status.json").exists():
+            subdirs_with_status.append(child)
+
+    if subdirs_with_status:
+        json_files = []
+        passed_count = 0
+        skipped_count = 0
+        failed_count = 0
+        for subdir in subdirs_with_status:
+            status_data = {}
+            try:
+                with open(subdir / "_status.json", "r") as f:
+                    status_data = json.load(f)
+                status = status_data.get("status", "unknown")
+            except Exception:
+                status = "unknown"
+
+            if status == "passed":
+                passed_count += 1
+                subdir_jsons = sorted(p for p in subdir.glob("*.json") if not p.name.startswith("_"))
+                json_files.extend(subdir_jsons)
+            elif status == "skipped":
+                skipped_count += 1
+            else:
+                failed_count += 1
+                test_id = status_data.get("test_nodeid", subdir.name) if isinstance(status_data, dict) else subdir.name
+                if include_failed:
+                    subdir_jsons = sorted(p for p in subdir.glob("*.json") if not p.name.startswith("_"))
+                    json_files.extend(subdir_jsons)
+                    print(f"   ⚠️  Including traces from failed test: {test_id}")
+                else:
+                    print(f"   ⏭️  Skipping traces from failed test: {test_id}")
+
+        summary_parts = [f"{passed_count} passed"]
+        if failed_count > 0:
+            if include_failed:
+                summary_parts.append(f"{failed_count} failed (included)")
+            else:
+                summary_parts.append(f"{failed_count} failed (skipped)")
+        if skipped_count > 0:
+            summary_parts.append(f"{skipped_count} skipped")
+        print(f"📊 Per-test trace summary: {', '.join(summary_parts)}")
+        return sorted(json_files)
+
+    # Flat layout fallback: all JSONs directly in trace_dir (exclude sidecars)
+    json_files = sorted(p for p in trace_path.glob("*.json") if not p.name.startswith("_"))
     return json_files
 
 
@@ -624,12 +743,23 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
     new_configs_added = 0
     next_config_id = max_config_id + 1
 
+    # Python-wrapper ops that delegate to a different C++ op.
+    # The tracer captures the C++ name; remap to the wrapper name so the
+    # sweep trace matches the master JSON.
+    _OP_ALIASES = {
+        "ttnn.avg_pool2d": "ttnn.global_avg_pool2d",
+    }
+
     print(f"\n💾 Updating master JSON with {len(operations)} operations...")
     for operation in tqdm(operations, desc="Updating master", unit="op"):
         if not operation:
             continue
 
         op_name = operation.get("operation", "unknown")
+
+        # Remap Python-wrapper ops only when the master has the alias
+        if op_name in _OP_ALIASES and _OP_ALIASES[op_name] in master_data.get("operations", {}):
+            op_name = _OP_ALIASES[op_name]
         op_args = operation.get("arguments", [])
 
         # Canonicalize non-finite floats (inf/-inf/nan -> string forms) BEFORE the
@@ -643,19 +773,33 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
         if op_name not in master_data["operations"]:
             master_data["operations"][op_name] = {"configurations": []}
 
-        # Create argument signature for deduplication
-        args_str = json.dumps(op_args, sort_keys=True, default=str)
-        arg_signature = hashlib.md5(args_str.encode()).hexdigest()
+        # Create argument signature for deduplication.
+        # When sweep_source_hash is present (sweep validation mode), use it as
+        # the dedup key — each sweep vector maps to exactly one master config,
+        # so different vectors must produce distinct configs even if their
+        # serialized arguments happen to hash identically.
+        sweep_source_hash = operation.get("sweep_source_hash")
+        if sweep_source_hash:
+            arg_signature = None  # Not used; matching uses sweep_source_hash directly
+        else:
+            args_str = json.dumps(op_args, sort_keys=True, default=str)
+            arg_signature = hashlib.md5(args_str.encode()).hexdigest()
 
         # Check if this configuration already exists
         matching_config = None
         for existing_config in master_data["operations"][op_name]["configurations"]:
-            if isinstance(existing_config, dict) and "arguments" in existing_config:
-                existing_args = existing_config["arguments"]
-                existing_sig = hashlib.md5(json.dumps(existing_args, sort_keys=True, default=str).encode()).hexdigest()
-                if existing_sig == arg_signature:
+            if isinstance(existing_config, dict):
+                if sweep_source_hash and existing_config.get("sweep_source_hash") == sweep_source_hash:
                     matching_config = existing_config
                     break
+                elif not sweep_source_hash and "arguments" in existing_config:
+                    existing_args = existing_config["arguments"]
+                    existing_sig = hashlib.md5(
+                        json.dumps(existing_args, sort_keys=True, default=str).encode()
+                    ).hexdigest()
+                    if existing_sig == arg_signature:
+                        matching_config = existing_config
+                        break
 
         if matching_config is None:
             # New configuration - assign new config_id
@@ -678,7 +822,6 @@ def update_master_file(master_file_path, operations, test_source, trace_uid=None
                 ],
             }
 
-            sweep_source_hash = operation.get("sweep_source_hash")
             if sweep_source_hash:
                 config_entry["sweep_source_hash"] = sweep_source_hash
 
@@ -837,7 +980,9 @@ def detect_pytest_tests(test_path):
         return False
 
 
-def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=False, extra_args=None):
+def run_test_with_tracing(
+    test_path, output_dir, keep_traces=False, debug_mode=False, extra_args=None, include_failed=False
+):
     """Run test with --trace-params flag and collect operation JSONs"""
     extra_args = extra_args or []
 
@@ -870,7 +1015,21 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
         if extra_args:
             print(f"📎 Passing additional arguments: {' '.join(extra_args)}")
 
-        cmd = [python_cmd, "-m", "pytest", test_path, "-v", "-s", "--timeout=0", "--trace-params"] + extra_args
+        # Load the tracer-only pytest plugin explicitly so the top-level
+        # conftest does not need to carry --trace-params or the per-test
+        # trace dir fixture. The plugin lives in model_tracer/.
+        cmd = [
+            python_cmd,
+            "-m",
+            "pytest",
+            test_path,
+            "-v",
+            "-s",
+            "--timeout=0",
+            "-p",
+            "model_tracer.tracer_pytest_plugin",
+            "--trace-params",
+        ] + extra_args
     else:
         print(f"✅ No pytest cases detected, running as standalone Python script...")
         cmd = [python_cmd, test_path, "--trace-params"] + extra_args
@@ -936,23 +1095,30 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
             pass
 
     # Collect generated JSON files from the unique subdirectory
-    json_files = collect_operation_jsons(trace_dir)
+    json_files = collect_operation_jsons(trace_dir, include_failed=include_failed)
 
     print(f"📊 Found {len(json_files)} operation trace files")
 
     # Create metadata file with source and machine info
     # This will be used when importing traces with --load
+    tt_smi_snapshot = _get_tt_smi_snapshot_json()
+    software_versions = _extract_tt_software_versions(tt_smi_snapshot)
+
+    captured_machine_info = get_machine_info(tt_smi_snapshot=tt_smi_snapshot)
+
     metadata = {
         "test_source": test_path,
         "timestamp": datetime.now().isoformat(),
         "trace_uid": str(uuid.uuid4()),
-        "machine_info": get_machine_info(),
+        "machine_info": captured_machine_info,
         "trace_count": len(json_files),
         # Capture the pytest CLI args (everything after `--`) so the loader
         # can persist them on trace_run.pytest_args. This is what lets users
         # answer "did I trace model X with these args on this hardware?".
         "pytest_args": " ".join(extra_args) if extra_args else None,
     }
+    if software_versions:
+        metadata["software_versions"] = software_versions
 
     # Check for HF_MODEL and LLAMA_DIR environment variables
     if "models/tt_transformers/demo/simple_text_demo.py" in test_path:
@@ -996,6 +1162,8 @@ def run_test_with_tracing(test_path, output_dir, keep_traces=False, debug_mode=F
         "trace_files": json_files,
         "trace_dir": trace_dir,
         "trace_uid": metadata["trace_uid"],
+        "machine_info": metadata.get("machine_info"),
+        "software_versions": metadata.get("software_versions"),
         "pytest_args": metadata.get("pytest_args"),
         "keep_traces": keep_traces,
         "output_dir": output_dir,
@@ -1209,10 +1377,11 @@ def recompute_config_hashes(json_file):
             old_hash = config.get("config_hash")
             op_args = config.get("arguments", {})
 
-            machine_info = None
-            executions = config.get("executions", [])
-            if executions and isinstance(executions[0], dict):
-                machine_info = executions[0].get("machine_info")
+            machine_info = config.get("traced_machine_info")
+            if machine_info is None:
+                executions = config.get("executions", [])
+                if executions and isinstance(executions[0], dict):
+                    machine_info = executions[0].get("machine_info")
             new_hash = _compute_config_hash(op_name, op_args, machine_info)
 
             if new_hash != old_hash:
@@ -1261,6 +1430,19 @@ Examples (Import existing traces):
         help="Process existing trace directory and add to master JSON (skips test execution). "
         "Useful for importing traces collected on other machines with --store flag.",
     )
+    parser.add_argument(
+        "--include-failed",
+        action="store_true",
+        help="Include traces from failed tests (by default only passed tests are collected)",
+    )
+    parser.add_argument(
+        "--allow-test-failures",
+        action="store_true",
+        help=(
+            "Exit 0 even when the underlying pytest run failed. Default is to propagate the pytest exit code "
+            "so CI workflows that gate on this script's exit status surface real test regressions."
+        ),
+    )
 
     # Handle explicit separator
     if "--" in sys.argv:
@@ -1292,18 +1474,13 @@ Examples (Import existing traces):
             print(f"❌ Error: Trace directory not found: {args.load}")
             return 1
         trace_dir = args.load
-        # Find all JSON files in the trace directory, excluding metadata
-        trace_files = [
-            os.path.join(trace_dir, f)
-            for f in os.listdir(trace_dir)
-            if f.endswith(".json") and not f.startswith("_trace_")
-        ]
+        trace_files = collect_operation_jsons(trace_dir, include_failed=args.include_failed)
         if not trace_files:
             print(f"❌ Error: No JSON trace files found in {args.load}")
             return 1
         result = {
             "success": True,
-            "trace_files": sorted(trace_files),
+            "trace_files": trace_files,
             "trace_dir": trace_dir,
             "keep_traces": True,  # Always keep when processing existing traces
         }
@@ -1321,22 +1498,11 @@ Examples (Import existing traces):
     try:
         # Run test with tracing (unless processing existing traces)
         if not args.load:
-            result = run_test_with_tracing(args.test_path, args.output_dir, args.store, args.debug, extra_args)
+            result = run_test_with_tracing(
+                args.test_path, args.output_dir, args.store, args.debug, extra_args, args.include_failed
+            )
 
-        print("\n" + "=" * 50)
-        print("📋 RESULTS")
-        print("=" * 50)
-
-        # Display test results if we ran tests (not from existing traces)
-        if not args.load and "test_stats" in result:
-            stats = result["test_stats"]
-            if stats["total"] > 0:
-                print(f"Test Results: ✅ {stats['passed']} passed, ❌ {stats['failed']} failed (Total: {stats['total']})")
-            else:
-                # Fallback if we couldn't parse the output
-                print(f"Test Result: {'✅ PASSED' if result['success'] else '❌ FAILED'}")
-
-        print(f"📊 Collected {len(result['trace_files'])} operation trace files")
+        print(f"\n📊 Collected {len(result['trace_files'])} operation trace files")
 
         if not args.load and not result["trace_files"]:
             if result["success"]:
@@ -1352,7 +1518,7 @@ Examples (Import existing traces):
             # Load valid operations and excluded operations
             valid_operations = load_valid_operations()
             excluded_operations = get_excluded_operations()
-            machine_info = get_machine_info()
+            machine_info = result.get("machine_info") if not args.load else get_machine_info()
             trace_uid = result.get("trace_uid")
             pytest_args = result.get("pytest_args")
 
@@ -1381,9 +1547,18 @@ Examples (Import existing traces):
                         if env_tags:
                             test_source = f"{test_source} {' '.join(env_tags)}"
 
-                        # Use machine_info from metadata if present
-                        if "machine_info" in metadata:
-                            machine_info = metadata["machine_info"]
+                        # Use machine_info/software_versions from metadata if present.
+                        # For imported traces, this preserves the original tracing host
+                        # versions instead of local host values.
+                        metadata_machine_info = metadata.get("machine_info")
+                        metadata_software_versions = metadata.get("software_versions")
+                        if _has_required_machine_fields(metadata_machine_info):
+                            machine_info = metadata_machine_info
+                        if metadata_software_versions:
+                            if isinstance(machine_info, dict):
+                                machine_info.update(metadata_software_versions)
+
+                        if _has_required_machine_fields(metadata_machine_info) or metadata_software_versions:
                             trace_uid = metadata.get("trace_uid", trace_uid)
                             pytest_args = metadata.get("pytest_args", pytest_args)
                             print(f"📋 Loaded metadata from trace directory")
@@ -1523,10 +1698,17 @@ Examples (Import existing traces):
                 if cleaned_count > 0:
                     print(f"✅ Cleaned up {cleaned_count} trace file(s)")
 
-                # Also remove the metadata file and subdirectory
+                # Also remove the metadata file, per-test subdirectories, and parent
                 trace_dir = result.get("trace_dir")
                 if trace_dir and os.path.exists(trace_dir):
                     try:
+                        import shutil
+
+                        # Remove per-test subdirectories (including failed/skipped ones)
+                        for child in Path(trace_dir).iterdir():
+                            if child.is_dir():
+                                shutil.rmtree(child, ignore_errors=True)
+
                         # Remove metadata file if it exists
                         metadata_file = os.path.join(trace_dir, "_trace_metadata.json")
                         if os.path.exists(metadata_file):
@@ -1544,22 +1726,45 @@ Examples (Import existing traces):
                 if cleaned_count > 0:
                     print("💡 Tip: Use --store flag to keep individual trace files")
 
-            print(f"\n✅ Operations extracted successfully!")
-            print(f"📄 Master file: {master_file}")
-
             # Fix memory config shard_spec entries in the master JSON
             fix_memory_config_in_json(master_file)
 
-        # Fail the pipeline if the underlying test run had any failures.
-        # This ensures CI catches pytest failures instead of silently
-        # succeeding just because traces were collected.
-        if not args.load and not result.get("success", True):
-            stats = result.get("test_stats", {})
-            if stats.get("failed", 0) > 0:
-                print(f"\n❌ Failing because {stats['failed']} test(s) failed")
+        # Print final summary at the very end so it's always visible
+        print("\n" + "=" * 50)
+        print("📋 RESULTS")
+        print("=" * 50)
+
+        if result.get("trace_files"):
+            print(f"📄 Master file: {master_file}")
+            print(f"📊 Collected {len(result['trace_files'])} operation trace files")
+
+        if not args.load and "test_stats" in result:
+            stats = result["test_stats"]
+            if stats["total"] > 0:
+                print(f"Test Results: ✅ {stats['passed']} passed, ❌ {stats['failed']} failed (Total: {stats['total']})")
+                if stats["failed"] > 0:
+                    if args.include_failed:
+                        print(f"📌 Traces captured from all {stats['total']} test(s) (--include-failed enabled)")
+                    else:
+                        print(
+                            f"📌 Traces captured from {stats['passed']} passed test(s) only ({stats['failed']} failed test traces ignored)"
+                        )
             else:
-                print(f"\n❌ Failing because test process exited with code {result.get('exit_code', 1)}")
-            return 1
+                print(f"Test Result: {'✅ PASSED' if result['success'] else '❌ FAILED'}")
+
+        print(f"\n✅ Operations extracted successfully!")
+
+        # Propagate the pytest exit code so CI gates on real test failures.
+        # --allow-test-failures restores the prior swallow-failures behavior
+        # for callers that explicitly want trace collection to be best-effort.
+        if not args.load and not args.allow_test_failures:
+            exit_code = result.get("exit_code", 0)
+            if exit_code:
+                print(
+                    f"\n❌ Failing because test process exited with code {exit_code}. "
+                    "Use --allow-test-failures to suppress."
+                )
+                return exit_code
 
         return 0
 

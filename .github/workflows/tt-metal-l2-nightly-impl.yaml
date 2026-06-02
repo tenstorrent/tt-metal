@@ -136,7 +136,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -183,7 +183,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -228,7 +228,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -272,7 +272,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -319,7 +319,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -366,7 +366,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -413,7 +413,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -464,7 +464,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -527,7 +527,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -574,7 +574,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -625,7 +625,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -680,7 +680,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -728,7 +728,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -775,7 +775,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -823,7 +823,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -839,6 +839,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: pytest tests/ttnn/nightly/unit_tests/operations/data_movement -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - name: ttnn nightly data_movement/ccl tests group 1
+        if: ${{ !cancelled() }}
         run: pytest --timeout 300 tests/ttnn/unit_tests/operations/data_movement tests/ttnn/unit_tests/operations/ccl tests/ttnn/unit_tests/operations/point_to_point -xv --splits 3 --group 1 -m "not disable_fast_runtime_mode"
       - name: ttnn nightly data_movement/ccl tests group 2
         if: ${{ !cancelled() }}
@@ -880,7 +881,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -926,7 +927,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job

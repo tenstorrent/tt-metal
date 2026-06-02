@@ -17,6 +17,7 @@
 #endif
 
 #if defined(ARCH_QUASAR)
+#include "experimental/kernel_args.h"
 #include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
 typedef uint64_t atomic_type;
 // TODO: Remove this once cache invalidation functionality for Quasar is added
@@ -46,13 +47,14 @@ void test_atomic_load_store(atomic_type* shared_value_ptr, atomic_type* result_p
 #ifdef ARCH_QUASAR
     uint64_t thread_idx = 0;
     asm volatile("csrr %0, mhartid" : "=r"(thread_idx));
-    // On Quasar, DM0 runs writer() and DM1-7 run reader()
-    // Each DM writes to its own result location for host to verify
-    if (thread_idx == 0) {
+    // Metal 2.0 reserves DM0/DM1; user threads start at DM2.
+    constexpr uint64_t first_dm_id = 2;
+    // The lowest-numbered user DM thread is the writer; the rest are readers.
+    if (thread_idx == first_dm_id) {
         writer(shared_value_ptr);
     } else {
         // Each reader DM writes to a unique result slot so host verification is per thread
-        atomic_type* per_thread_result_ptr = result_ptr + (thread_idx - 1);
+        atomic_type* per_thread_result_ptr = result_ptr + (thread_idx - first_dm_id - 1);
         reader(shared_value_ptr, per_thread_result_ptr);
         // Flush the cache so host readback sees the updated L1
         flush_l2_cache_line(per_thread_result_ptr);
@@ -89,8 +91,14 @@ void test_compare_and_swap_atomic(atomic_type* l1_counter_ptr, const uint32_t in
 
 void kernel_main() {
     // Base L1 address shared by all DMs: used as a counter (add/CAS) or value + result slots (load/store)
+#ifdef ARCH_QUASAR
+    atomic_type* l1_counter_ptr =
+        reinterpret_cast<atomic_type*>(static_cast<uintptr_t>(get_arg(args::l1_counter_addr)));
+    const uint32_t increment_times = get_arg(args::increment_times);
+#else
     atomic_type* l1_counter_ptr = reinterpret_cast<atomic_type*>(get_arg_val<uint32_t>(0));
     const uint32_t increment_times = get_arg_val<uint32_t>(1);
+#endif
 
 #if TEST_ATOMIC_LOAD_STORE
     atomic_type* shared_value_ptr = l1_counter_ptr;

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t input_buffer_address = get_arg_val<uint32_t>(0);
@@ -11,7 +11,7 @@ void kernel_main() {
     uint32_t num_sticks = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t src_cb_id = get_compile_time_arg_val(0);
-    experimental::CircularBuffer src_cb(src_cb_id);
+    CircularBuffer src_cb(src_cb_id);
     uint64_t local_l1_read_addr = get_noc_addr(input_buffer_address);
 
     for (uint32_t i = 0; i < num_sticks; ++i) {

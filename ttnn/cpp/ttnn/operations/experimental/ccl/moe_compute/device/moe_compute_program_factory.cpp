@@ -14,6 +14,7 @@
 #include <vector>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
@@ -27,6 +28,10 @@
 namespace {
 
 constexpr uint32_t TILE_WIDTH = 32;
+
+inline uint32_t non_tile_cb_page_size(tt::DataFormat data_format, uint32_t l1_alignment) {
+    return std::max({tt::datum_size(data_format), l1_alignment, CIRCULAR_BUFFER_COMPUTE_WORD_SIZE});
+}
 
 uint32_t get_num_pages_st(const ttnn::Tensor& tensor) { return (uint32_t)tensor.buffer()->num_pages(); }
 
@@ -313,17 +318,9 @@ MoEComputeMeshWorkloadFactory::create_at(
     const auto combine_token_parallel_cores = args.combine_params.num_token_parallel_cores;
     const auto combine_data_parallel_cores = args.combine_params.num_data_parallel_cores;
 
-    // Determine config type based on hidden size. Bias does not matter for these values
-    uint32_t config_type, a2a_cb_pages;
-    if (hidden_size == 7168) {
-        config_type = static_cast<uint32_t>(detail::MoEConfigType::DEEPSEEK);
-        a2a_cb_pages = moe_ring::DeepSeekRingConfig</*HasBias=*/false>::IN2_TILES_PER_STEP;
-    } else if (hidden_size == 2880) {
-        config_type = static_cast<uint32_t>(detail::MoEConfigType::GPT);
-        a2a_cb_pages = moe_ring::GptRingConfig</*HasBias=*/false>::IN2_TILES_PER_STEP;
-    } else {
-        TT_THROW("Unsupported hidden size {} for moe_compute. Expected 7168 (DeepSeek) or 2880 (GPT)", hidden_size);
-    }
+    const uint32_t intermediate_size = args.intermediate_size;
+    const uint32_t hidden_tiles = hidden_size / 32;
+    const uint32_t intermediate_tiles = intermediate_size / 32;
 
     // Cores
     const auto
@@ -342,6 +339,10 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     const uint32_t tilize_num_cores = tilize_core_range_set.num_cores();
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
+
+    // IN2_TILES_PER_STEP = ceil(intermediate_tiles / matmul_num_cores)
+    const uint32_t a2a_cb_pages_raw = (intermediate_tiles + matmul_num_cores - 1) / matmul_num_cores;
+    const uint32_t a2a_cb_pages = (a2a_cb_pages_raw + 1) & ~1u;
 
     const uint32_t tilize_bounding_box_num_cores = tilize_bounding_box.size();
     const uint32_t matmul_bounding_box_num_cores = matmul_bounding_box.size();
@@ -663,12 +664,14 @@ MoEComputeMeshWorkloadFactory::create_at(
         tt::DataFormat::UInt32);
 
     // CB for passing total_chunks from writer to compute kernel
-    // Single page holding one uint32_t value
+    // Single page holding one uint32_t value. Page size floored at l1_alignment /
+    // CIRCULAR_BUFFER_COMPUTE_WORD_SIZE so the unpack LLK fifo_* fields (16 B words) are non-zero
+    // when tilize_compute pops this CB.
     tt::tt_metal::create_cb(
         total_chunks_cb_id,
         program,
         tilize_core_range_set,
-        sizeof(uint32_t),
+        non_tile_cb_page_size(tt::DataFormat::UInt32, l1_alignment),
         1,  // single page
         tt::DataFormat::UInt32);
 
@@ -676,18 +679,23 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Matmul CBs
     //-------------------------------------------------------------------------
 
-    // CBs used in the MOE operation
+    // CBs on matmul (ring) cores.  Tile counts depend on (hidden_size, intermediate_size).
+    // Two reference configs for comparison:
+    //   DeepSeek  — hidden=7168  intermediate=2048  (Ht=224, Nt=64,  a2a_cb_pages=6)
+    //   GPT-OSS   — hidden=2880  intermediate=2880  (Ht=90,  Nt=90,  a2a_cb_pages=8)
     /*
-        ------------------------------------------------------------------------------------
-        |     Name       |   CB Index    |   Dtype    | Tile? | Tiles/CB |  Total size (B) |
-        ------------------------------------------------------------------------------------
-        | cb_s2c_in      | CBIndex::c_0  | Float16_b  | true  |    224*2 |      917504     |
-        | cb_r2c_w0      | CBIndex::c_1  | Bfp4_b     | true  |    14*6  |      48384      |
-        | cb_c2w_rdy     | CBIndex::c_2  | Float32    | false |    1     |      4          |
-        | cb_w2c_rdy     | CBIndex::c_3  | Float32    | false |    1     |      4          |
-        | cb_s2c_in2     | CBIndex::c_4  | Float16_b  | true  |    6*12  |      147456     |
-        | cb_w2c_md      | CBIndex::c_5  | UInt32     | false |    2     |      8          |
-        ------------------------------------------------------------------------------------
+        ----------------------------------------------------------------------------------------------------------
+        | Name           | CB Index     | Dtype     | Tile? | Tiles/CB  | DS  | GPT | Remarks                    |
+        ----------------------------------------------------------------------------------------------------------
+        | cb_s2c_in      | CBIndex::c_0 | Float16_b | true  | (shared)  | 448 | 180 | Shared output buf          |
+        | cb_r2c_w0      | CBIndex::c_3 | Bfp4_b    | true  | 14*6      |  84 |  84 | 3 triple-bufs W0/W1        |
+        | cb_c2w_rdy     | CBIndex::c_4 | Float32   | false | 1         |   — |   — | Compute->writer ready      |
+        | cb_w2c_rdy     | CBIndex::c_5 | Float32   | false | 1         |   — |   — | Writer->compute ready      |
+        | cb_s2c_in2     | CBIndex::c_6 | Float16_b | true  | a2a*cores |  72 |  96 | Ring A2A activation        |
+        | cb_w2c_md      | CBIndex::c_7 | UInt32    | false | 2         |   — |   — | Metadata (token counts)    |
+        ----------------------------------------------------------------------------------------------------------
+        Non-tile CBs use page_size >= non_tile_cb_page_size(data_format, l1_alignment)
+        so LLK fifo_* fields (16 B words; circular_buffer_constants.h) are non-zero on compute push/pop.
     */
 
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
@@ -696,7 +704,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"cb_r2c_w0", tt::CBIndex::c_3, tt::DataFormat::Bfp4_b, true, 14 * 6},
         {"cb_c2w_rdy", tt::CBIndex::c_4, tt::DataFormat::Float32, false, 1},
         {"cb_w2c_rdy", tt::CBIndex::c_5, tt::DataFormat::Float32, false, 1},
-        {"cb_s2c_in2", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, a2a_cb_pages * 12},
+        {"cb_s2c_in2", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, a2a_cb_pages * matmul_num_cores},
         {"cb_w2c_md", tt::CBIndex::c_7, tt::DataFormat::UInt32, false, 2},
     };
     if (args.has_bias) {
@@ -704,15 +712,14 @@ MoEComputeMeshWorkloadFactory::create_at(
         matmul_cb_specs0.emplace_back("cb_c2c_ones_tile", tt::CBIndex::c_8, tt::DataFormat::Float16_b, true, 1);
     }
 
-    std::map<std::string, tt::tt_metal::CBHandle> matmul_cb_handles;
-
     // Create CBs
     for (const auto& [name, index, data_format, is_tile, tiles_per_cb] : matmul_cb_specs0) {
-        const uint32_t bytes_per_tile = is_tile ? tt::tile_size(data_format) : tt::datum_size(data_format);
+        const uint32_t bytes_per_tile =
+            is_tile ? tt::tile_size(data_format) : non_tile_cb_page_size(data_format, l1_alignment);
         const auto cb_config = tt::tt_metal::CircularBufferConfig(tiles_per_cb * bytes_per_tile, {{index, data_format}})
                                    .set_page_size(index, bytes_per_tile);
 
-        matmul_cb_handles[name] = tt::tt_metal::CreateCircularBuffer(program, matmul_core_range_set, cb_config);
+        tt::tt_metal::CreateCircularBuffer(program, matmul_core_range_set, cb_config);
     }
 
     //-------------------------------------------------------------------------
@@ -802,7 +809,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"mesh_rows", mesh_view.num_rows()},
         {"mesh_cols", mesh_view.num_cols()},
         {"linearized_mesh_coord", linearized_mesh_coord},
-        {"cluster_axis", (uint32_t)(args.combine_params.axis.has_value() ? args.combine_params.axis.value() : 1)},
+        {"cluster_axis", args.combine_params.axis},
 
         // Coordinates for non-drain-sync to drain-sync synchronization
         {"drain_core_noc_x", (uint32_t)tilize_drain_core_physical.x},
@@ -1063,6 +1070,9 @@ MoEComputeMeshWorkloadFactory::create_at(
                                          (hidden_size / combine_data_parallel_cores / double_buffer) /
                                          combine_token_parallel_cores;
 
+    // NOC_MAX_BURST_SIZE — arch-dependent, used by dm1 to split ring A2A packets
+    const uint32_t noc_max_burst_bytes = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? 16384u : 8192u;
+
     // activation function
     const ttnn::experimental::prim::detail::MoEActivationFunction activation_type = args.activation_type;
 
@@ -1088,7 +1098,9 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"token_expert_row_offset", token_expert_row_offset},
         {"height_shard_dim", output_height_shard_dim},
         {"width_shard_dim", combine_data_parallel_cores},
-        {"moe_config_type", config_type},
+        {"hidden_tiles", hidden_tiles},
+        {"intermediate_tiles", intermediate_tiles},
+        {"noc_max_burst_bytes", noc_max_burst_bytes},
         // Matmul -> combine: dm1 increments this on combine cores when data is written
         {"matmul_combine_sync_semaphore_id", matmul_combine_sync_semaphore_id},
     };
@@ -1222,9 +1234,7 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // Combine parameters (copy from args and set worker_cores for this mesh)
     TT_FATAL(args.combine_params.num_links > 0, "num_links must be greater than 0");
-    TT_FATAL(
-        !args.combine_params.axis.has_value() || args.combine_params.axis.value() < 2,
-        "cluster_axis must be 0 or 1");
+    TT_FATAL(args.combine_params.axis < 2, "cluster_axis must be 0 or 1");
 
     auto combine_params = args.combine_params;
     combine_params.worker_cores = combine_cores;

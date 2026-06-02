@@ -2,14 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
 import pytest
 
 import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
+from tests.ttnn.utils_for_testing import assert_equal
 
 
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32])
@@ -23,6 +22,4 @@ def test_tilize_with_zero_padding(device, in_dtype, use_multicore, shape):
     output_tt = ttnn.tilize_with_zero_padding(ttnn_input, use_multicore=use_multicore)
     output_torch = ttnn.to_torch(output_tt)
 
-    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_input, output_torch)
-    logger.info(pcc_msg)
-    assert passing
+    assert_equal(torch_input, output_torch)

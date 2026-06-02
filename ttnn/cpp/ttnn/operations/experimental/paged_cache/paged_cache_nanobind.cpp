@@ -24,6 +24,17 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
     const auto* paged_update_cache_doc =
         R"doc(
          Paged update cache operation. This operation expects the following inputs: cache_tensor of shape [B, 1, kv_len, head_dim] and input_tensor of shape [1, B, 1[32], head_dim] where input_tensor is height sharded on B cores. update_idxs will specify for each batch element which token to update in the cache.
+
+         ``head_dim`` is read from ``input_tensor.padded_shape[-1]``. ``block_size``
+         defaults to ``cache_tensor.padded_shape[2]``; pass the kwarg to override it for
+         callers that reinterpret one physical buffer with different
+         ``(block_size, head_dim)`` tile layouts (e.g. vLLM's hybrid kv-cache-groups
+         path). ``num_kv_heads`` defaults to ``cache_tensor.padded_shape[1]``; pass the
+         kwarg when the input view has a different kv-head count from the cache (e.g.
+         Gemma4 sliding kv=8 / full kv=2 sharing one HMA buffer) — the decode-time
+         input is height-sharded with the kv-heads dim padded to TILE_HEIGHT so the
+         logical count can't be inferred from the tensor.
+         ``num_kv_heads * block_size * head_dim`` must be preserved across views.
         )doc";
 
     ttnn::bind_function<"paged_update_cache", "ttnn.experimental.">(
@@ -39,7 +50,9 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         nb::arg("page_table").noconvert() = nb::none(),
         nb::arg("batch_offset") = 0,
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
-        nb::arg("mesh_coords").noconvert() = nb::none());
+        nb::arg("mesh_coords").noconvert() = nb::none(),
+        nb::arg("block_size") = nb::none(),
+        nb::arg("num_kv_heads") = nb::none());
 
     const auto* paged_fused_update_cache_doc =
         R"doc(
@@ -91,6 +104,10 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         batch_idx_tensor (optional) shape: [1] (scalar uint32 tensor)
         batch_idx (scalar, defaults to 0) is used if batch_idx_tensor is not provided.
         mesh_coords (optional) is a set of MeshCoordinate objects that specify the mesh coordinates to execute on.
+
+        ``head_dim`` is read from ``input_tensor.padded_shape[-1]``. ``block_size``
+        defaults to ``cache_tensor.padded_shape[2]``; pass the kwarg to override it (see
+        ``paged_update_cache`` for details). Per-block byte count must be preserved.
         )doc";
 
     ttnn::bind_function<"paged_fill_cache", "ttnn.experimental.">(
@@ -104,7 +121,8 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         nb::arg("batch_idx_tensor").noconvert() = nb::none(),
         nb::arg("batch_idx") = 0,
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
-        nb::arg("mesh_coords").noconvert() = nb::none());
+        nb::arg("mesh_coords").noconvert() = nb::none(),
+        nb::arg("block_size") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::paged_cache::detail

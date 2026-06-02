@@ -10,7 +10,12 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, check_with_pcc_without_tensor_printout
+from tests.ttnn.utils_for_testing import (
+    assert_with_pcc,
+    assert_equal,
+    check_with_pcc_without_tensor_printout,
+)
+from tests.ttnn.unit_tests.base_functionality.test_narrow import assert_quality
 from models.common.utility_functions import torch_random
 
 
@@ -282,7 +287,7 @@ def test_to_layout_sharded(dtype, device):
 
     output = ttnn.to_layout(ttnn_input_tensor1, ttnn.ROW_MAJOR_LAYOUT)
 
-    assert_with_pcc(torch_input_tensor1, ttnn.to_torch(output), 0.9999)
+    assert_quality(torch_input_tensor1, ttnn.to_torch(output), dtype)
 
 
 @pytest.mark.parametrize("batch_size", [9, 32])

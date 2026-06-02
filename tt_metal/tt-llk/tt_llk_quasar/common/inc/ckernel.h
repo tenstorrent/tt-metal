@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-// Compiler hint that a branch is unlikely to be taken
-#define UNLIKELY(condition) __builtin_expect(static_cast<bool>(condition), 0)
 #define TT_ALWAYS_INLINE    inline __attribute__((always_inline))
 #define tt_l1_ptr           __attribute__((rvtt_l1_ptr))
 #define tt_reg_ptr          __attribute__((rvtt_reg_ptr))

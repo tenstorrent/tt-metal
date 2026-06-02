@@ -227,7 +227,7 @@ template <
     uint32_t block_size,
     uint32_t scale_fp32,
     uint32_t num_l_chunks,
-    int vector_mode = (int)VectorMode::C>
+    VectorMode vector_mode = VectorMode::C>
 ALWI void sdpa_tail_streaming(
     uint32_t cb_worker_max_sum,
     uint32_t cb_prev_max_sum,
@@ -285,7 +285,8 @@ ALWI void sdpa_forward_data(
     uint32_t block_size) {
     copy_tile_init(cb_prev_max_sum);
     // Reconfigure from pack_block_contiguous mop configuration back to regular tile packing
-    PACK((llk_pack_mop_config<false, false>(cb_cur_max_sum)));
+    PACK((llk_pack_init<ckernel::PackMode::Default, false /* zero_output */, true /* skip_addrmod_config */>(
+        cb_cur_max_sum)));
     cb_wait_front(cb_prev_max_sum, 1);
     cb_reserve_back(cb_cur_max_sum, 1);
 
@@ -323,7 +324,7 @@ template <
     uint32_t block_size,
     uint32_t scale_fp32,
     uint32_t num_l_chunks,
-    int vector_mode = (int)VectorMode::C>
+    VectorMode vector_mode = VectorMode::C>
 ALWI void sdpa_tail_streaming_conditional(
     uint32_t cb_worker_max_sum,
     uint32_t cb_prev_max_sum,
@@ -814,7 +815,7 @@ struct SdpaReduceWorker {
         // TRISC (Compute) - streaming SDPA tail reduction
         // ==================================================================
         void compute_impl([[maybe_unused]] const ComputeArgs& args) {
-            constexpr int vector_mode = VectorMode::RC_custom;
+            constexpr VectorMode vector_mode = VectorMode::RC_custom;
 
             reconfig_data_format<false, true>(CTArgs::cb_local_l, CTArgs::cb_local_l);
             pack_reconfig_data_format<true>(CTArgs::cb_l_out);

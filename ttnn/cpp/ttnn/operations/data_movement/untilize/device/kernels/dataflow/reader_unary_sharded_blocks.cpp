@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 // Block-by-block reader for sharded inputs. The kernel does a simple local L1 to CB copy (not page-by-page via
 // TensorAccessor), so it is not fully using device API 1.1 features. Only cb operations are used.
@@ -37,7 +37,7 @@ void kernel_main() {
     constexpr uint32_t tile_size_bytes = get_tile_size(cb_id_in0);
     constexpr uint32_t block_size_bytes = tiles_per_block * tile_size_bytes;
 
-    experimental::CircularBuffer cb_in(cb_id_in0);
+    CircularBuffer cb_in(cb_id_in0);
     uint64_t l1_read_addr = get_noc_addr(src_addr);
 
     for (uint32_t b = 0; b < num_blocks; ++b) {

@@ -48,6 +48,11 @@ TRACE_ID = 1
 CHIP_FREQ_RE = re.compile(r"CHIP_FREQ\[MHz\]:\s*(\d+(?:\.\d+)?)")
 REDUCE_TO_ONE_TRACE_NUM_WARMUP_SAMPLES_ENV = "CCL_REDUCE_TO_ONE_TRACE_NUM_WARMUP_SAMPLES"
 REDUCE_TO_ONE_TRACE_NUM_PERF_SAMPLES_ENV = "CCL_REDUCE_TO_ONE_TRACE_NUM_PERF_SAMPLES"
+TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE_ENV = "TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE"
+TT_METAL_FABRIC_TRIMMING_PROFILE_ENV = "TT_METAL_FABRIC_TRIMMING_PROFILE"
+TT_METAL_FABRIC_TRIMMING_OVERRIDE_ENV = "TT_METAL_FABRIC_TRIMMING_OVERRIDE"
+TT_METAL_LOGS_PATH_ENV = "TT_METAL_LOGS_PATH"
+CHANNEL_TRIMMING_CAPTURE_FILENAME = "channel_trimming_capture.yaml"
 REDUCE_TO_ONE_ROTATED_ROOTS = ((1, 0), (1, 1), (2, 0), (2, 1))
 DEFAULT_REDUCE_TO_ONE_NUM_WARMUP_SAMPLES = 15
 DEFAULT_REDUCE_TO_ONE_NUM_PERF_SAMPLES = 30
@@ -327,6 +332,16 @@ def parse_args() -> argparse.Namespace:
         help="Optional pytest target override. Defaults to the selected CCL trace test.",
     )
     parser.add_argument(
+        "--channel-trim",
+        action="store_true",
+        help=(
+            "For each sweep point, first run a plain pytest capture with "
+            "TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE=1, then replay the "
+            "profiled tracy run with TT_METAL_FABRIC_TRIMMING_PROFILE set to "
+            "the captured YAML."
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         default="generated/profiler",
         help="Directory to write markdown summaries (default: generated/profiler).",
@@ -561,6 +576,47 @@ def run_tracy_pytest(test_target: str, env: dict[str, str], repo_root: Path) -> 
         test_target,
     ]
     subprocess.run(cmd, env=env, cwd=repo_root, check=True)
+
+
+def run_pytest(test_target: str, env: dict[str, str], repo_root: Path) -> None:
+    cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "-svv",
+        test_target,
+    ]
+    subprocess.run(cmd, env=env, cwd=repo_root, check=True)
+
+
+def clear_channel_trimming_env(env: dict[str, str]) -> None:
+    env.pop(TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE_ENV, None)
+    env.pop(TT_METAL_FABRIC_TRIMMING_PROFILE_ENV, None)
+    env.pop(TT_METAL_FABRIC_TRIMMING_OVERRIDE_ENV, None)
+
+
+def build_channel_trim_capture_dir(
+    output_dir: Path,
+    timestamp: str,
+    *,
+    ccl: str,
+    num_links: int,
+    max_payload: int,
+    num_l_chunks: int | None,
+    compute_block_size: int | None,
+) -> Path:
+    capture_dir = (
+        output_dir / "channel_trim" / timestamp / ccl / f"num_links_{num_links}" / f"max_payload_{max_payload}"
+    )
+    if num_l_chunks is not None:
+        capture_dir = capture_dir / f"num_l_chunks_{num_l_chunks}"
+    if compute_block_size is not None:
+        capture_dir = capture_dir / f"compute_block_size_{compute_block_size}"
+    return capture_dir
+
+
+def get_channel_trim_capture_yaml_path(capture_dir: Path) -> Path:
+    return capture_dir / "generated" / "reports" / CHANNEL_TRIMMING_CAPTURE_FILENAME
 
 
 def is_header_row(row: list[str]) -> bool:
@@ -922,10 +978,13 @@ def build_reduce_to_one_run_result(
     if not sample_op_stats:
         raise RuntimeError("reduce_to_one sample analysis requires at least one per-replay sample")
 
-    setup_details = reduce_to_one_setup_details(trace_config)
-    notes = [
-        f"Perf replay samples analyzed: {len(sample_op_stats)}",
-    ]
+    setup_details = base_result.setup_details + reduce_to_one_setup_details(trace_config)
+    notes = list(base_result.notes)
+    notes.extend(
+        [
+            f"Perf replay samples analyzed: {len(sample_op_stats)}",
+        ]
+    )
 
     per_root_values: dict[str, list[float]] = defaultdict(list)
     for sample in sample_op_stats:
@@ -1758,6 +1817,39 @@ def main() -> int:
                                 reduce_to_one_trace_config.num_perf_samples
                             )
 
+                        run_setup_details: tuple[str, ...] = ()
+                        run_notes: list[str] = []
+                        if args.channel_trim:
+                            clear_channel_trimming_env(env)
+                            env.pop(TT_METAL_LOGS_PATH_ENV, None)
+                            capture_dir = build_channel_trim_capture_dir(
+                                output_dir,
+                                timestamp,
+                                ccl=ccl,
+                                num_links=num_links,
+                                max_payload=max_payload,
+                                num_l_chunks=num_l_chunks,
+                                compute_block_size=compute_block_size,
+                            )
+                            capture_dir.mkdir(parents=True, exist_ok=True)
+                            capture_yaml = get_channel_trim_capture_yaml_path(capture_dir)
+
+                            capture_env = env.copy()
+                            capture_env[TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE_ENV] = "1"
+                            capture_env[TT_METAL_LOGS_PATH_ENV] = str(capture_dir)
+                            run_pytest(test_target, capture_env, repo_root)
+
+                            if not capture_yaml.exists():
+                                raise RuntimeError(
+                                    "Channel trimming capture did not produce the expected YAML: " f"{capture_yaml}"
+                                )
+
+                            env[TT_METAL_FABRIC_TRIMMING_PROFILE_ENV] = str(capture_yaml)
+                            run_setup_details = ("Channel trimming mode: capture + replay per sweep point.",)
+                            run_notes.append(
+                                "Channel trimming replay profile: " + to_repo_relative(capture_yaml, repo_root)
+                            )
+
                         before = set(list_profile_logs(report_root))
                         run_start = time.time()
 
@@ -1817,6 +1909,8 @@ def main() -> int:
                             num_l_chunks=num_l_chunks,
                             tiles_per_l_chunk=tiles_per_l_chunk,
                             block_size=block_size,
+                            setup_details=run_setup_details,
+                            notes=tuple(run_notes),
                             root_device_stats=root_device_stats,
                         )
                         if ccl == "reduce_to_one":

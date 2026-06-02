@@ -18,8 +18,16 @@ inputs:
   workerTag:
     description: 'Worker tag'
     required: true
+  ranks:
+    description: 'Node-to-rank JSON mapping'
+    required: false
+    default: ''
   sharedVolumeEnabled:
     description: 'Whether to mount volume shared with the runner (multihost-with-nfs runner required)'
+    required: false
+    default: 'false'
+  useDevHostMount:
+    description: 'Whether to use /dev host mount instead of /dev/tenstorrent'
     required: false
     default: 'false'
   timeout:
@@ -37,9 +45,7 @@ runs:
     - name: Generate SSH key
       shell: bash
       run: |
-        if [ ! -f /home/runner/.ssh/id_ed25519 ]; then
-          ssh-keygen -t ed25519 -f /home/runner/.ssh/id_ed25519 -N ""
-        fi
+        ssh-keygen -t ed25519 -f /home/runner/.ssh/id_ed25519 -N ""
         echo "SSH_PUBLIC_KEY=$(cat /home/runner/.ssh/id_ed25519.pub)" >> $GITHUB_ENV
     - name: Construct Environment manifest
       shell: bash
@@ -68,8 +74,8 @@ runs:
               repository: ${{ inputs.workerRepository }}
               tag: ${{ inputs.workerTag }}
             deviceMountTypes:
-              hostPath: true
-              devicePlugin: false
+              hostPath: ${{ inputs.useDevHostMount == 'false' }}
+              hostPathInsecureDev: ${{ inputs.useDevHostMount == 'false' }}
             cardsPerHost: $TT_CARDS_PER_HOST
             clientAuthorizedKeys: $SSH_PUBLIC_KEY
             volume:
@@ -83,13 +89,13 @@ runs:
       shell: bash
       run: |
         echo "Creating environment..."
-        echo "${{ env.ENVIRONMENT_MANIFEST }}" | kubectl -n ${{ inputs.namespace }} apply -f -
+        echo "${{ env.ENVIRONMENT_MANIFEST }}" | kubectl -n${{ inputs.namespace }} apply -f -
 
     - name: Wait for environment
       shell: bash
       run: |
         echo "Waiting for environment to be ready..."
-        kubectl -n ${{ inputs.namespace }} wait --for=condition=Ready helmrelease/${{ inputs.environmentName }} --timeout=${{ inputs.timeout }}
+        kubectl -n${{ inputs.namespace }} wait --for=condition=Ready helmrelease/${{ inputs.environmentName }} --timeout=${{ inputs.timeout }}
 
     - name: Connect to the environment
       shell: bash

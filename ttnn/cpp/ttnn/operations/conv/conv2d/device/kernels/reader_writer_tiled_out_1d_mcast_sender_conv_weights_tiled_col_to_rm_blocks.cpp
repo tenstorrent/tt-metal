@@ -65,7 +65,7 @@ void kernel_main() {
     const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i++);
 
     // Experimental API objects
-    experimental::Noc noc;
+    Noc noc;
 
     if constexpr (split_reader_enabled) {
         if constexpr (needs_act_block_zero_out) {
@@ -78,9 +78,9 @@ void kernel_main() {
         get_arg_val<uint32_t>(i++), get_arg_val<uint32_t>(i++), get_arg_val<uint32_t>(i++), get_arg_val<uint32_t>(i++)};
     const uint32_t weights_mcast_num_dests = get_arg_val<uint32_t>(i++);
     const uint32_t weights_mcast_num_cores = get_arg_val<uint32_t>(i++);
-    experimental::Semaphore<> weights_mcast_sender_sem(get_arg_val<uint32_t>(i++));
-    experimental::Semaphore<> weights_mcast_receiver_sem(get_arg_val<uint32_t>(i++));
-    experimental::MulticastEndpoint mcast_ep;
+    Semaphore<> weights_mcast_sender_sem(get_arg_val<uint32_t>(i++));
+    Semaphore<> weights_mcast_receiver_sem(get_arg_val<uint32_t>(i++));
+    MulticastEndpoint mcast_ep;
     experimental::CB cb_weight_obj(cb_id_weight);
     experimental::CB cb_bias_obj(bias_cb_id);
     experimental::CB cb_act_second_obj(cb_id_act_second_reader);
@@ -253,7 +253,7 @@ void kernel_main() {
                 // num_dests must not include source, since we are NOT really doing a local copy!
                 mcast_dst.addr = cb_weight_obj.get_write_ptr();
                 noc.async_write_multicast(
-                    experimental::use<experimental::CB::AddrSelector::WRITE_PTR>(cb_weight_obj),
+                    use<experimental::CB::AddrSelector::WRITE_PTR>(cb_weight_obj),
                     mcast_ep,
                     weights_block_size_bytes,
                     weights_mcast_num_cores,
@@ -313,7 +313,7 @@ void kernel_main() {
                 // num_dests must not include source, since we are NOT really doing a local copy!
                 mcast_dst.addr = cb_bias_obj.get_write_ptr();
                 noc.async_write_multicast(
-                    experimental::use<experimental::CB::AddrSelector::WRITE_PTR>(cb_bias_obj),
+                    use<experimental::CB::AddrSelector::WRITE_PTR>(cb_bias_obj),
                     mcast_ep,
                     bias_block_size_bytes,
                     weights_mcast_num_cores,

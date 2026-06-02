@@ -10,13 +10,6 @@
  * LLK UNPACK AB MATMUL
  *************************************************************************/
 
-inline void llk_unpack_AB_matmul_mop_config(
-    const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool partial_face_a, const bool partial_face_b) {
-    // in0 - loaded to SrcB
-    // in1 - loaded to SrcA
-    _llk_unpack_AB_matmul_mop_config_(ct_dim, rt_dim, partial_face_a, partial_face_b);
-}
-
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     const std::uint32_t operandA,
     const std::uint32_t operandB,
@@ -73,8 +66,6 @@ inline void llk_unpack_AB_matmul(
     const std::uint32_t kt_dim = 1) {
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
-
-    volatile uint* cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);

@@ -5,19 +5,21 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
-#include "experimental/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/dataflow/noc.h"
+#include "experimental/kernel_args.h"
 #endif
 
 // #include "api/debug/dprint.h"
 
 void generate_bcast_scaler() {
 #ifdef ARCH_QUASAR
-    experimental::DataflowBuffer dfb1(1);
+    DataflowBuffer dfb1(dfb::out_scaler);
+    uint32_t scaler = get_arg(args::scaler);
 #else
     constexpr uint32_t cb_in_2 = 2;
-#endif
     uint32_t scaler = get_arg_val<uint32_t>(8);
+#endif
     union {
         float f;
         uint32_t u;
@@ -50,24 +52,32 @@ void generate_bcast_scaler() {
 }
 
 void kernel_main() {
+#ifdef ARCH_QUASAR
+    uint32_t num_tiles = get_arg(args::num_tiles);
+#else
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t num_tiles =
         get_arg_val<uint32_t>(3);  // same arg index as in reader_unary and in reader_unary_transpose_wh_8bank
+#endif
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
 
 #ifdef ARCH_QUASAR
-    experimental::Noc noc;
-    experimental::DataflowBuffer dfb0(0);
+    Noc noc;
+    DataflowBuffer dfb0(dfb::out_data);
     const uint32_t tile_bytes = dfb0.get_entry_size();
 #else
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
 #endif
 
+#ifdef ARCH_QUASAR
+    const auto src_a = TensorAccessor(ta::src_tensor);
+#else
     constexpr auto src_args = TensorAccessorArgs<0>();
     const auto src_a = TensorAccessor(src_args, src_addr);
+#endif
 
 #if GENERATE_BCAST_SCALER
     // TODO(AP): cleanup, probably with named args/param pack/reflection.

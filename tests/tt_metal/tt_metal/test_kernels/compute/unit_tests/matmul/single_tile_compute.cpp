@@ -6,7 +6,7 @@
 
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     const uint32_t in0_cb = get_compile_time_arg_val(0);
@@ -21,9 +21,9 @@ void kernel_main() {
     const bool transpose = false;
     mm_init(in0_cb, in1_cb, out_cb);
 
-    experimental::CircularBuffer cb0(in0_cb);
-    experimental::CircularBuffer cb1(in1_cb);
-    experimental::CircularBuffer cb_out(out_cb);
+    CircularBuffer cb0(in0_cb);
+    CircularBuffer cb1(in1_cb);
+    CircularBuffer cb_out(out_cb);
 
     cb_out.reserve_back(num_out_tiles);
     acquire_dst();

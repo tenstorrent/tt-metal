@@ -16,7 +16,7 @@ from tt_lib.utils import (
 )
 from models.common.utility_functions import print_diff_argmax
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
+from models.common.utility_functions import torch2tt_tensor
 
 TEST_PADDING_VALUE = -42
 
@@ -127,13 +127,17 @@ def test_softmax_mix_precision(device, inplace, in_dtype):
         golden_output_tensor = torch.softmax(input_tensor, dim=-1)
         print_diff_argmax(tt_output_tensor, golden_output_tensor)
 
+        # BF8 thresholds loosened: shared-exponent quantization amplified by softmax's
+        # exp()+normalize. Was previously masked by fill_implicit_tile_padding leaking
+        # BF16 on rank>3 inputs (PR #42770).
+        is_bfp8 = in_dtype == ttnn.bfloat8_b
         assert_numeric_metrics(
             golden_output_tensor,
             tt_output_tensor,
-            pcc_threshold=0.999,
+            pcc_threshold=0.99 if is_bfp8 else 0.999,
             rtol=1.186,
-            atol=0.026,
-            frobenius_threshold=0.032,
+            atol=0.05 if is_bfp8 else 0.026,
+            frobenius_threshold=0.08 if is_bfp8 else 0.032,
         )
 
 

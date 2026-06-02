@@ -177,9 +177,12 @@ class TestConfig:
         False  # Should everything be converted to compile-time arguments?
     )
 
+    TEST_TARGET: ClassVar[TestTargetConfig] = TestTargetConfig()
+
     WORKER_ID: ClassVar[str] = "master"
     TENSIX_LOCATION: ClassVar[str] = "0,0"
     STIMULI_ADDRESS_MAP: ClassVar[dict[str, int]] = {}
+    SIMULATOR_TIMEOUT: ClassVar[int] = 600
 
     # When the infrastructure itself needs to be tested, some functionality like compiling the artefacts and writing them
     # to tmpfs can be skipped (eg. object, elf and coverage data files etc.). This flag is used to skip such code to enable fast execution of infra tests.
@@ -242,7 +245,6 @@ class TestConfig:
             case ChipArchitecture.QUASAR:
                 TestConfig.ARCH_NON_COMPUTE = "-mcpu=tt-qsr32"
                 TestConfig.ARCH_COMPUTE = "-mcpu=tt-qsr32-tensix"
-                TestConfig.ARCH_SPECIFIC_OPTIONS = "-mno-tt-tensix-optimize-replay"
                 TestConfig.ARCH_DEFINE = "-DARCH_QUASAR"
                 TestConfig.ARCH_LLK_ROOT = "tt_llk_quasar"
                 TestConfig.ARCH = ChipArchitecture.QUASAR
@@ -422,7 +424,6 @@ class TestConfig:
         stimuli_only: str = None,
         use_stimuli: str = None,
     ):
-
         TestConfig.WORKER_ID = worker_id
 
         if worker_id != "master":
@@ -526,6 +527,7 @@ class TestConfig:
 
         TILE_SIZES = {
             DataFormat.Bfp8_b: 68,
+            DataFormat.Bfp4_b: 36,
             DataFormat.Float32: 256,
         }
 
@@ -1215,6 +1217,10 @@ class TestConfig:
         ):
             raise ValueError("Quasar only supports TRISC boot mode")
 
+        brisc_cmd_timeout = (
+            TestConfig.SIMULATOR_TIMEOUT if TestConfig.TEST_TARGET.run_simulator else 1
+        )
+
         if boot_mode == BootMode.BRISC:
             if not TestConfig.BRISC_ELF_LOADED:
                 commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
@@ -1237,11 +1243,18 @@ class TestConfig:
                 commit_tensix_soft_reset(
                     0, [RiscCore.BRISC], TestConfig.TENSIX_LOCATION
                 )
-                wait_brisc_boot_ready(TestConfig.TENSIX_LOCATION)
-            if TestConfig.ARCH != ChipArchitecture.QUASAR:
-                commit_brisc_command(TestConfig.TENSIX_LOCATION, BriscCmd.RESET_TRISCS)
+                wait_brisc_boot_ready(
+                    TestConfig.TENSIX_LOCATION, timeout=brisc_cmd_timeout
+                )
+
+            # Reset only TRISCs, BRISC stays alive in its polling loop
+            commit_brisc_command(
+                TestConfig.TENSIX_LOCATION,
+                BriscCmd.RESET_TRISCS,
+                timeout=brisc_cmd_timeout,
+            )
         else:
-            set_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
+            commit_tensix_soft_reset(1, location=TestConfig.TENSIX_LOCATION)
 
         VARIANT_ELF_DIR = (
             TestConfig.ARTEFACTS_DIR / self.test_name / self.variant_id / "elf"
@@ -1286,16 +1299,20 @@ class TestConfig:
                 boot_mode == BootMode.BRISC
                 and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
             ):
-                # Instruct Brisc to update it's start addresses cache before it releases T[0-2] from reset
                 commit_brisc_command(
                     TestConfig.TENSIX_LOCATION,
                     BriscCmd.UPDATE_START_ADDR_CACHE_AND_START,
+                    timeout=brisc_cmd_timeout,
                 )
                 return
 
         match boot_mode:
             case BootMode.BRISC:
-                commit_brisc_command(TestConfig.TENSIX_LOCATION, BriscCmd.START_TRISCS)
+                commit_brisc_command(
+                    TestConfig.TENSIX_LOCATION,
+                    BriscCmd.START_TRISCS,
+                    timeout=brisc_cmd_timeout,
+                )
             case BootMode.TRISC:
                 reset_mailboxes(TestConfig.TENSIX_LOCATION)
                 set_tensix_soft_reset(0, [RiscCore.TRISC0], TestConfig.TENSIX_LOCATION)
@@ -1322,8 +1339,11 @@ class TestConfig:
                 device_module.Mailboxes.BriscBread0,
                 device_module.Mailboxes.BriscBread1,
             }
-        test_target = TestTargetConfig()
-        timeout = 600 if test_target.run_simulator else timeout
+        timeout = (
+            TestConfig.SIMULATOR_TIMEOUT
+            if TestConfig.TEST_TARGET.run_simulator
+            else timeout
+        )
 
         completed = set()
         end_time = time.time() + timeout

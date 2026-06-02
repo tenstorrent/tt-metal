@@ -28,7 +28,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/span.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 #include "device_fixture.hpp"
 #include <umd/device/types/xy_pair.hpp>
@@ -42,6 +42,12 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 namespace unit_tests::runtime_args {
+
+// Metal 2.0 on Quasar reserves DM0 and DM1 for runtime use, leaving DM2..DM7 (6 cores) for user kernels.
+// See: docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/metal2_migration_guide_quasar.md
+constexpr uint32_t kQuasarReservedDms = 2;
+constexpr uint32_t kQuasarFirstUserDm = kQuasarReservedDms;
+constexpr uint32_t kQuasarNumUserDms = 6;
 
 enum class KernelType {
     DATA_MOVEMENT = 0,
@@ -138,7 +144,7 @@ distributed::MeshWorkload initialize_program_data_movement_rta(
 }
 
 // Quasar-specific helper - handles all Quasar DM kernel patterns
-std::pair<distributed::MeshWorkload, std::vector<KernelHandle>> initialize_program_data_movement_rta_quasar(
+std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_program_data_movement_rta_quasar(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreRangeSet& core_range_set,
     uint32_t num_runtime_args,
@@ -147,40 +153,78 @@ std::pair<distributed::MeshWorkload, std::vector<KernelHandle>> initialize_progr
     uint32_t dm_processors_per_kernel) {
     TT_ASSERT(MetalContext::instance().hal().get_arch() == tt::ARCH::QUASAR, "This helper is only for Quasar");
 
+    TT_ASSERT(
+        dm_processors_per_kernel <= kQuasarNumUserDms,
+        "dm_processors_per_kernel ({}) exceeds the {} user DMs available on Quasar Metal 2.0",
+        dm_processors_per_kernel,
+        kQuasarNumUserDms);
+
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    tt::tt_metal::Program program = tt_metal::CreateProgram();
 
-    std::vector<KernelHandle> kernel_handles(num_kernels);
+    // The kernel uses raw `hartid` (= 2..7 for Quasar user DMs) as the L1 slot index,
+    // so anchor RESULTS_ADDR at the DM0 slot to keep the kernel's stride math (MAX_DMS) correct.
     uint32_t rta_base = get_runtime_arg_addr(
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
         tt::tt_metal::HalProcessorClassType::DM,
         0,
         common_rtas);
 
-    std::map<std::string, std::string> dm_defines = {
-        {"DATA_MOVEMENT", "1"},
-        {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args)},
-        {"RESULTS_ADDR", std::to_string(rta_base)}};
     uint32_t max_dms = MetalContext::instance().hal().get_processor_types_count(
         HalProgrammableCoreType::TENSIX, ttsl::as_underlying_type(HalProcessorClassType::DM));
-    dm_defines["MAX_DMS"] = std::to_string(max_dms);
+    experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines defines_vec = {
+        {"DATA_MOVEMENT", "1"},
+        {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args)},
+        {"RESULTS_ADDR", std::to_string(rta_base)},
+        {"MAX_DMS", std::to_string(max_dms)}};
     if (common_rtas) {
-        dm_defines["COMMON_RUNTIME_ARGS"] = "1";
+        defines_vec.push_back({"COMMON_RUNTIME_ARGS", "1"});
     }
+
+    std::vector<std::string> kernel_names(num_kernels);
+    std::vector<experimental::metal2_host_api::KernelSpec> kernel_specs;
+    std::vector<std::string> wu_kernel_names;
+    kernel_specs.reserve(num_kernels);
+    wu_kernel_names.reserve(num_kernels);
 
     for (uint32_t k = 0; k < num_kernels; k++) {
-        kernel_handles[k] = tt::tt_metal::experimental::quasar::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
-            core_range_set,
-            tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                .num_threads_per_cluster = dm_processors_per_kernel, .defines = dm_defines});
+        kernel_names[k] = "dm_kernel_" + std::to_string(k);
+        kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
+            .unique_id = kernel_names[k],
+            .source =
+                experimental::metal2_host_api::KernelSpec::SourceFilePath{
+                    "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp"},
+            .num_threads = static_cast<uint8_t>(dm_processors_per_kernel),
+            .compiler_options = {.defines = defines_vec},
+            .runtime_arguments_schema =
+                {
+                    .num_runtime_varargs = num_runtime_args,
+                    .num_common_runtime_varargs = common_rtas ? num_runtime_args : 0,
+                },
+            .config_spec =
+                experimental::metal2_host_api::DataMovementConfiguration{
+                    .gen2_data_movement_config =
+                        experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+        });
+        wu_kernel_names.push_back(kernel_names[k]);
     }
 
+    experimental::metal2_host_api::WorkUnitSpec main_wu{
+        .unique_id = "main",
+        .kernels = wu_kernel_names,
+        .target_nodes = core_range_set,
+    };
+
+    experimental::metal2_host_api::ProgramSpec spec{
+        .program_id = "quasar_crta_test",
+        .kernels = kernel_specs,
+        .work_units = {main_wu},
+    };
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+
     workload.add_program(device_range, std::move(program));
-    return {std::move(workload), kernel_handles};
+    return {std::move(workload), kernel_names};
 }
 
 tt::tt_metal::KernelHandle initialize_program_compute(
@@ -344,10 +388,13 @@ void verify_results(
     }
 }
 
+// `per_user_dm_crtas` is indexed by user-DM index (0..kQuasarNumUserDms-1), corresponding to
+// physical DMs DM2..DM(2+kQuasarNumUserDms-1). DM0/DM1 are reserved by Metal 2.0 runtime.
+// The kernel uses raw `hartid` (= 2..7) to index into a MAX_DMS-wide L1 region anchored at DM0's slot.
 void verify_quasar_crtas(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const CoreCoord& core,
-    const std::vector<std::vector<uint32_t>>& per_kernel_crtas,
+    const std::vector<std::vector<uint32_t>>& per_user_dm_crtas,
     bool expect_shared_address) {
     auto* device = mesh_device->get_devices()[0];
     uint32_t l1_base = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -355,34 +402,35 @@ void verify_quasar_crtas(
     uint32_t max_dms = MetalContext::instance().hal().get_processor_types_count(
         HalProgrammableCoreType::TENSIX, ttsl::as_underlying_type(HalProcessorClassType::DM));
 
-    // Kernel writes to memory using hartid as index, so verification must cover all DMs
+    uint32_t num_verified_user_dms = per_user_dm_crtas.size();
     TT_ASSERT(
-        per_kernel_crtas.size() == max_dms,
-        "per_kernel_crtas.size() ({}) must equal max_dms ({})",
-        per_kernel_crtas.size(),
-        max_dms);
+        num_verified_user_dms <= kQuasarNumUserDms,
+        "per_user_dm_crtas.size() ({}) exceeds the {} user DMs available on Quasar Metal 2.0",
+        num_verified_user_dms,
+        kQuasarNumUserDms);
 
     constexpr uint32_t kCommonRTASeparation = 1024;
     // For this test, all CRTAs in all kernels are the same size
-    const uint32_t num_crtas = per_kernel_crtas[0].size();
+    const uint32_t num_crtas = per_user_dm_crtas[0].size();
     std::vector<uint32_t> crta_addrs;
 
-    for (uint32_t dm_id = 0; dm_id < max_dms; dm_id++) {
-        const auto& expected_crtas = per_kernel_crtas[dm_id];
-        uint32_t dm_crta_addr = results_base + ((kCommonRTASeparation + dm_id * num_crtas) * sizeof(uint32_t));
+    for (uint32_t user_dm_idx = 0; user_dm_idx < num_verified_user_dms; user_dm_idx++) {
+        uint32_t physical_dm_id = kQuasarFirstUserDm + user_dm_idx;
+        const auto& expected_crtas = per_user_dm_crtas[user_dm_idx];
+        uint32_t crta_addr = results_base + ((kCommonRTASeparation + physical_dm_id * num_crtas) * sizeof(uint32_t));
 
         std::vector<uint32_t> observed;
-        tt_metal::detail::ReadFromDeviceL1(device, core, dm_crta_addr, num_crtas * sizeof(uint32_t), observed);
+        tt_metal::detail::ReadFromDeviceL1(device, core, crta_addr, num_crtas * sizeof(uint32_t), observed);
 
-        for (size_t i = 0; i < num_crtas; i++) {
-            EXPECT_EQ(observed[i], expected_crtas[i]) << "DM" << dm_id << " CRTA[" << i << "]";
+        for (size_t j = 0; j < num_crtas; j++) {
+            EXPECT_EQ(observed[j], expected_crtas[j]) << "DM" << physical_dm_id << " CRTA[" << j << "]";
         }
     }
 
-    // Address slot starts right after CRTA values
     uint32_t addr_base = results_base + ((kCommonRTASeparation + max_dms * num_crtas) * sizeof(uint32_t));
-    for (uint32_t dm_id = 0; dm_id < max_dms; dm_id++) {
-        uint32_t addr_offset = addr_base + (dm_id * sizeof(uint32_t));
+    for (uint32_t user_dm_idx = 0; user_dm_idx < num_verified_user_dms; user_dm_idx++) {
+        uint32_t physical_dm_id = kQuasarFirstUserDm + user_dm_idx;
+        uint32_t addr_offset = addr_base + (physical_dm_id * sizeof(uint32_t));
         std::vector<uint32_t> addr;
         tt_metal::detail::ReadFromDeviceL1(device, core, addr_offset, sizeof(uint32_t), addr);
         crta_addrs.push_back(addr[0]);
@@ -397,8 +445,10 @@ void verify_quasar_crtas(
         // All DMs should have different CRTA addresses
         for (size_t i = 0; i < crta_addrs.size(); i++) {
             for (size_t j = i + 1; j < crta_addrs.size(); j++) {
-                EXPECT_NE(crta_addrs[i], crta_addrs[j])
-                    << "DM" << i << " and DM" << j << " have same CRTA address: 0x" << std::hex << crta_addrs[i];
+                uint32_t physical_dm_i = kQuasarFirstUserDm + i;
+                uint32_t physical_dm_j = kQuasarFirstUserDm + j;
+                EXPECT_NE(crta_addrs[i], crta_addrs[j]) << "DM" << physical_dm_i << " and DM" << physical_dm_j
+                                                        << " have same CRTA address: 0x" << std::hex << crta_addrs[i];
             }
         }
     }
@@ -903,9 +953,10 @@ TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
     }
 }
 
-// Quasar only test: Single kernel running on all 8 DM processors with shared CRTAs.
-// Verifies all DMs receive identical CRTA values at the same L1 address
-// TODO: Once SW supports multiple quasar clusters/cores, expand to multiple CoreRangeSets
+// Quasar only test: Single kernel running on all 6 user DM processors (DM2..DM7) with shared CRTAs.
+// Verifies all DMs receive identical CRTA values at the same L1 address.
+// Metal 2.0 reserves DM0/DM1 on Quasar, leaving DM2..DM7 (6 cores) available for user kernels.
+// TODO: Once SW supports multiple quasar clusters/cores, expand to multiple NodeRangeSets
 // to verify CRTA dispatch across different Kernel groups
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
     auto mesh_device = devices_[0];
@@ -916,23 +967,36 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    uint32_t num_dm = MetalContext::instance().hal().get_processor_types_count(
-        HalProgrammableCoreType::TENSIX, ttsl::as_underlying_type(tt::tt_metal::HalProcessorClassType::DM));
+
     std::vector<uint32_t> common_rtas{0xdeadbeef, 0xabcd1234, 0x101};
-    // Single kernel on all DMs: all DMs should receive identical CRTAs
-    std::vector<std::vector<uint32_t>> all_crtas(num_dm, common_rtas);
-    auto [workload, handles] = unit_tests::runtime_args::initialize_program_data_movement_rta_quasar(
-        mesh_device, core_range_set, common_rtas.size(), true, /*num_kernels*/ 1, num_dm);
+    // Single kernel on all 6 user DMs (DM2..DM7): all DMs should receive identical CRTAs
+    std::vector<std::vector<uint32_t>> all_crtas(unit_tests::runtime_args::kQuasarNumUserDms, common_rtas);
+    auto [workload, kernel_names] = unit_tests::runtime_args::initialize_program_data_movement_rta_quasar(
+        mesh_device,
+        core_range_set,
+        common_rtas.size(),
+        true,
+        /*num_kernels*/ 1,
+        unit_tests::runtime_args::kQuasarNumUserDms);
     auto& program = workload.get_programs().at(device_range);
-    SetCommonRuntimeArgs(program, handles[0], common_rtas);
+
+    experimental::metal2_host_api::ProgramRunParams params;
+    params.kernel_run_params = {{
+        .kernel_spec_name = kernel_names[0],
+        .runtime_varargs = {{core, std::vector<uint32_t>(common_rtas.size(), 0)}},
+        .common_runtime_varargs = common_rtas,
+    }};
+    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+
     distributed::EnqueueMeshWorkload(cq, workload, true);
-    // Verify all DMs share the same CRTA L1 address
+    // Verify all 6 user DMs (DM2..DM7) share the same CRTA L1 address
     unit_tests::runtime_args::verify_quasar_crtas(mesh_device, core, all_crtas, /*expect_shared_address*/ true);
 }
 
-// Quasar only test: 8 separate kernels, each running on a unique DM processor, with unique CRTAs.
-// Verifies each kernel receives its own distinct CRTA values at different L1 addresses
-// TODO: Once SW supports multiple quasar clusters/cores, expand to multiple CoreRangeSets
+// Quasar only test: 6 separate kernels, each running on a unique user DM processor (DM2..DM7), with unique CRTAs.
+// Verifies each kernel receives its own distinct CRTA values at different L1 addresses.
+// Metal 2.0 reserves DM0/DM1 on Quasar, leaving DM2..DM7 (6 cores) available -- one kernel per user DM
+// TODO: Once SW supports multiple quasar clusters/cores, expand to multiple NodeRangeSets
 // to verify CRTA dispatch across different Kernel groups
 TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
     auto mesh_device = devices_[0];
@@ -944,20 +1008,28 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     std::vector<uint32_t> base_crtas = {0x101, 0x202, 0x303};
-    // One kernel per DM: each kernel gets its own CRTA offset
-    uint32_t num_kernels = MetalContext::instance().hal().get_processor_types_count(
-        HalProgrammableCoreType::TENSIX, ttsl::as_underlying_type(tt::tt_metal::HalProcessorClassType::DM));
-    auto [workload, handles] = unit_tests::runtime_args::initialize_program_data_movement_rta_quasar(
+    // One kernel per user DM (DM2..DM7): each kernel gets its own CRTA offset
+    constexpr uint32_t num_kernels = unit_tests::runtime_args::kQuasarNumUserDms;
+
+    auto [workload, kernel_names] = unit_tests::runtime_args::initialize_program_data_movement_rta_quasar(
         mesh_device, core_range_set, base_crtas.size(), true, num_kernels, /*dm_processors_per_kernel*/ 1);
     auto& program = workload.get_programs().at(device_range);
+
+    experimental::metal2_host_api::ProgramRunParams params;
     std::vector<std::vector<uint32_t>> all_crtas(num_kernels);
     for (uint32_t i = 0; i < num_kernels; i++) {
         std::vector<uint32_t> kernel_crtas = {base_crtas[0] + i, base_crtas[1] + i, base_crtas[2] + i};
         all_crtas[i] = kernel_crtas;
-        SetCommonRuntimeArgs(program, handles[i], kernel_crtas);
+        params.kernel_run_params.push_back({
+            .kernel_spec_name = kernel_names[i],
+            .runtime_varargs = {{core, std::vector<uint32_t>(base_crtas.size(), 0)}},
+            .common_runtime_varargs = kernel_crtas,
+        });
     }
+    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+
     distributed::EnqueueMeshWorkload(cq, workload, true);
-    // Verify each kernel has a unique CRTA L1 address
+    // Verify each user DM (DM2..DM7) has a unique CRTA L1 address
     unit_tests::runtime_args::verify_quasar_crtas(mesh_device, core, all_crtas, /*expect_shared_address*/ false);
 }
 

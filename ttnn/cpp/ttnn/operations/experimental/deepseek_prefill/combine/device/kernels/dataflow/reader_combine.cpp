@@ -183,6 +183,7 @@ void kernel_main() {
     }
 #endif
 
+#if INIT_ZEROS
     // Signal writer that zero-init is complete
     volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
@@ -195,6 +196,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_barrier_address);
     noc_semaphore_wait(barrier_sem_ptr, num_cores);
     noc_semaphore_set(barrier_sem_ptr, 0);
+#endif
 
     // Read expert token counts
     const auto experts_tok_counter_addr_gen = TensorAccessor(experts_tok_counter_args, experts_tok_counter_addr);

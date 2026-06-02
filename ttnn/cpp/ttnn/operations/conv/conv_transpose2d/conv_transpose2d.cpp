@@ -242,6 +242,7 @@ ConvTranspose2dResult conv_transpose2d_L1(
             false,                                      // enable_kernel_stride_folding
             false,                                      // full_inner_dim
             false,                                      // enable_activation_reuse
+            false,                                      // coalesce_1d_depthwise_kw_reads
             ConvTranspose2dDimensions::CONV2D_STRIDE);  // stride (always {1,1} for transposed conv2d)
         tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
             transform_weights_for_conv_transpose2d(weight_for_transform, mirror_kernel), bias_tensor, params, device);

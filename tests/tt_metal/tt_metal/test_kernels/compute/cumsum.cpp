@@ -11,7 +11,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/cumsum.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr int onetile = 1;
@@ -26,8 +26,8 @@ void kernel_main() {
 #endif
     cumsum_tile_init();
 
-    experimental::CircularBuffer cb0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb16(tt::CBIndex::c_16);
+    CircularBuffer cb0(tt::CBIndex::c_0);
+    CircularBuffer cb16(tt::CBIndex::c_16);
 
     for (uint32_t nc = 0; nc < NC; ++nc) {
         for (uint32_t wt = 0; wt < Wt; ++wt) {

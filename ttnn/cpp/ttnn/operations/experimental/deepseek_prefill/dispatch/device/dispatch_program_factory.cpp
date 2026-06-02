@@ -83,6 +83,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
     DispatchProgramFactory::tensor_return_value_t& tensor_return_value,
     const MeshCoordinateRangeSet& tensor_coords,
     const GlobalSemaphore& init_semaphore,
+    const GlobalSemaphore& exit_semaphore,
     const GlobalSemaphore& cross_device_semaphore) {
     tt::tt_metal::Program program{};
 
@@ -744,6 +745,11 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
         reader_runtime_args[11] = core_idx;  // dispatch_core_idx
         writer_runtime_args[11] = core_idx;
 
+        // Writer-only: exit semaphore address (separate from init_semaphore to avoid
+        // init/exit reuse race where a fast peer's exit-inc lands during the post-init
+        // set(0) window).
+        writer_runtime_args.push_back((uint32_t)exit_semaphore.address());
+
         // Inter-core sync args for reader
         reader_runtime_args.push_back(data_ready_semaphore_ids[core_idx]);
         reader_runtime_args.push_back(start_semaphore_ids[core_idx]);
@@ -832,6 +838,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_tile_la
          .cores = sender_cores,
          .idle_cores = all_idle_cores,
          .init_semaphore = init_semaphore,
+         .exit_semaphore = exit_semaphore,
          .cross_device_semaphore = cross_device_semaphore,
          .data_ready_semaphore_ids = std::move(data_ready_semaphore_ids),
          .start_semaphore_ids = std::move(start_semaphore_ids)}};
@@ -845,6 +852,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
     DispatchProgramFactory::tensor_return_value_t& tensor_return_value,
     const MeshCoordinateRangeSet& tensor_coords,
     const GlobalSemaphore& init_semaphore,
+    const GlobalSemaphore& exit_semaphore,
     const GlobalSemaphore& cross_device_semaphore) {
     tt::tt_metal::Program program{};
 
@@ -1172,6 +1180,10 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
         reader_runtime_args[11] = core_idx;
         writer_runtime_args[11] = core_idx;
 
+        // Writer-only: exit semaphore address (separate from init_semaphore to avoid
+        // init/exit reuse race; mirrors the combine fix).
+        writer_runtime_args.push_back((uint32_t)exit_semaphore.address());
+
         if (operation_attributes.num_links > 0) {
             uint32_t core_link = core_idx % num_links;
             for (const auto& neighbor_coordinate : neighbors) {
@@ -1212,6 +1224,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> create_at_row_maj
          .cores = sender_cores,
          .idle_cores = {},
          .init_semaphore = init_semaphore,
+         .exit_semaphore = exit_semaphore,
          .cross_device_semaphore = cross_device_semaphore,
          .data_ready_semaphore_ids = {},
          .start_semaphore_ids = {}}};
@@ -1233,6 +1246,8 @@ DispatchProgramFactory::cached_mesh_workload_t DispatchProgramFactory::create_me
                                                                             : tt::tt_metal::BufferType::L1;
     auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(
         mesh_device, operation_attributes.worker_core_range_set, 0, sem_buffer_type);
+    auto exit_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(
+        mesh_device, operation_attributes.worker_core_range_set, 0, sem_buffer_type);
     auto final_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(
         mesh_device, operation_attributes.worker_core_range_set, 0, sem_buffer_type);
     tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
@@ -1245,6 +1260,7 @@ DispatchProgramFactory::cached_mesh_workload_t DispatchProgramFactory::create_me
             tensor_return_value,
             tensor_coords,
             init_barrier_semaphore,
+            exit_barrier_semaphore,
             final_barrier_semaphore);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
@@ -1259,6 +1275,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
     DispatchProgramFactory::tensor_return_value_t& tensor_return_value,
     const MeshCoordinateRangeSet& tensor_coords,
     const GlobalSemaphore& init_semaphore,
+    const GlobalSemaphore& exit_semaphore,
     const GlobalSemaphore& cross_device_semaphore) {
     const bool is_tile_layout = tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE;
     log_info(tt::LogOp, "Prefill dispatch: input tensor is {} layout", is_tile_layout ? "TILE" : "ROW_MAJOR");
@@ -1276,6 +1293,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
             tensor_return_value,
             tensor_coords,
             init_semaphore,
+            exit_semaphore,
             cross_device_semaphore);
     }
     return create_at_row_major(
@@ -1285,6 +1303,7 @@ ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFa
         tensor_return_value,
         tensor_coords,
         init_semaphore,
+        exit_semaphore,
         cross_device_semaphore);
 }
 
@@ -1327,6 +1346,9 @@ void DispatchProgramFactory::override_runtime_arguments(
             writer_runtime_args.at(6) = tensor_args.expert_dispatch_table_tensor.buffer()->address();
             writer_runtime_args.at(7) = (uint32_t)shared_variables.cross_device_semaphore.address();
             writer_runtime_args.at(8) = (uint32_t)shared_variables.init_semaphore.address();
+            // Index 13 is the writer-only exit_semaphore.address() pushed in create_at_*.
+            // base_runtime_args has 13 entries (0..12), then writer push_back's exit_semaphore at 13.
+            writer_runtime_args.at(13) = (uint32_t)shared_variables.exit_semaphore.address();
         }
 
         // Idle cores only exist on the tile-layout path.

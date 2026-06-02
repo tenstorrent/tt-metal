@@ -29,6 +29,7 @@ from .pack import (
     pack_int8,
     pack_int16,
     pack_int32,
+    pack_mxfp4,
     pack_mxfp8p,
     pack_mxfp8r,
     pack_uint8,
@@ -257,6 +258,7 @@ class StimuliConfig:
             DataFormat.Int32: pack_int32,
             DataFormat.MxFp8R: pack_mxfp8r,
             DataFormat.MxFp8P: pack_mxfp8p,
+            DataFormat.MxFp4: pack_mxfp4,
             DataFormat.Fp8_e4m3: pack_fp8_e4m3,
             DataFormat.UInt32: pack_uint32,
             DataFormat.Int16: pack_int16,
@@ -297,7 +299,7 @@ class StimuliConfig:
             tile_elements = num_faces * face_r_dim * FACE_C_DIM
 
         def _pack_tile(buffer_tile):
-            if pack_function in (pack_mxfp8r, pack_mxfp8p):
+            if pack_function in (pack_mxfp8r, pack_mxfp8p, pack_mxfp4):
                 return pack_function(
                     buffer_tile,
                     num_faces=num_faces,
@@ -349,7 +351,7 @@ class StimuliConfig:
         tile_elements = tile_r * tile_c  # Dense: use actual tile dimensions
 
         def _pack_tile(buffer_tile):
-            if pack_function in (pack_mxfp8r, pack_mxfp8p):
+            if pack_function in (pack_mxfp8r, pack_mxfp8p, pack_mxfp4):
                 return pack_function(
                     buffer_tile,
                     num_faces=num_faces,

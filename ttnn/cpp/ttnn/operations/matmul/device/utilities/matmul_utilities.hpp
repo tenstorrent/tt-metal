@@ -13,6 +13,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/shared_with_host/activation_type.hpp"
+#include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
 namespace ttnn::operations::matmul::utilities {
 
@@ -21,13 +22,6 @@ namespace ttnn::operations::matmul::utilities {
 // Allows easily changing buffering strategy in one place for relevant factories.
 constexpr uint32_t MCAST_INPUT_BUFFERING_DEPTH = 2;
 
-/**
- * @brief True when fused matmul bias add can use the row-broadcast kernel path.
- *
- * Broadcast applies when there is no distinct row axis (rank < 2, e.g. vector bias) or the
- * logical row dimension is 1 (shape[-2] == 1, e.g. [..., 1, N]). Otherwise the bias has multiple
- * logical rows and the fused kernel must use elementwise add_tiles.
- */
 inline bool fused_matmul_bias_row_broadcastable(const std::optional<const Tensor>& bias) {
     if (!bias.has_value()) {
         return false;
@@ -76,15 +70,6 @@ bool is_input_batched(const ttnn::Shape& shape);
 ttnn::Shape compute_matmul_output_shape(
     const Tensor& input_tensor_a, const Tensor& input_tensor_b, bool transpose_a, bool transpose_b);
 
-/*
- * @brief Computes the output shape of a matmul operation with bias given two input shapes
- *
- * Determines the output shape based on the broadcasting rules for matrix multiplication with bias:
- *
- * @param matmul_shape The shape of the matmul operation
- * @param bias_shape The shape of the bias tensor
- * @return Shape of the resulting tensor after matmul with bias
- */
 ttnn::Shape compute_matmul_with_bias_output_shape(const ttnn::Shape& matmul_shape, const ttnn::Shape& bias_shape);
 
 using Activation = std::variant<std::string, ttnn::operations::unary::UnaryWithParam>;
@@ -343,6 +328,17 @@ inline ActivationParams get_activation_params(const ttnn::operations::unary::Una
 
     return result;
 }
+
+void validate_matmul_reuse_work_split(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const ttnn::Shape& a_shape_padded,
+    const ttnn::Shape& b_shape_padded,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const MatmulMultiCoreReuseProgramConfig& program_config,
+    const tt::tt_metal::MemoryConfig& output_mem_config,
+    const std::optional<tt::tt_metal::CoreRangeSet>& core_range_set = std::nullopt);
 
 }  // namespace ttnn::operations::matmul::utilities
 

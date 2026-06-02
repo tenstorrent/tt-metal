@@ -48,9 +48,15 @@ inline void _llk_pack_untilize_mop_config_(const std::uint8_t buf_desc_id)
 template <std::uint32_t FULL_CT_DIM, std::uint32_t BLOCK_CT_DIM, std::uint32_t C_DIM_FACES>
 inline void _llk_pack_untilize_init_(const std::uint8_t buf_desc_id, const TileShape& tile_shape)
 {
-    cfg_rmw(THCON_PACKER0_REG1_PACK_UNTILIZE_SRC_Z_STRIDE_RMW, tile_shape.num_faces * tile_shape.face_r_dim); // inc MATH DEST REG ptr by 64 16-datum rows
-    cfg_rmw(THCON_PACKER0_REG1_PACK_UNTILIZE_DST_Z_STRIDE_RMW, C_DIM_FACES);                                  // inc L1 SRC ptr by 2 16-datum rows
-    cfg_rmw(THCON_PACKER0_REG1_PACK_STRIDE_OFFSET_0_RMW, C_DIM_FACES * FULL_CT_DIM);                          // stride each row by 2*C_DIM 16-datum rows
+    ckernel::pack::pack_untilize_stride_cfg_u pk_cfg = {};
+
+    pk_cfg.f.src_z_stride    = tile_shape.num_faces * tile_shape.face_r_dim; // inc MATH DEST REG ptr by 64 16-datum rows
+    pk_cfg.f.dst_z_stride    = C_DIM_FACES;                                  // inc L1 SRC ptr by 2 16-datum rows
+    pk_cfg.f.stride_offset_0 = C_DIM_FACES * FULL_CT_DIM;                    // stride each row by 2*C_DIM 16-datum rows
+
+    cfg[THCON_PACKER0_REG1_PACK_UNTILIZE_SRC_Z_STRIDE_ADDR32] = pk_cfg.val[0];
+    cfg[THCON_PACKER0_REG1_PACK_STRIDE_OFFSET_0_ADDR32]       = pk_cfg.val[1];
+
     _llk_pack_untilize_mop_config_<BLOCK_CT_DIM>(buf_desc_id);
 }
 
@@ -171,25 +177,29 @@ template <std::uint32_t FULL_CT_DIM, std::uint32_t FACE_R_DIM, std::uint32_t NUM
 inline void _llk_pack_untilize_strided_init_(const std::uint8_t buf_desc_id, const TileShape& tile_shape)
 {
     cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_VAL_SOURCE_RMW, 0); // sel STRIDE_OFFSET_0
-    if constexpr (FACE_R_DIM >= 8)
-    {                                                                                    // 32x32 16x32 and 8x32
-        cfg_rmw(THCON_PACKER0_REG1_PACK_STRIDE_OFFSET_0_RMW, C_DIM_FACES * FULL_CT_DIM); // stride each row by 2*FULL_CT_DIM 16-datum rows
+    if constexpr (FACE_R_DIM != 1)
+    {
+        ckernel::pack::pack_untilize_stride_cfg_u stride_cfg = {};
+        stride_cfg.f.stride_offset_0                        = C_DIM_FACES * FULL_CT_DIM; // stride each row by 2*FULL_CT_DIM 16-datum rows
+        cfg[THCON_PACKER0_REG1_PACK_STRIDE_OFFSET_0_ADDR32] = stride_cfg.val[1];
+    }
+
+    if constexpr (FACE_R_DIM >= 8) // 32x32, 16x32, 8x32
+    {
         _llk_pack_untilize_strided_mop_config_<FULL_CT_DIM, FACE_R_DIM, C_DIM_FACES>(buf_desc_id);
     }
-    else if constexpr (FACE_R_DIM == 4)
-    {                                                                                    // 4x32
-        cfg_rmw(THCON_PACKER0_REG1_PACK_STRIDE_OFFSET_0_RMW, C_DIM_FACES * FULL_CT_DIM); // stride each row by 2*FULL_CT_DIM 16-datum rows
+    else if constexpr (FACE_R_DIM == 4) // 4x32
+    {
         _llk_pack_untilize_strided_4x32_mop_config_<FULL_CT_DIM, NUM_TILES_PER_BLOCK, C_DIM_FACES>(buf_desc_id);
     }
-    else if constexpr (FACE_R_DIM == 2)
-    {                                                            // 2x32
-        cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_NO_WRITE_RMW, 1); // Need to mask off last 2 rows
+    else if constexpr (FACE_R_DIM == 2) // 2x32
+    {
+        cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_NO_WRITE_RMW, 1); // mask off last 2 rows
         cfg_rmw(THCON_PACKER0_REG3_PACK_STRIDE_ROW_MASK_RMW, 0x1100);
-        cfg_rmw(THCON_PACKER0_REG1_PACK_STRIDE_OFFSET_0_RMW, C_DIM_FACES * FULL_CT_DIM);
         _llk_pack_untilize_strided_2x32_mop_config_<FULL_CT_DIM, NUM_TILES_PER_BLOCK, C_DIM_FACES>(buf_desc_id);
     }
-    else
-    { // 1x32
+    else // 1x32
+    {
         _llk_pack_untilize_strided_1x32_mop_config_<FULL_CT_DIM, NUM_TILES_PER_BLOCK, C_DIM_FACES>(buf_desc_id);
     }
 }

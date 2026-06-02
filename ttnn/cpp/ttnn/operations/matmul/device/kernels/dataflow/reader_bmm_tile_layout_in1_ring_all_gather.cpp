@@ -9,19 +9,19 @@
 #include "api/remote_circular_buffer.h"
 #include "api/debug/dprint.h"
 #include "api/debug/dprint_tile.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/tensor.h"
-#include "experimental/endpoints.h"
-#include "experimental/core_local_mem.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/noc_traits.h"
+#include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
 template <typename TensorAccessorType>
 void read_block_from_dram(
-    const experimental::Noc& noc,
-    experimental::CircularBuffer& cb,
+    const Noc& noc,
+    CircularBuffer& cb,
     const TensorAccessorType& s1,
     uint32_t tensor_width_in_tiles,
     uint32_t block_w_idx,
@@ -43,11 +43,11 @@ void read_block_from_dram(
     noc.async_read_barrier();
 }
 
-void do_signaling(const experimental::Noc& noc, uint32_t& rt_args_idx) {
+void do_signaling(const Noc& noc, uint32_t& rt_args_idx) {
     const uint32_t pv_core_x = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t pv_core_y = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t pv_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
-    experimental::Semaphore<> pv_sem(pv_semaphore_id);
+    Semaphore<> pv_sem(pv_semaphore_id);
     const bool is_privilaged = get_arg_val<uint32_t>(rt_args_idx++) == 1;
     if (is_privilaged) {
         const uint32_t target_sem_value = get_arg_val<uint32_t>(rt_args_idx++);
@@ -57,7 +57,7 @@ void do_signaling(const experimental::Noc& noc, uint32_t& rt_args_idx) {
         const uint32_t multicast_end_y = get_arg_val<uint32_t>(rt_args_idx++);
         const uint32_t num_signalling_semaphores = get_arg_val<uint32_t>(rt_args_idx++);
         const uint32_t signalling_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
-        experimental::Semaphore<> sig_sem(signalling_semaphore_id);
+        Semaphore<> sig_sem(signalling_semaphore_id);
         pv_sem.wait(target_sem_value);
         pv_sem.set(1);
         sig_sem.set(1);
@@ -88,7 +88,7 @@ void kernel_main() {
     uint32_t core_type = get_arg_val<uint32_t>(rt_args_idx++);
     if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE || core_type == (uint32_t)CORE_TYPE::HOP_CORE) {
         if constexpr (needs_signaler) {
-            experimental::Noc early_noc;
+            Noc early_noc;
             do_signaling(early_noc, rt_args_idx);
             early_noc.async_write_barrier();
         }
@@ -119,10 +119,10 @@ void kernel_main() {
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
     const auto s1 = TensorAccessor(in1_args, in1_tensor_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in1(cb_id_in1);
-    experimental::CircularBuffer cb_sync(sync_cb);
-    experimental::CircularBuffer cb_sync2(sync_cb2);
+    Noc noc;
+    CircularBuffer cb_in1(cb_id_in1);
+    CircularBuffer cb_sync(sync_cb);
+    CircularBuffer cb_sync2(sync_cb2);
 
     uint32_t in1_shard_width_offset_bytes = 0;
     uint32_t in1_dram_shard_block_size_bytes = 0;
@@ -170,17 +170,17 @@ void kernel_main() {
                 cb_in1.reserve_back(in1_block_num_tiles);
                 l1_write_addr_in1 = cb_in1.get_write_ptr();
 
-                experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_bank;
+                AllocatorBank<AllocatorBankType::DRAM> dram_bank;
                 for (uint32_t h = 0; h < in1_block_height_in_tiles; ++h) {
                     uint32_t curr_l1_read_addr_in1 = l1_read_addr_in1;
                     for (uint32_t w = 0; w < in1_block_width_num_pages; ++w) {
                         uint32_t curr_page_size =
                             w == in1_block_width_num_pages - 1 ? in1_block_page_size_last : in1_block_page_size;
-                        noc.set_async_read_state<experimental::Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+                        noc.set_async_read_state<Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
                             dram_bank, curr_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, vc);
-                        noc.async_read_with_state<experimental::Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
+                        noc.async_read_with_state<Noc::VcSelection::CUSTOM, NOC_MAX_BURST_SIZE>(
                             dram_bank,
-                            experimental::CoreLocalMem<uint32_t>(l1_write_addr_in1),
+                            CoreLocalMem<uint32_t>(l1_write_addr_in1),
                             curr_page_size,
                             {.bank_id = dram_bank_id, .addr = in1_tensor_addr + curr_l1_read_addr_in1},
                             {},

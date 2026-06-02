@@ -5,9 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     // Standard first 5 arguments
@@ -44,9 +44,9 @@ void kernel_main() {
     constexpr auto src1_args =
         TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_pred(predicate_cb);
-    experimental::CircularBuffer cb_b(src_b_cb);
+    Noc noc;
+    CircularBuffer cb_pred(predicate_cb);
+    CircularBuffer cb_b(src_b_cb);
 
     // #if SRC_SHARDED_A
     //     cb_pred.reserve_back(srcA_num_tiles);

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "argmax_device_operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -124,6 +125,10 @@ ProgramDescriptor ArgMaxSingleCoreProgramFactory::create_descriptor(
     const uint32_t num_units = 1;  // single-core
     auto [num_cores, all_cores, unused_1, unused_2, unused_3, unused_4] =
         tt::tt_metal::split_work_to_cores(grid_size, num_units);
+
+    TT_FATAL(num_cores > 0, "Argmax single-core split requires at least one core ");
+    validate_reduce_op_program_grid(
+        "Argmax single-core", all_cores, device->compute_with_storage_grid_size(), nullptr, true, {});
 
     const tt::DataFormat input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const tt::DataFormat output_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());

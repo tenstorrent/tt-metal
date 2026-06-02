@@ -18,7 +18,6 @@ void kernel_main() {
     constexpr uint32_t tilize_output_cb_id = get_named_compile_time_arg_val("tilize_output_cb_id");
     constexpr uint32_t total_chunks_cb_id = get_named_compile_time_arg_val("total_chunks_cb_id");
     constexpr uint32_t tokens_per_chunk = get_named_compile_time_arg_val("tokens_per_chunk");
-    constexpr uint32_t max_tiles_per_local_chunk = get_named_compile_time_arg_val("max_tiles_per_local_chunk");
     constexpr uint32_t shared_cb_num_pages = get_named_compile_time_arg_val("shared_cb_num_pages");
 
     // Runtime arguments
@@ -30,7 +29,7 @@ void kernel_main() {
 
     // Setup
     compute_kernel_hw_startup(tilize_input_cb_id, tilize_output_cb_id);
-    fast_tilize_init(tilize_input_cb_id, max_tiles_per_local_chunk, tilize_output_cb_id);
+    fast_tilize_init(tilize_input_cb_id, tiles_per_local_chunk, tilize_output_cb_id);
 
     // Wait for writer to push total_chunks via CB
     cb_wait_front(total_chunks_cb_id, one_page);
@@ -56,6 +55,6 @@ void kernel_main() {
         cb_pop_front(tilize_input_cb_id, tokens_per_chunk);
     }
 
-    fast_tilize_uninit(tilize_input_cb_id, tilize_output_cb_id);
+    fast_tilize_uninit(tilize_input_cb_id, tilize_output_cb_id, tiles_per_local_chunk);
     cb_pop_front(total_chunks_cb_id, one_page);
 }

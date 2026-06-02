@@ -13,6 +13,8 @@
 #include "context/metal_context.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "distributed/mesh_workload_impl.hpp"
+#include <program_cache.hpp>
+#include <system_mesh.hpp>
 #include "jit_build/build_env_manager.hpp"
 #include "device/device_manager.hpp"
 #include <llrt/tt_cluster.hpp>
@@ -68,6 +70,7 @@ Data::Data(std::optional<int> rank) : logger(MetalContext::instance().rtoptions(
             get_rpc_server().setGetMetalDeviceIdMappingsCallback(
                 [this](auto result) { this->rpc_get_metal_device_id_mappings(result); });
             get_rpc_server().setGetConfigurationCallback([this](auto result) { this->rpc_get_configuration(result); });
+            get_rpc_server().setGetSystemMeshCallback([this](auto result) { this->rpc_get_system_mesh(result); });
         } catch (const std::exception& e) {
             TT_INSPECTOR_THROW("Failed to start Inspector RPC server: {}", e.what());
         }
@@ -142,11 +145,13 @@ void Data::rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& 
         const auto& shape_view = mesh_device_data.mesh_device->get_view().shape();
         auto shape = mesh_device.initShape(shape_view.dims());
         for (size_t k = 0; k < shape_view.dims(); ++k) {
-            shape.set(k, shape_view.get_stride(k));
+            shape.set(k, shape_view[k]);
         }
 
         mesh_device.setParentMeshId(mesh_device_data.parent_mesh_id.value_or(-1));
         mesh_device.setInitialized(mesh_device_data.initialized);
+        mesh_device.setProgramCacheEnabled(
+            const_cast<distributed::MeshDeviceImpl*>(mesh_device_data.mesh_device)->get_program_cache().is_enabled());
     }
 }
 
@@ -681,6 +686,45 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
 #undef RT
 #undef RT_CUSTOM
 #undef RT_GUARDED
+
+void Data::rpc_get_system_mesh(rpc::Inspector::GetSystemMeshResults::Builder& results) {
+    auto& system_mesh = MetalContext::instance().get_system_mesh();
+    auto system_mesh_builder = results.initSystemMesh();
+
+    const auto& global_shape = system_mesh.shape();
+    auto global_shape_builder = system_mesh_builder.initGlobalShape(global_shape.dims());
+    for (size_t i = 0; i < global_shape.dims(); ++i) {
+        global_shape_builder.set(i, global_shape[i]);
+    }
+
+    const auto& local_shape = system_mesh.local_shape();
+    auto local_shape_builder = system_mesh_builder.initLocalShape(local_shape.dims());
+    for (size_t i = 0; i < local_shape.dims(); ++i) {
+        local_shape_builder.set(i, local_shape[i]);
+    }
+
+    const auto local_offset = MetalContext::instance().get_control_plane().get_local_mesh_offset();
+    auto local_offset_builder = system_mesh_builder.initLocalOffset(local_offset.dims());
+    for (size_t i = 0; i < local_offset.dims(); ++i) {
+        local_offset_builder.set(i, local_offset[i]);
+    }
+
+    const auto mapped = system_mesh.get_mapped_devices(std::nullopt);
+    auto mapped_builder = system_mesh_builder.initMappedDevices(mapped.fabric_node_ids.size());
+    for (size_t i = 0; i < mapped.fabric_node_ids.size(); ++i) {
+        auto entry = mapped_builder[i];
+        const auto& fabric_node_id = mapped.fabric_node_ids[i];
+        entry.setFabricMeshId(*fabric_node_id.mesh_id);
+        entry.setFabricChipId(fabric_node_id.chip_id);
+
+        const auto& device_id = mapped.device_ids[i];
+        const bool is_local = device_id.is_local();
+        entry.setIsLocal(is_local);
+        if (is_local) {
+            entry.setLocalChipId(static_cast<uint32_t>(*device_id));
+        }
+    }
+}
 
 void Data::rpc_get_configuration(rpc::Inspector::GetConfigurationResults::Builder& results) {
     std::vector<ConfigurationEntry> all_entries;

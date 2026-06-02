@@ -7,7 +7,7 @@ import ml_dtypes
 import numpy as np
 import torch
 from helpers.format_config import (
-    MXFP8_BLOCK_SIZE,
+    MX_FORMAT_BLOCK_SIZE,
     MXFP8_SRCS_SLICE_32B_PACKED_BYTE_LEN,
     MXFP8_SRCS_SLICE_PACKED_BYTE_LEN,
     DataFormat,
@@ -94,13 +94,6 @@ def unpack_uint8(packed_list):
 
 
 def bfp8_to_float_block(exponent, bfp8_mantissas, unpacked_bfp8):
-    # Bug fix and improvement:
-    # 1. Caching: If the (exponent, mantissa) pair is already processed, the precomputed value is reused.
-    # 2. Sign and Fractional Calculation: The sign bit is extracted, and the fractional part is calculated by iterating
-    #    over the mantissa bits, adding `1 / (2 ** i)` for each '1' bit.
-    # 3. Exponent Scaling: The final value is scaled by `2^exponent` and adjusted by the sign bit.
-    # 4. Efficient Storage: The computed value is stored in `unpacked_bfp8` for future use.
-
     bfloat16_values = []
     exponent = exponent - 127
 
@@ -110,22 +103,22 @@ def bfp8_to_float_block(exponent, bfp8_mantissas, unpacked_bfp8):
             continue
 
         sign_mantissa = str(format(mantissa, "08b"))
-        # Extract the sign bit (most significant bit)
         sign = int(sign_mantissa[0], 2)
-        # Get the remaining bits which represent the fractional part of the mantissa
         mantissa_value = sign_mantissa[1:]
-        # Changed computation of mantissa to fix , accumulate fractional value
+
         fract_value = 0.0
         for i in range(len(mantissa_value)):
-            # If the bit is '1', add the corresponding fractional value to fract_value
             if mantissa_value[i] == "1":
                 fract_value += 1 / (2 ** (i))
 
-        bfloat16_values.append(((-1.0) ** sign) * (2**exponent) * (fract_value))
+        # ISA spec: sign=1, mag=0 → -Inf (BF16 0xff80); sign=0, mag=0 → +0
+        if fract_value == 0.0:
+            value = -float("inf") if sign == 1 else 0.0
+        else:
+            value = ((-1.0) ** sign) * (2**exponent) * fract_value
 
-        unpacked_bfp8[(exponent, mantissa)] = (
-            ((-1.0) ** sign) * (2**exponent) * (fract_value)
-        )
+        bfloat16_values.append(value)
+        unpacked_bfp8[(exponent, mantissa)] = value
 
     return bfloat16_values
 
@@ -170,8 +163,13 @@ def bfp4_to_float_block(exponent, bfp4_mantissas, unpacked_bfp4):
     for mantissa in bfp4_mantissas:
         mag = mantissa & 0x7
         if mag == 0:
-            bfloat16_values.append(0.0)
-            unpacked_bfp4[(exp_adj, mantissa)] = 0.0
+            # ISA spec: sign=1, mag=0 → -Inf (BF16 0xff80); sign=0, mag=0 → +0
+            if mantissa & 0x8:
+                value = -float("inf")
+            else:
+                value = 0.0
+            bfloat16_values.append(value)
+            unpacked_bfp4[(exp_adj, mantissa)] = value
             continue
 
         key = (exp_adj, mantissa)
@@ -247,7 +245,7 @@ def _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces=4, face_r_dim=MAX_FACE_R_DI
         torch.Tensor of bfloat16 values
     """
     num_elements = face_r_dim * FACE_C_DIM * num_faces
-    num_scales = num_elements // MXFP8_BLOCK_SIZE
+    num_scales = num_elements // MX_FORMAT_BLOCK_SIZE
 
     scale_section_len = _align16(num_scales)
 
@@ -256,7 +254,7 @@ def _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces=4, face_r_dim=MAX_FACE_R_DI
 
     # Convert elements bytes to FP8 blocks and reshape to (num_scales, 32)
     fp8_blocks = np.frombuffer(bytes(elements_bytes), dtype=fp8_dtype).reshape(
-        num_scales, MXFP8_BLOCK_SIZE
+        num_scales, MX_FORMAT_BLOCK_SIZE
     )
 
     # Vectorized scale decoding - decode all E8M0 scales at once
@@ -361,6 +359,110 @@ def unpack_mxfp8p(
     return _unpack_mxfp8(packed_bytes, ml_dtypes.float8_e4m3fn, num_faces, face_r_dim)
 
 
+def unpack_mxfp4(
+    packed_bytes,
+    num_faces=4,
+    face_r_dim=MAX_FACE_R_DIM,
+    use_srcs: bool = False,
+    dest_acc: bool = False,
+):
+    """
+    Unpack MXFP4 format (E2M1 variant) to bfloat16 tensor.
+    Function is implemented based on the OCP MX specification and Tensix hardware documentation.
+
+    MXFP4 uses 32-element blocks per OCP MX spec, each with:
+      - 1 shared E8M0 scale (8 bits)
+      - 32 × float4_e2m1fn elements (4 bits each, packed 2 per byte)
+
+    Layout: [all_scales][all_packed_elements]
+      - [32 scales (1 per block)][512 bytes (2 FP4 elements per byte)]
+
+    Per Tensix hardware documentation:
+      - Block exp = 0xFF (255): NaN block, all elements become NaN
+      - Block exp = 0x00 (0): neutral-ish scale for zeros
+
+    Args:
+        packed_bytes: Packed MX data in FULLY SEPARATED layout [all_scales][all_elements]
+        num_faces: Number of faces to unpack (1, 2, or 4). Defaults to 4.
+        face_r_dim: Rows per face (1, 2, 4, 8, or 16). Defaults to 16.
+        use_srcs: If True, unpack sequential SrcS slices (not yet implemented for MxFp4).
+        dest_acc: If True (with use_srcs), use 32-bit SrcS slice geometry (not yet implemented for MxFp4).
+
+    Returns:
+        torch.Tensor of bfloat16 values
+    """
+    if use_srcs:
+        # SrcS mode not yet implemented for MxFp4
+        raise NotImplementedError("use_srcs mode is not yet supported for MxFp4")
+
+    block_size = MX_FORMAT_BLOCK_SIZE
+    num_elements = face_r_dim * FACE_C_DIM * num_faces
+    num_blocks = num_elements // block_size
+
+    if num_elements % block_size != 0:
+        raise ValueError(
+            "Invalid MXFP4 tile geometry: num_elements must be a multiple of "
+            f"{block_size}, got {num_elements}."
+        )
+
+    # Expected bytes = 1 scale byte per block (16B-aligned) + packed FP4 elements.
+    scale_section_len = _align16(num_blocks)
+    element_bytes_len = num_blocks * (block_size // 2)
+    expected_len = scale_section_len + element_bytes_len
+    if len(packed_bytes) != expected_len:
+        raise ValueError(
+            "Invalid packed_bytes length for MXFP4: got "
+            f"{len(packed_bytes)} bytes, expected {expected_len} bytes."
+        )
+
+    scales_u8 = np.frombuffer(bytes(packed_bytes[:num_blocks]), dtype=np.uint8)
+    packed_u8 = np.frombuffer(
+        bytes(packed_bytes[scale_section_len : scale_section_len + element_bytes_len]),
+        dtype=np.uint8,
+    )
+
+    # Each byte packs 2 FP4 values: low nibble then high nibble.
+    nibbles_u8 = np.empty(packed_u8.size * 2, dtype=np.uint8)
+    nibbles_u8[0::2] = packed_u8 & 0x0F
+    nibbles_u8[1::2] = packed_u8 >> 4
+
+    fp4_f32 = (
+        nibbles_u8.view(ml_dtypes.float4_e2m1fn)[: num_blocks * block_size]
+        .reshape(num_blocks, block_size)
+        .astype(np.float32)
+    )
+
+    block_exp_unbiased = scales_u8.astype(np.int32) - 127  # E8M0 bias=127
+    scaled_blocks = fp4_f32 * np.exp2(block_exp_unbiased.astype(np.float32))[:, None]
+
+    # Extract 2-bit exponent field from E2M1 format
+    unit_exp_field = (
+        ((nibbles_u8 >> 1) & 0x3)
+        .astype(np.int32)[: num_blocks * block_size]
+        .reshape(num_blocks, block_size)
+    )
+
+    # E2M1 unbiased exponent calculation (bias=1):
+    # - Normal values (exp_field != 0): unbiased = exp_field - 1
+    # - Subnormal values (exp_field == 0): unbiased = 0 (fixed at 1-bias)
+    unit_exp_unbiased = np.where(unit_exp_field == 0, 0, unit_exp_field - 1)
+    combined_unbiased = block_exp_unbiased[:, None] + unit_exp_unbiased
+
+    nan_blocks = scales_u8 == 0xFF
+    overflow_mask = (combined_unbiased >= 128) & ~nan_blocks[:, None]
+    underflow_mask = (combined_unbiased < -127) & ~nan_blocks[:, None]
+
+    if np.any(nan_blocks):
+        scaled_blocks[nan_blocks] = np.nan
+
+    scaled_blocks[overflow_mask] = np.where(
+        scaled_blocks[overflow_mask] >= 0.0, np.inf, -np.inf
+    )
+    scaled_blocks[underflow_mask] = 0.0
+
+    return torch.tensor(scaled_blocks.ravel(), dtype=torch.bfloat16)
+
+
 _UNPACKERS = {
     DataFormat.Float16: unpack_fp16,
     DataFormat.Float16_b: unpack_bfp16,
@@ -417,6 +519,8 @@ def unpack_res_tiles(
         unpack_func = unpack_mxfp8r
     elif output_format == DataFormat.MxFp8P:
         unpack_func = unpack_mxfp8p
+    elif output_format == DataFormat.MxFp4:
+        unpack_func = unpack_mxfp4
     else:
         unpack_func = _UNPACKERS[output_format]
 
@@ -432,7 +536,7 @@ def unpack_res_tiles(
             unpacked_tile = unpack_func(
                 tile_data, sfpu=sfpu, num_faces=num_faces, face_r_dim=face_r_dim
             )
-        elif unpack_func in [unpack_mxfp8r, unpack_mxfp8p]:
+        elif unpack_func in [unpack_mxfp8r, unpack_mxfp8p, unpack_mxfp4]:
             unpacked_tile = unpack_func(
                 tile_data,
                 num_faces=num_faces,

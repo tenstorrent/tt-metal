@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/endpoints.h"
 #include "api/debug/dprint.h"
 
 // L1 to L1 send
@@ -37,12 +37,12 @@ void kernel_main() {
         std::swap(start_y, end_y);
     }
 
-    experimental::Noc noc(noc_index);
-    experimental::UnicastEndpoint unicast_endpoint;
-    experimental::MulticastEndpoint multicast_endpoint;
+    Noc noc(noc_index);
+    UnicastEndpoint unicast_endpoint;
+    MulticastEndpoint multicast_endpoint;
 
-    constexpr experimental::Noc::McastMode include_src =
-        loopback ? experimental::Noc::McastMode::INCLUDE_SRC : experimental::Noc::McastMode::EXCLUDE_SRC;
+    constexpr Noc::McastMode include_src =
+        loopback ? Noc::McastMode::INCLUDE_SRC : Noc::McastMode::EXCLUDE_SRC;
 
     {
         DeviceZoneScopedN("RISCV0");

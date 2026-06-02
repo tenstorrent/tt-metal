@@ -31,7 +31,7 @@ void kernel_main() {
     // entry survives round-trip. A wrong offset in either kernel breaks the cancellation.
     const uint32_t vararg_xor = get_vararg(0) ^ get_vararg(1) ^ get_common_vararg(0);
 
-    experimental::DataflowBuffer buf(dfb::loopback_dfb);
+    DataflowBuffer buf(dfb::loopback_dfb);
 
     for (uint32_t i = 0; i < num_entries; i++) {
         buf.wait_front(1);

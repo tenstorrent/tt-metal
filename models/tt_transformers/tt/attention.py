@@ -702,7 +702,7 @@ class Attention(LightweightModule):
         # This is because the SDPA op in decode mode has different number of reductions depending on batch size
         # Which leads to slightly different outputs from attention (due to accumulated errors)
         sdpa_decode_prog_cfg = self.args.get_attn_sdpa_decode_program_config(self.prefetcher)
-        if page_table:
+        if page_table is not None:
             attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q_heads_1BQD,
                 keys,
@@ -904,7 +904,7 @@ class Attention(LightweightModule):
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
-        if seq_len > 128:
+        if self.args.use_minimal_qkv_prefill_matmul(seq_len):
             xqkv_fused = ttnn.experimental.minimal_matmul(
                 x_11SH,
                 self.wqkv,
@@ -985,7 +985,7 @@ class Attention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD)
 
         # sharding k_fill to deal with update_cache memory limitation
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and page_table is None:
             k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.args.get_attn_kv_prefill_mem_config(seq_len))
         else:
             k_fill = k_heads_1KSD_8b
@@ -995,7 +995,7 @@ class Attention(LightweightModule):
         ttnn.deallocate(v_heads_1VSD)
 
         # sharding v_fill to deal with update_cache memory limitation
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and page_table is None:
             v_fill = ttnn.interleaved_to_sharded(v_heads_1VSD_8b, self.args.get_attn_kv_prefill_mem_config(seq_len))
         else:
             v_fill = v_heads_1VSD_8b
@@ -1003,7 +1003,7 @@ class Attention(LightweightModule):
         if self.TG:
             k_fill = self.prefill_prepare_tensor_for_kv_cache(k_fill, user_id)
             v_fill = self.prefill_prepare_tensor_for_kv_cache(v_fill, user_id)
-        if page_table:
+        if page_table is not None:
             # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
             # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
             block_size = keys_BKSD.shape[2]
@@ -1038,7 +1038,7 @@ class Attention(LightweightModule):
                 # Fill cache for this specific slot with scalar batch_idx
                 ttnn.experimental.paged_fill_cache(keys_BKSD, k_user_sliced, fill_page_table, batch_idx=slot_idx)
                 ttnn.experimental.paged_fill_cache(values_BKSD, v_user_sliced, fill_page_table, batch_idx=slot_idx)
-        elif page_table:
+        elif page_table is not None:
             # Single user path with page_table
             page_len = fill_page_table.shape[1] * block_size
             k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
@@ -1057,7 +1057,7 @@ class Attention(LightweightModule):
                 v_fill,
                 user_id % self.batch_size_per_device_group,
             )
-        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and page_table is None:
             ttnn.deallocate(k_fill)
             ttnn.deallocate(v_fill)
 
@@ -1068,15 +1068,27 @@ class Attention(LightweightModule):
         if chunk_start_idx is not None:
             if self.sliding_window is not None:
                 raise NotImplementedError("Sliding window not supported for chunked prefill SDPA")
-            attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
-                input_tensor_q=q_heads_1QSD_8b,
-                input_tensor_k=keys_BKSD,
-                input_tensor_v=values_BKSD,
-                page_table_tensor=page_table,
-                chunk_start_idx=chunk_start_idx,
-                compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None),
-            )
+            if isinstance(chunk_start_idx, ttnn.Tensor):
+                attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    input_tensor_q=q_heads_1QSD_8b,
+                    input_tensor_k=keys_BKSD,
+                    input_tensor_v=values_BKSD,
+                    page_table_tensor=page_table,
+                    chunk_start_idx=None,
+                    chunk_start_idx_tensor=chunk_start_idx,
+                    compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
+                    program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, 0, None),
+                )
+            else:
+                attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
+                    input_tensor_q=q_heads_1QSD_8b,
+                    input_tensor_k=keys_BKSD,
+                    input_tensor_v=values_BKSD,
+                    page_table_tensor=page_table,
+                    chunk_start_idx=chunk_start_idx,
+                    compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
+                    program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None),
+                )
         else:
             # For batched prefill, the actual per-user seq_len is seq_len // batch_size
             # since the tensors have shape [batch_size, n_heads, seq_len_per_user, head_dim]

@@ -7,7 +7,8 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.unit_tests.base_functionality.test_narrow import assert_quality
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
@@ -25,7 +26,7 @@ def test_untilize_single_core_interleaved_to_interleaved(device, dtype, tensor_s
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=False)
 
-    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert_quality(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), dtype)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -520,7 +521,7 @@ def test_untilize_multi_core_interleaved_to_interleaved(device, dtype, tensor_sh
     input_ttnn_tensor = ttnn.to_device(input_ttnn_tensor, device, memory_config=input_memory_config)
     ttnn_output_tensor = ttnn.untilize(input_ttnn_tensor, memory_config=output_memory_config, use_multicore=True)
 
-    assert_with_pcc(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), 0.9999)
+    assert_quality(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor), dtype)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])

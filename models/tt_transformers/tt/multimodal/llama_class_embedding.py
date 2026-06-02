@@ -4,7 +4,6 @@
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.multimodal.tensor_utils import from_torch_host_to_device
 
 
 class TtLlamaClassEmbedding(LightweightModule):
@@ -27,7 +26,7 @@ class TtLlamaClassEmbedding(LightweightModule):
         class_embedding = state_dict[f"{state_dict_prefix}class_embedding"]
         class_embedding = class_embedding.reshape(1, 1, 1, *class_embedding.shape)
 
-        self.class_embedding = from_torch_host_to_device(
+        self.class_embedding = ttnn.as_tensor(
             class_embedding,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,  # [INFO] TILE_LAYOUT shouldn't be used here because of the `dim=2` concat that this tensor is used in

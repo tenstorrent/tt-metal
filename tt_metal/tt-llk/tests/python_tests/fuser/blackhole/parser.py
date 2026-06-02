@@ -16,6 +16,7 @@ from helpers.llk_params import (
     DestSync,
     EltwiseBinaryReuseDestType,
     EnforceFP32Accumulation,
+    L1Accumulation,
     MathFidelity,
     MathOperation,
     PackerReluType,
@@ -438,6 +439,7 @@ class OperationSchema(BaseModel):
     block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
     pack_relu: PackerReluType = PackerReluType.NoRelu
     relu_threshold: float = 0.0
+    pack_l1_accumulation: L1Accumulation = L1Accumulation.No
     bh_tilize: Optional[Tilize] = None
 
     @field_validator("packer", mode="before")
@@ -492,6 +494,12 @@ class OperationSchema(BaseModel):
                 f"Block size {self.block_size} exceeds output dimensions {output.dimensions}"
             )
 
+        if (
+            self.pack_l1_accumulation == L1Accumulation.Yes
+            and not output.data_format.supports_l1_accumulation()
+        ):
+            raise ValueError(f"{output.data_format} does not support L1 accumulation")
+
         kwargs = {}
         if self.dest_sync:
             kwargs["dest_sync"] = self.dest_sync
@@ -501,6 +509,8 @@ class OperationSchema(BaseModel):
             kwargs["pack_relu"] = self.pack_relu
         if self.relu_threshold:
             kwargs["relu_threshold"] = self.relu_threshold
+        if self.pack_l1_accumulation:
+            kwargs["pack_l1_accumulation"] = self.pack_l1_accumulation
         if self.bh_tilize:
             kwargs["bh_tilize"] = self.bh_tilize
 

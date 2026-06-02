@@ -26,9 +26,9 @@ namespace tt::tt_metal::experimental::dfb::detail {
 
 // Per-risc config matching dfb_initializer_per_risc_t
 struct LocalDFBInterfaceHost {
-    std::array<uint32_t, 4> base_addr = {0};
-    std::array<uint32_t, 4> limit = {0};
-    std::array<::dfb::PackedTileCounter, 4> packed_tile_counter = {0};
+    std::array<uint32_t, ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR> base_addr = {0};
+    std::array<uint32_t, ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR> limit = {0};
+    std::array<::dfb::PackedTileCounter, ::dfb::MAX_NUM_TILE_COUNTERS_TO_RR> packed_tile_counter = {0};
     uint8_t num_tcs_to_rr = 1;
     bool broadcast_tc = false;  // DM-DM ALL producer: post to all TCs instead of round-robin
     uint8_t remapper_pair_index = 0;
@@ -76,6 +76,33 @@ struct DataflowBufferImpl {
     bool configs_finalized = false;
     // Flag to track if this DFB uses remapper (set during finalization)
     bool use_remapper = false;
+
+    // Set by set_borrowed_memory_base_addr()
+    uint32_t borrowed_addr_ = 0;
+
+    // Aliased DFBs share the same L1 data-buffer
+    // alias_primary_id: set on secondaries; holds the primary's DFB id.
+    // alias_secondary_ids: set on the primary; lists all secondary DFB ids.
+    // The choice of a primary is arbitrary
+    std::optional<uint32_t> alias_primary_id;
+    std::vector<uint32_t>   alias_secondary_ids;
+
+    bool borrows_memory() const { return config.borrows_memory; }
+
+    void set_borrowed_memory_base_addr(uint32_t new_addr) {
+        TT_FATAL(borrows_memory(), "Cannot set borrowed address on DFB {} that does not borrow memory", id);
+        borrowed_addr_ = new_addr;
+        // If allocate_dataflow_buffers() has already run, update the live tables so that
+        // a subsequent run picks up the new address.
+        for (auto& group : groups) {
+            for (auto& [core, addr] : group.l1_by_core) {
+                addr = new_addr;
+            }
+        }
+        for (auto& [core, pair] : core_lookup_) {
+            pair.second = new_addr;
+        }
+    }
 
     uint32_t total_size() const { return config.entry_size * config.num_entries; }
     uint32_t serialized_size() const;

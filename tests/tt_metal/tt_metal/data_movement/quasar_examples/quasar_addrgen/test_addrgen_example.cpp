@@ -8,7 +8,7 @@
 #include "device_fixture.hpp"
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 namespace tt::tt_metal {
 
@@ -24,22 +24,49 @@ bool should_skip_test() {
     return std::getenv("TT_METAL_SIMULATOR") == nullptr;
 }
 
+// All four addrgen kernels declare the same three named CTAs. The interleaved kernel
+// only consumes `num_of_addresses`; the two stride-enable bindings are dead in that path.
 bool run_addrgen_test(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const std::string& kernel_path,
     uint32_t src_stride_en,
     uint32_t dst_stride_en,
     uint32_t num_of_addresses) {
-    constexpr CoreCoord core = {0, 0};
+    constexpr const char* DM_KERNEL = "addrgen";
+    const experimental::metal2_host_api::NodeCoord node{0, 0};
 
-    Program program = CreateProgram();
+    experimental::metal2_host_api::KernelSpec dm_kernel_spec{
+        .unique_id = DM_KERNEL,
+        .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_path},
+        .num_threads = 1,
+        .compile_time_arg_bindings =
+            {{"src_stride_en", src_stride_en},
+             {"dst_stride_en", dst_stride_en},
+             {"num_of_addresses", num_of_addresses}},
+        .config_spec =
+            experimental::metal2_host_api::DataMovementConfiguration{
+                .gen2_data_movement_config =
+                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+    };
 
-    experimental::quasar::CreateKernel(
-        program,
-        kernel_path,
-        core,
-        experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = 1, .compile_args = {src_stride_en, dst_stride_en, num_of_addresses}});
+    experimental::metal2_host_api::WorkUnitSpec main_wu{
+        .unique_id = "main",
+        .kernels = {DM_KERNEL},
+        .target_nodes = node,
+    };
+
+    experimental::metal2_host_api::ProgramSpec spec{
+        .program_id = "addrgen",
+        .kernels = {dm_kernel_spec},
+        .work_units = {main_wu},
+    };
+    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+
+    experimental::metal2_host_api::ProgramRunParams params;
+    params.kernel_run_params = {{
+        .kernel_spec_name = DM_KERNEL,
+    }};
+    experimental::metal2_host_api::SetProgramRunParameters(program, params);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());

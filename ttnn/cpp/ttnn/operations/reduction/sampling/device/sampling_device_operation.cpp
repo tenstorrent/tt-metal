@@ -10,6 +10,7 @@
 
 #include "ttnn/operations/reduction/sampling/device/sampling_device_operation_types.hpp"
 #include "ttnn/operations/reduction/sampling/device/sampling_program_factory.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -44,12 +45,20 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
         input_indices_tensor.logical_shape() == input_values_tensor.logical_shape(),
         "Input values and indices must have the same shape!");
     auto input_shape = input_values_tensor.logical_shape();
+    TT_FATAL(input_shape.rank() == 4, "Sampling input_values must be rank-4; got rank {}", input_shape.rank());
     TT_FATAL(input_shape[0] * input_shape[1] * input_shape[2] == 32, "Input must have 32 users!");
     TT_FATAL(
         input_shape[3] != 0 && input_shape[3] % 32 == 0,
         "Input inner dim ({}) must be non-zero and divisible by 32, pad if needed!",
         input_shape[3]);
 
+    if (args.sub_core_grids.has_value()) {
+        ReduceOpDeviceGridValidationOptions sampling_grid_opts;
+        sampling_grid_opts.num_cores_use_last_core_divider = true;
+        sampling_grid_opts.sub_grid_contained_in_device_grid = &args.sub_core_grids.value();
+        sampling_grid_opts.sub_grid_label = "sub_core_grids";
+        validate_reduce_op_tensor(input_values_tensor, "Sampling", "input_values", &sampling_grid_opts);
+    }
     if (args.sub_core_grids.has_value()) {
         TT_FATAL(
             args.sub_core_grids.value().num_cores() == input_shape[0] * input_shape[1] * input_shape[2],
@@ -65,6 +74,22 @@ void SamplingDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             preallocated_output_tensor.value().memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Only INTERLEAVED memory layout is supported for outputs!");
+
+        const auto& sampling_pre_out = preallocated_output_tensor.value();
+        const auto& sampling_pre_out_shape = sampling_pre_out.logical_shape();
+        TT_FATAL(
+            sampling_pre_out_shape.rank() == 4,
+            "Sampling preallocated output must be rank-4, got rank {}",
+            sampling_pre_out_shape.rank());
+        TT_FATAL(
+            sampling_pre_out_shape[0] == 1 && sampling_pre_out_shape[1] == 1 && sampling_pre_out_shape[2] == 1 &&
+                sampling_pre_out_shape[3] == input_shape[2],
+            "Sampling preallocated output logical shape must be [1,1,1,{}] (input dim 2), got [{},{},{},{}]",
+            input_shape[2],
+            sampling_pre_out_shape[0],
+            sampling_pre_out_shape[1],
+            sampling_pre_out_shape[2],
+            sampling_pre_out_shape[3]);
     }
 
     // Check size, layout and dtype of k, p, temp

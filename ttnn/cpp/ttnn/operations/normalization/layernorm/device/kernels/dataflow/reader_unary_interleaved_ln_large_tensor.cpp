@@ -63,16 +63,16 @@ void kernel_main() {
     constexpr uint32_t cb_id_gamma = get_named_compile_time_arg_val("cb_gamma");
     constexpr uint32_t cb_id_beta = get_named_compile_time_arg_val("cb_beta");
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
 #ifdef FUSE_PRE_ADD
-    experimental::CircularBuffer cb_in1(cb_id_in1);
+    CircularBuffer cb_in1(cb_id_in1);
 #endif
 #ifdef FUSE_GAMMA
-    experimental::CircularBuffer cb_gamma(cb_id_gamma);
+    CircularBuffer cb_gamma(cb_id_gamma);
 #endif
 #ifdef FUSE_BETA
-    experimental::CircularBuffer cb_beta(cb_id_beta);
+    CircularBuffer cb_beta(cb_id_beta);
 #endif
 
     // No use_welford slot (large-tensor + Welford uses a separate kernel).
@@ -93,7 +93,7 @@ void kernel_main() {
 
     constexpr uint32_t rm_row_stride_bytes = block_size * TILE_W * elem_size_bytes;
     constexpr uint32_t cb_id_in_rm = get_named_compile_time_arg_val("cb_in_rm");
-    experimental::CircularBuffer cb_in_rm(cb_id_in_rm);
+    CircularBuffer cb_in_rm(cb_id_in_rm);
 
     const uint32_t src0_page_bytes = W_logical * elem_size_bytes;
 #else

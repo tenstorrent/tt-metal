@@ -32,10 +32,6 @@ Usage:
     python generate.py --model_path Qwen/Qwen3-8B --prompt "Once upon a time" \\
         --max_tokens 32 --max_seq_len 128 --mesh_shape 1 8 --no_logits
 
-    # Sharded loss + on-device sampling (all_gather before sample):
-    python generate.py --model_path Qwen/Qwen3-8B --prompt "Once upon a time" \\
-        --max_tokens 32 --max_seq_len 128 --mesh_shape 1 8 --sharded_loss --no_logits
-
     # Batched generation (4 samples per device, 8 total with DP=2):
     python generate.py --model_path Qwen/Qwen3-0.6B --prompt "Once upon a time" \\
         --max_tokens 32 --max_seq_len 128 --mesh_shape 2 1 --batch_size 4
@@ -257,7 +253,6 @@ def generate_ttml(
     temperature=0.0,
     collect_logits=False,
     distributed=False,
-    sharded_loss=False,
     dp_size=1,
     tp_size=1,
     kv_cache=False,
@@ -265,9 +260,9 @@ def generate_ttml(
 ):
     """Generate with ttml model.
 
-    When sharded_loss=True, logits arrive vocab-sharded across TP devices.
-    We all_gather them to full vocab before sampling or collection — this
-    is simpler and avoids the distributed argmax+Gumbel approximation.
+    In TP mode logits arrive vocab-sharded across TP devices.  We all_gather
+    them to full vocab before sampling or collection — this is simpler and
+    avoids the distributed argmax+Gumbel approximation.
     """
     ttml.autograd.AutoContext.get_instance().set_gradient_mode(ttml.autograd.GradMode.DISABLED)
     model.eval()
@@ -315,8 +310,8 @@ def generate_ttml(
         if track_memory and step == 0:
             MemoryUsageTracker.snapshot("GENERATION_STEP_0")
 
-        # --- if vocab-sharded, gather to full vocab on device ---
-        if sharded_loss:
+        # --- if vocab-sharded (TP mode), gather to full vocab on device ---
+        if tp_size > 1:
             logits = ttml.ops.distributed.all_gather(logits, dim=3, cluster_axis=1)
 
         # --- sample ---
@@ -429,7 +424,7 @@ def compare_logits(all_hf_logits, all_ttml_logits, vocab_size, tokenizer):
 
 
 def _create_model(hf_config, hf_state_dict, args, dp_size, tp_size):
-    """Create ttml model and load HF weights. Returns (model, config, sharded_loss, mode_str)."""
+    """Create ttml model and load HF weights. Returns (model, config, mode_str)."""
     from utils.model_factory import create_ttml_model, load_hf_weights
 
     use_tp = tp_size > 1
@@ -439,9 +434,7 @@ def _create_model(hf_config, hf_state_dict, args, dp_size, tp_size):
         dp_size=dp_size,
         tp_size=tp_size,
         track_memory=args.track_memory,
-        sharded_loss=args.sharded_loss,
     )
-    sharded_loss = args.sharded_loss and use_tp
     load_hf_weights(
         model,
         hf_state_dict,
@@ -450,7 +443,7 @@ def _create_model(hf_config, hf_state_dict, args, dp_size, tp_size):
         tp=use_tp,
         shard_dim=shard_dim,
     )
-    return model, config, sharded_loss, mode_str
+    return model, config, mode_str
 
 
 # =====================================================================
@@ -472,12 +465,6 @@ def main():
         default=[1, 1],
         metavar=("ROWS", "COLS"),
         help="Device mesh [rows, cols]. rows=DP, cols=TP. Default: 1 1.",
-    )
-    parser.add_argument(
-        "--sharded_loss",
-        action="store_true",
-        default=False,
-        help="Keep LM head output vocab-sharded; all_gather before sampling.",
     )
     parser.add_argument(
         "--track_memory",
@@ -543,9 +530,7 @@ def main():
         MemoryUsageTracker.snapshot("BEFORE_MODEL_CREATION")
 
     # 4. Create ttml model and load weights
-    model, config, sharded_loss, mode_str = _create_model(
-        hf_model.config, hf_model.state_dict(), args, dp_size, tp_size
-    )
+    model, config, mode_str = _create_model(hf_model.config, hf_model.state_dict(), args, dp_size, tp_size)
 
     if args.track_memory:
         MemoryUsageTracker.snapshot("AFTER_WEIGHT_LOADING")
@@ -583,7 +568,6 @@ def main():
         temperature=args.temperature,
         collect_logits=collect_logits,
         distributed=distributed,
-        sharded_loss=sharded_loss,
         dp_size=dp_size,
         tp_size=tp_size,
         kv_cache=args.kv_cache,

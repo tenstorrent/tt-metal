@@ -6,12 +6,13 @@
 #include "api/compute/common.h"
 #include "dev_mem_map.h"
 #include "ckernel.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     const uint32_t neo_id = ckernel::csr_read<ckernel::CSR::NEO_ID>();
     const uint32_t trisc_id = ckernel::csr_read<ckernel::CSR::TRISC_ID>();
     [[maybe_unused]] const uint32_t thread_idx = NUM_TRISC_CORES * neo_id + trisc_id;
-    const uint32_t l1_address = get_arg_val<uint32_t>(0);
+    const uint32_t l1_address = get_arg(args::l1_address);
 #ifdef TRISC_PACK
     int32_t A = 1;
     int32_t B = 2;

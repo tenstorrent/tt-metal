@@ -2,27 +2,29 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
 from functools import partial
-from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_model_traced_mesh_shape,
-    create_mesh_device,
-    create_tensor_on_mesh,
-    mesh_tensor_to_torch,
-    broadcast_torch_inputs_to_global,
-)
+
+import torch
+
+import ttnn
+from models.common.utility_functions import torch_random
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    broadcast_torch_inputs_to_global,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    get_model_traced_mesh_shape,
+    mesh_tensor_to_torch,
+)
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
     build_op_kwargs,
     extract_named_tensor_kwargs,
     parse_dict_value,
 )
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -183,13 +185,37 @@ def run(
     # Re-add memory_config and dtype to op_kwargs when present in master config.
     # NOTE: memory_config and dtype are declared as named params on run(), so
     # they live in their own bindings — kwargs.get() would never see them.
-    if memory_config is not None:
+    # Use __absent_keys__ to distinguish "master had kwarg=None" from "master never had kwarg".
+    absent_keys = kwargs.get("__absent_keys__")
+    has_absent_info = absent_keys is not None
+    absent_keys = set(absent_keys or [])
+    if has_absent_info and "memory_config" not in absent_keys:
+        if memory_config is not None:
+            parsed_mc = (
+                parse_dict_value("memory_config", memory_config) if isinstance(memory_config, dict) else memory_config
+            )
+            if parsed_mc is not None:
+                op_kwargs["memory_config"] = parsed_mc
+            else:
+                op_kwargs["memory_config"] = None
+        else:
+            op_kwargs["memory_config"] = None
+    elif memory_config is not None:
         parsed_mc = (
             parse_dict_value("memory_config", memory_config) if isinstance(memory_config, dict) else memory_config
         )
         if parsed_mc is not None:
             op_kwargs["memory_config"] = parsed_mc
-    if dtype is not None:
+    if has_absent_info and "dtype" not in absent_keys:
+        if dtype is not None:
+            parsed_dt = parse_dict_value("dtype", dtype) if isinstance(dtype, dict) else dtype
+            if parsed_dt is not None:
+                op_kwargs["dtype"] = parsed_dt
+            else:
+                op_kwargs["dtype"] = None
+        else:
+            op_kwargs["dtype"] = None
+    elif dtype is not None:
         parsed_dt = parse_dict_value("dtype", dtype) if isinstance(dtype, dict) else dtype
         if parsed_dt is not None:
             op_kwargs["dtype"] = parsed_dt

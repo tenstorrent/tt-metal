@@ -15,23 +15,53 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/base_types.hpp>    // For MathFidelity, UnpackToDestMode (global scope)
 #include <tt-metalium/kernel_types.hpp>  // For DataMovementProcessor, NOC, etc.
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
 struct ComputeConfiguration {
-    // Tensix hardware resource configuration (configured by compute kernels)
-    // Gen1 and Gen2 configurations are currently identical.
+    // Tensix hardware resource configuration for compute kernels.
+    // Gen1 and Gen2 configurations are identical.
+    //
+    // The Tensix Engine is a 3-stage pipeline (Unpack → Math → Pack).
+    // There are two math engines:
+    //  - FPU reads operands from the SrcA / SrcB register files (~19-bit),
+    //    writes to the Dest register file (16- or 32-bit, configurable).
+    //  - SFPU runs SIMD transcendentals. It can only access Dest.
+    // The fields below configure this pipeline.
 
+    // Number of multiply passes the FPU runs to use more mantissa bits
     MathFidelity math_fidelity = MathFidelity::HiFi4;
+
+    // Configure Dest register to hold 32-bit elements (instead of the default 16-bit)
     bool fp32_dest_acc_en = false;
+
+    // Dest register sync mode:
+    //   false (Half) — Dest is split in half; math and pack pipeline (double-buffered)
+    //   true  (Full) — Dest is one buffer; twice the capacity, no math/pack overlap
     bool dst_full_sync_en = false;
+
+    // Pack-side precision tweak for the Bfp8 block-float format.
+    // (Affects how exponents are reconciled when converting Dest contents to Bfp8)
     bool bfp8_pack_precise = false;
+
+    // Select fast-and-approximate vs slow-and-precise variants of SFPU transcendentals
     bool math_approx_mode = false;
 
-    // "Unpack to dest" mode must be specified on a per-DFB basis
-    // unpack_to_dest_mode maps DFB identifier to UnpackToDestMode
+    // Per-DFB choice of how the unpacker delivers data into the math stage:
+    //   Default          — unpack via SrcA/B regs (~19-bit elements; full FPU access)
+    //   UnpackToDestFp32 — unpack via Dest regs with full FP32 precision (SFPU only)
+    //
+    // This choice matters only when ALL of the following hold for the DFB binding:
+    //   1. The kernel is the consumer endpoint (unpacking data into the kernel)
+    //   2. The DFB's data format is Float32.
+    //   3. fp32_dest_acc_en is true (Dest must be 32-bit-wide to hold FP32).
+    //
+    // You MUST provide an unpack_to_dest_mode entry for the DFB if these conditions hold;
+    // failing to do so will trigger an error. Otherwise, supplying an entry is optional
+    // and only Default is accepted.
     using UnpackToDestModeEntry = std::pair<DFBSpecName, tt::tt_metal::UnpackToDestMode>;
     std::vector<UnpackToDestModeEntry> unpack_to_dest_mode;
 };
@@ -74,6 +104,11 @@ using KernelSpecName = std::string;
 //  - Kernel argument schema (for arguments specified when the Program is enqueued)
 //  - Kernel argument bindings (for compile-time constant arguments)
 //  - The configuration of any hardware resources controlled by the kernel
+//
+// Specialization: A single kernel source may be represented by multiple KernelSpecs in
+// the same ProgramSpec — for example with different CTA bindings, different DFB endpoint
+// bindings, different semaphore bindings, etc. Each KernelSpec compiles independently
+// and is placed independently via WorkUnitSpec membership.
 //
 // Instancing: A KernelSpec is a *per-node template*. At runtime, one independent
 // instance runs on each node where the kernel is placed, with its own runtime arguments.
@@ -122,7 +157,7 @@ struct KernelSpec {
     // Kernel compiler options
     ///////////////////////////////////////////////////////////////////
     struct CompilerOptions {
-        using IncludePaths = std::vector<std::string>;
+        using IncludePaths = std::vector<std::filesystem::path>;
         using Defines = std::vector<std::pair<std::string, std::string>>;
         using OptLevel = tt::tt_metal::KernelBuildOptLevel;
 
@@ -138,21 +173,34 @@ struct KernelSpec {
     //////////////////////////////////////////////////////////////////
 
     // DFB bindings
+    // Declares that this kernel requires a DFB resource (declared at the ProgramSpec level)
+    // The kernel constructs the accessor via DataflowBufferAccessor(dfb::<local_accessor_name>)
     enum class DFBEndpointType { PRODUCER, CONSUMER, RELAY };
     struct DFBBinding {
         DFBSpecName dfb_spec_name;        // identify the DFB within the ProgramSpec
         std::string local_accessor_name;  // DFB accessor name (used in the kernel source code)
         DFBEndpointType endpoint_type;    // producer, consumer, or relay
-        DFBAccessPattern access_pattern;  // strided, all, or blocked
+        DFBAccessPattern access_pattern = DFBAccessPattern::STRIDED;  // strided, all, or blocked
     };
     std::vector<DFBBinding> dfb_bindings;
 
     // Semaphore bindings
+    // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
+    // The kernel constructs the accessor via SemaphoreAccessor(sem::<local_accessor_name>)
     struct SemaphoreBinding {
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
     };
     std::vector<SemaphoreBinding> semaphore_bindings;
+
+    // Tensor bindings
+    // Declares that this kernel accesses a tensor parameter (declared at the ProgramSpec level)
+    // The kernel constructs the accessor via TensorAccessor(ta::<accessor_name>)
+    struct TensorBinding {
+        TensorParameterName tensor_parameter_name;  // identify the TensorBinding within the ProgramSpec
+        std::string accessor_name;                  // tensor accessor name (used in the kernel source code)
+    };
+    std::vector<TensorBinding> tensor_bindings;
 
     // TODO -- GlobalSemaphore bindings
     // TODO -- GlobalDataflowBuffer bindings

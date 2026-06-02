@@ -77,6 +77,7 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     const std::optional<Tensor>& optional_rs_output_tensor,
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,
-    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt);
+    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt,
+    std::optional<tt::tt_metal::DataType> dtype = std::nullopt);
 
 }  // namespace ttnn::prim

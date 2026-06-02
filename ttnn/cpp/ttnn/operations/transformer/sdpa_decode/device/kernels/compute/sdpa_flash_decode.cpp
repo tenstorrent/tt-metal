@@ -252,7 +252,7 @@ void kernel_main() {
     // - VectorMode::RC is equivalent to 32x32 tiles
     // - VectorMode::R is equivalent to 16x32 tiles
     // NOTE: Using VectorMode::RC for 16x32 tiles will be correct accuracy, just slower due to unnecessary math
-    constexpr int vector_mode = use_half_tile ? VectorMode::R : VectorMode::RC;
+    constexpr VectorMode vector_mode = use_half_tile ? VectorMode::R : VectorMode::RC;
 
     // We set up Ping Pong intermediate buffers between loops
     uint32_t cb_cur_max = cb_max_1;

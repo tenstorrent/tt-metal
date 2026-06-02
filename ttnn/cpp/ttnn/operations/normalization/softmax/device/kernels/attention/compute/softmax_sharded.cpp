@@ -9,14 +9,14 @@
 #include "api/compute/bcast.h"
 #include "api/compute/softmax.h"
 #include "api/compute/reduce.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 template <uint32_t block_w, uint32_t num_subblocks_w, uint32_t subblock_w>
 ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_max_scaler, uint32_t cb_max, uint32_t cb_out) {
-    auto cb_in_obj = experimental::CircularBuffer(cb_in);
-    auto cb_max_obj = experimental::CircularBuffer(cb_max);
-    auto cb_out_obj = experimental::CircularBuffer(cb_out);
+    auto cb_in_obj = CircularBuffer(cb_in);
+    auto cb_max_obj = CircularBuffer(cb_max);
+    auto cb_out_obj = CircularBuffer(cb_out);
 
     // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
     // Note: The library handles waiting for scaler tile internally
@@ -79,17 +79,17 @@ void kernel_main() {
     constexpr auto cb_x = cb_exps;
 #endif
 
-    auto cb_in0_obj = experimental::CircularBuffer(cb_in0);
-    auto cb_max_scaler_obj = experimental::CircularBuffer(cb_max_scaler);
-    auto cb_fused_scale_obj = experimental::CircularBuffer(cb_fused_scale);
-    auto cb_fused_attn_obj = experimental::CircularBuffer(cb_fused_attn);
-    auto cb_exps_obj = experimental::CircularBuffer(cb_exps);
-    auto cb_recipsumexps_obj = experimental::CircularBuffer(cb_recipsumexps);
-    auto cb_scale_mask_obj = experimental::CircularBuffer(cb_scale_mask);
-    auto cb_out0_obj = experimental::CircularBuffer(cb_out0);
-    auto cb_x_obj = experimental::CircularBuffer(cb_x);
+    auto cb_in0_obj = CircularBuffer(cb_in0);
+    auto cb_max_scaler_obj = CircularBuffer(cb_max_scaler);
+    auto cb_fused_scale_obj = CircularBuffer(cb_fused_scale);
+    auto cb_fused_attn_obj = CircularBuffer(cb_fused_attn);
+    auto cb_exps_obj = CircularBuffer(cb_exps);
+    auto cb_recipsumexps_obj = CircularBuffer(cb_recipsumexps);
+    auto cb_scale_mask_obj = CircularBuffer(cb_scale_mask);
+    auto cb_out0_obj = CircularBuffer(cb_out0);
+    auto cb_x_obj = CircularBuffer(cb_x);
 #ifdef NUMERIC_STABLE
-    auto cb_max_obj = experimental::CircularBuffer(cb_max);
+    auto cb_max_obj = CircularBuffer(cb_max);
 #endif
 
     constexpr int dst0 = 0;

@@ -5,17 +5,17 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/endpoints.h"
-#include "experimental/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
 
 inline void read_tiles(
-    experimental::Noc& noc, uint32_t num_tiles, uint32_t src_addr, uint32_t bank_id, uint32_t cb_id_in) {
+    Noc& noc, uint32_t num_tiles, uint32_t src_addr, uint32_t bank_id, uint32_t cb_id_in) {
     // ublocks size defined in tiles
-    experimental::CircularBuffer cb(cb_id_in);
+    CircularBuffer cb(cb_id_in);
     constexpr uint32_t ublock_size_tiles = 1;
     uint32_t ublock_size_bytes = cb.get_tile_size() * ublock_size_tiles;
-    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_bank;
+    AllocatorBank<AllocatorBankType::DRAM> dram_bank;
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     for (uint32_t i = 0; i < num_tiles; i += ublock_size_tiles) {
@@ -36,7 +36,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
 
-    experimental::Noc noc;
+    Noc noc;
 
     read_tiles(noc, num_tiles, src_addr_0, bank_id_0, cb_id_in0);
     read_tiles(noc, num_tiles, src_addr_1, bank_id_1, cb_id_in1);

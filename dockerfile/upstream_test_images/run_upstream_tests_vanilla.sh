@@ -47,6 +47,11 @@ verify_llama_dir_() {
     if [ -z "${LLAMA_DIR:-}" ]; then
       echo "LLAMA_DIR environment variable not set. Checking for HF_MODEL and TT_CACHE_PATH..."
 
+      if [ -n "${HF_HOME:-}" ] && [ -d "$HF_HOME" ] && [ "$(ls -A "$HF_HOME")" ]; then
+        echo "[upstream-tests] HF_HOME is set to $HF_HOME and exists, continuing"
+        return 0
+      fi
+
       # Check if both HF_MODEL and TT_CACHE_PATH are set
       if [ -z "${HF_MODEL:-}" ] || [ -z "${TT_CACHE_PATH:-}" ]; then
         echo "Error: HF_MODEL and TT_CACHE_PATH environment variables not detected. Please set these environment variables to tell the tests where to find the downloaded Llama weights." >&2
@@ -168,10 +173,6 @@ test_suite_wh_6u_metal_unit_tests() {
 test_suite_wh_6u_metal_torus_xy_health_check_tests() {
     echo "[upstream-tests] Checking for XY Torus topology on WH 6U"
     ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
-}
-
-test_suite_wh_6u_metal_qsfp_links_health_check_tests() {
-    echo "[upstream-tests] Checking QSFP links on WH 6U (Only works on XY (2D) Torus systems. Check https://github.com/tenstorrent/tt-metal/issues/30415 for updates)"
     ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_6U_galaxy.yaml
 }
 
@@ -208,7 +209,7 @@ test_suite_bh_ttnn_stress_tests() {
     pytest tests/ttnn/stress_tests/
 }
 
-test_suite_bh_glx_metal_unit_tests() {
+test_suite_bh_6u_metal_unit_tests() {
     echo "[upstream-tests] running BH GLX upstream metal unit tests"
 
     # BH Galaxy XY (2D) Torus System Validation (no fabric, simply validate that expected links are discovered and healthy)
@@ -239,13 +240,19 @@ UnitMeshMultiCQMultiDeviceEventFixture.*:\
 UnitMeshCQSingleCardFixture.TensixTestReadWriteMultipleCoresL1"
 }
 
-test_suite_bh_glx_python_unit_tests() {
+test_suite_bh_6u_metal_torus_xy_health_check_tests() {
+    echo "[upstream-tests] Checking for XY Torus topology on BH 6U Galaxy"
+    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto --hard-fail --send-traffic --num-iterations 1
+    ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_short_running.yaml
+}
+
+test_suite_bh_6u_python_unit_tests() {
     echo "[upstream-tests] running BH GLX upstream python unit tests"
     # CCL / Ops
     pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_galaxy_torus.py
 }
 
-test_suite_bh_glx_llama_demo_tests() {
+test_suite_bh_6u_llama_demo_tests() {
     echo "[upstream-tests] running BH GLX upstream Llama demo tests with weights"
 
     verify_llama_dir_
@@ -253,7 +260,7 @@ test_suite_bh_glx_llama_demo_tests() {
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 32 --timeout 1200
 }
 
-test_suite_bh_glx_torus_xyz_health_check_tests() {
+test_suite_bh_6u_torus_xyz_health_check_tests() {
     echo "[upstream-tests] Checking for XY Torus + Z links topology on BH 6U Galaxy"
     # Fabric
     # This test is to be run on systems that have the XY Torus links setup, along with Z connections between adjacent trays.
@@ -311,16 +318,16 @@ hw_topology_test_suites["wh_6u"]="
 test_suite_wh_6u_llama_demo_tests
 test_suite_wh_6u_metal_torus_xy_health_check_tests
 test_suite_wh_6u_model_unit_tests
-test_suite_wh_6u_metal_unit_tests
-test_suite_wh_6u_metal_qsfp_links_health_check_tests"
+test_suite_wh_6u_metal_unit_tests"
 
 hw_topology_test_suites["blackhole_ttnn_stress_tests"]="
 test_suite_bh_ttnn_stress_tests"
 
 hw_topology_test_suites["blackhole_glx"]="
-test_suite_bh_glx_metal_unit_tests
-test_suite_bh_glx_python_unit_tests
-test_suite_bh_glx_llama_demo_tests"
+test_suite_bh_6u_metal_unit_tests
+test_suite_bh_6u_metal_torus_xy_health_check_tests
+test_suite_bh_6u_python_unit_tests
+test_suite_bh_6u_llama_demo_tests"
 
 # Function to display help
 show_help() {

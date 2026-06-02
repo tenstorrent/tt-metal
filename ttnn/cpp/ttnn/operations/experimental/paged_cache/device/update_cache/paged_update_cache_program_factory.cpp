@@ -65,7 +65,7 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
         index_stick_size = update_idxs_tensor.value().buffer()->aligned_page_size();
     }
 
-    // Pagetable-specific parameters
+    // Pagetable-specific parameters.
     bool is_paged_cache = page_table.has_value();
     uint32_t block_size = 0;
     uint32_t block_size_t = 0;
@@ -76,7 +76,7 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
     if (is_paged_cache) {
         const auto& page_table_tensor = page_table.value();
 
-        block_size = cache_tensor.padded_shape()[2];
+        block_size = operation_attributes.block_size_override.value_or(cache_tensor.padded_shape()[2]);
         block_size_t = block_size / TILE_HEIGHT;
         max_blocks_per_seq = page_table_tensor.padded_shape()[1];
         page_table_stick_size = page_table_tensor.padded_shape()[-1] * page_table_tensor.element_size();
@@ -84,10 +84,15 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
         page_table_data_format = tt_metal::datatype_to_dataformat_converter(page_table_tensor.dtype());
     }
 
-    uint32_t Wt = cache_tensor.padded_shape()[-1] / TILE_WIDTH;
-    uint32_t St = cache_tensor.padded_shape()[-2] / TILE_HEIGHT;
-    uint32_t Wbytes = fp32_dest_acc_en ? cache_tensor.padded_shape()[-1] * sizeof(float)
-                                       : cache_tensor.padded_shape()[-1] * 2;  // 2 bytes for bfloat16
+    // Per-call write geometry (head_dim, Wt, Wbytes) comes from the input tensor; the
+    // cache shape is only a byte budget. num_heads comes from the call view (via the
+    // optional num_kv_heads_override) when sharing one buffer across layer types with
+    // asymmetric kv-head counts, otherwise from the cache. St is block_size_t in paged
+    // mode, cache seq-len-in-tiles otherwise.
+    uint32_t Wt = input_tensor.padded_shape()[-1] / TILE_WIDTH;
+    uint32_t St = is_paged_cache ? block_size_t : cache_tensor.padded_shape()[-2] / TILE_HEIGHT;
+    uint32_t Wbytes = fp32_dest_acc_en ? input_tensor.padded_shape()[-1] * sizeof(float)
+                                       : input_tensor.padded_shape()[-1] * 2;  // 2 bytes for bfloat16
     uint32_t cache_total_num_tiles = cache_tensor.physical_volume() / TILE_HW;
     uint32_t cache_batch_num_tiles =
         operation_attributes.share_cache
@@ -96,7 +101,7 @@ PagedUpdateCacheProgramFactory::cached_program_t PagedUpdateCacheProgramFactory:
                   cache_tensor.padded_shape()[0];  // if share cache, we can set cache batch num tiles to 0
                                                    // so batch offset would be 0 in future calculations
     uint32_t B = input_tensor.padded_shape()[1];
-    uint32_t num_heads = cache_tensor.padded_shape()[1];
+    uint32_t num_heads = operation_attributes.num_kv_heads_override.value_or(cache_tensor.padded_shape()[1]);
 
     log_debug(tt::LogOp, "cache_cb_data_format: {}", cache_cb_data_format);
     log_debug(tt::LogOp, "input_cb_data_format: {}", input_cb_data_format);

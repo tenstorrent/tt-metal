@@ -4,6 +4,7 @@
 
 #include "accumulation/device/accumulation_device_operation_types.hpp"
 #include "accumulation_device_operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 
 #include "tt-metalium/base_types.hpp"
 #include "tt-metalium/host_api.hpp"
@@ -80,6 +81,13 @@ tt::tt_metal::ProgramDescriptor AccumulationProgramFactory::create_descriptor(
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_cols_per_core_group_1, num_cols_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(grid, num_rows_total);
+
+    TT_FATAL(
+        num_cores > 0,
+        "Accumulation (cumsum/cumprod) requires at least one worker core; num_rows_total={}",
+        num_rows_total);
+
+    validate_reduce_op_program_grid("Accumulation", all_cores, grid, nullptr, true, {{&output_tensor, "output"}});
 
     constexpr uint32_t in_tiles = 4;
     constexpr uint32_t acc_tiles = 1;

@@ -12,7 +12,7 @@
  */
 
 #include "ttnn/cpp/ttnn/kernel_lib/cb_helpers_compute.hpp"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 namespace compute_kernel_lib {
 
@@ -43,17 +43,27 @@ constexpr uint32_t compute_num_blocks(uint32_t total_width, uint32_t max_block_w
 // Standalone Init/Uninit Wrapper Functions Implementations
 // =============================================================================
 
-template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
+template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb, untilize_config::RemapMode remap_mode>
 ALWI void untilize_init() {
     constexpr uint32_t dest_limit = DEST_AUTO_LIMIT;
     constexpr bool use_block_based_pack = (block_width_tiles > dest_limit);
     constexpr uint32_t num_sub_blocks = use_block_based_pack ? compute_num_blocks(block_width_tiles, dest_limit) : 1;
-    constexpr uint32_t sub_block_width = use_block_based_pack ? (block_width_tiles / num_sub_blocks) : block_width_tiles;
+    constexpr uint32_t sub_block_width =
+        use_block_based_pack ? (block_width_tiles / num_sub_blocks) : block_width_tiles;
+    constexpr bool configure_remap = (remap_mode == untilize_config::RemapMode::Configure);
 
     if constexpr (use_block_based_pack) {
-        pack_untilize_init<sub_block_width, block_width_tiles>(input_cb, output_cb);
+        if constexpr (configure_remap) {
+            pack_untilize_init<sub_block_width, block_width_tiles>(input_cb, output_cb);
+        } else {
+            pack_untilize_init_skip_remap<sub_block_width, block_width_tiles>(input_cb, output_cb);
+        }
     } else {
-        pack_untilize_init<block_width_tiles, block_width_tiles>(input_cb, output_cb);
+        if constexpr (configure_remap) {
+            pack_untilize_init<block_width_tiles, block_width_tiles>(input_cb, output_cb);
+        } else {
+            pack_untilize_init_skip_remap<block_width_tiles, block_width_tiles>(input_cb, output_cb);
+        }
     }
 }
 
@@ -72,18 +82,14 @@ template <
     uint32_t output_cb,
     untilize_config::InitUninitMode init_uninit_mode,
     untilize_config::WaitMode wait_mode,
-    untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode>
+    untilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
+    untilize_config::RemapMode remap_mode>
 ALWI void untilize(uint32_t num_blocks) {
-
     // Compile-time validation
-    static_assert(input_cb != output_cb,
-        "Untilize cannot be done in-place: input_cb and output_cb must be different");
-    static_assert(block_width_tiles > 0,
-        "block_width_tiles must be greater than 0");
-    static_assert(input_cb < 32,
-        "Invalid input_cb: must be less than 32");
-    static_assert(output_cb < 32,
-        "Invalid output_cb: must be less than 32");
+    static_assert(input_cb != output_cb, "Untilize cannot be done in-place: input_cb and output_cb must be different");
+    static_assert(block_width_tiles > 0, "block_width_tiles must be greater than 0");
+    static_assert(input_cb < 32, "Invalid input_cb: must be less than 32");
+    static_assert(output_cb < 32, "Invalid output_cb: must be less than 32");
 
     // Runtime parameter validation
     ASSERT(num_blocks > 0);
@@ -116,10 +122,10 @@ ALWI void untilize(uint32_t num_blocks) {
     constexpr bool use_block_based_pack = (block_width_tiles > dest_limit);
 
     // Compute block parameters for block-based pack path
-    constexpr uint32_t num_sub_blocks = use_block_based_pack ?
-        compute_num_blocks(block_width_tiles, dest_limit) : 1;
-    constexpr uint32_t sub_block_width = use_block_based_pack ?
-        (block_width_tiles / num_sub_blocks) : block_width_tiles;
+    constexpr uint32_t num_sub_blocks = use_block_based_pack ? compute_num_blocks(block_width_tiles, dest_limit) : 1;
+    constexpr uint32_t sub_block_width =
+        use_block_based_pack ? (block_width_tiles / num_sub_blocks) : block_width_tiles;
+    constexpr bool configure_remap = (remap_mode == untilize_config::RemapMode::Configure);
 
     // Validate CB capacity.
     // Guarded because get_local_cb_interface() references cb_interface, which is
@@ -138,11 +144,18 @@ ALWI void untilize(uint32_t num_blocks) {
     if constexpr (
         init_uninit_mode == untilize_config::InitUninitMode::InitAndUninit ||
         init_uninit_mode == untilize_config::InitUninitMode::InitOnly) {
-
         if constexpr (use_block_based_pack) {
-            pack_untilize_init<sub_block_width, block_width_tiles>(input_cb, output_cb);
+            if constexpr (configure_remap) {
+                pack_untilize_init<sub_block_width, block_width_tiles>(input_cb, output_cb);
+            } else {
+                pack_untilize_init_skip_remap<sub_block_width, block_width_tiles>(input_cb, output_cb);
+            }
         } else {
-            pack_untilize_init<block_width_tiles, block_width_tiles>(input_cb, output_cb);
+            if constexpr (configure_remap) {
+                pack_untilize_init<block_width_tiles, block_width_tiles>(input_cb, output_cb);
+            } else {
+                pack_untilize_init_skip_remap<block_width_tiles, block_width_tiles>(input_cb, output_cb);
+            }
         }
     }
 
@@ -150,9 +163,9 @@ ALWI void untilize(uint32_t num_blocks) {
     // UPFRONT WAITING (if requested)
     // =================================================================
 
-    // Construct experimental::CircularBuffer objects for sync operations
-    experimental::CircularBuffer in_cb(input_cb);
-    experimental::CircularBuffer out_cb(output_cb);
+    // Construct CircularBuffer objects for sync operations
+    CircularBuffer in_cb(input_cb);
+    CircularBuffer out_cb(output_cb);
 
     if constexpr (wait_mode == untilize_config::WaitMode::WaitUpfront) {
         uint32_t total_tiles = block_width_tiles * num_blocks;
@@ -206,7 +219,6 @@ ALWI void untilize(uint32_t num_blocks) {
     if constexpr (
         init_uninit_mode == untilize_config::InitUninitMode::InitAndUninit ||
         init_uninit_mode == untilize_config::InitUninitMode::UninitOnly) {
-
         pack_untilize_uninit(output_cb);
     }
 }

@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 #include "api/debug/dprint.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/noc.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t num_tensors = get_compile_time_arg_val(0);
@@ -22,11 +22,11 @@ void kernel_main() {
     uint32_t arg_index = 5;
 
     const auto s = TensorAccessor(dst_args, dst_addr);
-    experimental::Noc noc;
+    Noc noc;
 
     for (uint32_t tensor_id = 0; tensor_id < num_tensors; tensor_id++) {
         const uint32_t input_shard_cb_id = get_arg_val<uint32_t>(arg_index++);
-        experimental::CircularBuffer input_shard_cb(input_shard_cb_id);
+        CircularBuffer input_shard_cb(input_shard_cb_id);
         input_shard_cb.wait_front(num_pages_per_tensor);
         uint32_t page_id = 0;
         for (uint32_t page_id_input = 0; page_id_input < num_pages_per_tensor; page_id_input++) {

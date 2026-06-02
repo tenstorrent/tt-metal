@@ -781,6 +781,7 @@ TEST_F(SDPABackwardTest, CausalMask_GQA) {
 }
 
 TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_NanoGPTConfig) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // D=128 + S=1024: wider tolerance for accumulated BF16 rounding
     SDPABackwardTestConfig config{
         .batch_size = 64U,
@@ -798,6 +799,7 @@ TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_NanoGPTConfig) {
 }
 
 TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_LargerSequence) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // D=128 + S=1024: wider tolerance (see NIGHTLY_LargerSequence comment)
     SDPABackwardTestConfig config{
         .batch_size = 4U,

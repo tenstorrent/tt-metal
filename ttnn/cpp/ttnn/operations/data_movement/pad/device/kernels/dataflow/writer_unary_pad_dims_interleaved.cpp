@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -25,8 +25,8 @@ void kernel_main() {
     const uint32_t tile_size = get_tile_size(cb_id_out0);
 
     const auto s1 = TensorAccessor(dst_args, dst_addr);
-    experimental::CircularBuffer cb_out0(cb_id_out0);
-    experimental::CircularBuffer cb_out1(cb_id_out1);
+    CircularBuffer cb_out0(cb_id_out0);
+    CircularBuffer cb_out1(cb_id_out1);
 
     cb_out1.reserve_back(1);  // in this kernel we are not pushing anything into CBs, just using the space
 

@@ -8,7 +8,7 @@
 // For multicast modes: always uses async_write_multicast (no stateful variant exists).
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/endpoints.h"
 #include "log_helpers.hpp"
 
 void kernel_main() {
@@ -41,9 +41,9 @@ void kernel_main() {
     constexpr uint32_t same_axis = get_compile_time_arg_val(18);
     constexpr uint32_t loopback_meta = get_compile_time_arg_val(19);
 
-    experimental::Noc noc(noc_index);
-    experimental::UnicastEndpoint unicast_ep;
-    experimental::MulticastEndpoint multicast_ep;
+    Noc noc(noc_index);
+    UnicastEndpoint unicast_ep;
+    MulticastEndpoint multicast_ep;
 
     // ============ MODE 0: UNICAST SINGLE (one_to_one) ============
     if constexpr (mode == WRITER_MODE_UNICAST_SINGLE) {
@@ -156,8 +156,8 @@ void kernel_main() {
             mcast_end_y = tmp;
         }
 
-        constexpr experimental::Noc::McastMode mcast_mode =
-            loopback ? experimental::Noc::McastMode::INCLUDE_SRC : experimental::Noc::McastMode::EXCLUDE_SRC;
+        constexpr Noc::McastMode mcast_mode =
+            loopback ? Noc::McastMode::INCLUDE_SRC : Noc::McastMode::EXCLUDE_SRC;
 
         {
             DeviceZoneScopedN("RISCV0");
@@ -202,8 +202,8 @@ void kernel_main() {
             mcast_end_y = tmp;
         }
 
-        constexpr experimental::Noc::McastMode mcast_mode =
-            loopback ? experimental::Noc::McastMode::INCLUDE_SRC : experimental::Noc::McastMode::EXCLUDE_SRC;
+        constexpr Noc::McastMode mcast_mode =
+            loopback ? Noc::McastMode::INCLUDE_SRC : Noc::McastMode::EXCLUDE_SRC;
 
         {
             DeviceZoneScopedN("RISCV0");

@@ -4,7 +4,7 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t num_hw_blocks_per_core = get_compile_time_arg_val(0);
@@ -20,8 +20,8 @@ void kernel_main() {
 
     const uint32_t stick_size_bytes = W_size_bytes;
 
-    experimental::CircularBuffer cb_src(cb_in0);
-    experimental::CircularBuffer cb_dst(cb_in);
+    CircularBuffer cb_src(cb_in0);
+    CircularBuffer cb_dst(cb_in);
 
     uint32_t l1_read_addr = cb_src.get_read_ptr();
     uint64_t read_noc_addr = get_noc_addr(l1_read_addr);

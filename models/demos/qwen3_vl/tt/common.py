@@ -81,6 +81,55 @@ def merge_vision_tokens_ttnn(
     return input_embeds, deepstack_visual_embeds
 
 
+def merge_vision_tokens_single_user_ttnn(
+    input_ids,
+    input_embeds,
+    image_embeds,
+    hf_config,
+    deepstack_visual_embeds=None,
+    model_args=None,
+):
+    """
+    Merge vision tokens for a single user. Avoids batch dimension operations.
+
+    Args:
+        input_ids: torch.Tensor of shape [seq_len] for a single user
+        input_embeds: ttnn.Tensor of shape [seq_len, hidden_dim] for a single user
+        image_embeds: ttnn.Tensor of shape [num_image_tokens, hidden_dim]
+        hf_config: HuggingFace config with image_token_id
+        deepstack_visual_embeds: List of ttnn.Tensors for deepstack visual embeddings
+        model_args: Model arguments
+
+    Returns:
+        Tuple of (merged_embeds, deepstack_visual_embeds) both for single user
+    """
+    S, H = input_embeds.shape
+    input_ids_flat = input_ids.view(-1)
+    mask_indices = torch.where(input_ids_flat == hf_config.image_token_id)[0]
+
+    if len(mask_indices) == 0:
+        # No image tokens, return a copy of input_embeds
+        input_embeds_out = ttnn.zeros_like(input_embeds)
+        return ttnn.copy(input_embeds, input_embeds_out), deepstack_visual_embeds
+
+    # Reshape mask_indices to match image_embeds shape for scatter
+    mask_indices = mask_indices.view(image_embeds.shape[0], 1).expand(image_embeds.shape[0], image_embeds.shape[1])
+    mask_indices_tt = ttnn.from_torch(
+        mask_indices, device=model_args.mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+
+    # Scatter image embeddings into text embeddings at image token positions
+    zeros = ttnn.zeros_like(input_embeds)
+    input_embeds = ttnn.scatter(input_embeds, 0, mask_indices_tt, image_embeds)
+
+    # Process deepstack visual embeddings if provided
+    if deepstack_visual_embeds is not None:
+        for i in range(len(deepstack_visual_embeds)):
+            deepstack_visual_embeds[i] = ttnn.scatter(zeros, 0, mask_indices_tt, deepstack_visual_embeds[i])
+
+    return input_embeds, deepstack_visual_embeds
+
+
 def preprocess_inputs_prefill(
     input_embeds,
     model_args,
@@ -232,6 +281,66 @@ def preprocess_inputs_prefill_ttnn(
     )
 
 
+def preprocess_inputs_prefill_single_user_ttnn(
+    input_embed,
+    model_args,
+    attention_mask,
+    pad_embedding,
+    max_prefill_len=None,
+    deepstack_visual_embeds=None,
+):
+    """
+    Preprocess inputs for prefill for a single user. Avoids ttnn.stack by processing
+    one user at a time.
+
+    Args:
+        input_embed: ttnn.Tensor of shape [seq_len, hidden_dim] for a single user
+        model_args: Model arguments
+        attention_mask: torch.Tensor attention mask for this user [seq_len]
+        pad_embedding: ttnn.Tensor pad embedding
+        max_prefill_len: Maximum prefill length
+        deepstack_visual_embeds: List of ttnn.Tensors for deepstack visual embeddings (single user)
+
+    Returns:
+        Tuple of (input_prefill, deepstack_visual_embeds, decoding_pos, prefill_len)
+    """
+    if max_prefill_len is None:
+        max_prefill_len = model_args.max_seq_len
+
+    # Determine the actual length of the prompt using the attention_mask
+    actual_prompt_len = int(attention_mask.sum().item())
+
+    # Prefill size is nearest power of 2
+    prefill_seq_len = min(max_prefill_len, max(2 ** math.ceil(math.log(input_embed.shape[0], 2)), 128))
+
+    # Check if padding is required
+    if prefill_seq_len - actual_prompt_len > 0:
+        # Initialize prefill tensors full of pad tokens
+        input_padding = ttnn.expand(pad_embedding, (prefill_seq_len - actual_prompt_len, -1))
+        input_prefill = ttnn.concat([input_embed[:actual_prompt_len, :], input_padding], dim=0)
+    else:
+        input_prefill = input_embed[:actual_prompt_len, :]
+
+    # Process deepstack visual embeddings if provided
+    deepstack_visual_embeds_processed = None
+    if deepstack_visual_embeds is not None:
+        deepstack_visual_embeds_processed = [
+            ttnn.pad(
+                deepstack_visual_embeds[j],
+                [(0, prefill_seq_len - deepstack_visual_embeds[j].shape[0]), (0, 0)],
+                0,
+            )
+            for j in range(len(deepstack_visual_embeds))
+        ]
+
+    return (
+        input_prefill,
+        deepstack_visual_embeds_processed,
+        actual_prompt_len,  # decoding_pos
+        prefill_seq_len,  # prefill_len
+    )
+
+
 def get_pad_embedding(reference_model, pad_token_id, model_args):
     pad_embedding = reference_model.model.language_model.embed_tokens(torch.tensor(pad_token_id))
     pad_embedding_tt = ttnn.from_torch(
@@ -284,6 +393,58 @@ def multimodal_rope_from_hf(
     # convert to meta-style interleaved format:
     cos, sin = convert_rope_style_hf_to_meta(cos, sin)
     # we have precomputed embeddings for the entire sequence length and converted to 1D so we no longer need to track rope_deltas
+    return cos, sin, rope_deltas
+
+
+def multimodal_rope_single_user_from_hf(
+    input_ids,
+    image_grid_thw,
+    reference_model,
+    model_args,
+    pad_token_id,
+):
+    """
+    Compute multimodal rope embeddings for a single user. Precomputes cos and sin
+    for the entire sequence length including the generated tokens.
+
+    Args:
+        input_ids: torch.Tensor of shape [seq_len] for a single user
+        image_grid_thw: torch.Tensor of shape [num_images, 3] or None for text-only
+        reference_model: Reference HuggingFace model
+        model_args: Model arguments
+        pad_token_id: Pad token ID
+
+    Returns:
+        Tuple of (cos, sin, rope_deltas) for this single user
+    """
+    # Ensure input_ids has batch dimension
+    if input_ids.dim() == 1:
+        input_ids = input_ids.unsqueeze(0)
+
+    max_seq_len = min(model_args.max_seq_len, max(2 ** math.ceil(math.log(input_ids.shape[-1], 2)), 128))
+    padded_inputs = torch.nn.functional.pad(input_ids, (0, max_seq_len - input_ids.shape[-1]), value=pad_token_id)
+
+    # Create a mask that is all 1s for the full max_seq_len
+    padded_attention_mask = torch.ones_like(padded_inputs, dtype=torch.int64)
+
+    # Qwen3VLForConditionalGeneration.forward:
+    position_ids, rope_deltas = reference_model.model.get_rope_index(
+        padded_inputs,
+        image_grid_thw,
+        video_grid_thw=None,
+        attention_mask=padded_attention_mask,
+    )
+
+    # Qwen3VLModel.forward:
+    x = SimpleNamespace(device=SimpleNamespace(type="cpu"), dtype=torch.bfloat16)
+    cos, sin = reference_model.model.language_model.rotary_emb(x, position_ids)
+    # apply_multimodal_rotary_pos_emb:
+    unsqueeze_dim = 1
+    cos = cos.unsqueeze(unsqueeze_dim)
+    sin = sin.unsqueeze(unsqueeze_dim)
+    # convert to meta-style interleaved format:
+    cos, sin = convert_rope_style_hf_to_meta(cos, sin)
+
     return cos, sin, rope_deltas
 
 

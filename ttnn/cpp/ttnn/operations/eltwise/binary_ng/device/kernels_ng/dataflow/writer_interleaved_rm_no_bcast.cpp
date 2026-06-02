@@ -5,8 +5,8 @@
 
 #include "api/alignment.h"
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t index = 0;
@@ -30,8 +30,8 @@ void kernel_main() {
     constexpr auto cb_id_out = tt::CBIndex::c_2;
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_out(cb_id_out);
+    Noc noc;
+    CircularBuffer cb_out(cb_id_out);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_out);
     constexpr uint32_t tile_hw = get_tile_hw(cb_id_out);

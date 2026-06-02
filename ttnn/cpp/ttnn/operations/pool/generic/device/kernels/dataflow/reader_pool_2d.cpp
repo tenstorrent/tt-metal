@@ -48,8 +48,8 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
 
     experimental::CB in_cb(in_cb_id);
     experimental::CB clear_cb(clear_value_cb_id);
-    experimental::Noc noc;
-    experimental::UnicastEndpoint self_ep;
+    Noc noc;
+    UnicastEndpoint self_ep;
 
     uint32_t max_write_inc = wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover;
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
@@ -232,7 +232,7 @@ void kernel_main() {
         // for average pool clear out tiles runs in loop, no need to initialize here
         if constexpr (!is_avg_pool || !is_large_kernel) {
             clear_out_tiles<in_cb_id, clear_value_cb_id>(
-                experimental::Noc(), experimental::CB(in_cb_id), clear_value_cb);
+                Noc(), experimental::CB(in_cb_id), clear_value_cb);
         }
     }
 
@@ -253,7 +253,7 @@ void kernel_main() {
                 reader_dram_addr,
                 reader_page_size,
                 reader_tensor_args_index,
-                in_reader_indices_cb_id>(experimental::Noc(), reader_indices_cb, core_nhw_index);
+                in_reader_indices_cb_id>(Noc(), reader_indices_cb, core_nhw_index);
 
         } else {
             reader_indices_cb.wait_front(1);
@@ -282,7 +282,7 @@ void kernel_main() {
                     config_dram_addr,
                     config_page_size,
                     config_tensor_args_index,
-                    config_cb_id>(experimental::Noc(), config_cb, core_nhw_index);
+                    config_cb_id>(Noc(), config_cb, core_nhw_index);
             } else {
                 config_cb.wait_front(1);
             }

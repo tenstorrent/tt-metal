@@ -46,7 +46,7 @@ void kernel_main() {
 
     experimental::CB weight_cb(cb_id_weight);
     experimental::CB bias_cb(bias_cb_id);
-    experimental::Noc noc;
+    Noc noc;
 
     bool to_load_bias = true;
 

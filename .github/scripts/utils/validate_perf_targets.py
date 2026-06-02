@@ -317,15 +317,21 @@ def _validate_gap_coverage(
     tests_yaml_path: Path,
     targets_yaml: dict[str, Any],
 ) -> list[str]:
-    """Ensure each active model/SKU combo has centralized target coverage."""
-    errors: list[str] = []
+    """Report active e2e model/SKU combos missing from the centralized targets.
+
+    Returns a list of human-readable messages — these are surfaced as
+    warnings (not errors) so a missing target does not fail CI. The
+    intent is to nudge owners to add the entry, not to block landing.
+    Only `models_e2e_tests.yaml` is walked here by design.
+    """
+    warnings: list[str] = []
     for model, sku in _collect_active_test_combos(tests_yaml_path):
         if not _has_model_sku_coverage(targets_yaml, model_name=model, sku=sku):
-            errors.append(
+            warnings.append(
                 f"Active test combo model={model}, sku={sku} is missing in centralized targets "
-                "(must be active entry or explicit TODO in models/model_targets.yaml)"
+                "(add an active entry or explicit TODO in models/model_targets.yaml)"
             )
-    return errors
+    return warnings
 
 
 def parse_args() -> argparse.Namespace:
@@ -377,11 +383,9 @@ def main() -> int:
             print(f"::error::{error}")
         return 1
 
-    gap_errors = _validate_gap_coverage(tests_yaml_path, targets_yaml)
-    if gap_errors:
-        for error in gap_errors:
-            print(f"::error::{error}")
-        return 1
+    gap_warnings = _validate_gap_coverage(tests_yaml_path, targets_yaml)
+    for warning in gap_warnings:
+        print(f"::warning::{warning}")
 
     benchmark_files = _benchmark_files(benchmark_dir)
     if not benchmark_files:

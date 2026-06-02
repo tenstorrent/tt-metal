@@ -31,18 +31,20 @@ void calculate_recip_first_column() {
     constexpr int ITERATIONS_HALF_FACE = 4;
     for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat out;
         if constexpr (DST_ACCUM_MODE) {
-            sfpi::dst_reg[0] = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
+            out = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
         } else {
-            sfpi::vFloat out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-            sfpi::dst_reg[0] = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(out, 0));
+            out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
+            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
         }
+        sfpi::dst_reg[0] = out;
         sfpi::dst_reg += 2;
     }
 }
 
 void recip_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(calculate_recip_first_column, idst, (int)VectorMode::C);
+    _llk_math_eltwise_unary_sfpu_params_(calculate_recip_first_column, idst, VectorMode::C);
 }
 
 // First-column exp with fused scale: exp(scale * x) on column 0 only.
@@ -63,7 +65,7 @@ void calculate_exponential_first_column() {
 
 template <uint16_t scale_bf16>
 void exp_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(calculate_exponential_first_column<scale_bf16>, idst, (int)VectorMode::C);
+    _llk_math_eltwise_unary_sfpu_params_(calculate_exponential_first_column<scale_bf16>, idst, VectorMode::C);
 }
 #endif
 
@@ -135,7 +137,7 @@ void update_cur_row_max_value(
 
         // find max value between current max and previous max
         binary_max_tile_init();
-        binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx, static_cast<int>(VectorMode::C));
+        binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx, VectorMode::C);
     }
     tile_regs_commit();
 
@@ -164,7 +166,7 @@ void apply_exp_inplace_and_find_exp_sum(uint32_t cb_attention_weights, uint32_t 
     // Fused scale+exp: compute exp(scale * (score - max)) in a single SFPU pass.
     constexpr uint16_t scaler_bf16 = static_cast<uint16_t>(scaler_fp32 >> 16);
     exp_tile_init</* approx */ false, scaler_fp32>();
-    exp_tile</* approx */ false, /* scale_en */ true>(exp_dst_idx, (int)VectorMode::RC, scaler_bf16);
+    exp_tile</* approx */ false, /* scale_en */ true>(exp_dst_idx, VectorMode::RC, scaler_bf16);
     tile_regs_commit();
 
     tile_regs_wait();
@@ -194,10 +196,10 @@ void matmul_qk_by_v(
     cb_wait_front(cb_value, Wt);
     cb_reserve_back(cb_cur_mm_out, Wt);
 
-    mm_init_short(cb_attention_weights, cb_value, /* transpose */ 0);
-    pack_reconfig_data_format(cb_cur_mm_out);
     // matmul maps: in0(attention_weights)→SrcB, in1(value)→SrcA
     reconfig_data_format(cb_value, cb_attention_weights);
+    mm_init_short(cb_attention_weights, cb_value, /* transpose */ 0);
+    pack_reconfig_data_format(cb_cur_mm_out);
     for (uint32_t tile_idx = 0; tile_idx < Wt; tile_idx += block_size) {
         tile_regs_acquire();
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
@@ -256,10 +258,10 @@ void update_cur_exp_sum_inplace(uint32_t cb_prev_sum_exp, uint32_t cb_cur_sum_ex
     cb_wait_front(cb_exp_max_diff, onetile);
 
     const uint32_t exp_sum_dst_idx = 0;
+    reconfig_data_format(cb_prev_sum_exp, cb_exp_max_diff);  // reconfig data format to precise
     mul_bcast_cols_init_short(cb_prev_sum_exp, cb_exp_max_diff);
     tile_regs_acquire();
     // multiply previous exp sum with exp_max_diff
-    reconfig_data_format(cb_prev_sum_exp, cb_exp_max_diff);  // reconfig data format to precise
     mul_tiles_bcast_cols(cb_prev_sum_exp, cb_exp_max_diff, 0, 0, exp_sum_dst_idx);
 
     // copy current sum exp to next register
@@ -374,6 +376,7 @@ void recip_tile_inplace(uint32_t cb_in_idx) {
     reconfig_data_format(cb_in_idx, cb_in_idx);
     copy_tile_init(cb_in_idx);
     copy_tile(cb_in_idx, /* tile_idx */ 0, dst_idx);
+    recip_tile_init</* legacy_compat */ false>();
     MATH((recip_tile_first_column(dst_idx)));
     tile_regs_commit();
 

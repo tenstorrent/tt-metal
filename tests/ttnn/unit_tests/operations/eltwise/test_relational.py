@@ -8,12 +8,12 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal
 
 pytestmark = pytest.mark.use_module_device
 
 
-def run_relational_test(device, h, w, ttnn_function, pcc=0.9999):
+def run_relational_test(device, h, w, ttnn_function):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
@@ -30,10 +30,11 @@ def run_relational_test(device, h, w, ttnn_function, pcc=0.9999):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    # Cast bool→float because comp_equal uses subtraction which doesn't support bool tensors
+    assert_equal(torch_output_tensor.float(), output_tensor.float())
 
 
-def run_relational_z_test(device, h, w, ttnn_function, pcc=0.9999):
+def run_relational_z_test(device, h, w, ttnn_function):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
@@ -46,7 +47,7 @@ def run_relational_z_test(device, h, w, ttnn_function, pcc=0.9999):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    assert_equal(torch_output_tensor.float(), output_tensor.float())
 
 
 @pytest.mark.parametrize("h", [64])
@@ -121,7 +122,7 @@ def test_ne(device, h, w):
     run_relational_test(device, h, w, ttnn.ne)
 
 
-def run_relational_test_with_scalar(device, h, w, scalar, ttnn_function, pcc=0.9999):
+def run_relational_test_with_scalar(device, h, w, scalar, ttnn_function):
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
@@ -136,7 +137,7 @@ def run_relational_test_with_scalar(device, h, w, scalar, ttnn_function, pcc=0.9
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    assert_equal(torch_output_tensor.float(), output_tensor.float())
 
 
 @pytest.mark.parametrize("scalar", [3])
@@ -236,7 +237,7 @@ def test_expand_and_broadcast(device, h, w):
     tt_output = ttnn.lt(a, b)
     tt_output = ttnn.to_torch(tt_output)
 
-    assert_with_pcc(torch_output, tt_output, 0.9999)
+    assert_equal(torch_output.float(), tt_output.float())
 
 
 @pytest.mark.parametrize("h", [500])
@@ -252,7 +253,7 @@ def test_expand_and_broadcast_reversed(device, h, w):
     output = ttnn.lt(input_tensor_b, input_tensor_a)
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, 0.9999)
+    assert_equal(torch_output.float(), output.float())
 
 
 @pytest.mark.parametrize("atol", [1e-8, 1e-10])
@@ -276,7 +277,149 @@ def test_isclose(device, h, w, atol, rtol):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert_equal(torch_output_tensor.float(), output_tensor.float())
+
+
+@pytest.mark.parametrize(
+    "rtol, atol",
+    [(1e-05, 1e-08), (0.01, 5), (0.05, 10), (1e-04, 0)],
+)
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([1, 1, 32, 32]),
+        torch.Size([1, 1, 320, 384]),
+        torch.Size([1, 1, 768, 456]),
+    ],
+)
+def test_isclose_int32(device, input_shapes, rtol, atol):
+    torch.manual_seed(0)
+
+    x_torch = torch.randint(-2_000_000, 2_000_000, input_shapes, dtype=torch.int32)
+    delta = torch.randint(-200, 200, input_shapes, dtype=torch.int32)
+    y_torch = x_torch + delta
+
+    z_torch = torch.isclose(x_torch.float(), y_torch.float(), rtol=rtol, atol=atol)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn.isclose(x_tt, y_tt, rtol=rtol, atol=atol)
+    tt_out = ttnn.to_torch(z_tt)
+
+    assert torch.equal(z_torch, tt_out.bool())
+
+
+@pytest.mark.parametrize(
+    "rtol, atol",
+    [(1e-05, 1e-08), (1e-04, 0), (1e-3, 1e-6), (1e-1, 5e-1)],
+)
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([1, 1, 32, 32]),
+        torch.Size([1, 1, 320, 384]),
+        torch.Size([1, 1, 768, 456]),
+    ],
+)
+@pytest.mark.parametrize(
+    "a_dtype, b_dtype",
+    [
+        (ttnn.int32, ttnn.bfloat16),
+        (ttnn.bfloat16, ttnn.int32),
+    ],
+)
+def test_isclose_int32_mixed_dtype(device, input_shapes, rtol, atol, a_dtype, b_dtype):
+    """Mixed-dtype coverage: verifies that every (int32 / bfloat16) pairing
+    that flows through invoke_binary_ng_isclose produces results matching a
+    float-based torch.isclose reference. Pairs containing INT32 exercise the
+    INT32->FLOAT32 pre-promotion path; pure-float pairs verify the no-promotion
+    fast path."""
+    torch.manual_seed(0)
+
+    ttnn_to_torch_dtype = {
+        ttnn.int32: torch.int32,
+        ttnn.bfloat16: torch.bfloat16,
+    }
+
+    x_int = torch.randint(-1000, 1000, input_shapes, dtype=torch.int32)
+    delta = torch.randint(-3, 3, input_shapes, dtype=torch.int32)
+    y_int = x_int + delta
+
+    a_torch = x_int.to(ttnn_to_torch_dtype[a_dtype])
+    b_torch = y_int.to(ttnn_to_torch_dtype[b_dtype])
+
+    z_torch = torch.isclose(a_torch.float(), b_torch.float(), rtol=rtol, atol=atol)
+
+    a_tt = ttnn.from_torch(a_torch, dtype=a_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    b_tt = ttnn.from_torch(b_torch, dtype=b_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn.isclose(a_tt, b_tt, rtol=rtol, atol=atol)
+    tt_out = ttnn.to_torch(z_tt)
+
+    assert torch.equal(z_torch, tt_out.bool())
+
+
+@pytest.mark.parametrize("equal_nan", [True, False])
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        torch.Size([1, 1, 32, 32]),
+        torch.Size([1, 1, 64, 128]),
+    ],
+)
+def test_isclose_bfloat16_equal_nan(device, input_shapes, equal_nan):
+    """Validate equal_nan semantics on bfloat16 inputs against torch.isclose."""
+    torch.manual_seed(0)
+
+    a = torch.randn(input_shapes, dtype=torch.bfloat16)
+    b = a.clone()
+
+    nan = float("nan")
+    a[0, 0, 0, 0] = nan
+    b[0, 0, 0, 0] = nan
+    a[0, 0, 0, 1] = nan
+    a[0, 0, 0, 2] = 1.0
+    b[0, 0, 0, 2] = nan
+
+    z_torch = torch.isclose(a.float(), b.float(), rtol=1e-5, atol=1e-8, equal_nan=equal_nan)
+
+    a_tt = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b_tt = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn.isclose(a_tt, b_tt, rtol=1e-5, atol=1e-8, equal_nan=equal_nan)
+    tt_out = ttnn.to_torch(z_tt)
+
+    assert torch.equal(z_torch, tt_out.bool())
+
+
+@pytest.mark.parametrize("shape", [torch.Size([1, 1, 32, 32])])
+def test_isclose_zero_tolerance(device, shape):
+    """With rtol=atol=0 only bit-identical values should compare as close."""
+    torch.manual_seed(0)
+    a = torch.randn(shape, dtype=torch.bfloat16)
+    b = a.clone()
+    b[0, 0, 0, 0] = b[0, 0, 0, 0] + torch.tensor(0.001, dtype=torch.bfloat16)
+
+    z_torch = torch.isclose(a.float(), b.float(), rtol=0.0, atol=0.0)
+
+    a_tt = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b_tt = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn.isclose(a_tt, b_tt, rtol=0.0, atol=0.0)
+
+    assert torch.equal(z_torch, ttnn.to_torch(z_tt).bool())
+
+
+def test_isclose_inf_divergence(device):
+    # Hardware correctly returns False for unequal infinities, matching torch.isclose semantics.
+    a = torch.tensor([[[[float("inf"), float("-inf")]]]]).to(torch.bfloat16)
+    b = torch.tensor([[[[float("-inf"), float("inf")]]]]).to(torch.bfloat16)
+
+    z_torch = torch.isclose(a.float(), b.float(), rtol=1e-5, atol=1e-8)
+
+    a_tt = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    b_tt = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    result = ttnn.isclose(a_tt, b_tt, rtol=1e-5, atol=1e-8)
+    out = ttnn.to_torch(result)
+
+    assert torch.equal(z_torch, out.bool())
 
 
 @pytest.mark.parametrize(

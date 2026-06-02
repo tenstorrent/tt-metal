@@ -125,7 +125,6 @@ def test_sfpu_binary_add_top_row(formats, dest_acc, mathop):
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-        sfpu=True,
     )
 
     generate_golden = get_golden_generator(BinarySFPUGolden)
