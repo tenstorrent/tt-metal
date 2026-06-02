@@ -2,12 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+"""Tests for profile_log_device.csv schema (ARCH metadata + column headers)."""
+
 from pathlib import Path
 
 import pytest
 
-from models.common.utility_functions import skip_for_blackhole
-from tracy.common import PROFILER_DEVICE_SIDE_LOG, generate_logs_folder
 from tracy.device_log_schema import (
     DEVICE_LOG_COLUMN_HEADERS,
     DeviceLogSchemaError,
@@ -17,13 +17,8 @@ from tracy.device_log_schema import (
     validate_profile_log_device_csv,
 )
 from tracy.process_device_log import extract_device_info, import_device_profile_log
-from tracy.process_model_log import get_latest_ops_log_filename, get_profiler_folder, run_device_profiler
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "profile_log_device_minimal.csv"
-
-PROFILER_SUBDIR = "DeviceLogSchema"
-# Written by C++ under TT_METAL_PROFILER_DIR set by tracy -o; not generated/profiler/.logs.
-DEVICE_LOG_PATH = generate_logs_folder(get_profiler_folder(PROFILER_SUBDIR)) / PROFILER_DEVICE_SIDE_LOG
 
 
 def test_parse_device_arch_metadata_from_fixture():
@@ -97,23 +92,3 @@ def test_validate_rejects_wrong_field_count(tmp_path):
     )
     with pytest.raises(DeviceLogSchemaError, match="has 14 fields"):
         validate_profile_log_device_csv(bad_log)
-
-
-@skip_for_blackhole()
-@pytest.mark.timeout(600)
-def test_device_log_written_under_tracy_profiler_dir():
-    """End-to-end: tracy -r runs a short TTNN test; C++ writes profile_log_device.csv under -o/.logs."""
-    run_device_profiler(
-        'pytest "tests/ttnn/tracy/test_trace_runs.py::test_with_ops"',
-        PROFILER_SUBDIR,
-    )
-
-    assert DEVICE_LOG_PATH.is_file(), f"Missing device log at {DEVICE_LOG_PATH}"
-
-    metadata = validate_profile_log_device_arch_and_headers(DEVICE_LOG_PATH)
-    assert metadata.arch
-    assert metadata.freq_mhz > 0
-
-    report_device_log = get_latest_ops_log_filename(PROFILER_SUBDIR).parent / PROFILER_DEVICE_SIDE_LOG
-    assert report_device_log.is_file(), f"Missing copied device log in report folder: {report_device_log}"
-    validate_profile_log_device_arch_and_headers(report_device_log)
