@@ -106,7 +106,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1 + (e_local + 1U) * sizeof(uint32_t));
     volatile tt_l1_ptr uint32_t* my_real_count_per_expert =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1 + (2U * e_local + 1U) * sizeof(uint32_t));
-    noc_async_read(get_noc_addr(0, offsets_addrgen), scratch_l1, (e_local + 1U) * sizeof(uint32_t));
+    noc_async_read(offsets_addrgen.get_noc_addr(0), scratch_l1, (e_local + 1U) * sizeof(uint32_t));
     noc_async_read_barrier();
     cb_push_back(cb_reader_scratch, 1U);
 

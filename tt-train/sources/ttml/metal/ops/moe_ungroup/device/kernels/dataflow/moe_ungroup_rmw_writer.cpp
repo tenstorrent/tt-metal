@@ -122,7 +122,7 @@ void kernel_main() {
     noc_async_read_barrier();
     auto zero_slice = ttml::metal::moe_ungroup::slice_for_core(total_rows, num_total_cores, my_core_idx);
     for (uint32_t row = zero_slice.start; row < zero_slice.start + zero_slice.count; ++row) {
-        uint64_t dst_noc = get_noc_addr(row, ungrouped_addrgen);
+        uint64_t dst_noc = ungrouped_addrgen.get_noc_addr(row);
         noc_async_write(zero_buf_addr, dst_noc, h * 2U);
     }
     noc_async_write_barrier();
@@ -132,7 +132,7 @@ void kernel_main() {
     // Read offsets into L1 (one-shot). leids no longer needed —
     // grouped_scores already encodes the right scalar per active row.
     // ---------------------------------------------------------------
-    noc_async_read(get_noc_addr(0, offsets_addrgen), offsets_buf_addr, off_page_bytes);
+    noc_async_read(offsets_addrgen.get_noc_addr(0), offsets_buf_addr, off_page_bytes);
     noc_async_read_barrier();
 
     // ---------------------------------------------------------------
@@ -161,10 +161,9 @@ void kernel_main() {
             // expert just does scaled += and the first one effectively writes.
             {
                 uint64_t plan_noc =
-                    get_noc_addr(0, plan_addrgen) + tr_global * tt::constants::TILE_HEIGHT * sizeof(uint32_t);
+                    plan_addrgen.get_noc_addr(0, tr_global * tt::constants::TILE_HEIGHT * sizeof(uint32_t));
                 noc_async_read(plan_noc, plan_buf_addr, tt::constants::TILE_HEIGHT * sizeof(uint32_t));
-                uint64_t gs_noc =
-                    get_noc_addr(0, gs_addrgen) + tr_global * tt::constants::TILE_HEIGHT * sizeof(uint16_t);
+                uint64_t gs_noc = gs_addrgen.get_noc_addr(0, tr_global * tt::constants::TILE_HEIGHT * sizeof(uint16_t));
                 noc_async_read(gs_noc, w_buf_addr, tt::constants::TILE_HEIGHT * sizeof(uint16_t));
                 noc_async_read_barrier();
             }
@@ -219,7 +218,7 @@ void kernel_main() {
                         fill_zeros_async(row_buf, hidden_chunk_bytes);
                         continue;
                     }
-                    uint64_t dst_noc = get_noc_addr(flat, ungrouped_addrgen) + chunk * hidden_chunk_bytes;
+                    uint64_t dst_noc = ungrouped_addrgen.get_noc_addr(flat, chunk * hidden_chunk_bytes);
                     noc_async_read(dst_noc, row_buf, chunk_bytes);
                 }
                 noc_async_read_barrier();
@@ -252,7 +251,7 @@ void kernel_main() {
                     if (flat == SENTINEL) {
                         continue;
                     }
-                    uint64_t dst_noc = get_noc_addr(flat, ungrouped_addrgen) + chunk * hidden_chunk_bytes;
+                    uint64_t dst_noc = ungrouped_addrgen.get_noc_addr(flat, chunk * hidden_chunk_bytes);
                     noc_async_write(src_l1 + r * hidden_chunk_bytes, dst_noc, write_bytes);
                 }
                 noc_async_write_barrier();

@@ -84,7 +84,7 @@ void kernel_main() {
             uint32_t src = get_read_ptr(cb_out);
             for (uint32_t t = 0; t < tiles_to_write; ++t) {
                 uint32_t c = chunk * tiles_per_chunk + t;
-                uint64_t dst_noc = get_noc_addr(tile_row * Wt + c, grouped_addrgen);
+                uint64_t dst_noc = grouped_addrgen.get_noc_addr(tile_row * Wt + c);
                 noc_async_write(src + t * tile_bytes, dst_noc, tile_bytes);
             }
             noc_async_write_barrier();
