@@ -53,6 +53,7 @@ Tensor make_zero_host_tensor(const TensorSpec& spec) {
             return Tensor::from_vector<bfloat16>(std::vector<bfloat16>(bytes / sizeof(bfloat16)), spec);
         case DataType::FLOAT32: return Tensor::from_vector<float>(std::vector<float>(bytes / sizeof(float)), spec);
         case DataType::INT32: return Tensor::from_vector<int32_t>(std::vector<int32_t>(bytes / sizeof(int32_t)), spec);
+        case DataType::FP8_E4M3:  // 1 byte per element — share UINT8 storage
         case DataType::UINT8: return Tensor::from_vector<uint8_t>(std::vector<uint8_t>(bytes / sizeof(uint8_t)), spec);
         case DataType::UINT16:
             return Tensor::from_vector<uint16_t>(std::vector<uint16_t>(bytes / sizeof(uint16_t)), spec);
@@ -91,6 +92,7 @@ Tensor make_borrowed_host_tensor(ttsl::Span<const std::byte> bytes, const Tensor
                 ttsl::Span<int32_t>(reinterpret_cast<int32_t*>(raw), bytes.size() / sizeof(int32_t)),
                 shape,
                 MemoryPin{});
+        case DataType::FP8_E4M3:  // 1 byte per element — share UINT8 storage
         case DataType::UINT8:
             return Tensor::from_borrowed_data<uint8_t>(
                 ttsl::Span<uint8_t>(reinterpret_cast<uint8_t*>(raw), bytes.size() / sizeof(uint8_t)),
