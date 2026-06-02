@@ -231,6 +231,11 @@ static void run_a1_pipeline(const std::shared_ptr<distributed::MeshDevice>& mesh
         {"num_entries_per_consumer", num_entries}, {"blocked_consumer", 0u}, {"implicit_sync", 0u}};
     consumer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
 
+    // All-pass set dfb_in/dfb_out .disable_implicit_sync = true; #45160 moved that onto the
+    // Gen2 DM config, so disable per DM endpoint (the compute stage is Tensix → no DM side).
+    disable_implicit_sync_for(producer, DFB_IN);
+    disable_implicit_sync_for(consumer, DFB_OUT);
+
     m2::WorkUnitSpec wu{
         .unique_id = "wu",
         .kernels = {PRODUCER, CONSUMER, COMPUTE},
@@ -359,6 +364,10 @@ static void run_dm_dfb_dm_implicit_sync_2_0(
         {"blocked_consumer", 0u},
         {"implicit_sync", implicit_sync ? 1u : 0u}};
     consumer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+
+    // All-pass: dfb.disable_implicit_sync = !implicit_sync (now per-DM-endpoint, post-#45160).
+    maybe_disable_implicit_sync(producer, implicit_sync, DFB);
+    maybe_disable_implicit_sync(consumer, implicit_sync, DFB);
 
     m2::WorkUnitSpec wu{.unique_id = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
 
@@ -514,6 +523,11 @@ TEST_F(MeshDeviceFixture, C2_2_0_DMTriscSelfLoopDM_DoubleRelu) {
     consumer.compile_time_arg_bindings = {
         {"num_entries_per_consumer", num_entries}, {"blocked_consumer", 0u}, {"implicit_sync", 0u}};
     consumer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+
+    // All-pass disabled dfb_in/dfb_self/dfb_out implicit sync; dfb_self is Tensix-only
+    // (compute self-loop, no DM endpoint). Disable the two DM-side endpoints (post-#45160).
+    disable_implicit_sync_for(producer, DFB_IN);
+    disable_implicit_sync_for(consumer, DFB_OUT);
 
     m2::WorkUnitSpec wu{.unique_id = "wu", .kernels = {PRODUCER, CONSUMER, COMPUTE}, .target_nodes = node};
 
@@ -848,6 +862,12 @@ TEST_F(MeshDeviceFixture, D3_2_0_MultiCoreDFB_TwoGroupsViaDecoy) {
         {"num_entries_per_consumer", entries_per_core}, {"blocked_consumer", 0u}, {"implicit_sync", 0u}};
     consumer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
 
+    // All-pass disabled decoy_dfb/shared_dfb implicit sync (now per-DM-endpoint, post-#45160).
+    disable_implicit_sync_for(decoy_producer, DECOY_DFB);
+    disable_implicit_sync_for(decoy_consumer, DECOY_DFB);
+    disable_implicit_sync_for(producer, SHARED_DFB);
+    disable_implicit_sync_for(consumer, SHARED_DFB);
+
     // WUs: decoy on core A only; shared on both. WUs cannot overlap target_nodes,
     // so we put decoy on a single-core WU and shared on a disjoint range.
     m2::WorkUnitSpec decoy_wu{
@@ -1043,6 +1063,18 @@ static void run_single_dfb_program_2_0(
          .local_accessor_name = "in",
          .endpoint_type = m2::KernelSpec::DFBEndpointType::CONSUMER,
          .access_pattern = p.cap}};
+
+    // Restore the all-pass `dfb_spec.disable_implicit_sync = !p.implicit_sync` semantics.
+    // #45160 moved that flag off DataflowBufferSpec onto the Gen2 DM config, so it is now
+    // expressed per-DM-kernel via disable_implicit_sync_for. For ImplicitSyncFalse this keeps
+    // the host from programming implicit-sync ISR/txn metadata on top of the kernels' explicit
+    // credit-flow path. Only DM endpoints carry the flag; Tensix endpoints have no DM side.
+    if (p.producer_type == M2PorCType::DM) {
+        maybe_disable_implicit_sync(producer, p.implicit_sync, DFB);
+    }
+    if (p.consumer_type == M2PorCType::DM) {
+        maybe_disable_implicit_sync(consumer, p.implicit_sync, DFB);
+    }
 
     m2::WorkUnitSpec wu{.unique_id = "wu", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node};
 
@@ -1265,6 +1297,10 @@ static void run_single_dfb_multicore_2_0(
         {"implicit_sync", implicit_sync ? 1u : 0u}};
     consumer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
 
+    // All-pass: dfb.disable_implicit_sync = !implicit_sync (now per-DM-endpoint, post-#45160).
+    maybe_disable_implicit_sync(producer, implicit_sync, DFB);
+    maybe_disable_implicit_sync(consumer, implicit_sync, DFB);
+
     // Single WU covering both cores via NodeRange.
     m2::WorkUnitSpec wu{
         .unique_id = "wu",
@@ -1366,6 +1402,7 @@ static void run_concurrent_dfbs_program_2_0(
             {"num_entries_per_producer", entries_per_dfb},
             {"implicit_sync", implicit_sync ? 1u : 0u},
             {"chunk_offset", i * entries_per_dfb}};
+        maybe_disable_implicit_sync(prod, implicit_sync, dfb_id);  // all-pass: !implicit_sync (post-#45160)
         kernels.push_back(prod);
         kernel_names.push_back(prod_id);
 
@@ -1380,6 +1417,7 @@ static void run_concurrent_dfbs_program_2_0(
             {"num_entries_per_consumer", entries_per_dfb},
             {"implicit_sync", implicit_sync ? 1u : 0u},
             {"chunk_offset", i * entries_per_dfb}};
+        maybe_disable_implicit_sync(cons, implicit_sync, dfb_id);  // all-pass: !implicit_sync (post-#45160)
         kernels.push_back(cons);
         kernel_names.push_back(cons_id);
     }
@@ -1717,6 +1755,12 @@ static void run_sequential_4_dfbs_2_0(
         {"is_blocked_3", dfb_specs[3].cap == m2::DFBAccessPattern::ALL ? 1u : 0u},
     };
 
+    // All-pass: each DFB .disable_implicit_sync = !implicit_sync (now per-DM-endpoint, post-#45160).
+    for (uint32_t i = 0; i < 4; ++i) {
+        maybe_disable_implicit_sync(producer, implicit_sync, DFB_NAMES[i]);
+        maybe_disable_implicit_sync(consumer, implicit_sync, DFB_NAMES[i]);
+    }
+
     std::vector<m2::TensorParameter> tensor_parameters;
     tensor_parameters.reserve(8);
     for (uint32_t i = 0; i < 4; ++i) {
@@ -1869,6 +1913,9 @@ TEST_P(DFBImplicitSyncParamFixture_2_0, TensixDMTest4xDFB_1Sx1S_2_0) {
             {"blocked_consumer", 0u},
             {"implicit_sync", implicit_sync ? 1u : 0u}};
         c.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+        // All-pass: DFB .disable_implicit_sync = !implicit_sync. Producer is Tensix (no DM
+        // side); disable on the DM consumer endpoint (post-#45160).
+        maybe_disable_implicit_sync(c, implicit_sync, DFB_NAMES[i]);
         consumers.push_back(c);
     }
 
@@ -2005,6 +2052,11 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup_2_0) {
     consumer.compile_time_arg_bindings = {
         {"num_entries_per_consumer", num_entries}, {"blocked_consumer", 0u}, {"implicit_sync", 0u}};
     consumer.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+
+    // All-pass disabled dfb implicit sync (now per-DM-endpoint, post-#45160). Set before the
+    // ProgramSpec copies these kernels by value.
+    disable_implicit_sync_for(producer, DFB);
+    disable_implicit_sync_for(consumer, DFB);
 
     m2::ProgramSpec spec{
         .program_id = "homogeneous_grid_2_0",
@@ -2360,6 +2412,8 @@ static inline Program build_single_dfb_program_2_0(
             k.compile_time_arg_bindings = {
                 {"num_entries_per_producer", per_producer}, {"implicit_sync", p.implicit_sync ? 1u : 0u}};
             k.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+            // All-pass: dfb.disable_implicit_sync = !p.implicit_sync (now per-DM-endpoint, post-#45160).
+            maybe_disable_implicit_sync(k, p.implicit_sync, DFB);
             return k;
         }
         auto k = make_compute_kernel(
@@ -2388,6 +2442,8 @@ static inline Program build_single_dfb_program_2_0(
                 {"blocked_consumer", is_all ? 1u : 0u},
                 {"implicit_sync", p.implicit_sync ? 1u : 0u}};
             k.runtime_arguments_schema = {.named_runtime_args = {"chunk_offset", "entries_per_core"}};
+            // All-pass: dfb.disable_implicit_sync = !p.implicit_sync (now per-DM-endpoint, post-#45160).
+            maybe_disable_implicit_sync(k, p.implicit_sync, DFB);
             return k;
         }
         auto k = make_compute_kernel(
