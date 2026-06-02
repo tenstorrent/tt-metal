@@ -322,7 +322,9 @@ def run_e2e_synthesis_loop(
     all iters) yields converged=False.
     """
     if pytest_runner is None:
-        pytest_runner = _default_pytest_runner
+        # Use the model-id-aware factory so HF_MODEL / PLANNER_TARGET_HF_MODEL
+        # are set in the pytest subprocess env (matching _run_focused_pytest).
+        pytest_runner = _make_default_pytest_runner(model_id=model_id)
     if agent_invoker is None:
         agent_invoker = _default_agent_invoker(agent_bin=agent_bin, agent_model=agent_model)
 
@@ -516,17 +518,58 @@ def _default_agent_invoker(*, agent_bin: str, agent_model: str) -> Callable[...,
     return _invoke
 
 
-def _default_pytest_runner(demo_py_path: Path) -> "tuple[int, str]":
-    """Default pytest runner for the synthesis loop.
+def _make_default_pytest_runner(
+    *,
+    model_id: str = "",
+    timeout_s: int = 600,
+) -> "Callable[[Path], tuple[int, str]]":
+    """Build the default pytest-runner closure for the synthesis loop.
 
-    Runs ``pytest <demo_py_path>::test_demo -v -s`` and returns
-    ``(rc, captured_stdout+stderr)``. Bounded by a 600s wall-clock.
+    Carries the env-setup that ``_run_focused_pytest`` does for the
+    per-component loop:
+      * HF_MODEL=<model_id>            (HF token resolution + demo
+                                          template uses this to load weights)
+      * PLANNER_TARGET_HF_MODEL=<id>   (tool-internal target marker)
+      * PYTHONUNBUFFERED=1             (stream stdout for real-time logs)
+
+    Without these, the demo would either fail to find the model or
+    fall back to a different model_id than the one the synthesis
+    targets. This factory closes over ``model_id`` so the returned
+    runner has the env baked in.
+
     Tests inject their own runner bypassing this seam.
+    """
+    import os as _os
+    import subprocess
+    import sys
 
-    Reuses the same subprocess shape as ``_run_focused_pytest`` (the
-    per-component loop's pytest invocation) without re-implementing
-    its env-building / kill-stale / timeout logic — that's overkill
-    for the synthesis loop's single-test target.
+    def _runner(demo_py_path: Path) -> "tuple[int, str]":
+        env = dict(_os.environ)
+        if model_id:
+            env["HF_MODEL"] = model_id
+            env["PLANNER_TARGET_HF_MODEL"] = model_id
+        env["PYTHONUNBUFFERED"] = "1"
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-m", "pytest", f"{demo_py_path}::test_demo", "-v", "-s"],
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+                env=env,
+            )
+            return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+        except subprocess.TimeoutExpired as exc:
+            return 124, f"(pytest timed out after {timeout_s}s: {exc})"
+        except Exception as exc:
+            return 2, f"(pytest invocation raised {type(exc).__name__}: {exc})"
+
+    return _runner
+
+
+def _default_pytest_runner(demo_py_path: Path) -> "tuple[int, str]":
+    """Back-compat shim — defers to :func:`_make_default_pytest_runner`
+    with no model_id (env vars not set). Kept for legacy callers that
+    invoke the synthesizer without going through ``run_e2e_synthesis_loop``.
     """
     import subprocess
     import sys

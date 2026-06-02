@@ -18,6 +18,7 @@ from typing import Tuple
 from scripts.tt_hw_planner._cli_helpers.e2e_synthesizer import (
     E2ESynthIterResult,
     E2ESynthResult,
+    _make_default_pytest_runner,
     build_synthesis_prompt,
     extract_late_discovery_markers,
     extract_pcc_from_output,
@@ -486,6 +487,58 @@ def test_loop_late_discoveries_empty_when_no_markers(tmp_path: Path) -> None:
         max_iters=1,
     )
     assert result.late_discoveries == []
+
+
+# ─── _make_default_pytest_runner env propagation ───────────────────
+
+
+def test_default_pytest_runner_sets_hf_model_env(tmp_path: Path, monkeypatch) -> None:
+    """The factory must inject HF_MODEL / PLANNER_TARGET_HF_MODEL into
+    the subprocess env so the demo can find the right HF model.
+
+    Mock subprocess.run to capture the env it was called with."""
+    captured: Dict[str, Any] = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = "end-to-end PCC=0.99"
+        stderr = ""
+
+    def _fake_run(*args, **kwargs):
+        captured["env"] = kwargs.get("env", {})
+        return _Proc()
+
+    monkeypatch.setattr("subprocess.run", _fake_run)
+    runner = _make_default_pytest_runner(model_id="microsoft/Phi-3.5-mini-instruct")
+    rc, out = runner(tmp_path / "demo.py")
+    assert rc == 0
+    assert captured["env"].get("HF_MODEL") == "microsoft/Phi-3.5-mini-instruct"
+    assert captured["env"].get("PLANNER_TARGET_HF_MODEL") == "microsoft/Phi-3.5-mini-instruct"
+    assert captured["env"].get("PYTHONUNBUFFERED") == "1"
+
+
+def test_default_pytest_runner_handles_timeout(tmp_path: Path, monkeypatch) -> None:
+    """Timeout → rc=124 with informative message (matches _run_focused_pytest)."""
+    import subprocess as _sub
+
+    def _raise(*a, **kw):
+        raise _sub.TimeoutExpired(cmd="pytest", timeout=600)
+
+    monkeypatch.setattr("subprocess.run", _raise)
+    runner = _make_default_pytest_runner(model_id="org/m", timeout_s=600)
+    rc, out = runner(tmp_path / "demo.py")
+    assert rc == 124
+    assert "timed out" in out
+
+
+def test_default_pytest_runner_catches_generic_exception(tmp_path: Path, monkeypatch) -> None:
+    """Any other exception → rc=2 with type/message instead of propagating."""
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: (_ for _ in ()).throw(OSError("disk full")))
+    runner = _make_default_pytest_runner(model_id="org/m")
+    rc, out = runner(tmp_path / "demo.py")
+    assert rc == 2
+    assert "OSError" in out
+    assert "disk full" in out
 
 
 # ─── persist_synth_result ───────────────────────────────────────────
