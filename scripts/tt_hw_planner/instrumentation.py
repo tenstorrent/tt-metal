@@ -137,12 +137,21 @@ def _install_trace_disable() -> None:
     if orig is None or getattr(orig, "_tt_hw_planner_trace_patched", False):
         return
 
+    import functools
+
+    @functools.wraps(orig)
     def wrapped(*args, **kwargs):
         if "enable_trace" in kwargs and kwargs["enable_trace"]:
             _log("disabling trace mode for this run (NO_TRACE or PROBE_OUTPUT set)")
             kwargs["enable_trace"] = False
         return orig(*args, **kwargs)
 
+    # functools.wraps copies __dict__ which carries `pytestmark` (the
+    # parametrize decorators). Without this, replacing _demo.test_demo_text
+    # below collapses the 44-variant parametrize expansion to a single
+    # unparametrized test, breaking any `-k '<id>'` selector.
+    if hasattr(orig, "pytestmark"):
+        wrapped.pytestmark = list(orig.pytestmark)
     wrapped._tt_hw_planner_trace_patched = True
     _demo.test_demo_text = wrapped
     _log("test_demo_text wrapped to force enable_trace=False")
