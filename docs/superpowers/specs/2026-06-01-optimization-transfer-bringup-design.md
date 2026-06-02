@@ -76,7 +76,19 @@ usage_examples          # real call sites w/ concrete dims -> few-shot for the m
 applicability_notes     # from tech_reports: when valid + gotchas (round KV to 512, HiFi4+fp32_dest_acc, ...)
 status                  # in_use | supported_unused
 accumulation_sensitive  # bool: does this op feed the AR feedback path (KV dtype, SDPA acc, norm, rope)?
+pattern_kind            # chain (contiguous subsequence) | horizontal_merge (N sibling branches sharing an input)
+weight_transform        # recipe to fold donor weights for the fused op (e.g. concat([q,k,v]) along
+                        #   out-dim + concat biases); None for pure op swaps that don't touch weights
 ```
+
+**Two pattern kinds (both required).** `chain` patterns are contiguous op-subsequences
+(`linear → reshape → transpose` ⇒ `nlp_create_qkv_heads`). `horizontal_merge` patterns are **N
+parallel branches sharing an input** that collapse into one op — e.g. three separate q/k/v
+projections ⇒ one concatenated QKV matmul + one fused split. `horizontal_merge` is *why* the LLM
+is the primary matcher: an fx subgraph-rewrite would never discover "merge 3 matmuls," but an LLM
+reading sibling projections that share an input can — and it can emit the **`weight_transform`**
+(concat the donor weights) that the fusion requires. Donor for this exact pattern: `tt_transformers`
+fused QKV.
 
 **Build = three mining passes (hybrid):**
 1. **Curated extraction** over `tt_transformers`/`tt_dit`/`demos`: locate fused-op call sites,
@@ -102,10 +114,15 @@ Per block of the new model:
    The LLM is chosen as primary matcher specifically because **carrying the correct config across
    requires reading the donor's real code** — an fx subgraph-rewrite would insert the fused op but
    lose the config (the actual optimization). Uses **prompt caching** on the KB/few-shot context.
-4. **fx structural gate (pre-device, cheap).** Verify each proposal maps to an **actual contiguous
-   subsequence** in the traced graph, and the rewritten graph is **dataflow-equivalent** to the
-   original (same input→output topology; nothing dropped/added/reordered semantically). Failures
-   bounce back to the matcher with the structural error — they never reach the device.
+4. **fx structural gate (pre-device, cheap).** For `chain` rewrites: verify each proposal maps to an
+   **actual contiguous subsequence** in the traced graph and the rewritten graph is
+   **dataflow-equivalent** (same input→output topology; nothing dropped/added/reordered
+   semantically). For `horizontal_merge` rewrites (which reorganize *weights*, so strict graph
+   isomorphism does not hold): verify the merged branches (a) all consume the same input, (b) cover
+   exactly the claimed sibling ops with no extra consumers, and (c) the `weight_transform` is a
+   shape/role-preserving concat — then rely on PCC as the numerical backstop for the algebraic
+   identity. Failures bounce back to the matcher with the structural error — they never reach the
+   device.
 
 ### Layer C — Codegen + verification + repair loop (LangGraph)
 
@@ -183,12 +200,18 @@ Prove the whole loop end-to-end on one motivated case before investing in breadt
     Exactly the config/variant judgment the LLM matcher + KB usage-examples is meant to resolve,
     with PCC as the backstop. A meaningful proof, not a trivial one.
 
-**Verified (2026-06-02, on-device):** `nlp_create_qkv_heads` reproduces SeamlessMHA's naive
-head-split at **PCC = 1.0** for the per-projection pure-split form, with two concrete API facts:
-(1) the op **requires a 4D input** `[B, 1, S, hidden]` (3D throws `ShapeBase[] index out of range`);
-(2) the separate full-width projection is split with **`num_kv_heads=0`**. Still unverified: the
-"fuse all three projections into one QKV matmul + single split" variant (the larger win), the
-`nlp_concat_heads` output side, the full real-weight MHA forward, and the perf delta.
+**Verified (2026-06-02, on-device):** Both fusion classes for this slice work numerically:
+- **`chain` (per-projection head-split):** `nlp_create_qkv_heads` reproduces the naive
+  `reshape → transpose` at **PCC = 1.0** (`num_kv_heads=0`).
+- **`horizontal_merge` (fused QKV):** concat q/k/v weights → one matmul → one
+  `nlp_create_qkv_heads(num_heads=16, num_kv_heads=16)` → q/k/v at **PCC q=1.0, k/v=0.99999** vs the
+  separate-projection torch goldens. This is the multi-branch + `weight_transform` proof.
+
+Two concrete API facts the static reading missed: (1) the op **requires a 4D input**
+`[B, 1, S, hidden]` (3D throws `ShapeBase[] index out of range`); (2) the concatenated QKV tensor
+must be ordered `[q|k|v]` along the last dim. So the **first slice now proves *both* pattern kinds**
+(`chain` and `horizontal_merge`), making it a sharper end-to-end test of the design. Still
+unverified: the `nlp_concat_heads` output side, the full real-weight MHA forward, and the perf delta.
 
 ## Scope decomposition
 
@@ -226,8 +249,14 @@ real components:
 
 - **fx tracing robustness** on models with data-dependent control flow — mitigated by tracing
   per-block and falling back to module-signature matching where a block won't trace.
-- **`nlp_create_qkv_heads` variant coverage** for separate-projection (BART-style) attention —
-  confirm the separate-Q/K/V head-split variant exists and its config knobs during the slice.
+- **`nlp_create_qkv_heads` variant coverage** — RESOLVED for the slice: per-projection split
+  (`num_kv_heads=0`) and fused-QKV merge (`num_kv_heads=H`) both verified on-device (see First
+  vertical slice). 4D input + `[q|k|v]` ordering are hard requirements the codegen must honor.
+- **Structural equivalence over weight rewrites** — `horizontal_merge` fusions reorganize weights, so
+  the fx gate cannot prove them by graph isomorphism; it verifies shared-input + exact-coverage +
+  shape/role-preserving `weight_transform`, and defers the algebraic identity to the PCC gate. Need
+  to confirm this is strict enough to catch a wrong weight-concat ordering before device (or accept
+  PCC as the sole catch for that class).
 - **Culprit localization cost** when many fusions are applied — A/B fallback toggling is O(n)
   device runs worst case; per-op trace diff should localize most cases without full A/B.
 - **Long-decode gate runtime** — multi-K-token free-runs are expensive; gate length should be
