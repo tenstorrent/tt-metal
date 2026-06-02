@@ -317,241 +317,323 @@ void kernel_main() {
                 socket.read_ptr + sizeof(DramCorePrefetcherRequestHeader));
         const uint32_t layout_table_end = socket.read_ptr + kRequestPageBytes;
 
-        {
-            for (uint32_t e = 0; e < req_num_entries; ++e) {
-                const uint32_t tensor_base = entries[e].bank_local_base;
-                volatile tt_l1_ptr DramCorePrefetcherTensorLayout* g =
-                    reinterpret_cast<volatile tt_l1_ptr DramCorePrefetcherTensorLayout*>(
-                        layout_table_end - (entries[e].layout_index + 1) * sizeof(DramCorePrefetcherTensorLayout));
-                const uint32_t t_num_sub = g->num_sub;
-                const uint32_t t_M = g->M;
-                const uint32_t t_rows_per_sub = g->rows_per_sub;
-                const uint32_t t_coal_page_size = g->coalesced_page_size;
-                const uint32_t t_coal_num_pages = g->coalesced_num_pages;
-                const uint32_t t_chunk_bytes = g->sub_chunk_bytes;
-                const uint32_t t_sub_stride = g->sub_stride_bytes;
-                const uint32_t t_block_stride = g->block_stride_bytes;
-                const uint32_t t_page_bytes_per_recv = g->page_bytes_per_recv;
-                const uint32_t t_layout_mode = g->layout_mode;
-                const uint32_t t_target_per_visit = g->target_per_visit_pages;
-                const uint32_t t_recv_stride = g->recv_stride_bytes;
-                const uint32_t t_block_count = g->block_count;
+        for (uint32_t e = 0; e < req_num_entries; ++e) {
+            const uint32_t tensor_base = entries[e].bank_local_base;
+            volatile tt_l1_ptr DramCorePrefetcherTensorLayout* g =
+                reinterpret_cast<volatile tt_l1_ptr DramCorePrefetcherTensorLayout*>(
+                    layout_table_end - (entries[e].layout_index + 1) * sizeof(DramCorePrefetcherTensorLayout));
+            const uint32_t t_num_sub = g->num_sub;
+            const uint32_t t_M = g->M;
+            const uint32_t t_rows_per_sub = g->rows_per_sub;
+            const uint32_t t_coal_page_size = g->coalesced_page_size;
+            const uint32_t t_coal_num_pages = g->coalesced_num_pages;
+            const uint32_t t_chunk_bytes = g->sub_chunk_bytes;
+            const uint32_t t_sub_stride = g->sub_stride_bytes;
+            const uint32_t t_block_stride = g->block_stride_bytes;
+            const uint32_t t_page_bytes_per_recv = g->page_bytes_per_recv;
+            const uint32_t t_layout_mode = g->layout_mode;
+            const uint32_t t_target_per_visit = g->target_per_visit_pages;
+            const uint32_t t_recv_stride = g->recv_stride_bytes;
+            const uint32_t t_block_count = g->block_count;
 
-                // Set the sender fifo page size to one full per-receiver page so
-                // remote_cb_reserve_back reserves exactly one page per receiver.
-                experimental::resize_remote_sender_cb_interface</*update_remote_over_noc=*/false>(
-                    remote_cb_id, t_page_bytes_per_recv, noc_index);
+            // Set the sender fifo page size to one full per-receiver page so
+            // remote_cb_reserve_back reserves exactly one page per receiver.
+            experimental::resize_remote_sender_cb_interface</*update_remote_over_noc=*/false>(
+                remote_cb_id, t_page_bytes_per_recv, noc_index);
 
-                constexpr uint32_t stage_slot_sum = stage_slot_a + stage_slot_b;
+            constexpr uint32_t stage_slot_sum = stage_slot_a + stage_slot_b;
 
-                // Branch on layout. The branch is per-tensor (100% predictable across the
-                // inner chunk loop), so adding the second branch costs nothing in the
-                // hot path.
-                if (t_layout_mode == 0) {
-                    // ---- K-row-major main loop ----
-                    const uint32_t t_recv_per_chunk = num_receivers / t_M;
-                    const uint32_t t_sub_band_per_block = t_num_sub * t_M;
-                    const uint32_t total_chunks = t_block_count * t_sub_band_per_block;
+            // Branch on layout. The branch is per-tensor (100% predictable across the
+            // inner chunk loop), so adding the second branch costs nothing in the
+            // hot path.
+            if (t_layout_mode == 0) {
+                // ---- K-row-major main loop ----
+                const uint32_t t_recv_per_chunk = num_receivers / t_M;
+                const uint32_t t_sub_band_per_block = t_num_sub * t_M;
+                const uint32_t total_chunks = t_block_count * t_sub_band_per_block;
 
-                    experimental::dma_async_read(/*stream=*/0, tensor_base, stage_slot_a, t_chunk_bytes);
+                experimental::dma_async_read(/*stream=*/0, tensor_base, stage_slot_a, t_chunk_bytes);
 
-                    uint32_t fifo_snapshot = 0;
-                    uint32_t cum_offset_in_page = 0;
-                    uint32_t blk = 0;
-                    uint32_t sb = 0;
-                    uint32_t ch = 0;
-                    uint32_t stage_slot = stage_slot_a;
-                    bool has_next = (total_chunks > 1);
+                uint32_t fifo_snapshot = 0;
+                uint32_t cum_offset_in_page = 0;
+                uint32_t blk = 0;
+                uint32_t sb = 0;
+                uint32_t ch = 0;
+                uint32_t stage_slot = stage_slot_a;
+                bool has_next = (total_chunks > 1);
 
-                    for (uint32_t c = 0; c < total_chunks; ++c) {
-                        if (sb == 0 && ch == 0) {
-                            experimental::remote_cb_reserve_back(remote_cb_id, 1);
-                            fifo_snapshot = iface.fifo_wr_ptr;
-                            cum_offset_in_page = 0;
-                        }
-
-                        // Compute the successor (blk, sb, ch) by incrementing the nested counters.
-                        uint32_t next_ch = ch + 1;
-                        uint32_t next_sb = sb;
-                        uint32_t next_blk = blk;
-                        if (next_ch == t_M) {
-                            next_ch = 0;
-                            ++next_sb;
-                            if (next_sb == t_num_sub) {
-                                next_sb = 0;
-                                ++next_blk;
-                                if (next_blk == t_block_count) {
-                                    has_next = false;
-                                }
-                            }
-                        }
-                        const uint32_t next_slot = stage_slot_sum - stage_slot;
-
-                        // Issue the next DMA before waiting on this one (ping-pong, depth 2).
-                        if (has_next) {
-                            const uint32_t next_src = tensor_base + next_blk * t_block_stride + next_sb * t_sub_stride +
-                                                      next_ch * t_chunk_bytes;
-                            experimental::dma_async_read(/*stream=*/0, next_src, next_slot, t_chunk_bytes);
-                        }
-                        const uint32_t outstanding_after_wait = has_next ? 1u : 0u;
-                        experimental::dma_async_read_wait_n(/*stream=*/0, outstanding_after_wait);
-                        volatile tt_l1_ptr uint32_t* chunk_recv_xy =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) +
-                            ch * t_recv_per_chunk * 2;
-                        if (t_rows_per_sub == 1) {
-                            if (t_coal_num_pages == 1) {
-                                prefetcher_write_chunk</*single_row=*/true, /*single_page=*/true>(
-                                    stage_slot,
-                                    fifo_snapshot + cum_offset_in_page,
-                                    chunk_recv_xy,
-                                    t_recv_per_chunk,
-                                    t_rows_per_sub,
-                                    t_coal_num_pages,
-                                    t_coal_page_size,
-                                    noc_index);
-                            } else {
-                                prefetcher_write_chunk</*single_row=*/true, /*single_page=*/false>(
-                                    stage_slot,
-                                    fifo_snapshot + cum_offset_in_page,
-                                    chunk_recv_xy,
-                                    t_recv_per_chunk,
-                                    t_rows_per_sub,
-                                    t_coal_num_pages,
-                                    t_coal_page_size,
-                                    noc_index);
-                            }
-                        } else {
-                            if (t_coal_num_pages == 1) {
-                                prefetcher_write_chunk</*single_row=*/false, /*single_page=*/true>(
-                                    stage_slot,
-                                    fifo_snapshot + cum_offset_in_page,
-                                    chunk_recv_xy,
-                                    t_recv_per_chunk,
-                                    t_rows_per_sub,
-                                    t_coal_num_pages,
-                                    t_coal_page_size,
-                                    noc_index);
-                            } else {
-                                prefetcher_write_chunk</*single_row=*/false, /*single_page=*/false>(
-                                    stage_slot,
-                                    fifo_snapshot + cum_offset_in_page,
-                                    chunk_recv_xy,
-                                    t_recv_per_chunk,
-                                    t_rows_per_sub,
-                                    t_coal_num_pages,
-                                    t_coal_page_size,
-                                    noc_index);
-                            }
-                        }
-
-                        if (ch + 1 == t_M) {
-                            cum_offset_in_page += t_rows_per_sub * t_coal_num_pages * t_coal_page_size;
-                        }
-
-                        if (sb + 1 == t_num_sub && ch + 1 == t_M) {
-                            noc_async_posted_writes_flushed();
-                            prefetcher_finalize_block</*skip_ptr_update=*/true>(
-                                iface, t_page_bytes_per_recv, num_receivers, noc_index);
-                        } else {
-                            // The ping-pong DMA can reuse this stage slot two chunks later.
-                            // Make sure all posted writes sourced from it have departed first.
-                            noc_async_posted_writes_flushed();
-                        }
-
-                        blk = next_blk;
-                        sb = next_sb;
-                        ch = next_ch;
-                        stage_slot = next_slot;
+                for (uint32_t c = 0; c < total_chunks; ++c) {
+                    if (sb == 0 && ch == 0) {
+                        experimental::remote_cb_reserve_back(remote_cb_id, 1);
+                        fifo_snapshot = iface.fifo_wr_ptr;
+                        cum_offset_in_page = 0;
                     }
-                } else {
-                    // ---- Receiver-contiguous main loop (dynamic batching + 3-slot pipeline) ----
-                    // Per round, we pick B = min(target_per_visit,
-                    // min_free_blocks_across_receivers, remaining_blocks, blocks_to_wrap).
-                    // Then for each receiver r in turn we DMA + NoC-write B blocks of
-                    // receiver r's slab (contiguous: slab = recv_stride, block stride =
-                    // page_bytes_per_recv). set_state once per receiver visit; with_state
-                    // for every packet — amortizes destination reprogramming.
+
+                    // Compute the successor (blk, sb, ch) by incrementing the nested counters.
+                    uint32_t next_ch = ch + 1;
+                    uint32_t next_sb = sb;
+                    uint32_t next_blk = blk;
+                    if (next_ch == t_M) {
+                        next_ch = 0;
+                        ++next_sb;
+                        if (next_sb == t_num_sub) {
+                            next_sb = 0;
+                            ++next_blk;
+                            if (next_blk == t_block_count) {
+                                has_next = false;
+                            }
+                        }
+                    }
+                    const uint32_t next_slot = stage_slot_sum - stage_slot;
+
+                    // Issue the next DMA before waiting on this one (ping-pong, depth 2).
+                    if (has_next) {
+                        const uint32_t next_src =
+                            tensor_base + next_blk * t_block_stride + next_sb * t_sub_stride + next_ch * t_chunk_bytes;
+                        experimental::dma_async_read(/*stream=*/0, next_src, next_slot, t_chunk_bytes);
+                    }
+                    const uint32_t outstanding_after_wait = has_next ? 1u : 0u;
+                    experimental::dma_async_read_wait_n(/*stream=*/0, outstanding_after_wait);
+                    volatile tt_l1_ptr uint32_t* chunk_recv_xy =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) +
+                        ch * t_recv_per_chunk * 2;
+                    if (t_rows_per_sub == 1) {
+                        if (t_coal_num_pages == 1) {
+                            prefetcher_write_chunk</*single_row=*/true, /*single_page=*/true>(
+                                stage_slot,
+                                fifo_snapshot + cum_offset_in_page,
+                                chunk_recv_xy,
+                                t_recv_per_chunk,
+                                t_rows_per_sub,
+                                t_coal_num_pages,
+                                t_coal_page_size,
+                                noc_index);
+                        } else {
+                            prefetcher_write_chunk</*single_row=*/true, /*single_page=*/false>(
+                                stage_slot,
+                                fifo_snapshot + cum_offset_in_page,
+                                chunk_recv_xy,
+                                t_recv_per_chunk,
+                                t_rows_per_sub,
+                                t_coal_num_pages,
+                                t_coal_page_size,
+                                noc_index);
+                        }
+                    } else {
+                        if (t_coal_num_pages == 1) {
+                            prefetcher_write_chunk</*single_row=*/false, /*single_page=*/true>(
+                                stage_slot,
+                                fifo_snapshot + cum_offset_in_page,
+                                chunk_recv_xy,
+                                t_recv_per_chunk,
+                                t_rows_per_sub,
+                                t_coal_num_pages,
+                                t_coal_page_size,
+                                noc_index);
+                        } else {
+                            prefetcher_write_chunk</*single_row=*/false, /*single_page=*/false>(
+                                stage_slot,
+                                fifo_snapshot + cum_offset_in_page,
+                                chunk_recv_xy,
+                                t_recv_per_chunk,
+                                t_rows_per_sub,
+                                t_coal_num_pages,
+                                t_coal_page_size,
+                                noc_index);
+                        }
+                    }
+
+                    if (ch + 1 == t_M) {
+                        cum_offset_in_page += t_rows_per_sub * t_coal_num_pages * t_coal_page_size;
+                    }
+
+                    if (sb + 1 == t_num_sub && ch + 1 == t_M) {
+                        noc_async_posted_writes_flushed();
+                        prefetcher_finalize_block</*skip_ptr_update=*/true>(
+                            iface, t_page_bytes_per_recv, num_receivers, noc_index);
+                    } else {
+                        // The ping-pong DMA can reuse this stage slot two chunks later.
+                        // Make sure all posted writes sourced from it have departed first.
+                        noc_async_posted_writes_flushed();
+                    }
+
+                    blk = next_blk;
+                    sb = next_sb;
+                    ch = next_ch;
+                    stage_slot = next_slot;
+                }
+            } else {
+                // ---- Receiver-contiguous main loop (dynamic batching + 3-slot pipeline) ----
+                // Per round, we pick B = min(target_per_visit,
+                // min_free_blocks_across_receivers, remaining_blocks, blocks_to_wrap).
+                // Then for each receiver r in turn we DMA + NoC-write B blocks of
+                // receiver r's slab (contiguous: slab = recv_stride, block stride =
+                // page_bytes_per_recv). set_state once per receiver visit; with_state
+                // for every packet — amortizes destination reprogramming.
+                //
+                // Stage layout is 3 thirds rotating (vs the K-row path's 2 halves).
+                // Per iter we DMA into slot (gc+1)%3 and write from slot gc%3. The slot
+                // we're about to overwrite at iter gc+1 was last written at iter gc-2,
+                // giving the NIU ~2 iters of DMA+enqueue overhead to drain those
+                // posted writes. We flush only RIGHT BEFORE the next DMA-into-reused-slot
+                // (gc >= 2), turning the per-iter blocking flush (304 cyc on 8B_FF1_1d)
+                // into mostly free overlapped work.
+                //
+                // After all num_receivers visits, finalize bumps pages_sent + remote
+                // semaphore by B for every receiver and advances iface.fifo_wr_ptr by
+                // B * t_page_bytes_per_recv. The pages_to_wrap clamp prevents B from
+                // crossing fifo_limit_page_aligned mid-round.
+                constexpr uint32_t kStageSlotBytes = stage_third;
+                // Per-stage-slot capacity expressed in whole sub-bands; t_chunk_bytes
+                // (= sub_chunk_bytes) is the natural alignment for both DMA and NoC
+                // writes — it's a multiple of t_coal_page_size by construction, so
+                // packet counts come out exact (no truncation loss).
+                const uint32_t subs_per_stage_slot = kStageSlotBytes / t_chunk_bytes;
+                const uint32_t max_chunk_bytes = subs_per_stage_slot * t_chunk_bytes;
+
+                // fifo_pages_per_block converts aligned-page free space into
+                // "blocks of t_page_bytes_per_recv" — the batch unit B uses.
+                const uint32_t fifo_pages_per_block = t_page_bytes_per_recv / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+
+                constexpr uint32_t slot_addrs[3] = {stage_slot_0, stage_slot_1, stage_slot_2};
+
+                uint32_t pages_sent_global = 0;
+
+                while (pages_sent_global < t_block_count) {
+                    PROF_INC(prof_rounds);
+                    // ---- Pick B for this round ----
+                    uint32_t min_free_blocks;
+                    PROF_DECL_TS(t_poll_start);
+                    PROF_DECL_TS(t_poll_end);
+                    PROF_TICK(t_poll_start);
+                    do {
+                        const uint32_t min_free_aligned = poll_min_free_aligned_pages(iface, num_receivers);
+                        min_free_blocks = min_free_aligned / fifo_pages_per_block;
+                    } while (min_free_blocks == 0);
+                    PROF_TICK(t_poll_end);
+                    PROF_ACC(prof_poll, t_poll_end, t_poll_start);
+
+                    const uint32_t bytes_to_wrap = iface.fifo_limit_page_aligned - iface.fifo_wr_ptr;
+                    const uint32_t pages_to_wrap = bytes_to_wrap / t_page_bytes_per_recv;
+                    const uint32_t remaining = t_block_count - pages_sent_global;
+
+                    uint32_t B = t_target_per_visit;
+                    if (B > min_free_blocks) {
+                        B = min_free_blocks;
+                    }
+                    if (B > remaining) {
+                        B = remaining;
+                    }
+                    if (B > pages_to_wrap) {
+                        B = pages_to_wrap;
+                    }
+
+                    const uint32_t fifo_snapshot = iface.fifo_wr_ptr;
+                    const uint32_t bytes_per_recv = B * t_page_bytes_per_recv;
+                    const uint32_t chunks_per_visit = (bytes_per_recv + max_chunk_bytes - 1) / max_chunk_bytes;
+                    const uint32_t total_chunks_round = num_receivers * chunks_per_visit;
+
+                    // ---- Depth-2 software pipeline over 3 stage slots ----
+                    // Per chunk gc we: wait gc's DMA, enqueue gc's NoC writes (posted), THEN
+                    // issue chunk gc+2's DMA. Enqueuing the writes before the DMA lets them
+                    // drain on the NoC while the core spins on the DMA read_ready gate and the
+                    // engine reads gc+2 — overlapping the ~190 cyc write drain with the ~320 cyc
+                    // read instead of serializing them.
                     //
-                    // Stage layout is 3 thirds rotating (vs the K-row path's 2 halves).
-                    // Per iter we DMA into slot (gc+1)%3 and write from slot gc%3. The slot
-                    // we're about to overwrite at iter gc+1 was last written at iter gc-2,
-                    // giving the NIU ~2 iters of DMA+enqueue overhead to drain those
-                    // posted writes. We flush only RIGHT BEFORE the next DMA-into-reused-slot
-                    // (gc >= 2), turning the per-iter blocking flush (304 cyc on 8B_FF1_1d)
-                    // into mostly free overlapped work.
-                    //
-                    // After all num_receivers visits, finalize bumps pages_sent + remote
-                    // semaphore by B for every receiver and advances iface.fifo_wr_ptr by
-                    // B * t_page_bytes_per_recv. The pages_to_wrap clamp prevents B from
-                    // crossing fifo_limit_page_aligned mid-round.
-                    constexpr uint32_t kStageSlotBytes = stage_third;
-                    // Per-stage-slot capacity expressed in whole sub-bands; t_chunk_bytes
-                    // (= sub_chunk_bytes) is the natural alignment for both DMA and NoC
-                    // writes — it's a multiple of t_coal_page_size by construction, so
-                    // packet counts come out exact (no truncation loss).
-                    const uint32_t subs_per_stage_slot = kStageSlotBytes / t_chunk_bytes;
-                    const uint32_t max_chunk_bytes = subs_per_stage_slot * t_chunk_bytes;
+                    // Slot safety: chunk gc+2's DMA targets slot (gc+2)%3 == (gc-1)%3, last
+                    // NoC-written by chunk gc-1. We drain it with a flush placed BEFORE
+                    // writes(gc) — so the flush waits only on chunks <= gc-1 (already mostly
+                    // drained during this iter's DMA wait) and never on chunk gc's just-issued
+                    // writes, preserving the overlap. The two in-flight DMAs (gc+1, gc+2) and
+                    // the write source (gc) occupy all three distinct slots.
 
-                    // fifo_pages_per_block converts aligned-page free space into
-                    // "blocks of t_page_bytes_per_recv" — the batch unit B uses.
-                    const uint32_t fifo_pages_per_block =
-                        t_page_bytes_per_recv / REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE;
+                    // Prologue: prime the pipe with the first up-to-2 chunk DMAs.
+                    for (uint32_t c = 0; c < 2u && c < total_chunks_round; ++c) {
+                        const uint32_t cr = c / chunks_per_visit;
+                        const uint32_t civ = c - cr * chunks_per_visit;
+                        const uint32_t boff = civ * max_chunk_bytes;
+                        const uint32_t rem = bytes_per_recv - boff;
+                        const uint32_t cb = rem < max_chunk_bytes ? rem : max_chunk_bytes;
+                        const uint32_t src = tensor_base + (recv_index_base + cr) * t_recv_stride +
+                                             pages_sent_global * t_page_bytes_per_recv + boff;
+                        PROF_DECL_TS(t_p0);
+                        PROF_DECL_TS(t_p1);
+                        PROF_TICK(t_p0);
+                        experimental::dma_async_read(/*stream=*/0, src, slot_addrs[c % 3u], cb);
+                        PROF_TICK(t_p1);
+                        PROF_ACC(prof_dma_issue, t_p1, t_p0);
+                    }
 
-                    constexpr uint32_t slot_addrs[3] = {stage_slot_0, stage_slot_1, stage_slot_2};
+                    uint32_t cur_r = uint32_t(-1);
+                    uint32_t remote_noc_xy = 0;
+                    for (uint32_t gc = 0; gc < total_chunks_round; ++gc) {
+                        PROF_INC(prof_chunks);
+                        const uint32_t r = gc / chunks_per_visit;
+                        const uint32_t chunk_in_visit = gc - r * chunks_per_visit;
+                        const uint32_t byte_offset = chunk_in_visit * max_chunk_bytes;
+                        const uint32_t remaining_visit = bytes_per_recv - byte_offset;
+                        const uint32_t chunk_bytes =
+                            remaining_visit < max_chunk_bytes ? remaining_visit : max_chunk_bytes;
+                        const bool keep_one = (gc + 1u) < total_chunks_round;    // gc+1 stays in flight
+                        const bool will_issue = (gc + 2u) < total_chunks_round;  // a gc+2 chunk exists
 
-                    uint32_t pages_sent_global = 0;
+                        // ---- Wait for chunk gc's DMA (keep chunk gc+1 in flight). ----
+                        PROF_DECL_TS(t_dw0);
+                        PROF_DECL_TS(t_dw1);
+                        PROF_TICK(t_dw0);
+                        experimental::dma_async_read_wait_n(/*stream=*/0, keep_one ? 1u : 0u);
+                        PROF_TICK(t_dw1);
+                        PROF_ACC(prof_dma_wait, t_dw1, t_dw0);
 
-                    while (pages_sent_global < t_block_count) {
-                        PROF_INC(prof_rounds);
-                        // ---- Pick B for this round ----
-                        uint32_t min_free_blocks;
-                        PROF_DECL_TS(t_poll_start);
-                        PROF_DECL_TS(t_poll_end);
-                        PROF_TICK(t_poll_start);
-                        do {
-                            const uint32_t min_free_aligned = poll_min_free_aligned_pages(iface, num_receivers);
-                            min_free_blocks = min_free_aligned / fifo_pages_per_block;
-                        } while (min_free_blocks == 0);
-                        PROF_TICK(t_poll_end);
-                        PROF_ACC(prof_poll, t_poll_end, t_poll_start);
-
-                        const uint32_t bytes_to_wrap = iface.fifo_limit_page_aligned - iface.fifo_wr_ptr;
-                        const uint32_t pages_to_wrap = bytes_to_wrap / t_page_bytes_per_recv;
-                        const uint32_t remaining = t_block_count - pages_sent_global;
-
-                        uint32_t B = t_target_per_visit;
-                        if (B > min_free_blocks) {
-                            B = min_free_blocks;
+                        // ---- Pre-write slot-protect flush: drain chunks <= gc-1 so chunk gc+2's
+                        //      DMA can safely overwrite slot (gc+2)%3 == (gc-1)%3. Cheap (those
+                        //      writes drained during the wait above); does not touch chunk gc's
+                        //      writes (not yet enqueued). Not needed for gc<1 (virgin slot). ----
+                        if (will_issue && gc >= 1u) {
+                            PROF_DECL_TS(t_df0);
+                            PROF_DECL_TS(t_df1);
+                            PROF_TICK(t_df0);
+                            noc_async_posted_writes_flushed();
+                            PROF_TICK(t_df1);
+                            PROF_ACC(prof_defer_flush, t_df1, t_df0);
                         }
-                        if (B > remaining) {
-                            B = remaining;
+
+                        // ---- set_state on the first chunk of a new receiver ----
+                        if (r != cur_r) {
+                            cur_r = r;
+                            volatile tt_l1_ptr uint32_t* xy_ptr =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) + r * 2;
+                            remote_noc_xy = uint32_t(NOC_XY_ENCODING(
+                                DYNAMIC_NOC_X(noc_index, xy_ptr[0]), DYNAMIC_NOC_Y(noc_index, xy_ptr[1])));
+                            const uint64_t set_state_dest = get_noc_addr_helper(remote_noc_xy, fifo_snapshot);
+                            PROF_DECL_TS(t_ss0);
+                            PROF_DECL_TS(t_ss1);
+                            PROF_TICK(t_ss0);
+                            noc_async_write_one_packet_set_state</*posted=*/true>(
+                                set_state_dest, t_coal_page_size, noc_index);
+                            PROF_TICK(t_ss1);
+                            PROF_ACC(prof_set_state, t_ss1, t_ss0);
                         }
-                        if (B > pages_to_wrap) {
-                            B = pages_to_wrap;
+
+                        // ---- Enqueue chunk gc's NoC writes (posted) from slot gc%3. They drain
+                        //      on the NoC while we issue+read chunk gc+2 below. ----
+                        const uint32_t num_packets = chunk_bytes / t_coal_page_size;
+                        uint32_t src_addr = slot_addrs[gc % 3u];
+                        uint32_t dest_addr = fifo_snapshot + byte_offset;
+                        PROF_DECL_TS(t_w0);
+                        PROF_DECL_TS(t_w1);
+                        PROF_TICK(t_w0);
+                        for (uint32_t p = 0; p < num_packets; ++p) {
+                            noc_async_write_one_packet_with_state</*posted=*/true>(src_addr, dest_addr, noc_index);
+                            src_addr += t_coal_page_size;
+                            dest_addr += t_coal_page_size;
                         }
+                        PROF_TICK(t_w1);
+                        PROF_ACC(prof_writes, t_w1, t_w0);
 
-                        const uint32_t fifo_snapshot = iface.fifo_wr_ptr;
-                        const uint32_t bytes_per_recv = B * t_page_bytes_per_recv;
-                        const uint32_t chunks_per_visit =
-                            (bytes_per_recv + max_chunk_bytes - 1) / max_chunk_bytes;
-                        const uint32_t total_chunks_round = num_receivers * chunks_per_visit;
-
-                        // ---- Depth-2 software pipeline over 3 stage slots ----
-                        // Per chunk gc we: wait gc's DMA, enqueue gc's NoC writes (posted), THEN
-                        // issue chunk gc+2's DMA. Enqueuing the writes before the DMA lets them
-                        // drain on the NoC while the core spins on the DMA read_ready gate and the
-                        // engine reads gc+2 — overlapping the ~190 cyc write drain with the ~320 cyc
-                        // read instead of serializing them.
-                        //
-                        // Slot safety: chunk gc+2's DMA targets slot (gc+2)%3 == (gc-1)%3, last
-                        // NoC-written by chunk gc-1. We drain it with a flush placed BEFORE
-                        // writes(gc) — so the flush waits only on chunks <= gc-1 (already mostly
-                        // drained during this iter's DMA wait) and never on chunk gc's just-issued
-                        // writes, preserving the overlap. The two in-flight DMAs (gc+1, gc+2) and
-                        // the write source (gc) occupy all three distinct slots.
-
-                        // Prologue: prime the pipe with the first up-to-2 chunk DMAs.
-                        for (uint32_t c = 0; c < 2u && c < total_chunks_round; ++c) {
+                        // ---- Issue chunk gc+2's DMA into slot (gc+2)%3 (read overlaps gc's drain). ----
+                        if (will_issue) {
+                            const uint32_t c = gc + 2u;
                             const uint32_t cr = c / chunks_per_visit;
                             const uint32_t civ = c - cr * chunks_per_visit;
                             const uint32_t boff = civ * max_chunk_bytes;
@@ -559,123 +641,34 @@ void kernel_main() {
                             const uint32_t cb = rem < max_chunk_bytes ? rem : max_chunk_bytes;
                             const uint32_t src = tensor_base + (recv_index_base + cr) * t_recv_stride +
                                                  pages_sent_global * t_page_bytes_per_recv + boff;
-                            PROF_DECL_TS(t_p0);
-                            PROF_DECL_TS(t_p1);
-                            PROF_TICK(t_p0);
+                            PROF_DECL_TS(t_di0);
+                            PROF_DECL_TS(t_di1);
+                            PROF_TICK(t_di0);
                             experimental::dma_async_read(/*stream=*/0, src, slot_addrs[c % 3u], cb);
-                            PROF_TICK(t_p1);
-                            PROF_ACC(prof_dma_issue, t_p1, t_p0);
+                            PROF_TICK(t_di1);
+                            PROF_ACC(prof_dma_issue, t_di1, t_di0);
                         }
-
-                        uint32_t cur_r = uint32_t(-1);
-                        uint32_t remote_noc_xy = 0;
-                        for (uint32_t gc = 0; gc < total_chunks_round; ++gc) {
-                            PROF_INC(prof_chunks);
-                            const uint32_t r = gc / chunks_per_visit;
-                            const uint32_t chunk_in_visit = gc - r * chunks_per_visit;
-                            const uint32_t byte_offset = chunk_in_visit * max_chunk_bytes;
-                            const uint32_t remaining_visit = bytes_per_recv - byte_offset;
-                            const uint32_t chunk_bytes =
-                                remaining_visit < max_chunk_bytes ? remaining_visit : max_chunk_bytes;
-                            const bool keep_one = (gc + 1u) < total_chunks_round;    // gc+1 stays in flight
-                            const bool will_issue = (gc + 2u) < total_chunks_round;  // a gc+2 chunk exists
-
-                            // ---- Wait for chunk gc's DMA (keep chunk gc+1 in flight). ----
-                            PROF_DECL_TS(t_dw0);
-                            PROF_DECL_TS(t_dw1);
-                            PROF_TICK(t_dw0);
-                            experimental::dma_async_read_wait_n(/*stream=*/0, keep_one ? 1u : 0u);
-                            PROF_TICK(t_dw1);
-                            PROF_ACC(prof_dma_wait, t_dw1, t_dw0);
-
-                            // ---- Pre-write slot-protect flush: drain chunks <= gc-1 so chunk gc+2's
-                            //      DMA can safely overwrite slot (gc+2)%3 == (gc-1)%3. Cheap (those
-                            //      writes drained during the wait above); does not touch chunk gc's
-                            //      writes (not yet enqueued). Not needed for gc<1 (virgin slot). ----
-                            if (will_issue && gc >= 1u) {
-                                PROF_DECL_TS(t_df0);
-                                PROF_DECL_TS(t_df1);
-                                PROF_TICK(t_df0);
-                                noc_async_posted_writes_flushed();
-                                PROF_TICK(t_df1);
-                                PROF_ACC(prof_defer_flush, t_df1, t_df0);
-                            }
-
-                            // ---- set_state on the first chunk of a new receiver ----
-                            if (r != cur_r) {
-                                cur_r = r;
-                                volatile tt_l1_ptr uint32_t* xy_ptr =
-                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.receiver_noc_xy_ptr) +
-                                    r * 2;
-                                remote_noc_xy = uint32_t(NOC_XY_ENCODING(
-                                    DYNAMIC_NOC_X(noc_index, xy_ptr[0]), DYNAMIC_NOC_Y(noc_index, xy_ptr[1])));
-                                const uint64_t set_state_dest =
-                                    get_noc_addr_helper(remote_noc_xy, fifo_snapshot);
-                                PROF_DECL_TS(t_ss0);
-                                PROF_DECL_TS(t_ss1);
-                                PROF_TICK(t_ss0);
-                                noc_async_write_one_packet_set_state</*posted=*/true>(
-                                    set_state_dest, t_coal_page_size, noc_index);
-                                PROF_TICK(t_ss1);
-                                PROF_ACC(prof_set_state, t_ss1, t_ss0);
-                            }
-
-                            // ---- Enqueue chunk gc's NoC writes (posted) from slot gc%3. They drain
-                            //      on the NoC while we issue+read chunk gc+2 below. ----
-                            const uint32_t num_packets = chunk_bytes / t_coal_page_size;
-                            uint32_t src_addr = slot_addrs[gc % 3u];
-                            uint32_t dest_addr = fifo_snapshot + byte_offset;
-                            PROF_DECL_TS(t_w0);
-                            PROF_DECL_TS(t_w1);
-                            PROF_TICK(t_w0);
-                            for (uint32_t p = 0; p < num_packets; ++p) {
-                                noc_async_write_one_packet_with_state</*posted=*/true>(
-                                    src_addr, dest_addr, noc_index);
-                                src_addr += t_coal_page_size;
-                                dest_addr += t_coal_page_size;
-                            }
-                            PROF_TICK(t_w1);
-                            PROF_ACC(prof_writes, t_w1, t_w0);
-
-                            // ---- Issue chunk gc+2's DMA into slot (gc+2)%3 (read overlaps gc's drain). ----
-                            if (will_issue) {
-                                const uint32_t c = gc + 2u;
-                                const uint32_t cr = c / chunks_per_visit;
-                                const uint32_t civ = c - cr * chunks_per_visit;
-                                const uint32_t boff = civ * max_chunk_bytes;
-                                const uint32_t rem = bytes_per_recv - boff;
-                                const uint32_t cb = rem < max_chunk_bytes ? rem : max_chunk_bytes;
-                                const uint32_t src = tensor_base + (recv_index_base + cr) * t_recv_stride +
-                                                     pages_sent_global * t_page_bytes_per_recv + boff;
-                                PROF_DECL_TS(t_di0);
-                                PROF_DECL_TS(t_di1);
-                                PROF_TICK(t_di0);
-                                experimental::dma_async_read(/*stream=*/0, src, slot_addrs[c % 3u], cb);
-                                PROF_TICK(t_di1);
-                                PROF_ACC(prof_dma_issue, t_di1, t_di0);
-                            }
-                        }
-
-                        // ---- Final flush: drain any remaining writes before finalize bumps semaphore.
-                        // (Finalize's per-receiver semaphore inc rides the same NoC VC, so a
-                        // drained NIU also implies data writes are committed in-order on the wire.)
-                        PROF_DECL_TS(t_f0);
-                        PROF_DECL_TS(t_f1);
-                        PROF_TICK(t_f0);
-                        noc_async_posted_writes_flushed();
-                        PROF_TICK(t_f1);
-                        PROF_ACC(prof_flush, t_f1, t_f0);
-
-                        // ---- Finalize round: bump pages_sent + semaphores by B blocks ----
-                        PROF_DECL_TS(t_fn0);
-                        PROF_DECL_TS(t_fn1);
-                        PROF_TICK(t_fn0);
-                        prefetcher_finalize_block</*skip_ptr_update=*/true>(
-                            iface, B * t_page_bytes_per_recv, num_receivers, noc_index);
-                        PROF_TICK(t_fn1);
-                        PROF_ACC(prof_finalize, t_fn1, t_fn0);
-                        pages_sent_global += B;
                     }
+
+                    // ---- Final flush: drain any remaining writes before finalize bumps semaphore.
+                    // (Finalize's per-receiver semaphore inc rides the same NoC VC, so a
+                    // drained NIU also implies data writes are committed in-order on the wire.)
+                    PROF_DECL_TS(t_f0);
+                    PROF_DECL_TS(t_f1);
+                    PROF_TICK(t_f0);
+                    noc_async_posted_writes_flushed();
+                    PROF_TICK(t_f1);
+                    PROF_ACC(prof_flush, t_f1, t_f0);
+
+                    // ---- Finalize round: bump pages_sent + semaphores by B blocks ----
+                    PROF_DECL_TS(t_fn0);
+                    PROF_DECL_TS(t_fn1);
+                    PROF_TICK(t_fn0);
+                    prefetcher_finalize_block</*skip_ptr_update=*/true>(
+                        iface, B * t_page_bytes_per_recv, num_receivers, noc_index);
+                    PROF_TICK(t_fn1);
+                    PROF_ACC(prof_finalize, t_fn1, t_fn0);
+                    pages_sent_global += B;
                 }
             }
         }
