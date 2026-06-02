@@ -883,6 +883,39 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
         !valid_groupings_map.at("MESH").empty(),
         "Internal error: Physical grouping descriptor was not able to find mesh groupings");
 
+    // Multi-MGD globalization. With several MGDs (split sub-contexts) different descriptors reuse instance names
+    // ("M0") and local mesh ids (0). get_valid_groupings_for_mgds prefixes the merged keys with "mgd{i}_"; here we
+    // mirror the logical side's compute_merge_mesh_id_renumbering (sequential offset across MGDs, per-MGD meshes
+    // sorted by local id) so the physical mesh nodes use the SAME global mesh ids. Single-MGD is left untouched.
+    const bool multi_mgd = mesh_graph_descriptors.size() > 1;
+    std::vector<std::map<MeshId, MeshId>> per_mgd_local_to_global(mesh_graph_descriptors.size());
+    {
+        std::uint32_t next_base = 0;
+        for (std::size_t i = 0; i < mesh_graph_descriptors.size(); ++i) {
+            std::set<MeshId> mesh_local_ids;
+            for (const auto& mn : mesh_graph_descriptors[i].get_all_mesh_names()) {
+                for (::tt::tt_fabric::GlobalNodeId gid : mesh_graph_descriptors[i].instances_by_name(mn)) {
+                    const auto& inst = mesh_graph_descriptors[i].get_instance(gid);
+                    if (inst.kind == ::tt::tt_fabric::NodeKind::Mesh) {
+                        mesh_local_ids.insert(MeshId{inst.local_id});
+                    }
+                }
+            }
+            std::uint32_t j = 0;
+            for (MeshId lid : mesh_local_ids) {
+                // size==1 keeps identity (lid->lid) to match compute_merge_mesh_id_renumbering and leave the
+                // single-MGD path unchanged; multi-MGD renumbers sequentially.
+                per_mgd_local_to_global[i][lid] = multi_mgd ? MeshId{next_base + j} : lid;
+                ++j;
+            }
+            next_base += static_cast<std::uint32_t>(mesh_local_ids.size());
+        }
+    }
+    // Build the valid-groupings key for (mgd index, original mesh name).
+    auto mesh_key_for = [&](std::size_t mgd_index, const std::string& name) -> std::string {
+        return multi_mgd ? fmt::format("mgd{}_{}", mgd_index, name) : name;
+    };
+
     // -------------------------------------------------------------------------
     // Phase 3: For each mesh shape, locate every valid placement on the real
     // hardware and build a connection graph for those placements.
@@ -941,8 +974,9 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
             gbits.push_back(std::move(word_vec));
         }
 
-        // Record the placements for this shape so later phases can look them up by shape name. The mapping to
-        // logical MeshIds is decided by the solver later, so no logical MeshId is needed here.
+        // Record the placements for this shape (keyed by the possibly "mgd{i}_"-prefixed shape name so instances
+        // that share a local id / name across MGDs stay distinct). The mapping to logical MeshIds is decided by
+        // the solver later, so no logical MeshId is needed here.
         placements_by_shape[mesh_name] = placements;
     }
 
@@ -1002,9 +1036,9 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     // graph. Used below to decide whether to expand the pattern to cover the
     // full physical topology.
     std::size_t descriptor_names_with_psd = 0;
-    for (const auto& mgd : mesh_graph_descriptors) {
-        for (const auto& mn : mgd.get_all_mesh_names()) {
-            if (mesh_physical_graphs.contains(mn)) {
+    for (std::size_t i = 0; i < mesh_graph_descriptors.size(); ++i) {
+        for (const auto& mn : mesh_graph_descriptors[i].get_all_mesh_names()) {
+            if (mesh_physical_graphs.contains(mesh_key_for(i, mn))) {
                 ++descriptor_names_with_psd;
             }
         }
@@ -1012,21 +1046,25 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
 
     std::unordered_map<std::string, MeshEnumState> mesh_enum_states;
 
-    for (const auto& mesh_graph_descriptor : mesh_graph_descriptors) {
+    for (std::size_t mgd_idx = 0; mgd_idx < mesh_graph_descriptors.size(); ++mgd_idx) {
+        const auto& mesh_graph_descriptor = mesh_graph_descriptors[mgd_idx];
         const auto [mgd_intermesh_mesh_level, mgd_intermesh_ports] =
             get_requested_intermesh_from_mgd(mesh_graph_descriptor);
         (void)mgd_intermesh_ports;
 
         for (const auto& mesh_name : mesh_graph_descriptor.get_all_mesh_names()) {
-            if (mesh_enum_states.contains(mesh_name)) {
+            // Globally-unique shape key so two MGDs reusing "M0" don't dedup onto each other.
+            const std::string mesh_key = mesh_key_for(mgd_idx, mesh_name);
+            if (mesh_enum_states.contains(mesh_key)) {
                 continue;  // Already set up from an earlier MGD
             }
-            const auto physical_it = mesh_physical_graphs.find(mesh_name);
+            const auto physical_it = mesh_physical_graphs.find(mesh_key);
             if (physical_it == mesh_physical_graphs.end()) {
                 log_warning(
                     tt::LogFabric,
-                    "No PSD-derived PhysicalMultiMeshGraph for mesh descriptor '{}'; skipping mesh-level topology solve",
-                    mesh_name);
+                    "No PSD-derived PhysicalMultiMeshGraph for mesh descriptor '{}'; skipping mesh-level topology "
+                    "solve",
+                    mesh_key);
                 continue;
             }
             const AdjacencyGraph<MeshId>& physical_mesh_level = physical_it->second.mesh_level_graph_;
@@ -1036,6 +1074,11 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
             // shape name, edges are FABRIC inter-mesh connections among them.
             AdjacencyGraph<MeshId> mgd_mesh_level_graph = build_mgd_mesh_level_subgraph_for_mesh_descriptor_name(
                 mesh_graph_descriptor, mesh_name, mgd_intermesh_mesh_level);
+            // Renumber this MGD's local mesh ids to GLOBAL ids (matching the logical merge) so the per-shape
+            // logical graph, the solver's target ids, and combined_mesh_groupings below all agree across MGDs.
+            if (multi_mgd) {
+                mgd_mesh_level_graph = remap_mesh_id_adjacency(mgd_mesh_level_graph, per_mgd_local_to_global[mgd_idx]);
+            }
 
             // Pattern expansion: when the logical descriptor declares fewer
             // instances than the hardware has placements (e.g. one "galaxy" entry
@@ -1055,7 +1098,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
             MeshEnumState state;
             state.logical_graph = std::move(logical_mesh_level_graph);
             state.physical_graph = physical_mesh_level;
-            mesh_enum_states.emplace(mesh_name, std::move(state));
+            mesh_enum_states.emplace(mesh_key, std::move(state));
         }
     }
 
