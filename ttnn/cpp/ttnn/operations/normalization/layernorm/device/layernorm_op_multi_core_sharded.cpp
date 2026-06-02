@@ -132,6 +132,10 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     uint32_t K = shape[-1];
     uint32_t Kt = K / tile_width;
     uint32_t block_w = block_wt * tile_width;
+    // Logical (un-padded) width. Welford must normalize over the true element count and index
+    // its reciprocal LUT by it, so a non-tile-aligned width normalizes by the logical N rather
+    // than folding the tile padding columns into the mean and variance.
+    const uint32_t logical_K = a.logical_shape()[-1];
 
     // Compute grid and worker distribution using helper structs
     auto grid = GridParams::compute(a, block_ht, device->compute_with_storage_grid_size());
@@ -267,6 +271,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .out_single_tile_size = out_single_tile_size,
         .block_wt_resharded = block_wt_resharded,
         .K = K,
+        .logical_K = logical_K,
         .rms_norm = rms_norm,
         .use_welford = use_welford,
         .has_gamma = gamma.has_value(),
@@ -318,6 +323,18 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
 
     uint32_t last_core_width_index =
         grid.mcast_1d ? cores.size() - 1 : (grid.row_wise ? grid.grid_size.x - 1 : grid.grid_size.y - 1);
+
+    // Welford's partial-tile handling uses one last-tile width for both the per-core reduction
+    // and the cross-core combine. Those agree only when the width is tile-aligned or a single
+    // width shard spans the whole row; with several width shards each full shard would need the
+    // full tile width while only the final shard carries the partial tile. Reject that case
+    // rather than silently normalize some shards over their padding columns.
+    TT_FATAL(
+        !use_welford || (logical_K % tile_width == 0) || (last_core_width_index == 0),
+        "Sharded Welford layer_norm does not support a non-tile-aligned width ({}) split across "
+        "multiple width shards ({}); use a single width shard or a tile-aligned width.",
+        logical_K,
+        last_core_width_index + 1);
 
     RuntimeArgsContext rt_ctx{
         .grid = grid,

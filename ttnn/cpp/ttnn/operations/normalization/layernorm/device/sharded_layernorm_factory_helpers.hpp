@@ -210,6 +210,9 @@ struct CompileTimeArgsContext {
     uint32_t out_single_tile_size = 0;
     uint32_t block_wt_resharded = 0;
     uint32_t K = 0;
+    // Logical (un-padded) width. Welford normalizes over this element count rather than the
+    // tile-padded width K, so non-tile-aligned widths exclude the padding columns.
+    uint32_t logical_K = 0;
 
     // Flags
     bool rms_norm = false;
