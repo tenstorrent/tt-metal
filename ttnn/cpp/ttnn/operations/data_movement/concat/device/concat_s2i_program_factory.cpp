@@ -42,13 +42,13 @@ tt::tt_metal::ProgramDescriptor ConcatS2IProgramFactory::create_descriptor(
                 .data_format = cb_data_format,
                 .page_size = input_page_size,
             }}},
-            .buffer = input_tensors[input_id].buffer(),
+            .tensor = &input_tensors[input_id].mesh_tensor(),
         });
     }
 
     KernelDescriptor::CompileTimeArgs reader_compile_time_args = {num_input_tensors};
     KernelDescriptor::CompileTimeArgs writer_compile_time_args = {num_input_tensors, input_unit_size};
-    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(output.mesh_tensor()).append_to(writer_compile_time_args);
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -79,7 +79,7 @@ tt::tt_metal::ProgramDescriptor ConcatS2IProgramFactory::create_descriptor(
         std::vector<uint32_t> reader_runtime_args;
         reader_runtime_args.reserve(num_input_tensors * 2);
         std::vector<uint32_t> writer_runtime_args = {
-            output.buffer()->address(),
+            output.mesh_tensor().address(),
             core_id,
             curr_num_output_rows,
             num_input_tensors * input_shard_spec.shape[0],
