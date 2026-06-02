@@ -1565,8 +1565,8 @@ solve_for_many_groupings_to_psd_heterogeneous(
 
     // Pre-seed the result map so every grouping has an entry, even if no placement is selected.
     std::unordered_map<const GroupingInfo*, std::vector<MappingResult<uint32_t, AsicID>>> map_result;
-    for (size_t i = 0; i < groupings.size(); ++i) {
-        map_result.emplace(&groupings[i], std::vector<MappingResult<uint32_t, AsicID>>{});
+    for (const auto& grouping : groupings) {
+        map_result.emplace(&grouping, std::vector<MappingResult<uint32_t, AsicID>>{});
     }
     if (candidates.empty()) {
         return map_result;
