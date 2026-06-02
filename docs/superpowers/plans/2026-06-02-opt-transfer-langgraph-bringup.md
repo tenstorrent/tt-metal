@@ -2059,15 +2059,21 @@ class RealImpl:
 
     def verify(self, state):
         # Per-block: compare fused QKV against the reference's separate-projection split.
+        # Both sides must consume the SAME input the q/k/v projections actually see in the
+        # reference forward, i.e. the post-attn_norm hidden state h — not raw x.
         import torch
         from models.experimental.opt_transfer.verify import pcc
         ref = state["_ref"]; embed = self.cfg["embed_dim"]
-        x = torch.randn(1, 64, embed)
+        ref.eval()
+        with torch.no_grad():
+            x = torch.randn(1, 64, embed)
+            h = ref.attn_norm(x)        # the tensor q_proj/k_proj/v_proj consume
         worst = 1.0
         for run in state["_runners"]:
-            q, k, v = run(x)
+            q, k, v = run(h)
             for name, got in zip(("q_proj", "k_proj", "v_proj"), (q, k, v)):
-                gold = ref._split(getattr(ref, name)(ref.attn_norm(x)))
+                with torch.no_grad():
+                    gold = ref._split(getattr(ref, name)(h))
                 worst = min(worst, pcc(gold, got))
         state["full_pcc"] = worst
         return state
