@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -90,11 +91,12 @@ void kernel_main() {
     const auto s = TensorAccessor(src_args, src_addr);
     Noc noc;
     CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_in1(cb_id_in1);
 
-    cb_reserve_back(cb_id_in1, 1);
-    uint32_t temp_addr_raw = get_write_ptr(cb_id_in1);
+    cb_in1.reserve_back(1);
+    uint32_t temp_addr_raw = cb_in1.get_write_ptr();
     uint32_t temp_addr = (temp_addr_raw + dram_alignment - 1) & ~(dram_alignment - 1);
-    cb_push_back(cb_id_in1, 1);
+    cb_in1.push_back(1);
 
     auto read_block = [&](uint32_t num_rows,
                           uint32_t start_row_id,
@@ -128,14 +130,21 @@ void kernel_main() {
                 }
             } else {
                 // If there is a mis-alignment, we first load the data to a middle L1 cb, then copy to the final cb
-                // buffer
-                noc_async_read(
-                    (src_noc_addr + (uint64_t)start_column_id) & dram_align_mask,
-                    temp_addr,
-                    width_size + dram_alignment);
+                // buffer. The aligned-down source is a full NoC address, so it is supplied directly via
+                // UnicastEndpoint (decomposed into x/y/local addr; NOC_XY_ADDR repacks it unchanged).
+                const uint64_t aligned_src_noc_addr = (src_noc_addr + (uint64_t)start_column_id) & dram_align_mask;
+                CoreLocalMem<uint32_t> temp_dst(temp_addr);
+                noc.async_read(
+                    UnicastEndpoint{},
+                    temp_dst,
+                    width_size + dram_alignment,
+                    {.noc_x = (uint32_t)NOC_UNICAST_ADDR_X(aligned_src_noc_addr),
+                     .noc_y = (uint32_t)NOC_UNICAST_ADDR_Y(aligned_src_noc_addr),
+                     .addr = (uint32_t)NOC_LOCAL_ADDR_OFFSET(aligned_src_noc_addr)},
+                    {.offset_bytes = 0});
 
                 // Block before copying data from tmp to cb buffer
-                noc_async_read_barrier();
+                noc.async_read_barrier();
 
                 uint32_t prev_size = start_column_id;
                 uint32_t this_block_size = unpadded_X_size - prev_size;

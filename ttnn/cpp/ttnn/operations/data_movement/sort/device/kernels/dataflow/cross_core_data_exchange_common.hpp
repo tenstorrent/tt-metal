@@ -143,7 +143,8 @@ FORCE_INLINE std::pair<uint32_t, uint32_t> get_core_physical_coordinates(
         return {core_x, core_y};  // Invalid core ID
     }
 
-    const uint32_t l1_read_addr = get_read_ptr(lookup_table_buffer_cb_index);
+    CircularBuffer lookup_table_buffer_cb(lookup_table_buffer_cb_index);
+    const uint32_t l1_read_addr = lookup_table_buffer_cb.get_read_ptr();
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_read_addr);
 
     core_x = ptr[core_id * 2];

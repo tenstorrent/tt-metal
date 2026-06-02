@@ -33,7 +33,9 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
 
     constexpr bool MISALIGNED = ALIGNMENT > SUBTILE_LINE_BYTES;
-    uint32_t intermed_l1_scratch = MISALIGNED ? get_write_ptr(1) : 0;
+    constexpr uint32_t cb_id_intermed = 1;
+    CircularBuffer cb_intermed(cb_id_intermed);
+    uint32_t intermed_l1_scratch = MISALIGNED ? cb_intermed.get_write_ptr() : 0;
     volatile tt_l1_ptr uint8_t* intermed_l1_scratch_ptr = (volatile uint8_t*)intermed_l1_scratch;
 
     const auto s0 = TensorAccessor(src0_args, src0_addr);

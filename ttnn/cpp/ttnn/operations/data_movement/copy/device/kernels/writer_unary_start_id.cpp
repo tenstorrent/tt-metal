@@ -6,8 +6,6 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -26,24 +24,9 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
 
-#ifdef SHARDED
-    typedef ShardedInfo<
-        get_compile_time_arg_val(1),
-        get_compile_time_arg_val(2),
-        get_compile_time_arg_val(3),
-        get_compile_time_arg_val(4),
-        get_compile_time_arg_val(5),
-        get_compile_time_arg_val(6),
-        get_compile_time_arg_val(7)>
-        tensor_shard_info;
-
-    const auto [mapping_table, rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(3));
-    experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = dst_addr, .shard_array = mapping_table};
-#else
+    // TensorAccessor handles both interleaved and sharded outputs.
     constexpr auto dst_args = TensorAccessorArgs<1>();
     const auto s = TensorAccessor(dst_args, dst_addr);
-#endif
 
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_tiles;
@@ -53,15 +36,8 @@ void kernel_main() {
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
         cb_out.wait_front(onetile);
-#ifdef SHARDED
-        // ShardedAddrGen has no noc_traits_t specialization; keep legacy NoC API.
-        uint64_t dest_noc_addr = s.get_noc_addr(i);
-        noc_async_write(cb_out.get_read_ptr(), dest_noc_addr, tile_bytes);
-        noc_async_write_barrier();
-#else
         noc.async_write(cb_out, s, tile_bytes, {.offset_bytes = 0}, {.page_id = i, .offset_bytes = 0});
         noc.async_write_barrier();
-#endif
         cb_out.pop_front(onetile);
     }
 #endif
