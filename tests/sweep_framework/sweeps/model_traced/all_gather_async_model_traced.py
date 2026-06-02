@@ -423,6 +423,23 @@ def run(
     if not persistent_output_buffer_was_provided:
         persistent_output_buffer = None
 
+    # Some traced overloads name the gathered tensor `input_tensor` instead of
+    # `input`, so the loader emits the input_tensor_* kwarg family rather than
+    # input_a_*. They are deserialized identically; alias them so these configs
+    # run instead of falling through to the "incomplete vector" skip.
+    if input_a_shape is None:
+        _it_shape = kwargs.get("input_tensor_shape")
+        if _it_shape not in (None, _ABSENT):
+            input_a_shape = _it_shape
+            if input_a_dtype is None:
+                input_a_dtype = kwargs.get("input_tensor_dtype")
+            if input_a_layout is None:
+                input_a_layout = kwargs.get("input_tensor_layout")
+            if input_a_memory_config is None:
+                input_a_memory_config = kwargs.get("input_tensor_memory_config")
+            if input_a_tensor_placement is None:
+                input_a_tensor_placement = kwargs.get("input_tensor_tensor_placement")
+
     # Check if this is a model_traced run (V2 format has input_a_shape)
     is_model_traced = input_a_shape is not None
 
@@ -534,18 +551,23 @@ def run(
             # sweep tensor's `tensor.shape` after sharding must match
             # input_shape / mesh_shape on each sharded axis. Use input_shape
             # directly as the global tensor — do NOT scale by mesh size.
-            global_shape = list(input_shape)
-            torch_global = torch.rand(global_shape).bfloat16()
-
-            # The traced model path below uses replicate_with_topology: every
-            # chip receives the full logical tensor while preserving the
-            # model's sharded topology metadata for trace matching. Mirror the
-            # resulting all_gather semantics in the golden by repeating the
-            # logical tensor across the gathered cluster axis.
+            # input_a_shape is the PER-DEVICE shape (the master records
+            # per-shard sizes). Build the global tensor by scaling the gather
+            # dim up by the cluster size, then shard it along the gather dim
+            # across ONLY the cluster axis (replicating the other mesh axis) so
+            # each device holds exactly one per-device slice. all_gather over
+            # cluster_axis reconstructs the full gather dim on every device, so
+            # the golden is simply the global tensor.
+            #
+            # Scaling by cluster_size guarantees even sharding (global = D * C),
+            # which the previous "shard across all 32 devices" approach did not:
+            # for gather dims not divisible by 32 it produced uneven/zero shards
+            # and hung the device (e.g. dim=56 across 32).
             cluster_size = mesh_shape[cluster_axis]
-            repeats = [1] * len(global_shape)
-            repeats[effective_dim] = cluster_size
-            torch_reference = torch_global.repeat(*repeats)
+            global_shape = list(input_shape)
+            global_shape[effective_dim] = global_shape[effective_dim] * cluster_size
+            torch_global = torch.rand(global_shape).bfloat16()
+            torch_reference = torch_global
             torch_input = torch_global
         else:
             # 1D mesh or unparseable placement: shard only along gather dim.
@@ -555,6 +577,11 @@ def run(
             torch_input = torch_reference
     else:
         # Original generality/lead_model format
+        # Incomplete traced vectors (no input_a_shape and no mesh_shape) reach
+        # here with mesh_shape=None; skip cleanly instead of crashing with
+        # 'NoneType' object is not subscriptable.
+        if mesh_shape is None:
+            return [(True, "Skipped: incomplete vector (missing input_a_shape/mesh_shape)"), 0.0]
         # Create reference output
         replicate_dim = mesh_shape[cluster_axis] if cluster_axis is not None else prod(mesh_shape)
         torch_input = torch.rand(input_shape).bfloat16()
@@ -580,25 +607,22 @@ def run(
                 return False, device_err, None, None
 
             if is_model_traced:
-                # all_gather gathers along ONE dimension. The input must be
-                # sharded along that dim across ALL devices (each device holds
-                # a 1/N slice). ShardTensorToMesh handles both 1D and 2D meshes
-                # by splitting into total_devices chunks along the gather dim.
-                if is_2d_mesh:
-                    if shard_dims is not None:
-                        mapper_dims = shard_dims
-                    elif cluster_axis == 1:
-                        mapper_dims = (None, effective_dim)
-                    else:
-                        mapper_dims = (effective_dim, None)
+                # all_gather gathers along ONE dimension across the cluster
+                # axis. Shard the (scaled-up) global tensor along the gather dim
+                # across ONLY the cluster axis and replicate the other mesh
+                # axis, so each device holds exactly one per-device slice. This
+                # mirrors the model's per-device distribution and, because the
+                # global gather dim == per_device * cluster_size, always shards
+                # evenly (no uneven/zero shards -> no device hang).
+                mapper_dims = (None, effective_dim) if cluster_axis == 1 else (effective_dim, None)
                 tt_input = ttnn.from_torch(
                     torch_input,
                     layout=layout,
                     dtype=input_dtype,
                     memory_config=input_memory_config,
-                    mesh_mapper=ttnn.ShardTensorToMesh(device, dim=effective_dim),
-                        device=device,
-                    )
+                    mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=mapper_dims, mesh_shape=mesh_shape),
+                    device=device,
+                )
 
                 # Move from DRAM to the traced sharded layout if applicable
                 if target_sharded_config is not None:
