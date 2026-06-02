@@ -20,9 +20,6 @@
 //     accumulators into DEST row 0; the host XOR-folds the packed tile and the
 //     zeroed rows cancel, leaving XOR(32 accumulators).
 //   - The DEST debug-bus read-back (dbg_get_array_row) is intentionally NOT used.
-//
-// STATUS: structure mirrors the hardware-validated Wormhole path; Blackhole SFPU
-// sequence is pending on-device bring-up.
 
 #pragma once
 

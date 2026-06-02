@@ -20,8 +20,6 @@
 # A bit-exact Python golden is intentionally omitted: the SFPU lane ordering and
 # the DEST/pack datum handling are hardware-specific. The properties above are
 # what matter for nondeterminism bisection.
-#
-# STATUS: hardware-validated on WH B0 (n150). BH SFPU sequence pending bring-up.
 
 import pytest
 import torch
