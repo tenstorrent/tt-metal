@@ -119,7 +119,7 @@ python -m pytest tests/models/motif/test_pipeline_motif.py -v
 python -m pytest tests/models/qwenimage/test_pipeline_qwenimage.py -v
 python -m pytest tests/models/mochi/test_pipeline_mochi.py -v
 python -m pytest tests/models/wan2_2/test_pipeline_wan.py -v
-python -m pytest tests/models/ltx/test_pipeline_ltx_av.py -v
+python -m pytest tests/models/ltx/test_pipeline_ltx.py -v
 ```
 
 ## Key Features

@@ -9,7 +9,7 @@ import pytest
 from loguru import logger
 
 import ttnn
-from models.tt_dit.pipelines.ltx.pipeline_ltx_two_stages import LTXAVTwoStagesPipeline
+from models.tt_dit.pipelines.ltx.pipeline_ltx_two_stages import LTXTwoStagesPipeline
 from models.tt_dit.utils.test import line_params, ring_params
 
 
@@ -110,7 +110,7 @@ def test_pipeline_av_two_stages(
     num_inference_steps = int(os.environ.get("NUM_INFERENCE_STEPS", "30"))
 
     run_warmup = os.environ.get("RUN_WARMUP", "0") in ("1", "true", "True")
-    pipeline = LTXAVTwoStagesPipeline.create_pipeline(
+    pipeline = LTXTwoStagesPipeline.create_pipeline(
         mesh_device=mesh_device,
         checkpoint_name=ckpt,
         gemma_path=gemma,

@@ -10,7 +10,7 @@ from loguru import logger
 
 import ttnn
 from models.tt_dit.pipelines.ltx.pipeline_ltx import on_device_audio_enabled
-from models.tt_dit.pipelines.ltx.pipeline_ltx_fast import LTXFastPipeline
+from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline
 from models.tt_dit.utils.test import line_params, ring_params
 
 
@@ -102,7 +102,7 @@ def test_pipeline_av_fast(
     is_fsdp,
     no_prompt,
 ):
-    """LTX-2.3 Fast distilled 2-stage AV pipeline."""
+    """LTX-2.3 distilled 2-stage AV pipeline."""
     ckpt = _default_checkpoint()
     gemma = _default_gemma()
 
@@ -124,7 +124,7 @@ def test_pipeline_av_fast(
     run_warmup = os.environ.get("RUN_WARMUP", "0") in ("1", "true", "True")
     traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
 
-    pipeline = LTXFastPipeline.create_pipeline(
+    pipeline = LTXDistilledPipeline.create_pipeline(
         mesh_device=mesh_device,
         checkpoint_name=ckpt,
         gemma_path=gemma,

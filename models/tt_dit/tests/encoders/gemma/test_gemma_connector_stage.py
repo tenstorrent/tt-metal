@@ -25,7 +25,7 @@ from safetensors import safe_open
 
 import ttnn
 from models.tt_dit.encoders.gemma.feature_extractor import GemmaFeatureExtractor
-from models.tt_dit.pipelines.ltx.pipeline_ltx_av import LTXAVPipeline
+from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
 
 CONNECTOR_PREFIXES = (
     "text_embedding_projection.video_aggregate_embed.",
@@ -65,7 +65,7 @@ def test_aggregate_embed_isolated(*, mesh_device):
     if not gemma or not ckpt:
         pytest.skip("assets missing")
 
-    pipe = LTXAVPipeline.create_pipeline(mesh_device, checkpoint_name=None, gemma_path=gemma, mode="av")
+    pipe = LTXPipeline.create_pipeline(mesh_device, checkpoint_name=None, gemma_path=gemma, mode="av")
     # Connectors need a gemma encoder loaded for sequence_length bookkeeping, but we
     # only exercise aggregate_embed here, so skip the (slow) encoder load.
     conn_state, raw = {}, {}

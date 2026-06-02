@@ -24,7 +24,6 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field
-from fractions import Fraction
 from typing import Callable
 
 import torch
@@ -66,8 +65,38 @@ from ...utils.ltx import (
 from ...utils.mochi import get_rot_transformation_mat
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from ...utils.tracing import Tracer
+from ...utils.video import export_video_audio
 
 LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+
+# LTX-2 VAE compression ratios (pixel -> latent). Used throughout to map pixel
+# dims to the latent token grid. NOTE: the TILE size used for SP padding (also 32)
+# is a separate concept — do NOT replace `32 * sp_factor` padding math with these.
+TEMPORAL_COMPRESSION = 8
+SPATIAL_COMPRESSION = 32
+
+# Distilled sigma schedules shared by the distilled and two-stage subclasses.
+DISTILLED_SIGMA_VALUES = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]
+STAGE_2_DISTILLED_SIGMA_VALUES = [0.909375, 0.725, 0.421875, 0.0]
+
+# LTX-2 reference packages (vendored under repo root) needed for the host torch
+# reference paths (prompt encoding, constants).
+_LTX_REFERENCE_PATHS = ("LTX-2/packages/ltx-core/src", "LTX-2/packages/ltx-pipelines/src")
+
+
+def _ensure_ltx_reference_on_path() -> None:
+    """Put the LTX-2 reference packages on ``sys.path`` (idempotent) and stub out
+    ``torch.cuda.synchronize`` (no CUDA on the TT host) so reference code runs."""
+    for p in _LTX_REFERENCE_PATHS:
+        if p not in sys.path:
+            sys.path.insert(0, p)
+    torch.cuda.synchronize = lambda *a, **kw: None  # noqa: ARG005
+
+
+def latent_grid(num_frames: int, height: int, width: int) -> tuple[int, int, int]:
+    """Map pixel dims to the LTX latent token grid ``(latent_frames, latent_h, latent_w)``."""
+    latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
+    return latent_frames, height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
 
 
 @dataclass
@@ -212,7 +241,7 @@ class LTXPipeline:
         out_channels: int = 128,
         num_layers: int = 48,
         cross_attention_dim: int = 4096,
-        mode: str = "video",
+        mode: str = "av",
         positional_embedding_theta: float = 10000.0,
         positional_embedding_max_pos: list[int] | None = None,
         timestep_scale_multiplier: float = 1000.0,
@@ -541,7 +570,7 @@ class LTXPipeline:
         latent_frames = (num_frames - 1) // 8 + 1. Config read from checkpoint header."""
         with safe_open(self._upsampler_path, framework="pt") as f:
             cfg = json.loads(f.metadata()["config"])
-        latent_frames = (self._init_num_frames - 1) // 8 + 1
+        latent_frames = (self._init_num_frames - 1) // TEMPORAL_COMPRESSION + 1
         input_hw = (self._init_height // 64, self._init_width // 64)
         return LTXLatentUpsampler(
             input_hw=input_hw,
@@ -1056,9 +1085,7 @@ class LTXPipeline:
         assert self.checkpoint_name is not None, "checkpoint_name must be set before encode_prompts_reference"
         assert self.gemma_path is not None, "gemma_path must be set before encode_prompts_reference"
         try:
-            sys.path.insert(0, "LTX-2/packages/ltx-core/src")
-            sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
-            torch.cuda.synchronize = lambda *a, **kw: None  # No CUDA on TT host
+            _ensure_ltx_reference_on_path()
             from ltx_pipelines.utils.blocks import PromptEncoder
         except ImportError as e:
             raise ImportError(
@@ -1230,7 +1257,7 @@ class LTXPipeline:
         """JIT-compile the upsampler at the stage-1 half-res shape."""
         if self.upsampler is None:
             return
-        latent_frames = (num_frames - 1) // 8 + 1
+        latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
         s1_lh, s1_lw = height // 64, width // 64
         dummy = torch.zeros(1, self.in_channels, latent_frames, s1_lh, s1_lw)
         self._upsample_latent(dummy)
@@ -1240,8 +1267,7 @@ class LTXPipeline:
         the target shape. No-op if no VAE is configured."""
         if self.vae_decoder is None:
             return
-        latent_frames = (num_frames - 1) // 8 + 1
-        latent_h, latent_w = height // 32, width // 32
+        latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
         dummy = torch.zeros(1, latent_frames * latent_h * latent_w, self.in_channels)
         self._prepare_vae()
         self.decode_latents(dummy, latent_frames, latent_h, latent_w)
@@ -1306,6 +1332,25 @@ class LTXPipeline:
             prompt = prompt[..., : self.cross_attention_dim]
         return bf16_tensor(prompt, device=self.mesh_device)
 
+    def _ensure_device_encoder(self) -> None:
+        """Lazily load the on-device Gemma encoder + video/audio connectors (once)."""
+        if self.gemma_encoder is not None:
+            return
+
+        connector_prefixes = (
+            "text_embedding_projection.video_aggregate_embed.",
+            "text_embedding_projection.audio_aggregate_embed.",
+            "model.diffusion_model.video_embeddings_connector.",
+            "model.diffusion_model.audio_embeddings_connector.",
+        )
+        self.load_gemma_encoder(self.gemma_path, num_layers=48, sequence_length=1024)
+        conn_state = {}
+        with safe_open(self.checkpoint_name, "pt") as f:
+            for k in f.keys():
+                if k.startswith(connector_prefixes):
+                    conn_state[k] = f.get_tensor(k)
+        self.load_embeddings_connectors(conn_state)
+
     def warmup_buffers(
         self,
         *,
@@ -1314,195 +1359,137 @@ class LTXPipeline:
         width: int,
         num_inference_steps: int = 2,
     ) -> None:
-        """Run 2 steps through the real ``__call__`` to compile every device
-        program at the target shape. Subclasses override for multi-stage flows."""
-        if self.mode != "video":
-            raise NotImplementedError(
-                f"warmup_buffers needs mode='video' here (got '{self.mode}'); " "subclasses override for AV"
-            )
+        """Compile every device program full-guidance ``call_av`` will exercise
+        (4 transformer passes/step: cond/uncond/ptb/iso) plus VAE decode.
+        ``ge_gamma=0`` skips the GE branch (pure host math)."""
         t0 = time.time()
-        logger.info(f"warmup (video): {num_frames}f@{height}x{width}, {num_inference_steps} steps")
-        self(
-            prompt="warmup",
+        logger.info(f"warmup (AV): {num_frames}f@{height}x{width}, {num_inference_steps} steps")
+
+        results = self.encode_prompts_reference(["warmup", "warmup"])
+        v_p = results[0].video_encoding.float()
+        a_p = results[0].audio_encoding.float()
+        v_n = results[1].video_encoding.float()
+        a_n = results[1].audio_encoding.float()
+
+        self.call_av(
+            video_prompt_embeds=v_p,
+            audio_prompt_embeds=a_p,
+            neg_video_prompt_embeds=v_n,
+            neg_audio_prompt_embeds=a_n,
             num_frames=num_frames,
             height=height,
             width=width,
             num_inference_steps=num_inference_steps,
-            guidance_scale=1.0,
             seed=0,
+            ge_gamma=0.0,
         )
-        logger.info(f"warmup (video) done in {time.time() - t0:.1f}s")
 
-    def __call__(
+        self._warmup_decode(num_frames, height, width)
+        self._prepare_transformer(0)
+        logger.info(f"warmup (AV) done in {time.time() - t0:.1f}s")
+
+    def generate(
         self,
-        prompt: str | list[str],
+        prompt: str,
         *,
-        negative_prompt: str | list[str] | None = None,
-        num_frames: int = 33,
-        height: int = 480,
-        width: int = 832,
+        output_path: str,
+        negative_prompt: str | None = None,
+        num_frames: int = 121,
+        height: int = 512,
+        width: int = 768,
         num_inference_steps: int = 30,
-        guidance_scale: float = 4.0,
-        seed: int | None = None,
-        # Scheduler params
-        max_shift: float = 2.05,
-        base_shift: float = 0.95,
-        # Latent space params (LTX uses 8x temporal, 32x spatial compression)
-        temporal_compression: int = 8,
-        spatial_compression: int = 32,
-    ) -> torch.Tensor:
-        """
-        Run the full text-to-video generation pipeline.
+        video_cfg_scale: float = 3.0,
+        audio_cfg_scale: float = 7.0,
+        video_stg_scale: float = 1.0,
+        audio_stg_scale: float = 1.0,
+        video_modality_scale: float = 3.0,
+        audio_modality_scale: float = 3.0,
+        rescale_scale: float = 0.7,
+        stg_block: int = 28,
+        seed: int = 10,
+        ge_gamma: float | None = None,
+        fps: int = 24,
+    ) -> str:
+        """Run the full LTX-2.3 Pro AV generation pipeline and write an MP4."""
+        if ge_gamma is None:
+            # Official LTX gradient-estimation sampling; enable on BH by default for quality.
+            ge_gamma = 2.0 if ttnn.device.is_blackhole() else 0.0
+            logger.info(f"ge_gamma={ge_gamma} (arch default)")
 
-        Args:
-            prompt: Text prompt(s)
-            negative_prompt: Negative prompt(s) for CFG
-            num_frames: Number of output video frames
-            height: Output video height in pixels
-            width: Output video width in pixels
-            num_inference_steps: Number of denoising steps
-            guidance_scale: CFG guidance strength (1.0 = no guidance)
-            seed: Random seed for reproducibility
+        _ensure_ltx_reference_on_path()
+        from ltx_pipelines.utils.constants import DEFAULT_NEGATIVE_PROMPT
 
-        Returns:
-            Denoised latent tensor of shape (B, num_tokens, out_channels)
-        """
-        assert self.transformer is not None, "Call load_transformer() first"
+        neg = negative_prompt if negative_prompt is not None else DEFAULT_NEGATIVE_PROMPT
 
-        if isinstance(prompt, str):
-            prompt = [prompt]
-        B = len(prompt)
+        def _env_float(name: str, default: float) -> float:
+            val = os.environ.get(name)
+            return float(val) if val is not None else default
 
-        # Compute latent dimensions
-        latent_frames = (num_frames - 1) // temporal_compression + 1
-        latent_height = height // spatial_compression
-        latent_width = width // spatial_compression
-        video_N_real = latent_frames * latent_height * latent_width
-        # SP padding: round seq dim up to TILE_SIZE * sp_factor so ring SDPA's
-        # N_local % TILE_HEIGHT == 0 and N_global == N_local * ring_size checks pass.
-        video_N = self._video_sp_pad_len(video_N_real)
-        # Used by compute_sigmas / scheduler shift — keep based on logical (real) token count.
-        num_tokens = video_N_real
+        video_cfg_scale = _env_float("VIDEO_CFG_SCALE", video_cfg_scale)
+        audio_cfg_scale = _env_float("AUDIO_CFG_SCALE", audio_cfg_scale)
+        video_stg_scale = _env_float("VIDEO_STG_SCALE", video_stg_scale)
+        audio_stg_scale = _env_float("AUDIO_STG_SCALE", audio_stg_scale)
+        video_modality_scale = _env_float("VIDEO_MODALITY_SCALE", video_modality_scale)
+        audio_modality_scale = _env_float("AUDIO_MODALITY_SCALE", audio_modality_scale)
+        rescale_scale = _env_float("RESCALE_SCALE", rescale_scale)
+        if os.environ.get("GE_GAMMA") is not None:
+            ge_gamma = float(os.environ["GE_GAMMA"])
 
-        logger.info(
-            f"Generating: {num_frames} frames @ {height}x{width}, "
-            f"latent: {latent_frames}x{latent_height}x{latent_width} = {video_N_real} tokens"
-            + (f" (SP-padded to {video_N})" if video_N > video_N_real else "")
+        total_t0 = time.time()
+
+        t0 = time.time()
+        # On-device Gemma encode; coresident-excluded with the DiT/VAE, so loading it auto-evicts
+        # them and _prepare_transformer(0) evicts the encoder back. Only load on a cache miss —
+        # a cached prompt skips the encoder entirely.
+        if not os.path.exists(self._device_embed_cache_path([prompt, neg])):
+            self._ensure_device_encoder()
+        enc = self.encode_prompts_device([prompt, neg])
+        v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
+        neg_v, neg_a = enc[1][0].float(), enc[1][1].float()
+        logger.info(f"Encoding (device): {time.time() - t0:.1f}s")
+
+        self._prepare_transformer(0)
+
+        t0 = time.time()
+        video_latent, audio_latent = self.call_av(
+            video_prompt_embeds=v_embeds,
+            audio_prompt_embeds=a_embeds,
+            neg_video_prompt_embeds=neg_v,
+            neg_audio_prompt_embeds=neg_a,
+            num_frames=num_frames,
+            height=height,
+            width=width,
+            num_inference_steps=num_inference_steps,
+            video_cfg_scale=video_cfg_scale,
+            audio_cfg_scale=audio_cfg_scale,
+            video_stg_scale=video_stg_scale,
+            audio_stg_scale=audio_stg_scale,
+            video_modality_scale=video_modality_scale,
+            audio_modality_scale=audio_modality_scale,
+            rescale_scale=rescale_scale,
+            stg_block=stg_block,
+            seed=seed,
+            ge_gamma=ge_gamma,
         )
+        denoise_time = time.time() - t0
+        logger.info(f"Denoising: {denoise_time:.1f}s ({denoise_time / num_inference_steps:.1f}s/step)")
 
-        # 1. Encode text
-        do_cfg = guidance_scale > 1.0
-        if self.text_encoder is not None:
-            prompt_embeds = self.text_encoder.encode(prompt)
-        else:
-            # Fallback: zero embeddings
-            prompt_embeds = torch.zeros(B, 256, self.cross_attention_dim)
+        t0 = time.time()
+        self._prepare_vae()
+        logger.info(f"VAE loaded in {time.time() - t0:.0f}s")
 
-        if do_cfg:
-            if self.text_encoder is not None and negative_prompt is not None:
-                if isinstance(negative_prompt, str):
-                    negative_prompt = [negative_prompt] * B
-                negative_embeds = self.text_encoder.encode(negative_prompt)
-            else:
-                negative_embeds = torch.zeros_like(prompt_embeds)
+        latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
 
-        # Push prompts to device
-        tt_prompt = self._prepare_prompt(prompt_embeds)
-        tt_negative_prompt = self._prepare_prompt(negative_embeds) if do_cfg else None
+        t0 = time.time()
+        video_pixels = self.decode_latents(video_latent, latent_frames, latent_h, latent_w)
+        logger.info(f"VAE decode: {time.time() - t0:.1f}s — {video_pixels.shape}")
 
-        # 2. Prepare RoPE
-        rope_cos, rope_sin = self._prepare_rope(latent_frames, latent_height, latent_width)
-        trans_mat = self._prepare_trans_mat()
+        audio_obj = self.decode_audio(audio_latent, num_frames, fps=fps)
+        self.export_video(video_pixels, output_path, fps=fps, audio=audio_obj)
 
-        # 3. Compute sigma schedule
-        sigmas = compute_sigmas(
-            steps=num_inference_steps,
-            num_tokens=num_tokens,
-            max_shift=max_shift,
-            base_shift=base_shift,
-        )
-        logger.info(f"Sigmas: {sigmas[0]:.4f} -> {sigmas[-1]:.4f} ({len(sigmas)} values)")
-
-        # 4. Prepare initial noise
-        if seed is not None:
-            torch.manual_seed(seed)
-        # Generate noise at logical seq len, then zero-pad to video_N on dim=1 for SP.
-        latent_real = torch.randn(B, video_N_real, self.in_channels, dtype=torch.float32)
-        latent_real = latent_real * sigmas[0]
-        if video_N > video_N_real:
-            latent = torch.zeros(B, video_N, self.in_channels, dtype=torch.float32)
-            latent[:, :video_N_real, :] = latent_real
-        else:
-            latent = latent_real
-
-        # 5. Denoising loop
-        for step_idx in range(num_inference_steps):
-            sigma = sigmas[step_idx].item()
-            sigma_next = sigmas[step_idx + 1].item()
-
-            # Prepare spatial input: (1, B, video_N, in_channels) — already SP-padded.
-            spatial_torch = latent.unsqueeze(0)
-            timestep_torch = torch.tensor([sigma])
-
-            # Forward pass (conditioned). video_N is the LOGICAL (unpadded) count and
-            # is forwarded as ``logical_n`` to ring SDPA so padded K positions get masked.
-            tt_denoised = self.transformer.forward(
-                video_1BNI_torch=spatial_torch,
-                video_prompt_1BLP=tt_prompt,
-                video_rope_cos=rope_cos,
-                video_rope_sin=rope_sin,
-                trans_mat=trans_mat,
-                video_N=video_N_real,
-                timestep_torch=timestep_torch,
-            )
-            # Model output is velocity (shape (B, video_N, C)). Zero padded slots so the
-            # latent stays clean and Euler updates don't drift in the padded region.
-            velocity = LTXTransformerModel.device_to_host(tt_denoised).squeeze(0)
-            velocity = self._zero_video_padding(velocity, video_N_real)
-            denoised = latent.float() - velocity.float() * sigma
-
-            # CFG
-            if do_cfg:
-                tt_uncond = self.transformer.forward(
-                    video_1BNI_torch=spatial_torch,
-                    video_prompt_1BLP=tt_negative_prompt,
-                    video_rope_cos=rope_cos,
-                    video_rope_sin=rope_sin,
-                    trans_mat=trans_mat,
-                    video_N=video_N_real,
-                    timestep_torch=timestep_torch,
-                )
-                uncond_velocity = LTXTransformerModel.device_to_host(tt_uncond).squeeze(0)
-                uncond_velocity = self._zero_video_padding(uncond_velocity, video_N_real)
-                uncond = latent.float() - uncond_velocity.float() * sigma
-
-                # guidance = uncond + scale * (cond - uncond)
-                denoised = uncond + guidance_scale * (denoised - uncond)
-
-            # Euler step
-            latent = euler_step(latent, denoised, sigma, sigma_next)
-            # Re-zero padded slots (cheap insurance — Euler with zeroed velocity should
-            # leave the zeros in place, but bf16 round-trips can introduce tiny drift).
-            latent = self._zero_video_padding(latent, video_N_real)
-
-            if (step_idx + 1) % 5 == 0 or step_idx == 0:
-                logger.info(
-                    f"Step {step_idx + 1}/{num_inference_steps}: "
-                    f"sigma {sigma:.4f} -> {sigma_next:.4f}, "
-                    f"latent range [{latent.min():.3f}, {latent.max():.3f}]"
-                )
-
-        # Slice out SP padding before VAE decode.
-        latent = latent[:, :video_N_real, :]
-        logger.info(f"Denoising complete. Output latent shape: {latent.shape}")
-
-        # Optionally decode latents to video
-        if self.vae_decoder is not None:
-            video = self.decode_latents(latent, latent_frames, latent_height, latent_width)
-            logger.info(f"Decoded video shape: {video.shape}")
-            return video
-
-        return latent
+        total_time = time.time() - total_t0
+        logger.info(f"Total: {total_time:.1f}s | Output: {output_path}")
+        return output_path
 
     def _prepare_audio_rope(self, audio_N: int, audio_N_real: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Compute audio RoPE in INTERLEAVED layout for ttnn.experimental.rotary_embedding_llama."""
@@ -1800,8 +1787,7 @@ class LTXPipeline:
         their neutral values (``cfg=1.0, stg=0.0, mod=1.0, ge_gamma=0.0``).
         """
         B = 1
-        latent_frames = (num_frames - 1) // 8 + 1
-        latent_h, latent_w = height // 32, width // 32
+        latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
         video_N_real = latent_frames * latent_h * latent_w
         # SP padding: round seq dim up to TILE_SIZE * sp_factor so ring SDPA's
         # N_local % TILE_HEIGHT == 0 and N_global == N_local * ring_size checks pass.
@@ -2059,9 +2045,7 @@ class LTXPipeline:
         """
         assert self.checkpoint_name is not None, "checkpoint_name must be set before decode_audio_reference"
         try:
-            sys.path.insert(0, "LTX-2/packages/ltx-core/src")
-            sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
-            torch.cuda.synchronize = lambda *a, **kw: None
+            _ensure_ltx_reference_on_path()
             from ltx_core.types import Audio
             from ltx_pipelines.utils.blocks import AudioDecoder
 
@@ -2118,9 +2102,7 @@ class LTXPipeline:
         No weights are loaded — ``_prepare_audio_decoder`` handles that via the
         disk cache the same way ``_prepare_vae`` does for the video VAE.
         """
-        sys.path.insert(0, "LTX-2/packages/ltx-core/src")
-        sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
-        torch.cuda.synchronize = lambda *a, **kw: None
+        _ensure_ltx_reference_on_path()
 
         from ...models.audio_vae.audio_decoder_ltx import LTXAudioDecoder
         from ...models.audio_vae.bwe_ltx import LTXMelSTFT, LTXVocoderWithBWE
@@ -2254,9 +2236,7 @@ class LTXPipeline:
         if self.tt_audio_decoder.is_loaded() and self.tt_vocoder_with_bwe.is_loaded():
             return
 
-        sys.path.insert(0, "LTX-2/packages/ltx-core/src")
-        sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
-        torch.cuda.synchronize = lambda *a, **kw: None
+        _ensure_ltx_reference_on_path()
         from ltx_pipelines.utils.blocks import AudioDecoder as RefAudioDecoderBlock
 
         model_name = os.path.basename(self.checkpoint_name).removesuffix(".safetensors")
@@ -2341,7 +2321,7 @@ class LTXPipeline:
         """
         assert self.checkpoint_name is not None, "checkpoint_name must be set before decode_audio_device"
         try:
-            sys.path.insert(0, "LTX-2/packages/ltx-core/src")
+            _ensure_ltx_reference_on_path()
             from ltx_core.types import Audio
 
             # VAE and audio modules can't be L1-coresident on BH-LB. With
@@ -2388,95 +2368,6 @@ class LTXPipeline:
             return self.decode_audio_reference(audio_latent, num_frames, fps=fps)
 
     def export_video(self, video_pixels: torch.Tensor, output_path: str, fps: int = 24, audio=None) -> None:
-        """Export decoded video (and optionally audio) to MP4.
-
-        Matches reference ltx_pipelines.utils.media_io.encode_video exactly:
-        - H.264 video with yuv420p pixel format
-        - AAC audio stream (if audio provided)
-        - Correct [-1,1] → uint8 conversion
-
-        Args:
-            video_pixels: (B, C, F, H, W) from decode_latents(), range [-1, 1]
-            output_path: output .mp4 path
-            fps: frame rate
-            audio: object with .waveform (torch.Tensor) and .sampling_rate (int), or None
-        """
-        import av
-
-        # Convert to (F, H, W, C) uint8
-        # In-place [-1,1] → [0,255]: one fp32 copy + in-place passes instead of
-        # allocating a fresh full-size tensor per arithmetic op (127.5 == 255/2).
-        v = video_pixels[0].float()
-        v.add_(1.0).mul_(127.5).clamp_(0.0, 255.0)
-        # .contiguous() forces a single bulk (F,H,W,C) copy here, so each per-frame
-        # slice below is already contiguous and VideoFrame.from_ndarray just wraps it
-        # — otherwise the permuted view makes from_ndarray do a strided copy per frame.
-        frames = v.to(torch.uint8).permute(1, 2, 3, 0).contiguous().cpu().numpy()  # (F, H, W, C)
-
-        _, height, width, _ = frames.shape
-
-        container = av.open(output_path, mode="w")
-        stream = container.add_stream("libx264", rate=int(fps))
-        stream.width = width
-        stream.height = height
-        stream.pix_fmt = "yuv420p"
-        # "veryfast" preset + multi-threaded encode is ~5-8x faster than libx264's
-        # default "medium" single-threaded path, while crf 23 keeps the quality higher.
-        stream.options = {"preset": "veryfast", "crf": "23"}
-        stream.thread_type = "AUTO"
-
-        # Prepare audio stream if provided
-        audio_stream = None
-        if audio is not None:
-            audio_stream = container.add_stream("aac", rate=audio.sampling_rate)
-            audio_stream.codec_context.sample_rate = audio.sampling_rate
-            audio_stream.codec_context.layout = "stereo"
-            audio_stream.codec_context.time_base = Fraction(1, audio.sampling_rate)
-
-        # Write video frames
-        for frame_array in frames:
-            frame = av.VideoFrame.from_ndarray(frame_array, format="rgb24")
-            for packet in stream.encode(frame):
-                container.mux(packet)
-
-        # Flush video encoder
-        for packet in stream.encode():
-            container.mux(packet)
-
-        # Write audio if provided
-        if audio is not None and audio_stream is not None:
-            samples = audio.waveform
-            if samples.ndim == 1:
-                samples = samples[:, None]
-            if samples.shape[1] != 2 and samples.shape[0] == 2:
-                samples = samples.T
-            if samples.shape[1] != 2:
-                logger.warning(f"Audio has {samples.shape[1]} channels, expected 2 — duplicating mono")
-                samples = samples[:, :1].repeat(1, 2)
-
-            if samples.dtype != torch.int16:
-                samples = torch.clip(samples, -1.0, 1.0)
-                samples = (samples * 32767.0).to(torch.int16)
-
-            frame_in = av.AudioFrame.from_ndarray(
-                samples.contiguous().reshape(1, -1).cpu().numpy(),
-                format="s16",
-                layout="stereo",
-            )
-            frame_in.sample_rate = audio.sampling_rate
-
-            # Resample to encoder format and write
-            cc = audio_stream.codec_context
-            resampler = av.audio.resampler.AudioResampler(
-                format=cc.format or "fltp",
-                layout=cc.layout or "stereo",
-                rate=cc.sample_rate or audio.sampling_rate,
-            )
-            for resampled in resampler.resample(frame_in):
-                for packet in audio_stream.encode(resampled):
-                    container.mux(packet)
-            for packet in audio_stream.encode():
-                container.mux(packet)
-
-        container.close()
-        logger.info(f"Saved: {output_path} ({frames.shape[0]}f @ {fps}fps)")
+        """Export decoded video (and optionally audio) to MP4. Thin wrapper over
+        ``utils.video.export_video_audio`` kept for back-compat with existing callers."""
+        export_video_audio(video_pixels, output_path, fps=fps, audio=audio)

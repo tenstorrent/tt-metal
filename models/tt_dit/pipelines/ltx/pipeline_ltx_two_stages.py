@@ -21,7 +21,6 @@ Text-only; image conditioning is not wired here yet.
 from __future__ import annotations
 
 import os
-import sys
 import time
 
 import torch
@@ -31,13 +30,17 @@ import ttnn
 
 from ...utils.lora import LoraSpec
 from ...utils.ltx import AudioLatentShape, VideoPixelShape
-from .pipeline_ltx import LTXPipeline
-from .pipeline_ltx_av import LTXAVPipeline
+from .pipeline_ltx import (
+    SPATIAL_COMPRESSION,
+    STAGE_2_DISTILLED_SIGMA_VALUES,
+    TEMPORAL_COMPRESSION,
+    LTXPipeline,
+    _ensure_ltx_reference_on_path,
+    latent_grid,
+)
 
-STAGE_2_DISTILLED_SIGMA_VALUES = [0.909375, 0.725, 0.421875, 0.0]
 
-
-class LTXAVTwoStagesPipeline(LTXAVPipeline):
+class LTXTwoStagesPipeline(LTXPipeline):
     """Two-stage AV pipeline: full-guidance s1 (variant 0 = base 22B) +
     distilled-LoRA s2 refine (variant 1 = LoRA-fused base)."""
 
@@ -66,9 +69,9 @@ class LTXAVTwoStagesPipeline(LTXAVPipeline):
         super().__init__(*args, **kwargs)
 
     @staticmethod
-    def create_pipeline(mesh_device: ttnn.MeshDevice, **kwargs) -> "LTXAVTwoStagesPipeline":
+    def create_pipeline(mesh_device: ttnn.MeshDevice, **kwargs) -> "LTXTwoStagesPipeline":
         kwargs.setdefault("mode", "av")
-        kwargs["pipeline_class"] = LTXAVTwoStagesPipeline
+        kwargs["pipeline_class"] = LTXTwoStagesPipeline
         return LTXPipeline.create_pipeline(mesh_device, **kwargs)
 
     def warmup_buffers(
@@ -132,8 +135,8 @@ class LTXAVTwoStagesPipeline(LTXAVPipeline):
         s2_sigmas = list(STAGE_2_DISTILLED_SIGMA_VALUES)[:num_inference_steps] + [0.0]
         s2_sigmas_t = torch.tensor(s2_sigmas, dtype=torch.float32)
 
-        latent_frames = (num_frames - 1) // 8 + 1
-        full_latent_count = latent_frames * (height // 32) * (width // 32)
+        latent_frames, full_lh, full_lw = latent_grid(num_frames, height, width)
+        full_latent_count = latent_frames * full_lh * full_lw
         dummy_v_init = torch.zeros(1, full_latent_count, self.in_channels)
         vps = VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=24)
         als = AudioLatentShape.from_video_pixel_shape(vps)
@@ -181,7 +184,7 @@ class LTXAVTwoStagesPipeline(LTXAVPipeline):
         num_frames: int = 121,
         height: int = 512,
         width: int = 768,
-        # Stage 1 (guided) knobs — same defaults as LTXAVPipeline.generate.
+        # Stage 1 (guided) knobs — same defaults as LTXPipeline.generate.
         num_inference_steps: int = 30,
         video_cfg_scale: float = 3.0,
         audio_cfg_scale: float = 7.0,
@@ -208,7 +211,7 @@ class LTXAVTwoStagesPipeline(LTXAVPipeline):
             ge_gamma = 2.0 if ttnn.device.is_blackhole() else 0.0
             logger.info(f"ge_gamma={ge_gamma} (arch default)")
 
-        # Env overrides — match LTXAVPipeline.generate semantics.
+        # Env overrides — match LTXPipeline.generate semantics.
         def _env_float(name: str, default: float) -> float:
             val = os.environ.get(name)
             return float(val) if val is not None else default
@@ -239,9 +242,7 @@ class LTXAVTwoStagesPipeline(LTXAVPipeline):
                 f"__init__ used {self._distilled_lora_strength}"
             )
 
-        sys.path.insert(0, "LTX-2/packages/ltx-core/src")
-        sys.path.insert(0, "LTX-2/packages/ltx-pipelines/src")
-        torch.cuda.synchronize = lambda *a, **kw: None  # noqa: ARG005
+        _ensure_ltx_reference_on_path()
         from ltx_pipelines.utils.constants import DEFAULT_NEGATIVE_PROMPT
 
         neg = negative_prompt if negative_prompt is not None else DEFAULT_NEGATIVE_PROMPT
@@ -284,14 +285,14 @@ class LTXAVTwoStagesPipeline(LTXAVPipeline):
         )
         logger.info(f"Stage 1: {time.time() - t0:.1f}s")
 
-        latent_frames = (num_frames - 1) // 8 + 1
-        s1_lh, s1_lw = s1_h // 32, s1_w // 32
+        latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
+        s1_lh, s1_lw = s1_h // SPATIAL_COMPRESSION, s1_w // SPATIAL_COMPRESSION
         s1_spatial = s1_video.reshape(1, latent_frames, s1_lh, s1_lw, 128).permute(0, 4, 1, 2, 3)
         t0 = time.time()
         upsampled = self._upsample_latent(s1_spatial)
         logger.info(f"Upsample: {time.time() - t0:.1f}s")
         upsampled_flat = upsampled.permute(0, 2, 3, 4, 1).reshape(
-            1, latent_frames * (height // 32) * (width // 32), 128
+            1, latent_frames * (height // SPATIAL_COMPRESSION) * (width // SPATIAL_COMPRESSION), 128
         )
 
         # Stage 2: variant 1 (LoRA-fused), full-res, neutral guidance. Refines
@@ -331,7 +332,7 @@ class LTXAVTwoStagesPipeline(LTXAVPipeline):
         self._prepare_vae()
         logger.info(f"VAE loaded in {time.time() - t0:.0f}s")
 
-        latent_h, latent_w = height // 32, width // 32
+        latent_h, latent_w = height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
         t0 = time.time()
         video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w)
         logger.info(f"VAE decode: {time.time() - t0:.1f}s — {video_pixels.shape}")

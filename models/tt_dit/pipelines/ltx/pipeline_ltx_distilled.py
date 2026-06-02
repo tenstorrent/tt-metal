@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""LTX-2.3 Fast distilled two-stage audio-video pipeline."""
+"""LTX-2.3 distilled two-stage audio-video pipeline."""
 
 from __future__ import annotations
 
@@ -17,22 +17,27 @@ import ttnn
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
 from ...utils.ltx import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
-from .pipeline_ltx import LTXPipeline, euler_step, on_device_audio_enabled
-from .pipeline_ltx_av import LTXAVPipeline
+from .pipeline_ltx import (
+    DISTILLED_SIGMA_VALUES,
+    SPATIAL_COMPRESSION,
+    STAGE_2_DISTILLED_SIGMA_VALUES,
+    TEMPORAL_COMPRESSION,
+    LTXPipeline,
+    euler_step,
+    latent_grid,
+    on_device_audio_enabled,
+)
 
-DISTILLED_SIGMA_VALUES = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]
-STAGE_2_DISTILLED_SIGMA_VALUES = [0.909375, 0.725, 0.421875, 0.0]
 
-
-class LTXFastPipeline(LTXAVPipeline):
+class LTXDistilledPipeline(LTXPipeline):
     """Distilled 2-stage AV pipeline: half-res denoise → upsample → full-res refine."""
 
     HAS_UPSAMPLER = True
 
     @staticmethod
-    def create_pipeline(mesh_device: ttnn.MeshDevice, **kwargs) -> "LTXFastPipeline":
+    def create_pipeline(mesh_device: ttnn.MeshDevice, **kwargs) -> "LTXDistilledPipeline":
         kwargs.setdefault("mode", "av")
-        kwargs["pipeline_class"] = LTXFastPipeline
+        kwargs["pipeline_class"] = LTXDistilledPipeline
         return LTXPipeline.create_pipeline(mesh_device, **kwargs)
 
     def warmup_buffers(
@@ -45,7 +50,7 @@ class LTXFastPipeline(LTXAVPipeline):
         stages: tuple[str, ...] = ("s1", "s2"),
     ) -> None:
         """Compile every program both stages will hit. Both stages use variant 0
-        (Fast doesn't swap weights between stages); only the sequence length
+        (distilled doesn't swap weights between stages); only the sequence length
         differs. Pass ``stages=("s1",)`` to skip the full-res s2 warmup."""
         assert height % 64 == 0 and width % 64 == 0, f"H/W must be div by 64 (got {height}x{width})"
         assert num_frames > 0, f"num_frames must be > 0 (got {num_frames})"
@@ -54,7 +59,7 @@ class LTXFastPipeline(LTXAVPipeline):
 
         t0 = time.time()
         logger.info(
-            f"warmup (Fast 2-stage): {num_frames}f@{height}x{width}, "
+            f"warmup (distilled 2-stage): {num_frames}f@{height}x{width}, "
             f"stages={stages}, {num_inference_steps} steps/stage"
         )
 
@@ -93,8 +98,8 @@ class LTXFastPipeline(LTXAVPipeline):
             self._warmup_upsample(num_frames, height, width)
 
             # Zero-dummies at the exact shapes the real stage-2 call uses.
-            latent_frames = (num_frames - 1) // 8 + 1
-            full_latent_count = latent_frames * (height // 32) * (width // 32)
+            latent_frames, full_lh, full_lw = latent_grid(num_frames, height, width)
+            full_latent_count = latent_frames * full_lh * full_lw
             dummy_v_init = torch.zeros(1, full_latent_count, self.in_channels)
 
             vps = VideoPixelShape(batch=1, frames=num_frames, height=height, width=width, fps=24)
@@ -131,7 +136,7 @@ class LTXFastPipeline(LTXAVPipeline):
         self._ensure_device_encoder()
         self.encode_prompts_device(["warmup"], use_cache=False)
 
-        logger.info(f"warmup (Fast 2-stage) done in {time.time() - t0:.1f}s")
+        logger.info(f"warmup (distilled 2-stage) done in {time.time() - t0:.1f}s")
 
     def _prealloc_trace_io(self, trace_key, *, num_frames, height, width):
         """Allocate and cache a stage's persistent trace inputs (constants, latent buffers,
@@ -141,8 +146,7 @@ class LTXFastPipeline(LTXAVPipeline):
         overwritten on replay. Allocating every held input for both stages first keeps them
         below both traces' activations. (The prompt is built separately in _denoise.)"""
         B = 1
-        latent_frames = (num_frames - 1) // 8 + 1
-        latent_h, latent_w = height // 32, width // 32
+        latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
         video_N_real = latent_frames * latent_h * latent_w
         video_N = self._video_sp_pad_len(video_N_real)
         vps = VideoPixelShape(batch=B, frames=num_frames, height=height, width=width, fps=24)
@@ -225,8 +229,7 @@ class LTXFastPipeline(LTXAVPipeline):
         trace_key: str | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         B = 1
-        latent_frames = (num_frames - 1) // 8 + 1
-        latent_h, latent_w = height // 32, width // 32
+        latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
         video_N_real = latent_frames * latent_h * latent_w
         # SP padding: round video seq dim up to TILE_SIZE * sp_factor so ring SDPA's
         # N_local % TILE_HEIGHT and N_global == N_local * ring_size checks pass.
@@ -618,7 +621,7 @@ class LTXFastPipeline(LTXAVPipeline):
         v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
         logger.info(f"Encoding (device): {time.time() - t0:.1f}s")
 
-        # Both Fast stages share variant 0 (no weight swap between stages).
+        # Both distilled stages share variant 0 (no weight swap between stages).
         t0 = time.time()
         self._prepare_transformer(0)
         logger.info(f"Transformer prepare: {time.time() - t0:.1f}s")
@@ -646,14 +649,14 @@ class LTXFastPipeline(LTXAVPipeline):
                 logger.info(f"LTX_DECODE_S1_AUDIO: wrote {s1_path}")
             return output_path
 
-        latent_frames = (num_frames - 1) // 8 + 1
-        s1_h, s1_w = s1_height // 32, s1_width // 32
+        latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
+        s1_h, s1_w = s1_height // SPATIAL_COMPRESSION, s1_width // SPATIAL_COMPRESSION
         s1_spatial = s1_video.reshape(1, latent_frames, s1_h, s1_w, 128).permute(0, 4, 1, 2, 3)
         t0 = time.time()
         upsampled = self._upsample_latent(s1_spatial)
         logger.info(f"Latent upsample: {time.time() - t0:.1f}s")
         upsampled_flat = upsampled.permute(0, 2, 3, 4, 1).reshape(
-            1, latent_frames * (height // 32) * (width // 32), 128
+            1, latent_frames * (height // SPATIAL_COMPRESSION) * (width // SPATIAL_COMPRESSION), 128
         )
 
         logger.info(f"Stage 2: {height}x{width}, {len(STAGE_2_DISTILLED_SIGMA_VALUES) - 1} steps")
@@ -677,7 +680,7 @@ class LTXFastPipeline(LTXAVPipeline):
         self._prepare_vae()
         logger.info(f"VAE prepare: {time.time() - t0:.1f}s")
 
-        latent_h, latent_w = height // 32, width // 32
+        latent_h, latent_w = height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
         t0 = time.time()
         video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w)
         logger.info(f"VAE decode (forward): {time.time() - t0:.1f}s — {tuple(video_pixels.shape)}")
