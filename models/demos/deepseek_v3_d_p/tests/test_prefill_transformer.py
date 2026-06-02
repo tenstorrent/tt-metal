@@ -79,6 +79,7 @@ TRACE_PCC_THRESHOLD_DEVICE_FP32 = 0.95
 # or any InfiniteBench subset name (downloaded on first use via infinitebench_prompt fixture).
 INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", "longbook_qa_eng"}
 SEQ_LEN_1K = 1024
+SEQ_LEN_5K = 5120
 SEQ_LEN_25K = 25600
 
 
@@ -129,7 +130,7 @@ def _compare_intermediate_pcc(reference_items, tt_intermediates, number_of_non_p
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
-    [(SEQ_LEN_1K, 8), (SEQ_LEN_25K, 8)],
+    [(SEQ_LEN_1K, 8), (SEQ_LEN_5K, 8), (SEQ_LEN_25K, 8)],
 )
 @pytest.mark.parametrize(
     "num_layers",

@@ -61,6 +61,7 @@ ILLIAD_25024_TRACE = TRACE_DIR_BASE / "illiad_prefill_fa2_25024"
 ABC_1K_PAD_RIGHT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_right_1024"
 ABC_1K_PAD_LEFT_1024 = TRACE_DIR_BASE / "ABC_1k_prefill_padd_left_1024"
 LONGBOOK_QA_ENG_25600 = TRACE_DIR_BASE / "longbook_qa_eng_prefill_25600_nopad"
+LONGBOOK_QA_ENG_5120 = TRACE_DIR_BASE / "longbook_qa_eng_prefill_5120_nopad"
 
 # Identity-based trace lookup: (input_source, isl_total, padding_side) -> Path.
 # Traces are only used when use_pretrained=True and n_routed_experts=256, since they
@@ -71,6 +72,7 @@ TRACE_LOOKUP: dict[tuple[str, int, str], Path] = {
     ("abc_1k", 1024, "right"): ABC_1K_PAD_RIGHT_1024,
     ("abc_1k", 1024, "left"): ABC_1K_PAD_LEFT_1024,
     ("longbook_qa_eng", 25600, "right"): LONGBOOK_QA_ENG_25600,
+    ("longbook_qa_eng", 5120, "right"): LONGBOOK_QA_ENG_5120,
 }
 
 
