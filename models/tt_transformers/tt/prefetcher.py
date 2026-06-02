@@ -262,14 +262,28 @@ class Prefetcher(LightweightModule):
             num_receiver_cores is None or num_receiver_cores in self.legal_receiver_cores
         ), "num_receiver_cores must be in legal_receiver_cores"
         if self.receiver_mapping_override is not None:
+            assert (
+                len(self.receiver_mapping_override) == self.num_senders
+            ), f"receiver_mapping_override must define exactly {self.num_senders} senders"
+            inferred_receiver_counts = {len(v) for v in self.receiver_mapping_override.values()}
+            assert len(inferred_receiver_counts) == 1, (
+                "receiver_mapping_override must assign the same number of receivers to every sender"
+            )
+            inferred_receiver_count = inferred_receiver_counts.pop()
+            assert inferred_receiver_count > 0, "receiver_mapping_override must define at least one receiver per sender"
             if num_receiver_cores is None:
-                inferred_receiver_counts = {len(v) for v in self.receiver_mapping_override.values()}
-                assert len(inferred_receiver_counts) == 1, "receiver_mapping_override must assign the same number of receivers to every sender"
-                self.num_receiver_cores = inferred_receiver_counts.pop()
+                self.num_receiver_cores = inferred_receiver_count
             else:
+                assert inferred_receiver_count == num_receiver_cores, (
+                    "receiver_mapping_override receiver counts must match num_receiver_cores"
+                )
                 self.num_receiver_cores = num_receiver_cores
-            assert self.num_receiver_cores > 0, "receiver_mapping_override must define at least one receiver per sender"
-            assert len(self.receiver_mapping_override) > 0, "receiver_mapping_override must define at least one sender"
+            assert (
+                self.num_receiver_cores in self.legal_receiver_cores
+            ), "receiver_mapping_override must use a supported number of receivers per sender"
+            assert is_prefetcher_supported(
+                self.model_name, self.mesh_device.get_num_devices(), self.num_receiver_cores * self.num_senders
+            ), "receiver_mapping_override is not supported"
         elif num_receiver_cores is not None:
             assert is_prefetcher_supported(
                 self.model_name, self.mesh_device.get_num_devices(), num_receiver_cores * self.num_senders

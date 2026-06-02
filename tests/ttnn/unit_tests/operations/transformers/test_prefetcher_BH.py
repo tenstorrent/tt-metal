@@ -50,8 +50,14 @@ def test_prefetcher_override_infers_receiver_count(monkeypatch):
     monkeypatch.setenv("HF_MODEL", "Llama-3.2-1B")
 
     override = {
-        (0, 0): [(1, 0), (2, 0), (3, 0)],
+        (0, 9): [(1, 9), (2, 9), (3, 9)],
+        (0, 1): [(1, 1), (2, 1), (3, 1)],
+        (0, 7): [(1, 7), (2, 7), (3, 7)],
+        (0, 3): [(1, 3), (2, 3), (3, 3)],
         (7, 0): [(8, 0), (9, 0), (10, 0)],
+        (7, 2): [(8, 2), (9, 2), (10, 2)],
+        (7, 6): [(8, 6), (9, 6), (10, 6)],
+        (7, 4): [(8, 4), (9, 4), (10, 4)],
     }
 
     prefetcher = Prefetcher(
@@ -64,6 +70,89 @@ def test_prefetcher_override_infers_receiver_count(monkeypatch):
     assert prefetcher.receiver_mapping_override == override
     assert prefetcher.num_receiver_cores == 3
     assert prefetcher.ring_size == 3 * prefetcher.num_senders
+
+
+def test_prefetcher_override_requires_full_sender_mapping(monkeypatch):
+    class _FakeMeshDevice:
+        def get_num_devices(self):
+            return 2
+
+        def compute_with_storage_grid_size(self):
+            return ttnn.CoreCoord(11, 10)
+
+    monkeypatch.setenv("HF_MODEL", "Llama-3.2-1B")
+
+    with pytest.raises(AssertionError, match="must define exactly 8 senders"):
+        Prefetcher(
+            mesh_device=_FakeMeshDevice(),
+            num_tensors=5,
+            num_layers=1,
+            receiver_mapping_override={
+                (0, 0): [(1, 0), (2, 0), (3, 0)],
+                (7, 0): [(8, 0), (9, 0), (10, 0)],
+            },
+        )
+
+
+def test_prefetcher_override_rejects_receiver_count_mismatch(monkeypatch):
+    class _FakeMeshDevice:
+        def get_num_devices(self):
+            return 2
+
+        def compute_with_storage_grid_size(self):
+            return ttnn.CoreCoord(11, 10)
+
+    monkeypatch.setenv("HF_MODEL", "Llama-3.2-1B")
+
+    override = {
+        (0, 9): [(1, 9), (2, 9), (3, 9)],
+        (0, 1): [(1, 1), (2, 1), (3, 1)],
+        (0, 7): [(1, 7), (2, 7), (3, 7)],
+        (0, 3): [(1, 3), (2, 3), (3, 3)],
+        (7, 0): [(8, 0), (9, 0), (10, 0)],
+        (7, 2): [(8, 2), (9, 2), (10, 2)],
+        (7, 6): [(8, 6), (9, 6), (10, 6)],
+        (7, 4): [(8, 4), (9, 4), (10, 4)],
+    }
+
+    with pytest.raises(AssertionError, match="must match num_receiver_cores"):
+        Prefetcher(
+            mesh_device=_FakeMeshDevice(),
+            num_tensors=5,
+            num_layers=1,
+            num_receiver_cores=2,
+            receiver_mapping_override=override,
+        )
+
+
+def test_prefetcher_override_rejects_unsupported_receiver_count(monkeypatch):
+    class _FakeMeshDevice:
+        def get_num_devices(self):
+            return 2
+
+        def compute_with_storage_grid_size(self):
+            return ttnn.CoreCoord(11, 10)
+
+    monkeypatch.setenv("HF_MODEL", "Llama-3.2-1B")
+
+    override = {
+        (0, 9): [(1, 9)] * 4,
+        (0, 1): [(1, 1)] * 4,
+        (0, 7): [(1, 7)] * 4,
+        (0, 3): [(1, 3)] * 4,
+        (7, 0): [(8, 0)] * 4,
+        (7, 2): [(8, 2)] * 4,
+        (7, 6): [(8, 6)] * 4,
+        (7, 4): [(8, 4)] * 4,
+    }
+
+    with pytest.raises(AssertionError, match="must use a supported number of receivers per sender"):
+        Prefetcher(
+            mesh_device=_FakeMeshDevice(),
+            num_tensors=5,
+            num_layers=1,
+            receiver_mapping_override=override,
+        )
 
 
 def create_weight_tensors(
