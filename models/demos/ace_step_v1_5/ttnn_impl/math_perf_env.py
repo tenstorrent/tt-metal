@@ -2127,7 +2127,7 @@ def _ace_step_cond_256x1024_1d_width_program_config(
 # Nt=192 does not divide the 11×10 grid evenly so it is not in this pinned table.
 _ACE_STEP_ENCODER_MM_PINNED = {
     (1024, 4096): ("1D", 8, 8, 8),  # qkv: Nt=128 fills 64 cores in 1D
-    (2048, 1024): ("2D", 8, 8, 8),  # wo:  2D splits K=64t over gx=8 → 64c; pair with bs in0/out
+    (2048, 1024): ("2D", 8, 8, 8),  # wo:  2D splits K=64t over gx=8 → 64c; pair with bs in0/out (BF16×BFP8, PCC 0.9999)
     (3072, 1024): ("2D", 8, 8, 12),  # down: Kt/gx=12; ibw=12 (was 6) ~1.18× in sweep
 }
 
