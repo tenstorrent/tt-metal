@@ -989,40 +989,45 @@ std::vector<uint32_t> pack_as_bfp_tiles(
     // hold (production formats - 32x32 tile, 16x16 face - always satisfy
     // both invariants and use the optimized path above).
     //
-    // All scratch vectors used by this path are sized / hoisted up-front so
-    // the inner loops pay zero allocation cost: `packed_result` is reserved
-    // to its final output size; the small accumulators (`exponents`, `data`)
-    // are reserved to their flush-threshold capacity; and the per-row /
-    // per-tile scratch (`single_row`, `packed_data`) are hoisted outside the
-    // inner loops and `clear()`-reused instead of being re-constructed each
-    // iteration (clear() preserves capacity, so reserve() is paid once total).
+    // All scratch vectors used by this path are pre-sized once with
+    // `resize()` and then written via indexed assignment instead of
+    // `push_back`. `single_row` has a constant size (subtile_cols), and
+    // the flush-threshold accumulators (`exponents`, `data`) and the
+    // per-tile `packed_data` all have constant maximum sizes, so once
+    // capacity is in place we never reallocate and we never have to
+    // re-check size on every store. Counters (`exp_idx`, `data_idx`,
+    // `packed_data_idx`) track logical fill level within each fixed-
+    // size buffer. `packed_result` is reserved (not resized) to its
+    // exact final size; we still use push_back / insert into it, but
+    // the up-front reserve eliminates any grow-from-zero reallocations.
     // ------------------------------------------------------------------
     const uint32_t subtile_rows = face_H;
     const uint32_t subtile_cols = face_W;
-    constexpr int num_exponents_in_dword = 4;
+    constexpr size_t num_exponents_in_dword = 4;
 
     std::vector<uint32_t> packed_result;
     packed_result.reserve(static_cast<size_t>(num_tiles) * bfp_dwords_per_tile);
-    std::vector<uint8_t> exponents;
-    exponents.reserve(num_exponents_in_dword);
-    std::vector<uint32_t> data;
-    data.reserve(num_mantissas_in_dword);
-    std::vector<uint32_t> single_row;
-    single_row.reserve(subtile_cols);
-    std::vector<uint32_t> packed_data;
-    packed_data.reserve(num_data_dwords_per_tile);
+
+    // Constant-size scratch buffers - sized once, indexed by position.
+    std::vector<uint32_t> single_row(subtile_cols);
+    std::vector<uint8_t> exponents(num_exponents_in_dword);
+    std::vector<uint32_t> data(num_mantissas_in_dword);
+    std::vector<uint32_t> packed_data(num_data_dwords_per_tile);
+
+    // Padded-exponent scratch: per-tile size varies with padding, so we
+    // still rely on push_back into a single hoisted, pre-reserved buffer.
     std::vector<uint8_t> exponents_with_padding;
     exponents_with_padding.reserve(l1_alignment * subtiles_in_tile_row * subtiles_in_tile_col);
 
     int fp32_element_index = 0;
+    size_t exp_idx = 0;
 
     for (uint32_t tile_index = 0; tile_index < num_tiles; ++tile_index) {
-        packed_data.clear();
+        size_t packed_data_idx = 0;
         exponents_with_padding.clear();
         for (uint32_t tr = 0; tr < subtiles_in_tile_row; ++tr) {
             for (uint32_t tc = 0; tc < subtiles_in_tile_col; ++tc) {
                 for (uint32_t i = 0; i < subtile_rows; ++i) {
-                    single_row.clear();
                     for (uint32_t j = 0; j < subtile_cols; ++j) {
                         int data_index;
                         if (row_major_input) {
@@ -1032,8 +1037,7 @@ std::vector<uint32_t> pack_as_bfp_tiles(
                             data_index = fp32_element_index++;
                         }
                         float float_num = static_cast<float>(input_data[data_index]);
-                        uint32_t uint32_num = std::bit_cast<uint32_t>(float_num);
-                        single_row.push_back(uint32_num);
+                        single_row[j] = std::bit_cast<uint32_t>(float_num);
                     }
 
                     uint8_t exp = get_max_exp(single_row, is_exp_a);
@@ -1041,19 +1045,20 @@ std::vector<uint32_t> pack_as_bfp_tiles(
                     if (exponent_padding) {
                         exponents_with_padding.push_back(exp);
                     } else {
-                        exponents.push_back(exp);
-                        if (exponents.size() % num_exponents_in_dword == 0) {
+                        exponents[exp_idx++] = exp;
+                        if (exp_idx == num_exponents_in_dword) {
                             packed_result.push_back(get_exp_dword(exponents));
-                            exponents.clear();
+                            exp_idx = 0;
                         }
                     }
 
+                    size_t data_idx = 0;
                     for (uint32_t u32_datum : single_row) {
-                        data.push_back(u32_datum);
-                        if (data.size() % num_mantissas_in_dword == 0) {
-                            uint32_t datum = create_packed_bfp_packed_as_u32<BfpFormat>(data, exp, is_exp_a);
-                            packed_data.push_back(datum);
-                            data.clear();
+                        data[data_idx++] = u32_datum;
+                        if (data_idx == num_mantissas_in_dword) {
+                            packed_data[packed_data_idx++] =
+                                create_packed_bfp_packed_as_u32<BfpFormat>(data, exp, is_exp_a);
+                            data_idx = 0;
                         }
                     }
                 }
