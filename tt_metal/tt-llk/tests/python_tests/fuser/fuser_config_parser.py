@@ -24,7 +24,7 @@ from .fused_operand import OperandRegistry
 from .fuser_config import FuserConfig, GlobalConfig
 
 FUSER_CONFIG_DIR = (
-    Path(os.environ.get("LLK_HOME", ".")) / "tests" / "python_tests" / "fuser_config"
+    Path(os.environ.get("LLK_HOME", ".")) / "tests" / "python_tests" / "fuser_tests"
 )
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
@@ -112,7 +112,7 @@ class FuserConfigSchema(BaseModel):
                     seen_operands.add(node.src_b)
 
             if op.output in seen_operands:
-                raise ValueError("output already used")
+                raise ValueError(f"cannot use '{op.output}' as output twice")
 
             seen_operands.add(op.output)
 
