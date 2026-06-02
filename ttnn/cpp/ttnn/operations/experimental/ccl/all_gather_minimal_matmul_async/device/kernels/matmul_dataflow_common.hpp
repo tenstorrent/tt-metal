@@ -12,6 +12,10 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/core_local_mem.h"
 
+#ifndef MATMUL_ISOLATION_MODE
+#define MATMUL_ISOLATION_MODE 0
+#endif
+
 namespace detail {
 template <typename... Args, uint32_t... Indexes>
 auto make_tensor_accessor_tuple_impl(
@@ -156,6 +160,10 @@ void compute_actual_k_block(
     }
 #if defined(IS_IN0) || defined(IS_IN1)
     if (wait_for_forwarded_data) {
+#ifdef IS_IN0
+#if MATMUL_ISOLATION_MODE == 0
+    if (device_iter > 0 && is_first_n_block) {
+        // When we are not reading from local, and we are in the first forward pass through n, wait for data to arrive
         if (is_injector_core) {
             if constexpr (IsLinear) {
                 // Linear uni-ring: one slice per iter from "successor" (Dev k+1 normally; for
@@ -182,6 +190,9 @@ void compute_actual_k_block(
         }
     }
 #endif  // IS_IN0 || IS_IN1
+#endif  // MATMUL_ISOLATION_MODE == 0
+    }
+#endif
 }
 
 #ifdef USE_MUX

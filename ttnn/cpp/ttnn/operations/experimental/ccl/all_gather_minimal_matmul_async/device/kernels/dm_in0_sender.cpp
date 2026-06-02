@@ -17,6 +17,10 @@
 
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
+#ifndef MATMUL_ISOLATION_MODE
+#define MATMUL_ISOLATION_MODE 0
+#endif
+
 using ttnn::ccl::Topology;
 
 ///////////////////////////////////////////////////
@@ -154,6 +158,7 @@ void kernel_main() {
     auto outputs_tuple =
         make_tensor_accessor_tuple_uniform_page_size_common(outputs_args, out_addr_common_arg_start, out_tile_size);
 
+#if MATMUL_ISOLATION_MODE == 0
 #ifdef USE_MUX
     uint32_t backward_in0_core_order_index = in0_core_order_size - 2;
     uint32_t forward_in0_core_order_index = in0_core_order_size - 1;
@@ -179,6 +184,7 @@ void kernel_main() {
         mux_connection_handle_forward = mux_forward.build_and_connect(fabric_mux_status_address);
     }
 #endif
+#endif  // MATMUL_ISOLATION_MODE == 0
 
 #ifdef FUSE_BIAS
     constexpr uint32_t in2_args_cta_offset =
@@ -269,6 +275,7 @@ void kernel_main() {
     uint64_t out_ready_sem_injector_noc_addr_forward_in_pkt =
         safe_get_noc_addr(out_ready_sem_injector_noc0_x, out_ready_sem_injector_noc0_y, out_ready_sem_forward, 0);
 
+#if MATMUL_ISOLATION_MODE == 0
 #ifdef USE_MUX
     auto pkt_hdrs_backward = allocate_and_init_packet_headers(
         detail::valid_targets(1),
@@ -280,6 +287,7 @@ void kernel_main() {
     auto pkt_hdrs_forward = allocate_and_init_packet_headers(
         detail::valid_targets(0), unicast_route_info_forward, in0_reader, num_tiles_to_write_per_packet, in3_tile_size);
 #endif
+#endif  // MATMUL_ISOLATION_MODE == 0
 
     /**
      * This is a Row-Major output block ordering.
@@ -296,7 +304,6 @@ void kernel_main() {
     bool defer_write = false;
 
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
-        DPRINT << " THE CORRECT KERNEL" << ENDL();
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
         uint32_t current_M_block_tiles = m_tile_end - m_tile;
@@ -450,6 +457,7 @@ void kernel_main() {
 
                     noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
                 }
+#if MATMUL_ISOLATION_MODE == 0
 #ifdef USE_MUX
                 if (n_block_iter == 0) {
                     if constexpr (is_linear) {
@@ -570,6 +578,7 @@ void kernel_main() {
                     }
                 }
 #endif  // USE_MUX
+#endif  // MATMUL_ISOLATION_MODE == 0
             }
 #ifdef FUSE_BIAS
             if constexpr (!is_output_writer) {
@@ -666,6 +675,7 @@ void kernel_main() {
     noc_obj.async_write_barrier();
     noc_obj.async_atomic_barrier();
 
+#if MATMUL_ISOLATION_MODE == 0
 #ifdef USE_MUX
     if (mux_backward.connection_valid) {
         close_mux(
@@ -694,6 +704,7 @@ void kernel_main() {
             mux_forward.termination_master_noc_y);
     }
 #endif  // USE_MUX
+#endif  // MATMUL_ISOLATION_MODE == 0
 
     noc_obj.async_write_barrier();
 
