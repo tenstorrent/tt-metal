@@ -4,7 +4,6 @@ Finds exactly where the computation diverges.
 Run: pytest models/demos/blackhole/qwen3_5_9b/tests/test_component_pcc.py -v -s --noconftest --timeout=600
 """
 import glob
-import os
 
 import pytest
 import torch
@@ -14,12 +13,6 @@ from loguru import logger
 import ttnn
 from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
 from models.demos.blackhole.qwen3_5_9b.tt.weight_mapping import remap_qwen35_state_dict
-
-# HF_MODEL (hub name or local path) is the single source of truth for the config.
-# CHECKPOINT_DIR is still used directly to glob the raw safetensors (exercising the
-# model.language_model.* remap path).
-CHECKPOINT_DIR = os.environ.get("HF_MODEL", "/local/ttuser/atupe/Qwen9b")
-os.environ.setdefault("HF_MODEL", CHECKPOINT_DIR)
 
 
 def compute_pcc(a, b):
@@ -43,7 +36,7 @@ def setup(device):
     from safetensors import safe_open
 
     raw = {}
-    for path in sorted(glob.glob(f"{CHECKPOINT_DIR}/model.safetensors-*.safetensors")):
+    for path in sorted(glob.glob(f"{args.CKPT_DIR}/model.safetensors-*.safetensors")):
         with safe_open(path, framework="pt", device="cpu") as f:
             for key in f.keys():
                 raw[key] = f.get_tensor(key)

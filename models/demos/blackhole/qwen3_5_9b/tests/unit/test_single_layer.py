@@ -5,7 +5,6 @@ Requires a Blackhole P150 device.
 Run: pytest models/demos/blackhole/qwen3_5_9b/tests/test_single_layer.py -v
 """
 import glob
-import os
 
 import pytest
 import torch
@@ -16,10 +15,6 @@ from models.demos.blackhole.qwen3_5_9b.tt.layer import Qwen35DecoderLayer
 from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
 from models.demos.blackhole.qwen3_5_9b.tt.weight_mapping import remap_qwen35_state_dict
 
-# HF_MODEL (hub name or local path) is the single source of truth for the config.
-# CHECKPOINT_DIR is still used directly to glob the raw safetensors.
-CHECKPOINT_DIR = os.environ.get("HF_MODEL", "/local/ttuser/atupe/Qwen9b")
-os.environ.setdefault("HF_MODEL", CHECKPOINT_DIR)
 pytestmark = run_for_blackhole()
 PCC_THRESHOLD = 0.98
 
@@ -51,7 +46,7 @@ def model_fixtures(device):
     from safetensors import safe_open
 
     raw_sd = {}
-    for path in sorted(glob.glob(f"{CHECKPOINT_DIR}/model.safetensors-*.safetensors")):
+    for path in sorted(glob.glob(f"{args.CKPT_DIR}/model.safetensors-*.safetensors")):
         with safe_open(path, framework="pt", device="cpu") as f:
             for key in f.keys():
                 raw_sd[key] = f.get_tensor(key)

@@ -15,7 +15,6 @@ Run 2k:     pytest models/demos/blackhole/qwen3_5_9b/demo/text_demo.py -v -s -k 
 
 import hashlib
 import json
-import os
 import time
 from pathlib import Path
 
@@ -28,10 +27,6 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen3_5_9b.tt.model import Qwen35Model
 from models.tt_transformers.tt.generator import Generator
-
-# HF_MODEL (hub name or local path) is the single source of truth.
-CHECKPOINT_DIR = os.environ.get("HF_MODEL", "/local/ttuser/atupe/Qwen9b")
-os.environ.setdefault("HF_MODEL", CHECKPOINT_DIR)
 
 DEVICE_PARAMS = [{"l1_small_size": 24576, "num_command_queues": 2}]
 
@@ -208,11 +203,9 @@ def test_demo_text(
     use_trace,
 ):
     """End-to-end text generation: prefill + decode with performance validation."""
-    from transformers import PreTrainedTokenizerFast
+    from transformers import AutoTokenizer
 
     device.enable_program_cache()
-    tokenizer = PreTrainedTokenizerFast.from_pretrained(CHECKPOINT_DIR)
-
     # Fixed block budget — max_seq_len derived from it
     max_seq_len = MAX_NUM_BLOCKS * BLOCK_SIZE
 
@@ -224,6 +217,7 @@ def test_demo_text(
         # n_layers=4,  # uncomment for fast iteration; default uses 32-layer config
     )
     logger.info(f"Model load: {time.time() - t0:.1f}s")
+    tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
 
     token_ids = _get_prompt(seqlen, tokenizer)
     actual_len = token_ids.shape[1]

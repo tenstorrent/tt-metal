@@ -17,17 +17,12 @@ reference (prefill_paged), with chunk-seq enabled, across multiple chunks.
 Run:
   pytest models/demos/blackhole/qwen3_5_9b/tests/test_prefill_trace_chunked.py -v -s
 """
-import os
-
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
 
-# HF_MODEL (hub name or local path) is the single source of truth.
-CHECKPOINT_DIR = os.environ.get("HF_MODEL", "/local/ttuser/atupe/Qwen9b")
-os.environ.setdefault("HF_MODEL", CHECKPOINT_DIR)
 DEVICE_PARAMS = [{"l1_small_size": 24576, "num_command_queues": 2}]
 BLOCK_SIZE = 64
 MAX_NUM_BLOCKS = 1280  # 1280 * 64 = 81920 token capacity (covers the >64k isolation case)

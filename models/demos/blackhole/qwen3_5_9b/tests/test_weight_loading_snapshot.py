@@ -4,7 +4,6 @@
 First run (baseline, no fixture present) writes fixtures/baseline_logits.pt.
 Subsequent runs compare current prefill logits against that baseline at PCC >= 0.9999.
 """
-import os
 from pathlib import Path
 
 import pytest
@@ -16,7 +15,6 @@ from models.demos.blackhole.qwen3_5_9b.tt.model import Qwen35Model
 
 pytestmark = run_for_blackhole()
 
-CHECKPOINT_DIR = os.environ.get("HF_MODEL", "/local/ttuser/atupe/Qwen9b")
 FIXTURE = Path(__file__).parent / "fixtures" / "baseline_logits.pt"
 # Fixed, deterministic prompt — 64 tokens, no padding.
 PROMPT_TOKENS = torch.arange(1, 65, dtype=torch.int32).unsqueeze(0)  # [1, 64]
@@ -36,9 +34,7 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 
 
 def test_prefill_logits_snapshot(device):
-    # HF_MODEL (hub name or local path) is the single source of truth; the run
-    # command exports it, and CHECKPOINT_DIR mirrors it for the fallback default.
-    os.environ.setdefault("HF_MODEL", CHECKPOINT_DIR)
+    # HF_MODEL (hub name or local path) is the single source of truth.
     model = Qwen35Model.from_pretrained(device, max_seq_len=2048)
     logits_tt = model.prefill(PROMPT_TOKENS)
     logits = ttnn.to_torch(logits_tt).float().cpu()
