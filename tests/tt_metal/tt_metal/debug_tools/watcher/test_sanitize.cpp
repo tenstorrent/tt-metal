@@ -199,8 +199,8 @@ void RunTestOnCore(
         // TENSIX kernel is launched via Metal 2.0 on both gen1 (WH/BH) and gen2 (Quasar).
         // On Quasar, user DMs (DM2..DM7) run the kernel; multi_dm_race syncs them to race, else only dm_id executes.
         // On WH/BH, BRISC or NCRISC (selected by use_ncrisc) runs the kernel.
-        experimental::metal2_host_api::KernelSpec::CompileTimeArgBindings cta_bindings;
-        experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines defines;
+        experimental::KernelSpec::CompileTimeArgs cta_bindings;
+        experimental::KernelSpec::CompilerOptions::Defines defines;
         if (is_quasar && multi_dm_race) {
             constexpr uint32_t num_dms = 6;
             constexpr uint32_t multi_dm_base_addr = 0xFFFF0000;
@@ -229,25 +229,23 @@ void RunTestOnCore(
         auto gen1_processor =
             use_ncrisc ? tt::tt_metal::DataMovementProcessor::RISCV_1 : tt::tt_metal::DataMovementProcessor::RISCV_0;
         auto gen1_noc = use_ncrisc ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default;
-        experimental::metal2_host_api::DataMovementConfiguration dm_cfg{
-            .gen1_data_movement_config =
-                experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
-                    .processor = gen1_processor, .noc = gen1_noc},
-            .gen2_data_movement_config =
-                experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{},
+        experimental::DataMovementHardwareConfig dm_cfg{
+            .gen1_config =
+                experimental::DataMovementHardwareConfig::Gen1Config{.processor = gen1_processor, .noc = gen1_noc},
+            .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
         };
-        uint8_t num_threads = is_quasar ? 6 : 1;
+        uint32_t num_threads = is_quasar ? 6u : 1u;
         if (!is_quasar) {
             noc = static_cast<int>(gen1_noc);
         }
-        experimental::metal2_host_api::KernelSpec dm_spec{
+        experimental::KernelSpec dm_spec{
             .unique_id = DRAM_COPY_KERNEL_NAME,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel_metal2},
+            .source = kernel_metal2,
             .num_threads = num_threads,
             .compiler_options = {.defines = defines},
-            .compile_time_arg_bindings = cta_bindings,
-            .runtime_arguments_schema =
-                {.named_runtime_args =
+            .compile_time_args = cta_bindings,
+            .runtime_arg_schema =
+                {.runtime_arg_names =
                      {"local_buffer_addr",
                       "buffer_src_addr",
                       "src_noc_x",
@@ -264,19 +262,19 @@ void RunTestOnCore(
                       "use_multicast_semaphore_inc",
                       "mcast_dst_end_x",
                       "mcast_dst_end_y"}},
-            .config_spec = dm_cfg,
+            .hw_config = dm_cfg,
         };
-        experimental::metal2_host_api::WorkUnitSpec wu{
-            .unique_id = "main",
+        experimental::WorkUnitSpec wu{
+            .name = "main",
             .kernels = {DRAM_COPY_KERNEL_NAME},
-            .target_nodes = experimental::metal2_host_api::NodeCoord{core},
+            .target_nodes = experimental::NodeCoord{core},
         };
-        experimental::metal2_host_api::ProgramSpec spec{
-            .program_id = "watcher_sanitize",
+        experimental::ProgramSpec spec{
+            .name = "watcher_sanitize",
             .kernels = {dm_spec},
             .work_units = {wu},
         };
-        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+        program = experimental::MakeProgramFromSpec(*mesh_device, spec);
         if (is_quasar) {
             // Quasar SD does not yet expose a NOC index in the same way as legacy DMs; the watcher
             // log emits "noc0" for Metal 2.0 DM kernels. Match that so expected strings line up.
@@ -382,11 +380,11 @@ void RunTestOnCore(
         // ETH cores still go through the legacy API.
         tt_metal::SetRuntimeArgs(program, dram_copy_kernel, core, rta_values);
     } else {
-        experimental::metal2_host_api::ProgramRunParams params;
-        params.kernel_run_params = {{
+        experimental::ProgramRunArgs params;
+        params.kernel_run_args = {{
             .kernel_spec_name = DRAM_COPY_KERNEL_NAME,
-            .named_runtime_args =
-                {{.node = experimental::metal2_host_api::NodeCoord{core},
+            .runtime_arg_values =
+                {{.node = experimental::NodeCoord{core},
                   .args =
                       {{"local_buffer_addr", buffer_addr},
                        {"buffer_src_addr", input_buffer_addr},
@@ -405,7 +403,7 @@ void RunTestOnCore(
                        {"mcast_dst_end_x", mcast_dst_end_x},
                        {"mcast_dst_end_y", mcast_dst_end_y}}}},
         }};
-        experimental::metal2_host_api::SetProgramRunParameters(program, params);
+        experimental::SetProgramRunArgs(program, params);
     }
     workload.add_program(device_range, std::move(program));
 
@@ -603,9 +601,14 @@ void RunTestOnCore(
                 (eth_dest_overflow_addr_words << 4));
         } break;
         case SanitizeNOCMulticastInvalidRange: {
+            // The watcher device reader formats multicast coords using CoreCoord::str() +
+            // "-" + CoreCoord::str(), which (since UMD bump) produces "X1-Y1-X2-Y2".
+            // Build the expected string the same way to stay format-agnostic.
+            CoreCoord mcast_start_coord = output_buf_noc_xy;
+            CoreCoord mcast_end_coord = {mcast_dst_end_x, mcast_dst_end_y};
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to multicast write 4 "
-                "bytes from local L1[{:#08x}] to DRAM core range w/ virtual coords (x={},y={})-(x={},y={}) "
+                "bytes from local L1[{:#08x}] to DRAM core range w/ virtual coords {}-{} "
                 "DRAM[addr=0x{:08x}] (multicast invalid range).",
                 device->id(),
                 core_name,
@@ -616,10 +619,8 @@ void RunTestOnCore(
                 risc_name,
                 noc,
                 0,  // l1_addr is 0 for address-only sanitization
-                output_buf_noc_xy.x,
-                output_buf_noc_xy.y,
-                mcast_dst_end_x,
-                mcast_dst_end_y,
+                mcast_start_coord.str(),
+                mcast_end_coord.str(),
                 output_buffer_addr);
         } break;
         default:

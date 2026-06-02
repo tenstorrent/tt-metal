@@ -41,8 +41,8 @@ void kernel_main() {
     UnicastEndpoint unicast_endpoint;
     MulticastEndpoint multicast_endpoint;
 
-    constexpr Noc::McastMode include_src =
-        loopback ? Noc::McastMode::INCLUDE_SRC : Noc::McastMode::EXCLUDE_SRC;
+    constexpr NocOptions include_src =
+        loopback ? NocOptions::MCAST_INCL_SRC : NocOptions::DEFAULT;
 
     {
         DeviceZoneScopedN("RISCV0");

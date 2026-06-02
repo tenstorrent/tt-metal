@@ -218,7 +218,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* fill = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fill_addr);
 
     // ---- Load leids (uint16) into leids_buf ----
-    noc_async_read(get_noc_addr(0, leids_addrgen), (uint32_t)leids_buf, leids_aligned_page);
+    noc_async_read(leids_addrgen.get_noc_addr(0), (uint32_t)leids_buf, leids_aligned_page);
     noc_async_read_barrier();
     volatile tt_l1_ptr uint16_t* leids_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(leids_buf);
 
@@ -235,7 +235,7 @@ void kernel_main() {
             for (uint32_t row = block_start; row < block_end; ++row) {
                 uint32_t local_row = row - block_start;
                 noc_async_read(
-                    get_noc_addr(row, md_addrgen), md_block_addr + local_row * md_aligned_page, md_aligned_page);
+                    md_addrgen.get_noc_addr(row), md_block_addr + local_row * md_aligned_page, md_aligned_page);
             }
             noc_async_read_barrier();
             // Count
@@ -341,9 +341,9 @@ void kernel_main() {
             stamp_entries += copy_entries;
         }
 
-        uint64_t plan_base_noc = get_noc_addr(0, plan_addrgen);
-        uint64_t gs_base_noc = get_noc_addr(0, gs_addrgen);
-        uint64_t ks_base_noc = get_noc_addr(0, ks_addrgen);
+        uint64_t plan_base_noc = plan_addrgen.get_noc_addr(0);
+        uint64_t gs_base_noc = gs_addrgen.get_noc_addr(0);
+        uint64_t ks_base_noc = ks_addrgen.get_noc_addr(0);
         constexpr uint32_t gs_entries_per_burst = MEM_ZEROS_SIZE / sizeof(uint16_t);
         for (uint32_t base = 0; base < t_cap; base += prefill_stamp_entries) {
             uint32_t n = (base + prefill_stamp_entries <= t_cap) ? prefill_stamp_entries : (t_cap - base);
@@ -357,9 +357,9 @@ void kernel_main() {
 
         // Write counts and offsets to DRAM (use stage as staging)
         for (uint32_t e = 0; e < e_local; ++e) stage[e] = counts[e];
-        noc_async_write((uint32_t)stage, get_noc_addr(0, cnt_addrgen), cnt_page_bytes);
+        noc_async_write((uint32_t)stage, cnt_addrgen.get_noc_addr(0), cnt_page_bytes);
         for (uint32_t e = 0; e <= e_local; ++e) stage[e] = offsets[e];
-        noc_async_write((uint32_t)stage, get_noc_addr(0, off_addrgen), off_page_bytes);
+        noc_async_write((uint32_t)stage, off_addrgen.get_noc_addr(0), off_page_bytes);
         noc_async_write_barrier();
 
         // Signal phase 2 done on every core (incl. lead) via ONE NOC multicast
@@ -396,9 +396,9 @@ void kernel_main() {
 
     for (uint32_t e = 0; e < e_local; ++e) fill[e] = 0;
 
-    uint64_t plan_base_noc = get_noc_addr(0, plan_addrgen);
-    uint64_t gs_base_noc = get_noc_addr(0, gs_addrgen);
-    uint64_t ks_base_noc = get_noc_addr(0, ks_addrgen);
+    uint64_t plan_base_noc = plan_addrgen.get_noc_addr(0);
+    uint64_t gs_base_noc = gs_addrgen.get_noc_addr(0);
+    uint64_t ks_base_noc = ks_addrgen.get_noc_addr(0);
     if (my_slice_size > 0U) {
         for (uint32_t block_start = my_slice_start; block_start < my_slice_end; block_start += block_rows) {
             uint32_t block_end = block_start + block_rows;
@@ -408,9 +408,9 @@ void kernel_main() {
             for (uint32_t row = block_start; row < block_end; ++row) {
                 uint32_t local_row = row - block_start;
                 noc_async_read(
-                    get_noc_addr(row, md_addrgen), md_block_addr + local_row * md_aligned_page, md_aligned_page);
+                    md_addrgen.get_noc_addr(row), md_block_addr + local_row * md_aligned_page, md_aligned_page);
                 noc_async_read(
-                    get_noc_addr(row, scores_addrgen), sc_block_addr + local_row * sc_aligned_page, sc_aligned_page);
+                    scores_addrgen.get_noc_addr(row), sc_block_addr + local_row * sc_aligned_page, sc_aligned_page);
             }
             noc_async_read_barrier();
             // Scatter: on match, write plan[i]=row, gs[i]=scores[row,ki], ks[i]=ki.
@@ -519,7 +519,7 @@ void kernel_main() {
 
     // Pull offsets[e_local] from DRAM so we can short-circuit reads for
     // tile-rows past the last active expert slice.
-    noc_async_read(get_noc_addr(0, off_addrgen), (uint32_t)stage, (e_local + 1U) * sizeof(uint32_t));
+    noc_async_read(off_addrgen.get_noc_addr(0), (uint32_t)stage, (e_local + 1U) * sizeof(uint32_t));
     noc_async_read_barrier();
     const uint32_t max_active_tiles = stage[e_local] / tt::constants::TILE_HEIGHT;
 
@@ -550,7 +550,7 @@ void kernel_main() {
     const uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE);
     constexpr uint32_t zero_chunk_bytes = MEM_ZEROS_SIZE;
     for (uint32_t step = 0; step < my_active_count; ++step, tile_row += worker_stride) {
-        uint64_t plan_noc = get_noc_addr(0, plan_addrgen) + tile_row * tt::constants::TILE_HEIGHT * sizeof(uint32_t);
+        uint64_t plan_noc = plan_addrgen.get_noc_addr(0, tile_row * tt::constants::TILE_HEIGHT * sizeof(uint32_t));
         noc_async_read(plan_noc, plan_l1_addr, tt::constants::TILE_HEIGHT * sizeof(uint32_t));
         noc_async_read_barrier();
 
@@ -575,7 +575,7 @@ void kernel_main() {
                         remaining -= n;
                     }
                 } else {
-                    uint64_t row_noc = get_noc_addr(src, dispatched_addrgen) + chunk_off_bytes;
+                    uint64_t row_noc = dispatched_addrgen.get_noc_addr(src, chunk_off_bytes);
                     noc_async_read(row_noc, row_dst, read_bytes);
                     if (pad_bytes > 0U) {
                         uint32_t remaining = pad_bytes;

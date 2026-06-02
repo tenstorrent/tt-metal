@@ -31,8 +31,10 @@ void calculate_exponential([[maybe_unused]] const uint exp_base_scale_factor = p
 template <
     [[maybe_unused]] bool APPROXIMATION_MODE,
     [[maybe_unused]] uint32_t scale = 0x3F800000,
-    [[maybe_unused]] bool CLAMP_NEGATIVE = true>
+    [[maybe_unused]] bool CLAMP_NEGATIVE = true,
+    [[maybe_unused]] bool EN_32BIT_DEST>
 void exp_init() {
+    static_assert(EN_32BIT_DEST == false, "Non-default EN_32BIT_DEST not supported in Quasar exp");
     static_assert(scale == 0x3F800000, "Non-default scale not supported in Quasar exp");
     static_assert(CLAMP_NEGATIVE == true, "Non-default CLAMP_NEGATIVE not supported in Quasar exp");
     llk_math_eltwise_unary_sfpu_init<SfpuType::exponential>();

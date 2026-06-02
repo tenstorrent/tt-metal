@@ -257,7 +257,7 @@ bool single_core_binary(
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
     auto& cq = mesh_device->mesh_command_queue();
     auto zero_coord = distributed::MeshCoordinate(0, 0);
-    const experimental::metal2_host_api::NodeCoord node{
+    const experimental::NodeCoord node{
         static_cast<uint32_t>(test_config.core.x), static_cast<uint32_t>(test_config.core.y)};
 
     // Math-fidelity masks model WH/BH LLK behavior; Quasar HW does not apply them.
@@ -269,7 +269,7 @@ bool single_core_binary(
     auto& output_dram_buffer = buffers.output;
 
     auto defines_map = build_binary_defines(test_config);
-    experimental::metal2_host_api::KernelSpec::CompilerOptions::Defines defines;
+    experimental::KernelSpec::CompilerOptions::Defines defines;
     defines.reserve(defines_map.size());
     for (auto& kv : defines_map) {
         defines.emplace_back(kv.first, kv.second);
@@ -284,150 +284,142 @@ bool single_core_binary(
     constexpr const char* COMPUTE = "compute";
 
     auto make_input_dfb = [&](const std::string& name) {
-        return experimental::metal2_host_api::DataflowBufferSpec{
+        return experimental::DataflowBufferSpec{
             .unique_id = name,
             .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
             .num_entries = static_cast<uint32_t>(test_config.num_tiles),
             .data_format_metadata = test_config.l1_input_data_format,
             .tile_format_metadata = test_config.tile,
-            // Match pre-migration behavior: legacy DataflowBufferConfig set enable_implicit_sync=false.
-            .disable_implicit_sync = true,
         };
     };
 
-    experimental::metal2_host_api::DataflowBufferSpec inp0_dfb_spec = make_input_dfb(INP0_DFB);
-    experimental::metal2_host_api::DataflowBufferSpec inp1_dfb_spec = make_input_dfb(INP1_DFB);
-    experimental::metal2_host_api::DataflowBufferSpec inp2_dfb_spec = make_input_dfb(INP2_DFB);
-    experimental::metal2_host_api::DataflowBufferSpec out_dfb_spec{
+    experimental::DataflowBufferSpec inp0_dfb_spec = make_input_dfb(INP0_DFB);
+    experimental::DataflowBufferSpec inp1_dfb_spec = make_input_dfb(INP1_DFB);
+    experimental::DataflowBufferSpec inp2_dfb_spec = make_input_dfb(INP2_DFB);
+    experimental::DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
         .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
         .num_entries = static_cast<uint32_t>(test_config.num_tiles),
         .data_format_metadata = test_config.l1_output_data_format,
         .tile_format_metadata = test_config.tile,
-        // Match pre-migration behavior: legacy DataflowBufferConfig set enable_implicit_sync=false.
-        .disable_implicit_sync = true,
     };
 
-    experimental::metal2_host_api::KernelSpec reader_spec{
+    experimental::KernelSpec reader_spec{
         .unique_id = READER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_2_0.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = defines},
         .dfb_bindings =
             {{
                  .dfb_spec_name = INP0_DFB,
-                 .local_accessor_name = "in0",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "in0",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = INP1_DFB,
-                 .local_accessor_name = "in1",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "in1",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = INP2_DFB,
-                 .local_accessor_name = "in2",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "in2",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
-        .runtime_arguments_schema =
-            {.named_runtime_args =
+        .runtime_arg_schema =
+            {.runtime_arg_names =
                  {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles", "src2_addr", "src2_bank_id"}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen1_config =
+                    experimental::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                .gen2_config =
+                    experimental::DataMovementHardwareConfig::Gen2Config{
+                        .disable_implicit_sync_for = {INP0_DFB, INP1_DFB, INP2_DFB}}},
     };
 
-    experimental::metal2_host_api::KernelSpec writer_spec{
+    experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {{
-            .dfb_spec_name = OUT_DFB,
-            .local_accessor_name = "in",
-            .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
-        .runtime_arguments_schema = {.named_runtime_args = {"dst_addr", "bank_id", "num_tiles"}},
-        .config_spec =
-            experimental::metal2_host_api::DataMovementConfiguration{
-                .gen1_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen1DataMovementConfig{
+        .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
+        .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen1_config =
+                    experimental::DataMovementHardwareConfig::Gen1Config{
                         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
-                .gen2_data_movement_config =
-                    experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                .gen2_config =
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {OUT_DFB}}},
     };
 
-    experimental::metal2_host_api::KernelSpec compute_spec{
+    experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source =
-            experimental::metal2_host_api::KernelSpec::SourceFilePath{
-                "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary_2_0.cpp"},
+
+            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_binary_2_0.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = defines},
         .dfb_bindings =
             {{
                  .dfb_spec_name = INP0_DFB,
-                 .local_accessor_name = "in0",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "in0",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = INP1_DFB,
-                 .local_accessor_name = "in1",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "in1",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = INP2_DFB,
-                 .local_accessor_name = "in2",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "in2",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUT_DFB,
-                 .local_accessor_name = "out",
-                 .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
+                 .accessor_name = "out",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
-        .runtime_arguments_schema = {.named_runtime_args = {"per_core_block_cnt", "per_core_block_size", "acc_to_dst"}},
-        .config_spec =
-            experimental::metal2_host_api::ComputeConfiguration{
+        .runtime_arg_schema = {.runtime_arg_names = {"per_core_block_cnt", "per_core_block_size", "acc_to_dst"}},
+        .hw_config =
+            experimental::ComputeHardwareConfig{
                 .math_fidelity = test_config.math_fidelity,
             },
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id = "main",
+    experimental::WorkUnitSpec wu{
+        .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id = "single_core_binary",
+    experimental::ProgramSpec spec{
+        .name = "single_core_binary",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {inp0_dfb_spec, inp1_dfb_spec, inp2_dfb_spec, out_dfb_spec},
         .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     const uint32_t num_tiles_u = static_cast<uint32_t>(test_config.num_tiles);
-    experimental::metal2_host_api::ProgramRunParams params;
-    params.kernel_run_params = {
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args =
                       {{"src0_addr", input0_dram_buffer->address()},
@@ -438,20 +430,20 @@ bool single_core_binary(
                        {"src2_addr", input2_dram_buffer->address()},
                        {"src2_bank_id", 0u}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args = {{"dst_addr", output_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", num_tiles_u}}}},
         },
-        experimental::metal2_host_api::ProgramRunParams::KernelRunParams{
+        experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = COMPUTE,
-            .named_runtime_args =
+            .runtime_arg_values =
                 {{.node = node,
                   .args = {{"per_core_block_cnt", num_tiles_u}, {"per_core_block_size", 1u}, {"acc_to_dst", 0u}}}},
         },
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, params);
+    experimental::SetProgramRunArgs(program, params);
 
     auto* dev = mesh_device->get_devices()[0];
     tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);

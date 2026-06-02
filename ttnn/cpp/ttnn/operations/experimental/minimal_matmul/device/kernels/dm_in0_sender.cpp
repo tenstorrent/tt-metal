@@ -328,7 +328,7 @@ void kernel_main() {
 
                 uint32_t l1_write_addr_in2 = get_write_ptr(cb_id_in2);
                 for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end; n_tile_id++) {
-                    noc_async_read_tile(n_tile_id, in2_reader, l1_write_addr_in2);
+                    noc_async_read_page(n_tile_id, in2_reader, l1_write_addr_in2);
                     l1_write_addr_in2 += in2_tile_size;
                 }
                 noc_async_read_barrier();
