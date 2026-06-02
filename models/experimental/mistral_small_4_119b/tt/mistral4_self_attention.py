@@ -32,10 +32,10 @@ Architecture (all on device, no PyTorch fallback for compute):
     concat_heads → [seq, N_HEADS * V_HEAD_DIM]
     →[o_proj]→ hidden
 
-Sharding strategy for 2-device mesh [1, 2] (P300 × 2):
+Sharding strategy for the P150x8 mesh [1, 8]:
   All attention weights are *replicated* for the initial bring-up.
-  Both devices compute identical attention outputs; only device-0
-  output is used for logit accuracy, but both are in sync for the
+  Every device computes identical attention outputs; only device-0
+  output is used for logit accuracy, but all are in sync for the
   residual stream used by the MoE layer.
 """
 

@@ -14,7 +14,7 @@ Run::
     export MISTRAL4_VISION_SMOKE=1
     export MISTRAL4_VISION_N_LAYERS=24       # optional; default 2
     export MISTRAL4_VISION_IMG_PATCHES=10    # patches per side (image = 10*14 = 140 px); default 10
-    export MESH_DEVICE=T3K                   # T3K=1x8, P150x4=1x4, single=1x1
+    export MESH_DEVICE=P150x8
     pytest models/experimental/mistral_small_4_119b/tests/test_vision_tower_smoke.py -v -s --timeout=0
 
 Device-perf profiling (per-op timing of one forward pass)::

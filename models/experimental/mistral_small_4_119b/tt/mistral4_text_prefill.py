@@ -304,7 +304,7 @@ class TtMistral4TextPrefillLogits:
       - Final ``ttnn.to_torch()`` to return logits as a torch tensor
 
     Args:
-        mesh_device:        TTNN MeshDevice (e.g. P300 × 2 → [1, 2] mesh)
+        mesh_device:        TTNN MeshDevice (P150x8 → [1, 8] mesh)
         state_dict:         HF checkpoint dict (filtered to required prefixes)
         text_config:        HF ``text_config`` (e.g. from AutoConfig.text_config)
         num_decoder_layers: Number of decoder layers to instantiate (1..36)

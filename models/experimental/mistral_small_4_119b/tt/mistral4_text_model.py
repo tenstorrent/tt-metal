@@ -67,7 +67,12 @@ class TtMistral4TextModel:
     ):
         self.mesh_device = mesh_device
         self.num_decoder_layers = num_decoder_layers
-        self.max_seq_len = max_seq_len
+        # Prefill runs in fixed-size chunks. A ragged (non-chunk-multiple) final chunk makes
+        # the projection matmuls pick a per_core_M/out_subblock layout whose circular buffers
+        # clash with L1 (assert.hpp:104), so _run_prefill_chunked pads the final chunk up to
+        # this size. Round the KV-cache capacity up to a chunk multiple so the padded rows fit.
+        self._prefill_chunk = int(os.environ.get("MISTRAL4_PREFILL_CHUNK", "512"))
+        self.max_seq_len = ((max_seq_len + self._prefill_chunk - 1) // self._prefill_chunk) * self._prefill_chunk
 
         # Resolve cache dir: explicit arg > env var > None (no caching).
         # Encode num_devices in the path so cached sharded tensors don't
@@ -114,7 +119,7 @@ class TtMistral4TextModel:
                 cache_dir=_effective_cache_dir,
             )
             self.decoder_layers.append(layer)
-            self.kv_caches.append(layer.attn.allocate_kv_cache(max_seq_len))
+            self.kv_caches.append(layer.attn.allocate_kv_cache(self.max_seq_len))
 
         # ── Final norm + LM head ────────────────────────────────────────
         self.final_norm_w = _load_norm_weight(
@@ -386,29 +391,41 @@ class TtMistral4TextModel:
         return pc
 
     def _to_logits(self, x: ttnn.Tensor) -> torch.Tensor:
-        """Final norm → lm_head → gather to host."""
+        """Final norm → lm_head → gather to host, chunked over positions.
+
+        The prefill lm_head writes its output to L1 with ``per_core_M = M-tiles``, so running
+        it over the whole sequence at once overflows L1 for long prompts. Process the sequence
+        in fixed chunks (padding a ragged final chunk so the matmul always uses the validated
+        ``m_tiles = chunk//32`` program config) and gather each chunk's logits to host, where
+        the full ``[seq_len, vocab]`` tensor is reassembled. DS would assert here (M == 1 tile).
+        """
         x = _rms_norm(x, self.final_norm_w, self.compute_kernel_config, ttnn.L1_MEMORY_CONFIG)
-        # Prefill path: M = seq_len (> 1 tile), so use the interleaved weight + 1D mcast
-        # program config.  DS would assert (kernel requires M == 1 tile).
-        m_tiles = (x.shape[2] + 31) // 32
-        logits_tt = ttnn.linear(
-            x,
-            self.lm_head_weight_prefill,
-            program_config=self._lm_head_prefill_pc(m_tiles),
-            compute_kernel_config=self.lm_head_compute_kernel_config,
-            dtype=ttnn.bfloat8_b,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        seq_len = x.shape[2]
+        chunk = self._prefill_chunk
+        pc = self._lm_head_prefill_pc(chunk // 32)
+        # lm_head_weight is column-sharded across devices (dim=1 of [hidden, vocab]); each
+        # device produces partial logits [1, 1, chunk, vocab/n_devices], concatenated on host.
+        blocks = []
+        for s in range(0, seq_len, chunk):
+            e = min(s + chunk, seq_len)
+            real = e - s
+            xb = ttnn.slice(x, [0, 0, s, 0], [1, 1, e, HIDDEN_SIZE])
+            if real < chunk:
+                xb = ttnn.pad(xb, [(0, 0), (0, 0), (0, chunk - real), (0, 0)], value=0.0)
+            lb = ttnn.linear(
+                xb,
+                self.lm_head_weight_prefill,
+                program_config=pc,
+                compute_kernel_config=self.lm_head_compute_kernel_config,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(xb)
+            lb_host = ttnn.to_torch(lb, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=3))
+            ttnn.deallocate(lb)
+            blocks.append(lb_host[0, 0, :real].to(torch.bfloat16))  # [real, vocab]
         ttnn.deallocate(x)
-        # lm_head_weight is column-sharded across devices (dim=1 of [hidden, vocab]).
-        # Each device produces partial logits [1, 1, seq_len, vocab/n_devices].
-        # Concatenate along the vocab dim to reconstruct full logits.
-        logits_host = ttnn.to_torch(
-            logits_tt,
-            mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=3),
-        )
-        ttnn.deallocate(logits_tt)
-        return logits_host[0].to(torch.bfloat16)
+        return torch.cat(blocks, dim=0).unsqueeze(0)  # [1, seq_len, vocab]
 
     def _argmax_to_device(self, x_last: ttnn.Tensor) -> ttnn.Tensor:
         """
@@ -793,7 +810,7 @@ class TtMistral4TextModel:
         pre-chunking single-pass path.
         """
         seq_len = x.shape[-2]
-        chunk = int(os.environ.get("MISTRAL4_PREFILL_CHUNK", "512"))
+        chunk = self._prefill_chunk
         if seq_len <= chunk:
             cos_tt, sin_tt = self._rope_slice(0, seq_len)
             for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
@@ -806,12 +823,25 @@ class TtMistral4TextModel:
         last = None
         for s in range(0, seq_len, chunk):
             e = min(s + chunk, seq_len)
+            real = e - s
             xc = ttnn.slice(x, [0, 0, s, 0], [1, 1, e, HIDDEN_SIZE])
             cos_c, sin_c = self._rope_slice(s, e)
+            if real < chunk:
+                # Ragged final chunk: pad up to a full chunk so every projection matmul runs at
+                # the fixed m_tiles = chunk//32 program config (a ragged m_tiles picks a per_core_M/
+                # out_subblock layout whose circular buffers clash with L1). Padded rows are sliced
+                # off below; their KV writes land in [seq_len, padded) — covered by the chunk-rounded
+                # cache and overwritten by causal decode before they are ever read.
+                pad = chunk - real
+                xc = ttnn.pad(xc, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
+                cos_c = ttnn.pad(cos_c, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
+                sin_c = ttnn.pad(sin_c, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
             for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
                 xc = layer.forward_with_cache(xc, cos_c, sin_c, kv_cache, chunk_start_idx=s)
             ttnn.deallocate(cos_c)
             ttnn.deallocate(sin_c)
+            if real < chunk:
+                xc = ttnn.slice(xc, [0, 0, 0, 0], [1, 1, real, HIDDEN_SIZE])
             if last_only:
                 if last is not None:
                     ttnn.deallocate(last)

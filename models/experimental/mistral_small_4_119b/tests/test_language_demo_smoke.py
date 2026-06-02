@@ -14,7 +14,7 @@ Run::
     export MISTRAL4_LANG_DEMO_PROMPT="The capital of France is"   # optional
     export MISTRAL4_LANG_DEMO_MAX_NEW_TOKENS=8  # optional; default 8
     export MISTRAL4_WEIGHT_CACHE_DIR=/tmp/mistral4_weights  # optional; cache quantized weights to skip re-quantization
-    export MESH_DEVICE=P150x8                   # optional
+    export MESH_DEVICE=P150x8
     pytest models/experimental/mistral_small_4_119b/tests/test_language_demo_smoke.py -v -s --timeout=0
 """
 

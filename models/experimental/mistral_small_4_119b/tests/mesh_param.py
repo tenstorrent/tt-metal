@@ -5,33 +5,11 @@
 Mesh device request parameter for Mistral-Small-4-119B tests.
 
 Returns the mesh shape tuple used by the ``mesh_device`` pytest fixture.
-The default is (1, 2) — a single-row, two-column BlackHole (P300 × 2) mesh.
-
-Override via env var ``MESH_DEVICE``:
-    P300x2   → (1, 2)   (default; 2 × BlackHole P300)
-    P150x4   → (1, 4)   (4 × BlackHole P150)
-    P150x8   → (1, 8)   (8 × BlackHole P150)
-    P150x2   → (1, 2)
-    N300     → (1, 2)   (2 × WH N300)
-    T3K      → (1, 8)   (WH T3000, full 8-chip rack)
-    single   → (1, 1)   (single chip; E2E smoke uses disabled fabric for 1×1 — no Ethernet mesh required)
+This port targets the 1×8 BlackHole P150 mesh (P150x8) exclusively, so the
+shape is always (1, 8). Set ``MESH_DEVICE=P150x8`` when running.
 """
-
-import os
 
 
 def mesh_device_request_param() -> tuple[int, int]:
-    """Return the (rows, cols) mesh shape for the ``mesh_device`` fixture."""
-    env = os.environ.get("MESH_DEVICE", "P300x2").strip().upper()
-
-    _MAP = {
-        "P300X2": (1, 2),
-        "P300": (1, 2),
-        "P150X8": (1, 8),
-        "P150X4": (1, 4),
-        "P150X2": (1, 2),
-        "N300": (1, 2),
-        "T3K": (1, 8),
-        "SINGLE": (1, 1),
-    }
-    return _MAP.get(env, (1, 2))
+    """Return the (rows, cols) mesh shape for the ``mesh_device`` fixture (P150x8)."""
+    return (1, 8)
