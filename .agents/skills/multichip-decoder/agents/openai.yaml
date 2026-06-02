@@ -1,4 +1,0 @@
-interface:
-  display_name: "Multichip Decoder"
-  short_description: "Parallelize a TTNN decoder layer"
-  default_prompt: "Use $multichip-decoder to implement models/autoports/<model>/tt/multichip_decoder.py, choose a mesh strategy for the current hardware, compare to the single-chip TTNN baseline, and leave a concise work log, final report, and perf-report output."

@@ -1,6 +1,52 @@
-# Optimize Decoder Knowledge
+---
+name: optimize
+description: Optimize per-device performance of runnable TTNN code, preserving correctness while improving layout, precision, sharding, program configs, data movement, and warmed latency with tt-perf-report evidence.
+---
 
-Use this reference while optimizing a functional TTNN decoder. It captures repo-local optimization patterns and the strongest current LLM guidance.
+# Optimize TTNN code
+
+This skill assumes you have some runnable TTNN code already with passing correctness tests. If you do not, this is the wrong skill to use. Assuming you do, let's continue. This guide is written for autogenerative LLMs with prefill and decode phases. If your model doesn't look like this, you'll have to try to adapt it to your situation as makes sense.
+
+This guide does not explain how to make more efficient multi-device mesh layout decisions (e.g. mixtures of TP/DP/EP) but if you have multi-device TTNN code it will make every device run as fast as it can given the existing multi-device weight layout choices.
+
+Read the advice in `tech_reports/LLMs/llms.md`, particularly section 4 "Best practices and optimizations". In this skill we will strive to optimize *on-device* performance. For decode it is important to always measure the performance of a traced execution run. If there are significant op/host gaps you can note them but you should still follow the steps below to optimize on-device performance. Always perform optimization using real model shapes, do not use reduced shapes!
+
+A note on the term "sharding" - tt-metal uses this to mean two things. On-device sharding (e.g. L1-sharded activations, DRAM-sharded weights) are sharded across the cores/dram banks of a single device (which is a grid of cores). You should absolutely consider these as in-scope for this stage! Multi-chip sharding (e.g. with a mesh mapper) is about distributing tensors across multiple devices in a mesh. Any time tt-perf-report mentions sharding it is probably talking about on-device sharding and is in-scope for you.
+
+Profile warmed prefill and decode separately. Use `tt-perf-report` as a conversation with the hardware, not as an oracle: classify bottlenecks, try applicable advice, keep changes that improve the target without unacceptable correctness or complexity cost, and record why rejected advice was rejected. We'd like to improve tt-perf-report and its advice to be more useful so please call out potential improvements in your final report.
+
+Tune precision and fidelity one group at a time so regressions can be assigned. A common starting point is BF16 activations and norms, BFP8 attention/MLP weights, BFP8 KV cache if PCC allows it, and selective BFP4 trials for MLP/expert weights. After that follow tt-perf-report, read the kernels, explore and be methodically creative until you are satisfied we've got everything out of the hardware that we can without rewriting the ttnn ops themselves!
+
+Before you finish, take another look over a current tt-perf-report output. Is everything optimized that can be optimized, or were some things left deferred? If so, now is the time to take a breath and then systematically address them. After all, there *is* no "deferred". We are the optimization pass. If we defer something, it will forever be left unfinished. Now is the time to reach for our goal of a decoder that comes as close to full hardware performance as we can within the bounds of ttnn's capabilities! If there are specific ttnn op limitations preventing performance optimizations call these out in your report, we want to continue to improve it.
+
+## Evidence To Leave
+
+Final optimized evidence should show:
+
+- Functional checks still pass against the optimized path.
+- Prefill and decode PCC remain at the functional acceptance bar, with any material delta explained.
+- Paged KV-cache and warmed trace replay still behave correctly.
+- Runtime fallback audit remains clean.
+- Stress or repeated-run coverage appropriate to the risk of the changes.
+- Warmed prefill and decode latency before/after optimization.
+- `tt-perf-report` output with advice enabled and the main performance conclusions.
+- Watcher still clean. Watcher should be run by setting TT_METAL_WATCHER=10, don't skip asserts or anything.
+- Optimization checklist:
+-[ ] Decoder path fully traced with no host fallbacks
+-[ ] Decode activations generally width-sharded in L1 across norm, attention, residual, MLP, and output projection boundaries.
+-[ ] Prefill activations generally DRAM interleaved; use 2D matmul program configs for large prefill matmuls.
+-[ ] Used SDPA and other optimized composite ttnn ops instead of hand-built attention primitives where the target model fits their contracts.
+-[ ] Explicitly configured `memory_config`, `program_config`, and `compute_kernel_config` for important ops.
+-[ ] Shard specs and core grids that divide tensor dimensions cleanly into tiles where possible, code grids as large as this and the model/hardware allows.
+-[ ] DRAM-sharded decode matmuls.
+-[ ] Fused matmul-CCL ops used where possible (or profiled and discarded with evidence).
+-[ ] For MoE models: optimized the routed active-expert path using `all_to_all_dispatch_metadata` + `moe_compute` where the model/hardware fits, including packed W0/W1/W2 weights, expert mapping, combine/reduce, and no dense all-expert runtime path.
+
+If this checklist is not completed, take this as a sign that you should go back and perform those optimization steps to improve on-device performance. For this stage that is what we are most interested in optimizing; op/host gap will be reduced by tracing.
+
+# Useful Optimization Knowledge
+
+Use this reference while optimizing functional TTNN code. It captures repo-local optimization patterns and the strongest current LLM guidance. If you are not optimizing an LLM, use your best judgement about what applies in your case.
 
 ## Code Paths Worth Reading
 
@@ -17,7 +63,7 @@ Use this reference while optimizing a functional TTNN decoder. It captures repo-
 
 ## Core Optimization Rules
 
-- The functional decoder test suite remains the correctness floor. Rerun the same functional prefill, decode, PCC, paged KV-cache, determinism, stress, trace, and watcher checks against the optimized path before accepting performance wins.
+- Your initial functional test suite remains the correctness floor. Rerun the same functional prefill, decode, PCC, paged KV-cache, determinism, stress, trace, and watcher checks against the optimized path before accepting performance wins.
 - Avoid data movement before tuning math. A slightly smaller core grid can beat a faster individual op if it avoids resharding between ops.
 - Decode activations should generally stay width-sharded in L1 across norm, attention, residual, MLP, and output projection boundaries.
 - Prefill activations are usually large and often belong in DRAM interleaved; use 2D matmul program configs for large prefill matmuls.
@@ -54,7 +100,7 @@ Use this reference while optimizing a functional TTNN decoder. It captures repo-
 
 ## Compute Kernel Configs
 
-Common Wormhole/Blackhole-style starting points:
+Common Wormhole-style starting points:
 
 ```python
 compute_kernel_config_lofi = ttnn.WormholeComputeKernelConfig(
@@ -79,7 +125,7 @@ compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
 )
 ```
 
-Use the architecture-appropriate config class when optimizing non-Wormhole targets if the codebase has an established local pattern.
+Use the architecture-appropriate config class when optimizing non-Wormhole targets.
 
 ## `tt-perf-report`
 
@@ -115,9 +161,9 @@ tt-perf-report "$ARTIFACT_DIR/tracy/<layer_kind_id>/decode_ops.csv" \
   > "$ARTIFACT_DIR/tracy/<layer_kind_id>/decode_perf_report.txt"
 ```
 
-Use the same pattern for prefill with `PERF_PREFILL` signposts and `prefill_*` filenames. If your installed `tt-perf-report` version uses different flags, run `tt-perf-report --help`, use the equivalent flags, and record the exact command.
+Use the same pattern for prefill with `PERF_PREFILL` signposts and `prefill_*` filenames. If your installed `tt-perf-report` version uses different flags, run `tt-perf-report --help`, use the equivalent flags, and record the exact command. You'll have to add these signposts to your code, of course.
 
-The `tt-perf-report` run used for final optimization conclusions should keep advice enabled. If you also need a compact no-advice report for a table, run that as a secondary command and keep the advice-backed run in the work log.
+`tt-perf-report` runs should keep advice enabled. If you also need a compact no-advice report for a table, run that as a secondary command and keep the advice-backed run in your work log and final reports.
 
 Check time units before computing latency. Filtered `tt-perf-report` CSVs may expose `Device Time` in microseconds; raw Tracy ops CSVs often expose `DEVICE KERNEL DURATION [ns]`.
 
