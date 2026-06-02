@@ -39,7 +39,6 @@ from models.experimental.seamless_m4t_v2_large.tests.pcc.decoder_pcc_fixtures im
     make_s2tt_decoder_pcc_inputs,
     make_t2tt_decoder_pcc_inputs,
 )
-from models.experimental.seamless_m4t_v2_large.tests.pcc.prof_capture_limits import TEXT_DECODER_ENC_SEQ
 from models.experimental.seamless_m4t_v2_large.tt.common import (
     build_causal_with_padding_4d,
     build_cross_attn_mask_4d,
@@ -56,7 +55,6 @@ from models.experimental.seamless_m4t_v2_large.tt.model_preprocessing import cre
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_decoder import TTSeamlessM4Tv2Decoder
 
 PCC_THRESHOLD = 0.99
-PROF_CAPTURE_ENC_SEQ = TEXT_DECODER_ENC_SEQ
 # Longest tokenized source length (text-encoder output) validated with production seed on BH 1×4.
 # Next power-of-two (1024) overflows L1 on cross-attention prefill at tile-padded encoder length.
 MAX_ENC_SEQ = 512
@@ -166,12 +164,8 @@ def test_seamless_m4t_v2_text_decoder_s2tt_prefill_pcc(mesh_device, device_param
 
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
-def test_seamless_m4t_v2_text_decoder_max_enc_seq_pcc(mesh_device, device_params, reset_seeds):
-    """Decoder prefill PCC ≥ 0.99 at the longest validated source length (``MAX_ENC_SEQ`` tokens).
-
-    Exercises cross-attention over a long text-encoder timeline while the decoder input stays the
-    production two-token seed. The next power-of-two source length (1024) overflows L1 on BH 1×4.
-    """
+def test_seamless_m4t_v2_text_decoder_t2tt_max_enc_seq_pcc(mesh_device, device_params, reset_seeds):
+    """T2TT decoder prefill PCC ≥ 0.99 at ``MAX_ENC_SEQ`` text-encoder timeline (decoder seed = 2)."""
     _ = reset_seeds
     _ = device_params
     weights_dir = _weights_dir_or_skip()
@@ -179,21 +173,20 @@ def test_seamless_m4t_v2_text_decoder_max_enc_seq_pcc(mesh_device, device_params
     with mesh_default_device(mesh_device):
         hf_model, processor, _ = load_hf_model_and_processor(weights_dir, dtype=torch.bfloat16)
         case = make_t2tt_decoder_pcc_inputs(hf_model, processor, enc_seq_len=MAX_ENC_SEQ)
+        assert int(case.encoder_hidden_states.shape[1]) == MAX_ENC_SEQ
         _run_decoder_pcc(mesh_device, hf_model.text_decoder, hf_model.config, case, log_label="T2TT-max-enc")
 
 
-@pytest.mark.timeout(1800)
+@pytest.mark.timeout(3600)
 @pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
-def test_seamless_m4t_v2_text_decoder_prof_capture_seq_pcc(mesh_device, device_params, reset_seeds):
-    """Decoder PCC ≥ 0.99 at the tracy-safe T2TT source length (``PROF_CAPTURE_ENC_SEQ`` = 32).
-
-    Uses production-shaped tensors; encoder length is the tracy budget knob (decoder seed stays 2).
-    """
+def test_seamless_m4t_v2_text_decoder_s2tt_max_enc_seq_pcc(mesh_device, device_params, reset_seeds):
+    """S2TT decoder prefill PCC ≥ 0.99 at ``MAX_ENC_SEQ`` speech-encoder timeline (decoder seed = 2)."""
     _ = reset_seeds
     _ = device_params
     weights_dir = _weights_dir_or_skip()
 
     with mesh_default_device(mesh_device):
         hf_model, processor, _ = load_hf_model_and_processor(weights_dir, dtype=torch.bfloat16)
-        case = make_t2tt_decoder_pcc_inputs(hf_model, processor, enc_seq_len=PROF_CAPTURE_ENC_SEQ)
-        _run_decoder_pcc(mesh_device, hf_model.text_decoder, hf_model.config, case, log_label="prof-capture")
+        case = make_s2tt_decoder_pcc_inputs(hf_model, processor, enc_seq_len=MAX_ENC_SEQ)
+        assert int(case.encoder_hidden_states.shape[1]) == MAX_ENC_SEQ
+        _run_decoder_pcc(mesh_device, hf_model.text_decoder, hf_model.config, case, log_label="S2TT-max-enc")
