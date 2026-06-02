@@ -321,16 +321,6 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     logits_torch = ttnn.to_torch(logits).squeeze()
     assert not torch.isnan(logits_torch).any(), "NaN in prefill logits"
     next_token = logits_torch.argmax().item()
-    model._prefill_trace_inputs = None
-    for layer in model.layers:
-        if not layer.is_full_attention:
-            layer.attention._trace_prefill_output = None
-            # IMPORTANT: leave use_inplace_state=True (set by set_external_state in
-            # allocate_kv_caches). The decode trace REQUIRES it — without it,
-            # gated_deltanet_forward_ttnn allocates fresh state tensors via
-            # ttnn.zeros/from_torch inside the captured trace, which does a
-            # host→device write and FATALs.
-
     gen = Generator([model], [model.args], device)
 
     # Capture the decode trace once with GDN-state save/restore so the loop replays from the
