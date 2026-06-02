@@ -205,17 +205,17 @@ class DistributedRMSNorm(Module):
             )
             raise ValueError(msg)
 
-        # Optional fused single-op path: ttnn.all_gather_rms_norm fuses pre-stats -> all-gather -> post into
-        # one op. Only valid for the plain norm (no fused RoPE / head-split), which is exactly how the LTX
-        # block norms (norm1/2/3, audio_norm*) are called. Gated by env so it can be A/B'd against the
-        # wan pre/AG/post path. (Op currently supports num_links==1, so it always uses a single fabric link.)
+        # Optional fused single-op path: ttnn.all_gather_rms_norm fuses pre-stats -> all-gather -> post (and
+        # the per-head head-split via num_heads) into one op. Valid for the plain norm AND the Q/K norm
+        # (which head-splits) -- i.e. every way the LTX norms (norm1/2/3, audio_norm*, norm_q/norm_k) are
+        # called, since RoPE is always applied as a SEPARATE rotary op afterward (never fused into the norm).
+        # Gated by env so it can be A/B'd against the wan pre/AG/post path. (Op supports num_links==1.)
         if (
             os.environ.get("LTX_FUSED_AGRMS") in ("1", "true", "True")
             and self.mesh_width > 1
             and rope_cos is None
             and rope_sin is None
             and trans_mat is None
-            and num_heads_per_device == 1
         ):
             if getattr(self, "_agrms_sem", None) is None:
                 self._agrms_sem = ttnn.create_global_semaphore(self.mesh_device, self.ccl_manager.ccl_cores, 0)
@@ -230,6 +230,7 @@ class DistributedRMSNorm(Module):
                 topology=self.ccl_manager.topology,
                 num_links=1,
                 compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
+                num_heads=num_heads_per_device,
             )
 
         stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
