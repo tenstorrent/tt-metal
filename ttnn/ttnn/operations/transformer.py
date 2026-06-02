@@ -6,6 +6,7 @@ from typing import Optional
 
 import ttnn
 
+# SDPAProgramConfig struct survives in sdpa_config.hpp (kept when the sdpa op was nuked).
 SDPAProgramConfig = ttnn._ttnn.operations.transformer.SDPAProgramConfig
 
 
@@ -79,18 +80,6 @@ def _golden_function(input_tensor: ttnn.Tensor, *, head_size: int, attention_mas
         input_tensor += attention_mask
 
     return torch.softmax(input_tensor, -1)
-
-
-ttnn.attach_golden_function(
-    ttnn.transformer.attention_softmax,
-    golden_function=_golden_function,
-)
-
-
-ttnn.attach_golden_function(
-    ttnn.transformer.attention_softmax_,
-    golden_function=_golden_function,
-)
 
 
 def _golden_function(input_tensor: ttnn.Tensor, **_):

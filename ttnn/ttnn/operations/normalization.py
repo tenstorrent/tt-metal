@@ -9,13 +9,10 @@ import ttnn
 
 import math
 
-from ttnn._ttnn.operations.normalization import (
-    create_group_norm_input_mask,
-    create_group_norm_input_negative_mask,
-    determine_expected_group_norm_sharded_config_and_grid_size,
-    _compute_num_virtual_cols,
-    _find_expected_dram_grid,
-)
+# TODO(nuked-op group_norm/layer_norm/rms_norm/softmax): normalization ops nuked for eval
+# regen. The C++ group_norm helper bindings and the softmax/layer_norm/rms_norm/group_norm
+# golden-function registrations are removed. Surviving group_norm helper utilities remain but
+# will raise NameError at call time until the op is recreated.
 
 
 def find_closest_largest_divisor(num: int, start_divisor: int):
@@ -28,115 +25,6 @@ def find_closest_largest_divisor(num: int, start_divisor: int):
     while num % divisor != 0:
         divisor = divisor - 1
     return divisor
-
-
-def _golden_function(input_tensor: ttnn.Tensor, dim: Optional[int] = None, **_):
-    import torch
-
-    dim = dim or -1
-
-    return torch.nn.Softmax(dim)(input_tensor)
-
-
-ttnn.attach_golden_function(
-    ttnn.softmax,
-    golden_function=_golden_function,
-)
-
-ttnn.attach_golden_function(
-    ttnn.softmax_in_place,
-    golden_function=_golden_function,
-)
-
-
-def _golden_function(input_tensor: ttnn.Tensor, scalar: float, attention_mask=None, **_):
-    import torch
-
-    input_tensor = input_tensor.float()
-    input_tensor = input_tensor * scalar
-    if attention_mask is not None:
-        input_tensor = input_tensor + attention_mask
-    return torch.softmax(input_tensor, dim=-1)
-
-
-ttnn.attach_golden_function(
-    ttnn.scale_mask_softmax_in_place,
-    golden_function=_golden_function,
-)
-
-ttnn.attach_golden_function(
-    ttnn.scale_mask_softmax,
-    golden_function=_golden_function,
-)
-
-ttnn.attach_golden_function(
-    ttnn.scale_causal_mask_hw_dims_softmax_in_place,
-    golden_function=_golden_function,
-)
-
-
-SoftmaxProgramConfig = ttnn._ttnn.operations.normalization.SoftmaxProgramConfig
-SoftmaxDefaultProgramConfig = ttnn._ttnn.operations.normalization.SoftmaxDefaultProgramConfig
-SoftmaxShardedMultiCoreProgramConfig = ttnn._ttnn.operations.normalization.SoftmaxShardedMultiCoreProgramConfig
-
-
-def _golden_function(
-    input_tensor: ttnn.Tensor,
-    *,
-    epsilon=1e-12,
-    residual_input_tensor=None,
-    weight=None,
-    bias=None,
-    **_,
-):
-    import torch
-
-    if residual_input_tensor is not None:
-        input_tensor += residual_input_tensor
-
-    if weight is not None:
-        if len(weight.shape) >= 2:
-            weight = weight.squeeze()
-        weight = weight.to(input_tensor.dtype)
-
-    if bias is not None:
-        if len(bias.shape) >= 2:
-            bias = bias.squeeze()
-        bias = bias.to(input_tensor.dtype)
-
-    return torch.nn.functional.layer_norm(input_tensor, (input_tensor.shape[-1],), weight, bias, eps=epsilon)
-
-
-ttnn.attach_golden_function(ttnn.layer_norm, golden_function=_golden_function)
-
-
-def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, **_):
-    import torch
-
-    variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
-    input_tensor = input_tensor * torch.rsqrt(variance + epsilon)
-
-    if weight is not None and weight.dtype in [torch.float16, torch.bfloat16]:
-        input_tensor = input_tensor.to(weight.dtype)
-
-    return weight * input_tensor if weight is not None else input_tensor
-
-
-ttnn.attach_golden_function(ttnn.rms_norm, golden_function=_golden_function)
-
-LayerNormProgramConfig = ttnn._ttnn.operations.normalization.LayerNormProgramConfig
-LayerNormDefaultProgramConfig = ttnn._ttnn.operations.normalization.LayerNormDefaultProgramConfig
-LayerNormShardedMultiCoreProgramConfig = ttnn._ttnn.operations.normalization.LayerNormShardedMultiCoreProgramConfig
-LayerNormType = ttnn._ttnn.operations.normalization.LayerNormType
-DistributedLayerNormStage = ttnn._ttnn.operations.normalization.DistributedLayerNormStage
-LayerNormParams = ttnn._ttnn.operations.normalization.LayerNormParams
-LayerNormInputs = ttnn._ttnn.operations.normalization.LayerNormInputs
-LayerNormDeviceOperation = ttnn._ttnn.operations.normalization.LayerNormDeviceOperation
-LayerNormMultiCoreProgramFactory = ttnn._ttnn.operations.normalization.LayerNormMultiCoreProgramFactory
-LayerNormShardedProgramFactory = ttnn._ttnn.operations.normalization.LayerNormShardedProgramFactory
-layernorm_default_compute_config = ttnn._ttnn.operations.normalization.layernorm_default_compute_config
-rmsnorm_default_compute_config = ttnn._ttnn.operations.normalization.rmsnorm_default_compute_config
-create_layernorm_program_config = ttnn._ttnn.operations.normalization.create_layernorm_program_config
 
 
 def create_layer_norm_reciprocals(device: ttnn.Device, core_range_set: ttnn.CoreRangeSet, width: int):
@@ -420,48 +308,5 @@ def get_group_norm_cores_across_channel(memory_layout, core_grid, shard_orientat
 
     return num_cores_across_channel
 
-
-def _golden_function(
-    input_tensor: ttnn.Tensor,
-    *,
-    num_groups,
-    epsilon=1e-05,
-    weight=None,
-    bias=None,
-    memory_config=None,
-    core_grid=None,
-    input_mask=None,
-    **kwargs,
-):
-    import torch
-
-    num_channels = input_tensor.shape[-1]
-    shard_orientation = getattr(memory_config.shard_spec, "orientation", None) if memory_config.shard_spec else None
-    num_cores_across_channel = get_group_norm_cores_across_channel(
-        memory_config.memory_layout, core_grid, shard_orientation
-    )
-    weight = weight.reshape((num_cores_across_channel, -1))
-    weight = weight[:, : num_channels // num_cores_across_channel].flatten()
-    if bias is not None:
-        bias = bias.reshape((num_cores_across_channel, -1))
-        bias = bias[:, : num_channels // num_cores_across_channel].flatten()
-
-    input_tensor = input_tensor.permute(0, 3, 1, 2)
-    output = torch.nn.functional.group_norm(input_tensor.float(), num_groups, weight.float(), bias.float(), eps=epsilon)
-    output = output.permute(0, 2, 3, 1)
-    return output
-
-
-def _postprocess_golden_function_outputs(output, args, kwargs):
-    input_tensor = args[0]
-    output = ttnn.reshape(output, input_tensor.shape)
-    return output
-
-
-ttnn.attach_golden_function(
-    ttnn.group_norm,
-    golden_function=_golden_function,
-    postprocess_golden_function_outputs=_postprocess_golden_function_outputs,
-)
 
 __all__ = []

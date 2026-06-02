@@ -72,8 +72,6 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_wh.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_bh.cpp
     cpp/ttnn/operations/experimental/test/hang_device/hang_device_program_factory.cpp
-    cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp
-    cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
     cpp/ttnn/operations/copy/typecast/device/typecast_device_op.cpp
     cpp/ttnn/operations/copy/typecast/device/typecast_program_factory.cpp
     cpp/ttnn/operations/copy/typecast/device/typecast_rm_chunked_program_factory.cpp
@@ -244,10 +242,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/moreh/moreh_dot_backward/moreh_dot_backward_nanobind.cpp
     cpp/ttnn/operations/moreh/moreh_fold/fold_nanobind.cpp
     cpp/ttnn/operations/moreh/moreh_getitem/moreh_getitem_nanobind.cpp
-    cpp/ttnn/operations/moreh/moreh_group_norm/moreh_group_norm_nanobind.cpp
-    cpp/ttnn/operations/moreh/moreh_group_norm_backward/moreh_group_norm_backward_nanobind.cpp
-    cpp/ttnn/operations/moreh/moreh_layer_norm/moreh_layer_norm_nanobind.cpp
-    cpp/ttnn/operations/moreh/moreh_layer_norm_backward/moreh_layer_norm_backward_nanobind.cpp
     cpp/ttnn/operations/moreh/moreh_linear/moreh_linear_nanobind.cpp
     cpp/ttnn/operations/moreh/moreh_linear_backward/moreh_linear_backward_nanobind.cpp
     cpp/ttnn/operations/moreh/moreh_matmul/moreh_matmul_nanobind.cpp
@@ -260,20 +254,10 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/moreh/moreh_norm/moreh_norm_nanobind.cpp
     cpp/ttnn/operations/moreh/moreh_norm_backward/moreh_norm_backward_nanobind.cpp
     cpp/ttnn/operations/moreh/moreh_sgd/moreh_sgd_nanobind.cpp
-    cpp/ttnn/operations/moreh/moreh_softmax/moreh_softmax_nanobind.cpp
-    cpp/ttnn/operations/moreh/moreh_softmax/moreh_softmax_nanobind.cpp
-    cpp/ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward_nanobind.cpp
     cpp/ttnn/operations/moreh/moreh_sum/moreh_sum_nanobind.cpp
     cpp/ttnn/operations/moreh/moreh_sum_backward/moreh_sum_backward_nanobind.cpp
     cpp/ttnn/operations/normalization/batch_norm/batch_norm_nanobind.cpp
-    cpp/ttnn/operations/normalization/groupnorm/groupnorm_nanobind.cpp
-    cpp/ttnn/operations/normalization/layernorm/layernorm_nanobind.cpp
-    cpp/ttnn/operations/normalization/layernorm_distributed/layernorm_distributed_nanobind.cpp
     cpp/ttnn/operations/normalization/normalization_nanobind.cpp
-    cpp/ttnn/operations/normalization/rmsnorm/rmsnorm_nanobind.cpp
-    cpp/ttnn/operations/normalization/rmsnorm/rmsnorm_nanobind.cpp
-    cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_distributed_nanobind.cpp
-    cpp/ttnn/operations/normalization/softmax/softmax_nanobind.cpp
     cpp/ttnn/operations/pool/generic/generic_pools_nanobind.cpp
     cpp/ttnn/operations/pool/grid_sample/grid_sample_nanobind.cpp
     cpp/ttnn/operations/pool/rotate/rotate_nanobind.cpp
@@ -293,11 +277,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/reduction/manual_seed/manual_seed_nanobind.cpp
     cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/deepseek_grouped_gate_nanobind.cpp
     cpp/ttnn/operations/sliding_window/sliding_window_nanobind.cpp
-    cpp/ttnn/operations/transformer/attention_softmax/attention_softmax_nanobind.cpp
     cpp/ttnn/operations/transformer/concatenate_heads/concatenate_heads_nanobind.cpp
-    cpp/ttnn/operations/transformer/sdpa/sdpa_nanobind.cpp
-    cpp/ttnn/operations/transformer/sdpa_decode/sdpa_decode_nanobind.cpp
-    cpp/ttnn/operations/transformer/sdpa_windowed/sdpa_windowed_nanobind.cpp
     cpp/ttnn/operations/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.cpp
     cpp/ttnn/operations/transformer/transformer_nanobind.cpp
     cpp/ttnn/operations/uniform/uniform_nanobind.cpp
