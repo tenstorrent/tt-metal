@@ -215,6 +215,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     auto q_chunk_size = args.get_q_chunk_size();
     auto k_chunk_size = args.get_k_chunk_size();
+    const bool has_kv_pad_rotation = args.has_kv_pad_rotation();
 
     TT_FATAL(!(L != 0 && args.is_causal), "Causality is enabled only for ring attention");
 
@@ -236,6 +237,65 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         N_local_q,
         N_local_kv,
         args.is_causal);
+
+    if (has_kv_pad_rotation) {
+        const auto kv_actual_isl = args.kv_actual_isl.value();
+        TT_FATAL(
+            is_chunked,
+            "kv_actual_isl enables KV-pad-aware rotation and requires chunked-prefill input (Q.seq < K.seq). "
+            "Got N_local_q={}, N_local_kv={}",
+            N_local_q,
+            N_local_kv);
+        TT_FATAL(
+            args.is_causal,
+            "kv_actual_isl enables KV-pad-aware rotation, which is causal-only. Got is_causal={}",
+            args.is_causal);
+        TT_FATAL(
+            !args.is_balanced, "kv_actual_isl does not support balanced zigzag distribution. Pass is_balanced=false.");
+        TT_FATAL(
+            L == 0,
+            "KV-pad-aware rotation currently supports ring attention without joint tokens. Got joint length L={}",
+            L);
+        TT_FATAL(
+            args.logical_n >= kv_actual_isl,
+            "logical_n must be >= kv_actual_isl. Got logical_n={}, kv_actual_isl={}",
+            args.logical_n,
+            kv_actual_isl);
+        const auto new_actual_isl = args.logical_n - kv_actual_isl;
+        const auto chunk_capacity = N_local_q * args.ring_size;
+        const auto cache_capacity = N_local_kv * args.ring_size;
+        TT_FATAL(
+            kv_actual_isl % tt::constants::TILE_HEIGHT == 0 && new_actual_isl % tt::constants::TILE_HEIGHT == 0,
+            "KV-pad-aware rotation currently requires tile-aligned lengths. Got kv_actual_isl={}, "
+            "new_actual_isl={} (logical_n - kv_actual_isl), TILE_HEIGHT={}",
+            kv_actual_isl,
+            new_actual_isl,
+            tt::constants::TILE_HEIGHT);
+        TT_FATAL(
+            new_actual_isl > 0,
+            "KV-pad-aware rotation requires at least one valid token in the current chunk. Got kv_actual_isl={}, "
+            "logical_n={}",
+            kv_actual_isl,
+            args.logical_n);
+        TT_FATAL(
+            N_local_kv % N_local_q == 0,
+            "KV-pad-aware rotation expects K/V local sequence length to be an integer number of Q-sized slabs. "
+            "Got N_local_kv={}, N_local_q={}",
+            N_local_kv,
+            N_local_q);
+        TT_FATAL(
+            args.logical_n <= cache_capacity,
+            "KV-pad-aware rotation logical_n exceeds physical K/V cache capacity. Got logical_n={}, "
+            "cache capacity={}",
+            args.logical_n,
+            cache_capacity);
+        TT_FATAL(
+            new_actual_isl <= chunk_capacity,
+            "KV-pad-aware rotation expects current valid Q to fit in one fixed chunk. Got new_actual_isl={}, "
+            "chunk capacity={}",
+            new_actual_isl,
+            chunk_capacity);
+    }
 
     TT_FATAL(
         !(args.is_balanced && (N_local_q / 2) % q_chunk_size != 0),
@@ -327,8 +387,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     }
 
     TT_FATAL(
-        N_global == N_local_kv * args.ring_size,
-        "Gathered K seq length must equal per-device K shard times ring size. Got N_global: {}, N_local_kv: {}, "
+        N_global >= N_local_kv * args.ring_size,
+        "Gathered K seq length must be >= per-device K shard times ring size. Got N_global: {}, N_local_kv: {}, "
         "ring_size: {}",
         N_global,
         N_local_kv,
@@ -450,6 +510,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         // cache_batch_idx is a reader runtime arg, but descriptor cache-hit patching only updates buffer rt args.
         // Keep the value in the op hash so a cached Program never reuses stale scalar rt args for another slot.
         args.cache_batch_idx,
+        args.kv_actual_isl,
         ttnn::experimental::prim::RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
             args.all_gather_operation_attributes, args.all_gather_tensor_args) /*all_gather input tensors*/
     );
@@ -532,7 +593,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<float> scale,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
-    const std::optional<uint32_t> cache_batch_idx) {
+    const std::optional<uint32_t> cache_batch_idx,
+    const std::optional<uint32_t> kv_actual_isl) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -589,7 +651,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         std::move(all_gather_operation_attributes),
         std::move(all_gather_tensor_args),
         ccl_core_grid_offset,
-        cache_batch_idx);
+        cache_batch_idx,
+        kv_actual_isl);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

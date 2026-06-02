@@ -1298,6 +1298,8 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"FD_CORE_TYPE", "0"},
         {"IS_D_VARIANT", "1"},
         {"IS_H_VARIANT", "1"},
+        {"DISPATCH_TELEMETRY_ADDR", "0"},
+        {"DISPATCH_TELEMETRY_DISABLED", "1"},
     };
 }
 
@@ -1395,6 +1397,8 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"OFFSETOF_ROUTER_DIRECTION", "2"},
         {"FD_CORE_TYPE", "0"},
         {"PREFETCH_Q_ENTRY_BITS", std::to_string(entry_size * 8)},
+        {"DISPATCH_TELEMETRY_ADDR", "0"},
+        {"DISPATCH_TELEMETRY_DISABLED", "1"},
         // FABRIC_RELAY intentionally omitted - must be undefined for #if defined(FABRIC_RELAY) to be false
     };
 }
