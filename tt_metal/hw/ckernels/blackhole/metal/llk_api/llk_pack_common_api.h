@@ -26,7 +26,7 @@ inline void llk_pack_hw_configure(std::uint32_t pack_output) {
 
     const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
 
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, false /*untilize*/>(
+    _llk_pack_hw_configure_<is_fp32_dest_acc_en, PackMode::Default>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         tile_size,
@@ -37,15 +37,18 @@ inline void llk_pack_hw_configure(std::uint32_t pack_output) {
         0 /*relu_config*/);
 }
 
-template <bool out_of_order_output, bool untilize>
+template <bool out_of_order_output, PackMode pack_addr_mode = PackMode::Default>
 inline std::uint32_t get_output_tile_address(std::uint8_t output_id, std::uint32_t output_tile_index) {
+    static_assert(
+        pack_addr_mode == PackMode::Default || pack_addr_mode == PackMode::Untilize,
+        "Pack tile address helper supports PackMode::Default and PackMode::Untilize only");
     std::uint32_t pack_tile_addr;
     if constexpr (out_of_order_output) {
         pack_tile_addr = get_local_cb_interface(output_id).fifo_wr_ptr +
                          (std::uint32_t)(get_local_cb_interface(output_id).fifo_page_size) * output_tile_index - 1;
     } else {
-        if constexpr (untilize) {
-            static_assert(!untilize, "Use llk_pack_untilize APIs for pack-untilize.");
+        if constexpr (pack_addr_mode == PackMode::Untilize) {
+            static_assert(pack_addr_mode != PackMode::Untilize, "Use llk_pack_untilize APIs for pack-untilize.");
             // TODO: uplift this option from BBE
         } else {
             pack_tile_addr =
@@ -63,13 +66,20 @@ inline void llk_pack_dest_section_done() {
     _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
 
-template <bool untilize = false, bool diagonal = false>
+template <PackMode pack_mode = PackMode::Default, bool diagonal = false>
 inline void llk_init_packer_dest_offset_registers([[maybe_unused]] const std::uint32_t pack_output = 16) {
+    static_assert(
+        pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
+        "Blackhole llk_init_packer_dest_offset_registers: PackMode::Tilize is not used on this path");
+    (void)diagonal;
     _llk_init_packer_dest_offset_registers_<DST_SYNC_MODE>();
 }
 
-template <bool is_fp32_dest_acc_en, bool untilize = false>
+template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void llk_pack_dest_init([[maybe_unused]] const std::uint32_t pack_output = 16) {
+    static_assert(
+        pack_mode == PackMode::Default || pack_mode == PackMode::Untilize,
+        "Blackhole llk_pack_dest_init: PackMode::Tilize is not used on this path");
     _llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
 }
 
@@ -87,7 +97,7 @@ inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
         face_r_dim,
         tile_c_dim,
         num_faces,
-        false);  // partial_face
+        false /* partial_face */);
 }
 
 template <bool is_fp32_dest_acc_en>

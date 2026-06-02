@@ -24,6 +24,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
 #include "cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
@@ -35,8 +36,7 @@ ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transp
           DST_ACCUM_MODE,
           BroadcastType::NONE,
           false,  // is_int_fpu_en
-          false   // tilize
-          >(cbid)));
+          PackMode::Default>(cbid)));
 }
 
 /**
@@ -53,12 +53,14 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
     cb_wait_front(in0, num_tiles);
     cb_wait_front(in1, num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        acquire_dst();
+        tile_regs_acquire();
         copy_tile(in0, i, dst_reg_0);
         copy_tile(in1, i, dst_reg_1);
-        binary_max_tile(dst_reg_0, dst_reg_1, dst_reg_0, static_cast<int>(VectorMode::C));
+        binary_max_tile(dst_reg_0, dst_reg_1, dst_reg_0, VectorMode::C);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(dst_reg_0, in0);
-        release_dst();
+        tile_regs_release();
     }
     cb_pop_front(in0, num_tiles);
     cb_reserve_back(in0, num_tiles);
@@ -68,7 +70,7 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
 /**
  * out_cb = eltwise_max(in0, in1)
  */
-template <int vector_mode = (int)VectorMode::RC>
+template <VectorMode vector_mode = VectorMode::RC>
 void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) {
     // inputs come in full, outputs go out full
     copy_tile_to_dst_init_short(in0);
@@ -80,12 +82,14 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) 
     cb_wait_front(in1, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        acquire_dst();
+        tile_regs_acquire();
         copy_tile(in0, i, dst_reg_0);
         copy_tile(in1, i, dst_reg_1);
-        binary_max_tile(dst_reg_0, dst_reg_1, dst_reg_0, static_cast<int>(VectorMode::C));
+        binary_max_tile(dst_reg_0, dst_reg_1, dst_reg_0, vector_mode);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(dst_reg_0, out_cb, i);
-        release_dst();
+        tile_regs_release();
     }
     cb_push_back(out_cb, num_tiles);
 }
@@ -100,7 +104,7 @@ template <
     uint32_t scale_cb,
     uint32_t rows,
     uint32_t cols,
-    int vector_mode = static_cast<int>(VectorMode::C)>
+    VectorMode vector_mode = VectorMode::C>
 void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
@@ -129,7 +133,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
     uint32_t row_start_idx = 0;
     for (uint32_t g = 0; g < granularity; g++) {
         cb_wait_front(in0_cb, in0_wait_tiles);
-        acquire_dst();
+        tile_regs_acquire();
 
         if (do_eltwise_max) {
             cb_wait_front(prev_cb, g * dst_tiles);
@@ -155,11 +159,13 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
         }
         reduce_block_max_row_uninit(in0_cb);
 
+        tile_regs_commit();
+        tile_regs_wait();
         for (uint32_t i = 0; i < dst_tiles; i++) {
             const uint32_t cur_max_dst_idx = i;
             pack_tile<true>(cur_max_dst_idx, out_cb, (row_start_idx + i));
         }
-        release_dst();
+        tile_regs_release();
 
         row_start_idx += dst_tiles;
         in0_wait_tiles += num_tiles_to_wait;
@@ -179,7 +185,7 @@ template <
     uint32_t in0_cb,
     uint32_t scale_cb,
     uint32_t rows,
-    int vector_mode = static_cast<int>(VectorMode::C)>
+    VectorMode vector_mode = VectorMode::C>
 void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_max = false) {
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
@@ -198,7 +204,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
     constexpr uint32_t prev_max_dst_idx = 1;
 
     for (uint32_t i = 0; i < rows; i++) {
-        acquire_dst();
+        tile_regs_acquire();
         reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
         for (uint32_t j = 0; j < cols; j++) {
             reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
@@ -207,11 +213,13 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         if (do_eltwise_max) {
             copy_tile_to_dst_init_short(prev_cb);
             copy_tile(prev_cb, i, prev_max_dst_idx);
-            binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx, static_cast<int>(vector_mode));
+            binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx, vector_mode);
         }
 
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(reduce_dst_idx, out_cb);
-        release_dst();
+        tile_regs_release();
     }
 
     cb_push_back(out_cb, rows);
@@ -261,7 +269,7 @@ void calculate_recip_first_column() {
 
 template <bool legacy_compat = true>
 void recip_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(calculate_recip_first_column<legacy_compat>, idst, (int)VectorMode::C);
+    _llk_math_eltwise_unary_sfpu_params_(calculate_recip_first_column<legacy_compat>, idst, VectorMode::C);
 }
 #endif
 
@@ -278,11 +286,13 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
 
     cb_wait_front(in_cb, num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        acquire_dst();
+        tile_regs_acquire();
         copy_tile(in_cb, i, 0);
         MATH((recip_tile_first_column(0)));
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, in_cb);
-        release_dst();
+        tile_regs_release();
     }
     cb_pop_front(in_cb, num_tiles);
     cb_reserve_back(in_cb, num_tiles);
@@ -298,7 +308,7 @@ template <
     uint32_t scale_fp32,
     bool write_result_inplace = true,
     bool do_reduce = true,
-    int vector_mode = (int)VectorMode::RC>
+    VectorMode vector_mode = VectorMode::RC>
 void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
@@ -331,8 +341,8 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
-                constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 : 8;
-                constexpr int vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
+                constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 /*ITER*/ : 8 /*ITER*/;
+                constexpr VectorMode vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
                 exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(j, vector_mode_exp);
             }
             tile_regs_commit();
@@ -409,13 +419,15 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
         static_assert(!pack_accumulate, "Unsupported parameter configuration");
         for (uint32_t i = 0; i < rows; ++i) {
             for (uint32_t j = 0; j < cols; ++j) {
-                acquire_dst();
+                tile_regs_acquire();
                 mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
+                tile_regs_commit();
                 cb_pop_front(in0_cb, 1);
                 cb_reserve_back(out_cb, 1);
+                tile_regs_wait();
                 pack_tile(0, out_cb);
+                tile_regs_release();
                 cb_push_back(out_cb, 1);
-                release_dst();
             }
         }
         cb_pop_front(in1_cb, rows);
@@ -524,15 +536,17 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_cb) {
     cb_wait_front(in1_scalar_cb, 1);
     uint32_t in0_index = 0;
     for (uint32_t g = 0; g < granularity; ++g) {
-        acquire_dst();
+        tile_regs_acquire();
         for (uint32_t i = 0; i < dst_tiles; ++i) {
             mul_tiles_bcast_scalar(in0_cb, in1_scalar_cb, in0_index, 0, i);
             in0_index++;
         }
+        tile_regs_commit();
+        tile_regs_wait();
         for (uint32_t i = 0; i < dst_tiles; ++i) {
             pack_tile(i, in0_cb);
         }
-        release_dst();
+        tile_regs_release();
     }
     cb_pop_front(in0_cb, num_tiles);
     cb_reserve_back(in0_cb, num_tiles);
@@ -552,10 +566,12 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
-        acquire_dst();
+        tile_regs_acquire();
         add_tiles(in0_cb, in1_cb, i, i, 0);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, in0_cb);
-        release_dst();
+        tile_regs_release();
     }
 
     cb_pop_front(in0_cb, num_tiles);
@@ -579,13 +595,15 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
-        acquire_dst();
+        tile_regs_acquire();
         mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
+        tile_regs_commit();
         cb_pop_front(in0_cb, 1);
         cb_reserve_back(in0_cb, 1);
+        tile_regs_wait();
         pack_tile(0, in0_cb);
+        tile_regs_release();
         cb_push_back(in0_cb, 1);
-        release_dst();
     }
 }
 
@@ -602,13 +620,15 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     cb_wait_front(in1_cb, num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
         invalidate_l1_cache();
-        acquire_dst();
+        tile_regs_acquire();
         mul_tiles(in0_cb, in1_cb, 0, i, 0);
+        tile_regs_commit();
         cb_pop_front(in0_cb, 1);
         cb_reserve_back(in0_cb, 1);
+        tile_regs_wait();
         pack_tile(0, in0_cb);
+        tile_regs_release();
         cb_push_back(in0_cb, 1);
-        release_dst();
     }
 }
 
@@ -848,7 +868,7 @@ void calculate_exponential_first_column() {
 template <bool SDPA_EXP_APPROX_MODE, uint16_t scale_bf16>
 void exp_tile_first_column(uint32_t idst) {
     _llk_math_eltwise_unary_sfpu_params_(
-        calculate_exponential_first_column<SDPA_EXP_APPROX_MODE, scale_bf16>, idst, (int)VectorMode::C);
+        calculate_exponential_first_column<SDPA_EXP_APPROX_MODE, scale_bf16>, idst, VectorMode::C);
 }
 #endif  // defined(TRISC_MATH) || defined(TRISC_PACK)
 
@@ -872,12 +892,14 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         invalidate_l1_cache();
-        acquire_dst();
+        tile_regs_acquire();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
         MATH((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(0)));
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, out_cb);
+        tile_regs_release();
         cb_push_back(out_cb, 1);
-        release_dst();
     }
 }
 
@@ -940,14 +962,14 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     }
 }
 
-template <bool SDPA_EXP_APPROX_MODE, int vector_mode = (int)VectorMode::C>
+template <bool SDPA_EXP_APPROX_MODE, VectorMode vector_mode = VectorMode::C>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
     _llk_math_eltwise_unary_sfpu_params_(
         calculate_fused_max_sub_exp_add_tile<SDPA_EXP_APPROX_MODE>, idst, vector_mode, scale_bf16);
 }
 #endif
 
-template <uint32_t scale_fp32, int vector_mode = (int)VectorMode::C>
+template <uint32_t scale_fp32, VectorMode vector_mode = VectorMode::C>
 void correction_block(
     uint32_t cb_worker_max,
     uint32_t cb_worker_sum,
@@ -978,7 +1000,7 @@ void correction_block(
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
     for (uint32_t i = 0; i < num_head_tiles; i++) {
-        acquire_dst();
+        tile_regs_acquire();
         copy_tile_to_dst_init_short(cb_worker_max);
         exp_tile_init<EXP_APPROX_MODE>();
         copy_tile(cb_prev_max, i, dst_reg_0);
@@ -986,15 +1008,17 @@ void correction_block(
         copy_tile(cb_prev_sum, i, dst_reg_3);
         copy_tile(cb_worker_sum, i, dst_reg_4);
         MATH((fused_max_sub_exp_add_tile<EXP_APPROX_MODE, vector_mode>(0, scale_bf16)));
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(dst_reg_0, cb_exp_max_diff);
         pack_tile(dst_reg_1, cb_exp_max_diff_2);
         pack_tile(dst_reg_2, cb_cur_max);
         pack_tile(dst_reg_3, cb_cur_sum);
+        tile_regs_release();
         cb_push_back(cb_cur_max, 1);
         cb_push_back(cb_cur_sum, 1);
         cb_push_back(cb_exp_max_diff, 1);
         cb_push_back(cb_exp_max_diff_2, 1);
-        release_dst();
     }
     cb_pop_front(cb_prev_sum, num_head_tiles);
     cb_pop_front(cb_worker_sum, num_head_tiles);
@@ -1017,11 +1041,13 @@ void move_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
 
 #pragma GCC unroll 0
     for (uint32_t i = 0; i < num_tiles; i++) {
-        acquire_dst();
+        tile_regs_acquire();
         copy_tile(in_cb, i, 0 /*dst*/);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, out_cb);
+        tile_regs_release();
         cb_push_back(out_cb, 1);
-        release_dst();
     }
     if (pop_in_cb) {
         cb_pop_front(in_cb, num_tiles);
@@ -1038,11 +1064,13 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     cb_reserve_back(out_cb, num_tiles);
 #pragma GCC unroll 0
     for (uint32_t i = 0; i < num_tiles; i++) {
-        acquire_dst();
+        tile_regs_acquire();
         copy_tile(in_cb, i, 0 /*dst*/);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, out_cb);
+        tile_regs_release();
         cb_push_back(out_cb, 1);
-        release_dst();
     }
     cb_pop_front(in_cb, num_tiles);
 }
@@ -1054,12 +1082,14 @@ void log_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     cb_reserve_back(out_cb, num_tiles);
 
     for (uint32_t i = 0; i < num_tiles; i++) {
-        acquire_dst();
+        tile_regs_acquire();
         copy_tile(in_cb, i, 0 /*dst*/);
         log_tile(0);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, out_cb);
+        tile_regs_release();
         cb_push_back(out_cb, 1);
-        release_dst();
     }
 }
 
@@ -1076,19 +1106,30 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
     cb_reserve_back(out_cb, num_tiles);
     sub_tiles_init(in0_cb, in1_cb);
     exp_tile_init<false>();
-    // recip_tile_init<false>(); // Can omit this because accurate exp_tile_init performs reduce_tile_init
+    // recip_tile_first_column<false>() calls the scalar _sfpu_reciprocal_ path, so initialize exactly
+    // that SFPU state here. Blackhole needs vConstFloatPrgm0 = 2.0 for Newton-Raphson; Wormhole
+    // needs vConstFloatPrgm0/1/2 loaded with reciprocal polynomial coefficients.
+    // This init programs persistent SFPU constants, not per-tile data. It intentionally comes after
+    // exp_tile_init<false>() because the exp call below is the custom exp_tile_first_column<false>(),
+    // whose polynomial implementation loads the constants it consumes into LREGs in the tile body; it
+    // does not depend on vConstFloatPrgm* state from exp_tile_init. Conversely, that exp body also
+    // does not clobber the reciprocal constants, so one reciprocal init before the tile loop is enough.
+    MATH((ckernel::sfpu::sfpu_reciprocal_init<false>()));
 
     for (uint32_t i = 0; i < num_tiles; i++) {
-        acquire_dst();
+        tile_regs_acquire();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
         // exp_tile<false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
         MATH((exp_tile_first_column<false /*APPROX_MODE*/, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
-        // add_unary_tile(0, 0x3F800000); // Call the LLK directly to get access to VectorMode argument
-        MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, ADD_UNARY>(0, 0x3F800000, (int)VectorMode::C)));
+        // add_unary_tile(0 /*dst_index*/, 0x3F800000); // Call the LLK directly to get access to VectorMode argument
+        MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, ADD_UNARY>(
+            0 /*dst_index*/, 0x3F800000 /*scalar*/, VectorMode::C)));
         // recip_tile<false>(0, (int)VectorMode::C);
-        MATH((recip_tile_first_column<false>(0)));
+        MATH((recip_tile_first_column<false>(0 /*dst_index*/)));
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, out_cb);
-        release_dst();
+        tile_regs_release();
     }
     cb_push_back(out_cb, num_tiles);
 }
@@ -1111,7 +1152,7 @@ void calculate_softplus_first_column(uint param0, uint param1, uint param2) {
 
 void softplus_tile_first_column(uint32_t idst, uint beta, uint beta_reciprocal, uint threshold) {
     _llk_math_eltwise_unary_sfpu_params_(
-        calculate_softplus_first_column<APPROX>, idst, (int)VectorMode::C, beta, beta_reciprocal, threshold);
+        calculate_softplus_first_column<APPROX>, idst, VectorMode::C, beta, beta_reciprocal, threshold);
 }
 #endif
 
@@ -1127,7 +1168,7 @@ void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
     constexpr uint32_t const_20_fp32 = 0x41A00000;
 
     for (uint32_t i = 0; i < num_tiles; i++) {
-        acquire_dst();
+        tile_regs_acquire();
         // Negate input to softplus by swapping inputs to sub
         sub_tiles(in1_cb, in0_cb, i, i, 0);
         // softplus_tile(0, 0x3F800000, 0x3F800000, 0x41A00000);  // beta, beta_reciprocal, threshold
@@ -1141,8 +1182,10 @@ void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
         MATH((softplus_tile_first_column(0, const_1_fp32, const_1_fp32, const_20_fp32)));
         // Negate the output of softplus
         negative_tile(0);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, out_cb);
-        release_dst();
+        tile_regs_release();
     }
     cb_push_back(out_cb, num_tiles);
 }
@@ -1158,10 +1201,12 @@ __attribute__((optimize("Os"))) void sub_block(uint32_t in0_cb, uint32_t in1_cb,
     sub_tiles_init(in0_cb, in1_cb);
 
     for (uint32_t i = 0; i < num_tiles; i++) {
-        acquire_dst();
+        tile_regs_acquire();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(0, out_cb);
-        release_dst();
+        tile_regs_release();
     }
     cb_push_back(out_cb, num_tiles);
 }
@@ -1405,34 +1450,59 @@ void apply_causal_mask_lightweight(
     uint32_t q_start_tile,
     uint32_t k_start_tile,
     uint32_t num_rows,
-    uint32_t num_cols) {
+    uint32_t num_cols,
+    uint32_t straddle_col = 0,
+    uint32_t straddle_jump = 0) {
     copy_tile_to_dst_init_short(mask_cb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
     for (uint32_t row = 0; row < num_rows; row++) {
-        int32_t diag_col = static_cast<int32_t>(q_start_tile + row) - static_cast<int32_t>(k_start_tile);
         uint32_t row_offset = row * num_cols;
+        const int32_t q_pos = static_cast<int32_t>(q_start_tile + row);
 
-        if (diag_col < 0) {
-            // Entire row above diagonal -> stamp all neginf
-            stamp_tile_range_l1_acc<dst_batch>(mask_cb, neginf_idx, out_cb, row_offset, num_cols);
-        } else if (static_cast<uint32_t>(diag_col) < num_cols) {
-            // Stamp the diagonal tile
-            tile_regs_acquire();
-            copy_tile(mask_cb, diag_idx, 0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile<true>(0, out_cb, row_offset + static_cast<uint32_t>(diag_col));
-            tile_regs_release();
+        if (straddle_col == 0) {
+            // Fast path: K coords contiguous across cols.
+            int32_t diag_col = q_pos - static_cast<int32_t>(k_start_tile);
+            if (diag_col < 0) {
+                // Entire row above diagonal -> stamp all neginf
+                stamp_tile_range_l1_acc<dst_batch>(mask_cb, neginf_idx, out_cb, row_offset, num_cols);
+            } else if (static_cast<uint32_t>(diag_col) < num_cols) {
+                // Stamp the diagonal tile
+                tile_regs_acquire();
+                copy_tile(mask_cb, diag_idx, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile<true>(0, out_cb, row_offset + static_cast<uint32_t>(diag_col));
+                tile_regs_release();
 
-            // Stamp neginf tiles to the right of diagonal
-            uint32_t neginf_start = static_cast<uint32_t>(diag_col) + 1;
-            if (neginf_start < num_cols) {
-                stamp_tile_range_l1_acc<dst_batch>(
-                    mask_cb, neginf_idx, out_cb, row_offset + neginf_start, num_cols - neginf_start);
+                // Stamp neginf tiles to the right of diagonal
+                uint32_t neginf_start = static_cast<uint32_t>(diag_col) + 1;
+                if (neginf_start < num_cols) {
+                    stamp_tile_range_l1_acc<dst_batch>(
+                        mask_cb, neginf_idx, out_cb, row_offset + neginf_start, num_cols - neginf_start);
+                }
+            }
+            // else: diag_col >= num_cols -> entire row below diagonal, no mask needed
+        } else {
+            // Chunked-prefill straddle: K coord jumps by straddle_jump at col >= straddle_col
+            // (the K-chunk crosses a slab boundary). Evaluate per-col.
+            for (uint32_t col = 0; col < num_cols; col++) {
+                int32_t k_pos = static_cast<int32_t>(k_start_tile) + static_cast<int32_t>(col);
+                if (col >= straddle_col) {
+                    k_pos += static_cast<int32_t>(straddle_jump);
+                }
+                if (k_pos > q_pos) {
+                    stamp_tile_range_l1_acc<dst_batch>(mask_cb, neginf_idx, out_cb, row_offset + col, 1);
+                } else if (k_pos == q_pos) {
+                    tile_regs_acquire();
+                    copy_tile(mask_cb, diag_idx, 0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile<true>(0, out_cb, row_offset + col);
+                    tile_regs_release();
+                }
             }
         }
-        // else: diag_col >= num_cols -> entire row below diagonal, no mask needed
     }
 
     PACK((llk_pack_reconfig_l1_acc(0)));
@@ -1520,9 +1590,11 @@ struct LightweightMaskContext {
         uint32_t global_n_mask_chunk_id,
         uint32_t local_n_mask_chunk_id,
         uint32_t joint_n_mask_chunk_id,
-        uint32_t q_start_tile = 0) const {
+        uint32_t q_start_tile,
+        uint32_t k_start_tile,
+        uint32_t straddle_col = 0,
+        uint32_t straddle_jump = 0) const {
         if (is_causal) {
-            uint32_t k_start_tile = k_chunk * Sk_chunk_t;
             apply_causal_mask_lightweight<dst_size>(
                 cb_mask_in,
                 neginf_tile_idx,
@@ -1531,7 +1603,9 @@ struct LightweightMaskContext {
                 q_start_tile,
                 k_start_tile,
                 Sq_chunk_t,
-                Sk_chunk_t);
+                Sk_chunk_t,
+                straddle_col,
+                straddle_jump);
         }
 
         // Apply padding stamp (also when is_causal — the causal stamp doesn't handle K padding).
@@ -1668,7 +1742,10 @@ template <
     bool is_chunked,
     uint32_t scale_fp32,
     uint32_t sliding_window_size,
-    bool lightweight_mask_enabled = false>
+    bool lightweight_mask_enabled = false,
+    bool chunked_enabled = false,
+    uint32_t chunked_q_local_padded_Nt = 0,
+    uint32_t chunked_chunk_size_t = 0>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -1728,7 +1805,8 @@ void sdpa_inner_loop(
     const bool is_causal = false,
     const bool is_balanced = false,
     const bool use_zigzag_balancing = false,
-    const bool is_last_ring_iter = true) {
+    const bool is_last_ring_iter = true,
+    const ChunkedContext& chunked = {}) {
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     uint32_t KV_chunks_processed_in_iter = 0;
     const uint32_t q_per_core = iter_q_end - iter_q_start;
@@ -1738,18 +1816,10 @@ void sdpa_inner_loop(
         uint32_t q_high_tile = 0;     // STANDARD: upper tile bound for K iteration
         uint32_t causal_k_limit = 0;  // RING: K-chunk index beyond which all K is above the diagonal
         if constexpr (sdpa_type == STANDARD) {
-            uint32_t q_chunk;
-#if defined BALANCED_Q_PARALLEL
-            uint32_t q_chunk_div_2 = iter_q_end / 2;  // q_chunks_per_core / 2.
-            if (q_iter < q_chunk_div_2) {             // bottom half
-                q_chunk = local_q_start + q_iter;
-            } else {
-                uint32_t back_q_iter = q_iter - q_chunk_div_2;  // Back half should start at 0
-                q_chunk = q_num_chunks - 1 - (local_q_start + back_q_iter);
-            }
-#else
-            q_chunk = local_q_start + q_iter;
-#endif
+            const uint32_t linear_q_chunk = local_q_start + (q_iter - iter_q_start);
+            // Mod is a no-op when the input is per-head ([0, q_num_chunks)) and extracts the
+            // per-head q_chunk when it's a flat global index (global Q scheduling spans heads).
+            uint32_t q_chunk = remap_q_index(linear_q_chunk, q_num_chunks, use_zigzag_balancing) % q_num_chunks;
             // Get Q chunk
             if constexpr (is_chunked) {
                 q_chunk = chunked_q_chunk_offset + q_chunk;
@@ -1767,7 +1837,11 @@ void sdpa_inner_loop(
         } else if (sdpa_type == RING) {
             uint32_t q_chunk = remap_q_index(q_iter, q_num_chunks, use_zigzag_balancing) % q_num_chunks;
 
-            if (is_causal) {
+            if constexpr (chunked_enabled) {
+                // Absolute Q tile row. Diag stamp masks K past Q's range; logical_n skip handles K past the cache.
+                q_start_tile =
+                    chunked.q_start_idx_t + chunked.ring_index * chunked_q_local_padded_Nt + q_chunk * Sq_chunk_t;
+            } else if (is_causal) {
                 q_start_tile = q_chunk * Sq_chunk_t;
                 causal_k_limit = (q_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
             }
@@ -1795,10 +1869,17 @@ void sdpa_inner_loop(
         uint32_t processed_k_chunks = 0;
 
         for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
+            uint32_t kv_global_start_tile = 0;  // RING only: abs K-tile index of this k_chunk's start
             if constexpr (sdpa_type == RING) {
                 const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
-                // Global index into the padded KV tensor
-                const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+                // Global index into the padded KV tensor. Chunked: non-monotonic local→abs map.
+                if constexpr (chunked_enabled) {
+                    kv_global_start_tile =
+                        kv_global_tile_for_local<true, 0, chunked_chunk_size_t, chunked_q_local_padded_Nt>(
+                            ring_id, k_chunk * Sk_chunk_t);
+                } else {
+                    kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+                }
                 if (!kv_chunk_is_joint && (kv_global_start_tile >= logical_nt)) {
                     // This is a KV chunk on spatial input beyond the logical N, and not joint KV. Skip it.
                     continue;
@@ -1807,7 +1888,9 @@ void sdpa_inner_loop(
 
             KV_chunks_processed_in_iter++;
 
-            if (sdpa_type == RING && k_chunk >= causal_k_limit && is_causal) {
+            // Chunked-prefill: never take this skip (local-frame causal_k_limit doesn't apply —
+            // the diag stamp uses absolute coords every k_chunk instead).
+            if (sdpa_type == RING && !chunked_enabled && k_chunk >= causal_k_limit && is_causal) {
                 cb_wait_front(cb_k_in, k_chunk_tiles);
                 cb_wait_front(cb_v_in, v_chunk_tiles);
                 cb_pop_front(cb_k_in, k_chunk_tiles);
@@ -1855,8 +1938,27 @@ void sdpa_inner_loop(
             if (sdpa_type == RING && !is_causal) {
                 apply_mask = needs_padding_mask;
             } else if (is_causal || sliding_window_size > 0) {
-                const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
-                const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
+                // Chunked-prefill (RING): use abs K so the causal-overlap test matches the diag stamp's frame.
+                uint32_t k_low_idx;
+                uint32_t k_high_idx;
+                if constexpr (sdpa_type == RING && chunked_enabled) {
+                    k_low_idx = kv_global_start_tile;
+                    k_high_idx = k_low_idx + Sk_chunk_t;
+                    // Straddle: chunk crosses a per-chunk slab boundary in the local cache. The
+                    // tail tiles land in the next slab, so the actual high global K is shifted by
+                    // chunk_size_t - q_local_padded_Nt.
+                    if (chunked_q_local_padded_Nt > 0) {
+                        const uint32_t local_start = k_chunk * Sk_chunk_t;
+                        const uint32_t slab_end_local =
+                            (local_start / chunked_q_local_padded_Nt + 1) * chunked_q_local_padded_Nt;
+                        if (local_start + Sk_chunk_t > slab_end_local) {
+                            k_high_idx += (chunked_chunk_size_t - chunked_q_local_padded_Nt);
+                        }
+                    }
+                } else {
+                    k_low_idx = k_chunk * Sk_chunk_t;
+                    k_high_idx = k_low_idx + Sk_chunk_t;
+                }
                 // Apply mask if causal overlap, sliding window, or this K chunk has padding
                 apply_mask = (q_start_tile < k_high_idx) || (sliding_window_size > 0) || needs_padding_mask;
             } else if constexpr (use_provided_mask) {
@@ -1885,6 +1987,31 @@ void sdpa_inner_loop(
                     cb_wait_front(cb_qk_im, Sk_chunk_t * Sq_chunk_t);
                     cb_pop_front(cb_qk_im, Sk_chunk_t * Sq_chunk_t);
                     cb_reserve_back(cb_qk_im, Sk_chunk_t * Sq_chunk_t);
+                    // Chunked-prefill: feed abs K (matches abs q_start_tile so diag stamp lines up).
+                    uint32_t k_start_tile_for_mask;
+                    uint32_t lw_straddle_col = 0;
+                    uint32_t lw_straddle_jump = 0;
+                    if constexpr (sdpa_type == RING && chunked_enabled) {
+                        k_start_tile_for_mask = kv_global_start_tile;
+                        // Chunked-prefill straddle: a K-chunk can begin in one per-chunk K
+                        // region and end in the next when k_chunk_size does not divide
+                        // q_local_padded_Nt. Global K is non-contiguous across the K-chunk in
+                        // that case (jumps by chunk_size_t - q_local_padded_Nt between regions),
+                        // so we signal the column boundary (straddle_col) and the jump
+                        // (straddle_jump) to the diag stamp — see same comment block in
+                        // compute_streaming.hpp:sdpa_inner_loop_step for the full picture.
+                        if (chunked_q_local_padded_Nt > 0) {
+                            const uint32_t local_start = k_chunk * Sk_chunk_t;
+                            const uint32_t slab_end_local =
+                                (local_start / chunked_q_local_padded_Nt + 1) * chunked_q_local_padded_Nt;
+                            if (local_start + Sk_chunk_t > slab_end_local) {
+                                lw_straddle_col = slab_end_local - local_start;
+                                lw_straddle_jump = chunked_chunk_size_t - chunked_q_local_padded_Nt;
+                            }
+                        }
+                    } else {
+                        k_start_tile_for_mask = k_chunk * Sk_chunk_t;
+                    }
                     lw_mask.template apply<dst_size>(
                         cb_mask_in,
                         cb_qk_im,
@@ -1898,7 +2025,10 @@ void sdpa_inner_loop(
                         global_n_mask_chunk_id,
                         local_n_mask_chunk_id,
                         joint_n_mask_chunk_id,
-                        q_start_tile);
+                        q_start_tile,
+                        k_start_tile_for_mask,
+                        lw_straddle_col,
+                        lw_straddle_jump);
                     cb_push_back(cb_qk_im, Sk_chunk_t * Sq_chunk_t);
                 } else {
                     add_block_inplace(cb_qk_im, cb_mask_in, qk_chunk_tiles);
@@ -2118,6 +2248,13 @@ void sdpa_inner_loop(
         if (q_per_core > 1 || is_last_ring_iter) {
             cb_pop_front(cb_q_in, q_chunk_tiles);
         }
+
+        // Under global Q scheduling the reader pushes one cb_attention_sink slot per Q iter,
+        // so we must drain matching slots inside this loop. Pre-PR the push/pop pair was
+        // 1:1 outside the loop; the new cadence is 1:1 per iter.
+        if constexpr (use_attention_sink) {
+            cb_pop_front(cb_attention_sink, Sq_chunk_t);
+        }
     }
 
     if constexpr (sdpa_type == RING) {
@@ -2127,10 +2264,6 @@ void sdpa_inner_loop(
             cb_pop_front(cb_k_in, k_chunk_tiles);
             cb_pop_front(cb_v_in, v_chunk_tiles);
         }
-    }
-
-    if constexpr (use_attention_sink) {
-        cb_pop_front(cb_attention_sink, Sq_chunk_t);
     }
 }
 
@@ -2195,7 +2328,8 @@ void sdpa_standard(
     const uint32_t cb_sum_B,
     const uint32_t cb_exp_max_diff,
     const uint32_t cb_out,
-    const LightweightMaskContext& lw_mask = {}) {
+    const LightweightMaskContext& lw_mask = {},
+    const bool use_zigzag_balancing = false) {
     sdpa_inner_loop<
         STANDARD,
         cb_qk_im,
@@ -2270,7 +2404,9 @@ void sdpa_standard(
         0,  // cb_prev_out (not used)
         cb_out,
         lw_mask,
-        is_causal);
+        is_causal,
+        false,  // is_balanced (not used)
+        use_zigzag_balancing);
 }
 
 /**
@@ -2407,7 +2543,10 @@ template <
     uint32_t DHt,
     uint32_t vDHt,
     uint32_t scale_fp32,
-    bool lightweight_mask_enabled = false>
+    bool lightweight_mask_enabled = false,
+    bool chunked_enabled = false,
+    uint32_t chunked_q_local_padded_Nt = 0,
+    uint32_t chunked_chunk_size_t = 0>
 void sdpa_ring(
     const uint32_t qk_in0_block_w,
     const uint32_t qk_subblock_w,
@@ -2462,7 +2601,8 @@ void sdpa_ring(
     const bool is_causal_ring_iter,
     const bool skip_first_half_q,
     const bool is_last_ring_iter,
-    const bool use_zigzag_balancing = false) {
+    const bool use_zigzag_balancing = false,
+    const ChunkedContext& chunked = {}) {
     sdpa_inner_loop<
         RING,
         cb_qk_im,
@@ -2481,7 +2621,10 @@ void sdpa_ring(
         false,  // is_chunked (not used)
         scale_fp32,
         0,  // sliding_window_size (not used)
-        lightweight_mask_enabled>(
+        lightweight_mask_enabled,
+        chunked_enabled,
+        chunked_q_local_padded_Nt,
+        chunked_chunk_size_t>(
         0,  // Skt (not used)
         qk_in0_block_w,
         qk_subblock_w,
@@ -2540,7 +2683,8 @@ void sdpa_ring(
         is_causal_ring_iter,
         skip_first_half_q,
         use_zigzag_balancing,
-        is_last_ring_iter);
+        is_last_ring_iter,
+        chunked);
 }
 
 /**

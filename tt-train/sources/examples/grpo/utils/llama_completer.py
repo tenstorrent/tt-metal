@@ -196,6 +196,8 @@ class LlamaGRPOCompleter(GRPOCompleter):
         tt_model = LlamaCompositeKV(llama_cfg)
 
         if dev_config.enable_ddp:
+            # NOTE: TP is intentionally disabled here. The cross_entropy_loss call below
+            # assumes full-vocab logits;
             autograd_ctx.initialize_parallelism_context(
                 ttml.autograd.DistributedConfig(enable_ddp=True, enable_tp=False)
             )

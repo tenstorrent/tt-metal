@@ -38,6 +38,7 @@ set(SOURCES
     optimizers/muon_composite_test.cpp
     ops/newton_schulz_op_test.cpp
     ops/frobenius_normalize_test.cpp
+    ops/k_split_gram_matmul_op_test.cpp
     optimizers/adamw_full_precision_test.cpp
     optimizers/no_op_test.cpp
     modules/distributed/linear_test.cpp
@@ -45,6 +46,7 @@ set(SOURCES
     serialization/flatbuffer_serializer_test.cpp
     serialization/tensor_serializer_test.cpp
     serialization/safetensors_test.cpp
+    serialization/get_value_type_test.cpp
     ops/cross_entropy_fw_op_test.cpp
     ops/select_target_logit_op_test.cpp
     ops/subtract_at_target_op_test.cpp
@@ -175,6 +177,7 @@ if(TARGET benchmark::benchmark)
         benchmark/adamw_benchmark.cpp
         benchmark/frobenius_normalize_benchmark.cpp
         benchmark/polynorm_fusion_benchmark.cpp
+        benchmark/gram_matmul_benchmark.cpp
     )
 
     foreach(BENCH_SRC ${BENCHMARK_SOURCES})

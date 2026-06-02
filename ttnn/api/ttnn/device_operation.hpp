@@ -231,7 +231,7 @@ void enqueue_mesh_workload(
 }
 
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted
-// path for `ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` factories.
+// path for `ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `ProgramSpecFactoryConcept` factories.
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t, typename ProgramFactory, typename Fn>
 void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, const Fn& fn) {
     std::visit(
@@ -242,8 +242,12 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
             [&]<ProgramDescriptorFactoryConcept T>(const T&) {
+                using AdaptedMeshWorkloadFactory = mesh_device_operation_t::template DescriptorMeshWorkloadAdapter<T>;
+                fn.template operator()<AdaptedMeshWorkloadFactory>();
+            },
+            [&]<ProgramSpecFactoryConcept T>(const T&) {
                 using AdaptedMeshWorkloadFactory =
-                    mesh_device_operation_t::template DescriptorMeshWorkloadFactoryAdapter<T>;
+                    mesh_device_operation_t::template ProgramSpecMeshWorkloadFactoryAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
             [&]<MeshWorkloadFactoryConcept WorkloadFactory>(const WorkloadFactory&) {

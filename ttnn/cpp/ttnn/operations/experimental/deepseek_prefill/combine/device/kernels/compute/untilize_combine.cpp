@@ -14,11 +14,9 @@
 
 #define ENABLE_COMBINE_DEBUG 0
 #if ENABLE_COMBINE_DEBUG
-#define DPRINT_COMBINE DPRINT
+#define DPRINT_COMBINE(...) DPRINT(__VA_ARGS__)
 #else
-#define DPRINT_COMBINE \
-    if (0)             \
-    DebugPrinter()
+#define DPRINT_COMBINE(...)
 #endif
 
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;

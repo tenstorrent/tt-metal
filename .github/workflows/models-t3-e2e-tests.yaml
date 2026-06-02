@@ -24,7 +24,7 @@ on:
           - qwq-32b
           - phi-3-mini
           # phi-4-mini: disabled — assert freqs.shape[-1] == ext_factors.shape[-1]
-          # mamba-2.8b: disabled — PCC failures (see #42163)
+          - mamba-2.8b
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
@@ -34,7 +34,16 @@ on:
           - all
           - "wh_n150 (N150)"
           - "wh_n300 (N300)"
-          - "wh_llmbox_perf (T3000)"
+          - "wh_llmbox (T3000)"
+          - "wh_llmbox_perf (T3000 perf)"
+          - "wh_galaxy (WH Galaxy)"
+          - "wh_galaxy_perf (WH Galaxy perf)"
+          - "bh_p150 (P150)"
+          - "bh_loudbox (BH LoudBox)"
+          - "bh_p300 (P300)"
+          - "bh_quietbox_2 (BH QB2)"
+          - "bh_galaxy (BH Galaxy)"
+          - "bh_galaxy_perf (BH Galaxy perf)"
       platform:
         required: false
         type: choice
@@ -81,7 +90,7 @@ jobs:
       - name: Resolve SKU and model selection
         id: resolve
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_llmbox_perf"
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_loudbox,bh_p300,bh_quietbox_2,bh_galaxy,bh_galaxy_perf"
           EVENT="${{ github.event_name }}"
           if [[ "$EVENT" == "workflow_dispatch" ]]; then
             SKU_INPUT="${{ inputs.sku || 'all' }}"

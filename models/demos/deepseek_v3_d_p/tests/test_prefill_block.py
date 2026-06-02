@@ -25,7 +25,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.moe.tt_prefill_block import TtPrefillBlock
+from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
@@ -46,10 +46,11 @@ PCC_THRESHOLD_KVPE = 0.999
 @pytest.mark.parametrize(
     "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
     [
-        ("random", False, 1024, 2),
-        ("abc_1k", True, 1024, 2),
+        ("random", False, 1024, 8),
+        ("abc_1k", False, 25 * 1024, 8),
+        ("abc_1k", True, 1024, 8),
     ],
-    ids=["smoke-random", "pcc-abc_1k"],
+    ids=["smoke-random", "perf-abc_25k", "pcc-abc_1k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
@@ -59,6 +60,7 @@ PCC_THRESHOLD_KVPE = 0.999
     ],
     ids=["dense", "moe-gate_device"],
 )
+@pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "non_balanced"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -92,6 +94,7 @@ def test_prefill_block(
     config_only,
     mesh_device,
     device_params,
+    is_balanced,
     isl_total,
     dispatch_buffer_capacity_factor,
     layer_type,
@@ -106,6 +109,8 @@ def test_prefill_block(
 ):
     if is_ci_env or is_ci_v2_env and pcc_validation == False:
         pytest.skip("Skip non-PCC test in CI to save time")
+    if (is_ci_env or is_ci_v2_env) and not is_balanced:
+        pytest.skip("Skip non_balanced variant in CI — runnable locally for non_balanced-mode validation")
 
     profiler.clear()
     profiler.start("total_test_time")
@@ -252,6 +257,8 @@ def test_prefill_block(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         weight_cache_path=cache_dir,
+        capacity_factor=32,
+        is_balanced=is_balanced,
     )
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
@@ -271,7 +278,7 @@ def test_prefill_block(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(-2, -1)),
     )
 
-    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=False)
+    rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
     rope_tensors = rope_setup.get_rope_tensors(isl_total)
 
     kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank

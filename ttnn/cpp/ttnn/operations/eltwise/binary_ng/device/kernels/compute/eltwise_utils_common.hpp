@@ -33,3 +33,14 @@
 #define OTHER_OP P_CAT(BCAST_OP_, P_COMPL(BCAST_INPUT))
 #define BCAST_OP_0 LHS
 #define BCAST_OP_1 RHS
+
+// In that build, the SFPU tile API takes two extra runtime-arg scalars
+// (rtol/atol IEEE-754 bits) which are read once at the top of kernel_main and
+// then forwarded into the inlined process_tile helpers via these macros.
+#ifdef ISCLOSE_OP
+#define ISCLOSE_RT_ARG_PARAMS , uint32_t rtol_bits, uint32_t atol_bits
+#define ISCLOSE_RT_ARG_FWD , rtol_bits, atol_bits
+#else
+#define ISCLOSE_RT_ARG_PARAMS
+#define ISCLOSE_RT_ARG_FWD
+#endif

@@ -20,17 +20,22 @@ on:
         type: string
         default: "all"
         description: "Filter test rows by model-name (untagged rows always run)"
+      test-selection:
+        required: false
+        type: string
+        default: "all"
+        description: "Filter test rows by id, or by the sdpa tag group"
 
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.filter-matrix.outputs.matrix || steps.prepare.outputs.matrix }}
+      matrix: ${{ steps.apply-filters.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/blackhole_e2e_tests.yaml
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github
@@ -52,20 +57,73 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
-      - name: Filter test matrix by model
-        id: filter-matrix
-        if: inputs.model != 'all'
+      - name: Apply test matrix filters
+        id: apply-filters
         env:
           MATRIX: ${{ steps.prepare.outputs.matrix }}
+          MODEL: ${{ inputs.model }}
+          TEST_SELECTION: ${{ inputs.test-selection }}
         run: |
-          filtered=$(echo "$MATRIX" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
+          selected="$MATRIX"
+
+          if [[ "$TEST_SELECTION" != "all" ]]; then
+            selection_exists=$(python3 - <<'PY'
+          import os
+          import yaml
+
+          selection = os.environ["TEST_SELECTION"]
+          tests_path = os.environ["TESTS_YAML_PATH"]
+
+          with open(tests_path, "r") as f:
+              tests = yaml.safe_load(f) or []
+
+          if selection == "sdpa":
+              matches = any(selection in (test.get("tags") or []) for test in tests)
+          else:
+              matches = any(test.get("id") == selection for test in tests)
+
+          print("true" if matches else "false")
+          PY
+          )
+            if [[ "$selection_exists" != "true" ]]; then
+              echo "::error::Unknown e2e test-selection '$TEST_SELECTION'. Use 'all', 'sdpa', or an id from $TESTS_YAML_PATH."
+              exit 1
+            fi
+
+            case "$TEST_SELECTION" in
+              sdpa)
+                selected=$(echo "$selected" | jq -c '[.[] | select((.tags // []) | index("sdpa"))]')
+                ;;
+              *)
+                selected=$(echo "$selected" | jq -c --arg id "$TEST_SELECTION" '[.[] | select(.id == $id)]')
+                ;;
+            esac
+          fi
+
+          filtered="$selected"
+          if [[ "$MODEL" != "all" ]]; then
+            filtered=$(echo "$filtered" | jq -c --arg model "$MODEL" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
+          fi
+
           count=$(echo "$filtered" | jq 'length')
           if [[ "$count" -eq 0 ]]; then
-            echo "::warning::No e2e tests match model '${{ inputs.model }}' for enabled SKU(s) '${{ inputs.enabled-skus }}'; e2e matrix is empty and jobs will be skipped."
+            echo "::warning::No e2e tests match model '$MODEL' and test-selection '$TEST_SELECTION' for enabled SKU(s) '${{ inputs.enabled-skus }}'; e2e matrix is empty and jobs will be skipped."
           fi
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$filtered" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+      - name: Write test matrix to file
+        env:
+          # Same as load-test-matrix outputs.matrix above.
+          MATRIX: ${{ steps.apply-filters.outputs.matrix }}
+        run: |
+          echo "$MATRIX" > test_matrix_${{ inputs.enabled-skus }}.json
+      - name: Upload test matrix
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: test_matrix_${{ inputs.enabled-skus }}
+          path: test_matrix_${{ inputs.enabled-skus }}.json
+          retention-days: 1
 
   blackhole-e2e-tests:
     needs: load-test-matrix
@@ -97,7 +155,7 @@ jobs:
         working-directory: /work
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -189,57 +247,3 @@ jobs:
           owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
-
-  ai-run-summary:
-    name: "AI Run Summary"
-    needs: [load-test-matrix, blackhole-e2e-tests]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - id: extract-matrix
-        env:
-          MATRIX: ${{ needs.load-test-matrix.outputs.matrix }}
-        run: |
-          # load-test-matrix exposes the flat array of leg dicts directly
-          # (unlike the legacy {"test-group":[...]} wrapper used in
-          # blackhole-multi-card-unit-tests-impl.yaml). Validate-parse via
-          # jq and default to [] when the upstream output is empty.
-          if [ -z "$MATRIX" ]; then
-            EXPECTED="[]"
-          else
-            EXPECTED=$(echo "$MATRIX" | jq -c '. // []')
-          fi
-          {
-            echo "matrix<<EOF"
-            echo "$EXPECTED"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-      - id: ai-run-summary
-        continue-on-error: true
-        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
-        with:
-          config: |
-            {
-              "model": "${{ vars.AI_SUMMARY_MODEL }}",
-              "workspace": "$GITHUB_WORKSPACE",
-              "input_dir": "ai_job_summaries",
-              "output_dir": "ai_run_summaries"
-            }
-          api-key: ${{ secrets.TT_CHAT_API_KEY }}
-          api-url: ${{ secrets.TT_CHAT_URL }}
-          expected-jobs: ${{ steps.extract-matrix.outputs.matrix }}
-          run-result: ${{ needs.blackhole-e2e-tests.result }}
-      - name: Show report
-        if: always() && steps.ai-run-summary.outputs.report-file != ''
-        continue-on-error: true
-        shell: bash
-        env:
-          REPORT_FILE: ${{ steps.ai-run-summary.outputs.report-file }}
-        run: |
-          if [ -f "$REPORT_FILE" ]; then
-            cat "$REPORT_FILE"
-            cat "$REPORT_FILE" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "::warning::Report file not found: $REPORT_FILE"
-          fi

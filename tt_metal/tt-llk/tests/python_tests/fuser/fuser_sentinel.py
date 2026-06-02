@@ -383,20 +383,20 @@ class FuserSentinel:
         self._pack_format = fmt
 
         dest_acc = config.dest_acc.cpp_enum_value
-        bh_tilize = operation.bh_tilize.cpp_enum_value
         pack_size = operation.output.tile_size
         face_r_dim = operation.output.tile_shape.face_r_dim
         num_faces = operation.output.tile_shape.total_num_faces()
 
         if config.architecture == ChipArchitecture.BLACKHOLE:
+            bh_pack_mode = operation.bh_tilize.pack_mode_value
             return (
-                f"_llk_pack_hw_configure_<{dest_acc}, false, {bh_tilize}>(\n"
+                f"_llk_pack_hw_configure_<{dest_acc}, {bh_pack_mode}>(\n"
                 f"    {self._fmt(fmt.pack_src)}, {self._fmt(fmt.pack_dst)}, {pack_size}, {face_r_dim}, TILE_C_DIM, {num_faces}\n"
                 f");\n"
             )
 
         return (
-            f"_llk_pack_hw_configure_<{dest_acc}, false>(\n"
+            f"_llk_pack_hw_configure_<{dest_acc}, PackMode::Default>(\n"
             f"    {self._fmt(fmt.pack_src)}, {self._fmt(fmt.pack_dst)}, {pack_size}, {face_r_dim}, {num_faces}\n"
             f");\n"
         )

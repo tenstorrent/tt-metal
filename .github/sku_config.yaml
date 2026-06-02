@@ -51,14 +51,6 @@ skus:
       - topology-6u
       - in-service
 
-  # Temporary SKU separating UF machines
-  wh_galaxy_perf_uf:
-    runs_on:
-      - arch-wormhole_b0
-      - pipeline-perf-uf
-      - topology-6u
-      - in-service
-
   wh_galaxy_release:
     runs_on:
       - arch-wormhole_b0
@@ -217,6 +209,16 @@ skus:
       - BH-QB-GE
       - pipeline-perf
       - in-service
+
+  bh_spsg:
+    runs_on:
+      - exabox-multihost-with-nfs
+    allocation:
+      type: Count
+      count: 1
+      match_labels:
+        exabox.tenstorrent.com/purpose: ci-metal
+        exabox.tenstorrent.com/superpod: A29
 
   bh_sp1:
     runs_on:

@@ -28,8 +28,8 @@
 // Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
 // The user will never directly interact with this type.
 //
-// The user's host code declares a local_accessor_name when binding a DFB endpoint to a kernel.
-// The user then uses that local_accessor_name to construct a DataflowBuffer in the kernel code.
+// The user's host code declares an accessor_name when binding a DFB endpoint to a kernel.
+// The user then uses that accessor_name to construct a DataflowBuffer in the kernel code.
 //
 // Usage example:
 //   // (Host code declares "my_dfb_name" as the DFB local accessor name for this kernel.)
@@ -38,12 +38,29 @@
 //
 // Here my_dfb_name is a constexpr DFBAccessor, auto-included in kernel_bindings_generated.h.
 //
-// Currently, DFBAccessor is backed by a compile-time ID, baked into the kernel binary.
-// If we want to switch to using an implicit CRTA mechanism, the implementation of
-// DFBAccessor can be transparently modified (kernel-side syntax stays unchanged).
 struct DFBAccessor {
-    explicit constexpr DFBAccessor(uint16_t id) noexcept : id(id) {}
-    uint16_t id;
+    explicit constexpr DFBAccessor(uint16_t id) noexcept : id_(id) {}
+
+    // Constexpr behavior for ID extraction:
+    //  - On WH/BH, DFBAccessor is always constexpr. It's backed by a compile-time ID.
+    //  - On Quasar, we reserve the right to switch to a runtime-backed ID.
+    //    (Future-proofing workaround to a future problem with DM assignments.)
+
+    // Implicit conversion to uint32_t:
+    // This lets a Metal 2.0 kernel pass a DFBAccessor directly to Gen1 (WH/BH) LLK
+    // compute APIs that expect a raw CB id.
+    // This conversion is constexpr; it's intended for Gen1 use only.
+    constexpr operator uint32_t() const noexcept { return id_; }
+
+    // Explicit ID accessor:
+    // This meant only for Quasar LLK APIs, which accept DFBAccessor directly.
+    // Intentionally NOT constexpr; since body could become an RTA retrieval.
+    // (If constexpr is needed by LLK, we could fix that for compute kernels.)
+    uint16_t resolve_id() const noexcept { return id_; }
+
+private:
+    uint16_t id_;
+    // uint32_t rta_idx; // future-proofing option
 };
 
 class DataflowBuffer {
@@ -57,7 +74,7 @@ public:
     // Preferred constructor for Metal 2.0 / ProgramSpec kernels.
     // Pass the named binding constant from kernel_bindings_generated.h:
     //   DataflowBuffer dfb(my_dfb_name);
-    DataflowBuffer(DFBAccessor accessor) : DataflowBuffer(accessor.id) {}
+    DataflowBuffer(DFBAccessor accessor) : DataflowBuffer(accessor.resolve_id()) {}
 
     // Low-level constructor: prefer DFBAccessor overload above for new kernel code.
     DataflowBuffer(uint16_t logical_dfb_id);
