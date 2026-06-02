@@ -283,6 +283,42 @@ def test_all_gather_rms_norm_multi_device_accuracy(mesh_device, seq_len, hidden_
 
 
 # ---------------------------------------------------------------------------------------------------------
+# LTX model RMS-norm shapes. LTX normalizes over the embedding dim (video 4096 = 32 heads x 128; audio
+# 2048 = 32 x 64), TP-sharded across the tensor-parallel mesh axis (ring = TP, 2-4 in LTX), with the
+# sequence SP-sharded so each device holds N_local rows. Real generations give N_local ~ 1.2k-19k
+# (NCHt ~ 38-608). This host only trains fabric on the full 1x8 line, so we run the LTX dims + sequence
+# range at ring=8 -- the per-device width is narrower than LTX's TP=4 (local Wt 16 vs 32 for video), but
+# the exercised op path (chunked batched gather over many rows) is identical. gamma_beta = scale-sensitive.
+# ---------------------------------------------------------------------------------------------------------
+LTX_SHAPES = [
+    (1216, 4096),  # video, NCHt=38  (low end)
+    (4864, 4096),  # video, NCHt=152
+    (19456, 4096),  # video, NCHt=608 (high end: ~76 rows/core, ~10 batched-gather chunks/core)
+    (1216, 2048),  # audio, NCHt=38
+    (4864, 2048),  # audio, NCHt=152
+]
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], ids=["1x8"], indirect=True)
+@pytest.mark.parametrize("seq_len, hidden_dim", LTX_SHAPES, ids=[f"seq{s}_h{h}" for s, h in LTX_SHAPES])
+@pytest.mark.parametrize("has_weight, has_bias", [(True, False), (True, True)], ids=["gamma", "gamma_beta"])
+def test_all_gather_rms_norm_ltx_shapes(mesh_device, seq_len, hidden_dim, has_weight, has_bias):
+    if mesh_device.get_num_devices() < tuple(mesh_device.shape)[1]:
+        pytest.skip("not enough devices for this mesh")
+    run_all_gather_rms_norm(
+        mesh_device,
+        batch_size=1,
+        seq_len=seq_len,
+        hidden_dim=hidden_dim,
+        cluster_axis=1,
+        eps=1e-6,
+        has_weight=has_weight,
+        has_bias=has_bias,
+    )
+
+
+# ---------------------------------------------------------------------------------------------------------
 # Program cache: run twice to exercise the descriptor cache-hit (Buffer-binding) fast path, on both the
 # single-device and multi-device (mux) paths.
 # ---------------------------------------------------------------------------------------------------------
