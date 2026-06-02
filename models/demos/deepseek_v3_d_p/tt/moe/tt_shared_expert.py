@@ -11,6 +11,7 @@ This module demonstrates:
 - SiLU activation fusion
 """
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -18,6 +19,12 @@ import torch
 from loguru import logger
 
 import ttnn
+
+# [ND-DEBUG] module-global call counter: increments once per shared-expert forward.
+# Call order is deterministic within a process and identical across processes
+# (same input, same graph), so it serves as a stable cross-process "layer" id to
+# match fingerprints. Gated entirely behind TT_DS_ND_DEBUG.
+_ND_SE_CALL = [0]
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 
@@ -388,6 +395,15 @@ class TtSharedExpert(LightweightModule):
         batch_size = x.shape[0]
         logger.debug(f"Forward pass: input shape={x.shape}, batch_size={batch_size}")
 
+        # [ND-DEBUG] fingerprint the shared-expert INPUT (allshards) to decide
+        # whether divergence is already present on entry (=> upstream: attention /
+        # distributed RMSNorm all-reduce) or introduced by the matmuls here.
+        _nd_se_in = os.getenv("TT_DS_ND_SUBSTAGE", "0").lower() in ("1", "true", "yes")
+        if _nd_se_in:
+            from models.demos.deepseek_v3_d_p.utils.nd_debug import nd_moe_log as _nd_moe_log_in
+
+            _nd_moe_log_in(_ND_SE_CALL[0], 0, "SE_0_input", x, allshards=True)
+
         # Verify input is replicated (full emb_dim) when multiple mesh columns
         if self.mesh_device.shape[1] > 1:
             assert x.shape[-1] == self.emb_dim, (
@@ -464,6 +480,15 @@ class TtSharedExpert(LightweightModule):
         )
         ttnn.deallocate(gate_out)
 
+        # [ND-DEBUG] fingerprint pre/post reduce_scatter to localize the ND seed.
+        _nd_se = os.getenv("TT_DS_ND_SUBSTAGE", "0").lower() in ("1", "true", "yes")
+        _nd_call = _ND_SE_CALL[0]
+        _ND_SE_CALL[0] += 1
+        if _nd_se:
+            from models.demos.deepseek_v3_d_p.utils.nd_debug import nd_moe_log as _nd_moe_log
+
+            _nd_moe_log(_nd_call, 0, "SE_a_output_full_preRS", output_full, allshards=True)
+
         # 4) Reduce-scatter across mesh columns when TP > 1.
         if self.mesh_device.shape[1] > 1:
             output = ttnn.reduce_scatter(
@@ -477,5 +502,8 @@ class TtSharedExpert(LightweightModule):
         else:
             output = output_full
         logger.debug(f"After shared_expert_ffn: {output.shape}")
+
+        if _nd_se:
+            _nd_moe_log(_nd_call, 0, "SE_b_output_postRS", output, allshards=True)
 
         return output

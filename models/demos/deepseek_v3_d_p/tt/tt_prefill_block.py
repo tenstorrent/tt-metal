@@ -188,6 +188,7 @@ class TtPrefillBlock(LightweightModule):
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
+        self.layer_idx = layer_idx
         self.is_moe = layer_idx >= DeepSeekV3Config.NUM_DENSE_LAYERS
 
         emb_dim = config.hidden_size
@@ -350,8 +351,23 @@ class TtPrefillBlock(LightweightModule):
         Returns:
             (output_tensor, kv_cache) where kv_cache is a host tensor or None
         """
+        # [ND-DEBUG] allshards sub-stage fingerprints for early layers, to pin the
+        # exact op where across-process divergence first appears (attn_norm vs MLA
+        # vs ffn_norm). Gated by TT_DS_ND_DEBUG; restricted to a few layers.
+        import os as _os
+
+        _nd_blk = _os.getenv("TT_DS_ND_SUBSTAGE", "0").lower() in ("1", "true", "yes") and (2 <= self.layer_idx <= 6)
+        if _nd_blk:
+            from models.demos.deepseek_v3_d_p.utils.nd_debug import nd_moe_log as _ndb
+        else:
+            _ndb = None
+
         # --- Attention ---
+        if _ndb:
+            _ndb(self.layer_idx, 0, "BLK_0_x_in", x, allshards=True)
         attn_norm_out = self.attn_norm(x)
+        if _ndb:
+            _ndb(self.layer_idx, 0, "BLK_1_attn_norm", attn_norm_out, allshards=True)
         mla_out = self.mla.forward(
             attn_norm_out,
             rope_tensors,
@@ -360,12 +376,18 @@ class TtPrefillBlock(LightweightModule):
             on_layer_complete=on_layer_complete,
             actual_isl=actual_isl,
         )
+        if _ndb:
+            _ndb(self.layer_idx, 0, "BLK_2_mla_out", mla_out, allshards=True)
         ttnn.deallocate(attn_norm_out)
         x = ttnn.add(x, mla_out)
         ttnn.deallocate(mla_out)
 
         # --- FFN ---
+        if _ndb:
+            _ndb(self.layer_idx, 0, "BLK_3_post_attn", x, allshards=True)
         ffn_norm_out = self.ffn_norm(x)
+        if _ndb:
+            _ndb(self.layer_idx, 0, "BLK_4_ffn_norm", ffn_norm_out, allshards=True)
 
         if self.is_moe:
             ffn_out = self._moe_path(ffn_norm_out, return_intermediates=return_intermediates)

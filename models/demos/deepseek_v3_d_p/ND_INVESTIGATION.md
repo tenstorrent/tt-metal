@@ -6,6 +6,42 @@
 **Symptom:** `test_prefill_transformer.py` produces a different first token across
 repeated runs on identical input.
 
+---
+## ★ RESOLUTION SUMMARY (2026-06-02) — supersedes everything below
+
+**The earlier "unified FFN kernel" conclusion was WRONG** (it was based on 2 across-process
+samples that agreed by chance; two samples never prove determinism for a probabilistic
+across-process race). At full scale the **naive** routed-expert path is ALSO non-deterministic
+(61L/iter25: tokens 2845 vs 6029), so the seed is NOT in the experts — it is **upstream, in
+the attention backbone, shared by both FFN paths.**
+
+**Method:** cross-process *allshards* SHA fingerprints at every sub-stage (probes added in
+`tt_prefill_block.py` BLK_*, `mla/mla.py` MLA_*, `moe/tt_shared_expert.py` SE_*, all gated by
+`TT_DS_ND_SUBSTAGE=1`; MoE-stage probes by `TT_DS_ND_DEBUG=1`). Always compare **logits /
+hidden-state fingerprints**, never the Gumbel-sampled token (temperature=0.5 → sampled token
+is RNG-confounded). Reproduces only at scale (61L + 25600 tok).
+
+**PRIMARY ROOT CAUSE (found + fixed):** `ttnn.transformer.ring_joint_scaled_dot_product_attention`
+(`mla.py:679`, the ring/distributed flash attention). Its inputs (Q, V-embedding) are
+bit-identical across processes, but its **output differs by ~1e-6** — the bf16 *streaming*
+online-softmax merge combines cross-chip partial results in a timing-dependent way. The sub-ULP
+seed compounds through 61 residual layers and flips gate top-k routing → different token.
+First divergence: `BLK_2_mla_out` / `MLA_2_attn_out_postSDPA` (attn_norm is deterministic).
+**FIX (validated):** point the ring SDPA at an `fp32_dest_acc_en=True` compute-kernel config
+(the non-streaming fp32 merge path) — env-gated `TT_DS_ND_SDPA_FP32=1`. With it the **prefill
+forward is bit-deterministic across processes** (iter0 layer-60 `06_final_output` SHA identical
+across ~7 processes; iter1 ×4 all token 2845). **Trade-off:** fp32 non-streaming SDPA is slower.
+
+**SECONDARY RESIDUAL (open):** at 61L/iter25 the per-iteration output is non-idempotent — even
+with the fp32 fix, iters 1..24 diverge across processes and vary within a process
+(iter0≠iter1≠iter2). The ring SDPA reuses `persistent_k_output_buffer`/`persistent_v_output_buffer`
+(`mla.py:304/315`, passed at 700/701) across every forward WITHOUT reset; stale carry-over is
+the likely cause. The test reports the LAST iteration's token, so this still makes the reported
+iter25 token vary. Needs: reset the persistent buffers per call (or confirm the iter loop's
+intended KV-state semantics). Not yet fixed.
+
+---
+
 > This investigation was started **from scratch** at the user's request; prior
 > `drift_analysis/*` docs (different branch) are treated as untrusted and are not
 > relied upon. Conclusions here are only what this session measured directly.

@@ -511,6 +511,16 @@ class ttMLA:
         num_heads_local = self.num_heads // self.tp_factor
         seq_len_local = hidden_states.shape[2]
 
+        # [ND-DEBUG] allshards fingerprints to pin the non-deterministic op inside
+        # MLA (q/kv collectives vs ring SDPA vs o_proj reduce_scatter). Gated.
+        import os as _os
+
+        _nd_mla = _os.getenv("TT_DS_ND_SUBSTAGE", "0").lower() in ("1", "true", "yes") and (2 <= self.layer_idx <= 6)
+        if _nd_mla:
+            from models.demos.deepseek_v3_d_p.utils.nd_debug import nd_moe_log as _ndm
+        else:
+            _ndm = None
+
         # q_projection
         tt_q = ttnn.linear(
             hidden_states,
@@ -676,6 +686,10 @@ class ttMLA:
             **self._get_mm_kwargs("wkv_b2", seq_len_local),
         )
 
+        if _ndm:
+            _ndm(self.layer_idx, 0, "MLA_0_q_preSDPA", tt_q, allshards=True)
+            _ndm(self.layer_idx, 0, "MLA_1_vemb_preSDPA", tt_v_embedding, allshards=True)
+
         attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tt_q,
             tt_kvpe,
@@ -688,7 +702,14 @@ class ttMLA:
             joint_strategy="rear",
             logical_n=seq_len_local * self.sp_factor,
             program_config=self._get_sdpa_program_config(seq_len_local),
-            compute_kernel_config=self.default_compute_kernel_config,
+            # [ND-FIX TEST] fp32_dest_acc_en=True forces the non-streaming fp32
+            # online-softmax merge path; testing whether it removes the ring-SDPA
+            # cross-process non-determinism (bf16 streaming merge is the suspect).
+            compute_kernel_config=(
+                self.hifi4_fp32_compute_kernel_config
+                if _os.getenv("TT_DS_ND_SDPA_FP32", "0").lower() in ("1", "true", "yes")
+                else self.default_compute_kernel_config
+            ),
             dim=2,
             multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
             num_links=self.ccl_num_links,
@@ -702,6 +723,9 @@ class ttMLA:
             scale=self.scale,
             is_balanced=self.is_balanced,
         )
+
+        if _ndm:
+            _ndm(self.layer_idx, 0, "MLA_2_attn_out_postSDPA", attn_out, allshards=True)
 
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v_out = ttnn.linear(
@@ -723,5 +747,7 @@ class ttMLA:
             )
         else:
             out = v_out
+        if _ndm:
+            _ndm(self.layer_idx, 0, "MLA_3_out_postOProjRS", out, allshards=True)
         signpost(header="MLA_END")
         return out

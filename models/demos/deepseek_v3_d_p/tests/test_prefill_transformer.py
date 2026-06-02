@@ -508,6 +508,14 @@ def test_prefill_transformer(
     profiler.start("tt_forward")
     logger.info("Running TtPrefillTransformer forward...")
     do_return_kv = pcc_validation and return_kv_cache
+    # [ND-DEBUG] TT_DS_ND_NO_PCACHE=1 disables the program cache so every op
+    # invocation re-runs program setup (re-initializing semaphores etc.) instead
+    # of reusing a cached program. Tests whether cache-reuse stale state (e.g.
+    # un-reset mcast semaphores) is the non-determinism source. Slow but reuses
+    # JIT-compiled binaries; for iter1 it is tolerable.
+    if os.getenv("TT_DS_ND_NO_PCACHE", "0").lower() in ("1", "true", "yes"):
+        logger.info("[ND-DEBUG] disabling program cache for this run")
+        mesh_device.disable_and_clear_program_cache()
     # [ND-DEBUG] Non-determinism probe (kgrujcic/deepseek_nd). When TT_DS_ND_DEBUG=1,
     # force return_intermediates so we can fingerprint per-layer outputs AND the raw
     # logits (NOT the Gumbel-sampled token, which is RNG-confounded at temperature>0)
