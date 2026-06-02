@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Dict
 
@@ -184,4 +186,5 @@ class FusedKernelGenerator:
         with open(cpp_path, "w") as f:
             f.write(combined)
 
-        os.system(f'clang-format -i "{cpp_path}"')
+        if shutil.which("clang-format"):
+            subprocess.run(["clang-format", "-i", str(cpp_path)])
