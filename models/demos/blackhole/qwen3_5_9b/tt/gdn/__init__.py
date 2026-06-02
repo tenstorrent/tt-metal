@@ -70,9 +70,6 @@ class Qwen35GatedDeltaNet:
         # execute_trace() replays (each replay re-runs the same baked buffer addresses).
         # Eager prefill keeps the reassign path. See Qwen35Model.capture_prefill_trace_chunked.
         self._chunk_inplace_state = False
-        # Optional persistent buffer used by the (now-superseded) whole-sequence
-        # paged prefill trace path in model.py. Unused by the default chunk-outer path.
-        self._trace_prefill_output = None
 
     def forward(self, x, mode="recurrent", chunk_size=None):
         return recurrent_forward(self, x, mode=mode, chunk_size=chunk_size)
