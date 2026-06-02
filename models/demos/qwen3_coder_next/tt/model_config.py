@@ -61,6 +61,7 @@ class Qwen3CoderNextConfig:
     vocab_size: int = 151936
 
     # Device-specific
+    model_name: str = "Qwen/Qwen3-Coder-Next"
     weights_dtype = None
 
     @property

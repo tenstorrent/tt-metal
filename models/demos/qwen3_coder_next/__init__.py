@@ -1,12 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
+"""Qwen3-Coder-Next demo package for TT-NN (P150a/Wormhole).
 
-"""Qwen3-Coder-Next demo package for TT-NN (P150a)."""
+Lazy imports: only non-device-dependent modules are imported at package load.
+Device-dependent modules (deltanet, attention, moe, moe_ep, model, generator)
+must be imported directly after ttnn device initialization.
+"""
 
 from .tt.model_config import Qwen3CoderNextConfig
-from .tt.deltanet import TtGatedDeltaNet
-from .tt.attention import TtGatedAttention
-from .tt.decoder import TtHybridDecoderLayer
-from .tt.moe import TtMoE
-from .tt.generator import Qwen3CoderNextGenerator
-from .tt.model import TtQwen3CoderNextModel
+
+__all__ = [
+    "Qwen3CoderNextConfig",
+]

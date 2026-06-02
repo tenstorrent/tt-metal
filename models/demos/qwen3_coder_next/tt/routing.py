@@ -40,10 +40,13 @@ class TopKRouter:
             topk_weights: [S, K] normalized gating weights
         """
         if x.dim() == 4:
-            x_flat = x.flatten().float()  # [H]
+            x_flat = x.reshape(1, -1).float()  # [1, H]
+            S = 1
+        elif x.dim() == 1:
+            x_flat = x.float().unsqueeze(0)  # [1, H]
             S = 1
         else:
-            x_flat = x.float()
+            x_flat = x.float()  # [S, H]
             S = x.shape[0]
 
         # Gate logits
@@ -84,14 +87,15 @@ def compute_auxiliary_loss(
     # Create expert dispatch mask [num_tokens, num_experts]
     dispatch_mask = torch.zeros(num_tokens, num_experts, device=topk_indices.device,
                                 dtype=topk_weights.dtype)
-    scatter_idx = topk_indices.unsqueeze(-1).expand(-1, -1, 1).squeeze(-1)
     dispatch_mask.scatter_(1, topk_indices, torch.ones_like(topk_weights))
 
     # f: fraction of tokens dispatched to each expert
     f = dispatch_mask.sum(dim=0) / num_tokens  # [num_experts]
 
     # P: fraction of total gating weight going to each expert
-    P = topk_weights.sum(dim=0) / num_tokens  # [num_experts]
+    P = torch.zeros(num_experts, device=topk_indices.device, dtype=topk_weights.dtype)
+    P.scatter_add_(0, topk_indices.flatten(), topk_weights.flatten())
+    P = P / num_tokens  # [num_experts]
 
     # Auxiliary loss
     loss = num_experts * (f * P).sum()

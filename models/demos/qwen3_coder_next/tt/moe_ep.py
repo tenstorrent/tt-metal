@@ -137,10 +137,12 @@ class TtMoEExperts(LightweightModule):
     """
 
     def __init__(self, device, state_dict, layer_idx: int, config, ep_config: EPConfig,
-                 dtype=ttnn.bfloat16, weights_dtype=None):
+                 dtype=None, weights_dtype=None):
         super().__init__()
         self.device = device
         self.layer_idx = layer_idx
+        if dtype is None:
+            dtype = ttnn.bfloat16
         if weights_dtype is None:
             weights_dtype = getattr(config, "weights_dtype", ttnn.bfloat8_b)
 
@@ -239,10 +241,12 @@ class TtMoEEPLayer(LightweightModule):
     """
 
     def __init__(self, device, state_dict, layer_idx: int, config, ep_config: EPConfig,
-                 dtype=ttnn.bfloat16, weights_dtype=None):
+                 dtype=None, weights_dtype=None):
         super().__init__()
         self.device = device
         self.layer_idx = layer_idx
+        if dtype is None:
+            dtype = ttnn.bfloat16
         if weights_dtype is None:
             weights_dtype = getattr(config, "weights_dtype", ttnn.bfloat8_b)
 

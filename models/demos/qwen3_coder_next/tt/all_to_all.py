@@ -12,7 +12,6 @@ Gather: results from all chips → aggregated back to active chip
 """
 
 import torch
-import ttnn
 
 
 class AllToAllScatterGather:
@@ -113,6 +112,7 @@ class AllToAllScatterGather:
         """
         # TODO: Implement with ttnn's mesh_noC ops when available
         # For now, use CPU scatter as fallback
+        import ttnn
         x_cpu = ttnn.to_torch(x_tt)
         return self.scatter(x_cpu, topk_indices, topk_weights)
 
@@ -124,6 +124,7 @@ class AllToAllScatterGather:
         # Flatten CPU outputs and gather
         cpu_outputs = {}
         for cid, out in ep_outputs.items():
+            import ttnn
             if isinstance(out, torch.Tensor):
                 cpu_outputs[cid] = out
             else:
