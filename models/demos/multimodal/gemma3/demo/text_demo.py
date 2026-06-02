@@ -1375,56 +1375,11 @@ def test_demo_text(
             logger.info(
                 f"Checking measurements against CI performance targets for batch size 32 of {model_name} on {tt_device_name}, sku={perf_sku}"
             )
-            resolved_ci_targets = resolve_perf_targets(
+
+            verify_perf(
+                measurements,
                 model_name=model_name,
                 sku=perf_sku,
                 batch_size=global_batch_size,
                 seq_len=max(prefill_lens),
             )
-            if not resolved_ci_targets:
-                resolved_ci_targets = resolve_perf_targets(
-                    model_name=model_name,
-                    sku=perf_sku,
-                    batch_size=global_batch_size,
-                    seq_len=max_seq_len,
-                )
-            if not resolved_ci_targets and max_seq_len != 1024:
-                resolved_ci_targets = resolve_perf_targets(
-                    model_name=model_name,
-                    sku=perf_sku,
-                    batch_size=global_batch_size,
-                    seq_len=1024,
-                )
-            if not resolved_ci_targets:
-                resolved_ci_targets = resolve_perf_targets(
-                    model_name=model_name,
-                    sku=perf_sku,
-                    batch_size=global_batch_size,
-                    seq_len=None,
-                )
-
-            expected_measurements = {}
-            if resolved_ci_targets:
-                if (
-                    resolved_ci_targets.get("prefill_time_to_token") is not None
-                    or resolved_ci_targets.get("prefill_time_to_first_token") is not None
-                ):
-                    expected_measurements["prefill_time_to_token"] = True
-                if resolved_ci_targets.get("decode_t/s") is not None:
-                    expected_measurements["decode_t/s"] = True
-                if resolved_ci_targets.get("decode_t/s/u") is not None:
-                    expected_measurements["decode_t/s/u"] = True
-
-            if expected_measurements:
-                verify_perf(
-                    measurements,
-                    expected_measurements=expected_measurements,
-                    model_name=model_name,
-                    sku=perf_sku,
-                    batch_size=global_batch_size,
-                    seq_len=max(prefill_lens),
-                )
-            else:
-                logger.warning(
-                    f"No centralized CI performance targets found for {model_device_key}. Skipping performance verification."
-                )
