@@ -66,7 +66,7 @@
         --prompt "Solve this step by step: Design a cache for sharded LLM weights across multiple hosts with local NVMe and shared NFS. Minimize startup latency, avoid duplicate reads, support cache invalidation, and explain tradeoffs between per-host caches, content-addressable storage, and pre-sharded artifacts." \
         --model-path /mnt/models/deepseek-ai/DeepSeek-R1-0528-dequantized
   skus:
-    bh_sp1:
+    bh_sp1_mgd:
       timeout: 30
   owner_id: U08E1JCMAJF
   team: scaleout
