@@ -47,6 +47,7 @@ from models.demos.rvc.tt.runtime import (
     UPSAMPLE_RATES,
     TTNNGeneratorNSF,
 )
+from models.demos.rvc.demo import MAX_CHUNK_FRAMES, OVERLAP, TARGET_LEN
 
 CHECKPOINT_PATH = os.path.join(
     os.path.dirname(__file__),
@@ -63,13 +64,16 @@ _CUM_RATES = [1]
 for _r in UPSAMPLE_RATES:
     _CUM_RATES.append(_CUM_RATES[-1] * _r)
 
-# Demo MAX_CHUNK_FRAMES=50 + OVERLAP=5 yields ext-sizes between 50 and 60.
-DEMO_CHUNK_PATTERN = [55, 60, 60, 60, 60, 53]  # observed from a 3s clip
+# Production ext-chunk sizes after MAX_CHUNK_FRAMES=75 + OVERLAP=3 padding:
+# the first chunk is one-sided (75 + OVERLAP = 78) and every interior /
+# padded-tail chunk is TARGET_LEN (75 + 2*OVERLAP = 81). The previous
+# 55/60/53 values were from an earlier MAX_CHUNK_FRAMES=50 + OVERLAP=5
+# regime and no longer reflect any chunk demo.py / benchmark.py produces.
+PRODUCTION_CHUNK_SIZES = [MAX_CHUNK_FRAMES + OVERLAP, TARGET_LEN]  # [78, 81]
 
-# Worst-case input T → ResBlock seq_lens per stage
-_T_WORST = 60
-PRODUCTION_RB_SEQ_LENS = [_T_WORST * _CUM_RATES[s + 1] for s in range(NUM_UPSAMPLES)]
-# = [720, 7200, 14400, 28800]
+# Worst-case ResBlock seq_lens per stage at the padded production chunk.
+# At TARGET_LEN=81: stages → 972, 9720, 19440, 38880.
+PRODUCTION_RB_SEQ_LENS = [TARGET_LEN * _CUM_RATES[s + 1] for s in range(NUM_UPSAMPLES)]
 
 
 @pytest.fixture(scope="module")
@@ -101,8 +105,10 @@ def fresh_gen(checkpoint):
 # ---------------------------------------------------------------------------
 # k=11 ResBlock at every production seq_len
 # ---------------------------------------------------------------------------
-# Phase 1 device-residency broke specifically at kernel_size=11 (k_idx=2)
-# with seq_len ≥ 7200. These tests cover that exact failure surface.
+# Phase 1 device-residency broke at kernel_size=11 (k_idx=2) starting at
+# seq_len ≥ 7200 — the same shape class that now lands at 9720/19440/38880
+# in the TARGET_LEN=81 regime. These tests cover the production failure
+# surface end-to-end via _resblock1_device.
 
 
 @pytest.mark.parametrize(
@@ -113,7 +119,10 @@ def fresh_gen(checkpoint):
 def test_resblock_k11_at_production_seq_len(fresh_gen, stage):
     """k_idx=2 (kernel_size=11) ResBlock at production seq_len for each stage.
 
-    seq_lens covered: 720, 7200, 14400, 28800.
+    seq_lens covered: 972, 9720, 19440, 38880 (TARGET_LEN=81 × cumulative
+    upsample). Exercises the device-resident path the production generator
+    actually calls (_resblock1_device), not the legacy host-mediated
+    _resblock1 helper.
     """
     torch.manual_seed(stage)
     k_idx = 2  # kernel_size=11
@@ -122,8 +131,10 @@ def test_resblock_k11_at_production_seq_len(fresh_gen, stage):
     ch = fresh_gen._resblocks[rb_idx]["channels"]
 
     x = torch.randn(1, ch, seq_len)
-    out = fresh_gen._resblock1(x, rb_idx, RESBLOCK_DILATIONS[k_idx], seq_len)
+    out = fresh_gen._resblock1_device(x, rb_idx, RESBLOCK_DILATIONS[k_idx], seq_len)
 
+    # _resblock1_device returns a torch tensor (host) in the same shape
+    # contract as _resblock1: (B, C, T).
     assert out.shape == (1, ch, seq_len), f"shape mismatch: {out.shape}"
     assert torch.isfinite(out).all(), "non-finite values in ResBlock output"
 
@@ -133,10 +144,12 @@ def test_resblock_k11_at_production_seq_len(fresh_gen, stage):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("T", [55, 60, 53])
+@pytest.mark.parametrize("T", PRODUCTION_CHUNK_SIZES)
 def test_generator_at_demo_chunk_size(fresh_gen, T):
     """gen.forward at every chunk size the demo's overlap-add path actually
-    emits (55, 60, 53). No try/except — TTNN exceptions surface as failures.
+    emits at MAX_CHUNK_FRAMES=75 + OVERLAP=3: the one-sided first chunk
+    (T=78) and the fully padded interior/tail chunk (T=81).
+    No try/except — TTNN exceptions surface as failures.
     """
     torch.manual_seed(T)
     z = torch.randn(1, 192, T)
@@ -161,10 +174,11 @@ def test_generator_at_demo_chunk_size(fresh_gen, T):
 
 
 def test_generator_repeated_same_chunk_deterministic(fresh_gen):
-    """Same T=60 chunk three times — bit-identical determinism."""
+    """Same TARGET_LEN chunk three times — bit-identical determinism."""
+    T = TARGET_LEN
     torch.manual_seed(99)
-    z = torch.randn(1, 192, 60)
-    har = torch.randn(1, 1, 60 * 480)
+    z = torch.randn(1, 192, T)
+    har = torch.randn(1, 1, T * 480)
     g_emb = torch.randn(1, 256, 1)
 
     results = [fresh_gen(z, har, g_emb).clone() for _ in range(3)]
@@ -173,9 +187,9 @@ def test_generator_repeated_same_chunk_deterministic(fresh_gen):
         assert max_diff == 0.0, f"non-deterministic at run {i}: max_diff={max_diff}"
 
 
-def test_generator_correctness_vs_torch_at_t60(fresh_gen, checkpoint):
-    """PCC against torch reference at the demo's worst-case chunk size."""
-    T = 60
+def test_generator_correctness_vs_torch_at_target_len(fresh_gen, checkpoint):
+    """PCC against torch reference at the padded production chunk size."""
+    T = TARGET_LEN
     torch.manual_seed(0)
     z = torch.randn(1, 192, T)
     har = torch.randn(1, 1, T * 480)
