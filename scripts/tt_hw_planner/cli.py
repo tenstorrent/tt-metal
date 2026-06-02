@@ -8028,15 +8028,74 @@ def _cmd_up_core(args) -> int:
         sep_e = "=" * 72
         print()
         print(sep_e)
-        print("  ENVIRONMENT INCOMPATIBLE -- aborting before any LLM/device work")
+        print("  ENVIRONMENT INCOMPATIBLE -- pre-flight package check failed")
         print(sep_e)
         for line in env_problems_early:
             print(f"  - {line}" if not line.startswith("transformers==") else f"  {line}")
         print()
-        print("  Options to unblock (pick ONE):")
-        print("    1. pip install 'transformers<5.0'")
-        print("    2. Apply the listed file patches (see today's repo diff).")
+
+        # Skip auto-fix if operator opted out or we already tried.
+        _no_env_fix = getattr(args, "no_env_fix", False)
+        _already_tried = bool(os.environ.get(_ENV_FIX_ATTEMPTED_FLAG))
+        if _no_env_fix or _already_tried:
+            print("  To resolve manually, install package versions compatible with the codebase.")
+            if _no_env_fix:
+                print("  (--no-env-fix is set; not auto-installing.)")
+            if _already_tried:
+                print(
+                    "  (auto-fix already attempted in this invocation; the proposed install didn't resolve the issue.)"
+                )
+            print(sep_e)
+            return 2
+
+        # LLM-driven fix: ask the LLM to look at the actual problems +
+        # the live `pip freeze` and propose the right install command.
+        # Falls back to manual banner if the LLM can't be reached or
+        # returns nothing valid — never silently does the wrong thing.
+        from ._cli_helpers.env_fix import run_llm_env_fix, run_pip_install
+
+        print("  Asking LLM to diagnose and propose a fix...")
         print(sep_e)
+        proposal = run_llm_env_fix(
+            env_problems=list(env_problems_early),
+            work_dir=Path.cwd(),
+        )
+        if proposal is None:
+            print()
+            print(sep_e)
+            print(
+                "  Could not obtain a fix proposal from the LLM (agent unreachable, no verdict, or rejected for safety)."
+            )
+            print("  To resolve manually, install package versions compatible with the codebase.")
+            print(sep_e)
+            return 2
+
+        print()
+        print(sep_e)
+        print(f"  LLM proposes: {proposal.pip_command_str}")
+        if proposal.reasoning:
+            print(f"  Reasoning:    {proposal.reasoning}")
+        print(sep_e)
+        _ok, _log = run_pip_install(proposal.pip_args)
+        if not _ok:
+            print()
+            print(sep_e)
+            print("  Proposed install FAILED. pip output tail:")
+            for line in _log.splitlines()[-15:]:
+                print(f"      {line}")
+            print()
+            print(f"  Manual fix: {proposal.pip_command_str}")
+            print(sep_e)
+            return 2
+        print()
+        print(sep_e)
+        print("  Install complete. Re-executing this command with the new environment...")
+        print(sep_e)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        _new_env = dict(os.environ)
+        _new_env[_ENV_FIX_ATTEMPTED_FLAG] = "1"
+        os.execvpe(sys.executable, [sys.executable, "-m", "scripts.tt_hw_planner", *sys.argv[1:]], _new_env)
         return 2
     _already_supported = (
         _early_compat is not None
@@ -10777,9 +10836,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     por.add_argument("model_id")
     por.set_defaults(func=cmd_overlay_revert)
 
-    pod = sub.add_parser("overlay-drop", help="Permanently delete a stored overlay.")
+    pod = sub.add_parser(
+        "overlay-drop",
+        help="Permanently delete stored overlay(s). Omit rel_path to wipe ALL overlays for the scope.",
+    )
     pod.add_argument("model_id")
-    pod.add_argument("rel_path", help="Repo-relative path (e.g. models/tt_transformers/tt/rope.py)")
+    pod.add_argument(
+        "rel_path",
+        nargs="?",
+        default=None,
+        help="Repo-relative path (e.g. models/tt_transformers/tt/rope.py). Omit to drop the entire scope.",
+    )
     pod.set_defaults(func=cmd_overlay_drop)
 
     def _cmd_overlay_clear_skips(args) -> int:

@@ -3833,7 +3833,7 @@ def test_cmd_up_runs_env_check_for_supported_models() -> None:
     src = _planner_source()
     fn_idx = src.find("def cmd_up(")
     assert fn_idx >= 0
-    block = src[fn_idx : fn_idx + 25000]
+    block = src[fn_idx : fn_idx + 40000]
     env_check_call = block.find("_check_demo_environment_compat(")
     cmd_prepare_call = block.find("cmd_prepare(prepare_argv)")
     assert env_check_call >= 0, "cmd_up must call _check_demo_environment_compat in the " "supported-model branch"
@@ -3855,7 +3855,7 @@ def test_cmd_up_skips_meta_plan_for_already_supported_models() -> None:
     src = _planner_source()
     fn_idx = src.find("def cmd_up(")
     assert fn_idx >= 0
-    block = src[fn_idx : fn_idx + 20000]
+    block = src[fn_idx : fn_idx + 40000]
     early_check = block.find("_already_supported = (")
     meta_plan_call = block.find("_run_advisory_meta_plan(")
     assert early_check >= 0 and meta_plan_call >= 0, "both the supported-check and meta-plan call must be present"
@@ -3946,7 +3946,7 @@ def test_audit_bug_1_generic_routing_uses_correct_probe_import() -> None:
         "cmd_up must NOT import from .hf_probe (module doesn't exist); " "the correct module is .probe"
     )
     fn_idx = src.find("def cmd_up(")
-    block = src[fn_idx : fn_idx + 25000]
+    block = src[fn_idx : fn_idx + 40000]
     assert (
         "from .probe import probe_model as _probe_model" in block
     ), "the generic-LLM detection must import probe_model from .probe"
@@ -3960,7 +3960,7 @@ def test_audit_bug_2_generic_fast_path_rejects_partial_blocks() -> None:
     the tighter gate: only `READY` with zero PARTIAL too."""
     src = _planner_source()
     fn_idx = src.find("def cmd_up(")
-    block = src[fn_idx : fn_idx + 25000]
+    block = src[fn_idx : fn_idx + 40000]
 
     assert "_CompatStatus.PARTIAL" in block, "generic-LLM fast-path must reject components with PARTIAL status"
 
@@ -4020,7 +4020,7 @@ def test_audit_bug_5_meta_plan_skipped_for_generic_llm_route() -> None:
     `_route_via_generic_llm`."""
     src = _planner_source()
     fn_idx = src.find("def cmd_up(")
-    block = src[fn_idx : fn_idx + 25000]
+    block = src[fn_idx : fn_idx + 40000]
     meta_idx = block.find("_run_advisory_meta_plan(")
     assert meta_idx >= 0
 
@@ -4036,7 +4036,7 @@ def test_audit_bug_6_env_compat_check_fires_before_scaffold_path() -> None:
     early call."""
     src = _planner_source()
     fn_idx = src.find("def cmd_up(")
-    block = src[fn_idx : fn_idx + 25000]
+    block = src[fn_idx : fn_idx + 40000]
 
     env_check_calls = [i for i in range(len(block)) if block.startswith("_check_demo_environment_compat()", i)]
     assert len(env_check_calls) >= 1, (
@@ -4855,7 +4855,7 @@ def test_cmd_up_runs_meta_plan_by_default_and_no_meta_plan_disables_it() -> None
     src = _planner_source()
     fn_idx = src.find("def cmd_up(")
     assert fn_idx >= 0
-    block = src[fn_idx : fn_idx + 25000]
+    block = src[fn_idx : fn_idx + 40000]
     assert "_run_advisory_meta_plan(" in block, "cmd_up must call _run_advisory_meta_plan before scaffold"
     assert "no_meta_plan" in block, "cmd_up must check args.no_meta_plan to honor the disable flag"
 

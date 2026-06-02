@@ -563,6 +563,41 @@ def drop(model_id: str, rel_path: str) -> bool:
     return True
 
 
+def drop_scope(model_id: str) -> Tuple[int, List[str]]:
+    """Drop EVERY overlay registered under ``model_id``.
+
+    Iterates the model's overlay index, deletes each patch file, then
+    removes the index + scope directory. Returns ``(count_dropped,
+    dropped_rel_paths)``. Returns ``(0, [])`` when no overlays exist
+    for the scope (no-op, no error).
+
+    Used by the CLI's ``overlay-drop <model_id>`` (rel_path omitted)
+    form to give operators a single-call wipe instead of looping
+    :func:`drop` per file. Especially useful when overlays were
+    captured under a broken-gate regime and the operator wants a
+    clean slate.
+    """
+    idx = _load_index(model_id)
+    if not idx:
+        return 0, []
+    dropped: List[str] = []
+    md = _model_dir(model_id)
+    for rel_path, entry in list(idx.items()):
+        patch_file = md / entry.get("patch_file", "")
+        try:
+            if patch_file.is_file():
+                patch_file.unlink()
+        except OSError:
+            pass
+        dropped.append(rel_path)
+    _index_path(model_id).unlink(missing_ok=True)
+    try:
+        md.rmdir()
+    except OSError:
+        pass
+    return len(dropped), dropped
+
+
 def promote(model_id: str, rel_path: str) -> Tuple[bool, str]:
     idx = _load_index(model_id)
     if rel_path not in idx:
