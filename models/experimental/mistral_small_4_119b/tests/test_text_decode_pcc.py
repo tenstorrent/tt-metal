@@ -45,7 +45,7 @@ Run manually::
 
     export MISTRAL4_DECODE_PCC=1
     export MISTRAL4_DECODE_PCC_PREFILL_LEN=4   # optional; default 4
-    export MESH_DEVICE=P150x4                  # optional
+    export MESH_DEVICE=P150x8
     pytest models/experimental/mistral_small_4_119b/tests/test_text_decode_pcc.py -v -s --timeout=0
 """
 

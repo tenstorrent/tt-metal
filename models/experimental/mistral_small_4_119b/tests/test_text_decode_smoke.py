@@ -13,7 +13,7 @@ Run manually::
     export MISTRAL4_DECODE_N_LAYERS=2        # optional; default 2
     export MISTRAL4_DECODE_PREFILL_LEN=4     # optional; default 4
     export MISTRAL4_DECODE_N_STEPS=3         # optional; default 3
-    export MESH_DEVICE=P150x8                # optional
+    export MESH_DEVICE=P150x8
     pytest models/experimental/mistral_small_4_119b/tests/test_text_decode_smoke.py -v -s --timeout=0
 
 Device-perf profiling (per-op timing for one decode step)::

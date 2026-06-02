@@ -17,7 +17,7 @@ Run::
 
     export MISTRAL4_PREFILL_SMOKE=1
     export MISTRAL4_PREFILL_N_LAYERS=36
-    export MESH_DEVICE=T3K
+    export MESH_DEVICE=P150x8
     pytest models/experimental/mistral_small_4_119b/tests/test_text_prefill_smoke.py -v -s --timeout=0
 
 Device-perf profiling (per-op timing of one prefill step)::

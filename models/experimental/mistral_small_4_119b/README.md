@@ -34,15 +34,11 @@ Architecture constants live in [constants.py](constants.py).
 
 ## Supported hardware
 
-Blackhole only. The demo targets **P150×8** or a **Blackhole Loud Box**; the test suite also runs on smaller meshes. Select the mesh via the `MESH_DEVICE` env var (see [tests/mesh_param.py](tests/mesh_param.py)):
+**P150×8 only** (a **Blackhole Loud Box** — 8× P150, `MeshShape(1, 8)`). Set `MESH_DEVICE=P150x8` before running:
 
 | `MESH_DEVICE` | Mesh shape | Notes |
 |---------------|-----------|-------|
-| `P300x2` | (1, 2) | test default |
-| `P150x4` | (1, 4) | |
-| `P150x8` | (1, 8) | demo target |
-| `single` | (1, 1) | single chip; smoke tests only (fabric disabled) |
-| `T3K` / `N300` | (1, 8) / (1, 2) | Wormhole, test-only |
+| `P150x8` | (1, 8) | the only supported target — 8× BlackHole P150, tensor-parallel |
 
 ## Setup
 
@@ -69,11 +65,17 @@ export MESH_DEVICE=P150x8
 
 # Full model (36 text + 24 vision layers) on the default sample image + prompt
 python models/experimental/mistral_small_4_119b/demo/demo_multimodal.py \
-    --n-text-layers 36 --n-vision-layers 24
+    --image-max-side 512 \
+    --n-text-layers 36 \
+    --n-vision-layers 24 \
+    --max-new-tokens 512
 
 # Custom image (URL or local path) and prompt
 python models/experimental/mistral_small_4_119b/demo/demo_multimodal.py \
-    --n-text-layers 36 --n-vision-layers 24 \
+    --image-max-side 512 \
+    --n-text-layers 36 \
+    --n-vision-layers 24 \
+    --max-new-tokens 512 \
     --image /path/to/image.jpg \
     --prompt "Describe the scene."
 ```
