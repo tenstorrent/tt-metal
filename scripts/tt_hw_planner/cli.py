@@ -2780,6 +2780,36 @@ def _exit_if_hf_weight_failure(model_id: str, captured_output: str) -> None:
     sys.exit(2)
 
 
+def _exit_if_zero_tests_selected(model_id: str, rc: int, captured_output: str) -> None:
+    """Short-circuit the bring-up flow when pytest ran but collected /
+    selected ZERO tests.
+
+    This is a TEST-SELECTOR or TEST-DISCOVERY bug — the runtime-repair
+    loop and the PCC-fail escalation hook will both burn iter budget
+    trying to "fix" a model that never actually executed. Surface the
+    diagnostic and exit cleanly so the operator can fix the selector
+    (or add the model to the parametrize table) instead of watching
+    the tool spin.
+
+    Wired alongside :func:`_exit_if_hf_weight_failure` at every
+    ``_run_prepare_capture`` call site. Returns silently when not
+    matched — caller falls through to normal repair/escalation.
+    """
+    from ._cli_helpers.error_patterns import (
+        detect_zero_tests_collected,
+        format_zero_tests_message,
+    )
+
+    info = detect_zero_tests_collected(rc, captured_output)
+    if info is None:
+        return
+    sys.stderr.write(format_zero_tests_message(model_id, info))
+    sys.stderr.flush()
+    # rc=2 = "tool bailed for setup reasons" (same as HF weight
+    # failures). NOT rc=1/_PCC_FAIL_RC — the test never even ran.
+    sys.exit(2)
+
+
 from ._cli_helpers.runtime_repair import _runtime_repair_loop, _PCC_FAIL_RC  # noqa: F401
 
 
@@ -8296,6 +8326,14 @@ def _cmd_up_core(args) -> int:
         if _auto_mode and _captured_output:
             _exit_if_hf_weight_failure(MODEL, _captured_output)
 
+        # Zero-tests-collected is a config bug (selector / parametrize
+        # mismatch / wrong path), not a PCC fail. Without this guard,
+        # rc=5 falls into the runtime-repair loop, then the
+        # _maybe_escalate_pcc_fail hook — both of which burn budget
+        # "fixing" a model that never ran. Surface and exit instead.
+        if _auto_mode:
+            _exit_if_zero_tests_selected(MODEL, _rc_supp, _captured_output)
+
         if _rc_supp != 0 and _auto_mode and _captured_output:
             _rc_supp = _runtime_repair_loop(
                 model_id=MODEL,
@@ -8606,6 +8644,10 @@ def _cmd_up_core(args) -> int:
         # the equivalent guard at the Path 2 call site above.
         if _auto_mode and _captured_output:
             _exit_if_hf_weight_failure(MODEL, _captured_output)
+
+        # Zero-tests-collected short-circuit (cold-start variant).
+        if _auto_mode:
+            _exit_if_zero_tests_selected(MODEL, _rc_cold, _captured_output)
 
         if _rc_cold != 0 and _auto_mode and _captured_output:
             _rc_cold = _runtime_repair_loop(
@@ -9396,6 +9438,8 @@ def _cmd_up_core(args) -> int:
                 # than mis-stamp UNVERIFIED for the wrong reason.
                 if _path_a_captured:
                     _exit_if_hf_weight_failure(MODEL, _path_a_captured)
+                # Zero-tests-collected short-circuit (Path A verify).
+                _exit_if_zero_tests_selected(MODEL, _path_a_rc, _path_a_captured)
                 if _path_a_rc != 0 or not _path_a_captured:
                     _path_a_outcome = OUTCOME_UNVERIFIED
                     print(
