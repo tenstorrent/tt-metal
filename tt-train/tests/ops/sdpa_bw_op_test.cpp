@@ -511,13 +511,6 @@ struct SDPABackwardTestConfig {
     // magnitude, so gradient checks can stay tight even when FW output needs wider tol.
     float fw_atol = 3e-2F;
     float fw_rtol = 3e-2F;
-    // Tolerances widened after the new bf16 exp landed: exp(0) ≠ 1.0 in fp32 dest
-    // drifts LSE and propagates through dQ/dK/dV. Training correctness is verified
-    // separately; these tolerances exist so the integration tests still flag
-    // wholesale regressions.
-    // Args here are forwarded to `xt::allclose(a, b, rtol, atol)` in xtensor order.
-    // float atol = 3.0F;
-    // float rtol = 1.0e2F;
     std::string test_name = "SDPA Backward Test";
     ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Arbitrary;
 };
@@ -739,8 +732,8 @@ TEST_F(SDPABackwardTest, DISABLED_SmallBatch) {
         .num_query_heads = 4U,
         .num_kv_heads = 4U,
         .dropout_prob = 0.0F,
-        .atol = 4e-2F,
-        .rtol = 4e-2F,
+        .atol = 2e-2F,
+        .rtol = 2e-2F,
         .test_name = "SmallBatch (B=2, S=128, D=64, H=4)"};
     run_sdpa_backward_test(config);
 }
@@ -748,7 +741,6 @@ TEST_F(SDPABackwardTest, DISABLED_SmallBatch) {
 TEST_F(SDPABackwardTest, NIGHTLY_NanoGPTConfig) {
     // D=128 needs wider tolerance: 2x inner dim accumulation depth in BF16 matmul
     // causes larger forward-to-backward precision cascade for dQ/dK.
-    // bf16 exp adds a further precision shift in logsumexp.
     SDPABackwardTestConfig config{
         .batch_size = 64U,
         .sequence_length = 256U,
@@ -757,8 +749,8 @@ TEST_F(SDPABackwardTest, NIGHTLY_NanoGPTConfig) {
         .num_query_heads = 6U,
         .num_kv_heads = 6U,
         .dropout_prob = 0.0F,
-        .atol = 1e-1F,
-        .rtol = 1e-1F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
         .test_name = "NanoGPTConfig (B=64, S=256, D=128, H=6)"};
     run_sdpa_backward_test(config);
 }
@@ -772,8 +764,6 @@ TEST_F(SDPABackwardTest, NIGHTLY_LargerSequence) {
         .num_query_heads = 8U,
         .num_kv_heads = 8U,
         .dropout_prob = 0.0F,
-//        .atol = 8e-2F,
-//        .rtol = 8e-2F,
         .test_name = "LargerSequence (B=4, S=1024, D=128, H=8)"};
     run_sdpa_backward_test(config);
 }
@@ -789,8 +779,8 @@ TEST_F(SDPABackwardTest, DISABLED_GroupedQueryAttention) {
         .num_query_heads = 8U,
         .num_kv_heads = 2U,  // 4 query heads per kv head
         .dropout_prob = 0.0F,
-        .atol = 4e-2F,
-        .rtol = 4e-2F,
+        .atol = 2e-2F,
+        .rtol = 2e-2F,
         .test_name = "GroupedQueryAttention (qH=8, kvH=2)"};
     run_sdpa_backward_test(config);
 }
@@ -818,8 +808,6 @@ TEST_F(SDPABackwardTest, DISABLED_TinyLlamaConfig) {
         .dropout_prob = 0.0F,
         .atol = 3e-2F,
         .rtol = 3e-2F,
-//        .atol = 7e-2F,
-//        .rtol = 7e-2F,
         .test_name = "TinyLlamaConfig (B=1, S=256, D=64, qH=32, kvH=4)"};
     run_sdpa_backward_test(config);
 }
@@ -874,8 +862,8 @@ TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_NanoGPTConfig) {
         .num_query_heads = 6U,
         .num_kv_heads = 6U,
         .dropout_prob = 0.0F,
-        .atol = 6e-2F,
-        .rtol = 6e-2F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
         .test_name = "CausalMask_NanoGPTConfig (B=64, S=256, D=128, H=6)",
         .mask_type = ttml::metal::AttentionMaskType::Causal};
     run_sdpa_backward_test(config);
@@ -891,8 +879,6 @@ TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_LargerSequence) {
         .num_query_heads = 8U,
         .num_kv_heads = 8U,
         .dropout_prob = 0.0F,
-        .atol = 5e-2F,
-        .rtol = 5e-2F,
         .test_name = "CausalMask_LargerSeq (B=4, S=1024, D=128, H=8)",
         .mask_type = ttml::metal::AttentionMaskType::Causal};
     run_sdpa_backward_test(config);
