@@ -10,6 +10,6 @@ def acoustic_fm_noise_seed(base_seed: int, step_idx: int) -> int:
         step_idx: The current Euler step index (0-based).
 
     Returns:
-        An integer suitable for ``torch.manual_seed`` that is unique per (base_seed, step_idx) pair.
+        An integer suitable for ``ttnn.randn(..., seed=...)`` (and legacy ``torch.manual_seed`` on CPU ref).
     """
     return base_seed * 1_000_000 + step_idx
