@@ -938,7 +938,7 @@ static void populate_bank_mapping(
     // same worker core that `SWEmuleChip::write_to_device` wrote a given page
     // to.  Without this, every page maps to bank 0 (a single core) while the
     // host scatters across all worker cores — interleaved-L1 → sharded paths
-    // see all zeros (B8.4 in round8-sharded-harvest.md).
+    // read all zeros.
     std::memset(l1_bank_to_noc_xy, 0, sizeof(l1_bank_to_noc_xy));
     std::memset(bank_to_l1_offset, 0, sizeof(bank_to_l1_offset));
     if (device) {
@@ -956,12 +956,9 @@ static void populate_bank_mapping(
                               static_cast<uint16_t>(virt.x);
             l1_bank_to_noc_xy[0][b] = noc_xy;  // NOC 0
             l1_bank_to_noc_xy[1][b] = noc_xy;  // NOC 1 (same target in emule)
-            // Intentionally leave bank_to_l1_offset[b] = 0.  On silicon
-            // `allocator->get_bank_offset(L1, b)` returns the reserved-region
-            // start (~tens of MB depending on harvest mask) that the firmware
-            // skips past; in emule each core's L1 mmap starts at offset 0 with
-            // no firmware reservation, so adding a silicon-style offset would
-            // push every NOC L1 read past the end of the mmap (OOB).
+            // Intentionally leave bank_to_l1_offset[b] = 0.  emule's per-core
+            // L1 mmap starts at byte 0 with no firmware-reserved prefix, so
+            // silicon's `allocator->get_bank_offset(L1, b)` isn't applicable.
         }
     }
 }
