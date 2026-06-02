@@ -50,7 +50,7 @@ struct UniformDeviceOperation {
     // seed/from/to are excluded from the program hash (so calls differing only in those values
     // cache-hit instead of recompiling); they are DYNAMIC and re-applied to the cached program on
     // every dispatch. Must mirror the compute-kernel runtime args built in create_descriptor().
-    static ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& output,

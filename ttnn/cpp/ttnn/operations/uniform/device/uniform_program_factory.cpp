@@ -179,7 +179,7 @@ ProgramDescriptor UniformDeviceOperation::create_descriptor(
     return desc;
 }
 
-ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> UniformDeviceOperation::get_dynamic_runtime_args(
+std::vector<tt::tt_metal::DynamicRuntimeArg> UniformDeviceOperation::get_dynamic_runtime_args(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output,
@@ -193,7 +193,7 @@ ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> UniformDeviceOperation::get_d
     const uint32_t f2u_from = std::bit_cast<uint32_t>(operation_attributes.from);
     const uint32_t f2u_to = std::bit_cast<uint32_t>(operation_attributes.to - eps);
 
-    ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
     dynamic_args.reserve(cores.size() * 3);
     for (int i = 0; i < static_cast<int>(cores.size()); ++i) {
         const uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();

@@ -7,9 +7,16 @@
 /**
  * Fast cache-hit patching for descriptor-factory programs.
  *
- * This is a temporary shim. Metal 2.0 solves the same problem at the framework level with
- * native Tensor/Buffer bindings. This shim should be removed once op factories migrate to
- * the Metal 2.0 API.
+ * ⚠️ TEMPORARY SHIM — DO NOT BUILD ON THIS, DO NOT ADD CALLERS. ⚠️
+ *
+ * A stop-gap that lets descriptor-based op factories re-patch Buffer addresses and the handful
+ * of hash-excluded scalar runtime args on a program-cache hit — standing in for the legacy
+ * override_runtime_arguments() path until Metal 2.0 lands. Metal 2.0 solves this at the
+ * framework level with native Tensor/Buffer bindings, at which point THIS ENTIRE FILE AND ITS
+ * IMPLEMENTATION ARE DELETED. Do not extend the API, do not depend on it outside the
+ * mesh-device-operation adapter. New code almost certainly wants the Metal 2.0 binding instead.
+ *
+ * CODE REVIEWERS: if anyone builds on top of this, reject immediately — unless it's Diego.
  *
  * Usage:
  *   // In create_descriptor() — cache miss:

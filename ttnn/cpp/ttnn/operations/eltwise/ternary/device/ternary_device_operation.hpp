@@ -61,7 +61,7 @@ struct TernaryDeviceOperation {
     static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t&);
 
     // scalar_input_a/b are excluded from the hash; re-applied each dispatch. Mirrors the factory.
-    static ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& output,

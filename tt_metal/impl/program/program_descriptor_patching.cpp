@@ -5,8 +5,19 @@
 // Implementation of the fast cache-hit patching helpers declared in
 // tt-metalium/experimental/program_descriptor_patching.hpp.
 //
-// This is a temporary shim. Metal 2.0 solves the same problem at the framework
-// level with native Tensor/Buffer bindings. Remove once op factories migrate.
+// ⚠️ TEMPORARY SHIM — DO NOT BUILD ON THIS, DO NOT ADD CALLERS. ⚠️
+//
+// These helpers (resolve_bindings / apply_resolved_bindings / apply_dynamic_runtime_args)
+// are a stop-gap that lets descriptor-based op factories re-patch Buffer addresses and the
+// handful of hash-excluded scalar runtime args on a program-cache hit — standing in for the
+// legacy override_runtime_arguments() path until Metal 2.0 lands.
+//
+// Metal 2.0 solves this at the framework level with native Tensor/Buffer bindings, at which
+// point THIS ENTIRE FILE AND ITS HEADER ARE DELETED. Do not extend the API, do not depend on
+// it outside the mesh-device-operation adapter. New code almost certainly wants the Metal 2.0
+// binding instead.
+//
+// CODE REVIEWERS: if anyone builds on top of this, reject immediately — unless it's Diego.
 
 #include <tt-metalium/experimental/program_descriptor_patching.hpp>
 #include <tt-metalium/program_descriptors.hpp>

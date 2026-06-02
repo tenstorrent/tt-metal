@@ -206,7 +206,7 @@ ProgramDescriptor RandDeviceOperation::create_descriptor(
     return desc;
 }
 
-ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> RandDeviceOperation::get_dynamic_runtime_args(
+std::vector<tt::tt_metal::DynamicRuntimeArg> RandDeviceOperation::get_dynamic_runtime_args(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output,
@@ -220,7 +220,7 @@ ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> RandDeviceOperation::get_dyna
     const uint32_t from_bits = std::bit_cast<uint32_t>(operation_attributes.from);
     const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to - eps);
 
-    ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
     dynamic_args.reserve(ws.cores.size() * 3);
     for (int i = 0; i < static_cast<int>(ws.cores.size()); ++i) {
         const uint32_t seed = rand_seed_for_core(operation_attributes, i, ws.device_seed_offset);

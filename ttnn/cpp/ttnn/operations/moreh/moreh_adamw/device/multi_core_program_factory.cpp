@@ -348,7 +348,7 @@ ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
     return desc;
 }
 
-ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> MorehAdamWDeviceOperation::get_dynamic_runtime_args(
+std::vector<tt::tt_metal::DynamicRuntimeArg> MorehAdamWDeviceOperation::get_dynamic_runtime_args(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& /*tensor_return_value*/,
@@ -370,7 +370,7 @@ ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> MorehAdamWDeviceOperation::ge
 
     const auto ws = compute_adamw_work_split(tensor_args.param_in);
 
-    ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
     dynamic_args.reserve(static_cast<size_t>(ws.num_cores) * 5);
     for (uint32_t i = 0; i < ws.num_cores; ++i) {
         const CoreCoord core = {i / ws.num_cores_y, i % ws.num_cores_y};

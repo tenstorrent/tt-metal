@@ -200,7 +200,7 @@ ProgramDescriptor BernoulliDeviceOperation::create_descriptor(
     return desc;
 }
 
-ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> BernoulliDeviceOperation::get_dynamic_runtime_args(
+std::vector<tt::tt_metal::DynamicRuntimeArg> BernoulliDeviceOperation::get_dynamic_runtime_args(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output,
@@ -210,7 +210,7 @@ ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> BernoulliDeviceOperation::get
     constexpr uint32_t kComputeKernelIdx = 2;
     auto cores = bernoulli_work_split(output).cores;
 
-    ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
     dynamic_args.reserve(cores.size());
     for (int i = 0; i < static_cast<int>(cores.size()); ++i) {
         const uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();

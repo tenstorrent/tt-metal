@@ -344,7 +344,7 @@ tt::tt_metal::ProgramDescriptor DropoutMeshWorkloadFactory::create_descriptor(
     return DropoutProgramFactory::create_descriptor(effective_args, tensor_args, output);
 }
 
-ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> DropoutDeviceOperation::get_dynamic_runtime_args(
+std::vector<tt::tt_metal::DynamicRuntimeArg> DropoutDeviceOperation::get_dynamic_runtime_args(
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& /*output*/,
@@ -369,7 +369,7 @@ ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> DropoutDeviceOperation::get_d
     constexpr uint32_t kComputeGroup1Idx = 2;
     constexpr uint32_t kComputeGroup2Idx = 3;
 
-    ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
     dynamic_args.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

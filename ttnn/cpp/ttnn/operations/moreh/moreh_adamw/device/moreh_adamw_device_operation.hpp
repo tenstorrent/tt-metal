@@ -75,7 +75,7 @@ struct MorehAdamWDeviceOperation {
     // must be re-applied to the cached program on every fast-path cache hit. Mirrors the reader and
     // compute runtime args built in create_descriptor() — test_moreh_adamw_cache enforces it (it
     // fails outright if step/lr stay frozen across the cache-hit steps).
-    static ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
