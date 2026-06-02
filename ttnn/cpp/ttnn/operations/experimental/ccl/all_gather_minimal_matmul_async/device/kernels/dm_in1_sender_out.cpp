@@ -114,6 +114,10 @@ void kernel_main() {
     const uint32_t injector_virtual_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_core_order_index = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_core_order_size = get_arg_val<uint32_t>(argidx++);
+    // Chain-order indices of this row's backward/forward fabric senders (cores co-located with their
+    // mux columns). Computed host-side so the relay gate is a per-row column match, not a fixed tail.
+    const uint32_t fsdp_backward_in1_core_order_index = get_arg_val<uint32_t>(argidx++);
+    const uint32_t fsdp_forward_in1_core_order_index = get_arg_val<uint32_t>(argidx++);
 #endif
 
     // Tensor accessor for input tensor (PWB when FSDP_FUSED, else FSDP-sharded local weight = full weight when not
@@ -215,9 +219,7 @@ void kernel_main() {
     // Mux connection setup. Each fabric-sender core only parses + connects the single direction
     // it actually uses; the program factory pushes RT args for exactly one direction per sender.
     // Non-sender cores get no mux RT args at all (so their argidx never advances into a mux slot).
-    uint32_t fsdp_backward_in1_core_order_index = in1_core_order_size - 2;
-    uint32_t fsdp_forward_in1_core_order_index = in1_core_order_size - 1;
-
+    // The two sender indices are read from RT args above (column-matched senders, not the tail).
     MuxConnection<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes> fsdp_mux_backward{};
     MuxConnection<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes> fsdp_mux_forward{};
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* fsdp_mux_handle_backward = nullptr;
@@ -498,8 +500,7 @@ void kernel_main() {
                         if constexpr (fsdp_num_targets_backward == 0) {
                             // fsdp Dev 0 (chain head): long send via mux_backward + pkt_hdrs_forward
                             if constexpr (fsdp_num_targets_forward > 0) {
-                                if (in1_core_order_index >= fsdp_backward_in1_core_order_index &&
-                                    in1_core_order_index < fsdp_forward_in1_core_order_index) {
+                                if (in1_core_order_index == fsdp_backward_in1_core_order_index) {
                                     forward_in1_half_block_to_fabric_neighbor(
                                         k_block_left_tile,
                                         n_tile,
@@ -521,7 +522,7 @@ void kernel_main() {
                             }
                         } else {
                             // fsdp Dev k > 0: short send via mux_forward + pkt_hdrs_backward
-                            if (in1_core_order_index >= fsdp_forward_in1_core_order_index) {
+                            if (in1_core_order_index == fsdp_forward_in1_core_order_index) {
                                 forward_in1_half_block_to_fabric_neighbor(
                                     k_block_left_tile,
                                     n_tile,
