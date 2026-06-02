@@ -765,6 +765,16 @@ def test_ring_joint_sdpa(
     ids=mesh_device_map.keys(),
     indirect=["mesh_shape_or_skip"],
 )
+@pytest.mark.skip(
+    reason=(
+        "Calling pytest within pytest in ttnn is problematic right now. "
+        "The parent process maintains an open handle to the device which prevents the child process "
+        "from using the device, leading to deadlock. "
+        "TODO: This test should be re-enabled when functionality for releasing handles is exposed in ttnn "
+        "(currently this exists in C++ as release_ownership but does not exist in python at the moment). "
+        "Also, this test doesn't actually test anything so maybe we need to actually do some assertions that might make sense here."
+    )
+)
 def test_ring_joint_sdpa_perf_table(mesh_device_id, mesh_shape_or_skip):
     results = []
     for model_input_id, model_input_shape in benchmark_model_input_shapes.items():

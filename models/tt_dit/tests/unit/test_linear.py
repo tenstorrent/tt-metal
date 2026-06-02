@@ -14,9 +14,16 @@ from ...utils.check import assert_quality
 from ...utils.tensor import bf16_tensor
 
 
+def mesh_device_id(shape) -> str:
+    """Readable pytest id for a (rows, cols) mesh_device shape, e.g. (2, 4) -> '2x4'."""
+    rows, cols = shape
+    return f"{rows}x{cols}"
+
+
 @pytest.mark.parametrize(
     "mesh_device",
     [(1, 1), (1, 2), (2, 1)],
+    ids=mesh_device_id,
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -78,6 +85,7 @@ def test_linear(
 @pytest.mark.parametrize(
     "mesh_device",
     [(1, 1), (1, 2), (2, 1), (2, 2), (2, 4), (4, 2)],
+    ids=mesh_device_id,
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -194,6 +202,7 @@ def test_col_parallel_linear(
 @pytest.mark.parametrize(
     "mesh_device",
     [(1, 2), (2, 1), (2, 2), (2, 4), (4, 2)],
+    ids=mesh_device_id,
     indirect=True,
 )
 @pytest.mark.parametrize(
