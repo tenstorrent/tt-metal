@@ -12,13 +12,13 @@ Required Options:
     --image <docker-image>              Docker image to use ("none" to use local build)
 
 Optional:
-    --config <4x8|4x32|8x16|4x8z|2x4x4z|4x32z|16x4x4z>  Mesh configuration (default: 4x32)
+    --config <4x8|4x32|8x16|4x8z|2x4x4z|4x32z|8x4x4z>  Mesh configuration (default: 4x32)
                                         The *z configs are multi-mesh layouts that exercise Z links
                                         (inter-mesh) in addition to the intra-mesh N/S/E/W links.
                                         They launch one MPI rank per mesh, each with its own TT_MESH_ID.
                                         4x8z    = single galaxy as 4 Z-connected 4x2 meshes (4 ranks).
                                         2x4x4z  = single galaxy as 2 Z-connected 4x4 meshes (2 ranks, dual_4x4 layout).
-                                        16x4x4z = full quad: 8 Z-connected 4x4 meshes across 4 hosts (12 ranks);
+                                        8x4x4z = full quad: 8 Z-connected 4x4 meshes across 4 hosts (12 ranks);
                                                   even mesh ids are single-host (slices {1,2}), odd mesh ids are
                                                   split across two adjacent ring hosts ({3} + next-host {0}).
     --output <directory>                Output directory for log files (default: fabric_test_logs)
@@ -32,13 +32,13 @@ Optional:
                                                        (single galaxy split into 2 Z-connected 4x4 meshes)
                                         4x32z default:  tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_4x4x8_z_torus_graph_descriptor.textproto
                                                        (4 galaxies as 4 Z-connected 8x4 torus meshes)
-                                        16x4x4z default: tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_8x4x4_z_graph_descriptor.textproto
+                                        8x4x4z default: tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_8x4x4_z_graph_descriptor.textproto
                                                        (8 Z-connected 4x4 meshes across 4 galaxies; even single-host, odd split 2x1)
     --test-binary <path>                Path to test binary
                                         (default: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric)
     --test-config <path>                Path to test configuration file
                                         (default: tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_stability.yaml)
-                                        (4x8z/2x4x4z/4x32z/16x4x4z default: test_fabric_multi_mesh_sanity_common.yaml, whose
+                                        (4x8z/2x4x4z/4x32z/8x4x4z default: test_fabric_multi_mesh_sanity_common.yaml, whose
                                          neighbor_exchange/all_to_all patterns route across mesh boundaries / Z links)
     --filter <pattern>                  Filter pattern passed to test_tt_fabric --filter
     --mpi-if <interface>                Network interface for MPI TCP transport (default: ens5f0np0)
@@ -63,7 +63,7 @@ MESH_GRAPH_DESC_PATH_4x8z="tt_metal/fabric/mesh_graph_descriptors/single_bh_gala
 # 2x4x4z: single galaxy split into 2 Z-connected 4x4 meshes (dual_4x4 layout).
 MESH_GRAPH_DESC_PATH_2x4x4z="tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_2x4x4_z_graph_descriptor.textproto"
 MESH_GRAPH_DESC_PATH_4x32z="tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_4x4x8_z_torus_graph_descriptor.textproto"
-MESH_GRAPH_DESC_PATH_16x4x4z="tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_8x4x4_z_graph_descriptor.textproto"
+MESH_GRAPH_DESC_PATH_8x4x4z="tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_8x4x4_z_graph_descriptor.textproto"
 CONFIG="4x32"
 MESH_GRAPH_DESC_PATH=""
 MESH_GRAPH_DESC_PATH_EXPLICIT=false
@@ -104,8 +104,8 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             CONFIG="$2"
-            if [[ "$CONFIG" != "4x8" && "$CONFIG" != "4x32" && "$CONFIG" != "8x16" && "$CONFIG" != "4x8z" && "$CONFIG" != "2x4x4z" && "$CONFIG" != "4x32z" && "$CONFIG" != "16x4x4z" ]]; then
-                echo "Error: --config must be one of '4x8', '4x32', '8x16', '4x8z', '2x4x4z', '4x32z', or '16x4x4z'"
+            if [[ "$CONFIG" != "4x8" && "$CONFIG" != "4x32" && "$CONFIG" != "8x16" && "$CONFIG" != "4x8z" && "$CONFIG" != "2x4x4z" && "$CONFIG" != "4x32z" && "$CONFIG" != "8x4x4z" ]]; then
+                echo "Error: --config must be one of '4x8', '4x32', '8x16', '4x8z', '2x4x4z', '4x32z', or '8x4x4z'"
                 echo ""
                 show_help
                 exit 1
@@ -213,14 +213,14 @@ if [[ "$MESH_GRAPH_DESC_PATH_EXPLICIT" == false ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_2x4x4z"
     elif [[ "$CONFIG" == "4x32z" ]]; then
         MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_4x32z"
-    elif [[ "$CONFIG" == "16x4x4z" ]]; then
-        MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_16x4x4z"
+    elif [[ "$CONFIG" == "8x4x4z" ]]; then
+        MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH_8x4x4z"
     fi
 fi
 
 # Multi-mesh (Z) configs need a multi-mesh-aware test config; fall back to the
 # multi-mesh sanity config unless the user explicitly passed --test-config.
-if [[ "$TEST_CONFIG_EXPLICIT" == false && ( "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$CONFIG" == "16x4x4z" ) ]]; then
+if [[ "$TEST_CONFIG_EXPLICIT" == false && ( "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$CONFIG" == "8x4x4z" ) ]]; then
     TEST_CONFIG="$TEST_CONFIG_Z"
 fi
 
@@ -362,7 +362,7 @@ resolve_slice_z_visible_devices() {
     done
 }
 
-# Resolve the 16x4x4z quad split layout: 8 Z-connected 4x4 meshes across 4 ring
+# Resolve the 8x4x4z quad split layout: 8 Z-connected 4x4 meshes across 4 ring
 # hosts as a 12-rank table (even meshes single-host {1,2}; odd meshes split
 # {3}+next-host {0}). Populates parallel per-rank arrays in canonical
 # (mesh_id, host_rank) -> mpi_rank order:
@@ -381,19 +381,19 @@ resolve_quad_split_rank_table() {
         exit 1
     fi
 
-    echo "Resolving quad split rank table via 2x4 slice discovery (--slice-config 16x4x4z, hosts ${hosts_csv})..."
+    echo "Resolving quad split rank table via 2x4 slice discovery (--slice-config 8x4x4z, hosts ${hosts_csv})..."
     local rank_lines=()
     mapfile -t rank_lines < <(
         cd "$tt_home" && \
         LD_LIBRARY_PATH="${tt_home}/build/lib:${LD_LIBRARY_PATH:-}" \
         TT_METAL_HOME="$tt_home" \
-        python3 "$gen_rb" --slice-config 16x4x4z --hosts "$hosts_csv" --mpi-if "$MPI_IF" \
+        python3 "$gen_rb" --slice-config 8x4x4z --hosts "$hosts_csv" --mpi-if "$MPI_IF" \
             --print-rank-table --work-dir "$tt_home" \
             | grep '^FABRIC_RANK:' | sed 's/^FABRIC_RANK://'
     )
 
     if [[ "${#rank_lines[@]}" -ne "$expected_ranks" ]]; then
-        echo "Error: expected ${expected_ranks} FABRIC_RANK entries for 16x4x4z, got ${#rank_lines[@]}" >&2
+        echo "Error: expected ${expected_ranks} FABRIC_RANK entries for 8x4x4z, got ${#rank_lines[@]}" >&2
         exit 1
     fi
 
@@ -542,7 +542,7 @@ print_fabric_final_summary() {
     fi
 }
 
-if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$CONFIG" == "16x4x4z" ]]; then
+if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$CONFIG" == "8x4x4z" ]]; then
     # Multi-mesh Z configs: launch one MPI rank per mesh, each with its own
     # TT_MESH_ID, so the descriptor's inter-mesh (Z) connections are exercised
     # alongside the intra-mesh N/S/E/W links during neighbor exchange.
@@ -566,7 +566,7 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$
         Z_GLOBAL_HOST=(--host "${SINGLE_HOST}:${NUM_MESHES}")
         resolve_slice_z_visible_devices "2x4x4z" "$SINGLE_HOST" "$NUM_MESHES"
         echo "Running multi-mesh 2x4x4z (2 Z-connected 4x4 meshes, slice-based) on single host: $SINGLE_HOST"
-    elif [[ "$CONFIG" == "16x4x4z" ]]; then
+    elif [[ "$CONFIG" == "8x4x4z" ]]; then
         # 8 Z-connected 4x4 meshes across 4 ring hosts, composed from 2x4 slices:
         # even meshes are single-host 4x4 {1,2}; odd meshes are split across two
         # adjacent hosts ({3} on host H + {0} on host H+1). That yields 12 ranks
@@ -576,12 +576,12 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$
         NUM_RANKS=12
         IFS=',' read -ra Z_RANK_HOSTS <<< "$HOSTS"
         if [[ "${#Z_RANK_HOSTS[@]}" -ne 4 ]]; then
-            echo "Error: --config 16x4x4z requires exactly 4 hosts in --hosts (got ${#Z_RANK_HOSTS[@]})"
+            echo "Error: --config 8x4x4z requires exactly 4 hosts in --hosts (got ${#Z_RANK_HOSTS[@]})"
             exit 1
         fi
         resolve_quad_split_rank_table "$HOSTS" "$NUM_RANKS"
         write_quad_split_rankfile
-        echo "Running multi-mesh 16x4x4z (8 Z-connected 4x4 meshes across 4 hosts, slice-based split; 12 ranks, even=single-host {1,2}, odd=split {3}+next-host {0}); ranks pinned via rankfile."
+        echo "Running multi-mesh 8x4x4z (8 Z-connected 4x4 meshes across 4 hosts, slice-based split; 12 ranks, even=single-host {1,2}, odd=split {3}+next-host {0}); ranks pinned via rankfile."
     else
         NUM_MESHES=4
         # 4x32z: one full galaxy per host. The Z ring (mesh 0->1->2->3->0) only
@@ -606,7 +606,7 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$
     fi
     echo ""
 
-    # Configs other than 16x4x4z launch one rank per mesh (mesh_id == rank, no
+    # Configs other than 8x4x4z launch one rank per mesh (mesh_id == rank, no
     # explicit host rank). Fill the per-rank arrays so the segment builder below
     # is shared by all Z configs.
     if [[ -z "$NUM_RANKS" ]]; then
@@ -619,9 +619,9 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$
 
     # Assemble the per-rank ":"-separated MPMD segments shared by the docker
     # and no-docker launch paths. Each segment carries its own TT_MESH_ID (and,
-    # where resolved, TT_VISIBLE_DEVICES). 16x4x4z additionally sets
+    # where resolved, TT_VISIBLE_DEVICES). 8x4x4z additionally sets
     # TT_MESH_HOST_RANK (required on multi-host systems, and distinguishes the
-    # two ranks of a split mesh). Host placement for 4x32z/16x4x4z is handled by
+    # two ranks of a split mesh). Host placement for 4x32z/8x4x4z is handled by
     # the OpenMPI rankfile in Z_GLOBAL_HOST, not per-segment --host.
     # TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS matches full_rank_binding.yaml so the
     # slowest ethernet handshakes don't trip the Fabric Router Sync timeout.
@@ -645,7 +645,7 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$
     # per MPMD segment. OpenMPI's default sm BTL needs a shared IPC namespace
     # across containers on the same host; force TCP instead (same as tt-run).
     Z_DOCKER_MPI_ARGS=()
-    if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "16x4x4z" ]]; then
+    if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "8x4x4z" ]]; then
         Z_DOCKER_MPI_ARGS=(--mca btl self,tcp)
     fi
 

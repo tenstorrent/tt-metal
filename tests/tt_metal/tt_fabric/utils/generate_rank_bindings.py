@@ -122,7 +122,7 @@ def visible_devices_for_rank(tray_to_pcie_device_mapping, rank_to_tray_mapping, 
 #   m0(tr1)  m1(tr3)
 #   m3(tr2)  m2(tr4)
 # Intra-host Z: 0-1, 1-2, 2-3, 0-3 (bh_galaxy_split_4x2_multi_mesh).
-# NOTE: 2x4x4z / 16x4x4z now use the 2x4 slice discovery instead (see
+# NOTE: 2x4x4z / 8x4x4z now use the 2x4 slice discovery instead (see
 # FABRIC_TEST_SLICE_MAPPINGS / resolve_fabric_test_visible_devices_slices below).
 FABRIC_TEST_TRAY_MAPPINGS = {
     # 4 Z-connected 4x2 meshes: one tray per mesh (same as BH_GLX_QUAD_RANK_TO_TRAY_MAPPING).
@@ -163,7 +163,7 @@ def resolve_fabric_test_visible_devices(
     return [visible_devices_for_rank(tray_to_pcie_device_mapping, rank_to_tray, rank) for rank in sorted(rank_to_tray)]
 
 
-# --- Slice-based device resolution (2x4x4z / 16x4x4z) -----------------------
+# --- Slice-based device resolution (2x4x4z / 8x4x4z) -----------------------
 # Uses the 2x4 "slice" discovery (Generate2x4SliceToPCIeDeviceMapping) instead
 # of per-tray discovery. A slice is a host-local 2x4 (8-chip) block spanning two
 # trays; the gtest already accounts for the Rev C tray swap, so slice ids 0..3
@@ -177,7 +177,7 @@ def resolve_fabric_test_visible_devices(
 # Both lists are ordered top-tray-pair slice first, bottom-tray-pair slice
 # second (1 before 2, 0 before 3) so the two meshes share a consistent
 # device ordering. The discovery runs across all hosts in one mpirun and writes
-# a per-host keyed mapping, so the quad layout (16x4x4z) no longer needs a
+# a per-host keyed mapping, so the quad layout (8x4x4z) no longer needs a
 # per-host SSH discovery loop.
 SLICE_MAPPING_GTEST_FILTER = "*Generate2x4SliceToPCIeDeviceMapping*"
 SLICE_MAPPING_FILE = "slice_to_pcie_device_mapping.yaml"
@@ -185,14 +185,14 @@ DEVICES_PER_SLICE = 8
 
 # Single-host (2x4x4z) local mesh -> slice ids. With no adjacent host both 4x4
 # meshes are self-contained: mesh 0 = inner pair {1,2}, mesh 1 = outer pair {0,3}.
-# The quad layout (16x4x4z) instead splits the outer slices across adjacent ring
+# The quad layout (8x4x4z) instead splits the outer slices across adjacent ring
 # hosts -- see build_quad_split_rank_table / resolve_quad_split_rank_table.
 FABRIC_TEST_SLICE_MAPPINGS = {
     "2x4x4z": {0: [1, 2], 1: [0, 3]},
 }
 
 # CLI choices for --slice-config: single-host plus the quad split layout.
-SLICE_CONFIG_CHOICES = ["2x4x4z", "16x4x4z"]
+SLICE_CONFIG_CHOICES = ["2x4x4z", "8x4x4z"]
 
 
 def generate_slice_to_pcie_device_mapping(hosts, mpi_if=None, work_dir=None, mapping_file=SLICE_MAPPING_FILE):
@@ -306,7 +306,7 @@ def resolve_fabric_test_visible_devices_slices(
 
 
 def build_quad_split_rank_table(hosts):
-    """Canonical 12-rank table for the quad split 4x4 layout (16x4x4z).
+    """Canonical 12-rank table for the quad split 4x4 layout (8x4x4z).
 
     8 meshes across 4 ring-ordered hosts:
       even mesh 2i  -> single-host 4x4 on hosts[i], slices {1,2}, host_rank 0
@@ -319,7 +319,7 @@ def build_quad_split_rank_table(hosts):
     (mesh_id, host_rank, host, slice_ids).
     """
     if len(hosts) != 4:
-        logger.error(f"16x4x4z requires exactly 4 hosts in ring order, got {len(hosts)}: {hosts}")
+        logger.error(f"8x4x4z requires exactly 4 hosts in ring order, got {len(hosts)}: {hosts}")
         sys.exit(1)
 
     table = []
@@ -386,17 +386,17 @@ def parse_args():
     parser.add_argument(
         "--fabric-config",
         choices=sorted(FABRIC_TEST_TRAY_MAPPINGS.keys()),
-        help="Single-host fabric test layout (used by run_fabric_tests.sh 4x8z/2x4x4z and per-host on 16x4x4z)",
+        help="Single-host fabric test layout (used by run_fabric_tests.sh 4x8z/2x4x4z and per-host on 8x4x4z)",
     )
     parser.add_argument(
         "--slice-config",
         choices=SLICE_CONFIG_CHOICES,
-        help="Slice-based fabric test layout (used by run_fabric_tests.sh 2x4x4z/16x4x4z)",
+        help="Slice-based fabric test layout (used by run_fabric_tests.sh 2x4x4z/8x4x4z)",
     )
     parser.add_argument(
         "--hosts",
         default="",
-        help="With --slice-config: comma-separated hosts (in rank/mesh order; ring order for 16x4x4z)",
+        help="With --slice-config: comma-separated hosts (in rank/mesh order; ring order for 8x4x4z)",
     )
     parser.add_argument(
         "--mpi-if",
@@ -411,7 +411,7 @@ def parse_args():
     parser.add_argument(
         "--print-rank-table",
         action="store_true",
-        help="With --slice-config 16x4x4z: print one FABRIC_RANK:<mesh_id>;<host_rank>;<host>;<devices> line per rank",
+        help="With --slice-config 8x4x4z: print one FABRIC_RANK:<mesh_id>;<host_rank>;<host>;<devices> line per rank",
     )
     parser.add_argument(
         "--no-discovery",
@@ -731,7 +731,7 @@ def generate_supported_rank_bindings():
 
 if __name__ == "__main__":
     args = parse_args()
-    if args.slice_config == "16x4x4z":
+    if args.slice_config == "8x4x4z":
         hosts = [h for h in args.hosts.split(",") if h]
         rank_table = resolve_quad_split_rank_table(
             hosts,

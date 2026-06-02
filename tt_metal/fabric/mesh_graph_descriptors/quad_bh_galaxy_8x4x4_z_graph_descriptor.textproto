@@ -24,7 +24,7 @@
 # with the 4 split meshes contributing 2 ranks each. Ranks are ordered
 # mesh-major then host-rank-minor to match control_plane's
 # (mesh_id, host_rank) -> mpi_rank assignment. See run_fabric_tests.sh
-# (--config 16x4x4z) and generate_rank_bindings.py (--slice-config 16x4x4z).
+# (--config 8x4x4z) and generate_rank_bindings.py (--slice-config 8x4x4z).
 # Host order matches scaleout_configs/full_rankfile (c07u08, c07u02, c08u02, c08u08).
 
 mesh_descriptors {
