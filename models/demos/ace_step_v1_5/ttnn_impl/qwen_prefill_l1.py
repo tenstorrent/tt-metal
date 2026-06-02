@@ -13,6 +13,7 @@ without editing upstream ``tt_transformers`` sources.
 from __future__ import annotations
 
 import functools
+import math
 from contextlib import contextmanager
 from typing import Any, Callable, Iterator
 
@@ -249,6 +250,195 @@ def ace_step_apply_qwen_prefill_matmul_configs(model_args: Any) -> None:
     _patch_prefill_minimal_matmul_getter(model_args, "get_mlp_ff2_prg_config")
 
 
+# --------------------------------------------------------------------------------------------------
+# Fused MLP gate+up matmul (the two SLOW ``256 x 1024 x 3072`` ``MatmulDeviceOperation`` rows).
+#
+# Stock ``tt_transformers`` MLP.forward issues TWO separate ``ttnn.linear`` calls — gate (w1) and
+# up (w3) — that share the SAME input ``x`` and K=1024, differing only in weights.  We pre-concat
+# w1+w3 on the output axis into a single ``[dim, 2*hidden_dim]`` weight (=> N=6144) and run ONE
+# matmul, then slice the gate/up halves back out for the existing SiLU*mul.  One op launch instead
+# of two; ``x`` read once instead of twice.
+#
+# Program config: the fused N is so wide that the 2D block-mcast kernel blows the L1 CB budget
+# (per_core_N=24..48).  The 1D mcast_in0 kernel keeps all M tiles per core and splits N: with
+# Nt=192 and per_core_N=2 it fills exactly 96 cores (structural optimum on the 11x10=110-core BH
+# grid).  Device sweep (test_matmul_256x1024x6144_gateup_sweep.py, LoFi BF16xBFP8=>BF16, fp32 acc,
+# in-process kernel-duration) winner: 1D grid (11,10), per_core_N=2, in0_block_w=8 (~beats the
+# ibw=4 heuristic baseline of ~21.5us).  Gated to 128 < seq_len <= 256 and the non-galaxy path
+# (the TG reduce_scatter logic operates on separate w1_out/w3_out and is not fused here).
+_ACE_STEP_QWEN_GATEUP_GRID = (11, 10)
+_ACE_STEP_QWEN_GATEUP_TARGET_CORES = 96
+_ACE_STEP_QWEN_GATEUP_IBW = 8
+
+
+def _ace_step_gateup_subblock(per_core_m: int, per_core_n: int) -> tuple[int, int]:
+    """Largest (out_subblock_h, out_subblock_w) with h*w<=4 (fp32 dest acc)."""
+    for h, w in ((2, 2), (4, 1), (1, 4), (2, 1), (1, 2), (1, 1)):
+        if per_core_m % h == 0 and per_core_n % w == 0:
+            return h, w
+    return 1, 1
+
+
+def _ace_step_gateup_1d_config(seq_len: int, k: int, fused_n: int):
+    cfg_cls = getattr(ttnn, "MatmulMultiCoreReuseMultiCast1DProgramConfig", None)
+    coord = getattr(ttnn, "CoreCoord", None)
+    if cfg_cls is None or coord is None:
+        return None
+    mt = math.ceil(seq_len / ttnn.TILE_SIZE)
+    kt = math.ceil(k / ttnn.TILE_SIZE)
+    nt = math.ceil(fused_n / ttnn.TILE_SIZE)
+    gx, gy = _ACE_STEP_QWEN_GATEUP_GRID
+    # in0_block_w must divide Kt; prefer the tuned 8, else the largest divisor <= 8.
+    ibw = (
+        _ACE_STEP_QWEN_GATEUP_IBW
+        if kt % _ACE_STEP_QWEN_GATEUP_IBW == 0
+        else next((d for d in range(min(8, kt), 0, -1) if kt % d == 0), 1)
+    )
+    # per_core_N sets cores_used = ceil(Nt/per_core_N); aim for ~96 cores, capped by the grid.
+    per_core_n = max(1, math.ceil(nt / _ACE_STEP_QWEN_GATEUP_TARGET_CORES))
+    if math.ceil(nt / per_core_n) > gx * gy:
+        per_core_n = math.ceil(nt / (gx * gy))
+    sh, sw = _ace_step_gateup_subblock(mt, per_core_n)
+    return cfg_cls(
+        compute_with_storage_grid_size=coord(gx, gy),
+        in0_block_w=ibw,
+        out_subblock_h=sh,
+        out_subblock_w=sw,
+        per_core_M=mt,
+        per_core_N=per_core_n,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+def _ace_step_build_fused_gate_up_weight(mlp_mod: Any) -> Any:
+    """Concat w1 (gate) + w3 (up) on the output axis into one DRAM-interleaved weight."""
+    w1 = getattr(mlp_mod, "w1", None)
+    w3 = getattr(mlp_mod, "w3", None)
+    dram_mc = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+    if w1 is None or w3 is None or dram_mc is None:
+        return None
+    w1_i = ttnn.to_memory_config(w1, dram_mc)
+    w3_i = ttnn.to_memory_config(w3, dram_mc)
+    w13 = ttnn.concat([w1_i, w3_i], dim=-1, memory_config=dram_mc)
+    ttnn.deallocate(w1_i)
+    ttnn.deallocate(w3_i)
+    return w13
+
+
+def _patch_mlp_fused_gate_up(mlp_mod: Any) -> None:
+    """Fuse the gate (w1) + up (w3) prefill matmuls of one MLP into a single N-wide matmul."""
+    if getattr(mlp_mod, "args", None) is None or getattr(mlp_mod.args, "is_galaxy", False):
+        return
+    if getattr(mlp_mod, "prefetcher", None) is not None:
+        return  # prefetcher path threads w1/w3 through the global CB separately; leave it stock
+    fused_w13 = _ace_step_build_fused_gate_up_weight(mlp_mod)
+    if fused_w13 is None:
+        return
+    mlp_mod._ace_fused_w13 = fused_w13
+
+    from models.tt_transformers.tt.ccl import tt_all_reduce
+    from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
+
+    orig_forward = mlp_mod.forward
+    seq_max = _ACE_STEP_QWEN_PREFILL_MM_SEQ_MAX
+
+    def forward(x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
+        seq_len = x.shape[-2]
+        if mode != Mode.PREFILL or not (128 < int(seq_len) <= seq_max):
+            return orig_forward(x, mode)
+        if seq_len >= mlp_mod.args.prefill_len_cutoff:
+            return orig_forward(x, mode)  # reshaped multi-block prefill — defer to stock
+
+        layer_num = max(mlp_mod.layer_num, 0)
+        opt = mlp_mod.decoders_optimizations
+        activation_dtype = opt.get_tensor_dtype(decoder_id=layer_num, tensor=TensorGroup.ACTIVATION)
+        ff1_3_ckc = opt.get_math_fidelity(decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=mlp_mod.args)
+        ff2_ckc = opt.get_math_fidelity(decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=mlp_mod.args)
+        pc_2 = mlp_mod.args.get_mlp_ff2_prg_config(mode, seq_len, mlp_mod.prefetcher)
+        ff1_3_mc = mlp_mod.args.get_mlp_ff1_3_mem_config(mode, mlp_mod.prefetcher)
+
+        hidden = mlp_mod.args.hidden_dim
+        fused_pc = _ace_step_gateup_1d_config(int(seq_len), mlp_mod.args.dim, 2 * hidden)
+
+        w13_out = ttnn.linear(
+            x,
+            mlp_mod._ace_fused_w13,
+            dtype=activation_dtype or ttnn.bfloat16,
+            compute_kernel_config=ff1_3_ckc,
+            program_config=fused_pc,
+            memory_config=ff1_3_mc,
+        )
+        ttnn.deallocate(x)
+
+        rank = len(w13_out.shape)
+        begins = [0] * rank
+        gate_ends = list(w13_out.shape)
+        gate_ends[-1] = hidden
+        up_begins = [0] * rank
+        up_begins[-1] = hidden
+        up_ends = list(w13_out.shape)
+        w1_out = ttnn.slice(w13_out, begins, gate_ends, memory_config=ff1_3_mc)
+        w3_out = ttnn.slice(w13_out, up_begins, up_ends, memory_config=ff1_3_mc)
+        ttnn.deallocate(w13_out)
+
+        w2_in = ttnn.mul(
+            w1_out,
+            w3_out,
+            input_tensor_a_activations=[mlp_mod.activation_type],
+            dtype=activation_dtype or ttnn.bfloat8_b,
+            memory_config=w1_out.memory_config(),
+        )
+        ttnn.deallocate(w3_out)
+        ttnn.deallocate(w1_out)
+
+        if seq_len > 128:
+            w2_out = ttnn.experimental.minimal_matmul(w2_in, mlp_mod.w2, compute_kernel_config=ff2_ckc, config=pc_2)
+        else:
+            w2_out = ttnn.linear(
+                w2_in,
+                mlp_mod.w2,
+                compute_kernel_config=ff2_ckc,
+                dtype=activation_dtype or ttnn.bfloat16,
+                program_config=pc_2,
+                memory_config=mlp_mod.args.get_mlp_ff2_mem_config(mode, mlp_mod.prefetcher),
+            )
+        ttnn.deallocate(w2_in)
+
+        w2_out_reduced = tt_all_reduce(
+            w2_out,
+            mlp_mod.mesh_device,
+            mlp_mod.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            sharded=False,
+            memory_config=mlp_mod.args.get_mlp_ff2_all_reduce_mem_config(mode, w2_out),
+            rs_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=mlp_mod.args.ccl_dtype,
+            use_composite=mlp_mod.dim == 8192,
+            topology=mlp_mod.args.ccl_topology(),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            subdevice_id=None,
+        )
+        original_shape = w2_out_reduced.shape
+        w2_out_reduced = ttnn.reshape(
+            w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
+        )
+        return w2_out_reduced
+
+    mlp_mod.forward = forward  # type: ignore[method-assign]
+
+
+def ace_step_apply_qwen_prefill_gate_up_fusion(tt_model: Any) -> None:
+    """Fuse gate+up matmuls in every decoder MLP (seq<=256 non-galaxy prefill)."""
+    for layer in getattr(tt_model, "layers", []):
+        mlp_mod = getattr(layer, "feed_forward", None)
+        if mlp_mod is not None and hasattr(mlp_mod, "w1") and hasattr(mlp_mod, "w3"):
+            _patch_mlp_fused_gate_up(mlp_mod)
+
+
 def ace_step_apply_qwen_prefill_l1(tt_model: Any, model_args: Any) -> None:
     """Patch a loaded ``tt_transformers`` Qwen model for L1 prefill activations."""
     l1_mc = ace_step_linear_l1_memory_config(ttnn)
@@ -257,6 +447,7 @@ def ace_step_apply_qwen_prefill_l1(tt_model: Any, model_args: Any) -> None:
 
     ace_step_patch_model_args_prefill_l1(model_args)
     ace_step_apply_qwen_prefill_matmul_configs(model_args)
+    ace_step_apply_qwen_prefill_gate_up_fusion(tt_model)
 
     _patch_embd_l1_output(tt_model.embd, l1_mc=l1_mc)
     for layer in tt_model.layers:
@@ -388,6 +579,7 @@ def ace_step_qwen_prefill_l1_op_context() -> Iterator[None]:
 
 __all__ = [
     "ace_step_apply_qwen_prefill_l1",
+    "ace_step_apply_qwen_prefill_gate_up_fusion",
     "ace_step_patch_model_args_prefill_l1",
     "ace_step_qwen_prefill_l1_op_context",
 ]
