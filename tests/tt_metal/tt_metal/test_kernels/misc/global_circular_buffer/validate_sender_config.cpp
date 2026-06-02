@@ -33,7 +33,8 @@ void kernel_main() {
     uint32_t num_receivers = get_arg_val<uint32_t>(arg_idx++);
     pass &= config_ptr[config_idx++] == num_receivers;
     ASSERT(pass);
-    pass &= remote_sender_cb_interface.num_receivers == num_receivers;
+    pass &=
+        remote_cb_num_receivers(remote_sender_cb_interface.num_receivers_and_remote_pages_sent_ptr) == num_receivers;
     ASSERT(pass);
     // fifo_start_addr
     uint32_t fifo_start_addr = get_arg_val<uint32_t>(arg_idx++);

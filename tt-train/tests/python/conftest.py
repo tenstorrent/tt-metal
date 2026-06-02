@@ -17,17 +17,11 @@ def pytest_configure(config):
 
 def pytest_collection_modifyitems(config, items):
     """Skip device-requiring tests if no device is available."""
-    # Check if device is available
-    device_available = False
-    try:
-        import ttml
+    import pathlib
 
-        auto_ctx = ttml.autograd.AutoContext.get_instance()
-        auto_ctx.open_device()
-        auto_ctx.close_device()
-        device_available = True
-    except Exception:  # noqa: S110 - intentionally ignore device check failures
-        pass
+    device_available = (
+        any(pathlib.Path("/dev/tenstorrent/").iterdir()) if pathlib.Path("/dev/tenstorrent/").exists() else False
+    )
 
     if not device_available:
         skip_device = pytest.mark.skip(reason="Tenstorrent device not available")

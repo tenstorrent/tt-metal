@@ -938,6 +938,9 @@ def test_demo_text(
     num_layers = request.config.getoption("--num_layers") or num_layers
     mode = request.config.getoption("--mode") or mode
     use_prefetcher = request.config.getoption("--use_prefetcher") or use_prefetcher
+    if use_prefetcher and not is_blackhole():
+        logger.warning("--use_prefetcher requested but DRAM prefetcher is only supported on Blackhole; disabling.")
+        use_prefetcher = False
     use_prefetcher = (
         use_prefetcher and is_prefetcher_supported(hf_dir, num_devices) and "Llama" in hf_dir and "8B" in hf_dir
     )
@@ -1634,6 +1637,12 @@ def test_demo_text(
                 # Faster-than-expected TTFT observed in CI; lower the target and keep tolerance to avoid false failures.
                 "T3K_Qwen2.5-Coder-32B": (100, 1.27),  # (value, high_tolerance_ratio)
                 "T3K_Qwen3-32B": 43,
+                # P150x4 == bh_quietbox_2 (2x P300, 4 dies). Today's
+                # determine_device_name labels this hardware "P150x4"; the
+                # canonical name is P300x2. Numbers from workflow 26664009397.
+                "P150x4_Llama-3.1-8B": 53,
+                "P150x4_Llama-3.3-70B": 136,
+                "P150x4_Qwen3-32B": 207,
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better
@@ -1649,6 +1658,10 @@ def test_demo_text(
                 "T3K_Qwen2.5-72B": 13.25,
                 "T3K_Qwen2.5-Coder-32B": 20,
                 "T3K_Qwen3-32B": 24,
+                # P150x4 == bh_quietbox_2; see note above.
+                "P150x4_Llama-3.1-8B": 23.0,
+                "P150x4_Llama-3.3-70B": 16.30,
+                "P150x4_Qwen3-32B": 8.7,
             }
 
             # Only call verify_perf if the model_device_key exists in the targets

@@ -721,3 +721,43 @@ def test_moreh_layer_norm_no_mean_rstd(input_shape_normalized_dims, elementwise_
     if dtype == ttnn.bfloat8_b:
         pytest.skip(f"bfloat8_b is not supported in the kernel")
     run_moreh_layer_norm(input_shape_normalized_dims, elementwise_affine, eps, dtype, device, create_mean_rstd=False)
+
+
+# Validation test for moreh.layer_norm not populating rstd when mean=None, see #22089
+def test_moreh_layer_norm_rstd_only_mean_none(device):
+    torch.manual_seed(2023)
+    input_shape = [2, 32, 512]
+    normalized_dims = 1
+    eps = 1e-5
+    mean_rstd_shape = input_shape[:-normalized_dims]
+
+    cpu_input, cpu_gamma, cpu_beta, _ = make_input_tensors(input_shape, normalized_dims, elementwise_affine=True)
+
+    # expected
+    _, _, expected_rstd = torch_layer_norm(
+        cpu_input, normalized_dims=normalized_dims, eps=eps, gamma=cpu_gamma, beta=cpu_beta
+    )
+
+    # actual: pass mean=None, preallocate rstd
+    npu_input = to_ttnn(cpu_input, device=device, dtype=ttnn.bfloat16)
+    npu_gamma = to_ttnn(cpu_gamma, device=device, dtype=ttnn.bfloat16)
+    npu_beta = to_ttnn(cpu_beta, device=device, dtype=ttnn.bfloat16)
+    npu_output = to_ttnn(torch.empty_like(cpu_input), device=device, dtype=ttnn.bfloat16)
+    npu_rstd = to_ttnn(torch.zeros(mean_rstd_shape, dtype=torch.bfloat16), device=device, dtype=ttnn.bfloat16)
+
+    ttnn.operations.moreh.layer_norm(
+        npu_input,
+        normalized_dims,
+        eps,
+        npu_gamma,
+        npu_beta,
+        output=npu_output,
+        mean=None,
+        rstd=npu_rstd,
+    )
+
+    actual_rstd = to_torch(npu_rstd, shape=mean_rstd_shape)
+
+    pass_rstd, out_rstd = comp_allclose(expected_rstd, actual_rstd, rtol=0.09, atol=0.06)
+    logger.debug(f"rstd's {out_rstd}")
+    assert pass_rstd

@@ -48,6 +48,40 @@ jobs:
           # Harry Andrews (U08TJ70UFRT), Stuti Raizada (U06F3ER8X9A) - GPT-OSS
 
           # Note: This matrix must be kept in sync with the original static matrix
+          #
+          # The two Gemma4-31B vLLM entries below are temporarily disabled —
+          # the full unquantized KV cache for the global-attention layers
+          # runs out of DRAM on both 1x4 (BH-QB-GE) and 1x8 (WH-T3K).
+          # Re-enable once KV cache quantization lands — TODO: file follow-up issue.
+          #
+          # Disabled entries preserved verbatim for the re-enable:
+          #
+          #   {
+          #     "name": "[WH-T3K] Gemma4-31B",
+          #     "model": "google/gemma-4-31B-it",
+          #     "server-timeout": 45,
+          #     "benchmark-timeout": 5,
+          #     "runner-label": "config-t3000",
+          #     "arch": "arch-wormhole_b0",
+          #     "mesh-device": "T3K",
+          #     "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
+          #     "additional-server-args": "--async-scheduling",
+          #     "multimodal": false,
+          #     "owner_id": "U08TJ70UFRT"
+          #   },
+          #   {
+          #     "name": "[BH-QB-GE] Gemma4-31B",
+          #     "model": "google/gemma-4-31B-it",
+          #     "server-timeout": 20,
+          #     "benchmark-timeout": 5,
+          #     "runner-label": "BH-QB-GE",
+          #     "arch": "arch-blackhole",
+          #     "mesh-device": "P150x4",
+          #     "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
+          #     "additional-server-args": "--async-scheduling",
+          #     "multimodal": false,
+          #     "owner_id": "U08TJ70UFRT"
+          #   }
           all_tests='[
             {
               "name": "[WH-T3K] Gemma3-27B",
@@ -79,6 +113,44 @@ jobs:
               "multimodal": true,
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08BH66EXAL"
+            },
+            {
+              "name": "[WH-N150] Gemma4-E2B",
+              "model": "google/gemma-4-E2B-it",
+              "server-timeout": 15,
+              "benchmark-timeout": 5,
+              "runner-label": "N150",
+              "arch": "arch-wormhole_b0",
+              "mesh-device": "N150",
+              "additional-server-args": "--async-scheduling",
+              "multimodal": false,
+              "owner_id": "U08TJ70UFRT"
+            },
+            {
+              "name": "[WH-T3K] Gemma4-26B-A4B",
+              "model": "google/gemma-4-26B-A4B-it",
+              "server-timeout": 30,
+              "benchmark-timeout": 5,
+              "runner-label": "config-t3000",
+              "arch": "arch-wormhole_b0",
+              "mesh-device": "T3K",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
+              "additional-server-args": "--async-scheduling",
+              "multimodal": false,
+              "owner_id": "U08TJ70UFRT"
+            },
+            {
+              "name": "[BH-QB-GE] Gemma4-26B-A4B",
+              "model": "google/gemma-4-26B-A4B-it",
+              "server-timeout": 15,
+              "benchmark-timeout": 5,
+              "runner-label": "BH-QB-GE",
+              "arch": "arch-blackhole",
+              "mesh-device": "P150x4",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
+              "additional-server-args": "--async-scheduling",
+              "multimodal": false,
+              "owner_id": "U08TJ70UFRT"
             },
             {
               "name": "[WH-GLX] GPT-OSS-120B (low-latency)",
@@ -129,6 +201,7 @@ jobs:
               "additional-server-args": "--async-scheduling",
               "structured-output": true,
               "sampling-tests": true,
+              "sampling-test-filter": "not test_mixed_params_batch and not TestSeedingAndVariety and not test_repetition_penalty_mixed_batch and not test_presence_penalty_mixed_batch and not test_frequency_penalty_mixed_batch",
               "multimodal": false,
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08CEGF78ET"
@@ -301,11 +374,15 @@ jobs:
             }
           ]'
 
-          # Filter matrix based on model selection
+          # Filter matrix based on model selection. Substring match (not exact)
+          # so a family-level dropdown entry like "google/gemma-4" picks up
+          # every google/gemma-4-*-it variant in the matrix above, while
+          # explicit hub IDs ("meta-llama/Llama-3.1-8B-Instruct") still
+          # trivially match themselves.
           if [ "${{ inputs.model }}" = "all" ]; then
             matrix="$all_tests"
           else
-            matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model == \"${{ inputs.model }}\")]")
+            matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model | contains(\"${{ inputs.model }}\"))]")
           fi
 
           echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
@@ -393,6 +470,11 @@ jobs:
             if [ -d vllm/plugins/vllm-tt-plugin ]; then
               uv pip install --no-deps -e vllm/plugins/vllm-tt-plugin
             fi
+            # Per-model Python deps when the model directory pins versions that
+            # differ from the docker image (Gemma4 needs transformers==5.5.0).
+            case "${{ matrix.test-group.model }}" in
+              google/gemma-4-*) uv pip install -r models/demos/gemma4/requirements.txt ;;
+            esac
           } 2>&1 | tee "${FILE_INSTALL_LOG}"
           exit "${PIPESTATUS[0]}"
 

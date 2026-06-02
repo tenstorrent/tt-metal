@@ -462,15 +462,16 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         previous_sampling_params = getattr(self, "sampling_params", None)
 
         # sampling params of all users are assumed to be the same default values if not provided.
-        normalized_sampling_params = (
+        local_sampling_params = (
             self._to_local_sampling_params(new_sampling_params)
             if new_sampling_params is not None
             else SamplingParams(
-                temperature=[DEFAULT_SAMPLING_TEMPERATURE] * self.batch_size,
-                top_p=[DEFAULT_SAMPLING_TOP_P] * self.batch_size,
-                top_k=[DEFAULT_SAMPLING_TOP_K] * self.batch_size,
+                temperature=DEFAULT_SAMPLING_TEMPERATURE,
+                top_p=DEFAULT_SAMPLING_TOP_P,
+                top_k=DEFAULT_SAMPLING_TOP_K,
             )
         )
+        normalized_sampling_params = self._normalize_sampling_params_for_batch(local_sampling_params, self.batch_size)
 
         if self.sample_on_device:
             params_same = previous_sampling_params is not None and self._are_sampling_params_same(
@@ -516,6 +517,55 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
             repetition_penalty=getattr(params_obj, "repetition_penalty", 1.0),
             seed=getattr(params_obj, "seed", None),
             enable_log_probs=getattr(params_obj, "enable_log_probs", False),
+            num_logprobs=getattr(params_obj, "num_logprobs", 0),
+        )
+
+    @staticmethod
+    def _normalize_sampling_params_for_batch(sampling_params: SamplingParams, batch_size: int) -> SamplingParams:
+        """Convert scalar/tensor/list sampling params to batch-sized python lists.
+
+        Singleton values are broadcast across the full batch. Multi-value lists
+        shorter than batch_size are padded with the last provided value.
+        """
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be > 0, got {batch_size}")
+
+        def _to_list(value):
+            if isinstance(value, torch.Tensor):
+                tensor_value = value.detach().cpu().tolist()
+                return tensor_value if isinstance(tensor_value, list) else [tensor_value]
+            if isinstance(value, (list, tuple)):
+                return list(value)
+            return [value]
+
+        def _normalize_field(value, *, fallback_if_none, allow_none: bool = False):
+            values = _to_list(value)
+            if not values:
+                raise ValueError("Sampling parameter list cannot be empty.")
+            if all(v is None for v in values):
+                if allow_none:
+                    values = [None]
+                else:
+                    values = [fallback_if_none]
+            elif not allow_none:
+                values = [fallback_if_none if v is None else v for v in values]
+            if len(values) == 1:
+                return values * batch_size
+            if len(values) < batch_size:
+                pad_value = values[-1]  # pad with the last value
+                return values + [pad_value] * (batch_size - len(values))
+            return values[:batch_size]
+
+        return SamplingParams(
+            temperature=_normalize_field(sampling_params.temperature, fallback_if_none=DEFAULT_SAMPLING_TEMPERATURE),
+            top_k=_normalize_field(sampling_params.top_k, fallback_if_none=DEFAULT_SAMPLING_TOP_K),
+            top_p=_normalize_field(sampling_params.top_p, fallback_if_none=DEFAULT_SAMPLING_TOP_P),
+            presence_penalty=_normalize_field(sampling_params.presence_penalty, fallback_if_none=0.0),
+            frequency_penalty=_normalize_field(sampling_params.frequency_penalty, fallback_if_none=0.0),
+            repetition_penalty=_normalize_field(sampling_params.repetition_penalty, fallback_if_none=1.0),
+            seed=_normalize_field(sampling_params.seed, fallback_if_none=None, allow_none=True),
+            enable_log_probs=_normalize_field(sampling_params.enable_log_probs, fallback_if_none=False),
+            num_logprobs=_normalize_field(sampling_params.num_logprobs, fallback_if_none=0),
         )
 
     def _are_sampling_params_same(self, new_sampling_params, current_sampling_params) -> bool:
@@ -1967,16 +2017,24 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         profiler.end("tokenizing")
 
         logger.info(f"Lengths of {lengths.shape} (encoded) prompts: {lengths}")
-        padded_seq_len = int(tokens_batched.shape[-1])
+        padded_prefill_seq_len = int(tokens_batched.shape[-1])
+        model_max_seq_len = int(self.hf_config.max_seq_len)
         # For demo the entire batch of prompts are padded to the same max length,
         # so we warmup the model with only one prefill length i.e. min and max are the same.
         # Once https://github.com/tenstorrent/tt-metal/issues/43099 is fixed, we can use the actual min lengths of the prompts
-        min_token_len = padded_seq_len
-        max_token_len = padded_seq_len
+        min_token_len = padded_prefill_seq_len
+        max_token_len = padded_prefill_seq_len
 
         if max_token_len > self.hf_config.max_seq_len:
             raise ValueError(
                 f"Max prompt length {max_token_len} exceeds model max seq len {self.hf_config.max_seq_len}"
+            )
+        if padded_prefill_seq_len + max_new_tokens > model_max_seq_len:
+            raise ValueError(
+                "Prompt/decode budget exceeds model context length: "
+                f"prefill_seq_len ({padded_prefill_seq_len}) + decode_seq_len ({max_new_tokens}) > "
+                f"context_length ({model_max_seq_len}). "
+                "Reduce prefill lengths or decode lengths."
             )
         # Warmup is expensive and only depends on runtime mode + prefill length bounds.
         # Cache completed warmups per configuration so repeated generate() calls can skip it.
