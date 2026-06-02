@@ -11,6 +11,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <ttnn/tensor/layout/tensor_layout.hpp>
@@ -30,17 +31,17 @@ RmPlan make_rm_plan(
     plan.H_logical = logical_shape[2];
     plan.W_logical = logical_shape[3];
     plan.rm_rows_per_tile = tile_height;
-    plan.Wt = (padded_shape[3] + tile_width - 1) / tile_width;
-    plan.Ht_rm = (plan.H_logical + plan.rm_rows_per_tile - 1) / plan.rm_rows_per_tile;
+    plan.Wt = tt::div_up(padded_shape[3], tile_width);
+    plan.Ht_rm = tt::div_up(plan.H_logical, plan.rm_rows_per_tile);
 
     // Only supports ReduceOpDim::W or ReduceOpDim::H
     constexpr uint32_t k_rm_max_tiles_per_chunk = 8;
     if (dim == tt::tt_metal::ReduceOpDim::W) {
-        plan.wt_tiles_per_chunk = std::min<uint32_t>(k_rm_max_tiles_per_chunk, std::max(1U, plan.Wt));
+        plan.wt_tiles_per_chunk = std::clamp(plan.Wt, 1u, k_rm_max_tiles_per_chunk);
         plan.ht_tiles_per_chunk = 1;
     } else {
         plan.wt_tiles_per_chunk = 1;
-        plan.ht_tiles_per_chunk = std::min<uint32_t>(k_rm_max_tiles_per_chunk, std::max(1U, plan.Ht_rm));
+        plan.ht_tiles_per_chunk = std::clamp(plan.Ht_rm, 1u, k_rm_max_tiles_per_chunk);
     }
 
     // The RM dense path is gated to BF16/FP32 at validate_rm_preconditions;

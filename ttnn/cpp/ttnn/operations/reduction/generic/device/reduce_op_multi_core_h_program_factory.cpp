@@ -7,6 +7,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -33,8 +34,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreHProgramFa
     const uint32_t tile_width = a.tensor_spec().tile().get_width();
     const uint32_t tile_hw = a.tensor_spec().tile().get_tile_hw();
 
-    uint32_t Wt = (W + tile_width - 1) / tile_width;
-    uint32_t Ht = (H + tile_height - 1) / tile_height;
+    uint32_t Wt = tt::div_up(W, tile_width);
+    uint32_t Ht = tt::div_up(H, tile_height);
     uint32_t HtWt = Ht * Wt;
 
     if (rm_path) {
