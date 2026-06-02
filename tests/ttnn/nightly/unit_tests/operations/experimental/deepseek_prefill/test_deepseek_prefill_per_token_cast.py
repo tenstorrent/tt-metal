@@ -23,7 +23,7 @@ import ttnn
 from loguru import logger
 
 from models.common.utility_functions import is_blackhole
-from tests.ttnn.utils_for_testing import comp_pcc
+from tests.ttnn.utils_for_testing import comp_pcc, assert_equal
 
 
 GROUP_SIZE = 128
@@ -175,13 +175,41 @@ def test_cast_back_default_dtype(device):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
+def test_cast_to_fp8_scale(device, dtype):
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+
+    H = 1024
+    M = 128 * 16
+    # In this test, we want to verify that cast_to_fp8 scale is lossless if 128-consecutives values are the same
+    # and if they can be represented exactly in fp8.
+    # This generate values [-M/4, -M/4 + 0.25, ..., M/4 - 0.25] (centered around 0)
+    # And for each value, repeat 128 times horizontally; and 1024 times vertically.
+    STEP = 0.25
+    MIN_VAL = -M / 2 * 0.25
+    x = torch.tensor([(MIN_VAL + i * STEP) for i in range(M // 128)], dtype=torch_dtype).repeat([H, M])
+    x_tt = ttnn.from_torch(
+        x, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    _, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x_tt)
+    scale = ttnn.to_torch(scale_tt).float()
+
+    ref = _ref_scale(x.float())
+    assert_equal(scale, ref)
+
+
+@pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("M, H", SHAPES)
 def test_cast_to_fp8_scale_values(device, dtype, M, H):
     torch.manual_seed(0)
-    x = (torch.randn(M, H) * 5.0).to(_dtype_to_torch(dtype))
+
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+
+    x = (torch.randn(M, H) * 5.0).to(torch_dtype)
     x_tt = ttnn.from_torch(
-        x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        x, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     _, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x_tt)
     scale = ttnn.to_torch(scale_tt).float()
@@ -192,14 +220,17 @@ def test_cast_to_fp8_scale_values(device, dtype, M, H):
     assert_quality(scale, ref, pcc_threshold=0.999, rtol=1e-2, atol=1e-9, label=f"scale {dtype} M={M} H={H}")
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("M, H", SHAPES)
 def test_cast_to_fp8_quantize_within_ulp(device, dtype, M, H):
     torch.manual_seed(0)
-    x = (torch.randn(M, H) * 5.0).to(_dtype_to_torch(dtype))
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+
+    x = (torch.randn(M, H) * 5.0).to(torch_dtype)
     x_in = x.float()
     x_tt = ttnn.from_torch(
-        x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        x, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     e4m3_tt, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x_tt)
     y = _decode_e4m3(e4m3_tt)
@@ -226,10 +257,13 @@ def test_cast_to_fp8_quantize_within_ulp(device, dtype, M, H):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("out_dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("M, H", SHAPES)
 def test_cast_back_dequant(device, out_dtype, M, H):
     torch.manual_seed(0)
+    torch_dtype = getattr(torch, out_dtype)
+    ttnn_dtype = getattr(ttnn, out_dtype)
+
     e4m3 = (torch.randn(M, H) * 3.0).clamp(-E4M3_MAX, E4M3_MAX).to(torch.float8_e4m3fn)
     scale = (torch.rand(M, H // GROUP_SIZE) * 4.0 - 2.0).to(torch.float32)
 
@@ -237,12 +271,12 @@ def test_cast_back_dequant(device, out_dtype, M, H):
     scale_tt = ttnn.from_torch(
         scale, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    out_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(e4m3_tt, scale_tt, output_dtype=out_dtype)
+    out_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(e4m3_tt, scale_tt, output_dtype=ttnn_dtype)
     out = ttnn.to_torch(out_tt).float()
 
     ref = e4m3.float() * scale.repeat_interleave(GROUP_SIZE, dim=1)
-    if out_dtype == ttnn.bfloat16:
-        ref = ref.to(torch.bfloat16).float()
+    if out_dtype == "bfloat16":
+        ref = ref.to(torch_dtype).float()
 
     # Restrict to normal e4m3 values where relative tolerance is meaningful.
     normal = e4m3.float().abs() > 2.0**-6
@@ -256,14 +290,17 @@ def test_cast_back_dequant(device, out_dtype, M, H):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("M, H", ROUNDTRIP_SHAPES)
 def test_round_trip_random(device, dtype, M, H):
     torch.manual_seed(0)
-    x = (torch.randn(M, H) * 5.0).to(_dtype_to_torch(dtype))
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+
+    x = (torch.randn(M, H) * 5.0).to(torch_dtype)
     x_in = x.float()
     x_tt = ttnn.from_torch(
-        x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        x, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     e4m3_tt, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x_tt)
     y_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(e4m3_tt, scale_tt, output_dtype=ttnn.float32)
