@@ -56,9 +56,10 @@ class RealImpl:
         return state
 
     def codegen(self, state):
-        from models.experimental.opt_transfer.codegen import build_fused_qkv
+        from models.experimental.opt_transfer.codegen import build_fused
 
         dims = {"H": self.cfg["num_heads"], "D": self.cfg["head_dim"], "embed": self.cfg["embed_dim"]}
+        kb_by_id = {e.id: e for e in self.kb}
         ref = self._ref
         runners = []
         for p in self._applied:
@@ -67,7 +68,7 @@ class RealImpl:
                 n: {"weight": getattr(ref, n).weight.detach(), "bias": getattr(ref, n).bias.detach()}
                 for n in p.matched_nodes
             }
-            runners.append(build_fused_qkv(p, weights, self.device, dims))
+            runners.append(build_fused(p, kb_by_id[p.entry_id], weights, self.device, dims))
         self._runners = runners
         return state
 

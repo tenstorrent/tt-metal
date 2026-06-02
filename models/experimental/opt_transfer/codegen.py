@@ -33,3 +33,31 @@ def build_fused_qkv(proposal, weights, device, dims):
         return ttnn.to_torch(q), ttnn.to_torch(k), ttnn.to_torch(v)
 
     return run
+
+
+_EMITTERS = {}
+
+
+def register_emitter(fused_op):
+    def deco(fn):
+        _EMITTERS[fused_op] = fn
+        return fn
+
+    return deco
+
+
+def build_fused(proposal, entry, weights, device, dims):
+    """Dispatch a resolved FusionProposal to its emitter -> callable(input)->output(s).
+    A KB op with no registered emitter raises (the graph routes that to handoff)."""
+    if proposal.fused_op not in _EMITTERS:
+        raise KeyError(
+            f"no codegen emitter for {proposal.fused_op}; KB knows the op but codegen "
+            f"can't emit it yet (register one + add a J6 model-shape test)"
+        )
+    return _EMITTERS[proposal.fused_op](proposal, entry, weights, device, dims)
+
+
+# the verified QKV emitter becomes the first registered emitter
+@register_emitter("ttnn.experimental.nlp_create_qkv_heads")
+def _emit_qkv(proposal, entry, weights, device, dims):
+    return build_fused_qkv(proposal, weights, device, dims)

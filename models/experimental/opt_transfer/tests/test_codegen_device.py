@@ -2,6 +2,7 @@ import pytest
 import torch
 from models.experimental.opt_transfer.schema import FusionProposal
 from models.experimental.opt_transfer.codegen import build_fused_qkv
+from models.experimental.opt_transfer.codegen import register_emitter, build_fused
 
 
 def _pcc(a, b):
@@ -51,3 +52,19 @@ def test_fused_qkv_matches_separate_projection_goldens():
         assert pcc_v > 0.99, f"v PCC {pcc_v} < 0.99"
     finally:
         ttnn.close_device(device)
+
+
+def test_build_fused_dispatches_by_fused_op():
+    @register_emitter("test.op")
+    def _e(proposal, entry, weights, device, dims):
+        return lambda x: ("ran", x)
+
+    p = FusionProposal("e", "test.op", ["n"], {}, None, "", "")
+    runner = build_fused(p, entry=None, weights={}, device=None, dims={})
+    assert runner(7) == ("ran", 7)
+
+
+def test_build_fused_unknown_op_raises():
+    p = FusionProposal("e", "ttnn.not_registered", ["n"], {}, None, "", "")
+    with pytest.raises(KeyError):
+        build_fused(p, None, {}, None, {})
