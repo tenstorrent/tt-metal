@@ -40,6 +40,8 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+  schedule:
+    - cron: "0 5 * * *" # Run at 5:00 AM UTC every day
 
 jobs:
   build-artifact:
