@@ -111,8 +111,6 @@ struct DeepseekMoeGate {
 
             // Input indices CB should have the same tile shape as the input CB
             reconfig_data_format<false, true>(CTArgs::input_indices_cb, CTArgs::bias_cb);
-            // Output indices CB should have the same tile shape as the output CB
-            pack_reconfig_data_format<true>(CTArgs::output_cb);
 
             // Init portion
             cb_wait_front(CTArgs::input_indices_cb, 1);
@@ -124,7 +122,7 @@ struct DeepseekMoeGate {
             tile_regs_acquire();
 
             // Copy indices (already transposed to cols)
-            copy_tile(CTArgs::input_indices_cb, 0, 1);
+            copy_tile(CTArgs::input_indices_cb, 10, 1);
 
             reconfig_data_format_srca(CTArgs::input_cb);  // Assumes same tile shape as input indices CB
             deepseek_moe_gate_init<CTArgs::enable_sigmoid>(CTArgs::input_cb, CTArgs::bias_cb);
@@ -141,11 +139,11 @@ struct DeepseekMoeGate {
 
             tile_regs_wait();
 
-            pack_tile(0, CTArgs::output_cb);
+            pack_tile(20, CTArgs::output_cb);
             cb_push_back(CTArgs::output_cb, 1);
 
             pack_reconfig_data_format(CTArgs::output_indices_cb);  // Assumes same tile shape as output CB
-            pack_tile(1, CTArgs::output_indices_cb);
+            pack_tile(21, CTArgs::output_indices_cb);
             cb_push_back(CTArgs::output_indices_cb, 1);
 
             tile_regs_release();

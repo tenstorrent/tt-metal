@@ -21,6 +21,7 @@ inline void llk_unpack_A_init(
     const std::uint32_t operand = 0) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
+    // const std::uint32_t num_faces = 3;
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
 
     const std::uint32_t operand_unpack_src_format = unpack_src_format[operand_id];
