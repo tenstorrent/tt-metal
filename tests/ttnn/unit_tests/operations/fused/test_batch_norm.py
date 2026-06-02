@@ -760,7 +760,11 @@ def test_batch_norm_aliased_running_and_affine_tensors(device):
     and weight). Since the running stats are updated in place, doing that update first overwrote
     weight and bias before batch_norm used them.
     """
-    input_shape = torch.Size([1, 152, 24, 32])
+    # Channel size 152 triggers a Shape hash collision
+    # with [3, 17, 1, 1] (an intermediate from test_batch_norm_compute_config)
+    # See issue #45821 for more details.
+    # input_shape = torch.Size([1, 152, 24, 32])
+    input_shape = torch.Size([1, 153, 24, 32])
     channels = input_shape[1]
     eps = 9.99999996e-13
     momentum = 1.0
