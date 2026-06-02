@@ -189,7 +189,7 @@ def test_cast_to_fp8_scale_values(device, dtype, M, H):
     ref = _ref_scale(x.float())
     max_rel = ((scale - ref).abs() / ref.abs().clamp_min(1e-9)).max().item()
     logger.info(f"scale {dtype} M={M} H={H}: max_rel={max_rel:.4f}")
-    assert_quality(scale, ref, pcc_threshold=0.999, rtol=2e-2, atol=1e-9, label=f"scale {dtype} M={M} H={H}")
+    assert_quality(scale, ref, pcc_threshold=0.999, rtol=1e-2, atol=1e-9, label=f"scale {dtype} M={M} H={H}")
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
@@ -218,7 +218,7 @@ def test_cast_to_fp8_quantize_within_ulp(device, dtype, M, H):
     # Round-trip quality: reconstruction via actual device scale and decoded e4m3.
     # e4m3 has 3 mantissa bits (~12% worst-case relative error); use loose allclose.
     recon = y * scale.repeat_interleave(GROUP_SIZE, dim=1)
-    assert_quality(recon, x_in, pcc_threshold=0.999, rtol=0.2, atol=2.0, label=f"quant roundtrip {dtype} M={M} H={H}")
+    assert_quality(recon, x_in, pcc_threshold=0.999, rtol=0.1, atol=0.2, label=f"quant roundtrip {dtype} M={M} H={H}")
 
 
 # ---------------------------------------------------------------------------
@@ -270,4 +270,4 @@ def test_round_trip_random(device, dtype, M, H):
     y = ttnn.to_torch(y_tt).float()
 
     # fp8 quantization (~12% worst-case relative error) bounds the reconstruction.
-    assert_quality(y, x_in, pcc_threshold=0.998, rtol=0.2, atol=2.0, label=f"roundtrip {dtype} M={M} H={H}")
+    assert_quality(y, x_in, pcc_threshold=0.999, rtol=0.1, atol=0.2, label=f"roundtrip {dtype} M={M} H={H}")
