@@ -229,6 +229,16 @@ inline void _llk_math_eltwise_unary_datacopy_(
     }
 }
 
+/**
+ * @brief Program the address-mod slots for a datacopy: single-row and 8-row (or 4-row for UInt16) dest/source steps.
+ *
+ * The increment pattern depends on the datacopy direction (A2D walks SrcA, B2D walks SrcB) and broadcast type;
+ * UInt16 B2D uses 4-row steps because it relies on MOVB2D.
+ *
+ * @tparam type: Datacopy direction, values = <A2D/B2D>
+ * @tparam bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @param dst_format: Destination data format (DataFormat enum underlying value); selects the UInt16 4-row step.
+ */
 template <DataCopyType type, BroadcastType bcast_type = BroadcastType::NONE>
 inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
 {
@@ -308,6 +318,22 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
     }
 }
 
+/**
+ * @brief Program the datacopy MOP, selecting the move instruction (MOVA2D/MOVB2D/ELWADD) per direction, format, and broadcast.
+ *
+ * A2D normally uses MOVA2D but falls back to ELWADD when dest is FP32/INT or the datum is UInt8/UInt16; B2D uses
+ * MOVB2D (or ELWADD for non-UInt16 column broadcast) with loop counts derived from the broadcast type.
+ *
+ * @tparam type: Datacopy direction, values = <A2D/B2D>
+ * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
+ * @tparam bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @tparam tilize: Pack in tilize layout (A2D only); collapses the outer loop to a single iteration.
+ * @tparam is_int_fpu_en: Enable integer FPU datapath (forces the ELWADD move path like FP32 dest).
+ * @param rows_per_inst: Rows moved per instruction (selects single-row vs. multi-row addr mode and loop count).
+ * @param total_rows: Total rows to move across the inner loop.
+ * @param num_faces: Number of faces in the tile.
+ * @param dst_format: Destination data format (DataFormat enum underlying value); selects UInt16 special-casing.
+ */
 template <DataCopyType type, bool is_fp32_dest_acc_en, BroadcastType bcast_type = BroadcastType::NONE, bool tilize = false, bool is_int_fpu_en = false>
 inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32_t total_rows, const std::uint32_t num_faces, const std::uint32_t dst_format)
 {

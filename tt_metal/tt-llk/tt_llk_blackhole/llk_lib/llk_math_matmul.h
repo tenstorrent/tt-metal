@@ -19,6 +19,21 @@
 
 using namespace ckernel;
 
+/**
+ * @brief Program the matmul address-mod slots for the given tile shapes, transpose, and fidelity.
+ *
+ * Sets up the SrcA/SrcB/dest increments and the fidelity-phase reset mods (ADDR_MOD_5, plus ADDR_MOD_6 when
+ * throttling). The increment pattern branches on the in0/in1 face geometry (16x32, 32x16, full 32x32) and transpose.
+ *
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam THROTTLE_LEVEL: Non-zero adds the extra fidelity-clear address mod used by the throttled MOP.
+ * @param transpose: True to transpose in1 faces during the multiply.
+ * @param in0_tile_r_dim: Row dimension of an in0 tile.
+ * @param in0_tile_c_dim: Column dimension of an in0 tile.
+ * @param in1_tile_r_dim: Row dimension of an in1 tile.
+ * @param in1_tile_c_dim: Column dimension of an in1 tile.
+ * @param partial_face: True when the tile has fewer than the full set of faces.
+ */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL>
 inline void matmul_configure_addrmod(
     const bool transpose,
@@ -276,6 +291,21 @@ inline void matmul_configure_addrmod(
     }
 }
 
+/**
+ * @brief Build the matmul MOP: records the per-tile MVMUL sequence into the replay buffer and wraps it in a ckernel_template.
+ *
+ * The recorded MVMUL order depends on the in0/in1 face geometry; the inner loop count is the number of fidelity
+ * phases. For high fidelity the end op clears the reused source register (SrcA or SrcB).
+ *
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @param in0_tile_r_dim: Row dimension of an in0 tile.
+ * @param in0_tile_c_dim: Column dimension of an in0 tile.
+ * @param in1_tile_r_dim: Row dimension of an in1 tile.
+ * @param in1_tile_c_dim: Column dimension of an in1 tile.
+ * @param partial_face: True when the tile has fewer than the full set of faces.
+ */
 template <MathFidelity math_fidelity>
 inline void matmul_configure_mop(
     const std::uint32_t ct_dim,
@@ -415,6 +445,14 @@ inline void matmul_configure_mop(
     tmp.program();
 }
 
+/**
+ * @brief Emit one throttled MVMUL sequence for a full 32x32 tile, interleaving NOPs to cap matmul throughput.
+ *
+ * Each Level specialization (1..5) uses a different NOP-to-MVMUL ratio, yielding progressively lower throughput
+ * (Level 1 ~73% of max down to Level 5 ~33%).
+ *
+ * @tparam Level: Throttle level, values = <1/2/3/4/5>
+ */
 template <int Level>
 void run_throttled_sequence();
 
@@ -499,17 +537,22 @@ void run_throttled_sequence<5>()
     TTI_NOP;
 }
 
-/*
- * Programming of the MOP for the case we limit matmul compute throughput
- * Done by inserting NOP instructions between MVMUL instructions of matmul kernel
+/**
+ * @brief Build the throttled matmul MOP, inserting NOPs between MVMULs to cap compute throughput.
  *
- * Valid range of THROTTLE_LEVEL is {1,2,3,4,5}
- * Each value corresponds to level of throttling as:
- * Level 1: throttle to 73% of max
- * Level 2: throttle to 67% of max
- * Level 3: throttle to 50% of max
- * Level 4: throttle to 40% of max
- * Level 5: throttle to 33% of max
+ * Records a per-level @ref run_throttled_sequence into the replay buffer and wraps it in a ckernel_template.
+ * Each THROTTLE_LEVEL caps throughput at a fixed fraction of max: 1 -> 73%, 2 -> 67%, 3 -> 50%, 4 -> 40%, 5 -> 33%.
+ * Only supported for full 32x32 tiles (asserts on partial faces or smaller tiles).
+ *
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam THROTTLE_LEVEL: Throttle level, values = <1/2/3/4/5>
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @param in0_tile_r_dim: Row dimension of an in0 tile.
+ * @param in0_tile_c_dim: Column dimension of an in0 tile.
+ * @param in1_tile_r_dim: Row dimension of an in1 tile.
+ * @param in1_tile_c_dim: Column dimension of an in1 tile.
+ * @param partial_face: True when the tile has fewer than the full set of faces.
  */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL>
 inline void matmul_configure_mop_throttled(

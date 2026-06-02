@@ -23,6 +23,15 @@ inline void reduce_configure_addrmod();
 template <ReduceDim dim, MathFidelity math_fidelity>
 inline void reduce_configure_mop();
 
+/**
+ * @brief Transpose the pooled row result through SrcB so a row-reduction lands as a column in the destination register.
+ *
+ * The FP32-accumulation path transposes the hi16 and lo16 halves separately (MOVD2B/TRNSPSRCB/MOVB2D) to avoid
+ * precision loss; otherwise it casts int32 dest datums to int8 (when integer FPU is enabled) before the SrcB transpose.
+ *
+ * @tparam enforce_fp32_accumulation: Transpose in two 16-bit halves to preserve FP32 accumulation.
+ * @tparam is_int_fpu_en: Cast int32 dest datums to int8 (via SFPU) before moving to SrcB.
+ */
 template <bool enforce_fp32_accumulation, bool is_int_fpu_en>
 inline void reduce_row_perform_transpose()
 {
@@ -107,6 +116,16 @@ inline void reduce_row_perform_transpose()
     }
 }
 
+/**
+ * @brief Pool one face into the destination register, dispatching to the right pool instruction for the op type.
+ *
+ * MAX uses GMPOOL; SUM/AVG use GAPOOL directly (LoFi) or the preconfigured MOP followed by a DVALID clear (high fidelity).
+ *
+ * @tparam type: Pooling op, values = <SUM/AVG/MAX>
+ * @tparam high_fidelity: Run the multi-phase fidelity MOP instead of a single GAPOOL.
+ * @tparam clear_mode: Source-clear mode applied after pooling (p_setrwc::CLR_* value).
+ * @tparam index: Pool index argument passed to the instruction.
+ */
 template <PoolType type, bool high_fidelity, std::uint32_t clear_mode, std::uint32_t index = 0>
 inline void reduce_pool_op()
 {
@@ -263,6 +282,12 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::Tens
     }
 }
 
+/**
+ * @brief Program the address-mod slots for a reduce: no-op/fidelity-clear, single-row, 8-row, and (high fidelity) fidelity-step.
+ *
+ * @tparam type: Pooling op, values = <SUM/AVG/MAX>
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ */
 template <PoolType type, MathFidelity math_fidelity>
 inline void reduce_configure_addrmod()
 {
@@ -291,6 +316,12 @@ inline void reduce_configure_addrmod()
     }
 }
 
+/**
+ * @brief Build the high-fidelity reduce MOP: a multi-phase GAPOOL sequence (one inner-loop iteration per fidelity phase).
+ *
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam math_fidelity: Math fidelity for controlling precision; sets the inner-loop length, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ */
 template <ReduceDim dim, MathFidelity math_fidelity>
 inline void reduce_configure_mop()
 {

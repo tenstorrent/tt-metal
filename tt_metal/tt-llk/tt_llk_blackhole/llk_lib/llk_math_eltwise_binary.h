@@ -19,6 +19,13 @@ using namespace ckernel;
 /*************************************************************************
  * Common Helpers
  *************************************************************************/
+/**
+ * @brief Program the four address-mod slots used by eltwise binary MOPs (per-row, no-op, fidelity-step, face-step).
+ *
+ * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ */
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType bcast_type, MathFidelity math_fidelity>
 inline void eltwise_binary_configure_addrmod()
 {
@@ -55,6 +62,16 @@ inline void eltwise_binary_configure_addrmod()
 }
 
 // Helper template to select the appropriate eltwise binary operation
+/**
+ * @brief Build the encoded FPU instruction (ELWADD/ELWSUB/ELWMUL) for the given binary op type.
+ *
+ * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @param clr_src: Source-clear mode passed to the instruction.
+ * @param acc_to_dest: Accumulate result into dest instead of overwriting.
+ * @param broadcast_type: Source B broadcast mode (p_elwise::SRCB_* value).
+ * @param addr_mod: Address-mod slot the instruction uses.
+ * @return The encoded TT_OP instruction word.
+ */
 template <EltwiseBinaryType eltwise_binary_type>
 inline auto eltwise_binary_func(std::uint8_t clr_src, std::uint8_t acc_to_dest, std::uint8_t broadcast_type, std::uint8_t addr_mod)
 {
@@ -308,6 +325,11 @@ inline void _llk_math_eltwise_binary_standard_(const ckernel::TensorShape &tenso
  * Complex: Read dest -> Move to src -> Compute -> Store
  *************************************************************************/
 
+/**
+ * @brief Move one face of the destination register into a source register (SrcA or SrcB) for dest-reuse ops.
+ *
+ * @tparam binary_reuse_dest: Reuse destination as source type, values = <DEST_TO_SRCA/DEST_TO_SRCB>
+ */
 template <EltwiseBinaryReuseDestType binary_reuse_dest>
 inline void eltwise_binary_reuse_dest_as_src()
 {
@@ -436,6 +458,16 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_init_(const ckernel::Tensor
 }
 
 // Helper to run the eltwise binary loop with dest reuse and face clearing
+/**
+ * @brief Run the dest-reuse MOP once per face, moving dest into a source register and zeroing the dest face first.
+ *
+ * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register (halves tiles per bank and gates the zero-flag clear).
+ * @tparam binary_reuse_dest: Reuse destination as source type, values = <DEST_TO_SRCA/DEST_TO_SRCB>
+ * @param loop_count: Number of faces to process.
+ * @param face_offset: Index of the first face within the tile.
+ * @param clear_fp32_dst_acc: Clear the FP32 dest accumulator face when FP32 mode is enabled.
+ * @param dst_index: Tile index into the destination register.
+ */
 template <bool is_fp32_dest_acc_en, EltwiseBinaryReuseDestType binary_reuse_dest>
 inline void eltwise_binary_run_with_dest_reuse(
     const std::uint32_t loop_count, const std::uint32_t face_offset, const bool clear_fp32_dst_acc, const std::uint32_t dst_index)

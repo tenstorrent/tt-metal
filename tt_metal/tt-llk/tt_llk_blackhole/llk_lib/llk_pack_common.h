@@ -119,6 +119,14 @@ inline void _llk_pack_dest_init_()
     pack_sync_tile_dst_ptr = 0;
 }
 
+/**
+ * @brief Select which destination-register tile the packer reads from.
+ *
+ * Sets the packer CH0 W counter to tile_index, which addresses the tile within the destination
+ * register that subsequent PACR instructions pack out.
+ *
+ * @param tile_index: Index of the source tile in the destination register.
+ */
 inline void set_dst_write_addr(const std::uint32_t tile_index)
 {
     TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_index);

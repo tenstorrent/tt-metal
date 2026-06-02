@@ -30,6 +30,16 @@ enum class p_dim_stride_target
 // This function stores a value to memory, and then immediately reads it back.
 // The load result will not be available until the store has completed.
 // This will make sure any subsequent instruction will see the store as complete.
+/**
+ * @brief Store a value to memory then read it back, fencing subsequent code on the store.
+ *
+ * The dependent load cannot retire until the store completes, so any instruction consuming the
+ * returned value observes the store as finished. Used to serialize against pending memory writes.
+ *
+ * @param addr: Memory location to store to and load back from.
+ * @param to_store: Value written to addr.
+ * @return The value read back from addr after the store.
+ */
 static inline __attribute__((always_inline)) std::uint32_t store_then_load(volatile std::uint32_t *addr, std::uint32_t to_store)
 {
     std::uint32_t result;

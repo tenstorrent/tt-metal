@@ -333,6 +333,24 @@ inline void _llk_pack_mop_config_(
 
 namespace llk_pack_internal_bh
 {
+/**
+ * @brief Shared packer-init body behind the @ref _llk_pack_init_ overloads.
+ *
+ * Runs the common init sequence with each stage individually skippable: program the ADDR_MOD slots,
+ * build the MOP template, set the packer strides, and program the final ADC X counter. The
+ * skip_* template flags let a caller reuse state already established by a prior init or hw-configure.
+ *
+ * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
+ * @tparam zero_output: When true, the packer emits zeros instead of dest data.
+ * @tparam skip_addrmod_config: When true, leave the ADDR_MOD slots untouched.
+ * @tparam skip_packer_strides: When true, do not re-program the packer strides.
+ * @tparam skip_final_adcxx: When true, skip the closing SETADCXX of the packer X counter.
+ * @param pack_src_format: Source (dest register) data format; only used when programming strides.
+ * @param face_r_dim: Number of rows per face.
+ * @param tile_c_dim: Tile column dimension (datums).
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param num_tiles: Number of tiles processed per MOP run.
+ */
 template <PackMode pack_mode, bool zero_output, bool skip_addrmod_config, bool skip_packer_strides, bool skip_final_adcxx>
 inline void pack_init_apply(
     const std::uint32_t pack_src_format,
