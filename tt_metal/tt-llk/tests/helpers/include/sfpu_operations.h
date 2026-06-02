@@ -25,20 +25,20 @@
 #include "llk_sfpu/ckernel_sfpu_exp2.h"
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_log1p.h"
+#include "llk_sfpu/ckernel_sfpu_rsqrt.h"
+#include "llk_sfpu/ckernel_sfpu_shift.h"
+#include "llk_sfpu/ckernel_sfpu_sqrt.h"
+#include "llk_sfpu/ckernel_sfpu_square.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
+#include "llk_sfpu/ckernel_sfpu_trigonometry.h"
 #include "sfpu/ckernel_sfpu_abs.h"
 #include "sfpu/ckernel_sfpu_fill.h"
 #include "sfpu/ckernel_sfpu_log.h"
 #include "sfpu/ckernel_sfpu_negative.h"
 #include "sfpu/ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_relu.h"
-#include "sfpu/ckernel_sfpu_rsqrt.h"
-#include "sfpu/ckernel_sfpu_shift.h"
 #include "sfpu/ckernel_sfpu_silu.h"
-#include "sfpu/ckernel_sfpu_sqrt.h"
-#include "sfpu/ckernel_sfpu_square.h"
 #include "sfpu/ckernel_sfpu_threshold.h"
-#include "sfpu/ckernel_sfpu_trigonometry.h"
 
 namespace test_utils
 {
@@ -114,7 +114,7 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::sqrt)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(_init_sqrt_<APPROX_MODE>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(sqrt_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::tanh)
     {
@@ -341,7 +341,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
-        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_square_, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::tanh)
     {
