@@ -208,7 +208,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
 
     const auto compute_grid = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_g1, num_blocks_per_core_g2] =
-        tt::tt_metal::split_work_to_cores(compute_grid, num_blocks_of_work, /*row_major=*/true);
+        tt::tt_metal::split_work_to_cores(compute_grid, num_blocks_of_work, /*row_wise=*/true);
 
     tt::tt_metal::ProgramDescriptor desc;
 
@@ -265,7 +265,7 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     auto* dst_buffer = cache.buffer();
     const uint32_t g1_numcores = core_group_1.num_cores();
 
-    const auto cores = corerange_to_cores(all_cores, num_cores, /*row_major=*/true);
+    const auto cores = corerange_to_cores(all_cores, num_cores, /*row_wise=*/true);
     reader_kernel.runtime_args.reserve(num_cores);
     writer_kernel.runtime_args.reserve(num_cores);
 
