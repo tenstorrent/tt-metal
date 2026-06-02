@@ -595,6 +595,9 @@ fused_mmrs_configs = {
         (128, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 6, 8, 1, 2, None, 1),  # 595.7 μs
         (4096, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 3, 8, 2, 2, None, 1),  # 1408.3 μs
         (128, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 6, 8, 1, 2, None, 1),  # 626.2 μs
+        # x_c_merged: concat([spatial, prompt_sp_sharded]) → M=4096+128=4224; same K/N/grid as (4096,…). This is an unconfirmed estimate.
+        (4224, 3072, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 3, 8, 2, 2, None, 1),
+        (4224, 2304, 6144): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 4, 3, 8, 1, 2, None, 1),
     },
 }
 
