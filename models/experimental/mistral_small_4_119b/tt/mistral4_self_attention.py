@@ -171,42 +171,6 @@ def _deinterleave_kv_a_proj(w: torch.Tensor) -> torch.Tensor:
     return torch.cat([nope_cols, rope_cols], dim=-1).contiguous()
 
 
-def _apply_rope_ttnn(
-    x: ttnn.Tensor,
-    cos: ttnn.Tensor,
-    sin: ttnn.Tensor,
-    seq_len: int,
-    n_heads: int,
-    rope_dim: int,
-    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-) -> ttnn.Tensor:
-    """
-    Apply rotary position embeddings in pure TTNN (standard half-split variant).
-
-    Args:
-        x:       [1, n_heads, seq_len, rope_dim]  — already in interleaved layout
-        cos/sin: [1, 1, seq_len, rope_dim]  (broadcast over heads)
-        Returns: [1, n_heads, seq_len, rope_dim]
-    """
-    half = rope_dim // 2
-    # rotate_half: concat([-x2, x1]) where x1=x[..,:half], x2=x[..,half:]
-    x1 = ttnn.slice(x, [0, 0, 0, 0], [1, n_heads, seq_len, half], memory_config=memory_config)
-    x2 = ttnn.slice(x, [0, 0, 0, half], [1, n_heads, seq_len, rope_dim], memory_config=memory_config)
-    neg_x2 = ttnn.neg(x2, memory_config=memory_config)
-    ttnn.deallocate(x2)
-    x_rot = ttnn.concat([neg_x2, x1], dim=-1, memory_config=memory_config)
-    ttnn.deallocate(x1)
-    ttnn.deallocate(neg_x2)
-
-    out = ttnn.add(
-        ttnn.multiply(x, cos, memory_config=memory_config),
-        ttnn.multiply(x_rot, sin, memory_config=memory_config),
-        memory_config=memory_config,
-    )
-    ttnn.deallocate(x_rot)
-    return out
-
-
 class TtMistral4Attention(LightweightModule):
     """
     MLA attention for Mistral-Small-4 (prefill + decode, replicated weights).

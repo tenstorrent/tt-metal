@@ -186,17 +186,14 @@ class TtMistral4TextModel:
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
             cache_file_name=_cf("language_model.lm_head.weight.prefill_interleaved"),
         )
-        _lm_per_core_N = max(1, NT_per_device // 64)  # P150x8 → 8
-        self.lm_head_program_config_prefill = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=1,
-            out_subblock_h=1,
-            out_subblock_w=1,
-            per_core_M=1,
-            per_core_N=_lm_per_core_N,
-            fuse_batch=True,
-            mcast_in0=True,
-        )
+        # 1D-mcast prefill PC: N (512 tiles/device) is split across the 8×8=64-core
+        # grid (per_core_N=8 → 64 cores), and each core loops the FULL M on-core, so
+        # per_core_M MUST equal the M-tile count. Hardcoding per_core_M=1 makes the op
+        # also fan M across cores (num_blocks_total = m_tiles × 64), which trips the
+        # `num_blocks_total <= num_cores` check for any seq_len > 32. Build the PC per
+        # m_tiles instead (see _lm_head_prefill_pc); m_tiles=1 reproduces the old config.
+        self._lm_per_core_N = max(1, NT_per_device // 64)  # P150x8 → 8
+        self._lm_head_prefill_pc_cache: dict = {}
 
         self.lm_head_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -272,6 +269,8 @@ class TtMistral4TextModel:
         # Captured decode-step trace (set by capture_decode_trace); None = eager.
         self._decode_trace_id = None
         self._last_decode_pos = 0
+        # CQ0 "op" event for the 2-CQ decode pipeline (armed by begin_decode_2cq).
+        self._decode_2cq_op_event = None
 
     # ── RoPE table caching ─────────────────────────────────────────────────
 
@@ -363,15 +362,39 @@ class TtMistral4TextModel:
         x = ttnn.reshape(x, [1, 1, seq_len, HIDDEN_SIZE])
         return ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
+    def _lm_head_prefill_pc(self, m_tiles: int):
+        """1D-mcast LM-head program config for a full-logits prefill of ``m_tiles`` M-tiles.
+
+        N is fixed across the 64-core grid (per_core_N); per_core_M spans the full M so
+        the op loops M on-core rather than fanning it across cores (which would exceed
+        the grid for seq_len > 32). Cached by m_tiles.
+        """
+        cached = self._lm_head_prefill_pc_cache.get(m_tiles)
+        if cached is not None:
+            return cached
+        pc = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=1,
+            per_core_M=m_tiles,
+            per_core_N=self._lm_per_core_N,
+            fuse_batch=True,
+            mcast_in0=True,
+        )
+        self._lm_head_prefill_pc_cache[m_tiles] = pc
+        return pc
+
     def _to_logits(self, x: ttnn.Tensor) -> torch.Tensor:
         """Final norm → lm_head → gather to host."""
         x = _rms_norm(x, self.final_norm_w, self.compute_kernel_config, ttnn.L1_MEMORY_CONFIG)
         # Prefill path: M = seq_len (> 1 tile), so use the interleaved weight + 1D mcast
         # program config.  DS would assert (kernel requires M == 1 tile).
+        m_tiles = (x.shape[2] + 31) // 32
         logits_tt = ttnn.linear(
             x,
             self.lm_head_weight_prefill,
-            program_config=self.lm_head_program_config_prefill,
+            program_config=self._lm_head_prefill_pc(m_tiles),
             compute_kernel_config=self.lm_head_compute_kernel_config,
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -527,7 +550,7 @@ class TtMistral4TextModel:
         logits_tt = ttnn.linear(
             x,
             self.lm_head_weight_prefill,
-            program_config=self.lm_head_program_config_prefill,
+            program_config=self._lm_head_prefill_pc((seq_len + 31) // 32),
             compute_kernel_config=self.lm_head_compute_kernel_config,
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -585,13 +608,17 @@ class TtMistral4TextModel:
         ttnn.deallocate(x_last)
         return logits_tt
 
-    def _decode_upload_step_state(self, input_id: torch.Tensor, current_pos: int) -> None:
+    def _decode_upload_step_state(self, input_id: torch.Tensor, current_pos: int, cq_id: int = 0) -> None:
         """Update all pre-allocated decode input tensors in-place for this step.
 
         Updates: token id, current position scalar, and the single-position
         cos/sin RoPE buffers.  All three must be refreshed before either a
         direct kernel dispatch or a trace replay so the correct position's
         embeddings and KV-cache slot are used.
+
+        ``cq_id`` selects the command queue for the host→device copies (0 for the
+        single-queue path; 1 for the 2-CQ decode pipeline, where the writes overlap
+        CQ0's trace replay — see decode_next_token_2cq).
         """
         input_id_host = ttnn.from_torch(
             input_id.to(torch.int32),
@@ -599,7 +626,7 @@ class TtMistral4TextModel:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        ttnn.copy_host_to_device_tensor(input_id_host, self._decode_input_id_device)
+        ttnn.copy_host_to_device_tensor(input_id_host, self._decode_input_id_device, cq_id=cq_id)
 
         cur_pos_host = ttnn.from_torch(
             torch.tensor([current_pos], dtype=torch.int32),
@@ -607,7 +634,7 @@ class TtMistral4TextModel:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        ttnn.copy_host_to_device_tensor(cur_pos_host, self._decode_cur_pos_device)
+        ttnn.copy_host_to_device_tensor(cur_pos_host, self._decode_cur_pos_device, cq_id=cq_id)
         self._last_decode_pos = current_pos
 
         # Update single-position RoPE buffers from the retained CPU table.
@@ -628,8 +655,8 @@ class TtMistral4TextModel:
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        ttnn.copy_host_to_device_tensor(cos_host, self._cos_decode)
-        ttnn.copy_host_to_device_tensor(sin_host, self._sin_decode)
+        ttnn.copy_host_to_device_tensor(cos_host, self._cos_decode, cq_id=cq_id)
+        ttnn.copy_host_to_device_tensor(sin_host, self._sin_decode, cq_id=cq_id)
 
     # ── Greedy generation entry points (on-device argmax) ──────────────────
 
@@ -714,6 +741,42 @@ class TtMistral4TextModel:
             ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=False)
         else:
             self._decode_kernel(current_pos)
+        return self._readback_argmax()
+
+    # ── 2-CQ decode pipeline ────────────────────────────────────────────────
+
+    def begin_decode_2cq(self) -> None:
+        """Arm the 2-CQ decode pipeline by recording the initial CQ0 event.
+
+        Call once after capture_decode_trace() and before the first
+        decode_next_token_2cq() step. The event seeds the cross-queue handshake so
+        the first CQ1 input write has a prior CQ0 completion to wait on.
+        """
+        assert self._decode_trace_id is not None, "capture_decode_trace() must run before begin_decode_2cq()"
+        self._decode_2cq_op_event = ttnn.record_event(self.mesh_device, 0)
+
+    def decode_next_token_2cq(self, input_id: torch.Tensor, current_pos: int) -> int:
+        """One decode step with the input upload on CQ1 overlapping the trace on CQ0.
+
+        Same result as decode_next_token, but dispatch is split across two command
+        queues: CQ1 writes the per-step token/position/RoPE buffers while CQ0 owns
+        the captured compute trace, fenced by events so neither queue races the
+        other on the shared input buffers. The argmax token is read back on CQ0
+        (token feedback is inherently serial for greedy decode, so only the input
+        H2D — not compute — overlaps). Requires capture_decode_trace() +
+        begin_decode_2cq().
+        """
+        assert self._decode_trace_id is not None, "decode_next_token_2cq requires a captured trace"
+        assert self._decode_2cq_op_event is not None, "call begin_decode_2cq() before decode_next_token_2cq()"
+        # CQ1 must not overwrite the input buffers until CQ0's previous trace finished reading them.
+        ttnn.wait_for_event(1, self._decode_2cq_op_event)
+        self._decode_upload_step_state(input_id, current_pos, cq_id=1)
+        write_event = ttnn.record_event(self.mesh_device, 1)
+        # CQ0 must not start the trace until CQ1's writes have landed.
+        ttnn.wait_for_event(0, write_event)
+        ttnn.execute_trace(self.mesh_device, self._decode_trace_id, cq_id=0, blocking=False)
+        # Mark trace completion on CQ0 so the next step's CQ1 write can proceed.
+        self._decode_2cq_op_event = ttnn.record_event(self.mesh_device, 0)
         return self._readback_argmax()
 
     # ── Embedding-input entry points (multimodal) ──────────────────────────

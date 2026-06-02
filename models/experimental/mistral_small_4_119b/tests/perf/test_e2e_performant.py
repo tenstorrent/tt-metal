@@ -17,15 +17,16 @@ numbers):
      prefill path creates a fresh device input every call and reads the next token
      id back to host, neither of which is trace-friendly.
   4. Decode:  1 compile pass (eager) -> ``capture_decode_trace`` -> M trace replays
-     (timed).
+     (timed) over **2 command queues** — CQ1 uploads each step's token/position/RoPE
+     while CQ0 replays the captured trace (``decode_next_token_2cq``).
 
 Reports TTFT (vision_replay + prefill_replay), prefill tok/s,
 **steady-state decode tok/s/user** (trace replay only), and
 **end-to-end decode tok/s/user** (vision + prefill + decode compile/capture + all decode
 steps), plus CSV/JSON via ``prep_perf_report`` + ``BenchmarkData``.
 
-``num_command_queues`` is set to 2 for forward-compatibility with a future
-``DecodeTrace2CQ`` port; today CQ1 is unused — all dispatch flows through CQ0.
+``num_command_queues`` is set to 2: the decode replay loop uses CQ1 for the
+per-step host→device input uploads and CQ0 for the compute trace (event-fenced).
 
 Run::
 
@@ -223,11 +224,16 @@ def _run_mistral_perf(
     ttnn.synchronize_device(mesh_device)
     decode_capture_time = time.time() - t
 
+    # 2-CQ trace replay: per step, CQ1 writes the token/position/RoPE inputs while
+    # CQ0 replays the captured decode trace (event-fenced). begin_decode_2cq arms the
+    # initial CQ0 event before the loop.
+    model.begin_decode_2cq()
     t = time.time()
     for step in range(decode_iters):
         current_pos = prompt_len + 1 + step
-        tok = model.decode_next_token(cur, current_pos)
+        tok = model.decode_next_token_2cq(cur, current_pos)
         cur = torch.tensor([[tok]], dtype=torch.long)
+    ttnn.synchronize_device(mesh_device)
     decode_total_time = time.time() - t
     decode_replay_time = decode_total_time / decode_iters
     steady_state_decode_tok_per_s = decode_iters / decode_total_time
@@ -274,7 +280,7 @@ def _e2e_perf_device_params():
     return {
         "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         "trace_region_size": 100_000_000,
-        # CQ1 is unused today — kept at 2 to leave room for a future DecodeTrace2CQ port.
+        # 2 queues: CQ1 for decode input uploads, CQ0 for the compute trace (see decode loop).
         "num_command_queues": 2,
     }
 

@@ -16,7 +16,8 @@ Run::
     export MISTRAL4_MM_PCC=1
     export MISTRAL4_MM_TEXT_LAYERS=36
     export MISTRAL4_MM_VISION_LAYERS=24
-    export MISTRAL4_MM_IMAGE=path/to/img.jpg
+    export MISTRAL4_MM_IMAGE=Battle.jpg
+    export MISTRAL4_WEIGHT_CACHE_DIR=/tmp/mistral4_weights  # optional; cache quantized text weights to skip re-quantization
     export MESH_DEVICE=P150x8
     pytest models/experimental/mistral_small_4_119b/tests/test_multimodal_pcc_unified.py -v -s --timeout=0
 """
