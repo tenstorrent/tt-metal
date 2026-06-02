@@ -26,7 +26,8 @@ void process_loaded_tile_all_h_columns(
     const InputContext& ctx, uint32_t w_tile, uint32_t h_tile, DTYPE max_vals[], uint32_t arg_maxs[]) {
     auto src_ptr = get_tt_l1_ptr_based_on_data_format<format>(ctx.cb_addr);
 
-    for (uint32_t face_id = 0; face_id < 4; face_id++) {
+    constexpr uint32_t faces_per_tile = 4;
+    for (uint32_t face_id = 0; face_id < faces_per_tile; face_id++) {
         uint32_t rows_to_process = face_height;
         uint32_t cols_to_process = face_width;
         if (ctx.has_padding) {

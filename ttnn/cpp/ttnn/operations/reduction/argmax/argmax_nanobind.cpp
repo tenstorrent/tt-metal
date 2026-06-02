@@ -24,7 +24,7 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
             Keyword args:
                 dim (int, optional): Dim to reduce. ``None`` reduces all elements (ROW_MAJOR input only). Default: ``None``.
                 keepdim (bool, optional): Keep reduced dim. Default: ``False``.
-                sub_core_grids (CoreRangeSet, optional): Limits execution to a subset of cores. Supported on ROW_MAJOR last-dim reductions (<= 2 ranges) and non-HW dim (``argmax_nc``) reductions. Default: ``None``.
+                sub_core_grids (CoreRangeSet, optional): Limits execution to a subset of cores. Supported on ROW_MAJOR last-dim reductions (<= 2 ranges) and batch/channel dim reductions. Default: ``None``.
                 use_multicore (bool, optional): Enables multi-core only on ROW_MAJOR last-dim reductions. Default: ``False``.
                     **Deprecated** — use ``sub_core_grids`` to control core assignment instead. Will be removed in a future release (tracked in #44838).
                 memory_config (ttnn.MemoryConfig, optional): Output memory (INTERLEAVED DRAM/L1). Default: input's memory_config.
@@ -44,7 +44,7 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
               - BFLOAT16/FLOAT32 only
               - ROW_MAJOR inputs are internally tilized; this path runs single-core (``use_multicore`` is ignored)
 
-            - **0 <= dim < rank-2** (non-HW dims, rank >= 3; ``argmax_nc`` path):
+            - **0 <= dim < rank-2** (batch/channel dims, rank >= 3):
               - BFLOAT16/FLOAT32 only (integer dtypes not supported)
               - input may be ROW_MAJOR or TILE (ROW_MAJOR is converted to TILE internally)
               - output is produced in TILE internally and converted to ROW_MAJOR
@@ -54,8 +54,8 @@ void bind_reduction_argmax_operation(nb::module_& mod) {
 
             - Sharded tensors (inputs/outputs must be INTERLEAVED)
             - TILE input with ``dim=None``
-            - Non-HW dims (``argmax_nc``) with INT/UINT inputs
-            - Integer dtypes on the non-HW dims (``argmax_nc``) path
+            - Batch/channel dim reductions with INT/UINT inputs
+            - Integer dtypes on batch/channel dim reductions
             - ``use_multicore=True`` with TILE inputs (multi-core requires ROW_MAJOR input)
         )doc";
 
