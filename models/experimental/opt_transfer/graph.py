@@ -15,24 +15,31 @@ class RealImpl:
         self.device = device
         self.matcher = matcher
         self.kb = kb
+        # Cross-node runtime objects (not serialisable; kept on self, not in state).
+        self._ref = None
+        self._graph = None
+        self._proposals = []
+        self._applied = []
+        self._runners = []
 
     def trace(self, state):
-        import importlib, torch
+        import importlib
+        import torch
         from models.experimental.opt_transfer.trace import trace_module
 
         ref_mod = importlib.import_module(self.cfg["reference"]).SeamlessBlock(
             self.cfg["embed_dim"], self.cfg["num_heads"]
         )
         g = trace_module(ref_mod, (torch.randn(1, 8, self.cfg["embed_dim"]),))
-        state["_ref"] = ref_mod
+        self._ref = ref_mod
+        self._graph = g
         state["graph_summary"] = g.summary_json()
-        state["_graph"] = g
         return state
 
     def match(self, state):
         props = self.matcher.propose(state["graph_summary"], self.kb)
+        self._proposals = props
         state["proposals"] = [p.__dict__ for p in props]
-        state["_proposals"] = props
         return state
 
     def gate(self, state):
@@ -40,11 +47,11 @@ class RealImpl:
 
         kb_by_id = {e.id: e for e in self.kb}
         applied = []
-        for p in state["_proposals"]:
-            ok, reason = validate(state["_graph"], p, kb_by_id[p.entry_id])
+        for p in self._proposals:
+            ok, reason = validate(self._graph, p, kb_by_id[p.entry_id])
             if ok:
                 applied.append(p)
-        state["_applied"] = applied
+        self._applied = applied
         state["applied"] = [p.entry_id for p in applied]
         return state
 
@@ -52,16 +59,16 @@ class RealImpl:
         from models.experimental.opt_transfer.codegen import build_fused_qkv
 
         dims = {"H": self.cfg["num_heads"], "D": self.cfg["head_dim"], "embed": self.cfg["embed_dim"]}
-        ref = state["_ref"]
+        ref = self._ref
         runners = []
-        for p in state["_applied"]:
+        for p in self._applied:
             p = p.resolve(dims)
             weights = {
                 n: {"weight": getattr(ref, n).weight.detach(), "bias": getattr(ref, n).bias.detach()}
                 for n in p.matched_nodes
             }
             runners.append(build_fused_qkv(p, weights, self.device, dims))
-        state["_runners"] = runners
+        self._runners = runners
         return state
 
     def verify(self, state):
@@ -71,14 +78,14 @@ class RealImpl:
         import torch
         from models.experimental.opt_transfer.verify import pcc
 
-        ref = state["_ref"]
+        ref = self._ref
         embed = self.cfg["embed_dim"]
         ref.eval()
         with torch.no_grad():
             x = torch.randn(1, 64, embed)
             h = ref.attn_norm(x)
         worst = 1.0
-        for run in state["_runners"]:
+        for run in self._runners:
             q, k, v = run(h)
             for name, got in zip(("q_proj", "k_proj", "v_proj"), (q, k, v)):
                 with torch.no_grad():
