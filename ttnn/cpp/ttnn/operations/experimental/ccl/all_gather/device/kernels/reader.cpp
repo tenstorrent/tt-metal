@@ -34,19 +34,9 @@ void kernel_main() {
     constexpr uint32_t cb_page_size = get_compile_time_arg_val(5);
     constexpr uint32_t packet_size = get_compile_time_arg_val(6);
     constexpr bool load_balance_across_alt_routes = get_compile_time_arg_val(7) != 0;
-    constexpr uint32_t num_connections = get_compile_time_arg_val(8);
-    constexpr uint8_t line_hops = get_compile_time_arg_val(9);
-    constexpr uint8_t rect_e_hops = get_compile_time_arg_val(10);
-    constexpr uint8_t rect_w_hops = get_compile_time_arg_val(11);
-    constexpr uint8_t rect_spine_hops = get_compile_time_arg_val(12);
-    constexpr uint8_t line_hops_alt = get_compile_time_arg_val(13);
-    constexpr uint8_t rect_e_hops_alt = get_compile_time_arg_val(14);
-    constexpr uint8_t rect_w_hops_alt = get_compile_time_arg_val(15);
-    constexpr uint8_t rect_spine_hops_alt = get_compile_time_arg_val(16);
-    constexpr auto input_tensor_args = TensorAccessorArgs<17>();
+    constexpr auto input_tensor_args = TensorAccessorArgs<8>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
-    constexpr bool enable_fabric = (num_connections > 0);
     constexpr uint32_t inputs_per_cb_page = cb_page_size / input_page_size;
     constexpr uint32_t outputs_per_cb_page = cb_page_size / output_page_size;
     constexpr uint32_t num_banks = NUM_DRAM_BANKS;  // compile-time constant available in kernels
@@ -73,6 +63,19 @@ void kernel_main() {
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t barrier_wait_value = get_arg_val<uint32_t>(arg_idx++);
+    // This core sends in a single direction (one axis). num_connections is 0 (edge) or 1.
+    // range_* are the {e,w,n,s} hop components of that direction's multicast (host decides
+    // line vs rect by what it fills in); range_*_alt is the ring load-balance alternate.
+    const uint32_t num_connections = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t range_e = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t range_w = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t range_n = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t range_s = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t range_e_alt = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t range_w_alt = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t range_n_alt = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t range_s_alt = get_arg_val<uint32_t>(arg_idx++);
+    const bool enable_fabric = (num_connections > 0);
     size_t arg_for_fab = arg_idx;
 
     auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_address);
@@ -86,33 +89,21 @@ void kernel_main() {
     ///////////////////////////////////////////////////
 
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
-    if constexpr (enable_fabric) {
+    if (enable_fabric) {
         open_connections(fabric_connection, num_connections, arg_for_fab);
     }
 
-    // Build ranges + ranges_alt arrays.
-    // Connection order should match host: line first, then rect (only active ones are present,
-    // indexed 0..num_connections-1).
-    FabricRange ranges[2] = {};      // [0] = E-line, [1] = S-rect (Fabric_2D only)
-    FabricRange ranges_alt[2] = {};  // [0] = E-line, [1] = S-rect (Fabric_2D only)
+    // Build the single fabric range for this core's one direction. The kernel is dumb to
+    // routing: the host decides line vs rect purely by which {e,w,n,s} components it fills in.
+    FabricRange ranges[1] = {};
+    FabricRange ranges_alt[1] = {};
 #ifdef FABRIC_2D
-    {
-        uint32_t idx = 0;
-        if constexpr (line_hops > 0) {
-            ranges[idx] = FabricRange{line_hops, 0, 0, 0};
-            ranges_alt[idx] = FabricRange{line_hops_alt, 0, 0, 0};
-            ++idx;
-        }
-        if constexpr (rect_spine_hops > 0) {
-            ranges[idx] = FabricRange{rect_e_hops, rect_w_hops, 0, rect_spine_hops};
-            ranges_alt[idx] = FabricRange{rect_e_hops_alt, rect_w_hops_alt, 0, rect_spine_hops_alt};
-            ++idx;
-        }
-    }
+    ranges[0] = FabricRange{range_e, range_w, range_n, range_s};
+    ranges_alt[0] = FabricRange{range_e_alt, range_w_alt, range_n_alt, range_s_alt};
 #else
-    // 1D: exactly one of (line_hops, rect_spine_hops) is nonzero — that's the active axis.
-    ranges[0] = (line_hops != 0) ? line_hops : rect_spine_hops;
-    ranges_alt[0] = (line_hops != 0) ? line_hops_alt : rect_spine_hops_alt;
+    // 1D: exactly one component is nonzero — that's the single hop count along the active axis.
+    ranges[0] = range_e + range_w + range_n + range_s;
+    ranges_alt[0] = range_e_alt + range_w_alt + range_n_alt + range_s_alt;
 #endif
     FabricWriter<output_page_size, packet_size, load_balance_across_alt_routes> fabric(
         noc, fabric_connection, num_connections, ranges, ranges_alt);
@@ -122,7 +113,7 @@ void kernel_main() {
     // Writer fires backward, and implicitly gets blocked waiting for CB to contain valid data.
     uint8_t sem_route_id = 0;
     uint64_t barrier_sem_noc_addr_in_pkt = safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
-    if constexpr (enable_fabric) {
+    if (enable_fabric) {
         sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
         uint8_t starts[1] = {1};
 
@@ -228,7 +219,7 @@ void kernel_main() {
             cb.push_back(1);
             wait_trid = (wait_trid == max_trid) ? 1 : (wait_trid + 1);
 
-            if constexpr (enable_fabric) {
+            if (enable_fabric) {
                 // Send Fabric data in our dir
                 for (uint32_t i = 0; i < outputs_per_cb_page && valid_output_page_id(); ++i) {
                     auto page_id = next_output_page_id();
@@ -257,7 +248,7 @@ void kernel_main() {
         cb.push_back(1);
         wait_trid = (wait_trid == max_trid) ? 1 : (wait_trid + 1);
 
-        if constexpr (enable_fabric) {
+        if (enable_fabric) {
             // Send Fabric data in our dir
             for (uint32_t i = 0; i < outputs_per_cb_page && valid_output_page_id(); ++i) {
                 auto page_id = next_output_page_id();
@@ -310,7 +301,7 @@ void kernel_main() {
 
     // Completion signal.
     // Reader of first worker core owns wait + reset.
-    if constexpr (enable_fabric) {
+    if (enable_fabric) {
         uint64_t out_ready_sem_noc_addr_in_pkt =
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
         fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
@@ -328,7 +319,7 @@ void kernel_main() {
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
     }
 
-    if constexpr (enable_fabric) {
+    if (enable_fabric) {
         close_connections(fabric_connection);
     }
     noc.async_write_barrier();

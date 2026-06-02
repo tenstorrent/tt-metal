@@ -245,6 +245,9 @@ AllGatherDeviceOperation::create_op_performance_model(
     const uint64_t input_size_bytes = input_tensor.physical_volume() * input_tensor.element_size();
 
     const uint32_t N = args.ring_size;
+    // TODO: AllGather now runs separate core groups per axis (E/W and N/S), each with its own link
+    // count. This model still uses the single aggregate args.num_links; update it to account for the
+    // per-axis link counts for a more accurate fabric-time estimate.
     const uint32_t num_links = args.num_links;
     double fabric_time_ns = 0.0f;
     if (N <= 1) {
