@@ -49,11 +49,24 @@ protected:
         }
 
         this->DetectDispatchMode();
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        this->arch_ = tt::tt_metal::MetalContext::instance().get_cluster().arch();
         init_max_cbs();
     }
 
     void TearDown() override {
+        // Reset idle eth cores that tests intentionally tripped into watcher sanitize hang loop.
+        // UMD topology discovery probes heartbeats on any eth core whose reset bit is deasserted,
+        // and a hung core will fail that check. Tensix/DRAM cores don't need this.
+        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        for (auto& [device_id, device] : id_to_device_) {
+            for (const auto& logical_core : device->get_devices()[0]->get_inactive_ethernet_cores()) {
+                CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
+                    device->get_devices()[0]->id(), logical_core, CoreType::ETH);
+                cluster.assert_risc_reset_at_core(
+                    tt_cxy_pair(device->get_devices()[0]->id(), virtual_core), tt::umd::RiscType::ALL);
+            }
+        }
+
         for (auto& [device_id, device] : id_to_device_) {
             device->close();
             device.reset();
@@ -124,7 +137,7 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noinline(true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
 
-        const auto detected_arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        const auto detected_arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noc_sanitize_linked_transaction(
             detected_arch == tt::ARCH::BLACKHOLE || detected_arch == tt::ARCH::QUASAR);
 
