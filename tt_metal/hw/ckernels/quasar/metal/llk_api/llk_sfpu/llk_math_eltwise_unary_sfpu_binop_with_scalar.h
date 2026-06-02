@@ -1,0 +1,42 @@
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "sfpu/ckernel_sfpu_binop_with_unary.h"
+#include "llk_math_eltwise_unary_sfpu_init.h"
+#include "llk_math_eltwise_unary_sfpu_common.h"
+#include "llk_assert.h"
+
+namespace ckernel {
+
+/**
+ * @brief Initialize SFPU for elementwise unary binop with scalar
+ */
+inline void llk_math_eltwise_unary_sfpu_binop_with_scalar_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unused>();
+}
+
+/**
+ * @brief Performs elementwise unary binop with scalar: y = binop(x, scalar)
+ *
+ * Operates in-place on the DST tile at dst_index. Quasar currently supports MUL_UNARY (binop_mode = 2)
+ * only.
+ *
+ * @tparam APPROXIMATE: Approximation mode
+ * @tparam binop_mode: Binop mode (ADD_UNARY=0, SUB_UNARY=1, MUL_UNARY=2, DIV_UNARY=3, RSUB_UNARY=4)
+ *
+ * @param dst_index: The index of the tile in DST register buffer to read and write
+ * @param scalar: fp32 scalar value encoded as uint32
+ * @param vector_mode: Vector mode (must be VectorMode::RC)
+ */
+template <bool APPROXIMATE, int binop_mode>
+inline void llk_math_eltwise_unary_sfpu_binop_with_scalar(
+    uint dst_index, uint32_t scalar, VectorMode vector_mode = VectorMode::RC) {
+    LLK_ASSERT(vector_mode == VectorMode::RC, "Quasar currently only supports vector mode RC");
+    _llk_math_eltwise_unary_sfpu_params_(
+        sfpu::calculate_binop_with_scalar<APPROXIMATE, binop_mode, 8>, dst_index, scalar);
+}
+
+}  // namespace ckernel
