@@ -416,8 +416,6 @@ inline void _llk_pack_set_fp32_dest_acc_(bool enable)
     cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(enable);
 }
 
-// If using 8bit datums for unpack src. tilize must be set to false because we skip the blackhole workaround which involves unswizzling rows in the tile,
-// and this unswizzling is not needed for 8bit datums as they are not affected by the blackhole issue.
 /**
  * @brief One-time hardware configuration of the packer for a given data format and tile geometry.
  *
@@ -434,6 +432,7 @@ inline void _llk_pack_set_fp32_dest_acc_(bool enable)
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
  * @param partial_face: True if packing a partial (sub-face-row) face.
  * @param relu_config: Packed relu mode and threshold configuration (0 disables relu).
+ * @note For 8-bit unpack-source datums, do not use PackMode::Tilize: the Blackhole row-unswizzling workaround is skipped (and is unnecessary, as 8-bit formats are unaffected by the issue).
  */
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_hw_configure_(

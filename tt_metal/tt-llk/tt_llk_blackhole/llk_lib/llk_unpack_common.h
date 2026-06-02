@@ -27,9 +27,6 @@ enum class p_dim_stride_target
     FACE_ROW_MAJOR // Set dim/stride for unpacking face in row major format
 };
 
-// This function stores a value to memory, and then immediately reads it back.
-// The load result will not be available until the store has completed.
-// This will make sure any subsequent instruction will see the store as complete.
 /**
  * @brief Store a value to memory then read it back, fencing subsequent code on the store.
  *

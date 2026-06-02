@@ -427,7 +427,6 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
     }
 }
 
-// If using 8bit datums for unpack src, skip_bh_tilize_workaround should be set to true because blackhole tilize workaround is not done for 8 bit datum formats.
 /**
  * @brief Initialize the math thread (address mods and MOP) for an elementwise unary datacopy.
  *

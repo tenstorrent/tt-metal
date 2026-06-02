@@ -61,7 +61,6 @@ inline void eltwise_binary_configure_addrmod()
         .set(ADDR_MOD_3);
 }
 
-// Helper template to select the appropriate eltwise binary operation
 /**
  * @brief Build the encoded FPU instruction (ELWADD/ELWSUB/ELWMUL) for the given binary op type.
  *
@@ -457,7 +456,6 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_init_(const ckernel::Tensor
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
-// Helper to run the eltwise binary loop with dest reuse and face clearing
 /**
  * @brief Run the dest-reuse MOP once per face, moving dest into a source register and zeroing the dest face first.
  *
