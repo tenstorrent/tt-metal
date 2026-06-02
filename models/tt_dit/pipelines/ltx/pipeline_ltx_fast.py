@@ -15,7 +15,7 @@ from loguru import logger
 import ttnn
 
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
-from ...utils.ltx import AudioLatentShape, VideoPixelShape
+from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from ...utils.tensor import bf16_tensor
 from .pipeline_ltx import LTXPipeline, euler_step, on_device_audio_enabled
 from .pipeline_ltx_av import LTXAVPipeline

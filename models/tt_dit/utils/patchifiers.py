@@ -2,25 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Local LTX-2 utility types and functions.
-
-These are self-contained reimplementations of types and patchifier helpers from
-the LTX-2 reference codebase (ltx_core), copied here so the tt-dit pipeline
-has no dependency on the unpublished reference packages.
-
-Reference source: LTX-2/packages/ltx-core/src/ltx_core/
-"""
+"""Self-contained LTX-2 latent shape types and patchifier grid helpers."""
 
 from __future__ import annotations
 
 from typing import NamedTuple
 
 import torch
-
-# =============================================================================
-# Shape types
-# =============================================================================
 
 
 class VideoPixelShape(NamedTuple):
@@ -42,9 +30,6 @@ class VideoLatentShape(NamedTuple):
     height: int
     width: int
 
-    def token_count(self) -> int:
-        return self.frames * self.height * self.width
-
 
 class AudioLatentShape(NamedTuple):
     """Shape of audio in VAE latent space: (batch, channels, frames, mel_bins)."""
@@ -53,9 +38,6 @@ class AudioLatentShape(NamedTuple):
     channels: int
     frames: int
     mel_bins: int
-
-    def token_count(self) -> int:
-        return self.frames
 
     @staticmethod
     def from_duration(
@@ -95,22 +77,15 @@ class AudioLatentShape(NamedTuple):
         )
 
 
-# =============================================================================
-# Patchifier helpers
-# =============================================================================
-
-
 def video_get_patch_grid_bounds(
     shape: VideoLatentShape,
     patch_size: tuple[int, int, int] = (1, 1, 1),
     device: torch.device | str = "cpu",
 ) -> torch.Tensor:
-    """Compute per-patch [start, end) grid bounds for video latent tokens.
+    """Per-patch [start, end) grid bounds for video latent tokens.
 
-    Returns tensor of shape (batch, 3, num_patches, 2) where axis 1 is (frame, height, width)
+    Returns (batch, 3, num_patches, 2) where axis 1 is (frame, height, width)
     and axis 3 is [start, end).
-
-    Reference: ltx_core.components.patchifiers.VideoLatentPatchifier.get_patch_grid_bounds
     """
     grid_coords = torch.meshgrid(
         torch.arange(start=0, end=shape.frames, step=patch_size[0], device=device),
@@ -123,7 +98,6 @@ def video_get_patch_grid_bounds(
     patch_ends = patch_starts + patch_size_delta
     latent_coords = torch.stack((patch_starts, patch_ends), dim=-1)  # (3, F, H, W, 2)
 
-    # Flatten spatial dims and broadcast to batch: (B, 3, N, 2)
     F, H, W = latent_coords.shape[1], latent_coords.shape[2], latent_coords.shape[3]
     latent_coords = latent_coords.reshape(3, F * H * W, 2)
     latent_coords = latent_coords.unsqueeze(0).expand(shape.batch, -1, -1, -1)
@@ -139,12 +113,7 @@ def audio_get_patch_grid_bounds(
     shift: int = 0,
     device: torch.device | str = "cpu",
 ) -> torch.Tensor:
-    """Compute per-patch temporal bounds for audio latent tokens.
-
-    Returns tensor of shape (batch, 1, num_frames, 2) with timestamps in seconds.
-
-    Reference: ltx_core.components.patchifiers.AudioPatchifier.get_patch_grid_bounds
-    """
+    """Per-patch temporal bounds (seconds) for audio latent tokens, shape (batch, 1, num_frames, 2)."""
 
     def _latent_to_seconds(start_idx: int, end_idx: int) -> torch.Tensor:
         frame = torch.arange(start_idx, end_idx, dtype=torch.float32, device=device)
@@ -168,14 +137,10 @@ def get_pixel_coords(
     scale_factors: tuple[int, int, int] = (8, 32, 32),
     causal_fix: bool = False,
 ) -> torch.Tensor:
-    """Map latent-space [start, end) coordinates to pixel-space by scaling each axis.
+    """Scale latent-space [start, end) coordinates to pixel space per axis.
 
-    Args:
-        latent_coords: (batch, n_dims, num_patches, 2) tensor of grid bounds
-        scale_factors: (temporal, height, width) VAE downsampling factors
-        causal_fix: Adjust temporal axis for causal encoding (first frame offset)
-
-    Reference: ltx_core.components.patchifiers.get_pixel_coords
+    scale_factors is (temporal, height, width); causal_fix offsets the first
+    temporal frame for causal encoding.
     """
     broadcast_shape = [1] * latent_coords.ndim
     broadcast_shape[1] = -1
@@ -187,22 +152,3 @@ def get_pixel_coords(
         pixel_coords[:, 0, ...] = (pixel_coords[:, 0, ...] + 1 - scale_factors[0]).clamp(min=0)
 
     return pixel_coords
-
-
-# =============================================================================
-# Constants
-# =============================================================================
-
-DEFAULT_NEGATIVE_PROMPT = (
-    "blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, "
-    "grainy texture, poor lighting, flickering, motion blur, distorted proportions, unnatural skin tones, "
-    "deformed facial features, asymmetrical face, missing facial features, extra limbs, disfigured hands, "
-    "wrong hand count, artifacts around text, inconsistent perspective, camera shake, incorrect depth of "
-    "field, background too sharp, background clutter, distracting reflections, harsh shadows, inconsistent "
-    "lighting direction, color banding, cartoonish rendering, 3D CGI look, unrealistic materials, uncanny "
-    "valley effect, incorrect ethnicity, wrong gender, exaggerated expressions, wrong gaze direction, "
-    "mismatched lip sync, silent or muted audio, distorted voice, robotic voice, echo, background noise, "
-    "off-sync audio, incorrect dialogue, added dialogue, repetitive speech, jittery movement, awkward "
-    "pauses, incorrect timing, unnatural transitions, inconsistent framing, tilted camera, flat lighting, "
-    "inconsistent tone, cinematic oversaturation, stylized filters, or AI artifacts."
-)

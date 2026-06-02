@@ -54,8 +54,9 @@ from ...parallel.config import (
 from ...parallel.manager import CCLManager
 from ...utils import cache as cache_module
 from ...utils.conv3d import conv3d_blocking_hash
-from ...utils.lora import LoraSpec, fuse_loras_into
-from ...utils.ltx import (
+from ...utils.fuse_loras import LoraSpec, fuse_loras_into
+from ...utils.mochi import get_rot_transformation_mat
+from ...utils.patchifiers import (
     AudioLatentShape,
     VideoLatentShape,
     VideoPixelShape,
@@ -63,7 +64,6 @@ from ...utils.ltx import (
     get_pixel_coords,
     video_get_patch_grid_bounds,
 )
-from ...utils.mochi import get_rot_transformation_mat
 from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from ...utils.tracing import Tracer
 

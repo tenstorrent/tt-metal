@@ -24,8 +24,8 @@ from models.tt_dit.models.transformers.ltx.transformer_ltx import LTXTransformer
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
-from models.tt_dit.utils.ltx import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.mochi import get_rot_transformation_mat
+from models.tt_dit.utils.patchifiers import AudioLatentShape, VideoPixelShape
 from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from models.tt_dit.utils.test import line_params, ring_params
 

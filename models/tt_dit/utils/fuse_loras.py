@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""LoRA fuse helper for LTX transformer state dicts.
+"""Fuse LoRA deltas into LTX transformer state dicts (bf16 base weights only).
 
-Mirrors the reference ``ltx_core.loader.fuse_loras.apply_loras`` path for
-bf16 base weights — which is what the 22B LTX safetensors carry on TT.
-FP8 / scaled-FP8 are not handled here because we do not use them on device.
+FP8 / scaled-FP8 base weights are intentionally unsupported — we do not use
+them on device.
 """
 
 from __future__ import annotations
@@ -19,11 +18,7 @@ from safetensors.torch import load_file
 
 @dataclass(frozen=True)
 class LoraSpec:
-    """A LoRA safetensors file with a fuse strength.
-
-    Mirrors ``ltx_core.loader.primitives.LoraPathStrengthAndSDOps`` minus the
-    ``sd_ops`` hook (we never need to permute / rename LoRA tensors on TT).
-    """
+    """A LoRA safetensors file with a fuse strength."""
 
     path: str
     strength: float = 1.0
@@ -37,13 +32,11 @@ def _strip_prefix(state_dict: dict[str, torch.Tensor], prefix: str) -> dict[str,
 
 
 def _normalize_lora_keys(lora_sd: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    """Strip the diffusion-model prefix from LoRA keys so they align with the
-    base transformer keyspace.
+    """Strip the diffusion-model prefix so LoRA keys align with the base keyspace.
 
-    Base safetensors use ``model.diffusion_model.<rest>`` (and ``_transformer_state_dict``
-    strips that). LTX HF LoRAs ship with the shorter ``diffusion_model.<rest>``
-    prefix (see ``ltx-2.3-22b-distilled-lora-384-1.1.safetensors``). Try both,
-    longest first, so either layout becomes ``<rest>.lora_A.weight`` post-strip.
+    HF LoRAs ship as ``model.diffusion_model.<rest>`` or the shorter
+    ``diffusion_model.<rest>``; try both (longest first) so either becomes
+    ``<rest>.lora_A.weight``.
     """
     for prefix in ("model.diffusion_model.", "diffusion_model."):
         if any(k.startswith(prefix) for k in lora_sd):
@@ -57,13 +50,10 @@ def fuse_loras_into(
 ) -> dict[str, torch.Tensor]:
     """Return a new state dict with ``W += sum_i strength_i * (B_i @ A_i)``.
 
-    For each base weight key ``<prefix>.weight`` we look up matching
-    ``<prefix>.lora_A.weight`` / ``<prefix>.lora_B.weight`` in each LoRA and
-    accumulate the delta in fp32, casting the result back to the base dtype.
-    Keys without a matching LoRA pair are passed through unchanged.
-
-    Logs the per-LoRA fuse count so prefix mismatches surface immediately
-    (count == 0 means the LoRA keyspace did not align with the base).
+    For each base ``<prefix>.weight`` we accumulate matching
+    ``<prefix>.lora_A/B.weight`` deltas in fp32 and cast back to the base dtype;
+    keys without a LoRA pair pass through unchanged. A fuse count of 0 is logged
+    as a warning since it means the LoRA keyspace did not align with the base.
     """
     if not loras:
         return base_sd

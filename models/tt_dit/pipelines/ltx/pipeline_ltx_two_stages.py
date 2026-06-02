@@ -29,8 +29,8 @@ from loguru import logger
 
 import ttnn
 
-from ...utils.lora import LoraSpec
-from ...utils.ltx import AudioLatentShape, VideoPixelShape
+from ...utils.fuse_loras import LoraSpec
+from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
 from .pipeline_ltx import LTXPipeline
 from .pipeline_ltx_av import LTXAVPipeline
 
