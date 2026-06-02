@@ -364,14 +364,14 @@ def _default_quad_ring_shard_maps(
     *,
     num_cores: int = 12,
 ) -> tuple[list[int], list[tuple[int, int]]]:
-    from ttnn.experimental.moe_compute_utils import BLOCK_TILES_W, _shard_tiles, _w2_shard_tiles
+    from ttnn.experimental.moe_compute_utils import W2_TILES_PER_A2A_ITER_W, _shard_tiles, _w2_shard_tiles
 
     import ttnn
 
     hidden_tiles = hidden_size // ttnn.TILE_SIZE
     intermediate_tiles = intermediate_size // ttnn.TILE_SIZE
     max_w2_tiles = (hidden_tiles + num_cores - 1) // num_cores
-    groups_per_core = (max_w2_tiles + BLOCK_TILES_W - 1) // BLOCK_TILES_W
+    groups_per_core = (max_w2_tiles + W2_TILES_PER_A2A_ITER_W - 1) // W2_TILES_PER_A2A_ITER_W
 
     w0_w1_shard_map = []
     w2_shard_map = []
@@ -379,8 +379,8 @@ def _default_quad_ring_shard_maps(
         w0_w1_shard_map.append(_shard_tiles(intermediate_tiles, ring_pos, num_cores))
 
         w2_tiles = _w2_shard_tiles(hidden_tiles, ring_pos, intermediate_tiles, num_cores)
-        last_group_tiles = w2_tiles - (groups_per_core - 1) * BLOCK_TILES_W
-        last_group_pad_tiles = groups_per_core * BLOCK_TILES_W - w2_tiles
+        last_group_tiles = w2_tiles - (groups_per_core - 1) * W2_TILES_PER_A2A_ITER_W
+        last_group_pad_tiles = groups_per_core * W2_TILES_PER_A2A_ITER_W - w2_tiles
         w2_shard_map.append((last_group_tiles, last_group_pad_tiles))
 
     return w0_w1_shard_map, w2_shard_map

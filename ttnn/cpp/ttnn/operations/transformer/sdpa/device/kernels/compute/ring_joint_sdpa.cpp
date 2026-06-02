@@ -51,12 +51,11 @@ void kernel_main() {
     constexpr bool use_streaming_compute = get_compile_time_arg_val(33) == 1;
     constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(34);
     constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(35);
-    constexpr bool uniform_dataformat = get_compile_time_arg_val(36) == 1;
-    constexpr bool is_causal = get_compile_time_arg_val(37) == 1;
-    constexpr bool is_balanced = get_compile_time_arg_val(38) == 1;
-    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(39) == 1;
-    constexpr bool chunked_enabled = get_compile_time_arg_val(40) == 1;
-    constexpr uint32_t chunk_size_t = get_compile_time_arg_val(41);
+    constexpr bool is_causal = get_compile_time_arg_val(36) == 1;
+    constexpr bool is_balanced = get_compile_time_arg_val(37) == 1;
+    constexpr bool use_zigzag_balancing = get_compile_time_arg_val(38) == 1;
+    constexpr bool chunked_enabled = get_compile_time_arg_val(39) == 1;
+    constexpr uint32_t chunk_size_t = get_compile_time_arg_val(40);
     // Diagonal-mask tile slot is shared by the kernel's is_causal path and the chunked-prefill
     // path. kernel_is_causal is masked off by the program factory when chunked is on, so only
     // one of the two paths drives the stamp per program — but they share the CB slot layout.
@@ -79,7 +78,9 @@ void kernel_main() {
     constexpr uint32_t total_mask_tiles =
         1 + (diag_tile_enabled ? 1 : 0) + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
 
-    constexpr uint32_t q_start_idx_t = chunked_enabled ? (kv_local_padded_Nt - q_local_padded_Nt) * ring_size : 0;
+    // Chunked prefill masks against absolute Q/K coordinates. Use logical_nt as the populated
+    // cache boundary instead of deriving the Q start from the physical K cache extent.
+    constexpr uint32_t q_start_idx_t = chunked_enabled ? logical_nt - q_local_padded_Nt * ring_size : 0;
 
     uint32_t argidx = 0;
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
@@ -94,33 +95,33 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    // TODO: CB indices below are hardcoded and duplicated from the program factory.
-    // They should be passed as compile-time args so the factory is the single source of truth.
-    constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
-    constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
-    constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
-    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
-    constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
-    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
-    constexpr uint32_t cb_max_in = tt::CBIndex::c_6;  // deferred norm: running max
-    constexpr uint32_t cb_lse_in = tt::CBIndex::c_6;  // eager norm: LSE
-    constexpr uint32_t cb_prev_out = tt::CBIndex::c_7;
-    constexpr uint32_t cb_col_identity = tt::CBIndex::c_8;
-    constexpr uint32_t cb_recip_scratch = tt::CBIndex::c_9;  // 1-tile scratch for normalize_row_streaming
-    constexpr uint32_t cb_sum_out = tt::CBIndex::c_10;
-    constexpr uint32_t cb_sum_in = tt::CBIndex::c_11;
-    constexpr uint32_t cb_signal = tt::CBIndex::c_12;
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    constexpr uint32_t cb_max_out = tt::CBIndex::c_17;  // deferred norm: running max
-    constexpr uint32_t cb_lse_out = tt::CBIndex::c_17;  // eager norm: LSE
-    constexpr uint32_t cb_qk_im = tt::CBIndex::c_13;
-    constexpr uint32_t cb_out_im_A = tt::CBIndex::c_14;
-    constexpr uint32_t cb_out_im_B = tt::CBIndex::c_15;
-    constexpr uint32_t cb_max_A = tt::CBIndex::c_18;
-    constexpr uint32_t cb_max_B = tt::CBIndex::c_19;
-    constexpr uint32_t cb_sum_A = tt::CBIndex::c_20;
-    constexpr uint32_t cb_sum_B = tt::CBIndex::c_21;
-    constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_22;
+    constexpr uint32_t cb_arg_offset = 41;
+    constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
+    constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
+    constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
+    constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
+    constexpr uint32_t cb_scale_in = get_compile_time_arg_val(cb_arg_offset + 4);
+    constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
+    constexpr uint32_t cb_max_in = get_compile_time_arg_val(cb_arg_offset + 6);  // deferred norm: running max
+    constexpr uint32_t cb_lse_in = cb_max_in;                                    // eager norm: LSE
+    constexpr uint32_t cb_prev_out = get_compile_time_arg_val(cb_arg_offset + 7);
+    constexpr uint32_t cb_col_identity = get_compile_time_arg_val(cb_arg_offset + 8);
+    constexpr uint32_t cb_recip_scratch =
+        get_compile_time_arg_val(cb_arg_offset + 9);  // 1-tile scratch for normalize_row_streaming
+    constexpr uint32_t cb_sum_out = get_compile_time_arg_val(cb_arg_offset + 10);
+    constexpr uint32_t cb_sum_in = get_compile_time_arg_val(cb_arg_offset + 11);
+    constexpr uint32_t cb_signal = get_compile_time_arg_val(cb_arg_offset + 12);
+    constexpr uint32_t cb_out = get_compile_time_arg_val(cb_arg_offset + 13);
+    constexpr uint32_t cb_max_out = get_compile_time_arg_val(cb_arg_offset + 14);  // deferred norm: running max
+    constexpr uint32_t cb_lse_out = cb_max_out;                                    // eager norm: LSE
+    constexpr uint32_t cb_qk_im = get_compile_time_arg_val(cb_arg_offset + 15);
+    constexpr uint32_t cb_out_im_A = get_compile_time_arg_val(cb_arg_offset + 16);
+    constexpr uint32_t cb_out_im_B = get_compile_time_arg_val(cb_arg_offset + 17);
+    constexpr uint32_t cb_max_A = get_compile_time_arg_val(cb_arg_offset + 18);
+    constexpr uint32_t cb_max_B = get_compile_time_arg_val(cb_arg_offset + 19);
+    constexpr uint32_t cb_sum_A = get_compile_time_arg_val(cb_arg_offset + 20);
+    constexpr uint32_t cb_sum_B = get_compile_time_arg_val(cb_arg_offset + 21);
+    constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 22);
 
     mm_init(cb_q_in, cb_k_in, cb_qk_im);
 
@@ -264,7 +265,6 @@ void kernel_main() {
                 cb_max_out,
                 cb_prev_out,
                 cb_out,
-                uniform_dataformat,
                 cb_out,  // cb_normalized_out — output goes directly to cb_out
                 cb_sum_out,
                 cb_sum_in,
@@ -275,7 +275,11 @@ void kernel_main() {
                 chunked_enabled,
                 kv_local_padded_Nt,
                 q_local_padded_Nt,
-                chunk_size_t>(
+                chunk_size_t,
+                global_n_has_padding,
+                local_n_has_padding,
+                joint_has_padding,
+                has_straddle && is_causal && is_balanced>(
                 global_q_start,
                 global_q_end,
                 iter_num_kv_chunks,

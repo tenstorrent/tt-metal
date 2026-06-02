@@ -28,7 +28,6 @@
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include "internal/tt-2xx/quasar/error_handling.h"
-#include <tt-metalium/experimental/host_api.hpp>
 #include "impl/debug/debug_helpers.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 
@@ -64,7 +63,11 @@ static void RunTest(
     auto* device = mesh_device->get_devices()[0];
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
-    const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp";
+    // TENSIX cores use the Metal 2.0 host API and the *_2_0.cpp kernel; ETH/DRAM cores remain on the legacy
+    // host API and continue to use the original kernel.
+    const bool use_legacy_api = processor.core_type != HalProgrammableCoreType::TENSIX;
+    const std::string kernel = use_legacy_api ? "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp"
+                                              : "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts_2_0.cpp";
 
     // Depending on riscv type, choose one core to run the test on (since the test hangs the board).
     CoreCoord logical_core, virtual_core;
@@ -75,84 +78,73 @@ static void RunTest(
         hal.get_processor_index(processor.core_type, processor.processor_class, processor.processor_type);
     std::string risc = hal.get_processor_class_name(processor.core_type, processor_idx, false);
     switch (processor.core_type) {
-        case HalProgrammableCoreType::TENSIX:
+        case HalProgrammableCoreType::TENSIX: {
             logical_core = {0, 0};
             virtual_core = device->worker_core_from_logical_core(logical_core);
+            experimental::KernelSpec assert_kernel_spec{
+                .unique_id = ASSERT_KERNEL_NAME,
+                .source = kernel,
+                .runtime_arg_schema = {.runtime_arg_names = {"a", "b", "assert_type", "hw_assert_cause"}},
+            };
             switch (processor.processor_class) {
-                case HalProcessorClassType::DM:
+                case HalProcessorClassType::DM: {
+                    // On Quasar, all 6 user DMs (DM2..DM7) launch the kernel; only the one whose
+                    // kernel-local thread id matches target_thread_id executes the test, others exit early.
+                    // DM0/DM1 are reserved for internal use and are skipped by the outer test fixture.
+                    // On gen1, the test pins to a specific BRISC/NCRISC processor (no target_thread_id needed).
+                    auto gen1_processor =
+                        is_quasar ? tt::tt_metal::DataMovementProcessor::RISCV_0
+                                  : static_cast<tt::tt_metal::DataMovementProcessor>(processor.processor_type);
+                    auto gen1_noc = (gen1_processor == tt::tt_metal::DataMovementProcessor::RISCV_1)
+                                        ? tt_metal::NOC::RISCV_1_default
+                                        : tt_metal::NOC::RISCV_0_default;
                     if (is_quasar) {
-                        // On Quasar, kernel runs on the 6 user DMs (DM2..DM7); only dm_id executes the test;
-                        // others exit early. DM0/DM1 are reserved for internal use and are skipped by the
-                        // outer test fixture.
-                        uint32_t dm_id = static_cast<uint32_t>(processor.processor_type);
-                        experimental::metal2_host_api::KernelSpec assert_kernel_spec{
-                            .unique_id = ASSERT_KERNEL_NAME,
-                            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel},
-                            .num_threads = 6,
-                            .compile_time_arg_bindings = {{"dm_id", dm_id}},
-                            .runtime_arguments_schema =
-                                {.named_runtime_args = {"a", "b", "assert_type", "hw_assert_cause"}},
-                            .config_spec =
-                                experimental::metal2_host_api::DataMovementConfiguration{
-                                    .gen2_data_movement_config = experimental::metal2_host_api::
-                                        DataMovementConfiguration::Gen2DataMovementConfig{}},
-                        };
-                        experimental::metal2_host_api::WorkUnitSpec wu{
-                            .unique_id = "main",
-                            .kernels = {ASSERT_KERNEL_NAME},
-                            .target_nodes = experimental::metal2_host_api::NodeCoord{logical_core},
-                        };
-                        experimental::metal2_host_api::ProgramSpec spec{
-                            .program_id = "watcher_assert_dm",
-                            .kernels = {assert_kernel_spec},
-                            .work_units = {wu},
-                        };
-                        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
+                        // processor.processor_type is the absolute DM index (2..7 for DM2..DM7).
+                        // Map to kernel-local thread id (0..5) since the kernel launches on the 6 user DMs.
+                        constexpr uint32_t kFirstUserDm = 2;
+                        uint32_t target_thread_id = static_cast<uint32_t>(processor.processor_type) - kFirstUserDm;
+                        assert_kernel_spec.num_threads = 6;
+                        assert_kernel_spec.compile_time_args = {{"target_thread_id", target_thread_id}};
                     } else {
-                        DataMovementConfig dm_config{};
-                        dm_config.processor = static_cast<tt_metal::DataMovementProcessor>(processor.processor_type);
-                        dm_config.noc = (processor.processor_type ==
-                                         enchantum::to_underlying(tt::tt_metal::DataMovementProcessor::RISCV_1))
-                                            ? tt_metal::NOC::RISCV_1_default
-                                            : tt_metal::NOC::RISCV_0_default;
-                        assert_kernel = CreateKernel(program, kernel, logical_core, dm_config);
+                        assert_kernel_spec.num_threads = 1;
                     }
+                    // Provide both gen1 and gen2 configs so the same KernelSpec runs on either arch.
+                    assert_kernel_spec.hw_config = experimental::DataMovementHardwareConfig{
+                        .gen1_config =
+                            experimental::DataMovementHardwareConfig::Gen1Config{
+                                .processor = gen1_processor,
+                                .noc = gen1_noc,
+                            },
+                        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
+                    };
                     break;
-                case HalProcessorClassType::COMPUTE:
-                    if (is_quasar) {
-                        uint32_t trisc_id = static_cast<uint32_t>(processor.processor_type);
-                        experimental::metal2_host_api::KernelSpec assert_kernel_spec{
-                            .unique_id = ASSERT_KERNEL_NAME,
-                            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{kernel},
-                            .num_threads = 1,
-                            .compiler_options = {.defines = {{fmt::format("TRISC{}", trisc_id), "1"}}},
-                            .compile_time_arg_bindings = {{"trisc_id", trisc_id}},
-                            .runtime_arguments_schema =
-                                {.named_runtime_args = {"a", "b", "assert_type", "hw_assert_cause"}},
-                            .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
-                        };
-                        experimental::metal2_host_api::WorkUnitSpec wu{
-                            .unique_id = "main",
-                            .kernels = {ASSERT_KERNEL_NAME},
-                            .target_nodes = experimental::metal2_host_api::NodeCoord{logical_core},
-                        };
-                        experimental::metal2_host_api::ProgramSpec spec{
-                            .program_id = "watcher_assert_compute",
-                            .kernels = {assert_kernel_spec},
-                            .work_units = {wu},
-                        };
-                        program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
-                    } else {
-                        assert_kernel = CreateKernel(
-                            program,
-                            kernel,
-                            logical_core,
-                            ComputeConfig{.defines = {{fmt::format("TRISC{}", processor.processor_type), "1"}}});
-                    }
+                }
+                case HalProcessorClassType::COMPUTE: {
+                    uint32_t trisc_id = static_cast<uint32_t>(processor.processor_type);
+                    assert_kernel_spec.num_threads = 1;
+                    assert_kernel_spec.compiler_options = {
+                        .defines = {{fmt::format("TRISC{}", trisc_id), "1"}}};
+                    // Bind trisc_id so the kernel can early-return on TRISCs that aren't the target
+                    // of a Quasar compute HW-fault test.
+                    assert_kernel_spec.compile_time_args = {{"trisc_id", trisc_id}};
+                    assert_kernel_spec.hw_config = experimental::ComputeHardwareConfig{};
                     break;
+                }
                 default: TT_THROW("Unsupported processor class type for TENSIX");
             }
+            experimental::WorkUnitSpec wu{
+                .name = "main",
+                .kernels = {ASSERT_KERNEL_NAME},
+                .target_nodes = experimental::NodeCoord{logical_core},
+            };
+            experimental::ProgramSpec spec{
+                .name = "watcher_assert",
+                .kernels = {assert_kernel_spec},
+                .work_units = {wu},
+            };
+            program = experimental::MakeProgramFromSpec(*mesh_device, spec);
             break;
+        }
         case HalProgrammableCoreType::ACTIVE_ETH:
         case HalProgrammableCoreType::IDLE_ETH: {
             bool is_active = (processor.core_type == HalProgrammableCoreType::ACTIVE_ETH);
@@ -189,20 +181,21 @@ static void RunTest(
     }
     log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);
 
-    // Build runtime arg setter that targets either the Metal 2.0 named-name path or the legacy handle.
+    // Build runtime arg setter that targets either the Metal 2.0 named-name path (TENSIX) or
+    // the legacy handle (ETH/DRAM).
     auto set_args = [&](Program& prog, const std::vector<uint32_t>& args) {
-        if (is_quasar) {
-            experimental::metal2_host_api::ProgramRunParams params;
-            params.kernel_run_params = {{
+        if (use_legacy_api) {
+            SetRuntimeArgs(prog, assert_kernel, logical_core, args);
+        } else {
+            experimental::ProgramRunArgs params;
+            params.kernel_run_args = {{
                 .kernel_spec_name = ASSERT_KERNEL_NAME,
-                .named_runtime_args =
-                    {{.node = experimental::metal2_host_api::NodeCoord{logical_core},
+                .runtime_arg_values =
+                    {{.node = experimental::NodeCoord{logical_core},
                       .args =
                           {{"a", args[0]}, {"b", args[1]}, {"assert_type", args[2]}, {"hw_assert_cause", args[3]}}}},
             }};
-            experimental::metal2_host_api::SetProgramRunParameters(prog, params);
-        } else {
-            SetRuntimeArgs(prog, assert_kernel, logical_core, args);
+            experimental::SetProgramRunArgs(prog, params);
         }
     };
 

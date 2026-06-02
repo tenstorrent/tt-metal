@@ -42,10 +42,8 @@ tt::tt_metal::ProgramDescriptor PreAllGatherWelfordProgramFactory::create_descri
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t in_single_tile_size = tt::tile_size(in_data_format);
     uint32_t out_single_tile_size = tt::tile_size(out_data_format);
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
 
     constexpr uint32_t double_buffer = 2;
     const uint32_t in0_tiles = block_size * double_buffer;
@@ -102,16 +100,55 @@ tt::tt_metal::ProgramDescriptor PreAllGatherWelfordProgramFactory::create_descri
     writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_kernel_desc.config = WriterConfigDescriptor{};
 
+    // Float32 input on the welford path requires fp32_dest_acc_en=true as a prerequisite for
+    // UnpackToDestFp32 (set below). UnpackToDestFp32 is what bypasses the unpacker's
+    // Float32 → TF32 truncation in SrcA; fp32_dest_acc_en provides the 32-bit DEST that
+    // UnpackToDestFp32 writes into. Without fp32 DEST, UnpackToDestFp32 can't be enabled
+    // and inputs are silently truncated to TF32 (10 mantissa bits) on the way through SrcA.
+    TT_FATAL(
+        !(in_data_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
+        "dit_layernorm_pre_all_gather with Float32 input requires fp32_dest_acc_en=true in the "
+        "compute kernel config; otherwise precision is silently lost in the unpacker format "
+        "conversion.");
+
+    // For Float32 input with fp32_dest_acc_en, force unpack-to-dest in fp32 mode so the
+    // unpacker writes full fp32 to DEST instead of routing through SrcA which would downcast
+    // to TF32 (10 mantissa bits). Without this, the Welford recurrence sees TF32-truncated
+    // inputs and catastrophically loses precision when |mean| >> std.
+    std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
+        NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
+    const bool welford_unpack_fp32_active = (in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en);
+    if (welford_unpack_fp32_active) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_0)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
+    // Intermediate scratch CB (c_1) holds data only for the final transpose operation,
+    // so its format mirrors out_data_format. When both that format is Float32 and DEST
+    // is in fp32 mode, force fp32 unpack on c_1 too so the read-back doesn't truncate to
+    // TF32. For non-fp32 outputs the final pack to c_14 truncates anyway, so unpacking to
+    // fp32 would not be useful.
+    if (out_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en) {
+        unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_1)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+
+    // Argument to gate the post-transpose welford state re-establishment in the kernel,
+    // which is only needed when unpacking to fp32.
+    KernelDescriptor::NamedCompileTimeArgs compute_named_args = {
+        {"welford_unpack_fp32_active", welford_unpack_fp32_active ? 1u : 0u},
+    };
+
     // Compute kernel
     KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source = compute_kernel_file;
     compute_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel_desc.core_ranges = all_cores;
     compute_kernel_desc.compile_time_args = std::move(compute_args);
+    compute_kernel_desc.named_compile_time_args = std::move(compute_named_args);
     compute_kernel_desc.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
         .math_approx_mode = math_approx_mode};
 
     // Build runtime args per core
@@ -158,14 +195,18 @@ tt::tt_metal::ProgramDescriptor PreAllGatherWelfordProgramFactory::create_descri
             .data_format = in_data_format,
             .page_size = in_single_tile_size}}}});
 
-    // c_intermed0 -> x^2 (CB 1)
+    // Intermediate scratch for the post-Welford transpose round-trip (CB 1). Used only for
+    // the last transpose operation before copying data into the output CB, which is why its
+    // data format is tied to the output format. Anything wider would waste SRAM and gain no
+    // precision (the read-back unpack truncates to TF32 unless the output is Float32, in
+    // which case UnpackToDestFp32 above preserves it).
     program_descriptor.cbs.push_back(CBDescriptor{
-        .total_size = in0_tiles * single_tile_size,
+        .total_size = in0_tiles * out_single_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size}}}});
+            .data_format = out_data_format,
+            .page_size = out_single_tile_size}}}});
 
     // Output (CB 14)
     program_descriptor.cbs.push_back(CBDescriptor{

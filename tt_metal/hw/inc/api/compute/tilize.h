@@ -271,7 +271,7 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
 #endif
 }
 
-namespace detail {
+namespace fast_tilize_detail {
 
 template <bool configure_remap>
 ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
@@ -301,18 +301,18 @@ ALWI void fast_tilize_init_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb, u
 #endif
 }
 
-}  // namespace detail
+}  // namespace fast_tilize_detail
 
 ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    detail::fast_tilize_init_impl<true>(icb, full_dim, ocb, call_line);
+    fast_tilize_detail::fast_tilize_init_impl<true>(icb, full_dim, ocb, call_line);
 }
 
 ALWI void fast_tilize_init_skip_remap(
     uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    detail::fast_tilize_init_impl<false>(icb, full_dim, ocb, call_line);
+    fast_tilize_detail::fast_tilize_init_impl<false>(icb, full_dim, ocb, call_line);
 }
 
-namespace detail {
+namespace fast_tilize_detail {
 
 template <bool configure_remap>
 ALWI void fast_tilize_init_with_dt_impl(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
@@ -325,14 +325,14 @@ ALWI void fast_tilize_init_with_dt_impl(uint32_t icb, uint32_t full_dim, uint32_
     fast_tilize_init_impl<configure_remap>(icb, full_dim, ocb);
 }
 
-}  // namespace detail
+}  // namespace fast_tilize_detail
 
 ALWI void fast_tilize_init_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
-    detail::fast_tilize_init_with_dt_impl<true>(icb, full_dim, ocb);
+    fast_tilize_detail::fast_tilize_init_with_dt_impl<true>(icb, full_dim, ocb);
 }
 
 ALWI void fast_tilize_init_with_dt_skip_remap(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
-    detail::fast_tilize_init_with_dt_impl<false>(icb, full_dim, ocb);
+    fast_tilize_detail::fast_tilize_init_with_dt_impl<false>(icb, full_dim, ocb);
 }
 
 ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, uint32_t full_dim) {

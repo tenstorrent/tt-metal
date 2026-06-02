@@ -4,7 +4,7 @@
 set(TTNN_OP_EMBEDDING_BACKWARD_SRCS
     embedding_backward.cpp
     device/embedding_backward_device_operation.cpp
-    device/embedding_backward_program_factory.cpp
+    device/embedding_backward_program_descriptor.cpp
 )
 
 set(TTNN_OP_EMBEDDING_BACKWARD_API_HEADERS embedding_backward.hpp)

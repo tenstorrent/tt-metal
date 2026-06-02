@@ -17,20 +17,11 @@ on:
         type: string
         default: ""
         description: "Pre-built CI Build Docker image tag"
-      do-full-scan:
-        required: true
-        type: string
-        description: "Whether to do a full scan or incremental"
-      merge-base:
-        required: false
-        type: string
-        default: ""
-        description: "Merge base commit for incremental scans"
       prereq-targets:
         required: false
         type: string
         default: ""
-        description: "Prerequisite targets to build without analysis (space-separated, built after switching to current ref but before restoring shim)"
+        description: "Prerequisite targets to build without analysis (space-separated)"
       scan-targets:
         required: false
         type: string
@@ -87,6 +78,69 @@ jobs:
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
+      - name: Configure ctcache
+        # Same fork gate as ccache: forks have no secrets so skip silently.
+        # ctcache is writable from all non-fork refs (including PR branches)
+        # so repeated commits to a branch benefit from cached clang-tidy results.
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        run: |
+          # ctcache is not published on PyPI — install from pinned commit SHA (tag 1.2.0)
+          # Pinned to SHA (not tag) to avoid supply-chain risk from mutable git tags
+          uv pip install --quiet "ctcache @ git+https://github.com/matus-chochlik/ctcache.git@e33c063ca6e52b48bcefbc45d46d8c150ffa81ca" boto3  # 1.2.0
+
+          # Namespace encodes the clang-tidy version so a toolchain upgrade auto-invalidates
+          CT_VERSION=$(clang-tidy-20 --version 2>/dev/null | grep -oP 'version \K[0-9]+' || echo "20")
+          {
+            echo "CTCACHE_S3_BUCKET=ctcache"
+            echo "CTCACHE_S3_FOLDER=ct${CT_VERSION}"
+            echo "CTCACHE_KEEP_COMMENTS=1"
+            # Note: CTCACHE_SAVE_OUTPUT is intentionally NOT set — S3 store_in_cache_with_data
+            # is a TODO no-op in ctcache 1.2.0, so saving output would silently write nothing.
+            echo "AWS_ACCESS_KEY_ID=${{ secrets.GARAGE_S3_ACCESS_KEY }}"
+            echo "AWS_SECRET_ACCESS_KEY=${{ secrets.GARAGE_S3_SECRET_KEY }}"
+            echo "AWS_ENDPOINT_URL=http://garage.garage.svc.cluster.local:3900"
+            echo "AWS_DEFAULT_REGION=us-east-1"
+            echo "HTTP_PROXY=http://proxy.restricted-proxy.svc.cluster.local:3128"
+            echo "HTTPS_PROXY=http://proxy.restricted-proxy.svc.cluster.local:3128"
+          } >> "$GITHUB_ENV"
+          echo "ctcache S3 folder: ct${CT_VERSION}"
+
+          # Diagnose connectivity at the HTTP level before boto3
+          # 403 from curl is expected (Garage rejects unsigned requests) — confirms proxy reaches Garage
+          echo "--- Garage HTTP probe (403 = Garage reachable, proxy working) ---"
+          curl -s -o /dev/null -w "Garage root HTTP status: %{http_code}\n" \
+            -x "http://proxy.restricted-proxy.svc.cluster.local:3128" \
+            http://garage.garage.svc.cluster.local:3900/ || echo "Garage root: curl failed (unreachable)"
+
+          # Verify connectivity — warn but don't fail if Garage is unreachable
+          AWS_ACCESS_KEY_ID="${{ secrets.GARAGE_S3_ACCESS_KEY }}" \
+          AWS_SECRET_ACCESS_KEY="${{ secrets.GARAGE_S3_SECRET_KEY }}" \
+          AWS_ENDPOINT_URL="http://garage.garage.svc.cluster.local:3900" \
+          AWS_DEFAULT_REGION="us-east-1" \
+          HTTP_PROXY="http://proxy.restricted-proxy.svc.cluster.local:3128" \
+          HTTPS_PROXY="http://proxy.restricted-proxy.svc.cluster.local:3128" \
+          python3 - << 'PYEOF'
+          import boto3, botocore, os, sys
+          print(f"Endpoint: {os.environ.get('AWS_ENDPOINT_URL', '')}")
+          print(f"HTTP_PROXY: {os.environ.get('HTTP_PROXY', '(not set)')}")
+          try:
+              s3 = boto3.client("s3",
+                  endpoint_url=os.environ["AWS_ENDPOINT_URL"],
+                  aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
+                  aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
+                  region_name=os.environ["AWS_DEFAULT_REGION"],
+                  config=botocore.config.Config(s3={"addressing_style": "path"}),
+              )
+              s3.list_objects_v2(Bucket="ctcache", MaxKeys=1)
+              print("ctcache Garage S3 connection OK")
+              # Signal to downstream steps that S3 is reachable
+              with open(os.environ["GITHUB_ENV"], "a") as f:
+                  f.write("CTCACHE_S3_OK=1\n")
+          except Exception as e:
+              print(f"::warning::ctcache Garage S3 unreachable ({e}) — analysis will run without caching")
+              sys.exit(0)
+          PYEOF
+
       - name: Create ccache tmpdir
         run: |
           mkdir -p /tmp/ccache
@@ -94,28 +148,34 @@ jobs:
       - name: Check out repo
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 0
-          fetch-tags: true
           submodules: recursive
           clean: true
 
       - name: Configure git safe.directory
         run: git config --global --add safe.directory /work
 
-      - name: Check out baseline
-        if: ${{ inputs.do-full-scan != 'true' }}
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ inputs.merge-base }}
-          fetch-depth: 0
-          fetch-tags: true
-          submodules: recursive
-          clean: true
-
-      - name: Create shim
+      # Shim approach: cmake always sees the same command text ("./clang-tidy-shim;...")
+      # so Ninja never force-rebuilds TUs just because the analysis tool changed.
+      # During prereq builds the shim is a no-op; for analysis it delegates to ctcache.
+      - name: Create shim (no-op for prereq builds)
         run: |
-          # Suppress clang-tidy to first get an up-to-date build tree
-          ln -sf /usr/bin/true ./clang-tidy-shim
+          cat > ./clang-tidy-shim << 'SHIMEOF'
+          #!/bin/bash
+          exec /usr/bin/true "$@"
+          SHIMEOF
+          chmod +x ./clang-tidy-shim
+
+      - name: 📦 Restore CPM source cache
+        id: cpm-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .cpmcache.tar.zst
+          key: cpm-z22-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
+          restore-keys: cpm-z22-
+
+      - name: Unpack CPM cache
+        run: |
+          [ -f .cpmcache.tar.zst ] && tar -I 'zstd -T0' -xf .cpmcache.tar.zst || true
 
       - name: 🔧 CMake configure
         run: |
@@ -124,40 +184,20 @@ jobs:
             -DCMAKE_CXX_CLANG_TIDY="$CLANG_TIDY_CMD" \
             -DCMAKE_C_CLANG_TIDY="$CLANG_TIDY_CMD"
 
-      - name: Prepare baseline ccache summary
-        if: ${{ inputs.do-full-scan != 'true' }}
+      - name: Pack CPM cache
+        if: steps.cpm-cache.outputs.cache-hit != 'true'
         run: |
-          # Zero out the stats so we can see how we did this build
-          # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
-          ccache -z
+          [ -d .cpmcache ] && tar -I 'zstd -T0 --ultra -22' -cf .cpmcache.tar.zst .cpmcache || true
 
-      - name: 🛠️ Baseline Build
-        if: ${{ inputs.do-full-scan != 'true' }}
-        timeout-minutes: 60
-        run: |
-          cmake --build --preset clang-tidy
-
-      - name: Publish Ccache summary
-        if: ${{ inputs.do-full-scan != 'true' }}
-        run: |
-          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          ccache -s >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          ccache -s
-
-      - name: Checkout repo
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Save CPM source cache
+        if: steps.cpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
         with:
-          fetch-depth: 0
-          fetch-tags: true
-          submodules: recursive
-          clean: false
+          path: .cpmcache.tar.zst
+          key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
 
       - name: Prepare ccache summary
-        run: |
-          # Zero out the stats so we can see how we did this build
-          ccache -z
+        run: ccache -z
 
       - name: Build prerequisite targets (without analysis)
         if: ${{ inputs.prereq-targets != '' }}
@@ -169,11 +209,30 @@ jobs:
             cmake --build --preset clang-tidy --target "$target"
           done
 
-      - name: Restore shim
+      - name: Activate analysis shim
         run: |
-          # Restore shim to legit clang-tidy
-          # Symlink tomfoolery here so that Ninja believes the build command has not changed from the previous run
-          ln -sf $(which clang-tidy-20) ./clang-tidy-shim
+          # Overwrite the no-op shim with the real analysis wrapper.
+          # The filename stays ./clang-tidy-shim so Ninja's command hash is unchanged.
+          # Gate on both: clang-tidy-cache installed AND S3 probe succeeded.
+          if command -v clang-tidy-cache &>/dev/null && [ "${CTCACHE_S3_OK:-0}" = "1" ]; then
+            cat > ./clang-tidy-shim << 'SHIMEOF'
+          #!/bin/bash
+          exec clang-tidy-cache clang-tidy-20 "$@"
+          SHIMEOF
+            chmod +x ./clang-tidy-shim
+            echo "ctcache shim active (S3 folder: ${CTCACHE_S3_FOLDER:-ctcache})"
+          else
+            cat > ./clang-tidy-shim << 'SHIMEOF'
+          #!/bin/bash
+          exec clang-tidy-20 "$@"
+          SHIMEOF
+            chmod +x ./clang-tidy-shim
+            if ! command -v clang-tidy-cache &>/dev/null; then
+              echo "::warning::clang-tidy-cache not found — running clang-tidy-20 directly (no result caching)"
+            else
+              echo "::warning::Garage S3 unreachable at probe time — falling back to direct clang-tidy-20 (no result caching)"
+            fi
+          fi
 
       - name: 🔍 Analyze code with clang-tidy
         timeout-minutes: 120
@@ -190,8 +249,21 @@ jobs:
           fi
 
       - name: Publish Ccache summary
+        if: always()
         run: |
           echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Publish ctcache summary
+        if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
+        run: |
+          {
+            echo '## ctcache Summary'
+            if command -v clang-tidy-cache &>/dev/null; then
+              echo '```'
+              clang-tidy-cache --show-stats 2>/dev/null || echo "stats unavailable"
+              echo '```'
+            fi
+          } >> $GITHUB_STEP_SUMMARY

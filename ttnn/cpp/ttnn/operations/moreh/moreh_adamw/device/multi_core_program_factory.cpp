@@ -237,14 +237,15 @@ ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
     auto* const grad_buf = grad.buffer();
     auto* const exp_avg_in_buf = exp_avg_in.buffer();
     auto* const exp_avg_sq_in_buf = exp_avg_sq_in.buffer();
-    const uint32_t max_exp_avg_sq_in_addr =
-        max_exp_avg_sq_in.has_value() ? max_exp_avg_sq_in.value().buffer()->address() : 0u;
+    // Register max_exp_avg_sq as a BufferBinding so the framework patches its address on
+    // cache hit. A raw Buffer::address() write here would go stale across cache hits because
+    // the program hash zeros out step+lr, so the same cached program is reused with new tensors.
+    auto* const max_exp_avg_sq_in_buf = max_exp_avg_sq_in.has_value() ? max_exp_avg_sq_in.value().buffer() : nullptr;
 
     auto* const param_out_buf = param_out.buffer();
     auto* const exp_avg_out_buf = exp_avg_out.buffer();
     auto* const exp_avg_sq_out_buf = exp_avg_sq_out.buffer();
-    const uint32_t max_exp_avg_sq_out_addr =
-        max_exp_avg_sq_out.has_value() ? max_exp_avg_sq_out.value().buffer()->address() : 0u;
+    auto* const max_exp_avg_sq_out_buf = max_exp_avg_sq_out.has_value() ? max_exp_avg_sq_out.value().buffer() : nullptr;
     float beta1_exponent = std::pow(beta1, step);
     float beta2_exponent = std::pow(beta2, step);
 
@@ -274,7 +275,7 @@ ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
              grad_buf,
              exp_avg_in_buf,
              exp_avg_sq_in_buf,
-             max_exp_avg_sq_in_addr,
+             max_exp_avg_sq_in_buf,
              f2u_lr,
              f2u_beta1,
              f2u_beta2,
@@ -292,7 +293,7 @@ ProgramDescriptor MorehAdamWDeviceOperation::create_descriptor(
             {param_out_buf,
              exp_avg_out_buf,
              exp_avg_sq_out_buf,
-             max_exp_avg_sq_out_addr,
+             max_exp_avg_sq_out_buf,
              num_tiles_per_core,
              tile_offset});
 

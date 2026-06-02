@@ -47,7 +47,7 @@ void core_agnostic_main() {
                 llk_math_dest_section_done<DST_ACCUM_MODE>();
             }
 
-            llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::NONE, MathFidelity::LoFi>();
+            llk_math_eltwise_binary_init<EltwiseBinaryType::ELWADD, BroadcastType::NONE, MathFidelity::LoFi>(cb24, cb1);
             for (uint32_t c = 0; c < per_core_block_c_tiles; c++) {
                 llk_math_wait_for_dest_available();
                 llk_math_eltwise_binary<

@@ -302,11 +302,21 @@
 - name: Gemma-4-E2B e2e tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
-    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E2B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E2B-it
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E2B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E2B-it
     pytest -s --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo
+    # test_lm_head and test_model::test_full_model load real weights via
+    # AutoModelForCausalLM.from_pretrained, so they live in the e2e job
+    # (HF_MODEL=hub-id resolves to the populated /mnt/MLPerf cache) rather
+    # than the unit job (HF_MODEL=local config-only dir).
+    pytest -s --timeout 600 \
+      models/demos/gemma4/tests/unit/test_lm_head.py \
+      models/demos/gemma4/tests/unit/test_model.py::test_full_model
   model: gemma-4-e2b
   skus:
     wh_n150:
+      timeout: 15
+      tier: 2
+    bh_p150:
       timeout: 15
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
@@ -315,43 +325,80 @@
 - name: Gemma-4-E4B e2e tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
-    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E4B-it
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-E4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-E4B-it
     pytest -s --timeout 1000 models/demos/gemma4/demo/text_demo.py::test_demo
+    pytest -s --timeout 600 \
+      models/demos/gemma4/tests/unit/test_lm_head.py \
+      models/demos/gemma4/tests/unit/test_model.py::test_full_model
   model: gemma-4-e4b
   skus:
-    wh_n150:
-      timeout: 15
-      tier: 2
     # wh_n300 disabled due to reduced N300 runner availability — re-enable when capacity returns.
     # wh_n300:
     #   timeout: 15
     #   tier: 2
+    bh_p300:
+      timeout: 15
+      tier: 2
+    bh_quietbox_2:
+      timeout: 15
+      tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 - name: Gemma-4-26B-A4B e2e tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
-    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-26B-A4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-26B-A4B-it
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-26B-A4B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-26B-A4B-it
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
+    pytest -s --timeout 900 \
+      models/demos/gemma4/tests/unit/test_lm_head.py \
+      models/demos/gemma4/tests/unit/test_model.py::test_full_model
   model: gemma-4-26b-a4b
   skus:
     wh_llmbox_perf:
-      timeout: 7
+      timeout: 15
       tier: 2
+    bh_quietbox_2:
+      timeout: 15
+      tier: 2
+    bh_loudbox:
+      timeout: 15
+      tier: 2
+    # bh_galaxy_perf: temporarily disabled — Blackhole Galaxy fabric / ethernet
+    # bring-up hits an unrecoverable hang at open_mesh_device (FabricFirmwareInitializer
+    # router sync timeout / "active ethernet core … to become active again"). Same
+    # cluster of failures as the bh_galaxy unit-test entries below; same fix
+    # window. Re-enable once root-caused.
+    # bh_galaxy_perf:
+    #   timeout: 15
+    #   tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
 - name: Gemma-4-31B e2e tests
   cmd: |
     uv pip install -r models/demos/gemma4/requirements.txt
-    export HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-31B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-31B-it
     pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
+    pytest -s --timeout 900 \
+      models/demos/gemma4/tests/unit/test_lm_head.py \
+      models/demos/gemma4/tests/unit/test_model.py::test_full_model
   model: gemma-4-31b
   skus:
     wh_llmbox_perf:
-      timeout: 5
+      timeout: 15
       tier: 2
+    bh_quietbox_2:
+      timeout: 15
+      tier: 2
+    bh_loudbox:
+      timeout: 15
+      tier: 2
+    # bh_galaxy_perf: temporarily disabled — same Blackhole Galaxy fabric / ethernet
+    # hang as 26B-A4B above. Re-enable once root-caused.
+    # bh_galaxy_perf:
+    #   timeout: 15
+    #   tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
 
@@ -434,8 +481,12 @@
 - name: GPT-OSS 120B e2e tests
   cmd: |
     uv pip install -r models/demos/gpt_oss/requirements.txt
-    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/
-    pytest models/demos/gpt_oss/demo/text_demo.py --timeout 1500
+    export HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/openai--gpt-oss-120b/ TT_MM_THROTTLE_PERF=2
+    # Tensor cache is pre-built on the NAS — skip loading model weights by default.
+    # Check mlperf-write-access in the workflow to load weights and regenerate the cache.
+    SKIP_MODEL_LOAD="--skip-model-load"
+    [ "${MLPERF_READ_ONLY:-true}" = "false" ] && SKIP_MODEL_LOAD=""
+    pytest models/demos/gpt_oss/demo/text_demo.py --timeout 1500 $SKIP_MODEL_LOAD
   model: gpt-oss-120b
   skus:
     wh_galaxy_perf:
@@ -500,16 +551,13 @@
 # ── Mamba ──────────────────────────────────────────────────────────
 
 # See issue: https://github.com/tenstorrent/tt-metal/issues/42163
-# - name: Mamba-2.8B e2e tests
-#   cmd: |
-#     pytest --timeout 420 --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py
-#   model: mamba-2.8b
-#   skus:
-#     wh_n150:
-#       timeout: 5
-#       tier: 3
-#     wh_n300:
-#       timeout: 5
-#       tier: 3
-#   owner_id: U06ECNVR0EN # Evan Smal
-#   team: models
+- name: Mamba-2.8B e2e tests
+  cmd: |
+    pytest --timeout 420 --disable-warnings -q -s --input-method=json --input-path='models/demos/wormhole/mamba/demo/prompts.json' models/demos/wormhole/mamba/demo/demo.py
+  model: mamba-2.8b
+  skus:
+    wh_n150:
+      timeout: 5
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
