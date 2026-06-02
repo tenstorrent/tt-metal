@@ -498,7 +498,6 @@ targets:
               prefill_time_to_token: 0.053
               decode_t/s/u: 23.0
               decode_t/s: 23.0
-              decode_tolerance: 1.15
             accuracy:
               top1: 90.0
               top5: 97.6
@@ -701,7 +700,6 @@ targets:
               prefill_time_to_token: 0.136
               decode_t/s/u: 16.30
               decode_t/s: 521.6
-              decode_tolerance: 1.15
             accuracy:
               top1: 96.0
               top5: 100.0
@@ -983,7 +981,6 @@ targets:
               prefill_time_to_token: 0.207
               decode_t/s/u: 8.7
               decode_t/s: 278
-              decode_tolerance: 1.15
             accuracy:
               top1: 91.0
               top5: 99.0
