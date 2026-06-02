@@ -18,7 +18,9 @@ Optional:
                                         They launch one MPI rank per mesh, each with its own TT_MESH_ID.
                                         4x8z    = single galaxy as 4 Z-connected 4x2 meshes (4 ranks).
                                         2x4x4z  = single galaxy as 2 Z-connected 4x4 meshes (2 ranks, dual_4x4 layout).
-                                        16x4x4z = full quad: 4 hosts x 2 Z-connected 4x4 meshes each (8 ranks).
+                                        16x4x4z = full quad: 8 Z-connected 4x4 meshes across 4 hosts (12 ranks);
+                                                  even mesh ids are single-host (slices {1,2}), odd mesh ids are
+                                                  split across two adjacent ring hosts ({3} + next-host {0}).
     --output <directory>                Output directory for log files (default: fabric_test_logs)
     --mesh-graph-desc-path <path>       Path to mesh graph descriptor file (overrides --config)
                                         4x8 default:   tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
@@ -31,7 +33,7 @@ Optional:
                                         4x32z default:  tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_4x4x8_z_torus_graph_descriptor.textproto
                                                        (4 galaxies as 4 Z-connected 8x4 torus meshes)
                                         16x4x4z default: tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_8x4x4_z_graph_descriptor.textproto
-                                                       (4 galaxies x 2 Z-connected 4x4 meshes each)
+                                                       (8 Z-connected 4x4 meshes across 4 galaxies; even single-host, odd split 2x1)
     --test-binary <path>                Path to test binary
                                         (default: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric)
     --test-config <path>                Path to test configuration file
@@ -287,45 +289,6 @@ run_fabric_discovery_local() {
     fi
 }
 
-is_local_fabric_host() {
-    local host="$1"
-    local short_name fqdn host_short
-    short_name="$(hostname -s 2>/dev/null || hostname)"
-    fqdn="$(hostname -f 2>/dev/null || true)"
-    host_short="${host%%.*}"
-    [[ "$host" == "localhost" || "$host" == "127.0.0.1" || "$host" == "$short_name" || "$host" == "$fqdn" || "$host_short" == "$short_name" ]]
-}
-
-run_fabric_discovery_on_host() {
-    local host="$1"
-    local fabric_config="$2"
-    local tt_home="${TT_METAL_HOME:-$(pwd)}"
-    local ssh_opts=(-o StrictHostKeyChecking=false -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
-
-    if is_local_fabric_host "$host"; then
-        run_fabric_discovery_local "$fabric_config"
-        return
-    fi
-
-    if [[ "$DOCKER_IMAGE" == "none" ]]; then
-        local gen_rb="${tt_home}/tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
-        ssh "${ssh_opts[@]}" "$host" \
-            "cd '${tt_home}' && LD_LIBRARY_PATH='${tt_home}/build/lib:'\${LD_LIBRARY_PATH:-} TT_METAL_HOME='${tt_home}' python3 '${gen_rb}' --fabric-config '${fabric_config}' --print-devices --work-dir '${tt_home}'"
-    else
-        ssh "${ssh_opts[@]}" "$host" \
-            "docker run --rm --net=host --privileged \
-                -v /tmp:/tmp \
-                -v /dev/hugepages-1G:/dev/hugepages-1G \
-                -v '${HOME}:${HOME}' \
-                --user '$(id -u):$(id -g)' \
-                -v /etc/passwd:/etc/passwd:ro \
-                -v /etc/group:/etc/group:ro \
-                --entrypoint='' \
-                '${DOCKER_IMAGE}' \
-                bash -c 'cd \"\$TT_METAL_HOME\" && python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py --fabric-config ${fabric_config} --print-devices --work-dir \"\$TT_METAL_HOME\"'"
-    fi
-}
-
 resolve_single_host_z_visible_devices() {
     local fabric_config="$1"
     local expected_ranks="$2"
@@ -355,63 +318,113 @@ resolve_single_host_z_visible_devices() {
     done
 }
 
-resolve_quad_host_z_visible_devices() {
-    local per_host_fabric_config="$1"
-    local num_hosts="$2"
-    local ranks_per_host="$3"
-    local expected_total=$((num_hosts * ranks_per_host))
+# Resolve TT_VISIBLE_DEVICES for 2x4x4z from the multi-host 2x4 slice discovery
+# (generate_rank_bindings.py --slice-config). One mpirun across all hosts
+# produces a per-host slice mapping (Rev C tray swap handled in the gtest), so no
+# per-host SSH loop is needed. Prints one TT_VISIBLE_DEVICES line per rank in
+# host-major order (host0 local mesh 0, host0 local mesh 1, host1 ...).
+#
+# Discovery ALWAYS runs natively on the launch host, even in docker mode: it only
+# reads the hardware topology and emits logical device ids (identical whether run
+# natively or inside a container), and the multi-host discovery gtest cannot be
+# launched across per-rank containers. In docker mode the resolved
+# TT_VISIBLE_DEVICES are forwarded into the containers via -x at launch time.
+# Requires a local host build of test_physical_discovery + python3 (loguru/yaml).
+resolve_slice_z_visible_devices() {
+    local slice_config="$1"
+    local hosts_csv="$2"
+    local expected_ranks="$3"
+    local tt_home="${TT_METAL_HOME:-$(pwd)}"
+    local gen_rb="${tt_home}/tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
 
-    if [[ "$DOCKER_IMAGE" == "none" ]]; then
-        local gen_rb="${TT_METAL_HOME:-$(pwd)}/tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
-        if [[ ! -f "$gen_rb" ]]; then
-            echo "Error: rank binding helper not found: $gen_rb" >&2
-            exit 1
-        fi
-    fi
-
-    IFS=',' read -ra Z_RANK_HOSTS <<< "$HOSTS"
-    if [[ "${#Z_RANK_HOSTS[@]}" -ne "$num_hosts" ]]; then
-        echo "Error: --config requires exactly $num_hosts hosts in --hosts (got ${#Z_RANK_HOSTS[@]})" >&2
+    if [[ ! -f "$gen_rb" ]]; then
+        echo "Error: rank binding helper not found: $gen_rb" >&2
         exit 1
     fi
 
-    echo "Resolving TT_VISIBLE_DEVICES via tray discovery on ${num_hosts} hosts (--fabric-config ${per_host_fabric_config})..."
+    echo "Resolving TT_VISIBLE_DEVICES via 2x4 slice discovery (--slice-config ${slice_config}, hosts ${hosts_csv})..."
     Z_VISIBLE_DEVICES=()
+    mapfile -t Z_VISIBLE_DEVICES < <(
+        cd "$tt_home" && \
+        LD_LIBRARY_PATH="${tt_home}/build/lib:${LD_LIBRARY_PATH:-}" \
+        TT_METAL_HOME="$tt_home" \
+        python3 "$gen_rb" --slice-config "$slice_config" --hosts "$hosts_csv" --mpi-if "$MPI_IF" \
+            --print-devices --work-dir "$tt_home" \
+            | grep '^FABRIC_VISIBLE_DEVICES:' | sed 's/^FABRIC_VISIBLE_DEVICES://'
+    )
 
-    local host_idx=0
-    for host in "${Z_RANK_HOSTS[@]}"; do
-        local host_devices=()
-        mapfile -t host_devices < <(
-            run_fabric_discovery_on_host "$host" "$per_host_fabric_config" \
-                | grep '^FABRIC_VISIBLE_DEVICES:' | sed 's/^FABRIC_VISIBLE_DEVICES://'
-        )
-        if [[ "${#host_devices[@]}" -ne "$ranks_per_host" ]]; then
-            echo "Error: expected ${ranks_per_host} TT_VISIBLE_DEVICES entries from ${host}, got ${#host_devices[@]}" >&2
-            exit 1
-        fi
-        for ((local_rank = 0; local_rank < ranks_per_host; local_rank++)); do
-            local global_rank=$((host_idx * ranks_per_host + local_rank))
-            Z_VISIBLE_DEVICES+=("${host_devices[$local_rank]}")
-            echo "  rank $global_rank (host ${host}, local mesh ${local_rank}) -> TT_VISIBLE_DEVICES=${host_devices[$local_rank]}"
-        done
-        ((host_idx++))
-    done
-
-    if [[ "${#Z_VISIBLE_DEVICES[@]}" -ne "$expected_total" ]]; then
-        echo "Error: expected ${expected_total} TT_VISIBLE_DEVICES entries, got ${#Z_VISIBLE_DEVICES[@]}" >&2
+    if [[ "${#Z_VISIBLE_DEVICES[@]}" -ne "$expected_ranks" ]]; then
+        echo "Error: expected ${expected_ranks} TT_VISIBLE_DEVICES entries for ${slice_config}, got ${#Z_VISIBLE_DEVICES[@]}" >&2
         exit 1
     fi
+    for ((i = 0; i < expected_ranks; i++)); do
+        echo "  rank $i -> TT_VISIBLE_DEVICES=${Z_VISIBLE_DEVICES[$i]}"
+    done
 }
 
-write_quad_z_rankfile() {
-    local ranks_per_host="$1"
+# Resolve the 16x4x4z quad split layout: 8 Z-connected 4x4 meshes across 4 ring
+# hosts as a 12-rank table (even meshes single-host {1,2}; odd meshes split
+# {3}+next-host {0}). Populates parallel per-rank arrays in canonical
+# (mesh_id, host_rank) -> mpi_rank order:
+#   Z_RANK_MESH_ID, Z_RANK_HOST_RANK, Z_RANK_PIN_HOSTS, Z_VISIBLE_DEVICES.
+#
+# Like resolve_slice_z_visible_devices, the slice discovery always runs natively
+# on the launch host (even in docker mode); only the test launch is containerized.
+resolve_quad_split_rank_table() {
+    local hosts_csv="$1"
+    local expected_ranks="$2"
+    local tt_home="${TT_METAL_HOME:-$(pwd)}"
+    local gen_rb="${tt_home}/tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py"
+
+    if [[ ! -f "$gen_rb" ]]; then
+        echo "Error: rank binding helper not found: $gen_rb" >&2
+        exit 1
+    fi
+
+    echo "Resolving quad split rank table via 2x4 slice discovery (--slice-config 16x4x4z, hosts ${hosts_csv})..."
+    local rank_lines=()
+    mapfile -t rank_lines < <(
+        cd "$tt_home" && \
+        LD_LIBRARY_PATH="${tt_home}/build/lib:${LD_LIBRARY_PATH:-}" \
+        TT_METAL_HOME="$tt_home" \
+        python3 "$gen_rb" --slice-config 16x4x4z --hosts "$hosts_csv" --mpi-if "$MPI_IF" \
+            --print-rank-table --work-dir "$tt_home" \
+            | grep '^FABRIC_RANK:' | sed 's/^FABRIC_RANK://'
+    )
+
+    if [[ "${#rank_lines[@]}" -ne "$expected_ranks" ]]; then
+        echo "Error: expected ${expected_ranks} FABRIC_RANK entries for 16x4x4z, got ${#rank_lines[@]}" >&2
+        exit 1
+    fi
+
+    Z_RANK_MESH_ID=()
+    Z_RANK_HOST_RANK=()
+    Z_RANK_PIN_HOSTS=()
+    Z_VISIBLE_DEVICES=()
+    local idx=0
+    local mesh_id host_rank host devices
+    for line in "${rank_lines[@]}"; do
+        IFS=';' read -r mesh_id host_rank host devices <<< "$line"
+        Z_RANK_MESH_ID[$idx]="$mesh_id"
+        Z_RANK_HOST_RANK[$idx]="$host_rank"
+        Z_RANK_PIN_HOSTS[$idx]="$host"
+        Z_VISIBLE_DEVICES[$idx]="$devices"
+        echo "  rank $idx -> mesh_id ${mesh_id} host_rank ${host_rank} host ${host} TT_VISIBLE_DEVICES=${devices}"
+        ((idx++))
+    done
+}
+
+# Build an OpenMPI rankfile that pins each rank to its host (from
+# Z_RANK_PIN_HOSTS), assigning per-host slots in increasing order.
+write_quad_split_rankfile() {
     Z_RANKFILE="$(mktemp)"
-    local global_rank=0
-    for ((h = 0; h < ${#Z_RANK_HOSTS[@]}; h++)); do
-        for ((slot = 0; slot < ranks_per_host; slot++)); do
-            echo "rank $global_rank=${Z_RANK_HOSTS[$h]} slot=$slot" >> "$Z_RANKFILE"
-            ((global_rank++))
-        done
+    declare -A host_slot
+    local i h slot
+    for ((i = 0; i < NUM_RANKS; i++)); do
+        h="${Z_RANK_PIN_HOSTS[$i]}"
+        slot="${host_slot[$h]:-0}"
+        echo "rank $i=${h} slot=$slot" >> "$Z_RANKFILE"
+        host_slot[$h]=$((slot + 1))
     done
     Z_GLOBAL_HOST=(--hostfile "$Z_RANKFILE" --map-by "rankfile:file=$Z_RANKFILE")
 }
@@ -425,6 +438,110 @@ cleanup_run_artifacts() {
 }
 trap cleanup_run_artifacts EXIT
 
+# ---------------------------------------------------------------------------
+# Success highlighting helpers (used live during test output and at end).
+# Defined here, before the launch logic, so the pipelines below can call them.
+# ---------------------------------------------------------------------------
+
+FABRIC_SUCCESS_MARKER="Test | All tests completed successfully"
+
+# Print an unmissable banner when a rank reports success.
+_print_fabric_success_banner() {
+    local plain_line="$1"
+    local success_count="$2"
+    local rank_label=""
+
+    if [[ "$plain_line" =~ \[1,([0-9]+)\] ]]; then
+        rank_label=" (MPI rank ${BASH_REMATCH[1]})"
+    fi
+
+    echo ""
+    echo -e "\033[42m\033[1;30m                                                                                \033[0m"
+    echo -e "\033[42m\033[1;30m                                                                                \033[0m"
+    echo -e "\033[42m\033[1;30m   >>>>>  FABRIC TESTS PASSED${rank_label}  <<<<<                              \033[0m"
+    echo -e "\033[42m\033[1;30m                                                                                \033[0m"
+    echo -e "\033[42m\033[1;30m   Detected: ${FABRIC_SUCCESS_MARKER}                                       \033[0m"
+    echo -e "\033[42m\033[1;30m   Success signals so far: ${success_count}                                   \033[0m"
+    echo -e "\033[42m\033[1;30m                                                                                \033[0m"
+    echo -e "\033[42m\033[1;30m                                                                                \033[0m"
+    echo ""
+}
+
+# Tee filter: pass output through unchanged, but shout when success is detected.
+# The success phrase is never split by ANSI codes mid-string, so we substring-match
+# the raw line directly instead of spawning a sed per line (keeps the live pipe fast).
+highlight_fabric_test_success() {
+    local line success_count=0
+
+    while IFS= read -r line; do
+        printf '%s\n' "$line"
+        if [[ "$line" == *"All tests completed successfully"* ]]; then
+            success_count=$((success_count + 1))
+            _print_fabric_success_banner "$line" "$success_count"
+        fi
+    done
+}
+
+# After the run, summarize pass/fail from the log (one success line per MPI rank).
+print_fabric_final_summary() {
+    local log_file="$1"
+    local success_count=0
+    local expected_hosts=0
+    local all_passed=false
+
+    if [[ ! -f "$log_file" ]]; then
+        echo ""
+        echo -e "\033[1;31mNo log file found; cannot verify fabric test results.\033[0m"
+        return 1
+    fi
+
+    # Single awk pass over the log: strip ANSI inline, count success markers and
+    # distinct MPI rank tags ([1,N] from --tag-output). This replaces a bash
+    # while-loop that spawned printf|sed per line (two processes per log line),
+    # which was very slow on large multi-rank logs.
+    read -r success_count expected_hosts < <(
+        awk '
+        {
+            line = $0
+            gsub(/\033\[[0-9;]*m/, "", line)
+            if (line ~ /All tests completed successfully/) success++
+            if (match(line, /^\[1,[0-9]+\]/)) ranks[substr(line, RSTART, RLENGTH)] = 1
+        }
+        END { n = 0; for (k in ranks) n++; print success + 0, n + 0 }
+        ' "$log_file"
+    )
+
+    if [[ "$expected_hosts" -eq 0 ]]; then
+        expected_hosts=1
+    fi
+
+    if [[ "$success_count" -eq "$expected_hosts" && "$success_count" -gt 0 ]]; then
+        all_passed=true
+    fi
+
+    echo ""
+    if [[ "$all_passed" == true ]]; then
+        echo -e "\033[42m\033[1;30m                                                                                \033[0m"
+        echo -e "\033[42m\033[1;30m                                                                                \033[0m"
+        echo -e "\033[42m\033[1;30m                                                                                \033[0m"
+        echo -e "\033[42m\033[1;30m   ##########################  ALL FABRIC TESTS PASSED  ######################## \033[0m"
+        echo -e "\033[42m\033[1;30m                                                                                \033[0m"
+        echo -e "\033[42m\033[1;30m   Every MPI rank (${success_count}/${expected_hosts}) reported: ${FABRIC_SUCCESS_MARKER} \033[0m"
+        echo -e "\033[42m\033[1;30m                                                                                \033[0m"
+        echo -e "\033[42m\033[1;30m                                                                                \033[0m"
+        echo -e "\033[42m\033[1;30m                                                                                \033[0m"
+        echo ""
+    else
+        echo -e "\033[1;31m================================================================================\033[0m"
+        echo -e "\033[1;31m FABRIC TESTS DID NOT FULLY PASS \033[0m"
+        echo -e "\033[1;31m Success signals: ${success_count}/${expected_hosts} MPI rank(s)\033[0m"
+        echo -e "\033[1;31m Expected '${FABRIC_SUCCESS_MARKER}' once per rank.\033[0m"
+        echo -e "\033[1;31m See log: ${log_file}\033[0m"
+        echo -e "\033[1;31m================================================================================\033[0m"
+        echo ""
+    fi
+}
+
 if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$CONFIG" == "16x4x4z" ]]; then
     # Multi-mesh Z configs: launch one MPI rank per mesh, each with its own
     # TT_MESH_ID, so the descriptor's inter-mesh (Z) connections are exercised
@@ -432,7 +549,10 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$
     Z_VISIBLE_DEVICES=()
     Z_RANK_HOSTS=()
     Z_GLOBAL_HOST=()
-    Z_RANKS_PER_HOST=1
+    Z_RANK_MESH_ID=()
+    Z_RANK_HOST_RANK=()
+    Z_RANK_PIN_HOSTS=()
+    NUM_RANKS=""
 
     if [[ "$CONFIG" == "4x8z" ]]; then
         NUM_MESHES=4
@@ -444,24 +564,24 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$
         NUM_MESHES=2
         SINGLE_HOST="${HOSTS%%,*}"
         Z_GLOBAL_HOST=(--host "${SINGLE_HOST}:${NUM_MESHES}")
-        resolve_single_host_z_visible_devices "2x4x4z" "$NUM_MESHES"
-        echo "Running multi-mesh 2x4x4z (2 Z-connected 4x4 meshes) on single host: $SINGLE_HOST"
+        resolve_slice_z_visible_devices "2x4x4z" "$SINGLE_HOST" "$NUM_MESHES"
+        echo "Running multi-mesh 2x4x4z (2 Z-connected 4x4 meshes, slice-based) on single host: $SINGLE_HOST"
     elif [[ "$CONFIG" == "16x4x4z" ]]; then
+        # 8 Z-connected 4x4 meshes across 4 ring hosts, composed from 2x4 slices:
+        # even meshes are single-host 4x4 {1,2}; odd meshes are split across two
+        # adjacent hosts ({3} on host H + {0} on host H+1). That yields 12 ranks
+        # (3 per host) ordered mesh-major then host-rank-minor, matching
+        # control_plane's (mesh_id, host_rank) -> mpi_rank assignment.
         NUM_MESHES=8
-        Z_RANKS_PER_HOST=2
+        NUM_RANKS=12
         IFS=',' read -ra Z_RANK_HOSTS <<< "$HOSTS"
         if [[ "${#Z_RANK_HOSTS[@]}" -ne 4 ]]; then
             echo "Error: --config 16x4x4z requires exactly 4 hosts in --hosts (got ${#Z_RANK_HOSTS[@]})"
             exit 1
         fi
-        resolve_quad_host_z_visible_devices "2x4x4z" 4 "$Z_RANKS_PER_HOST"
-        write_quad_z_rankfile "$Z_RANKS_PER_HOST"
-        echo "Running multi-mesh 16x4x4z (4 hosts x 2 Z-connected 4x4 meshes, 8 ranks total); rank i pinned via rankfile:"
-        for ((i = 0; i < NUM_MESHES; i++)); do
-            local_host_idx=$((i / Z_RANKS_PER_HOST))
-            local_mesh=$((i % Z_RANKS_PER_HOST))
-            echo "  rank $i -> mesh_id $i -> ${Z_RANK_HOSTS[$local_host_idx]} (local mesh ${local_mesh})"
-        done
+        resolve_quad_split_rank_table "$HOSTS" "$NUM_RANKS"
+        write_quad_split_rankfile
+        echo "Running multi-mesh 16x4x4z (8 Z-connected 4x4 meshes across 4 hosts, slice-based split; 12 ranks, even=single-host {1,2}, odd=split {3}+next-host {0}); ranks pinned via rankfile."
     else
         NUM_MESHES=4
         # 4x32z: one full galaxy per host. The Z ring (mesh 0->1->2->3->0) only
@@ -486,17 +606,33 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$
     fi
     echo ""
 
+    # Configs other than 16x4x4z launch one rank per mesh (mesh_id == rank, no
+    # explicit host rank). Fill the per-rank arrays so the segment builder below
+    # is shared by all Z configs.
+    if [[ -z "$NUM_RANKS" ]]; then
+        NUM_RANKS="$NUM_MESHES"
+        for ((i = 0; i < NUM_RANKS; i++)); do
+            Z_RANK_MESH_ID[$i]="$i"
+            Z_RANK_HOST_RANK[$i]=""
+        done
+    fi
+
     # Assemble the per-rank ":"-separated MPMD segments shared by the docker
     # and no-docker launch paths. Each segment carries its own TT_MESH_ID (and,
-    # for 4x8z/2x4x4z, TT_VISIBLE_DEVICES). Host placement for 4x32z is handled
-    # by the OpenMPI rankfile in Z_GLOBAL_HOST, not per-segment --host.
+    # where resolved, TT_VISIBLE_DEVICES). 16x4x4z additionally sets
+    # TT_MESH_HOST_RANK (required on multi-host systems, and distinguishes the
+    # two ranks of a split mesh). Host placement for 4x32z/16x4x4z is handled by
+    # the OpenMPI rankfile in Z_GLOBAL_HOST, not per-segment --host.
     # TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS matches full_rank_binding.yaml so the
     # slowest ethernet handshakes don't trip the Fabric Router Sync timeout.
     Z_SEGMENTS=()
-    for ((i = 0; i < NUM_MESHES; i++)); do
+    for ((i = 0; i < NUM_RANKS; i++)); do
         [[ $i -gt 0 ]] && Z_SEGMENTS+=(":")
         Z_SEGMENTS+=(-np 1)
-        Z_SEGMENTS+=(-x TT_MESH_ID="$i")
+        Z_SEGMENTS+=(-x TT_MESH_ID="${Z_RANK_MESH_ID[$i]}")
+        if [[ -n "${Z_RANK_HOST_RANK[$i]:-}" ]]; then
+            Z_SEGMENTS+=(-x TT_MESH_HOST_RANK="${Z_RANK_HOST_RANK[$i]}")
+        fi
         if [[ "${#Z_VISIBLE_DEVICES[@]}" -gt 0 ]]; then
             Z_SEGMENTS+=(-x TT_VISIBLE_DEVICES="${Z_VISIBLE_DEVICES[$i]}")
         fi
@@ -521,7 +657,7 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$
             "${MPI_EXTRA_ARGS[@]}" \
             --bind-to none \
             "${Z_GLOBAL_HOST[@]}" \
-            "${Z_SEGMENTS[@]}" |& tee "$LOG_FILE"
+            "${Z_SEGMENTS[@]}" |& tee "$LOG_FILE" | highlight_fabric_test_success
     else
         ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
             --empty-entrypoint \
@@ -530,7 +666,7 @@ if [[ "$CONFIG" == "4x8z" || "$CONFIG" == "2x4x4z" || "$CONFIG" == "4x32z" || "$
             "${MPI_EXTRA_ARGS[@]}" \
             --bind-to none \
             "${Z_GLOBAL_HOST[@]}" \
-            "${Z_SEGMENTS[@]}" |& tee "$LOG_FILE"
+            "${Z_SEGMENTS[@]}" |& tee "$LOG_FILE" | highlight_fabric_test_success
     fi
 elif [[ "$DOCKER_IMAGE" == "none" ]]; then
     # No-docker path: invoke mpirun-ulfm directly against the local build.
@@ -550,7 +686,7 @@ elif [[ "$DOCKER_IMAGE" == "none" ]]; then
             -x TT_MESH_ID=0 \
             -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
             "$TEST_BINARY" \
-            --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
+            --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE" | highlight_fabric_test_success
     else
         mpirun-ulfm \
             --tag-output \
@@ -578,7 +714,7 @@ elif [[ "$DOCKER_IMAGE" == "none" ]]; then
             -x TT_MESH_ID=0 \
             -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
             "$TEST_BINARY" \
-            --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
+            --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE" | highlight_fabric_test_success
     fi
 elif [[ "$CONFIG" == "4x8" ]]; then
     SINGLE_HOST="${HOSTS%%,*}"
@@ -595,7 +731,7 @@ elif [[ "$CONFIG" == "4x8" ]]; then
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
         "$TEST_BINARY" \
-        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE" | highlight_fabric_test_success
 else
     ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
         --empty-entrypoint \
@@ -622,7 +758,7 @@ else
         -x TT_MESH_ID=0 \
         -x TT_MESH_GRAPH_DESC_PATH="$MESH_GRAPH_DESC_PATH" \
         "$TEST_BINARY" \
-        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE"
+        --test_config "$TEST_CONFIG" $EXTRA_BINARY_ARGS |& tee "$LOG_FILE" | highlight_fabric_test_success
 fi
 
 echo ""
@@ -642,4 +778,6 @@ for report in pairwise_validation_summary.log pairwise_validation_detailed.log; 
         echo "Copied report: $OUTPUT_DIR/$report"
     fi
 done
+
+print_fabric_final_summary "$LOG_FILE"
 echo "=========================================="

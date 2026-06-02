@@ -14,6 +14,9 @@ from loguru import logger
 
 # Machine-readable stdout prefix for run_fabric_tests.sh (--print-devices).
 FABRIC_VISIBLE_DEVICES_PREFIX = "FABRIC_VISIBLE_DEVICES:"
+# Machine-readable stdout prefix for run_fabric_tests.sh (--print-rank-table).
+# Format: FABRIC_RANK:<mesh_id>;<host_rank>;<host>;<devices_csv>
+FABRIC_RANK_PREFIX = "FABRIC_RANK:"
 
 
 def generate_tray_to_pcie_device_mapping(mapping_file="tray_to_pcie_device_mapping.yaml", work_dir=None):
@@ -113,21 +116,15 @@ def visible_devices_for_rank(tray_to_pcie_device_mapping, rank_to_tray_mapping, 
     return ",".join(map(str, device_ids))
 
 
-# Rev C Blackhole Galaxy single-host layouts used by run_fabric_tests.sh (4x8z / 2x4x4z).
-# Quad configs (16x4x4z) reuse these per-host layouts via SSH discovery on
-# each galaxy host; mesh_id is assigned globally in rankfile order (host0 meshes first).
+# Rev C Blackhole Galaxy single-host tray layout used by run_fabric_tests.sh (4x8z).
 # Tray ids come from test_physical_discovery (tray_to_pcie_device_mapping.yaml).
 # 4x8z must follow BH_GLX_QUAD rank->tray order. Physical 2x2 tray grid per host:
 #   m0(tr1)  m1(tr3)
 #   m3(tr2)  m2(tr4)
 # Intra-host Z: 0-1, 1-2, 2-3, 0-3 (bh_galaxy_split_4x2_multi_mesh).
-# Quad inter-host: same local mesh index across chassis stack (see quad_bh_galaxy_16x4x2_z MGD; 4x4x8z TBD).
+# NOTE: 2x4x4z / 16x4x4z now use the 2x4 slice discovery instead (see
+# FABRIC_TEST_SLICE_MAPPINGS / resolve_fabric_test_visible_devices_slices below).
 FABRIC_TEST_TRAY_MAPPINGS = {
-    # 2 Z-connected 4x4 meshes: trays 1+2 (top) and 3+4 (bottom) on Rev C.
-    "2x4x4z": {
-        0: [1, 2],
-        1: [3, 4],
-    },
     # 4 Z-connected 4x2 meshes: one tray per mesh (same as BH_GLX_QUAD_RANK_TO_TRAY_MAPPING).
     "4x8z": {
         0: [1],
@@ -166,6 +163,224 @@ def resolve_fabric_test_visible_devices(
     return [visible_devices_for_rank(tray_to_pcie_device_mapping, rank_to_tray, rank) for rank in sorted(rank_to_tray)]
 
 
+# --- Slice-based device resolution (2x4x4z / 16x4x4z) -----------------------
+# Uses the 2x4 "slice" discovery (Generate2x4SliceToPCIeDeviceMapping) instead
+# of per-tray discovery. A slice is a host-local 2x4 (8-chip) block spanning two
+# trays; the gtest already accounts for the Rev C tray swap, so slice ids 0..3
+# are logical. Each 4x4 mesh is composed from two slices.
+#
+# Slice -> 4x4 composition follows the canonical slice layout used by the blitz
+# decode pipeline (blitz_pipeline_config_quad_galaxy_4x4.yaml): the two 4x4
+# meshes are *interleaved* across all four trays, not split into tray-pairs.
+#   inner pair  -> slices {1, 2}  (single-host 4x4 in the blitz config)
+#   outer pair  -> slices {0, 3}  (the wrap/split 4x4 in the blitz config)
+# Both lists are ordered top-tray-pair slice first, bottom-tray-pair slice
+# second (1 before 2, 0 before 3) so the two meshes share a consistent
+# device ordering. The discovery runs across all hosts in one mpirun and writes
+# a per-host keyed mapping, so the quad layout (16x4x4z) no longer needs a
+# per-host SSH discovery loop.
+SLICE_MAPPING_GTEST_FILTER = "*Generate2x4SliceToPCIeDeviceMapping*"
+SLICE_MAPPING_FILE = "slice_to_pcie_device_mapping.yaml"
+DEVICES_PER_SLICE = 8
+
+# Single-host (2x4x4z) local mesh -> slice ids. With no adjacent host both 4x4
+# meshes are self-contained: mesh 0 = inner pair {1,2}, mesh 1 = outer pair {0,3}.
+# The quad layout (16x4x4z) instead splits the outer slices across adjacent ring
+# hosts -- see build_quad_split_rank_table / resolve_quad_split_rank_table.
+FABRIC_TEST_SLICE_MAPPINGS = {
+    "2x4x4z": {0: [1, 2], 1: [0, 3]},
+}
+
+# CLI choices for --slice-config: single-host plus the quad split layout.
+SLICE_CONFIG_CHOICES = ["2x4x4z", "16x4x4z"]
+
+
+def generate_slice_to_pcie_device_mapping(hosts, mpi_if=None, work_dir=None, mapping_file=SLICE_MAPPING_FILE):
+    """Run the multi-host 2x4 slice discovery; writes slice_to_pcie_device_mapping.yaml."""
+    cwd = Path(work_dir) if work_dir else Path.cwd()
+    test_executable = cwd / "build/test/tt_metal/tt_fabric/test_physical_discovery"
+    if not test_executable.exists():
+        logger.error(f"Test executable not found at {test_executable}")
+        logger.info("Please build with: ./build_metal.sh --build-tests")
+        sys.exit(1)
+
+    cmd = [
+        "mpirun",
+        "--np",
+        str(len(hosts)),
+        "--host",
+        ",".join(hosts),
+        "--mca",
+        "btl",
+        "self,tcp",
+    ]
+    if mpi_if:
+        cmd.extend(["--mca", "btl_tcp_if_include", mpi_if])
+    cmd.extend(["--bind-to", "none", "--tag-output", "--wdir", str(cwd)])
+    cmd.extend([str(test_executable), f"--gtest_filter={SLICE_MAPPING_GTEST_FILTER}"])
+
+    logger.info(f"Running: {' '.join(cmd)}")
+    try:
+        result = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        if result.returncode != 0:
+            if result.stderr:
+                logger.error(result.stderr.rstrip())
+            logger.error(f"{cmd} Failed to generate slice to pcie device mapping")
+            sys.exit(result.returncode)
+    except KeyboardInterrupt:
+        logger.error(f"{cmd} Interrupted")
+        sys.exit(1)
+
+    mapping_path = cwd / mapping_file
+    if not mapping_path.exists():
+        logger.error(f"{mapping_path} not found")
+        sys.exit(1)
+    return mapping_path
+
+
+def _match_slice_host_key(device_mapping, host):
+    """Map a requested host to its key in the slice mapping (exact or short-name match)."""
+    if host in device_mapping:
+        return host
+    host_short = host.split(".")[0]
+    for key in device_mapping:
+        if key == host_short or key.split(".")[0] == host_short:
+            return key
+    logger.error(f"Host {host!r} not found in slice mapping (keys: {sorted(device_mapping)})")
+    sys.exit(1)
+
+
+def resolve_fabric_test_visible_devices_slices(
+    fabric_config,
+    hosts,
+    mpi_if=None,
+    run_discovery=True,
+    work_dir=None,
+):
+    """Discover 2x4 slices across hosts; return one TT_VISIBLE_DEVICES per rank.
+
+    Ranks are ordered host-major: host0 local mesh 0, host0 local mesh 1,
+    host1 local mesh 0, ... matching the rankfile slot order in run_fabric_tests.sh.
+    """
+    if fabric_config not in FABRIC_TEST_SLICE_MAPPINGS:
+        logger.error(f"Unknown slice config {fabric_config!r}. Supported: {sorted(FABRIC_TEST_SLICE_MAPPINGS)}")
+        sys.exit(1)
+    if not hosts:
+        logger.error("Slice-based resolution requires at least one host (--hosts)")
+        sys.exit(1)
+
+    local_mesh_to_slices = FABRIC_TEST_SLICE_MAPPINGS[fabric_config]
+    cwd = Path(work_dir) if work_dir else Path.cwd()
+    mapping_path = cwd / SLICE_MAPPING_FILE
+
+    if run_discovery:
+        generate_slice_to_pcie_device_mapping(hosts, mpi_if=mpi_if, work_dir=cwd)
+    elif not mapping_path.exists():
+        logger.error(f"{mapping_path} not found (run discovery or generate it first)")
+        sys.exit(1)
+
+    with open(mapping_path, "r") as f:
+        slice_mapping = yaml.safe_load(f)
+    device_mapping = slice_mapping.get("device_mapping", {})
+
+    visible = []
+    for host in hosts:
+        host_key = _match_slice_host_key(device_mapping, host)
+        host_slices = device_mapping[host_key]
+        for local_mesh in sorted(local_mesh_to_slices):
+            devices = []
+            for slice_id in local_mesh_to_slices[local_mesh]:
+                if slice_id not in host_slices:
+                    logger.error(f"Slice {slice_id} not found for host {host_key} in {mapping_path}")
+                    sys.exit(1)
+                slice_devices = sorted(host_slices[slice_id])
+                if len(slice_devices) != DEVICES_PER_SLICE:
+                    logger.error(
+                        f"Slice {slice_id} on {host_key} resolved to {len(slice_devices)} devices, "
+                        f"expected {DEVICES_PER_SLICE}"
+                    )
+                    sys.exit(1)
+                devices.extend(slice_devices)
+            visible.append(",".join(map(str, devices)))
+    return visible
+
+
+def build_quad_split_rank_table(hosts):
+    """Canonical 12-rank table for the quad split 4x4 layout (16x4x4z).
+
+    8 meshes across 4 ring-ordered hosts:
+      even mesh 2i  -> single-host 4x4 on hosts[i], slices {1,2}, host_rank 0
+      odd  mesh 2i+1 -> split 4x4: host_rank 0 = hosts[i]   slice {3}
+                                    host_rank 1 = hosts[i+1] slice {0}  (ring wrap)
+
+    Entries are ordered mesh-major then host-rank-minor, matching control_plane's
+    (mesh_id, host_rank) -> mpi_rank assignment, so the launcher must emit MPMD
+    segments / rankfile slots in exactly this order. Each entry is a tuple
+    (mesh_id, host_rank, host, slice_ids).
+    """
+    if len(hosts) != 4:
+        logger.error(f"16x4x4z requires exactly 4 hosts in ring order, got {len(hosts)}: {hosts}")
+        sys.exit(1)
+
+    table = []
+    for mesh_id in range(8):
+        host_idx = mesh_id // 2
+        if mesh_id % 2 == 0:
+            table.append((mesh_id, 0, hosts[host_idx], [1, 2]))
+        else:
+            table.append((mesh_id, 0, hosts[host_idx], [3]))
+            table.append((mesh_id, 1, hosts[(host_idx + 1) % 4], [0]))
+    return table
+
+
+def resolve_quad_split_rank_table(hosts, mpi_if=None, run_discovery=True, work_dir=None):
+    """Discover 2x4 slices across the 4 quad hosts; return the 12-rank table.
+
+    Returns a list (in canonical rank order) of dicts:
+      {"mesh_id": int, "host_rank": int, "host": str, "devices": "d0,d1,..."}.
+    """
+    table = build_quad_split_rank_table(hosts)
+    cwd = Path(work_dir) if work_dir else Path.cwd()
+    mapping_path = cwd / SLICE_MAPPING_FILE
+
+    if run_discovery:
+        generate_slice_to_pcie_device_mapping(hosts, mpi_if=mpi_if, work_dir=cwd)
+    elif not mapping_path.exists():
+        logger.error(f"{mapping_path} not found (run discovery or generate it first)")
+        sys.exit(1)
+
+    with open(mapping_path, "r") as f:
+        slice_mapping = yaml.safe_load(f)
+    device_mapping = slice_mapping.get("device_mapping", {})
+
+    rank_table = []
+    for mesh_id, host_rank, host, slice_ids in table:
+        host_key = _match_slice_host_key(device_mapping, host)
+        host_slices = device_mapping[host_key]
+        devices = []
+        for slice_id in slice_ids:
+            if slice_id not in host_slices:
+                logger.error(f"Slice {slice_id} not found for host {host_key} in {mapping_path}")
+                sys.exit(1)
+            slice_devices = sorted(host_slices[slice_id])
+            if len(slice_devices) != DEVICES_PER_SLICE:
+                logger.error(
+                    f"Slice {slice_id} on {host_key} resolved to {len(slice_devices)} devices, "
+                    f"expected {DEVICES_PER_SLICE}"
+                )
+                sys.exit(1)
+            devices.extend(slice_devices)
+        rank_table.append(
+            {
+                "mesh_id": mesh_id,
+                "host_rank": host_rank,
+                "host": host,
+                "devices": ",".join(map(str, devices)),
+            }
+        )
+    return rank_table
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate rank bindings from tray discovery")
     parser.add_argument(
@@ -174,9 +389,29 @@ def parse_args():
         help="Single-host fabric test layout (used by run_fabric_tests.sh 4x8z/2x4x4z and per-host on 16x4x4z)",
     )
     parser.add_argument(
+        "--slice-config",
+        choices=SLICE_CONFIG_CHOICES,
+        help="Slice-based fabric test layout (used by run_fabric_tests.sh 2x4x4z/16x4x4z)",
+    )
+    parser.add_argument(
+        "--hosts",
+        default="",
+        help="With --slice-config: comma-separated hosts (in rank/mesh order; ring order for 16x4x4z)",
+    )
+    parser.add_argument(
+        "--mpi-if",
+        default=None,
+        help="With --slice-config: network interface for the discovery mpirun (btl_tcp_if_include)",
+    )
+    parser.add_argument(
         "--print-devices",
         action="store_true",
-        help="With --fabric-config: print one TT_VISIBLE_DEVICES line per rank (stdout)",
+        help="With --fabric-config/--slice-config 2x4x4z: print one TT_VISIBLE_DEVICES line per rank (stdout)",
+    )
+    parser.add_argument(
+        "--print-rank-table",
+        action="store_true",
+        help="With --slice-config 16x4x4z: print one FABRIC_RANK:<mesh_id>;<host_rank>;<host>;<devices> line per rank",
     )
     parser.add_argument(
         "--no-discovery",
@@ -496,7 +731,42 @@ def generate_supported_rank_bindings():
 
 if __name__ == "__main__":
     args = parse_args()
-    if args.fabric_config:
+    if args.slice_config == "16x4x4z":
+        hosts = [h for h in args.hosts.split(",") if h]
+        rank_table = resolve_quad_split_rank_table(
+            hosts,
+            mpi_if=args.mpi_if,
+            run_discovery=not args.no_discovery,
+            work_dir=args.work_dir,
+        )
+        if args.print_rank_table:
+            for entry in rank_table:
+                print(
+                    f"{FABRIC_RANK_PREFIX}{entry['mesh_id']};{entry['host_rank']};"
+                    f"{entry['host']};{entry['devices']}"
+                )
+        else:
+            for rank, entry in enumerate(rank_table):
+                print(
+                    f"rank {rank}: mesh_id={entry['mesh_id']} host_rank={entry['host_rank']} "
+                    f"host={entry['host']} TT_VISIBLE_DEVICES={entry['devices']}"
+                )
+    elif args.slice_config:
+        hosts = [h for h in args.hosts.split(",") if h]
+        devices = resolve_fabric_test_visible_devices_slices(
+            args.slice_config,
+            hosts,
+            mpi_if=args.mpi_if,
+            run_discovery=not args.no_discovery,
+            work_dir=args.work_dir,
+        )
+        if args.print_devices:
+            for line in devices:
+                print(f"{FABRIC_VISIBLE_DEVICES_PREFIX}{line}")
+        else:
+            for rank, visible in enumerate(devices):
+                print(f"rank {rank}: TT_VISIBLE_DEVICES={visible}")
+    elif args.fabric_config:
         devices = resolve_fabric_test_visible_devices(
             args.fabric_config,
             run_discovery=not args.no_discovery,
