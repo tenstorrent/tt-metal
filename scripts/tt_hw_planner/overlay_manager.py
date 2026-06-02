@@ -500,15 +500,51 @@ def list_overlays(model_id: Optional[str] = None) -> List[Dict[str, object]]:
 
 
 def apply_for(model_id: str) -> Tuple[int, List[str]]:
+    """Apply every overlay patch registered under ``model_id``.
+
+    Returns ``(count_applied, applied_rel_paths)``. Skips a patch when
+    ``git apply --check`` says it can't apply (target file drifted)
+    AND prints a one-line WARN so the operator can see WHY the count
+    is low — the previous silent ``continue`` hid cases where an
+    entire scope had no applying patches (e.g. _shared overlays
+    captured against an old model_config.py that no longer matches).
+
+    Also prints a WARN when ``index.json`` doesn't exist or is empty,
+    since callers (cli.py:_cmd_up_isolated, instrumentation
+    _apply_overlays_for_active_model) treat ``n == 0`` as "no
+    overlays registered" — silently true when the index file was
+    deleted from disk, which has been a recurring source of
+    "_shared overlays not applied" bugs.
+    """
+    md = _model_dir(model_id)
+    idx_path = _index_path(model_id)
     idx = _load_index(model_id)
     applied: List[str] = []
     if not idx:
+        # Distinguish "scope intentionally empty" from "index file
+        # missing." The latter is usually a deletion / missing-checkout
+        # bug the operator wants to know about.
+        if not idx_path.is_file():
+            print(
+                f"[overlay] apply_for({model_id}): no index.json at "
+                f"{idx_path} — scope appears uninitialized OR the index "
+                f"was deleted from disk. No patches will apply.",
+                file=sys.stderr,
+            )
         return 0, applied
-    md = _model_dir(model_id)
+    skipped_rel: List[str] = []
     for rel, meta in idx.items():
         patch_text = (md / meta["patch_file"]).read_text()
-        rc_check, _ = _git_apply(patch_text, check_only=True)
+        rc_check, check_err = _git_apply(patch_text, check_only=True)
         if rc_check != 0:
+            skipped_rel.append(rel)
+            print(
+                f"[overlay] apply_for({model_id}): skipped {rel} — "
+                f"git apply --check returned rc={rc_check}. The target "
+                f"file has drifted since the patch was captured. "
+                f"Tail: {check_err.strip().splitlines()[-1] if check_err.strip() else '(empty)'}",
+                file=sys.stderr,
+            )
             continue
         rc, err = _git_apply(patch_text)
         if rc == 0:
@@ -518,6 +554,13 @@ def apply_for(model_id: str) -> Tuple[int, List[str]]:
                 f"[overlay] apply failed for {rel} (model={model_id}): {err.strip()}",
                 file=sys.stderr,
             )
+    if not applied and skipped_rel:
+        print(
+            f"[overlay] apply_for({model_id}): 0/{len(idx)} patches "
+            f"applied — every patch was skipped due to drift. The scope "
+            f"may need re-capture against current HEAD.",
+            file=sys.stderr,
+        )
     return len(applied), applied
 
 

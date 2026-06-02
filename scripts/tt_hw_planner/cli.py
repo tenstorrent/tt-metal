@@ -8043,11 +8043,43 @@ def _cmd_up_core(args) -> int:
         sep_e = "=" * 72
         print()
         print(sep_e)
-        print("  ENVIRONMENT INCOMPATIBLE -- pre-flight package check failed")
+        # Distinguish the two failure modes the check can produce:
+        #   (a) transformers version mismatch (a package-level issue
+        #       the LLM env-fix CAN resolve via pip install)
+        #   (b) source-level issues in tt_metal (missing helpers,
+        #       hard-coded grids) that ONLY a code fix or an overlay
+        #       re-apply will resolve — pip install can't help here
+        # The banner used to claim "transformers... assumes 4.x APIs"
+        # for both, which was wrong for (b) and led the LLM to refuse
+        # to propose a pip command.
+        _has_pkg_issue = any(line.startswith("transformers==") for line in env_problems_early)
+        _has_src_issue = any(
+            ("model_config.py" in line or "models/" in line) and not line.startswith("transformers==")
+            for line in env_problems_early
+        )
+        if _has_pkg_issue and not _has_src_issue:
+            print("  ENVIRONMENT INCOMPATIBLE -- transformers version mismatch (package-level)")
+        elif _has_src_issue and not _has_pkg_issue:
+            print("  ENVIRONMENT INCOMPATIBLE -- tt_metal source-level issues (NOT a package mismatch)")
+        else:
+            print("  ENVIRONMENT INCOMPATIBLE -- pre-flight check failed (mixed package + source issues)")
         print(sep_e)
         for line in env_problems_early:
             print(f"  - {line}" if not line.startswith("transformers==") else f"  {line}")
         print()
+        # If ALL problems are source-level (no transformers== line),
+        # explain that pip install can't fix this and skip the LLM
+        # env-fix step entirely — it would just waste an agent
+        # invocation (the LLM correctly refuses every time).
+        if _has_src_issue and not _has_pkg_issue:
+            print(
+                "  These are source-level issues in tt_metal (missing helpers, drifted code).\n"
+                "  pip install CANNOT resolve them. To fix:\n"
+                "    1. Re-apply the relevant overlays (check `_shared` overlay scope), OR\n"
+                "    2. Apply the listed source patches to the working tree.\n"
+            )
+            print(sep_e)
+            return 2
 
         # Skip auto-fix if operator opted out or we already tried.
         _no_env_fix = getattr(args, "no_env_fix", False)
