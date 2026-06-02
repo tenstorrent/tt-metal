@@ -654,36 +654,6 @@ void run_sdpa_backward_test(const SDPABackwardTestConfig& config) {
     EXPECT_TRUE(xt::all(xt::isfinite(sdpa_bw_dV))) << "kernel_dV contains NaN or Inf values";
 
     // ========== Comparisons ==========
-    // Per-tensor max-abs / max-rel error — used to size tolerances.
-    auto max_abs_rel = [](const xt::xarray<float>& a, const xt::xarray<float>& b) {
-        xt::xarray<float> abs_diff = xt::abs(a - b);
-        constexpr float kRelEps = 1e-12F;
-        xt::xarray<float> rel = abs_diff / xt::maximum(xt::abs(b), kRelEps);
-        return std::make_pair(xt::amax(abs_diff)(), xt::amax(rel)());
-    };
-    auto [abs_fw_kvc, rel_fw_kvc] = max_abs_rel(kernel_attn_output_cpu, composite_attn_output_cpu);
-    auto [abs_fw_iv, rel_fw_iv] = max_abs_rel(kernel_intermediates_cpu, float_intermediates);
-    auto [abs_dQ, rel_dQ] = max_abs_rel(sdpa_bw_dQ, float_dQ);
-    auto [abs_dK, rel_dK] = max_abs_rel(sdpa_bw_dK, float_dK);
-    auto [abs_dV, rel_dV] = max_abs_rel(sdpa_bw_dV, float_dV);
-    std::cout << "[SDPA_BW_ERR " << config.test_name << "]\n"
-              << "  fw_attn         k_vs_composite: abs=" << abs_fw_kvc << " rel=" << rel_fw_kvc << "\n"
-              << "  fw_intermed     k_vs_float    : abs=" << abs_fw_iv << " rel=" << rel_fw_iv << "\n"
-              << "  dQ              k_vs_float    : abs=" << abs_dQ << " rel=" << rel_dQ << "\n"
-              << "  dK              k_vs_float    : abs=" << abs_dK << " rel=" << rel_dK << "\n"
-              << "  dV              k_vs_float    : abs=" << abs_dV << " rel=" << rel_dV << std::endl;
-
-    // The new bf16 exp produces NaN at fully-masked rows; substitute the float
-    // reference at those positions so allclose can still check the bulk.
-    auto clean_nan = [](const xt::xarray<float>& a, const xt::xarray<float>& ref) {
-        return xt::eval(xt::where(xt::isnan(a), ref, a));
-    };
-    xt::xarray<float> kernel_attn_clean = clean_nan(kernel_attn_output_cpu, composite_attn_output_cpu);
-    xt::xarray<float> kernel_interm_clean = clean_nan(kernel_intermediates_cpu, float_intermediates);
-    xt::xarray<float> dQ_clean = clean_nan(sdpa_bw_dQ, float_dQ);
-    xt::xarray<float> dK_clean = clean_nan(sdpa_bw_dK, float_dK);
-    xt::xarray<float> dV_clean = clean_nan(sdpa_bw_dV, float_dV);
-
     // Forward pass checks (use fw_atol/fw_rtol — bf16 cancellation outliers in attn
     // output don't propagate to dQ/dK/dV at the same magnitude, so the gradient checks
     // below stay on the tighter atol/rtol).
