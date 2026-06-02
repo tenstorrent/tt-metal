@@ -323,7 +323,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
         .num_threads = QUASAR_NUM_TENSIX_ENGINES_PER_CLUSTER,
         .runtime_arg_schema =
             {
-                .named_runtime_args = {"signal_address", "l1_result_addr"},
+                .runtime_arg_names = {"signal_address", "l1_result_addr"},
             },
         .hw_config = experimental::ComputeHardwareConfig{},
     };
@@ -344,7 +344,7 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelTLS) {
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {{
         .kernel_spec_name = COMPUTE_KERNEL,
-        .named_runtime_args = {{.node = node, .args = {{"l1_result_addr", l1_result_addr}, {"signal_address", signal_address}}}},
+        .runtime_arg_values = {{.node = node, .args = {{"l1_result_addr", l1_result_addr}, {"signal_address", signal_address}}}},
     }};
     experimental::SetProgramRunArgs(program, params);
 
