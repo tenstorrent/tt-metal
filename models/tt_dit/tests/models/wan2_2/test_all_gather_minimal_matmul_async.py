@@ -70,6 +70,7 @@ def run_test_linear_impl(
     addcmul_scalar=1.0,
     chunks=1,
     broadcast_gate=True,
+    skip_result_check=False,
 ):
     ccl_cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(core_grid.x - 1, core_grid.y - 1))}
@@ -282,6 +283,9 @@ def run_test_linear_impl(
 
     # Check results
     check_result_list = []
+    if skip_result_check:
+        return check_result_list
+
     for n in range(num_iters):
         print(f"iteration {n}:")
         tt_output = tt_output_tensor_list[n]
@@ -361,6 +365,7 @@ def run_test_linear(
     addcmul_scalar=1.0,
     chunks=1,
     broadcast_gate=True,
+    skip_result_check=False,
 ):
     logger.info(f"Running test_linear with M={M}, K={K}, N={N}")
     torch_dtype = torch.float32
@@ -452,6 +457,7 @@ def run_test_linear(
         addcmul_scalar=addcmul_scalar,
         chunks=chunks,
         broadcast_gate=broadcast_gate,
+        skip_result_check=skip_result_check,
     )
 
 
