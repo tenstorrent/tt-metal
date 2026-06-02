@@ -95,3 +95,54 @@ def test_pass_records_perf_and_flags_weak_gain():
     assert out["status"] == "pass"
     assert out["perf"]["gain_pct"] < 2.0
     assert out.get("perf_warnings")  # flagged, not blocked
+
+
+from models.experimental.opt_transfer.repair import build_diagnosis
+
+
+class RepairFakes:
+    def __init__(self):
+        self.seen_diag = []
+        self.calls = 0
+
+    def trace(self, s):
+        s["graph_summary"] = [{"name": "q"}]
+        return s
+
+    def match(self, s):
+        self.seen_diag.append(s.get("diagnosis"))
+        s["proposals"] = [{"entry_id": "x"}]
+        return s
+
+    def gate(self, s):
+        s["applied"] = ["x"]
+        return s
+
+    def codegen(self, s):
+        return s
+
+    def verify(self, s):
+        self.calls += 1
+        s["full_pcc"] = 0.999 if self.calls >= 2 else 0.80  # fails once, then passes
+        s["drift"] = {"first_divergence_step": 100, "horizon": 100}
+        return s
+
+    def perf(self, s):
+        s["perf"] = {"naive_ms": 100.0, "fused_ms": 60.0}
+        return s
+
+    def repair(self, s):
+        s["diagnosis"] = build_diagnosis(
+            node="x", per_block_pcc=s["full_pcc"], tf_pcc=None, free_run_divergence_frac=None, config_tried={}
+        ).__dict__
+        s["iteration"] = s.get("iteration", 0) + 1
+        return s
+
+
+def test_repair_sets_diagnosis_and_match_consumes_it():
+    f = RepairFakes()
+    out = build_graph(f, max_iterations=3).invoke({"model": "m", "iteration": 0})
+    assert out["status"] == "pass"
+    assert f.seen_diag[0] is None  # first match: no diagnosis
+    assert f.seen_diag[1] is not None  # second match: repair's diagnosis forwarded
+    assert f.seen_diag[1]["node"] == "x" and f.seen_diag[1]["axis"] == "per_block_pcc"

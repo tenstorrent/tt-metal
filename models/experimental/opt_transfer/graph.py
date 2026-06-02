@@ -102,8 +102,80 @@ class RealImpl:
         return state
 
     def repair(self, state):
+        from models.experimental.opt_transfer.repair import localize_culprit, build_diagnosis
+
+        applied = state.get("applied", [])
+        # localize: which single fusion, reverted to fallback, restores full PCC?
+        culprit = localize_culprit(
+            applied,
+            pcc_with=lambda disabled: self._full_pcc_with(state, disabled),  # re-runs verify on device
+            threshold=CONFIG.gates["full_pcc"],
+        )
+        node = culprit or (applied[0] if applied else "?")
+        drift = state.get("drift") or {}
+        frac = (drift.get("first_divergence_step", 1) / drift["horizon"]) if drift.get("horizon") else None
+        state["diagnosis"] = build_diagnosis(
+            node=node,
+            per_block_pcc=state.get("full_pcc", 0.0),
+            tf_pcc=state.get("tf_pcc"),
+            free_run_divergence_frac=frac,
+            config_tried=state.get("last_config", {}),
+            drift_min_frac=CONFIG.gates["drift_first_divergence_min_frac"],
+        ).__dict__
         state["iteration"] = state.get("iteration", 0) + 1
         return state
+
+    def _full_pcc_with(self, state, disabled):
+        """Re-measure full PCC with the named fusions in `disabled` reverted to the reference's
+        naive (separate-projection) fallback. With every applied fusion disabled the path is the
+        reference itself (PCC 1.0); enabled fusions run on device. Exercised on-device by the e2e."""
+        import torch
+        from models.experimental.opt_transfer.verify import pcc
+
+        ref = self._ref
+        embed = self.cfg["embed_dim"]
+        ref.eval()
+        with torch.no_grad():
+            x = torch.randn(1, 64, embed)
+            h = ref.attn_norm(x)
+        worst = 1.0
+        for entry_id, run in zip([p.entry_id for p in self._applied], self._runners):
+            if entry_id in disabled:
+                continue  # reverted to naive fallback -> matches the reference exactly
+            q, k, v = run(h)
+            for name, got in zip(("q_proj", "k_proj", "v_proj"), (q, k, v)):
+                with torch.no_grad():
+                    gold = ref._split(getattr(ref, name)(h))
+                worst = min(worst, pcc(gold, got))
+        return worst
+
+    def _measure_fused_vs_naive(self, state):
+        """Time the fused device runners vs the reference's naive separate-projection path on the
+        same input. Follows the `perf` skill (reusable trace). Exercised on-device by the e2e."""
+        import time
+        import torch
+
+        ref = self._ref
+        embed = self.cfg["embed_dim"]
+        ref.eval()
+        with torch.no_grad():
+            x = torch.randn(1, 64, embed)
+            h = ref.attn_norm(x)
+
+        iters = 20
+        t0 = time.perf_counter()
+        for _ in range(iters):
+            for run in self._runners:
+                run(h)
+        fused_ms = (time.perf_counter() - t0) / iters * 1000.0
+
+        t0 = time.perf_counter()
+        for _ in range(iters):
+            with torch.no_grad():
+                for name in ("q_proj", "k_proj", "v_proj"):
+                    ref._split(getattr(ref, name)(h))
+        naive_ms = (time.perf_counter() - t0) / iters * 1000.0
+        return {"naive_ms": naive_ms, "fused_ms": fused_ms}
 
 
 def build_graph(impl, max_iterations: int = None):
