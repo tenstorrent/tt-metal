@@ -406,6 +406,73 @@ static void test_single_core_copy(
     EXPECT_EQ(output_vec, src);
 }
 
+template <typename T>
+static void test_single_core_copy_abstract_wrapper(
+    const CopyParams& params, tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    MemoryConfig mem_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, params.buffer_type);
+    TensorSpec tensor_spec(params.tensor_shape, TensorLayout(params.dtype, PageConfig(params.layout), mem_config));
+
+    const auto src = tt::test_utils::generate_uniform_random_vector<T>(0, UINT8_MAX, params.tensor_shape.volume());
+
+    auto input_tensor = Tensor::from_vector(src, tensor_spec, mesh_device);
+    auto output_tensor = Tensor::from_vector(std::vector<T>(params.tensor_shape.volume()), tensor_spec, mesh_device);
+
+    auto input_buffer = input_tensor.buffer();
+    auto output_buffer = output_tensor.buffer();
+    auto aligned_page_size = input_buffer->aligned_page_size();
+    if (output_buffer->aligned_page_size() != aligned_page_size) {
+        GTEST_SKIP() << "Input and output buffers must have the same aligned page size!";
+    }
+
+    auto program = CreateProgram();
+
+    constexpr CoreCoord grid = {0, 0};
+    const auto data_format = datatype_to_dataformat_converter(params.dtype);
+
+    constexpr auto num_tiles = 2;
+    CBHandle cb_idx = tt::CBIndex::c_0;
+    auto cb_config = CircularBufferConfig(aligned_page_size * num_tiles, {{cb_idx, data_format}})
+                         .set_page_size(cb_idx, aligned_page_size);
+    CreateCircularBuffer(program, grid, cb_config);
+
+    const auto input_accessor_args = TensorAccessorArgs(*input_buffer);
+    const auto output_accessor_args = TensorAccessorArgs(*output_buffer);
+
+    std::vector<uint32_t> compile_time_args = input_accessor_args.get_compile_time_args();
+    const auto output_compile_time_args = output_accessor_args.get_compile_time_args();
+    compile_time_args.insert(
+        compile_time_args.end(), output_compile_time_args.begin(), output_compile_time_args.end());
+    compile_time_args.push_back(cb_idx);
+    compile_time_args.push_back(aligned_page_size);
+    compile_time_args.push_back(input_buffer->num_pages());
+
+    KernelHandle kernel_id = CreateKernel(
+        program,
+        "tests/ttnn/unit_tests/gtests/accessor/kernels/copy_all_pages_abstract_wrapper.cpp",
+        grid,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = compile_time_args,
+        });
+
+    std::vector<uint32_t> runtime_args{
+        input_buffer->address(),
+        output_buffer->address(),
+    };
+    SetCommonRuntimeArgs(program, kernel_id, runtime_args);
+
+    auto mesh_workload = tt::tt_metal::distributed::MeshWorkload();
+    mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
+
+    auto output_tensor_cpu = output_tensor.cpu(true);
+    Tensor output_tensor_device = ttnn::distributed::get_device_tensors(output_tensor_cpu).front();
+    auto output_vec = output_tensor_device.to_vector<T>();
+
+    EXPECT_EQ(output_vec, src);
+}
+
 }  // namespace tensor_accessor_device_tests
 
 using namespace tensor_accessor_device_tests;
@@ -714,6 +781,17 @@ TEST_P(InterleavedAccessorTestsCopyOnDevice, SingleCoreCopyAllPages) {
         case DataType::UINT8: test_single_core_copy<uint8_t>(params, mesh_device_.get(), true); break;
         case DataType::UINT16: test_single_core_copy<uint16_t>(params, mesh_device_.get(), true); break;
         case DataType::BFLOAT16: test_single_core_copy<bfloat16>(params, mesh_device_.get(), true); break;
+        default: TT_THROW("Unsupported data type");
+    }
+}
+
+TEST_P(InterleavedAccessorTestsCopyOnDevice, SingleCoreCopyAllPagesAbstractWrapper) {
+    const auto& params = GetParam();
+
+    switch (params.dtype) {
+        case DataType::UINT8: test_single_core_copy_abstract_wrapper<uint8_t>(params, mesh_device_.get()); break;
+        case DataType::UINT16: test_single_core_copy_abstract_wrapper<uint16_t>(params, mesh_device_.get()); break;
+        case DataType::BFLOAT16: test_single_core_copy_abstract_wrapper<bfloat16>(params, mesh_device_.get()); break;
         default: TT_THROW("Unsupported data type");
     }
 }

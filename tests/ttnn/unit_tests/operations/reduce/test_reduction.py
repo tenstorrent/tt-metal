@@ -188,7 +188,6 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
 #                                       hw_configure flip between cb_in's Default mode and
 #                                       cb_scaled's UnpackToDestFp32 mode across many
 #                                       iterations rather than just one boundary crossing)
-@pytest.mark.skip(reason="Skipped due to bit 11 precision regression introduced in PR #44412")
 @pytest.mark.parametrize("scalar", [2.0, -2.0, 0.5, 4.0])
 @pytest.mark.parametrize("N", [33, 129], ids=["Wt2", "Wt5"])
 def test_var_fp32_doscale_wt_gt_1(device, scalar, N):
