@@ -101,13 +101,16 @@ def _load_stacked_experts(
     gate_up_key = f"{prefix}experts.gate_up_proj"
 
     if proj_name == "gate_up" and gate_up_key in state_dict:
-        # Fused gate+up: load full [E, 2*I, H] and permute to [E, H, 2*I].
-        # Caller slices [:I] for gate, [I:] for up after the matmul.
+        # Fused gate+up: HF stores [E, 2*I, H] as [gate; up]. Reorder to [up; gate]
+        # and permute to [E, H, 2*I] so the fused output has up in [:I], gate in [I:].
+        # This matches the shared-expert layout and lets the SwiGLU fuse via
+        # ttnn.swiglu(z) = z[:I] * SiLU(z[I:]) = up * SiLU(gate) in one device op.
         scale_inv = state_dict.get(f"{prefix}experts.gate_up_proj_scale_inv")
         gu = _bf16(state_dict[gate_up_key], scale_inv)
         if gu.shape[0] != num_experts or gu.shape[1] != 2 * half:
             raise ValueError(f"{gate_up_key}: expected shape ({num_experts}, {2 * half}, *), got {tuple(gu.shape)}")
-        w = gu.permute(0, 2, 1).contiguous()  # [E, H, 2*I]
+        gu = torch.cat([gu[:, half:, :], gu[:, :half, :]], dim=1)  # [E, 2*I, H] = [up; gate]
+        w = gu.permute(0, 2, 1).contiguous()  # [E, H, 2*I] = [up, gate]
     elif proj_name in ("gate_proj", "up_proj") and gate_up_key in state_dict:
         scale_inv = state_dict.get(f"{prefix}experts.gate_up_proj_scale_inv")
         gu = _bf16(state_dict[gate_up_key], scale_inv)
@@ -518,6 +521,13 @@ class TtMistral4MoELayer(LightweightModule):
         self._prefill_bf8_routing = os.environ.get("MISTRAL4_MOE_BF8_ROUTING", "0") == "1"
         self._expert_sharding_mode = os.environ.get("MISTRAL4_MOE_SHARDING", "off").lower()
         self._preshard_expert_weights = os.environ.get("MISTRAL4_MOE_PRESHARD_WEIGHTS", "0") == "1"
+        # Use ttnn.swiglu to fuse the per-expert gate/up split + SiLU-multiply (3 ops
+        # → 1) regardless of seq tile-alignment. The swiglu split is on the last
+        # (feature) dim while seq is tile-padded in the height dim, so a non-aligned
+        # seq only affects padding rows (6:32) that are sliced off downstream and
+        # never reduced. Set MISTRAL4_MOE_SWIGLU=0 to fall back to slice+multiply if
+        # a PCC regression is observed.
+        self._moe_use_swiglu = os.environ.get("MISTRAL4_MOE_SWIGLU", "1") == "1"
         if self._is_blackhole:
             H = HIDDEN_SIZE
             I = EXPERT_INTERMEDIATE_SIZE
@@ -590,6 +600,12 @@ class TtMistral4MoELayer(LightweightModule):
         # Uses 1D-mcast to share in0 across the 4 output-tile cores, avoiding
         # redundant DRAM reads of the 4096-wide input vector.
         self._gate_pc = self._expert_1d_mcast_pc(1, HIDDEN_SIZE // 32, NUM_EXPERTS // 32)
+
+        # Prefill scatter-zeros buffers, allocated lazily per seq_len. scatter is
+        # out-of-place (reads the target, returns a new tensor), so one zeros buffer
+        # is reused as the scatter base across all layers — dropping a per-layer
+        # FillPadDeviceOperation (~10 μs) after the first.
+        self._routing_zeros_prefill: dict = {}
 
         # Pre-allocate a zeros buffer for scatter in _compute_routing_weights (decode).
         # Avoids a costly FillPadDeviceOperation every decode step.
@@ -762,7 +778,12 @@ class TtMistral4MoELayer(LightweightModule):
         if seq_len == 1 and self._routing_zeros_decode is not None:
             scatter_target = self._routing_zeros_decode
         else:
-            scatter_target = ttnn.zeros_like(probs_tt)
+            # Reuse a cached zeros base per seq_len: scatter is out-of-place, so the
+            # base stays zeros and is safe to share across all layers.
+            scatter_target = self._routing_zeros_prefill.get(seq_len)
+            if scatter_target is None:
+                scatter_target = ttnn.zeros_like(probs_tt)
+                self._routing_zeros_prefill[seq_len] = scatter_target
         dense_routing_tt = ttnn.scatter(
             scatter_target,
             dim=-1,
@@ -846,6 +867,11 @@ class TtMistral4MoELayer(LightweightModule):
         if self._is_blackhole:
             _mem = ttnn.L1_MEMORY_CONFIG
             m_tiles = (seq_len + 31) // 32
+            # ttnn.swiglu has no seq argument and returns the tile-padded logical seq,
+            # so it is only correct when seq is already tile-aligned; otherwise the
+            # explicit slice path (which crops to seq_len) is required. Gate on both
+            # tile-alignment and the env flag.
+            use_swiglu = self._moe_use_swiglu and (seq_len % ttnn.TILE_SIZE == 0)
             use_sharded_weight_staging = self._expert_sharding_mode == "on" or (
                 self._expert_sharding_mode == "auto" and seq_len >= 64
             )
@@ -861,13 +887,12 @@ class TtMistral4MoELayer(LightweightModule):
             shared_gu_pc = self._expert_1d_mcast_pc(m_tiles, H // 32, 2 * SHARED_EXPERT_INTERMEDIATE_SIZE // 32)
             shared_d_pc = self._expert_1d_mcast_pc(m_tiles, SHARED_EXPERT_INTERMEDIATE_SIZE // 32, H // 32)
 
-            # Untile routing_weights once: per-expert ttnn.slice on the TILE
-            # [1,1,seq,EPD] tensor would internally untile→slice→retile each
-            # iteration (3 ops × EPD experts). One untile + per-iter
-            # (rm_slice + retile of a [1,1,seq,1] column) keeps the per-iter
-            # device-op count at 2 and drops the per-step UntilizeWithUnpadding
-            # count from EPD to 1.
-            routing_weights_rm = ttnn.to_layout(routing_weights, ttnn.ROW_MAJOR_LAYOUT, memory_config=_mem)
+            # Permute routing weights once so each expert's column moves to the
+            # batch dim: [1,1,seq,EPD] → [EPD,1,seq,1]. Per-expert weight is then a
+            # batch (dim-0) slice, which stays TILE-aligned and needs no re-tilize —
+            # vs the prior untile + per-iter (rm_slice + retile) that emitted EPD
+            # TilizeWithValPadding ops. Same op the non-Blackhole path uses.
+            routing_weights_perm = ttnn.permute(routing_weights, [3, 0, 2, 1], memory_config=_mem)
             ttnn.deallocate(routing_weights)
 
             partial = None
@@ -891,18 +916,44 @@ class TtMistral4MoELayer(LightweightModule):
                 )
                 if deallocate_gate_up_weight:
                     ttnn.deallocate(gate_up_weight)
-                gate_i = ttnn.slice(gate_up_i, [0, 0, 0, 0], [1, 1, seq_len, I], memory_config=_mem)
-                up_i = ttnn.slice(gate_up_i, [0, 0, 0, I], [1, 1, seq_len, 2 * I], memory_config=_mem)
-                ttnn.deallocate(gate_up_i)
+                # ── SwiGLU: fused split + SiLU + multiply in one device op ──────
+                # gate_up layout is [up, gate], so ttnn.swiglu(z) = z[:I] * SiLU(z[I:])
+                # = up * SiLU(gate), collapsing the two slices and the SiLU-multiply
+                # (3 ops) into one. Only valid for tile-aligned seq (see use_swiglu);
+                # the slice fallback crops to seq_len and is correct for any seq.
+                if use_swiglu:
+                    hidden_i = ttnn.swiglu(gate_up_i, dim=-1, memory_config=_mem)
+                    ttnn.deallocate(gate_up_i)
+                else:
+                    up_i = ttnn.slice(gate_up_i, [0, 0, 0, 0], [1, 1, seq_len, I], memory_config=_mem)
+                    gate_i = ttnn.slice(gate_up_i, [0, 0, 0, I], [1, 1, seq_len, 2 * I], memory_config=_mem)
+                    ttnn.deallocate(gate_up_i)
+                    hidden_i = ttnn.multiply(
+                        gate_i,
+                        up_i,
+                        input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+                        memory_config=_mem,
+                    )
+                    ttnn.deallocate(gate_i)
+                    ttnn.deallocate(up_i)
 
-                hidden_i = ttnn.multiply(
-                    gate_i,
-                    up_i,
-                    input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+                # ── Apply routing weight on hidden (width I) before down_proj ───
+                # down_proj is row-linear: scaling hidden[r, :] by the token's
+                # routing weight w_r scales out[r, :] by w_r. Doing it on the
+                # I-wide (2048) hidden rather than the H-wide (4096) down output
+                # halves this broadcast-multiply, and the down output is then
+                # already weighted (no separate weighted_i multiply).
+                # Expert i's per-token weight = batch slice (dim 0) of the permuted
+                # routing tensor → [1, 1, seq, 1], already TILE-aligned (no retilize).
+                w_i = ttnn.slice(
+                    routing_weights_perm,
+                    [i, 0, 0, 0],
+                    [i + 1, 1, seq_len, 1],
                     memory_config=_mem,
                 )
-                ttnn.deallocate(gate_i)
-                ttnn.deallocate(up_i)
+                hidden_w = ttnn.multiply(hidden_i, w_i, memory_config=_mem)
+                ttnn.deallocate(hidden_i)
+                ttnn.deallocate(w_i)
 
                 if use_sharded_weight_staging and self.expert_down_sharded_list is not None:
                     down_weight = self.expert_down_sharded_list[i]
@@ -914,7 +965,7 @@ class TtMistral4MoELayer(LightweightModule):
                     down_weight = self.expert_down_list[i]
                     deallocate_down_weight = False
                 out_i = ttnn.matmul(
-                    hidden_i,
+                    hidden_w,
                     down_weight,
                     compute_kernel_config=self.expert_compute_kernel_config,
                     dtype=ttnn.bfloat8_b,
@@ -923,28 +974,17 @@ class TtMistral4MoELayer(LightweightModule):
                 )
                 if deallocate_down_weight:
                     ttnn.deallocate(down_weight)
-                ttnn.deallocate(hidden_i)
+                ttnn.deallocate(hidden_w)
 
-                w_i_rm = ttnn.slice(
-                    routing_weights_rm,
-                    [0, 0, 0, i],
-                    [1, 1, seq_len, i + 1],
-                    memory_config=_mem,
-                )
-                w_i = ttnn.to_layout(w_i_rm, ttnn.TILE_LAYOUT, memory_config=_mem)
-                ttnn.deallocate(w_i_rm)
-                weighted_i = ttnn.multiply(out_i, w_i, memory_config=_mem)
-                ttnn.deallocate(out_i)
-                ttnn.deallocate(w_i)
-
+                # out_i is already routing-weighted; accumulate directly.
                 if partial is None:
-                    partial = weighted_i
+                    partial = out_i
                 else:
-                    new_partial = ttnn.add(partial, weighted_i, memory_config=_mem)
+                    new_partial = ttnn.add(partial, out_i, memory_config=_mem)
                     ttnn.deallocate(partial)
-                    ttnn.deallocate(weighted_i)
+                    ttnn.deallocate(out_i)
                     partial = new_partial
-            ttnn.deallocate(routing_weights_rm)
+            ttnn.deallocate(routing_weights_perm)
             # all_reduce_sum expects DRAM input.
             partial_dram = ttnn.to_memory_config(partial, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(partial)
@@ -975,13 +1015,14 @@ class TtMistral4MoELayer(LightweightModule):
             )
             ttnn.deallocate(x_exp)
             # SliceDeviceOperation optimized: use L1_SHARDED for better bandwidth
-            gate_all = ttnn.slice(
+            # gate_up layout is [up, gate]: up in [:I], gate in [I:].
+            up_all = ttnn.slice(
                 gate_up_all,
                 [0, 0, 0, 0],
                 [self.experts_per_device, 1, seq_len, I],
                 memory_config=_mem,
             )
-            up_all = ttnn.slice(
+            gate_all = ttnn.slice(
                 gate_up_all,
                 [0, 0, 0, I],
                 [self.experts_per_device, 1, seq_len, 2 * I],
@@ -1084,8 +1125,9 @@ class TtMistral4MoELayer(LightweightModule):
             if _own_gu_w:
                 ttnn.deallocate(gate_up_w)
 
-            gate = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, 1, I], memory_config=_mem)
-            up = ttnn.slice(gate_up, [0, 0, 0, I], [1, 1, 1, 2 * I], memory_config=_mem)
+            # gate_up layout is [up, gate]: up in [:I], gate in [I:].
+            up = ttnn.slice(gate_up, [0, 0, 0, 0], [1, 1, 1, I], memory_config=_mem)
+            gate = ttnn.slice(gate_up, [0, 0, 0, I], [1, 1, 1, 2 * I], memory_config=_mem)
             ttnn.deallocate(gate_up)
             hidden = ttnn.multiply(
                 gate,
@@ -1185,8 +1227,9 @@ class TtMistral4MoELayer(LightweightModule):
                     memory_config=_mem,
                     program_config=gu_pc,
                 )
-                gate_i = ttnn.slice(gate_up_i, [0, 0, 0, 0], [1, 1, 1, I], memory_config=_mem)
-                up_i = ttnn.slice(gate_up_i, [0, 0, 0, I], [1, 1, 1, 2 * I], memory_config=_mem)
+                # gate_up layout is [up, gate]: up in [:I], gate in [I:].
+                up_i = ttnn.slice(gate_up_i, [0, 0, 0, 0], [1, 1, 1, I], memory_config=_mem)
+                gate_i = ttnn.slice(gate_up_i, [0, 0, 0, I], [1, 1, 1, 2 * I], memory_config=_mem)
                 ttnn.deallocate(gate_up_i)
                 hidden_i = ttnn.multiply(
                     gate_i,
@@ -1232,8 +1275,9 @@ class TtMistral4MoELayer(LightweightModule):
                 memory_config=_mem,
             )
             ttnn.deallocate(x_exp)
-            gate_all = ttnn.slice(gate_up_all, [0, 0, 0, 0], [self.experts_per_device, 1, 1, I], memory_config=_mem)
-            up_all = ttnn.slice(gate_up_all, [0, 0, 0, I], [self.experts_per_device, 1, 1, 2 * I], memory_config=_mem)
+            # gate_up layout is [up, gate]: up in [:I], gate in [I:].
+            up_all = ttnn.slice(gate_up_all, [0, 0, 0, 0], [self.experts_per_device, 1, 1, I], memory_config=_mem)
+            gate_all = ttnn.slice(gate_up_all, [0, 0, 0, I], [self.experts_per_device, 1, 1, 2 * I], memory_config=_mem)
             ttnn.deallocate(gate_up_all)
             hidden_all = ttnn.multiply(
                 gate_all,
