@@ -47,9 +47,6 @@
     wh_n150:
       timeout: 30
       tier: 1
-    bh_p150:
-      timeout: 30
-      tier: 1
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
@@ -72,9 +69,6 @@
   model: qwen3-32b
   skus:
     wh_galaxy_perf:
-      timeout: 60
-      tier: 1
-    bh_galaxy:
       timeout: 60
       tier: 1
   owner_id: U09LTAPEU2U # Viktor Pus
@@ -102,9 +96,6 @@
     wh_llmbox_perf:
       timeout: 60
       tier: 2
-    bh_loudbox:
-      timeout: 60
-      tier: 2
   owner_id: U09LTAPEU2U # Viktor Pus
   team: models
 
@@ -115,9 +106,6 @@
   model: qwen3-32b
   skus:
     wh_llmbox_perf:
-      timeout: 60
-      tier: 2
-    bh_loudbox:
       timeout: 60
       tier: 2
   owner_id: U09LTAPEU2U # Viktor Pus
@@ -270,8 +258,5 @@
     wh_llmbox_perf:
       timeout: 30
       tier: 2
-    # bh_loudbox:
-    #   timeout: 30
-    #   tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
