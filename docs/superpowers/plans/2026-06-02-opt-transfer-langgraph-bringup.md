@@ -2575,6 +2575,97 @@ git add models/experimental/opt_transfer/graph.py models/experimental/opt_transf
 git commit -m "feat(opt_transfer): diagnosis-driven repair (localize culprit -> diagnose -> re-propose)"
 ```
 
+### Task J5: Checkpointer + `--resume` (the Claude-Code resume story, wired)
+
+**Files:**
+- Modify: `models/experimental/opt_transfer/graph.py` (`build_graph` accepts a checkpointer)
+- Modify: `models/experimental/opt_transfer/run.py` (SQLite checkpointer + `--resume`)
+- Test: `models/experimental/opt_transfer/tests/test_graph.py`
+
+H2 compiled with no checkpointer and `--resume` was ignored. Now `build_graph` compiles with a LangGraph checkpointer, so state persists per `thread_id` and a run **resumes from its last checkpoint** — the mechanism the handoff bundle's README tells Claude Code to use after a fix.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# tests/test_graph.py (append)
+from langgraph.checkpoint.memory import MemorySaver
+from models.experimental.opt_transfer.graph import build_graph
+
+
+def test_checkpointer_persists_state_under_thread():
+    f = Fakes(pcc_sequence=[0.999])      # the H2 Fakes (success on first verify)
+    g = build_graph(f, max_iterations=3, checkpointer=MemorySaver())
+    cfg = {"configurable": {"thread_id": "t1"}}
+    g.invoke({"model": "m", "iteration": 0}, cfg)
+    snap = g.get_state(cfg)
+    assert snap.values["status"] == "pass"   # state retrievable from the checkpoint
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `pytest models/experimental/opt_transfer/tests/test_graph.py::test_checkpointer_persists_state_under_thread -v`
+Expected: FAIL (`build_graph` takes no `checkpointer`)
+
+- [ ] **Step 3: Write minimal implementation**
+
+```python
+# graph.py — build_graph signature + compile
+def build_graph(impl, max_iterations: int = None, checkpointer=None):
+    # ... unchanged body ...
+    return wf.compile(checkpointer=checkpointer)
+```
+
+```python
+# run.py — checkpointed, resumable
+import argparse, ttnn
+from langgraph.checkpoint.sqlite import SqliteSaver
+from models.experimental.opt_transfer.graph import build_graph, RealImpl
+from models.experimental.opt_transfer.matcher import LLMClient
+from models.experimental.opt_transfer.kb.store import KBStore
+from models.experimental.opt_transfer.config import CONFIG
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--model", default="seamless_m4t_v2")
+    ap.add_argument("--resume", action="store_true",
+                    help="continue the saved run for --model from its last checkpoint")
+    args = ap.parse_args()
+
+    run_dir = CONFIG.run_dir / args.model
+    run_dir.mkdir(parents=True, exist_ok=True)
+    client = LLMClient()
+    kb = KBStore(CONFIG.kb_dir).load()
+    device = ttnn.open_device(device_id=0)
+    try:
+        with SqliteSaver.from_conn_string(str(run_dir / "state.db")) as cp:
+            graph = build_graph(RealImpl(args.model, device, client, kb), checkpointer=cp)
+            cfg = {"configurable": {"thread_id": args.model}}
+            init = None if args.resume else {  # None -> resume from checkpoint
+                "model": args.model, "iteration": 0, "run_dir": str(run_dir)}
+            out = graph.invoke(init, cfg)
+            print("STATUS:", out["status"], "PCC:", out.get("full_pcc"))
+    finally:
+        ttnn.close_device(device)
+
+
+if __name__ == "__main__":
+    main()
+```
+(If the installed `langgraph-checkpoint-sqlite` exposes `SqliteSaver` without the context-manager form, adapt to its constructor — the contract is "persist per thread_id, resume on `invoke(None, cfg)`".)
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `pytest models/experimental/opt_transfer/tests/test_graph.py -v`
+Expected: PASS (all)
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add models/experimental/opt_transfer/graph.py models/experimental/opt_transfer/run.py models/experimental/opt_transfer/tests/test_graph.py
+git commit -m "feat(opt_transfer): checkpointer + --resume (resume a run from its last checkpoint)"
+```
+
 ---
 
 ## Self-Review
