@@ -112,7 +112,9 @@ curl -s -H "Authorization: token $GITHUB_TOKEN" \
 - Found (even in a comment) → `DISABLED`
 - Not found anywhere → `REMOVED`
 
-**For `DISABLED`, `SKIPPED`, `UNKNOWN`:** Keep open, do not analyze further.
+**DISABLED — additional check (job renamed vs. truly gated):** When a job is classified `DISABLED`, also search recent run job lists for any job whose name contains the key model/subsystem words from `job_name` (e.g. "GPT-OSS 120B", "Wan2.2", "Gemma-3"). If a closely-named job is found and running, the job was **renamed**, not disabled. Treat it as `STILL_FAILING` and process normally with the renamed job's data.
+
+**For `DISABLED`, `SKIPPED`, `UNKNOWN`:** Keep open. If the issue has not been updated in more than 14 days, post a comment: `"Job appears to be conditionally gated or disabled. No new run data available as of YYYY-MM-DD. Manual review may be needed."` so the issue does not go silently stale.
 
 ---
 
@@ -163,8 +165,9 @@ Compare the **current error** against the **original error** described in the is
 | Scenario | Action |
 |---|---|
 | Same root cause (same test, same assertion type, same subsystem) | Keep open, no comment |
-| Same category of failure, minor symptom variation (e.g. same assertion type but different threshold/token/position) | Keep open, post update comment noting the symptom change and linking new run URLs |
-| Completely different root cause (different test name, different assertion type, different subsystem, or failure mode fundamentally changed e.g. was OOM, now is a hang) | **CLOSE** — but only if all 3 conditions hold (see below) |
+| Same category of failure, minor symptom variation (e.g. same assertion type but different threshold/token/position) | Keep open. **Update the issue body** to replace the "Error excerpt" / "Error signature" / "Notes" fields with the current error. Post a comment recording what the previous error was. |
+| Original failures were **disabled by a PR** (filtered out via gtest/pytest filter) and new failures appear in a different subsystem | Keep open, post a comment: `"The original failure has been temporarily disabled by PR <link to PR>."` Do NOT update the issue body or URL list. Creating a new issue for the new failures is the issue creation pipeline's job, not lifecycle's. |
+| Completely different root cause (different test name, different assertion type, different subsystem, or failure mode fundamentally changed e.g. was OOM, now is a hang) | Keep open. **Update the issue body** to replace the "Error excerpt" / "Error signature" / "Notes" fields with the current error. Post a comment recording what the previous error was. Then **CLOSE** — but only if all 3 conditions hold (see below). |
 
 **The 3 conditions required to close a STILL_FAILING issue:**
 
@@ -177,7 +180,6 @@ Compare the **current error** against the **original error** described in the is
 - SSH disconnection during test
 - OOM from runner itself (not test-induced)
 - Azure/AWS/GitHub Actions internal errors
-- Timeout waiting for a runner or hardware
 
 **Condition C — Confident:** If uncertain whether old and new failure are related → keep open. Default to conservative.
 
@@ -226,22 +228,22 @@ Post a comment:
 Issue still relevant. Last updated: YYYY-MM-DD HH:MM UTC.
 ```
 
-### Update Action (signature changed, keep open)
+### Update Action (signature changed — minor variation or different root cause)
 
-When posting an update:
+The issue body must always reflect the **current** error, not the original one. When the error signature has changed:
 
-1. **Edit the issue body** to replace the "Failing job URLs" section with the new failing run URLs (same mechanism as Step 5).
+1. **Edit the issue body** to replace the "Error excerpt", "Error signature", and "Notes" fields with the current error details. Also update the "Failing job URLs" section with the new failing run URLs.
 
-2. **Post a comment** to record that the update happened:
+2. **Post a comment** recording what the previous error was:
 
 ```markdown
 ## Auto-triage lifecycle update
 
-**Original failure:** <brief summary from issue body>
+**Previous error:** <exact Error excerpt text that was in the issue body before this update>
 
-**Current symptom change:** <describe how the current failure differs symptomatically>
+**Current error (symptom change):** <describe the new failure — test name, assertion, subsystem — and link new run URLs>
 
-Issue body updated with new failing run URLs at YYYY-MM-DD HH:MM UTC.
+Issue body updated to reflect current error at YYYY-MM-DD HH:MM UTC.
 
 *Updated by BrAIn lifecycle review.*
 ```
