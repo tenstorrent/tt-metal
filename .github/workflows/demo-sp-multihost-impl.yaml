@@ -52,8 +52,13 @@ jobs:
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
+          # Extract allocation type for conditional MGD extraction
+          ALLOC_TYPE=$(python3 .github/scripts/utils/extract_allocation_from_sku.py "bh_${{ inputs.sp-config }}" --type-only)
+          echo "allocation_type=$ALLOC_TYPE" >> $GITHUB_OUTPUT
+
       - name: Extract MGD content from SKU
         id: extract-mgd
+        if: steps.extract-allocation.outputs.allocation_type == 'mgd'
         run: |
           {
             echo "mgd_content<<EOF"
@@ -167,7 +172,7 @@ jobs:
         timeout-minutes: 5
         with:
           directory: /ci/ttrun
-          mgd: ${{ needs.load-test-matrix.outputs.mgd_content }}
+          mgd: ${{ needs.load-test-matrix.outputs.mgd_content || '' }}
           copyToWorkers: false
           ranksData: ${{ steps.get-allocation-data.outputs.ranksData }}
 

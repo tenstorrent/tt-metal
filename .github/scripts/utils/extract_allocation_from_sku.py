@@ -15,6 +15,11 @@ def main():
         action="store_true",
         help="Extract only MGD content (without YAML wrapper)",
     )
+    parser.add_argument(
+        "--type-only",
+        action="store_true",
+        help="Extract only allocation type",
+    )
     args = parser.parse_args()
 
     sku_name = args.sku_name
@@ -49,6 +54,13 @@ def main():
     if sku_name not in skus:
         print(f"::error::SKU '{sku_name}' not found in config file", file=sys.stderr)
         sys.exit(1)
+
+    # If --type-only flag is set, extract and print only allocation type
+    if args.type_only:
+        allocation = skus[sku_name].get("allocation", {})
+        allocation_type = allocation.get("type", "").lower()
+        print(allocation_type)
+        sys.exit(0)
 
     # If --mgd-only flag is set, extract and print only MGD content
     if args.mgd_only:
