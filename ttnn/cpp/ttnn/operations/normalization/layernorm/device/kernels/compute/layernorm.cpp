@@ -237,60 +237,49 @@ void kernel_main() {
 #endif
 #endif
 
-        /* (x - E[x])^2
-         * compute temp = xmm*xmm = (x-E[x])^2  — per-block same-CB squaring with
-         * cumulative wait on cb_xmm (each block waits a growing prefix: block.start()
-         * + size). cb_xmm is held across blocks (popped later in gamma/beta stage).
+        /* (x - E[x])^2 = xmm*xmm — single hoisted same-CB squaring over the full
+         * padded row, blocked internally by block_size. Replaces the external
+         * generic::blocks loop + per-call TileOffset::Set, which re-emitted the boot
+         * init every block and defeated hoisting.
          *
-         * Reconfig audit: mul_tiles_init(cb_xmm, cb_xmm) reconfigs srca/srcb ONCE
-         * outside the loop. No explicit reconfig_data_format. Inner loop has no
-         * reconfig. No pack_reconfig (pack stays at whatever was set by previous
-         * stage). -> BinaryDataFormatReconfig::Input (chain emits per-call, but since
-         * CbA==CbB and prev=cur srca after first iter, fold elides it) +
-         * PackTileReconfig::None.
+         * Shape = Wt_padded = ceil(Wt/block_size)*block_size (== total_buffer_size).
+         * This MUST be the padded count, not Wt: cb_xmm2 is sized total_buffer_size and
+         * the downstream Var reduce (FullBlockWithPopPolicy -> sync_full_block) waits/pops
+         * cb_xmm2 in full_block_size (padded) chunks. tiles(Wt) would make the chain's
+         * last internal block partial (= remainder), under-producing cb_xmm2 and hanging
+         * the reduce's wait_front. tiles(Wt_padded) makes every internal block full, so
+         * the producer/consumer padded-block convention matches (the junk padding tiles
+         * are read/squared/pushed but the reduce sums only its block.local() actual tiles).
          *
-         * Same-CB BinaryFpu Mul: chain dedups B-side wait/pop since CbA == CbB.
-         * Index: A walks block-local 0..size-1 with compute_kernel_lib::TileOffset::Set(block.start())
-         * so absolute index = block.start() + i = block.to_global(i). B (same-CB)
-         * must match A's index per static_assert -> Block + compute_kernel_lib::TileOffset::Set(block.start()).
-         *
-         * cb_xmm lifecycle: cumulative wait (each block waits `start + size` tiles),
-         * never popped here. Chain expresses this as InputLifecycle::HeldBulk +
-         * compute_kernel_lib::TileOffset::Set(start): the chain emits `cb_wait_front(cb_xmm, start + n_tiles)` per call
-         * (InputLifecycle::HeldBulk inflates the wait count by the runtime base — see chain.hpp §1d) and no pop.
-         * InputLifecycle::HeldCumulative isn't legal with compute_kernel_lib::TileOffset::Set (legal-with-base list at
-         * chain.hpp:553 is
-         * InputLifecycle::Bulk/InputLifecycle::HeldBulk/InputLifecycle::DeferredPop/InputLifecycle::BulkDrain/InputLifecycle::CallerManaged)
-         * and would also under-wait — InputLifecycle::HeldBulk is the correct policy match. cb_xmm2: reserve+push
-         * block.full_block_size per call -> OutputLifecycle::Bulk + Block.
-         *
-         * NOTE: the #ifdef RMSNORM branch waits block.full_block_size vs the
-         * non-RMSNORM branch's block.size(). The chain processes n_tiles tiles
-         * regardless — using block.full_block_size() matches the RMSNORM wait and
-         * preserves the padded-junk-pack semantics for the non-RMSNORM path.
+         * cb_xmm: HeldBulk — waited once upfront, NEVER popped here. It is held because
+         *   the scale stage below re-reads cb_xmm and only pops it at line ~429
+         *   (cb_xmm_obj.pop_front(total_buffer_size)). A popping input (Chunked/Streaming)
+         *   would drain cb_xmm mid-squaring and hang the scale stage. CbA==CbB so the
+         *   chain dedups the B-side wait. No TileOffset: BlockIter index is already absolute.
+         * cb_xmm2: OutputLifecycle::Bulk (reserve total_buffer_size upfront + push at end),
+         *   matching the original.
+         * Reconfig: mul_tiles_init(cb_xmm, cb_xmm) -> BinaryDataFormatReconfig::Input
+         *   (fold elides after first block, CbA==CbB); no pack_reconfig -> None.
          */
-        for (auto block : generic::blocks(Wt, block_size)) {
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/block_size),
-                compute_kernel_lib::BinaryFpu<
-                    cb_xmm,
-                    cb_xmm,
-                    compute_kernel_lib::BinaryFpuOp::Mul,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::HeldBulk,
-                    compute_kernel_lib::InputLifecycle::HeldBulk,
-                    compute_kernel_lib::OperandKind::Block,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Block,
-                    compute_kernel_lib::TileOffset::Set,
-                    compute_kernel_lib::TileOffset::Set>{block.start(), block.start()},
-                compute_kernel_lib::PackTile<
-                    cb_xmm2,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::PackTileReconfig::None>{});
-        }
+        constexpr uint32_t Wt_padded = ((Wt + block_size - 1) / block_size) * block_size;
+        compute_kernel_lib::eltwise_chain(
+            compute_kernel_lib::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size),
+            compute_kernel_lib::BinaryFpu<
+                cb_xmm,
+                cb_xmm,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Block>{},
+            compute_kernel_lib::PackTile<
+                cb_xmm2,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::PackTileReconfig::None>{});
 #if defined RMSNORM and not defined FUSED_PRE_ADD
         reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
 #endif
