@@ -62,3 +62,63 @@ def scan_usage(config) -> dict:
             for op, snippet in _scan_calls(text):
                 usage.setdefault(op, []).append({"source": rel, "snippet": snippet})
     return usage
+
+
+from models.experimental.opt_transfer.kb.cache import ContentCache
+from models.experimental.opt_transfer.kb.store import KBStore
+from models.experimental.opt_transfer.schema import KBEntry
+from models.experimental.opt_transfer.config import CONFIG
+
+
+def _golden_source(op_name: str):
+    """Tier-1 opportunity source: the op's registered torch golden, or None. Lazy ttnn
+    import (device-free); any failure (no op / no golden / RuntimeError) -> None."""
+    import inspect
+
+    try:
+        import ttnn
+
+        op = (
+            getattr(ttnn, op_name, None)
+            or getattr(getattr(ttnn, "experimental", None), op_name, None)
+            or getattr(getattr(ttnn, "transformer", None), op_name, None)
+        )
+        if op is None:
+            return None
+        g = ttnn.get_golden_function(op)
+        return inspect.getsource(g) if g is not None else None
+    except Exception:
+        return None
+
+
+def build_kb(client, cache_root=None, kb_root=None, config=CONFIG, limit_ops=None) -> list[KBEntry]:
+    cache = ContentCache(cache_root or config.cache_dir)
+    store = KBStore(kb_root or config.kb_dir)
+    inv = inventory_ops(config)
+    usage = scan_usage(config)
+    ops = sorted(set(inv) | set(usage))  # union: available + used
+    if limit_ops:
+        ops = ops[:limit_ops]
+    entries: dict[str, KBEntry] = {}
+    for op in ops:
+        available = inv.get(op, {"tests": [], "examples": []})
+        used = usage.get(op, [])
+        golden_src = _golden_source(op)
+        content = repr(golden_src) + repr(available["examples"]) + repr([u["snippet"] for u in used])
+        raw = cache.get_or_compute(
+            key=f"op::{op}",
+            content=content,
+            compute=lambda op=op, a=available, u=used, g=golden_src: client.extract_entries(op, a, u, g),
+        )
+        for d in raw:
+            e = KBEntry.from_dict(d)
+            if not e.unit_test_refs:
+                e.unit_test_refs = list(available["tests"])
+            e.status = "in_use" if used else "supported_unused"
+            if e.pattern_source == "unit_test":
+                e.pattern_source = "golden" if golden_src else ("unit_test" if available["examples"] else "llm")
+                e.confidence = "low" if e.pattern_source == "llm" else "high"
+            entries[e.id] = e
+    out = list(entries.values())
+    store.save(out)
+    return out
