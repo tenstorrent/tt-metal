@@ -2817,12 +2817,15 @@ git commit -m "feat(opt_transfer): model-shape validation (E0) + multi-block rea
 - Whole-model assembly: F1. ✅
 - Prompt caching on matcher KB context: C2. ✅
 - First-slice fusions (QKV head-split + merge) as validation, op-agnostic components: codegen D3 + e2e I2; nothing in the pipeline hardcodes "QKV". ✅
+- **Stub closures (Phase J):** general codegen emitter registry/dispatch (J1, closes "QKV-only codegen") ✅; real `LLMClient` for both extraction + diagnosis-aware matching (J2) ✅; drift + perf gates wired into routing (J3) ✅; diagnosis-driven repair = localize → diagnose → re-propose (J4) ✅; checkpointer + `--resume` (J5) ✅; model-shape validation (E0) + multi-block assembly (J6) ✅.
+- **DB-of-opportunities methodology:** layered `torch_pattern` extraction — tier1 `ttnn.get_golden_function` → tier2 unit-test golden → tier3 LLM (low-confidence); `pattern_source`/`confidence`/`unit_test_refs` recorded; offline build, validated at bring-up at model shapes (Phase B + J6). ✅
 
 **Known scope edges (honest, not placeholders):**
-- F1 assembly composes block runners; full multi-layer SeamlessM4T forward with real HF weights + `nlp_concat_heads` output side is exercised by the e2e but the deep multi-block integration (all encoder/decoder layers, real checkpoint) is the natural Plan-4 expansion. The e2e here proves the *attention QKV* path end-to-end through the real graph.
-- G3/E2 on-device timing + drift use the `perf`/`generation` skill procedures at run time; the unit tests cover the gate logic, the e2e covers the wiring. Real thresholds (`min_perf_gain_pct`, `drift_first_divergence_min_frac`) are starting values in config to be tuned against measured baselines.
-- The matcher's real output quality is validated by the manual smoke step (I2 Step 3), not the deterministic device gate (which uses a stub matcher to stay key-free and reproducible).
+- The full multi-layer SeamlessM4T forward with the real HF checkpoint (all encoder/decoder layers) is wired by J6 + the I2/J6 e2e, but exhaustive coverage of *every* layer type and the complete generate loop remains a natural follow-on; the e2e proves the attention QKV path + a ≥2-layer real-weight stack end-to-end through the graph.
+- J1 ships the emitter **registry** + the verified QKV emitter; emitters for the other fused ops (concat_heads, SDPA, rope, CCL, rms_norm…) are added incrementally, each gated by its J6 model-shape test. A KB op with no emitter raises and routes to handoff — coverage gaps are explicit, never silent.
+- On-device timing/drift (J3/E2) use the `perf`/`generation` skill procedures at run time; unit tests cover gate logic, the e2e covers wiring. Thresholds (`min_perf_gain_pct`, `drift_first_divergence_min_frac`) are starting values to tune against measured baselines.
+- The matcher's real output quality is validated by the manual smoke step (I2 Step 3) + the real-weight e2e; the deterministic device gate uses a stub matcher to stay key-free and reproducible.
 
 **Placeholder scan:** no "TBD"/"handle errors"/"similar to" — each code step is complete.
 
-**Type consistency:** `KBEntry`/`FusionProposal`/`Diagnosis`/`BringupState` from `schema.py` used consistently; `validate(graph, proposal, entry)`, `build_fused_qkv(proposal, weights, device, dims)`, `build_graph(impl, max_iterations)`, `RealImpl(model_key, device, matcher, kb)` signatures match across tasks.
+**Type consistency:** `KBEntry`/`FusionProposal`/`Diagnosis`/`BringupState` from `schema.py` used consistently; `validate(graph, proposal, entry)`, `build_fused(proposal, entry, weights, device, dims)` (dispatch) → `build_fused_qkv(proposal, weights, device, dims)` (emitter), `build_graph(impl, max_iterations, checkpointer)`, `RealImpl(model_key, device, matcher, kb)`, `LLMClient.extract_entries(op, available, used, golden_src)` / `LLMClient.propose(graph_summary, kb, diagnosis)` signatures match across tasks.
