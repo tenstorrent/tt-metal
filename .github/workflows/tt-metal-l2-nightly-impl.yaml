@@ -285,7 +285,7 @@ jobs:
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
       - name: ttnn nightly fused tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/ttnn/nightly/unit_tests/operations/fused -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+        run: pytest tests/ttnn/nightly/unit_tests/operations/fused -v -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 15
         if: ${{ !cancelled() }}
@@ -789,7 +789,7 @@ jobs:
           enable-llk-asserts: ${{ inputs.enable-llk-asserts }}
       - name: ttnn nightly moreh tests
         timeout-minutes: ${{ inputs.timeout }}
-        run: pytest tests/ttnn/nightly/unit_tests/operations/moreh -xv -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
+        run: pytest tests/ttnn/nightly/unit_tests/operations/moreh -v -m "not disable_fast_runtime_mode" --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
@@ -964,7 +964,7 @@ jobs:
           cp /work/tt_metal/soc_descriptors/${{ steps.ttsim-info.outputs.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
       - name: ttnn compute-fused validation tests
         timeout-minutes: 20
-        run: pytest tests/ttnn/nightly/unit_tests/operations_compute_only/fused -xv --timeout=${{ env.TEST_BUDGET_SECONDS }}
+        run: pytest tests/ttnn/nightly/unit_tests/operations_compute_only/fused -v --timeout=${{ env.TEST_BUDGET_SECONDS }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}
