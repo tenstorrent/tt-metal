@@ -521,9 +521,9 @@ def test_prefill_transformer(
     # logits (NOT the Gumbel-sampled token, which is RNG-confounded at temperature>0)
     # and compare them across iterations within one process to find the first
     # stage that drifts. Pure measurement; does not change device compute.
-    from models.demos.deepseek_v3_d_p.utils.nd_debug import nd_compare_log, nd_fingerprint
-
     nd_debug = os.getenv("TT_DS_ND_DEBUG", "0").lower() in ("1", "true", "yes")
+    if nd_debug:
+        from models.demos.deepseek_v3_d_p.utils.nd_debug import nd_compare_log, nd_fingerprint
     # The per-layer host gather (return_intermediates) accumulates every layer's
     # full hidden state in host RAM — ~9GB+ for 12 layers x 25600 tokens, which
     # OOMs (SIGBUS). Gate it behind TT_DS_ND_FULL_INTERMEDIATES (default off).
