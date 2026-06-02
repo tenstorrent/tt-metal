@@ -21,7 +21,11 @@ from typing import Any
 import ttnn
 from models.tt_transformers.tt.common import Mode
 
-from .math_perf_env import ace_step_lm_head_sharded_norm_enabled
+from .math_perf_env import (
+    ace_step_build_prefill_block_sharded_norm_config,
+    ace_step_lm_head_sharded_norm_enabled,
+    ace_step_prefill_block_sharded_norm_enabled,
+)
 
 
 def _tensor_is_sharded(tensor: Any) -> bool:
@@ -105,22 +109,32 @@ def _distributed_norm_prestep(
 
 def _run_sharded_lm_head_norm(dnorm: Any, x: Any, *, mode: Mode, norm_config: dict) -> Any:
     prefetcher = None if mode == Mode.PREFILL else dnorm.prefetcher
-    lm_head_input_mem_cfg = dnorm.args.get_lm_head_input_mem_config(mode, prefetcher)
+    blk_cfg = (
+        ace_step_build_prefill_block_sharded_norm_config(ttnn, x, dnorm.args.mesh_device)
+        if ace_step_prefill_block_sharded_norm_enabled()
+        else None
+    )
+    target_sharded_mem_cfg = (
+        blk_cfg["sharded_output_config"]
+        if blk_cfg is not None
+        else dnorm.args.get_lm_head_input_mem_config(mode, prefetcher)
+    )
+    run_cfg = blk_cfg if blk_cfg is not None else norm_config
     x = _distributed_norm_prestep(
         dnorm,
         x,
         mode=mode,
         norm_config=norm_config,
-        target_sharded_mem_cfg=lm_head_input_mem_cfg,
+        target_sharded_mem_cfg=target_sharded_mem_cfg,
     )
     if not _tensor_is_sharded(x):
-        x = _shard_for_lm_head(x, lm_head_input_mem_cfg)
+        x = _shard_for_lm_head(x, target_sharded_mem_cfg)
     return dnorm.norm(
         x,
         mode=mode,
         in_sharded=True,
         out_sharded=True,
-        norm_config=norm_config,
+        norm_config=run_cfg,
     )
 
 

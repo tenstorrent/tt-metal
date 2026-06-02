@@ -1509,6 +1509,16 @@ def ace_step_lm_head_sharded_norm_enabled() -> bool:
     return os.environ.get("ACE_STEP_LM_LM_HEAD_SHARDED_NORM", "1").lower() not in ("0", "false", "no", "off")
 
 
+def ace_step_prefill_block_sharded_norm_enabled() -> bool:
+    """BLOCK-sharded L1 RMSNorm for Qwen/encoder ``[B,1,S,K]`` prefill (seq 128–256). Default on."""
+    return os.environ.get("ACE_STEP_QWEN_PREFILL_BLOCK_SHARDED_NORM", "1").lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
 def ace_step_lm_sdpa_gather_unified_enabled() -> bool:
     """Align post-SDPA ``gather_users`` WIDTH with residual grid. Default on."""
     return os.environ.get("ACE_STEP_LM_SDPA_GATHER_UNIFIED", "1").lower() not in ("0", "false", "no", "off")
@@ -1881,8 +1891,7 @@ def _ace_step_cond_in0_block_w_cap(*, intermediate_size: int | None = None) -> i
 def _ace_step_cond_gate_up_in0_block_w_cap(*, intermediate_size: int) -> int:
     """``in0_block_w`` cap for fused MLP gate+up (``256×1024×6144`` family).
 
-    Encoder sweep: ibw=8 @ 1D/96c/L1 interleaved ~1.16× vs ibw=4 heuristic (PCC=0.9931).
-    Do not use width-sharded gate_up output — downstream SiLU/slice expects L1 interleaved.
+    Encoder sweep: ibw=8 @ 1D/96c; WIDTH_SHARDED out ~1.13× vs L1 interleaved (PCC=0.9999).
     Wide lyric/timbre MLPs (intermediate ≥ 6144) keep cap=1 for L1 CB budget.
     """
     if int(intermediate_size) >= _WIDE_MLP_INTERMEDIATE_THRESHOLD:
@@ -2118,25 +2127,32 @@ def _ace_step_cond_256x1024_1d_width_program_config(
 # in0_block_w).
 #   "1D" = MatmulMultiCoreReuseMultiCast1D (mcast_in0); caps at Nt cores.
 #   "2D" = MatmulMultiCoreReuseMultiCast block-mcast; splits K over gx for N-narrow matmuls.
-# Sweep winners (device us, PCC=0.9931 unless noted):
-#   qkv 1024×4096   1D 8×8 ibw=8 L1 interleaved          ~18.0  (pinned; ws-out ~17.6 isolated)
-#   wo  2048×1024   2D 8×8 ibw=8 bs in0+out               ~15.6  (vs ~16.7 L1 interleaved)
-#   gu  1024×6144   1D 11×10 pcN=2 ibw=8 L1 interleaved   ~18.5  (vs ~21.5 ibw=4 heuristic)
-#   down 3072×1024  2D 8×8 ibw=12 L1 interleaved         ~21.1  (vs ~24.9 ibw=6)
-# gate_up stays on the 1D heuristic (grid from device, per_core_N=2 → 96 cores) with ibw=8;
-# Nt=192 does not divide the 11×10 grid evenly so it is not in this pinned table.
+# Sweep winners (device us, PCC≥0.999 unless noted; ``test_matmul_256x*`` on blackhole):
+#   qkv 1024×4096   1D 8×8 ibw=16 l1/dram/l1                        ~23μs (ws ~22μs but breaks nlp_create_qkv_heads)
+#   wo  2048×1024   2D 8×8 ibw=8 bs/dram/bs                          ~17μs
+#   down 3072×1024  2D 8×4 ibw=12 l1/dram/l1                        ~24μs (vs ~36μs MinimalMatmul)
+# gate_up (6144 N) is tuned in ``qwen_prefill_l1`` (1D 11×10, ibw=8, ws out) — not in this table.
 _ACE_STEP_ENCODER_MM_PINNED = {
-    (1024, 4096): ("1D", 8, 8, 8),  # qkv: Nt=128 fills 64 cores in 1D
-    (2048, 1024): ("2D", 8, 8, 8),  # wo:  2D splits K=64t over gx=8 → 64c; pair with bs in0/out (BF16×BFP8, PCC 0.9999)
-    (3072, 1024): ("2D", 8, 8, 12),  # down: Kt/gx=12; ibw=12 (was 6) ~1.18× in sweep
+    (1024, 4096): ("1D", 8, 8, 16, "l1"),  # qkv prefill: L1 interleaved out (downstream nlp_create_qkv_heads)
+    (2048, 1024): ("2D", 8, 8, 8, "bs"),  # o_proj: block-sharded in0+out
+    (3072, 1024): ("2D", 8, 4, 12, "l1"),  # down_proj / FF2: half grid, same speed as 8×8
 }
 
 
 def ace_step_encoder_matmul_pinned(m: int, k: int, n: int):
-    """Return ``(family, grid_x, grid_y, in0_block_w)`` for a swept encoder matmul, else ``None``."""
+    """Return ``(family, grid_x, grid_y, in0_block_w, out_layout)`` for a swept encoder matmul."""
     if int(m) != 256:
         return None
     return _ACE_STEP_ENCODER_MM_PINNED.get((int(k), int(n)))
+
+
+def ace_step_prefill_width_sharded_l1_memory_config(ttnn: Any):
+    """Generic WIDTH_SHARDED L1 output (matches ``test_matmul_256x*_sweep`` ``_mem_out`` for ``ws``)."""
+    layout = getattr(ttnn, "TensorMemoryLayout", None)
+    buf = getattr(ttnn, "BufferType", None)
+    if layout is None or buf is None:
+        return None
+    return ttnn.MemoryConfig(memory_layout=layout.WIDTH_SHARDED, buffer_type=buf.L1)
 
 
 def ace_step_encoder_2d_block_sharded_memory_config(
@@ -2171,7 +2187,9 @@ def ace_step_encoder_2d_block_sharded_memory_config(
     if int(in_dim) != 2048:
         return None
 
-    _, gx, gy, _ = pin
+    _, gx, gy, _, out_layout = pin
+    if out_layout != "bs":
+        return None
     dev_grid = device.compute_with_storage_grid_size()
     if gx > int(dev_grid.x) or gy > int(dev_grid.y):
         return None
@@ -2208,7 +2226,7 @@ def ace_step_encoder_matmul_program_config(
     pin = ace_step_encoder_matmul_pinned(m, in_dim, out_dim)
     if pin is None or not hasattr(device, "compute_with_storage_grid_size"):
         return None
-    family, gx, gy, ibw = pin
+    family, gx, gy, ibw, out_layout = pin
     grid = device.compute_with_storage_grid_size()
     if gx > int(grid.x) or gy > int(grid.y):
         return None
@@ -2216,6 +2234,7 @@ def ace_step_encoder_matmul_program_config(
     nt = (int(out_dim) + tile - 1) // tile
     mt = (m + tile - 1) // tile
     kt = int(in_dim) // tile
+    shard_out = bool(out_sharded) or out_layout in ("ws", "bs")
 
     if family == "2D":
         cfg_cls = getattr(ttnn, "MatmulMultiCoreReuseMultiCastProgramConfig", None)
@@ -2224,7 +2243,7 @@ def ace_step_encoder_matmul_program_config(
         pcm, pcn = mt // gy, nt // gx
         if (kt // gx) % ibw:
             return None
-        sh, sw = _ace_step_pick_2d_out_subblock(pcm, pcn, out_sharded=bool(out_sharded))
+        sh, sw = _ace_step_pick_2d_out_subblock(pcm, pcn, out_sharded=shard_out)
         return cfg_cls(
             compute_with_storage_grid_size=(gx, gy),
             in0_block_w=ibw,
@@ -2243,11 +2262,14 @@ def ace_step_encoder_matmul_program_config(
     if cfg_cls is None or nt % cores or kt % ibw:
         return None
     pcn = nt // cores
-    sh, sw = 1, 1
-    for h, w in [(2, 2), (4, 1), (1, 4), (2, 1), (1, 2), (1, 1)]:
-        if mt % h == 0 and pcn % w == 0:
-            sh, sw = h, w
-            break
+    if shard_out:
+        sh, sw = _ace_step_pick_2d_out_subblock(mt, pcn, out_sharded=True)
+    else:
+        sh, sw = 1, 1
+        for h, w in [(2, 2), (4, 1), (1, 4), (2, 1), (1, 2), (1, 1)]:
+            if mt % h == 0 and pcn % w == 0:
+                sh, sw = h, w
+                break
     return cfg_cls(
         compute_with_storage_grid_size=(gx, gy),
         in0_block_w=ibw,
@@ -2701,4 +2723,168 @@ def ace_step_rms_norm_width_sharded(
         except Exception:
             pass
 
+    return out
+
+
+# ---------------------------------------------------------------------------
+# BLOCK_SHARDED RMSNorm helper (pairs with 8×4 pinned conditioning matmul grid)
+# ---------------------------------------------------------------------------
+
+_ACE_STEP_BLOCK_SHARDED_RMSNORM_GRID = (8, 4)  # gx, gy — same as MinimalMatmul / 2D-mcast winners
+_ACE_STEP_BLOCK_SHARDED_RMSNORM_SEQ_MAX = 256
+_ACE_STEP_BLOCK_SHARDED_RMSNORM_SEQ_MIN = 128
+
+
+def _ace_step_block_norm_subblock_w(block_w: int) -> int:
+    for sw in range(min(block_w, 4), 0, -1):
+        if block_w % sw == 0:
+            return sw
+    return 1
+
+
+def ace_step_build_prefill_block_sharded_norm_config(
+    ttnn: Any,
+    x: Any,
+    device: Any,
+) -> dict[str, Any] | None:
+    """Build ``norm_config`` for BLOCK-sharded ``LayerNormDeviceOperation`` on ``[B,1,S,K]`` prefill."""
+    lnpc_cls = getattr(ttnn, "LayerNormShardedMultiCoreProgramConfig", None)
+    create_shard = getattr(ttnn, "create_sharded_memory_config", None)
+    shard_strategy = getattr(ttnn, "ShardStrategy", None)
+    shard_orientation = getattr(ttnn, "ShardOrientation", None)
+    core_grid_cls = getattr(ttnn, "CoreGrid", None)
+    if any(v is None for v in (lnpc_cls, create_shard, shard_strategy, shard_orientation, core_grid_cls)):
+        return None
+    if not hasattr(device, "compute_with_storage_grid_size"):
+        return None
+
+    shape = x.shape
+    if len(shape) != 4 or int(shape[1]) != 1:
+        return None
+    seq_len = int(shape[2])
+    if not (_ACE_STEP_BLOCK_SHARDED_RMSNORM_SEQ_MIN < seq_len <= _ACE_STEP_BLOCK_SHARDED_RMSNORM_SEQ_MAX):
+        return None
+
+    tile = int(getattr(ttnn, "TILE_SIZE", 32))
+    b_dim, one_dim, s_dim, k_dim = (int(shape[0]), int(shape[1]), int(shape[2]), int(shape[3]))
+    m_physical = ace_step_tile_physical_m_dim(batch=b_dim, one=one_dim, seq=s_dim, tile=tile)
+    k_pad = (k_dim + tile - 1) // tile * tile
+    m_tiles = m_physical // tile
+    k_tiles = k_pad // tile
+
+    gx, gy = _ACE_STEP_BLOCK_SHARDED_RMSNORM_GRID
+    dev_grid = device.compute_with_storage_grid_size()
+    if gx > int(dev_grid.x) or gy > int(dev_grid.y):
+        return None
+    if m_tiles % gy != 0 or k_tiles % gx != 0:
+        return None
+
+    block_h = m_tiles // gy
+    block_w = k_tiles // gx
+    if block_h < 1 or block_w < 1 or block_h > _ACE_STEP_WIDTH_SHARDED_RMSNORM_MAX_BLOCK_H:
+        return None
+
+    try:
+        sharded_mc = create_shard(
+            (b_dim, one_dim, m_physical, k_pad),
+            core_grid=core_grid_cls(y=gy, x=gx),
+            strategy=shard_strategy.BLOCK,
+            orientation=shard_orientation.ROW_MAJOR,
+        )
+        prog_cfg = lnpc_cls(
+            compute_with_storage_grid_size=(gx, gy),
+            subblock_w=_ace_step_block_norm_subblock_w(block_w),
+            block_h=block_h,
+            block_w=block_w,
+            inplace=False,
+        )
+    except Exception:
+        return None
+
+    return {
+        "sharded_program_config": prog_cfg,
+        "sharded_output_config": sharded_mc,
+        "output_mem_config": None,
+    }
+
+
+def ace_step_rms_norm_block_sharded(
+    ttnn: Any,
+    x: Any,
+    weight: Any,
+    epsilon: float,
+    *,
+    device: Any,
+    l1_mc: Any | None = None,
+    compute_kernel_config: Any | None = None,
+    activation_dtype: Any | None = None,
+) -> Any:
+    """BLOCK_SHARDED ``ttnn.rms_norm`` on ``[B,1,S,K]`` (8×4 L1 grid); falls back to interleaved."""
+    i2s = getattr(ttnn, "interleaved_to_sharded", None)
+    s2i = getattr(ttnn, "sharded_to_interleaved", None)
+
+    _fb_kw: dict = {}
+    if l1_mc is not None:
+        _fb_kw["memory_config"] = l1_mc
+    if compute_kernel_config is not None:
+        _fb_kw["compute_kernel_config"] = compute_kernel_config
+
+    def _maybe_typecast_act(t: Any) -> Any:
+        if activation_dtype is None or t.dtype == activation_dtype:
+            return t
+        tc_kw = {"memory_config": l1_mc} if l1_mc is not None else {}
+        return ttnn.typecast(t, dtype=activation_dtype, **tc_kw)
+
+    def _fallback(t: Any) -> Any:
+        return ttnn.rms_norm(_maybe_typecast_act(t), weight=weight, epsilon=epsilon, **_fb_kw)
+
+    if not ace_step_prefill_block_sharded_norm_enabled() or i2s is None or s2i is None:
+        return _fallback(x)
+
+    blk = ace_step_build_prefill_block_sharded_norm_config(ttnn, x, device)
+    if blk is None:
+        return _fallback(x)
+
+    x_l1 = ace_step_ensure_l1_activation(ttnn, x, l1_mc)
+    x_l1 = _maybe_typecast_act(x_l1)
+    try:
+        x_sharded = i2s(x_l1, blk["sharded_output_config"])
+    except Exception:
+        return _fallback(x)
+
+    rn_kw: dict = {
+        "memory_config": blk["sharded_output_config"],
+        "program_config": blk["sharded_program_config"],
+    }
+    if compute_kernel_config is not None:
+        rn_kw["compute_kernel_config"] = compute_kernel_config
+    try:
+        out_sharded = ttnn.rms_norm(x_sharded, weight=weight, epsilon=epsilon, **rn_kw)
+        ace_step_safe_deallocate(ttnn, x_sharded)
+    except Exception:
+        ace_step_safe_deallocate(ttnn, x_sharded)
+        return _fallback(x)
+
+    out_kw = {"memory_config": l1_mc} if l1_mc is not None else {}
+    try:
+        out = s2i(out_sharded, **out_kw)
+        ace_step_safe_deallocate(ttnn, out_sharded)
+    except Exception:
+        ace_step_safe_deallocate(ttnn, out_sharded)
+        return _fallback(x)
+
+    b_dim = int(x.shape[0])
+    one_dim = int(x.shape[1])
+    s_dim = int(x.shape[2])
+    k_dim = int(x.shape[3])
+    k_pad = (
+        (k_dim + int(getattr(ttnn, "TILE_SIZE", 32)) - 1)
+        // int(getattr(ttnn, "TILE_SIZE", 32))
+        * int(getattr(ttnn, "TILE_SIZE", 32))
+    )
+    if k_pad != k_dim:
+        try:
+            out = ttnn.slice(out, (0, 0, 0, 0), (b_dim, one_dim, s_dim, k_dim), **out_kw)
+        except Exception:
+            pass
     return out
