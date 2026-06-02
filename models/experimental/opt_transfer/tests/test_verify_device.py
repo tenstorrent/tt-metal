@@ -1,7 +1,13 @@
 import numpy as np
 import torch
 from models.experimental.opt_transfer.references.seamless_m4t_v2 import SeamlessBlock
-from models.experimental.opt_transfer.verify import drift_metrics, golden_outputs, pcc
+from models.experimental.opt_transfer.verify import (
+    drift_metrics,
+    golden_outputs,
+    pcc,
+    perf_gain_pct,
+    perf_gate_pass,
+)
 
 
 def test_pcc_identity_is_one():
@@ -31,3 +37,12 @@ def test_drift_identical_trajectories():
     m = drift_metrics(g, g.copy())
     assert m["token_match_rate"] == 1.0
     assert m["first_divergence_step"] == 40
+
+
+def test_perf_gain_pct():
+    assert abs(perf_gain_pct(naive_ms=100.0, fused_ms=60.0) - 40.0) < 1e-6
+
+
+def test_perf_gate_rejects_regression():
+    assert perf_gate_pass(naive_ms=100.0, fused_ms=99.5, min_gain_pct=2.0) is False
+    assert perf_gate_pass(naive_ms=100.0, fused_ms=80.0, min_gain_pct=2.0) is True

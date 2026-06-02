@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 
 
@@ -10,9 +11,6 @@ def golden_outputs(reference_module, example_inputs: tuple) -> torch.Tensor:
     reference_module.eval()
     with torch.no_grad():
         return reference_module(*example_inputs)
-
-
-import numpy as np
 
 
 def drift_metrics(golden_logits, fused_logits) -> dict:
@@ -32,3 +30,11 @@ def drift_metrics(golden_logits, fused_logits) -> dict:
         "drift_slope": slope,
         "horizon": T,
     }
+
+
+def perf_gain_pct(naive_ms: float, fused_ms: float) -> float:
+    return (naive_ms - fused_ms) / naive_ms * 100.0
+
+
+def perf_gate_pass(naive_ms: float, fused_ms: float, min_gain_pct: float) -> bool:
+    return perf_gain_pct(naive_ms, fused_ms) >= min_gain_pct
