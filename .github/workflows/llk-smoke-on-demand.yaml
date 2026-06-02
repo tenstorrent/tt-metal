@@ -42,10 +42,6 @@ jobs:
       llk-tests-changed: ${{ steps.find-changes.outputs.llk-tests-changed }}
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 1
-          sparse-checkout: .github
       - id: find-changes
         uses: ./.github/actions/find-changed-files
 
