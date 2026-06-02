@@ -158,7 +158,7 @@ DropoutCoreSplit dropout_core_split(const Tensor& input) {
     auto grid = input.device()->compute_with_storage_grid_size();
     uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(grid, num_tiles);
+        tt::tt_metal::split_work_to_cores(grid, num_tiles);
     return {
         num_cores,
         grid.y,

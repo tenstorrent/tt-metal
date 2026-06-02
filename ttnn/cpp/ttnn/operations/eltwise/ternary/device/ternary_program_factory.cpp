@@ -525,7 +525,7 @@ struct TernaryCorePartition {
     uint32_t num_cores_total = 0;
     bool has_sharding = false;
     bool zero_start_grid = false;
-    CoreCoord compute_with_storage_grid{};
+    CoreCoord compute_with_storage_grid;
     uint32_t num_tiles_per_core_group_1 = 0;
     uint32_t num_tiles_per_core_group_2 = 0;
     bool row_major = true;

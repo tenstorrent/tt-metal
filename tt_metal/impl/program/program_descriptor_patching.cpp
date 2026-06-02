@@ -56,7 +56,7 @@ ResolvedBindings resolve_bindings(
             }
             const bool is_input = i < num_input_buffers;
             // An output/workload buffer that aliases an input is the safe in-place case — skip it.
-            if (!is_input && input_buffers.count(buf) != 0) {
+            if (!is_input && input_buffers.contains(buf)) {
                 continue;
             }
             // Otherwise a repeat is ambiguous (matmul(X, X), or a repeated output) — bail to slow path.
