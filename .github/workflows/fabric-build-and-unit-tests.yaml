@@ -58,6 +58,7 @@ jobs:
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
+        TT_LOGGER_LEVEL: warn
         LD_LIBRARY_PATH: /work/build/lib
         PYTHONPATH: /work
         TT_METAL_HOME: /work
