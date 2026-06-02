@@ -9,7 +9,13 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import pad_by_zero
-from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import vision_rms_norm_memcfg
+from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import (
+    vision_rms_norm_block_shard_eligible,
+    vision_rms_norm_block_shard_memcfg,
+    vision_rms_norm_block_shard_program_config,
+    vision_rms_norm_memcfg,
+    vision_rms_norm_prepare_block_shard_input,
+)
 
 
 def _resolve_weight_state_dict_key(weight_key: str | None, state_dict_prefix: str | None) -> str:
@@ -59,16 +65,27 @@ class TtPixtralRMSNorm(LightweightModule):
         )[0]
 
     def forward(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
-        norm_mem_cfg = vision_rms_norm_memcfg(
-            int(hidden_states.shape[-2]),
-            int(hidden_states.shape[-1]),
-        )
-        if hidden_states.memory_config().buffer_type != norm_mem_cfg.buffer_type:
-            hidden_states = ttnn.to_memory_config(hidden_states, norm_mem_cfg)
+        seq_len = int(hidden_states.shape[-2])
+        feature_dim = int(hidden_states.shape[-1])
+        grid_x, grid_y = 8, 8
+
+        if vision_rms_norm_block_shard_eligible(seq_len, feature_dim, grid_x, grid_y):
+            norm_mem_cfg = vision_rms_norm_block_shard_memcfg(seq_len, feature_dim, grid_x, grid_y)
+            program_config = vision_rms_norm_block_shard_program_config(seq_len, feature_dim, grid_x, grid_y)
+            hidden_states = vision_rms_norm_prepare_block_shard_input(
+                hidden_states, seq_len, feature_dim, grid_x, grid_y
+            )
+        else:
+            norm_mem_cfg = vision_rms_norm_memcfg(seq_len, feature_dim)
+            program_config = None
+            if hidden_states.memory_config().buffer_type != norm_mem_cfg.buffer_type:
+                hidden_states = ttnn.to_memory_config(hidden_states, norm_mem_cfg)
+
         return ttnn.rms_norm(
             hidden_states,
             epsilon=self.variance_epsilon,
             weight=self.weight,
+            program_config=program_config,
             memory_config=norm_mem_cfg,
         )
 

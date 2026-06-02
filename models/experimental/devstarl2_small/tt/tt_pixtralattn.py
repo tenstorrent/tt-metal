@@ -377,7 +377,9 @@ class TtMistralImageAttention(LightweightModule):
     def forward(self, x_11SH, position_embeddings=None):
         seq_len = int(x_11SH.shape[-2])
         act_mem_cfg = vision_seq_memcfg(seq_len, self.hidden_size)
-        if x_11SH.memory_config().buffer_type != act_mem_cfg.buffer_type:
+        if x_11SH.is_sharded():
+            x_11SH = ttnn.sharded_to_interleaved(x_11SH, act_mem_cfg)
+        elif x_11SH.memory_config().buffer_type != act_mem_cfg.buffer_type:
             x_11SH = ttnn.to_memory_config(x_11SH, act_mem_cfg)
 
         max_mm_seq_len = pixtral_effective_mm_seq_len(self.configuration, seq_len)
