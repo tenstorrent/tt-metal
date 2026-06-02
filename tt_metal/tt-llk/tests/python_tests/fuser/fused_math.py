@@ -428,7 +428,7 @@ class ComputePipeline:
         operation: "FusedOperation",
         config: "GlobalConfig",
         golden_type: GoldenType,
-    ) -> torch.Tensor:
+    ):
         first_fpu = next((op for op in self.operations if op.src_a is not None), None)
         if first_fpu is not None:
             tensor_a = torch.zeros(first_fpu.src_a.dimensions)
