@@ -171,6 +171,22 @@ void D2HSocket::write_socket_metadata(
     config_data[host_addr_offset + 1] = data_info.addr_hi;
     config_data[host_addr_offset + 2] = data_info.pcie_xy_enc;
 
+    if (is_l2cpu_) {
+        // L2CPU has no MeshBuffer-backed config and no fast-dispatch /
+        // WriteToDeviceL1 path. Push the wire blob over PCIe directly to
+        // the caller-provided LIM address on the L2CPU tile. sender_core_
+        // .core_coord here is the L2CPU's TRANSLATED NOC coord (the L2CPU
+        // constructor stamps it that way).
+        const auto& cluster = MetalContext::instance().get_cluster();
+        const uint32_t device_id = mesh_device->get_device(sender_core_.device_coord)->id();
+        cluster.write_core(
+            config_data.data(),
+            total_config_bytes,
+            tt_cxy_pair(device_id, sender_core_.core_coord),
+            config_buffer_address_);
+        return;
+    }
+
     // External-config ctor skips MeshBuffer allocation; use direct L1 write. Standard
     // ctor owns config_buffer_; use fast-dispatch WriteShard like pre-RT-profiler path.
     if (config_buffer_) {
@@ -191,7 +207,26 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
 
     const auto& cluster = MetalContext::instance().get_cluster();
 
-    if (mesh_device) {
+    if (is_l2cpu_) {
+        // sender_core_.core_coord is the TRANSLATED L2CPU NOC coord that the
+        // L2CPU D2HSocket constructor's @param sender_l2cpu contract requires
+        // the caller to supply. On Blackhole, TRANSLATED == NOC0 for L2CPU
+        // so it is usable directly.
+        //
+        // L2CPU uses a static 2 MiB TLB anchored at the LIM base
+        // (0x08000000) -- registered in tlb_config.cpp. Anchoring at LIM
+        // base (rather than 0 like Tensix/ETH) is required because LIM
+        // addresses are around 0x08130000+, far outside any 2 MiB window
+        // anchored at 0. A 4 GiB TLB would also work but BH only has 8
+        // of those and DRAM uses all of them.
+        TT_FATAL(mesh_device, "L2CPU D2H sockets require a mesh_device for TLB setup.");
+        sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
+        sender_virtual_core = sender_core_.core_coord;
+        sender_core_tlb_ = cluster.get_driver()
+                               ->get_chip(sender_device_id)
+                               ->get_tlb_manager()
+                               ->get_tlb_window(tt_xy_pair(sender_virtual_core.x, sender_virtual_core.y));
+    } else if (mesh_device) {
         sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
         sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
         sender_core_tlb_ = cluster.get_driver()
@@ -205,7 +240,17 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
     }
 
     auto arch = MetalContext::instance().hal().get_arch();
-    if (arch == tt::ARCH::BLACKHOLE && mesh_device) {
+    if (is_l2cpu_) {
+        // The L2CPU TLB is anchored at LIM base 0x08000000, so absolute
+        // device_addr values must be converted to window-relative offsets
+        // before write_block (which calls validate(offset, size) against
+        // the 2 MiB window size). Tensix/ETH TLBs are anchored at 0 so
+        // their lambda passes device_addr through unchanged.
+        const uint64_t l2cpu_tlb_base = sender_core_tlb_->get_base_address();
+        pcie_writer_ = [this, l2cpu_tlb_base](void* data, uint32_t num_bytes, uint64_t device_addr) {
+            sender_core_tlb_->write_block(device_addr - l2cpu_tlb_base, data, num_bytes);
+        };
+    } else if (arch == tt::ARCH::BLACKHOLE && mesh_device) {
         // This process owns a mesh_device and hence has statically initialized TLBs.
         // Entire device address space for Blackhole is statically mapped.
         // Safe to use static TLBs without requiring the driver to do a reconfig.
@@ -303,6 +348,33 @@ D2HSocket::D2HSocket(
         external_config.address,
         l1_alignment);
     config_buffer_address_ = external_config.address;
+    init_common(mesh_device);
+}
+
+D2HSocket::D2HSocket(
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const MeshCoreCoord& sender_l2cpu,
+    uint32_t fifo_size,
+    uint32_t config_buffer_address) :
+    sender_core_(sender_l2cpu),
+    fifo_size_(fifo_size),
+    pcie_alignment_(MetalContext::instance().hal().get_alignment(HalMemType::HOST)),
+    mesh_device_(mesh_device.get()),
+    is_l2cpu_(true) {
+    TT_FATAL(
+        MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE,
+        "L2CPU D2H sockets are only supported on Blackhole architectures.");
+    TT_FATAL(config_buffer_address != 0, "L2CPU config buffer LIM address must be non-zero.");
+
+    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    TT_FATAL(
+        config_buffer_address % l1_alignment == 0,
+        "L2CPU config buffer LIM address 0x{:x} must be L1-aligned ({} B).",
+        config_buffer_address,
+        l1_alignment);
+    TT_FATAL(fifo_size_ > 0 && fifo_size_ % pcie_alignment_ == 0, "FIFO size must be non-zero and PCIe-aligned.");
+
+    config_buffer_address_ = config_buffer_address;
     init_common(mesh_device);
 }
 
@@ -536,6 +608,11 @@ MeshDevice* D2HSocket::get_mesh_device() const { return mesh_device_; }
 
 std::string D2HSocket::export_descriptor(const std::string& socket_id) {
     TT_FATAL(is_owner_, "Only the owner process can export a socket descriptor.");
+    TT_FATAL(
+        !is_l2cpu_,
+        "export_descriptor is not supported for L2CPU D2H sockets in Phase 1: the descriptor "
+        "schema doesn't record L2CPU-specific fields (LIM config address, is_l2cpu_) so a "
+        "connector process couldn't rebuild the device side correctly.");
     TT_FATAL(shm_ && shm_->is_open(), "Cannot export descriptor: shared memory is not initialized.");
 
     HDSocketDescriptor desc;

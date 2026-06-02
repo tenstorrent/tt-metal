@@ -15,7 +15,6 @@
 
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
-
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 
@@ -54,6 +53,47 @@ void py_module_types(nb::module_& mod) {
                     buffer_type (BufferType): Memory type for the device-side FIFO buffer (L1 or DRAM).
                     fifo_size (int): Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
                     h2d_mode (H2DMode): Transfer mode: HOST_PUSH or DEVICE_PULL.
+            )doc")
+        .def(
+            nb::init<
+                const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&,
+                const tt::tt_metal::distributed::MeshCoreCoord&,
+                uint32_t,
+                uint32_t,
+                uint32_t>(),
+            nb::arg("mesh_device"),
+            nb::arg("recv_l2cpu"),
+            nb::arg("fifo_size"),
+            nb::arg("config_buffer_address"),
+            nb::arg("data_fifo_address"),
+            R"doc(
+                Construct an H2DSocket targeting an L2CPU (X280) receiver.
+
+                L2CPUs have no allocator in tt-metal, so the caller must reserve LIM
+                addresses for both the receiver_socket_md config blob and the H2D data
+                FIFO. The X280 firmware on the receiving tile must already know to read
+                these addresses (see ``tt-llm-engine/x280/include/socket_layout.h``
+                for the canonical layout used by the migration worker).
+
+                Only HOST_PUSH mode is supported in Phase 1; DEVICE_PULL is not
+                implemented on the X280 side.
+
+                Args:
+                    mesh_device (MeshDevice): Mesh containing the L2CPU.
+                    recv_l2cpu (MeshCoreCoord): Target L2CPU tile. ``core_coord`` must
+                        be the TRANSLATED NOC coord of an L2CPU tile (no Tensix
+                        logical->virtual translation happens). On Blackhole this is one
+                        of (8,3), (8,5), (8,7), (8,9); TRANSLATED == NOC0 so the NOC0
+                        pair can be passed directly. Enumerate via
+                        ``cluster.get_soc_desc(device_id).get_cores(CoreType.L2CPU,
+                        CoordSystem.TRANSLATED)``.
+                    fifo_size (int): Ring size in bytes. PCIe-aligned and small enough
+                        for the data FIFO to fit in one 2 MiB TLB window starting at
+                        ``data_fifo_address``.
+                    config_buffer_address (int): Pre-reserved LIM address on the L2CPU
+                        for the receiver_socket_md wire struct.
+                    data_fifo_address (int): Pre-reserved LIM address on the L2CPU for
+                        the H2D data ring.
             )doc")
         .def(
             "get_page_size",
@@ -201,6 +241,41 @@ void py_module_types(nb::module_& mod) {
                     mesh_device (MeshDevice): The mesh device containing the sender core.
                     sender_core (MeshCoreCoord): The source core coordinate that sends data.
                     fifo_size (int): Size of the circular FIFO buffer in bytes. Must be PCIe-aligned.
+            )doc")
+        .def(
+            nb::init<
+                const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>&,
+                const tt::tt_metal::distributed::MeshCoreCoord&,
+                uint32_t,
+                uint32_t>(),
+            nb::arg("mesh_device"),
+            nb::arg("sender_l2cpu"),
+            nb::arg("fifo_size"),
+            nb::arg("config_buffer_address"),
+            R"doc(
+                Construct a D2HSocket with an L2CPU (X280) sender.
+
+                The pinned host data FIFO and bytes_sent counter are allocated by
+                tt-metal as usual (PinnedMemory is device-centric, so the X280 firmware
+                writes into them via PCIe NOC just like a Tensix kernel does). The
+                sender_socket_md wire blob lives in LIM on the L2CPU tile and must be
+                placed at a caller-reserved address; the X280 firmware must already
+                know to read that address (see
+                ``tt-llm-engine/x280/include/socket_layout.h``).
+
+                Args:
+                    mesh_device (MeshDevice): Mesh containing the L2CPU.
+                    sender_l2cpu (MeshCoreCoord): Sending L2CPU tile. ``core_coord``
+                        must be the TRANSLATED NOC coord of an L2CPU tile (no Tensix
+                        logical->virtual translation happens). On Blackhole this is one
+                        of (8,3), (8,5), (8,7), (8,9); TRANSLATED == NOC0 so the NOC0
+                        pair can be passed directly. Enumerate via
+                        ``cluster.get_soc_desc(device_id).get_cores(CoreType.L2CPU,
+                        CoordSystem.TRANSLATED)``.
+                    fifo_size (int): Pinned data FIFO size in bytes (PCIe-aligned).
+                    config_buffer_address (int): Pre-reserved LIM address on the L2CPU
+                        for the sender_socket_md + bytes_acked + d2h_sender_socket_md
+                        wire blob.
             )doc")
         .def(
             "get_page_size",

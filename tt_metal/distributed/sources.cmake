@@ -25,6 +25,7 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/h2d_socket.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/d2h_socket.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cluster_noc_helpers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/named_shm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/shm_resource_tracker.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/hd_socket_descriptor.cpp

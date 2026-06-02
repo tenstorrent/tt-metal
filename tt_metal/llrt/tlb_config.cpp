@@ -86,6 +86,44 @@ void configure_static_tlbs(
     for (const  tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::ETH, tt::CoordSystem::TRANSLATED)) {
         device_driver.configure_tlb(mmio_device_id, core, get_static_tlb_size(), address, tt::umd::tlb_data::Strict);
     }
+    // Static TLBs for L2CPU tiles on Blackhole, anchored at the LIM base.
+    //
+    // Unlike Tensix/ETH (anchored at NOC address 0 because L1 lives in
+    // [0, 2 MiB)), L2CPU LIM starts at 0x08000000, so a window anchored
+    // at 0 would never cover any useful LIM address. We anchor each
+    // L2CPU TLB at 0x08000000 instead, giving it coverage of
+    // [0x08000000, 0x08200000) -- enough for the H2D config buffer,
+    // D2H config buffer, and an H2D data FIFO whose end is below
+    // 0x08200000.
+    //
+    // We use a 2 MiB window (get_static_tlb_size()), NOT a 4 GiB one.
+    // Blackhole has only 8 × 4 GiB TLBs total (see UMD's
+    // TLB_COUNT_4G[BLACKHOLE] = 8 in tt_kmd_lib.c) and the DRAM block
+    // below consumes all 8 (one per channel). 2 MiB TLBs have 202 slots
+    // and Tensix+ETH use < ~150, so 4 more for L2CPU is well within budget
+    // and DRAM access is unaffected.
+    //
+    // Because the window is anchored at 0x08000000 rather than 0, the
+    // H2DSocket/D2HSocket L2CPU pcie_writer must convert absolute LIM
+    // addresses to window-relative offsets via
+    // (device_addr - tlb->get_base_address()) before write_block. Tensix
+    // gets away without that subtraction only because its base is 0.
+    //
+    // get_cores(TRANSLATED) returns only unharvested L2CPU tiles; on
+    // Blackhole the set is {(8,3),(8,5),(8,7),(8,9)} with TRANSLATED == NOC0.
+    //
+    // Ordering is Strict (not the Posted DRAM uses): socket FIFO
+    // bookkeeping (bytes_sent / bytes_acked / read_ptr) is order-sensitive
+    // across the L2CPU NOC pipeline, and the FIFO data path already runs
+    // at PCIe-limited throughput on this socket so a Posted relaxation
+    // would not help.
+    if (arch == tt::ARCH::BLACKHOLE) {
+        constexpr uint64_t l2cpu_lim_base = 0x08000000ULL;
+        for (const tt::umd::CoreCoord& core : sdesc.get_cores(tt::CoreType::L2CPU, tt::CoordSystem::TRANSLATED)) {
+            device_driver.configure_tlb(
+                mmio_device_id, core, get_static_tlb_size(), l2cpu_lim_base, tt::umd::tlb_data::Strict);
+        }
+    }
 
     if (arch == tt::ARCH::BLACKHOLE && sdesc.get_num_dram_channels() == blackhole::NUM_DRAM_CHANNELS) {
         uint32_t dram_addr = 0;

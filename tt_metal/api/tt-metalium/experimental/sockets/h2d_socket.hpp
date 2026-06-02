@@ -83,6 +83,66 @@ public:
         H2DMode h2d_mode);
 
     /**
+     * @brief Constructs an H2DSocket targeting an L2CPU (X280) receiver.
+     *
+     * L2CPU receivers differ from Tensix receivers in three ways that this
+     * constructor handles:
+     *   - The device-side socket-config buffer and H2D data FIFO live in
+     *     LIM (the L2CPU's on-chip SRAM) which has no allocator inside
+     *     tt-metal, so the caller must pre-reserve those addresses (see
+     *     tt-llm-engine/x280/include/socket_layout.h for the
+     *     conventional layout used by the X280 migration worker).
+     *   - The config buffer is written via @c cluster.write_core directly
+     *     to the L2CPU tile -- fast dispatch can't target L2CPUs.
+     *   - The runtime TLB used by @c write() is programmed against the
+     *     L2CPU's NOC coord (@c recv_l2cpu.core_coord) instead of a Tensix
+     *     worker virtual coord.
+     *
+     * Only @ref H2DMode::HOST_PUSH is supported in this overload;
+     * DEVICE_PULL would require an X280-side DEVICE_PULL implementation
+     * which Phase 1 does not provide.
+     *
+     * @param mesh_device          Mesh containing the target L2CPU.
+     * @param recv_l2cpu           MeshCoreCoord identifying the receiving
+     *                             L2CPU tile. @c core_coord must be the
+     *                             TRANSLATED NOC coord of an L2CPU tile
+     *                             on the target device (no Tensix
+     *                             logical->virtual translation happens
+     *                             for this overload). On Blackhole the
+     *                             four L2CPU tiles live at NOC0 coords
+     *                             (8,3), (8,5), (8,7), and (8,9), and
+     *                             TRANSLATED == NOC0 so those pairs can
+     *                             be passed directly. Enumerate at
+     *                             runtime via
+     *                             @code
+     *                             cluster.get_soc_desc(device_id).get_cores(
+     *                                 tt::umd::CoreType::L2CPU,
+     *                                 tt::umd::CoordSystem::TRANSLATED);
+     *                             @endcode
+     * @param fifo_size            Ring size in bytes. Must be a multiple
+     *                             of the PCIe alignment and small enough
+     *                             that the data FIFO fits inside a single
+     *                             2 MiB TLB window starting at
+     *                             @c data_fifo_address.
+     * @param config_buffer_address  Pre-reserved LIM address (on the
+     *                               L2CPU tile) for the
+     *                               @c receiver_socket_md wire struct.
+     *                               Must be PCIe-aligned and at least
+     *                               @c sizeof(receiver_socket_md) bytes
+     *                               into a writable LIM region.
+     * @param data_fifo_address    Pre-reserved LIM address (on the
+     *                               L2CPU tile) for the H2D data ring.
+     *                               Must be PCIe-aligned and disjoint
+     *                               from the config buffer.
+     */
+    H2DSocket(
+        const std::shared_ptr<MeshDevice>& mesh_device,
+        const MeshCoreCoord& recv_l2cpu,
+        uint32_t fifo_size,
+        uint32_t config_buffer_address,
+        uint32_t data_fifo_address);
+
+    /**
      * @brief Connects to an existing H2DSocket from another process.
      *
      * Waits for the flatbuffer descriptor exported by the owner, opens the named
@@ -210,6 +270,15 @@ private:
     HDSocketConnectorState* connector_state_ = nullptr;
     uint32_t connector_state_offset_ = 0;
     bool prior_clean_shutdown_ = true;
+
+    // True when the receiver is an L2CPU (X280) tile rather than a Tensix
+    // worker core. Routes init/write/TLB code paths to use raw
+    // cluster.write_core writes against the L2CPU's NOC coord and to skip
+    // MeshBuffer allocation for the config + data buffers. Cross-process
+    // export_descriptor() / connect() is not supported in this mode in
+    // Phase 1 -- the constructor leaves connector_state_ null and the
+    // export path fatals.
+    bool is_l2cpu_ = false;
 };
 
 }  // namespace tt::tt_metal::distributed

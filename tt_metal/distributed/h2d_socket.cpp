@@ -149,12 +149,7 @@ void H2DSocket::write_socket_metadata(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const PinnedBufferInfo& bytes_acked_info,
     const PinnedBufferInfo& data_info) {
-    const auto& core_to_core_id = config_buffer_->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
-
-    std::vector<receiver_socket_md> config_data(
-        config_buffer_->size() / sizeof(receiver_socket_md), receiver_socket_md());
-
-    auto& md = config_data[core_to_core_id.at(recv_core_.core_coord)];
+    receiver_socket_md md{};
     md.bytes_sent = 0;
     md.bytes_acked = 0;
     md.read_ptr = aligned_data_buf_start_;
@@ -166,6 +161,24 @@ void H2DSocket::write_socket_metadata(
     md.h2d.data_addr_lo = data_info.addr_lo;
     md.h2d.data_addr_hi = data_info.addr_hi;
     md.h2d.pcie_xy_enc = bytes_acked_info.pcie_xy_enc;
+
+    if (is_l2cpu_) {
+        // L2CPU has no MeshBuffer-backed config buffer; the caller pre-
+        // reserved a fixed LIM address (config_buffer_address_) and the
+        // device side has no fast-dispatch path either. Push the wire
+        // struct over PCIe directly to that address on the L2CPU tile.
+        const auto& cluster = MetalContext::instance().get_cluster();
+        const uint32_t device_id = mesh_device->get_device(recv_core_.device_coord)->id();
+        cluster.write_core(&md, sizeof(md), tt_cxy_pair(device_id, recv_core_.core_coord), config_buffer_address_);
+        return;
+    }
+
+    const auto& core_to_core_id = config_buffer_->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
+
+    std::vector<receiver_socket_md> config_data(
+        config_buffer_->size() / sizeof(receiver_socket_md), receiver_socket_md());
+
+    config_data[core_to_core_id.at(recv_core_.core_coord)] = md;
 
     distributed::WriteShard(
         mesh_device->mesh_command_queue(0), config_buffer_, config_data, recv_core_.device_coord, true);
@@ -179,7 +192,27 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
 
     const auto& cluster = MetalContext::instance().get_cluster();
 
-    if (mesh_device) {
+    if (is_l2cpu_) {
+        // recv_core_.core_coord is the TRANSLATED L2CPU NOC coord that the
+        // L2CPU H2DSocket constructor's @param recv_l2cpu contract requires
+        // the caller to supply. Skip the Tensix-worker logical->virtual
+        // translation; for L2CPU, TRANSLATED == NOC0 on Blackhole so the
+        // value is usable as-is.
+        //
+        // L2CPU uses a static 2 MiB TLB anchored at the LIM base
+        // (0x08000000) -- registered in tlb_config.cpp. Anchoring at LIM
+        // base (rather than 0 like Tensix/ETH) is required because LIM
+        // addresses are around 0x08130000+, far outside any 2 MiB window
+        // anchored at 0. A 4 GiB TLB would also work but BH only has 8
+        // of those and DRAM uses all of them.
+        TT_FATAL(mesh_device, "L2CPU H2D sockets require a mesh_device for TLB setup.");
+        recv_device_id = mesh_device->get_device(recv_core_.device_coord)->id();
+        recv_virtual_core = recv_core_.core_coord;
+        receiver_core_tlb_ = cluster.get_driver()
+                                 ->get_chip(recv_device_id)
+                                 ->get_tlb_manager()
+                                 ->get_tlb_window(tt_xy_pair(recv_virtual_core.x, recv_virtual_core.y));
+    } else if (mesh_device) {
         recv_device_id = mesh_device->get_device(recv_core_.device_coord)->id();
         recv_virtual_core = mesh_device->worker_core_from_logical_core(recv_core_.core_coord);
         receiver_core_tlb_ = cluster.get_driver()
@@ -192,7 +225,17 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
             recv_device_id, recv_core_.core_coord, CoreType::TENSIX);
     }
     auto arch = MetalContext::instance().hal().get_arch();
-    if (arch == tt::ARCH::BLACKHOLE && mesh_device) {
+    if (is_l2cpu_) {
+        // The L2CPU TLB is anchored at LIM base 0x08000000, so absolute
+        // device_addr values must be converted to window-relative offsets
+        // before write_block (which calls validate(offset, size) against
+        // the 2 MiB window size). Tensix/ETH TLBs are anchored at 0 so
+        // their lambda passes device_addr through unchanged.
+        const uint64_t l2cpu_tlb_base = receiver_core_tlb_->get_base_address();
+        pcie_writer = [this, l2cpu_tlb_base](void* data, uint32_t num_bytes, uint64_t device_addr) {
+            receiver_core_tlb_->write_block(device_addr - l2cpu_tlb_base, data, num_bytes);
+        };
+    } else if (arch == tt::ARCH::BLACKHOLE && mesh_device) {
         // This process owns a mesh_device and hence has statically initialized TLBs.
         // Entire device address space for Blackhole is statically mapped.
         // Safe to use static TLBs without requiring the driver to do a reconfig.
@@ -260,6 +303,94 @@ H2DSocket::H2DSocket(
     // NamedShm::create zero-initialized the region; we stamp the version and
     // mark clean_shutdown=1 so the first connect() sees "no prior crash" (the
     // owner side has nothing to recover from).
+    connector_state_ =
+        reinterpret_cast<HDSocketConnectorState*>(static_cast<uint8_t*>(shm_->ptr()) + connector_state_offset_);
+    connector_state_->version = kHDSocketConnectorStateVersion;
+    connector_state_->clean_shutdown = 1;
+}
+
+H2DSocket::H2DSocket(
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    const MeshCoreCoord& recv_l2cpu,
+    uint32_t fifo_size,
+    uint32_t config_buffer_address,
+    uint32_t data_fifo_address) :
+    recv_core_(recv_l2cpu),
+    buffer_type_(BufferType::L1),
+    fifo_size_(fifo_size),
+    pcie_alignment_(MetalContext::instance().hal().get_alignment(HalMemType::HOST)),
+    pinned_memory_(nullptr),
+    h2d_mode_(H2DMode::HOST_PUSH),
+    mesh_device_(mesh_device.get()),
+    is_l2cpu_(true) {
+    MeshCoordinateRangeSet recv_device_range_set;
+    recv_device_range_set.merge(MeshCoordinateRange(recv_core_.device_coord));
+
+    const uint32_t pcie_alignment = pcie_alignment_;
+    TT_FATAL(
+        MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE,
+        "L2CPU H2D sockets are only supported on Blackhole architectures.");
+    TT_FATAL(fifo_size_ > 0 && fifo_size_ % pcie_alignment == 0, "FIFO size must be non-zero and PCIe-aligned.");
+    TT_FATAL(config_buffer_address != 0, "L2CPU config buffer LIM address must be non-zero.");
+    TT_FATAL(data_fifo_address != 0, "L2CPU data FIFO LIM address must be non-zero.");
+    TT_FATAL(
+        data_fifo_address % pcie_alignment == 0,
+        "L2CPU data FIFO LIM address 0x{:x} must be PCIe-aligned ({} B).",
+        data_fifo_address,
+        pcie_alignment);
+    TT_FATAL(
+        config_buffer_address % pcie_alignment == 0,
+        "L2CPU config buffer LIM address 0x{:x} must be PCIe-aligned ({} B).",
+        config_buffer_address,
+        pcie_alignment);
+
+    // Phase-1 cap: the L2CPU static TLB is a single 2 MiB window anchored
+    // at LIM base 0x08000000 (see tlb_config.cpp). The H2D FIFO writes
+    // are issued through that window via pcie_writer, so the FIFO must
+    // end strictly inside [0x08000000, 0x08200000). Going past that
+    // boundary would surface later as TlbWindow::validate() throwing
+    // "Out of bounds access" on the first wrapping write -- catch it
+    // here instead.
+    constexpr uint64_t l2cpu_tlb_window_end = 0x08200000ULL;
+    TT_FATAL(
+        static_cast<uint64_t>(data_fifo_address) + static_cast<uint64_t>(fifo_size_) <= l2cpu_tlb_window_end,
+        "L2CPU H2D data FIFO [0x{:x}, 0x{:x}) does not fit in the 2 MiB static "
+        "TLB window [0x08000000, 0x{:x}). Reduce fifo_size or move data_fifo_address "
+        "earlier in LIM.",
+        data_fifo_address,
+        static_cast<uint64_t>(data_fifo_address) + static_cast<uint64_t>(fifo_size_),
+        l2cpu_tlb_window_end);
+    TT_FATAL(
+        data_fifo_address >= 0x08000000ULL,
+        "L2CPU H2D data FIFO address 0x{:x} must lie inside the LIM region "
+        "[0x08000000, 0x08200000) covered by the static TLB.",
+        data_fifo_address);
+
+    // Cache the externally-supplied LIM addresses; the existing
+    // write_socket_metadata path uses these via is_l2cpu_ instead of
+    // pulling them out of MeshBuffer.
+    config_buffer_address_ = config_buffer_address;
+    aligned_data_buf_start_ = data_fifo_address;
+    write_ptr_ = 0;
+
+    // Same bytes_acked pinned-buffer machinery as the Tensix HOST_PUSH path
+    // -- the X280 firmware writes back into this counter via PCIe NOC just
+    // like a Tensix kernel does.
+    std::string shm_name = generate_shm_name("h2d-l2cpu");
+    PinnedBufferInfo bytes_acked_info =
+        init_bytes_acked_buffer(mesh_device, recv_device_range_set, pcie_alignment, shm_name);
+    bytes_acked_ptr_ = host_buffer_.get();
+
+    // DEVICE_PULL would require an X280 implementation of pulling from
+    // host pinned RAM, which Phase 1 does not provide. data_info stays
+    // zeroed since the X280 H2D path is HOST_PUSH only.
+    PinnedBufferInfo data_info{};
+    write_socket_metadata(mesh_device, bytes_acked_info, data_info);
+    init_receiver_tlb(mesh_device);
+
+    // Stamp the connector-state struct so a future cross-process attach
+    // path (not exposed for L2CPU in Phase 1, but harmless to populate)
+    // sees a well-formed header instead of zeros.
     connector_state_ =
         reinterpret_cast<HDSocketConnectorState*>(static_cast<uint8_t*>(shm_->ptr()) + connector_state_offset_);
     connector_state_->version = kHDSocketConnectorStateVersion;
@@ -392,6 +523,11 @@ H2DMode H2DSocket::get_h2d_mode() const { return h2d_mode_; }
 
 std::string H2DSocket::export_descriptor(const std::string& socket_id) {
     TT_FATAL(is_owner_, "Only the owner process can export a socket descriptor.");
+    TT_FATAL(
+        !is_l2cpu_,
+        "export_descriptor is not supported for L2CPU H2D sockets in Phase 1: the descriptor "
+        "schema doesn't record L2CPU-specific fields (LIM config / data addresses, is_l2cpu_) "
+        "so a connector process couldn't rebuild the device side correctly.");
     TT_FATAL(shm_ && shm_->is_open(), "Cannot export descriptor: shared memory is not initialized.");
 
     HDSocketDescriptor desc;
