@@ -175,94 +175,6 @@ ALWI void recip_tile_first_column_wh_idst0_direct() {
 }
 #endif
 
-#if defined(TRISC_MATH) && defined(ARCH_BLACKHOLE)
-// Self-contained, hazard-free BF16 reciprocal for the streaming SDPA normalize.
-//
-// Ported from the fixed Blackhole LLK fast path (tt-metal commit 15b16a4) and kept
-// local to the SDPA kernel so the determinism fix does not depend on the LLK header
-// version. The previous LLK _calculate_reciprocal_fast_8b_3c_ injected the BF16 low-bit
-// correction through the SFPLOADMACRO store side, creating a Dst write-to-read spacing
-// hazard: a Dst block written by the macro store could be read by a following
-// SFPLOAD/SFPLOADMACRO too soon. In chunked ring-joint SDPA the timing around the
-// row-normalization reciprocal made that surface as nondeterministic output.
-//
-// This keeps SFPLOADMACRO only for the source load + approximate reciprocal + x copy,
-// then does the 0x8000 BF16 correction, the Newton error step, and a single direct
-// SFPSTORE with normal HW instruction scoreboarding (no async macro store).
-inline void _sdpa_init_reciprocal_8b_3c_() {
-#ifndef DISABLE_SFPLOADMACRO
-    // InstructionTemplate[0]: y = arecip(y)
-    TTI_SFPARECIP(0, 0, 12, sfpi::SFPARECIP_MOD1_RECIP);
-    // InstructionTemplate[1]: x = y (copy via indirect VD)
-    TTI_SFPMAD(p_sfpu::LCONST_0, p_sfpu::LCONST_0, 0, 13, 8);  // SFPMAD_MOD1_INDIRECT_VD
-    {
-        constexpr std::uint32_t simple_bits = (0 << 3) | (4 + 0);
-        constexpr std::uint32_t mad_bits = (0 << 3) | (4 + 1);
-        constexpr std::uint32_t round_bits = 0;
-        constexpr std::uint32_t store_bits = 0;  // Store unit unused: no macro store.
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 0, 0);
-    }
-    // Simple + MAD use WaitForElapsedInstructions; Store/Round unused.
-    TTI_SFPCONFIG(0x300, 8, 1);
-#endif
-    // DISABLE_SFPLOADMACRO (e.g. ttsim, which does not model SFPLOADMACRO): no LOADMACRO
-    // registers to program; the non-macro calculate path below is self-contained.
-}
-
-template <int ITERATIONS>
-inline void _sdpa_calculate_reciprocal_8b_3c_() {
-#ifdef DISABLE_SFPLOADMACRO
-    // Non-macro fallback (matches the LLK DISABLE_SFPLOADMACRO path): same arecip + BF16
-    // low-bit correction issued as plain SFPU instructions, for targets where
-    // SFPLOADMACRO is unavailable/unmodeled (ttsim).
-    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, 0x8000);
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
-        TTI_SFPMAD(p_sfpu::LCONST_0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-        TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPARECIP_MOD1_RECIP);
-        TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LCONST_neg1, p_sfpu::LREG1, 0);
-        TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG1, p_sfpu::LREG1, 5);
-        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
-    }
-#else
-    constexpr int y = p_sfpu::LREG0;
-    constexpr int x = p_sfpu::LREG1;
-
-    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, x);
-
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOADMACRO((0 << 2) | y, 0, ADDR_MOD_7, 0);
-        // Macro 0 schedules y = arecip(y) and x = y for the next SFPU issue.
-        // Wait before writing y's low 16 bits directly.
-        TTI_SFPNOP;
-        TTI_SFPLOADI(y, sfpi::SFPLOADI_MOD0_LOWER, 0x8000);
-        TTI_SFPMAD(x, y, p_sfpu::LCONST_neg1, x, 0);
-        TTI_SFPSHFT((-16) & 0xFFF, x, x, 5);
-        TTI_SFPIADD(0, x, y, sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPSTORE(y, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
-    }
-
-    TTI_SFPNOP;
-#endif
-}
-
-// idst-0 column reciprocal for the streaming normalize. Mirrors recip_tile<false>(idst,
-// VectorMode::C): same launcher (DST addr-mod setup + VectorMode::C face traversal), but
-// a hazard-free macro body.
-ALWI void recip_tile_streaming_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::reciprocal>(_sdpa_init_reciprocal_8b_3c_);
-}
-ALWI void recip_tile_streaming(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(_sdpa_calculate_reciprocal_8b_3c_<8>, idst, VectorMode::C);
-}
-#endif
-
 // Raw pack: caller must have already called configure_row_pack_width(out_cb, pack_width).
 // Use this in tight loops after configuring once at the loop boundary.
 ALWI void pack_contiguous_rows_nocfg(
@@ -664,8 +576,8 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             tile_regs_acquire();
             matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
 #ifdef ARCH_BLACKHOLE
-            MATH((recip_tile_streaming_init()));
-            MATH((recip_tile_streaming(0 /*dst_index*/)));
+            recip_tile_init<false>();
+            MATH((recip_tile<false>(0 /*dst_index*/, VectorMode::C)));
 #else
             recip_tile_init();
             MATH((recip_tile_first_column_wh_idst0_direct()));
