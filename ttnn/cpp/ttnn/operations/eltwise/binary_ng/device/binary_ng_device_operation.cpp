@@ -500,14 +500,16 @@ ttsl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
         return operation::hash_operation<BinaryNgDeviceOperation>(
             attributes,
             input_tensor_a.dtype(),
+            input_tensor_a.padded_shape(),
             input_tensor_a.memory_config(),
             input_tensor_b->dtype(),
+            input_tensor_b->padded_shape(),
             input_tensor_b->memory_config(),
             shard_volumes);
     }
 
     return operation::hash_operation<BinaryNgDeviceOperation>(
-        attributes, input_tensor_a.dtype(), input_tensor_a.memory_config());
+        attributes, input_tensor_a.dtype(), input_tensor_a.padded_shape(), input_tensor_a.memory_config());
 }
 
 bool BinaryNgDeviceOperation::skip_launch(
