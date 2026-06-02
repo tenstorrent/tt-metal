@@ -305,8 +305,13 @@ class FuserSentinel:
         code = ""
 
         if srca_changed:
+            to_from_int8 = (
+                "true"
+                if self._unpack_A_src.is_int8_format() or new_A_src.is_int8_format()
+                else "false"
+            )
             code += (
-                f"_llk_unpack_reconfig_data_format_srca_impl_<{dest_acc}, p_dim_stride_target::IGNORE, false>(\n"
+                f"_llk_unpack_reconfig_data_format_srca_impl_<{dest_acc}, p_dim_stride_target::IGNORE, {to_from_int8}>(\n"
                 f"    {self._fmt(new_A_src)}, {self._fmt(new_A_dst)}, {compute_node.src_a.tile_size}\n"
                 f");\n"
             )
@@ -318,8 +323,13 @@ class FuserSentinel:
                 else (compute_node.src_b.tile_size if compute_node.src_b else None)
             )
             if srcb_tile_size is not None:
+                to_from_int8 = (
+                    "true"
+                    if self._unpack_B_src.is_int8_format() or new_B_src.is_int8_format()
+                    else "false"
+                )
                 code += (
-                    f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, p_dim_stride_target::IGNORE, false>(\n"
+                    f"_llk_unpack_reconfig_data_format_srcb_impl_<{dest_acc}, p_dim_stride_target::IGNORE, {to_from_int8}>(\n"
                     f"    {self._fmt(new_B_src)}, {self._fmt(new_B_dst)}, {srcb_tile_size}\n"
                     f");\n"
                 )
@@ -382,9 +392,14 @@ class FuserSentinel:
         if self._math_format == new_math:
             return ""
 
+        to_from_int8 = (
+            "true"
+            if self._math_format.is_int8_format() or new_math.is_int8_format()
+            else "false"
+        )
         dest_acc = config.dest_acc.cpp_enum_value
         code = (
-            f"_llk_math_reconfig_data_format_<{dest_acc}, false>(\n"
+            f"_llk_math_reconfig_data_format_<{dest_acc}, {to_from_int8}>(\n"
             f"    {self._fmt(new_math)}, {self._fmt(new_math)}\n"
             f");\n"
         )
