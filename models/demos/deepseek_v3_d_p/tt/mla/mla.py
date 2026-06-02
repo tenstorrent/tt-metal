@@ -713,13 +713,17 @@ class ttMLA:
             joint_strategy="rear",
             logical_n=seq_len_local * self.sp_factor,
             program_config=self._get_sdpa_program_config(seq_len_local),
-            # [ND-FIX TEST] fp32_dest_acc_en=True forces the non-streaming fp32
-            # online-softmax merge path; testing whether it removes the ring-SDPA
-            # cross-process non-determinism (bf16 streaming merge is the suspect).
+            # [ND-FIX] Default to the fp32 (fp32_dest_acc_en=True) non-streaming
+            # online-softmax merge. The bf16 *streaming* merge combines cross-chip
+            # partial attention results in a timing-dependent order, which is
+            # non-deterministic across processes (~1e-6) and — compounded over 61
+            # layers — flips the prefill token. The fp32 path is deterministic.
+            # Trade-off: slower than bf16 streaming. Set TT_DS_SDPA_FAST=1 to restore
+            # the fast (non-deterministic) bf16 streaming path for perf work.
             compute_kernel_config=(
-                self.hifi4_fp32_compute_kernel_config
-                if _os.getenv("TT_DS_ND_SDPA_FP32", "0").lower() in ("1", "true", "yes")
-                else self.default_compute_kernel_config
+                self.default_compute_kernel_config
+                if _os.getenv("TT_DS_SDPA_FAST", "0").lower() in ("1", "true", "yes")
+                else self.hifi4_fp32_compute_kernel_config
             ),
             dim=2,
             multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
