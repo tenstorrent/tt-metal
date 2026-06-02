@@ -76,10 +76,14 @@ def get_num_tiles_per_accumulation(acc_to_dest: bool) -> int:
         MathFidelity.HiFi3,
         MathFidelity.HiFi4,
     ],
-    implied_math_format=[
-        ImpliedMathFormat.No,
-        ImpliedMathFormat.Yes,
-    ],
+    implied_math_format=lambda formats: (
+        [
+            ImpliedMathFormat.No,
+            ImpliedMathFormat.Yes,
+        ]
+        if not formats.input_format.is_mx_format()
+        else [ImpliedMathFormat.Yes]
+    ),
     dest_sync_dims_dest_acc=ELTWISE_DIMENSIONS,
     acc_to_dest=[False, True],
     num_faces=[4],
@@ -103,13 +107,6 @@ def test_eltwise_binary(
         and math_fidelity != MathFidelity.LoFi
     ):
         pytest.skip("Math fidelity only affects multiplication operations")
-
-    # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
-    if (
-        formats.input_format.is_mx_format()
-        and implied_math_format == ImpliedMathFormat.No
-    ):
-        pytest.skip("MX formats require implied_math_format=Yes on Quasar")
 
     num_tiles_per_accumulation = get_num_tiles_per_accumulation(acc_to_dest)
     total_tiles = (
