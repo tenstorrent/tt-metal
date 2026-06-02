@@ -12,6 +12,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include <algorithm>
+#include <cstdio>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -86,7 +87,9 @@ namespace tt {
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const umd::ClusterDescriptor* cluster_desc) {
-    if (rtoptions.get_simulator_enabled() && !rtoptions.get_mock_enabled()) {
+    // When ttsim is active, derive cluster type from the simulator soc descriptor even if a mock
+    // cluster descriptor is also configured (tt-run MP sweeps set both).
+    if (rtoptions.get_simulator_enabled()) {
         auto soc_desc =
             tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
         auto arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
@@ -484,7 +487,11 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
         for (const auto& mmio_device_id : mmio_device_ids) {
             futures.emplace_back(tt_metal::detail::async([this, mmio_device_id]() {
                 ll_api::configure_static_tlbs(
-                    this->arch_, mmio_device_id, this->get_soc_desc(mmio_device_id), *this->driver_);
+                    this->arch_,
+                    mmio_device_id,
+                    this->get_soc_desc(mmio_device_id),
+                    *this->driver_,
+                    this->target_type_ == TargetDevice::Silicon);
             }));
         }
 
@@ -722,7 +729,12 @@ std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_y(ChipId chi
     return worker_logical_to_virtual_y;
 }
 
-int Cluster::get_device_aiclk(const ChipId& chip_id) const { return this->driver_->get_chip(chip_id)->get_clock(); }
+int Cluster::get_device_aiclk(const ChipId& chip_id) const {
+    if (this->target_type_ != tt::TargetDevice::Silicon) {
+        return 0;
+    }
+    return this->driver_->get_chip(chip_id)->get_clock();
+}
 
 uint16_t Cluster::get_bus_id(ChipId chip) const { return this->get_cluster_desc()->get_bus_id(chip); }
 
@@ -1549,6 +1561,26 @@ bool Cluster::supports_ethernet_link_retraining() const {
         return this->get_ethernet_firmware_version() >= tt::umd::semver_t(1, 9, 0);
     }
     return false;
+}
+
+void Cluster::register_sim_fabric_endpoint_direction(
+    ChipId chip_id, tt_fabric::chan_id_t eth_chan_id, tt_fabric::eth_chan_directions direction) const {
+    if (std::getenv("TTSIM_FABRIC_TERMINAL_TRACE")) {
+        std::fprintf(
+            stderr,
+            "[ttsim-fabric-terminal] tt-metal-register-direction chip=%d chan=%u dir=%u target=%u\n",
+            chip_id,
+            static_cast<uint32_t>(eth_chan_id),
+            static_cast<uint32_t>(direction),
+            static_cast<uint32_t>(this->target_type_));
+    }
+    if (this->target_type_ != tt::TargetDevice::Simulator) {
+        return;
+    }
+#if defined(TT_UMD_BUILD_SIMULATION)
+    this->get_driver()->register_sim_fabric_endpoint_direction(
+        chip_id, static_cast<uint32_t>(eth_chan_id), static_cast<uint32_t>(direction));
+#endif
 }
 
 }  // namespace tt
