@@ -25,12 +25,12 @@ uint32_t get_random_seed() { return dist(rng); }
 
 // Work split shared by create_descriptor (cache miss) and get_dynamic_runtime_args (cache hit).
 struct BernoulliWorkSplit {
-    uint32_t num_cores;
+    uint32_t num_cores = 0;
     CoreRangeSet all_cores;
     CoreRangeSet core_group_1;
     CoreRangeSet core_group_2;
-    uint32_t units_per_core_group_1;
-    uint32_t units_per_core_group_2;
+    uint32_t units_per_core_group_1 = 0;
+    uint32_t units_per_core_group_2 = 0;
     std::vector<CoreCoord> cores;
 };
 
@@ -200,7 +200,7 @@ ProgramDescriptor BernoulliDeviceOperation::create_descriptor(
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> BernoulliDeviceOperation::get_dynamic_runtime_args(
+ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> BernoulliDeviceOperation::get_dynamic_runtime_args(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output,
@@ -210,7 +210,7 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> BernoulliDeviceOperation::get_dynam
     constexpr uint32_t kComputeKernelIdx = 2;
     auto cores = bernoulli_work_split(output).cores;
 
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
     dynamic_args.reserve(cores.size());
     for (int i = 0; i < static_cast<int>(cores.size()); ++i) {
         const uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();

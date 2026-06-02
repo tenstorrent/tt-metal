@@ -57,7 +57,7 @@ struct RandDeviceOperation {
     // current per-core (seed) and per-call (from/to) values so the framework re-applies them to the
     // cached program on every dispatch.  Must mirror the seed/from/to runtime args built in
     // create_descriptor() — the test_rand_different_seed_values regression test enforces this.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
+    static ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& output,

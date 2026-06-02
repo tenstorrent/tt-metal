@@ -145,13 +145,13 @@ inline tt::tt_metal::KernelDescriptor create_compute_kernel(
  */
 // Work split shared by create_descriptor (cache miss) and get_dynamic_runtime_args (cache hit).
 struct DropoutCoreSplit {
-    uint32_t num_cores;
-    uint32_t num_cores_y;
+    uint32_t num_cores = 0;
+    uint32_t num_cores_y = 0;
     tt::tt_metal::CoreRangeSet all_cores;
     tt::tt_metal::CoreRangeSet core_group_1;
     tt::tt_metal::CoreRangeSet core_group_2;
-    uint32_t num_tiles_per_core_group_1;
-    uint32_t num_tiles_per_core_group_2;
+    uint32_t num_tiles_per_core_group_1 = 0;
+    uint32_t num_tiles_per_core_group_2 = 0;
 };
 
 DropoutCoreSplit dropout_core_split(const Tensor& input) {
@@ -344,7 +344,7 @@ tt::tt_metal::ProgramDescriptor DropoutMeshWorkloadFactory::create_descriptor(
     return DropoutProgramFactory::create_descriptor(effective_args, tensor_args, output);
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> DropoutDeviceOperation::get_dynamic_runtime_args(
+ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> DropoutDeviceOperation::get_dynamic_runtime_args(
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& /*output*/,
@@ -369,7 +369,7 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> DropoutDeviceOperation::get_dynamic
     constexpr uint32_t kComputeGroup1Idx = 2;
     constexpr uint32_t kComputeGroup2Idx = 3;
 
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
     dynamic_args.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

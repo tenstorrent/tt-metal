@@ -30,14 +30,14 @@ constexpr const char* COMPUTE_KERNEL_PATH = "ttnn/cpp/ttnn/operations/rand/devic
 // Work split + per-device seed offset, shared by create_descriptor (cache miss) and
 // get_dynamic_runtime_args (cache hit) so both derive the identical core list and seed offset.
 struct RandWorkSplit {
-    uint32_t num_cores;
+    uint32_t num_cores = 0;
     CoreRangeSet all_cores;
     CoreRangeSet core_group_1;
     CoreRangeSet core_group_2;
-    uint32_t units_per_core_group_1;
-    uint32_t units_per_core_group_2;
+    uint32_t units_per_core_group_1 = 0;
+    uint32_t units_per_core_group_2 = 0;
     std::vector<CoreCoord> cores;
-    uint32_t device_seed_offset;
+    uint32_t device_seed_offset = 0;
 };
 
 RandWorkSplit compute_rand_work_split(
@@ -206,7 +206,7 @@ ProgramDescriptor RandDeviceOperation::create_descriptor(
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> RandDeviceOperation::get_dynamic_runtime_args(
+ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> RandDeviceOperation::get_dynamic_runtime_args(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& /*tensor_args*/,
     tensor_return_value_t& output,
@@ -220,7 +220,7 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> RandDeviceOperation::get_dynamic_ru
     const uint32_t from_bits = std::bit_cast<uint32_t>(operation_attributes.from);
     const uint32_t to_bits = std::bit_cast<uint32_t>(operation_attributes.to - eps);
 
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
     dynamic_args.reserve(ws.cores.size() * 3);
     for (int i = 0; i < static_cast<int>(ws.cores.size()); ++i) {
         const uint32_t seed = rand_seed_for_core(operation_attributes, i, ws.device_seed_offset);

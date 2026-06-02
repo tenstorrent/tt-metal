@@ -1382,7 +1382,7 @@ tt::tt_metal::ProgramDescriptor TernaryDeviceOperation::TernaryProgramFactory::c
     return desc;
 }
 
-std::vector<tt::tt_metal::DynamicRuntimeArg> TernaryDeviceOperation::get_dynamic_runtime_args(
+ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> TernaryDeviceOperation::get_dynamic_runtime_args(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output,
@@ -1406,7 +1406,7 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> TernaryDeviceOperation::get_dynamic
 
     auto partition = CMAKE_UNIQUE_NAMESPACE::compute_core_partition(operation_attributes, tensor_args, output);
 
-    std::vector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
+    ttsl::SmallVector<tt::tt_metal::DynamicRuntimeArg> dynamic_args;
     dynamic_args.reserve(partition.cores.size());
     for (uint32_t i = 0; i < partition.num_cores_total; ++i) {
         const auto& core = partition.cores[i];
