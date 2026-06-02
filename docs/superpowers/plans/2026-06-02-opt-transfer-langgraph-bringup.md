@@ -486,9 +486,15 @@ git commit -m "feat(opt_transfer): KB store (save/load/retrieve by category)"
 
 ---
 
-## Phase B — KB builder (cached miner over the 4 sources)
+## Phase B — KB builder (comprehensive: ALL available + used fused ops, cached)
 
-### Task B1: Source enumerator
+**Design intent (do not narrow this):** the KB must capture the *whole* transferable surface up front, not a hand-picked op list:
+- **Available / supported** — every op exercised by `tests/ttnn/unit_tests/operations`. This is the authoritative supported set and includes fused ops **no model uses yet** (`status="supported_unused"` — the untapped optimizations). Each test also shows valid configs/shapes.
+- **Used** — every op called in `models/tt_transformers`, `models/tt_dit`, `models/demos`, with its **real config construction** and provenance (`status="in_use"`).
+
+The miner does **no hardcoded op allowlist.** It discovers the op universe from both sources, unions them, and lets the LLM extractor classify each (fusion-relevant → `pattern_kind` + `config_template` + `weight_transform`; primitive → recorded but not proposable). Adding coverage = pointing at more sources, never editing a regex.
+
+### Task B1: Op inventory from unit tests (the "available/supported" set)
 
 **Files:**
 - Modify: `models/experimental/opt_transfer/kb/miner.py` (create)
@@ -498,21 +504,24 @@ git commit -m "feat(opt_transfer): KB store (save/load/retrieve by category)"
 
 ```python
 # tests/test_miner.py (part 1)
-from models.experimental.opt_transfer.kb.miner import enumerate_sources
+from models.experimental.opt_transfer.kb.miner import inventory_ops
 from models.experimental.opt_transfer.config import CONFIG
 
 
-def test_enumerate_finds_fused_op_callsites():
-    srcs = enumerate_sources(CONFIG)
-    # at least the known fused-op users show up
-    joined = " ".join(s.relpath for s in srcs)
-    assert "tt_transformers" in joined
-    assert any("nlp_create_qkv_heads" in s.snippet for s in srcs)
+def test_inventory_covers_the_supported_op_surface():
+    inv = inventory_ops(CONFIG)
+    # broad: dozens of ops have unit tests, not a hand-picked few
+    assert len(inv) > 30
+    # known fused ops are present with their test provenance + example call snippets
+    assert "nlp_create_qkv_heads" in inv
+    assert "scaled_dot_product_attention" in inv
+    assert inv["nlp_create_qkv_heads"]["tests"]
+    assert any("nlp_create_qkv_heads" in s for s in inv["nlp_create_qkv_heads"]["examples"])
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pytest models/experimental/opt_transfer/tests/test_miner.py::test_enumerate_finds_fused_op_callsites -v`
+Run: `pytest models/experimental/opt_transfer/tests/test_miner.py::test_inventory_covers_the_supported_op_surface -v`
 Expected: FAIL with `ModuleNotFoundError`
 
 - [ ] **Step 3: Write minimal implementation**
@@ -520,77 +529,131 @@ Expected: FAIL with `ModuleNotFoundError`
 ```python
 # kb/miner.py (part 1)
 import re
-from dataclasses import dataclass
 from pathlib import Path
 
-# fused ops we know are worth harvesting (extend as the KB grows)
-FUSED_OP_RE = re.compile(
-    r"ttnn\.(experimental\.)?(nlp_create_qkv_heads\w*|nlp_concat_heads\w*|"
-    r"scaled_dot_product_attention\w*|rms_norm|rotary_embedding\w*|"
-    r"paged_update_cache|all_gather|reduce_scatter|all_reduce)"
-)
+# Matches ANY ttnn op call: ttnn.foo( or ttnn.experimental.bar( — no hardcoded allowlist.
+OP_CALL_RE = re.compile(r"ttnn\.(?:experimental\.)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\(")
 
 
-@dataclass
-class SourceHit:
-    relpath: str
-    lineno: int
-    snippet: str          # the call site +/- a few lines of context (incl. config construction)
-    content: str          # full file content (for the cache key)
+def _iter_py(base: Path):
+    for p in base.rglob("*.py"):
+        if "__pycache__" in str(p):
+            continue
+        try:
+            yield p, p.read_text()
+        except (UnicodeDecodeError, OSError):
+            continue
 
 
-def _context(lines: list[str], i: int, before: int = 8, after: int = 12) -> str:
-    lo, hi = max(0, i - before), min(len(lines), i + after)
-    return "".join(lines[lo:hi])
+def _scan_calls(text: str):
+    """Yield (op_name, context_snippet) for every ttnn op call in text."""
+    lines = text.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        for m in OP_CALL_RE.finditer(line):
+            lo, hi = max(0, i - 4), min(len(lines), i + 10)
+            yield m.group(1), "".join(lines[lo:hi])
 
 
-def enumerate_sources(config) -> list[SourceHit]:
-    hits: list[SourceHit] = []
-    for root in config.kb_source_roots:
-        base = config.repo_root / root
-        for p in base.rglob("*.py"):
-            if "__pycache__" in str(p):
-                continue
-            try:
-                text = p.read_text()
-            except (UnicodeDecodeError, OSError):
-                continue
-            lines = text.splitlines(keepends=True)
-            for i, line in enumerate(lines):
-                if FUSED_OP_RE.search(line):
-                    hits.append(SourceHit(
-                        relpath=str(p.relative_to(config.repo_root)),
-                        lineno=i + 1,
-                        snippet=_context(lines, i),
-                        content=text,
-                    ))
-    return hits
+def inventory_ops(config) -> dict:
+    """Available/supported set: every ttnn op exercised by the operations unit tests,
+    with test provenance + example call snippets (which encode valid configs/shapes)."""
+    base = config.repo_root / "tests/ttnn/unit_tests/operations"
+    inv: dict[str, dict] = {}
+    for p, text in _iter_py(base):
+        rel = str(p.relative_to(config.repo_root))
+        for op, snippet in _scan_calls(text):
+            e = inv.setdefault(op, {"tests": set(), "examples": []})
+            e["tests"].add(rel)
+            if len(e["examples"]) < 5:
+                e["examples"].append(snippet)
+    for op in inv:
+        inv[op]["tests"] = sorted(inv[op]["tests"])
+    return inv
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pytest models/experimental/opt_transfer/tests/test_miner.py::test_enumerate_finds_fused_op_callsites -v`
+Run: `pytest models/experimental/opt_transfer/tests/test_miner.py::test_inventory_covers_the_supported_op_surface -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add models/experimental/opt_transfer/kb/miner.py models/experimental/opt_transfer/tests/test_miner.py
-git commit -m "feat(opt_transfer): KB miner source enumerator (fused-op call sites + config context)"
+git commit -m "feat(opt_transfer): op inventory from unit tests (full supported surface)"
 ```
 
-### Task B2: LLM extraction of a SourceHit → KBEntry (mocked in test)
+### Task B2: Model usage scan (the "used" set + real configs)
 
 **Files:**
 - Modify: `models/experimental/opt_transfer/kb/miner.py`
 - Test: `models/experimental/opt_transfer/tests/test_miner.py`
 
-The extractor uses an LLM (via the matcher's `LLMClient`, Task C2) to turn a call-site + its config-construction context into a structured `KBEntry`. The test injects a fake client so it runs offline. Caching wraps the per-file extraction (Task A3).
-
 - [ ] **Step 1: Write the failing test**
 
 ```python
 # tests/test_miner.py (part 2)
+from models.experimental.opt_transfer.kb.miner import scan_usage
+from models.experimental.opt_transfer.config import CONFIG
+
+
+def test_usage_scan_finds_model_callsites_with_provenance():
+    usage = scan_usage(CONFIG)
+    assert "nlp_create_qkv_heads" in usage
+    hit = usage["nlp_create_qkv_heads"][0]
+    assert any(r in hit["source"] for r in ("tt_transformers", "tt_dit", "demos"))
+    assert "nlp_create_qkv_heads" in hit["snippet"]
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `pytest models/experimental/opt_transfer/tests/test_miner.py::test_usage_scan_finds_model_callsites_with_provenance -v`
+Expected: FAIL (`scan_usage` undefined)
+
+- [ ] **Step 3: Write minimal implementation**
+
+```python
+# kb/miner.py (part 2 — append)
+USAGE_ROOTS = ("models/tt_transformers", "models/tt_dit", "models/demos")
+
+
+def scan_usage(config) -> dict:
+    """Used set: every ttnn op call in the model source roots, with config context
+    + provenance. The snippet captures the surrounding config construction."""
+    usage: dict[str, list] = {}
+    for root in USAGE_ROOTS:
+        base = config.repo_root / root
+        for p, text in _iter_py(base):
+            rel = str(p.relative_to(config.repo_root))
+            for op, snippet in _scan_calls(text):
+                usage.setdefault(op, []).append({"source": rel, "snippet": snippet})
+    return usage
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `pytest models/experimental/opt_transfer/tests/test_miner.py::test_usage_scan_finds_model_callsites_with_provenance -v`
+Expected: PASS
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add models/experimental/opt_transfer/kb/miner.py models/experimental/opt_transfer/tests/test_miner.py
+git commit -m "feat(opt_transfer): model usage scan (used ops + real config provenance)"
+```
+
+### Task B3: build_kb — union available+used, status-tag, LLM-extract, cache
+
+**Files:**
+- Modify: `models/experimental/opt_transfer/kb/miner.py`
+- Test: `models/experimental/opt_transfer/tests/test_miner.py`
+
+`build_kb` iterates the **union** of inventory + usage ops, marks `status` (`in_use` if used else `supported_unused`), and asks the extraction client to produce KBEntries from the combined evidence (test examples + model call sites). Cached per op on the combined evidence hash. The real extraction client is the `LLMClient` added in Task C2 (it implements both `extract_entries` here and `propose` for the matcher); the test injects a fake so it runs offline.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# tests/test_miner.py (part 3)
 from models.experimental.opt_transfer.kb.miner import build_kb
 from models.experimental.opt_transfer.schema import KBEntry, PatternKind
 
@@ -599,56 +662,71 @@ class FakeClient:
     def __init__(self):
         self.calls = 0
 
-    def extract_entries(self, hit) -> list[dict]:
+    def extract_entries(self, op, available, used) -> list[dict]:
         self.calls += 1
+        status = "in_use" if used else "supported_unused"
         return [KBEntry(
-            id=f"e{self.calls}", fused_op="ttnn.experimental.nlp_create_qkv_heads",
-            category="attention.qkv", pattern_kind=PatternKind.HORIZONTAL_MERGE,
-            torch_pattern=["linear", "linear", "linear"], signature={"input_rank": 4},
-            config_template={"num_heads": "{H}"}, weight_transform="concat_qkv",
-            source=hit.relpath, usage_examples=[hit.snippet[:40]],
+            id=op, fused_op=f"ttnn.{op}", category="auto",
+            pattern_kind=PatternKind.CHAIN, torch_pattern=[op], signature={},
+            config_template={}, weight_transform=None,
+            source=(used[0]["source"] if used else available["tests"][0] if available["tests"] else "tests"),
+            usage_examples=available["examples"][:1], status=status,
         ).to_dict()]
 
 
-def test_build_kb_extracts_and_caches(tmp_path):
+def test_build_kb_captures_available_and_used_with_status(tmp_path):
     client = FakeClient()
-    entries = build_kb(client=client, cache_root=tmp_path / "cache",
-                       kb_root=tmp_path / "kb", limit=3)
-    assert all(isinstance(e, KBEntry) for e in entries)
-    n_after_first = client.calls
-    # second build is fully cached -> no new client calls
-    build_kb(client=client, cache_root=tmp_path / "cache", kb_root=tmp_path / "kb", limit=3)
-    assert client.calls == n_after_first
+    entries = build_kb(client=client, cache_root=tmp_path / "c", kb_root=tmp_path / "kb", limit_ops=40)
+    by_id = {e.id: e for e in entries}
+    # comprehensive: many ops, not just a couple
+    assert len(by_id) > 25
+    # a used fused op is tagged in_use
+    assert by_id["nlp_create_qkv_heads"].status == "in_use"
+    # every entry carries a valid status
+    assert all(e.status in ("in_use", "supported_unused") for e in entries)
+
+
+def test_build_kb_is_cached(tmp_path):
+    client = FakeClient()
+    build_kb(client=client, cache_root=tmp_path / "c", kb_root=tmp_path / "kb", limit_ops=20)
+    n = client.calls
+    build_kb(client=client, cache_root=tmp_path / "c", kb_root=tmp_path / "kb", limit_ops=20)
+    assert client.calls == n  # second build fully cached
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pytest models/experimental/opt_transfer/tests/test_miner.py::test_build_kb_extracts_and_caches -v`
+Run: `pytest models/experimental/opt_transfer/tests/test_miner.py::test_build_kb_captures_available_and_used_with_status -v`
 Expected: FAIL (`build_kb` undefined)
 
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# kb/miner.py (part 2 — append)
+# kb/miner.py (part 3 — append)
 from models.experimental.opt_transfer.kb.cache import ContentCache
 from models.experimental.opt_transfer.kb.store import KBStore
 from models.experimental.opt_transfer.schema import KBEntry
 from models.experimental.opt_transfer.config import CONFIG
 
 
-def build_kb(client, cache_root=None, kb_root=None, config=CONFIG, limit=None) -> list[KBEntry]:
+def build_kb(client, cache_root=None, kb_root=None, config=CONFIG, limit_ops=None) -> list[KBEntry]:
     cache = ContentCache(cache_root or config.cache_dir)
     store = KBStore(kb_root or config.kb_dir)
-    hits = enumerate_sources(config)
-    if limit:
-        hits = hits[:limit]
+    inv = inventory_ops(config)
+    usage = scan_usage(config)
+    ops = sorted(set(inv) | set(usage))          # union: available + used
+    if limit_ops:
+        ops = ops[:limit_ops]
     entries: dict[str, KBEntry] = {}
-    for hit in hits:
-        # cache per (file, lineno); only re-mine when the file content changes
+    for op in ops:
+        available = inv.get(op, {"tests": [], "examples": []})
+        used = usage.get(op, [])
+        # cache key = combined evidence; re-mine only when test/usage snippets change
+        content = repr(available["examples"]) + repr([u["snippet"] for u in used])
         raw = cache.get_or_compute(
-            key=f"{hit.relpath}:{hit.lineno}",
-            content=hit.content,
-            compute=lambda h=hit: client.extract_entries(h),
+            key=f"op::{op}",
+            content=content,
+            compute=lambda op=op, available=available, used=used: client.extract_entries(op, available, used),
         )
         for d in raw:
             e = KBEntry.from_dict(d)
@@ -661,19 +739,21 @@ def build_kb(client, cache_root=None, kb_root=None, config=CONFIG, limit=None) -
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `pytest models/experimental/opt_transfer/tests/test_miner.py -v`
-Expected: PASS (2 passed)
+Expected: PASS (4 passed)
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add models/experimental/opt_transfer/kb/miner.py models/experimental/opt_transfer/tests/test_miner.py
-git commit -m "feat(opt_transfer): cached KB builder (LLM extraction per call-site, incremental)"
+git commit -m "feat(opt_transfer): comprehensive cached KB build (available+used, status-tagged)"
 ```
 
-> **Note (real-run smoke, not a unit test):** after Phase C lands the real `LLMClient`, run
-> `python -m models.experimental.opt_transfer.kb.miner` to populate `kb/records/`. Eyeball that the
-> two SeamlessMHA-relevant patterns (`nlp_create_qkv_heads` chain + horizontal_merge, `nlp_concat_heads`)
-> appear with non-empty `config_template`. This is the Phase-B acceptance check.
+> **Phase-B acceptance check (real-run smoke, after Task C2's `LLMClient`):** run
+> `python -m models.experimental.opt_transfer.kb.miner` to populate `kb/records/`. Verify (a) the KB
+> has **broad** coverage — dozens of ops across attention/norm/rope/ccl/kv-cache, not a handful;
+> (b) both `status` values appear (some `supported_unused`); (c) the known fused ops
+> (`nlp_create_qkv_heads`/`_decode`, `nlp_concat_heads`/`_decode`, `scaled_dot_product_attention`,
+> `rotary_embedding_llama*`, `paged_update_cache`, CCL ops) have non-empty `config_template`.
 
 ---
 
@@ -2045,7 +2125,7 @@ git commit -m "test(opt_transfer): e2e on-device QKV-fusion bring-up passes PCC 
 ## Self-Review
 
 **Spec coverage:**
-- Layer A (KB builder, cached): Phase A3 (cache) + Phase B (miner). ✅ — incremental via content hash; LLM extraction cached per call-site.
+- Layer A (KB builder, cached): Phase A3 (cache) + Phase B (inventory + usage + build). ✅ — **comprehensive**: unions the full unit-test supported surface (`available`, incl. `supported_unused`) with all model call sites (`used` + real configs), status-tagged; incremental via per-op content-hash cache. No hardcoded op allowlist.
 - Layer B (matcher + config transfer + fx structural gate): Phase C2 (matcher, prompt-cached), C1 (fx trace), D1 (structural gate, both pattern kinds). ✅
 - `pattern_kind` + `weight_transform`: schema A1, transforms D2, gate D1, codegen D3. ✅
 - Layer C (codegen + verification + repair, LangGraph, autonomous + Claude-Code-supervisable): codegen D3, verify E/G3, assembly F1, repair G, LangGraph H2, handoff H1. ✅
