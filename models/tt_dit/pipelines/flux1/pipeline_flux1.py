@@ -167,8 +167,7 @@ class Flux1Pipeline(PipelineAPIMixin):
         self.transformers = [
             checkpoint.build(ccl_manager=mgr, parallel_config=config.dit_parallel_config) for mgr in self._ccl_managers
         ]
-        for submesh_device in self._submesh_devices:
-            ttnn.synchronize_device(submesh_device)
+        self.synchronize_devices()
 
         self._tracers = [Tracer(self._traced_step, device=device, prep_run=False) for device in self._submesh_devices]
         self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint_name, subfolder="scheduler")
@@ -350,8 +349,7 @@ class Flux1Pipeline(PipelineAPIMixin):
 
                 latents[idx] = self._solvers[idx].step(step=i, latent=latents[idx], velocity_pred=velocity_pred)
 
-            for device in self._submesh_devices:
-                ttnn.synchronize_device(device)  # Helps with accurate time profiling.
+            self.synchronize_devices()  # Helps with accurate time profiling.
 
             on_event(SectionEnd(f"denoising_step_{i}"))
         on_event(SectionEnd("denoising"))
@@ -364,6 +362,10 @@ class Flux1Pipeline(PipelineAPIMixin):
         on_event(SectionEnd("total"))
 
         return output
+
+    def synchronize_devices(self) -> None:
+        for submesh_device in self._submesh_devices:
+            ttnn.synchronize_device(submesh_device)
 
     def _random_latents(self, *, batch_size: int, seed: int) -> list[ttnn.Tensor]:
         torch.manual_seed(seed)

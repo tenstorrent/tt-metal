@@ -188,8 +188,7 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         self.transformers = [
             checkpoint.build(ccl_manager=mgr, parallel_config=self.dit_parallel_config) for mgr in self.ccl_managers
         ]
-        for submesh_device in self.submesh_devices:
-            ttnn.synchronize_device(submesh_device)
+        self.synchronize_devices()
 
         self._tracers = [Tracer(self._traced_step, device=submesh, prep_run=False) for submesh in self.submesh_devices]
         self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint_name, subfolder="scheduler")

@@ -191,8 +191,7 @@ class MotifPipeline(PipelineAPIMixin):
                 ccl_manager=self._ccl_managers[0],
             )
 
-        for d in self._devices:
-            ttnn.synchronize_device(d)
+        self.synchronize_devices()
 
         logger.info("pipeline allocation run...")
         self(prompts=[""], num_inference_steps=2, traced=False, cfg_scale=2 if config.cfg_enabled else 1)
@@ -314,8 +313,7 @@ class MotifPipeline(PipelineAPIMixin):
                 latents[idx] = self._solvers[idx].step(step=step, latent=latents[idx], velocity_pred=velocity_pred)
 
             # Helps with accurate time profiling.
-            for device in self._devices:
-                ttnn.synchronize_device(device)
+            self.synchronize_devices()
 
             on_event(SectionEnd(f"denoising_step_{step}"))
 
@@ -328,6 +326,10 @@ class MotifPipeline(PipelineAPIMixin):
 
         on_event(SectionEnd("total"))
         return images
+
+    def synchronize_devices(self) -> None:
+        for device in self._devices:
+            ttnn.synchronize_device(device)
 
     def _traced_step(self, *, submesh_idx: int, latents: ttnn.Tensor, **kwargs: Any) -> ttnn.Tensor:
         if self._cfg_enabled and not self._cfg_parallel:

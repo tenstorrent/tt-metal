@@ -515,8 +515,7 @@ class QwenImagePipeline(PipelineAPIMixin):
 
                 latents[idx] = self._solvers[idx].step(step=i, latent=latents[idx], velocity_pred=velocity_pred)
 
-            for device in self._submesh_devices:
-                ttnn.synchronize_device(device)
+            self.synchronize_devices()
 
             on_event(SectionEnd(f"denoising_step_{i}"))
         on_event(SectionEnd("denoising"))
