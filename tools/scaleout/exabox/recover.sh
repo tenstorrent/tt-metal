@@ -441,13 +441,43 @@ if [[ "$REGENERATE_ON_FAILURE" == true && $VALIDATION_EXIT -ne 0 ]]; then
             echo "--deployment-descriptor-path (cannot regenerate from --factory-descriptor-path alone)."
         else
             REGEN_DIR="$OUTPUT_DIR/regenerated"
+            REGEN_ARGS=(
+                --cabling "$CABLING_DESCRIPTOR_PATH"
+                --deployment "$DEPLOYMENT_DESCRIPTOR_PATH"
+                --unretrainable-channels "$UNRETRAINABLE_YAML"
+                --output-dir "$REGEN_DIR"
+            )
             echo ""
             echo "Validation exited unrecoverable; regenerating descriptors without unretrainable cables..."
-            ./build/tools/scaleout/run_regen_descriptors \
-                --cabling "$CABLING_DESCRIPTOR_PATH" \
-                --deployment "$DEPLOYMENT_DESCRIPTOR_PATH" \
-                --unretrainable-channels "$UNRETRAINABLE_YAML" \
-                --output-dir "$REGEN_DIR" || echo "Warning: descriptor regeneration failed (see error above)"
+            if [[ -n "$DOCKER_IMAGE" ]]; then
+                # run_regen_descriptors is a single-host offline tool. In docker mode the binary
+                # only exists inside the image, so run one rank on the first host, mounting the
+                # descriptor inputs and the output dir so paths resolve identically in-container.
+                # Relative input paths resolve against the container's working dir, which differs
+                # from the host cwd, so warn the operator to use absolute paths.
+                if [[ "$CABLING_DESCRIPTOR_PATH" != /* || "$DEPLOYMENT_DESCRIPTOR_PATH" != /* ]]; then
+                    echo "Warning: --cabling-descriptor-path / --deployment-descriptor-path are relative;"
+                    echo "         in --use-docker mode they may not resolve inside the container."
+                    echo "         Use absolute paths if regeneration fails to find the descriptors."
+                fi
+                FIRST_HOST="${HOSTS%%,*}"
+                REGEN_VOLUMES=(--volume /data/scaleout_configs --volume "$OUTPUT_DIR")
+                # Mount the directories holding the input descriptors too, in case they live
+                # outside /data/scaleout_configs (custom --cabling/--deployment paths).
+                CABLING_DIR="$(cd "$(dirname "$CABLING_DESCRIPTOR_PATH")" && pwd)"
+                DEPLOYMENT_DIR="$(cd "$(dirname "$DEPLOYMENT_DESCRIPTOR_PATH")" && pwd)"
+                REGEN_VOLUMES+=(--volume "$CABLING_DIR" --volume "$DEPLOYMENT_DIR")
+                ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
+                    --empty-entrypoint \
+                    --mpi-interface "$MPI_IF" \
+                    "${REGEN_VOLUMES[@]}" \
+                    --host "$FIRST_HOST" -np 1 \
+                    ./build/tools/scaleout/run_regen_descriptors \
+                    "${REGEN_ARGS[@]}" || echo "Warning: descriptor regeneration failed (see error above)"
+            else
+                ./build/tools/scaleout/run_regen_descriptors \
+                    "${REGEN_ARGS[@]}" || echo "Warning: descriptor regeneration failed (see error above)"
+            fi
         fi
     fi
 fi
