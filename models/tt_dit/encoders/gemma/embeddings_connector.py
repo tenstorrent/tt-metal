@@ -3,11 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-LTX-2 Embeddings Connector — projects Gemma hidden states to DiT dimensions.
+LTX-2 Embeddings Connector — transformer blocks + final norm that refine the per-modality
+features from GemmaFeatureExtractor into the dims the DiT cross-attention consumes.
 
-Pipeline: Gemma hidden states (49 layers × 3840) → aggregate_embed → connector → embeddings
-- Video: aggregate_embed(188160→4096) + 8 transformer blocks at 4096
-- Audio: aggregate_embed(188160→2048) + 2 transformer blocks at 2048
+The aggregate_embed projection lives in GemmaFeatureExtractor (the reference
+FeatureExtractorV2 boundary); this module is the stack of ConnectorBlocks (8 each at 4096
+video / 2048 audio).
 
 Reference: ltx_core.text_encoders.gemma.embeddings_connector
 """
@@ -22,18 +23,6 @@ from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
 from ...utils.substate import rename_substate
-
-
-def _rms_norm_cc(mesh_device) -> ttnn.DeviceComputeKernelConfig:
-    """HiFi4 + fp32 dest-acc compute config for the parameter-free RMS norms (matches the
-    fidelity the DiT norms use; the native kernel's default fidelity costs ~1e-3 PCC)."""
-    return ttnn.init_device_compute_kernel_config(
-        mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
-    )
 
 
 class ConnectorBlock(Module):
@@ -100,7 +89,15 @@ class ConnectorBlock(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        self.rmsnorm_cc = _rms_norm_cc(mesh_device)
+        # HiFi4 + fp32 dest-acc for the parameter-free RMS norms: the native kernel's default
+        # fidelity costs ~1e-3 PCC.
+        self.rmsnorm_cc = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
 
     def _prepare_torch_state(self, state):
         rename_substate(state, "attn1.to_q", "to_q")
@@ -243,17 +240,15 @@ class ConnectorBlock(Module):
 
 
 class EmbeddingsConnector(Module):
-    """Embeddings connector: aggregate_embed + transformer blocks.
-
-    Takes stacked Gemma hidden states (B, seq, 49*3840) and produces
-    embeddings at the target dim (4096 for video, 2048 for audio).
-    """
+    """Holds the connector's transformer blocks + learnable registers. Consumes the projected
+    features from GemmaFeatureExtractor (B, seq, output_dim); the encoder pair drives the blocks
+    (with RoPE) in ``_run_connector``."""
 
     def __init__(
         self,
         *,
         output_dim: int,  # 4096 (video) or 2048 (audio)
-        num_blocks: int,  # 8 (video) or 2 (audio)
+        num_blocks: int,  # 8 for both video and audio
         num_heads: int = 32,
         ff_mult: int = 4,
         num_learnable_registers: int = 128,
@@ -266,8 +261,14 @@ class EmbeddingsConnector(Module):
         self.output_dim = output_dim
         self.num_learnable_registers = num_learnable_registers
         self.mesh_device = mesh_device
-        self.eps = eps
-        self.rmsnorm_cc = _rms_norm_cc(mesh_device)
+        # HiFi4 + fp32 dest-acc RMS-norm config; used by the encoder pair's final norm.
+        self.rmsnorm_cc = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
 
         # aggregate_embed lives in GemmaFeatureExtractor (reference FeatureExtractorV2 boundary);
         # this connector consumes the projected features.
@@ -286,25 +287,3 @@ class EmbeddingsConnector(Module):
             ConnectorBlock(output_dim, ff_dim, num_heads, eps, mesh_device, ccl_manager, parallel_config)
             for _ in range(num_blocks)
         )
-
-    def _prepare_torch_state(self, state):
-        pass
-
-    def forward(self, features: ttnn.Tensor) -> ttnn.Tensor:
-        """
-        Args:
-            features: (B, seq, output_dim) aggregate_embed output from GemmaFeatureExtractor
-
-        Returns:
-            (B, seq, output_dim) embeddings ready for DiT
-        """
-        # Run through transformer blocks (no RoPE on this convenience path)
-        x = features
-        for block in self.transformer_1d_blocks:
-            x = block(x)
-
-        # Final norm (parameter-free RMS norm)
-        x = ttnn.experimental.dit_rms_norm_unary_fused(
-            x, weight=None, epsilon=self.eps, compute_kernel_config=self.rmsnorm_cc
-        )
-        return x

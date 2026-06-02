@@ -56,7 +56,8 @@ from ...utils.ltx import (
     get_pixel_coords,
     video_get_patch_grid_bounds,
 )
-from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard, prepare_rot_transformation_mat
+from ...utils.mochi import get_rot_transformation_mat
+from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard
 from ...utils.tracing import Tracer
 from ...utils.video import Audio, export_video_audio
 
@@ -67,10 +68,6 @@ LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safet
 # is a separate concept — do NOT replace `32 * sp_factor` padding math with these.
 TEMPORAL_COMPRESSION = 8
 SPATIAL_COMPRESSION = 32
-
-# Distilled sigma schedules shared by the distilled and two-stage subclasses.
-DISTILLED_SIGMA_VALUES = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]
-STAGE_2_DISTILLED_SIGMA_VALUES = [0.909375, 0.725, 0.421875, 0.0]
 
 # Default negative prompt (inlined from the LTX-2 reference
 # ``ltx_pipelines.utils.constants.DEFAULT_NEGATIVE_PROMPT`` so the pipeline has no
@@ -847,7 +844,7 @@ class LTXPipeline:
     def _prepare_trans_mat(self) -> ttnn.Tensor:
         """Cached per-tile rotation matrix for rotary_embedding_llama (shared builder)."""
         if getattr(self, "_cached_trans_mat", None) is None:
-            self._cached_trans_mat = prepare_rot_transformation_mat(self.mesh_device)
+            self._cached_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=self.mesh_device)
         return self._cached_trans_mat
 
     def _prepare_prompt(self, prompt_embeds: torch.Tensor) -> ttnn.Tensor:

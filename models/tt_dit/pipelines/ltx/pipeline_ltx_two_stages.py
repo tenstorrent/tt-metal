@@ -31,14 +31,10 @@ import ttnn
 from ...utils.lora import LoraSpec
 from ...utils.ltx import AudioLatentShape, VideoPixelShape
 from ...utils.video import export_video_audio
-from .pipeline_ltx import (
-    DEFAULT_NEGATIVE_PROMPT,
-    SPATIAL_COMPRESSION,
-    STAGE_2_DISTILLED_SIGMA_VALUES,
-    TEMPORAL_COMPRESSION,
-    LTXPipeline,
-    latent_grid,
-)
+from .pipeline_ltx import DEFAULT_NEGATIVE_PROMPT, SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline, latent_grid
+
+# Stage-2 distilled sigma schedule (stage 1 renoises the s1 latent at sigmas[0]).
+STAGE_2_DISTILLED_SIGMA_VALUES = [0.909375, 0.725, 0.421875, 0.0]
 
 
 class LTXTwoStagesPipeline(LTXPipeline):
