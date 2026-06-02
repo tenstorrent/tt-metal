@@ -123,14 +123,14 @@ TRACED = os.environ.get("WAN_TRACED", "1") == "1"
 METRIC_STEPS = int(os.environ.get("WAN_STEPS", str(NUM_INFERENCE_STEPS)))
 
 
-def _save_correctness_image(frames, batch_size, height, width):
+def _save_correctness_image(frames, batch_size, height, width, suffix=""):
     """Save the generated image(s) under outputs/correctness/<RUN_TAG>/ for collation."""
     if not RUN_TAG:
         return
     out = Path("outputs/correctness") / RUN_TAG
     out.mkdir(parents=True, exist_ok=True)
     for b in range(batch_size):
-        path = out / f"{b}x{height}x{width}.png"
+        path = out / f"{b}x{height}x{width}{suffix}.png"
         Image.fromarray(frames[b][0]).save(path)
         logger.info(f"  [correctness] saved {path}")
 
@@ -348,11 +348,18 @@ def test_resolution_sweep(
         wanted = {s.strip() for s in shape_filter.split(",") if s.strip()}
         sweep_shapes = [s for s in SHAPES if f"{s[0]}x{s[1]}x{s[2]}" in wanted]
         logger.info(f"WAN_SWEEP_SHAPES set; running {len(sweep_shapes)} shape(s): {sorted(wanted)}")
+    # Bug-#1 bisection knob: WAN_REPEAT=N runs each swept shape N times back-to-back
+    # (each is a separate capture/release cycle). If the 2nd identical-resolution traced
+    # run is also corrupt, the bug is "any 2nd capture cycle", not resolution change.
+    repeat = int(os.environ.get("WAN_REPEAT", "1"))
+    if repeat > 1:
+        sweep_shapes = [s for s in sweep_shapes for _ in range(repeat)]
 
-    for batch_size, height, width in sweep_shapes:
+    for rep_idx, (batch_size, height, width) in enumerate(sweep_shapes):
         label = f"{batch_size}x{height}x{width}"
+        save_suffix = f"_rep{rep_idx}" if repeat > 1 else ""
         prompts = [PROMPT] * batch_size
-        logger.info(f"=== {label} ===")
+        logger.info(f"=== {label}{save_suffix} ===")
         try:
             # Eager (non-traced) warmup first. This allocates all persistent
             # buffers — notably the CCL ping-pong buffers, which are created
@@ -431,7 +438,7 @@ def test_resolution_sweep(
                     height=height,
                     width=width,
                 )
-                _save_correctness_image(frames, batch_size, height, width)
+                _save_correctness_image(frames, batch_size, height, width, suffix=save_suffix)
 
         except Exception as e:
             logger.warning(f"  {label} FAILED: {e}")

@@ -395,6 +395,18 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self.cfg_devices = [self.mesh_device]
         self.cfg_ccl_managers = [self.dit_ccl_manager]
         self.cfg_dit = [self.transformer]
+        # Persistent per-submesh spatial input buffer for the traced CFG denoise. The
+        # traced combined_step must receive the SAME tensor object every step (updated
+        # in place via ttnn.copy) so the Tracer no-ops the input — passing a fresh
+        # sharded tensor each step makes the Tracer's _update_input mis-copy it and the
+        # trace keeps replaying the first step's latent. Mirrors self.latent_buffer.
+        self.cfg_spatial_buffers = [None] * self.cfg_factor
+        # Persistent per-submesh prompt buffers, same rationale as cfg_spatial_buffers:
+        # the traced combined_step must see the SAME prompt tensor object every call so the
+        # Tracer no-ops it (update via external ttnn.copy). A fresh sharded prompt each call
+        # forces the Tracer's _update_input to mis-copy it -> degenerate predictions.
+        # Shape-independent (text embeds), so not cleared on resolution change.
+        self.cfg_prompt_bufs = [None] * self.cfg_factor
         if self.cfg_factor > 1:
             submesh1 = self.cfg_submeshes[1]
             ccl1 = CCLManager(mesh_device=submesh1, num_links=num_links, topology=topology)
@@ -456,6 +468,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         if self.condition_buffer is not None:
             ttnn.deallocate(self.condition_buffer)
             self.condition_buffer = None
+        for i, buf in enumerate(self.cfg_spatial_buffers):
+            if buf is not None:
+                ttnn.deallocate(buf)
+                self.cfg_spatial_buffers[i] = None
 
         if self._solver is not None:
             self._solver.clear_state()
@@ -1349,7 +1365,16 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 mesh_axes=[None, None, None, None],
                 dtype=ttnn.bfloat16,
             )
-            prompt_bufs.append(dit.prepare_text_conditioning(tt_pe))
+            fresh = dit.prepare_text_conditioning(tt_pe)
+            # Persist the prompt buffer (same object across the warmup-capture and measured
+            # calls) so the traced combined_step's Tracer no-ops it; update in place via
+            # ttnn.copy. A fresh prompt each call makes the Tracer mis-copy the sharded prompt
+            # and the replay degenerates. Mirrors the non-CFG prepare_text_conditioning path.
+            if self.cfg_prompt_bufs[i] is None or not traced:
+                self.cfg_prompt_bufs[i] = fresh
+            else:
+                ttnn.copy(fresh, self.cfg_prompt_bufs[i])
+            prompt_bufs.append(self.cfg_prompt_bufs[i])
 
         # Patchify spatial input on host (identical for both submeshes).
         permuted_latent, N = dits[0].preprocess_spatial_input_host(latents)
@@ -1368,14 +1393,31 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             combined_step blocks until its trace finishes (mesh execute_trace is
             synchronous), but it releases the GIL while the device runs, so calling
             this from two threads overlaps the two submeshes' compute. The spatial
-            input is bf16 (mirrors get_model_input's typecast); the timestep is a host
-            tensor when tracing so the tracer copies it into the trace input per step.
+            input is bf16 (mirrors get_model_input's typecast). When tracing, BOTH the
+            spatial input and timestep are HOST tensors so the tracer owns a single
+            persistent device input buffer and updates it via copy_host_to_device each
+            step — feeding the trace a freshly-allocated DEVICE tensor every step instead
+            corrupts the replay ("Allocating device buffers is unsafe during active trace").
             """
             dit = dits[j]
-            spatial_j = tensor.from_torch(
+            # Update the persistent spatial buffer in place. Passing this SAME object to
+            # the traced combined_step every step makes the Tracer no-op the input (the
+            # update is the ttnn.copy below); a fresh tensor each step would force the
+            # Tracer to mis-copy the sharded input and replay stale latents.
+            new_spatial = tensor.from_torch(
                 latent_state, device=devices[j], mesh_axes=[None, None, sp_axis, None], dtype=ttnn.bfloat16
             )
-            timestep_j = float32_tensor(timestep, device=(None if traced else devices[j]))
+            if self.cfg_spatial_buffers[j] is None or tuple(self.cfg_spatial_buffers[j].shape) != tuple(
+                new_spatial.shape
+            ):
+                self.cfg_spatial_buffers[j] = new_spatial
+            else:
+                ttnn.copy(new_spatial, self.cfg_spatial_buffers[j])
+            spatial_j = self.cfg_spatial_buffers[j]
+            # DIAG WAN_CFG_REF: capture traces in warmup but compute the measured forward
+            # untraced — distinguishes capture-corruption from replay-corruption.
+            use_traced = traced and not os.environ.get("WAN_CFG_REF")
+            timestep_j = float32_tensor(timestep, device=(None if use_traced else devices[j]))
             rope_cos, rope_sin, trans_mat = rope_per[j]
             pred_j = dit.combined_step(
                 do_classifier_free_guidance=False,
@@ -1388,10 +1430,27 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 trans_mat=trans_mat,
                 timestep=timestep_j,
                 guidance_scale=guidance_scale,
-                gather_output=True,  # gather SP so the host gets the full prediction
-                traced=traced,
+                gather_output=False,  # gather SP OUTSIDE the trace (below), not inside it
+                traced=use_traced,
             )
-            return local_device_to_torch(pred_j)
+            # Gather the SP-fractured prediction to the full tensor OUTSIDE the trace —
+            # mirroring the non-CFG path, which gathers post-loop (untraced). Doing the
+            # gather INSIDE the traced combined_step (gather_output=True) corrupted the CFG
+            # traced replay (output is a persistent CCL ping-pong buffer baked into the trace).
+            # Gather SP with a NON-persistent buffer: the per-step untraced all_gather must
+            # not touch the dit CCLManager's ping-pong buffers, which the traced forward
+            # bakes specific indices of — sharing them clobbers the trace's buffers across
+            # steps and the replay diverges (correct for ~2 steps, then garbage).
+            pred_j = dit.ccl_manager.all_gather(
+                pred_j, dim=2, mesh_axis=sp_axis, use_hyperparams=False, use_persistent_buffer=False
+            )
+            host_pred = local_device_to_torch(pred_j)
+            if os.environ.get("WAN_CFG_LOGMEAN"):
+                logger.info(
+                    f"[mean] submesh {j} traced={use_traced}: pred_mean={host_pred.float().mean().item():.5f} "
+                    f"pred_std={host_pred.float().std().item():.5f}"
+                )
+            return host_pred
 
         def _traces_ready():
             # True once every submesh's combined_step trace is captured. Capture (the
@@ -1403,6 +1462,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     return False
             return True
 
+        import os as _os
+
+        no_thread = _os.environ.get("WAN_CFG_NOTHREAD") == "1"  # debug: force serial submeshes
         executor = ThreadPoolExecutor(max_workers=self.cfg_factor)
         try:
             with self.progress_bar(total=len(timesteps)) as progress_bar:
@@ -1415,7 +1477,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     # while the device runs, so two threads give true device-level
                     # concurrency (~2x). Fall back to serial during trace capture (concurrent
                     # begin_trace_capture is unsafe) and in the untraced path.
-                    if traced and _traces_ready():
+                    if traced and not no_thread and _traces_ready():
                         preds_full = list(
                             executor.map(lambda j: _run_submesh(j, latent_state, timestep), range(self.cfg_factor))
                         )
@@ -1442,8 +1504,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                     new_latent_dev0 = self._solver.step(step=step_i, latent=latent_dev0, velocity_pred=noise_dev0)
 
                     # Gather to full torch so both submeshes can be re-seeded next step.
-                    new_latent_dev0 = dits[0].ccl_manager.all_gather_persistent_buffer(
-                        new_latent_dev0, dim=2, mesh_axis=sp_axis
+                    # Non-persistent buffer: this per-step untraced gather must not share the
+                    # dit CCLManager's ping-pong buffers with the traced forward (see above).
+                    new_latent_dev0 = dits[0].ccl_manager.all_gather(
+                        new_latent_dev0, dim=2, mesh_axis=sp_axis, use_hyperparams=False, use_persistent_buffer=False
                     )
                     latent_state = local_device_to_torch(new_latent_dev0)
                     progress_bar.update()
