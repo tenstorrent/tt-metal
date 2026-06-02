@@ -160,7 +160,7 @@ TEST_F(MoeUngroupTest, LargeELocal) {
     constexpr uint32_t E = 64, K = 4;
     std::vector<uint16_t> leids;
     leids.reserve(32);
-    for (uint16_t i = 0; i < 32; ++i) leids.push_back(i);
+    for (uint32_t i = 0; i < 32; ++i) leids.push_back(static_cast<uint16_t>(i));
     run_and_check(make_inputs(D, B, S, H, E, K), leids, K);
 }
 
@@ -172,7 +172,7 @@ TEST_F(MoeUngroupTest, LargeELocal) {
 void check_group_ungroup_roundtrip(uint32_t D, uint32_t B, uint32_t S, uint32_t H, uint32_t E, uint32_t K) {
     std::vector<uint16_t> leids;
     leids.reserve(E);
-    for (uint16_t i = 0; i < E; ++i) leids.push_back(i);
+    for (uint32_t i = 0; i < E; ++i) leids.push_back(static_cast<uint16_t>(i));
     auto host = make_inputs(D, B, S, H, E, K);
 
     auto g = build_group_inputs(host, leids, K);
