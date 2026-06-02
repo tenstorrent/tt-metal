@@ -472,7 +472,7 @@ std::vector<RankBindingConfig> extract_rank_bindings(
     // Iterate through fabric_node_to_asic mapping
     for (const auto& [fabric_node_id, asic_id] : mapping_result.fabric_node_to_asic) {
         MeshId mesh_id_global = fabric_node_id.mesh_id;
-        if (!partition_globals.empty() && !partition_globals.count(mesh_id_global)) {
+        if (!partition_globals.empty() && !partition_globals.contains(mesh_id_global)) {
             continue;
         }
         tt::ChipId chip_id_from_fabric_node = static_cast<tt::ChipId>(fabric_node_id.chip_id);

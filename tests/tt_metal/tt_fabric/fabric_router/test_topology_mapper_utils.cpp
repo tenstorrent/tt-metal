@@ -20,7 +20,6 @@
 #include <unordered_set>
 #include <string>
 #include <string_view>
-#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 #include <tt-logger/tt-logger.hpp>
