@@ -202,15 +202,12 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
         cq.enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
     }
 
-    {
-        const auto& old_spec = host_tensor.tensor_spec();
-        device_tensor = MeshTensor(
-            mesh_buffer,
-            TensorSpec(
-                old_spec.logical_shape(),
-                TensorLayout(old_spec.data_type(), old_spec.page_config(), device_tensor.memory_config())),
-            host_tensor.tensor_topology());
-    }
+    const auto& old_spec = host_tensor.tensor_spec();
+    device_tensor = MeshTensor(
+        mesh_buffer,
+        TensorSpec(
+            old_spec.logical_shape(), old_spec.tensor_layout().with_memory_config(device_tensor.memory_config())),
+        host_tensor.tensor_topology());
 }
 
 // ======================================================================================
@@ -383,8 +380,7 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
     device_tensor = MeshTensor(
         mesh_buffer,
         TensorSpec(
-            old_spec.logical_shape(),
-            TensorLayout(old_spec.data_type(), old_spec.page_config(), device_tensor.memory_config())),
+            old_spec.logical_shape(), old_spec.tensor_layout().with_memory_config(device_tensor.memory_config())),
         topology);
 }
 
@@ -471,8 +467,7 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
     device_tensor = MeshTensor(
         mesh_buffer,
         TensorSpec(
-            old_spec.logical_shape(),
-            TensorLayout(old_spec.data_type(), old_spec.page_config(), device_tensor.memory_config())),
+            old_spec.logical_shape(), old_spec.tensor_layout().with_memory_config(device_tensor.memory_config())),
         host_tensor.tensor_topology());
 
     return coords;
