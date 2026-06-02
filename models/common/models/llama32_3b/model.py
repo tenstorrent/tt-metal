@@ -202,17 +202,23 @@ def _all_gather_rmsnorm_tensor(
         memory_config = x.memory_config()
 
     tt_ccl = cfg.tt_ccl or get_tt_ccl(cfg.mesh_device)
+    # CCL pipelining matched to the proven mistral_7b / qwen25_7b N300 recipe
+    # (num_links=1, chunks_per_sync=24, num_workers_per_link=4) for parity with the
+    # reference ports. Measured neutral vs the prior (num_links=2, chunks_per_sync=10,
+    # num_workers_per_link=2) config on N300 batch-1 decode (perf-tuning.md §Axis-3: the
+    # per-layer gather is invisible in the decode-step budget on N150/N300; it only bites
+    # at T3K+ scale), but kept to avoid oversubscribing N300's single inter-chip link.
     return ttnn.experimental.all_gather_async(
         x,
         persistent_output_buffer=None,
         dim=3,
         multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
-        num_links=tt_ccl.get_num_links(),
+        num_links=1,
         topology=default_topology(cfg.mesh_device),
         memory_config=memory_config,
         barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-        chunks_per_sync=10,
-        num_workers_per_link=2,
+        chunks_per_sync=24,
+        num_workers_per_link=4,
         num_buffers_per_channel=2,
     )
 
@@ -410,6 +416,16 @@ def _build_decoder_layer(
             paged_attention_config=paged_cfg,
             kv_cache=None,
             kv_cache_dtype=precision.kv_cache_dtype,
+            # TTTv1 parity: Llama-3 family decode SDPA runs HIFI2 with exp_approx_mode=True
+            # (model_config.py `_default_settings` → SDPA_DECODE=HIFI2, used in BOTH accuracy
+            # and performance). Attention1D's generic default builds this prog config with
+            # exp_approx_mode=False, leaving decode SDPA slower than TTTv1. Flip it to match.
+            decode_sdpa_prg_config=ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                exp_approx_mode=True,
+                q_chunk_size=0,
+                k_chunk_size=0,
+            ),
         )
     )
 
