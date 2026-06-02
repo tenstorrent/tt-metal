@@ -442,10 +442,20 @@ struct PackTile : PackTileTag {
 
     // Pack exec — walk the reserved output window (base + i_flat) for OutputLifecycle::Bulk, or stay pinned
     // at base for per-tile/chunk policies whose CB front already advanced. TileOffset adds base.
+    //
+    // OOO gating: the LLK's sequential pack path (out_of_order_output=false) derives its write
+    // address from an internal running `fifo_wr_tile_ptr` and IGNORES `out_idx` entirely. That is
+    // correct only when the intended index coincides with the sequential counter — i.e. when there
+    // is no base offset (walk: 0,1,2,…; pinned: 0). The moment `Offset == Set`, `out_idx` carries a
+    // non-coincident base that the sequential path would silently drop (data lands at index 0, not
+    // base). So we switch to `pack_tile<true>` for `TileOffset::Set`, which honors `out_idx`
+    // (addr = fifo_wr_ptr + page_size*out_idx - 1) without advancing the internal counter — exactly
+    // matching the explicit `base + i_flat` we pass each iteration. Unset keeps the proven
+    // sequential path with zero behavior change.
     ALWI void exec(uint32_t i_flat, uint32_t /*ht*/, uint32_t /*wt*/, uint32_t slot_offset) const {
         const uint32_t base = tile_base_value<Offset>(tile_base);
         const uint32_t out_idx = walk ? (base + i_flat) : base;
-        pack_tile(to_u32(DstSlot) + slot_offset, Cb, out_idx);
+        pack_tile</*out_of_order_output=*/Offset == TileOffset::Set>(to_u32(DstSlot) + slot_offset, Cb, out_idx);
     }
 
     // Upfront reserve/push — OutputLifecycle::Bulk walks the full window (Ht*Wt); OutputLifecycle::DeferredReserve is pinned (1).
