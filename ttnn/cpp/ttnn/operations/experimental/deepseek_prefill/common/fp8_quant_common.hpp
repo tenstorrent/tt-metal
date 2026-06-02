@@ -16,8 +16,9 @@ inline constexpr uint32_t SCALE_GROUP_SIZE = 128;
 inline constexpr uint32_t SCALE_GROUP_TILES = 4;  // SCALE_GROUP_SIZE / TILE_WIDTH (=32)
 inline constexpr float E4M3_MAX_NORMAL = 448.0f;
 inline constexpr float SCALE_CLAMP_MIN = 1.0e-4f;  // DeepEP clamps amax to >= 1e-4 before /448
-// The LLK kernels process the width in fixed 1024-element column-blocks (32 tiles); H must be a
-// multiple of this. Covers the DeepSeek prefill hidden dim (7168 = 7 * 1024).
+// The LLK kernels process the width in 1024-element column-blocks (32 tiles). H need NOT be a
+// multiple of this: the last column-block may be partial (fewer whole 128-groups) and the kernels
+// zero-pad it. H must still be a multiple of SCALE_GROUP_SIZE (128) so groups are always full.
 inline constexpr uint32_t COL_BLOCK_ELEMS = 1024;
 
 inline std::tuple<uint32_t, uint32_t> infer_M_H(const ttnn::Shape& shape) {

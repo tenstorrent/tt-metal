@@ -8,6 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/experimental/deepseek_prefill/common/fp8_quant_common.hpp"
 
@@ -45,19 +46,21 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     const uint32_t face_h = face_shape[0];
     const uint32_t face_w = face_shape[1];
 
-    TT_FATAL(M % tile_h == 0, "per_token_cast_back: M={} must be divisible by tile height={}", M, tile_h);
+    // M and H are now arbitrary; the last tile-row / column-block may be partial (zero-padded by the
+    // reader, written back only for real rows/columns by the writer). H stays a multiple of 128 so
+    // groups are always full and the scale tensor's last dim is H/128.
     TT_FATAL(
-        H % common::COL_BLOCK_ELEMS == 0,
-        "per_token_cast_back: H={} must be a multiple of COL_BLOCK_ELEMS={}",
+        H % common::SCALE_GROUP_SIZE == 0,
+        "per_token_cast_back: H={} must be a multiple of SCALE_GROUP_SIZE={}",
         H,
-        common::COL_BLOCK_ELEMS);
+        common::SCALE_GROUP_SIZE);
 
     const uint32_t TILE_BYTES_FP32 = tile_h * tile_w * 4;
     const uint32_t COL_BLOCK_TILES = common::COL_BLOCK_ELEMS / tile_w;                         // 32 for 32-wide tiles
     constexpr uint32_t GROUPS_PER_BLOCK = common::COL_BLOCK_ELEMS / common::SCALE_GROUP_SIZE;  // 8
 
-    const uint32_t tile_rows = M / tile_h;
-    const uint32_t num_col_blocks = H / common::COL_BLOCK_ELEMS;
+    const uint32_t tile_rows = tt::div_up(M, tile_h);                        // last tile-row may be partial
+    const uint32_t num_col_blocks = tt::div_up(H, common::COL_BLOCK_ELEMS);  // last col-block may be partial
     const uint32_t e4m3_col_block_bytes = common::COL_BLOCK_ELEMS;  // 1 byte/elem
     const uint32_t out_elem_bytes = output.element_size();
     const uint32_t out_col_block_bytes = common::COL_BLOCK_ELEMS * out_elem_bytes;  // bf16: 2048, fp32: 4096
@@ -172,9 +175,9 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
             program,
             reader_kernel_id,
             core,
-            {src_e4m3_buffer->address(), src_scale_buffer->address(), rows_for_core, num_col_blocks, row_offset});
+            {src_e4m3_buffer->address(), src_scale_buffer->address(), rows_for_core, num_col_blocks, row_offset, M, H});
         SetRuntimeArgs(
-            program, writer_kernel_id, core, {dst_buffer->address(), rows_for_core, num_col_blocks, row_offset});
+            program, writer_kernel_id, core, {dst_buffer->address(), rows_for_core, num_col_blocks, row_offset, M, H});
         SetRuntimeArgs(program, compute_kernel_id, core, {rows_for_core, num_col_blocks});
         row_offset += rows_for_core;
     }

@@ -33,16 +33,13 @@ void PerTokenCastToFp8DeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(shape.size() >= 2, "per_token_cast_to_fp8: input rank must be >= 2, got {}", shape.size());
 
     auto [M, H] = common::infer_M_H(shape);
+    // M and H are arbitrary (the kernels zero-pad the partial last tile-row / column-block). H must
+    // stay a multiple of the 128-element scale group so groups are always full.
     TT_FATAL(
-        H % common::COL_BLOCK_ELEMS == 0,
-        "per_token_cast_to_fp8: hidden dim H={} must be a multiple of {} (LLK column-block width)",
+        H % common::SCALE_GROUP_SIZE == 0,
+        "per_token_cast_to_fp8: hidden dim H={} must be a multiple of SCALE_GROUP_SIZE={}",
         H,
-        common::COL_BLOCK_ELEMS);
-    TT_FATAL(
-        M % tt::constants::TILE_HEIGHT == 0,
-        "per_token_cast_to_fp8: row count M={} must be a multiple of TILE_HEIGHT={}",
-        M,
-        tt::constants::TILE_HEIGHT);
+        common::SCALE_GROUP_SIZE);
     TT_FATAL(M > 0, "per_token_cast_to_fp8: M must be > 0");
 }
 

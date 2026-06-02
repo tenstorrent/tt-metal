@@ -11,6 +11,7 @@
 // to satisfy NOC alignment (scale pages are round_up(W/128*4, 64); see notes §6).
 
 #include <cstdint>
+#include <algorithm>
 
 #include "api/dataflow/dataflow_api.h"
 
@@ -40,6 +41,8 @@ void kernel_main() {
     uint32_t num_tile_rows = get_arg_val<uint32_t>(2);
     uint32_t num_col_blocks = get_arg_val<uint32_t>(3);
     uint32_t start_tile_row = get_arg_val<uint32_t>(4);
+    uint32_t m_total = get_arg_val<uint32_t>(5);  // total rows (M); last tile-row may be partial
+    uint32_t h_total = get_arg_val<uint32_t>(6);  // total width (H); last col-block may be partial
 
     constexpr uint32_t cb_e4m3 = get_compile_time_arg_val(0);
     constexpr uint32_t e4m3_col_block_bytes = get_compile_time_arg_val(1);  // 1024
@@ -71,25 +74,36 @@ void kernel_main() {
     uint32_t scratch = get_write_ptr(cb_scale_scratch);
     volatile tt_l1_ptr uint32_t* scratch_u32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
 
+    constexpr uint32_t e4m3_elem_bytes = e4m3_col_block_bytes / COL_BLOCK_ELEMS;  // 1 byte/elem
+
     for (uint32_t tr = 0; tr < num_tile_rows; ++tr) {
+        uint32_t row_base = (start_tile_row + tr) * tile_h;
+        uint32_t rows_this = std::min(tile_h, m_total - row_base);  // real rows in this tile-row
         for (uint32_t c = 0; c < num_col_blocks; ++c) {
-            // e4m3 output
+            uint32_t real_col_elems = std::min(COL_BLOCK_ELEMS, h_total - c * COL_BLOCK_ELEMS);
+            uint32_t real_col_bytes = real_col_elems * e4m3_elem_bytes;  // real e4m3 width
+            uint32_t real_groups = real_col_elems / SCALE_GROUP_SIZE;    // exact (H % 128 == 0)
+
+            // e4m3 output: drain the full CB, but only write real rows / real columns.
             cb_wait_front(cb_e4m3, tile_h);
             uint32_t l1 = get_read_ptr(cb_e4m3);
             uint32_t col_offset_bytes = c * e4m3_col_block_bytes;
             for (uint32_t s = 0; s < tile_h; ++s) {
-                uint32_t page_id = (start_tile_row + tr) * tile_h + s;
-                noc_async_write(l1, e4m3.get_noc_addr(page_id) + col_offset_bytes, e4m3_col_block_bytes);
+                if (s < rows_this) {
+                    uint32_t page_id = row_base + s;
+                    noc_async_write(l1, e4m3.get_noc_addr(page_id) + col_offset_bytes, real_col_bytes);
+                }
                 l1 += e4m3_col_block_bytes;
             }
             noc_async_write_barrier();
             cb_pop_front(cb_e4m3, tile_h);
 
-            // extract column 0 of the GROUPS_PER_BLOCK scale tiles into the per-row scratch
+            // extract column 0 of the GROUPS_PER_BLOCK scale tiles into the per-row scratch.
+            // Only real groups are stored (guards global_group against the scratch row width).
             cb_wait_front(cb_scale_tiles, GROUPS_PER_BLOCK);
             volatile tt_l1_ptr uint32_t* tiles =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_scale_tiles));
-            for (uint32_t g = 0; g < GROUPS_PER_BLOCK; ++g) {
+            for (uint32_t g = 0; g < real_groups; ++g) {
                 uint32_t tile_base = g * TILE_FP32;
                 uint32_t global_group = c * GROUPS_PER_BLOCK + g;
                 append_first_column_to_tile<face_h, face_w, FACE_ROWS, FACE_ROW_STRIDE, scale_aligned_u32>(
@@ -98,9 +112,9 @@ void kernel_main() {
             cb_pop_front(cb_scale_tiles, GROUPS_PER_BLOCK);
         }
 
-        // write this tile-row's scale rows (full row, aligned)
-        for (uint32_t s = 0; s < tile_h; ++s) {
-            uint32_t page_id = (start_tile_row + tr) * tile_h + s;
+        // write this tile-row's scale rows (full row, aligned); real rows only.
+        for (uint32_t s = 0; s < rows_this; ++s) {
+            uint32_t page_id = row_base + s;
             noc_async_write(scratch + s * scale_aligned_page_bytes, scale.get_noc_addr(page_id), scale_row_bytes);
         }
         noc_async_write_barrier();

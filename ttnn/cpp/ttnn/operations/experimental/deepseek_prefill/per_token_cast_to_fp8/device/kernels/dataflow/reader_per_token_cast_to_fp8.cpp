@@ -16,6 +16,8 @@ void kernel_main() {
     uint32_t num_tile_rows = get_arg_val<uint32_t>(1);
     uint32_t num_col_blocks = get_arg_val<uint32_t>(2);
     uint32_t start_tile_row = get_arg_val<uint32_t>(3);
+    uint32_t m_total = get_arg_val<uint32_t>(4);  // total rows (M); last tile-row may be partial
+    uint32_t h_total = get_arg_val<uint32_t>(5);  // total width (H); last col-block may be partial
 
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t col_block_bytes = get_compile_time_arg_val(1);  // 1024 * elem_size
@@ -28,6 +30,8 @@ void kernel_main() {
     constexpr uint32_t ONE_F32_BITS = 0x3f800000u;  // 1.0f
     constexpr uint32_t face_elems = face_h * face_w;                       // fp32 elements per face
     constexpr uint32_t num_faces = (tile_h / face_h) * (tile_w / face_w);  // faces per tile
+    constexpr uint32_t COL_BLOCK_ELEMS = 1024;                             // LLK column-block width
+    constexpr uint32_t elem_bytes = col_block_bytes / COL_BLOCK_ELEMS;     // input element size
     constexpr auto src_args = TensorAccessorArgs<7>();
 
     const auto src = TensorAccessor(src_args, src_addr);
@@ -45,13 +49,26 @@ void kernel_main() {
     cb_push_back(cb_scaler, 1);
 
     for (uint32_t tr = 0; tr < num_tile_rows; ++tr) {
+        uint32_t row_base = (start_tile_row + tr) * tile_h;
+        uint32_t rows_this = std::min(tile_h, m_total - row_base);  // real rows in this tile-row
         for (uint32_t c = 0; c < num_col_blocks; ++c) {
+            uint32_t real_col_elems = std::min(COL_BLOCK_ELEMS, h_total - c * COL_BLOCK_ELEMS);
+            uint32_t real_col_bytes = real_col_elems * elem_bytes;  // real width of this col-block
             cb_reserve_back(cb_in, tile_h);
             uint32_t l1 = get_write_ptr(cb_in);
             uint32_t col_offset_bytes = c * col_block_bytes;
+            // Always fill tile_h full-width pages; zero-pad the partial column tail and any rows
+            // beyond M so the (padding-oblivious) compute never reads garbage into amax/divide.
             for (uint32_t s = 0; s < tile_h; ++s) {
-                uint32_t page_id = (start_tile_row + tr) * tile_h + s;
-                noc_async_read(src.get_noc_addr(page_id) + col_offset_bytes, l1, col_block_bytes);
+                if (s < rows_this) {
+                    uint32_t page_id = row_base + s;
+                    noc_async_read(src.get_noc_addr(page_id) + col_offset_bytes, l1, real_col_bytes);
+                    if (real_col_bytes < col_block_bytes) {
+                        fill_zeros_async(l1 + real_col_bytes, col_block_bytes - real_col_bytes);
+                    }
+                } else {
+                    fill_zeros_async(l1, col_block_bytes);
+                }
                 l1 += col_block_bytes;
             }
             noc_async_read_barrier();
