@@ -20,6 +20,7 @@ class _VectorTimeout(Exception):
 def _alarm_handler(signum, frame):
     raise _VectorTimeout("Vector execution timed out (SIGALRM)")
 
+
 import ttnn
 
 # Import V2 master config loader for traced model configurations
@@ -690,9 +691,7 @@ def run(
         _pob_mem_cfg = kwargs.get("persistent_output_buffer_memory_config")
         if _pob_mem_cfg in (None, _ABSENT):
             _pob_mem_cfg = None
-        _dispatch_axis = _dispatch_axis_for_shard_specs(
-            target_sharded_config, output_memory_config, _pob_mem_cfg
-        )
+        _dispatch_axis = _dispatch_axis_for_shard_specs(target_sharded_config, output_memory_config, _pob_mem_cfg)
         if _dispatch_axis is not None:
             _device_params = {"dispatch_core_axis": _dispatch_axis}
 
@@ -797,6 +796,10 @@ def run(
                 )
 
             for i in range(num_iters):
+                # Initialize before the try: if signal.signal() itself raises
+                # (e.g. not running in the main thread), the cleanup/except paths
+                # below must not hit UnboundLocalError and mask the real error.
+                old_handler = None
                 try:
                     old_handler = signal.signal(signal.SIGALRM, _alarm_handler)
                     signal.alarm(120)
@@ -902,13 +905,19 @@ def run(
                     ttnn.synchronize_device(device, sub_device_ids=sub_device_stall_group)
                     e2e_perf = stop_measuring_time(start_time)
                     signal.alarm(0)
-                    signal.signal(signal.SIGALRM, old_handler)
+                    if old_handler is not None:
+                        signal.signal(signal.SIGALRM, old_handler)
                 except _VectorTimeout:
-                    signal.signal(signal.SIGALRM, old_handler)
+                    # Always cancel any pending alarm and only restore the
+                    # handler if it was actually installed.
+                    signal.alarm(0)
+                    if old_handler is not None:
+                        signal.signal(signal.SIGALRM, old_handler)
                     raise RuntimeError("all_gather_async timed out after 120s (device hang)")
                 except Exception as e:
                     signal.alarm(0)
-                    signal.signal(signal.SIGALRM, old_handler)
+                    if old_handler is not None:
+                        signal.signal(signal.SIGALRM, old_handler)
                     raise RuntimeError(f"Execution failed: {e}")
 
             device.reset_sub_device_stall_group()

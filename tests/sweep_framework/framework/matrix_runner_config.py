@@ -169,8 +169,7 @@ LEAD_MODELS_DEFAULT_TEST_GROUP = "lead-models-single-chip"
 LEAD_MODELS_SUITE_NAME = "model_traced"
 
 # Absent entries use the caller-provided fixed ``batch_size``.
-LEAD_MODELS_BATCH_POLICY = {
-}
+LEAD_MODELS_BATCH_POLICY = {}
 
 
 # ── Model-traced sweep: per-group batching policy ─────────────────────────────

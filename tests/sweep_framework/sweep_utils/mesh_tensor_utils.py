@@ -222,10 +222,13 @@ def create_mesh_device(
         # cleanly and avoids that; ETH stays as a fallback. Dispatch-core
         # placement does not affect op results, only which cores are usable.
         try:
+            # Specify WORKER explicitly: DispatchCoreConfig(axis=...) alone
+            # leaves the core *type* at the system default (which can be ETH on
+            # multi-chip clusters), defeating the purpose of avoiding ETH here.
             return ttnn.open_mesh_device(
                 mesh_shape=ttnn.MeshShape(*mesh_shape),
                 l1_small_size=l1_small_size,
-                dispatch_core_config=ttnn.DispatchCoreConfig(axis=ttnn.DispatchCoreAxis.ROW),
+                dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER, ttnn.DispatchCoreAxis.ROW),
             )
         except Exception:
             pass
@@ -1021,6 +1024,8 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None, forc
             if device_tensors:
                 return _to_torch_safe(device_tensors[0])
         except Exception:
+            # get_device_tensors can fail for some host/odd tensors; fall back
+            # to converting the tensor as-is below.
             pass
         return _to_torch_safe(ttnn_tensor)
 
@@ -1037,8 +1042,19 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None, forc
                     topology = ttnn_tensor.tensor_topology()
                     placements = list(topology.placements())
                     if any(type(p).__name__ == "PlacementShard" for p in placements):
-                        return _to_torch_safe(dt[0])
+                        # Identical per-device *shapes* with a Shard topology are
+                        # ambiguous: either replicate_with_topology (identical
+                        # data -> safe to collapse) or a genuine shard (identical
+                        # shapes, DIFFERENT data -> must NOT collapse, or we'd
+                        # drop shards). _replicated_single_copy verifies contents
+                        # are byte-identical and returns None for a real shard,
+                        # so we fall through to the proper concat/gather path.
+                        single = _replicated_single_copy(dt, _to_torch_safe)
+                        if single is not None:
+                            return single
         except Exception:
+            # Best-effort fast path; on any error fall back to the normal
+            # topology-driven gather below.
             pass
 
     if not is_mesh:

@@ -172,6 +172,8 @@ def get_timeout(test_module_name):
                 try:
                     timeout = int(line.split("=")[-1].strip())
                 except (ValueError, IndexError):
+                    # Malformed/unparseable TIMEOUT line — keep the default
+                    # timeout already assigned and stop scanning.
                     break
     return timeout
 

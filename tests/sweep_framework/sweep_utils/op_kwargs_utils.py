@@ -155,6 +155,7 @@ def _parse_core_range_set(value: Any) -> Any:
     """
     import re
     import json as _json
+    import ttnn  # required: this helper builds ttnn.CoreRange/CoreCoord/CoreRangeSet
 
     data = value.get("data")
     if data is not None:
@@ -166,13 +167,17 @@ def _parse_core_range_set(value: Any) -> Any:
                 for rd in data:
                     start = rd["start"]
                     end = rd["end"]
-                    core_ranges.add(ttnn.CoreRange(
-                        ttnn.CoreCoord(start["x"], start["y"]),
-                        ttnn.CoreCoord(end["x"], end["y"]),
-                    ))
+                    core_ranges.add(
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(start["x"], start["y"]),
+                            ttnn.CoreCoord(end["x"], end["y"]),
+                        )
+                    )
                 if core_ranges:
                     return ttnn.CoreRangeSet(core_ranges)
         except (KeyError, TypeError, ValueError):
+            # Malformed/partial structured "data" — fall through to the
+            # regex-based repr parser below rather than failing the vector.
             pass
 
     repr_str = str(value.get("value", value.get("repr", "")))
@@ -276,7 +281,9 @@ def _create_output_tensor(descriptor: dict, device, input_shape=None) -> Any:
     memory_config = dict_to_memory_config(mc_dict) if isinstance(mc_dict, dict) else ttnn.DRAM_MEMORY_CONFIG
 
     try:
-        torch_tensor = torch.zeros(shape, dtype=torch.float32)
+        # Preallocated output buffer is overwritten by the op; use empty() to
+        # skip a host-side memset of potentially large tensors.
+        torch_tensor = torch.empty(shape, dtype=torch.float32)
         return ttnn.from_torch(torch_tensor, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
     except Exception:
         return None
@@ -303,8 +310,11 @@ def parse_dict_value(key: str, value: Any) -> Any:
             return parse_dtype(value.get("repr", ""))
         elif _is_layout_dict(value):
             return parse_layout(value.get("repr", ""))
+        elif _is_core_range_set_dict(value):
+            return _parse_core_range_set(value)
         elif value.get("type") == "Shape":
             import re as _shape_re
+
             m = _shape_re.search(r"Shape\(\[(.*?)\]\)", str(value.get("value", "")))
             if m:
                 return [int(x.strip()) for x in m.group(1).split(",") if x.strip()]

@@ -180,7 +180,7 @@ def run(
     # PCC threshold — sum(x^2) has lower precision under bfloat16 accumulation,
     # especially without fp32_dest_acc_en. On mesh-device runs each chip computes
     # its own per-slice partial sum, so a single tiled global golden correlates
-    # but never byte-matches; relaxing to 0.95 there.
+    # but never byte-matches; relaxing to 0.80 there.
     if is_mesh_device:
         pcc_threshold = 0.80
     else:
