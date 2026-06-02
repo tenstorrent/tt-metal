@@ -207,6 +207,25 @@ def _install_logit_dump() -> None:
 
 
 def _dump_first_step_logits(result) -> None:
+    """Best-effort step-0 logit dump for the strict PCC gate.
+
+    When ``prefill_forward_text`` is called with ``sampling_params=None``,
+    it returns the full ``[batch, 1, vocab_size]`` logits tensor — which
+    is exactly what the gate needs. But when on-device sampling is
+    enabled (typical for the simple_text_demo which sets
+    ``temperature/top_p/top_k``), the function returns the SAMPLED TOKEN
+    ID instead — a scalar of shape ``(1,)``. Dumping that as "logits"
+    feeds the gate garbage and produces "shape mismatch" errors.
+
+    Decision logic:
+      * If the captured tensor's flat size is NOT comparable to a
+        vocab dimension (>= 1000 elements), we are almost certainly
+        looking at sampled tokens rather than logits. Skip the dump
+        and log loudly so the gate's UNVERIFIED message carries an
+        actionable next step.
+      * Otherwise dump the tensor and emit ``==LOGITS PATH:`` so
+        the strict gate can compute PCC.
+    """
     from pathlib import Path
 
     import numpy as _np
@@ -220,6 +239,24 @@ def _dump_first_step_logits(result) -> None:
     else:
         logits = result
     if not isinstance(logits, torch.Tensor):
+        _log(
+            f"logit-dump skipped: prefill_forward_text returned a "
+            f"{type(logits).__name__}, not a Tensor — typically means "
+            f"on-device sampling is active and the function emitted "
+            f"sampled-token-ids instead of logits."
+        )
+        return
+
+    flat = logits.reshape(-1)
+    if int(flat.numel()) < 1000:
+        _log(
+            f"logit-dump skipped: captured tensor has only {int(flat.numel())} "
+            f"elements (expected ~vocab_size ≥ 1000). On-device sampling is "
+            f"likely active — prefill_forward_text returned sampled token IDs, "
+            f"not full vocab logits. To get strict logit-PCC, either disable "
+            f"on-device sampling (sampling_params=None) OR hook a deeper "
+            f"forward call that emits the full output_tensor."
+        )
         return
 
     dump_dir = Path(os.environ.get("TT_HW_PLANNER_DUMP_DIR", "/tmp/tt_hw_planner_runs"))
@@ -228,6 +265,7 @@ def _dump_first_step_logits(result) -> None:
     arr = logits[0].detach().to(dtype=torch.float32).cpu().numpy().reshape(-1)
     _np.save(str(dump_path), arr)
     print(f"==LOGITS PATH: {dump_path}", flush=True)
+    _log(f"logit-dump emitted: shape={tuple(logits.shape)} flat={arr.shape[0]} path={dump_path}")
     _dump_first_step_logits._done = True
 
 

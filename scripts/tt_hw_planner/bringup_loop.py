@@ -1573,6 +1573,7 @@ def _emit_op_synth_stub(
     )
 
     stub_path = demo_dir / "_stubs" / f"{safe}.py"
+    stub_path.parent.mkdir(parents=True, exist_ok=True)
     stub_path.write_text(source)
     (demo_dir / "_stubs" / f"{safe}.opplan.json").write_text(json.dumps(manifest, indent=2))
 
@@ -1620,19 +1621,38 @@ def autofill_stubs(
 
     hf_model: Any = None
     if op_synth:
-        try:
-            import transformers
+        # Cascade the AutoModel class to match generate_hf_reference's
+        # loader. Plain `AutoModel.from_pretrained` does NOT register
+        # custom (trust_remote_code) configs like Phi3Config; only the
+        # task-specific factories (AutoModelForCausalLM,
+        # AutoModelForImageTextToText) do. Without the cascade, every
+        # trust_remote_code LM (Phi-3.5, etc.) silently falls back to
+        # the torch-wrapper autofill, losing the op-synth path.
+        import transformers as _tf_mod
 
-            hf_model = transformers.AutoModel.from_pretrained(model_id, trust_remote_code=True)
-            hf_model.eval()
-        except Exception as exc:
+        _hf_load_classes = []
+        for _attr in ("AutoModelForCausalLM", "AutoModelForImageTextToText", "AutoModel"):
+            _cls = getattr(_tf_mod, _attr, None)
+            if _cls is not None:
+                _hf_load_classes.append((_attr, _cls))
+        _last_exc: Optional[BaseException] = None
+        for _cls_name, _cls in _hf_load_classes:
+            try:
+                hf_model = _cls.from_pretrained(model_id, trust_remote_code=True)
+                hf_model.eval()
+                _last_exc = None
+                break
+            except Exception as _exc:
+                _last_exc = _exc
+                continue
+        if hf_model is None and _last_exc is not None:
             print(
                 f"  [op-synth] could not load HF model {model_id!r} "
-                f"({type(exc).__name__}: {exc}); falling back to torch-wrapper "
-                f"autofill for every NEW component.",
+                f"({type(_last_exc).__name__}: {_last_exc}); tried "
+                f"{', '.join(n for n, _ in _hf_load_classes)}. Falling back "
+                f"to torch-wrapper autofill for every NEW component.",
                 flush=True,
             )
-            hf_model = None
 
     actions: List[Tuple[str, str]] = []
     for comp in data.get("components", []):
@@ -1758,6 +1778,7 @@ def autofill_stubs(
                 tt_reuse_target=_tt_reuse_target,
                 canonical_class=comp.get("tt_reuse_class"),
             )
+            stub_path.parent.mkdir(parents=True, exist_ok=True)
             stub_path.write_text(canonical_body)
             actions.append((comp["name"], f"canonical-wrapper:{_tt_reuse_target}"))
             wrote = True
@@ -1775,6 +1796,7 @@ def autofill_stubs(
                 actions.append((comp["name"], label))
                 wrote = True
         if not wrote:
+            stub_path.parent.mkdir(parents=True, exist_ok=True)
             stub_path.write_text(body)
             actions.append((comp["name"], "written" if not op_synth else "op-synth:fallback-to-torch"))
 
