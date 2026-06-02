@@ -54,32 +54,53 @@ def _compute_step0_logit_pcc(tt_logits_path: str, hf_logits: Any) -> Optional[fl
     same mean-centred cosine the scaffolded per-component tests use,
     so the LLM/VLM gate and the cold-start gate report comparable
     numbers. Returns ``None`` on any failure (missing file, shape
-    mismatch beyond the tail-pad rescue, NaNs, no torch); the caller
-    treats ``None`` as "post-screen could not run" rather than
-    "post-screen failed".
+    mismatch beyond the tail-pad rescue, NaNs, no torch).
+
+    Side effect: prints a one-line diagnostic identifying WHICH gap
+    fired (missing file vs missing numpy/torch vs shape mismatch vs
+    nan output). Without this trail, callers can't distinguish the
+    three failure modes and operators have no actionable next step.
     """
     try:
         import numpy as np
         import torch
-    except Exception:
+    except Exception as _exc:
+        print(f"  [logit-PCC] numpy/torch import failed: {type(_exc).__name__}: {_exc}")
         return None
     from pathlib import Path
 
     p = Path(tt_logits_path)
     if not p.is_file():
+        print(f"  [logit-PCC] TT logits file does not exist at {tt_logits_path}")
         return None
     try:
         tt_arr = np.load(str(p))
-    except Exception:
+    except Exception as _exc:
+        print(f"  [logit-PCC] np.load failed on {tt_logits_path}: {type(_exc).__name__}: {_exc}")
         return None
     try:
         tt_t = torch.from_numpy(np.asarray(tt_arr))
         hf_t = torch.from_numpy(np.asarray(hf_logits))
-    except Exception:
+    except Exception as _exc:
+        print(f"  [logit-PCC] tensor construction failed: {type(_exc).__name__}: {_exc}")
         return None
+    try:
+        _tt_shape = tuple(tt_t.shape)
+        _hf_shape = tuple(hf_t.shape)
+    except Exception:
+        _tt_shape = "<unknown>"
+        _hf_shape = "<unknown>"
+    print(f"  [logit-PCC] loaded TT shape={_tt_shape} HF shape={_hf_shape} from {p.name}")
     from scripts.tt_hw_planner.activation_diff import _pcc as _ad_pcc
 
-    return _ad_pcc(tt_t, hf_t)
+    try:
+        result = _ad_pcc(tt_t, hf_t)
+    except Exception as _exc:
+        print(f"  [logit-PCC] _pcc raised: {type(_exc).__name__}: {_exc}")
+        return None
+    if result is None:
+        print(f"  [logit-PCC] _pcc returned None (shape mismatch beyond tail-pad rescue, or NaN)")
+    return result
 
 
 def apply_strict_logit_pcc_gate(

@@ -229,7 +229,17 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
             repo_root=BRINGUP_ROOT(),
             force_adapt_all=True,
         )
-        demo_dir_esc_rel = Path(_be_esc.demo_path)
+        # Derive a SIBLING demo directory (not the backend's demo
+        # file itself). Without the slug, this used to be
+        # `models/tt_transformers/demo/simple_text_demo.py` — a
+        # regular file — which then failed `mkdir` with
+        # `[Errno 17] File exists` when scaffold tried to put
+        # BRING_UP_PLAN.md inside it. Mirrors the non-escalation
+        # path at line ~460 below.
+        from .scaffold_demo_folder import _slug as _scaffold_slug
+
+        _be_esc_parent = Path(_be_esc.demo_path).parent
+        demo_dir_esc_rel = _be_esc_parent / _scaffold_slug(new_model_id.split("/")[-1])
         changes_esc: List[ScaffoldChange] = []
         for target_rel, content, label in collect_bringup_plan_files(
             plan=bplan_esc,
@@ -260,9 +270,11 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
             ),
             compat_overall=compat.overall,
             compat_summary=(
-                f"force_already_supported: PCC-gate failure demoted all "
-                f"REUSE -> NEW for per-component iteration. "
+                f"force_already_supported: PCC-gate failure promoted REUSE "
+                f"-> ADAPT (canonical wrapper exists) or NEW (no wrapper) "
+                f"for per-component iteration. "
                 f"Plan: {c.get('REUSE', 0)} REUSE / "
+                f"{c.get('ADAPT', 0)} ADAPT / "
                 f"{c.get('NEW', 0)} NEW."
             ),
             changes=changes_esc,
