@@ -3067,8 +3067,9 @@ void kernel_main() {
         //  - MATH-only or PACK-only reset (both crash with KV cache desync)
         // The remaining hypothesis is a HW-level bank-1 vs bank-0 asymmetry
         // (FPU MVMUL/MOVD2B path or SFPU pipeline) that needs RTL inspection.
-        MATH((llk_math_pack_sync_init<false>()));
-        PACK((llk_pack_dest_init<false, false>(0)));
+        // TEMPORARILY DISABLED for chunk-count scaling sweep — restore before commit.
+        // MATH((llk_math_pack_sync_init<false>()));
+        // PACK((llk_pack_dest_init<false, false>(0)));
 #endif
 #ifdef ENABLE_REDUCE_TO_ONE
 #if defined(COMPILE_FOR_NCRISC)

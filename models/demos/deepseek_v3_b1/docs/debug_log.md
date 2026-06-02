@@ -1502,3 +1502,55 @@ A HW-level asymmetry on Blackhole's half-DEST register file between bank 0 and b
 To distinguish: an RTL-level read of a specific FPU/SFPU op (e.g., a single MVMUL or SFPSTORE) with identical inputs on bank-0 vs bank-1 starting state — beyond what host-visible bisection can establish.
 
 ---
+
+## Attempt 41 — Bypass `sdpa_mul_bcast_col_reuse_tiles` (FPU MVMUL + SRCB reuse): **|Δ|=0 at all positions**
+
+**What.** Commented out the call to `sdpa_mul_bcast_col_reuse_tiles<block_size>(cb_l2, cb_l1, tile_index, 0)` inside `sdpa_tail_l_block` (`sdpa.h:527`). This is the FPU ELWMUL with SRCB_BCAST_COL that computes L1*P1 + L2*P2 (the L-block contraction of sdpa_tail). DEST contents are no longer overwritten by this multiply; the subsequent `pack_block_contiguous`/`pack_untilize_dest` packs whatever DEST data is leftover from previous compute. Math is broken, but iter-to-iter alternation tests the bank-symmetry of just this ELWMUL path.
+
+**Result.** `DISABLE_SFPLOADMACRO=1`, Austin's iter-top workaround DISABLED, parametrized position_id × num_internal_iterations sweep:
+
+| position_id | num_iters=1 PCC | num_iters=2 PCC | \|Δ\| (bypass) | \|Δ\| (pristine baseline) |
+|---|---|---|---|---|
+| 127 | 0.9376369586895297 | 0.9376369586895297 | **0** | 0 (no flash_mla sdpa_tail) |
+| 255 | 0.9620043792554636 | 0.9620043792554636 | **0** | 1.13e-4 |
+| 383 | 0.9655067800415877 | 0.9655067800415877 | **0** | 2.10e-4 |
+| 511 | 0.9712301523152757 | 0.9712301523152757 | **0** | 4.26e-3 |
+
+**PCCs bit-identical to 16 digits across `num_iters=1` and `num_iters=2` at every position.** Bypassing the FPU MVMUL with SRCB reuse eliminates the iter-to-iter alternation entirely. (Absolute PCCs drop because the L-block multiply is broken — math is wrong but deterministic.)
+
+**Conclusion.** The bug lives in the `sdpa_mul_bcast_col_reuse_tiles` LLK pathway — i.e., `_llk_math_sdpa_bcast_col_srcb_reuse_` (FPU `ELWMUL` w/ `SRCB_BCAST_COL`) and/or its `_preamble_` (`MOVD2B`s into SrcB) / `_postamble_` (`SETRWC CLR_B`). These are at:
+
+- `tt_llk_blackhole/llk_lib/llk_math_sdpa_bcast_col_srcb_reuse.h:78` (`_llk_math_sdpa_bcast_col_srcb_reuse_`)
+- `tt_llk_blackhole/llk_lib/llk_math_sdpa_bcast_col_srcb_reuse.h:57` (`_llk_math_sdpa_bcast_col_srcb_reuse_preamble_`)
+- `tt_llk_blackhole/llk_lib/llk_unpack_A_sdpa.h:93` (`_llk_unpack_A_sdpa_set_srcb_dummy_valid_` — the unpacker companion)
+
+Rules out (combined with prior attempts): SFPU recip/exp/reduce LOADMACRO drain, KV-cache contamination, all-reduce smearing as the *source*. The asymmetry originates in a single FPU path: SRCB reuse via `MOVD2B`-populated SrcB + `ELWMUL` broadcast.
+
+**Next step.** Drill into `_llk_math_sdpa_bcast_col_srcb_reuse_preamble_` and the inner `ckernel_template`-driven ELWMUL loop. Candidate hypotheses to test (in order of suspicion):
+
+1. **SrcB ping-pong buffer state across sdpa_tail calls.** The reducer calls `sdpa_tail` *N* times (`num_cores_to_wait - 1` non-norm + 1 norm). Each sdpa_tail re-runs the preamble. If the SrcB physical buffer used by ELWMUL is the OTHER buffer (still holding stale data from the previous call), the broadcast reads the wrong column. A targeted `TTI_UNPACR_NOP(SrcB, ..., SET_DVALID, ..., UNP_ZEROSRC)` between sdpa_tail calls (or before each preamble) would test this.
+2. **ADDR_MOD residual state.** `sdpa_bcast_col_srcb_reuse_configure_addrmod` programs ADDR_MOD_0/1/2/3. If the FPU consumes them in a bank-conditional sequence, ADDR_MOD state could mismatch on the second sdpa_tail call.
+3. **MOVD2B src/dst alignment in half-DEST mode.** Preamble uses `set_dst_write_addr<Tile32x32, SrcRegs>(0)` then MOVD2Bs reading DEST offsets {0, 4, 64, 68}. In bank 1, the physical address for "tile 0 row 4" differs from bank 0 — the offset arithmetic could overflow/misalign on one bank.
+
+---
+
+## Attempt 42 — STALLWAIT(STALL_MATH, MATH) between MOVD2Bs and ELWMUL: **no effect**
+
+**What.** Added `TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH)` after the 4 MOVD2Bs in `_llk_math_sdpa_bcast_col_srcb_reuse_preamble_` (in the local copy at `models/demos/deepseek_v3_b1/kernel_includes/tt_llk/tt_llk_blackhole/llk_lib/llk_math_sdpa_bcast_col_srcb_reuse.h`). Tests whether a MOVD2B-to-ELWMUL pipeline hazard (MOVD2B not draining before ELWMUL reads SrcB) causes the bank-asymmetric output. Pristine math otherwise.
+
+**Result.**
+
+| position_id | num_iters=1 PCC | num_iters=2 PCC | \|Δ\| (STALLWAIT) | \|Δ\| (pristine baseline) |
+|---|---|---|---|---|
+| 127 | 0.9901647631143314 | 0.9901647631143314 | 0 | 0 |
+| 255 | 0.9907709857426044 | 0.990764648048267 | 6.51e-6 | ~1.13e-4 |
+| 383 | 0.9913380668762602 | 0.9913680422376573 | 3.00e-5 | ~2.10e-4 |
+| 511 | 0.9914568554511025 | 0.9916859209677518 | **2.29e-4** | **2.29e-4** |
+
+`pos=511` Δ identical to pristine. The `STALLWAIT(STALL_MATH, MATH)` (which drains the math pipe) had NO effect on the canonical multi-chunk repro. STALLWAIT reverted.
+
+The Δ reduction at pos=255/383 is curious but not the smoking gun — pos=511 (the original 8190 down-shifted equivalent) is unchanged.
+
+**Conclusion.** MOVD2B-to-ELWMUL pipeline hazard ruled out. The bug is not in the math pipe's read-after-write timing for SrcB.
+
+---

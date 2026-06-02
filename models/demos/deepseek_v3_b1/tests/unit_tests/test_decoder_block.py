@@ -864,8 +864,11 @@ def test_decoder(
 @pytest.mark.parametrize(
     "position_id",
     [
-        # #43563 re-anchor: multi-chunk is where the deterministic MLP-PCC
-        # alternation lives. 511 = 4 chunks, fastest multi-chunk repro.
+        # #43563 chunk scaling sweep — each pos value gives a different chunk
+        # count (k_chunk_size=128). 127=1ch, 255=2ch, 383=3ch, 511=4ch.
+        127,
+        255,
+        383,
         511,
     ],
 )
