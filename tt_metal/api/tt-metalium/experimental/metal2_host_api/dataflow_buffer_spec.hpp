@@ -40,6 +40,7 @@
 //   It is legal to bind more than one KernelSpec producer (or consumer) to a
 //   DFB endpoint, provided that they have:
 //     - non-overlapping node coverage, AND
+//     - the same kernel kind (compute or data movement), AND
 //     - identical binding-site parameters (access_pattern, num_threads)
 //
 // INSTANCING: Like KernelSpec, a DataflowBufferSpec is a *per-node template*.
