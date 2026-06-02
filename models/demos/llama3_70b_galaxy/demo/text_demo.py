@@ -1458,7 +1458,7 @@ def test_demo_text(
     )
 
     test_id = request.node.callspec.id
-    if "repeat2" in test_id:
+    if "repeat2" in test_id: #  test_id will be changed to eval-1 and eval-32 in the future
         sku = get_current_device_sku_name()
         resolved_targets = resolve_perf_targets(
             model_name=model_args.base_model_name,
