@@ -70,11 +70,11 @@ jobs:
           #     "owner_id": "U08TJ70UFRT"
           #   },
           #   {
-          #     "name": "[BH-QB-GE] Gemma4-31B",
+          #     "name": "[BH-QB-2] Gemma4-31B",
           #     "model": "google/gemma-4-31B-it",
           #     "server-timeout": 20,
           #     "benchmark-timeout": 5,
-          #     "runner-label": "BH-QB-GE",
+          #     "runner-label": "BH-Quietbox-2",
           #     "arch": "arch-blackhole",
           #     "mesh-device": "P150x4",
           #     "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
@@ -140,11 +140,11 @@ jobs:
               "owner_id": "U08TJ70UFRT"
             },
             {
-              "name": "[BH-QB-GE] Gemma4-26B-A4B",
+              "name": "[BH-QB-2] Gemma4-26B-A4B",
               "model": "google/gemma-4-26B-A4B-it",
               "server-timeout": 15,
               "benchmark-timeout": 5,
-              "runner-label": "BH-QB-GE",
+              "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
               "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
@@ -238,11 +238,11 @@ jobs:
               "owner_id": "U08GELBB1AP"
             },
             {
-              "name": "[BH-QB-GE] Llama-3.1-8B-Instruct",
+              "name": "[BH-QB-2] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 10,
               "benchmark-timeout": 10,
-              "runner-label": "BH-QB-GE",
+              "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
               "tt-config": "{\"trace_region_size\": 76000000}",
@@ -399,7 +399,7 @@ jobs:
       - ${{ matrix.test-group.arch }}
       - in-service
       # topology-6u tag is used for WH galaxies. Currently pipeline-perf machines have mlperf access and pipeline-functional machines do not.
-      - ${{ ((matrix.test-group.runner-label == 'BH-QB-GE' || matrix.test-group.runner-label == 'topology-6u') && 'pipeline-perf') || 'pipeline-functional' }}
+      - ${{ ((matrix.test-group.runner-label == 'BH-Quietbox-2' || matrix.test-group.runner-label == 'topology-6u') && 'pipeline-perf') || 'pipeline-functional' }}
     container:
       image: ${{ inputs.docker-image }}
       env:
@@ -423,9 +423,9 @@ jobs:
         - /dev/hugepages-1G:/dev/hugepages-1G
         # ``mlperf-read-only`` workflow input toggles ro/rw. Default ro for safety;
         # uncheck the box at dispatch time when a model needs tt_cache first-use
-        # write-through. BH-QB-GE uses a local override path (not the shared
+        # write-through. BH-Quietbox-2 uses a different network mount (/mnt/models, not the shared
         # /mnt/MLPerf) so the same toggle applies to either physical mount source.
-        - ${{ (matrix.test-group.runner-label == 'BH-QB-GE' && format('/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
+        - ${{ (matrix.test-group.runner-label == 'BH-Quietbox-2' && format('/mnt/models/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:
