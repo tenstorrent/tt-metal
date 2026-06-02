@@ -115,6 +115,61 @@ public:
         ExternalConfigBuffer external_config);
 
     /**
+     * @brief Constructs a D2HSocket with an L2CPU (X280) sender.
+     *
+     * L2CPU senders differ from Tensix senders in three ways that this
+     * constructor handles:
+     *   - The device-side sender_socket_md (+ bytes_acked entry +
+     *     d2h_sender_socket_md tail) lives in LIM on the L2CPU tile and has
+     *     no allocator inside tt-metal, so the caller must pre-reserve the
+     *     LIM address. The X280 firmware and the host-side socket must agree
+     *     on this address (see tt-llm-engine/x280/include/socket_layout.h
+     *     for the conventional layout used by the migration worker).
+     *   - The config buffer is written via @c cluster.write_core directly to
+     *     the L2CPU tile -- fast dispatch can't target L2CPUs.
+     *   - The runtime TLB used by @c notify_sender() is programmed against
+     *     the L2CPU's NOC coord (@c sender_l2cpu.core_coord) instead of a
+     *     Tensix worker virtual coord.
+     *
+     * The pinned host data FIFO + bytes_sent counter use the same
+     * @c PinnedMemory path as the Tensix overload; PinnedMemory is
+     * device-centric, not core-type-centric, so the X280 firmware writes
+     * into pinned RAM via PCIe NOC just like a Tensix kernel does.
+     *
+     * @param mesh_device           Mesh containing the L2CPU.
+     * @param sender_l2cpu          MeshCoreCoord identifying the sending
+     *                              L2CPU tile. @c core_coord must be the
+     *                              TRANSLATED NOC coord of an L2CPU tile
+     *                              on the target device (no Tensix
+     *                              logical->virtual translation happens
+     *                              for this overload). On Blackhole the
+     *                              four L2CPU tiles live at NOC0 coords
+     *                              (8,3), (8,5), (8,7), and (8,9), and
+     *                              TRANSLATED == NOC0 so those pairs can
+     *                              be passed directly. Enumerate at
+     *                              runtime via
+     *                              @code
+     *                              cluster.get_soc_desc(device_id).get_cores(
+     *                                  tt::umd::CoreType::L2CPU,
+     *                                  tt::umd::CoordSystem::TRANSLATED);
+     *                              @endcode
+     * @param fifo_size             Pinned data FIFO size in bytes.
+     *                              Must be PCIe-aligned and (for the
+     *                              Phase 1 firmware) small enough that
+     *                              the entire ring fits within a single
+     *                              2 MiB TLB window on the device side.
+     * @param config_buffer_address  Pre-reserved LIM address (on the
+     *                               L2CPU tile) for the sender_socket_md
+     *                               wire blob. Must be L1-aligned. Sized
+     *                               at least @ref required_config_buffer_size().
+     */
+    D2HSocket(
+        const std::shared_ptr<MeshDevice>& mesh_device,
+        const MeshCoreCoord& sender_l2cpu,
+        uint32_t fifo_size,
+        uint32_t config_buffer_address);
+
+    /**
      * @brief Connects to an existing D2HSocket from another process.
      *
      * Waits for the flatbuffer descriptor exported by the owner, opens the named
@@ -337,6 +392,14 @@ private:
     bool using_hugepage_ = false;
     uint32_t* hugepage_data_host_ptr_ = nullptr;
     volatile uint32_t* hugepage_bytes_sent_host_ptr_ = nullptr;
+
+    // True when the sender is an L2CPU (X280) tile rather than a Tensix
+    // worker core. Routes init/write/TLB code paths to use raw
+    // cluster.write_core writes against the L2CPU's NOC coord and to skip
+    // MeshBuffer allocation for the config buffer. Cross-process
+    // export_descriptor() / connect() is not supported in this mode in
+    // Phase 1.
+    bool is_l2cpu_ = false;
 };
 
 }  // namespace tt::tt_metal::distributed
