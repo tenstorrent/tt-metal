@@ -286,10 +286,9 @@ inline void _llk_unpack_tilize_(
  *
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
  * @param num_faces: Number of faces, used to restore the Z dimension, valid values = <1, 2, 4>.
- * @param face_r_dim: Unused; retained for API compatibility.
  * @note Call @ref _llk_unpack_tilize_init_ before this function.
  */
-inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t num_faces, [[maybe_unused]] const std::uint32_t face_r_dim)
+inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t num_faces)
 {
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
@@ -528,10 +527,9 @@ inline void _llk_unpack_tilizeA_B_(
  * (see tt-llk#1036), so it is not restored here.
  *
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
- * @param face_r_dim: Unused; retained for API compatibility.
  * @note Call @ref _llk_unpack_tilizeA_B_init_ before this function.
  */
-inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format, [[maybe_unused]] const std::uint32_t face_r_dim)
+inline void _llk_unpack_tilizeA_B_uninit_(const std::uint32_t unpack_dst_format)
 {
     TTI_STALLWAIT(p_stall::STALL_THCON, p_stall::UNPACK);
 

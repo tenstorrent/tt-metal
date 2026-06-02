@@ -203,7 +203,7 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
  * @param unpB_tensor_shape: Tensor shape for source B operand
  * @note Call @ref _llk_unpack_AB_init_ before this function.
  */
-inline void _llk_unpack_AB_uninit_([[maybe_unused]] const ckernel::TensorShape unpA_tensor_shape, [[maybe_unused]] const ckernel::TensorShape unpB_tensor_shape)
+inline void _llk_unpack_AB_uninit_()
 {
 }
 
@@ -401,10 +401,9 @@ inline void _llk_unpack_bcastA_B_init_()
  * (see tt-llk#1036), so it is not restored here.
  *
  * @param y_stride: SrcA Y stride to restore.
- * @param face_r_dim: Unused; retained for API compatibility.
  * @note Call @ref _llk_unpack_bcastA_B_init_ before this function.
  */
-inline void _llk_unpack_bcastA_B_uninit_(const std::uint32_t y_stride = FACE_R_DIM * 2, [[maybe_unused]] const std::uint32_t face_r_dim = FACE_R_DIM)
+inline void _llk_unpack_bcastA_B_uninit_(const std::uint32_t y_stride = FACE_R_DIM * 2)
 {
     // Revisit default stride value in tt-llk#1015
     cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_XY_REG_1_Ystride_RMW>(y_stride);

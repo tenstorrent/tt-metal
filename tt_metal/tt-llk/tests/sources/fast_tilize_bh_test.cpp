@@ -130,7 +130,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         {
             ZONE_SCOPED("UNINIT")
-            _llk_unpack_tilize_uninit_(formats.unpack_A_dst, 4, FACE_R_DIM);
+            _llk_unpack_tilize_uninit_(formats.unpack_A_dst, 4);
         }
         return;
     }

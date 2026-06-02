@@ -160,8 +160,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_(const std::uint32_t address_a, 
  * Standard _llk_unpack_AB_reduce_init_ operations typically don't require explicit cleanup.
  */
 template <bool respect_trigger = false>
-inline void _llk_unpack_AB_reduce_block_max_row_uninit_(
-    [[maybe_unused]] const std::uint32_t unpA_face_r_dim, [[maybe_unused]] const std::uint32_t unpB_face_r_dim)
+inline void _llk_unpack_AB_reduce_block_max_row_uninit_()
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
     TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);

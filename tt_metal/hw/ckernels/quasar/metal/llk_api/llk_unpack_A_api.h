@@ -157,4 +157,4 @@ inline void llk_unpack_A_block(
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
-inline void llk_unpack_A_uninit(const std::uint32_t operand) {}
+inline void llk_unpack_A_uninit() {}

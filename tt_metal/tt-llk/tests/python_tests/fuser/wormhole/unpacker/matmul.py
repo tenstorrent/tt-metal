@@ -142,4 +142,4 @@ class MatmulUnpacker(Unpacker):
         block: BlockData,
     ) -> str:
         face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
-        return f"_llk_unpack_AB_matmul_uninit_({face_r_dim});\n"
+        return f"_llk_unpack_AB_matmul_uninit_();\n"

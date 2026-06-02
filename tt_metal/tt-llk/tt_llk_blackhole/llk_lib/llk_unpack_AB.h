@@ -214,7 +214,7 @@ inline void _llk_unpack_AB_init_(const ckernel::TensorShape tensor_shape, const 
  * @param unpB_tensor_shape: Tensor shape for source B operand
  * @note Call @ref _llk_unpack_AB_init_ before this function.
  */
-inline void _llk_unpack_AB_uninit_([[maybe_unused]] const ckernel::TensorShape unpA_tensor_shape, [[maybe_unused]] const ckernel::TensorShape unpB_tensor_shape)
+inline void _llk_unpack_AB_uninit_()
 {
 }
 
