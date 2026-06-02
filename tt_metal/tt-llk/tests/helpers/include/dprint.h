@@ -24,8 +24,6 @@
 
 #include "dev_mem_map.h"
 
-#define USE_DEVICE_PRINT
-
 // Device print occasionally writes from host; Blackhole needs a fence,
 // and Quasar on DM cores needs a cache flush on top of that.
 // Informed by tt_metal/hw/inc/internal/tt-{1,2}xx/risc_common.h.
@@ -42,8 +40,6 @@ inline __attribute__((always_inline)) void invalidate_l1_cache()
 
 // We need to include this header after the above definitions.
 #include "api/debug/device_print.h"
-
-#define DPRINT(format, ...) DEVICE_PRINT(format, ##__VA_ARGS__)
 
 #if !defined(LLK_DEVICE_PRINT_BUFFER_BASE) || !defined(LLK_RUNTIME_ARGS_START)
 #error "LLK_DEVICE_PRINT_BUFFER_BASE and LLK_RUNTIME_ARGS_START must be defined by the build"
@@ -65,6 +61,5 @@ static_assert(
 #else
 
 #define DEVICE_PRINT(fmt, ...)
-#define DPRINT(fmt, ...)
 
 #endif // defined(DEBUG_PRINT_ENABLED) && !defined(COVERAGE)
