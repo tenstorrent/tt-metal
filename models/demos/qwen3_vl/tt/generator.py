@@ -240,7 +240,7 @@ class Generator(WarmupForwardMixin):
 
             return logits
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device) -> None:
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False) -> None:
         logger.warning("Warmup model prefill not implemented for Qwen3_VL Generator")
         logger.warning("Tracing in prefill mode is not supported for Qwen3_VL")
 

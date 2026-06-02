@@ -276,7 +276,7 @@ def test_multimodal_demo_text(
     generator = GemmaMultimodalGenerator(model, model_args, mesh_device)
 
     can_sample_on_device = getattr(model[0], "_supports_on_device_sampling", False) and model[0].sampling is not None
-    non_greedy_decoding_on_device = can_sample_on_device and temperature > 0
+    greedy_only = temperature <= 0
     if can_sample_on_device:
         if temperature <= 0:
             device_sampling_params = SamplingParams(temperature=0.0, top_k=1, top_p=1.0)
@@ -290,7 +290,7 @@ def test_multimodal_demo_text(
         kv_cache=None,
         enable_trace=enable_trace,
         can_sample_on_device=can_sample_on_device,
-        non_greedy_decoding_on_device=non_greedy_decoding_on_device,
+        greedy_only=greedy_only,
     )
     logger.info("Warmup complete")
 

@@ -137,7 +137,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         return ret
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, non_greedy_decoding_on_device):
+    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False):
         if self.already_warmed_up_prefill:
             return
         self.already_warmed_up_prefill = True
@@ -185,8 +185,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                     if not sampling_parameters_sweeped:
                         sampling_params = self._create_sampling_params(
                             can_sample_on_device=can_sample_on_device,
-                            non_greedy_decoding_on_device=non_greedy_decoding_on_device,
                             batch_size=batch_size,
+                            greedy_only=greedy_only,
                         )
                     else:
                         sampling_params = [None]
@@ -563,7 +563,6 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 kv_cache=kv_cache,
                 enable_trace=enable_trace,
                 can_sample_on_device=sampling_on_device_enabled,
-                non_greedy_decoding_on_device=sampling_on_device_enabled,
             )
 
         batch_size, batch_seq_len = tokens.shape

@@ -343,7 +343,6 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 kv_cache=None,
                 enable_trace=False,
                 can_sample_on_device=False,
-                non_greedy_decoding_on_device=False,
                 min_token_len=min_token_len,
                 max_token_len=max_token_len,
                 sample_on_device=self.sample_on_device,
@@ -3185,10 +3184,10 @@ class DeepseekGenerator(ModelCapabilitiesMixin, WarmupForwardMixin):
         kv_cache,
         enable_trace,
         can_sample_on_device,
-        non_greedy_decoding_on_device,
         min_token_len: int = 0,
         max_token_len: int = 0,
         sample_on_device: bool | None = None,
+        greedy_only: bool = False,
     ) -> None:
         if enable_trace:
             logger.warning("Tracing in prefill mode is not supported for DeepseekGenerator; skipping warmup.")
