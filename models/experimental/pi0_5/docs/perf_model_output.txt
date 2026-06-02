@@ -1,0 +1,117 @@
+========================================================================================
+pi0.5 Blackhole Galaxy perf model (prefill_seq = 968 tokens)
+========================================================================================
+
+Hardware assumption: Blackhole, BF8 effective TFLOPS = 1490, utilization = 50%, link bw = 100 GB/s, link util = 50%, L1/chip = 188.7 MB.
+
+### Option A: Pure TP=32 (no pipeline)
+Chips used: 32 / 32
+Per-chip / per-stage memory:
+  weights                                                    99.5 MB
+  replicated                                                  2.0 MB
+  activations                                                 2.0 MB
+  kv                                                        281.2 KB
+  scratch                                                    10.0 MB
+  total                                                     113.7 MB
+
+### Option B: 4 stages x 8 chips/stage (TP=8 within stage)
+Chips used: 32 / 32
+Per-chip / per-stage memory:
+  stage0_siglip+embed (8 chips)                             148.5 MB
+  stage1_vlm_0-8 (8 chips)                                  136.3 MB
+  stage2_vlm_9-17 (8 chips)                                 136.3 MB
+  stage3_expert+suffix (8 chips)                             26.9 MB
+
+### Option C: Heterogeneous pipeline: 3 vision + 1 vision-embed + 18 prefill + 6 denoise (28 chips used)
+Chips used: 28 / 32
+Per-chip / per-stage memory:
+  vision (3 chips, 9 SigLIP layers each)                    156.9 MB
+  vision-embed (1 chip)                                      16.0 MB
+  prefill (18 chips, 1 VLM layer each)                      122.5 MB
+  denoise (6 chips, 3 expert layers each)                    30.0 MB
+
+### Option C': Uniform 1x2 submeshes: every logical chip becomes 2-chip TP=2 submesh
+Chips used: 56 / 32
+WARNING: option exceeds chip / memory budget.
+Per-chip / per-stage memory:
+  vision (6 chips, TP=2)                                     84.0 MB
+  vision-embed (2 chips, TP=2)                               13.5 MB
+  prefill (36 chips, TP=2)                                   67.2 MB
+  denoise (12 chips, TP=2)                                   20.0 MB
+
+Comparison table
+----------------------------------------------------------------------------------------
+Metric                        Option A          Option B          Option C          Option C'
+----------------------------------------------------------------------------------------
+Chips used                    32                32                28                56
+Vision compute                79.5 us           317.8 us          2.54 ms           1.27 ms
+Prefill compute               160.9 us          643.8 us          5.15 ms           2.58 ms
+Denoise step                  1.1 us            4.6 us            36.7 us           18.4 us
+Denoise (x10)                 11.5 us           45.9 us           367.4 us          183.7 us
+All-reduce overhead           6.57 ms           5.93 ms           0.0 us            3.39 ms
+Inter-stage transfer          0.0 us            108.0 us          833.4 us          833.4 us
+KV migration                  0.0 us            45.0 us           10.0 us           10.0 us
+End-to-end latency            6.82 ms           7.09 ms           8.90 ms           8.26 ms
+Throughput (inf/s)            146.69            3106.77           1179.91           2359.82
+----------------------------------------------------------------------------------------
+
+Stage utilization (compute-time / end-to-end latency)
+----------------------------------------------------------------------------------------
+Option A:
+  tp32                                        100.0%
+
+Option B:
+  stage0_siglip                                 4.5%
+  stage1_vlm_first_half                         4.5%
+  stage2_vlm_second_half                        4.5%
+  stage3_expert (10x denoise)                   0.6%
+
+Option C:
+  vision (3 chips)                             28.6%
+  vision-embed (1 chip)                         0.1%
+  prefill (18 chips)                           57.8%
+  denoise (6 chips, 10x)                        4.1%
+
+Option C':
+  vision (6 chips)                             15.4%
+  vision-embed (2 chips)                        0.1%
+  prefill (36 chips)                           31.2%
+  denoise (12 chips, 10x)                       2.2%
+
+Option summaries
+----------------------------------------------------------------------------------------
+Option A — Pure TP=32 (no pipeline)
+  end-to-end latency  : 6.82 ms
+  bottleneck          : all-reduce
+  note: Every chip active every layer; all-reduce traffic dominates at seq=968
+
+Option B — 4 stages x 8 chips/stage (TP=8 within stage)
+  end-to-end latency  : 7.09 ms
+  bottleneck          : all-reduce
+  note: Stage 3 is the throughput bottleneck (10x denoise); stages 0-2 idle during denoise loop -> ~70% mesh idle for single-shot inference.
+
+Option C — Heterogeneous pipeline: 3 vision + 1 vision-embed + 18 prefill + 6 denoise (28 chips used)
+  end-to-end latency  : 8.90 ms
+  bottleneck          : prefill compute
+  note: Denoise stage at 10x cost per inference dominates pipeline throughput even though it uses only 6/32 chips.
+
+Option C' — Uniform 1x2 submeshes: every logical chip becomes 2-chip TP=2 submesh
+  end-to-end latency  : 8.26 ms
+  bottleneck          : all-reduce
+  note: EXCEEDS Galaxy budget: 56 chips needed vs 32 available (+24 chips, ~1.75 Galaxies).
+  note: Budget exhausted partway through prefill (TP=2): after that group total = 44 (exceeds 32 by 12).
+  note: TP=2 halves per-layer compute and weight footprint, but doubles the chip count -> only viable on >=2 Galaxies.
+
+Caveats
+----------------------------------------------------------------------------------------
+  * First-order analytical estimate. Peak FLOPS derated by a single
+    utilization fraction (50%); real kernels may achieve more or less.
+  * All-reduce latency grows roughly as 2*(N-1)/N * payload / link_bw and
+    is sized only for ring topology. Tree/recursive-doubling rings can shave
+    latency further if the framework picks them.
+  * Pipeline options have a long tail during the 10-step denoise loop;
+    only the denoise stage is active for ~Nx(stage_time) of that window.
+  * Memory headroom must include activations (~2 MB peak), per-layer KV
+    (~250 KB), and ~10 MB scratch in addition to weights.
+  * Numbers assume bf8 weights everywhere. Mixing in bf16 layers (e.g.
+    expert attn QKV) will inflate weight bytes proportionally.
