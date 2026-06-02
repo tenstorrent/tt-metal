@@ -38,7 +38,9 @@ class LTX_STFTFn(Module):
     in fp32, so a 512-tap kernel with C_in=1 blows the static CB allocation past
     L1. Instead we unfold the (causally left-padded) waveform into
     ``(B, T_frames, win_length)`` and matmul against the basis reshaped to
-    ``(win_length, n_freqs*2)`` — fp32 end-to-end, same fidelity.
+    ``(win_length, n_freqs*2)`` — fp32 end-to-end, same fidelity. The cost is a
+    device→host→device round-trip per call (no device-side unfold op exists);
+    permanent fix is a device unfold to keep the waveform resident.
 
     Input is ``(B, T, 1)`` ROW_MAJOR; output magnitude/phase are
     ``(B, T_frames, n_freqs)`` ROW_MAJOR. ``forward_basis`` is a Parameter loaded

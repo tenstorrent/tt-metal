@@ -322,9 +322,10 @@ class LTXAudioDecoder(Module):
         self.dtype = dtype
 
         # Per-channel denormalize stats: non-Parameter host tensors consumed in
-        # _denormalize_latents.
-        self._stats_std = torch.empty(ch)
-        self._stats_mean = torch.empty(ch)
+        # _denormalize_latents. Default to identity (std=1, mean=0) so an unset
+        # path is a harmless passthrough rather than uninitialized garbage.
+        self._stats_std = torch.ones(ch)
+        self._stats_mean = torch.zeros(ch)
 
         self.patchifier = LTXAudioPatchifier(
             patch_size=1,
@@ -352,34 +353,25 @@ class LTXAudioDecoder(Module):
             dtype=dtype,
         )
 
-        # `up` is indexed by the original (un-reversed) level so state-dict keys
-        # ``up.<level>.block.<idx>.*`` match; it is iterated in reverse.
-        self.up = ModuleList()
+        # Build high→low resolution so channel counts propagate, storing by level;
+        # then append in level order so state-dict keys ``up.<level>.*`` match
+        # (forward iterates these in reverse).
+        stages: list[_UpStage] = [None] * self.num_resolutions
         block_in = base_block_channels
-        for level in range(self.num_resolutions):
-            self.up.append(
-                _UpStage(
-                    in_channels=0,  # placeholder, will be overwritten below
-                    out_channels=0,
-                    num_res_blocks_in_stage=0,
-                    has_upsample=False,
-                    mesh_device=mesh_device,
-                    dtype=dtype,
-                )
-            )
         for level in reversed(range(self.num_resolutions)):
             block_out = ch * self.ch_mult[level]
-            has_upsample = level != 0
-            stage = _UpStage(
+            stages[level] = _UpStage(
                 in_channels=block_in,
                 out_channels=block_out,
                 num_res_blocks_in_stage=self.num_res_blocks + 1,
-                has_upsample=has_upsample,
+                has_upsample=level != 0,
                 mesh_device=mesh_device,
                 dtype=dtype,
             )
-            self.up._children[str(level)] = stage
             block_in = block_out
+        self.up = ModuleList()
+        for stage in stages:
+            self.up.append(stage)
 
         final_block_channels = block_in
 

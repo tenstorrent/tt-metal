@@ -34,6 +34,8 @@ from ...layers.audio_ops import (
 )
 from ...layers.module import Module, ModuleList
 from ...parallel.config import AudioTParallelConfig, ParallelFactor
+from ...parallel.manager import CCLManager
+from ...utils.conv3d import aligned_channels
 
 
 def _all_gather_t(ccl_manager, x: "ttnn.Tensor", parallel_config) -> "ttnn.Tensor":
@@ -54,10 +56,6 @@ def _partition_t(x: "ttnn.Tensor", parallel_config) -> "ttnn.Tensor":
     else:
         x = ttnn.mesh_partition(x, dim=1, cluster_axis=parallel_config.mesh_axis)
     return x
-
-
-from ...parallel.manager import CCLManager
-from ...utils.conv3d import aligned_channels
 
 
 def _make_kaiser_sinc_kernel_1d(cutoff: float, half_width: float, kernel_size: int) -> torch.Tensor:
