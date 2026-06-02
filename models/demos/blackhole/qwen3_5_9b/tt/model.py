@@ -102,7 +102,7 @@ class Qwen35Model:
         self._deltanet_external_states = None  # list of (recurrent, conv) tuples, set by allocate_kv_caches
         # Trace-prefill: persistent device buffers for inputs that would otherwise
         # be allocated per-call inside prefill_layer_chunked. Populated by
-        # capture_prefill_trace_paged. When None, prefill uses the legacy
+        # capture_prefill_trace_chunked. When None, prefill uses the legacy
         # allocate-per-call path.
         self._prefill_trace_inputs = None
         # Trace handle + persistent output buffer for traced prefill replay.
@@ -334,193 +334,6 @@ class Qwen35Model:
         logits = ttnn.linear(x, self.lm_head_weight)
         ttnn.deallocate(x)
         return logits
-
-    def capture_prefill_trace_paged(self, device, page_table, bucket_size=4096, chunk_size=2048):
-        """Capture a trace for paged prefill at a fixed bucket size.
-
-        Pre-allocates persistent input buffers (token_ids, page_table,
-        chunk_page_table_full) and a shared GDN output buffer, then runs one
-        warmup prefill (program-cache prime) followed by a traced prefill.
-
-        Args:
-            device: tt-metal device
-            page_table: torch.Tensor [B, max_blocks] int32 used during capture.
-                Must remain valid (or be replaced via copy_host_to_device) for replay.
-            bucket_size: T to capture for. Replay must pad inputs to this length.
-            chunk_size: GDN chunk size (must divide bucket_size). Default 2048.
-        """
-        assert self._deltanet_external_states is not None, "Call allocate_kv_caches first"
-        assert bucket_size % chunk_size == 0, f"bucket_size {bucket_size} must be multiple of chunk_size {chunk_size}"
-
-        B = 1
-        block_size = 64
-        attn_chunk_size = max(chunk_size, 4096)
-        num_attn_chunks = math.ceil(bucket_size / attn_chunk_size)
-
-        # Release prior trace if any.
-        if self._prefill_trace_id is not None:
-            ttnn.release_trace(device, self._prefill_trace_id)
-            self._prefill_trace_id = None
-            if self._prefill_trace_inputs:
-                for key in ("token_ids", "page_table"):
-                    if self._prefill_trace_inputs.get(key) is not None:
-                        ttnn.deallocate(self._prefill_trace_inputs[key])
-                for buf in self._prefill_trace_inputs.get("chunk_page_tables", []):
-                    if buf is not None:
-                        ttnn.deallocate(buf)
-            self._prefill_trace_inputs = None
-
-        # Persistent input buffers. Sized for the bucket; replay copies inputs into these.
-        token_ids_dummy = torch.zeros(B, bucket_size, dtype=torch.int32)
-        token_ids_buf = ttnn.from_torch(token_ids_dummy, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        page_table_buf = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-        # One chunk_page_table buffer per full-attn chunk. For bucket > attn_chunk_size,
-        # SDPA prefill operates on a chunk at a time; each chunk needs its own page_table
-        # slice. Buffers are sized to their actual chunk's block count (so the SDPA program
-        # for the partial last chunk has correct input shape).
-        chunk_page_table_bufs = []
-        for i in range(num_attn_chunks):
-            chunk_start = i * attn_chunk_size
-            chunk_end = min(chunk_start + attn_chunk_size, bucket_size)
-            blocks_start = chunk_start // block_size
-            blocks_end = math.ceil(chunk_end / block_size)
-            chunk_page_table_bufs.append(
-                ttnn.from_torch(
-                    page_table[:, blocks_start:blocks_end].contiguous(),
-                    dtype=ttnn.int32,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=device,
-                )
-            )
-
-        self._prefill_bucket_size = bucket_size
-
-        # ---- 1. Warmup OUTSIDE trace mode ----
-        # Run a normal prefill to compile every program at the bucket size. We do
-        # this BEFORE setting _prefill_trace_inputs so prefill_paged takes its
-        # legacy allocate-fresh path. This compiles all kernels and primes the
-        # program cache. State and the persistent external DN buffers will be
-        # zeroed afterward.
-        dummy_ids = torch.zeros(B, bucket_size, dtype=torch.long)
-        _ = self.prefill_paged(dummy_ids, page_table)
-        ttnn.synchronize_device(device)
-
-        # ---- 2. Allocate the GDN output buffer (shared across all GDN layers) ----
-        first_dn = next(layer.attention for layer in self.layers if not layer.is_full_attention)
-        Nv = first_dn.num_v_heads
-        Dv = first_dn.head_v_dim
-        num_pairs = B * Nv
-        gdn_output_buf = ttnn.zeros(
-            [num_pairs * chunk_size, 1, Dv],
-            device=device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        for layer in self.layers:
-            if layer.is_full_attention:
-                continue
-            dn = layer.attention
-            dn._trace_prefill_output = gdn_output_buf
-            dn.use_inplace_state = True
-
-        # ---- 3. Allocate zero buffers and reset DN state in place ----
-        # Note: warmup left dn.fused_conv_state pointing at a NON-persistent buffer
-        # (slice of x_padded). Restore it to the external persistent buffer first
-        # so subsequent in-place writes always target the same address.
-        for layer, (ext_rec, ext_conv) in zip(
-            (l for l in self.layers if not l.is_full_attention),
-            self._deltanet_external_states,
-        ):
-            dn = layer.attention
-            dn.recurrent_state = ext_rec
-            dn.fused_conv_state = ext_conv
-            dn.conv_state_q = None
-            dn.conv_state_k = None
-            dn.conv_state_v = None
-            if dn.split_conv_state is not None:
-                for buf in dn.split_conv_state:
-                    ttnn.deallocate(buf)
-                dn.split_conv_state = None
-        self._init_dn_zero_buffers()
-
-        # Now activate trace mode (persistent inputs + reset_state no-op)
-        self._prefill_trace_inputs = {
-            "token_ids": token_ids_buf,
-            "page_table": page_table_buf,
-            "chunk_page_tables": chunk_page_table_bufs,
-            "gdn_output": gdn_output_buf,
-        }
-        self._reset_dn_state_inplace()
-
-        # ---- 4. Capture the trace ----
-        # Inside the trace: prefill_paged returns the full last-layer hidden state
-        # [1, bucket, hidden_size]. We then gather a single row at position given
-        # by the index buffer, run rms_norm + lm_head, and the trace's output is a
-        # tiny [1, 1, vocab_size] logit tensor — independent of bucket size.
-        self._prefill_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-        self._prefill_trace_logits = self.prefill_paged(dummy_ids, page_table)
-        ttnn.end_trace_capture(device, self._prefill_trace_id, cq_id=0)
-        logger.info("Prefill trace captured successfully!")
-
-    def prefill_traced_paged(self, token_ids, page_table, actual_len):
-        """Replay captured prefill trace.
-
-        `token_ids` must be padded to `bucket_size`. `actual_len` is the number
-        of REAL tokens in the prompt (excludes padding) — used to extract the
-        next-token logit at the right position.
-
-        Returns: ttnn.Tensor (host) with shape [1, 1, vocab_size] — the logit
-        for the token AFTER position `actual_len-1`.
-
-        Note: releases the trace after one replay (sets `_prefill_trace_id` to
-        None). For repeated traced prefill, re-capture before each call.
-        """
-        assert self._prefill_trace_id is not None, "Call capture_prefill_trace_paged first"
-        bucket = self._prefill_bucket_size
-        T = token_ids.shape[1]
-        assert T == bucket, f"token_ids T={T} != bucket {bucket}; pad before calling"
-        assert 1 <= actual_len <= bucket, f"actual_len {actual_len} not in [1, {bucket}]"
-
-        self._reset_dn_state_inplace()
-
-        token_host = ttnn.from_torch(token_ids.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.copy_host_to_device_tensor(token_host, self._prefill_trace_inputs["token_ids"])
-        page_table_host = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.copy_host_to_device_tensor(page_table_host, self._prefill_trace_inputs["page_table"])
-        block_size = 64
-        attn_chunk_size = max(2048, 4096)  # mirrors prefill_layer_chunked
-        for i, chunk_pt_buf in enumerate(self._prefill_trace_inputs["chunk_page_tables"]):
-            chunk_start = i * attn_chunk_size
-            chunk_end = min(chunk_start + attn_chunk_size, bucket)
-            blocks_start = chunk_start // block_size
-            blocks_end = math.ceil(chunk_end / block_size)
-            chunk_pt_host = ttnn.from_torch(
-                page_table[:, blocks_start:blocks_end].contiguous(),
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-            ttnn.copy_host_to_device_tensor(chunk_pt_host, chunk_pt_buf)
-
-        ttnn.execute_trace(self.device, self._prefill_trace_id, cq_id=0, blocking=False)
-        ttnn.synchronize_device(self.device)
-
-        # Trace output is the full last-layer hidden state [1, bucket, hidden_size].
-        # Slice at actual_len-1 and run rms_norm + lm_head OUTSIDE the trace. ttnn.gather
-        # would let us do the slice inside the trace, but its impl calls ttnn::slice +
-        # fill_implicit_tile_padding (both host-allocating) which FATAL during capture.
-        # The post-trace slice produces an "Allocating device buffers is unsafe" warning
-        # but that's benign (warning, not FATAL).
-        hidden = self._prefill_trace_logits  # [1, bucket, hidden_size], TILE
-        x_last = hidden[:, actual_len - 1 : actual_len, :]
-        x_last = ttnn.to_layout(x_last, ttnn.TILE_LAYOUT)
-        x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
-        x_last = self.norm(x_last, mode=Mode.PREFILL)
-        logits = ttnn.linear(x_last, self.lm_head_weight)
-
-        ttnn.release_trace(self.device, self._prefill_trace_id)
-        self._prefill_trace_id = None
-        return logits.cpu()
 
     def _forward_prefill_chunk(
         self, token_buf, cos_buf, sin_buf, chunk_start_idx_tensor, full_page_table, chunk_page_table
@@ -816,7 +629,7 @@ class Qwen35Model:
         """Allocate one shared zero buffer per DN state shape (recurrent and conv).
 
         Both shapes are uniform across all DN layers, so a single pair suffices.
-        Called by capture_prefill_trace_paged.
+        Called by capture_prefill_trace_chunked.
         """
         if self._dn_zero_recurrent is not None:
             return
