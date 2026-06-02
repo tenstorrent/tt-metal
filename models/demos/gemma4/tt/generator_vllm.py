@@ -396,6 +396,12 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
             for m, pt_for_submesh in zip(self.model, per_submesh):
                 m.update_persistent_per_layer_page_tables(pt_for_submesh)
         with self._route_per_layer_page_tables(per_submesh):
+            # The vLLM bridge owns the authoritative runtime state here: the
+            # harness-allocated per-layer cache plus the persistent per-layer
+            # page-table buffers on the model. ``kv_cache`` remains a
+            # compatibility kwarg because Generator threads it through, but
+            # callers must treat it as an initialization handle, not a
+            # freely swappable decode-time input after trace capture.
             return super().prefill_forward_text(**kwargs)
 
     def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
@@ -406,6 +412,12 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
             for m, pt_for_submesh in zip(self.model, per_submesh):
                 m.update_persistent_per_layer_page_tables(pt_for_submesh)
         with self._route_per_layer_page_tables(per_submesh):
+            # The bridge refreshes per-layer page tables and persistent device
+            # buffers before entering Generator.decode_forward. After trace
+            # capture, those model-owned buffers are the authoritative routing
+            # state; ``kv_cache`` is kept only for compatibility with the shared
+            # Generator API and should not be treated as a caller-owned handle
+            # that can be swapped independently step to step.
             # Skip ``HybridAttentionForCausalLM.decode_forward``, which is a
             # NotImplementedError placeholder; route to ``Generator``'s
             # actual decode implementation. ``decode_forward_text`` was

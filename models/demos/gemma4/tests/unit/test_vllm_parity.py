@@ -1641,12 +1641,18 @@ def test_full_model_parity_decode_trace(layer_set, decode_steps, pli, mesh_devic
         # vLLM path: refresh persistent per-layer page tables + stash
         # the per-submesh routing list, then go through the same
         # Generator.decode_forward. Exactly mirrors what
-        # ``Gemma4ForCausalLM.decode_forward`` does in the bridge.
+        # ``Gemma4ForCausalLM.decode_forward`` does in the bridge. The
+        # externally threaded ``kv_cache`` is just the compatibility handle
+        # into the harness-owned cache allocation; the actual per-step routing
+        # authority comes from the page-table refresh above.
         pool.reserve_decode_token(req)
         pts_step_torch = pool.per_layer_page_tables(req)
         tt_model_vllm.update_persistent_per_layer_page_tables(pts_step_torch)
         tt_model_vllm._active_page_tables_per_layer = pts_step_torch
         try:
+            # Reuse the same harness-owned cache handle across decode steps.
+            # The thing that changes step to step is the refreshed page-table
+            # routing above, not the identity of ``kv_cache`` itself.
             v_out = gen_vllm.decode_forward(
                 tokens=tokens_step,
                 start_pos=pos_step,
@@ -1838,7 +1844,11 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
     # captured trace lands on the per-layer routing path. Without this
     # the warmup trace would bind against the legacy page_table only,
     # and at inference our update_persistent_per_layer_page_tables
-    # writes wouldn't reach anything the trace actually reads.
+    # writes wouldn't reach anything the trace actually reads. This is
+    # the ownership boundary the issue calls out: after trace capture,
+    # the authoritative decode state lives in the model's persistent
+    # buffers plus the harness-owned cache allocation, not in a caller
+    # swapping ``kv_cache`` references between steps.
     tt_model_vllm.update_persistent_per_layer_page_tables(warmup_page_table_per_layer)
     tt_model_vllm._active_page_tables_per_layer = warmup_page_table_per_layer
     try:
