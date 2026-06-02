@@ -1149,11 +1149,18 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgds(
     const std::vector<MeshGraphDescriptor>& mesh_graph_descriptors,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor) const {
     ValidGroupingsMap out;
+    // With multiple MGDs (split sub-contexts), different descriptors can reuse the same instance name (e.g. "M0").
+    // Prefix each MGD's instance names with "mgd{i}_" so they stay distinct in the merged map; otherwise their
+    // groupings (and the downstream physical mesh nodes) collapse together. Single-MGD keeps names unprefixed so the
+    // common path is unchanged. The "mgd{i}_" key encodes the originating descriptor index for downstream lookup
+    // (see build_physical_multi_mesh_adjacency_graph).
+    const bool multi_mgd = mesh_graph_descriptors.size() > 1;
     for (size_t i = 0; i < mesh_graph_descriptors.size(); ++i) {
         auto one = get_valid_groupings_for_mgd(mesh_graph_descriptors[i], physical_system_descriptor);
         for (const auto& [type, by_name] : one) {
             for (const auto& [name, gvec] : by_name) {
-                auto& dest = out[type][name];
+                const std::string key = multi_mgd ? fmt::format("mgd{}_{}", i, name) : name;
+                auto& dest = out[type][key];
                 dest.insert(dest.end(), gvec.begin(), gvec.end());
             }
         }
