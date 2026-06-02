@@ -5,6 +5,7 @@
 #include "binary_ng_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
@@ -19,8 +20,19 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::binary_ng;
 
+// Reference (single-device) buffer backing a mesh tensor.
+Buffer* get_reference_buffer(const MeshTensor& tensor) { return tensor.mesh_buffer().get_reference_buffer(); }
+
+// Alignment of the device buffer backing a mesh tensor.
+uint32_t get_buffer_alignment(const MeshTensor& tensor) { return get_reference_buffer(tensor)->alignment(); }
+
+// Aligned page size of the device buffer backing a mesh tensor.
+uint32_t get_buffer_aligned_page_size(const MeshTensor& tensor) {
+    return static_cast<uint32_t>(get_reference_buffer(tensor)->aligned_page_size());
+}
+
 // For rank > 5 dims will be collapsed into a single dim
-uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
+uint32_t extract_nD_dims(const MeshTensor& x, const int out_rank) {
     const auto& shape = x.logical_shape();
     uint32_t nD_dim = 1;
     if (out_rank >= 6 && shape.rank() >= 6) {
@@ -32,7 +44,7 @@ uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
     return nD_dim;
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_shape_dims(const Tensor& x) {
+std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t> get_shape_dims(const MeshTensor& x) {
     const auto& shape = x.padded_shape();
     const auto& tile = x.tensor_spec().tile();
     return {
@@ -62,7 +74,8 @@ std::tuple<uint32_t, uint32_t> calculate_compute_kernel_args(
     }
 }
 
-TensorMemoryLayout get_memory_layout(const Tensor& a, const std::optional<Tensor>& b, const Tensor& c) {
+TensorMemoryLayout get_memory_layout(
+    const MeshTensor& a, ttsl::optional_reference<const MeshTensor> b, const MeshTensor& c) {
     if (!b.has_value()) {
         return TensorMemoryLayout::INTERLEAVED;
     }
@@ -121,7 +134,7 @@ std::optional<AllShardSpecs> get_shard_specs(
 
 bool should_use_row_major_path(
     const BinaryNgDeviceOperation::operation_attributes_t& operation_attributes,
-    const std::optional<Tensor>& b,
+    ttsl::optional_reference<const MeshTensor> b,
     const bool has_sharding) {
     if (operation_attributes.input_layout_a != Layout::ROW_MAJOR ||
         operation_attributes.output_layout != Layout::ROW_MAJOR || has_sharding) {
@@ -159,7 +172,7 @@ class ShardShapeGenerator {
 public:
     ShardShapeGenerator() = default;
 
-    ShardShapeGenerator(const ShardSpec& shard_spec, const Tensor& tensor) :
+    ShardShapeGenerator(const ShardSpec& shard_spec, const MeshTensor& tensor) :
         // core ranges are sorted, so the last one is indeed the last core
         end_core(shard_spec.grid.ranges().rbegin()->end_coord),
         row_major(shard_spec.orientation == ShardOrientation::ROW_MAJOR),
@@ -382,14 +395,17 @@ std::optional<AllShardVolumes> get_shard_volumes(
 
 // Implements c = a op b
 tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_descriptor(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, tensor_return_value_t& c) {
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& c_tensor) {
     using namespace tt;
     using namespace tt::tt_metal;
 
     ProgramDescriptor desc;
 
-    const auto& a = tensor_args.input_tensor_a;
-    const auto& b = tensor_args.input_tensor_b;
+    const MeshTensor& a = tensor_args.input_tensor_a.mesh_tensor();
+    const auto b = tt::tt_metal::as_optional_mesh_tensor(tensor_args.input_tensor_b);
+    const MeshTensor& c = c_tensor.mesh_tensor();
     const bool is_sfpu_op = operation_attributes.is_sfpu;
     const bool is_quant_op = operation_attributes.is_quant_op;
     const bool is_where_op = operation_attributes.is_where_op;
@@ -429,10 +445,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     // we parallelize the computation across the output tiles
     const auto& all_device_cores = operation_attributes.worker_grid;
-
-    Buffer* a_buffer = a.buffer();
-    Buffer* b_buffer = b.has_value() ? b->buffer() : nullptr;
-    Buffer* c_buffer = c.buffer();
 
     auto op_type = operation_attributes.binary_op_type;
 
@@ -567,7 +579,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 .data_format = a_data_format,
                 .page_size = a_single_tile_size,
             }}},
-            .buffer = a_sharded ? a_buffer : nullptr,
+            .buffer = a_sharded ? CMAKE_UNIQUE_NAMESPACE::get_reference_buffer(a) : nullptr,
         });
     }
 
@@ -589,7 +601,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     // CB: b (c_1)
     {
-        uint32_t b_num_pages = b_buffer == nullptr ? 1 : b_num_tiles_per_shard.value_or(2);
+        uint32_t b_num_pages = !b.has_value() ? 1 : b_num_tiles_per_shard.value_or(2);
         desc.cbs.push_back(CBDescriptor{
             .total_size = b_single_tile_size * b_num_pages,
             .core_ranges = all_device_cores,
@@ -598,7 +610,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 .data_format = b_data_format,
                 .page_size = b_single_tile_size,
             }}},
-            .buffer = b_sharded ? b_buffer : nullptr,
+            .buffer = b_sharded ? CMAKE_UNIQUE_NAMESPACE::get_reference_buffer(*b) : nullptr,
         });
     }
 
@@ -658,7 +670,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 .data_format = c_data_format,
                 .page_size = c_single_tile_size,
             }}},
-            .buffer = c_sharded ? c_buffer : nullptr,
+            .buffer = c_sharded ? CMAKE_UNIQUE_NAMESPACE::get_reference_buffer(c) : nullptr,
         });
     }
 
@@ -697,7 +709,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // WRITER KERNEL DESCRIPTOR
     std::vector<uint32_t> writer_compile_time_args;
     std::vector<uint32_t> writer_common_runtime_args;
-    tt::tt_metal::TensorAccessorArgs(*c_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+    tt::tt_metal::TensorAccessorArgs(c, tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_compile_time_args, writer_common_runtime_args);
     writer_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
 
@@ -852,10 +864,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // READER KERNEL DESCRIPTOR
     std::vector<uint32_t> reader_compile_time_args;
     std::vector<uint32_t> reader_common_runtime_args;
-    tt::tt_metal::TensorAccessorArgs(*a_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+    tt::tt_metal::TensorAccessorArgs(a, tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(reader_compile_time_args, reader_common_runtime_args);
-    tt::tt_metal::TensorAccessorArgs(
-        b_buffer != nullptr ? *b_buffer : *a_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+    tt::tt_metal::TensorAccessorArgs(b.has_value() ? *b : a, tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(reader_compile_time_args, reader_common_runtime_args);
     reader_compile_time_args.push_back(static_cast<uint32_t>(has_sharding));
 
@@ -918,9 +929,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         std::vector<CoreCoord> cores;
 
         const bool row_major_inputs = CMAKE_UNIQUE_NAMESPACE::should_use_row_major_path(operation_attributes, b, rt_has_sharding);
-        const uint32_t a_alignment = a.buffer()->alignment();
-        const uint32_t b_alignment = b.has_value() ? b->buffer()->alignment() : a_alignment;
-        const uint32_t c_alignment = c.buffer()->alignment();
+        const uint32_t a_alignment = CMAKE_UNIQUE_NAMESPACE::get_buffer_alignment(a);
+        const uint32_t b_alignment = b.has_value() ? CMAKE_UNIQUE_NAMESPACE::get_buffer_alignment(*b) : a_alignment;
+        const uint32_t c_alignment = CMAKE_UNIQUE_NAMESPACE::get_buffer_alignment(c);
 
         const uint32_t tile_height = c.tensor_spec().tile().get_height();
         const uint32_t tile_width = c.tensor_spec().tile().get_width();
@@ -935,9 +946,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         uint32_t writer_stride_size_bytes = 0;
 
         if (row_major_inputs) {
-            const uint32_t c_aligned_page_size = c.buffer()->aligned_page_size();
-            const uint32_t a_aligned_page_size = a.buffer()->aligned_page_size();
-            const uint32_t b_aligned_page_size = b.has_value() ? b->buffer()->aligned_page_size() : a_aligned_page_size;
+            const uint32_t c_aligned_page_size = CMAKE_UNIQUE_NAMESPACE::get_buffer_aligned_page_size(c);
+            const uint32_t a_aligned_page_size = CMAKE_UNIQUE_NAMESPACE::get_buffer_aligned_page_size(a);
+            const uint32_t b_aligned_page_size =
+                b.has_value() ? CMAKE_UNIQUE_NAMESPACE::get_buffer_aligned_page_size(*b) : a_aligned_page_size;
 
             const uint32_t c_row_width_elements_aligned = c_aligned_page_size / c.element_size();
             const uint32_t a_row_width_elements_aligned = a_aligned_page_size / a.element_size();
@@ -1111,38 +1123,27 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                         b_num_tiles = b_shard_shape[0] * b_shard_shape[1];
                     }
                 }
-                std::vector<uint32_t> writer_runtime_args;
                 if (row_major_inputs) {
-                    writer_runtime_args = {
-                        c.buffer()->address(),
-                        common_row_width_elements,
-                        c_num_tiles_core,
-                        cD,
-                        cN,
-                        cC,
-                        cHt_r,
-                        cND,
-                        current_block,
-                        num_rows_per_tile,
-                        static_cast<uint32_t>(c.buffer()->aligned_page_size()),
-                        c_alignment,
-                        tiles_per_row_width,
-                        writer_stride_size_bytes};
+                    writer_desc.emplace_runtime_args(
+                        core,
+                        {c,
+                         common_row_width_elements,
+                         c_num_tiles_core,
+                         cD,
+                         cN,
+                         cC,
+                         cHt_r,
+                         cND,
+                         current_block,
+                         num_rows_per_tile,
+                         CMAKE_UNIQUE_NAMESPACE::get_buffer_aligned_page_size(c),
+                         c_alignment,
+                         tiles_per_row_width,
+                         writer_stride_size_bytes});
                 } else {
-                    writer_runtime_args = {
-                        c.buffer()->address(),
-                        c_start_id,
-                        c_num_tiles_core,
-                        c_current_shard_width,
-                        cD,
-                        cN,
-                        cC,
-                        cHt,
-                        cWt,
-                        cND,
-                        0u};
+                    writer_desc.emplace_runtime_args(
+                        core, {c, c_start_id, c_num_tiles_core, c_current_shard_width, cD, cN, cC, cHt, cWt, cND, 0u});
                 }
-                writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
 
                 auto [freq, counter] =
                     CMAKE_UNIQUE_NAMESPACE::calculate_compute_kernel_args(operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
@@ -1177,107 +1178,109 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                 const auto scalar = *operation_attributes.scalar;
                 const auto packed_scalar = pack_scalar_runtime_arg(scalar, a.dtype(), rt_is_quant_op);
                 packed_scalar_for_reader = packed_scalar;
-                std::vector<uint32_t> writer_runtime_args;
                 if (row_major_inputs) {
-                    writer_runtime_args = {
-                        c.buffer()->address(),
-                        common_row_width_elements,
-                        c_num_tiles_core,
-                        cD,
-                        cN,
-                        cC,
-                        cHt_r,
-                        cND,
-                        current_block,
-                        num_rows_per_tile,
-                        static_cast<uint32_t>(c.buffer()->aligned_page_size()),
-                        c_alignment,
-                        tiles_per_row_width,
-                        writer_stride_size_bytes};
+                    writer_desc.emplace_runtime_args(
+                        core,
+                        {c,
+                         common_row_width_elements,
+                         c_num_tiles_core,
+                         cD,
+                         cN,
+                         cC,
+                         cHt_r,
+                         cND,
+                         current_block,
+                         num_rows_per_tile,
+                         CMAKE_UNIQUE_NAMESPACE::get_buffer_aligned_page_size(c),
+                         c_alignment,
+                         tiles_per_row_width,
+                         writer_stride_size_bytes});
                 } else {
-                    writer_runtime_args = {
-                        packed_scalar,
-                        c.buffer()->address(),
-                        c_start_id,
-                        c_num_tiles_core,
-                        c_current_shard_width,
-                        cD,
-                        cN,
-                        cC,
-                        cHt,
-                        cWt,
-                        cND,
-                        0u};
+                    writer_desc.emplace_runtime_args(
+                        core,
+                        {packed_scalar,
+                         c,
+                         c_start_id,
+                         c_num_tiles_core,
+                         c_current_shard_width,
+                         cD,
+                         cN,
+                         cC,
+                         cHt,
+                         cWt,
+                         cND,
+                         0u});
                 }
-                writer_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{writer_runtime_args.begin(), writer_runtime_args.end()});
 
                 std::array compute_runtime_args = {compute_tiles, 0u, 0u, compute_scalar_value};
                 compute_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{compute_runtime_args.begin(), compute_runtime_args.end()});
             }
-            std::vector<uint32_t> reader_runtime_args;
+            KernelDescriptor::RTArgList reader_args;
 
             if (row_major_inputs) {
-                const uint32_t b_addr = b.has_value() ? b->buffer()->address() : 0u;
-                const uint32_t b_page_size = b.has_value() ? static_cast<uint32_t>(b->buffer()->aligned_page_size())
-                                                           : static_cast<uint32_t>(a.buffer()->aligned_page_size());
+                const uint32_t b_page_size = b.has_value() ? CMAKE_UNIQUE_NAMESPACE::get_buffer_aligned_page_size(*b)
+                                                           : CMAKE_UNIQUE_NAMESPACE::get_buffer_aligned_page_size(a);
                 const uint32_t bD_arg = b.has_value() ? bD : 1u;
                 const uint32_t bN_arg = b.has_value() ? bN : 1u;
                 const uint32_t bC_arg = b.has_value() ? bC : 1u;
                 const uint32_t bHt_r_arg = b.has_value() ? bHt_r : 1u;
-                reader_runtime_args = {
-                    a.buffer()->address(),
-                    c_num_tiles_core,
-                    aD,
-                    aN,
-                    aC,
-                    aHt_r,
-                    aND,
-                    b_addr,
-                    bD_arg,
-                    bN_arg,
-                    bC_arg,
-                    bHt_r_arg,
-                    bND,
-                    cHt_r,
-                    cC,
-                    cND,
-                    current_block,
-                    num_rows_per_tile,
-                    common_row_width_elements,
-                    static_cast<uint32_t>(a.buffer()->aligned_page_size()),
-                    b_page_size,
-                    a_alignment,
-                    b_alignment,
-                    tiles_per_row_width,
-                    reader_stride_size_bytes,
-                    packed_scalar_for_reader};
+                reader_args.push_back(a);
+                reader_args.append({c_num_tiles_core, aD, aN, aC, aHt_r, aND});
+                if (b.has_value()) {
+                    reader_args.push_back(*b);
+                } else {
+                    reader_args.push_back(0u);
+                }
+                reader_args.append(
+                    {bD_arg,
+                     bN_arg,
+                     bC_arg,
+                     bHt_r_arg,
+                     bND,
+                     cHt_r,
+                     cC,
+                     cND,
+                     current_block,
+                     num_rows_per_tile,
+                     common_row_width_elements,
+                     CMAKE_UNIQUE_NAMESPACE::get_buffer_aligned_page_size(a),
+                     b_page_size,
+                     a_alignment,
+                     b_alignment,
+                     tiles_per_row_width,
+                     reader_stride_size_bytes,
+                     packed_scalar_for_reader});
             } else {
-                reader_runtime_args = {
-                    a.buffer()->address(),
-                    c_start_id,
-                    a_num_tiles,
-                    c_num_tiles_core,
-                    c_current_shard_width,
-                    aHt * aWt * aC * aN * aD * (aND > 1),
-                    aHt * aWt * aC * aN * (aD > 1),
-                    aHt * aWt * aC * (aN > 1),
-                    aHt * aWt * (aC > 1),
-                    cD,
-                    cN,
-                    cC,
-                    cHt,
-                    cWt,
-                    cND,
-                    b.has_value() ? b->buffer()->address() : 0u,
-                    bHt * bWt * bC * bN * bD * (bND > 1),
-                    bHt * bWt * bC * bN * (bD > 1),
-                    bHt * bWt * bC * (bN > 1),
-                    bHt * bWt * (bC > 1),
-                    b_num_tiles,
-                };
+                reader_args.push_back(a);
+                reader_args.append(
+                    {c_start_id,
+                     a_num_tiles,
+                     c_num_tiles_core,
+                     c_current_shard_width,
+                     aHt * aWt * aC * aN * aD * (aND > 1),
+                     aHt * aWt * aC * aN * (aD > 1),
+                     aHt * aWt * aC * (aN > 1),
+                     aHt * aWt * (aC > 1),
+                     cD,
+                     cN,
+                     cC,
+                     cHt,
+                     cWt,
+                     cND});
+                if (b.has_value()) {
+                    reader_args.push_back(*b);
+                } else {
+                    reader_args.push_back(0u);
+                }
+                reader_args.append(
+                    {bHt * bWt * bC * bN * bD * (bND > 1),
+                     bHt * bWt * bC * bN * (bD > 1),
+                     bHt * bWt * bC * (bN > 1),
+                     bHt * bWt * (bC > 1),
+                     b_num_tiles});
             }
 
-            reader_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{reader_runtime_args.begin(), reader_runtime_args.end()});
+            reader_desc.emplace_runtime_args(core, reader_args);
 
             start_tile_id += c_num_tiles_core;
             if (row_major_inputs) {
