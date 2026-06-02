@@ -11,6 +11,8 @@
 #include <tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
+#include "ttnn/experimental/disaggregation/tensor_helpers.hpp"
+
 namespace ttnn::disaggregation {
 
 void bind_disaggregation_api(nb::module_& mod) {
@@ -172,7 +174,37 @@ void bind_disaggregation_api(nb::module_& mod) {
             "num_position_chunks",
             &KvChunkAddressTable::num_position_chunks,
             "Number of position chunks (computed from config).")
-        .def("total_entries", &KvChunkAddressTable::total_entries, "Total number of entries in the table.");
+        .def("total_entries", &KvChunkAddressTable::total_entries, "Total number of entries in the table.")
+
+        // Device reads
+        .def(
+            "read_device_chunk",
+            [](const KvChunkAddressTable& table, uint32_t layer, uint32_t position, uint32_t slot) {
+                auto buf = table.read_device_chunk(layer, position, slot);
+                return nb::bytes(reinterpret_cast<const char*>(buf.data()), buf.size());
+            },
+            nb::arg("layer"),
+            nb::arg("position"),
+            nb::arg("slot"),
+            R"(
+            Read the raw bytes of a single chunk from the primary replica device.
+            Resolves the device internally via the global ControlPlane.
+            Position is in tokens (chunk-aligned).
+            )");
+
+    mod.def(
+        "tensor_from_bfp8_bytes",
+        [](const nb::bytes& raw_bytes, const std::vector<uint32_t>& shape) {
+            return ttnn::experimental::disaggregation::tensor_from_bfp8_bytes(
+                std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(raw_bytes.c_str()), raw_bytes.size()), shape);
+        },
+        nb::arg("raw_bytes"),
+        nb::arg("shape"),
+        R"(
+        Wrap raw bfp8-packed bytes (uint32-aligned, TILE layout) as a host-side ttnn.Tensor
+        with the given shape — no quantization round-trip.
+        Used to compare KV-table reads against the live KV cache byte-for-byte.
+        )");
 }
 
 }  // namespace ttnn::disaggregation
