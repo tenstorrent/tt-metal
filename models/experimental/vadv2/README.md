@@ -2,19 +2,29 @@
 
 ## Platforms:
     Wormhole (n150, n300)
-
-## Introduction
-VADv2 (Video-based Autonomous Driving version 2) is a state-of-the-art multi-modal 3D perception and prediction model designed for autonomous driving applications.
-
-## Prerequisites
-- Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
-- Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
+    Blackhole (p150b)
 
 ## How to Run
 - Use the following command to run the vadv2 test:
 ```
 pytest models/experimental/vadv2/tests/pcc/test_tt_vad.py
 ```
+
+- To reproduce the warm-wall perf measurements, enable the timing /
+  warm-iteration knobs the test reads from the environment:
+
+```
+TT_VISIBLE_DEVICES=0 TT_VADV2_TIMING=1 TT_VADV2_WARM_ITERS=2 \
+    pytest models/experimental/vadv2/tests/pcc/test_tt_vad.py -s
+```
+
+  - `TT_VADV2_WARM_ITERS=N` runs `N` extra warm forwards after the cold
+    `call#1`. Anchor `call#3` (the second warm pass) is the
+    production-relevant warm-wall number.
+  - `TT_VADV2_TIMING=1` logs the per-call wall time and the warm anchor.
+  - `TT_VADV2_MEMORY_REPORT=1` (optional, with
+    `TT_VADV2_MEMORY_REPORT_PATH=/tmp/vadv2_graph.json`) captures a
+    `ttnn.graph` report for the run.
 
 ## Details
 - The entry point to vadv2 model is in `models/experimental/vadv2/tt/tt_vad.py`.
@@ -24,5 +34,31 @@ pytest models/experimental/vadv2/tests/pcc/test_tt_vad.py
 - Inference steps for both GPU and CPU : [https://docs.google.com/document/d/1mcqm_TXuZpPpvtnT19BNeKqP-ilQfGqSBGcEF_X9onk/edit?usp=sharing]
 - GPU and CPU evaluation metrics on nuscenes mini dataset are here : [https://drive.google.com/file/d/1p5ESawe79n4SPgt3ZCPO4fOQ4sxVufhU/view?usp=sharing]
 
-- ## Note:
-    - The test focuses on verifying the raw model outputs and does not include validation of post-processing steps.
+## Performance
+
+Measured on Blackhole p150b with the command above.
+
+- Warm wall (anchor `call#3`): **~989 ms** (sub-1-second).
+- Cold wall (`call#1`, includes JIT compile + first-touch): ~7030 ms.
+- PCC: all 9 output keys (`bev_embed`, `all_cls_scores`, `all_bbox_preds`,
+  `all_traj_preds`, `all_traj_cls_scores`, `map_all_cls_scores`,
+  `map_all_bbox_preds`, `map_all_pts_preds`, `ego_fut_preds`) pass the
+  per-key floors pinned in `test_tt_vad.py`.
+
+### Known follow-ups
+
+- **Fused MSDA op** (`ttnn.experimental.multi_scale_deformable_attn`).
+  Largest remaining single lever: VADv2's `n_feats=1` matches the fused
+  op's `num_levels==1` fast path and the BEV encoder runs `Q=10000`.
+  Requires a small adapter in `tt_utils.multi_scale_deformable_attn`.
+- **Metal Trace replay.** Every model-side blocker is cleared
+  (persistent buffers for `shift`/`can_bus`, static zeros caches for
+  `bev_mask`/`bev_pos`/`level_start_index`/`slots`/`sentinel_row`), but
+  `ttnn.embedding` itself does internal host→device writes on every
+  call (TT-Metal layer; FATAL inside trace capture at
+  `fd_mesh_command_queue.cpp:595`). Needs an upstream fix.
+- **bf8b weight quantization on memory-bound matmuls.** Previously
+  neutral or negative for compute-bound matmuls — worth a re-check now
+  that `linear_flatten_batch` has changed M dimensions; some matmuls
+  that were compute-bound may have become memory-bound at the new core
+  grid.
