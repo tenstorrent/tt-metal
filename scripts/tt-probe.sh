@@ -15,8 +15,8 @@
 #
 # Flags:
 #   --dev   Enables polling watcher (NoC sanitizer, waypoints, CB sanitization),
-#           lightweight ebreak asserts (ASSERT + LLK_ASSERT), and JSON triage
-#           to generated/tt-triage/triage.json. Same semantics as run_safe_pytest.sh --dev.
+#           lightweight ebreak asserts (ASSERT + LLK_ASSERT), and llm-friendly triage
+#           to generated/tt-triage/triage.txt. Same semantics as run_safe_pytest.sh --dev.
 #
 # With DPRINT:
 #   TT_METAL_DPRINT_CORES=0,0 TT_METAL_DPRINT_RISCVS=TR0 \
@@ -28,7 +28,7 @@
 #
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
-#   --dev    - Debug mode: watcher + lightweight asserts + JSON triage on hang.
+#   --dev    - Debug mode: watcher + lightweight asserts + llm-friendly triage on hang.
 #              Probes a suspected hang or bad kernel state, letting ASSERT()/
 #              LLK_ASSERT() halt at the exact failing instruction for triage.
 #
@@ -42,8 +42,8 @@ set -o pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
-TRIAGE_JSON_DIR="${REPO_DIR}/generated/tt-triage"
-TRIAGE_JSON="${TRIAGE_JSON_DIR}/triage.json"
+TRIAGE_OUT_DIR="${REPO_DIR}/generated/tt-triage"
+TRIAGE_REPORT="${TRIAGE_OUT_DIR}/triage.txt"
 LOCK_FILE="/tmp/tt-device.lock"
 DIRTY_FLAG="/tmp/tt-device.dirty"
 TRIAGE_LOG="/tmp/tt-probe-triage-$$.log"
@@ -144,23 +144,23 @@ if [[ "$SIM_MODE" == false ]]; then
 fi
 
 # --- Hang detection setup ---
-# Triage writes JSON to generated/tt-triage/triage.json for machine-readable
-# inspection (same location run_safe_pytest.sh uses), plus a text log for the
-# stderr dump. Grep targets are documented in CLAUDE.md § "Hang triage".
+# Triage writes an llm-friendly report to generated/tt-triage/triage.txt for
+# machine-readable inspection (same location run_safe_pytest.sh uses), plus a
+# text log for the stderr dump. Grep targets are documented in CLAUDE.md § "Hang triage".
 rm -f "$TRIAGE_LOG"
-# Also clear any stale triage JSON from a previous run. Downstream consumers
-# (hooks, CI) treat the JSON's presence as the hang signal — leaving a stale
+# Also clear any stale triage report from a previous run. Downstream consumers
+# (hooks, CI) treat the report's presence as the hang signal — leaving a stale
 # file around causes false-positive "hang detected" classification on the
 # next ordinary probe failure.
-rm -f "$TRIAGE_JSON"
+rm -f "$TRIAGE_REPORT"
 MISSING_TTEXALENS=false
 # On sim, TT_METAL_OPERATION_TIMEOUT_SECONDS is unset, so the dispatch-timeout
 # command never fires — sim hangs are caught by the libttsim watchdog below,
 # not this hook.
 if [[ "$SIM_MODE" == false ]]; then
     if python3 -c "import ttexalens" 2>/dev/null; then
-        mkdir -p "${TRIAGE_JSON_DIR}"
-        export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --json-path=${TRIAGE_JSON} > ${TRIAGE_LOG} 2>&1"
+        mkdir -p "${TRIAGE_OUT_DIR}"
+        export TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python3 ${TRIAGE_SCRIPT} --disable-progress --skip-version-check --llm-output --llm-output-path=${TRIAGE_REPORT} > ${TRIAGE_LOG} 2>&1"
     else
         # Defer the missing-tool warning to EXIT via trap — otherwise it gets
         # buried in probe output and users never see it.
@@ -305,8 +305,8 @@ fi
 if [[ -s "$TRIAGE_LOG" ]]; then
     echo "TT_PROBE: HANG DETECTED"
     cat "$TRIAGE_LOG"
-    if [[ "$SIM_MODE" == false && -s "$TRIAGE_JSON" ]]; then
-        echo "TT_PROBE: JSON triage: ${TRIAGE_JSON}"
+    if [[ "$SIM_MODE" == false && -s "$TRIAGE_REPORT" ]]; then
+        echo "TT_PROBE: triage report: ${TRIAGE_REPORT}"
     fi
     rm -f "$TRIAGE_LOG"
     rm -f "$PROBE_STDOUT_LOG"
