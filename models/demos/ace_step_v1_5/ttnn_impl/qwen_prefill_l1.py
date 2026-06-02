@@ -201,6 +201,54 @@ def _patch_decoder_l1_residual(decoder_layer: Any, *, l1_mc: Any) -> None:
     decoder_layer.forward = forward  # type: ignore[method-assign]
 
 
+# Tuned ``MinimalMatmulConfig`` for the two SLOW Qwen3 prefill ``minimal_matmul`` ops at
+# seq_len=256 (M=256). Both the fused QKV (K=1024, N=4096) and MLP down/FF2 (K=3072, N=1024)
+# matmuls win on the SAME block/grid: M_block=2, K_block=8, N_block=8 on a 8x4 (32-core) grid.
+# Device sweep (BF16/BFP8 x BFP8, LoFi, in-process kernel-duration, PCC 0.9999/0.9998):
+#   qkv  : stock g8x10 m8k8n8 = 45.45us  ->  g8x4 m2k8n8 = 38.69us  (~1.17x)
+#   ff2  : stock ~39us         ->  g8x4 m2k8n8 = 32.02us  (~1.22x)
+# Stock returns an 80-core (8x10) MinimalMatmulConfig with a literal "FIXME: optimize this
+# config for prefill" in tt_transformers/model_config.py; this overrides it WITHOUT editing
+# upstream.  Gated to 128 < seq_len <= 256 (the conditioning/caption prefill band we measured);
+# any other seq_len defers to the stock getter.
+_ACE_STEP_QWEN_PREFILL_MM_TUNED = dict(M_block_size=2, K_block_size=8, N_block_size=8)
+_ACE_STEP_QWEN_PREFILL_MM_GRID = (8, 4)
+_ACE_STEP_QWEN_PREFILL_MM_SEQ_MAX = 256
+
+
+def _ace_step_tuned_minimal_matmul_config():
+    cfg_cls = getattr(ttnn, "MinimalMatmulConfig", None)
+    coord = getattr(ttnn, "CoreCoord", None)
+    if cfg_cls is None or coord is None:
+        return None
+    gx, gy = _ACE_STEP_QWEN_PREFILL_MM_GRID
+    return cfg_cls(compute_with_storage_grid_size=coord(gx, gy), **_ACE_STEP_QWEN_PREFILL_MM_TUNED)
+
+
+def _patch_prefill_minimal_matmul_getter(model_args: Any, name: str) -> None:
+    """Override a ``get_*_program_config`` getter to return the tuned config for PREFILL seq<=256."""
+    original: Callable | None = getattr(model_args, name, None)
+    if original is None:
+        return
+    tuned = _ace_step_tuned_minimal_matmul_config()
+    if tuned is None:
+        return
+
+    @functools.wraps(original)
+    def patched(mode, seq_len=1, *args, **kwargs):
+        if mode == Mode.PREFILL and 128 < int(seq_len) <= _ACE_STEP_QWEN_PREFILL_MM_SEQ_MAX:
+            return tuned
+        return original(mode, seq_len, *args, **kwargs)
+
+    setattr(model_args, name, patched)
+
+
+def ace_step_apply_qwen_prefill_matmul_configs(model_args: Any) -> None:
+    """Pin tuned ``MinimalMatmulConfig`` for the SLOW Qwen3 prefill qkv + FF2 matmuls (seq<=256)."""
+    _patch_prefill_minimal_matmul_getter(model_args, "get_attn_qkv_program_config")
+    _patch_prefill_minimal_matmul_getter(model_args, "get_mlp_ff2_prg_config")
+
+
 def ace_step_apply_qwen_prefill_l1(tt_model: Any, model_args: Any) -> None:
     """Patch a loaded ``tt_transformers`` Qwen model for L1 prefill activations."""
     l1_mc = ace_step_linear_l1_memory_config(ttnn)
@@ -208,6 +256,7 @@ def ace_step_apply_qwen_prefill_l1(tt_model: Any, model_args: Any) -> None:
         return
 
     ace_step_patch_model_args_prefill_l1(model_args)
+    ace_step_apply_qwen_prefill_matmul_configs(model_args)
 
     _patch_embd_l1_output(tt_model.embd, l1_mc=l1_mc)
     for layer in tt_model.layers:
