@@ -1,8 +1,10 @@
 import itertools
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List
 
 from helpers.format_config import DataFormat
+from helpers.llk_params import VectorMode
+from helpers.test_variant_parameters import VECTOR_MODE, TemplateParameter
 
 from .._spec import BaseOpSpec
 
@@ -36,3 +38,13 @@ def ternary_input_output_formats_matched(
 @dataclass(kw_only=True)
 class TernaryOpSpec(BaseOpSpec):
     formats: List[TernaryInputOutputFormat]
+    # The ternary SFPU dispatch is the only arity whose kernel call takes a VECTOR_MODE
+    # face selector, so it lives here as a declared template param rather than a driver
+    # hardcode. Default is all faces (RC); give the field a list (e.g.
+    # ``VECTOR_MODE([VectorMode.RC, VectorMode.R, VectorMode.C])``) to sweep it into
+    # separate variants — see BaseOpSpec.extra_templates. A swept mode needs a
+    # mode-aware ``golden`` (the default golden compares all faces).
+    extra_templates: List[TemplateParameter] = field(
+        default_factory=lambda: [VECTOR_MODE(VectorMode.RC)]
+    )
+    arity_macro: str = "SFPU_TERNARY_OP"

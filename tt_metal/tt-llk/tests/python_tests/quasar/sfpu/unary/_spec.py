@@ -25,3 +25,4 @@ def input_output_formats(
 @dataclass(kw_only=True)
 class UnaryOpSpec(BaseOpSpec):
     formats: List[InputOutputFormat]
+    arity_macro: str = "SFPU_UNARY_OP"

@@ -7,7 +7,18 @@ from .binary._spec import BinaryOpSpec
 from .ternary._spec import TernaryOpSpec
 from .unary._spec import UnaryOpSpec
 
-_INC_ROOT = Path(__file__).resolve().parents[3] / "tt_llk_quasar" / "common" / "inc"
+# Roots an SFPU op header may live under, matching the compiler -I paths: the LLK
+# common tree, and tt-metal's quasar llk_api (where the sfpi float ops live, e.g.
+# "llk_sfpu/ckernel_sfpu_binary.h").
+_INC_ROOTS = [
+    Path(__file__).resolve().parents[4] / "tt_llk_quasar" / "common" / "inc",
+    Path(__file__).resolve().parents[5]
+    / "hw"
+    / "ckernels"
+    / "quasar"
+    / "metal"
+    / "llk_api",
+]
 
 
 def _discover(package_name: str, spec_type: Type) -> List:
@@ -24,9 +35,9 @@ def _discover(package_name: str, spec_type: Type) -> List:
             raise TypeError(
                 f"{module.__name__} SPEC must be {spec_type.__name__}, got {type(spec).__name__}"
             )
-        if not (_INC_ROOT / spec.header).is_file():
+        if not any((root / spec.include_header).is_file() for root in _INC_ROOTS):
             raise FileNotFoundError(
-                f"{spec.name} header not found: tt_llk_quasar/common/inc/{spec.header}"
+                f"{spec.name} header not found on any SFPU include root: {spec.include_header}"
             )
         specs.append(spec)
     specs.sort(key=lambda s: s.name)

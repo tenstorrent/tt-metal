@@ -3165,3 +3165,98 @@ class WhereGolden:
         cond = operand1.flatten().to(torch.float32)
         mask = cond != 0.0
         return torch.where(mask, true_value.flatten(), false_value.flatten())
+
+
+@register_golden
+class TernarySFPUGolden:
+    """Golden for ternary SFPU ops.
+
+    Mirrors BinarySFPUGolden: dispatch on the MathOperation and operate on tiles
+    within a single flat (tilized) tensor. Operands live at tile indices
+    src1/src2/src3; the result is written to dst_idx and the full tensor returned
+    (callers slice the dst tile)."""
+
+    def __init__(self):
+        self.ops = {
+            MathOperation.SfpuWhere: self._where,
+        }
+
+    def _where(self, cond, true_value, false_value):
+        # result = (cond == 0) ? false_value : true_value  (C++ sfpu_ternary_function)
+        mask = cond.to(torch.float32) != 0.0
+        return torch.where(mask, true_value, false_value)
+
+    def __call__(
+        self,
+        operation: MathOperation,
+        tensor,
+        src1_idx: int,
+        src2_idx: int,
+        src3_idx: int,
+        dst_idx: int,
+        num_iterations: int,
+        dimensions: tuple[int, int],
+        data_format: DataFormat,
+        skip_tilize: bool = False,
+        input_format: DataFormat = None,
+    ):
+        if operation not in self.ops:
+            raise ValueError(f"Unsupported ternary SFPU operation: {operation}")
+
+        if num_iterations < 1:
+            raise ValueError(f"num_iterations must be at least 1, got {num_iterations}")
+
+        if input_format is not None and input_format.is_mx_format():
+            tensor = quantize_mx_tensor_chunked(tensor, input_format)
+
+        total_elements = dimensions[0] * dimensions[1]
+        elements_per_tile = ELEMENTS_PER_TILE
+        elements_per_row = 32
+        num_tiles = total_elements // elements_per_tile
+
+        if not skip_tilize and data_format not in (
+            DataFormat.Bfp8_b,
+            DataFormat.Bfp4_b,
+        ):
+            result = tilize_block(tensor.flatten(), dimensions, data_format).flatten()
+        else:
+            result = tensor.flatten().clone()
+
+        for name, idx in [
+            ("src1_idx", src1_idx),
+            ("src2_idx", src2_idx),
+            ("src3_idx", src3_idx),
+            ("dst_idx", dst_idx),
+        ]:
+            if not 0 <= idx < num_tiles:
+                raise ValueError(
+                    f"{name} {idx} is out of bounds. Tensor has {num_tiles} tiles."
+                )
+
+        elements_to_process = num_iterations * elements_per_row
+        src1_start = src1_idx * elements_per_tile
+        src2_start = src2_idx * elements_per_tile
+        src3_start = src3_idx * elements_per_tile
+        dst_start = dst_idx * elements_per_tile
+
+        for name, start in [
+            ("src1_idx", src1_start),
+            ("src2_idx", src2_start),
+            ("src3_idx", src3_start),
+            ("dst_idx", dst_start),
+        ]:
+            if start + elements_to_process > total_elements:
+                raise ValueError(
+                    f"Processing {num_iterations} iterations from {name} "
+                    f"would exceed tensor bounds (trying to access element "
+                    f"{start + elements_to_process}, but tensor has only "
+                    f"{total_elements} elements)"
+                )
+
+        cond = result[src1_start : src1_start + elements_to_process]
+        true_value = result[src2_start : src2_start + elements_to_process]
+        false_value = result[src3_start : src3_start + elements_to_process]
+        result[dst_start : dst_start + elements_to_process] = self.ops[operation](
+            cond, true_value, false_value
+        )
+        return result
