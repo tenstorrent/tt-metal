@@ -469,6 +469,9 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
     // `sem::<accessor_name>` constants in `kernel_bindings_generated.h` for the kernel to
     // consume. The producer and consumer below choose different accessor names for the same
     // semaphore.
+    // These two DM kernels only need to land on distinct DM processors. The READER/WRITER role
+    // hints are the idiomatic way to get that — the producer writes the semaphore signal, the
+    // consumer reads it — with no need to hand-pick a processor/NOC via an explicit Gen1Config.
     KernelSpec producer{
         .unique_id = "producer",
         .source =
@@ -478,10 +481,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
         .semaphore_bindings = {{.semaphore_spec_name = "only_sem", .accessor_name = "signal"}},
         .hw_config =
             DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_0,
-                    },
+                .role = DataMovementHardwareConfig::RoleHint::WRITER,
             },
     };
     KernelSpec consumer{
@@ -493,10 +493,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
         .semaphore_bindings = {{.semaphore_spec_name = "only_sem", .accessor_name = "waiter"}},
         .hw_config =
             DataMovementHardwareConfig{
-                .gen1_config =
-                    DataMovementHardwareConfig::Gen1Config{
-                        .processor = DataMovementProcessor::RISCV_1,
-                    },
+                .role = DataMovementHardwareConfig::RoleHint::READER,
             },
     };
 
