@@ -301,27 +301,31 @@ class VoxtralTTSPipeline:
         current_pos = S_prompt
 
         for step_idx in range(max_tokens):
+            last_hidden = self.text.hidden_tt_to_torch(last_hidden_tt)
             if debug is not None:
-                debug.set(f"step.{step_idx}.text.hidden_in", self.text.hidden_tt_to_torch(last_hidden_tt))
-            torch.manual_seed(acoustic_fm_noise_seed(seed, step_idx))
-            # forward_from_tt accepts the device hidden directly — no [dim]-vector round-trip.
-            # Noise is generated first inside forward_from_tt (respects torch.manual_seed).
-            ac_out = self.acoustic.forward_from_tt(
-                last_hidden_tt,
+                debug.set(f"step.{step_idx}.text.hidden_in", last_hidden)
+            ac_out = self.acoustic_codes_forward(
+                last_hidden.unsqueeze(0),
                 cfg_alpha,
-                collect_semantic_logits=debug is not None,
+                noise_seed=acoustic_fm_noise_seed(seed, step_idx),
             )
-            if debug is not None:
-                assert isinstance(ac_out, tuple)
-                audio_codes, ac_debug = ac_out
-                audio_codes = audio_codes.to(torch.long)
-                for k, v in ac_debug.items():
-                    val = v.squeeze(0) if v.dim() > 1 and v.shape[0] == 1 else v
-                    debug.set(f"step.{step_idx}.acoustic.{k}", val)
-            else:
-                audio_codes = ac_out.to(torch.long)
+            audio_codes = ac_out.to(torch.long)
             if debug is not None:
                 debug.set(f"step.{step_idx}.acoustic.codes", audio_codes.squeeze(0))
+                llm_tt = ttnn.from_torch(
+                    last_hidden.unsqueeze(0).unsqueeze(1).to(torch.bfloat16),
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                sem_tt = self.acoustic.semantic_logits_tt(llm_tt)
+                ttnn.deallocate(llm_tt)
+                sem_host = ttnn.to_torch(sem_tt).float()
+                ttnn.deallocate(sem_tt)
+                while sem_host.dim() > 2:
+                    sem_host = sem_host.squeeze(1)
+                debug.set(f"step.{step_idx}.acoustic.semantic_logits", sem_host.squeeze(0))
 
             generated_codes.append(audio_codes[0].detach().cpu())
             if not fixed_step_count and int(audio_codes[0, 0].item()) == self.end_audio_id:
@@ -503,7 +507,7 @@ class VoxtralTTSPipeline:
         last_codes_tt = None
         for step in steps:
             llm_tile = self._acoustic_hidden_tile_copy(step.llm_hidden_tt)
-            codes_tt = self.acoustic.forward_acoustic_trace_codes(llm_tile, step.noise_tt, cfg_scalar)
+            codes_tt = self.acoustic.forward(llm_tile, step.noise_tt, cfg_scalar)
             if llm_tile.is_allocated():
                 ttnn.deallocate(llm_tile)
             self.text.decode_step_from_embeds_tt(
@@ -523,13 +527,30 @@ class VoxtralTTSPipeline:
         self,
         llm_hidden_bf16: torch.Tensor,
         cfg_alpha: torch.Tensor | None = None,
+        *,
+        noise_seed: int = 0,
     ) -> torch.Tensor:
-        """``[B, input_dim]`` LLM hidden → ``[B, 1+n_acoustic]`` discrete codes (TT acoustic ``forward``)."""
+        """Host wrapper: ``from_torch`` → acoustic ``forward`` → ``to_torch``."""
         if cfg_alpha is None:
             cfg_alpha = torch.tensor(
                 ACOUSTIC_CFG_ALPHA_DEFAULT, dtype=llm_hidden_bf16.dtype, device=llm_hidden_bf16.device
             )
-        return self.acoustic.forward(llm_hidden_bf16, cfg_alpha)
+        bsz = llm_hidden_bf16.shape[0]
+        cfg_scalar = float(cfg_alpha.flatten()[0].item())
+        llm_tt = ttnn.from_torch(
+            llm_hidden_bf16.unsqueeze(1).to(torch.bfloat16),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        noise_tt = self.acoustic.fm_noise_tt(bsz, noise_seed)
+        codes_tt = self.acoustic.forward(llm_tt, noise_tt, cfg_scalar)
+        ttnn.deallocate(llm_tt)
+        ttnn.deallocate(noise_tt)
+        codes = ttnn.to_torch(codes_tt).long().reshape(bsz, -1)
+        ttnn.deallocate(codes_tt)
+        return codes
 
     def cleanup_all(self) -> None:
         """Drop TT_CCL semaphores so profiler-enabled ``close_device`` does not segfault."""

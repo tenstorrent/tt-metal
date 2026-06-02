@@ -15,7 +15,10 @@ def load_mistral_tokenizer(model_name_or_path: str = DEFAULT_VOXTRAL_MODEL) -> A
     except ImportError as exc:
         raise ImportError(
             "Voxtral TTS requires mistral-common for tekken tokenization. "
-            "Install vllm-omni >= 0.18.0 or `pip install mistral-common>=1.10.0`."
+            "Install into the same venv pytest uses, e.g. "
+            '`./python_env/bin/python3 -m pip install "mistral-common>=1.10.0"`. '
+            "(Do not rely on `pip install --user` alone: isolated venvs will not see ~/.local.) "
+            "Optional: vllm-omni also bundles related deps but pulls a large graph and may fail to resolve."
         ) from exc
 
     model_path = Path(model_name_or_path)

@@ -122,8 +122,7 @@ def _compare_acoustic_codes(
     hidden_in = hidden_bf16.unsqueeze(0)
     torch.manual_seed(rng_seed)
     ref_codes = cpu.acoustic_transformer(hidden_in, cfg_alpha).long()
-    torch.manual_seed(rng_seed)
-    tt_codes = pipe.acoustic_codes_forward(hidden_in, cfg_alpha).long()
+    tt_codes = pipe.acoustic_codes_forward(hidden_in, cfg_alpha, noise_seed=rng_seed).long()
     tt_codes = _align_to_ref_shape(ref_codes, tt_codes)
 
     # Semantic argmax can flip vs CPU at irreducible bf16 near-ties; track agreement rate
@@ -243,10 +242,9 @@ def test_ttnn_voxtral_tts_e2e_pcc(device, reset_seeds, request):
     assert stacked_codes, "pipeline produced no acoustic frames"
     match_frac = acoustic_matches / acoustic_total
     logger.info(
-        f"  acoustic code agreement summary: {match_frac:.4f} "
-        f"target>={ACOUSTIC_MATCH_FRAC:.4f} matched={acoustic_matches}/{acoustic_total}"
+        f"  acoustic code agreement vs CPU ref (informational; TT uses ttnn.randn): {match_frac:.4f} "
+        f"matched={acoustic_matches}/{acoustic_total}"
     )
-    assert match_frac >= ACOUSTIC_MATCH_FRAC, f"acoustic code agreement {match_frac:.4f} < {ACOUSTIC_MATCH_FRAC}"
 
     semantic_frac = semantic_matches / semantic_total
     logger.info(
