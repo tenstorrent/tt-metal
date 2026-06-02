@@ -42,14 +42,12 @@ void kernel_main() {
     constexpr uint32_t num_q_readers = get_compile_time_arg_val(25);
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(26);
     constexpr uint32_t NHV = get_compile_time_arg_val(27);
-    // Latent-V mode: absent V, or an internal zero-sequence V sentinel, reads V tiles from K's buffer.
-    // Tile addressing uses K's row stride (DHt) instead of vDHt so the per-row
-    // offset matches K; the existing V Slice(..., 0, vDHt) already truncates
-    // the read window to V's logical head dim.
-    constexpr bool v_shares_k_buffer = get_compile_time_arg_val(28) == 1;
-    constexpr bool v_uses_batch_chain = !v_shares_k_buffer && (NHV == 1);
+    // Latent-V (MLA): no separate V tensor / all-gather; the reader rematerializes the compact
+    // V[Sk, vDHt] prefix from K's L1 buffer (transposing K^T) into V's own double-buffered CB.
+    constexpr bool v_is_latent = get_compile_time_arg_val(28) == 1;
+    constexpr bool v_uses_batch_chain = !v_is_latent && (NHV == 1);
     constexpr uint32_t q_heads_per_v = NH / NHV;
-    constexpr uint32_t v_tile_columns = v_shares_k_buffer ? DHt : vDHt;
+    constexpr uint32_t v_tile_columns = vDHt;
 
     // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
     // and dropped by the compiler, eliminating runtime ternaries and joint generator uses.
@@ -173,7 +171,7 @@ void kernel_main() {
 
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
-    constexpr uint32_t v_cb_entry_tiles = v_shares_k_buffer ? k_chunk_tiles : v_chunk_tiles;
+    constexpr uint32_t v_cb_entry_tiles = v_chunk_tiles;
 
     // Head chain (head-level): matches (batch, head), used by V and optionally K
     ChainLink<head_mcast_enabled, true> head_chain(
@@ -274,11 +272,11 @@ void kernel_main() {
 
     const auto q_reader = TensorAccessor(q_args, q_addr);
     const auto local_k_reader = TensorAccessor(k_args, k_addr);
-    // Latent-V mode: V accessors point at K's buffer (with K's stride). The v_args
-    // CT slot still appears in the arg list (the program factory pushes V's
-    // TensorAccessorArgs unconditionally), but we don't construct an accessor from it.
+    // Latent-V: V is rematerialized from K, so the V generators are never used. Point their
+    // accessors at K's buffer to avoid constructing from the absent V buffer (the v_args CT slot
+    // still appears in the arg list — the program factory pushes V's TensorAccessorArgs always).
     const auto local_v_reader = [&]() {
-        if constexpr (v_shares_k_buffer) {
+        if constexpr (v_is_latent) {
             return TensorAccessor(k_args, k_addr);
         } else {
             return TensorAccessor(v_args, v_addr);
@@ -286,7 +284,7 @@ void kernel_main() {
     }();
     const auto gathered_k_reader = TensorAccessor(gathered_k_args, gathered_k_addr);
     const auto gathered_v_reader = [&]() {
-        if constexpr (v_shares_k_buffer) {
+        if constexpr (v_is_latent) {
             return TensorAccessor(gathered_k_args, gathered_k_addr);
         } else {
             return TensorAccessor(gathered_v_args, gathered_v_addr);
@@ -319,6 +317,10 @@ void kernel_main() {
     [[maybe_unused]] const auto materialize_v_prefix_from_k = [&](uint32_t kt_base_addr, uint32_t rows_to_materialize) {
         cb_reserve_back(cb_v_in, v_cb_entry_tiles);
         uint32_t v_write_ptr = get_write_ptr(cb_v_in);
+        // Flush outstanding K-chain mcast writes before issuing these reads + read barrier: the
+        // K-only iterations (k_chunk > 0) don't issue a Q read, so the forward's NoC writes are
+        // otherwise still in flight, which races the read barrier (non-deterministic V).
+        noc_async_writes_flushed();
         noc_async_read_one_packet_set_state(get_noc_addr(kt_base_addr), k_tile_bytes);
         if (rows_to_materialize == Sk_chunk_t) {
 #pragma GCC unroll 16
@@ -540,9 +542,9 @@ void kernel_main() {
                 // doesn't advance, so cb_reserve_back returns the same address each iteration.
                 // This lets the buffer act as a reusable staging area for the mcast.
                 if (is_padded_iter) {
-                    if constexpr (v_shares_k_buffer) {
-                        // Latent-V transports only the K^T segment. Padded iterations participate
-                        // in that chain handshake but do not generate a compute-visible V half.
+                    if constexpr (v_is_latent) {
+                        // Latent-V is rematerialized locally from K (no V chain). Padded iterations
+                        // only sync the K chain; they generate no compute-visible V half.
                     } else if constexpr (v_uses_batch_chain && v_batch_mcast_enabled) {
                         cb_reserve_back(cb_v_in, 2 * v_chunk_tiles);
                         uint32_t cb_v_start_address = get_write_ptr(cb_v_in);
@@ -565,6 +567,34 @@ void kernel_main() {
                         }
                     }
                     continue;
+                }
+
+                if constexpr (v_is_latent) {
+                    // Latent-V: rematerialize compact V from K *before* making K visible to compute.
+                    // K's own CB (no longer shared with V) is freed for a chained injector to
+                    // overwrite as soon as compute pops it; materializing first keeps the K slot
+                    // locked (compute can't pop unpushed K) until this L1->L1 read completes.
+                    bool skip_v_materialization = false;
+                    uint32_t v_rows_to_materialize = Sk_chunk_t;
+                    if constexpr (is_causal && !chunked_enabled) {
+                        if (ring_iter == 0) {
+                            const uint32_t causal_k_limit =
+                                (q_row_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
+                            skip_v_materialization = k_chunk >= causal_k_limit;
+                            if (!skip_v_materialization && k_chunk == causal_k_limit - 1) {
+                                const uint32_t active_rows = q_row_start_tile + Sq_chunk_t - k_chunk * Sk_chunk_t;
+                                if (active_rows < Sk_chunk_t) {
+                                    v_rows_to_materialize = active_rows;
+                                }
+                            }
+                        }
+                    }
+                    if (skip_v_materialization) {
+                        cb_reserve_back(cb_v_in, v_cb_entry_tiles);
+                        cb_push_back(cb_v_in, v_cb_entry_tiles);
+                    } else {
+                        materialize_v_prefix_from_k(cb_k_start_address, v_rows_to_materialize);
+                    }
                 }
 
                 // Make K available to compute.
@@ -611,33 +641,8 @@ void kernel_main() {
                     q_pushed = true;
                 }
 
-                if constexpr (v_shares_k_buffer) {
-                    bool skip_v_materialization = false;
-                    uint32_t v_rows_to_materialize = Sk_chunk_t;
-                    if constexpr (is_causal && !chunked_enabled) {
-                        if (ring_iter == 0) {
-                            const uint32_t causal_k_limit =
-                                (q_row_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
-                            skip_v_materialization = k_chunk >= causal_k_limit;
-                            if (!skip_v_materialization && k_chunk == causal_k_limit - 1) {
-                                const uint32_t active_rows = q_row_start_tile + Sq_chunk_t - k_chunk * Sk_chunk_t;
-                                if (active_rows < Sk_chunk_t) {
-                                    v_rows_to_materialize = active_rows;
-                                }
-                            }
-                        }
-                    }
-
-                    // Same physical CB as K. K^T is already pushed; reserve a second fixed-size
-                    // FIFO entry whose prefix is compact V[Sk, vDHt] via local L1-to-L1 NoC reads.
-                    if (skip_v_materialization) {
-                        cb_reserve_back(cb_v_in, v_cb_entry_tiles);
-                        cb_push_back(cb_v_in, v_cb_entry_tiles);
-                    } else {
-                        materialize_v_prefix_from_k(cb_k_start_address, v_rows_to_materialize);
-                    }
-                } else {
-                    // V: either read locally (injector or not participant) or receive from chain.
+                if constexpr (!v_is_latent) {
+                    // Tensor-V: either read locally (injector or not participant) or receive from chain.
                     cb_reserve_back(cb_v_in, v_cb_entry_tiles);
                     uint32_t cb_v_start_address = get_write_ptr(cb_v_in);
                     if (v_chain.should_receive(nb, nv)) {
@@ -666,12 +671,10 @@ void kernel_main() {
                 }
             }
         }
-        uint32_t dummy_kv_chunks = 0;
-        if constexpr (v_shares_k_buffer) {
-            dummy_kv_chunks = (3 - (KV_chunks_processed_in_iter % 3)) % 3;
-        } else if (KV_chunks_processed_in_iter % 2 == 0) {
-            dummy_kv_chunks = 1;
-        }
+        // Dummy KV pop for double-buffer write-pointer phase alignment across chained reader cores
+        // (K and V each have their own double-buffered CB; latent-V materializes into V's CB just
+        // like the tensor-V path pushes into it, so the mod-2 alignment is identical).
+        uint32_t dummy_kv_chunks = (KV_chunks_processed_in_iter % 2 == 0) ? 1 : 0;
         for (uint32_t dummy_chunk = 0; dummy_chunk < dummy_kv_chunks; ++dummy_chunk) {
             cb_reserve_back(cb_k_in, k_chunk_tiles);
             cb_reserve_back(cb_v_in, v_cb_entry_tiles);

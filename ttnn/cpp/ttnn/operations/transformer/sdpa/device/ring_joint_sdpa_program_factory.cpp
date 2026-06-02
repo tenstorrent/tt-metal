@@ -87,7 +87,11 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     const auto& input_tensor_q = tensor_args.input_q;
     const auto& input_tensor_k = tensor_args.input_k;
-    const bool v_shares_k_buffer = tensor_args.has_latent_v();
+    // Latent-V (MLA): V is the first vDHt head-dim tiles of K. The reader rematerializes the
+    // compact V from K's L1 buffer (no separate V tensor / all-gather), but V still gets its own
+    // double-buffered CB — sharing K's buffer needs mod-3 write-pointer phase alignment that races
+    // with the K mcast staging for some per-iteration chunk counts, corrupting receiver-core V.
+    const bool v_is_latent = tensor_args.has_latent_v();
     const auto& input_tensor_v = tensor_args.input_v.has_value() ? tensor_args.input_v.value() : input_tensor_k;
 
     const auto& joint_tensor_q = tensor_args.joint_q;
@@ -350,10 +354,8 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
-    // Latent-V reuses the K CB for K^T and compact V. A third fixed-size entry lets the reader
-    // materialize next V while compute still consumes current V.
-    uint32_t k_tiles = Sk_chunk_t * DHt * (v_shares_k_buffer ? 3 : 2);
-    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
+    uint32_t k_tiles = Sk_chunk_t * DHt * 2;   // double buffer
+    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer (latent-V materializes here too)
     uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
@@ -393,7 +395,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     // Ring-joint streaming supports single-Q-subblock shapes; only fp32 dest acc stays on the legacy path.
     const bool use_streaming_compute = !fp32_dest_acc_en;
     TT_FATAL(
-        use_streaming_compute || !v_shares_k_buffer,
+        use_streaming_compute || !v_is_latent,
         "Latent-V ring attention is implemented only for streaming compute (fp32_dest_acc_en must be false)");
     log_debug(
         tt::LogOp,
@@ -514,7 +516,8 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         num_active_cores,
         chunk_size_t,
         NHV,
-        static_cast<uint32_t>(v_shares_k_buffer),
+        // Reader slot 28: latent-V → rematerialize compact V from K's L1 buffer into V's own CB.
+        static_cast<uint32_t>(v_is_latent),
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -573,7 +576,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     // K chain selection: batch chain when NHK == 1 (MLA mode), else head chain
     // Computed early to gate resource allocation
     const bool k_uses_batch_chain = (NHK == 1);
-    const bool v_uses_batch_chain = !v_shares_k_buffer && (NHV == 1);
+    const bool v_uses_batch_chain = !v_is_latent && (NHV == 1);
 
     const auto head_sems = ChainSemaphores::create(desc, core_grid_set);  // head chain (V, optionally K)
     // Only create batch semaphores for MLA mode (NHK == 1)
@@ -680,7 +683,9 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
         static_cast<uint32_t>(enable_zigzag_balancing),
         static_cast<uint32_t>(tensor_args.is_chunked()),
         chunk_size_t,
-        static_cast<uint32_t>(v_shares_k_buffer)};
+        // Compute consumes a normal compact (vDHt-wide) V CB even in latent-V mode — V no longer
+        // shares K's buffer, so the shared-buffer (mod-3, DHt-wide-entry) compute path stays off.
+        static_cast<uint32_t>(false)};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
@@ -747,7 +752,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     const uint32_t cb_q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df);
     const uint32_t cb_k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
-    const uint32_t cb_v_in = v_shares_k_buffer ? cb_k_in : allocate_tile_cb(v_tiles, v_tile_size, v_df);
+    const uint32_t cb_v_in = allocate_tile_cb(v_tiles, v_tile_size, v_df);
 
     // Lightweight mask CB: holds neginf + optional causal diagonal + optional partial tiles.
     // Used for both causal (ring_iter 0) and padding (ring_iter > 0) masking.
@@ -1380,8 +1385,8 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     if (v_uses_batch_chain) {
         log_info(tt::LogOp, "V chain mode: batch ({})", k_mcast_enabled ? "mcast" : "unicast");
-    } else if (v_shares_k_buffer) {
-        log_info(tt::LogOp, "V chain mode: shared with K (no separate V chain)");
+    } else if (v_is_latent) {
+        log_info(tt::LogOp, "V chain mode: latent (rematerialized from K, no separate V chain)");
     } else {
         log_info(tt::LogOp, "V chain mode: head ({})", head_mcast_enabled ? "mcast" : "unicast");
     }
