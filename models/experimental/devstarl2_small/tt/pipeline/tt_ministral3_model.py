@@ -58,12 +58,14 @@ class TtMinistral3Model(LightweightModule):
         ministral_text_config: Optional["Ministral3Config"] = None,
         tt_rotary_embedding: Optional[TtMinistral3RotaryEmbedding] = None,
         embed_dtype=None,
+        paged_attention_config=None,
     ):
         super().__init__()
         self.args = model_args
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl  # fabric num_links for post-norm all_gather
         self.n_layers = int(model_args.n_layers)
+        self.paged_attention_config = paged_attention_config
         embed_dtype = embed_dtype if embed_dtype is not None else ttnn.bfloat16  # ROW_MAJOR only
 
         if tt_rotary_embedding is not None and ministral_text_config is not None:
@@ -104,6 +106,7 @@ class TtMinistral3Model(LightweightModule):
                 configuration=configuration,
                 llama_4_scaling_beta=llama_4_scaling_beta,
                 original_max_position_embeddings=original_max_position_embeddings,
+                paged_attention_config=paged_attention_config,
             )
             for i in range(self.n_layers)
         ]
@@ -124,6 +127,10 @@ class TtMinistral3Model(LightweightModule):
         rot_mats,
         position_ids,
         rope_start_pos: int = 0,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        user_id: int = 0,
     ) -> ttnn.Tensor:
         if rot_mats is None:
             if self.tt_rotary_embedding is None:
@@ -135,7 +142,15 @@ class TtMinistral3Model(LightweightModule):
             rot_mats = self.tt_rotary_embedding.slice_rot_mats_prefill(rope_start_pos, seq_len)
         h = hidden_states_11SH
         for layer in self.layers:
-            h = layer.forward_prefill(h, rot_mats, position_ids=position_ids)
+            h = layer.forward_prefill(
+                h,
+                rot_mats,
+                position_ids=position_ids,
+                page_table=page_table,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start_idx,
+                user_id=user_id,
+            )
         return self.norm(h, Mode.PREFILL)
 
     def forward_prefill(
@@ -170,6 +185,7 @@ class TtMinistral3Model(LightweightModule):
         token_ids_tt: ttnn.Tensor,
         pos_uint32: ttnn.Tensor,
         pos_int32: ttnn.Tensor,
+        page_table=None,
     ) -> ttnn.Tensor:
         if self.tt_rotary_embedding is None:
             raise ValueError(
@@ -184,7 +200,7 @@ class TtMinistral3Model(LightweightModule):
         residual_mem_cfg = self.args.get_residual_mem_config(Mode.DECODE, None)
         h = ttnn.to_memory_config(h, residual_mem_cfg)
         for layer in self.layers:
-            h = layer.forward_decode(h, pos_int32, rot_mats)
+            h = layer.forward_decode(h, pos_int32, rot_mats, page_table=page_table)
         h_dram = ttnn.to_memory_config(h, ttnn.DRAM_MEMORY_CONFIG)
         out = self.norm(h_dram, Mode.DECODE)
         if self.args.is_multichip:  # LM head needs full hidden width
