@@ -118,6 +118,12 @@ void kernel_main() {
     // Intermediate buffers need to be reserved/pushed/popped
     // in full blocks
     const auto total_buffer_size = generic::blocks(Wt, block_size).total_with_remainder();
+    // Padded row width (== total_buffer_size, compile-time). Used as the single-call
+    // EltwiseShape::tiles() count so the chain's internal blocking processes full
+    // block_size chunks (matching the padded full_block_size-per-block convention every
+    // producer/consumer here uses), instead of an external generic::blocks loop that
+    // re-emits the chain's boot init per block and defeats hoisting.
+    constexpr uint32_t Wt_padded = ((Wt + block_size - 1) / block_size) * block_size;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #ifdef TILIZE_IN
@@ -152,26 +158,29 @@ void kernel_main() {
         // per call). cb_x: OutputLifecycle::Bulk + Block. BlockSize template = block_size so DEST lanes
         // process all tiles in one DEST window — matches the original's `for (auto i : block.local())`
         // inside one ACQ/REL.
-        for (auto block : generic::blocks(Wt, block_size)) {
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/block_size),
-                compute_kernel_lib::BinaryFpu<
-                    cb_in,
-                    cb_inb,
-                    compute_kernel_lib::BinaryFpuOp::Add,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::OperandKind::Block,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Block>{},
-                compute_kernel_lib::PackTile<
-                    cb_x,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
-        }
+        // Single hoisted chain over the padded row. cb_in/cb_inb (in0_t/in1_t = 2*block_size)
+        // are STREAMED by the reader and consumed here, so Chunked (per-chunk wait+pop,
+        // == the old per-block Bulk-in-external-loop) — a single Bulk would wait the whole
+        // row upfront and deadlock the streaming reader. cb_x output is also streamed
+        // (im6_t = 2*block_size) -> Chunked. tiles(Wt_padded) keeps every internal block full.
+        compute_kernel_lib::eltwise_chain(
+            compute_kernel_lib::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size),
+            compute_kernel_lib::BinaryFpu<
+                cb_in,
+                cb_inb,
+                compute_kernel_lib::BinaryFpuOp::Add,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Chunked,
+                compute_kernel_lib::InputLifecycle::Chunked,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Block>{},
+            compute_kernel_lib::PackTile<
+                cb_x,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Chunked,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 #ifndef RMSNORM
         reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
 #else
@@ -210,26 +219,30 @@ void kernel_main() {
         //     OutputLifecycle::Bulk per call emits both. The upfront reserve(total) is dropped — per-block reserves
         //     cover the same capacity progressively. All reserves are capacity-checks;
         //     since the producer/consumer balance is unchanged, behavior is identical.
-        for (auto block : generic::blocks(Wt, block_size)) {
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/block_size),
-                compute_kernel_lib::BinaryFpu<
-                    cb_x,
-                    cb_ex,
-                    compute_kernel_lib::BinaryFpuOp::Sub,
-                    compute_kernel_lib::BroadcastDim::Col,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::OperandKind::Block,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
-                compute_kernel_lib::PackTile<
-                    cb_xmm,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::PackTileReconfig::None>{});
-        }
+        // Single hoisted chain. cb_x is consumed per-block (Chunked == the old per-block
+        // Bulk-in-external-loop; cb_x was read no-pop by the E[x] reduce just above, so it's
+        // fully present and x-E[x] is its popping consumer). cb_ex (the mean, 1 tile, col-bcast)
+        // is held -> CallerManaged, popped right after. cb_xmm output Chunked (per-chunk push;
+        // the squaring below waits it whole via HeldBulk once this stage completes).
+        // tiles(Wt_padded) keeps every internal block full.
+        compute_kernel_lib::eltwise_chain(
+            compute_kernel_lib::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size),
+            compute_kernel_lib::BinaryFpu<
+                cb_x,
+                cb_ex,
+                compute_kernel_lib::BinaryFpuOp::Sub,
+                compute_kernel_lib::BroadcastDim::Col,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Chunked,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar>{},
+            compute_kernel_lib::PackTile<
+                cb_xmm,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OutputLifecycle::Chunked,
+                compute_kernel_lib::PackTileReconfig::None>{});
         cb_ex_obj.pop_front(1);
 
 #ifndef FUSE_PRE_ADD
@@ -261,7 +274,6 @@ void kernel_main() {
          * Reconfig: mul_tiles_init(cb_xmm, cb_xmm) -> BinaryDataFormatReconfig::Input
          *   (fold elides after first block, CbA==CbB); no pack_reconfig -> None.
          */
-        constexpr uint32_t Wt_padded = ((Wt + block_size - 1) / block_size) * block_size;
         compute_kernel_lib::eltwise_chain(
             compute_kernel_lib::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size),
             compute_kernel_lib::BinaryFpu<
