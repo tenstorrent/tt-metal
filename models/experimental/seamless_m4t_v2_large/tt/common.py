@@ -941,7 +941,6 @@ def encoder_all_reduce_sum_replicate(
         x,
         cluster_axis=cluster_axis,
         memory_config=mc,
-        num_links=1,
         topology=ttnn.Topology.Linear,
     )
     if result is not x:
