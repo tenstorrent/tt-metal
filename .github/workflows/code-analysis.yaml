@@ -2,14 +2,16 @@ name: "Code analysis"
 
 on:
   schedule:
-    # Run daily at 6 PM PST (2 AM UTC next day)
+    # Run hourly to keep ctcache warm for PR runs (Ubuntu 22.04)
+    - cron: "0 * * * *"
+    # Keep the daily run as a backstop
     - cron: "0 2 * * *"
   workflow_call:
     inputs:
       platform:
         required: false
         type: string
-        default: "Ubuntu 24.04"
+        default: "Ubuntu 22.04"
         description: "Platform to analyze (e.g., 'Ubuntu 22.04', 'Ubuntu 24.04')"
       architecture:
         required: false
@@ -50,7 +52,7 @@ on:
       platform:
         required: false
         type: choice
-        default: "Ubuntu 24.04"
+        default: "Ubuntu 22.04"
         options:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
@@ -133,7 +135,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
 
   # Full scan: single job that analyzes everything
@@ -147,7 +149,7 @@ jobs:
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets: inherit
     with:
-      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
       ci-build-docker-image: >-
         ${{ inputs.ci-build-docker-image ||
@@ -167,7 +169,7 @@ jobs:
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets: inherit
     with:
-      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
       ci-build-docker-image: >-
         ${{ inputs.ci-build-docker-image ||
@@ -186,7 +188,7 @@ jobs:
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets: inherit
     with:
-      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
       ci-build-docker-image: >-
         ${{ inputs.ci-build-docker-image ||
@@ -205,7 +207,7 @@ jobs:
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets: inherit
     with:
-      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
       ci-build-docker-image: >-
         ${{ inputs.ci-build-docker-image ||
@@ -224,7 +226,7 @@ jobs:
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets: inherit
     with:
-      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
       ci-build-docker-image: >-
         ${{ inputs.ci-build-docker-image ||
