@@ -199,7 +199,7 @@ If no clear rationale is visible: **Keep open**
 
 ---
 
-## Step 7 — Closing Comment Format
+## Step 7 — Comment Formats
 
 When closing, post this comment before closing the issue:
 
