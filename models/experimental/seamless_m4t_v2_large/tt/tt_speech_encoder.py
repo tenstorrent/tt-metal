@@ -1143,12 +1143,13 @@ class TTSeamlessM4Tv2SpeechEncoder:
         )
 
     def _relative_position_index_device(self, seq_len: int, *, left_max: int, right_max: int) -> ttnn.Tensor:
-        """Cached device ``[1, S*S]`` uint32 distance indices for on-device ``ttnn.embedding``.
+        """Cached device ``[S, S]`` uint32 distance indices for on-device ``ttnn.embedding``.
 
         The index grid (a clamped ``q - k`` distance) depends only on ``(seq_len, left_max,
         right_max)``, so it is built once per shape on host (cheap integer arithmetic) and uploaded
-        as a small uint32 tensor — the heavy per-call work (the gather into ``[S, head_dim, S]``)
-        then runs on device.
+        as a small uint32 tensor. Keeping it 2-D ``[S, S]`` (not flattened to ``[1, S*S]``) makes
+        ``ttnn.embedding`` yield the table already shaped ``[S, S, head_dim]`` — no reshape to expose
+        the per-query batch dim for the relative-logits bmm.
         """
         idx_key = (seq_len, left_max, right_max)
         cached = self._rel_pos_idx_cache.get(idx_key)
@@ -1157,7 +1158,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         r = np.arange(seq_len, dtype=np.int64)
         l = np.arange(seq_len, dtype=np.int64)
         dist = np.clip(r[np.newaxis, :] - l[:, np.newaxis], -left_max, right_max) + left_max
-        idx_host = torch.from_numpy(dist.astype(np.int32).reshape(1, seq_len * seq_len))
+        idx_host = torch.from_numpy(np.ascontiguousarray(dist.astype(np.int32)))
         idx_dev = ttnn.from_torch(
             idx_host,
             dtype=ttnn.uint32,
@@ -1178,11 +1179,11 @@ class TTSeamlessM4Tv2SpeechEncoder:
         right_max: int,
         scale: float,
     ) -> ttnn.Tensor:
-        """Return pre-scaled ``[S, head_dim, S]`` relative position table for batched matmul.
+        """Return pre-scaled ``[S, S, head_dim]`` relative position table for batched matmul.
 
-        Cached per ``(seq_len, weight_id, scale)``. Layout is ``pos[s_q, d, s_k]`` so
-        ``ttnn.bmm`` over query index ``s_q`` computes relative logits without a 5-D
-        ``reshape + multiply + sum`` on activations.
+        Cached per ``(seq_len, weight_id, scale)``. Layout is ``pos[s_q, s_k, d]``; the
+        relative-logits bmm contracts ``d`` via ``transpose_b=True`` (see ``_relative_logits_bmm``),
+        so no per-layer permute to ``[s_q, d, s_k]`` is needed.
         """
         weight_id = self._tensor_stable_id(distance_weight)
         tab_key = (seq_len, weight_id, scale)
@@ -1199,16 +1200,13 @@ class TTSeamlessM4Tv2SpeechEncoder:
         table_bytes = seq_len * seq_len * head_dim * 2
         upload_mc = ttnn.DRAM_MEMORY_CONFIG if table_bytes > _L1_POS_TAB_LIMIT else ttnn.L1_MEMORY_CONFIG
 
-        # On-device gather: ``ttnn.embedding`` over the flat distance indices yields ``[1, S*S, D]``;
-        # reshape to ``[S, S, D]`` then permute to ``[S, D, S]`` (``pos[s_q, d, s_k]``) for the
-        # relative-logits ``bmm``. Replaces the host ``torch.nn.functional.embedding`` + full-table
-        # ``from_torch`` upload — no host gather and no ``S·D·S`` H2D copy (the table is hundreds of
-        # MB at long audio and was previously re-uploaded for every conformer layer on the uncached path).
+        # On-device gather: ``ttnn.embedding`` over the ``[S, S]`` distance indices yields the table
+        # already shaped ``[S, S, D]`` (``pos[s_q, s_k, d]``). The relative-logits bmm contracts ``d``
+        # with ``transpose_b=True``, so we skip the previous ``reshape [1,S²,D]→[S,S,D]`` (a physical
+        # re-tile of a hundreds-of-MB table) and the ``permute (0,2,1)→[S,D,S]`` (another full copy) —
+        # ~1 s of device work + two ~GB allocations per conformer layer at long audio. Replaces the
+        # host ``torch.nn.functional.embedding`` + full-table H2D upload of the original path.
         emb = ttnn.embedding(idx_dev, weight=distance_weight, layout=ttnn.TILE_LAYOUT, memory_config=upload_mc)
-        emb = ttnn.reshape(emb, (seq_len, seq_len, head_dim))
-        emb_t = ttnn.permute(emb, (0, 2, 1), memory_config=upload_mc)
-        ttnn.deallocate(emb)
-        emb = emb_t
 
         # Fold scale into the table when non-trivial (stage 7 / stage 8 compatibility).
         if scale != 1.0:
@@ -1236,7 +1234,12 @@ class TTSeamlessM4Tv2SpeechEncoder:
         memory_config: ttnn.MemoryConfig,
         compute_kernel_config: ttnn.DeviceComputeKernelConfig,
     ) -> ttnn.Tensor:
-        """``einsum('bhld,lrd->bhlr', q, pos)`` via batched matmul over query positions."""
+        """``einsum('bhld,lrd->bhlr', q, pos)`` via batched matmul over query positions.
+
+        ``pos_bmm`` is ``[S, S, head_dim]`` (``pos[s_q, s_k, d]``); ``transpose_b=True`` contracts the
+        last dim ``d`` (reading ``pos[s_q]`` as ``[d, s_k]``) so no explicit ``[s_q, d, s_k]`` permute
+        is built.
+        """
         head_dim = int(q.shape[-1])
         q_bh = ttnn.reshape(q, (batch * num_heads, seq_len, head_dim))
         q_sid = ttnn.permute(q_bh, (1, 0, 2), memory_config=memory_config)
@@ -1244,6 +1247,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         rel_sid = ttnn.matmul(
             q_sid,
             pos_bmm,
+            transpose_b=True,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,
         )
@@ -1930,7 +1934,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         """Populate ``_rel_pos_tab_cache`` and ``_rel_pos_idx_cache`` for each seq len.
 
         Conformer self-attention always uses ``scale=1.0`` because Q weights are pre-scaled
-        by 1/√head_dim during preprocessing. Cached tables are ``[S, D, S]`` for ``bmm``.
+        by 1/√head_dim during preprocessing. Cached tables are ``[S, S, D]`` for ``bmm`` (transpose_b).
         """
         enc = self.parameters.encoder
         for slen in seq_lens:
@@ -1956,7 +1960,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
         """Pre-populate shape-dependent caches for ``(batch, seq_len)`` before the first forward.
 
         Caches populated:
-        * ``_rel_pos_tab_cache``   — ``[S, D, S]`` tables (host embedding + TILE upload)
+        * ``_rel_pos_tab_cache``   — ``[S, S, D]`` tables (host embedding + TILE upload)
         * ``_chunk_attn_mask_cache`` — chunk mask (skipped when ``S <= chunk_size``)
         * ``_encoder_additive_mask_cache`` — no-padding-mask entry (``mask_id=-1``)
         * depthwise conv weight prep — ``prepare_conv_weights`` only (no Conv2d forward)
