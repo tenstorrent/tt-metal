@@ -179,7 +179,8 @@ class LTXAttention(Module):
         rename_substate(state, "k_norm", "norm_k")
 
         # Permute Q/K (and norm_q/norm_k) channels per head from checkpoint SPLIT rotation to
-        # the INTERLEAVED layout rotary_embedding_llama expects.
+        # the INTERLEAVED layout rotary_embedding_llama expects: even output lanes take the
+        # first half of each head's channels, odd lanes the second half.
         D = self.head_dim
         D_half = D // 2
         perm = torch.empty(D, dtype=torch.long)

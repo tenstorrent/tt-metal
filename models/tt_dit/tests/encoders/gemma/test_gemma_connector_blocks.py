@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Decisive bug-vs-fidelity test for the connector transformer blocks.
+Isolated parity test for the video connector transformer blocks.
 
-Feeds IDENTICAL random features (no gemma, no padding/registers) through the
-device video connector blocks and the reference Embeddings1DConnector, and
-compares. Clean PCC => connector blocks are correct and the end-to-end gap is
-propagated gemma bf16 fidelity; low PCC => a real bug in the device blocks.
+Feeds identical random features through the device video connector (register
+replacement -> on-device RoPE -> blocks -> final norm) and the reference
+Embeddings1DConnector, and asserts PCC. Isolating the connector from the Gemma
+encoder keeps a regression here distinguishable from upstream bf16 drift.
 """
 
 import glob
@@ -27,6 +27,7 @@ import ttnn
 from models.tt_dit.encoders.gemma.encoder_pair import _replace_padded_with_registers
 from models.tt_dit.models.transformers.ltx.rope_ltx import reshape_interleaved_to_bhnd
 from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
+from models.tt_dit.utils.check import assert_quality
 
 VIDEO_PREFIX = "model.diffusion_model.video_embeddings_connector."
 AGG_PREFIXES = ("text_embedding_projection.video_aggregate_embed.", "text_embedding_projection.audio_aggregate_embed.")
@@ -46,13 +47,6 @@ def _ltx_ckpt():
         )
     )
     return c[0] if c else None
-
-
-def pcc(a, b):
-    a_f, b_f = a.flatten().float(), b.flatten().float()
-    a_m, b_m = a_f - a_f.mean(), b_f - b_f.mean()
-    d = (a_m.pow(2).sum() * b_m.pow(2).sum()).sqrt()
-    return ((a_m * b_m).sum() / d).item() if d > 0 else 0.0
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
@@ -153,9 +147,8 @@ def test_connector_blocks_isolated(*, mesh_device):
     )
     dev_out = ttnn.to_torch(ttnn.get_device_tensors(tt_x)[0]).float()
 
-    logger.info(
-        f"CONNECTOR (with registers)  ref={tuple(ref_out.shape)} dev={tuple(dev_out.shape)}  PCC={pcc(dev_out, ref_out):.4f}"
-    )
+    logger.info(f"CONNECTOR (with registers)  ref={tuple(ref_out.shape)} dev={tuple(dev_out.shape)}")
+    assert_quality(ref_out, dev_out, pcc=0.99)
 
 
 if __name__ == "__main__":
