@@ -46,3 +46,19 @@ def inventory_ops(config) -> dict:
     for op in inv:
         inv[op]["tests"] = sorted(inv[op]["tests"])
     return inv
+
+
+USAGE_ROOTS = ("models/tt_transformers", "models/tt_dit", "models/demos")
+
+
+def scan_usage(config) -> dict:
+    """Used set: every ttnn op call in the model source roots, with config context
+    + provenance."""
+    usage: dict[str, list] = {}
+    for root in USAGE_ROOTS:
+        base = config.repo_root / root
+        for p, text in _iter_py(base):
+            rel = str(p.relative_to(config.repo_root))
+            for op, snippet in _scan_calls(text):
+                usage.setdefault(op, []).append({"source": rel, "snippet": snippet})
+    return usage
