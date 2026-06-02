@@ -14,6 +14,7 @@
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
 #include "metal/ops/moe_group/moe_group.hpp"
+#include "metal/ops/rmsnorm_bw/rmsnorm_bw.hpp"
 #include "nb_export_enum.hpp"
 #include "nb_fwd.hpp"
 #include "ops/binary_ops.hpp"
@@ -379,6 +380,30 @@ void py_module(nb::module_& m) {
             nb::arg("tensor"),
             nb::arg("gamma"),
             nb::arg("epsilon"));
+
+        // Low-level RMSNorm backward (matches tt-train C++ `ttml::metal::rmsnorm_bw`), for microbenchmarks.
+        py_rmsnorm.def(
+            "rmsnorm_bw",
+            [](const autograd::TensorPtr& input,
+               const autograd::TensorPtr& gamma,
+               const autograd::TensorPtr& rms,
+               const autograd::TensorPtr& dL_dout) -> std::tuple<autograd::TensorPtr, autograd::TensorPtr> {
+                auto grads = ttml::metal::rmsnorm_bw(
+                    input->get_value(), gamma->get_value(), rms->get_value(), dL_dout->get_value());
+                if (grads.size() != 2U) {
+                    throw std::runtime_error("rmsnorm_bw: unexpected number of tensors from metal rmsnorm_bw");
+                }
+                if (!grads[0].has_value() || !grads[1].has_value()) {
+                    throw std::runtime_error("rmsnorm_bw: expected gradients for input and gamma");
+                }
+                return std::make_tuple(
+                    autograd::create_tensor(std::move(grads[0].value())),
+                    autograd::create_tensor(std::move(grads[1].value())));
+            },
+            nb::arg("input"),
+            nb::arg("gamma"),
+            nb::arg("rms"),
+            nb::arg("dL_dout"));
     }
 
     m.def(
