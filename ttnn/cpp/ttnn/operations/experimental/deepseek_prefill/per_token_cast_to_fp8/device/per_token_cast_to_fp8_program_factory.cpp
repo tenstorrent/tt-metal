@@ -35,18 +35,28 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
 
     const auto& input_shape = input.logical_shape();
     auto [M, H] = common::infer_M_H(input_shape);  // M = rows, H = width (last dim)
-    TT_FATAL(M % constants::TILE_HEIGHT == 0, "per_token_cast_to_fp8: M={} must be divisible by TILE_HEIGHT=32", M);
+
+    // Tile / face dims come from the tensor's tile spec (32x32 / 16x16 by default; tiny tiles such as
+    // 16x32, 32x16, 16x16 are also supported). The kernels receive these as compile-time args.
+    const auto tile_shape = input.tensor_spec().tile().get_tile_shape();
+    const auto face_shape = input.tensor_spec().tile().get_face_shape();
+    const uint32_t tile_h = tile_shape[0];
+    const uint32_t tile_w = tile_shape[1];
+    const uint32_t face_h = face_shape[0];
+    const uint32_t face_w = face_shape[1];
+
+    TT_FATAL(M % tile_h == 0, "per_token_cast_to_fp8: M={} must be divisible by tile height={}", M, tile_h);
     TT_FATAL(
         H % common::COL_BLOCK_ELEMS == 0,
         "per_token_cast_to_fp8: H={} must be a multiple of COL_BLOCK_ELEMS={}",
         H,
         common::COL_BLOCK_ELEMS);
 
-    constexpr uint32_t TILE_BYTES_FP32 = constants::TILE_HEIGHT * constants::TILE_WIDTH * 4;   // 4096
-    constexpr uint32_t COL_BLOCK_TILES = common::COL_BLOCK_ELEMS / constants::TILE_WIDTH;      // 32
+    const uint32_t TILE_BYTES_FP32 = tile_h * tile_w * 4;
+    const uint32_t COL_BLOCK_TILES = common::COL_BLOCK_ELEMS / tile_w;                         // 32 for 32-wide tiles
     constexpr uint32_t GROUPS_PER_BLOCK = common::COL_BLOCK_ELEMS / common::SCALE_GROUP_SIZE;  // 8
 
-    const uint32_t tile_rows = M / constants::TILE_HEIGHT;
+    const uint32_t tile_rows = M / tile_h;
     const uint32_t num_col_blocks = H / common::COL_BLOCK_ELEMS;
     const uint32_t scale_groups = H / common::SCALE_GROUP_SIZE;
     const uint32_t in_elem_bytes = input.element_size();
@@ -106,14 +116,15 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
     CreateCircularBuffer(program, all_cores, cb_e4m3_cfg);
 
     // cb_scale_scratch: writer-private staging for 32 tokens' full scale rows (page-aligned stride).
-    const uint32_t scale_scratch_bytes = constants::TILE_HEIGHT * scale_aligned_page_bytes;
+    const uint32_t scale_scratch_bytes = tile_h * scale_aligned_page_bytes;
     CircularBufferConfig cb_scale_scratch_cfg =
         CircularBufferConfig(scale_scratch_bytes, {{cb_scale_scratch_idx, fp32_df}})
             .set_page_size(cb_scale_scratch_idx, scale_scratch_bytes);
     CreateCircularBuffer(program, all_cores, cb_scale_scratch_cfg);
 
     // Reader (RISCV_1): fills the reduce scaler, then column-block-major input reads.
-    std::vector<uint32_t> reader_ct_args = {cb_in_idx, in_col_block_bytes, cb_scaler_idx};
+    std::vector<uint32_t> reader_ct_args = {
+        cb_in_idx, in_col_block_bytes, cb_scaler_idx, tile_h, tile_w, face_h, face_w};
     TensorAccessorArgs(src_buffer).append_to(reader_ct_args);
     KernelHandle reader_kernel_id = CreateKernel(
         program,
@@ -130,7 +141,11 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
         cb_scale_tiles_idx,
         cb_scale_scratch_idx,
         scale_groups,
-        scale_aligned_page_bytes};
+        scale_aligned_page_bytes,
+        tile_h,
+        tile_w,
+        face_h,
+        face_w};
     TensorAccessorArgs(dst_e4m3_buffer).append_to(writer_ct_args);
     TensorAccessorArgs(dst_scale_buffer).append_to(writer_ct_args);
     KernelHandle writer_kernel_id = CreateKernel(
@@ -156,7 +171,9 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
         cb_e4m3_idx,
         clamp_min_bits,
         clamp_max_bits,
-        inv_e4m3_max_bits};
+        inv_e4m3_max_bits,
+        tile_h,
+        tile_w};
     // fp32_dest_acc_en=True is required whenever an 8-bit-float CB (e4m3) is on the core (DEST in
     // 32-bit family-agnostic mode); it also gives fp32 precision for the reduce/divide stages.
     KernelHandle compute_kernel_id = CreateKernel(

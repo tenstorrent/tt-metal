@@ -33,10 +33,15 @@ void kernel_main() {
     constexpr uint32_t cb_scale_bcast = get_compile_time_arg_val(3);
     constexpr uint32_t cb_out_tile = get_compile_time_arg_val(4);
     constexpr uint32_t cb_out_fp32 = get_compile_time_arg_val(5);
-    constexpr uint32_t TILE_HEIGHT = 32;
-    constexpr uint32_t COL_BLOCK_TILES = 32;                                  // 32 tiles = 1024 cols per column-block
-    constexpr uint32_t TILES_PER_GROUP = 4;                                   // 128 / 32
-    constexpr uint32_t GROUPS_PER_BLOCK = COL_BLOCK_TILES / TILES_PER_GROUP;  // 8
+    // Tile dims from the tensor's tile spec (32x32 by default; tiny tiles supported).
+    constexpr uint32_t tile_h = get_compile_time_arg_val(6);
+    constexpr uint32_t tile_w = get_compile_time_arg_val(7);
+    constexpr uint32_t COL_BLOCK_ELEMS = 1024;  // LLK column-block width in elements
+    constexpr uint32_t SCALE_GROUP_SIZE = 128;  // elements per per-token scale group
+    constexpr uint32_t TILE_HEIGHT = tile_h;
+    constexpr uint32_t COL_BLOCK_TILES = COL_BLOCK_ELEMS / tile_w;             // 32 tiles per column-block
+    constexpr uint32_t TILES_PER_GROUP = SCALE_GROUP_SIZE / tile_w;            // 4
+    constexpr uint32_t GROUPS_PER_BLOCK = COL_BLOCK_ELEMS / SCALE_GROUP_SIZE;  // 8
 
     constexpr uint32_t IDST0 = 0;
     constexpr uint32_t IDST1 = 1;

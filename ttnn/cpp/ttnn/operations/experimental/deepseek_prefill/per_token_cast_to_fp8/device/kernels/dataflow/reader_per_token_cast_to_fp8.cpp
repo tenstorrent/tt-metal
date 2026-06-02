@@ -20,12 +20,15 @@ void kernel_main() {
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t col_block_bytes = get_compile_time_arg_val(1);  // 1024 * elem_size
     constexpr uint32_t cb_scaler = get_compile_time_arg_val(2);
-    constexpr uint32_t TILE_HEIGHT = 32;
+    // Tile / face dims from the tensor's tile spec (32x32 / 16x16 by default; tiny tiles supported).
+    constexpr uint32_t tile_h = get_compile_time_arg_val(3);
+    constexpr uint32_t tile_w = get_compile_time_arg_val(4);
+    constexpr uint32_t face_h = get_compile_time_arg_val(5);
+    constexpr uint32_t face_w = get_compile_time_arg_val(6);
     constexpr uint32_t ONE_F32_BITS = 0x3f800000u;  // 1.0f
-    constexpr uint32_t FACE_FP32 = 16 * 16;         // fp32 elements per face
-    constexpr uint32_t NUM_FACES = 4;
-    constexpr uint32_t FACE_ROW_FP32 = 16;  // elements in row 0 of a face
-    constexpr auto src_args = TensorAccessorArgs<3>();
+    constexpr uint32_t face_elems = face_h * face_w;                       // fp32 elements per face
+    constexpr uint32_t num_faces = (tile_h / face_h) * (tile_w / face_w);  // faces per tile
+    constexpr auto src_args = TensorAccessorArgs<7>();
 
     const auto src = TensorAccessor(src_args, src_addr);
 
@@ -34,25 +37,25 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* sc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_scaler));
     fill_zeros_async(get_write_ptr(cb_scaler), get_tile_size(cb_scaler));
 
-    for (uint32_t f = 0; f < NUM_FACES; ++f) {
-        for (uint32_t j = 0; j < FACE_ROW_FP32; ++j) {
-            sc[f * FACE_FP32 + j] = ONE_F32_BITS;
+    for (uint32_t f = 0; f < num_faces; ++f) {
+        for (uint32_t j = 0; j < face_w; ++j) {  // row 0 of the face
+            sc[f * face_elems + j] = ONE_F32_BITS;
         }
     }
     cb_push_back(cb_scaler, 1);
 
     for (uint32_t tr = 0; tr < num_tile_rows; ++tr) {
         for (uint32_t c = 0; c < num_col_blocks; ++c) {
-            cb_reserve_back(cb_in, TILE_HEIGHT);
+            cb_reserve_back(cb_in, tile_h);
             uint32_t l1 = get_write_ptr(cb_in);
             uint32_t col_offset_bytes = c * col_block_bytes;
-            for (uint32_t s = 0; s < TILE_HEIGHT; ++s) {
-                uint32_t page_id = (start_tile_row + tr) * TILE_HEIGHT + s;
+            for (uint32_t s = 0; s < tile_h; ++s) {
+                uint32_t page_id = (start_tile_row + tr) * tile_h + s;
                 noc_async_read(src.get_noc_addr(page_id) + col_offset_bytes, l1, col_block_bytes);
                 l1 += col_block_bytes;
             }
             noc_async_read_barrier();
-            cb_push_back(cb_in, TILE_HEIGHT);
+            cb_push_back(cb_in, tile_h);
         }
     }
 }

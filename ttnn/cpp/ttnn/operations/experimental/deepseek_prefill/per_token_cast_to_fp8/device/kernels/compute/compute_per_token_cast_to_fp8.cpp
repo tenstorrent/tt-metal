@@ -33,10 +33,8 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 
 namespace {
-constexpr uint32_t TILE_HEIGHT = 32;
-constexpr uint32_t COL_BLOCK_TILES = 32;
-constexpr uint32_t TILES_PER_GROUP = 4;
-constexpr uint32_t GROUPS_PER_BLOCK = COL_BLOCK_TILES / TILES_PER_GROUP;  // 8
+constexpr uint32_t COL_BLOCK_ELEMS = 1024;  // LLK column-block width in elements
+constexpr uint32_t SCALE_GROUP_SIZE = 128;  // elements per per-token scale group
 }  // namespace
 
 void kernel_main() {
@@ -51,6 +49,11 @@ void kernel_main() {
     constexpr uint32_t clamp_min_bits = get_compile_time_arg_val(8);
     constexpr uint32_t clamp_max_bits = get_compile_time_arg_val(9);
     constexpr uint32_t inv_448_bits = get_compile_time_arg_val(10);
+    // Tile dims from the tensor's tile spec (arg 11 = tile_h, unused here; 32x32 by default).
+    constexpr uint32_t tile_w = get_compile_time_arg_val(12);
+    constexpr uint32_t COL_BLOCK_TILES = COL_BLOCK_ELEMS / tile_w;             // 32 for 32-wide tiles
+    constexpr uint32_t TILES_PER_GROUP = SCALE_GROUP_SIZE / tile_w;            // 4
+    constexpr uint32_t GROUPS_PER_BLOCK = COL_BLOCK_ELEMS / SCALE_GROUP_SIZE;  // 8
 
     constexpr uint32_t IDST0 = 0;
     constexpr uint32_t IDST1 = 1;

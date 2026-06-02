@@ -35,18 +35,28 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
 
     const auto& shape = e4m3.logical_shape();
     auto [M, H] = common::infer_M_H(shape);  // M = rows, H = width (last dim)
-    TT_FATAL(M % constants::TILE_HEIGHT == 0, "per_token_cast_back: M={} must be divisible by TILE_HEIGHT=32", M);
+
+    // Tile / face dims come from the tensor's tile spec (32x32 / 16x16 by default; tiny tiles such as
+    // 16x32, 32x16, 16x16 are also supported). The kernels receive these as compile-time args.
+    const auto tile_shape = e4m3.tensor_spec().tile().get_tile_shape();
+    const auto face_shape = e4m3.tensor_spec().tile().get_face_shape();
+    const uint32_t tile_h = tile_shape[0];
+    const uint32_t tile_w = tile_shape[1];
+    const uint32_t face_h = face_shape[0];
+    const uint32_t face_w = face_shape[1];
+
+    TT_FATAL(M % tile_h == 0, "per_token_cast_back: M={} must be divisible by tile height={}", M, tile_h);
     TT_FATAL(
         H % common::COL_BLOCK_ELEMS == 0,
         "per_token_cast_back: H={} must be a multiple of COL_BLOCK_ELEMS={}",
         H,
         common::COL_BLOCK_ELEMS);
 
-    constexpr uint32_t TILE_BYTES_FP32 = constants::TILE_HEIGHT * constants::TILE_WIDTH * 4;   // 4096
-    constexpr uint32_t COL_BLOCK_TILES = common::COL_BLOCK_ELEMS / constants::TILE_WIDTH;      // 32
+    const uint32_t TILE_BYTES_FP32 = tile_h * tile_w * 4;
+    const uint32_t COL_BLOCK_TILES = common::COL_BLOCK_ELEMS / tile_w;                         // 32 for 32-wide tiles
     constexpr uint32_t GROUPS_PER_BLOCK = common::COL_BLOCK_ELEMS / common::SCALE_GROUP_SIZE;  // 8
 
-    const uint32_t tile_rows = M / constants::TILE_HEIGHT;
+    const uint32_t tile_rows = M / tile_h;
     const uint32_t num_col_blocks = H / common::COL_BLOCK_ELEMS;
     const uint32_t e4m3_col_block_bytes = common::COL_BLOCK_ELEMS;  // 1 byte/elem
     const uint32_t out_elem_bytes = output.element_size();
@@ -100,7 +110,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     CreateCircularBuffer(program, all_cores, cb_out_cfg);
 
     // cb_scale_scratch: reader-private staging for 32 tokens' full scale rows (page-aligned stride).
-    const uint32_t scale_scratch_bytes = constants::TILE_HEIGHT * scale_aligned_page_bytes;
+    const uint32_t scale_scratch_bytes = tile_h * scale_aligned_page_bytes;
     CircularBufferConfig cb_scale_scratch_cfg =
         CircularBufferConfig(scale_scratch_bytes, {{cb_scale_scratch_idx, fp32_df}})
             .set_page_size(cb_scale_scratch_idx, scale_scratch_bytes);
@@ -113,7 +123,11 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         cb_scale_scratch_idx,
         e4m3_col_block_bytes,
         GROUPS_PER_BLOCK,
-        scale_aligned_page_bytes};
+        scale_aligned_page_bytes,
+        tile_h,
+        tile_w,
+        face_h,
+        face_w};
     TensorAccessorArgs(src_e4m3_buffer).append_to(reader_ct_args);
     TensorAccessorArgs(src_scale_buffer).append_to(reader_ct_args);
     KernelHandle reader_kernel_id = CreateKernel(
@@ -125,7 +139,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
 
     // Writer (RISCV_0): column-block-major writes of the row-major output.
-    std::vector<uint32_t> writer_ct_args = {cb_out_idx, out_col_block_bytes};
+    std::vector<uint32_t> writer_ct_args = {cb_out_idx, out_col_block_bytes, tile_h};
     TensorAccessorArgs(dst_buffer).append_to(writer_ct_args);
     KernelHandle writer_kernel_id = CreateKernel(
         program,
@@ -137,7 +151,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
 
     // Compute (TRISC): e4m3 -> fp32 RM -> tilize -> per-group bcast multiply -> untilize to output.
     std::vector<uint32_t> compute_ct_args = {
-        cb_e4m3_idx, cb_in_rm_idx, cb_in_tile_idx, cb_scale_bcast_idx, cb_out_tile_idx, cb_out_idx};
+        cb_e4m3_idx, cb_in_rm_idx, cb_in_tile_idx, cb_scale_bcast_idx, cb_out_tile_idx, cb_out_idx, tile_h, tile_w};
     // fp32_dest_acc_en=True required (e4m3 CB on core); HiFi4 (the ComputeConfig default) keeps the
     // broadcast multiply precise.
     KernelHandle compute_kernel_id = CreateKernel(

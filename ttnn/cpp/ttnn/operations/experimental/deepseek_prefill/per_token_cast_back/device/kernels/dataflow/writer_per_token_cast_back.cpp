@@ -19,24 +19,25 @@ void kernel_main() {
     uint32_t start_tile_row = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_out_fp32 = get_compile_time_arg_val(0);
-    constexpr uint32_t col_block_bytes = get_compile_time_arg_val(1);  // 4096 (fp32)
-    constexpr uint32_t TILE_HEIGHT = 32;
-    constexpr auto dst_args = TensorAccessorArgs<2>();
+    constexpr uint32_t col_block_bytes = get_compile_time_arg_val(1);  // COL_BLOCK_ELEMS * out_elem_size
+    // Tile height from the tensor's tile spec (32 by default; tiny tiles supported).
+    constexpr uint32_t tile_h = get_compile_time_arg_val(2);
+    constexpr auto dst_args = TensorAccessorArgs<3>();
 
     const auto dst = TensorAccessor(dst_args, dst_addr);
 
     for (uint32_t tr = 0; tr < num_tile_rows; ++tr) {
         for (uint32_t c = 0; c < num_col_blocks; ++c) {
-            cb_wait_front(cb_out_fp32, TILE_HEIGHT);
+            cb_wait_front(cb_out_fp32, tile_h);
             uint32_t l1 = get_read_ptr(cb_out_fp32);
             uint32_t col_offset_bytes = c * col_block_bytes;
-            for (uint32_t s = 0; s < TILE_HEIGHT; ++s) {
-                uint32_t page_id = (start_tile_row + tr) * TILE_HEIGHT + s;
+            for (uint32_t s = 0; s < tile_h; ++s) {
+                uint32_t page_id = (start_tile_row + tr) * tile_h + s;
                 noc_async_write(l1, dst.get_noc_addr(page_id) + col_offset_bytes, col_block_bytes);
                 l1 += col_block_bytes;
             }
             noc_async_write_barrier();
-            cb_pop_front(cb_out_fp32, TILE_HEIGHT);
+            cb_pop_front(cb_out_fp32, tile_h);
         }
     }
 }
