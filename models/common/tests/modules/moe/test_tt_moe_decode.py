@@ -336,6 +336,7 @@ SKIP_LIST = [
 @torch.no_grad()
 def test_tt_moe_decode(
     mesh_device: ttnn.MeshDevice,
+    device_params: dict,
     config_path: Path,
     num_iterations: int,
 ):
@@ -346,7 +347,11 @@ def test_tt_moe_decode(
         pytest.skip(f"{config_path} is a known failure")
 
     mesh_shape = tuple(mesh_device.shape)
-    config = TTMoEDecodeConfig.from_yaml(config_path.read_text())
+    # Derive the topology from the parametrized fabric_config so the config's RS path
+    # matches the fabric the device is actually brought up on.
+    fabric_config = device_params["fabric_config"]
+    topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
+    config = TTMoEDecodeConfig.from_yaml(config_path.read_text(), topology=topology)
     if config.mesh_shape != mesh_shape:
         try:
             config = config.with_mesh_shape(mesh_shape)

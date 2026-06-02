@@ -940,7 +940,10 @@ class TTMoEDecode:
             ttnn.deallocate(tt_dispatch_input_expert_indices_tensor)
 
         # [select_experts_k, tokens_per_device, hidden_size // num_replicated_devices] final per device shape
-        if self.config.mesh_shape[1 - self.config.cluster_axis] == self.DEEPSEEK_RS_DP_DIM:
+        if (
+            self.config.mesh_shape[1 - self.config.cluster_axis] == self.DEEPSEEK_RS_DP_DIM
+            and self.config.topology == ttnn.Topology.Ring
+        ):
             tt_final_output = ttnn.experimental.deepseek_moe_reduce_scatter(
                 tt_fast_reduce_output_tensors,
                 # output_memory_config

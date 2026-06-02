@@ -173,7 +173,8 @@ class DispatchConfig(_TTOpKwargs):
 
     shared_expert_ids: Optional[list[int]] = None
     cluster_axis: int
-    num_links: int
+    # all_to_all_dispatch_metadata auto-detects num_links when None.
+    num_links: Optional[int] = None
     drain_sync_tilizer_core: Optional[CoreCoord] = None
     worker_mode: WorkerMode = ttnn.WorkerMode.DIRECT
     dispatch_algorithm: DispatchAlgorithm = ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH
@@ -247,8 +248,9 @@ class DeepseekMoEReduceScatterConfig(_TTOpKwargs):
 
     output_memory_config: MemoryConfig = Field(default_factory=lambda: ttnn.DRAM_MEMORY_CONFIG)
     dim: int = -1
-    num_links: int
-    topology: Topology
+    # num_links is auto-detected by the op when None; topology must be Ring (op requirement).
+    num_links: Optional[int] = None
+    topology: Topology = ttnn.Topology.Ring
     cluster_axis: int = Field(validation_alias="rs_cluster_axis")
 
     @classmethod
@@ -264,9 +266,11 @@ class ReduceScatterConfig(_TTOpKwargs):
     """
 
     dim: int = -1
-    num_links: int
+    # ttnn.reduce_scatter accepts None for both (auto-determines num_links / fabric topology),
+    # so leave these unset rather than forcing a value the caller may not know.
+    num_links: Optional[int] = None
     cluster_axis: int = Field(validation_alias="rs_cluster_axis")
-    topology: Topology
+    topology: Optional[Topology] = None
     memory_config: Optional[MemoryConfig] = None
 
     @classmethod
@@ -414,8 +418,10 @@ class TTMoEDecodeConfig(BaseModel):
     num_fast_reduce_outputs: Optional[int] = None
 
     # Shared ccl kwargs adopted by sub-configs
-    num_links: int = 4
-    topology: Topology = ttnn.Topology.Ring
+    num_links: Optional[int] = None
+    # Runtime fabric topology (caller-detected). Required: it drives both the fast-reduce
+    # output layout and the reduce-scatter op selection, so we never silently guess it.
+    topology: Topology
 
     # Top-level memory configs
     dispatch_input_memory_config: MemoryConfig = Field(default_factory=lambda: ttnn.L1_MEMORY_CONFIG)
@@ -463,21 +469,26 @@ class TTMoEDecodeConfig(BaseModel):
                 resolved[name] = data[name]
             elif finfo.default_factory is not None:
                 resolved[name] = finfo.default_factory()
-            elif not finfo.is_required():
+            elif not finfo.is_required() and finfo.default is not None:
+                # A None default means "unset" — don't adopt it, or it would clobber the
+                # sub-config's own default (e.g. DeepseekMoEReduceScatterConfig.topology=Ring)
+                # with None and fail that sub-config's type check.
                 resolved[name] = finfo.default
             # else: required & missing — bail check upstream returned already
 
         # Pick num_fast_reduce_outputs and split_size based on which post-compute RS
         # path forward() will take:
-        #   - rs_axis == _DEEPSEEK_RS_DP_DIM → deepseek_moe_reduce_scatter consumes the
-        #     full list, so fast_reduce pre-splits into N=rs_axis_size outputs. Each
-        #     per-output split must be TILE_SIZE-aligned (fast_reduce's constraint).
+        #   - rs_axis == _DEEPSEEK_RS_DP_DIM AND topology is Ring → deepseek_moe_reduce_scatter
+        #     consumes the full list, so fast_reduce pre-splits into N=rs_axis_size outputs.
+        #     Each per-output split must be TILE_SIZE-aligned (fast_reduce's constraint).
         #   - otherwise → ttnn.reduce_scatter (or SKIP) takes a single tensor and does
         #     the per-device split internally. fast_reduce produces N=1 wide output
         #     covering the whole hidden dim; padding it to a multiple of
         #     num_replicated * TILE_SIZE keeps each post-RS device chunk tile-aligned.
+        # deepseek_moe_reduce_scatter only supports Ring, so on any other topology (or when
+        # the caller left topology unset → None) we must use the generic single-output layout.
         num_replicated = resolved["mesh_shape"][1 - resolved["cluster_axis"]]
-        if num_replicated == _DEEPSEEK_RS_DP_DIM:
+        if num_replicated == _DEEPSEEK_RS_DP_DIM and resolved.get("topology") == ttnn.Topology.Ring:
             num_fast_reduce_outputs = num_replicated
             align_unit = ttnn.TILE_SIZE
         else:
@@ -715,12 +726,18 @@ class TTMoEDecodeConfig(BaseModel):
         return yaml.safe_dump(data, sort_keys=False)
 
     @classmethod
-    def from_yaml(cls, yaml_str: str) -> "TTMoEDecodeConfig":
+    def from_yaml(cls, yaml_str: str, topology: ttnn.Topology) -> "TTMoEDecodeConfig":
         """Load a config from YAML.
+
+        `topology` is the runtime fabric topology (the caller detects it from the
+        device). It overrides any `topology` authored in the YAML, since the layout
+        and reduce-scatter path depend on the actual hardware, not the saved value.
 
         The pre-validators on each field re-hydrate ttnn objects from their dict
         / string representations via `from_json` (and enums by their name).
         """
         import yaml
 
-        return cls.model_validate(yaml.safe_load(yaml_str))
+        data = yaml.safe_load(yaml_str)
+        data["topology"] = topology
+        return cls.model_validate(data)
