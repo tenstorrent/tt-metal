@@ -19,7 +19,7 @@ on:
         required: false
         type: string
         default: "all"
-        description: "Filter test rows by model-name (untagged rows always run)"
+        description: "Filter test rows by model-name (strict: only rows whose model-name matches will run; use 'all' to run every row)"
       test-selection:
         required: false
         type: string
@@ -101,9 +101,10 @@ jobs:
           fi
 
           filtered="$selected"
-          if [[ "$MODEL" != "all" ]]; then
-            filtered=$(echo "$filtered" | jq -c --arg model "$MODEL" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
+          if [[ "$MODEL" != "all" && -n "$MODEL" ]]; then
+            filtered=$(echo "$filtered" | jq -c --arg model "$MODEL" '[.[] | select(.["model-name"] == $model)]')
           fi
+
 
           count=$(echo "$filtered" | jq 'length')
           if [[ "$count" -eq 0 ]]; then

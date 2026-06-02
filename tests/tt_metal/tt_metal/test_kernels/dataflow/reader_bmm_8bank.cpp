@@ -50,7 +50,7 @@ void kernel_main() {
 #ifdef ARCH_QUASAR
                         // Quasar: implicit-sync read. The DFB credit advances via the per-trid
                         // completion ISR; no reserve_back / barrier / push_back required.
-                        noc.async_read<Noc::TxnIdMode::ENABLED>(s0, dfb0, {.page_id = itileA}, {});
+                        noc.async_read<NocOptions::TXN_ID>(s0, dfb0, {.page_id = itileA}, {});
 #else
                         dfb0.reserve_back(onetile);
                         noc.async_read(s0, dfb0, entry_size0, {.page_id = itileA}, {});
@@ -62,7 +62,7 @@ void kernel_main() {
                     // Read B's tile at (kt, nt)
                     if (mt % num_readers == reader_id && kt % num_readers == reader_id) {
 #ifdef ARCH_QUASAR
-                        noc.async_read<Noc::TxnIdMode::ENABLED>(s1, dfb1, {.page_id = itileB}, {});
+                        noc.async_read<NocOptions::TXN_ID>(s1, dfb1, {.page_id = itileB}, {});
 #else
                         dfb1.reserve_back(onetile);
                         noc.async_read(s1, dfb1, entry_size1, {.page_id = itileB}, {});
