@@ -132,12 +132,18 @@ jobs:
         HF_HUB_CACHE: ${{ matrix.test-group.sku == 'bh_p150b_civ2' && '' || '/mnt/MLPerf/huggingface/hub' }}
         TT_MM_THROTTLE_PERF: ${{ contains(matrix.test-group.sku, 'bh_') && '0' || '5' }}
       volumes:
+        # Only the workspace mount is unconditional. Hugepages and MLPerf are
+        # threaded through container.options below so sim_* SKUs on ubuntu-latest
+        # can omit them.
         - ${{ github.workspace }}/docker-job:/work
-      # HW-only flags (--device, hugepages, MLPerf, P150b LFC token) are folded
-      # into options as a single conditional string so sim_* SKUs can omit them
-      # (volumes: list items can't be conditionally dropped).
+      # `--label runner-mode=sim` is a truthy no-op placeholder. It exists so the
+      # `&& '' || …` short-circuit doesn't fire: empty string is falsy in GHA
+      # expressions, which would cause the HW branch to be picked for sim entries
+      # and docker create would then try to mount /dev/tenstorrent on
+      # ubuntu-latest and fail.
       options: >-
-        ${{ startsWith(matrix.test-group.sku, 'sim_') && ''
+        ${{ startsWith(matrix.test-group.sku, 'sim_')
+            && '--label runner-mode=sim'
             || format('--device /dev/tenstorrent -v /dev/hugepages-1G:/dev/hugepages-1G -v /mnt/MLPerf:/mnt/MLPerf:ro {0}',
                      matrix.test-group.sku == 'bh_p150b_civ2' && '-e TT_GH_CI_INFRA=1' || '') }}
     defaults:

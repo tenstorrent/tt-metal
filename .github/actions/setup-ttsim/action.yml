@@ -6,7 +6,7 @@ description: |
   TT_METAL_DISABLE_SFPLOADMACRO). The caller workflow is expected to have
   uploaded an artifact containing libttsim_wh.so and libttsim_bh.so (see
   the fetch-ttsim job pattern in tt-metal-l2-nightly-impl.yaml). This action
-  picks the correct binary based on the SKU and installs it into /work/sim.
+  picks the correct binary based on the SKU and installs it into <root>/sim.
 
 inputs:
   sku:
@@ -22,6 +22,15 @@ inputs:
       uploaded by an upstream fetch-ttsim job in the calling workflow.
     required: false
     default: 'ttsim-binaries'
+  root:
+    description: |
+      Root directory containing tt_metal/soc_descriptors/. The simulator install
+      is placed at <root>/sim/ and TT_METAL_SIMULATOR_HOME is set to that path.
+      Default '/work' assumes the action is invoked inside the standard dev
+      container whose workdir is /work. For containerless callers (e.g. an
+      ubuntu-latest runner with a plain checkout), pass `${{ github.workspace }}`.
+    required: false
+    default: '/work'
 
 runs:
   using: composite
@@ -42,8 +51,8 @@ runs:
       shell: bash
       run: |
         {
-          echo "TT_METAL_SIMULATOR_HOME=/work/sim"
-          echo "TT_METAL_SIMULATOR=/work/sim/libttsim.so"
+          echo "TT_METAL_SIMULATOR_HOME=${{ inputs.root }}/sim"
+          echo "TT_METAL_SIMULATOR=${{ inputs.root }}/sim/libttsim.so"
           echo "TT_METAL_SLOW_DISPATCH_MODE=1"
           echo "TT_METAL_DISABLE_SFPLOADMACRO=1"
         } >> "$GITHUB_ENV"
@@ -58,6 +67,6 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        mkdir -p /work/sim
-        mv "/tmp/ttsim/${{ steps.ttsim-info.outputs.asset_name }}" "/work/sim/libttsim.so"
-        cp "/work/tt_metal/soc_descriptors/${{ steps.ttsim-info.outputs.soc_desc }}" "/work/sim/soc_descriptor.yaml"
+        mkdir -p "${{ inputs.root }}/sim"
+        mv "/tmp/ttsim/${{ steps.ttsim-info.outputs.asset_name }}" "${{ inputs.root }}/sim/libttsim.so"
+        cp "${{ inputs.root }}/tt_metal/soc_descriptors/${{ steps.ttsim-info.outputs.soc_desc }}" "${{ inputs.root }}/sim/soc_descriptor.yaml"
