@@ -208,42 +208,90 @@ def _tokens_to_host_tensor(token_ids: list[int], mapper) -> ttnn.Tensor:
     )
 
 
-def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DStreamService) -> None:
-    """External-producer standalone loop.
+def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
+    """Truly standalone: read token IDs from a JSON file and push them straight
+    through `pipeline.prefill(token_ids=...)`. No H2D socket, no SHM, no external
+    producer — single process, for local bring-up / perf.
 
-    Token IDs are pushed into the H2D service by a separate process running
-    `prefill_h2d_producer.py`. The producer also packs per-iter control
-    metadata (`actual_isl`, `slot_id`, `dst_slot`) — `h2d_socket_sync` returns
-    both the tokens tensor and the metadata tensor; we decode the metadata
-    and pass the real values to `pipeline.prefill`.
+    Reads PREFILL_STANDALONE_INPUT (default: standalone_input.json next to this
+    script). File format: {"task_id": <int>, "token_ids": [<int>, ...]}.
     """
+    import json
     import time as _time
 
-    num_iterations = int(os.environ.get("PREFILL_STANDALONE_ITERS", "1"))
-    logger.info(
-        f"[standalone] external-producer mode: waiting on h2d_socket_sync for "
-        f"{num_iterations} iters; per-iter control via H2D metadata channel"
-    )
+    default_path = Path(__file__).parent / "standalone_input.json"
+    input_path = Path(os.environ.get("PREFILL_STANDALONE_INPUT", default_path))
+    logger.info(f"[standalone] reading input from {input_path}")
+    with open(input_path) as f:
+        data = json.load(f)
+    task_id = data["task_id"]
+    token_ids = list(data["token_ids"])
 
+    if len(token_ids) > MAX_SEQ_LEN:
+        raise ValueError(
+            f"task_id={task_id} prompt has {len(token_ids)} tokens but MAX_SEQ_LEN={MAX_SEQ_LEN}. "
+            f"Bump PREFILL_MAX_SEQ_LEN."
+        )
+    actual_isl = len(token_ids)
+    if len(token_ids) < MAX_SEQ_LEN:
+        token_ids = token_ids + [1] * (MAX_SEQ_LEN - len(token_ids))
+
+    num_iterations = int(os.environ.get("PREFILL_STANDALONE_ITERS", "1"))
+    logger.info(f"[standalone] task_id={task_id} actual_isl={actual_isl} iters={num_iterations}")
     iter_times_ms = []
     first_token = None
     for i in range(num_iterations):
         _t0 = _time.perf_counter()
-        # Device-side sync: workers wait on data_ready_sem (set by the service
-        # core after the producer's push lands), copy backing -> fresh output,
-        # ack consumed_counter. Returns a tensor independent of the backing.
+        first_token = pipeline.prefill(token_ids=token_ids, slot_id=0, actual_isl=actual_isl)
+        _dt_ms = (_time.perf_counter() - _t0) * 1000.0
+        iter_times_ms.append(_dt_ms)
+        logger.info(
+            f"[prefill timing] task_id={task_id} iter={i} num_tokens={MAX_SEQ_LEN} "
+            f"pipeline.prefill() = {_dt_ms:.2f} ms first_token={first_token}"
+        )
+    logger.info(f"[iter timing summary] per-iter ms = {[round(t,2) for t in iter_times_ms]}")
+    # stdout, not a log line: callers (tests / orchestrators) parse this.
+    print(f"[standalone] task_id={task_id} first_token={first_token}")
+
+
+def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DStreamService) -> None:
+    """Request loop: token IDs + per-iter control metadata arrive over the H2D
+    socket service, pushed by a separate producer process (prefill_h2d_producer.py
+    today; the inference-server / prefill scheduler in production).
+
+    No SHM: the c2p token-input channel is replaced by the H2D socket service,
+    and the p2c token write-back is removed (downstream consumption is via
+    migration / layer-acks, not a host token hand-back).
+
+    `h2d_socket_sync` returns (tokens, metadata); we decode the 4×int32 metadata
+    [actual_isl, slot_id, dst_slot, reserved] and pass the real values into
+    `pipeline.prefill`.
+    """
+    import time as _time
+
+    logger.info(
+        "[request] entering request loop — blocks on h2d_socket_sync for each push, "
+        "runs until SIGTERM/SIGINT (Ctrl-C). Drive it with prefill_h2d_producer.py / the scheduler."
+    )
+
+    i = 0
+    while not _shutdown:
+        _t0 = _time.perf_counter()
+        # Device-side sync: workers block on data_ready_sem (set by the service
+        # core after a producer push lands), copy backing -> fresh output, ack
+        # consumed_counter. Returns tensors independent of the backing. This call
+        # blocks until the next push arrives, so the loop is naturally idle-waiting.
         tt_tokens, tt_metadata = h2d_socket_sync(
             h2d_service,
             H2D_SYNC_WORKER_CORES,
             metadata_size_bytes=H2D_METADATA_SIZE_BYTES,
         )
-        # Decode per-iter metadata: 4 × int32 = [actual_isl, slot_id, dst_slot, reserved].
-        # Replicated across the mesh — take the first device's view.
+        # Decode per-iter metadata (replicated across the mesh — first device view).
         meta_host = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()
         actual_isl = int(meta_host[0])
         slot_id = int(meta_host[1])
         dst_slot = int(meta_host[2])
-        logger.info(f"[standalone] iter={i} metadata: actual_isl={actual_isl} slot_id={slot_id} dst_slot={dst_slot}")
+        logger.info(f"[request] iter={i} metadata: actual_isl={actual_isl} slot_id={slot_id} dst_slot={dst_slot}")
         first_token = pipeline.prefill(
             input_tensor=tt_tokens,
             slot_id=slot_id,
@@ -251,104 +299,12 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H
             dst_slot=dst_slot if dst_slot != INVALID_SLOT_ID else None,
         )
         _dt_ms = (_time.perf_counter() - _t0) * 1000.0
-        iter_times_ms.append(_dt_ms)
         logger.info(
-            f"[prefill timing] iter={i} num_tokens={MAX_SEQ_LEN} "
+            f"[request] iter={i} num_tokens={MAX_SEQ_LEN} "
             f"pipeline.prefill() = {_dt_ms:.2f} ms first_token={first_token}"
         )
-    logger.info(f"[iter timing summary] per-iter ms = {[round(t,2) for t in iter_times_ms]}")
-
-    # stdout, not a log line: callers (tests / orchestrators) parse this.
-    print(f"[standalone] first_token={first_token}")
-
-
-def run_request_loop(
-    pipeline: TtDeepSeekPrefillPipeline,
-    h2d_service: ttnn.H2DStreamService,
-    mesh_device: ttnn.MeshDevice,
-) -> None:
-    """Read prefill requests from SHM, run pipeline.prefill, write tokens back.
-
-    SharedMemory lives in the C++ inference server's tree at
-    cpp_server/src/runners/shared_memory.py. The launcher (the C++ server's
-    Python child-process wrapper) must put cpp_server/src on PYTHONPATH; this
-    runner imports it lazily so standalone mode (which doesn't need SHM) works
-    regardless of that PYTHONPATH entry.
-    """
-    try:
-        from runners.shared_memory import PREFILL_MAX_TOKEN_IDS, SharedMemory
-    except ImportError as exc:
-        raise ImportError(
-            "Cannot import runners.shared_memory. SHM mode requires "
-            "<tt-inference-server>/tt-media-server/cpp_server/src on PYTHONPATH. "
-            "(Standalone mode does not need it; set PREFILL_STANDALONE=1 instead.)"
-        ) from exc
-
-    c2p_name = os.environ.get("TT_IPC_SHM_C2P")
-    p2c_name = os.environ.get("TT_IPC_SHM_P2C")
-    if not (c2p_name and p2c_name):
-        raise RuntimeError("TT_IPC_SHM_C2P / TT_IPC_SHM_P2C must be set")
-
-    logger.info(f"Opening SHM C2P={c2p_name} P2C={p2c_name}")
-    import time as _time
-
-    # Build the input mapper once; reused on every push via _tokens_to_host_tensor.
-    h2d_mapper = ttnn.create_mesh_mapper(mesh_device, H2D_MAPPER_CONFIG)
-
-    with SharedMemory(c2p_name, max_token_ids=PREFILL_MAX_TOKEN_IDS, is_shutdown=_is_shutdown) as c2p, SharedMemory(
-        p2c_name, max_token_ids=1, is_shutdown=_is_shutdown
-    ) as p2c:
-        logger.info("SHM bridge started, waiting for prefill requests...")
-
-        while not _shutdown:
-            msg = c2p.read()
-            if msg is None:
-                break
-
-            task_id = msg.task_id
-            token_ids = list(msg.token_ids)
-            dst_slot = msg.slot_id
-
-            logger.info(
-                f"Received task_id={task_id} num_tokens={len(token_ids)} "
-                f"first5={token_ids[:5]} last5={token_ids[-5:]} "
-                f"dst_slot={dst_slot if dst_slot != INVALID_SLOT_ID else 'INVALID(skip-migration)'}"
-            )
-
-            if len(token_ids) > MAX_SEQ_LEN:
-                tail_preview = token_ids[MAX_SEQ_LEN : MAX_SEQ_LEN + 10]
-                tail_suffix = "..." if len(token_ids) > MAX_SEQ_LEN + 10 else ""
-                raise ValueError(
-                    f"task_id={task_id} prompt has {len(token_ids)} tokens but "
-                    f"MAX_SEQ_LEN={MAX_SEQ_LEN}. Bump SEQ_LEN in the launcher. "
-                    f"Dropped tail tokens would have been: {tail_preview}{tail_suffix}"
-                )
-            actual_isl = len(token_ids)
-
-            if len(token_ids) < MAX_SEQ_LEN:
-                token_ids = token_ids + [1] * (MAX_SEQ_LEN - len(token_ids))
-
-            _t0 = _time.perf_counter()
-            host_tokens = _tokens_to_host_tensor(token_ids, h2d_mapper)
-            h2d_service.forward_to_tensor(host_tokens)
-            tt_tokens = h2d_socket_sync(h2d_service, H2D_SYNC_WORKER_CORES)
-            first_token = pipeline.prefill(
-                input_tensor=tt_tokens,
-                slot_id=0,
-                actual_isl=actual_isl,
-                dst_slot=dst_slot,
-            )
-            _dt_ms = (_time.perf_counter() - _t0) * 1000.0
-            logger.info(
-                f"[prefill timing] task_id={task_id} num_tokens={len(token_ids)} "
-                f"dst_slot={dst_slot if dst_slot != INVALID_SLOT_ID else '-'} "
-                f"pipeline.prefill() = {_dt_ms:.2f} ms"
-            )
-
-            p2c.write_token(task_id, first_token)
-            logger.info(f"Sent token {first_token} for task {task_id}")
-
-    logger.info("Request loop exited")
+        i += 1
+    logger.info(f"[request] loop exited after {i} requests")
 
 
 def _print_config() -> None:
@@ -357,8 +313,6 @@ def _print_config() -> None:
     rows = [
         ("DEEPSEEK_V3_HF_MODEL", os.environ.get("DEEPSEEK_V3_HF_MODEL", UNSET)),
         ("TT_DS_PREFILL_TTNN_CACHE", os.environ.get("TT_DS_PREFILL_TTNN_CACHE", DEFAULT_TTNN_CACHE)),
-        ("TT_IPC_SHM_C2P", os.environ.get("TT_IPC_SHM_C2P", UNSET)),
-        ("TT_IPC_SHM_P2C", os.environ.get("TT_IPC_SHM_P2C", UNSET)),
         ("PREFILL_SP", str(_sp)),
         ("PREFILL_TP", str(_tp)),
         ("PREFILL_NUM_LAYERS", str(NUM_LAYERS)),
@@ -452,20 +406,6 @@ def main() -> None:
     if PREFILL_DEBUG:
         probe_dram_allocatable_base(mesh_device, "after-compile")
 
-    h2d_service = _build_h2d_service(mesh_device)
-    if PREFILL_DEBUG:
-        probe_dram_allocatable_base(mesh_device, "after-h2d-service")
-
-    # Dump the descriptor to /dev/shm so the producer process can attach via
-    # `H2DStreamService.connect(service_id)` and push tokens in. The standalone
-    # loop below blocks on `h2d_socket_sync` waiting for those pushes.
-    service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-    descriptor_path = h2d_service.export_descriptor(service_id)
-    logger.info(
-        f"[h2d] exported descriptor service_id={service_id!r} -> {descriptor_path}; "
-        f"run prefill_h2d_producer.py in another process to drive token pushes."
-    )
-
     if enable_migration:
         from models.demos.deepseek_v3_d_p.tt.runners.migration_setup import DECODE_EP_ID, setup_prefill_migration
 
@@ -479,14 +419,38 @@ def main() -> None:
         pipeline.setup_migration(endpoint, DECODE_EP_ID)
         logger.info("[migration] pipeline.setup_migration() done; per-layer migrations fire on every prefill request")
 
-    logger.info("Setup complete, entering request loop")
     if os.environ.get("PREFILL_STANDALONE", "0") == "1":
-        run_standalone_loop(pipeline, h2d_service)
+        # Truly standalone: file input, no H2D socket service at all.
+        logger.info("Setup complete, running standalone loop (file input, no socket)")
+        run_standalone_loop(pipeline)
     else:
-        run_request_loop(pipeline, h2d_service, mesh_device)
+        # Request mode: input arrives over the H2D socket service. Build it,
+        # export the descriptor so a producer can connect, then read pushes.
+        h2d_service = _build_h2d_service(mesh_device)
+        if PREFILL_DEBUG:
+            probe_dram_allocatable_base(mesh_device, "after-h2d-service")
+        service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
+        descriptor_path = h2d_service.export_descriptor(service_id)
+        logger.info(
+            f"[h2d] exported descriptor service_id={service_id!r} -> {descriptor_path}; "
+            f"run prefill_h2d_producer.py (or the scheduler) in another process to drive token pushes."
+        )
+
+        logger.info("Setup complete, entering request loop")
+        run_request_loop(pipeline, h2d_service)
+
+        # Release the H2D service while the mesh + command queues + service core
+        # are still alive. Its dtor frees a command queue and the service-core L1;
+        # if that runs AFTER close_mesh_device (at interpreter exit) it aborts with
+        # "cq_id 0 out of range" / "deallocate_l1 on unclaimed core".
+        import gc
+
+        del h2d_service
+        gc.collect()
 
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
     ttnn.close_mesh_device(mesh_device)
+
     logger.info("Shutdown complete")
 
 
