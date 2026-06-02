@@ -7,7 +7,6 @@
 #include <dlfcn.h>
 #include <unistd.h>
 #include <sys/types.h>
-#include <sys/mman.h>
 
 #include <bit>
 #include <atomic>
@@ -76,38 +75,11 @@
 // We use the real type directly here.
 using __emule_cb_state = tt_emule::CBSyncState;
 
-thread_local std::vector<uint32_t> __rt_args;
-thread_local std::vector<uint32_t> __common_rt_args;
-
-// Below-4GB scratch buffers mirroring the rt args. Kernels reach into rt-args
-// storage via `get_arg_addr(idx)`, which returns a pointer; upstream
-// silicon-side code paths (e.g. `shard_addr_gen_utils::get_shard_map`) then
-// truncate that pointer to `uint32_t` because real L1 addresses fit in 32
-// bits.  When `__rt_args.data()` lives on the heap above 4 GB the truncation
-// destroys the upper bits and the subsequent dereference segfaults; this
-// mmap MAP_32BIT scratch keeps `get_arg_addr` 32-bit-safe.  Capacity 341 ×
-// uint32_t matches the upstream tt-metal cap for unique + common rt args.
-constexpr size_t EMULE_RT_ARGS_CAP = 341;
-thread_local uint32_t* __rt_args_scratch = nullptr;
-thread_local uint32_t* __common_rt_args_scratch = nullptr;
-
-static uint32_t* __emule_alloc_32bit_scratch(size_t bytes) {
-    void* p = mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
-    if (p == MAP_FAILED) {
-        throw std::runtime_error("emule: MAP_32BIT scratch allocation failed");
-    }
-    return static_cast<uint32_t*>(p);
-}
-
-static void __emule_ensure_rt_args_scratch() {
-    if (!__rt_args_scratch) {
-        __rt_args_scratch = __emule_alloc_32bit_scratch(EMULE_RT_ARGS_CAP * sizeof(uint32_t));
-    }
-    if (!__common_rt_args_scratch) {
-        __common_rt_args_scratch = __emule_alloc_32bit_scratch(EMULE_RT_ARGS_CAP * sizeof(uint32_t));
-    }
-}
+// Point into this core's L1 at kernel_config_base + rta_offset[proc_idx],
+// where WriteRuntimeArgsToDevice already wrote the bytes. nullptr = sentinel
+// (kernel declared no rt-args for this RISC).
+thread_local uint32_t* __rt_args = nullptr;
+thread_local uint32_t* __common_rt_args = nullptr;
 
 thread_local tt_emule::Core* __core = nullptr;
 thread_local tt_emule::Device* __device = nullptr;
@@ -335,6 +307,9 @@ namespace tt::tt_metal::emule {
 // Shared types used across subfunctions
 // ---------------------------------------------------------------------------
 
+// Mirrors RTA_CRTA_NO_ARGS_SENTINEL in tt_metal/hw/inc/hostdev/rta_constants.h.
+constexpr uint16_t kRtaCrtaNoArgsSentinel = 0xFFFF;
+
 struct KernelInfo {
     // size 1 for normal kernels; size 4 for Quasar compute (one per TRISC).
     // Either 4 distinct compiled variants (compile-time TRISC_* guards) or 4
@@ -348,6 +323,11 @@ struct KernelInfo {
     uint8_t thread_idx = 0;    // Index within this kernel's processor list → __emule_my_thread_id
     bool is_tensix = false;    // true for Tensix/compute kernels (DFB mask uses bits 8-23)
     uint32_t num_threads = 1;  // number of engines (for get_num_threads())
+    // L1 address of rt-args = kernel_config_base + rta_offset_in_kc (per-RISC,
+    // read from kg->launch_msg). Sentinel = kernel has no args on this RISC.
+    uint32_t kernel_config_base = 0;
+    uint16_t rta_offset_in_kc = kRtaCrtaNoArgsSentinel;
+    uint16_t crta_offset_in_kc = kRtaCrtaNoArgsSentinel;
 };
 
 // Captures a Metal 2.0 kernel's named bindings. Drives both the JIT wrapper's
@@ -413,6 +393,9 @@ struct PendingKernelInfo {
     uint8_t thread_idx = 0;    // Index within this kernel's processor list
     bool is_tensix = false;
     uint32_t num_threads = 1;
+    uint32_t kernel_config_base = 0;
+    uint16_t rta_offset_in_kc = kRtaCrtaNoArgsSentinel;
+    uint16_t crta_offset_in_kc = kRtaCrtaNoArgsSentinel;
 };
 
 // DFB allocation info for a single DFB on a core. Only dfb_id and base_addr
@@ -1235,9 +1218,26 @@ static void collect_kernels(
     std::vector<std::string>& inline_src_temps) {
     static const char* trisc_define_names[] = {"TRISC_UNPACK", "TRISC_MATH", "TRISC_PACK", "TRISC_ISOLATE_SFPU"};
 
-    const uint32_t num_pct = MetalContext::instance().hal().get_programmable_core_type_count();
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t num_pct = hal.get_programmable_core_type_count();
     for (uint32_t pct = 0; pct < num_pct; ++pct) {
         auto& kernels = impl.get_kernels(pct);
+        // (kernel_id, logical_core) → kg: a kernel that runs on cores in
+        // multiple KGs has distinct per-KG launch_msg layouts, so keying by
+        // kernel alone picks the wrong one for half the cores.
+        std::map<std::pair<KernelHandle, CoreCoord>, KernelGroup*> kernel_core_to_kg;
+        for (const auto& kg : impl.get_kernel_groups(pct)) {
+            for (const auto& cr : kg->core_ranges.ranges()) {
+                for (auto x = cr.start_coord.x; x <= cr.end_coord.x; ++x) {
+                    for (auto y = cr.start_coord.y; y <= cr.end_coord.y; ++y) {
+                        CoreCoord lc(x, y);
+                        for (auto kid : kg->kernel_ids) {
+                            kernel_core_to_kg.emplace(std::make_pair(kid, lc), kg.get());
+                        }
+                    }
+                }
+            }
+        }
         for (auto& [kernel_id, kernel] : kernels) {
             const auto& ksrc = kernel->kernel_source();
             std::string src_path = resolve_kernel_source_path(ksrc, inline_src_temps);
@@ -1367,11 +1367,30 @@ static void collect_kernels(
 
             ProcIdList procs = compute_proc_ids_and_thread_count(*kernel, qdm, qck);
 
+            const uint32_t processor_index = hal.get_processor_index(
+                kernel->get_kernel_programmable_core_type(),
+                kernel->get_kernel_processor_class(),
+                kernel->get_kernel_processor_type(0));
+
             const auto& core_range_set = kernel->core_range_set();
             for (const auto& core_range : core_range_set.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
                         CoreCoord logical_core(x, y);
+                        // KG lookup is per (kernel, logical_core): same kernel
+                        // on different cores may sit in different KGs with
+                        // distinct kernel_config layouts.
+                        auto kg_it = kernel_core_to_kg.find({kernel_id, logical_core});
+                        uint32_t kernel_config_base = 0;
+                        uint16_t rta_off = kRtaCrtaNoArgsSentinel;
+                        uint16_t crta_off = kRtaCrtaNoArgsSentinel;
+                        if (kg_it != kernel_core_to_kg.end()) {
+                            auto kc = kg_it->second->launch_msg.view().kernel_config();
+                            kernel_config_base = static_cast<uint32_t>(kc.kernel_config_base()[pct]);
+                            auto rta = kc.rta_offset()[processor_index];
+                            rta_off = rta.rta_offset();
+                            crta_off = rta.crta_offset();
+                        }
                         auto& rt_args_data = kernel->runtime_args(logical_core);
                         uint8_t tidx = 0;
                         for (uint8_t proc_id : procs.proc_ids) {
@@ -1383,7 +1402,10 @@ static void collect_kernels(
                                 proc_id,
                                 tidx++,
                                 is_tensix,
-                                procs.num_threads});
+                                procs.num_threads,
+                                kernel_config_base,
+                                rta_off,
+                                crta_off});
                         }
                     }
                 }
@@ -1846,18 +1868,14 @@ static void launch_cores(
                                               &kep = kernel_exceptions[kidx]]() {
                             (void)kidx;
                             auto& ki = *ki_ptr;
-                            __rt_args = ki.rt_args;
-                            __common_rt_args = ki.common_rt_args;
-                            __emule_ensure_rt_args_scratch();
-                            if (ki.rt_args.size() > EMULE_RT_ARGS_CAP ||
-                                ki.common_rt_args.size() > EMULE_RT_ARGS_CAP) {
-                                throw std::runtime_error(
-                                    "emule: rt_args size exceeds EMULE_RT_ARGS_CAP");
-                            }
-                            std::memcpy(__rt_args_scratch, ki.rt_args.data(),
-                                        ki.rt_args.size() * sizeof(uint32_t));
-                            std::memcpy(__common_rt_args_scratch, ki.common_rt_args.data(),
-                                        ki.common_rt_args.size() * sizeof(uint32_t));
+                            __rt_args = (ki.rta_offset_in_kc != kRtaCrtaNoArgsSentinel)
+                                ? reinterpret_cast<uint32_t*>(core->l1_ptr(
+                                      ki.kernel_config_base + ki.rta_offset_in_kc))
+                                : nullptr;
+                            __common_rt_args = (ki.crta_offset_in_kc != kRtaCrtaNoArgsSentinel)
+                                ? reinterpret_cast<uint32_t*>(core->l1_ptr(
+                                      ki.kernel_config_base + ki.crta_offset_in_kc))
+                                : nullptr;
                             __emule_bridge_l1 = l1_data;
                             __emule_bridge_dram = dram_data;
                             __emule_cbs = cb_array;
@@ -1896,6 +1914,8 @@ static void launch_cores(
                             }
 
                             __core = nullptr;
+                            __rt_args = nullptr;
+                            __common_rt_args = nullptr;
                             __emule_bridge_l1 = nullptr;
                             __emule_bridge_dram = nullptr;
                             __emule_cbs = nullptr;
@@ -2005,7 +2025,9 @@ void execute_program_emulated(IDevice* device, Program& program) {
     for (auto& [logical_core, pending_list] : pending_core_kernels) {
         for (auto& pk : pending_list) {
             KernelInfo ki{
-                {}, pk.run_all_variants, pk.rt_args, pk.common_rt_args, pk.processor_id, pk.thread_idx, pk.is_tensix, pk.num_threads};
+                {}, pk.run_all_variants, pk.rt_args, pk.common_rt_args, pk.processor_id, pk.thread_idx,
+                pk.is_tensix, pk.num_threads,
+                pk.kernel_config_base, pk.rta_offset_in_kc, pk.crta_offset_in_kc};
             ki.variants.reserve(pk.variant_cache_keys.size());
             for (const auto& key : pk.variant_cache_keys) {
                 ki.variants.push_back(resolved_fns.at(key));
