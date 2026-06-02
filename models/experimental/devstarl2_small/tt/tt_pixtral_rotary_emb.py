@@ -59,8 +59,17 @@ class TtPixtralRotaryEmbedding(LightweightModule):
         idx = position_ids.flatten().to(torch.long)
         cache_key = (seq_len, self.head_dim, idx.cpu().numpy().tobytes())
         if cache_key != self._cached_key:
-            cos_sel = self._cos_host[idx].reshape(1, seq_len, self.head_dim).contiguous()
-            sin_sel = self._sin_host[idx].reshape(1, seq_len, self.head_dim).contiguous()
+            # Cast to the target dtype on HOST so from_torch skips the device FP32->BF16 typecast
+            # and tilizes the smaller bf16 tensor (the freq tables are precomputed in fp32). One-time
+            # (cached below). bfloat8_b can't be represented host-side, so fall back to device convert.
+            torch_dtype = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}.get(self.datatype)
+            cos_sel = self._cos_host[idx].reshape(1, seq_len, self.head_dim)
+            sin_sel = self._sin_host[idx].reshape(1, seq_len, self.head_dim)
+            if torch_dtype is not None:
+                cos_sel = cos_sel.to(torch_dtype)
+                sin_sel = sin_sel.to(torch_dtype)
+            cos_sel = cos_sel.contiguous()
+            sin_sel = sin_sel.contiguous()
             self._cached_cos = ttnn.from_torch(
                 cos_sel,
                 device=self.mesh_device,
