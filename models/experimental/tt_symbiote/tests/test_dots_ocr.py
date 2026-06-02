@@ -105,6 +105,33 @@ def _assert_ttnn_tensor(tensor, name: str):
     assert isinstance(tensor, ttnn.Tensor), f"{name} should be a TTNN tensor"
 
 
+def _assert_vision_tensor_spec(
+    tensor,
+    name: str,
+    *,
+    shape: list[int],
+    dtype: ttnn.DataType,
+    buffer_type: ttnn.BufferType,
+    sharded: bool | None = None,
+):
+    _assert_ttnn_tensor(tensor, name)
+    assert list(tensor.shape) == shape, f"{name} shape: expected {shape}, got {list(tensor.shape)}"
+    assert tensor.dtype == dtype, f"{name} dtype: expected {dtype}, got {tensor.dtype}"
+    mem = tensor.memory_config()
+    assert mem.buffer_type == buffer_type, f"{name} buffer: expected {buffer_type}, got {mem.buffer_type}"
+    if sharded is not None:
+        is_sharded = mem.is_sharded()
+        assert is_sharded == sharded, f"{name} sharded: expected {sharded}, got {is_sharded}"
+
+
+def _vision_block_token_shape(seq_len: int, hidden_size: int) -> list[int]:
+    return [1, 1, seq_len, hidden_size]
+
+
+def _vision_head_shape(seq_len: int, num_heads: int, head_dim: int) -> list[int]:
+    return [1, num_heads, seq_len, head_dim]
+
+
 def _dots_ocr_pipeline_batch_size():
     """Match ``TTNNDotsOCRPipeline`` batch to mesh size when DP is requested.
 
@@ -669,7 +696,11 @@ def test_dots_ocr_prefill_one_layer(mesh_device):
     indirect=True,
 )
 def test_dots_ocr_vision_one_layer(mesh_device):
-    """Exercise one dots.ocr vision block: norm, attention, and MLP only."""
+    """Exercise one dots.ocr vision block: norm, attention, and MLP only.
+
+    Shapes and dtypes match the production vision-block perf slice at
+    M=11264 (``11264 x 1536 x {4608,1536,4224}`` matmuls in perf_vis.txt).
+    """
     from transformers import AutoConfig, AutoModelForCausalLM
 
     torch.manual_seed(0)
@@ -697,10 +728,18 @@ def test_dots_ocr_vision_one_layer(mesh_device):
     vision_tower.preprocess_weights()
     vision_tower.move_weights_to_device()
 
-    grid_thw = torch.tensor([[1, 96, 128]], dtype=torch.int32)
+    # M=11264 matches the traced vision-tower bucket in perf_vis.txt (not 12288).
+    grid_thw = torch.tensor([[1, 88, 128]], dtype=torch.int32)
     seq_len = int(grid_thw[0, 0] * grid_thw[0, 1] * grid_thw[0, 2])
+    assert seq_len == 11264
+    hidden_size = int(vision_tower.hidden_size)
+    num_heads = int(vision_tower.num_heads)
+    head_dim = int(vision_tower.head_dim)
+    token_shape = _vision_block_token_shape(seq_len, hidden_size)
+    head_shape = _vision_head_shape(seq_len, num_heads, head_dim)
+
     hidden_states = ttnn.from_torch(
-        torch.randn(1, 1, seq_len, vision_tower.hidden_size, dtype=torch.bfloat16),
+        torch.randn(1, 1, seq_len, hidden_size, dtype=torch.bfloat16),
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
@@ -709,32 +748,216 @@ def test_dots_ocr_vision_one_layer(mesh_device):
 
     block = vision_tower.blocks[0]
     seen = {"norm1": False, "attn": False, "norm2": False, "mlp": False}
+    matmul_calls: list[tuple[int, int, int, ttnn.DataType | None]] = []
+    typecast_calls: list[tuple[ttnn.DataType, ttnn.DataType]] = []
+    mul_calls: list[tuple[ttnn.DataType | None, ttnn.DataType | None, ttnn.DataType | None]] = []
+
     original_norm1_forward = block.norm1.forward
     original_attn_forward = block.attn.forward
     original_norm2_forward = block.norm2.forward
     original_mlp_forward = block.mlp.forward
+    original_linear = ttnn.linear
+    original_typecast = ttnn.typecast
+    original_mul = ttnn.mul
+    original_create_heads = ttnn.experimental.nlp_create_qkv_heads
+    original_rotary = ttnn.experimental.rotary_embedding
+    original_concat_heads = ttnn.experimental.nlp_concat_heads
+    original_sdpa = ttnn.transformer.scaled_dot_product_attention
 
-    def checked_norm1_forward(hidden_states):
-        output = original_norm1_forward(hidden_states)
-        _assert_ttnn_tensor(output, "vision norm1 output")
+    def _matmul_m_dim(activation: ttnn.Tensor) -> int:
+        return int(activation.shape[0]) * int(activation.shape[1]) * int(activation.shape[2])
+
+    def recording_linear(activation, weight, *args, **kwargs):
+        out_dtype = kwargs.get("dtype")
+        matmul_calls.append((_matmul_m_dim(activation), int(weight.shape[-2]), int(weight.shape[-1]), out_dtype))
+        return original_linear(activation, weight, *args, **kwargs)
+
+    def recording_typecast(tensor, dtype, *args, **kwargs):
+        typecast_calls.append((tensor.dtype, dtype))
+        return original_typecast(tensor, dtype, *args, **kwargs)
+
+    def recording_mul(a, b, *args, **kwargs):
+        mul_calls.append((a.dtype, b.dtype, kwargs.get("dtype")))
+        return original_mul(a, b, *args, **kwargs)
+
+    def recording_create_heads(qkv, *args, **kwargs):
+        _assert_vision_tensor_spec(
+            qkv,
+            "nlp_create_qkv_heads input",
+            shape=[1, 1, seq_len, hidden_size * 3],
+            dtype=ttnn.bfloat8_b,
+            buffer_type=ttnn.BufferType.DRAM,
+            sharded=False,
+        )
+        q, k, v = original_create_heads(qkv, *args, **kwargs)
+        for label, head in zip(("Q", "K", "V"), (q, k, v)):
+            _assert_vision_tensor_spec(
+                head,
+                f"nlp_create_qkv_heads {label}",
+                shape=head_shape,
+                dtype=ttnn.bfloat8_b,
+                buffer_type=ttnn.BufferType.L1,
+                sharded=False,
+            )
+        return q, k, v
+
+    def recording_rotary(tensor, cos, sin, *args, **kwargs):
+        _assert_vision_tensor_spec(
+            tensor,
+            "rotary input",
+            shape=head_shape,
+            dtype=ttnn.bfloat8_b,
+            buffer_type=ttnn.BufferType.L1,
+            sharded=False,
+        )
+        out = original_rotary(tensor, cos, sin, *args, **kwargs)
+        _assert_vision_tensor_spec(
+            out,
+            "rotary output",
+            shape=head_shape,
+            dtype=ttnn.bfloat8_b,
+            buffer_type=ttnn.BufferType.DRAM,
+            sharded=False,
+        )
+        return out
+
+    def recording_concat_heads(ctx, *args, **kwargs):
+        _assert_vision_tensor_spec(
+            ctx,
+            "nlp_concat_heads input",
+            shape=head_shape,
+            dtype=ttnn.bfloat8_b,
+            buffer_type=ttnn.BufferType.DRAM,
+            sharded=False,
+        )
+        out = original_concat_heads(ctx, *args, **kwargs)
+        _assert_vision_tensor_spec(
+            out,
+            "nlp_concat_heads output",
+            shape=token_shape,
+            dtype=ttnn.bfloat8_b,
+            buffer_type=ttnn.BufferType.L1,
+            sharded=False,
+        )
+        return out
+
+    def recording_sdpa(q, k, v, *args, **kwargs):
+        _assert_vision_tensor_spec(
+            q,
+            "sdpa Q",
+            shape=head_shape,
+            dtype=ttnn.bfloat8_b,
+            buffer_type=ttnn.BufferType.DRAM,
+            sharded=False,
+        )
+        _assert_vision_tensor_spec(
+            k,
+            "sdpa K",
+            shape=head_shape,
+            dtype=ttnn.bfloat8_b,
+            buffer_type=ttnn.BufferType.DRAM,
+            sharded=False,
+        )
+        _assert_vision_tensor_spec(
+            v,
+            "sdpa V",
+            shape=head_shape,
+            dtype=ttnn.bfloat4_b,
+            buffer_type=ttnn.BufferType.DRAM,
+            sharded=False,
+        )
+        out = original_sdpa(q, k, v, *args, **kwargs)
+        _assert_vision_tensor_spec(
+            out,
+            "sdpa output",
+            shape=head_shape,
+            dtype=ttnn.bfloat8_b,
+            buffer_type=ttnn.BufferType.DRAM,
+            sharded=False,
+        )
+        return out
+
+    def checked_norm1_forward(hidden_states, *args, **kwargs):
+        _assert_vision_tensor_spec(
+            hidden_states,
+            "vision norm1 input",
+            shape=token_shape,
+            dtype=ttnn.bfloat8_b,
+            buffer_type=ttnn.BufferType.DRAM,
+            sharded=False,
+        )
+        output = original_norm1_forward(hidden_states, *args, **kwargs)
+        _assert_vision_tensor_spec(
+            output,
+            "vision norm1 output",
+            shape=token_shape,
+            dtype=ttnn.bfloat8_b,
+            buffer_type=ttnn.BufferType.DRAM,
+            sharded=False,
+        )
         seen["norm1"] = True
         return output
 
     def checked_attn_forward(hidden_states, *args, **kwargs):
+        _assert_vision_tensor_spec(
+            hidden_states,
+            "vision attention input",
+            shape=token_shape,
+            dtype=ttnn.bfloat8_b,
+            buffer_type=ttnn.BufferType.DRAM,
+            sharded=False,
+        )
         output = original_attn_forward(hidden_states, *args, **kwargs)
-        _assert_ttnn_tensor(output, "vision attention output")
+        _assert_vision_tensor_spec(
+            output,
+            "vision attention output",
+            shape=token_shape,
+            dtype=ttnn.bfloat8_b,
+            buffer_type=ttnn.BufferType.L1,
+            sharded=True,
+        )
         seen["attn"] = True
         return output
 
-    def checked_norm2_forward(hidden_states):
-        output = original_norm2_forward(hidden_states)
-        _assert_ttnn_tensor(output, "vision norm2 output")
+    def checked_norm2_forward(hidden_states, *args, **kwargs):
+        _assert_vision_tensor_spec(
+            hidden_states,
+            "vision norm2 input",
+            shape=token_shape,
+            dtype=ttnn.bfloat8_b,
+            buffer_type=ttnn.BufferType.DRAM,
+            sharded=False,
+        )
+        output = original_norm2_forward(hidden_states, *args, **kwargs)
+        _assert_vision_tensor_spec(
+            output,
+            "vision norm2 output",
+            shape=token_shape,
+            dtype=ttnn.bfloat8_b,
+            buffer_type=ttnn.BufferType.L1,
+            sharded=False,
+        )
         seen["norm2"] = True
         return output
 
-    def checked_mlp_forward(hidden_states):
-        output = original_mlp_forward(hidden_states)
-        _assert_ttnn_tensor(output, "vision MLP output")
+    def checked_mlp_forward(hidden_states, *args, **kwargs):
+        _assert_vision_tensor_spec(
+            hidden_states,
+            "vision MLP input",
+            shape=token_shape,
+            dtype=ttnn.bfloat8_b,
+            buffer_type=ttnn.BufferType.L1,
+            sharded=False,
+        )
+        output = original_mlp_forward(hidden_states, *args, **kwargs)
+        _assert_vision_tensor_spec(
+            output,
+            "vision MLP output",
+            shape=token_shape,
+            dtype=ttnn.bfloat4_b,
+            buffer_type=ttnn.BufferType.L1,
+            sharded=False,
+        )
         seen["mlp"] = True
         return output
 
@@ -743,18 +966,55 @@ def test_dots_ocr_vision_one_layer(mesh_device):
     block.norm2.forward = checked_norm2_forward
     block.mlp.forward = checked_mlp_forward
 
-    rot_mats, _ = vision_tower.rope.build_padded(grid_thw, seq_len, seq_len)
-    output = block.forward(
-        hidden_states,
-        rot_mats=rot_mats,
-        cu_seqlens=None,
-        attention_logical_seq_len=seq_len,
-    )
-    ttnn.synchronize_device(mesh_device)
+    ttnn.linear = recording_linear
+    ttnn.typecast = recording_typecast
+    ttnn.mul = recording_mul
+    ttnn.experimental.nlp_create_qkv_heads = recording_create_heads
+    ttnn.experimental.rotary_embedding = recording_rotary
+    ttnn.experimental.nlp_concat_heads = recording_concat_heads
+    ttnn.transformer.scaled_dot_product_attention = recording_sdpa
+    try:
+        rot_mats, _ = vision_tower.rope.build_padded(grid_thw, seq_len, seq_len)
+        output = block.forward(
+            hidden_states,
+            rot_mats=rot_mats,
+            cu_seqlens=None,
+            attention_logical_seq_len=seq_len,
+        )
+        ttnn.synchronize_device(mesh_device)
+    finally:
+        ttnn.linear = original_linear
+        ttnn.typecast = original_typecast
+        ttnn.mul = original_mul
+        ttnn.experimental.nlp_create_qkv_heads = original_create_heads
+        ttnn.experimental.rotary_embedding = original_rotary
+        ttnn.experimental.nlp_concat_heads = original_concat_heads
+        ttnn.transformer.scaled_dot_product_attention = original_sdpa
 
-    _assert_ttnn_tensor(output, "vision block output")
-    assert list(output.shape) == [1, 1, seq_len, vision_tower.hidden_size]
+    _assert_vision_tensor_spec(
+        output,
+        "vision block output",
+        shape=token_shape,
+        dtype=ttnn.bfloat8_b,
+        buffer_type=ttnn.BufferType.DRAM,
+        sharded=False,
+    )
     assert seen == {"norm1": True, "attn": True, "norm2": True, "mlp": True}
+
+    intermediate_size = int(block.mlp.tt_fc1_weight.shape[-1])
+    expected_matmuls = [
+        (seq_len, hidden_size, hidden_size * 3, ttnn.bfloat8_b),  # qkv
+        (seq_len, hidden_size, hidden_size, ttnn.bfloat8_b),  # o_proj
+        (seq_len, hidden_size, intermediate_size, ttnn.bfloat8_b),  # gate
+        (seq_len, hidden_size, intermediate_size, ttnn.bfloat4_b),  # up
+        (seq_len, intermediate_size, hidden_size, ttnn.bfloat4_b),  # down
+    ]
+    assert matmul_calls == expected_matmuls, f"matmul shapes/dtypes: got {matmul_calls}"
+    assert typecast_calls == [(ttnn.bfloat8_b, ttnn.bfloat4_b)], f"V typecast: got {typecast_calls}"
+    assert len(mul_calls) == 1, f"expected one silu*mul, got {mul_calls}"
+    assert mul_calls[0][0] == ttnn.bfloat8_b
+    assert mul_calls[0][1] == ttnn.bfloat4_b
+    assert mul_calls[0][2] == ttnn.bfloat8_b
 
 
 @pytest.mark.parametrize(
