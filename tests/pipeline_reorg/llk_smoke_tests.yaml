@@ -14,7 +14,7 @@
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 1 --timeout=60 \
       --junitxml=pytest-report-wormhole-1-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
+    pytest $PYTEST_RUN_EXTRA --compile-consumer -n 8 -x \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 1 \
       --timeout=60 \
@@ -38,7 +38,7 @@
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 2 --timeout=60 \
       --junitxml=pytest-report-wormhole-2-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
+    pytest $PYTEST_RUN_EXTRA --compile-consumer -n 8 -x \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 2 \
       --timeout=60 \
@@ -62,7 +62,7 @@
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 3 --timeout=60 \
       --junitxml=pytest-report-wormhole-3-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
+    pytest $PYTEST_RUN_EXTRA --compile-consumer -n 8 -x \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 3 \
       --timeout=60 \
@@ -86,7 +86,7 @@
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 4 --timeout=60 \
       --junitxml=pytest-report-wormhole-4-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
+    pytest $PYTEST_RUN_EXTRA --compile-consumer -n 8 -x \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 4 \
       --timeout=60 \
@@ -110,7 +110,7 @@
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 1 --timeout=60 \
       --junitxml=pytest-report-blackhole-1-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
+    pytest $PYTEST_RUN_EXTRA --compile-consumer -n 8 -x \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 1 \
       --timeout=60 \
@@ -134,7 +134,7 @@
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 2 --timeout=60 \
       --junitxml=pytest-report-blackhole-2-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
+    pytest $PYTEST_RUN_EXTRA --compile-consumer -n 8 -x \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 2 \
       --timeout=60 \
@@ -158,7 +158,7 @@
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 3 --timeout=60 \
       --junitxml=pytest-report-blackhole-3-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
+    pytest $PYTEST_RUN_EXTRA --compile-consumer -n 8 -x \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 3 \
       --timeout=60 \
@@ -182,7 +182,7 @@
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 4 --timeout=60 \
       --junitxml=pytest-report-blackhole-4-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
+    pytest $PYTEST_RUN_EXTRA --compile-consumer -n 8 -x \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 4 \
       --timeout=60 \
