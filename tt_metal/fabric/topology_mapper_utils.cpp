@@ -689,14 +689,14 @@ LogicalMultiMeshGraph merge_logical_multi_mesh_adjacency_graphs(
         const auto& local_to_global = renum.per_part_local_to_global_mesh_id[i];
 
         LogicalMultiMeshGraph part = remap_logical_multi_mesh_for_merge(g, local_to_global);
-        for (const auto& [mesh_id, adj] : part.mesh_adjacency_graphs_) {
+        for (auto& [mesh_id, adj] : part.mesh_adjacency_graphs_) {
             merged.mesh_adjacency_graphs_[mesh_id] = std::move(adj);
         }
         for (const auto& [node, nbrs] : part.mesh_level_graph_.get_adjacency_map()) {
             auto& slot = merged_mesh_level[node];
             slot.insert(slot.end(), nbrs.begin(), nbrs.end());
         }
-        for (const auto& [mesh_id, exit_adj] : part.mesh_exit_node_graphs_) {
+        for (auto& [mesh_id, exit_adj] : part.mesh_exit_node_graphs_) {
             merged.mesh_exit_node_graphs_[mesh_id] = std::move(exit_adj);
         }
     }
@@ -897,7 +897,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     }
     // Parse a (possibly "mgd{i}_"-prefixed) valid-groupings key into {mgd_index, original_name}.
     auto parse_mesh_key = [&](const std::string& key) -> std::pair<std::size_t, std::string> {
-        if (multi_mgd && key.rfind("mgd", 0) == 0) {
+        if (multi_mgd && key.starts_with("mgd")) {
             const auto us = key.find('_');
             if (us != std::string::npos) {
                 return {static_cast<std::size_t>(std::stoul(key.substr(3, us - 3))), key.substr(us + 1)};
