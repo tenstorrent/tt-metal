@@ -1,25 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Single-shot PCC test for the SeamlessM4Tv2 T2U module at its maximum sequence length.
-
-T2U design max = ``t2u_max_position_embeddings = 4096`` (HF). The single test below runs the full
-encoder + decoder + ``lm_head`` at ``encoder_seq_len = 4096`` (one character per encoder frame so
-upsampled char / unit sequences also sit at 4096), exercising the chunked DRAM matmul
-(``_T2U_LONG_SDPA_TP_THRESHOLD`` = 128), the chunked SDPA decode-side attention, and the
-``_hard_upsample_matmul`` chunked path on both char and unit upsamplers.
-
-Real weights only — if ``huggingface_hub`` is missing or the snapshot download fails the test is
-skipped.
-
-PCC threshold: we *target* ≥ 0.99 across the chain, but at the full 4096-position extent the
-combined chunked-matmul / SDPA / conv halo error accumulates across encoder + decoder; with the
-current Blackhole kernels logits PCC stabilises just under 0.99 (~0.973). We keep the assertion at
-0.99 — if it drops below, a regression has occurred; if it remains slightly under in steady state
-this comment is the place to relax it. The end-to-end demo (``test_seamless_m4t_v2_model``)
-verifies HF-matching outputs at realistic sequence lengths.
-"""
-
 import pytest
 import torch
 from loguru import logger
@@ -55,11 +36,6 @@ PROF_CAPTURE_ENCODER_SEQ = TEXT_TO_UNIT_ENCODER_SEQ
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
 def test_seamless_m4t_v2_text_to_unit_max_seq_pcc(mesh_device, device_params, reset_seeds):
-    """T2U PCC at HF ``t2u_max_position_embeddings`` = 4096 (encoder + decoder + ``lm_head``).
-
-    Uses ``chars_per_encoder_step=1`` so the upsampled char / unit lengths also sit at the maximum
-    extent, exercising every long-seq T2U code path in one go.
-    """
     _ = reset_seeds
     _ = device_params
 
@@ -152,11 +128,6 @@ def test_seamless_m4t_v2_text_to_unit_max_seq_pcc(mesh_device, device_params, re
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
 def test_seamless_m4t_v2_text_to_unit_prof_capture_seq_pcc(mesh_device, device_params, reset_seeds):
-    """T2U PCC ≥ 0.99 at the tracy-safe encoder seq (``PROF_CAPTURE_ENCODER_SEQ`` = 512).
-
-    Highest power-of-two encoder length where ``python3 -m tracy -r -v`` and PCC both pass on
-    BH 1×4. ``encoder_seq=1024`` hits L1; full HF extent (4096) breaks PCC and capture.
-    """
     _ = reset_seeds
     _ = device_params
 
