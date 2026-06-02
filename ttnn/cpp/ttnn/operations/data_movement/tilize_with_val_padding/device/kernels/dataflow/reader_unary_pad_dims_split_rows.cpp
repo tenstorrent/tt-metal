@@ -4,6 +4,10 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t bytes_per_tile_row = get_compile_time_arg_val(0);
@@ -39,31 +43,33 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_args, src_addr);
 
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
+
     uint32_t stick_id = 0;
 
     auto pad_blocks = [&](uint32_t num_blocks) {
         for (uint32_t i = 0; i < num_blocks; i++) {
-            cb_reserve_back(cb_id_in0, num_tiles_block_c);
-            uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+            cb_in0.reserve_back(num_tiles_block_c);
+            uint32_t l1_write_addr = cb_in0.get_write_ptr();
             // pad the tile by reading values from zero buffer in L1
             volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr);
             // 8 = tile_height / 4
             for (uint32_t z = 0; z < block_row_size * 8; z++) {
                 dst[z] = pad_value;
             }
-            cb_push_back(cb_id_in0, num_tiles_block_c);
+            cb_in0.push_back(num_tiles_block_c);
         }
     };
 
     auto read_block = [&](uint32_t base_stick_id, uint32_t num_rows, uint32_t offset, uint32_t block_size) {
-        cb_reserve_back(cb_id_in0, num_tiles_block_c);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
+        cb_in0.reserve_back(num_tiles_block_c);
+        uint32_t l1_write_addr = cb_in0.get_write_ptr();
         uint32_t curr_stick_id = base_stick_id;
         for (uint32_t k = 0; k < num_rows; k++) {
-            uint64_t src_noc_addr = s.get_noc_addr(curr_stick_id + k) + offset;
-
-            // Read from DRAM to tmp buffer
-            noc_async_read(src_noc_addr, l1_write_addr, block_size);
+            CoreLocalMem<uint32_t> dst_mem(l1_write_addr);
+            noc.async_read(
+                s, dst_mem, block_size, {.page_id = curr_stick_id + k, .offset_bytes = offset}, {.offset_bytes = 0});
 
             if (block_row_size > block_size) {
                 volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr + block_size);
@@ -73,7 +79,7 @@ void kernel_main() {
             }
 
             // Block before copying data from tmp to cb buffer
-            noc_async_read_barrier();
+            noc.async_read_barrier();
             l1_write_addr += block_row_size;
         }
         if (num_rows < tile_height) {
@@ -83,7 +89,7 @@ void kernel_main() {
                 dst[z] = pad_value;
             }
         }
-        cb_push_back(cb_id_in0, num_tiles_block_c);
+        cb_in0.push_back(num_tiles_block_c);
     };
 
     auto read_block_rows = [&](uint32_t base_stick_id, uint32_t num_rows_block) {

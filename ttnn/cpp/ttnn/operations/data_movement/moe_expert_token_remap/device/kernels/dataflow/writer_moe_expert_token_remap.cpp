@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "api/debug/dprint_pages.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
@@ -33,6 +37,8 @@ void kernel_main() {
 
     const auto output_mapping_addrgen = TensorAccessor(output_mapping_args, output_mapping_base_addr);
     const auto output_reduced_addrgen = TensorAccessor(output_reduced_args, output_reduced_base_addr);
+
+    Noc noc;
 
     // scratch space for mapping
     cb_reserve_back(output_mapping_cb_id, 1);
@@ -75,8 +81,13 @@ void kernel_main() {
                 reduced_l1_ptr[e] = 1;
             }
         }
-        const uint64_t output_noc_addr = output_mapping_addrgen.get_noc_addr(bs);
-        noc_async_write(output_l1_addr, output_noc_addr, output_mapping_page_size_bytes);
+        CoreLocalMem<uint32_t> map_src(output_l1_addr);
+        noc.async_write(
+            map_src,
+            output_mapping_addrgen,
+            output_mapping_page_size_bytes,
+            {.offset_bytes = 0},
+            {.page_id = bs, .offset_bytes = 0});
 
         if (found) {
             cb_pop_front(data_cb_id, 1);
@@ -84,9 +95,14 @@ void kernel_main() {
         }
 
         if (reduction_count == reduction_size - 1) {
-            const uint64_t output_reduced_noc_addr = output_reduced_addrgen.get_noc_addr(reduce_idx++);
-            noc_async_write(reduced_l1_addr, output_reduced_noc_addr, output_reduced_page_size_bytes);
-            noc_async_write_barrier();
+            CoreLocalMem<uint32_t> red_src(reduced_l1_addr);
+            noc.async_write(
+                red_src,
+                output_reduced_addrgen,
+                output_reduced_page_size_bytes,
+                {.offset_bytes = 0},
+                {.page_id = reduce_idx++, .offset_bytes = 0});
+            noc.async_write_barrier();
             tt::data_movement::common::fill_with_val<uint16_t>(reduced_l1_addr, num_local_experts, 0u);
             reduction_count = 0;
         }

@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 /*
 To improve performance of both reader and writer kernels the work has been split so that they both prepare input and
@@ -42,6 +45,12 @@ void kernel_main() {
     // Index tensor config
     const auto interleaved_accessor1 = TensorAccessor(index_tensor_args, index_tensor_buffer_addr);
 
+    Noc noc;
+    CircularBuffer input_tensor_cb(input_tensor_cb_index);
+    CircularBuffer index_tensor_output_cb(index_tensor_output_cb_index);
+    const uint32_t tile_bytes = get_tile_size(input_tensor_cb_index);
+    const uint32_t index_tile_bytes = get_tile_size(index_tensor_output_cb_index);
+
     for (uint32_t core_loop = 0; core_loop < core_loop_count; core_loop++) {
         // Calculate tile h coordinate
         const uint32_t h = core_loop * total_number_of_cores +
@@ -49,20 +58,28 @@ void kernel_main() {
 
         // Read input value data
         for (uint32_t w = 0; w < Wt; w++) {
-            cb_reserve_back(input_tensor_cb_index, one_tile);
-            const uint32_t l1_write_addr = get_write_ptr(input_tensor_cb_index);
-            noc_async_read_page(h * Wt + w, interleaved_accessor0, l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(input_tensor_cb_index, one_tile);
+            input_tensor_cb.reserve_back(one_tile);
+            noc.async_read(
+                interleaved_accessor0,
+                input_tensor_cb,
+                tile_bytes,
+                {.page_id = h * Wt + w, .offset_bytes = 0},
+                {.offset_bytes = 0});
+            noc.async_read_barrier();
+            input_tensor_cb.push_back(one_tile);
         }  // Wt loop
 
         // Write output index data
         for (uint32_t w = 0; w < Wt; w++) {
-            cb_wait_front(index_tensor_output_cb_index, one_tile);
-            const uint32_t l1_write_addr_index = get_read_ptr(index_tensor_output_cb_index);
-            noc_async_write_page(h * Wt + w, interleaved_accessor1, l1_write_addr_index);
-            noc_async_write_barrier();
-            cb_pop_front(index_tensor_output_cb_index, one_tile);
+            index_tensor_output_cb.wait_front(one_tile);
+            noc.async_write(
+                index_tensor_output_cb,
+                interleaved_accessor1,
+                index_tile_bytes,
+                {.offset_bytes = 0},
+                {.page_id = h * Wt + w, .offset_bytes = 0});
+            noc.async_write_barrier();
+            index_tensor_output_cb.pop_front(one_tile);
         }  // Wt loop
     }  // core_loop_count loop
 }
