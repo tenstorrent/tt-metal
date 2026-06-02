@@ -52,7 +52,6 @@ void kernel_main() {
 #endif
                 compute_kernel_lib::PackTile<
                     cb_val,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 
@@ -68,7 +67,6 @@ void kernel_main() {
                         compute_kernel_lib::CopyTileReconfig::Input>{},
                     compute_kernel_lib::PackTile<
                         cb_cal,
-                        compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutputLifecycle::Streaming,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             } else {
@@ -88,7 +86,6 @@ void kernel_main() {
                         compute_kernel_lib::OperandKind::Scalar>{},
                     compute_kernel_lib::PackTile<
                         cb_cal,
-                        compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutputLifecycle::Streaming,
                         compute_kernel_lib::PackTileReconfig::Output>{});
 #else
@@ -112,7 +109,6 @@ void kernel_main() {
                         compute_kernel_lib::Dst::D0>{},
                     compute_kernel_lib::PackTile<
                         cb_cal,
-                        compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutputLifecycle::Streaming,
                         compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
@@ -133,7 +129,6 @@ void kernel_main() {
 #endif
             compute_kernel_lib::PackTile<
                 cb_y,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
     }

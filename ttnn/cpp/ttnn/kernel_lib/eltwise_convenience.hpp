@@ -38,7 +38,7 @@ ALWI void binary_op(uint32_t n_tiles) {
     eltwise_chain(
         n_tiles,
         BinaryFpu<CbA, CbB, Op, Bcast, Reconfig, InputLifecycle::Streaming, InputLifecycle::Streaming, Idx>{},
-        PackTile<CbOut, Dst::D0, OutputLifecycle::Streaming>{});
+        PackTile<CbOut, OutputLifecycle::Streaming>{});
 }
 
 template <
@@ -88,7 +88,7 @@ ALWI void unary(uint32_t n_tiles) {
         n_tiles,
         CopyTile<CbIn, Dst::D0, InputLifecycle::Streaming, Idx, Reconfig>{},
         SfpuOp{},
-        PackTile<CbOut, Dst::D0, OutputLifecycle::Streaming>{});
+        PackTile<CbOut, OutputLifecycle::Streaming>{});
 }
 
 // ---- SFPU binary streaming (two CB inputs, DEST-DEST SFPU op, one CB output) ----
@@ -102,7 +102,7 @@ ALWI void binary_sfpu(uint32_t n_tiles) {
         CopyTile<CbA, Dst::D0, InputLifecycle::Streaming, Idx>{},
         CopyTile<CbB, Dst::D1, InputLifecycle::Streaming, Idx>{},
         SfpuBinOp{},
-        PackTile<CbOut, Dst::D0, OutputLifecycle::Streaming>{});
+        PackTile<CbOut, OutputLifecycle::Streaming>{});
 }
 
 // ---- Pure copy ----
@@ -115,7 +115,7 @@ ALWI void copy(uint32_t n_tiles) {
     eltwise_chain(
         n_tiles,
         CopyTile<CbIn, Dst::D0, InputLifecycle::Streaming, Idx, Reconfig>{},
-        PackTile<CbOut, Dst::D0, OutputLifecycle::Streaming>{});
+        PackTile<CbOut, OutputLifecycle::Streaming>{});
 }
 
 // =============================================================================
@@ -136,7 +136,7 @@ ALWI void binary_op(EltwiseShape shape) {
     eltwise_chain(
         shape,
         BinaryFpu<CbA, CbB, Op, Bcast, Reconfig, InputLifecycle::Streaming, InputLifecycle::Streaming, Idx>{},
-        PackTile<CbOut, Dst::D0, OutputLifecycle::Streaming>{});
+        PackTile<CbOut, OutputLifecycle::Streaming>{});
 }
 
 template <
@@ -184,7 +184,7 @@ ALWI void unary(EltwiseShape shape) {
         shape,
         CopyTile<CbIn, Dst::D0, InputLifecycle::Streaming, Idx, Reconfig>{},
         SfpuOp{},
-        PackTile<CbOut, Dst::D0, OutputLifecycle::Streaming>{});
+        PackTile<CbOut, OutputLifecycle::Streaming>{});
 }
 
 template <class SfpuBinOp, uint32_t CbA, uint32_t CbB, uint32_t CbOut, OperandKind Idx = OperandKind::Scalar>
@@ -195,7 +195,7 @@ ALWI void binary_sfpu(EltwiseShape shape) {
         CopyTile<CbA, Dst::D0, InputLifecycle::Streaming, Idx>{},
         CopyTile<CbB, Dst::D1, InputLifecycle::Streaming, Idx>{},
         SfpuBinOp{},
-        PackTile<CbOut, Dst::D0, OutputLifecycle::Streaming>{});
+        PackTile<CbOut, OutputLifecycle::Streaming>{});
 }
 
 template <
@@ -207,7 +207,7 @@ ALWI void copy(EltwiseShape shape) {
     eltwise_chain(
         shape,
         CopyTile<CbIn, Dst::D0, InputLifecycle::Streaming, Idx, Reconfig>{},
-        PackTile<CbOut, Dst::D0, OutputLifecycle::Streaming>{});
+        PackTile<CbOut, OutputLifecycle::Streaming>{});
 }
 
 }  // namespace compute_kernel_lib

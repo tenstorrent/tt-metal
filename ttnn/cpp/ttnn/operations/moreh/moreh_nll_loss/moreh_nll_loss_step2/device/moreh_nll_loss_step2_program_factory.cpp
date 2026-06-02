@@ -67,9 +67,8 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             {CBIndex::c_3, static_cast<uint32_t>(divisor_has_value ? 1 : 0)},  // divisor
             {CBIndex::c_24, 1, fp32_dest_acc_en_data_format},                  // tmp_weight to reduce
             {CBIndex::c_25, 1, fp32_dest_acc_en_data_format},                  // tmp_input to reduce
-            {CBIndex::c_26, 1, fp32_dest_acc_en_data_format},                  // tmp1
-            {CBIndex::c_27, 1, fp32_dest_acc_en_data_format},                  // tmp2
-            {CBIndex::c_28, 1, fp32_dest_acc_en_data_format},                  // tmp3
+            {CBIndex::c_26, 1, fp32_dest_acc_en_data_format},                  // stage-1 temp (divisor path)
+            {CBIndex::c_27, 1, fp32_dest_acc_en_data_format},                  // divisor reciprocal (1/divisor)
             {CBIndex::c_16, 1},                                                // output
         });
 
@@ -96,17 +95,21 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
 
     if (weight_has_value) {
         reader_defines["WEIGHT"] = "1";
-        compute_defines["WEIGHT"] = "1";
     }
     if (divisor_has_value) {
         reader_defines["DIVISOR"] = "1";
-        compute_defines["DIVISOR"] = "1";
     }
 
     if (fp32_dest_acc_en) {
         reader_defines["FP32_DEST_ACC_EN"] = "1";
-        compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
+
+    // Compute kernel selects weight / divisor paths via compile-time args (if constexpr),
+    // not preprocessor defines.
+    const auto compute_args = [&](uint32_t units) {
+        return std::vector<uint32_t>{
+            units, static_cast<uint32_t>(weight_has_value), static_cast<uint32_t>(divisor_has_value)};
+    };
 
     auto reader_kernel_id = CreateReadKernel(
         program,
@@ -128,8 +131,8 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
         "moreh_nll_loss_step2_kernel.cpp",
         {
-            {core_group_1, units_per_core_group_1, {units_per_core_group_1}},
-            {core_group_2, units_per_core_group_2, {units_per_core_group_2}},
+            {core_group_1, units_per_core_group_1, compute_args(units_per_core_group_1)},
+            {core_group_2, units_per_core_group_2, compute_args(units_per_core_group_2)},
         },
         compute_defines,
         math_fidelity,
@@ -248,9 +251,8 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             {CBIndex::c_3, static_cast<uint32_t>(divisor_has_value ? 1 : 0)},  // divisor
             {CBIndex::c_24, 1, fp32_dest_acc_en_data_format},                  // tmp_weight to reduce
             {CBIndex::c_25, 1, fp32_dest_acc_en_data_format},                  // tmp_input to reduce
-            {CBIndex::c_26, 1, fp32_dest_acc_en_data_format},                  // tmp1
-            {CBIndex::c_27, 1, fp32_dest_acc_en_data_format},                  // tmp2
-            {CBIndex::c_28, 1, fp32_dest_acc_en_data_format},                  // tmp3
+            {CBIndex::c_26, 1, fp32_dest_acc_en_data_format},                  // stage-1 temp (divisor path)
+            {CBIndex::c_27, 1, fp32_dest_acc_en_data_format},                  // divisor reciprocal (1/divisor)
             {CBIndex::c_16, 1},                                                // output
         });
 
@@ -277,17 +279,21 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
 
     if (weight_has_value) {
         reader_defines["WEIGHT"] = "1";
-        compute_defines["WEIGHT"] = "1";
     }
     if (divisor_has_value) {
         reader_defines["DIVISOR"] = "1";
-        compute_defines["DIVISOR"] = "1";
     }
 
     if (fp32_dest_acc_en) {
         reader_defines["FP32_DEST_ACC_EN"] = "1";
-        compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
+
+    // Compute kernel selects weight / divisor paths via compile-time args (if constexpr),
+    // not preprocessor defines.
+    const auto compute_args = [&](uint32_t units) {
+        return std::vector<uint32_t>{
+            units, static_cast<uint32_t>(weight_has_value), static_cast<uint32_t>(divisor_has_value)};
+    };
 
     auto reader_kernel_id = CreateReadKernel(
         program,
@@ -309,8 +315,8 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
         "moreh_nll_loss_step2_kernel.cpp",
         {
-            {core_group_1, units_per_core_group_1, {units_per_core_group_1}},
-            {core_group_2, units_per_core_group_2, {units_per_core_group_2}},
+            {core_group_1, units_per_core_group_1, compute_args(units_per_core_group_1)},
+            {core_group_2, units_per_core_group_2, compute_args(units_per_core_group_2)},
         },
         compute_defines,
         math_fidelity,
@@ -442,10 +448,9 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
             {CBIndex::c_3, static_cast<uint32_t>(divisor_has_value ? 1 : 0)},               // divisor
             {CBIndex::c_24, 1, fp32_dest_acc_en_data_format},                               // tmp_weight to reduce
             {CBIndex::c_25, 1, fp32_dest_acc_en_data_format},                               // tmp_input to reduce
-            {CBIndex::c_26, 1, fp32_dest_acc_en_data_format},                               // tmp1
-            {CBIndex::c_27, 1, fp32_dest_acc_en_data_format},                               // tmp2
-            {CBIndex::c_28, 1, fp32_dest_acc_en_data_format},                               // tmp3
-            {CBIndex::c_16, 1},                                                             // output
+            {CBIndex::c_26, 1, fp32_dest_acc_en_data_format},  // stage-1 temp (divisor path)
+            {CBIndex::c_27, 1, fp32_dest_acc_en_data_format},  // divisor reciprocal (1/divisor)
+            {CBIndex::c_16, 1},                                // output
         });
 
     if (weight_has_value) {
@@ -471,17 +476,21 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
 
     if (weight_has_value) {
         reader_defines["WEIGHT"] = "1";
-        compute_defines["WEIGHT"] = "1";
     }
     if (divisor_has_value) {
         reader_defines["DIVISOR"] = "1";
-        compute_defines["DIVISOR"] = "1";
     }
 
     if (fp32_dest_acc_en) {
         reader_defines["FP32_DEST_ACC_EN"] = "1";
-        compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
+
+    // Compute kernel selects weight / divisor paths via compile-time args (if constexpr),
+    // not preprocessor defines.
+    const auto compute_args = [&](uint32_t units) {
+        return std::vector<uint32_t>{
+            units, static_cast<uint32_t>(weight_has_value), static_cast<uint32_t>(divisor_has_value)};
+    };
 
     auto reader_kernel_id = CreateReadKernel(
         program,
@@ -503,8 +512,8 @@ MorehNllLossStep2DeviceOperation::Factory::cached_program_t moreh_nll_loss_step2
         "ttnn/cpp/ttnn/operations/moreh/moreh_nll_loss/moreh_nll_loss_step2/device/kernels/"
         "moreh_nll_loss_step2_kernel.cpp",
         {
-            {core_group_1, units_per_core_group_1, {units_per_core_group_1}},
-            {core_group_2, units_per_core_group_2, {units_per_core_group_2}},
+            {core_group_1, units_per_core_group_1, compute_args(units_per_core_group_1)},
+            {core_group_2, units_per_core_group_2, compute_args(units_per_core_group_2)},
         },
         compute_defines,
         math_fidelity,

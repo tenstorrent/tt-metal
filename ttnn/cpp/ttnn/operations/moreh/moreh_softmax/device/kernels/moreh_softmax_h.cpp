@@ -88,7 +88,6 @@ void kernel_main() {
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 cb_x_m_max,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Bulk,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
@@ -125,7 +124,6 @@ void kernel_main() {
                 compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<
                 cb_exps,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
@@ -154,7 +152,6 @@ void kernel_main() {
             compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<
                 cb_exps,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
@@ -215,7 +212,6 @@ void kernel_main() {
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 cb_out0,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Bulk,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 #else
@@ -234,7 +230,6 @@ void kernel_main() {
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 cb_out0,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Bulk,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 #endif

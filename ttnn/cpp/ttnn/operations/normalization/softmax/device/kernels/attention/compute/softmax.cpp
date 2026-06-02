@@ -141,7 +141,6 @@ void kernel_main() {
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 cb_scale_mask,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
         reconfig_data_format(cb_scale_mask, cb_fused_attn);
@@ -245,7 +244,6 @@ void kernel_main() {
 #endif
                 compute_kernel_lib::PackTile<
                     cb_x,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::None>{});
 
@@ -270,7 +268,6 @@ void kernel_main() {
 #endif
                 compute_kernel_lib::PackTile<
                     cb_x,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::None>{});
 
@@ -309,7 +306,6 @@ void kernel_main() {
                     compute_kernel_lib::Dst::D0>{},
                 compute_kernel_lib::PackTile<
                     cb_exps,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::None>{});
 #endif
@@ -357,7 +353,6 @@ void kernel_main() {
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 cb_out0,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
         cb_recipsumexps_obj.pop_front(1);

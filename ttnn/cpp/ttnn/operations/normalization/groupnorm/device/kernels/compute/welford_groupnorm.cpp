@@ -446,7 +446,6 @@ void kernel_main() {
                                     compute_kernel_lib::CopyTileReconfig::None>{},
                                 compute_kernel_lib::PackTile<
                                     cb_x_id,
-                                    compute_kernel_lib::Dst::D0,
                                     compute_kernel_lib::OutputLifecycle::Streaming,
                                     compute_kernel_lib::PackTileReconfig::None>{});
                         } else {
@@ -465,7 +464,6 @@ void kernel_main() {
                                     compute_kernel_lib::OperandKind::Scalar>{},
                                 compute_kernel_lib::PackTile<
                                     cb_x_id,
-                                    compute_kernel_lib::Dst::D0,
                                     compute_kernel_lib::OutputLifecycle::Streaming,
                                     compute_kernel_lib::PackTileReconfig::None>{});
                         }
@@ -521,7 +519,6 @@ void kernel_main() {
                                 compute_kernel_lib::TileOffset::Set>{0u, nt},
                             compute_kernel_lib::PackTile<
                                 cb_x_id,
-                                compute_kernel_lib::Dst::D0,
                                 compute_kernel_lib::OutputLifecycle::Streaming,
                                 compute_kernel_lib::PackTileReconfig::None>{});
                     }
@@ -548,7 +545,6 @@ void kernel_main() {
                                 compute_kernel_lib::TileOffset::Set>{0u, nt},
                             compute_kernel_lib::PackTile<
                                 cb_x_id,
-                                compute_kernel_lib::Dst::D0,
                                 compute_kernel_lib::OutputLifecycle::Streaming,
                                 compute_kernel_lib::PackTileReconfig::None>{});
                     }
@@ -567,7 +563,6 @@ void kernel_main() {
                             compute_kernel_lib::CopyTileReconfig::Input>{},
                         compute_kernel_lib::PackTile<
                             cb_out_id,
-                            compute_kernel_lib::Dst::D0,
                             compute_kernel_lib::OutputLifecycle::Streaming,
                             compute_kernel_lib::PackTileReconfig::None>{});
                 }

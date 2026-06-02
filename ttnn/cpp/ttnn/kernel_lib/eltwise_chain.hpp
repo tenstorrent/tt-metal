@@ -80,15 +80,15 @@
  * no per-element template parameter, no SFINAE fold, no mid-kernel `enable_fp32_dest_acc()` /
  * `disable_fp32_dest_acc()` transitions.
  *
- * @section block_path_fold Block-path fold (D7)
+ * @section reconfig_fold Reconfig fold
  *
- * Block elements (`BlockCopyTile`, `BlockBinaryFpu`, `BlockPackTile`) participate in the same
- * compile-time prev-CB / prev-fp32 fold as streaming elements via the uniform
- * `reconfig_srca_cb` / `reconfig_srcb_cb` / `reconfig_pack_cb` static accessors. `init()` bodies
- * no longer emit reconfig — that's fold-driven. The `_with_dt` two-arg LLK forms (formerly at
- * `eltwise_block.hpp:72,236`) are now decomposed into the chain's
- * `reconfig_data_format_srca(curr) + copy_tile_init(curr)` sequence, compile-time-elided when
- * prev_cb == curr_cb.
+ * Every element participates in the same compile-time prev-CB fold via its uniform
+ * `reconfig_srca_cb` / `reconfig_srcb_cb` / `reconfig_pack_cb` static accessors. Element
+ * `init()` bodies do not emit reconfig themselves — the chain emits it in
+ * `emit_pre_element_transitions()` as a `reconfig_data_format_srca(curr) + copy_tile_init(curr)`
+ * sequence, compile-time-elided when prev_cb == curr_cb. Block processing (`block_size > 1` on
+ * `EltwiseShape`) reuses the same elements and the same fold; there are no separate block element
+ * types.
  *
  * @section caller_init_wrong_way Anti-examples (D8)
  *
@@ -114,36 +114,37 @@
  * Worked examples
  * ---------------
  *
- *   // InputLifecycle::Streaming unary — Exp(x) → out
+ *   // Streaming unary — Exp(x) → out. PackTile's DEST slot defaults to Dst::Infer:
+ *   // the chain resolves it to the slot the preceding op wrote (Exp's Dst::D0).
  *   eltwise_chain(num_tiles,
  *       CopyTile<cb_in,  Dst::D0, InputLifecycle::Streaming>{},
  *       Exp<>{},
- *       PackTile<cb_out, Dst::D0, OutputLifecycle::Streaming>{}
+ *       PackTile<cb_out, OutputLifecycle::Streaming>{}
  *   );
  *
- *   // InputLifecycle::Streaming binary — A + B → out
+ *   // Streaming binary — A + B → out
  *   //   BinaryFpu writes to DEST; the output CB lives on the PackTile element.
  *   eltwise_chain(num_tiles,
  *       BinaryFpu<cb_a, cb_b, BinaryFpuOp::Add>{},
- *       PackTile<cb_out, Dst::D0, OutputLifecycle::Streaming,
- *                OperandKind::Scalar, PackTileReconfig::Output>{}
+ *       PackTile<cb_out, OutputLifecycle::Streaming>{}
  *   );
  *
- *   // Fan-out — same input, two outputs
+ *   // Fan-out — same input, two outputs. Multiple PackTiles ⇒ inference is off;
+ *   // each pack names its DEST slot explicitly (trailing template arg).
  *   eltwise_chain(num_tiles,
  *       CopyTile<cb_in, Dst::D0, InputLifecycle::HeldStream>{},
  *       CopyTile<cb_in, Dst::D1, InputLifecycle::NoWaitPop>{},
  *       Exp<Approx::Exact, Approx::Fast, Dst::D0>{},
  *       Tanh<Dst::D1>{},
- *       PackTile<cb_out_a, Dst::D0, OutputLifecycle::Streaming>{},
- *       PackTile<cb_out_b, Dst::D1, OutputLifecycle::Streaming>{}
+ *       PackTile<cb_out_a, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0>{},
+ *       PackTile<cb_out_b, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D1>{}
  *   );
  *
  *   // Block reduction with upfront reserve / pop-at-end (auto-detected via `Es::is_upfront`)
  *   eltwise_chain(num_tiles,
  *       CopyTile<cb_in, Dst::D0, InputLifecycle::Bulk, OperandKind::Block>{},
  *       Exp<>{},
- *       PackTile<cb_out, Dst::D0, OutputLifecycle::Bulk>{}
+ *       PackTile<cb_out, OutputLifecycle::Bulk>{}
  *   );
  *
  *   // Asymmetric bcast walk — A streams the tile range, B pinned at tile 0
@@ -158,7 +159,7 @@
  *                 Dst::D0,
  *                 OperandKind::Scalar>{},  // BIndex — B pinned at tile 0
  *       Exp<>{},
- *       PackTile<cb_out, Dst::D0, OutputLifecycle::Streaming>{}
+ *       PackTile<cb_out, OutputLifecycle::Streaming>{}
  *   );
  *
  * Non-goals
@@ -170,7 +171,7 @@
  *  - `acquire_dst/release_dst` and `ACQ()/REL()` macros — modern dst-sync only. Kernels migrate
  *    their dst-sync as part of adopting the chain.
  *
- * Reconfig (`with_dt_tree`-style) — fold-driven post commits 2-3
+ * Reconfig (`with_dt_tree`-style) — fold-driven
  * ----------------------------------------------------------------
  *  - CopyTileReconfig::Input         → fold emits single-side reconfig on srca (compile-time-elided when prev == curr).
  *  - BinaryDataFormatReconfig::Input → fold emits per-side reconfig on srca + srcb (compile-time-elided per side).
@@ -183,7 +184,8 @@
  *  - DestReuseReconfig::SrcB         → fold emits srcb reconfig only, decoupled from ReuseType.
  *  - PackTileReconfig::Output        → fold emits pack reconfig — two-arg `_with_dt` form when prev_pack_cb is known,
  *    single-arg on first emit.
- *  - UnaryBcastReconfig::Input       → currently bundled into `unary_bcast_init`.
+ *  - UnaryBcastReconfig::Input       → fold emits per-side reconfig on srca + srcb (the row/col/scalar
+ *    bcast datacopy drives the FPU SrcB lane, so both sides are reprogrammed).
  *
  * Emission shapes the fold chooses between (see `emit_pre_element_transitions`):
  *
@@ -304,13 +306,45 @@ inline constexpr bool is_fpu_kind_op_v =
 /// MATH-MOP-touching element predicate. Groups every element whose init
 /// programs the MATH MOP / ADDR_MOD_0..3 lane: `CopyTile` (via
 /// `copy_tile_to_dst_init_short`) and the FPU-kind ops (`BinaryFpu`,
-/// `DestReuseBinary`, `UnaryBcast`). The hoist gate (doc G3 + the
-/// CopyTile-versus-FPU clash from the old `chain_has_non_copy_tile_fpu_clash`
-/// predicate) requires all such elements in a chain to be the same
-/// instantiated type — otherwise the boot-time fold leaves only the last
-/// init's MOP programmed and earlier elements run with the wrong MOP.
+/// `DestReuseBinary`, `UnaryBcast`). The hoist gate (`chain_math_mop_uniform`)
+/// requires all such elements in a chain to be the same instantiated type —
+/// otherwise the boot-time fold leaves only the last init's MOP programmed and
+/// earlier elements run with the wrong MOP.
 template <class T>
 inline constexpr bool is_math_mop_op_v = is_copy_tile_op_v<T> || is_fpu_kind_op_v<T>;
+
+// =============================================================================
+// 1a-ter. Wrapper customization points (transparent / inert chain elements)
+// =============================================================================
+//
+// A wrapper element (e.g. `OptionalChainElement`) can opt into being treated by
+// the chain's compile-time analysis as either:
+//   - INERT  — emits nothing; excluded from cohort uniformity, hoist decisions,
+//              and CB-collision checks (as if it were not in the chain at all);
+//   - TRANSPARENT — behaves exactly as the element it wraps; the uniformity /
+//              hoist analysis sees the *unwrapped* inner type (so a wrapped op
+//              and a bare op of the same type stay in one cohort).
+//
+// Defaults: not inert, identity unwrap. Wrappers specialize these (see
+// `eltwise_optional.hpp`). Declared here — before the chain pipeline in the
+// `.inl` consumes them — so a kernel that never includes a wrapper header pays
+// nothing, and one that does picks up the specializations (visible at chain-call
+// instantiation time).
+
+/// True ⇒ element emits nothing and must be excluded from all chain analysis.
+template <class E>
+struct chain_elem_inert : std::false_type {};
+template <class E>
+inline constexpr bool chain_elem_inert_v = chain_elem_inert<E>::value;
+
+/// Maps a transparent wrapper to the inner element type the chain should analyze.
+/// Identity for everything that isn't a transparent wrapper.
+template <class E>
+struct chain_elem_unwrap {
+    using type = E;
+};
+template <class E>
+using chain_elem_unwrap_t = typename chain_elem_unwrap<E>::type;
 
 // =============================================================================
 // 1a-bis. CB id sentinel
@@ -478,8 +512,8 @@ struct OutputLifecycle {
     }
     constexpr bool operator!=(OutputLifecycle other) const noexcept { return !(*this == other); }
 
-    // Named cells — written type-qualified (e.g. `OutputLifecycle::Bulk`). The historical
-    // `Out` prefix is dropped now that the type qualifies them. Defined out-of-line below.
+    // Named cells — written type-qualified (e.g. `OutputLifecycle::Bulk`). Declared
+    // here, defined out-of-line below.
     static const OutputLifecycle Streaming, Chunked, Bulk, BulkReservePerTile, BulkReservePerChunk, CallerManaged,
         HeldReserve, DeferredReserve;
 };
@@ -508,10 +542,9 @@ constexpr bool is_legal_output_lifecycle(OutputLifecycle lc) noexcept {
 /// Per-input operand kind. The output kind is always `Block` (single column
 /// in the output matrix), so no enum is defined for the output side.
 ///
-/// Runtime/compile-time tile-index offsets that previously lived as separate
-/// kinds (`Pinned`/`Absolute`/`BlockIterOffset`) are now expressed by composing
-/// one of these four canonical kinds with a `TileBase` (see `TileBase` types
-/// below). The kind carries the iteration shape; `TileBase` carries the offset.
+/// A tile-index offset is expressed by composing one of these four canonical kinds
+/// with a `TileOffset` (see `TileOffset` below): the kind carries the iteration
+/// shape, `TileOffset` carries the (runtime or compile-time) base offset.
 enum class OperandKind : uint8_t {
     Block,   // Ht × Wt — walks the full iteration domain
     Row,     // 1  × Wt — broadcast down rows
@@ -628,7 +661,7 @@ ALWI uint32_t tile_base_value(uint32_t stored) noexcept {
     }
 }
 
-/// Lifecycle compatibility check for `TileBase != None` on input elements.
+/// Lifecycle compatibility check for `TileOffset::Set` on input elements.
 /// Only InputLifecycle::Bulk-family (single upfront wait, single end pop or no pop) and
 /// InputLifecycle::CallerManaged are legal — iter-dependent counts
 /// (InputLifecycle::Streaming/InputLifecycle::Chunked/Cumulative) can't be expressed as `base + window`.
@@ -637,7 +670,7 @@ constexpr bool is_legal_input_lifecycle_with_base(InputLifecycle lc) noexcept {
            lc == InputLifecycle::BulkDrain || lc == InputLifecycle::CallerManaged;
 }
 
-/// Lifecycle compatibility check for `TileBase != None` on output elements.
+/// Lifecycle compatibility check for `TileOffset::Set` on output elements.
 constexpr bool is_legal_output_lifecycle_with_base(OutputLifecycle lc) noexcept {
     return lc == OutputLifecycle::Bulk || lc == OutputLifecycle::DeferredReserve ||
            lc == OutputLifecycle::HeldReserve || lc == OutputLifecycle::CallerManaged;
@@ -667,6 +700,13 @@ enum class Dst : uint32_t {
     D13 = 13,
     D14 = 14,
     D15 = 15,
+    /// Sentinel — "infer this slot from the chain". Valid ONLY as `PackTile`'s
+    /// trailing `DstSlot` default: the chain resolves it to the DEST slot written
+    /// by the nearest preceding DEST-writing element (CopyTile / BinaryFpu /
+    /// DestReuseBinary / UnaryBcast / SFPU op). Forbidden on every other element
+    /// (they static_assert `Slot != Dst::Infer`) and forbidden when the chain
+    /// holds more than one PackTile (fan-out must name slots explicitly).
+    Infer = 0xFFFFFFFFu,
 };
 
 constexpr uint32_t to_u32(Dst s) noexcept { return static_cast<uint32_t>(s); }
@@ -711,7 +751,7 @@ enum class Legacy : bool { Off = false, On = true };
 ///   | Row      | wt                       | Wt             |
 ///   | Col      | ht                       | Ht             |
 ///
-/// Runtime/compile-time tile offsets are expressed via `TileBase` (composed with
+/// Runtime/compile-time tile offsets are expressed via `TileOffset` (composed with
 /// any of the four kinds), not as separate index modes.
 ///
 /// Row / Col require non-streaming CB policy (`InputLifecycle::Bulk`, `InputLifecycle::HeldStream`,
@@ -806,8 +846,8 @@ enum class UnaryBcastReconfig : uint8_t {
 ///
 /// The fold emits `pack_reconfig_data_format(prev_p, curr_p)` (two-arg `_with_dt`)
 /// when a prior chain element established the pack target, and falls back to the
-/// single-arg form on first emit. The LLK's runtime format-equality check makes
-/// the legacy `OutputConditional` distinction redundant; only `Output` remains.
+/// single-arg form on first emit. The LLK's runtime format-equality check means a
+/// single `Output` value suffices (the reconfig is a hardware no-op when formats match).
 enum class PackTileReconfig : uint8_t {
     None,
     Output,  // fold emits pack_reconfig_data_format(prev_p, curr_p) when prev_p known, else (curr_p)
@@ -843,6 +883,7 @@ enum class PackTileReconfig : uint8_t {
 
 template <class Derived, Dst Slot>
 struct UnaryOp : DestOnlyTag {
+    static_assert(Slot != Dst::Infer, "UnaryOp: Dst::Infer is only valid as PackTile's trailing DstSlot");
     static_assert(
         to_u32(Slot) < DEST_AUTO_LIMIT, "UnaryOp: DEST slot exceeds compile-time DEST capacity (DEST_AUTO_LIMIT)");
 
@@ -862,6 +903,9 @@ struct UnaryOp : DestOnlyTag {
 
 template <class Derived, Dst In0, Dst In1, Dst Out>
 struct BinaryOp : DestOnlyTag {
+    static_assert(
+        In0 != Dst::Infer && In1 != Dst::Infer && Out != Dst::Infer,
+        "BinaryOp: Dst::Infer is only valid as PackTile's trailing DstSlot");
     static_assert(
         to_u32(In0) < DEST_AUTO_LIMIT && to_u32(In1) < DEST_AUTO_LIMIT && to_u32(Out) < DEST_AUTO_LIMIT,
         "BinaryOp: DEST slot exceeds compile-time DEST capacity (DEST_AUTO_LIMIT)");
@@ -886,6 +930,9 @@ struct BinaryOp : DestOnlyTag {
 
 template <class Derived, Dst In0, Dst In1, Dst In2, Dst Out>
 struct TernaryOp : DestOnlyTag {
+    static_assert(
+        In0 != Dst::Infer && In1 != Dst::Infer && In2 != Dst::Infer && Out != Dst::Infer,
+        "TernaryOp: Dst::Infer is only valid as PackTile's trailing DstSlot");
     static_assert(
         to_u32(In0) < DEST_AUTO_LIMIT && to_u32(In1) < DEST_AUTO_LIMIT && to_u32(In2) < DEST_AUTO_LIMIT &&
             to_u32(Out) < DEST_AUTO_LIMIT,
@@ -919,6 +966,9 @@ struct TernaryOp : DestOnlyTag {
 
 template <class Derived, Dst In0, Dst In1, Dst In2, Dst In3, Dst Out>
 struct QuaternaryOp : DestOnlyTag {
+    static_assert(
+        In0 != Dst::Infer && In1 != Dst::Infer && In2 != Dst::Infer && In3 != Dst::Infer && Out != Dst::Infer,
+        "QuaternaryOp: Dst::Infer is only valid as PackTile's trailing DstSlot");
     static_assert(
         to_u32(In0) < DEST_AUTO_LIMIT && to_u32(In1) < DEST_AUTO_LIMIT && to_u32(In2) < DEST_AUTO_LIMIT &&
             to_u32(In3) < DEST_AUTO_LIMIT && to_u32(Out) < DEST_AUTO_LIMIT,
@@ -1013,11 +1063,16 @@ template <
     UnaryBcastReconfig Reconfig = UnaryBcastReconfig::Input>
 struct UnaryBcast;
 
+// `DstSlot` is the trailing default. Most chains write the slot the preceding
+// compute produced, so `Dst::Infer` lets the chain resolve it
+// (nearest preceding DEST-writer) and the call site omits the token entirely. Pass an
+// explicit `Dst::Dn` (trailing) only for fan-out (multiple PackTiles) where inference
+// is ambiguous, or to pack a non-adjacent slot.
 template <
     uint32_t Cb,
-    Dst DstSlot = Dst::D0,
     OutputLifecycle Policy = OutputLifecycle::Streaming,
     PackTileReconfig Reconfig = PackTileReconfig::Output,
+    Dst DstSlot = Dst::Infer,
     TileOffset Offset = TileOffset::Unset>
 struct PackTile;
 

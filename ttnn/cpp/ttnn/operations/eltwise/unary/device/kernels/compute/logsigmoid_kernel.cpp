@@ -44,7 +44,6 @@ void kernel_main() {
             Logsigmoid<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>{},
         compute_kernel_lib::PackTile<
             cb_output,
-            compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

@@ -154,7 +154,6 @@ void kernel_main() {
             compute_kernel_lib::Power<compute_kernel_lib::Dst::D0>{step},
             compute_kernel_lib::PackTile<
                 cb_tmp1,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
@@ -181,7 +180,6 @@ void kernel_main() {
             compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<
                 cb_tmp1,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
@@ -211,7 +209,6 @@ void kernel_main() {
                 BinaryMax<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<
                 tmp_cb_max_exp_avg_sq,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
@@ -230,7 +227,6 @@ void kernel_main() {
                 compute_kernel_lib::CopyTileReconfig::Input>{},
             compute_kernel_lib::PackTile<
                 cb_max_exp_avg_sq_out,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
@@ -260,7 +256,6 @@ void kernel_main() {
             compute_kernel_lib::Sqrt<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<
                 cb_tmp1,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
         tmp_cb_max_exp_avg_sq_obj.pop_front(onetile);
@@ -281,7 +276,6 @@ void kernel_main() {
             compute_kernel_lib::Sqrt<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<
                 cb_tmp1,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 #endif
@@ -311,7 +305,6 @@ void kernel_main() {
             compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<
                 cb_tmp1,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
@@ -331,7 +324,6 @@ void kernel_main() {
             compute_kernel_lib::Power<compute_kernel_lib::Dst::D0>{step},
             compute_kernel_lib::PackTile<
                 cb_tmp2,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
@@ -356,7 +348,6 @@ void kernel_main() {
             compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<
                 cb_tmp2,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 

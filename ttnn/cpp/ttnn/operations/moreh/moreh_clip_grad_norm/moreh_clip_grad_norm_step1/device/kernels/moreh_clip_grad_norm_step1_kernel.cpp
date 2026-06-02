@@ -97,7 +97,6 @@ void kernel_main() {
                 compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
                 compute_kernel_lib::PackTile<
                     cb_xabs,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::None>{});
         } else if (mh) {
@@ -119,7 +118,6 @@ void kernel_main() {
                 compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
                 compute_kernel_lib::PackTile<
                     cb_xabs,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::None>{});
         } else if (mw) {
@@ -142,7 +140,6 @@ void kernel_main() {
                 compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
                 compute_kernel_lib::PackTile<
                     cb_xabs,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::None>{});
         } else {
@@ -157,7 +154,6 @@ void kernel_main() {
                 compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
                 compute_kernel_lib::PackTile<
                     cb_xabs,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::None>{});
         }
@@ -183,7 +179,6 @@ void kernel_main() {
                 compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>{},
                 compute_kernel_lib::PackTile<
                     cb_xpow,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::Output>{});
         } else {
@@ -198,7 +193,6 @@ void kernel_main() {
                 compute_kernel_lib::PowerIterative<compute_kernel_lib::Dst::D0>{p},
                 compute_kernel_lib::PackTile<
                     cb_xpow,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::Output>{});
         }
@@ -213,7 +207,6 @@ void kernel_main() {
             compute_kernel_lib::Log<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<
                 cb_logx,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
         compute_kernel_lib::eltwise_chain(
@@ -235,7 +228,6 @@ void kernel_main() {
                 compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<
                 cb_exp_lxmd,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
         compute_kernel_lib::eltwise_chain(
@@ -253,7 +245,6 @@ void kernel_main() {
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 cb_correct_xpow,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
@@ -271,7 +262,6 @@ void kernel_main() {
                     compute_kernel_lib::CopyTileReconfig::Input>{},
                 compute_kernel_lib::PackTile<
                     cb_xpowadd,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::None>{});
         } else {
@@ -292,7 +282,6 @@ void kernel_main() {
                     compute_kernel_lib::OperandKind::Scalar>{},
                 compute_kernel_lib::PackTile<
                     cb_xpowadd,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::None>{});
         }

@@ -122,7 +122,7 @@ void kernel_main() {
                 OperandKind::Scalar,
                 Dst::D0,
                 OperandKind::Scalar>{},
-            PackTile<sin_interm_cb, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
+            PackTile<sin_interm_cb, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
 
         // cos_interim = in * cos
         eltwise_chain(
@@ -138,7 +138,7 @@ void kernel_main() {
                 OperandKind::Scalar,
                 Dst::D0,
                 OperandKind::Scalar>{},
-            PackTile<cos_interm_cb, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
+            PackTile<cos_interm_cb, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
 
         // out = cos_interim + sin_interim
         eltwise_chain(
@@ -154,6 +154,6 @@ void kernel_main() {
                 OperandKind::Scalar,
                 Dst::D0,
                 OperandKind::Scalar>{},
-            PackTile<out_cb, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
+            PackTile<out_cb, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
     }
 }

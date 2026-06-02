@@ -29,7 +29,6 @@ void kernel_main() {
         compute_kernel_lib::Typecast<CHAIN_TYPECAST_IN_DF, CHAIN_TYPECAST_OUT_DF, compute_kernel_lib::Dst::D0>{},
         compute_kernel_lib::PackTile<
             output_cb,
-            compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

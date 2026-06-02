@@ -40,7 +40,6 @@ void kernel_main() {
                 compute_kernel_lib::CopyTileReconfig::Input>{},
             compute_kernel_lib::PackTile<
                 final_output_cb,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
     } else {
@@ -54,7 +53,6 @@ void kernel_main() {
                 compute_kernel_lib::CopyTileReconfig::Input>{},
             compute_kernel_lib::PackTile<
                 partial_prod_cb,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
         compute_kernel_lib::eltwise_chain(
@@ -72,7 +70,6 @@ void kernel_main() {
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 partial_prod_cb,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
         compute_kernel_lib::eltwise_chain(
@@ -85,7 +82,6 @@ void kernel_main() {
                 compute_kernel_lib::CopyTileReconfig::Input>{},
             compute_kernel_lib::PackTile<
                 final_output_cb,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
     }

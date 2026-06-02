@@ -49,7 +49,6 @@ void kernel_main() {
 #endif
         compute_kernel_lib::PackTile<
             cb_tmp0,
-            compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::None>{});
 
@@ -73,7 +72,6 @@ void kernel_main() {
         compute_kernel_lib::Log<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>{},
         compute_kernel_lib::PackTile<
             cb_output,
-            compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

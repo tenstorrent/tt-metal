@@ -40,7 +40,6 @@ void kernel_main() {
                     compute_kernel_lib::UnaryBcastReconfig::Input>{},
                 compute_kernel_lib::PackTile<
                     cb_id_dst,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::None>{});
             num_tiles_read += HtWt - start_t;

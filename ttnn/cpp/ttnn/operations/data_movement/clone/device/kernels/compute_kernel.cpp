@@ -27,7 +27,6 @@ void kernel_main() {
             compute_kernel_lib::CopyTileReconfig::None>{},
         compute_kernel_lib::PackTile<
             dst_cb_id,
-            compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

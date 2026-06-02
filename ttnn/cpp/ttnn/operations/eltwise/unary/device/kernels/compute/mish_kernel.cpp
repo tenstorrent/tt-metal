@@ -65,7 +65,7 @@ void kernel_main() {
             InputLifecycle::Streaming,
             OperandKind::Scalar>>
         fpu_mul_dest_x{};
-    constexpr PackTile<cb_output, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::None> pack_y{};
+    constexpr PackTile<cb_output, OutputLifecycle::Streaming, PackTileReconfig::None> pack_y{};
 
     if (use_approx) {
         eltwise_chain(

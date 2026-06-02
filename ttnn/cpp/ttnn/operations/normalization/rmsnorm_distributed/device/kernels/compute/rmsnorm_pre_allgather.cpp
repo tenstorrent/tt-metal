@@ -71,7 +71,6 @@ void kernel_main() {
                 compute_kernel_lib::OperandKind::Block>{},
             compute_kernel_lib::PackTile<
                 cb_x2,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Chunked,
                 compute_kernel_lib::OperandKind::Block>{});
 

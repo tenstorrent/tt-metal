@@ -190,7 +190,6 @@ void kernel_main() {
                 compute_kernel_lib::TileOffset::Set>{1, 1},
             compute_kernel_lib::PackTile<
                 cb_mean_squared,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Bulk,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
@@ -216,7 +215,6 @@ void kernel_main() {
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 cb_var,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Bulk,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
@@ -245,7 +243,6 @@ void kernel_main() {
                 compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<
                 cb_recip_sqrt_var,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 

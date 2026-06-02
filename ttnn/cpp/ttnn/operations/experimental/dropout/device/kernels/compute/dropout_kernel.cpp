@@ -37,7 +37,6 @@ void kernel_main() {
         compute_kernel_lib::Dropout<compute_kernel_lib::Dst::D0>{int_probability, int_scale_factor},
         compute_kernel_lib::PackTile<
             cb_output,
-            compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

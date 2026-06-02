@@ -127,8 +127,8 @@ void kernel_main() {
                         CopyTileReconfig::Input>{},
                     MulBinary<Dst::D1, Dst::D2, Dst::D1>{},
                     AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                    PackTile<cb_updated_running_mean, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{},
-                    PackTile<cb_out0, Dst::D0, OutputLifecycle::CallerManaged, PackTileReconfig::Output>{});
+                    PackTile<cb_updated_running_mean, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0>{},
+                    PackTile<cb_out0, OutputLifecycle::CallerManaged, PackTileReconfig::Output, Dst::D0>{});
             } else {
                 eltwise_chain(
                     onetile,
@@ -166,7 +166,7 @@ void kernel_main() {
                         CopyTileReconfig::Input>{},
                     MulBinary<Dst::D1, Dst::D2, Dst::D1>{},
                     AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                    PackTile<cb_updated_running_mean, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
+                    PackTile<cb_updated_running_mean, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
             }
 
             if constexpr (needs_mean_typecast) {
@@ -179,7 +179,7 @@ void kernel_main() {
                         OperandKind::Scalar,
                         CopyTileReconfig::Input>{},
                     Typecast<tc_in_fmt, tc_out_fmt, Dst::D0>{},
-                    PackTile<cb_writer_updated_mean, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
+                    PackTile<cb_writer_updated_mean, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
             }
         }
 
@@ -221,8 +221,8 @@ void kernel_main() {
                     CopyTileReconfig::Input>{},
                 MulBinary<Dst::D1, Dst::D2, Dst::D1>{},
                 AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
-                PackTile<cb_updated_running_var, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{},
-                PackTile<cb_out0, Dst::D0, OutputLifecycle::CallerManaged, PackTileReconfig::Output>{});
+                PackTile<cb_updated_running_var, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0>{},
+                PackTile<cb_out0, OutputLifecycle::CallerManaged, PackTileReconfig::Output, Dst::D0>{});
 
             if constexpr (needs_var_typecast) {
                 eltwise_chain(
@@ -234,7 +234,7 @@ void kernel_main() {
                         OperandKind::Scalar,
                         CopyTileReconfig::Input>{},
                     Typecast<tc_in_fmt, tc_out_fmt, Dst::D0>{},
-                    PackTile<cb_writer_updated_var, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
+                    PackTile<cb_writer_updated_var, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
             }
         }
 

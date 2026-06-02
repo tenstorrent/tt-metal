@@ -55,7 +55,6 @@ void kernel_main() {
             MulBinary<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>{},
         compute_kernel_lib::PackTile<
             cb_grad_in,
-            compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OutputLifecycle::Chunked,
             compute_kernel_lib::PackTileReconfig::None>{});
 }

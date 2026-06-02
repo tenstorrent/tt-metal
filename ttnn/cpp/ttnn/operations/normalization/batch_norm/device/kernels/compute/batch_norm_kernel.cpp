@@ -29,18 +29,20 @@
 //   cb_bcast, cb_den  InputLifecycle::CallerManaged on Scalar caller waits before the chain, pops after
 //   cb_weight,
 //   cb_bias           InputLifecycle::CallerManaged on Scalar same — held by this function call only
-template <bool WeightHas, bool BiasHas>
-ALWI void batchnorm_bcast_tiles(
+// CB ids are non-type template params (they index chain-element templates, which
+// require constant expressions); only freq / tile_start are runtime.
+template <
+    bool WeightHas,
+    bool BiasHas,
     uint32_t cb_bcast,
     uint32_t cb_other,
-    uint32_t freq,
-    uint32_t tile_start,
     uint32_t cb_batch_var,
     uint32_t cb_eps,
     uint32_t cb_den,
     uint32_t cb_weight,
     uint32_t cb_bias,
-    uint32_t cb_output_0) {
+    uint32_t cb_output_0>
+ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
     // Stage 1: cb_den = 1 / sqrt(cb_batch_var + cb_eps), one tile.
     compute_kernel_lib::eltwise_chain(
         1,
@@ -56,8 +58,7 @@ ALWI void batchnorm_bcast_tiles(
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OperandKind::Scalar>{},
         compute_kernel_lib::Rsqrt<>{},
-        compute_kernel_lib::
-            PackTile<cb_den, compute_kernel_lib::Dst::D0, compute_kernel_lib::OutputLifecycle::Streaming>{});
+        compute_kernel_lib::PackTile<cb_den, compute_kernel_lib::OutputLifecycle::Streaming>{});
 
     const uint32_t inner_count = freq - tile_start;
 
@@ -119,8 +120,8 @@ ALWI void batchnorm_bcast_tiles(
             compute_kernel_lib::DestReuseReconfig::Input,
             compute_kernel_lib::InputLifecycle::CallerManaged,
             compute_kernel_lib::OperandKind::Scalar>>{};
-    constexpr auto pack_out = compute_kernel_lib::
-        PackTile<cb_output_0, compute_kernel_lib::Dst::D0, compute_kernel_lib::OutputLifecycle::Streaming>{};
+    constexpr auto pack_out =
+        compute_kernel_lib::PackTile<cb_output_0, compute_kernel_lib::OutputLifecycle::Streaming>{};
 
     // Stage 2..4 fused. Single chain — DEST[0] threaded through Sub → Mul(den) →
     // [Mul(weight)] → [Add(bias)] → Pack. Optional weight / bias gates handle the four
@@ -168,30 +169,30 @@ void kernel_main() {
     cb_wait_front(cb_eps, 1);
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        batchnorm_bcast_tiles<weight_has_value, bias_has_value>(
+        batchnorm_bcast_tiles<
+            weight_has_value,
+            bias_has_value,
             cb_batch_mean,
             cb_input,
-            tile_freq,
-            tile_start,
             cb_batch_var,
             cb_eps,
             cb_den,
             cb_weight,
             cb_bias,
-            cb_output_0);
+            cb_output_0>(tile_freq, tile_start);
     }
     if (remaining_iterations > 0) {
-        batchnorm_bcast_tiles<weight_has_value, bias_has_value>(
+        batchnorm_bcast_tiles<
+            weight_has_value,
+            bias_has_value,
             cb_batch_mean,
             cb_input,
-            remaining_iterations,
-            tile_start,
             cb_batch_var,
             cb_eps,
             cb_den,
             cb_weight,
             cb_bias,
-            cb_output_0);
+            cb_output_0>(remaining_iterations, tile_start);
     }
 
     cb_pop_front(cb_eps, 1);

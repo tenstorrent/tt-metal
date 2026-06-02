@@ -46,7 +46,7 @@ namespace detail {
 //   RowBcast  | wt                    | Wt
 //   ColBcast  | ht                    | Ht
 //
-// Runtime offsets are layered on top by `TileBase` (caller-side add to the
+// Runtime offsets are layered on top by `TileOffset` (caller-side add to the
 // idx result, and an inflation of the wait/pop count via `tile_base_value`).
 //
 // `is_bcast_mode_v<M>` is the predicate driving the (Policy × Mode) compatibility
@@ -142,8 +142,8 @@ template <class E> constexpr uint32_t pack_cb_of();
 // Per-Side prev-CB SFINAE probe (D2)
 //
 // `cb_for_side<Side, E>` reads `E::reconfig_srca_cb` / `_srcb_cb` / `_pack_cb`
-// when present, returns `NO_PREV_CB` otherwise. Block elements that haven't yet
-// adopted the accessors (commit 3 / D7) still participate in the fold transparently.
+// when present, returns `NO_PREV_CB` otherwise — so an element that declares no
+// reconfig accessor participates in the fold transparently (contributes nothing).
 // =============================================================================
 
 template <class E, class = void>
@@ -330,7 +330,7 @@ struct CopyTile : CopyTileTag {
 
 
 
-    // 2D variants — Ht/Wt-aware. Routes through `idx` and `window`; TileBase
+    // 2D variants — Ht/Wt-aware. Routes through `idx` and `window`; TileOffset
     // adds the runtime offset on top. InputLifecycle::Streaming policies handled by the same
     // `wait_per_tile` / `pop_per_tile` as 1D.
     ALWI void wait_upfront(uint32_t Ht, uint32_t Wt) const {
@@ -378,14 +378,18 @@ struct CopyTile : CopyTileTag {
 // =============================================================================
 
 template <uint32_t Cb,
-          Dst DstSlot,
           OutputLifecycle Policy,
           PackTileReconfig Reconfig,
+          Dst DstSlot,
           TileOffset Offset>
 struct PackTile : PackTileTag {
-    static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
+    // `Dst::Infer` is tolerated here so a caller-written `PackTile<cb, ...>{}` (DstSlot
+    // defaulted to Infer) is a complete, constructible type BEFORE the chain resolves
+    // it. The chain rebinds every Infer pack to a concrete slot in `eltwise_chain(...)`
+    // (see `resolve_pack_element`); the resolved instance re-checks the real bound.
+    static_assert(DstSlot == Dst::Infer || to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "PackTile: DEST slot exceeds DEST_AUTO_LIMIT");
-    // TileBase != None on pack side requires caller-managed-style lifecycle on the
+    // TileOffset::Set on pack side requires caller-managed-style lifecycle on the
     // output CB (caller pre-reserved a window large enough for base + kind window).
     // InputLifecycle::Streaming / InputLifecycle::Chunked reserve+push counts can't be inflated by a runtime base
     // without per-iter bookkeeping the chain doesn't own.
@@ -517,7 +521,7 @@ struct BinaryFpu : BinaryFpuTag {
                   "BinaryFpu: A-side RowBcast / ColBcast index require non-streaming APolicy");
     static_assert(detail::valid_policy_mode_v<BPolicy, BIndex>,
                   "BinaryFpu: B-side RowBcast / ColBcast index require non-streaming BPolicy");
-    // Per-operand TileBase lifecycle compatibility — InputLifecycle::Streaming/InputLifecycle::Chunked/Cumulative
+    // Per-operand TileOffset lifecycle compatibility — InputLifecycle::Streaming/InputLifecycle::Chunked/Cumulative
     // can't compose with runtime base offsets (iter-dependent wait/pop counts).
     static_assert(OffsetA == TileOffset::Unset || is_legal_input_lifecycle_with_base(APolicy),
                   "BinaryFpu: OffsetA Set requires APolicy to be InputLifecycle::Bulk-family or InputLifecycle::CallerManaged");
@@ -1147,12 +1151,11 @@ constexpr bool element_supports_block() {
 template <class... Es>
 constexpr bool chain_supports_block_impl_v = (element_supports_block<Es>() && ...);
 
-// 1D-only chain entry points cannot resolve Row/Col indexing — there is no
-// Ht/Wt context to drive `idx<Row>(...) = wt` or `idx<Col>(...) = ht`.
-// In 1D, exec collapses Row/Col to `base` (silently degenerate). Banning these
-// kinds at the 1D dispatch site forces callers to either pick Block/Scalar
-// (the only kinds that make sense without Ht/Wt) or switch to the 2D
-// `eltwise_chain(EltwiseShape, ...)` overload.
+// Row/Col indexing needs an (Ht, Wt) grid to drive `idx<Row>(...) = wt` /
+// `idx<Col>(...) = ht`. The chain expresses the 1D case as Ht == 1, where there is no
+// row axis and Row/Col degenerate to `base` — use Block/Scalar there.
+// `elem_has_a_index_mode` / `_b_index_mode` SFINAE-detect an element's per-side index
+// mode (`a_index_mode` / `b_index_mode`).
 template <class E, class = void>
 struct elem_has_a_index_mode : std::false_type {};
 template <class E>
@@ -1224,7 +1227,8 @@ namespace detail {
 
 template <class A, class B>
 constexpr bool reader_pair_collide() {
-    if constexpr (!is_cb_reader_op_v<A> || !is_cb_reader_op_v<B>) return false;
+    if constexpr (chain_elem_inert_v<A> || chain_elem_inert_v<B>)  return false;  // disabled element: no CB traffic
+    else if constexpr (!is_cb_reader_op_v<A> || !is_cb_reader_op_v<B>) return false;
     else if constexpr (!A::is_upfront || !B::is_upfront)          return false;
     else {
         constexpr uint32_t a0 = cb_a_of<A>();
@@ -1241,7 +1245,8 @@ constexpr bool reader_pair_collide() {
 
 template <class A, class B>
 constexpr bool writer_pair_collide() {
-    if constexpr (!is_pack_tile_op_v<A> || !is_pack_tile_op_v<B>) return false;
+    if constexpr (chain_elem_inert_v<A> || chain_elem_inert_v<B>) return false;  // disabled pack: writes nothing
+    else if constexpr (!is_pack_tile_op_v<A> || !is_pack_tile_op_v<B>) return false;
     else                                                          return (pack_cb_of<A>() == pack_cb_of<B>()) &&
                                                                          (A::pack_dst_slot == B::pack_dst_slot);
 }
@@ -1303,10 +1308,9 @@ template <class... Es> struct chain_pack_writes_collide<EltwiseChain<Es...>>
 //       (`CopyTile`, `BinaryFpu`, `DestReuseBinary`, `UnaryBcast`), all
 //       instantiated types must be identical. Each one's init programs
 //       MATH MOP / ADDR_MOD_0..3 in a kind-specific way (different FPU
-//       ops, different CB args, different bcast modes, the CopyTile vs
-//       binary-op init clash from the old `chain_has_non_copy_tile_fpu_clash`
-//       check); hoisting more than one type leaves only the last init's
-//       MOP programmed and earlier elements run with the wrong MOP.
+//       ops, different CB args, different bcast modes, the CopyTile-vs-
+//       binary-op init clash); hoisting more than one type leaves only the
+//       last init's MOP programmed and earlier elements run with the wrong MOP.
 //
 //   SFPU. SFPU-init uniqueness — across all `is_sfpu_op_v` elements, all
 //       instantiated types must be identical. This is the regression fix:
@@ -1356,18 +1360,25 @@ struct is_math_mop_op_t : std::bool_constant<is_math_mop_op_v<E>> {};
 // call it `Rep`. Then every other `E` with `Pred<E>::value == true` must
 // satisfy `std::is_same_v<Rep, E>`. If no element matches, the chain is
 // vacuously uniform (returns true).
+// Cohort membership: an element participates iff it is NOT inert and its
+// effective (unwrapped) type satisfies Pred. Transparent wrappers
+// (OptionalChainElement<true, Inner>) are analyzed as `Inner`, so a wrapped op
+// and a bare op of the same type share one cohort and stay uniform.
+template <template <class> class Pred, class E>
+inline constexpr bool cohort_match_v = !chain_elem_inert_v<E> && Pred<chain_elem_unwrap_t<E>>::value;
+
 template <template <class> class Pred, class... Es>
 struct first_match { using type = void; };
 
 template <template <class> class Pred, class First, class... Rest>
 struct first_match<Pred, First, Rest...> {
-    using type = std::conditional_t<Pred<First>::value, First,
+    using type = std::conditional_t<cohort_match_v<Pred, First>, chain_elem_unwrap_t<First>,
                                     typename first_match<Pred, Rest...>::type>;
 };
 
 template <template <class> class Pred, class Rep, class... Es>
 struct all_match_rep
-    : std::bool_constant<(((!Pred<Es>::value) || std::is_same_v<Rep, Es>) && ...)> {};
+    : std::bool_constant<(((!cohort_match_v<Pred, Es>) || std::is_same_v<Rep, chain_elem_unwrap_t<Es>>) && ...)> {};
 
 // Empty `Rep == void` short-circuits to `true` (no element matched Pred at all,
 // so the "must equal Rep" condition is vacuously satisfied).
@@ -1417,8 +1428,7 @@ struct chain_hoist_math_mop<EltwiseChain<Es...>>
                          chain_math_mop_uniform_v<EltwiseChain<Es...>>> {};
 
 // SFPU cohort hoist: requires math-MOP hoist AND SFPU init uniformity.
-// True when every element's init can be emitted at boot. This is the
-// fully-hoisted shape (the historical `chain_is_hoist_safe` case).
+// True when every element's init can be emitted at boot — the fully-hoisted shape.
 template <class Chain>
 struct chain_hoist_sfpu : std::false_type {};
 
@@ -1631,7 +1641,7 @@ ALWI void emit_per_stage_pack_reconfig() {
 // the heterogeneous case stays correct across per-iter wraparound.
 template <std::size_t I, class E, class... Es>
 ALWI void elem_pack_init() {
-    if constexpr (is_pack_tile_op_v<E>) {
+    if constexpr (is_pack_tile_op_v<E> && !chain_elem_inert_v<E>) {
         emit_pre_element_transitions<E, I, Es...>();
         E::init();
     }
@@ -1669,8 +1679,8 @@ ALWI void pack_init_for_each(std::index_sequence<Is...>) {
 // policy-guarded (no-op for upfront / no-pop / no-push policies; those fire after
 // the outer loop via elem_pop_upfront_end / elem_push_at_end).
 //
-// BlockSize == 1 today; commit 7 (auto-block) raises it. exec(i_outer * BlockSize + j)
-// passes the absolute tile index — identical to today's exec(i) at BlockSize=1.
+// Each element's exec receives the absolute tile index `i_outer * block_size + j`
+// (which is just `i` when block_size == 1) plus the per-lane DEST slot offset.
 // =============================================================================
 
 // Boot-time hoist of compute-cohort init (math-MOP and/or SFPU), filtered
@@ -1688,8 +1698,9 @@ ALWI void hoist_compute_init(std::index_sequence<Is...>, Es&... elts) {
         constexpr std::size_t II = decltype(idx)::value;
         using ElemT = std::remove_reference_t<decltype(elem)>;
         constexpr bool emit =
-            (is_math_mop_op_v<ElemT> && HoistMath) ||
-            (is_dest_only_op_v<ElemT> && HoistSfpu);
+            !chain_elem_inert_v<ElemT> &&
+            ((is_math_mop_op_v<ElemT> && HoistMath) ||
+             (is_dest_only_op_v<ElemT> && HoistSfpu));
         if constexpr (emit) {
             emit_pre_element_transitions<ElemT, II, Es...>();
             ElemT::init();
@@ -1860,8 +1871,10 @@ ALWI void elem_push_at_end(const E& e, uint32_t Ht, uint32_t Wt) {
 
 }  // namespace detail
 
+// Chain body — runs over already-resolved elements (every PackTile carries a concrete
+// DstSlot here; `Dst::Infer` has been rebound by `eltwise_chain` below).
 template <class... Es>
-ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
+ALWI void eltwise_chain_run(EltwiseShape shape, Es... elts) {
     using Chain = EltwiseChain<Es...>;
 
     // ---- Compile-time invariant checks ----
@@ -1935,6 +1948,143 @@ ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
     // End-of-chain upfront-policy lifecycle.
     (detail::elem_pop_upfront_end(elts, Ht, Wt), ...);
     (detail::elem_push_at_end(elts, Ht, Wt), ...);
+}
+
+// =============================================================================
+// 11c. PackTile DstSlot inference — rebind `Dst::Infer` packs
+//
+// `PackTile`'s trailing `DstSlot` defaults to `Dst::Infer`. Before the chain body
+// runs, `eltwise_chain` rewrites every Infer pack into a concrete `PackTile<...,Dn>`
+// where `Dn` is the DEST slot written by the nearest preceding DEST-writer. This must
+// happen BEFORE `chain_lane_width_v` / `chain_pack_writes_collide_v` are computed (the
+// Infer sentinel would otherwise poison the lane-width fold), so it is done here on the
+// element pack, not inside the body.
+// =============================================================================
+
+namespace detail {
+
+// "Not a DEST-writer" sentinel for slot inference.
+inline constexpr uint32_t kNoSlot = 0xFFFFFFFFu;
+
+// Detect which slot accessor an element exposes (precedence: dst_slot > dst_idx > out).
+// CopyTile / BinaryFpu / DestReuseBinary / UnaryBcast expose `dst_slot`; SFPU unary
+// (and Fill / Rand) expose `dst_idx`; SFPU binary/ternary/quaternary expose `out`.
+template <class E, class = void>
+struct has_dst_slot_m : std::false_type {};
+template <class E>
+struct has_dst_slot_m<E, std::void_t<decltype(E::dst_slot)>> : std::true_type {};
+template <class E, class = void>
+struct has_dst_idx_m : std::false_type {};
+template <class E>
+struct has_dst_idx_m<E, std::void_t<decltype(E::dst_idx)>> : std::true_type {};
+template <class E, class = void>
+struct has_out_m : std::false_type {};
+template <class E>
+struct has_out_m<E, std::void_t<decltype(E::out)>> : std::true_type {};
+
+// DEST slot this element WRITES (for nearest-writer pack inference), or kNoSlot if it
+// is not a DEST-writer. PackTile reads DEST (pack-side), so it is never a writer here.
+template <class E>
+constexpr uint32_t elem_writer_slot() {
+    if constexpr (is_pack_tile_op_v<E>) {
+        return kNoSlot;
+    } else if constexpr (has_dst_slot_m<E>::value) {
+        return to_u32(E::dst_slot);
+    } else if constexpr (has_dst_idx_m<E>::value) {
+        return to_u32(E::dst_idx);
+    } else if constexpr (has_out_m<E>::value) {
+        return to_u32(E::out);
+    } else {
+        return kNoSlot;
+    }
+}
+
+// Is E exactly a `PackTile<...>` whose trailing DstSlot is `Dst::Infer`?
+template <class E>
+struct is_infer_pack : std::false_type {};
+template <uint32_t Cb, OutputLifecycle P, PackTileReconfig R, TileOffset O>
+struct is_infer_pack<PackTile<Cb, P, R, Dst::Infer, O>> : std::true_type {};
+template <class E>
+inline constexpr bool is_infer_pack_v = is_infer_pack<E>::value;
+
+// Rebind a PackTile's DstSlot to a concrete slot, preserving the rest.
+template <class E, Dst New>
+struct rebind_pack_slot {
+    using type = E;
+};
+template <uint32_t Cb, OutputLifecycle P, PackTileReconfig R, Dst S, TileOffset O, Dst New>
+struct rebind_pack_slot<PackTile<Cb, P, R, S, O>, New> {
+    using type = PackTile<Cb, P, R, New, O>;
+};
+template <class E, Dst New>
+using rebind_pack_slot_t = typename rebind_pack_slot<E, New>::type;
+
+// Access the I-th element of a pack by reference (no <tuple> in the kernel env).
+template <std::size_t I, class E0, class... Es>
+constexpr decltype(auto) pack_nth(const E0& e0, const Es&... es) {
+    if constexpr (I == 0) {
+        return (e0);
+    } else {
+        return pack_nth<I - 1>(es...);
+    }
+}
+
+// Nearest preceding DEST-writer slot for the element at index I (kNoSlot if none).
+template <std::size_t I, class... Es>
+constexpr uint32_t writer_slot_before() {
+    const uint32_t slots[] = {elem_writer_slot<Es>()...};
+    uint32_t found = kNoSlot;
+    for (std::size_t k = 0; k < I; ++k) {
+        if (slots[k] != kNoSlot) {
+            found = slots[k];
+        }
+    }
+    return found;
+}
+
+// Resolve element I: rebind an Infer PackTile to its inferred slot (carrying the
+// runtime tile_base), pass everything else through unchanged.
+template <std::size_t I, class... Es>
+ALWI auto resolve_pack_element(const Es&... elts) {
+    using E = std::remove_cv_t<std::remove_reference_t<decltype(pack_nth<I>(elts...))>>;
+    if constexpr (is_infer_pack_v<E>) {
+        constexpr uint32_t s = writer_slot_before<I, Es...>();
+        static_assert(s != kNoSlot,
+                      "PackTile<Dst::Infer>: no preceding DEST-writer to infer the slot from; "
+                      "name the slot explicitly via the trailing Dst template argument.");
+        using R = rebind_pack_slot_t<E, static_cast<Dst>(s)>;
+        return R{pack_nth<I>(elts...).tile_base};
+    } else {
+        return pack_nth<I>(elts...);
+    }
+}
+
+template <std::size_t... Is, class... Es>
+ALWI void eltwise_chain_resolve(EltwiseShape shape, std::index_sequence<Is...>, const Es&... elts) {
+    eltwise_chain_run(shape, resolve_pack_element<Is, Es...>(elts...)...);
+}
+
+// Count of PackTile / Infer-PackTile elements in the chain (binary left fold with init,
+// so the empty-chain case yields 0).
+template <class... Es>
+constexpr std::size_t count_pack_tiles() {
+    return (std::size_t{0} + ... + std::size_t{is_pack_tile_op_v<Es> ? 1u : 0u});
+}
+template <class... Es>
+constexpr std::size_t count_infer_packs() {
+    return (std::size_t{0} + ... + std::size_t{is_infer_pack_v<Es> ? 1u : 0u});
+}
+
+}  // namespace detail
+
+template <class... Es>
+ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
+    // Inference is single-pack only: with fan-out (≥2 PackTiles) the "nearest preceding
+    // DEST-writer" is ambiguous for the trailing pack(s), so those chains must name slots.
+    static_assert(detail::count_infer_packs<Es...>() == 0 || detail::count_pack_tiles<Es...>() == 1,
+                  "PackTile<Dst::Infer> requires exactly one PackTile in the chain; "
+                  "fan-out (multiple PackTiles) must name each DstSlot explicitly via the trailing Dst arg.");
+    detail::eltwise_chain_resolve(shape, std::make_index_sequence<sizeof...(Es)>{}, elts...);
 }
 
 // =============================================================================

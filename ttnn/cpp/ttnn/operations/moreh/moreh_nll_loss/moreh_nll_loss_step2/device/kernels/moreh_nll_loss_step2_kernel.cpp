@@ -6,150 +6,82 @@
 
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"  // OptionalChainElement
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"      // Recip
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"      // Negative
 
+// Per gathered tile: out = -input [* weight] [* (1/divisor)]
+//   has_weight  → multiply the negated input (held in DEST) by the per-target weight tile
+//   has_divisor → multiply by the scalar 1/divisor (mean reduction), broadcast from a single tile
+// The 1/divisor reciprocal is computed once up front and held across the loop. The weight
+// multiply is an inert OptionalChainElement when absent; the divisor stage is gated by
+// `if constexpr` (it needs its own DEST-sync window — the bcast reads the prior stage from a CB).
 void kernel_main() {
+    using namespace compute_kernel_lib;
+
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
+    constexpr bool has_weight = get_compile_time_arg_val(1) == 1;
+    constexpr bool has_divisor = get_compile_time_arg_val(2) == 1;
 
-    constexpr uint32_t cb_weight = tt::CBIndex::c_2;
     constexpr uint32_t cb_divisor = tt::CBIndex::c_3;
-    CircularBuffer cb_divisor_obj(cb_divisor);
-
     constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;
-    CircularBuffer cb_tmp_weight_obj(cb_tmp_weight);
     constexpr uint32_t cb_tmp_input = tt::CBIndex::c_25;
-    CircularBuffer cb_tmp_input_obj(cb_tmp_input);
-    constexpr uint32_t cb_tmp1 = tt::CBIndex::c_26;
-    CircularBuffer cb_tmp1_obj(cb_tmp1);
-    constexpr uint32_t cb_divisor_recip = tt::CBIndex::c_27;
-    CircularBuffer cb_divisor_recip_obj(cb_divisor_recip);  // 1/divisor
-    constexpr uint32_t cb_tmp3 = tt::CBIndex::c_28;
-    CircularBuffer cb_tmp3_obj(cb_tmp3);
-
+    constexpr uint32_t cb_tmp = tt::CBIndex::c_26;
+    constexpr uint32_t cb_divisor_recip = tt::CBIndex::c_27;  // 1/divisor
     constexpr uint32_t cb_output = tt::CBIndex::c_16;
-    CircularBuffer cb_output_obj(cb_output);
 
-    constexpr uint32_t dst0 = 0;
     constexpr uint32_t onetile = 1;
 
-    binary_op_init_common(cb_tmp_weight, cb_tmp_input, cb_output);
+    // Stage-1 packs straight to the output unless a divisor multiply follows, in which case it
+    // stages to a temp tile that the scalar-broadcast multiply reads back from a CB.
+    constexpr uint32_t cb_stage1_out = has_divisor ? cb_tmp : cb_output;
 
-#if defined(DIVISOR)
-    cb_divisor_obj.wait_front(onetile);
+    // Engine boot (moreh inner-loop pattern — covers every chain call; the chain owns per-element init).
+    binary_op_init_common(cb_tmp_input, cb_tmp_weight, cb_output);
 
-    tile_regs_acquire();
-    copy_tile_init_with_dt(cb_divisor);
-    copy_tile(cb_divisor, 0, dst0);
-    recip_tile_init();
-    recip_tile(dst0);
-    tile_regs_commit();
-
-    cb_divisor_obj.pop_front(onetile);
-    cb_divisor_recip_obj.reserve_back(onetile);
-    tile_regs_wait();
-    pack_tile_with_dt(dst0, cb_divisor_recip);
-    tile_regs_release();
-    cb_divisor_recip_obj.push_back(onetile);
-#endif
-
-    for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
-        cb_tmp_input_obj.wait_front(onetile);
-
-        tile_regs_acquire();
-        copy_tile_init_with_dt(cb_tmp_input);
-        copy_tile(cb_tmp_input, 0, dst0);
-
-        negative_tile_init();
-        negative_tile(dst0);
-        tile_regs_commit();
-
-        cb_tmp_input_obj.pop_front(onetile);
-
-#if defined(WEIGHT)
-        cb_tmp1_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp1);
-        tile_regs_release();
-        cb_tmp1_obj.push_back(onetile);
-
-        // multiply weight
-        cb_tmp1_obj.wait_front(onetile);
-        cb_tmp_weight_obj.wait_front(onetile);
-
-        tile_regs_acquire();
-        mul_tiles_init_with_dt(cb_tmp1, cb_tmp_weight);
-        mul_tiles(cb_tmp1, cb_tmp_weight, 0, 0, dst0);
-        tile_regs_commit();
-
-        cb_tmp_weight_obj.pop_front(onetile);
-        cb_tmp1_obj.pop_front(onetile);
-
-#if defined(DIVISOR)
-        cb_tmp3_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp3);
-        tile_regs_release();
-        cb_tmp3_obj.push_back(onetile);
-
-        cb_tmp3_obj.wait_front(onetile);
-        cb_divisor_recip_obj.wait_front(onetile);
-        tile_regs_acquire();
-#if defined FP32_DEST_ACC_EN
-        reconfig_data_format(cb_tmp3, cb_divisor_recip);
-#endif
-        mul_tiles_bcast_scalar_init_short(cb_tmp3, cb_divisor_recip);
-        mul_tiles_bcast_scalar(cb_tmp3, cb_divisor_recip, 0, 0, dst0);
-        tile_regs_commit();
-        cb_tmp3_obj.pop_front(onetile);
-
-        cb_output_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_output);
-        tile_regs_release();
-        cb_output_obj.push_back(onetile);
-#else
-        cb_output_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_output);
-        tile_regs_release();
-        cb_output_obj.push_back(onetile);
-#endif
-#else
-#if defined(DIVISOR)
-        cb_tmp1_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp1);
-        tile_regs_release();
-        cb_tmp1_obj.push_back(onetile);
-
-        cb_divisor_recip_obj.wait_front(onetile);
-        cb_tmp1_obj.wait_front(onetile);
-
-        tile_regs_acquire();
-#if defined FP32_DEST_ACC_EN
-        reconfig_data_format(cb_tmp1, cb_divisor_recip);
-#endif
-        mul_tiles_bcast_scalar_init_short(cb_tmp1, cb_divisor_recip);
-        mul_tiles_bcast_scalar(cb_tmp1, cb_divisor_recip, 0, 0, dst0);
-        tile_regs_commit();
-
-        cb_tmp1_obj.pop_front(onetile);
-
-        cb_output_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_output);
-        tile_regs_release();
-        cb_output_obj.push_back(onetile);
-#else
-        cb_output_obj.reserve_back(onetile);
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_output);
-        tile_regs_release();
-        cb_output_obj.push_back(onetile);
-#endif
-#endif
+    if constexpr (has_divisor) {
+        // 1/divisor — computed once, held in cb_divisor_recip for the whole loop.
+        eltwise_chain(
+            onetile,
+            CopyTile<cb_divisor, Dst::D0, InputLifecycle::Streaming, OperandKind::Scalar, CopyTileReconfig::Input>{},
+            Recip<>{},
+            PackTile<cb_divisor_recip, OutputLifecycle::Streaming>{});
+        // Hold the reciprocal across the loop; per-iter chains read it as a CallerManaged operand.
+        cb_wait_front(cb_divisor_recip, onetile);
     }
 
-#if defined(DIVISOR)
-    cb_divisor_recip_obj.pop_front(onetile);
-#endif
+    for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
+        // -input [* weight]  →  cb_stage1_out
+        eltwise_chain(
+            onetile,
+            CopyTile<cb_tmp_input, Dst::D0, InputLifecycle::Streaming, OperandKind::Scalar, CopyTileReconfig::Input>{},
+            Negative<>{},
+            OptionalChainElement<
+                has_weight,
+                DestReuseBinary<cb_tmp_weight, BinaryFpuOp::Mul, DestReuseType::DEST_TO_SRCA>>{},
+            PackTile<cb_stage1_out, OutputLifecycle::Streaming>{});
+
+        if constexpr (has_divisor) {
+            // * (1/divisor), broadcast as a scalar  →  cb_output
+            eltwise_chain(
+                onetile,
+                BinaryFpu<
+                    cb_stage1_out,
+                    cb_divisor_recip,
+                    BinaryFpuOp::Mul,
+                    BroadcastDim::Scalar,
+                    BinaryDataFormatReconfig::Input,
+                    InputLifecycle::Streaming,      // cb_stage1_out: wait + pop per iter
+                    InputLifecycle::CallerManaged,  // cb_divisor_recip: held, kernel-managed wait/pop
+                    OperandKind::Scalar,
+                    Dst::D0,
+                    OperandKind::Scalar>{},
+                PackTile<cb_output, OutputLifecycle::Streaming>{});
+        }
+    }
+
+    if constexpr (has_divisor) {
+        cb_pop_front(cb_divisor_recip, onetile);
+    }
 }

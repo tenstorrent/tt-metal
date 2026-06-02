@@ -94,7 +94,6 @@ void kernel_main() {
                 Rsqrt<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Legacy::On, compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<
                 cb_recip_sqrt_var,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
@@ -122,7 +121,6 @@ void kernel_main() {
                     compute_kernel_lib::OperandKind::Scalar>{},
                 compute_kernel_lib::PackTile<
                     cb_intermediate,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Bulk,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 
@@ -207,7 +205,6 @@ void kernel_main() {
                         compute_kernel_lib::TileOffset::Set>{0u, col_tile},
                     compute_kernel_lib::PackTile<
                         cb_out,
-                        compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutputLifecycle::Bulk,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }

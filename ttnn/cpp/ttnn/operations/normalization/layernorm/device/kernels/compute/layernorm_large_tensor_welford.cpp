@@ -374,7 +374,6 @@ void kernel_main() {
                 compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<
                 cb_ex2pe,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::None>{});
 
@@ -395,7 +394,6 @@ void kernel_main() {
                 compute_kernel_lib::UnaryBcastReconfig::Input>{},
             compute_kernel_lib::PackTile<
                 cb_ex2pe,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 

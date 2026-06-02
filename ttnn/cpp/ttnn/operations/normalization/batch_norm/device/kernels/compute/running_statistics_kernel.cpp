@@ -31,7 +31,7 @@ ALWI void fpu_binary_to_cb_chain() {
             OperandKind::Scalar,
             Dst::D0,
             OperandKind::Scalar>{},
-        PackTile<CbOut, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
+        PackTile<CbOut, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
 }
 
 }  // namespace
@@ -102,8 +102,8 @@ void kernel_main() {
                         OperandKind::Scalar,
                         Dst::D0,
                         OperandKind::Scalar>{},
-                    PackTile<cb_updated_running_mean, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{},
-                    PackTile<cb_out0, Dst::D0, OutputLifecycle::CallerManaged, PackTileReconfig::None>{});
+                    PackTile<cb_updated_running_mean, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0>{},
+                    PackTile<cb_out0, OutputLifecycle::CallerManaged, PackTileReconfig::None, Dst::D0>{});
             } else {
                 eltwise_chain(
                     onetile,
@@ -118,7 +118,7 @@ void kernel_main() {
                         OperandKind::Scalar,
                         Dst::D0,
                         OperandKind::Scalar>{},
-                    PackTile<cb_updated_running_mean, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
+                    PackTile<cb_updated_running_mean, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
             }
         }
         if constexpr (old_running_var_has_value) {
@@ -139,8 +139,8 @@ void kernel_main() {
                     OperandKind::Scalar,
                     Dst::D0,
                     OperandKind::Scalar>{},
-                PackTile<cb_updated_running_var, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{},
-                PackTile<cb_out0, Dst::D0, OutputLifecycle::CallerManaged, PackTileReconfig::None>{});
+                PackTile<cb_updated_running_var, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0>{},
+                PackTile<cb_out0, OutputLifecycle::CallerManaged, PackTileReconfig::None, Dst::D0>{});
         }
         cb_out0_obj.push_back(1);
     }

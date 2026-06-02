@@ -126,7 +126,6 @@ void kernel_main() {
                         compute_kernel_lib::OperandKind::Block>{},
                     compute_kernel_lib::PackTile<
                         cb_x,
-                        compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutputLifecycle::Bulk,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
@@ -225,7 +224,6 @@ void kernel_main() {
                     compute_kernel_lib::OperandKind::Scalar>{},
                 compute_kernel_lib::PackTile<
                     cb_xmm,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Bulk,
                     compute_kernel_lib::PackTileReconfig::None>{});
         }
@@ -261,7 +259,6 @@ void kernel_main() {
                 compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<
                 cb_ex2pe,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::None>{});
 
@@ -297,7 +294,6 @@ void kernel_main() {
                     compute_kernel_lib::TileOffset::Unset>{block.start(), 0u},
                 compute_kernel_lib::PackTile<
                     cb_im_or_out,
-                    compute_kernel_lib::Dst::D0,
                     compute_kernel_lib::OutputLifecycle::Bulk,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 
@@ -324,7 +320,6 @@ void kernel_main() {
                         compute_kernel_lib::TileOffset::Set>{0u, block.start()},
                     compute_kernel_lib::PackTile<
                         cb_outg,
-                        compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutputLifecycle::Bulk,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }
@@ -348,7 +343,6 @@ void kernel_main() {
                         compute_kernel_lib::TileOffset::Set>{0u, block.start()},
                     compute_kernel_lib::PackTile<
                         cb_out,
-                        compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutputLifecycle::Bulk,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             }

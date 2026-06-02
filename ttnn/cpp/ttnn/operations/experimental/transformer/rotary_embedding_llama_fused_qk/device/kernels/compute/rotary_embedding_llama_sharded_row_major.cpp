@@ -98,7 +98,6 @@ void kernel_main() {
                 compute_kernel_lib::OperandKind::Scalar>{},
             compute_kernel_lib::PackTile<
                 sin_interm_cb,
-                compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::CallerManaged,
                 compute_kernel_lib::PackTileReconfig::None>{});
         cb_push_back(sin_interm_cb, Wt);

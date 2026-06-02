@@ -111,4 +111,17 @@ struct OptionalChainElement<false, Inner>
     ALWI void push_at_end(uint32_t, uint32_t) const {}
 };
 
+// Wrapper customization points (see eltwise_chain.hpp). A disabled element is
+// INERT — the chain analysis treats it as absent (no cohort participation, no
+// hoist perturbation, no CB-collision contribution). An enabled element is
+// TRANSPARENT — the analysis unwraps it to `Inner`, so it shares a cohort with a
+// bare `Inner` and never breaks math-MOP / SFPU uniformity (and hence hoisting).
+template <class Inner>
+struct chain_elem_inert<OptionalChainElement<false, Inner>> : std::true_type {};
+
+template <class Inner>
+struct chain_elem_unwrap<OptionalChainElement<true, Inner>> {
+    using type = Inner;
+};
+
 }  // namespace compute_kernel_lib

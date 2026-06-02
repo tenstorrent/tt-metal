@@ -29,7 +29,7 @@ namespace compute_kernel_lib {
 ///   rand_tile_init(seed);                         // out-of-band, once
 ///   eltwise_chain(num_tiles,
 ///       RandTile<Dst::D0>{from, scale},           // per-tile rand
-///       PackTile<cb_out, Dst::D0, OutStreaming, PackTileReconfig::None>{});
+///       PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::None>{});
 /// @endcode
 template <Dst DstSlot>
 struct RandTile : RandTileTag, UnaryOp<RandTile<DstSlot>, DstSlot> {

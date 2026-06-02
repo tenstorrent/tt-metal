@@ -9,6 +9,7 @@
 #include "moreh_nll_loss_step1/device/moreh_nll_loss_step1_device_operation.hpp"
 #include "moreh_nll_loss_step2/device/moreh_nll_loss_step2_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn {
 
@@ -39,7 +40,13 @@ Tensor moreh_nll_loss(
             memory_config,
             compute_kernel_config_val);
 
-        moreh_sum(step1_result, std::nullopt, false, divisor_tensor, memory_config, compute_kernel_config_val);
+        // step1 emits a rank-1 [N] result for 2-D inputs. moreh_sum's rank-1 full-reduce
+        // sums unmasked tile padding (wrong divisor); reduce a 2-D [1, N] view instead.
+        const auto& step1_shape = step1_result.logical_shape();
+        const Tensor divisor_input =
+            step1_shape.rank() >= 2 ? step1_result : ttnn::reshape(step1_result, ttnn::Shape{1, step1_shape[-1]});
+
+        moreh_sum(divisor_input, std::nullopt, false, divisor_tensor, memory_config, compute_kernel_config_val);
 
         const Tensor& step2_result = prim::moreh_nll_loss_step2(
             input_tensor,

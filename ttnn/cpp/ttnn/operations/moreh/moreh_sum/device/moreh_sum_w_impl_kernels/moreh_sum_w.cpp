@@ -92,7 +92,6 @@ void kernel_main() {
                     compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
                     compute_kernel_lib::PackTile<
                         cb_masked_input,
-                        compute_kernel_lib::Dst::D0,
                         compute_kernel_lib::OutputLifecycle::Streaming,
                         compute_kernel_lib::PackTileReconfig::Output>{});
                 cb_input = cb_masked_input;
