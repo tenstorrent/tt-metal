@@ -14,6 +14,7 @@ This script:
 
 import argparse
 import os
+import warnings
 
 import pandas as pd
 import torch
@@ -115,8 +116,21 @@ def load_pytorch_model(checkpoint_path, config, device):
         head_dropout=0.0,  # disable dropout for comparison
     ).to(device)
 
+    print(checkpoint_path)
     if checkpoint_path and os.path.exists(checkpoint_path):
-        model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+        # Prefer safer loading when available; fallback is for older torch versions only.
+        try:
+            checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
+        except TypeError:
+            warnings.warn(
+                "This PyTorch version does not support weights_only=True. "
+                "Falling back to torch.load with full deserialization. "
+                "Only load checkpoints from trusted local sources.",
+                RuntimeWarning,
+            )
+            checkpoint = torch.load(checkpoint_path, map_location=device)
+
+        model.load_state_dict(checkpoint)
         print(f"Loaded PyTorch model from {checkpoint_path}")
     else:
         print("Using randomly initialized PyTorch model")

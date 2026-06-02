@@ -545,6 +545,12 @@ class TtPatchTSMixerLayer:
     ):
         self.device = device
         self.base = base_address
+        supported_modes = {"common_channel", "mix_channel"}
+        if mode not in supported_modes:
+            raise ValueError(
+                f"Unsupported mode '{mode}'. Supported modes: {sorted(supported_modes)}. "
+                "Hybrid mode is not implemented in this TTNN path."
+            )
         self.mode = mode
 
         # Optional channel mixer (only when mode == "mix_channel")
@@ -667,6 +673,8 @@ class TtPatchTSMixerForecastHead:
         # Permute - let TTNN manage
         out = ttnn.permute(y, (0, 3, 2, 1))
         ttnn.deallocate(y)
+        # Return documented forecast shape: (B, H, C)
+        out = ttnn.squeeze(out, 2)
         return out
 
 
@@ -1045,7 +1053,7 @@ class TtPatchTSMixerModelForForecasting:
     def __call__(self, past_values: ttnn.Tensor, *, dtype=ttnn.bfloat16):
         """
         past_values: ttnn tensor (B, L, C)
-        returns: TTNN tensor (B, H, 1, C)
+        returns: TTNN tensor (B, H, C)
         """
         B, L, C = past_values.shape
         assert L == self.context_length
@@ -1063,7 +1071,7 @@ class TtPatchTSMixerModelForForecasting:
         # 3) mixer block
         x, _ = self.mixer_block(x, output_hidden_states=False)
 
-        # 4) head: returns TT (B, H, 1, C)
+        # 4) head: returns TT (B, H, C)
         y = self.head(x)
 
         return y

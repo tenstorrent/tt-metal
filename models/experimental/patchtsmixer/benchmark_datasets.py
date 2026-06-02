@@ -179,7 +179,7 @@ def to_metric_output(pred, task_mode):
     """Convert model output tensor to numpy array for metric computation."""
     pred_np = pred.detach().cpu().float().numpy()
 
-    # Forecast TT path returns (B, H, 1, C); squeeze singleton patch axis.
+    # Forecast path returns (B, H, C). Keep compatibility with older (B, H, 1, C).
     if task_mode == "forecasting" and pred_np.ndim == 4 and pred_np.shape[2] == 1:
         pred_np = np.squeeze(pred_np, axis=2)
 
@@ -513,8 +513,36 @@ def run_benchmark(
 
         tt_predictions = np.concatenate(tt_predictions, axis=0)
         ttnn_throughput = len(samples) / ttnn_time
+        per_sample_latency_at_batch_ms = (ttnn_time / len(samples)) * 1000.0
         print(f"   Time: {ttnn_time:.2f}s")
         print(f"   Throughput: {ttnn_throughput:.2f} samples/sec")
+        print(f"   Per-sample latency at batch={batch_size}: {per_sample_latency_at_batch_ms:.2f} ms")
+
+        # Measure true single-sequence latency with batch_size=1.
+        print("\n6b. Measuring single-sequence latency (batch=1)...")
+        single_batch_warmup = torch.from_numpy(samples[0:1])
+        single_batch_warmup_tt = ttnn.from_torch(
+            single_batch_warmup,
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        _ = tt_model(single_batch_warmup_tt, dtype=ttnn.bfloat16)
+        ttnn.synchronize_device(device)
+
+        single_seq_time = 0.0
+        for i in range(len(samples)):
+            single_batch = torch.from_numpy(samples[i : i + 1])
+            single_batch_tt = ttnn.from_torch(single_batch, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+            ttnn.synchronize_device(device)
+            start = time.time()
+            _ = tt_model(single_batch_tt, dtype=ttnn.bfloat16)
+            ttnn.synchronize_device(device)
+            single_seq_time += time.time() - start
+
+        single_sequence_latency_ms = (single_seq_time / len(samples)) * 1000.0
+        print(f"   Single-sequence latency (batch=1): {single_sequence_latency_ms:.2f} ms")
 
     finally:
         ttnn.close_device(device)
@@ -560,8 +588,7 @@ def run_benchmark(
     # Bounty gates: trained checkpoint path + ground-truth correlation + device perf targets.
     gt_corr_check = ttnn_metrics["correlation"] >= 0.90
     throughput_check = ttnn_throughput >= 200.0
-    latency_ms = (ttnn_time / len(samples)) * 1000.0
-    latency_check = latency_ms < 30.0
+    latency_check = single_sequence_latency_ms < 30.0
 
     print(f"   Checkpoint provided: {'✅' if checkpoint_check else '❌'} (required for acceptance)")
     print(f"   MSE difference: {mse_diff_pct:.2f}% {'✅' if mse_check else '❌'} (target: ≤5%)")
@@ -575,7 +602,11 @@ def run_benchmark(
         f"{'✅' if gt_corr_check else '❌'} (target: >0.90)"
     )
     print(f"   Throughput: {ttnn_throughput:.2f} samples/sec {'✅' if throughput_check else '❌'} (target: ≥200)")
-    print(f"   Single-sequence latency: {latency_ms:.2f} ms {'✅' if latency_check else '❌'} (target: <30)")
+    print(f"   Per-sample latency at batch={batch_size}: {per_sample_latency_at_batch_ms:.2f} ms (informational)")
+    print(
+        f"   Single-sequence latency (batch=1): {single_sequence_latency_ms:.2f} ms "
+        f"{'✅' if latency_check else '❌'} (target: <30)"
+    )
 
     all_passed = (
         checkpoint_check
@@ -603,7 +634,8 @@ def run_benchmark(
         "ttnn_time": ttnn_time,
         "torch_throughput": torch_throughput,
         "ttnn_throughput": ttnn_throughput,
-        "ttnn_latency_ms": latency_ms,
+        "ttnn_latency_ms": single_sequence_latency_ms,
+        "ttnn_per_sample_latency_ms_at_batch": per_sample_latency_at_batch_ms,
         "passed": all_passed,
     }
 

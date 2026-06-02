@@ -485,8 +485,8 @@ def test_patchtsmixer_forecast_head(device, reset_seeds):
     torch_out = torch_head(x)  # (B, H, C)
 
     tt_x = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_y = tt_head(tt_x)  # (B, H, 1, C)
-    tt_out = ttnn.to_torch(tt_y).squeeze(2)  # (B, H, C)
+    tt_y = tt_head(tt_x)  # (B, H, C)
+    tt_out = ttnn.to_torch(tt_y)  # (B, H, C)
 
     assert_with_pcc(torch_out, tt_out, 0.99)
 
