@@ -156,6 +156,9 @@ class KBEntry:
     applicability_notes: str = ""
     status: str = "in_use"               # in_use | supported_unused
     accumulation_sensitive: bool = False
+    pattern_source: str = "unit_test"    # golden | unit_test | llm — provenance of torch_pattern
+    confidence: str = "high"             # high (tier1 golden / tier2 unit-test) | low (tier3 llm)
+    unit_test_refs: list = field(default_factory=list)  # op unit test(s) to reuse/parameterize at bring-up
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -494,6 +497,15 @@ git commit -m "feat(opt_transfer): KB store (save/load/retrieve by category)"
 
 The miner does **no hardcoded op allowlist.** It discovers the op universe from both sources, unions them, and lets the LLM extractor classify each (fusion-relevant → `pattern_kind` + `config_template` + `weight_transform`; primitive → recorded but not proposable). Adding coverage = pointing at more sources, never editing a regex.
 
+**The opportunity (`torch_pattern`) — layered extraction, recorded with provenance.** The opportunity is the *unoptimized op-subsequence the fused op replaces* — what the matcher looks for. It is **not** guessed; it comes from the most authoritative source available, recorded in `pattern_source`/`confidence`:
+- **Tier 1 — `ttnn.get_golden_function(op)`** (verified available for `rms_norm`, `linear`, most norm/elementwise/activation ops): `inspect.getsource` of the registered torch golden *is* the pattern. `pattern_source="golden"`, `confidence="high"`.
+- **Tier 2 — the op's unit-test golden** (for ops with no registered golden — `nlp_create_qkv_heads`/`_decode`/`_vit`/`_segformer`/`_boltz`, `nlp_concat_heads`, rope, SDPA, CCL — whose canonical tests live in `tests/tt_eager/python_api_testing/unit_testing/misc/` **and** `tests/ttnn/unit_tests/`): the torch reference the test asserts against. `pattern_source="unit_test"`, `confidence="high"`.
+- **Tier 3 — LLM from call site + op-name + tech_reports** for anything tiers 1–2 miss. `pattern_source="llm"`, `confidence="low"` — **never trusted without the bring-up PCC gate.**
+
+The LLM's role is to **normalize** a tier-1/2 source into a matchable `torch_pattern` + merge the real configs from call sites — not to invent the pattern.
+
+**No shape validation at build time (deliberate).** Toy-shape validation is misleading because TTNN ops are shape-sensitive — a toy PASS can fail at the model's real shape. So the KB build is **offline/device-free** and instead records `unit_test_refs` (the op's existing unit test(s)). **Validation happens at bring-up** (Phase E, on-device, at model shapes): the verify step reuses/parameterizes that unit test to the model's *actual* shapes and runs it on device → PCC at the real shape. This produces a durable, committable test artifact, is what Claude Code debugs on failure, and is the repair loop's per-fusion localized check.
+
 ### Task B1: Op inventory from unit tests (the "available/supported" set)
 
 **Files:**
@@ -554,18 +566,28 @@ def _scan_calls(text: str):
             yield m.group(1), "".join(lines[lo:hi])
 
 
+# canonical fused-op tests live in BOTH places — scan both (the tt_eager misc dir
+# holds nlp_create_qkv_heads / _decode / _vit / _segformer / _boltz, concat_heads, rope, ...)
+TEST_ROOTS = (
+    "tests/ttnn/unit_tests/operations",
+    "tests/tt_eager/python_api_testing/unit_testing/misc",
+)
+
+
 def inventory_ops(config) -> dict:
-    """Available/supported set: every ttnn op exercised by the operations unit tests,
-    with test provenance + example call snippets (which encode valid configs/shapes)."""
-    base = config.repo_root / "tests/ttnn/unit_tests/operations"
+    """Available/supported set: every ttnn op exercised by the unit tests, with test
+    provenance + example call snippets (which encode valid configs/shapes). The op's
+    test path(s) become the KBEntry.unit_test_refs reused/parameterized at bring-up."""
     inv: dict[str, dict] = {}
-    for p, text in _iter_py(base):
-        rel = str(p.relative_to(config.repo_root))
-        for op, snippet in _scan_calls(text):
-            e = inv.setdefault(op, {"tests": set(), "examples": []})
-            e["tests"].add(rel)
-            if len(e["examples"]) < 5:
-                e["examples"].append(snippet)
+    for root in TEST_ROOTS:
+        base = config.repo_root / root
+        for p, text in _iter_py(base):
+            rel = str(p.relative_to(config.repo_root))
+            for op, snippet in _scan_calls(text):
+                e = inv.setdefault(op, {"tests": set(), "examples": []})
+                e["tests"].add(rel)
+                if len(e["examples"]) < 5:
+                    e["examples"].append(snippet)
     for op in inv:
         inv[op]["tests"] = sorted(inv[op]["tests"])
     return inv
@@ -648,7 +670,7 @@ git commit -m "feat(opt_transfer): model usage scan (used ops + real config prov
 - Modify: `models/experimental/opt_transfer/kb/miner.py`
 - Test: `models/experimental/opt_transfer/tests/test_miner.py`
 
-`build_kb` iterates the **union** of inventory + usage ops, marks `status` (`in_use` if used else `supported_unused`), and asks the extraction client to produce KBEntries from the combined evidence (test examples + model call sites). Cached per op on the combined evidence hash. The real extraction client is the `LLMClient` added in Task C2 (it implements both `extract_entries` here and `propose` for the matcher); the test injects a fake so it runs offline.
+`build_kb` iterates the **union** of inventory + usage ops. For each op it gathers the layered opportunity evidence — **tier-1** golden source via `ttnn.get_golden_function(op)` + `inspect.getsource` (None if unregistered), **tier-2** the unit-test examples, **tier-3** the model call sites — and asks the extraction client to produce KBEntries. It then **stamps provenance**: `unit_test_refs` = the op's test paths (for bring-up reuse), `status` (`in_use` if used else `supported_unused`), and — if the client didn't set them — `pattern_source`/`confidence` from which tier supplied the pattern (`golden`→high, else `unit_test`→high, else `llm`→low). Cached per op on the combined-evidence hash. The real extraction client is the `LLMClient` (Task C2 — it implements both `extract_entries` here and `propose` for the matcher); the test injects a fake so it runs offline and device-free.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -662,28 +684,35 @@ class FakeClient:
     def __init__(self):
         self.calls = 0
 
-    def extract_entries(self, op, available, used) -> list[dict]:
+    def extract_entries(self, op, available, used, golden_src) -> list[dict]:
         self.calls += 1
-        status = "in_use" if used else "supported_unused"
+        # tier-1 if a golden source was supplied, else tier-2 (unit test)
+        pattern = (golden_src or (available["examples"][0] if available["examples"] else op)).split("\n")
         return [KBEntry(
             id=op, fused_op=f"ttnn.{op}", category="auto",
-            pattern_kind=PatternKind.CHAIN, torch_pattern=[op], signature={},
+            pattern_kind=PatternKind.CHAIN, torch_pattern=pattern[:3], signature={},
             config_template={}, weight_transform=None,
-            source=(used[0]["source"] if used else available["tests"][0] if available["tests"] else "tests"),
-            usage_examples=available["examples"][:1], status=status,
+            source=(used[0]["source"] if used else (available["tests"][0] if available["tests"] else "tests")),
+            usage_examples=available["examples"][:1],
         ).to_dict()]
 
 
-def test_build_kb_captures_available_and_used_with_status(tmp_path):
+def test_build_kb_captures_available_used_and_provenance(tmp_path):
     client = FakeClient()
     entries = build_kb(client=client, cache_root=tmp_path / "c", kb_root=tmp_path / "kb", limit_ops=40)
     by_id = {e.id: e for e in entries}
     # comprehensive: many ops, not just a couple
     assert len(by_id) > 25
-    # a used fused op is tagged in_use
-    assert by_id["nlp_create_qkv_heads"].status == "in_use"
-    # every entry carries a valid status
-    assert all(e.status in ("in_use", "supported_unused") for e in entries)
+    # a used fused op is tagged in_use and points at a reusable unit test
+    e = by_id["nlp_create_qkv_heads"]
+    assert e.status == "in_use"
+    assert e.unit_test_refs and any("test" in t for t in e.unit_test_refs)
+    # provenance recorded on every entry
+    assert all(x.status in ("in_use", "supported_unused") for x in entries)
+    assert all(x.pattern_source in ("golden", "unit_test", "llm") for x in entries)
+    # rms_norm has a registered golden -> tier 1
+    if "rms_norm" in by_id:
+        assert by_id["rms_norm"].pattern_source == "golden"
 
 
 def test_build_kb_is_cached(tmp_path):
@@ -709,6 +738,23 @@ from models.experimental.opt_transfer.schema import KBEntry
 from models.experimental.opt_transfer.config import CONFIG
 
 
+def _golden_source(op_name: str):
+    """Tier-1 opportunity source: the op's registered torch golden, or None. Lazy ttnn
+    import (device-free); any failure (no op / no golden / RuntimeError) -> None."""
+    import inspect
+    try:
+        import ttnn
+        op = (getattr(ttnn, op_name, None)
+              or getattr(getattr(ttnn, "experimental", None), op_name, None)
+              or getattr(getattr(ttnn, "transformer", None), op_name, None))
+        if op is None:
+            return None
+        g = ttnn.get_golden_function(op)
+        return inspect.getsource(g) if g is not None else None
+    except Exception:
+        return None
+
+
 def build_kb(client, cache_root=None, kb_root=None, config=CONFIG, limit_ops=None) -> list[KBEntry]:
     cache = ContentCache(cache_root or config.cache_dir)
     store = KBStore(kb_root or config.kb_dir)
@@ -721,15 +767,23 @@ def build_kb(client, cache_root=None, kb_root=None, config=CONFIG, limit_ops=Non
     for op in ops:
         available = inv.get(op, {"tests": [], "examples": []})
         used = usage.get(op, [])
-        # cache key = combined evidence; re-mine only when test/usage snippets change
-        content = repr(available["examples"]) + repr([u["snippet"] for u in used])
+        golden_src = _golden_source(op)          # tier-1 evidence (or None -> tier 2/3)
+        # cache key = combined evidence; re-mine only when golden/test/usage change
+        content = repr(golden_src) + repr(available["examples"]) + repr([u["snippet"] for u in used])
         raw = cache.get_or_compute(
             key=f"op::{op}",
             content=content,
-            compute=lambda op=op, available=available, used=used: client.extract_entries(op, available, used),
+            compute=lambda op=op, a=available, u=used, g=golden_src: client.extract_entries(op, a, u, g),
         )
         for d in raw:
             e = KBEntry.from_dict(d)
+            # stamp provenance the client may not have set
+            if not e.unit_test_refs:
+                e.unit_test_refs = list(available["tests"])
+            e.status = "in_use" if used else "supported_unused"
+            if e.pattern_source == "unit_test":   # default — refine from which tier supplied evidence
+                e.pattern_source = "golden" if golden_src else ("unit_test" if available["examples"] else "llm")
+                e.confidence = "low" if e.pattern_source == "llm" else "high"
             entries[e.id] = e
     out = list(entries.values())
     store.save(out)
