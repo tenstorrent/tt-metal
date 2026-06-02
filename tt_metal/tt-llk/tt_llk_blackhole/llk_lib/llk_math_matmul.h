@@ -592,6 +592,25 @@ inline void matmul_configure_mop_throttled(
     tmp.program();
 }
 
+/**
+ * @brief Configure the math (FPU/matrix engine) thread for a matmul: programs address mods and the MVMUL MOP.
+ *
+ * Computes D = in0 * in1, where in0 is loaded to SrcB and in1 to SrcA. When THROTTLE_LEVEL > 0, builds the
+ * throttled MOP variant that inserts NOPs between MVMULs to cap matmul throughput.
+ *
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam THROTTLE_LEVEL: Compute-throughput throttle level; 0 disables throttling, valid throttled range is {1,2,3,4,5}.
+ * @param in0_tile_r_dim: Row dimension of an in0 tile.
+ * @param in0_tile_c_dim: Column dimension of an in0 tile.
+ * @param in1_tile_r_dim: Row dimension of an in1 tile.
+ * @param in1_tile_c_dim: Column dimension of an in1 tile.
+ * @param partial_face: True when the tile has fewer than the full set of faces.
+ * @param transpose: Non-zero to transpose in1 faces during the multiply.
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @pre On the unpack thread, pair with @ref _llk_unpack_AB_matmul_init_ which feeds SrcA/SrcB.
+ * @post @ref _llk_math_matmul_ runs the configured matmul with matching template args.
+ */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_init_(
     const std::uint32_t in0_tile_r_dim = TILE_R_DIM,
@@ -620,11 +639,31 @@ inline void _llk_math_matmul_init_(
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
+/**
+ * @brief Uninitialize/cleanup after matmul operations, restoring any modified state to defaults.
+ *
+ * @post Reverses @ref _llk_math_matmul_init_; currently a no-op since all state is transient.
+ */
 inline void _llk_math_matmul_uninit_()
 {
     // No state to restore - all states are transient or default
 }
 
+/**
+ * @brief Perform a matmul block, accumulating in0 * in1 into the destination register.
+ *
+ * Iterates over the output block reusing SrcA or SrcB (whichever dimension is larger) to minimize reloads,
+ * clearing the reused source register at the end of each reuse row.
+ *
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam THROTTLE_LEVEL: Compute-throughput throttle level; must match the value used at init.
+ * @param dst_index: Base tile index into the destination register for the output block.
+ * @param ct_dim: Number of column tiles in the output block.
+ * @param rt_dim: Number of row tiles in the output block.
+ * @pre @ref _llk_math_matmul_init_ must be called with matching template args.
+ * @pre On the unpack thread, @ref _llk_unpack_AB_matmul_ must feed the operand tiles into SrcA/SrcB.
+ * @post Call @ref _llk_math_matmul_uninit_ to restore modified state.
+ */
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0>
 inline void _llk_math_matmul_(std::uint32_t dst_index, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1)
 {

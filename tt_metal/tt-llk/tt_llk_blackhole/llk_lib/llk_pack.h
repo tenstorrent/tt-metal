@@ -17,6 +17,14 @@
 using namespace ckernel;
 using namespace ckernel::packer;
 
+/**
+ * @brief Configure the packer address-modification (ADDR_MOD) slots for the selected pack mode.
+ *
+ * Programs ADDR_MOD_0/1/2 with the src/dest Y and Z increment/clear patterns the pack MOP relies
+ * on to traverse the destination register and step through faces for the given layout.
+ *
+ * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
+ */
 template <PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_configure_addrmod_()
 {
@@ -68,6 +76,20 @@ inline void _llk_pack_configure_addrmod_()
             .set(ADDR_MOD_2);
     }
 }
+/**
+ * @brief Build and program the packer MOP template for the selected pack mode.
+ *
+ * Programs the ckernel MOP (and, for tilize, a replay buffer) with the PACR instruction sequence
+ * that packs one tile worth of data, selecting packer interfaces and ADDR_MODs per the layout.
+ *
+ * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
+ * @tparam zero_output: When true, packer emits zeros instead of dest data.
+ * @param face_r_dim: Number of rows per face.
+ * @param tile_c_dim: Tile column dimension (datums).
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param num_tiles: Number of tiles processed per MOP run.
+ * @pre @ref _llk_pack_configure_addrmod_ must have programmed the ADDR_MOD slots for the same pack_mode.
+ */
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_mop_config_(
     const std::uint32_t face_r_dim = FACE_R_DIM,
@@ -336,6 +358,20 @@ inline void pack_init_apply(
 }
 } // namespace llk_pack_internal_bh
 
+/**
+ * @brief Reconfigure the packer source/destination data formats and tile geometry at runtime.
+ *
+ * Used to switch the packer to a new data format without a full HW re-configure.
+ *
+ * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
+ * @param pack_src_format: Source (dest register) data format.
+ * @param pack_dst_format: Destination (L1) data format.
+ * @param tile_size: Size of one output tile in bytes.
+ * @param face_r_dim: Number of rows per face.
+ * @param tile_c_dim: Tile column dimension (datums).
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param partial_face: True if packing a partial (sub-face-row) face.
+ */
 template <bool is_fp32_dest_acc_en>
 inline void _llk_pack_reconfig_data_format_(
     const std::uint32_t pack_src_format,
@@ -350,6 +386,12 @@ inline void _llk_pack_reconfig_data_format_(
     reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face);
 }
 
+/**
+ * @brief Enable or disable reading the destination register as 32-bit data for the packer.
+ *
+ * @param enable: True to read dest as 32-bit (FP32) data, false otherwise.
+ * @note Stalls on the pack pipe before modifying the PCK_DEST_RD_CTRL config register.
+ */
 inline void _llk_pack_set_fp32_dest_acc_(bool enable)
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK);
@@ -358,6 +400,23 @@ inline void _llk_pack_set_fp32_dest_acc_(bool enable)
 
 // If using 8bit datums for unpack src. tilize must be set to false because we skip the blackhole workaround which involves unswizzling rows in the tile,
 // and this unswizzling is not needed for 8bit datums as they are not affected by the blackhole issue.
+/**
+ * @brief One-time hardware configuration of the packer for a given data format and tile geometry.
+ *
+ * Programs the packer config registers (formats, strides, relu) for the chosen pack mode. Call once
+ * before the init/execute sequence.
+ *
+ * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
+ * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
+ * @param pack_src_format: Source (dest register) data format.
+ * @param pack_dst_format: Destination (L1) data format.
+ * @param tile_size: Size of one output tile in bytes.
+ * @param face_r_dim: Number of rows per face.
+ * @param tile_c_dim: Tile column dimension (datums).
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param relu_config: Packed relu mode and threshold configuration (0 disables relu).
+ */
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_hw_configure_(
     const std::uint32_t pack_src_format,
@@ -373,6 +432,21 @@ inline void _llk_pack_hw_configure_(
     configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces, partial_face, relu_config);
 }
 
+/**
+ * @brief Initialize the packer (addrmod + MOP) for a pack op, without touching packer strides.
+ *
+ * Lightweight init overload that skips stride setup and the final ADC X configuration; used when the
+ * packer strides were already established by a prior hw-configure.
+ *
+ * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
+ * @tparam zero_output: When true, packer emits zeros instead of dest data.
+ * @tparam skip_addrmod_config: When true, leave ADDR_MOD slots untouched (assume already programmed).
+ * @param face_r_dim: Number of rows per face.
+ * @param tile_c_dim: Tile column dimension (datums).
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param num_tiles: Number of tiles processed per MOP run.
+ * @post Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
+ */
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false>
 inline void _llk_pack_init_(
     const std::uint32_t face_r_dim = FACE_R_DIM,
@@ -385,6 +459,25 @@ inline void _llk_pack_init_(
         0 /* pack_src_format unused */, face_r_dim, tile_c_dim, num_faces, num_tiles);
 }
 
+/**
+ * @brief Initialize the packer (addrmod + MOP + strides) for a pack op given a source format.
+ *
+ * Full init overload: programs ADDR_MODs, the MOP template, packer strides, and the final ADC X
+ * configuration. When packing tilized 8-bit datums the Blackhole row-unswizzle workaround can be
+ * skipped (the issue does not affect 8-bit datums).
+ *
+ * @tparam pack_mode: Packing layout, values = <Default/Tilize/Untilize>
+ * @tparam zero_output: When true, packer emits zeros instead of dest data.
+ * @tparam skip_addrmod_config: When true, leave ADDR_MOD slots untouched (assume already programmed).
+ * @tparam skip_packer_strides: When true, do not re-program the packer strides.
+ * @param pack_src_format: Source (dest register) data format.
+ * @param face_r_dim: Number of rows per face.
+ * @param tile_c_dim: Tile column dimension (datums).
+ * @param num_faces: Faces per tile, valid values = <1, 2, 4>
+ * @param num_tiles: Number of tiles processed per MOP run.
+ * @param skip_bh_tilize_workaround: When true (8-bit src datums), skip the Blackhole tilize row-unswizzle workaround.
+ * @post Pair with @ref _llk_pack_uninit_ after the matching @ref _llk_pack_ execute calls.
+ */
 template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_src_format,
@@ -419,11 +512,33 @@ inline void _llk_pack_init_(
     }
 }
 
+/**
+ * @brief Tear down the packer after a pack op (no-op on Blackhole).
+ *
+ * On Blackhole @ref _llk_pack_init_ leaves the PAC X counter at its default value, so there is no
+ * state to restore.
+ *
+ * @pre Pairs with @ref _llk_pack_init_.
+ */
 inline void _llk_pack_uninit_()
 {
     // No state to restore - Blackhole pack_init sets PAC X counter to FACE_C_DIM - 1 which is the default
 }
 
+/**
+ * @brief Pack one tile from the destination register to an L1 address.
+ *
+ * Selects the source dest tile, programs the L1 destination address, runs the packer MOP, and resets
+ * the Z counters afterward.
+ *
+ * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
+ * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
+ * @tparam pack_mode: Packing layout, values = <Default/Untilize> (Tilize not supported here)
+ * @param tile_index: Index of the source tile in the destination register.
+ * @param address: L1 destination address for the packed tile.
+ * @pre @ref _llk_pack_init_ must have been called with matching template/runtime args.
+ * @post Call @ref _llk_pack_uninit_ once all pack calls are complete.
+ */
 template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {

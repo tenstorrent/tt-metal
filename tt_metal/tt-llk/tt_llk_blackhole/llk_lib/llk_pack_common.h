@@ -15,12 +15,24 @@
 using namespace ckernel;
 using namespace ckernel::packer;
 
+/**
+ * @brief Stall the packer until the math thread has produced data to pack.
+ *
+ * Waits on the MATH_PACK semaphore so the packer does not run ahead of the math result.
+ */
 // wait until math is done and has produced something to pack
 inline void _llk_packer_wait_for_math_done_()
 {
     TTI_SEMWAIT(p_stall::STALL_TDMA, semaphore::t6_sem(semaphore::MATH_PACK), p_stall::STALL_ON_ZERO);
 }
 
+/**
+ * @brief Signal (increment) the MATH_PACK semaphore to release the math thread.
+ *
+ * Tells math it may overwrite the destination register again now that the packer has consumed it.
+ *
+ * @tparam WaitRes: p_stall resource mask to stall on before signalling (e.g. p_stall::NONE, p_stall::PACK); default p_stall::NONE issues no stall.
+ */
 // Tell math that it can write again
 template <std::uint32_t WaitRes = p_stall::NONE>
 inline void _llk_packer_set_math_semaphore_()
@@ -28,6 +40,16 @@ inline void _llk_packer_set_math_semaphore_()
     t6_semaphore_get<WaitRes>(semaphore::MATH_PACK); // Indicate that packer is done and header is written into L1
 }
 
+/**
+ * @brief Finish a destination-register section: wait for pack, clear dest, and release math.
+ *
+ * Stalls until the pack completes, zeroes the just-packed dest region (all of dest for SyncFull, the
+ * active half for SyncHalf), then signals the MATH_PACK semaphore. For SyncHalf it also flips the
+ * dest-offset id and re-selects the packer dest registers so the next half can be packed.
+ *
+ * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
+ * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
+ */
 // Wait for all writes to complete in L1 (header + data)
 // Tell math it can write again
 // Clear dest
@@ -56,6 +78,14 @@ inline void _llk_pack_dest_section_done_()
     }
 }
 
+/**
+ * @brief Initialize the packer destination-offset GPRs and select the dest registers.
+ *
+ * Programs the low/high dest-offset GPRs for row-major order and selects the packer destination
+ * registers for the chosen sync mode.
+ *
+ * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
+ */
 template <DstSync Dst>
 inline void _llk_init_packer_dest_offset_registers_()
 {
@@ -69,6 +99,16 @@ inline void _llk_init_packer_dest_offset_registers_()
     select_packer_dest_registers<Dst>();
 }
 
+/**
+ * @brief Initialize packer destination state at the start of a kernel.
+ *
+ * Syncs Tensix, resets the dest-offset id, programs the packer dest-offset registers, initializes the
+ * packer address counter, and resets the tile dest pointer.
+ *
+ * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
+ * @tparam is_fp32_dest_acc_en: True if the destination register accumulates in FP32.
+ * @ref _llk_init_packer_dest_offset_registers_ performs the dest-offset register setup.
+ */
 template <DstSync Dst, bool is_fp32_dest_acc_en>
 inline void _llk_pack_dest_init_()
 {
@@ -84,6 +124,13 @@ inline void set_dst_write_addr(const std::uint32_t tile_index)
     TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_index);
 }
 
+/**
+ * @brief Configure the packer relu mode and threshold.
+ *
+ * Writes the relu mode and threshold carried by the config to the STACC_RELU config register.
+ *
+ * @param relu_config: Relu configuration supplying the hardware mode and threshold to apply.
+ */
 TT_ALWAYS_INLINE void _llk_pack_relu_config_(const ckernel::ReluConfig& relu_config)
 {
     const std::uint32_t val = (relu_config.get_threshold() << STACC_RELU_ReluThreshold_SHAMT) | (relu_config.get_hw_mode() << STACC_RELU_ApplyRelu_SHAMT);
@@ -95,11 +142,28 @@ TT_ALWAYS_INLINE void _llk_pack_relu_config_(const ckernel::ReluConfig& relu_con
     TTI_NOP;
 }
 
+/**
+ * @brief Enable or disable packer L1 accumulation.
+ *
+ * @param enable: Non-zero to accumulate packed output into existing L1 data, zero to overwrite.
+ */
 inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
 {
     reconfigure_packer_l1_acc(enable);
 }
 
+/**
+ * @brief Configure the packer edge-offset masks and tile-row-set mapping for a reduce output.
+ *
+ * Programs PCK_EDGE_OFFSET_SEC0/SEC1 masks and TILE_ROW_SET_MAPPING_1 so that only the reduced
+ * datums survive: for row reduce a single column per row, for col reduce only the first row, and for
+ * scalar reduce a single datum, with per-packer selection appropriate to the reduce dimension.
+ *
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam pack_mode: Packing layout, values = <Default/Untilize>
+ * @pre Pairs with @ref _llk_math_reduce_ on the math thread, whose reduced output these masks gate.
+ * @post Call @ref _llk_pack_reduce_mask_clear_ to restore the default pass-through masks.
+ */
 template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_reduce_mask_config_()
 {
@@ -182,6 +246,14 @@ inline void _llk_pack_reduce_mask_config_()
     TTI_NOP;
 }
 
+/**
+ * @brief Restore the default packer edge masks and tile-row-set mapping after a reduce.
+ *
+ * Resets the edge-offset masks to pass-through and points all tile-row-set mappings back to
+ * PCK_EDGE_OFFSET_SEC0, undoing @ref _llk_pack_reduce_mask_config_.
+ *
+ * @pre Pairs with @ref _llk_pack_reduce_mask_config_.
+ */
 inline void _llk_pack_reduce_mask_clear_()
 {
     // By default, all packers are set to use TILE_ROW_SET_MAPPING_0 and

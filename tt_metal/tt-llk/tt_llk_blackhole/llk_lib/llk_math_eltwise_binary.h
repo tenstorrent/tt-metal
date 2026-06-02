@@ -82,10 +82,11 @@ inline auto eltwise_binary_func(std::uint8_t clr_src, std::uint8_t acc_to_dest, 
  *************************************************************************/
 
 /**
- * @brief Configure MOP for standard eltwise binary operations (no dest reuse)
+ * @brief Configure MOP for standard eltwise binary operations (no dest reuse).
+ *
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
- * @tparam math_fidelity: Math fidelity for controlling precision
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param acc_to_dest: Accumulate result to destination register instead of overwriting
  * @param tensor_shape: Tensor shape describing tile dimensions
  */
@@ -169,12 +170,14 @@ inline void eltwise_binary_configure_mop_standard(const std::uint32_t acc_to_des
 }
 
 /**
- * @brief Initialize FPU for standard elementwise binary operations (no dest reuse)
+ * @brief Initialize FPU for standard elementwise binary operations (no dest reuse).
+ *
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
- * @tparam math_fidelity: Math fidelity for controlling precision
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param acc_to_dest: Accumulate result to destination register instead of overwriting
+ * @post @ref _llk_math_eltwise_binary_standard_ runs the configured op with matching template args.
  */
 template <EltwiseBinaryType eltwise_binary_type, BroadcastType src_b_bcast_type, MathFidelity math_fidelity = MathFidelity::LoFi>
 inline void _llk_math_eltwise_binary_standard_init_(const ckernel::TensorShape &tensor_shape, const std::uint32_t acc_to_dest)
@@ -190,15 +193,16 @@ inline void _llk_math_eltwise_binary_standard_init_(const ckernel::TensorShape &
 }
 
 /**
- * @brief Perform standard elementwise binary operation (no dest reuse)
- * Output = SrcA [+, -, *] SrcB
+ * @brief Perform standard elementwise binary operation (no dest reuse): Output = SrcA [+, -, *] SrcB.
+ *
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
- * @tparam Dst: Destination sync mode, values = <Half, Full>
+ * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam is_fp32_dest_acc_en: Enable FP32 mode in destination register
- * @tparam math_fidelity: Math fidelity for controlling precision
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param dst_index: Tile index into the destination register
+ * @pre @ref _llk_math_eltwise_binary_standard_init_ must be called with matching template args.
  */
 template <
     EltwiseBinaryType eltwise_binary_type,
@@ -318,12 +322,14 @@ inline void eltwise_binary_reuse_dest_as_src()
 }
 
 /**
- * @brief Configure MOP for eltwise binary operations with dest reuse
- * MOP outer loop = 1 face, called multiple times externally with ZEROACC between calls
- * This processes one face at a time because we need to clear dest before each face computation
- * @tparam eltwise_binary_type: Type of eltwise binary op
- * @tparam bcast_type: Broadcast type for source B
- * @tparam math_fidelity: Math fidelity for controlling precision
+ * @brief Configure MOP for eltwise binary operations with dest reuse.
+ *
+ * MOP outer loop = 1 face, called multiple times externally with ZEROACC between calls.
+ * This processes one face at a time because we need to clear dest before each face computation.
+ *
+ * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
  * @param acc_to_dest: Accumulate result to destination register
  * @param tensor_shape: Tensor shape describing tile dimensions
  */
@@ -401,13 +407,15 @@ inline void eltwise_binary_configure_mop_with_dest_reuse(const std::uint32_t acc
 }
 
 /**
- * @brief Initialize FPU for elementwise binary operations with dest reuse
- * @tparam eltwise_binary_type: Type of eltwise binary op
- * @tparam src_b_bcast_type: Broadcast type for source B
- * @tparam math_fidelity: Math fidelity for controlling precision
- * @tparam binary_reuse_dest: Reuse destination as source type
+ * @brief Initialize FPU for elementwise binary operations with dest reuse.
+ *
+ * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam binary_reuse_dest: Reuse destination as source type, values = <DEST_TO_SRCA/DEST_TO_SRCB> (NONE is rejected)
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param acc_to_dest: Accumulate result to destination register
+ * @post @ref _llk_math_eltwise_binary_with_dest_reuse_ runs the configured op with matching template args.
  */
 template <
     EltwiseBinaryType eltwise_binary_type,
@@ -450,17 +458,18 @@ inline void eltwise_binary_run_with_dest_reuse(
 }
 
 /**
- * @brief Perform elementwise binary operation with dest reuse
- * Output = SrcA [+, -, *] SrcB, where one src comes from dest register
- * @tparam eltwise_binary_type: Type of eltwise binary op
- * @tparam src_b_bcast_type: Broadcast type for source B
- * @tparam Dst: Destination sync mode
+ * @brief Perform elementwise binary operation with dest reuse: Output = SrcA [+, -, *] SrcB, where one src comes from the dest register.
+ *
+ * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
+ * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
+ * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam is_fp32_dest_acc_en: Enable FP32 mode in destination register
- * @tparam math_fidelity: Math fidelity for controlling precision
- * @tparam binary_reuse_dest: Reuse destination as source type
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam binary_reuse_dest: Reuse destination as source type, values = <DEST_TO_SRCA/DEST_TO_SRCB> (NONE is rejected)
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param dst_index: Tile index into the destination register
  * @param clear_fp32_dst_acc: Clears index in destination register when float32 mode is enabled
+ * @pre @ref _llk_math_eltwise_binary_with_dest_reuse_init_ must be called with matching template args.
  */
 template <
     EltwiseBinaryType eltwise_binary_type,
@@ -552,14 +561,18 @@ inline void _llk_math_eltwise_binary_with_dest_reuse_(const ckernel::TensorShape
  *************************************************************************/
 
 /**
- * @brief Initialize FPU to perform an elementwise binary operation where Output = SrcA [+, -, *] SrcB
- * Dispatches to standard or dest-reuse implementation based on binary_reuse_dest template parameter
+ * @brief Initialize FPU to perform an elementwise binary operation where Output = SrcA [+, -, *] SrcB.
+ *
+ * Dispatches to the standard or dest-reuse implementation based on the binary_reuse_dest template parameter.
+ *
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
- * @tparam math_fidelity: Math fidelity for controlling precision
- * @tparam binary_reuse_dest: Reuse destination as source type, values = <NONE, DEST_TO_SRCA, DEST_TO_SRCB>
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam binary_reuse_dest: Reuse destination as source type, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param acc_to_dest: Accumulate result to destination register instead of overwriting
+ * @pre On the unpack thread, pair with @ref _llk_unpack_AB_init_ which feeds SrcA/SrcB.
+ * @post @ref _llk_math_eltwise_binary_ runs the configured op with matching template args.
  */
 template <
     EltwiseBinaryType eltwise_binary_type,
@@ -579,17 +592,22 @@ inline void _llk_math_eltwise_binary_init_(const ckernel::TensorShape &tensor_sh
 }
 
 /**
- * @brief Perform an elementwise binary operation where Output = SrcA [+, -, *] SrcB
- * Dispatches to standard or dest-reuse implementation based on binary_reuse_dest template parameter
+ * @brief Perform an elementwise binary operation where Output = SrcA [+, -, *] SrcB.
+ *
+ * Dispatches to the standard or dest-reuse implementation based on the binary_reuse_dest template parameter.
+ *
  * @tparam eltwise_binary_type: Type of eltwise binary op, values = <ELWADD/ELWSUB/ELWMUL>
  * @tparam src_b_bcast_type: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
- * @tparam Dst: Destination sync mode, values = <Half, Full>
+ * @tparam Dst: Destination sync mode, values = <SyncHalf/SyncFull>
  * @tparam is_fp32_dest_acc_en: Enable FP32 mode in destination register
- * @tparam math_fidelity: Math fidelity for controlling precision
- * @tparam binary_reuse_dest: Reuse destination as source type, values = <NONE, DEST_TO_SRCA, DEST_TO_SRCB>
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam binary_reuse_dest: Reuse destination as source type, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
  * @param tensor_shape: Tensor shape describing tile dimensions
  * @param dst_index: Tile index into the destination register
  * @param clear_fp32_dst_acc: Clears index in destination register when float32 mode is enabled
+ * @pre @ref _llk_math_eltwise_binary_init_ must be called with matching template args.
+ * @pre On the unpack thread, @ref _llk_unpack_AB_ must feed the operand tiles into SrcA/SrcB.
+ * @post Call @ref _llk_math_eltwise_binary_uninit_ to restore modified state.
  */
 template <
     EltwiseBinaryType eltwise_binary_type,
@@ -612,8 +630,9 @@ inline void _llk_math_eltwise_binary_(const ckernel::TensorShape &tensor_shape, 
 }
 
 /**
- * @brief Uninitialize/cleanup after elementwise binary operations
- * Restores any modified state to defaults
+ * @brief Uninitialize/cleanup after elementwise binary operations, restoring any modified state to defaults.
+ *
+ * @post Reverses @ref _llk_math_eltwise_binary_init_; currently a no-op since all state is transient.
  */
 inline void _llk_math_eltwise_binary_uninit_()
 {

@@ -18,6 +18,22 @@
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
+/**
+ * @brief Program the unpacker MOP for a single-operand (A) unpack.
+ *
+ * Selects the UNPACR instruction sequence based on broadcast type, dest-reuse mode and
+ * whether data is unpacked straight to the dest register, covering transpose-of-faces and
+ * 32-bit-to-dest paths.
+ *
+ * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
+ * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
+ * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
+ * @param transpose_of_faces: Whether faces are reordered (transposed) during the unpack.
+ * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
+ * @param unpack_src_format: Source data format of the operand in L1.
+ * @param unpack_dst_format: Destination data format the operand is converted to.
+ */
 template <
     BroadcastType BType                          = BroadcastType::NONE,
     bool acc_to_dest                             = false,
@@ -187,6 +203,26 @@ inline void _llk_unpack_A_mop_config_(
     }
 }
 
+/**
+ * @brief Initialize the unpacker for a single-operand (A) unpack.
+ *
+ * Configures the within-face transpose register and per-unpacker datum count, then programs
+ * the MOP for the requested broadcast/dest-reuse/unpack-to-dest mode.
+ *
+ * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
+ * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
+ * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
+ * @param transpose_of_faces: Nonzero to reorder (transpose) faces during the unpack.
+ * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose (haloize mode).
+ * @param face_r_dim: Number of rows per face.
+ * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
+ * @param unpack_src_format: Source data format of the operand in L1.
+ * @param unpack_dst_format: Destination data format the operand is converted to.
+ * @post Call @ref _llk_unpack_A_uninit_ to restore the modified datum-count state.
+ * @ref _llk_unpack_A_ is the matching execute call.
+ * @ref _llk_math_eltwise_unary_datacopy_init_ is the matching init on the math thread (datacopy/transpose consumer).
+ */
 template <
     BroadcastType BType                          = BroadcastType::NONE,
     bool acc_to_dest                             = false,
@@ -233,6 +269,16 @@ inline void _llk_unpack_A_init_(
     _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format);
 }
 
+/**
+ * @brief Restore unpacker datum-count state after single-operand (A) unpacking.
+ *
+ * Resets the X-dimension address counter for the unpacker used by this broadcast mode back to
+ * a full face worth of datums.
+ *
+ * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
+ * @param face_r_dim: Number of rows per face, used to compute the restored datum count.
+ * @pre @ref _llk_unpack_A_init_ must have been called with matching template args.
+ */
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_A_uninit_(const std::uint32_t face_r_dim)
 {
@@ -242,6 +288,24 @@ inline void _llk_unpack_A_uninit_(const std::uint32_t face_r_dim)
     TT_SETADCXX(UNP_SEL, face_r_dim * FACE_C_DIM - 1, 0x0);
 }
 
+/**
+ * @brief Unpack a single tile (operand A) from L1 into the SrcA/SrcB or dest register.
+ *
+ * Programs the operand base address into the active config context, synchronizes with the
+ * unpacker via semaphores, and runs the configured MOP. When unpacking 32-bit datums to dest,
+ * also manages the dest write address and completion handshake.
+ *
+ * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
+ * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
+ * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
+ * @param address: L1 address of the source tile.
+ * @param unpack_src_format: Source data format of the operand in L1.
+ * @param unpack_dst_format: Destination data format the operand is converted to.
+ * @pre @ref _llk_unpack_A_init_ must be called first with matching template args.
+ * @post Call @ref _llk_unpack_A_uninit_ to restore modified state.
+ * @ref _llk_math_eltwise_unary_datacopy_ on the math thread consumes the tile unpacked here.
+ */
 template <
     BroadcastType BType                          = BroadcastType::NONE,
     bool acc_to_dest                             = false,

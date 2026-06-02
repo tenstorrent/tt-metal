@@ -129,6 +129,23 @@ inline void reduce_pool_op()
     }
 }
 
+/**
+ * @brief Perform a reduction on the math thread, pooling faces into the destination register.
+ *
+ * For REDUCE_ROW the per-row pooled result is transposed back into dest; REDUCE_COL pools down rows of faces;
+ * REDUCE_SCALAR pools all faces then transposes the partial result into a single column for a final pool.
+ *
+ * @tparam type: Pooling op, values = <SUM/AVG/MAX>
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam is_int_fpu_en: Enable integer FPU datapath (casts int32 dest datums to int8 before moving to SrcB).
+ * @tparam enforce_fp32_accumulation: Force FP32 accumulation through the transpose (requires is_fp32_dest_acc_en).
+ * @param dst_index: Tile index into the destination register.
+ * @param tensor_shape: Tensor shape describing tile dimensions.
+ * @pre @ref _llk_math_reduce_init_ must be called with matching template args.
+ * @post Call @ref _llk_math_reduce_uninit_ to restore modified state.
+ */
 template <
     PoolType type,
     ReduceDim dim,
@@ -295,6 +312,16 @@ inline void reduce_configure_mop()
     }
 }
 
+/**
+ * @brief Configure the math (FPU) thread for a reduce operation: programs address mods and, for high fidelity, the pool MOP.
+ *
+ * @tparam type: Pooling op, values = <SUM/AVG/MAX>
+ * @tparam dim: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
+ * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
+ * @tparam math_fidelity: Math fidelity for controlling precision, values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam enforce_fp32_accumulation: Force FP32 accumulation (requires is_fp32_dest_acc_en).
+ * @post @ref _llk_math_reduce_ runs the configured reduction with matching template args.
+ */
 template <PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en, MathFidelity math_fidelity, bool enforce_fp32_accumulation = false>
 inline void _llk_math_reduce_init_()
 {
@@ -315,6 +342,12 @@ inline void _llk_math_reduce_init_()
     math::reset_counters(p_setrwc::SET_ABD_F);
 }
 
+/**
+ * @brief Uninitialize after a reduce operation, undoing any init/execute-time workarounds.
+ *
+ * @tparam enforce_fp32_accumulation: Must match the value used at init.
+ * @post Reverses @ref _llk_math_reduce_init_; re-enables debug feature bit 11 (@ref _llk_math_dbg_feature_enable_) only when FP32 accumulation was enforced.
+ */
 template <bool enforce_fp32_accumulation = false>
 inline void _llk_math_reduce_uninit_()
 {

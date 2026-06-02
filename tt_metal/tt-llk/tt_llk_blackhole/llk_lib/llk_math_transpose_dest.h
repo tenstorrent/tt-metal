@@ -146,6 +146,22 @@ inline void transpose_dest_32b()
 // We may want to revisit these template parameters, and perhaps the
 // transpose_dest API generally as it's not currently widely used:
 // https://github.com/tenstorrent/tt-llk/issues/290
+/**
+ * @brief Transpose a tile in place within the destination register.
+ *
+ * For 32-bit datums uses the format-switching path (low/high 16-bit halves transposed separately to avoid
+ * clobbering); otherwise runs the preconfigured transpose MOP. transpose_of_faces controls whether the face
+ * arrangement is transposed in addition to the elements within each face.
+ *
+ * @tparam transpose_of_faces: Also transpose the arrangement of faces, not just elements within a face.
+ * @tparam is_32bit: True for 32-bit datums (uses the format-switching transpose path).
+ * @param dst_index: Tile index into the destination register.
+ * @pre @ref _llk_math_transpose_dest_init_ must be called with matching template args.
+ * @pre On the unpack thread, the tile must already be in dest (via @ref _llk_unpack_A_ datacopy);
+ *      @ref _llk_unpack_set_srcb_dummy_valid_ marks SrcB valid so the MOVB2D/MOVD2B sequence can run.
+ * @post Call @ref _llk_math_transpose_dest_uninit_ to restore modified state.
+ * @note <transpose_of_faces=false, is_32bit=false> is not supported.
+ */
 template <bool transpose_of_faces = true, bool is_32bit = false>
 inline void _llk_math_transpose_dest_(const std::uint32_t dst_index)
 {
@@ -322,6 +338,13 @@ inline void transpose_dest_configure_mop()
     }
 }
 
+/**
+ * @brief Configure the math thread (address mods and MOP) for a destination-register transpose.
+ *
+ * @tparam transpose_of_faces: Also transpose the arrangement of faces, not just elements within a face.
+ * @tparam is_32bit: True for 32-bit datums (configures the format-switching transpose path).
+ * @post @ref _llk_math_transpose_dest_ runs the configured transpose with matching template args.
+ */
 template <bool transpose_of_faces = true, bool is_32bit = false>
 inline void _llk_math_transpose_dest_init_()
 {
@@ -331,6 +354,11 @@ inline void _llk_math_transpose_dest_init_()
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 }
 
+/**
+ * @brief Uninitialize/cleanup after a destination-register transpose, restoring modified state to defaults.
+ *
+ * @post Reverses @ref _llk_math_transpose_dest_init_; currently a no-op since all state is transient.
+ */
 inline void _llk_math_transpose_dest_uninit_()
 {
     // No state to restore - all states are transient or default
