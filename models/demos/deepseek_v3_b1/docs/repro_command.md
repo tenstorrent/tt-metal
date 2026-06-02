@@ -222,20 +222,39 @@ alone** — by construction the per-core recip cancels it. It only becomes obser
 the post-SDPA tree-reduce + matmuls + MoE break that per-core cancellation across the
 multi-chunk accumulation. That requires the full `test_decoder_mlp` on the 8-chip mesh.
 
-### Why the full `test_decoder_mlp` is currently impractical on craq-sim
+### Status of the full `test_decoder_mlp` on craq-sim — two walls
 
-`test_decoder_mlp` on the 8-chip sim stalls before producing a kernel iteration:
+**Wall 1 — host upload (SOLVED by fastwrite).** Originally the 8-chip decoder stalled
+before any kernel iteration: ~150 s CPU weight prep, then tensor creation +
+`synchronize_device` parked the host in `FDMeshCommandQueue::finish_nolock` for tens of
+minutes draining the fast-dispatch CQ backlog at a few kHz.
 
-- **Host weight prep** (`prepare_dense_layer_weights`) is ~150 s of pure CPU torch —
-  unavoidable, and unrelated to the simulator.
-- **Tensor creation + `synchronize_device`** enqueues a large fast-dispatch CQ backlog
-  (all decoder weights sharded across 8 chips). Draining it on the sim parks the host in
-  `FDMeshCommandQueue::finish_nolock` for tens of minutes (confirmed via gdb:
-  `Synchronize → finish → finish_nolock`, sim clocking at only a few kHz).
+The fix is the **fastwrite** path: tt-metal branch `nkapre/sim-fast-h2d-write`
+(`2e3b48f2`, "sim: add opt-in direct H2D writes for FD mesh uploads"), enabled with
+`TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1`. It is **cherry-picked onto this branch**
+(commit `a9e50086`, 2 files: `fd_mesh_command_queue.cpp` + `tt_metal.cpp`; no umd bump).
+Measured effect on this workload: **weight prep 145 s → 30 s**, tensor-creation +
+golden-skip ~110 s → ~9 s. With it we reach the actual decoder kernel.
 
-A `TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1` "fastwrite" path (≈5.55× speedup, pushed to
-tt-metal on 2026-05-31 per `craq-sim/HANDOFF.md`) would mitigate the CQ-drain portion, but
-it is **not present** in the `ridvan/nkapre-multichip-metal-v2` tt-metal base used here.
+**Wall 2 — decoder kernel execution (UNSOLVED, craq-sim limitation).** With fastwrite,
+the run gets to `Running dense decoder operation...` and then **hangs inside the kernel**:
+the sim clock freezes (e.g. pinned at 2 M), the dispatch RISC firmware idle-spins, and the
+host blocks forever in the post-`execute` `synchronize_device`
+(`Synchronize → finish → finish_nolock`). This is the heavy multi-chip decoder fabric path
+(post-SDPA tree-reduce + all-reduce + reduce-to-one) and matches the open frontier in
+`craq-sim/HANDOFF.md` — the fused-MLA decoder workloads "reach op execution and stop at a
+fabric-router routing trap". It is **not** a config we can flip; it needs craq-sim
+multi-chip fabric/dispatch work.
+
+Net: fastwrite is **necessary but not sufficient**. The alternating MLP PCC needs the full
+decoder kernel to *run to completion* on the 8-chip sim, which currently hangs. The
+single-chip root-cause repro (above) remains the hardware-free signal that works today.
+
+Env to enable fastwrite (already in `/tmp/run_alt_pcc.sh`):
+
+```bash
+export TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1
+```
 
 ### Harness for the alternation (when the decoder run is feasible)
 
@@ -268,3 +287,9 @@ Expected once it completes: `pos=127` → niter-1 and niter-2 outputs **equal** 
 - Key commits on the tt-metal branch:
   - `900d180` — port Attempt 19 `hash_cb` to multichip `flash_mla.hpp`
   - `17cf304` — enable `DEBUG_CB_HASH` in `flash_mla/op.py` + relax PCC for hash-only run
+  - `59d407c` — golden-free alt-PCC harness in `test_decoder_mlp`
+  - `a9e50086` — cherry-pick of `nkapre/sim-fast-h2d-write` (`2e3b48f2`) fastwrite
+- craq-sim relaxations (in `src/tensix.cpp` on the `multichip` branch checkout): allow
+  `unpacr_nop bank_clr_ctrl=1` and `cfgshiftmask scratch_sel<4` (bodies already handle them).
+- Fastwrite stack per Slack (Nachiket, 2026-06-01): tt-metal `nkapre/sim-fast-h2d-write`
+  + tt-umd `nkapre/multichip`; knob `TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1`.
