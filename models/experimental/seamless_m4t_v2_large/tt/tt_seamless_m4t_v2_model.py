@@ -86,11 +86,12 @@ class TextDecoderKvDecodeRuntime:
     cur_pos_tt: ttnn.Tensor
     logits_tt: Optional[ttnn.Tensor] = None
     logits_tt_by_cache_seq_len: dict[int, ttnn.Tensor] = field(default_factory=dict)
-    # On-device greedy argmax token (pad batch→32 + untilize + multicore argmax, fused into the decode
-    # trace) so the loop reads back a scalar instead of the full 256k-vocab logits row. ``logits_tt`` is
-    # still kept for the rep-penalty fallback (host recompute only when the winner is a prior token).
-    tok_tt: Optional[ttnn.Tensor] = None
-    tok_tt_by_cache_seq_len: dict[int, ttnn.Tensor] = field(default_factory=dict)
+    # On-device greedy argmax fused into the decode trace: a ``(local_idx, chunk_max)`` pair, each
+    # ``[1, 1, 32]`` (32 vocab chunks). The loop reads back 64 scalars and combines on host instead of the
+    # full 256k-vocab logits row. ``logits_tt`` is still kept for the rep-penalty fallback (host recompute
+    # only when the winner is a prior token).
+    tok_tt: Optional[tuple[ttnn.Tensor, ttnn.Tensor]] = None
+    tok_tt_by_cache_seq_len: dict[int, tuple[ttnn.Tensor, ttnn.Tensor]] = field(default_factory=dict)
     trace_cache_seq_len: Optional[int] = None
     trace_id: Optional[int] = None
     trace_ids_by_cache_seq_len: dict[int, int] = field(default_factory=dict)
@@ -553,27 +554,40 @@ class TTSeamlessM4Tv2Model:
             compute_kernel_config=self._lm_head_compute,
         )
 
-    def _decode_argmax_token(self, logits: ttnn.Tensor) -> ttnn.Tensor:
-        """On-device greedy argmax for a single-token decode step ``logits`` ``[1, 1, V]`` → ``[1, 1, 32]``
-        token-id tensor (valid token is row 0).
+    # Number of vocab chunks for the fused decode argmax (tile-aligned so multicore argmax is valid).
+    _ARGMAX_CHUNKS = 32
 
-        ``ttnn.argmax(use_multicore=True)`` is ~30× faster than the 256k-vocab host readback but has two
-        alignment requirements: (1) the dim before the reduced vocab dim must be tile-aligned (32) — at
-        batch=1 it returns garbage — so pad the row dim to 32; (2) the multicore kernel reduces over the
-        *physical* (tile-padded) vocab width, not the logical extent, so a logical V (256102) that isn't a
-        multiple of 32 reads stale padding and returns garbage. Pad V up to the tile-aligned width with
-        ``-1e9`` so those columns can never win the argmax. Untilize first (argmax wants ROW_MAJOR), then
-        multicore argmax. Used both in the compile-outside-trace step and inside the trace capture so the
-        trace itself outputs the token id.
+    def _decode_argmax_token(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """On-device greedy argmax for a single-token decode step ``logits`` ``[1, 1, V]``.
+
+        Returns ``(local_idx, chunk_max)``, each ``[1, 1, 32]``: the vocab is reshaped into 32 contiguous
+        chunks, and per chunk we keep the in-chunk argmax index and the in-chunk max value. The host
+        combine (cheap, 64 scalars) picks the winning chunk ``c = argmax(chunk_max)`` then the global token
+        ``c * chunk_width + local_idx[c]`` (see ``_greedy_next_token_id``).
+
+        ``ttnn.argmax(use_multicore=True)`` is far faster than the 256k-vocab host readback but has two
+        alignment traps that both return *silent garbage*: (1) the dim before the reduced vocab dim must be
+        tile-aligned (32); (2) the multicore kernel reduces over the *physical* (tile-padded) width, so the
+        reduced dim must also be a multiple of 32. The natural ``[1, 1, 1, V]`` shape pads the height to 32
+        physically, so untilize/argmax churn ``32 × V`` elements for one real row. Reshaping to
+        ``[1, 1, 32, chunk_width]`` instead makes the 32 the *chunk count* (free tile alignment) and keeps
+        the physical work at ``32 × chunk_width ≈ V`` — ~3× faster than padding the row dim to 32. Pad V up
+        to ``32 * chunk_width`` with ``-1e9`` so the padding columns can never win. ``ttnn.max`` runs on the
+        TILE tensor directly; argmax needs ROW_MAJOR so untilize first. Both are used in the
+        compile-outside-trace step and inside the trace capture so the trace itself outputs the token.
         """
         v = int(logits.shape[-1])
-        v_aligned = ((v + 31) // 32) * 32
-        l4 = ttnn.reshape(logits, [1, 1, 1, v])
-        if v_aligned != v:
-            l4 = ttnn.pad(l4, [(0, 0), (0, 0), (0, 0), (0, v_aligned - v)], value=-1e9)
-        lp = ttnn.pad(l4, [(0, 0), (0, 0), (0, 31), (0, 0)], value=-1e9)
-        xu = ttnn.untilize(lp, use_multicore=True)
-        return ttnn.argmax(xu, dim=-1, keepdim=False, use_multicore=True)
+        nch = self._ARGMAX_CHUNKS
+        chunk_w = (((v + nch - 1) // nch) + 31) // 32 * 32  # tile-aligned chunk width
+        v_pad = nch * chunk_w
+        lp = logits
+        if v_pad != v:
+            lp = ttnn.pad(logits, [(0, 0), (0, 0), (0, v_pad - v)], value=-1e9)
+        cr = ttnn.reshape(lp, [1, 1, nch, chunk_w])
+        chunk_max = ttnn.max(cr, dim=-1, keepdim=False)
+        cu = ttnn.untilize(cr, use_multicore=True)
+        local_idx = ttnn.argmax(cu, dim=-1, keepdim=False, use_multicore=True)
+        return local_idx, chunk_max
 
     def _encode_text(
         self,
@@ -783,7 +797,8 @@ class TTSeamlessM4Tv2Model:
             ttnn.deallocate(old_logits)
         old_tok = rt.tok_tt_by_cache_seq_len.pop(bucket, None)
         if old_tok is not None:
-            ttnn.deallocate(old_tok)
+            for _t in old_tok:
+                ttnn.deallocate(_t)
         if rt.trace_cache_seq_len == bucket:
             rt.trace_id = None
             rt.trace_cache_seq_len = None
@@ -1018,7 +1033,8 @@ class TTSeamlessM4Tv2Model:
         # Pre-compile the fused argmax too — else it JITs during capture → "Writes not supported".
         compile_tok = self._decode_argmax_token(compile_logits)
         ttnn.synchronize_device(self.device)
-        ttnn.deallocate(compile_tok)
+        for _t in compile_tok:
+            ttnn.deallocate(_t)
         ttnn.deallocate(compile_logits)
 
         self._upload_kv_decode_step_inputs(token_id, position, batch_size)
@@ -1027,7 +1043,7 @@ class TTSeamlessM4Tv2Model:
         self._decode_trace_kernels_warmed = True
 
         capture_logits: Optional[ttnn.Tensor] = None
-        capture_tok: Optional[ttnn.Tensor] = None
+        capture_tok: Optional[tuple[ttnn.Tensor, ttnn.Tensor]] = None
 
         def traced_step_capture() -> None:
             nonlocal capture_logits, capture_tok
@@ -1471,13 +1487,14 @@ class TTSeamlessM4Tv2Model:
         *,
         repetition_penalty: float = 1.0,
         prev_token_ids: Optional[List[int]] = None,
-        tok_tt: Optional[ttnn.Tensor] = None,
+        tok_tt: Optional[tuple[ttnn.Tensor, ttnn.Tensor]] = None,
     ) -> int:
         """Greedy next-token id for traced KV decode.
 
-        Fast path: when ``tok_tt`` is given (argmax fused into the decode trace — pad-32 + untilize +
-        multicore argmax), read back only that scalar token (row 0) instead of the full 256k-vocab
-        logits row (~1.5 ms device vs ~4.4 ms host readback).
+        Fast path: when ``tok_tt`` is given (argmax fused into the decode trace, see
+        ``_decode_argmax_token``), read back only the per-chunk ``(local_idx, chunk_max)`` pair (64
+        scalars) and combine on host: winning chunk ``c = argmax(chunk_max)`` → token
+        ``c * chunk_width + local_idx[c]``. Far cheaper than the full 256k-vocab logits row (~4.4 ms).
 
         Speculative rep-penalty: the device argmax ignores the penalty. If the (unpenalized) winner is a
         previously-emitted token, the penalty could demote it → recompute exactly on host from
@@ -1487,7 +1504,12 @@ class TTSeamlessM4Tv2Model:
         import torch as _torch
 
         if tok_tt is not None:
-            token = int(to_torch_replicated_first_shard(tok_tt).reshape(-1)[0])
+            local_idx_tt, chunk_max_tt = tok_tt
+            local_idx = to_torch_replicated_first_shard(local_idx_tt).reshape(-1).to(_torch.int64)
+            chunk_max = to_torch_replicated_first_shard(chunk_max_tt).reshape(-1).to(_torch.float32)
+            chunk_w = ((int(logits.shape[-1]) + self._ARGMAX_CHUNKS - 1) // self._ARGMAX_CHUNKS + 31) // 32 * 32
+            c = int(chunk_max.argmax())
+            token = c * chunk_w + int(local_idx[c])
             if not (repetition_penalty > 1.0 and prev_token_ids and token in set(prev_token_ids)):
                 return token
 
