@@ -16,13 +16,19 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+uint32_t get_buffer_aligned_page_size(const MeshTensor& t) {
+    return static_cast<uint32_t>(t.mesh_buffer().get_reference_buffer()->aligned_page_size());
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
 tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
-    const auto& input_tensor = tensor_args.input;
+    const MeshTensor& input_tensor = tensor_args.input.mesh_tensor();
     auto input_shape = input_tensor.padded_shape();
     bool row_major = input_tensor.layout() == Layout::ROW_MAJOR;
-
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_cn needs to be on device!");
 
     ProgramDescriptor desc;
 
@@ -35,8 +41,7 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
     uint32_t page_size = page_shape[0] * page_shape[1];
     uint32_t stick_size = (row_major) ? page_shape[1] * input_tensor.element_size() : tt::tile_size(cb_data_format);
 
-    Buffer* src0_buffer = input_tensor.mesh_tensor().mesh_buffer().get_reference_buffer();
-    IDevice* device = input_tensor.device();
+    IDevice* device = &input_tensor.mutable_device();
 
     uint32_t num_tensor_pages = input_tensor.physical_volume() / page_size;
 
@@ -49,7 +54,7 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, num_tensor_pages);
 
-    Buffer* dst_buffer = output_tensor.mesh_tensor().mesh_buffer().get_reference_buffer();
+    const MeshTensor& c = output_tensor.mesh_tensor();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_pages = 2;
@@ -65,15 +70,17 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
 
     KernelDescriptor::Defines reader_defines;
     std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(src0_cb_index), src0_buffer->aligned_page_size(), stick_size};
+        static_cast<uint32_t>(src0_cb_index),
+        CMAKE_UNIQUE_NAMESPACE::get_buffer_aligned_page_size(input_tensor),
+        stick_size};
     std::vector<uint32_t> reader_common_runtime_args;
-    TensorAccessorArgs(*src0_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+    TensorAccessorArgs(input_tensor, tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(reader_compile_time_args, reader_common_runtime_args);
     KernelDescriptor::Defines writer_defines;
     std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(src0_cb_index), dst_buffer->aligned_page_size(), stick_size};
+        static_cast<uint32_t>(src0_cb_index), CMAKE_UNIQUE_NAMESPACE::get_buffer_aligned_page_size(c), stick_size};
     std::vector<uint32_t> writer_common_runtime_args;
-    TensorAccessorArgs(*dst_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+    TensorAccessorArgs(c, tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_compile_time_args, writer_common_runtime_args);
 
     if (row_major) {
@@ -130,8 +137,8 @@ tt::tt_metal::ProgramDescriptor TransposeCNProgramFactory::create_descriptor(
         uint32_t start_tile = num_pages_read + (curr_c * batch_step) - (curr_c / N * channel_step);
 
         reader_desc.emplace_runtime_args(
-            core, {src0_buffer, N, C, HtWt, batch_step, channel_step, num_pages_per_core, start_tile, hw, n});
-        writer_desc.emplace_runtime_args(core, {dst_buffer, num_pages_per_core, num_pages_read});
+            core, {input_tensor, N, C, HtWt, batch_step, channel_step, num_pages_per_core, start_tile, hw, n});
+        writer_desc.emplace_runtime_args(core, {c, num_pages_per_core, num_pages_read});
 
         num_pages_read += num_pages_per_core;
     }

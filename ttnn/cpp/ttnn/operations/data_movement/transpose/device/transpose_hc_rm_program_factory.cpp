@@ -18,27 +18,26 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+uint32_t get_buffer_aligned_page_size(const MeshTensor& t) {
+    return static_cast<uint32_t>(t.mesh_buffer().get_reference_buffer()->aligned_page_size());
+}
 
-// Compute per-core runtime args (reader+writer) for HC RM transpose and append them to the
-// supplied KernelDescriptors. The traversal logic that advances (curr_c, curr_h, curr_n) was
-// previously shared between `create` and `override_runtime_arguments`; now it has a single home.
 void emit_runtime_args_hc_rm(
     KernelDescriptor& reader_desc,
     KernelDescriptor& writer_desc,
-    const Tensor& input_tensor,
-    Tensor& output_tensor,
+    const MeshTensor& input_mesh,
+    const MeshTensor& output_mesh,
     uint32_t num_cores_total,
     uint32_t num_cores_y,
     const CoreRangeSet& core_group_1,
     uint32_t num_sticks_per_core_group_1,
     const CoreRangeSet& core_group_2,
     uint32_t num_sticks_per_core_group_2) {
-    const MeshTensor& input_mesh = input_tensor.mesh_tensor();
-    const MeshTensor& output_mesh = output_tensor.mesh_tensor();
     auto input_shape = input_mesh.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1];
-    uint32_t W_bytes = W * input_mesh.element_size();
+    uint32_t W_bytes = W * static_cast<uint32_t>(input_mesh.element_size());
 
     uint32_t max_read_size = 2048;
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
@@ -92,27 +91,26 @@ void emit_runtime_args_hc_rm(
     }
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 tt::tt_metal::ProgramDescriptor TransposeHCRMProgramFactory::create_descriptor(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
-    const auto& input_tensor = tensor_args.input;
+    const MeshTensor& a = tensor_args.input.mesh_tensor();
+    const MeshTensor& c = output_tensor.mesh_tensor();
 
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_hc needs to be allocated in a buffer on device!");
-
-    const auto& a_shape = input_tensor.logical_shape();
+    const auto& a_shape = a.logical_shape();
     uint32_t W = a_shape[3], H = a_shape[2], C = a_shape[1], N = a_shape[0];
     uint32_t NCH = N * C * H;
 
     ProgramDescriptor desc;
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(a.dtype());
 
     log_debug(tt::LogOp, "transpose_hc_rm");
     log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
 
-    IDevice* device = input_tensor.device();
+    IDevice* device = &a.mutable_device();
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -122,17 +120,15 @@ tt::tt_metal::ProgramDescriptor TransposeHCRMProgramFactory::create_descriptor(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, NCH);
 
-    Buffer* dst_buffer = output_tensor.mesh_tensor().mesh_buffer().get_reference_buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-
     uint32_t src0_cb_index = 0;
 
     auto num_sticks = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1
                                                                                 : num_sticks_per_core_group_2;
 
-    Buffer* src0_buffer = input_tensor.mesh_tensor().mesh_buffer().get_reference_buffer();
-    uint32_t aligned_page = std::max(src0_buffer->aligned_page_size(), dst_buffer->aligned_page_size());
-    auto stick_size = std::max(W * input_tensor.element_size(), aligned_page);
+    uint32_t src0_aligned_page_size = CMAKE_UNIQUE_NAMESPACE::get_buffer_aligned_page_size(a);
+    uint32_t dst_aligned_page_size = CMAKE_UNIQUE_NAMESPACE::get_buffer_aligned_page_size(c);
+    uint32_t aligned_page = std::max(src0_aligned_page_size, dst_aligned_page_size);
+    auto stick_size = std::max(static_cast<uint32_t>(W * a.element_size()), aligned_page);
 
     desc.cbs.push_back(CBDescriptor{
         .total_size = num_sticks * stick_size,
@@ -150,15 +146,15 @@ tt::tt_metal::ProgramDescriptor TransposeHCRMProgramFactory::create_descriptor(
     reader_compile_time_args.push_back(H);
     reader_compile_time_args.push_back(C);
     reader_compile_time_args.push_back(stick_size);
-    reader_compile_time_args.push_back(src0_buffer->aligned_page_size());
-    TensorAccessorArgs(*src0_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+    reader_compile_time_args.push_back(src0_aligned_page_size);
+    TensorAccessorArgs(a, tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(reader_compile_time_args, reader_common_runtime_args);
 
     std::vector<uint32_t> writer_compile_time_args = {src0_cb_index};
     std::vector<uint32_t> writer_common_runtime_args;
     writer_compile_time_args.push_back(stick_size);
-    writer_compile_time_args.push_back(dst_buffer->aligned_page_size());
-    TensorAccessorArgs(*dst_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+    writer_compile_time_args.push_back(dst_aligned_page_size);
+    TensorAccessorArgs(c, tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_compile_time_args, writer_common_runtime_args);
 
     KernelDescriptor reader_desc;
@@ -181,11 +177,11 @@ tt::tt_metal::ProgramDescriptor TransposeHCRMProgramFactory::create_descriptor(
     writer_desc.config = WriterConfigDescriptor{};
     writer_desc.common_runtime_args = std::move(writer_common_runtime_args);
 
-    emit_runtime_args_hc_rm(
+    CMAKE_UNIQUE_NAMESPACE::emit_runtime_args_hc_rm(
         reader_desc,
         writer_desc,
-        input_tensor,
-        output_tensor,
+        a,
+        c,
         num_cores_total,
         num_cores_y,
         core_group_1,

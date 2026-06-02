@@ -17,9 +17,7 @@ namespace ttnn::prim {
 
 tt::tt_metal::ProgramDescriptor TransposeWHShardedProgramFactory::create_descriptor(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
-    const auto& input_tensor = tensor_args.input;
-
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
+    const MeshTensor& input_tensor = tensor_args.input.mesh_tensor();
 
     ProgramDescriptor desc;
 
@@ -31,10 +29,10 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedProgramFactory::create_descrip
     const auto tile = input_tensor.tensor_spec().tile();
     const uint32_t tile_hw = tile.get_tile_hw();
 
-    IDevice* device = input_tensor.device();
+    const auto& device = input_tensor.device();
 
     bool fp32_dest_acc_en = src0_cb_data_format == tt::DataFormat::Float32;
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
@@ -45,10 +43,6 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedProgramFactory::create_descrip
     auto& all_cores = shard_spec.grid;
     uint32_t num_tiles_per_shard = shard_spec.numel() / tile_hw;
 
-    // Sharded CBs: total_size depends on num_tiles_per_shard which can vary across
-    // cache hits; .buffer triggers UpdateDynamicCircularBufferAddress. total_size
-    // is not in the program hash so the framework re-applies the combined update
-    // via apply_descriptor_runtime_args.
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = num_tiles_per_shard;
     desc.cbs.push_back(CBDescriptor{
@@ -59,7 +53,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedProgramFactory::create_descrip
             .data_format = src0_cb_data_format,
             .page_size = src0_single_tile_size,
         }}},
-        .tensor = &input_tensor.mesh_tensor(),
+        .buffer = input_tensor.mesh_buffer().get_reference_buffer(),
     });
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
@@ -72,7 +66,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedProgramFactory::create_descrip
             .data_format = dst_cb_data_format,
             .page_size = dst_single_tile_size,
         }}},
-        .tensor = &output_tensor.mesh_tensor(),
+        .buffer = output_tensor.mesh_tensor().mesh_buffer().get_reference_buffer(),
     });
 
     std::vector<uint32_t> reader_compile_time_args = {src0_cb_index};
@@ -133,8 +127,6 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedProgramFactory::create_descrip
     std::vector<CoreCoord> cores =
         grid_to_cores_with_noop(bbox.end_coord.x, bbox.end_coord.y, num_cores_x, num_cores_y, row_major);
 
-    // Active shard cores get the real arg values; the trailing no-op cores keep the
-    // default-constructed slots (matching legacy std::fill behavior on cores.size()).
     const std::vector<uint32_t> reader_rt = {num_blocks};
     const std::vector<uint32_t> compute_rt = {num_blocks, HtWt_tile_size, num_hw_blocks_per_shard, Ht_per_shard, Wts};
     const std::vector<uint32_t> writer_rt = {num_blocks};
@@ -149,7 +141,6 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedProgramFactory::create_descrip
             compute_desc.runtime_args.emplace_back(cores[i], compute_rt);
             writer_desc.runtime_args.emplace_back(cores[i], writer_rt);
         } else {
-            // No-op core: matches legacy std::vector<uint32_t>(1)/(5) zero-initialized rows.
             reader_desc.runtime_args.emplace_back(cores[i], std::vector<uint32_t>(1));
             compute_desc.runtime_args.emplace_back(cores[i], std::vector<uint32_t>(5));
             writer_desc.runtime_args.emplace_back(cores[i], std::vector<uint32_t>(1));

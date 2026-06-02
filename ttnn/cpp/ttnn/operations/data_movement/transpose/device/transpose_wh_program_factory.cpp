@@ -17,13 +17,18 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+uint32_t get_buffer_aligned_page_size(const MeshTensor& t) {
+    return static_cast<uint32_t>(t.mesh_buffer().get_reference_buffer()->aligned_page_size());
+}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 
 void emit_runtime_args_wh_tiled(
     KernelDescriptor& reader_desc,
     KernelDescriptor& compute_desc,
     KernelDescriptor& writer_desc,
-    const Tensor& input_tensor,
-    Tensor& output_tensor,
+    const MeshTensor& input_tensor,
+    const MeshTensor& output_tensor,
     uint32_t num_cores_total,
     uint32_t num_cores_y,
     const CoreRangeSet& core_group_1,
@@ -60,7 +65,7 @@ void emit_runtime_args_wh_tiled(
 
         reader_desc.emplace_runtime_args(
             core,
-            {input_tensor.mesh_tensor(),
+            {input_tensor,
              num_tiles_per_core,
              tt::round_down(num_tiles_read, HtWt) + (h * Wt) + w,
              h,
@@ -71,7 +76,7 @@ void emit_runtime_args_wh_tiled(
 
         compute_desc.emplace_runtime_args(core, {num_tiles_per_core});
 
-        writer_desc.emplace_runtime_args(core, {output_tensor.mesh_tensor(), num_tiles_per_core, num_tiles_read});
+        writer_desc.emplace_runtime_args(core, {output_tensor, num_tiles_per_core, num_tiles_read});
 
         num_tiles_read += num_tiles_per_core;
     }
@@ -81,8 +86,8 @@ void emit_runtime_args_wh_rm(
     KernelDescriptor& reader_desc,
     KernelDescriptor& compute_desc,
     KernelDescriptor& writer_desc,
-    const Tensor& input_tensor,
-    Tensor& output_tensor,
+    const MeshTensor& input_tensor,
+    const MeshTensor& output_tensor,
     uint32_t num_cores_total,
     uint32_t num_cores_y,
     const CoreRangeSet& core_group_1,
@@ -109,11 +114,11 @@ void emit_runtime_args_wh_rm(
             num_hw_blocks_per_core = 0;
         }
 
-        reader_desc.emplace_runtime_args(core, {input_tensor.mesh_tensor(), num_sticks_read, num_hw_blocks_per_core});
+        reader_desc.emplace_runtime_args(core, {input_tensor, num_sticks_read, num_hw_blocks_per_core});
 
         compute_desc.emplace_runtime_args(core, {num_hw_blocks_per_core});
 
-        writer_desc.emplace_runtime_args(core, {output_tensor.mesh_tensor(), num_sticks_write, num_hw_blocks_per_core});
+        writer_desc.emplace_runtime_args(core, {output_tensor, num_sticks_write, num_hw_blocks_per_core});
 
         num_sticks_read += num_hw_blocks_per_core * H;
         num_sticks_write += num_hw_blocks_per_core * W;
@@ -124,9 +129,7 @@ void emit_runtime_args_wh_rm(
 
 tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
-    const auto& input_tensor = tensor_args.input;
-
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
+    const MeshTensor& input_tensor = tensor_args.input.mesh_tensor();
 
     uint32_t num_tensor_tiles = input_tensor.physical_volume() / TILE_HW;
     uint32_t W = input_tensor.logical_shape()[3], H = input_tensor.logical_shape()[2];
@@ -143,8 +146,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
     tt::DataFormat dst_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
-    Buffer* src0_buffer = input_tensor.mesh_tensor().mesh_buffer().get_reference_buffer();
-    IDevice* device = input_tensor.device();
+    IDevice* device = &input_tensor.mutable_device();
 
     bool fp32_dest_acc_en = src0_cb_data_format == tt::DataFormat::Float32 ||
                             src0_cb_data_format == tt::DataFormat::Int32 ||
@@ -158,8 +160,6 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(compute_with_storage_grid_size, row_major ? NC : num_tensor_tiles);
-
-    Buffer* dst_buffer = output_tensor.mesh_tensor().mesh_buffer().get_reference_buffer();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = row_major ? wt * 2 : 2;
@@ -220,11 +220,11 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
         reader_compile_time_args.push_back(wt);
         reader_compile_time_args.push_back(W);
         reader_compile_time_args.push_back(ht * wt);
-        reader_compile_time_args.push_back(W * input_tensor.element_size());
-        reader_compile_time_args.push_back(wt * input_tensor.element_size() * TILE_WIDTH);
-        reader_compile_time_args.push_back(src0_buffer->aligned_page_size());
+        reader_compile_time_args.push_back(W * static_cast<uint32_t>(input_tensor.element_size()));
+        reader_compile_time_args.push_back(wt * static_cast<uint32_t>(input_tensor.element_size()) * TILE_WIDTH);
+        reader_compile_time_args.push_back(CMAKE_UNIQUE_NAMESPACE::get_buffer_aligned_page_size(input_tensor));
     }
-    TensorAccessorArgs(*src0_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+    TensorAccessorArgs(input_tensor, tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(reader_compile_time_args, reader_common_runtime_args);
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
@@ -238,9 +238,10 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
         writer_compile_time_args.push_back(ht * wt);
         writer_compile_time_args.push_back(H * output_tensor.element_size());
         writer_compile_time_args.push_back(ht * output_tensor.element_size() * TILE_HEIGHT);
-        writer_compile_time_args.push_back(dst_buffer->aligned_page_size());
+        writer_compile_time_args.push_back(
+            CMAKE_UNIQUE_NAMESPACE::get_buffer_aligned_page_size(output_tensor.mesh_tensor()));
     }
-    TensorAccessorArgs(*dst_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+    TensorAccessorArgs(output_tensor.mesh_tensor(), tensor_accessor::ArgConfig::RuntimeTensorShape)
         .append_to(writer_compile_time_args, writer_common_runtime_args);
 
     KernelDescriptor reader_desc;
@@ -309,7 +310,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
             compute_desc,
             writer_desc,
             input_tensor,
-            output_tensor,
+            output_tensor.mesh_tensor(),
             num_cores_total,
             num_cores_y,
             core_group_1,
@@ -322,7 +323,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHProgramFactory::create_descriptor(
             compute_desc,
             writer_desc,
             input_tensor,
-            output_tensor,
+            output_tensor.mesh_tensor(),
             num_cores_total,
             num_cores_y,
             core_group_1,

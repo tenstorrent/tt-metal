@@ -3,13 +3,10 @@
 
 #include "transpose_wh_sharded_rm_program_factory.hpp"
 
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-logger/tt-logger.hpp>
-
-#include <algorithm>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -18,9 +15,7 @@ namespace ttnn::prim {
 
 tt::tt_metal::ProgramDescriptor TransposeWHShardedRMProgramFactory::create_descriptor(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
-    const auto& input_tensor = tensor_args.input;
-
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
+    const MeshTensor& input_tensor = tensor_args.input.mesh_tensor();
 
     ProgramDescriptor desc;
 
@@ -95,7 +90,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedRMProgramFactory::create_descr
             .data_format = src0_cb_data_format,
             .page_size = stick_size_bytes,
         }}},
-        .tensor = &input_tensor.mesh_tensor(),
+        .buffer = input_tensor.mesh_buffer().get_reference_buffer(),
     });
 
     // sharded cb (output): .buffer triggers UpdateDynamicCircularBufferAddress on cache hit.
@@ -108,7 +103,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedRMProgramFactory::create_descr
             .data_format = dst_cb_data_format,
             .page_size = output_page_size,
         }}},
-        .tensor = &output_tensor.mesh_tensor(),
+        .buffer = output_tensor.mesh_buffer().get_reference_buffer(),
     });
 
     // cb_in (double-buffered intermediate)

@@ -18,9 +18,10 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
 
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_hc_rm_sharded(
-    const Tensor& input_tensor, uint32_t num_cores, uint32_t num_cores_x, uint32_t num_cores_y) {
+    const MeshTensor& input_tensor, uint32_t num_cores, uint32_t num_cores_x, uint32_t num_cores_y) {
     auto input_shape = input_tensor.padded_shape();
 
     uint32_t H = input_shape[2], C = input_shape[1];
@@ -29,18 +30,18 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     uint32_t shard_height = shard_spec.shape[0];
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
-    IDevice* device = input_tensor.device();
+    const auto& device = input_tensor.device();
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores);
 
     std::vector<uint32_t> shard_grid_x_map;
     for (uint32_t i = 0; i < num_cores_x; ++i) {
-        auto physical_core = device->worker_core_from_logical_core(CoreCoord(i, 0));
+        auto physical_core = device.worker_core_from_logical_core(CoreCoord(i, 0));
         shard_grid_x_map.push_back(physical_core.x);
     }
     std::vector<uint32_t> shard_grid_y_map;
     for (uint32_t i = 0; i < num_cores_y; ++i) {
-        auto physical_core = device->worker_core_from_logical_core(CoreCoord(0, i));
+        auto physical_core = device.worker_core_from_logical_core(CoreCoord(0, i));
         shard_grid_y_map.push_back(physical_core.y);
     }
 
@@ -84,7 +85,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 }
 
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_hc_rm_sharded_special_case(
-    const Tensor& input_tensor, uint32_t num_cores, uint32_t num_cores_x, uint32_t num_cores_y) {
+    const MeshTensor& input_tensor, uint32_t num_cores, uint32_t num_cores_x, uint32_t num_cores_y) {
     auto input_shape = input_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
@@ -95,7 +96,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     uint32_t shard_height = shard_spec.shape[0];
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
-    IDevice* device = input_tensor.device();
+    const auto& device = input_tensor.device();
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores);
 
@@ -163,7 +164,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 
             if (worker_x_logical < num_cores_x && worker_y_logical < num_cores_y) {
                 auto core_physical =
-                    device->worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
+                    device.worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
 
                 read_cores_indices.push_back(shard_id);
                 read_stick_offset.push_back(stick_id_in_shard * stick_size_bytes);
@@ -280,13 +281,12 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     return ret_val;
 }
 
+}  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
 tt::tt_metal::ProgramDescriptor TransposeHCShardedProgramFactory::create_descriptor(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
-    const auto& input_tensor = tensor_args.input;
-
-    TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_hc needs to be on device!");
+    const MeshTensor& input_tensor = tensor_args.input.mesh_tensor();
 
     ProgramDescriptor desc;
 
@@ -330,7 +330,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCShardedProgramFactory::create_descrip
             .data_format = src0_cb_data_format,
             .page_size = stick_size_bytes,
         }}},
-        .tensor = &input_tensor.mesh_tensor(),
+        .buffer = input_tensor.mesh_buffer().get_reference_buffer(),
     });
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
@@ -342,7 +342,7 @@ tt::tt_metal::ProgramDescriptor TransposeHCShardedProgramFactory::create_descrip
             .data_format = dst_cb_data_format,
             .page_size = stick_size_bytes,
         }}},
-        .tensor = &output_tensor.mesh_tensor(),
+        .buffer = output_tensor.mesh_tensor().mesh_buffer().get_reference_buffer(),
     });
 
     std::vector<uint32_t> reader_compile_time_args;
@@ -376,15 +376,13 @@ tt::tt_metal::ProgramDescriptor TransposeHCShardedProgramFactory::create_descrip
     reader_desc.defines = std::move(reader_defines);
     reader_desc.config = ReaderConfigDescriptor{};
 
-    // Writer kernel only exists in the special case path; the generic path puts
-    // everything through the reader (writer args returned by the generic helper
-    // are empty, matching the legacy `KernelHandle writer_kernel_id{}` behavior).
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> all_runtime_args;
     if (is_special_case) {
-        all_runtime_args =
-            get_runtime_args_hc_rm_sharded_special_case(input_tensor, num_cores, num_cores_x, num_cores_y);
+        all_runtime_args = CMAKE_UNIQUE_NAMESPACE::get_runtime_args_hc_rm_sharded_special_case(
+            input_tensor, num_cores, num_cores_x, num_cores_y);
     } else {
-        all_runtime_args = get_runtime_args_hc_rm_sharded(input_tensor, num_cores, num_cores_x, num_cores_y);
+        all_runtime_args =
+            CMAKE_UNIQUE_NAMESPACE::get_runtime_args_hc_rm_sharded(input_tensor, num_cores, num_cores_x, num_cores_y);
     }
 
     reader_desc.runtime_args.reserve(num_cores);
