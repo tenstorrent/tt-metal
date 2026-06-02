@@ -224,70 +224,59 @@ struct ByteSizeAddressType<Size, typename std::enable_if<Size == 4>::type> {
     typedef uint32_t type;
 };
 
-// Split a logical-row transfer across shards when a BLOCK/WIDTH-sharded buffer's row
-// spans multiple cores. Falls through to a single noc_async_{read,write} for interleaved
-// buffers, HEIGHT-sharded RM (whole row stays on one core), and shards whose width covers
-// the full row.
-//
-// dest_id is a logical row index; pages_per_row converts it to the starting page index in
-// the destination buffer. pages_per_row is the last (W) axis of dspec.tensor_shape() after
-// squeeze — equivalent to (and now generalized from) the prior tensor_shape()[1] indexing,
-// which assumed a fully-squeezed 2D dspec and so misread the C dim for 4D NCHW inputs.
 template <typename AddrGenType>
 FORCE_INLINE void noc_async_write_sharded(
     uint32_t l1_addr, AddrGenType tensor, uint32_t dest_id, uint32_t offset, uint32_t size) {
-    if constexpr (AddrGenType::DSpec::is_interleaved) {
-        // Interleaved TensorAccessor lacks dspec() — keep this branch inside `if constexpr`
-        // so the sharded path below is never instantiated for the interleaved specialization.
-        noc_async_write(l1_addr, tensor.get_noc_addr(dest_id, offset), size);
+    if constexpr (AddrGenType::DSpec::tensor_shape_static) {
+        if constexpr ((tensor.dspec().rank() > 1) && (tensor.dspec().tensor_shape()[1] > 1)) {
+            constexpr uint32_t pages_per_shard_width = tensor.dspec().tensor_shape()[1];
+            const uint32_t page_size = tensor.get_aligned_page_size();
+            uint32_t sharded_dest_id = dest_id * pages_per_shard_width + offset / page_size;
+            uint32_t sharded_offset = offset % page_size;
+            uint32_t num_pages = div_up(size + sharded_offset, page_size);
+            for (uint32_t i = 0; i < num_pages; i++) {
+                uint64_t dst_noc_addr = tensor.get_noc_addr(sharded_dest_id, sharded_offset);
+                uint32_t write_size = std::min(size - i * page_size, page_size - sharded_offset);
+                noc_async_write(l1_addr, dst_noc_addr, write_size);
+                sharded_dest_id++;
+                sharded_offset = 0;
+                l1_addr += write_size;
+            }
+        } else {
+            uint64_t dst_noc_addr = tensor.get_noc_addr(dest_id, offset);
+            noc_async_write(l1_addr, dst_noc_addr, size);
+        }
     } else {
-        const auto& dspec = tensor.dspec();
-        const uint32_t r = dspec.rank();
-        const uint32_t pages_per_row = (r > 1) ? dspec.tensor_shape()[r - 1] : 1u;
-        if (pages_per_row <= 1) {
-            noc_async_write(l1_addr, tensor.get_noc_addr(dest_id, offset), size);
-            return;
-        }
-        const uint32_t page_size = tensor.get_aligned_page_size();
-        uint32_t sharded_dest_id = dest_id * pages_per_row + offset / page_size;
-        uint32_t sharded_offset = offset % page_size;
-        uint32_t num_pages = div_up(size + sharded_offset, page_size);
-        for (uint32_t i = 0; i < num_pages; i++) {
-            uint64_t dst_noc_addr = tensor.get_noc_addr(sharded_dest_id, sharded_offset);
-            uint32_t write_size = std::min(size - i * page_size, page_size - sharded_offset);
-            noc_async_write(l1_addr, dst_noc_addr, write_size);
-            sharded_dest_id++;
-            sharded_offset = 0;
-            l1_addr += write_size;
-        }
+        uint64_t dst_noc_addr = tensor.get_noc_addr(dest_id, offset);
+        noc_async_write(l1_addr, dst_noc_addr, size);
     }
 }
 
 template <typename AddrGenType>
 FORCE_INLINE void noc_async_read_sharded(
     uint32_t l1_addr, AddrGenType tensor, uint32_t src_id, uint32_t offset, uint32_t size) {
-    if constexpr (AddrGenType::DSpec::is_interleaved) {
-        noc_async_read(tensor.get_noc_addr(src_id, offset), l1_addr, size);
+    if constexpr (AddrGenType::DSpec::tensor_shape_static) {
+        if constexpr ((tensor.dspec().rank() > 1) && (tensor.dspec().tensor_shape()[1] > 1)) {
+            constexpr uint32_t pages_per_shard_width = tensor.dspec().tensor_shape()[1];
+            const uint32_t page_size = tensor.get_aligned_page_size();
+            uint32_t sharded_src_id = src_id * pages_per_shard_width + offset / page_size;
+            uint32_t sharded_offset = offset % page_size;
+            uint32_t num_pages = div_up(size + sharded_offset, page_size);
+            for (uint32_t i = 0; i < num_pages; i++) {
+                uint64_t src_noc_addr = tensor.get_noc_addr(sharded_src_id, sharded_offset);
+                uint32_t read_size = std::min(size - i * page_size, page_size - sharded_offset);
+                noc_async_read(src_noc_addr, l1_addr, read_size);
+                sharded_src_id++;
+                sharded_offset = 0;
+                l1_addr += read_size;
+            }
+        } else {
+            uint64_t src_noc_addr = tensor.get_noc_addr(src_id, offset);
+            noc_async_read(src_noc_addr, l1_addr, size);
+        }
     } else {
-        const auto& dspec = tensor.dspec();
-        const uint32_t r = dspec.rank();
-        const uint32_t pages_per_row = (r > 1) ? dspec.tensor_shape()[r - 1] : 1u;
-        if (pages_per_row <= 1) {
-            noc_async_read(tensor.get_noc_addr(src_id, offset), l1_addr, size);
-            return;
-        }
-        const uint32_t page_size = tensor.get_aligned_page_size();
-        uint32_t sharded_src_id = src_id * pages_per_row + offset / page_size;
-        uint32_t sharded_offset = offset % page_size;
-        uint32_t num_pages = div_up(size + sharded_offset, page_size);
-        for (uint32_t i = 0; i < num_pages; i++) {
-            uint64_t src_noc_addr = tensor.get_noc_addr(sharded_src_id, sharded_offset);
-            uint32_t read_size = std::min(size - i * page_size, page_size - sharded_offset);
-            noc_async_read(src_noc_addr, l1_addr, read_size);
-            sharded_src_id++;
-            sharded_offset = 0;
-            l1_addr += read_size;
-        }
+        uint64_t src_noc_addr = tensor.get_noc_addr(src_id, offset);
+        noc_async_read(src_noc_addr, l1_addr, size);
     }
 }
 
