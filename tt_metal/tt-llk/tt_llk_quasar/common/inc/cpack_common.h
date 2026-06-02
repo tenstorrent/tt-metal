@@ -44,32 +44,7 @@ inline void _update_clear_dest_bank_id_()
 
 namespace
 {
-// L1 outputs allowed for Float32 pack input (Quasar Packer Gasket table).
-inline bool is_quasar_pack_f32_src_l1_dst_supported(const DataFormat dst)
-{
-    switch (dst)
-    {
-        case DataFormat::Float32:
-        case DataFormat::Tf32:
-        case DataFormat::Float16:
-        case DataFormat::Float16_b:
-        case DataFormat::Fp8R:
-        case DataFormat::Fp8P:
-        case DataFormat::MxFp8R:
-        case DataFormat::MxFp8P:
-        case DataFormat::MxFp6R:
-        case DataFormat::MxFp6P:
-        case DataFormat::MxFp4:
-        case DataFormat::MxInt8:
-        case DataFormat::MxInt4:
-        case DataFormat::MxInt2:
-            return true;
-        default:
-            return false;
-    }
-}
-
-// L1 outputs for Float16 / Float16_b pack input (no Float32/Tf32; spec F16 row).
+// L1 outputs for Float16 / Float16_b pack input.
 inline bool is_quasar_pack_f16_src_l1_dst_supported(const DataFormat dst)
 {
     switch (dst)
@@ -90,6 +65,12 @@ inline bool is_quasar_pack_f16_src_l1_dst_supported(const DataFormat dst)
         default:
             return false;
     }
+}
+
+// L1 outputs allowed for Float32 pack input (Quasar Packer Gasket table).
+inline bool is_quasar_pack_f32_src_l1_dst_supported(const DataFormat dst)
+{
+    return dst == DataFormat::Float32 || dst == DataFormat::Tf32 || is_quasar_pack_f16_src_l1_dst_supported(dst);
 }
 } // namespace
 
