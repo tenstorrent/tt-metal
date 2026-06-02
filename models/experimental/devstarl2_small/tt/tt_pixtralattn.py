@@ -14,6 +14,7 @@ from models.experimental.devstarl2_small.devstral_utils.pixtral_seq_chunk import
     pixtral_effective_mm_seq_len,
     trim_seq_dim2,
     vision_nlp_concat_input_memcfg,
+    vision_rms_norm_prepare_block_shard_input,
     vision_rope_memcfg,
     vision_seq_memcfg,
     vision_use_sharded_nlp_concat,
@@ -309,20 +310,66 @@ class TtMistralImageAttention(LightweightModule):
             fuse_batch=seq_len <= max_seq,
         )
 
+    def _qkv_block_shard_progcfg(
+        self, seq_len: int, n: int, grid_x: int = 8, grid_y: int = 8
+    ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+        """Recommendation D block-sharded QKV progcfg. out_subblock_w is the largest divisor of per_core_N
+        (<=4, DST half) -> (1,3) for N=768, i.e. 3x fewer subblock passes than a (1,1) subblock."""
+        per_core_m = (seq_len // 32) // grid_y
+        per_core_n = (n // 32) // grid_x
+        out_subblock_w = max(w for w in range(1, per_core_n + 1) if per_core_n % w == 0 and w <= 4)
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=out_subblock_w,
+            out_block_h=per_core_m,
+            out_block_w=per_core_n,
+            per_core_M=per_core_m,
+            per_core_N=per_core_n,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=True,
+        )
+
     def _linear_qkv_seq_chunked(self, x_11SH, seq_len: int, max_mm_seq_len: int) -> ttnn.Tensor:
         """Fused QKV ``ttnn.linear`` over the sequence axis; chunk so matmul ``m`` fits L1 CB budget."""
         x_11SH, seq_len, original_seq_len = pad_seq_to_chunk_multiple(x_11SH, seq_len, max_mm_seq_len)
         qkv_width = (self.n_local_heads + 2 * self.n_local_kv_heads) * self._padded_head_dim
         qkv_mem_cfg = vision_seq_memcfg(seq_len, qkv_width)
         if seq_len <= max_mm_seq_len:
-            out = ttnn.linear(
-                x_11SH,
-                self.wqkv,
-                dtype=ttnn.bfloat16,
-                memory_config=qkv_mem_cfg,
-                compute_kernel_config=self.qkv_compute_kernel_config,
-                program_config=self._qkv_program_config(seq_len, seq_len, qkv_width),
+            mt, nt, kt = seq_len // 32, qkv_width // 32, self.hidden_size // 32
+            block_shard = (
+                seq_len % 32 == 0
+                and mt % 8 == 0
+                and nt % 8 == 0
+                and kt % 8 == 0
+                and int(self.grid_size.x) >= 8
+                and int(self.grid_size.y) >= 8
             )
+            if block_shard:
+                # Block-shard in0 on 8x8 (same layout as block-sharded RMSNorm); reuse when already sharded.
+                x_bs = vision_rms_norm_prepare_block_shard_input(x_11SH, seq_len, self.hidden_size)
+                out = ttnn.linear(
+                    x_bs,
+                    self.wqkv,
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1),
+                    compute_kernel_config=self.qkv_compute_kernel_config,
+                    program_config=self._qkv_block_shard_progcfg(seq_len, qkv_width),
+                )
+                out = ttnn.to_memory_config(out, qkv_mem_cfg)
+            else:
+                if x_11SH.is_sharded():
+                    x_11SH = ttnn.sharded_to_interleaved(x_11SH, qkv_mem_cfg)
+                out = ttnn.linear(
+                    x_11SH,
+                    self.wqkv,
+                    dtype=ttnn.bfloat16,
+                    memory_config=qkv_mem_cfg,
+                    compute_kernel_config=self.qkv_compute_kernel_config,
+                    program_config=self._qkv_program_config(seq_len, seq_len, qkv_width),
+                )
             return trim_seq_dim2(out, original_seq_len)
 
         x_batched = ttnn.reshape(x_11SH, [1, seq_len // max_mm_seq_len, max_mm_seq_len, -1])
@@ -377,9 +424,7 @@ class TtMistralImageAttention(LightweightModule):
     def forward(self, x_11SH, position_embeddings=None):
         seq_len = int(x_11SH.shape[-2])
         act_mem_cfg = vision_seq_memcfg(seq_len, self.hidden_size)
-        if x_11SH.is_sharded():
-            x_11SH = ttnn.sharded_to_interleaved(x_11SH, act_mem_cfg)
-        elif x_11SH.memory_config().buffer_type != act_mem_cfg.buffer_type:
+        if not x_11SH.is_sharded() and x_11SH.memory_config().buffer_type != act_mem_cfg.buffer_type:
             x_11SH = ttnn.to_memory_config(x_11SH, act_mem_cfg)
 
         max_mm_seq_len = pixtral_effective_mm_seq_len(self.configuration, seq_len)
