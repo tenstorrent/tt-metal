@@ -184,6 +184,37 @@ class VoxtralTTSPipeline:
         embeds[audio_mask] = voice_emb
         return embeds
 
+    def _build_voice_injected_embeds_tt(
+        self,
+        prompt_token_ids: list[int],
+        voice: str,
+    ) -> tuple[torch.Tensor, ttnn.Tensor]:
+        """Prompt token IDs + voice injection → (CPU ``[S, dim]``, device ``[S, 1, 1, dim]``).
+
+        Builds the voice-injected embedding on CPU (F.embedding + boolean-mask scatter),
+        then uploads the full sequence in **one** ``ttnn.from_torch`` call as ROW_MAJOR DRAM.
+
+        Returning the CPU tensor avoids rebuilding it for debug traces.
+        The device tensor is in the exact format ``prefill_from_embeds`` expects, so the
+        internal CPU-reshape branch (item #3 in the torch-fallback audit) is never entered.
+
+        The caller owns the returned ``ttnn.Tensor`` and must deallocate it after
+        ``prefill_from_embeds`` returns.
+        """
+        embeds_cpu = self._build_voice_injected_embeds(prompt_token_ids, voice)  # [S, dim] CPU
+        dim = self.text.inner.args.dim
+        S = int(embeds_cpu.shape[0])
+        embeds_4d = embeds_cpu.reshape(S, 1, 1, dim).contiguous()  # [S,1,1,dim] CPU
+        embeds_tt = ttnn.from_torch(
+            embeds_4d,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,  # ROW_MAJOR allows non-tile-aligned slicing
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        return embeds_cpu, embeds_tt
+
     def _audio_codes_to_mm_embed(self, audio_codes_1_37: torch.Tensor) -> torch.Tensor:
         """``[1, 37]`` codes → ``[dim]`` MM embedding (CPU lookup+sum)."""
         emb = audio_tokenizer_encode_tokens_reference(
@@ -249,15 +280,20 @@ class VoxtralTTSPipeline:
         request = compose_speech_request(text, self.model_name_or_path, voice=voice)
         prompt_token_ids: list[int] = request["prompt_token_ids"]
         S_prompt = len(prompt_token_ids)
-        inputs_embeds = self._build_voice_injected_embeds(prompt_token_ids, voice)
+        # Build CPU embeds (for debug trace) and upload once to device as [S,1,1,dim].
+        # prefill_from_embeds receives ttnn.Tensor → skips the internal CPU-reshape branch.
+        inputs_embeds_cpu, inputs_embeds_tt = self._build_voice_injected_embeds_tt(prompt_token_ids, voice)
         if debug is not None:
-            debug.set("embeds.prompt", inputs_embeds)
+            debug.set("embeds.prompt", inputs_embeds_cpu)
 
         # Production prefill path only; debug must not call collect_layer_hiddens here
         # (that path reads every layer to host and can change the last-token hidden).
         # hidden stays on device (ttnn.Tensor) throughout the AR loop; acoustic model reads it via
         # forward_from_tt. Convert to torch only for debug trace (hidden_tt_to_torch).
-        last_hidden_tt = self.text.prefill_from_embeds(inputs_embeds, start_pos=0)
+        last_hidden_tt = self.text.prefill_from_embeds(inputs_embeds_tt, start_pos=0)
+        if inputs_embeds_tt.is_allocated():
+            ttnn.deallocate(inputs_embeds_tt)
+        del inputs_embeds_cpu  # allow CPU memory to be reclaimed
         if debug is not None:
             debug.set("text.prefill.hidden", self.text.hidden_tt_to_torch(last_hidden_tt))
         cfg_alpha = torch.tensor(ACOUSTIC_CFG_ALPHA_DEFAULT, dtype=torch.bfloat16)
