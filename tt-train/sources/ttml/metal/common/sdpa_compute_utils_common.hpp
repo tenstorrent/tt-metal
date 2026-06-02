@@ -111,7 +111,7 @@ inline void mul_then_sfpi_exp(uint16_t scale_bf16) {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
         val = val * sfpi::sFloat16b(static_cast<uint32_t>(scale_bf16));
-        sfpi::vFloat result = ckernel::sfpu::_sfpu_exp_21f_bf16_<is_fp32_dest_acc_en>(val);
+        sfpi::vFloat result = ckernel::sfpu::_sfpu_exp_accurate_<is_fp32_dest_acc_en>(val);
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
@@ -134,7 +134,7 @@ inline void mul_then_sfpi_exp_first_column() {
     for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
         val = val * sfpi::sFloat16b(static_cast<uint32_t>(scale_bf16));
-        sfpi::vFloat result = ckernel::sfpu::_sfpu_exp_21f_bf16_<DST_ACCUM_MODE>(val);
+        sfpi::vFloat result = ckernel::sfpu::_sfpu_exp_accurate_<DST_ACCUM_MODE>(val);
         if constexpr (!DST_ACCUM_MODE) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
         }
