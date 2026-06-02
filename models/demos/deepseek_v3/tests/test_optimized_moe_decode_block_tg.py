@@ -6,7 +6,7 @@
 MoE End-to-End Test Scaled down for Single Galaxy
 
 Run with:
-'MESH_DEVICE=TG8X4 USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/tg_moe_tests/test_optimized_moe_decode_block_tg.py -v'
+'MESH_DEVICE=TG8X4 USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/test_optimized_moe_decode_block_tg.py -v'
 """
 
 import os
