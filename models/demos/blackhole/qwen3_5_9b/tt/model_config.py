@@ -1,12 +1,15 @@
 # models/demos/blackhole/qwen3_5_9b/tt/model_config.py
 """Qwen3.5-9B model configuration for Blackhole P150.
 
-Subclasses ``tt_transformers.ModelArgs`` (the framework convention) and loads
-exactly like every other tt_transformers model: ``HF_MODEL`` (a hub name to
-download OR a local path) is the single source of truth. The base class resolves
-the checkpoint from ``HF_MODEL`` (``self.CKPT_DIR``) and parses the HF config via
-``AutoConfig`` (transformers 5.9.0 recognizes ``model_type='qwen3_5'``). No JSON
-config override and no ``checkpoint_dir`` constructor param remain.
+Subclasses ``tt_transformers.ModelArgs`` (the framework convention). ``HF_MODEL`` is
+the single source of truth and must be exported (the base raises a clear error if it
+is unset). It may be a local checkpoint directory OR a hub id; a hub id is resolved to
+a local snapshot directory via ``snapshot_download`` (same as the vLLM wrapper) because
+``AutoConfig.from_pretrained`` on a bare hub id is unreliable in this transformers
+version. Following the ``gpt_oss`` / ``gemma4`` convention, config, weights and the
+tokenizer are loaded with ``trust_remote_code=True``. The base class resolves the
+checkpoint from ``HF_MODEL`` (``self.CKPT_DIR``) and parses the HF config via
+``AutoConfig``. No JSON config override and no ``checkpoint_dir`` constructor param remain.
 
 Everything Qwen3.5-specific (hybrid Gated DeltaNet + Gated Full Attention layers,
 DeltaNet key/value heads + conv kernel, partial rotary factor) is read from the
@@ -18,6 +21,7 @@ NOT the framework's meta-style wq/wk/wv keys. Weights come from
 ``transformers.AutoModelForCausalLM.from_pretrained`` (resolves to the text-only
 ``Qwen3_5ForCausalLM`` — no vision tower) and are remapped to the internal scheme.
 """
+import os
 from pathlib import Path
 
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -34,7 +38,18 @@ class Qwen35ModelArgs(ModelArgs):
         **kwargs,
     ):
         # HF_MODEL (set in the environment) is the single source of truth: the base
-        # ModelArgs reads it into self.CKPT_DIR and parses the config via AutoConfig.
+        # ModelArgs reads it into self.CKPT_DIR and raises a clear error if it is unset.
+        # Unless HF_MODEL already points at a local checkpoint dir (one containing
+        # config.json), resolve it to a local snapshot dir via snapshot_download (same
+        # as the vLLM wrapper): AutoConfig.from_pretrained on a bare hub id is unreliable
+        # in this transformers version, but works on a directory path. The config.json
+        # check (rather than os.path.isdir) avoids being fooled by a stray relative dir
+        # created by the weight tensor cache when an unresolved hub id was used before.
+        hf_model = os.getenv("HF_MODEL")
+        if hf_model and not os.path.isfile(os.path.join(hf_model, "config.json")):
+            from huggingface_hub import snapshot_download
+
+            os.environ["HF_MODEL"] = snapshot_download(hf_model)
         super().__init__(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len, **kwargs)
 
         # The base resolves the checkpoint dir from HF_MODEL into self.CKPT_DIR; mirror
@@ -84,6 +99,12 @@ class Qwen35ModelArgs(ModelArgs):
             self.weight_dtype = None
             self.act_dtype = None
 
+    def _set_hf_params(self, checkpoint_dir):
+        # Match gpt_oss/gemma4: load the HF config with trust_remote_code=True. Set the
+        # flag before delegating so the base AutoConfig.from_pretrained call uses it.
+        self.trust_remote_code_hf = True
+        super()._set_hf_params(checkpoint_dir)
+
     def is_full_attention_layer(self, layer_idx: int) -> bool:
         return self.attention_type_list[layer_idx] == "full_attention"
 
@@ -118,7 +139,7 @@ class Qwen35ModelArgs(ModelArgs):
 
         from models.demos.blackhole.qwen3_5_9b.tt.weight_mapping import remap_qwen35_state_dict
 
-        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, dtype="auto")
+        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, dtype="auto", trust_remote_code=True)
         state_dict = remap_qwen35_state_dict(model.state_dict())
         del model
         return state_dict
