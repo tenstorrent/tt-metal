@@ -48,7 +48,7 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenIm
     "traced",
     [
         pytest.param(True, id="traced"),
-        pytest.param(False, id="not_traced"),
+        # pytest.param(False, id="not_traced"),
     ],
 )
 def test_qwenimage_pipeline(

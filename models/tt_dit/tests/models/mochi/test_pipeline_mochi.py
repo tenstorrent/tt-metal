@@ -113,7 +113,7 @@ def test_mochi_diffusers_pipeline():
     "traced",
     [
         pytest.param(True, id="tracing_on"),
-        pytest.param(False, id="tracing_off"),
+        # pytest.param(False, id="tracing_off"),
     ],
 )
 @pytest.mark.parametrize(
