@@ -169,6 +169,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         width: int = 0,
         num_frames: int = 81,
         run_warmup: bool = True,
+        cfg_submesh_shape: tuple[int, int] | None = None,
+        cfg_submesh_offsets: list[tuple[int, int]] | None = None,
     ):
         super().__init__()
 
@@ -207,12 +209,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "wan2.2 MoE (transformer_2) is not yet supported."
             )
             assert not dynamic_load, "CFG parallelism is incompatible with dynamic_load."
-            submesh_shape = list(mesh_device.shape)
-            submesh_shape[cfg_parallel.mesh_axis] //= self.cfg_factor
-            logger.info(
-                f"CFG parallel: splitting mesh {tuple(mesh_device.shape)} into "
-                f"{self.cfg_factor} submeshes of shape {tuple(submesh_shape)} on axis {cfg_parallel.mesh_axis}"
-            )
             # Keep a handle to the parent mesh ONLY to construct the submeshes. After the
             # split, NEVER run a command-queue op (incl. ttnn.synchronize_device) on the
             # parent: parent and child submeshes share per-physical-device cq0 completion/
@@ -221,7 +217,30 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             # synchronize/operate on the submeshes individually instead.
             # See memory: cfg-parallel-parent-mesh-cq-hang.
             self.cfg_parent_mesh = mesh_device
-            self.cfg_submeshes = list(mesh_device.create_submeshes(ttnn.MeshShape(*submesh_shape)))
+            if cfg_submesh_offsets is not None:
+                # Explicit submesh placement. Needed when the auto-tiled split would land
+                # a submesh on physically non-adjacent rows whose 1D fabric can't train
+                # (e.g. a (2,8) parent maps to physical rows 0 & 3 on the 4x8 Galaxy, so a
+                # tiled 2x4 submesh fails the ethernet handshake). Carving explicit 2x4
+                # blocks from a 4x8 parent at verified-adjacent-row offsets trains cleanly.
+                assert cfg_submesh_shape is not None, "cfg_submesh_offsets requires cfg_submesh_shape"
+                assert len(cfg_submesh_offsets) == self.cfg_factor
+                logger.info(
+                    f"CFG parallel: carving {self.cfg_factor} submeshes of shape {tuple(cfg_submesh_shape)} "
+                    f"from mesh {tuple(mesh_device.shape)} at offsets {cfg_submesh_offsets}"
+                )
+                self.cfg_submeshes = [
+                    mesh_device.create_submesh(ttnn.MeshShape(*cfg_submesh_shape), ttnn.MeshCoordinate(*off))
+                    for off in cfg_submesh_offsets
+                ]
+            else:
+                submesh_shape = list(mesh_device.shape)
+                submesh_shape[cfg_parallel.mesh_axis] //= self.cfg_factor
+                logger.info(
+                    f"CFG parallel: splitting mesh {tuple(mesh_device.shape)} into "
+                    f"{self.cfg_factor} submeshes of shape {tuple(submesh_shape)} on axis {cfg_parallel.mesh_axis}"
+                )
+                self.cfg_submeshes = list(mesh_device.create_submeshes(ttnn.MeshShape(*submesh_shape)))
             # Build everything below on submesh 0.
             mesh_device = self.cfg_submeshes[0]
         else:
@@ -442,7 +461,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             self._solver.clear_state()
 
         seen: set[int] = set()
-        for mgr in (self.dit_ccl_manager, self.vae_ccl_manager, self.encoder_ccl_manager):
+        # Include the per-submesh CFG CCL managers (cfg_ccl_managers[1] lives on
+        # submesh 1) so their shape-keyed buffers are dropped on resolution change too.
+        for mgr in (
+            self.dit_ccl_manager,
+            self.vae_ccl_manager,
+            self.encoder_ccl_manager,
+            *(self.cfg_ccl_managers or []),
+        ):
             if mgr is None or id(mgr) in seen:
                 continue
             seen.add(id(mgr))
@@ -1070,6 +1096,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 latent_frames=latent_frames,
                 latent_height=latent_height,
                 latent_width=latent_width,
+                traced=traced,
             )
         else:
             permuted_latent_tt = None
@@ -1280,12 +1307,19 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         latent_frames,
         latent_height,
         latent_width,
+        traced=False,
     ):
-        """CFG-parallel denoising (untraced, host-side combine).
+        """CFG-parallel denoising with host-side combine.
 
         Runs the unconditional pass on submesh 0 and the conditional pass on
-        submesh 1 concurrently (one inner_step each), then combines on host:
+        submesh 1, then combines on host:
             pred = uncond + guidance_scale * (cond - uncond)
+        Each submesh runs a single forward via combined_step(do_classifier_free_
+        guidance=False). When ``traced``, each submesh's forward is captured as an
+        independent trace (keyed per transformer instance) and the two are replayed
+        non-blocking so they execute concurrently — giving ~2x the throughput of the
+        single-mesh path, which runs cond+uncond sequentially on one mesh.
+
         The combined prediction is fed to the on-device solver (submesh 0); the
         updated latent is broadcast back to both submeshes for the next step.
 
@@ -1326,60 +1360,95 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         # Latent state carried as full torch (1, B, N, I) between steps.
         latent_state = permuted_latent
 
-        with self.progress_bar(total=len(timesteps)) as progress_bar:
-            for step_i, t in enumerate(timesteps):
-                timestep = t.expand(latents.shape[0]).unsqueeze(1).unsqueeze(1).unsqueeze(1)
+        from concurrent.futures import ThreadPoolExecutor
 
-                preds_full = []
-                for j, dit in enumerate(dits):
-                    # Model spatial input is bf16 (mirrors get_model_input, which
-                    # typecasts the float32 latent down before patch_embedding; the
-                    # float32 latent is kept for the solver below).
-                    spatial_j = tensor.from_torch(
+        def _run_submesh(j, latent_state, timestep):
+            """One submesh's forward + device->host read of the full prediction.
+
+            combined_step blocks until its trace finishes (mesh execute_trace is
+            synchronous), but it releases the GIL while the device runs, so calling
+            this from two threads overlaps the two submeshes' compute. The spatial
+            input is bf16 (mirrors get_model_input's typecast); the timestep is a host
+            tensor when tracing so the tracer copies it into the trace input per step.
+            """
+            dit = dits[j]
+            spatial_j = tensor.from_torch(
+                latent_state, device=devices[j], mesh_axes=[None, None, sp_axis, None], dtype=ttnn.bfloat16
+            )
+            timestep_j = float32_tensor(timestep, device=(None if traced else devices[j]))
+            rope_cos, rope_sin, trans_mat = rope_per[j]
+            pred_j = dit.combined_step(
+                do_classifier_free_guidance=False,
+                spatial_1BNI=spatial_j,
+                prompt_1BLP=prompt_bufs[j],
+                negative_prompt_1BLP=prompt_bufs[j],  # unused when do_cfg=False
+                N=N,
+                rope_cos_1HND=rope_cos,
+                rope_sin_1HND=rope_sin,
+                trans_mat=trans_mat,
+                timestep=timestep_j,
+                guidance_scale=guidance_scale,
+                gather_output=True,  # gather SP so the host gets the full prediction
+                traced=traced,
+            )
+            return local_device_to_torch(pred_j)
+
+        def _traces_ready():
+            # True once every submesh's combined_step trace is captured. Capture (the
+            # first traced step) must run single-threaded — concurrent begin_trace_capture
+            # across submeshes is unsafe — so threaded replay only kicks in afterwards.
+            for d in dits:
+                tr = WanTransformer3DModel.combined_step._tracers.get(d)
+                if tr is None or not tr.trace_captured:
+                    return False
+            return True
+
+        executor = ThreadPoolExecutor(max_workers=self.cfg_factor)
+        try:
+            with self.progress_bar(total=len(timesteps)) as progress_bar:
+                for step_i, t in enumerate(timesteps):
+                    timestep = t.expand(latents.shape[0]).unsqueeze(1).unsqueeze(1).unsqueeze(1)
+
+                    # Run both submeshes' forwards. Thread them so the two submeshes'
+                    # device work overlaps: combined_step blocks until its trace finishes
+                    # (mesh execute_trace is effectively synchronous) but releases the GIL
+                    # while the device runs, so two threads give true device-level
+                    # concurrency (~2x). Fall back to serial during trace capture (concurrent
+                    # begin_trace_capture is unsafe) and in the untraced path.
+                    if traced and _traces_ready():
+                        preds_full = list(
+                            executor.map(lambda j: _run_submesh(j, latent_state, timestep), range(self.cfg_factor))
+                        )
+                    else:
+                        preds_full = [_run_submesh(j, latent_state, timestep) for j in range(self.cfg_factor)]
+
+                    # Classifier-free guidance combine on host.
+                    uncond, cond = preds_full[0], preds_full[1]
+                    noise_pred = uncond + guidance_scale * (cond - uncond)
+
+                    # Solver step on submesh 0 (operates on SP-fractured tensors).
+                    latent_dev0 = tensor.from_torch(
                         latent_state,
-                        device=devices[j],
+                        device=devices[0],
                         mesh_axes=[None, None, sp_axis, None],
-                        dtype=ttnn.bfloat16,
+                        dtype=dits[0].output_dtype,
                     )
-                    timestep_j = float32_tensor(timestep, device=devices[j])
-                    rope_cos, rope_sin, trans_mat = rope_per[j]
-                    pred_j = dit.inner_step(
-                        spatial_j,
-                        prompt_bufs[j],
-                        rope_cos,
-                        rope_sin,
-                        trans_mat,
-                        N,
-                        timestep_j,
-                        gather_output=True,  # gather SP so the host gets the full prediction
+                    noise_dev0 = tensor.from_torch(
+                        noise_pred,
+                        device=devices[0],
+                        mesh_axes=[None, None, sp_axis, None],
+                        dtype=dits[0].output_dtype,
                     )
-                    preds_full.append(local_device_to_torch(pred_j))
+                    new_latent_dev0 = self._solver.step(step=step_i, latent=latent_dev0, velocity_pred=noise_dev0)
 
-                # Classifier-free guidance combine on host.
-                uncond, cond = preds_full[0], preds_full[1]
-                noise_pred = uncond + guidance_scale * (cond - uncond)
-
-                # Solver step on submesh 0 (operates on SP-fractured tensors).
-                latent_dev0 = tensor.from_torch(
-                    latent_state,
-                    device=devices[0],
-                    mesh_axes=[None, None, sp_axis, None],
-                    dtype=dits[0].output_dtype,
-                )
-                noise_dev0 = tensor.from_torch(
-                    noise_pred,
-                    device=devices[0],
-                    mesh_axes=[None, None, sp_axis, None],
-                    dtype=dits[0].output_dtype,
-                )
-                new_latent_dev0 = self._solver.step(step=step_i, latent=latent_dev0, velocity_pred=noise_dev0)
-
-                # Gather to full torch so both submeshes can be re-seeded next step.
-                new_latent_dev0 = dits[0].ccl_manager.all_gather_persistent_buffer(
-                    new_latent_dev0, dim=2, mesh_axis=sp_axis
-                )
-                latent_state = local_device_to_torch(new_latent_dev0)
-                progress_bar.update()
+                    # Gather to full torch so both submeshes can be re-seeded next step.
+                    new_latent_dev0 = dits[0].ccl_manager.all_gather_persistent_buffer(
+                        new_latent_dev0, dim=2, mesh_axis=sp_axis
+                    )
+                    latent_state = local_device_to_torch(new_latent_dev0)
+                    progress_bar.update()
+        finally:
+            executor.shutdown(wait=True)
 
         self._current_timestep = None
         return dits[0].postprocess_spatial_output_host(
@@ -1393,7 +1462,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         ttnn.synchronize_device(self.mesh_device)
 
     def release_traces(self):
-        for model in (m for m in (self.transformer, self.transformer_2) if m is not None):
+        # Include the per-submesh CFG transformers (cfg_dit[1] is submesh 1's model;
+        # cfg_dit[0] == self.transformer). Each has its own combined_step tracer.
+        models = {self.transformer, self.transformer_2, *(self.cfg_dit or [])}
+        for model in (m for m in models if m is not None):
             tracer = WanTransformer3DModel.combined_step._tracers.get(model)
             if tracer is not None:
                 tracer.release_trace()

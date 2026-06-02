@@ -421,15 +421,33 @@ def test_resolution_sweep(
         _write_csv(results, perf_csv_path)
 
 
-def _build_cfg_pipeline(parent_mesh, *, cfg_axis, sp_axis, tp_axis, num_links, topology, height, width, num_frames):
+def _build_cfg_pipeline(
+    parent_mesh,
+    *,
+    cfg_axis,
+    sp_axis,
+    tp_axis,
+    num_links,
+    topology,
+    height,
+    width,
+    num_frames,
+    cfg_submesh_shape=None,
+    cfg_submesh_offsets=None,
+):
     """Build a CFG-parallel WanPipeline21 on the full parent mesh.
 
-    The parent (e.g. 4x8) is split into two submeshes along cfg_axis (-> two 4x4).
-    sp/tp factors are taken from the SUBMESH shape; cfg_parallel splits the parent.
+    By default the parent is auto-tiled along cfg_axis into two submeshes. When
+    cfg_submesh_shape/offsets are given, the two submeshes are carved explicitly at
+    those offsets instead (used for 2x4 submeshes, whose auto-tiled placement lands
+    on physically non-adjacent rows whose 1D fabric can't train).
+    sp/tp factors are taken from the SUBMESH shape.
     """
-    parent_shape = tuple(parent_mesh.shape)
-    submesh_shape = list(parent_shape)
-    submesh_shape[cfg_axis] //= 2
+    if cfg_submesh_shape is not None:
+        submesh_shape = list(cfg_submesh_shape)
+    else:
+        submesh_shape = list(tuple(parent_mesh.shape))
+        submesh_shape[cfg_axis] //= 2
     sp_factor = submesh_shape[sp_axis]
     tp_factor = submesh_shape[tp_axis]
 
@@ -463,69 +481,168 @@ def _build_cfg_pipeline(parent_mesh, *, cfg_axis, sp_axis, tp_axis, num_links, t
         vae_t_chunk_size=full_latent_T,
         num_frames=num_frames,
         run_warmup=False,
+        cfg_submesh_shape=cfg_submesh_shape,
+        cfg_submesh_offsets=cfg_submesh_offsets,
     )
-
-
-CFG_SHAPES = [(1, 768, 1024), (1, 1152, 2048)]
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params",
-    [[(4, 8), line_params]],
-    ids=["wh_4x8_cfg2"],
+    "mesh_device, cfg_axis, sp_axis, tp_axis, num_links, cfg_submesh_shape, cfg_submesh_offsets, device_params",
+    [
+        # Two 4x4 submeshes auto-tiled from a 4x8 parent (split axis 1). Submesh sp1tp0 —
+        # the CFG-parallel analogue of the wh_4x4_sp1tp0 baseline.
+        [(4, 8), 1, 1, 0, 4, None, None, traced_params_4x4],
+        # Two 2x4 submeshes carved EXPLICITLY from a 4x8 parent at rows 0-1 and rows 2-3
+        # (cols 0-3). Submesh sp0tp1 — the analogue of the wh_2x4_sp0tp1 baseline. Explicit
+        # offsets are required because auto-tiling a (2,8)/(4,4) parent lands a 2x4 submesh
+        # on physically non-adjacent rows whose 1D fabric can't complete the ethernet
+        # handshake (failed on device 19 / device 4). The 4x8 parent's rows 0-3 are
+        # adjacent (config A's 4x4 submeshes train), so these 2x4 blocks train cleanly.
+        [(4, 8), 0, 0, 1, 4, (2, 4), [(0, 0), (2, 0)], traced_params_2x4],
+    ],
+    ids=["cfg2_4x4_sp1tp0", "cfg2_2x4_sp0tp1"],
     indirect=["mesh_device", "device_params"],
 )
-def test_cfg_parallel(*, mesh_device: ttnn.MeshDevice, is_ci_env: bool, galaxy_type: str) -> None:
-    """CFG parallelism: split the 4x8 parent into two 4x4 submeshes (uncond/cond)."""
+def test_cfg_parallel(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    cfg_axis: int,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    cfg_submesh_shape: tuple | None,
+    cfg_submesh_offsets: list | None,
+    is_ci_env: bool,
+    galaxy_type: str,
+) -> None:
+    """CFG parallelism with tracing: split the parent mesh into two submeshes
+    (uncond on submesh 0, cond on submesh 1), running concurrently. The denoise
+    forward on each submesh is traced; the two traces replay from separate threads so
+    the submeshes execute in parallel — roughly halving e2e vs the single-mesh baseline
+    that runs cond+uncond sequentially. Sweeps SHAPES and writes a perf CSV that can
+    be collated against the non-CFG-parallel sweeps."""
     if galaxy_type == "4U":
         pytest.skip("4U is not supported for this test")
 
-    only = os.environ.get("WAN_SWEEP_SHAPES")
-    shapes = CFG_SHAPES
-    if only:
-        wanted = {s.strip() for s in only.split(",")}
-        shapes = [s for s in CFG_SHAPES if f"{s[0]}x{s[1]}x{s[2]}" in wanted] or CFG_SHAPES
+    if cfg_submesh_shape is not None:
+        submesh_shape = list(cfg_submesh_shape)
+    else:
+        submesh_shape = list(tuple(mesh_device.shape))
+        submesh_shape[cfg_axis] //= 2
+    sp_factor = submesh_shape[sp_axis]
+    tp_factor = submesh_shape[tp_axis]
+    run_id = f"cfg2_{'x'.join(str(d) for d in submesh_shape)}_sp{sp_factor}tp{tp_factor}"
+    perf_csv_path = Path(f"wan2_1_{run_id}_shape_sweep_perf.csv")
 
     pipeline = _build_cfg_pipeline(
         mesh_device,
-        cfg_axis=1,
-        sp_axis=1,
-        tp_axis=0,
-        num_links=4,
+        cfg_axis=cfg_axis,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
         topology=ttnn.Topology.Linear,
-        height=max(h for _, h, _ in shapes),
-        width=max(w for _, _, w in shapes),
+        height=MAX_HEIGHT,
+        width=MAX_WIDTH,
         num_frames=NUM_FRAMES,
+        cfg_submesh_shape=cfg_submesh_shape,
+        cfg_submesh_offsets=cfg_submesh_offsets,
     )
+    assert pipeline.cfg_factor == 2 and len(pipeline.cfg_dit) == 2 and len(pipeline.cfg_submeshes) == 2
+    logger.info(f"CFG-parallel pipeline constructed: two {submesh_shape} submeshes (sp{sp_factor}tp{tp_factor}).")
 
-    # Construction smoke check: two submeshes, two transformers on distinct devices.
-    assert pipeline.cfg_factor == 2
-    assert len(pipeline.cfg_dit) == 2
-    assert len(pipeline.cfg_submeshes) == 2
-    logger.info("CFG-parallel pipeline constructed: 2 submeshes, 2 transformers.")
-
-    for batch_size, height, width in shapes:
-        label = f"{batch_size}x{height}x{width}"
-        cfg_steps = int(os.environ.get("WAN_CFG_STEPS", NUM_INFERENCE_STEPS))
-        logger.info(f"=== CFG {label} ({cfg_steps} steps) ===")
-        with torch.no_grad():
-            result = pipeline(
-                prompt=[PROMPT] * batch_size,
-                height=height,
-                width=width,
-                num_frames=NUM_FRAMES,
-                num_inference_steps=cfg_steps,
-                guidance_scale=5.0,
-                seed=42,
-                output_type="uint8",
-            )
-        # NOTE: do NOT synchronize the PARENT mesh here. Once it is split into
-        # submeshes (create_submeshes), the parent and child share per-physical-device
-        # cq0 completion/event state; a synchronize/record-event on the parent waits on
-        # a device completion that never arrives -> hang. Synchronize the submeshes.
-        for sm in pipeline.cfg_submeshes or [mesh_device]:
+    # Synchronize the SUBMESHES, never the parent: once split, parent and children
+    # share per-physical-device cq0 state and a parent synchronize hangs.
+    def _sync():
+        for sm in pipeline.cfg_submeshes:
             ttnn.synchronize_device(sm)
-        logger.info(f"  CFG {label} done")
-        if not is_ci_env and int(ttnn.distributed_context_get_rank()) == 0:
-            frames = result.frames if hasattr(result, "frames") else result[0]
-            _save_output_images(frames=frames, run_id="4x8_cfg2", batch_size=batch_size, height=height, width=width)
+
+    results = {}
+    sweep_shapes = SHAPES
+    shape_filter = os.environ.get("WAN_SWEEP_SHAPES")
+    if shape_filter:
+        wanted = {s.strip() for s in shape_filter.split(",") if s.strip()}
+        sweep_shapes = [s for s in SHAPES if f"{s[0]}x{s[1]}x{s[2]}" in wanted]
+        logger.info(f"WAN_SWEEP_SHAPES set; running {len(sweep_shapes)} shape(s): {sorted(wanted)}")
+
+    steps = int(os.environ.get("WAN_CFG_STEPS", NUM_INFERENCE_STEPS))
+
+    for batch_size, height, width in sweep_shapes:
+        label = f"{batch_size}x{height}x{width}"
+        prompts = [PROMPT] * batch_size
+        logger.info(f"=== {label} ===")
+        try:
+            # Eager (non-traced) warmup: allocates persistent CCL ping-pong buffers
+            # on both submeshes (lazy host->device writes that are illegal during
+            # trace capture), so the traced warmup can capture cleanly.
+            logger.info(f"  Eager warmup {label}...")
+            with torch.no_grad():
+                pipeline(
+                    prompt=prompts,
+                    height=height,
+                    width=width,
+                    num_frames=NUM_FRAMES,
+                    num_inference_steps=2,
+                    guidance_scale=5.0,
+                    traced=False,
+                    output_type="uint8",
+                )
+            _sync()
+
+            # Traced warmup: captures each submesh's forward trace and replays it.
+            logger.info(f"  Traced warmup {label}...")
+            with torch.no_grad():
+                pipeline(
+                    prompt=prompts,
+                    height=height,
+                    width=width,
+                    num_frames=NUM_FRAMES,
+                    num_inference_steps=2,
+                    guidance_scale=5.0,
+                    traced=True,
+                    output_type="uint8",
+                )
+            _sync()
+
+            logger.info(f"  Measuring {label} ({steps} steps)...")
+            profiler = BenchmarkProfiler()
+            with profiler("run", iteration=0):
+                with torch.no_grad():
+                    result = pipeline(
+                        prompt=prompts,
+                        height=height,
+                        width=width,
+                        num_frames=NUM_FRAMES,
+                        num_inference_steps=steps,
+                        guidance_scale=5.0,
+                        profiler=profiler,
+                        profiler_iteration=0,
+                        seed=42,
+                        traced=True,
+                        output_type="uint8",
+                    )
+                _sync()
+
+            results[label] = {
+                "encoder": profiler.get_duration("encoder", 0),
+                "denoising": profiler.get_duration("denoising", 0),
+                "vae": profiler.get_duration("vae", 0),
+                "total": profiler.get_duration("run", 0),
+            }
+            logger.info(
+                f"  {label}: total={results[label]['total']:.2f}s  "
+                f"denoise={results[label]['denoising']:.2f}s  "
+                f"vae={results[label]['vae']:.2f}s"
+            )
+
+            if not is_ci_env and int(ttnn.distributed_context_get_rank()) == 0:
+                frames = result.frames if hasattr(result, "frames") else result[0]
+                _save_output_images(frames=frames, run_id=run_id, batch_size=batch_size, height=height, width=width)
+
+        except Exception as e:
+            logger.warning(f"  {label} FAILED: {e}")
+            results[label] = {"error": str(e)}
+        finally:
+            pipeline.release_traces()
+
+    _print_table(results, tuple(submesh_shape), sp_factor, tp_factor)
+    _write_csv(results, perf_csv_path)
