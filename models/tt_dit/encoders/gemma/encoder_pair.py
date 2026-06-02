@@ -34,7 +34,6 @@ from transformers import AutoTokenizer
 
 import ttnn
 
-from ...models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis, reshape_interleaved_to_bhnd
 from ...parallel.manager import CCLManager
 from ...utils import cache as cache_module
 from ...utils.mochi import get_rot_transformation_mat
@@ -104,81 +103,6 @@ def _connector_state_dict(ckpt, axis: str, num_blocks: int) -> dict:
             continue
         sd[sub] = v
     return sd
-
-
-# --- compute ----------------------------------------------------------------
-
-
-def _replace_padded_with_registers(
-    hidden_states: torch.Tensor,
-    attention_mask: torch.Tensor,
-    learnable_registers: torch.Tensor,
-    num_registers: int,
-) -> torch.Tensor:
-    """Replace padded tokens with tiled learnable registers, matching reference
-    Embeddings1DConnector._replace_padded_with_learnable_registers: real tokens are
-    left-packed, remaining positions filled with tiled registers."""
-    seq_len = hidden_states.shape[1]
-    registers = learnable_registers.repeat(seq_len // num_registers, 1)  # (seq_len, dim)
-    mask_binary = attention_mask.bool()  # (B, T): 1 = real token, 0 = padding
-
-    result = hidden_states.clone()
-    for b in range(hidden_states.shape[0]):
-        real_tokens = hidden_states[b, mask_binary[b], :]
-        padded = torch.nn.functional.pad(real_tokens, (0, 0, 0, seq_len - real_tokens.shape[0]))
-        # Flip: registers go where attention_mask was 0 (left-padded).
-        flipped_mask = torch.flip(mask_binary[b : b + 1], dims=[1]).squeeze(0).unsqueeze(-1).int()
-        result[b] = flipped_mask.float() * padded + (1 - flipped_mask.float()) * registers.to(padded)
-    return result
-
-
-def _run_connector(connector, features, attn_mask, *, mesh_device, trans_mat) -> torch.Tensor:
-    """Register replacement → on-device RoPE transformer blocks → final norm, on the
-    aggregate_embed features from the feature extractor. Returns the host conditioning."""
-    dim = connector.output_dim
-    projected = ttnn.to_torch(ttnn.get_device_tensors(features)[0])
-    ttnn.deallocate(features)
-
-    # Replace padded tokens with learnable registers (on host, matching the reference).
-    if connector.num_learnable_registers > 0:
-        registers = ttnn.to_torch(ttnn.get_device_tensors(connector.learnable_registers.data)[0])
-        projected = _replace_padded_with_registers(projected, attn_mask, registers, connector.num_learnable_registers)
-
-    # Connector RoPE on device. Checkpoint is rope_type=SPLIT, but the block's Q/K (and
-    # q_norm/k_norm) weights were permuted at load (SPLIT→INTERLEAVED), so the on-device
-    # rotary_embedding_llama interleaved kernel is equivalent. cos/sin use the same fp32 freq
-    # grid as the reference.
-    seq_len = projected.shape[1]
-    num_heads = connector.transformer_1d_blocks[0].num_heads
-    indices_grid = torch.arange(seq_len, dtype=torch.float32).reshape(1, seq_len, 1)
-    cos_freq, sin_freq = precompute_freqs_cis(
-        indices_grid,
-        dim=dim,
-        out_dtype=torch.float32,
-        theta=10000.0,
-        max_pos=[4096],
-        num_attention_heads=num_heads,
-        rope_type=LTXRopeType.INTERLEAVED,
-    )
-    cos_freq = reshape_interleaved_to_bhnd(cos_freq, num_heads)
-    sin_freq = reshape_interleaved_to_bhnd(sin_freq, num_heads)
-    # Shard the head dim on the connector's TP axis so cos/sin match the per-device local-head
-    # count rotary_embedding_llama sees (the rope is per-head-varying). TP=1 → no-op.
-    conn_tp = connector.transformer_1d_blocks[0].parallel_config.tensor_parallel
-    shard_kw = {"mesh_axis": conn_tp.mesh_axis, "shard_dim": 1} if conn_tp.factor > 1 else {}
-    rope_cos = bf16_tensor(cos_freq, device=mesh_device, **shard_kw)
-    rope_sin = bf16_tensor(sin_freq, device=mesh_device, **shard_kw)
-
-    tt_x = ttnn.from_torch(projected.bfloat16(), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    for block in connector.transformer_1d_blocks:
-        tt_x = block(tt_x, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat)
-    tt_x = ttnn.experimental.dit_rms_norm_unary_fused(
-        tt_x, weight=None, epsilon=1e-6, compute_kernel_config=connector.rmsnorm_cc
-    )
-
-    # Do NOT zero register positions: the reference replaces padding with learnable registers
-    # then masks with all-zeros, so every token carries information after the blocks.
-    return ttnn.to_torch(ttnn.get_device_tensors(tt_x)[0]).float()
 
 
 class GemmaTokenizerEncoderPair:
@@ -264,7 +188,11 @@ class GemmaTokenizerEncoderPair:
         if self.is_loaded():
             return
         self.load_gemma_encoder()
-        self.load_embeddings_connectors(connector_state or (lambda: _read_connector_checkpoint(self.checkpoint_name)))
+        self.load_embeddings_connectors(
+            connector_state
+            if connector_state is not None
+            else (lambda: _read_connector_checkpoint(self.checkpoint_name))
+        )
 
     def load_gemma_encoder(self, gemma_path: str | None = None) -> None:
         """Load the TTNN Gemma-3 encoder. Built (with its CCLManager) once and reused across
@@ -397,21 +325,9 @@ class GemmaTokenizerEncoderPair:
             for hs in all_hidden_states:
                 ttnn.deallocate(hs)
 
-            video_embeds = _run_connector(
-                self.video_connector,
-                video_feats,
-                tokens.attention_mask,
-                mesh_device=self.mesh_device,
-                trans_mat=trans_mat,
-            )
+            video_embeds = self.video_connector(video_feats, tokens.attention_mask, trans_mat=trans_mat)
             audio_embeds = (
-                _run_connector(
-                    self.audio_connector,
-                    audio_feats,
-                    tokens.attention_mask,
-                    mesh_device=self.mesh_device,
-                    trans_mat=trans_mat,
-                )
+                self.audio_connector(audio_feats, tokens.attention_mask, trans_mat=trans_mat)
                 if self.audio_connector is not None
                 else None
             )

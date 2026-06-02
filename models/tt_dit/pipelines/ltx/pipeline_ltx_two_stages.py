@@ -8,8 +8,9 @@ Mirrors the reference ``ltx_pipelines.ti2vid_two_stages.TI2VidTwoStagesPipeline`
 - **Stage 1**: half-res AV denoise on the base 22B checkpoint with full
   ``MultiModalGuider`` guidance (CFG + STG + AV-modality).
 - **Spatial upsample**: stage-1 latent is x2-upsampled on-device via the
-  ``LTXLatentUpsampler`` (eagerly constructed and coresident-excluded with the
-  transformer and VAE — see ``LTXPipeline._register_coresident_exclusions``).
+  ``LTXLatentUpsampler`` (eagerly constructed; it stays resident alongside the
+  transformer and is coresident-excluded only against the VAE — see
+  ``LTXPipeline._register_coresident_exclusions``).
 - **Stage 2**: full-res AV refine with the distilled LoRA fused into the
   transformer and no guidance (``SimpleDenoiser`` equivalent), starting from
   the upsampled video latent + stage-1 audio latent renoised at

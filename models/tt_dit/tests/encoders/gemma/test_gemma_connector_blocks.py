@@ -24,7 +24,7 @@ from loguru import logger
 from safetensors import safe_open
 
 import ttnn
-from models.tt_dit.encoders.gemma.encoder_pair import _replace_padded_with_registers
+from models.tt_dit.encoders.gemma.embeddings_connector import _replace_padded_with_registers
 from models.tt_dit.models.transformers.ltx.rope_ltx import reshape_interleaved_to_bhnd
 from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
 from models.tt_dit.utils.check import assert_quality

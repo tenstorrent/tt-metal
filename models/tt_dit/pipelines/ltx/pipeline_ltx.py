@@ -911,8 +911,8 @@ class LTXPipeline:
         # (shape-driven) call_av kernels, not real prompt content. This avoids loading
         # the encoder here, which would coresident-evict the DiT; the encoder kernels
         # compile on the first generate().
-        v_p = torch.zeros(1, self._gemma_sequence_length, self._video_embed_dim)
-        a_p = torch.zeros(1, self._gemma_sequence_length, self._audio_embed_dim)
+        v_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.video_dim)
+        a_p = torch.zeros(1, self.gemma_encoder_pair.sequence_length, self.gemma_encoder_pair.audio_dim)
         v_n, a_n = v_p, a_p
 
         self.call_av(
