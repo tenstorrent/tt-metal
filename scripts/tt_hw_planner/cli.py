@@ -8765,8 +8765,38 @@ def _cmd_up_core(args) -> int:
         if exc.code not in (0, None):
             return int(exc.code) if exc.code is not None else 2
     except Exception as exc:
-        print(f"  scaffold failed: {exc}", file=sys.stderr)
-        return 2
+        # Try the layered setup-step recovery before bailing. Rules
+        # catch known shapes (mkdir-missing-parent, etc.); LLM
+        # fallback handles novel ones via an allowlist of actions.
+        # If a recovery applies cleanly, retry scaffold once. Same
+        # re-entry guard as env-fix prevents loops.
+        from ._cli_helpers.setup_step_recovery import (
+            RecoveryAction as _RA,
+            run_setup_step_recovery as _run_setup_recovery,
+        )
+
+        _proposal = _run_setup_recovery(
+            exc=exc,
+            step_name="step2_scaffold",
+            work_dir=Path.cwd(),
+            repo_root=BRINGUP_ROOT(),
+            workspace_summary=f"model_id={MODEL!r} new_demo_dir candidate path",
+        )
+        if _proposal is not None and _proposal.action != _RA.CANNOT_RECOVER:
+            print(f"  scaffold recovery: {_proposal.label()} → retrying scaffold once")
+            try:
+                rc = cmd_scaffold(scaffold_argv)
+                if rc in (0, None):
+                    pass  # recovered; fall through to next step
+                else:
+                    print(f"  scaffold STILL returned non-zero after recovery ({rc}); aborting.", file=sys.stderr)
+                    return 2
+            except Exception as retry_exc:
+                print(f"  scaffold retry failed: {retry_exc}", file=sys.stderr)
+                return 2
+        else:
+            print(f"  scaffold failed: {exc}", file=sys.stderr)
+            return 2
 
     banner(f"Step 3/6  LLM gate — does this model need an LLM to finish bring-up?")
     counts, _rows = _summarize_bringup_status(MODEL)
@@ -8991,8 +9021,42 @@ def _cmd_up_core(args) -> int:
             )
             return rc
     except Exception as exc:
-        print(f"  autofill failed: {exc} — aborting.", file=sys.stderr)
-        return 2
+        # Layered setup-step recovery (rule registry → LLM allowlist
+        # fallback). Same shape as the scaffold-step wiring above.
+        # Rules catch the recurring shapes we've already seen
+        # (AutoModel cascade for trust_remote_code Phi3 configs,
+        # mkdir-missing-parent on fresh demo dirs). LLM handles
+        # novel ones via the action allowlist.
+        from ._cli_helpers.setup_step_recovery import (
+            RecoveryAction as _RA,
+            run_setup_step_recovery as _run_setup_recovery,
+        )
+
+        _proposal = _run_setup_recovery(
+            exc=exc,
+            step_name="step4_autofill",
+            work_dir=Path.cwd(),
+            repo_root=BRINGUP_ROOT(),
+            workspace_summary=(
+                f"model_id={MODEL!r} op_synth={_op_synth_effective} " f"force_fallback={force_fallback}"
+            ),
+        )
+        if _proposal is not None and _proposal.action != _RA.CANNOT_RECOVER:
+            print(f"  autofill recovery: {_proposal.label()} → retrying autofill once")
+            try:
+                rc = _cmd_bringup_per_component(autofill_argv)
+                if rc not in (0, None):
+                    print(
+                        f"  autofill STILL returned non-zero after recovery ({rc}); " f"aborting.",
+                        file=sys.stderr,
+                    )
+                    return rc
+            except Exception as retry_exc:
+                print(f"  autofill retry failed: {retry_exc} — aborting.", file=sys.stderr)
+                return 2
+        else:
+            print(f"  autofill failed: {exc} — aborting.", file=sys.stderr)
+            return 2
 
     banner(f"Step 5/6  Build the runnable pytest invocation (prepare)")
     auto_on = getattr(args, "auto", False)
