@@ -28,7 +28,7 @@ inline void Noc::async_write_zeros(
         // size-vs-page-size discipline at the host program-factory level.
         ASSERT(scratch.get_entry_size() >= max_chunk);
     }
-    uint32_t src_addr = get_dst_ptr<AddressType::LOCAL_L1>(scratch, dst_args_t<Scratch>{});
+    uint32_t src_addr = get_src_ptr<AddressType::LOCAL_L1>(scratch, src_args_t<Scratch>{});
     uint64_t dst = accessor.get_noc_addr(args.page_id, args.offset_bytes, noc_id_);
     uint32_t remaining = size_bytes;
     while (remaining > 0) {
