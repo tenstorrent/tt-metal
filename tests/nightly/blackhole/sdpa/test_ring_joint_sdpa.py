@@ -1252,7 +1252,7 @@ def run_ring_joint_sdpa_kv_pad_rotation_case(
     new_actual_isl,
     seed,
     chunk_size_local=64,
-    pcc_threshold=0.97,
+    pcc_threshold=CHUNKED_PREFILL_PCC_THRESHOLD,
     rmse_threshold=DEFAULT_RMSE_THRESHOLD,
 ):
     sp_size = mesh_config.sp_size
