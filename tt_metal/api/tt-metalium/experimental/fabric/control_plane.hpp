@@ -10,6 +10,7 @@
 // get_physical_chip_id_from_eth_coord(). No tt-metalium equivalent exists yet.
 #include <tt_stl/span.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -28,9 +29,9 @@ class Cluster;
 struct EthCoord;
 
 namespace umd {
-    class Cluster;
-    class ClusterDescriptor;
-}
+class Cluster;
+class ClusterDescriptor;
+}  // namespace umd
 
 namespace llrt {
 class RunTimeOptions;
@@ -47,8 +48,6 @@ class PhysicalSystemDescriptor;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_fabric {
-
-class TopologyMapper;
 
 // TODO: remove this once UMD provides API for UBB ID and bus ID
 struct UbbId {

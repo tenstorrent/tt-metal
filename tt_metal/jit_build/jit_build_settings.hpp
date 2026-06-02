@@ -6,12 +6,36 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace tt::tt_metal {
+
+// Dispatch type for named runtime args: determines which device-side accessor to use.
+enum class RuntimeArgDispatch : uint8_t {
+    COMMON,   // get_common_arg_val (shared across all cores)
+    PER_CORE  // get_arg_val (unique per core)
+};
+
+// Entry in the named runtime arg namespace map.
+// length == 1: emits constexpr Arg (scalar).
+// length > 1:  emits constexpr ArrayArg (array of contiguous slots).
+struct NamedRuntimeArgEntry {
+    std::string field;
+    uint32_t index;
+    uint32_t length = 1;
+    RuntimeArgDispatch dispatch;
+};
+
+// Namespace → [entries] map for named runtime arg header generation.
+using NamedRuntimeArgNamespaces = std::map<std::string, std::vector<NamedRuntimeArgEntry>>;
+
+// Namespace → [(field, value)] map for named compile-time arg header generation.
+using NamedCTArgNamespaces = std::map<std::string, std::vector<std::pair<std::string, uint32_t>>>;
 
 // Metal 2.0: precomputed layout of a kernel's common runtime args (CRTA) buffer.
 //
@@ -96,6 +120,11 @@ public:
         static const std::vector<std::string> k_empty;
         return k_empty;
     }
+
+    // Called to process named runtime arg namespaces for generated header (rt:: namespace)
+    virtual void process_named_runtime_args(std::function<void(const NamedRuntimeArgNamespaces&)>) const = 0;
+    // Called to process named compile-time arg namespaces for generated header (ct:: namespace)
+    virtual void process_named_ct_arg_namespaces(std::function<void(const NamedCTArgNamespaces&)>) const = 0;
 
     // Metal 2.0: full CRTA buffer layout, precomputed at spec resolution time.
     // Default is the all-zero layout (no named CRTAs, no bindings, varargs start at offset 0),

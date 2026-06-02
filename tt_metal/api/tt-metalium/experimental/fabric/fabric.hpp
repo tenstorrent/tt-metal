@@ -75,6 +75,22 @@ enum class FabricApiType : uint8_t {
     Mesh = 1,
 };
 
+// Query the kernel defines required by the current fabric configuration and API type.
+// Pure query — no PD mutation, no side effects. Safe to call before kernel compilation.
+// Returns defines like {("FABRIC_2D", "1"), ("API_TYPE_Linear", "1")}.
+std::vector<std::pair<std::string, std::string>> get_fabric_kernel_defines(
+    FabricApiType api_type = FabricApiType::Linear);
+
+// Compute fabric connection RT args without any PD mutation.
+// Pure computation — resolves routing + assembles RT args using caller-provided semaphore IDs.
+// Returns flat vector matching RoutingPlaneConnectionManager::build_from_args() layout.
+std::vector<uint32_t> compute_fabric_connection_rt_args(
+    const FabricNodeId& src_fabric_node_id,
+    const std::vector<FabricNodeId>& dst_nodes,
+    const std::vector<uint32_t>& connection_link_indices,
+    const std::vector<uint32_t>& teardown_sem_ids,
+    const std::vector<uint32_t>& buffer_index_sem_ids);
+
 std::vector<eth_chan_directions> get_neighbor_eth_directions(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
 
@@ -108,6 +124,21 @@ uint32_t append_routing_plane_connection_manager_rt_args(
     FabricApiType api_type = FabricApiType::Linear,
     CoreType core_type = CoreType::WORKER);
 
+// Like append_routing_plane_connection_manager_rt_args but does NOT inject kernel defines.
+// Use with get_fabric_kernel_defines() when defines must be set before kernel compilation
+// (e.g., blaze eager-compile model). Allocates semaphores and computes RT args only.
+template <typename ProgramOrDescriptor>
+void append_routing_plane_connection_rt_args_no_defines(
+    const FabricNodeId& src_fabric_node_id,
+    const std::vector<FabricNodeId>& dst_nodes,
+    const std::vector<uint32_t>& connection_link_indices,
+    ProgramOrDescriptor& worker_program_or_desc,
+    tt::tt_metal::KernelHandle& kernel_id,
+    const CoreCoord& worker_core,
+    std::vector<uint32_t>& worker_args,
+    FabricApiType api_type = FabricApiType::Linear,
+    CoreType core_type = CoreType::WORKER);
+
 // returns which links on a given src chip are available for forwarding the data to a dst chip
 // these link indices can then be used to establish connection with the fabric routers
 std::vector<uint32_t> get_forwarding_link_indices(
@@ -119,6 +150,11 @@ std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
     FabricNodeId fabric_node_id, RoutingDirection routing_direction);
 
 std::unordered_map<MeshId, tt::tt_metal::distributed::MeshShape> get_physical_mesh_shapes();
+
+// Returns all compute mesh ids known to the current mesh graph descriptor, including
+// peer meshes that are not visible via get_user_physical_mesh_ids() (which only
+// returns the local rank's meshes). Intended for inter-mesh topology discovery.
+std::vector<MeshId> get_all_fabric_mesh_ids();
 
 tt::tt_fabric::Topology get_fabric_topology();
 

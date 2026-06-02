@@ -190,6 +190,20 @@ class UnifiedKernelDescriptor:
     ncrisc_common_runtime_args: list = field(default_factory=list)
     brisc_common_runtime_args: list = field(default_factory=list)
     trisc_common_runtime_args: list = field(default_factory=list)
+    ncrisc_named_common_runtime_args: list = field(default_factory=list)  # List of (name, value) tuples
+    brisc_named_common_runtime_args: list = field(default_factory=list)
+    trisc_named_common_runtime_args: list = field(default_factory=list)
+    ncrisc_named_per_core_runtime_args: list = field(default_factory=list)  # List of (name, {CoreCoord: value})
+    brisc_named_per_core_runtime_args: list = field(default_factory=list)
+    trisc_named_per_core_runtime_args: list = field(default_factory=list)
+    # Array variants: (name, [val0, val1, ...]) — N contiguous common RT arg slots
+    ncrisc_named_common_runtime_arg_arrays: list = field(default_factory=list)
+    brisc_named_common_runtime_arg_arrays: list = field(default_factory=list)
+    trisc_named_common_runtime_arg_arrays: list = field(default_factory=list)
+    # Per-core array variants: (name, {CoreCoord: [val0, val1, ...]}) — N contiguous per-core RT arg slots
+    ncrisc_named_per_core_runtime_arg_arrays: list = field(default_factory=list)
+    brisc_named_per_core_runtime_arg_arrays: list = field(default_factory=list)
+    trisc_named_per_core_runtime_arg_arrays: list = field(default_factory=list)
     trisc_compute_config: Optional[ttnn.ComputeConfigDescriptor] = None
     unified_compile_time_core_descriptors: list = field(default_factory=list)
     per_core_compile_time_descriptors: list = field(default_factory=list)  # List of PerCoreCompileTimeDescriptor
@@ -296,6 +310,10 @@ class UnifiedKernelDescriptor:
             named_compile_time_args=self.ncrisc_named_compile_time_args,
             defines=self.defines,
             common_runtime_args=self.ncrisc_common_runtime_args,
+            named_common_runtime_args=self.ncrisc_named_common_runtime_args,
+            named_per_core_runtime_args=self.ncrisc_named_per_core_runtime_args,
+            named_common_runtime_arg_arrays=self.ncrisc_named_common_runtime_arg_arrays,
+            named_per_core_runtime_arg_arrays=self.ncrisc_named_per_core_runtime_arg_arrays,
             runtime_args=ncrisc_runtime_args,
             config=ttnn.DataMovementConfigDescriptor(
                 processor=ttnn.DataMovementProcessor.RISCV_1,
@@ -313,6 +331,10 @@ class UnifiedKernelDescriptor:
             named_compile_time_args=self.brisc_named_compile_time_args,
             defines=self.defines,
             common_runtime_args=self.brisc_common_runtime_args,
+            named_common_runtime_args=self.brisc_named_common_runtime_args,
+            named_per_core_runtime_args=self.brisc_named_per_core_runtime_args,
+            named_common_runtime_arg_arrays=self.brisc_named_common_runtime_arg_arrays,
+            named_per_core_runtime_arg_arrays=self.brisc_named_per_core_runtime_arg_arrays,
             runtime_args=brisc_runtime_args,
             config=ttnn.DataMovementConfigDescriptor(
                 processor=ttnn.DataMovementProcessor.RISCV_0,
@@ -331,6 +353,10 @@ class UnifiedKernelDescriptor:
             named_compile_time_args=self.trisc_named_compile_time_args,
             defines=self.defines,
             common_runtime_args=self.trisc_common_runtime_args,
+            named_common_runtime_args=self.trisc_named_common_runtime_args,
+            named_per_core_runtime_args=self.trisc_named_per_core_runtime_args,
+            named_common_runtime_arg_arrays=self.trisc_named_common_runtime_arg_arrays,
+            named_per_core_runtime_arg_arrays=self.trisc_named_per_core_runtime_arg_arrays,
             runtime_args=trisc_runtime_args,
             config=compute_config,
         )
@@ -475,6 +501,10 @@ class UnifiedKernelDescriptor:
                     named_compile_time_args=ncrisc_named_compile_time_args_merged,
                     defines=self.defines,
                     common_runtime_args=self.ncrisc_common_runtime_args,
+                    named_common_runtime_args=self.ncrisc_named_common_runtime_args,
+                    named_per_core_runtime_args=self.ncrisc_named_per_core_runtime_args,
+                    named_common_runtime_arg_arrays=self.ncrisc_named_common_runtime_arg_arrays,
+                    named_per_core_runtime_arg_arrays=self.ncrisc_named_per_core_runtime_arg_arrays,
                     runtime_args=ncrisc_runtime_args,
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=ttnn.DataMovementProcessor.RISCV_1,
@@ -494,6 +524,10 @@ class UnifiedKernelDescriptor:
                     named_compile_time_args=brisc_named_compile_time_args_merged,
                     defines=self.defines,
                     common_runtime_args=self.brisc_common_runtime_args,
+                    named_common_runtime_args=self.brisc_named_common_runtime_args,
+                    named_per_core_runtime_args=self.brisc_named_per_core_runtime_args,
+                    named_common_runtime_arg_arrays=self.brisc_named_common_runtime_arg_arrays,
+                    named_per_core_runtime_arg_arrays=self.brisc_named_per_core_runtime_arg_arrays,
                     runtime_args=brisc_runtime_args,
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=ttnn.DataMovementProcessor.RISCV_0,
@@ -513,6 +547,10 @@ class UnifiedKernelDescriptor:
                     named_compile_time_args=trisc_named_compile_time_args_merged,
                     defines=self.defines,
                     common_runtime_args=self.trisc_common_runtime_args,
+                    named_common_runtime_args=self.trisc_named_common_runtime_args,
+                    named_per_core_runtime_args=self.trisc_named_per_core_runtime_args,
+                    named_common_runtime_arg_arrays=self.trisc_named_common_runtime_arg_arrays,
+                    named_per_core_runtime_arg_arrays=self.trisc_named_per_core_runtime_arg_arrays,
                     runtime_args=trisc_runtime_args,
                     config=compute_config,
                 )

@@ -171,6 +171,22 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
     return *((tt_l1_ptr T*)(get_common_arg_addr(arg_idx)));
 }
 
+#include "api/rt_arg.h"
+
+// Unified accessor for named runtime args (works for both Arg and ArrayArg).
+// Scalar:  uint32_t n = rt_args::get<rt_args::my_op::num_tiles>();
+// Array:   uint32_t a = rt_args::get<rt_args::my_op::worker_sem_addr>(i);
+namespace rt_args {
+template <auto arg, typename T = uint32_t>
+FORCE_INLINE T get(uint32_t i = 0) {
+    if constexpr (arg.dispatch == Dispatch::COMMON) {
+        return get_common_arg_val<T>(arg.index + i);
+    } else {
+        return get_arg_val<T>(arg.index + i);
+    }
+}
+}  // namespace rt_args
+
 // clang-format off
 /**
  * Pushes a given number of tiles in the back of the specified CB’s queue.

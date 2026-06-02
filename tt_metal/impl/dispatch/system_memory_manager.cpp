@@ -732,7 +732,6 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     // Handler for the timeout
     auto on_timeout = [this, &exit_condition]() {
         exit_condition.store(true);
-
         tt::tt_metal::MetalContext::instance(this->context_id).on_dispatch_timeout_detected();
 
         TT_THROW("TIMEOUT: device timeout, potential hang detected, the device is unrecoverable");
