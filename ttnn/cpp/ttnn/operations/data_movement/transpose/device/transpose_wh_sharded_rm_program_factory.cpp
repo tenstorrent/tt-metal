@@ -21,7 +21,6 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedRMProgramFactory::create_descr
     const auto& input_tensor = tensor_args.input;
 
     TT_ASSERT(input_tensor.storage_type() == StorageType::DEVICE, "Operand to transpose_wh needs to be on device!");
-    TT_ASSERT(input_tensor.buffer() != nullptr, "Operand to transpose_wh needs to be allocated in a buffer on device!");
 
     ProgramDescriptor desc;
 
@@ -96,7 +95,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedRMProgramFactory::create_descr
             .data_format = src0_cb_data_format,
             .page_size = stick_size_bytes,
         }}},
-        .buffer = input_tensor.buffer(),
+        .tensor = &input_tensor.mesh_tensor(),
     });
 
     // sharded cb (output): .buffer triggers UpdateDynamicCircularBufferAddress on cache hit.
@@ -109,7 +108,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedRMProgramFactory::create_descr
             .data_format = dst_cb_data_format,
             .page_size = output_page_size,
         }}},
-        .buffer = output_tensor.buffer(),
+        .tensor = &output_tensor.mesh_tensor(),
     });
 
     // cb_in (double-buffered intermediate)
