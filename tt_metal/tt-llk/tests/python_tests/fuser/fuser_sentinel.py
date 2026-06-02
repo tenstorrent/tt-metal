@@ -43,6 +43,19 @@ class FuserSentinel:
     golden_math_format: Optional[DataFormat] = field(default=None, repr=False)
     golden_pack_src: Optional[DataFormat] = field(default=None, repr=False)
 
+    def reset_unpack_formats(self):
+        self._unpack_A_src = None
+        self._unpack_A_dst = None
+        self._unpack_B_src = None
+        self._unpack_B_dst = None
+
+    def reset_math_format(self):
+        self._math_format = None
+
+    def reset_pack_formats(self):
+        self._pack_src = None
+        self._pack_dst = None
+
     @staticmethod
     def _find_format_node(
         operation: "FusedOperation",
@@ -77,7 +90,7 @@ class FuserSentinel:
         self,
         config: "GlobalConfig",
         compute_node: "ComputeNode",
-        output_format: DataFormat = DataFormat.Float16_b,
+        output_format: DataFormat,
     ) -> Tuple[DataFormat, DataFormat, DataFormat, DataFormat, DataFormat, DataFormat]:
         """Infer all pipeline formats from a compute node's operands.
 
@@ -122,7 +135,7 @@ class FuserSentinel:
     def _infer_output_formats(
         self,
         config: "GlobalConfig",
-        output_format: DataFormat = DataFormat.Float16_b,
+        output_format: DataFormat,
     ) -> Tuple[DataFormat, DataFormat, DataFormat, DataFormat, DataFormat, DataFormat]:
         """Infer formats for SFPU only operations that have no input operands.
 
@@ -227,8 +240,9 @@ class FuserSentinel:
         if self._unpack_A_src is not None:
             return ""
 
+        output_format = operation.math.pack_nodes[0].output.data_format
         unpack_A_src, unpack_A_dst, unpack_B_src, unpack_B_dst, _, _ = (
-            self._infer_node_formats(config, compute_node)
+            self._infer_node_formats(config, compute_node, output_format)
         )
 
         self._unpack_A_src = unpack_A_src
@@ -272,8 +286,9 @@ class FuserSentinel:
         the node's inferred formats against the currently configured state and emits
         _llk_unpack_reconfig_data_format_src{a,b}_impl_ only for channels that changed.
         """
+        output_format = operation.math.pack_nodes[0].output.data_format
         new_A_src, new_A_dst, new_B_src, new_B_dst, _, _ = self._infer_node_formats(
-            config, compute_node
+            config, compute_node, output_format
         )
 
         srca_changed = (
@@ -328,11 +343,14 @@ class FuserSentinel:
         if self._math_format is not None:
             return ""
 
+        output_format = operation.math.pack_nodes[0].output.data_format
         compute_node = self._find_format_node(operation)
         if compute_node is not None:
-            _, _, _, _, math_fmt, _ = self._infer_node_formats(config, compute_node)
+            _, _, _, _, math_fmt, _ = self._infer_node_formats(
+                config, compute_node, output_format
+            )
         else:
-            _, _, _, _, math_fmt, _ = self._infer_output_formats(config)
+            _, _, _, _, math_fmt, _ = self._infer_output_formats(config, output_format)
 
         self._math_format = math_fmt
 
@@ -356,7 +374,10 @@ class FuserSentinel:
         if compute_node.src_a is None:
             return ""
 
-        _, _, _, _, new_math, _ = self._infer_node_formats(config, compute_node)
+        output_format = operation.math.pack_nodes[0].output.data_format
+        _, _, _, _, new_math, _ = self._infer_node_formats(
+            config, compute_node, output_format
+        )
 
         if self._math_format == new_math:
             return ""

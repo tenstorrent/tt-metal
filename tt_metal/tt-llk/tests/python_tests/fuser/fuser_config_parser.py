@@ -12,6 +12,7 @@ import yaml
 from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation
+from helpers.logger import logger
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -132,6 +133,16 @@ class FuserConfigSchema(BaseModel):
                         raise ValueError(
                             f"Dest Accumulation must be enabled for {input_fmt.name} input and {output_fmt.name} output"
                         )
+
+            if len(op.pack) > 1:
+                pack_formats = [formats[e.output] for e in op.pack]
+                first_exp_b = pack_formats[0].is_exponent_B()
+                if any(f.is_exponent_B() != first_exp_b for f in pack_formats[1:]):
+                    names = [e.output for e in op.pack]
+                    logger.warning(
+                        f"Pack outputs {names} have mixed exponent families, "
+                        f"unpack/math format inference will use {op.pack[0].output} as reference",
+                    )
 
         return self
 

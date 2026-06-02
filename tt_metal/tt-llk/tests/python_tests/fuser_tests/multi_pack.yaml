@@ -9,7 +9,7 @@ operands:
     format: "Float16_b"
   - name: "out_plain"
     dims: [64, 64]
-    format: "Float16_b"
+    format: "Float16"
   - name: "out_relu"
     dims: [64, 64]
     format: "Float32"

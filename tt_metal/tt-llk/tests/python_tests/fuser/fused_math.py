@@ -398,8 +398,7 @@ class ComputePipeline:
         def batch_body(block: BlockData):
             body = self._packer_wait_for_math(config)
             if not hoist_reconfig:
-                config.sentinel._pack_src = None
-                config.sentinel._pack_dst = None
+                config.sentinel.reset_pack_formats()
             for pack_node in self.pack_nodes:
                 if not hoist_reconfig:
                     body += pack_node.reconfig(operation, config)
