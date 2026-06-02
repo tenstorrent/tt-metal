@@ -763,7 +763,7 @@ def get_shared_expert_to_device_map(routed_experts, devices, mode):
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
             "fabric_router_config": create_fabric_router_config(max_payload_size=4352),
             "trace_region_size": 500000,
         },
@@ -834,7 +834,7 @@ def test_correctness(mesh_device, mesh_shape, cluster_axis, routed_experts_per_d
         dtype=dtype,
         cluster_axis=cluster_axis,
         worker_mode=worker_mode,
-        dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
+        dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_LINEAR,
         use_persistent_mode=use_persistent_mode,
         shared_expert_ids_to_devices=shared_expert_ids_to_devices,
     )
