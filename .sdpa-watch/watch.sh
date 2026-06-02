@@ -21,6 +21,8 @@ log() { echo "[$(ts)] $*" >&2; }
 
 # Extract failure markers from a failed run's job logs. Outputs a single
 # multi-job blob suitable for inclusion in the agent prompt.
+# Reads $job_pattern from caller's scope: if non-empty, only failed jobs
+# whose .name matches (grep -E -i) the pattern have their logs fetched.
 fetch_failure_logs() {
   local rid="$1"
   local failed_jobs combined jid jname jlog_full jlog
@@ -29,6 +31,18 @@ fetch_failure_logs() {
   if [[ -z "$failed_jobs" ]]; then
     printf '(no failed jobs reported)'
     return
+  fi
+  if [[ -n "${job_pattern:-}" ]]; then
+    local before_count after_count
+    before_count=$(printf '%s\n' "$failed_jobs" | grep -c .)
+    failed_jobs=$(printf '%s\n' "$failed_jobs" | grep -E -i "$job_pattern" || true)
+    after_count=$(printf '%s\n' "$failed_jobs" | grep -c .)
+    log "  job filter '$job_pattern': $after_count/$before_count failed jobs in scope"
+    if [[ -z "$failed_jobs" ]]; then
+      printf '(no in-scope failed jobs — %d failed jobs filtered out by pattern /%s/)' \
+             "$before_count" "$job_pattern"
+      return
+    fi
   fi
   combined=""
   while IFS=$'\t' read -r jid jname; do
@@ -120,7 +134,7 @@ git -C "$TT_METAL_DIR" fetch --quiet origin "$BRANCH" 2>/dev/null \
 blocks=()
 
 for entry in "${PIPELINES[@]}"; do
-  IFS='|' read -r workflow display test_hint <<<"$entry"
+  IFS='|' read -r workflow display test_hint job_pattern <<<"$entry"
   log "checking: $workflow ($display)"
 
   # Latest run on $BRANCH (any status). We deliberately do NOT pass
