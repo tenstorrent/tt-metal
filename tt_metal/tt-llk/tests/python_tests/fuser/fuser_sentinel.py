@@ -409,10 +409,8 @@ class FuserSentinel:
                 f");\n"
             )
 
-        last = pack_nodes[-1]
-        last_src, last_dst = self._resolve_pack_formats(config, operation, last)
-        self._pack_src = last_src
-        self._pack_dst = last_dst
+        self._pack_src = pack_src
+        self._pack_dst = pack_dst
 
         return code
 
