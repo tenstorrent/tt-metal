@@ -44,14 +44,10 @@ One-time warmup (compile every device program, incl. the encoder): ~176s.
 | Loud Box (2×4) | WH | 2 | 4 | ~795s | ~20–29s | 4 guidance passes/step; host sync overhead |
 | Galaxy (4×8) | BH | 8 | 4 | ~843s | ~28s | Ring topology, `FABRIC_1D_RING` |
 
-On-device Gemma encoding has landed (TP=4 on 2×4 by default; ~16× over the prior host path).
+On-device Gemma encoding (TP=4 on 2×4 by default), with embeddings disk-cached.
 Remaining performance work:
-- device-resident denoise loop (latents, Euler step, CFG on device)
 - batched/fused MultiModalGuider passes
 - tuned matmul and SDPA blocking
-- Conv3D blocking sweep for VAE decode
-
-See `models/tt_dit/models/transformers/ltx/BRINGUP.md` for bringup history, correctness decisions, and optimization backlog.
 
 ## Prerequisites
 

@@ -3,15 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Diagnostic: per-layer comparison of the TTNN GemmaEncoder vs HF reference.
+Per-layer parity: TTNN GemmaEncoder vs HF reference (mirrors test_t5_encoder_all_layers).
 
-Reproduces the "explodes after layer 1" symptom and localizes it: for each of
-the first N layers we report NaN count, max-abs magnitude, and PCC over the real
-(non-pad) token positions, for both the masked (left-pad causal+pad) and the
-unmasked (pure causal) attention paths.
+For each of the first ``N_LAYERS`` decoder layers, compares the device hidden state
+to the HF reference over the real (non-pad) token positions and asserts PCC. Bounded
+to ``N_LAYERS`` because the full 12B encoder does not fit one chip at tp=1; raise
+``N_LAYERS`` (env) or run on a TP mesh to cover more.
 
-Run on a single Blackhole chip (1x1 mesh, tp=1, no CCL):
-    pytest models/tt_dit/tests/encoders/gemma/test_gemma_device_diag.py -s
+    pytest models/tt_dit/tests/encoders/gemma/test_gemma_encoder_all_layers.py -s
 """
 
 import glob
@@ -32,12 +31,15 @@ import ttnn
 from models.tt_dit.encoders.gemma.model_gemma import GemmaConfig, GemmaEncoder
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.utils.check import assert_quality
 
 N_LAYERS = int(os.environ.get("N_LAYERS", "6"))
 SEQ_LEN = 128  # must be >= SDPA q/k chunk size (128) in model_gemma to avoid a device hang
-# Long enough to fill all SEQ_LEN slots with REAL tokens (no padding). With no
-# padding the attention mask is all-ones, so the reference runs pure-causal and the
-# device is_causal path matches exactly — clean per-layer numerics, no mask confound.
+# Per-layer parity floor. Mirrors the T5 all-layers bar (0.947); bf16 over depth drifts,
+# so this is the floor each layer's real-token PCC must clear, not a tight equality bar.
+PCC_BAR = 0.94
+# Long enough to fill all SEQ_LEN slots with real tokens (no padding), so the reference
+# runs pure-causal and the device is_causal path matches exactly — no mask confound.
 PROMPT = (
     "A plump orange tabby cat sits on a worn piano bench in a sunlit living room, "
     "carefully playing the keys with its soft paws while dust motes drift through "
@@ -66,25 +68,9 @@ def _gemma_path() -> str:
     return "google/gemma-3-12b-it-qat-q4_0-unquantized"
 
 
-def pcc(a, b):
-    a_f, b_f = a.flatten().float(), b.flatten().float()
-    a_m, b_m = a_f - a_f.mean(), b_f - b_f.mean()
-    d = (a_m.pow(2).sum() * b_m.pow(2).sum()).sqrt()
-    return ((a_m * b_m).sum() / d).item() if d > 0 else 0.0
-
-
-def _stats(name, t):
-    t = t.float()
-    n_nan = int(torch.isnan(t).sum().item())
-    n_inf = int(torch.isinf(t).sum().item())
-    finite = t[torch.isfinite(t)]
-    mx = finite.abs().max().item() if finite.numel() else float("nan")
-    return f"{name}: nan={n_nan} inf={n_inf} max|x|={mx:.3e}"
-
-
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=["mesh_device"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=["device_params"])
-def test_gemma_device_per_layer(*, mesh_device):
+def test_gemma_layers_individually(*, mesh_device):
     gemma_path = _gemma_path()
     if not os.path.isdir(gemma_path):
         pytest.skip(f"Gemma not found: {gemma_path}")
@@ -97,34 +83,27 @@ def test_gemma_device_per_layer(*, mesh_device):
     logger.info(f"tokens {tuple(tokens.input_ids.shape)}, real={n_real} (left-pad)")
 
     # --- HF reference hidden states (first N_LAYERS only, for speed) ---
-    skip_ref = os.environ.get("SKIP_REF") == "1"
-    ref_hs = None
-    if skip_ref:
-        logger.info("SKIP_REF=1 — device-only run, no PCC comparison")
-    else:
-        ref_model = AutoModelForCausalLM.from_pretrained(gemma_path, torch_dtype=torch.bfloat16).eval()
-        # Truncate the decoder stack to N_LAYERS so the CPU forward is ~8x cheaper.
-        lm = ref_model
-        for attr in ("model", "language_model", "layers"):
-            if hasattr(lm, attr):
-                if attr == "layers":
-                    break
-                lm = getattr(lm, attr)
-        assert hasattr(lm, "layers"), "could not locate decoder layers on reference model"
-        lm.layers = lm.layers[:N_LAYERS]
-        if hasattr(lm, "config"):
-            lm.config.num_hidden_layers = N_LAYERS
-        logger.info(f"truncated reference to {len(lm.layers)} layers")
-        with torch.no_grad():
-            out = ref_model(
-                input_ids=tokens.input_ids,
-                attention_mask=tokens.attention_mask,
-                output_hidden_states=True,
-            )
-        ref_hs = [h.float() for h in out.hidden_states]  # embed + N_LAYERS
-        logger.info(f"ref hidden states: {len(ref_hs)}")
-        del ref_model, out
-        gc.collect()
+    ref_model = AutoModelForCausalLM.from_pretrained(gemma_path, torch_dtype=torch.bfloat16).eval()
+    # Truncate the decoder stack to N_LAYERS so the CPU forward is ~8x cheaper.
+    lm = ref_model
+    for attr in ("model", "language_model", "layers"):
+        if hasattr(lm, attr):
+            if attr == "layers":
+                break
+            lm = getattr(lm, attr)
+    assert hasattr(lm, "layers"), "could not locate decoder layers on reference model"
+    lm.layers = lm.layers[:N_LAYERS]
+    if hasattr(lm, "config"):
+        lm.config.num_hidden_layers = N_LAYERS
+    with torch.no_grad():
+        out = ref_model(
+            input_ids=tokens.input_ids,
+            attention_mask=tokens.attention_mask,
+            output_hidden_states=True,
+        )
+    ref_hs = [h.float() for h in out.hidden_states]  # embed + N_LAYERS
+    del ref_model, out
+    gc.collect()
 
     # --- device encoder: first N_LAYERS only (tp=1) ---
     weight_files = sorted(glob.glob(f"{gemma_path}/model-*.safetensors"))
@@ -135,9 +114,8 @@ def test_gemma_device_per_layer(*, mesh_device):
     # keep embed_tokens, final norm, and first N_LAYERS decoder layers
     keep = {}
     for k, v in full_sd.items():
-        kk = k
-        if kk.startswith("language_model.model.layers."):
-            li = int(kk.split("language_model.model.layers.")[1].split(".")[0])
+        if k.startswith("language_model.model.layers."):
+            li = int(k.split("language_model.model.layers.")[1].split(".")[0])
             if li >= N_LAYERS:
                 continue
         keep[k] = v
@@ -154,38 +132,20 @@ def test_gemma_device_per_layer(*, mesh_device):
     gc.collect()
 
     tt_ids = ttnn.from_torch(tokens.input_ids, device=mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-
     real_slice = slice(SEQ_LEN - n_real, SEQ_LEN)  # left-pad → real tokens at the end
 
-    # Run only the pure-causal path (is_causal=True, no mask). The masked/-inf-row
-    # path hangs the SDPA kernel and is investigated separately (RUN_MASKED=1).
-    variants = [("causal-only", None)]
-    if os.environ.get("RUN_MASKED") == "1":
-        variants.insert(0, ("masked", tokens.attention_mask))
-
-    for label, mask in variants:
-        logger.info(f"================ {label} ================")
-        hs = encoder(tt_ids, attention_mask=mask)
-        # hs: [embed, layer0..layerN-1, final_norm]
-        n_cmp = len(ref_hs) if ref_hs is not None else len(hs) - 1
-        for i in range(min(len(hs) - 1, n_cmp)):
-            dev = ttnn.to_torch(ttnn.get_device_tensors(hs[i])[0]).float()
-            if dev.dim() == 4:
-                dev = dev[0]
-            if ref_hs is None:
-                logger.info(f"  L{i:02d}  {_stats('dev', dev)}")
-                sys.stderr.flush()
-                continue
-            ref = ref_hs[i]
-            p_all = pcc(dev, ref)
-            p_real = pcc(dev[:, real_slice, :], ref[:, real_slice, :])
-            logger.info(
-                f"  L{i:02d}  {_stats('dev', dev)}  ref_max|x|={ref.abs().max().item():.3e}"
-                f"  | PCC_all={p_all:.4f} PCC_real={p_real:.4f}"
-            )
-            sys.stderr.flush()
-        for h in hs:
-            ttnn.deallocate(h)
+    # Pure-causal path (no mask): all positions real, so the device is_causal path
+    # matches the reference exactly.
+    hs = encoder(tt_ids, attention_mask=None)  # [embed, layer0..layerN-1, final_norm]
+    for i in range(min(len(hs) - 1, len(ref_hs))):
+        dev = ttnn.to_torch(ttnn.get_device_tensors(hs[i])[0]).float()
+        if dev.dim() == 4:
+            dev = dev[0]
+        assert torch.isfinite(dev).all(), f"layer {i}: device output has NaN/Inf"
+        logger.info(f"  L{i:02d}")
+        assert_quality(ref_hs[i][:, real_slice, :], dev[:, real_slice, :], pcc=PCC_BAR)
+    for h in hs:
+        ttnn.deallocate(h)
 
 
 if __name__ == "__main__":

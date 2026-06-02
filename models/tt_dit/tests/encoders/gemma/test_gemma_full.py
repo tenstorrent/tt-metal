@@ -14,7 +14,7 @@ Parametrized over two meshes (Blackhole): 1x1 (TP=1, no fabric) and 2x4 (TP=4,
 FABRIC_1D). Asserts video PCC > 0.999 and audio PCC > 0.998, and logs warm encode
 wall-clock. Do NOT run the 2x4 case under TT_METAL_WATCHER — the watcher overflows
 the active-eth fabric-router kernel-config buffer at device open.
-    pytest models/tt_dit/tests/encoders/gemma/test_gemma_encode_av.py -s
+    pytest models/tt_dit/tests/encoders/gemma/test_gemma_full.py -s
 """
 
 import glob
@@ -31,6 +31,7 @@ from safetensors import safe_open
 
 import ttnn
 from models.tt_dit.pipelines.ltx.pipeline_ltx import LTXPipeline
+from models.tt_dit.utils.check import assert_quality
 
 PROMPT = "A plump orange tabby cat sits on a piano bench playing keys with its paws."
 
@@ -64,15 +65,6 @@ def _ltx_ckpt() -> str | None:
     return cands[0] if cands else None
 
 
-def pcc(a, b):
-    a_f, b_f = a.flatten().float(), b.flatten().float()
-    n = min(a_f.numel(), b_f.numel())
-    a_f, b_f = a_f[:n], b_f[:n]
-    a_m, b_m = a_f - a_f.mean(), b_f - b_f.mean()
-    d = (a_m.pow(2).sum() * b_m.pow(2).sum()).sqrt()
-    return ((a_m * b_m).sum() / d).item() if d > 0 else 0.0
-
-
 def _encode_prompts_reference(checkpoint_path: str, gemma_root: str, prompts: list[str]) -> list:
     """Official LTX-2 CPU ``PromptEncoder`` reference, kept here for validation only —
     the production pipeline no longer depends on the reference package."""
@@ -104,7 +96,7 @@ def _encode_prompts_reference(checkpoint_path: str, gemma_root: str, prompts: li
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_encode_prompts_vs_reference(*, mesh_device):
+def test_gemma_encoder(*, mesh_device):
     gemma = _gemma_path()
     ckpt = _ltx_ckpt()
     if not os.path.isdir(gemma):
@@ -147,15 +139,15 @@ def test_encode_prompts_vs_reference(*, mesh_device):
 
     logger.info(f"ENCODE warm wall-clock (mesh {tuple(mesh_device.shape)}): {t_warm_ms:.1f} ms")
 
-    v_pcc = pcc(v_dev, v_ref)
-    a_pcc = pcc(a_dev, a_ref)
-    logger.info(f"VIDEO  ref={tuple(v_ref.shape)} dev={tuple(v_dev.shape)}  PCC={v_pcc:.4f}")
-    logger.info(f"AUDIO  ref={tuple(a_ref.shape)} dev={tuple(a_dev.shape)}  PCC={a_pcc:.4f}")
-
+    # Device and reference both pad to GEMMA_SEQUENCE_LENGTH=1024 (the reference text
+    # encoder fixes its tokenizer to 1024 too), so the outputs are the same shape and
+    # compare directly — no alignment needed.
+    logger.info(f"VIDEO  ref={tuple(v_ref.shape)} dev={tuple(v_dev.shape)}")
+    assert_quality(v_ref, v_dev, pcc=0.999)
     # Audio rides ~0.999; the looser bound reflects the longer connector chain it
     # passes through, not a regression. Tighten if the audio path is later hardened.
-    assert v_pcc > 0.999, f"video context PCC {v_pcc:.4f} below 0.999"
-    assert a_pcc > 0.998, f"audio context PCC {a_pcc:.4f} below 0.998"
+    logger.info(f"AUDIO  ref={tuple(a_ref.shape)} dev={tuple(a_dev.shape)}")
+    assert_quality(a_ref, a_dev, pcc=0.998)
 
 
 if __name__ == "__main__":

@@ -168,7 +168,9 @@ def test_ltx_self_attention(
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape)),
     ).squeeze(0)
 
-    assert_quality(torch_out, tt_out_torch, pcc=0.988)
+    # 8-way SP-ring all-gathers on 4x8 loosen the bound; <=8 devices hold the single-op bar.
+    pcc = 0.988 if mesh_device.get_num_devices() > 8 else 0.999
+    assert_quality(torch_out, tt_out_torch, pcc=pcc)
     logger.info("PASSED: LTX self-attention matches PyTorch reference")
 
 
@@ -254,5 +256,7 @@ def test_ltx_cross_attention(
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape)),
     ).squeeze(0)
 
-    assert_quality(torch_out, tt_out_torch, pcc=0.988)
+    # 8-way SP-ring all-gathers on 4x8 loosen the bound; <=8 devices hold the single-op bar.
+    pcc = 0.988 if mesh_device.get_num_devices() > 8 else 0.999
+    assert_quality(torch_out, tt_out_torch, pcc=pcc)
     logger.info("PASSED: LTX cross-attention matches PyTorch reference")

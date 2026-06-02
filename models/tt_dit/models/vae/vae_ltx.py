@@ -378,8 +378,12 @@ class LTXResnetBlock3D(Module):
             self.conv_shortcut = LTXCausalConv3d(
                 in_channels, out_channels, kernel_size=1, stride=1, conv_dims=conv_dims, **conv_kwargs
             )
-            # norm3 is GroupNorm(1) in PyTorch = LayerNorm over channels
-            # We store the learned weight/bias as Parameters and apply manually
+            # Reference norm3 is GroupNorm(num_groups=1); we approximate it with a
+            # per-spatial-location LayerNorm over channels. These are NOT equal —
+            # GroupNorm(1) pools statistics over C·T·H·W jointly, LayerNorm over C
+            # only — they coincide only when T·H·W == 1, and the approximation costs
+            # ~0.004 PCC on channel-change blocks. A correct GroupNorm(1) would need
+            # an all-gather'd GroupNorm3D because H/W are mesh-sharded here.
             self.norm3_weight = Parameter(total_shape=[1, in_channels], device=mesh_device, dtype=dtype)
             self.norm3_bias = Parameter(total_shape=[1, in_channels], device=mesh_device, dtype=dtype)
 
