@@ -86,6 +86,11 @@ class TextDecoderKvDecodeRuntime:
     cur_pos_tt: ttnn.Tensor
     logits_tt: Optional[ttnn.Tensor] = None
     logits_tt_by_cache_seq_len: dict[int, ttnn.Tensor] = field(default_factory=dict)
+    # On-device greedy argmax token (pad batch→32 + untilize + multicore argmax, fused into the decode
+    # trace) so the loop reads back a scalar instead of the full 256k-vocab logits row. ``logits_tt`` is
+    # still kept for the rep-penalty fallback (host recompute only when the winner is a prior token).
+    tok_tt: Optional[ttnn.Tensor] = None
+    tok_tt_by_cache_seq_len: dict[int, ttnn.Tensor] = field(default_factory=dict)
     trace_cache_seq_len: Optional[int] = None
     trace_id: Optional[int] = None
     trace_ids_by_cache_seq_len: dict[int, int] = field(default_factory=dict)
@@ -548,6 +553,28 @@ class TTSeamlessM4Tv2Model:
             compute_kernel_config=self._lm_head_compute,
         )
 
+    def _decode_argmax_token(self, logits: ttnn.Tensor) -> ttnn.Tensor:
+        """On-device greedy argmax for a single-token decode step ``logits`` ``[1, 1, V]`` → ``[1, 1, 32]``
+        token-id tensor (valid token is row 0).
+
+        ``ttnn.argmax(use_multicore=True)`` is ~30× faster than the 256k-vocab host readback but has two
+        alignment requirements: (1) the dim before the reduced vocab dim must be tile-aligned (32) — at
+        batch=1 it returns garbage — so pad the row dim to 32; (2) the multicore kernel reduces over the
+        *physical* (tile-padded) vocab width, not the logical extent, so a logical V (256102) that isn't a
+        multiple of 32 reads stale padding and returns garbage. Pad V up to the tile-aligned width with
+        ``-1e9`` so those columns can never win the argmax. Untilize first (argmax wants ROW_MAJOR), then
+        multicore argmax. Used both in the compile-outside-trace step and inside the trace capture so the
+        trace itself outputs the token id.
+        """
+        v = int(logits.shape[-1])
+        v_aligned = ((v + 31) // 32) * 32
+        l4 = ttnn.reshape(logits, [1, 1, 1, v])
+        if v_aligned != v:
+            l4 = ttnn.pad(l4, [(0, 0), (0, 0), (0, 0), (0, v_aligned - v)], value=-1e9)
+        lp = ttnn.pad(l4, [(0, 0), (0, 0), (0, 31), (0, 0)], value=-1e9)
+        xu = ttnn.untilize(lp, use_multicore=True)
+        return ttnn.argmax(xu, dim=-1, keepdim=False, use_multicore=True)
+
     def _encode_text(
         self,
         input_ids: ttnn.Tensor,
@@ -754,11 +781,16 @@ class TTSeamlessM4Tv2Model:
         old_logits = rt.logits_tt_by_cache_seq_len.pop(bucket, None)
         if old_logits is not None:
             ttnn.deallocate(old_logits)
+        old_tok = rt.tok_tt_by_cache_seq_len.pop(bucket, None)
+        if old_tok is not None:
+            ttnn.deallocate(old_tok)
         if rt.trace_cache_seq_len == bucket:
             rt.trace_id = None
             rt.trace_cache_seq_len = None
         if rt.logits_tt is old_logits:
             rt.logits_tt = None
+        if rt.tok_tt is old_tok:
+            rt.tok_tt = None
 
     def release_text_decoder_decode_trace(self) -> None:
         """Release all captured decode traces (keeps ``logits_tt`` and H2D buffers)."""
@@ -918,6 +950,7 @@ class TTSeamlessM4Tv2Model:
         rt.trace_id = trace_id
         rt.trace_cache_seq_len = cache_len
         rt.logits_tt = rt.logits_tt_by_cache_seq_len.get(cache_len)
+        rt.tok_tt = rt.tok_tt_by_cache_seq_len.get(cache_len)
         return trace_id
 
     def _decode_step_kv_lm(
@@ -982,7 +1015,10 @@ class TTSeamlessM4Tv2Model:
             cross_attn_cache,
             cache_seq_len=config_cache_len,
         )
+        # Pre-compile the fused argmax too — else it JITs during capture → "Writes not supported".
+        compile_tok = self._decode_argmax_token(compile_logits)
         ttnn.synchronize_device(self.device)
+        ttnn.deallocate(compile_tok)
         ttnn.deallocate(compile_logits)
 
         self._upload_kv_decode_step_inputs(token_id, position, batch_size)
@@ -991,9 +1027,10 @@ class TTSeamlessM4Tv2Model:
         self._decode_trace_kernels_warmed = True
 
         capture_logits: Optional[ttnn.Tensor] = None
+        capture_tok: Optional[ttnn.Tensor] = None
 
         def traced_step_capture() -> None:
-            nonlocal capture_logits
+            nonlocal capture_logits, capture_tok
             capture_logits = self._decode_step_kv_lm(
                 rt,
                 encoder_hidden,
@@ -1002,14 +1039,17 @@ class TTSeamlessM4Tv2Model:
                 cross_attn_cache,
                 cache_seq_len=config_cache_len,
             )
+            capture_tok = self._decode_argmax_token(capture_logits)
 
         trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
         traced_step_capture()
         ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
-        if capture_logits is None:
-            raise RuntimeError("Decode trace capture produced no logits tensor.")
+        if capture_logits is None or capture_tok is None:
+            raise RuntimeError("Decode trace capture produced no logits/token tensor.")
         rt.logits_tt_by_cache_seq_len[config_cache_len] = capture_logits
         rt.logits_tt = capture_logits
+        rt.tok_tt_by_cache_seq_len[config_cache_len] = capture_tok
+        rt.tok_tt = capture_tok
         rt.trace_ids_by_cache_seq_len[config_cache_len] = trace_id
         rt.trace_id = trace_id
         rt.trace_cache_seq_len = config_cache_len
@@ -1032,6 +1072,7 @@ class TTSeamlessM4Tv2Model:
         if logits_tt is None:
             raise RuntimeError("Decode trace logits buffer missing; re-capture the trace.")
         rt.logits_tt = logits_tt
+        rt.tok_tt = rt.tok_tt_by_cache_seq_len.get(bucket)
         ttnn.execute_trace(self.device, trace_id, cq_id=0, blocking=True)
         return logits_tt
 
@@ -1430,9 +1471,25 @@ class TTSeamlessM4Tv2Model:
         *,
         repetition_penalty: float = 1.0,
         prev_token_ids: Optional[List[int]] = None,
+        tok_tt: Optional[ttnn.Tensor] = None,
     ) -> int:
-        """Greedy argmax via host readback only (for traced KV decode; no device allocs)."""
+        """Greedy next-token id for traced KV decode.
+
+        Fast path: when ``tok_tt`` is given (argmax fused into the decode trace — pad-32 + untilize +
+        multicore argmax), read back only that scalar token (row 0) instead of the full 256k-vocab
+        logits row (~1.5 ms device vs ~4.4 ms host readback).
+
+        Speculative rep-penalty: the device argmax ignores the penalty. If the (unpenalized) winner is a
+        previously-emitted token, the penalty could demote it → recompute exactly on host from
+        ``logits``. Otherwise the device token is provably correct (the penalty only *lowers* prev-token
+        logits, never raising a non-prev token above the unpenalized max).
+        """
         import torch as _torch
+
+        if tok_tt is not None:
+            token = int(to_torch_replicated_first_shard(tok_tt).reshape(-1)[0])
+            if not (repetition_penalty > 1.0 and prev_token_ids and token in set(prev_token_ids)):
+                return token
 
         host = self._logits_row_to_host(logits, dec_len)
         if repetition_penalty > 1.0 and prev_token_ids:
@@ -1905,10 +1962,15 @@ class TTSeamlessM4Tv2Model:
                     )
                     ttnn.deallocate(next_tt)
                 elif use_decode_trace and decode_trace_ready:
-                    # Host readback only — ``ttnn.slice`` / ``argmax`` allocate device memory and
-                    # corrupt traced logits while a Metal trace is active.
+                    # Fast path reads the trace-fused argmax token (``rt.tok_tt``); only the rep-penalty
+                    # fallback touches the logits on host. The argmax is captured inside the trace (no
+                    # per-step device alloc, which would corrupt the active trace).
                     next_id = self._greedy_next_token_id(
-                        logits, 1, repetition_penalty=repetition_penalty, prev_token_ids=seq_host
+                        logits,
+                        1,
+                        repetition_penalty=repetition_penalty,
+                        prev_token_ids=seq_host,
+                        tok_tt=self._kv_decode_rt.tok_tt if self._kv_decode_rt is not None else None,
                     )
                 else:
                     next_tt, next_id = self._greedy_next_token(
