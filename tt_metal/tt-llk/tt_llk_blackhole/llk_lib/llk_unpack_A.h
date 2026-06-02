@@ -251,7 +251,18 @@ inline void _llk_unpack_A_init_(
     // bool disable_src_zero_flag_val = disable_src_zero_flag || (static_cast<uint>(unpack_dst_format) == static_cast<uint>(DataFormat::UInt16));
     // cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag_val ? 1 : 0);
 
-    constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE || unpack_to_dest) ? p_setadc::UNP_A : p_setadc::UNP_B;
+    // x-start/x-end is per-unpacker state, so program it on exactly the unpacker(s) the MOP issues a
+    // real (non-ZEROSRC) UNPACR against; a zeroed source does not read L1, so its X counter is unused:
+    //   plain datacopy            -> SrcA           (unpacker A)
+    //   acc_to_dest, no reuse      -> SrcA and SrcB  (both)
+    //   acc_to_dest DEST_TO_SRCA   -> SrcB only      (SrcA comes from DEST, e.g. hardswish x*hardsigmoid(x))
+    //   acc_to_dest DEST_TO_SRCB   -> SrcA only      (SrcB comes from DEST)
+    //   broadcast                  -> SrcB;  unpack-to-dest -> SrcA
+    constexpr bool reads_srca =
+        unpack_to_dest || (BType == BroadcastType::NONE && !(acc_to_dest && binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA));
+    constexpr bool reads_srcb =
+        !unpack_to_dest && (BType != BroadcastType::NONE || (acc_to_dest && binary_reuse_dest != EltwiseBinaryReuseDestType::DEST_TO_SRCB));
+    constexpr std::uint32_t UNP_SEL = (reads_srca && reads_srcb) ? p_setadc::UNP_AB : (reads_srca ? p_setadc::UNP_A : p_setadc::UNP_B);
     if constexpr ((BType == BroadcastType::ROW || BType == BroadcastType::SCALAR) && unpack_to_dest) // ROW and SCALAR bcast will only unpack a single row
     {
         config_unpacker_x_end<UNP_SEL>(1);
@@ -282,6 +293,7 @@ inline void _llk_unpack_A_init_(
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_A_uninit_()
 {
+    // x-start/x-end is transient and programmed by each operation's init LLK; nothing to restore here.
 }
 
 /**
