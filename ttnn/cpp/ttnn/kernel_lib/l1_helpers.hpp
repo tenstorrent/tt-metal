@@ -55,10 +55,10 @@ FORCE_INLINE void zero_tile(uint32_t write_addr) {
     UnicastEndpoint ep;
     const auto zeros_src = local_noc_addr(MEM_ZEROS_BASE, noc.get_noc_id());
 
-    noc.set_async_read_state<Noc::VcSelection::DEFAULT, MEM_ZEROS_SIZE>(ep, MEM_ZEROS_SIZE, zeros_src);
+    noc.set_async_read_state<NocOptions::DEFAULT, MEM_ZEROS_SIZE>(ep, MEM_ZEROS_SIZE, zeros_src);
 
     for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        noc.async_read_with_state<Noc::VcSelection::DEFAULT, 1>(
+        noc.async_read_with_state<NocOptions::DEFAULT, 1>(
             ep, ::CoreLocalMem<uint32_t>(write_addr), 0, zeros_src, {});
         write_addr += MEM_ZEROS_SIZE;
     }
