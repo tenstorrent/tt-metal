@@ -11,6 +11,7 @@ import os
 import pickle
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Callable, Optional
+import time
 
 if TYPE_CHECKING:
     from ttml.modules.lora import LoraConfig
@@ -228,22 +229,27 @@ class SFTTrainer:
                 warmup_announced = True
             # self.step is 0-based so external lr_schedule callables (e.g.
             # SpeedrunScheduler.lr_at) receive the expected step index.
+            print("doing step", self.step)
             lr = self._lr_schedule(self.step)
             self._optimizer.set_lr(lr)
             self._optimizer.zero_grad()
 
             micro_losses = []
+            start = time.perf_counter()
             for _ in range(cfg.gradient_accumulation_steps):
                 batch = _next_batch()
                 profiler_marker(None, "dataloader_step_done")
+                print(f"got batch with input_ids shape {batch.input_ids.shape}")
 
                 if measure:
                     _signpost(f"FWD_BEGIN step={self.step}")
+                    print(f"starting forward pass for step {self.step}")
                 loss = self._compute_loss(batch)
+                _signpost(f"LOSS_END step={self.step}")
                 micro_losses.append(float(loss.to_numpy(ttnn.DataType.FLOAT32, composer=self._loss_composer).mean()))
                 profiler_marker(None, "forward_pass_done", dump_results=True)
                 if measure:
-                    _signpost(f"FWD_END step={self.step}")
+                    print(f"finished forward pass for step {self.step}")
                     _signpost(f"BWD_BEGIN step={self.step}")
                 if cfg.gradient_accumulation_steps > 1:
                     loss = ttml.ops.binary.mul(loss, 1.0 / cfg.gradient_accumulation_steps)
@@ -256,14 +262,17 @@ class SFTTrainer:
             for cb in self._callbacks:
                 cb.on_before_optimizer_step(self)
 
-            if cfg.max_grad_norm > 0:
-                ttml.core.clip_grad_norm(self.model.parameters(), cfg.max_grad_norm, 2.0, False)
+            # if cfg.max_grad_norm > 0:
+            #     ttml.core.clip_grad_norm(self.model.parameters(), cfg.max_grad_norm, 2.0, False)
 
             profiler_marker(None, "gradient_sync_done")
+            print("gradients synced, doing optimizer step for step", self.step)
 
             if measure:
                 _signpost(f"OPT_BEGIN step={self.step}")
             self._optimizer.step()
+            end = time.perf_counter()
+            print(f"E2E time: {end - start:.2f} seconds for step {self.step}")
             self.step += 1
 
             profiler_marker(None, "optimizer_step_done", dump_results=True)
@@ -276,6 +285,7 @@ class SFTTrainer:
                 for cb in self._callbacks:
                     cb.on_step_end(self, self.step, step_loss, lr)
 
+            print("finished optimizer step for step", self.step)
             if cfg.eval_interval > 0 and self.step % cfg.eval_interval == 0:
                 if self.eval_dataloader is not None:
                     val_loss = self._eval()
@@ -290,14 +300,14 @@ class SFTTrainer:
                     for cb in self._callbacks:
                         cb.on_eval_end(self, self.step, val_loss)
 
-            if cfg.save_interval > 0 and self.step % cfg.save_interval == 0 and self.step > 0:
-                self._save_checkpoint()
-                for cb in self._callbacks:
-                    cb.on_save(
-                        self,
-                        self.step,
-                        os.path.join(cfg.checkpoint_dir, f"step_{self.step}.pkl"),
-                    )
+            # if cfg.save_interval > 0 and self.step % cfg.save_interval == 0 and self.step > 0:
+            #     self._save_checkpoint()
+            #     for cb in self._callbacks:
+            #         cb.on_save(
+            #             self,
+            #             self.step,
+            #             os.path.join(cfg.checkpoint_dir, f"step_{self.step}.pkl"),
+            #         )
 
             profiler_marker(None, f"iteration_{self.step}", dump_results=True)
             if self.step == 1:
@@ -317,6 +327,7 @@ class SFTTrainer:
         default masked cross-entropy.
         """
         logits = self.model(batch.input_ids, self._attention_mask)  # [B, 1, T, V]
+        _signpost(f"FWD_END step={self.step}")
         if self._compute_loss_override is not None:
             return self._compute_loss_override(logits, batch)
 
@@ -337,6 +348,7 @@ class SFTTrainer:
                     int(expected),
                 )
 
+        _signpost(f"LOSS_BEGIN step={self.step}")
         loss = self._loss_fn(logits, batch.labels, ttml.ops.ReduceType.NONE)  # [B, 1, T, 1]
         loss = loss * batch.loss_mask  # zero out prompt + padding
         return ttml.ops.unary.mean(loss)

@@ -1,0 +1,16 @@
+# Llama-3.1-70B with TWO transformer blocks — paired with llama3_1_70B_hf_1L.yaml
+# for delta-based perf extrapolation: (2L - 1L) cancels per-step ops and gives
+# the true per-layer cost, which can then be scaled to 80 layers.
+transformer_config:
+  model_type: "llama"
+  num_heads: 64
+  num_groups: 8
+  embedding_dim: 8192
+  intermediate_dim: 28672
+  dropout_prob: 0.0
+  num_blocks: 2
+  weight_tying: "disabled"
+  vocab_size: 128256
+  max_sequence_length: 1024
+  runner_type: default
+  theta: 500000.0

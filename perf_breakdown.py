@@ -75,8 +75,45 @@ def _phase_root(tag: str) -> str:
 # CSV mode
 # ============================================================
 
+# Device-time columns collapsed by `min` across devices in multi-device mode.
+_DEVICE_DURATION_COLS = ("DEVICE KERNEL DURATION [ns]", "DEVICE FW DURATION [ns]", "HOST DURATION [ns]")
 
-def run_csv(path: str, top: int) -> int:
+
+def _collapse_spmd(ops, pd):
+    """Collapse SPMD per-device op rows into one row per logical op.
+
+    In a multi-device SPMD run the same program runs on every device, so each
+    op appears once per device. The devices execute the op in lockstep, but a
+    device that arrives early stalls waiting on collectives — that wait time is
+    folded into its DEVICE KERNEL DURATION, producing huge outliers (e.g. a
+    ~170 s "kernel" that is really idle spinning). Taking the *minimum* across
+    devices recovers the true compute time of the fastest (non-stalled) device.
+
+    Devices run identical op sequences, so we align ops by their per-device
+    execution rank (k-th op on every device is the same logical op) rather than
+    GLOBAL CALL COUNT, which is offset per device. Device-time columns and
+    HOST START TS are reduced with `min`; OP CODE/OP TYPE take the first value.
+    """
+    ops = ops.sort_values(["DEVICE ID", "GLOBAL CALL COUNT"]).copy()
+    ops["__rank"] = ops.groupby("DEVICE ID").cumcount()
+
+    # Sanity check: a rank should map to one op code across devices. If not, the
+    # sequences diverged (not true SPMD) and rank-alignment is unsafe.
+    mismatched = ops.groupby("__rank")["OP CODE"].nunique()
+    n_bad = int((mismatched > 1).sum())
+    if n_bad:
+        print(
+            f"WARNING: {n_bad} op position(s) have mismatched op codes across devices; "
+            "SPMD alignment may be unreliable.",
+            file=sys.stderr,
+        )
+
+    agg = {"OP CODE": "first", "OP TYPE": "first", "HOST START TS": "min"}
+    agg.update({col: "min" for col in _DEVICE_DURATION_COLS})
+    return ops.groupby("__rank", as_index=False).agg(agg)
+
+
+def run_csv(path: str, top: int, per_device: bool) -> int:
     try:
         import pandas as pd
     except ImportError:
@@ -98,8 +135,17 @@ def run_csv(path: str, top: int) -> int:
         return 1
 
     ops = df[(df["OP TYPE"] != "signpost") & (~df["OP CODE"].isin(_IGNORED_OPS))].copy()
-    for col in ("DEVICE KERNEL DURATION [ns]", "DEVICE FW DURATION [ns]", "HOST DURATION [ns]"):
+    for col in _DEVICE_DURATION_COLS:
         ops[col] = pd.to_numeric(ops[col], errors="coerce").fillna(0)
+
+    n_devices = int(ops["DEVICE ID"].nunique())
+    if n_devices > 1 and not per_device:
+        ops["GLOBAL CALL COUNT"] = pd.to_numeric(ops["GLOBAL CALL COUNT"], errors="coerce")
+        ops = _collapse_spmd(ops, pd)
+        print(
+            f"Multi-device SPMD: {n_devices} devices collapsed to per-op "
+            f"minimum device time ({len(ops)} ops). Use --per-device to disable."
+        )
 
     grouped: dict[str, dict[str, float]] = defaultdict(
         lambda: {"ops": 0, "wall_ms": 0.0, "dev_k_ms": 0.0, "dev_fw_ms": 0.0, "host_ms": 0.0}
@@ -337,6 +383,12 @@ def main() -> int:
         default="auto",
         help="Force input format (default: auto-detect by extension).",
     )
+    parser.add_argument(
+        "--per-device",
+        action="store_true",
+        help="CSV mode: keep every device's op row separately instead of collapsing "
+        "SPMD ops to the per-op minimum device time across devices (multi-device runs).",
+    )
     args = parser.parse_args()
 
     fmt = args.format
@@ -347,7 +399,7 @@ def main() -> int:
         if args.ids is not None or args.phase is not None:
             print("--ids and --phase are only supported in TXT mode.", file=sys.stderr)
             return 2
-        return run_csv(args.path, args.top)
+        return run_csv(args.path, args.top, args.per_device)
     if args.ids is not None and args.phase is not None:
         print("--ids and --phase are mutually exclusive.", file=sys.stderr)
         return 2

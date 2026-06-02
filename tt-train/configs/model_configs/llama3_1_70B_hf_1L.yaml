@@ -1,0 +1,17 @@
+# Llama-3.1-70B with a SINGLE transformer block — for pipeline shakedown.
+# Same shapes/dims as llama3_1_70B_hf.yaml, just num_blocks: 1.
+# This skips the 18-min model-load phase and gets to FWD/BWD/OPT in seconds,
+# while still exercising the TP=8 DP=4 mesh + fabric + signposts + profiler paths.
+transformer_config:
+  model_type: "llama"
+  num_heads: 64
+  num_groups: 8
+  embedding_dim: 8192
+  intermediate_dim: 28672
+  dropout_prob: 0.0
+  num_blocks: 1
+  weight_tying: "disabled"
+  vocab_size: 128256
+  max_sequence_length: 1024
+  runner_type: default
+  theta: 500000.0
