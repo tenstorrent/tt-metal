@@ -953,6 +953,15 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         if (distributed_context_) {
             distributed_context_.reset();
         }
+
+        // Release cached pinned-memory entries while MetalContext is still alive
+        // (needs the cluster to map chip -> MMIO IDs). Must run before
+        // destroy_instance below, and only on the first close_impl call.
+        // Skip for mock devices — they never create pinned DMA regions.
+        if (MetalContext::instance(this->get_context_id()).get_cluster().get_target_device_type() !=
+            tt::TargetDevice::Mock) {
+            experimental::PinnedMemoryCache::instance().release_for_device(*pimpl_wrapper);
+        }
     }
 
     // TODO: This assumes only one MeshDevice per MetalEnv.
@@ -1607,7 +1616,6 @@ MeshDevice::MeshDevice(MetalEnv& /*metal_env*/) {}
 
 MeshDevice::~MeshDevice() {
     Inspector::mesh_device_destroyed(this->pimpl_.get());
-    experimental::PinnedMemoryCache::instance().release_for_device(*this);
     pimpl_->close_impl(this);
 }
 
