@@ -100,15 +100,6 @@ class Qwen35Model:
         self._paged_kv_caches = None
         self._attention_layer_indices = [i for i in range(args.n_layers) if args.is_full_attention_layer(i)]
         self._deltanet_external_states = None  # list of (recurrent, conv) tuples, set by allocate_kv_caches
-        # Trace-prefill: persistent device buffers for inputs that would otherwise
-        # be allocated per-call inside prefill_layer_chunked. Populated by
-        # capture_prefill_trace_chunked. When None, prefill uses the legacy
-        # allocate-per-call path.
-        self._prefill_trace_inputs = None
-        # Trace handle + persistent output buffer for traced prefill replay.
-        self._prefill_trace_id = None
-        self._prefill_trace_logits = None
-        self._prefill_bucket_size = None
         # Shared zero buffers for in-place DN state reset between traced replays.
         self._dn_zero_recurrent = None
         self._dn_zero_conv = None
