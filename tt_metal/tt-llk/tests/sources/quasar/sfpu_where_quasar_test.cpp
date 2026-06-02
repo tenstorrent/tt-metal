@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-// AI-generated — ternary SFPU where kernel test for Quasar.
 
 #include <cstdint>
 
@@ -17,7 +16,6 @@
 #include "llk_unpack_unary_operand.h"
 #include "params.h"
 
-// UNPACK: unpack 3 tiles packed in buffer_A (cond, true_val, false_val).
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -60,10 +58,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 
     _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(buf_desc_id, num_tiles_per_unpack);
+
+    // Unpacks all three input tiles (cond, true_val, false_val) from buffer_A in one call;
+    // tile count is taken from num_tiles_per_unpack set during init.
     _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(0 /*l1_tile_idx*/);
 
     if constexpr (unpack_to_dest)
     {
+        // Signals DEST writes are done; not called on the FPU path since UNPACK doesn't touch DEST there.
         _llk_unpack_dest_dvalid_section_done_<dest_sync>();
     }
 }
@@ -76,25 +78,16 @@ const bool is_int_fpu_en = false;
 
 #include "cfg_defines.h"
 #include "cmath_common.h"
-#include "experimental/ckernel_sfpu_where.h"
 #include "llk_math_common.h"
+#include "llk_math_eltwise_ternary_sfpu.h"
 #include "llk_math_eltwise_unary_datacopy.h"
-#include "llk_math_eltwise_unary_sfpu_common.h"
+#include "llk_sfpu/ckernel_sfpu_where.h"
 #include "params.h"
 
 using namespace ckernel;
 using namespace ckernel::math;
 using namespace ckernel::sfpu;
 
-// MATH: datacopy the three input tiles (condition, true_val, false_val) into DEST
-// at tile indices 0, 1, 2, then run the SFPU where kernel face-by-face with the
-// output overwriting DEST tile 0 (matches ttnn_where_test convention).
-// Per-face offsets (in SFPU dest_reg_addr units, i.e. rows × 2):
-//   - condition tile (DEST tile 0) → 0
-//   - true_val  tile (DEST tile 1) → 64  (32 rows × 2)
-//   - false_val tile (DEST tile 2) → 128 (64 rows × 2)
-//   - output   tile (DEST tile 0) → 0
-// Face stride is 16 (`_inc_dst_face_addr_<16>()`), advancing RWC_D between faces.
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -102,12 +95,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     if constexpr (unpack_to_dest)
     {
-        // Chain: UNPACK (writes DEST) → SFPU (reads/writes DEST) → PACK (reads DEST).
         set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
     else
     {
-        // Chain: UNPACK → SrcA → FPU datacopy (MOVA2D) → DEST → SFPU → PACK.
         set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
         set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
@@ -117,7 +108,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if constexpr (!unpack_to_dest)
     {
-        // FPU path: datacopy all 3 tiles from SrcA into DEST at tile indices 0, 1, 2.
         const std::uint32_t num_rows = params.num_faces * params.TEST_FACE_R_DIM;
         _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(num_rows, 1);
 
@@ -129,37 +119,19 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
     }
 
-    _llk_math_eltwise_sfpu_init_();
-    _init_where_();
+    _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
 
-    // Per-tile offsets in SFPU dest_reg_addr units (rows × 2; tile stride = 64 for 32x32 tiles).
-    // We set section_base to tile DST_INDEX below so offsets are relative to DST_INDEX's tile.
-    constexpr int TILE_STRIDE       = 64;
-    constexpr int cond_tile_offset  = 0 * TILE_STRIDE;  // tile DST_INDEX + 0 = condition
-    constexpr int true_tile_offset  = 1 * TILE_STRIDE;  // tile DST_INDEX + 1 = true_val
-    constexpr int false_tile_offset = 2 * TILE_STRIDE;  // tile DST_INDEX + 2 = false_val
-    constexpr int out_tile_offset   = cond_tile_offset; // overwrite condition tile
+    // Primes the CC stack
+    // to a known-empty lane mask before the first select op.
+    init_where();
 
-    // Bracket the per-face SFPU section. `_set_dst_write_addr_<Tile32x32>(DST_INDEX)` sets
-    // the section base to DST_INDEX's tile start so the offsets above resolve to the
-    // correct tile (DST_INDEX + 0, +1, +2).
-    _llk_math_eltwise_sfpu_start_(params.DST_INDEX);
-
-    const std::uint32_t num_sfpu_iterations = params.TEST_FACE_R_DIM / ckernel::math::SFP_ROWS;
-    for (std::uint32_t face = 0; face < params.num_faces; face++)
-    {
-        _calculate_where_(static_cast<int>(num_sfpu_iterations), cond_tile_offset, true_tile_offset, false_tile_offset, out_tile_offset);
-        _llk_math_eltwise_sfpu_inc_dst_face_addr_();
-    }
-
-    _llk_math_eltwise_sfpu_done_();
+    // Runs calculate_where over the faces selected by VECTOR_MODE: cond=tile 0,
+    // true_val=tile 1, false_val=tile 2, result written to tile 0. Faces outside
+    // the selected set keep whatever the producer wrote into Dest before SFPU ran
+    // (the cond tile, here), so the Python test asserts only on the processed faces.
+    _llk_math_eltwise_ternary_sfpu_params_(sfpu::calculate_where<false>, 0u, 1u, 2u, 0u, VECTOR_MODE);
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
-
-    // Wait for all math execution units this thread has driven to drain before PACK handover.
-    wait_sfpu_idle();
-    wait_fpu_idle();
-    wait_mop_idle();
 }
 
 #endif
@@ -171,13 +143,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-// PACK: write a single output tile (DEST tile 0) to buffer_Res.
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    std::uint32_t const buf_desc_id        = 8;
+    const std::uint32_t buf_desc_id        = 8;
     const std::uint32_t num_tiles_per_pack = 1;
 
     constexpr auto unpack_dest = unpack_to_dest ? dest_dvalid_client::UNPACK : dest_dvalid_client::FPU;
@@ -198,6 +169,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
     _llk_pack_init_(buf_desc_id, num_tiles_per_pack);
+
+    // Packs only the result tile (DEST[DST_INDEX]); where produces one output tile
+    // regardless of how many input tiles were loaded.
     _llk_pack_(params.DST_INDEX, 0);
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
 }

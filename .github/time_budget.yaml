@@ -85,15 +85,20 @@ ttnn:
     bh_p300: 145
     bh_quietbox_2: 145
   integration:
-    wh_llmbox: 30
-    # Placeholder allocation for wh_galaxy under integration, based on the
-    # current expected runtime of galaxy_integration_tests (~340 min) and
-    # galaxy_profiler_tests (~45 min: 30 min device + 15 min cross-reference).
-    # This comment is bookkeeping only; time-budget verification does not
-    # enforce a combined cap across multiple test YAML files. Final team /
-    # test-framework assignment tracked in
-    # https://github.com/tenstorrent/tt-metal/issues/44285
-    wh_galaxy: 385
+    wh_llmbox: 30   # t3k_integration_tests.yaml (ttnn entries)
+    wh_galaxy: 340  # galaxy_integration_tests.yaml
+  # Profiler budgets are kept under their own subheading for now while team /
+  # test-framework assignment is being settled. Tracked in
+  # https://github.com/tenstorrent/tt-metal/issues/44285
+  profiler:
+    # Budgets sized against the per-test decomposition of the umbrella
+    # run_profiling_test (each unique test now has its own matrix entry).
+    wh_llmbox: 150              # t3k_profiler_tests.yaml (~141m actual + headroom)
+    wh_galaxy: 50               # galaxy_profiler_tests.yaml (~45m actual + headroom)
+    wh_n150_civ2: 60            # single_card_profiler_tests.yaml (~53m actual + headroom)
+    wh_n300_civ2: 60
+    bh_p100a_civ2_viommu: 60
+    bh_p150b_civ2_viommu: 60
 
 shield:
   e2e:
@@ -117,14 +122,14 @@ scaleout:
     wh_llmbox: 185
     wh_galaxy: 100
     bh_galaxy: 60
+    bh_spsg: 20 # single galaxy
     bh_sp1: 90
-    bh_sp4: 50
+    bh_sp4: 150
     bh_deskbox: 80
     bh_llmbox: 80
     bh_loudbox: 80
     bh_p300: 80
     bh_quietbox_2: 80
-
 runtime:
   sanity:
     wh_n150_civ2: 13
@@ -168,36 +173,36 @@ models:
     wh_galaxy_perf: 500
   e2e:
     wh_llmbox: 198
-    wh_llmbox_perf: 312
+    wh_llmbox_perf: 330
     wh_n150: 100
     wh_n300: 15
     wh_galaxy_perf: 120
     bh_p150b_civ2: 55
-    bh_loudbox: 165
+    bh_loudbox: 183
     bh_p150: 60
-    bh_p300: 10
+    bh_p300: 30
     bh_deskbox: 60
-    bh_quietbox_2: 60
+    bh_quietbox_2: 85
     bh_llmbox: 40
-    bh_galaxy_perf: 60
+    bh_galaxy_perf: 78
   unit:
     wh_llmbox: 175
     wh_llmbox_perf: 230
-    wh_n150: 130
+    wh_n150: 135
     wh_n300: 15
     wh_galaxy: 45
     wh_galaxy_perf: 45
-    bh_p150: 30
-    bh_quietbox_2: 60
-    bh_galaxy: 60
+    bh_p150: 45
+    bh_p300: 30
+    bh_loudbox: 60
+    bh_quietbox_2: 85
+    bh_galaxy: 70
   integration:
     wh_llmbox: 422
   perf:
     wh_llmbox_perf: 685
     wh_galaxy: 280
     wh_galaxy_perf: 150
-    # UF Galaxy perf pool (see sku_config wh_galaxy_perf_uf)
-    wh_galaxy_perf_uf: 75
   device_perf:
     wh_n150: 10
     bh_p150: 10
@@ -208,9 +213,8 @@ models:
     wh_llmbox_perf_release: 1090
     wh_galaxy: 0
     wh_galaxy_perf: 150
-    wh_galaxy_perf_uf: 45
     wh_galaxy_release: 345
-    bh_galaxy: 280
+    bh_galaxy: 370
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
@@ -233,4 +237,4 @@ models:
 
 umd:
   unit:
-    wh_galaxy_perf_uf: 35
+    wh_galaxy_perf: 35

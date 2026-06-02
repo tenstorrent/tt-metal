@@ -55,7 +55,7 @@ CLUSTER_AXIS = 1
 
 @pytest.mark.requires_device(["N300", "T3K", "TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
-    "device_params", [{"fabric_config": get_fabric_config(), "trace_region_size": 90112}], indirect=True
+    "device_params", [{"fabric_config": get_fabric_config(), "trace_region_size": 0}], indirect=True
 )
 @pytest.mark.parametrize("dim", [DIM])
 @pytest.mark.parametrize("shape", DEEPSEEK_SHAPES)

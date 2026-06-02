@@ -61,6 +61,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     ids=["tile", "row_major"],
 )
+@pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
 def test_ttnn_combine(
     mesh_device,
     seq_len_per_chip,
@@ -73,11 +74,33 @@ def test_ttnn_combine(
     use_predictable_data,
     run_pcc_check,
     dispatched_buffer_layout,
+    use_fp8_output,
 ):
     """Test TTNN combine operation in isolation using torch reference inputs."""
     num_devices = mesh_device.get_num_devices()
     if num_devices >= 8 and not run_pcc_check and use_predictable_data:
         pytest.skip("8-chip perf only runs with random data")
+
+    # Predictable inputs are torch.arange(...), which produces values up to ~1.8M and
+    # overflows fp8_e4m3fn's ±448 range — overflow encodes as NaN, breaking PCC.
+    # Only exercise the fp8 path with random (N(0,1)) data that fits in range.
+    if use_fp8_output and use_predictable_data:
+        pytest.skip("predictable inputs overflow fp8_e4m3fn range; run fp8 with random data")
+
+    if use_fp8_output and not run_pcc_check:
+        pytest.skip("fp8 perf test doesn't run PCC")
+
+    # The fp8 output path is only wired up in combine_program_factory.cpp inside the
+    # is_tile_layout branch (the c_18 untilized_output CB swap to Fp8_e4m3). The ROW_MAJOR
+    # path has no untilize stage to retarget, so fp8 + row_major isn't a supported combo.
+    if use_fp8_output and dispatched_buffer_layout != ttnn.TILE_LAYOUT:
+        pytest.skip("fp8 combine output is only supported with TILE layout")
+
+    # FP8_E4M3 hardware support (Fp8_e4m3 DataFormat in CBs, packer FP8 path) only exists on
+    # Blackhole. TtCombineModule already raises ValueError if fp8_output is requested on
+    # non-BH; skip cleanly here so this surfaces as "skipped" instead of an error.
+    if use_fp8_output and mesh_device.arch() != ttnn.Arch.BLACKHOLE:
+        pytest.skip("fp8 combine output requires Blackhole hardware")
 
     torch.manual_seed(42)
 
@@ -228,6 +251,12 @@ def test_ttnn_combine(
 
     torch_output = torch_combine(dispatched_buffer, dispatched_metadata, expert_token_counts, expert_region_offsets)
 
+    # Quantize the torch combine output to fp8_e4m3fn so the reference matches the dtype
+    # the TT combine produces in fp8 mode. Round-trip back to bfloat16 because downstream
+    # validation expects a real float dtype; values keep fp8 precision.
+    if use_fp8_output:
+        torch_output = torch_output.to(torch.float8_e4m3fn).to(torch.bfloat16)
+
     # Run ttnn combine
     tt_combine = TtCombineModule(
         mesh_device=mesh_device,
@@ -240,6 +269,7 @@ def test_ttnn_combine(
         num_links=num_links,
         topology=topology,
         init_zeros=False,
+        fp8_output=use_fp8_output,
     )
 
     tt_output = tt_combine(
@@ -257,11 +287,15 @@ def test_ttnn_combine(
     # Step 6: Convert ttnn output to torch for comparison
     mesh_composer = get_ep_mesh_composer(mesh_device)
 
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=mesh_composer,
-        dtype=torch.bfloat16,
-    )
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer)
+    if use_fp8_output:
+        # ttnn.to_torch returns a torch.float8_e4m3fn tensor for FP8_E4M3 device tensors
+        # (see ttnn/ttnn/operations/core.py). Widen to bfloat16 for validation, since
+        # validate_combine_output expects a regular float dtype.
+        assert (
+            tt_output_torch.dtype == torch.float8_e4m3fn
+        ), f"expected torch.float8_e4m3fn fp8 combine output, got {tt_output_torch.dtype}"
+        tt_output_torch = tt_output_torch.to(torch.bfloat16)
 
     # Step 7: Verify correctness
     assert_output_shape(tt_output_torch, num_dispatch_groups, dispatch_group_size, "combine output")
@@ -271,12 +305,17 @@ def test_ttnn_combine(
     # Each EP rank's output only contains data for tokens that EP rank processed.
     # Output positions not written by local combine contain uninitialized garbage.
     # This comparison only checks the EP rank that actually processed each token.
+    #
+    # FP8 path: ~3-bit mantissa quantization makes allclose too tight (single-ULP rounding
+    # near magnitude 2 already produces 0.25 differences). Switch to PCC, matching what
+    # the dispatch fp8 PR does for the same reason.
     result = validate_combine_output(
         torch_output,
         tt_output_torch,
         indices,
         num_dispatch_groups,
         num_routed_experts,
+        use_pcc=use_fp8_output,
         verbose=True,
         expert_dispatch_table=expert_dispatch_table,
         expert_token_counts=expert_token_counts,

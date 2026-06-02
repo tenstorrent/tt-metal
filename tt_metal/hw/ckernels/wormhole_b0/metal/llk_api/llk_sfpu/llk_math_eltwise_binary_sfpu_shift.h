@@ -16,7 +16,7 @@ inline void llk_math_eltwise_binary_sfpu_shift_init() {
 
 template <bool APPROXIMATE, DataFormat DATA_FORMAT, bool SIGN_MAGNITUDE_FORMAT = false>
 inline void llk_math_eltwise_binary_sfpu_left_shift(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     static_assert(
         DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
         "Unsupported data format for left shift. Supported data formats are: Int32, UInt32, UInt16");
@@ -32,7 +32,7 @@ inline void llk_math_eltwise_binary_sfpu_left_shift(
 
 template <bool APPROXIMATE, DataFormat DATA_FORMAT, bool SIGN_MAGNITUDE_FORMAT = false>
 inline void llk_math_eltwise_binary_sfpu_right_shift(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     static_assert(
         DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
         "Unsupported data format for right shift. Supported data formats are: Int32, UInt32, UInt16");
@@ -48,7 +48,7 @@ inline void llk_math_eltwise_binary_sfpu_right_shift(
 
 template <bool APPROXIMATE, DataFormat DATA_FORMAT, bool SIGN_MAGNITUDE_FORMAT = false>
 inline void llk_math_eltwise_binary_sfpu_logical_right_shift(
-    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     static_assert(
         DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
         "Unsupported data format for logical right shift. Supported data formats are: Int32, UInt32, UInt16");

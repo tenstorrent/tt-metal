@@ -81,7 +81,7 @@ void kernel_main() {
         // Read the single-tile transformation matrix for ROPE.
         cb_reserve_back(transformation_mat_cb, 1);
         uint32_t transformation_mat_wr_ptr = get_write_ptr(transformation_mat_cb);
-        noc_async_read_tile(0, transformation_mat_accessor, transformation_mat_wr_ptr);
+        noc_async_read_page(0, transformation_mat_accessor, transformation_mat_wr_ptr);
         noc_async_read_barrier();
         cb_push_back(transformation_mat_cb, 1);
     }
@@ -92,7 +92,7 @@ void kernel_main() {
         cb_reserve_back(stats_cb, stats_tiles_cols);
         uint32_t stats_wr_ptr = get_write_ptr(stats_cb);
         for (uint32_t col_tile = 0; col_tile < stats_tiles_cols; col_tile++) {
-            noc_async_read_tile(stats_tile_idx, stats_accessor, stats_wr_ptr);
+            noc_async_read_page(stats_tile_idx, stats_accessor, stats_wr_ptr);
             stats_wr_ptr += stats_tile_bytes;
             stats_tile_idx++;
         }
@@ -106,7 +106,7 @@ void kernel_main() {
             uint32_t input_wr_ptr = get_write_ptr(input_cb);
 
             for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                noc_async_read_tile(input_tile_idx, input_accessor, input_wr_ptr);
+                noc_async_read_page(input_tile_idx, input_accessor, input_wr_ptr);
                 input_wr_ptr += input_tile_bytes;
                 input_tile_idx++;
             }
@@ -118,7 +118,7 @@ void kernel_main() {
                     cb_reserve_back(weight_cb, block_size);
                     uint32_t weight_wr_ptr = get_write_ptr(weight_cb);
                     for (uint32_t i = 0; i < block_size && col_tile + i < num_tile_cols; i++) {
-                        uint64_t weight_noc_addr = get_noc_addr(col_tile + i, weight_accessor);
+                        uint64_t weight_noc_addr = weight_accessor.get_noc_addr(col_tile + i);
 
                         // Rather than read a full tile containing sparse data,
                         // just read the first row of the tile from the faces.
@@ -140,7 +140,7 @@ void kernel_main() {
                     cb_reserve_back(rope_cos_cb, head_dim_tiles);
                     uint32_t rope_cos_wr_ptr = get_write_ptr(rope_cos_cb);
                     for (uint32_t i = 0; i < head_dim_tiles; i++) {
-                        noc_async_read_tile(rope_tile_start_idx + i, rope_cos_accessor, rope_cos_wr_ptr);
+                        noc_async_read_page(rope_tile_start_idx + i, rope_cos_accessor, rope_cos_wr_ptr);
                         rope_cos_wr_ptr += rope_cos_tile_bytes;
                     }
                     noc_async_read_barrier();
@@ -149,7 +149,7 @@ void kernel_main() {
                     cb_reserve_back(rope_sin_cb, head_dim_tiles);
                     uint32_t rope_sin_wr_ptr = get_write_ptr(rope_sin_cb);
                     for (uint32_t i = 0; i < head_dim_tiles; i++) {
-                        noc_async_read_tile(rope_tile_start_idx + i, rope_sin_accessor, rope_sin_wr_ptr);
+                        noc_async_read_page(rope_tile_start_idx + i, rope_sin_accessor, rope_sin_wr_ptr);
                         rope_sin_wr_ptr += rope_sin_tile_bytes;
                     }
                     noc_async_read_barrier();

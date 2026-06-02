@@ -475,7 +475,7 @@ def _build_ff2_inputs(
     [
         {
             "fabric_config": get_fabric_config(),
-            "trace_region_size": 2967552,
+            "trace_region_size": 0,
         }
     ],
     indirect=True,
@@ -595,7 +595,7 @@ def test_ds_ff2(
     [
         {
             "fabric_config": get_fabric_config(),
-            "trace_region_size": 2967552,
+            "trace_region_size": 0,
         }
     ],
     indirect=True,

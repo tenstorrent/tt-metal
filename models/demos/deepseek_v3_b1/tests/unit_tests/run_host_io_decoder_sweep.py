@@ -16,7 +16,7 @@ rank ``i`` verifies the i-th layer id, and the launcher world size must match
 the number of layer ids.
 
 Environment variables (read only as fallback defaults; flags always win):
-    DEEPSEEK_V3_HIDDEN_STATES_DIR   -> --hidden-states-dir
+    DEEPSEEK_V3_TRACE_ROOT          -> --trace-root
     DEEPSEEK_V3_KV_CACHE_DUMP_DIR   -> --dump-dir
 
 Slow dispatch is required for this sweep to function. Set this in
@@ -32,44 +32,43 @@ Mode A (single slot), one prompt, dump everything to ``./dumps``::
     TT_METAL_SLOW_DISPATCH_MODE=1 \\
     python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \\
         --decoder-layer-indices 4 \\
-        --hidden-states-dir /data/asaigal/pipeclean_traces \\
-        --prompt pipeclean_seq_8192 \\
+        --trace-root /mnt/models/ref_data/debug_traces \\
+        --model-id DeepSeek_R1_0528 \\
+        --prompt vllm-97854ebb-128000tok \\
+        --num-decode-steps 1024 \\
         --num-replication-slots 1 \\
         --dump-dir ./dumps
 
-Mode B (8 replication slots), two-prompt multi-turn, validate everything
-(including cross-trace PCC of both hidden states AND KV cache against the
-GPU/HF reference), no dumps.  For single-layer runs the ``--hidden-states-dir``
-must point directly at the directory containing ``<prompt>.pt`` and
-``kv_cache_reference_<prompt>.pt`` files (e.g. the layer-specific subdirectory)::
+Mode B (8 replication slots), validate metadata and hidden states from a
+chunked trace, no dumps::
 
     TT_METAL_SLOW_DISPATCH_MODE=1 \\
     python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \\
         --decoder-layer-indices 4 \\
-        --hidden-states-dir /data/gpu_reference/layer_04 \\
-        --prompt q_what_is_python q_quick_brown_fox \\
+        --trace-root /mnt/models/ref_data/debug_traces \\
+        --model-id DeepSeek_R1_0528 \\
+        --prompt vllm-97854ebb-128000tok \\
         --num-replication-slots 8 \\
         --validate-hidden-states-cross-trace \\
-        --validate-kv-cache-cross-trace \\
-        --pcc-threshold 0.97 --kv-cache-pcc-threshold 0.97 \\
+        --pcc-threshold 0.97 \\
         --no-dump-hidden-states --no-dump-kv-cache
 
-Note: ``--validate-kv-cache-cross-trace`` requires
-``kv_cache_reference_{prompt}.pt`` files in ``--hidden-states-dir``;
-they are slot-agnostic and stored in the
-HF/split-halves RoPE layout (the harness applies the permutation to TT's
-interleaved layout in-memory before the compare).
+Note: ``--validate-kv-cache-cross-trace`` is not implemented for chunked trace
+input yet; keep it disabled.
 
 Dry-run (print resolved config and exit, no device opened)::
 
     python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \\
         --decoder-layer-indices 4 \\
-        --hidden-states-dir /tmp/x --prompt foo --dry-run
+        --trace-root /mnt/models/ref_data/debug_traces \\
+        --model-id DeepSeek_R1_0528 \\
+        --prompt vllm-97854ebb-128000tok \\
+        --dry-run
 
 Four-layer rank-parallel verification, one rank per host::
 
-    export TRACE_ROOT=/data/username/pipeclean_traces/cache_design_gen8192
-    export PROMPT=cache_design_gen8192
+    export TRACE_ROOT=/mnt/models/ref_data/debug_traces
+    export PROMPT=vllm-97854ebb-128000tok
 
     TT_METAL_SLOW_DISPATCH_MODE=1 python -m ttnn.distributed.ttrun \\
       --tcp-interface ens5f0np0 \\
@@ -77,11 +76,11 @@ Four-layer rank-parallel verification, one rank per host::
       --mpi-args "--map-by rankfile:file=decoder_verify_4x_rank_file_current --bind-to none --tag-output" \\
       python -m models.demos.deepseek_v3_b1.tests.unit_tests.run_host_io_decoder_sweep \\
         --decoder-layer-indices 4 5 6 7 \\
-        --hidden-states-dir "${TRACE_ROOT}" \\
+        --trace-root "${TRACE_ROOT}" \\
+        --model-id DeepSeek_R1_0528 \\
         --prompt "${PROMPT}" \\
         --validate-hidden-states-cross-trace \\
-        --validate-kv-cache-cross-trace \\
-        --pcc-threshold 0.97 --kv-cache-pcc-threshold 0.97
+        --pcc-threshold 0.97
 
 """
 
@@ -99,8 +98,8 @@ from models.demos.deepseek_v3_b1.tests.unit_tests.ccl_test_utils import create_f
 from models.demos.deepseek_v3_b1.tests.unit_tests.host_io_decoder_harness import (
     DEFAULT_CACHE_PATH,
     DEFAULT_HF_MODEL_PATH,
-    HIDDEN_STATES_DIR_ENV,
     KV_CACHE_DUMP_DIR_ENV,
+    TRACE_ROOT_ENV,
     HostIoDecoderSweepConfig,
     open_mesh_device,
     run_sweep,
@@ -147,15 +146,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     required.add_argument(
-        "--hidden-states-dir",
+        "--trace-root",
         type=Path,
         default=None,
         help=(
-            f"Directory containing per-prompt reference traces (*.pt files with bf16 {{'input', 'output'}} "
-            f"tensors). In rank-parallel mode, this should be the root containing layer_<id> subdirectories. "
-            f"Falls back to ${HIDDEN_STATES_DIR_ENV} if omitted; required if neither this flag nor the env var "
-            f"is set."
+            f"Chunked trace registry root, e.g. /mnt/models/ref_data/debug_traces. Falls back to "
+            f"${TRACE_ROOT_ENV} if omitted; required if neither this flag nor the env var is set."
         ),
+    )
+    required.add_argument(
+        "--model-id",
+        default="DeepSeek_R1_0528",
+        help="Trace-registry model id resolved by debug_trace_io.py, e.g. DeepSeek_R1_0528.",
     )
     required.add_argument(
         "--prompt",
@@ -164,9 +166,17 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         required=True,
         metavar="NAME",
         help=(
-            "One or more prompt names (file stems under --hidden-states-dir). Multiple "
-            "prompts are run back-to-back in a single decoder launch; positions are "
-            "disjoint and accumulating across prompts (multi-turn semantics)."
+            "Prompt id under the resolved model trace directory, e.g. vllm-97854ebb-128000tok. "
+            "Chunked trace input currently supports exactly one prompt id."
+        ),
+    )
+    required.add_argument(
+        "--num-decode-steps",
+        type=int,
+        default=None,
+        help=(
+            "Optional decode-step limit. If omitted, the full chunked trace is used. When set, the loader "
+            "converts this to the Group A row slice using trace metadata."
         ),
     )
 
@@ -234,10 +244,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=False,
         help=(
-            "Per-(prompt, slot) PCC of the on-device KV-cache slice against a "
-            "kv_cache_reference_<prompt>.pt sibling in --hidden-states-dir "
-            "(produced by convert_bit_sculpt_trace.py). Forces the host KV-cache "
-            "pull even when no KV-cache dump is requested."
+            "Per-(prompt, slot) PCC of the on-device KV-cache slice against the chunked trace KV reference. "
+            "Forces the host KV-cache pull even when no KV-cache dump is requested."
         ),
     )
     val.add_argument(
@@ -336,19 +344,20 @@ def _format_path(raw: str | Path, *, layer_idx: int, rank: int) -> Path:
         ) from e
 
 
-def _resolve_hidden_states_dir(args: argparse.Namespace, *, layer_idx: int, layer_parallel: bool) -> Path:
-    """Resolve trace dir for the selected layer."""
-    if args.hidden_states_dir is not None:
-        resolved = Path(args.hidden_states_dir)
-    else:
-        raw = os.environ.get(HIDDEN_STATES_DIR_ENV)
-        if not raw:
-            raise ValueError(f"--hidden-states-dir is required (or set ${HIDDEN_STATES_DIR_ENV})")
-        resolved = Path(raw)
+def _resolve_trace_root(args: argparse.Namespace) -> Path:
+    """Resolve the chunked trace registry root."""
+    if args.trace_root is not None:
+        return Path(args.trace_root)
+    raw = os.environ.get(TRACE_ROOT_ENV)
+    if not raw:
+        raise ValueError(f"--trace-root is required (or set ${TRACE_ROOT_ENV})")
+    return Path(raw)
 
-    if layer_parallel:
-        return resolved / f"layer_{layer_idx:02d}"
-    return resolved
+
+def _validate_num_decode_steps(num_decode_steps: int | None) -> int | None:
+    if num_decode_steps is not None and num_decode_steps <= 0:
+        raise ValueError(f"--num-decode-steps must be > 0 when provided, got {num_decode_steps}")
+    return num_decode_steps
 
 
 def _resolve_dump_dir(
@@ -397,8 +406,10 @@ def _config_from_args_for_rank(
 
     return HostIoDecoderSweepConfig(
         decoder_layer_index=layer_idx,
-        hidden_states_dir=_resolve_hidden_states_dir(args, layer_idx=layer_idx, layer_parallel=layer_parallel),
+        trace_root=_resolve_trace_root(args),
+        model_id=args.model_id,
         prompt_names=tuple(args.prompt_names),
+        num_decode_steps=_validate_num_decode_steps(args.num_decode_steps),
         max_seq_len=args.max_seq_len,
         num_slots=args.num_slots,
         mesh_rows=args.mesh_rows,
@@ -479,8 +490,10 @@ def _log_resolved_config(config: HostIoDecoderSweepConfig) -> None:
     logger.info("Resolved HostIoDecoderSweepConfig:")
     for field, value in (
         ("decoder_layer_index", config.decoder_layer_index),
-        ("hidden_states_dir", config.hidden_states_dir),
+        ("trace_root", config.trace_root),
+        ("model_id", config.model_id),
         ("prompt_names", list(config.prompt_names)),
+        ("num_decode_steps", config.num_decode_steps),
         ("max_seq_len", config.max_seq_len),
         ("num_slots", config.num_slots),
         ("mesh_rows x mesh_cols", f"{config.mesh_rows} x {config.mesh_cols}"),

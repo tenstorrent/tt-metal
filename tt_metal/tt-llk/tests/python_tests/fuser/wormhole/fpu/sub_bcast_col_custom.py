@@ -37,7 +37,7 @@ class SubBcastColCustomFpu(EltwiseFpu):
         num_faces = operation.output.tile_shape.total_num_faces()
         return (
             f"// Operation {stage}: SubBcastColCustom FPU\n"
-            f"_llk_math_eltwise_binary_init_custom_<ELWSUB, BroadcastType::COL>({num_faces});\n"
+            f"_llk_math_eltwise_binary_init_custom_<ckernel::EltwiseBinaryType::ELWSUB, ckernel::BroadcastType::COL>({num_faces});\n"
         )
 
     def calculate(
