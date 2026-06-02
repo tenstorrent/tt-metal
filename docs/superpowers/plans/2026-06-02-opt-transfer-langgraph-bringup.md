@@ -2666,6 +2666,143 @@ git add models/experimental/opt_transfer/graph.py models/experimental/opt_transf
 git commit -m "feat(opt_transfer): checkpointer + --resume (resume a run from its last checkpoint)"
 ```
 
+### Task J6: Model-shape validation (E0) + multi-block assembly
+
+**Files:**
+- Modify: `models/experimental/opt_transfer/verify.py` (emit/run the model-shape test)
+- Modify: `models/experimental/opt_transfer/assemble.py` (stack layers)
+- Modify: `models/experimental/opt_transfer/graph.py` (`RealImpl.verify` uses the emitter; real-weight layers)
+- Test: `models/experimental/opt_transfer/tests/test_verify_device.py`, `tests/test_assemble.py`
+
+**Part A — model-shape validation (the E0 the KB methodology defers to).** For each proposed fusion, `emit_shape_test` writes a **durable, re-runnable pytest** parameterized to the model's *actual* dims (with a saved golden + input fixture), and runs it → PCC at the real shape. This is the per-fusion validation, the repair loop's localized check, and a committable artifact Claude Code can debug.
+
+- [ ] **Step 1A: Write the failing test** (CPU — artifact generation)
+
+```python
+# tests/test_verify_device.py (append)
+import ast, torch
+from models.experimental.opt_transfer.verify import emit_shape_test
+from models.experimental.opt_transfer.schema import KBEntry, PatternKind, FusionProposal
+
+
+def test_emit_shape_test_writes_runnable_artifact(tmp_path):
+    e = KBEntry("nlp_create_qkv_heads", "ttnn.experimental.nlp_create_qkv_heads", "attention.qkv",
+                PatternKind.HORIZONTAL_MERGE, ["linear"], {}, {}, "concat_qkv", "s")
+    p = FusionProposal("nlp_create_qkv_heads", "ttnn.experimental.nlp_create_qkv_heads",
+                       ["q", "k", "v"], {"num_heads": 16}, "concat_qkv", "", "s")
+    path = emit_shape_test(e, p, {"q": {"weight": torch.randn(4, 4), "bias": None}},
+                           {"H": 16}, torch.randn(2, 2), torch.randn(2, 2), tmp_path)
+    assert path.exists()
+    ast.parse(path.read_text())                       # generated test is valid python
+    assert list((tmp_path / "fixtures").glob("*.pt"))  # fixture saved
+```
+
+- [ ] **Step 2A: Run test to verify it fails**
+
+Run: `pytest models/experimental/opt_transfer/tests/test_verify_device.py::test_emit_shape_test_writes_runnable_artifact -v`
+Expected: FAIL (`emit_shape_test` undefined)
+
+- [ ] **Step 3A: Write minimal implementation**
+
+```python
+# verify.py (append)
+from pathlib import Path
+import torch
+
+_SHAPE_TEST = '''# AUTO-GENERATED model-shape validation for {op} @ dims={dims}
+import pytest, torch
+from models.experimental.opt_transfer.verify import pcc
+
+@pytest.mark.device
+def test_{slug}_model_shape():
+    import ttnn
+    from models.experimental.opt_transfer.codegen import build_fused
+    from models.experimental.opt_transfer.schema import FusionProposal, KBEntry
+    d = torch.load("{fixture}")
+    prop, entry = FusionProposal(**d["proposal"]), KBEntry.from_dict(d["entry"])
+    device = ttnn.open_device(device_id=0)
+    try:
+        run = build_fused(prop, entry, d["weights"], device, d["dims"])
+        out = run(d["input"]); outs = out if isinstance(out, tuple) else (out,)
+        golds = d["golden"] if isinstance(d["golden"], (list, tuple)) else (d["golden"],)
+        assert min(pcc(g, t) for g, t in zip(golds, outs)) > {thr}
+    finally:
+        ttnn.close_device(device)
+'''
+
+
+def emit_shape_test(entry, proposal, weights, dims, golden, sample_input, out_dir, threshold=0.99) -> Path:
+    """Write a durable, re-runnable model-shape PCC test + its fixture. Returns the test path."""
+    out_dir = Path(out_dir); (out_dir / "fixtures").mkdir(parents=True, exist_ok=True)
+    slug = entry.id.replace(".", "_")
+    fixture = out_dir / "fixtures" / f"{slug}.pt"
+    torch.save({"proposal": proposal.__dict__, "entry": entry.to_dict(), "weights": weights,
+                "dims": dims, "golden": golden, "input": sample_input}, fixture)
+    path = out_dir / f"test_{slug}_model_shape.py"
+    path.write_text(_SHAPE_TEST.format(op=entry.fused_op, dims=dims, slug=slug,
+                                       fixture=str(fixture), thr=threshold))
+    return path
+
+
+def run_shape_test(path) -> tuple[bool, str]:
+    """Run a generated model-shape test via pytest; return (passed, output)."""
+    import subprocess
+    r = subprocess.run(["pytest", str(path), "-q", "-m", "device"], capture_output=True, text=True)
+    return r.returncode == 0, r.stdout + r.stderr
+```
+
+`RealImpl.verify` (graph.py) emits + runs one shape test per applied fusion (reusing `entry.unit_test_refs` as the template source where present), records per-fusion PCC into `state["per_block_pcc"]`, and sets `state["full_pcc"]` to the min. The generated tests land under `state["run_dir"]/tests/` — committable and Claude-Code-debuggable.
+
+**Part B — multi-block assembly.** Generalize `assemble_model` to stacked layers; each layer uses its fused runners with naive fallbacks for unmatched ops. Real per-layer HF weights are loaded via the **`integration` skill** (real-weight loader + full-config PCC).
+
+- [ ] **Step 1B: Write the failing test**
+
+```python
+# tests/test_assemble.py (append)
+from models.experimental.opt_transfer.assemble import assemble_layers
+
+
+def test_assemble_layers_stacks_in_order():
+    m = assemble_layers([lambda x: x + 1, lambda x: x * 2, lambda x: x - 3])
+    assert m(3) == ((3 + 1) * 2) - 3
+```
+
+- [ ] **Step 2B: Run test to verify it fails**
+
+Run: `pytest models/experimental/opt_transfer/tests/test_assemble.py::test_assemble_layers_stacks_in_order -v`
+Expected: FAIL (`assemble_layers` undefined)
+
+- [ ] **Step 3B: Write minimal implementation**
+
+```python
+# assemble.py (append)
+def assemble_layers(layer_runners):
+    """Stack N decoder-layer runners into one forward. Each runner(prev)->next; unmatched
+    ops keep their naive fallback (baked into each runner by codegen). Generalizes
+    assemble_model to multi-layer real-weight models."""
+    def model(x):
+        for run in layer_runners:
+            x = run(x)
+        return x
+    return model
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `pytest models/experimental/opt_transfer/tests/test_verify_device.py models/experimental/opt_transfer/tests/test_assemble.py -v`
+Expected: PASS (all CPU tests). The on-device `test_*_model_shape.py` artifacts are run via `run_shape_test` during bring-up and in the e2e.
+
+- [ ] **Step 5: Extend the e2e to multi-layer real weights**
+
+In `tests/test_e2e_device.py`, add a `@pytest.mark.device` case that loads ≥2 real SeamlessM4T-v2 layers (weights via the `integration` skill loader), runs the graph, and asserts `status=="pass"` with full-model PCC > 0.99 and the perf node recording a gain. This is the closure's true acceptance gate.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add models/experimental/opt_transfer/verify.py models/experimental/opt_transfer/assemble.py models/experimental/opt_transfer/graph.py models/experimental/opt_transfer/tests/test_verify_device.py models/experimental/opt_transfer/tests/test_assemble.py models/experimental/opt_transfer/tests/test_e2e_device.py
+git commit -m "feat(opt_transfer): model-shape validation (E0) + multi-block real-weight assembly"
+```
+
 ---
 
 ## Self-Review
