@@ -1177,7 +1177,14 @@ ChipId GetPCIeDeviceID(ChipId device_id) {
 ClusterType GetClusterType() { return MetalContext::instance().get_cluster().get_cluster_type(); }
 
 std::string SerializeClusterDescriptor() {
-    std::filesystem::path path = tt::umd::Cluster::create_cluster_descriptor()->serialize_to_file();
+    // In mock/emule mode, serialize the mock cluster descriptor YAML instead of running real UMD
+    // topology discovery, which would open the physical card (reads firmware bundle version etc.)
+    // and bypass the emulator. Mirrors the gated path in tt_cluster.cpp.
+    const auto& rtoptions = MetalContext::instance().rtoptions();
+    std::filesystem::path path =
+        rtoptions.get_mock_enabled()
+            ? tt::umd::ClusterDescriptor::create_from_yaml(rtoptions.get_mock_cluster_desc_path())->serialize_to_file()
+            : tt::umd::Cluster::create_cluster_descriptor()->serialize_to_file();
     return path.string();
 }
 
