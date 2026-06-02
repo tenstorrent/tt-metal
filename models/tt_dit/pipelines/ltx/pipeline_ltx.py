@@ -246,7 +246,9 @@ class LTXPipeline:
         if ccl_manager.topology == ttnn.Topology.Linear:
             self.vae_ccl_manager = ccl_manager
         else:
-            self.vae_ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+            self.vae_ccl_manager = CCLManager(
+                mesh_device, num_links=ccl_manager.num_links, topology=ttnn.Topology.Linear
+            )
         if vae_parallel_config is None:
             vae_parallel_config = VaeHWParallelConfig(
                 height_parallel=parallel_config.tensor_parallel,
@@ -283,6 +285,7 @@ class LTXPipeline:
         self.gemma_encoder_pair = GemmaTokenizerEncoderPair(
             self.gemma_path,
             mesh_device=self.mesh_device,
+            ccl_manager=self.vae_ccl_manager,
             parallel_config=self.encoder_parallel_config,
             checkpoint_name=self.checkpoint_name,
             mode=self.mode,
@@ -446,7 +449,7 @@ class LTXPipeline:
             height_parallel=ParallelFactor(factor=mesh_shape[tp_axis], mesh_axis=tp_axis),
             width_parallel=ParallelFactor(factor=mesh_shape[sp_axis], mesh_axis=sp_axis),
         )
-        ccl_manager = CCLManager(mesh_device, topology=topology)
+        ccl_manager = CCLManager(mesh_device, num_links=num_links, topology=topology)
 
         pipeline_cls = pipeline_class or LTXPipeline
         if run_warmup and not (num_frames > 0 and height > 0 and width > 0):

@@ -119,6 +119,7 @@ class GemmaTokenizerEncoderPair:
         gemma_path: str | None,
         *,
         mesh_device: ttnn.MeshDevice,
+        ccl_manager: CCLManager,
         parallel_config,
         checkpoint_name: str | None = None,
         mode: str = "av",
@@ -131,6 +132,7 @@ class GemmaTokenizerEncoderPair:
     ) -> None:
         self.gemma_path = gemma_path
         self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
         self.checkpoint_name = checkpoint_name
         self.mode = mode
@@ -146,7 +148,6 @@ class GemmaTokenizerEncoderPair:
         self.feature_extractor = None
         self.video_connector = None
         self.audio_connector = None
-        self._enc_ccl = None
         self._coresident_peers: list = []
         self._cached_trans_mat = None
 
@@ -195,9 +196,9 @@ class GemmaTokenizerEncoderPair:
         )
 
     def load_gemma_encoder(self, gemma_path: str | None = None) -> None:
-        """Load the TTNN Gemma-3 encoder. Built (with its CCLManager) once and reused across
-        reloads — a fresh CCLManager would leak global semaphores; weights reload from the
-        shared cache (no re-tilizing 12B params)."""
+        """Load the TTNN Gemma-3 encoder. Built once and reused across reloads; weights reload
+        from the shared cache (no re-tilizing 12B params). The CCLManager is supplied by the
+        pipeline (shared with the connectors), so reloads never rebuild it."""
         gemma_path = gemma_path or self.gemma_path
         if self.gemma_encoder is None:
             config = GemmaConfig(
@@ -205,8 +206,7 @@ class GemmaTokenizerEncoderPair:
                 hidden_layer_index=self._hidden_layer_index,
                 max_position_embeddings=self._sequence_length,
             )
-            enc_ccl = CCLManager(self.mesh_device, topology=ttnn.Topology.Linear)
-            self.gemma_encoder = GemmaEncoder(config, self.mesh_device, enc_ccl, self.parallel_config)
+            self.gemma_encoder = GemmaEncoder(config, self.mesh_device, self.ccl_manager, self.parallel_config)
             self._register_exclusions(self.gemma_encoder)
             # Left-padding matches the reference FeatureExtractorV2: [PAD..PAD, BOS, real];
             # padded hidden states are zeroed via attention_mask on both sides.
@@ -234,7 +234,8 @@ class GemmaTokenizerEncoderPair:
         num_heads: int = 32,
     ) -> None:
         """Load the feature extractor + video/audio connectors from the LTX checkpoint through
-        the shared cache. Modules + CCLManager are built once and reused across reloads.
+        the shared cache. Modules are built once and reused across reloads; the CCLManager is
+        supplied by the pipeline (shared with the Gemma encoder).
 
         ``checkpoint_state`` is a dict or a zero-arg callable; resolved once and only on a cache
         miss, so an all-cache-hit reload reads neither the checkpoint nor the tilizer.
@@ -245,8 +246,6 @@ class GemmaTokenizerEncoderPair:
             if self.checkpoint_name
             else "ltx-connectors"
         )
-        if self._enc_ccl is None:
-            self._enc_ccl = CCLManager(self.mesh_device, topology=ttnn.Topology.Linear)
 
         if self.feature_extractor is None:
             self.feature_extractor = GemmaFeatureExtractor(
@@ -285,7 +284,7 @@ class GemmaTokenizerEncoderPair:
                 num_blocks=num_blocks,
                 num_heads=num_heads,
                 mesh_device=self.mesh_device,
-                ccl_manager=self._enc_ccl,
+                ccl_manager=self.ccl_manager,
                 parallel_config=self.parallel_config,
             )
             self._register_exclusions(connector)
