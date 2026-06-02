@@ -1,0 +1,7 @@
+interface:
+  display_name: "Model Bringup"
+  short_description: "Run the full TTNN autoport bringup pipeline"
+  default_prompt: "Use $model-bringup to bring up HF_MODEL under models/autoports/<model> through functional decoder, optimized decoder, multichip decoder, full model, and vLLM integration stages, following the repo-specific file contracts, readiness checks, work logs, and final reports."
+
+policy:
+  allow_implicit_invocation: true
