@@ -84,6 +84,12 @@ class VoxtralTTAcousticModel:
         self._fm_dram_mem_config = ttnn.DRAM_MEMORY_CONFIG
         self._semantic_dram_mem_config = ttnn.DRAM_MEMORY_CONFIG
         self._matmul_act_mem_config = ttnn.L1_MEMORY_CONFIG
+        # Euler ODE state-accumulation dtype. Measured: fp32 vs bf16 give equal acoustic-code
+        # agreement (~0.94 vs ~0.94 over 4 cases) — matching the bf16 reference dtype does NOT
+        # reduce round() flips, because the residual is dominated by TT-vs-torch bf16 matmul ULP
+        # in the velocity head, not by state accumulation. fp32 retained (marginally best, most
+        # precise). Knob kept for future round-error investigation.
+        self._fm_acc_dtype = ttnn.float32
 
         empty_codes = torch.full(
             (1, 1, n_acoustic_out),
@@ -393,12 +399,19 @@ class VoxtralTTAcousticModel:
         return masked
 
     def fm_noise_tt(self, bsz: int, seed: int) -> ttnn.Tensor:
-        """Device-resident FM initial noise ``[bsz, 1, n_acoustic]``."""
-        # FM noise on CPU: ttnn.randn(seed) != torch.randn(seed); CPU ref uses torch, so upload for E2E/step parity.
-        torch.manual_seed(seed)
-        x_0 = torch.randn(bsz, self.n_acoustic_out, dtype=torch.bfloat16)
+        """FM initial noise ``[bsz, 1, n_acoustic]`` drawn on host to match the CPU reference RNG.
+
+        The reference (``decode_one_frame``) draws ``x_0 = torch.randn(B, n_acoustic, dtype=bf16)``
+        from the global torch RNG (``_noise_scale == 1.0``). A seeded ``torch.Generator`` reproduces
+        that exact stream, so both ODEs start from identical noise. ``ttnn.randn`` is a *different*
+        RNG and desyncs the FM start, dropping acoustic-code agreement to ~chance.
+        """
+        g = torch.Generator().manual_seed(int(seed))
+        noise = torch.randn(bsz, self.n_acoustic_out, generator=g, dtype=torch.bfloat16).reshape(
+            bsz, 1, self.n_acoustic_out
+        )
         return ttnn.from_torch(
-            x_0.unsqueeze(1).contiguous(),
+            noise,
             device=self.mesh_device,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
@@ -532,15 +545,16 @@ class VoxtralTTAcousticModel:
 
     def _euler_integrate_sampled(self, sampled_tt: ttnn.Tensor, v_t_3d: ttnn.Tensor, dt_val: float) -> ttnn.Tensor:
         mem = self._fm_dram_mem_config
-        v_scaled = ttnn.multiply(v_t_3d, dt_val, dtype=ttnn.float32, memory_config=mem)
+        acc = self._fm_acc_dtype
+        v_scaled = ttnn.multiply(v_t_3d, dt_val, dtype=acc, memory_config=mem)
         ttnn.deallocate(v_t_3d)
-        if sampled_tt.dtype == ttnn.float32:
-            sampled_f32 = sampled_tt
+        if sampled_tt.dtype == acc:
+            sampled_acc = sampled_tt
         else:
-            sampled_f32 = ttnn.typecast(sampled_tt, ttnn.float32, memory_config=mem)
+            sampled_acc = ttnn.typecast(sampled_tt, acc, memory_config=mem)
             ttnn.deallocate(sampled_tt)
-        new_sampled = ttnn.add(sampled_f32, v_scaled, dtype=ttnn.float32, memory_config=mem)
-        ttnn.deallocate(sampled_f32)
+        new_sampled = ttnn.add(sampled_acc, v_scaled, dtype=acc, memory_config=mem)
+        ttnn.deallocate(sampled_acc)
         ttnn.deallocate(v_scaled)
         return new_sampled
 
@@ -570,7 +584,7 @@ class VoxtralTTAcousticModel:
         bsz = int(llm_hidden_tt.shape[0])
         sampled_tt = ttnn.typecast(
             ttnn.clone(noise_tt),
-            ttnn.float32,
+            self._fm_acc_dtype,
             memory_config=self._fm_dram_mem_config,
         )
 
