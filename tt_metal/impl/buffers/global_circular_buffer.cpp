@@ -26,6 +26,7 @@
 #include <limits>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -469,28 +470,45 @@ const std::vector<std::vector<CoreCoord>>& GlobalCircularBufferDramSenderInterna
 
 namespace {
 
-// Map (bank_id, receivers) pairs to (DRAM-logical CoreCoord, receivers) pairs. Each bank
-// is driven by two DRISC sender cores (a free non-endpoint subchannel on NOC0 and the
-// NOC1-endpoint subchannel, also running on NOC0): the bank's ordered receiver list is
-// split ceil/floor across them, so each core delivers roughly half. A bank with a single
-// receiver keeps a single sender. Receiver order is preserved (receiver-table order ==
-// bank-local slab order, the recv-contig contract); the second sender's slabs start where
-// the first sender's receivers end (tracked host-side via DramSenderStateBlock.recv_index_base).
+// Map (bank_id, receivers) pairs to (DRAM-logical CoreCoord, receivers) pairs. In dual mode each
+// bank is driven by two DRISC sender cores (a free non-endpoint subchannel on NOC0 and the
+// NOC1-endpoint subchannel, also running on NOC0): the bank's ordered receiver list is split
+// ceil/floor across them, so each core delivers roughly half. Receiver order is preserved
+// (receiver-table order == bank-local slab order, the recv-contig contract); the second sender's
+// slabs start where the first sender's receivers end (tracked host-side via
+// DramSenderStateBlock.recv_index_base, whose per-bank reset assumes a bank's senders are
+// contiguous in this mapping — hence the no-duplicate-bank guard below).
 std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
     distributed::MeshDevice* mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool dual_senders_per_bank) {
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
     mapping.reserve((dual_senders_per_bank ? 2 : 1) * bank_to_receivers.size());
+    std::unordered_set<uint32_t> seen_banks;
     for (const auto& [bank_id, receivers] : bank_to_receivers) {
         const uint32_t n = receivers.num_cores();
         TT_FATAL(n > 0, "DRAM bank {} has no receivers", bank_id);
+        TT_FATAL(
+            seen_banks.insert(bank_id).second,
+            "DRAM bank {} appears more than once in bank_to_receivers; each bank must be listed exactly once "
+            "(the per-bank recv_index_base / slab assignment assumes one contiguous group of senders per bank).",
+            bank_id);
 
-        if (!dual_senders_per_bank || n == 1) {
+        if (!dual_senders_per_bank) {
             // Single sender per bank (the free non-endpoint subchannel).
             mapping.emplace_back(mesh_device->impl().pick_unused_dram_logical_core(bank_id), receivers);
             continue;
         }
+
+        // Dual mode launches two senders per *every* bank (the prefetcher's enumerate_dram_senders
+        // does the same unconditionally), so a single-receiver bank can't be supported — splitting
+        // one receiver across two senders is impossible, and silently collapsing it to one sender
+        // would desync the GCB's sender count from the prefetcher's. Reject it with a clear message.
+        TT_FATAL(
+            n >= 2,
+            "DRAM bank {} has a single receiver, but dual_senders_per_bank requires at least 2 receivers per "
+            "bank. Use dual_senders_per_bank=false for this topology.",
+            bank_id);
 
         // Two sender cores per bank: split the bank's ordered receivers ceil/floor.
         // select_from_corerangeset indices are inclusive and traverse row-wise (matching

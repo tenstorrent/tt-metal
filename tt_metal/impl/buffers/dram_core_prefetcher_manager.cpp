@@ -71,30 +71,25 @@ enum class LayoutMode : uint32_t {
     ReceiverContiguous = 1,
 };
 
-// Detection keys on DRAM bank count and the total receiver count (= ring_size), both
-// independent of how many DRISC sender cores drive each bank. KRowMajor has one shard
-// per bank; ReceiverContiguous has one shard per receiver (round-robin across banks).
-LayoutMode detect_layout_mode(const Buffer& buf, uint32_t num_banks, uint32_t total_receivers) {
-    const auto& bds_opt = buf.buffer_distribution_spec();
-    if (!bds_opt.has_value()) {
-        // Legacy ShardSpec path: one shard per bank by construction.
-        return LayoutMode::KRowMajor;
-    }
-    const auto num_shards = static_cast<uint32_t>(bds_opt->num_shards());
-    if (num_shards == num_banks) {
-        return LayoutMode::KRowMajor;
-    }
-    if (num_shards == total_receivers) {
+// Detection keys on how the weight was allocated, NOT the shard count: receiver-contiguous
+// weights are created with an NdShardSpec (num_shards == ring_size), K-row-major weights use a
+// legacy (WIDTH_SHARDED) shard spec. Counting shards is ambiguous when total_receivers ==
+// num_banks (one receiver per bank, num_shards == num_banks == total_receivers): the count tie
+// would route a recv-contig tensor down the K-row path, where compute_tensor_layout_krow_major
+// calls shard_spec() and TT_FATALs because the buffer only has an NdShardSpec.
+LayoutMode detect_layout_mode(const MeshTensor& t, const Buffer& buf, uint32_t total_receivers) {
+    if (t.nd_shard_spec().has_value()) {
+        const auto& bds_opt = buf.buffer_distribution_spec();
+        TT_FATAL(
+            bds_opt.has_value() && static_cast<uint32_t>(bds_opt->num_shards()) == total_receivers,
+            "Receiver-contiguous DRAM-core prefetcher weight must have num_shards == total_receivers "
+            "(ring_size = {}); got {} shards.",
+            total_receivers,
+            bds_opt.has_value() ? static_cast<uint32_t>(bds_opt->num_shards()) : 0u);
         return LayoutMode::ReceiverContiguous;
     }
-    TT_FATAL(
-        false,
-        "DRAM-core prefetcher buffer has {} shards across {} DRAM banks; expected either "
-        "num_banks ({}, K-row-major) or total_receivers ({}, receiver-contiguous).",
-        num_shards,
-        num_banks,
-        num_banks,
-        total_receivers);
+    // Legacy ShardSpec path: one wide shard per bank by construction.
+    return LayoutMode::KRowMajor;
 }
 
 // Address-independent per-tensor geometry for the K-row-major DRAM layout — see
@@ -341,7 +336,8 @@ DramCorePrefetcherTensorLayout compute_tensor_layout(
     uint32_t stage_third,
     ContextId context_id) {
     const auto* ref_buffer = t.mesh_buffer().get_reference_buffer();
-    const LayoutMode mode = detect_layout_mode(*ref_buffer, num_banks, total_receivers);
+    (void)num_banks;
+    const LayoutMode mode = detect_layout_mode(t, *ref_buffer, total_receivers);
     if (mode == LayoutMode::KRowMajor) {
         // KRowMajor is single-sender-per-bank only, so receivers_per_bank is the bank's
         // full receiver count. (Receiver-contiguous derives its geometry from the shard
@@ -612,7 +608,8 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
     };
 
     begin_page();
-    for (const auto& input : data_tensors) {
+    for (size_t tensor_idx = 0; tensor_idx < data_tensors.size(); ++tensor_idx) {
+        const auto& input = data_tensors[tensor_idx];
         // block_count is per-tensor: it sets how many K-blocks the kernel pushes
         // (and how K is divided in compute_tensor_layout), replacing the GCB ring size.
         const DramCorePrefetcherTensorLayout layout = compute_tensor_layout(
@@ -624,6 +621,26 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
             ring_half_,
             stage_third_,
             context_id);
+        // dual_senders_per_bank only makes sense for the receiver-contiguous layout (a K-row-major
+        // bank holds one shard, nothing to split). Reject the mismatch here rather than silently
+        // building wrong per-sender geometry.
+        TT_FATAL(
+            !dual_senders_per_bank_ || layout.layout_mode == static_cast<uint32_t>(LayoutMode::ReceiverContiguous),
+            "DRAM-core prefetcher: dual_senders_per_bank is only supported for the receiver-contiguous "
+            "DRAM layout, but input tensor {} is K-row-major.",
+            tensor_idx);
+
+        // The sender's free-space poll counts whole per-receiver pages; if the GCB's per-receiver
+        // fifo can't hold even one full page the poll never reaches a usable block and the DRISC
+        // kernel hangs. Guard it here (applies to both layouts).
+        TT_FATAL(
+            gcb.size() >= layout.page_bytes_per_recv,
+            "DRAM-core prefetcher: GCB per-receiver fifo size ({} B) must be at least one full per-receiver "
+            "page ({} B) for input tensor {}; a smaller fifo makes the sender's free-space poll spin forever.",
+            gcb.size(),
+            layout.page_bytes_per_recv,
+            tensor_idx);
+
         const uint32_t bank_local_base = static_cast<uint32_t>(input.tensor.get().mesh_buffer().address());
 
         // Find this layout in the current page (dedup), or decide it needs adding.
