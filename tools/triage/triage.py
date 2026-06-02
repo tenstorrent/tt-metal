@@ -657,7 +657,7 @@ def init_output_serializer(args: ScriptArguments) -> None:
     else:
         serializers.append(RichSerializer(console_sink, utils, get_verbose_level))
 
-    csv_path = args["--llm-output-path"]
+    csv_path = utils.safe_path(args["--llm-output-path"])
     if csv_path:
         try:
             file_sink = FileSink(csv_path)
@@ -1001,7 +1001,7 @@ def main():
                 utils.INFO(f"Total execution time: {total_time:.2f}s")
         progress.remove_task(scripts_task)
 
-    triage_summary_path = args["--triage-summary-path"]
+    triage_summary_path = utils.safe_path(args["--triage-summary-path"])
     if triage_summary_path:
         try:
             os.makedirs(os.path.dirname(triage_summary_path), exist_ok=True)
