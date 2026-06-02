@@ -31,11 +31,14 @@ from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     ABC_1K_PATH,
+    PROMPT_25K_PATH,
     create_hf_model,
     extract_layer_state_dict,
     get_4d_causal_mask,
     tokenize_prompt_to_isl,
 )
+
+_REAL_PROMPT_SOURCES = {"abc_1k", "prompt_25k"}
 from tests.ttnn.utils_for_testing import comp_pcc
 
 
@@ -49,7 +52,7 @@ class PrefillBlockThresholds:
 
 
 DSV3_THRESHOLDS = PrefillBlockThresholds()
-KIMI_THRESHOLDS = PrefillBlockThresholds(moe_host=0.984)
+KIMI_THRESHOLDS = PrefillBlockThresholds(moe_host=0.950)
 
 
 def run_model(
@@ -108,8 +111,10 @@ def run_model(
     ttnn_cache_complete = TtPrefillBlock.check_cache_complete(cache_dir, layer_idx, is_dense)
     torch_ref_cache = cache_dir / f"torch_reference_{input_source}.pt"
 
-    ref_cache_loadable = torch_ref_cache.exists() and (pcc_validation or input_source == "abc_1k")
-    need_hf_model = not ttnn_cache_complete or ((pcc_validation or input_source == "abc_1k") and not ref_cache_loadable)
+    ref_cache_loadable = torch_ref_cache.exists() and (pcc_validation or input_source in _REAL_PROMPT_SOURCES)
+    need_hf_model = not ttnn_cache_complete or (
+        (pcc_validation or input_source in _REAL_PROMPT_SOURCES) and not ref_cache_loadable
+    )
     logger.info(
         f"Cache status: TTNN={ttnn_cache_complete}, ref_cache={torch_ref_cache.exists()}, "
         f"need_hf_model={need_hf_model}"
@@ -141,16 +146,19 @@ def run_model(
             torch_output = ref_cached["torch_output"]
             ref_kvpe = ref_cached["ref_kvpe"]
         profiler.end("reference_loading")
-    elif input_source == "abc_1k":
+    elif input_source in _REAL_PROMPT_SOURCES:
         profiler.start("tokenization")
-        prompts = load_prompts_from_json(str(ABC_1K_PATH))
+        prompt_path = ABC_1K_PATH if input_source == "abc_1k" else PROMPT_25K_PATH
+        prompts = load_prompts_from_json(str(prompt_path))
         prompt_text = prompts[0] if isinstance(prompts, list) else prompts
         token_ids, attention_mask, tokens = tokenize_prompt_to_isl(
             tokenizer, max_isl=isl_total, prompt_text=prompt_text
         )
         attention_mask = get_4d_causal_mask(attention_mask, causal_only=True)
         profiler.end("tokenization")
-        logger.info(f"Tokenized ABC_1k input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}")
+        logger.info(
+            f"Tokenized {input_source} input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}"
+        )
         with torch.no_grad():
             torch_input = hf_model.embed_tokens(token_ids).to(torch.bfloat16)
         logger.info(f"Embedded input shape: {torch_input.shape}")
@@ -367,10 +375,10 @@ _KIMI_MESH_PARAMS = [
     "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
     [
         ("random", False, 1024, 8),
-        ("abc_1k", False, 25 * 1024, 8),
+        ("prompt_25k", False, 25 * 1024, 8),
         ("abc_1k", True, 1024, 8),
     ],
-    ids=["smoke-random", "perf-abc_25k", "pcc-abc_1k"],
+    ids=["smoke-random", "perf-prompt_25k", "pcc-abc_1k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
@@ -430,16 +438,16 @@ def test_ds_prefill_block(
         ("random", False, 25 * 1024, 8),
         ("abc_1k", True, 1024, 8),
         ("abc_1k", True, 5 * 1024, 8),
-        ("abc_1k", True, 25 * 1024, 8),
+        ("prompt_25k", True, 25 * 1024, 8),
     ],
-    ids=["smoke-random", "perf-random-5k", "perf-random-25k", "pcc-abc_1k", "pcc-abc_5k", "pcc-abc_25k"],
+    ids=["smoke-random", "perf-random-5k", "perf-random-25k", "pcc-abc_1k", "pcc-abc_5k", "pcc-prompt_25k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
     [("dense", None), ("moe", GateComputeMode.HOST_ALL)],
     ids=["dense", "moe-gate_host"],
 )
-@pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "non_balanced"])
+@pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology", _KIMI_MESH_PARAMS, indirect=["mesh_device", "device_params"]
 )

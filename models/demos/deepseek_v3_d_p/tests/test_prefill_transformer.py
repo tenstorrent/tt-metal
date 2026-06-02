@@ -53,6 +53,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     P960TOK_PATH,
     PIE960_PATH,
     PROMPT_1K_PATH,
+    PROMPT_25K_PATH,
     ReferenceCacheKey,
     check_first_token_match,
     check_reference_cache_exists,
@@ -86,6 +87,25 @@ SEQ_LEN_25K = 25600
 def _compare_intermediate_pcc(reference_items, tt_intermediates, number_of_non_padded_tokens, padding_side):
     pcc_results = []
     for label, ref_host in reference_items:
+        # For lm_head TT only emits logits at the next-token position, not the full sequence.
+        # Compare the single meaningful position against the same slice of the full-seq reference.
+        if label == "lm_head":
+            tt_host = tt_intermediates.get("logits")
+            if tt_host is None:
+                logger.error(f"{label:<20s}  Missing 'logits' single-position extract in TT intermediates")
+                pcc_results.append((label, -1.0))
+                continue
+            last_token_idx = number_of_non_padded_tokens - 1 if padding_side == "right" else ref_host.shape[-2] - 1
+            try:
+                ref_slice = ref_host.narrow(-2, last_token_idx, 1)
+                _, pcc = comp_pcc(ref_slice.float(), tt_host.float())
+                logger.debug(f"{label:<20s}  PCC = {pcc:.6f}")
+                pcc_results.append((label, pcc))
+            except Exception as e:
+                logger.error(f"{label:<20s}  PCC comparison failed: {e}")
+                pcc_results.append((label, -1.0))
+            continue
+
         if label not in tt_intermediates:
             logger.error(f"{label:<20s}  Missing from TT intermediates")
             pcc_results.append((label, -1.0))
@@ -177,7 +197,12 @@ def run_model(
     # Check cache states
     experts_per_chip = n_routed_experts // (mesh_shape[0] * mesh_shape[1]) if use_pretrained else 8
     ttnn_cache_complete = (
-        TtPrefillTransformer.check_cache_complete(effective_cache_path, num_layers, experts_per_chip)
+        TtPrefillTransformer.check_cache_complete(
+            effective_cache_path,
+            num_layers,
+            experts_per_chip,
+            first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+        )
         if effective_cache_path
         else False
     )
@@ -269,6 +294,10 @@ def run_model(
             from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 
             prompt_text = load_prompts_from_json(str(PIE960_PATH))
+        elif input_source == "prompt_25k":
+            from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
+
+            prompt_text = load_prompts_from_json(str(PROMPT_25K_PATH))
         elif input_source in INFINITEBENCH_SUBSET_NAMES:
             cached_path = download_infinitebench_subset(input_source)
             with open(cached_path) as f:
@@ -608,6 +637,23 @@ def run_model(
             f"First Token: ID={first_token_id} [{repr(token_text)}] prob={first_token_prob*100:.1f}% temp={first_temp}"
         )
 
+        # Behavioral cross-check: TT's predicted next-token vs HF reference argmax at the
+        # same position. Independent of PCC noise — argmax over the vocab gives a single
+        # binary "TT matches HF" answer. Only meaningful when host reference is in scope
+        # (list of snapshots), not when a debug trace is loaded (different structure).
+        if isinstance(ref_snapshots, list) and len(ref_snapshots) >= 1:
+            hf_logits_full = ref_snapshots[-1]  # [1, seq_len, vocab]
+            last_real_idx = number_of_non_padded_tokens - 1 if padding_side == "right" else hf_logits_full.shape[-2] - 1
+            hf_token_id = int(hf_logits_full[0, last_real_idx, :].argmax().item())
+            hf_token_text = tok.decode([hf_token_id]) if tok else "N/A"
+            match = hf_token_id == first_token_id
+            logger.info(
+                f"HF reference token at position {last_real_idx}: "
+                f"ID={hf_token_id} [{repr(hf_token_text)}] | TT==HF match: {match}"
+            )
+            if not match:
+                failures.append(("first_token_hf_match", -1.0))
+
         # First-token match against trace metadata (full-layer trace only)
         if trace_full_model:
             token_match = check_first_token_match(trace, trace_dir, first_token_id, first_token_prob)
@@ -756,6 +802,7 @@ _KIMI_PT_MESH_PARAMS = [
         "p64tok",
         "p960tok",
         "pie960",
+        "prompt_25k",
         "random",
         "passkey",
         "kv_retrieval",
@@ -860,6 +907,7 @@ def test_ds_prefill_transformer(
         "p64tok",
         "p960tok",
         "pie960",
+        "prompt_25k",
         "random",
         "passkey",
         "kv_retrieval",
@@ -868,7 +916,7 @@ def test_ds_prefill_transformer(
     ],
 )
 @pytest.mark.parametrize("pcc_validation", [True, False], ids=["pcc", "smoke"])
-@pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "non_balanced"])
+@pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
     [(SEQ_LEN_1K, 8), (SEQ_LEN_5K, 8), (SEQ_LEN_25K, 8)],

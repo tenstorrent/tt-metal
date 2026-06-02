@@ -727,7 +727,14 @@ class DeepseekV3Attention(nn.Module):
             key_latent[:, :, :, : self.kv_lora_rank] = self.kv_a_layernorm(compressed_kv).view(
                 bsz, 1, q_len, self.kv_lora_rank
             )
-            key_latent[:, :, :, self.kv_lora_rank :] = k_pe.view(bsz, 1, q_len, self.qk_rope_head_dim)
+            # HF rotates k_pe in half-half layout (pair i at positions (i, i+d/2)); TT's
+            # KVPE buffer stores k_pe in interleaved/meta-style layout (pair i at (2i, 2i+1)).
+            # Permute so the cached value is bit-comparable to TT's storage.
+            k_pe_reshaped = k_pe.view(bsz, 1, q_len, self.qk_rope_head_dim)
+            half = self.qk_rope_head_dim // 2
+            key_latent[:, :, :, self.kv_lora_rank :] = torch.stack(
+                [k_pe_reshaped[..., :half], k_pe_reshaped[..., half:]], dim=-1
+            ).flatten(-2)
             past_key_value.update(key_latent, torch.empty((*key_latent.shape[:-1], 0)), self.layer_idx, cache_kwargs)
 
         attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) * self.softmax_scale
