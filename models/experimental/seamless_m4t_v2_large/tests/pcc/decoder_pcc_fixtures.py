@@ -179,22 +179,69 @@ def make_t2tt_decoder_pcc_inputs(
     )
 
 
+def _s2tt_encoder_timeline_from_wav(
+    model: SeamlessM4Tv2Model,
+    processor: AutoProcessor,
+    *,
+    wav_seconds: float,
+    seed: int,
+) -> Tuple[torch.Tensor, torch.Tensor, int]:
+    """Run HF speech encoder on processor features; return hidden, mask, logical enc seq."""
+    torch.manual_seed(seed)
+    n_samples = max(1, int(16_000 * wav_seconds))
+    wav = (torch.randn(n_samples, dtype=torch.float32) * 0.01).numpy().reshape(-1)
+    audio = processor(audios=wav, sampling_rate=16_000, return_tensors="pt")
+    input_features = audio["input_features"].to(dtype=next(model.parameters()).dtype)
+    mel_mask = audio["attention_mask"]
+    encoder_hidden, enc_attn = _hf_speech_encoder_hidden_and_mask(model, input_features, mel_mask)
+    return encoder_hidden, enc_attn, int(encoder_hidden.shape[1])
+
+
+def _truncate_encoder_timeline(
+    encoder_hidden: torch.Tensor,
+    enc_attn: torch.Tensor,
+    target_enc_seq: int,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    if int(encoder_hidden.shape[1]) < target_enc_seq:
+        raise RuntimeError(f"encoder timeline {encoder_hidden.shape[1]} < target {target_enc_seq}; use longer audio")
+    if int(encoder_hidden.shape[1]) > target_enc_seq:
+        encoder_hidden = encoder_hidden[:, :target_enc_seq, :].contiguous()
+        enc_attn = enc_attn[:, :target_enc_seq].contiguous()
+    return encoder_hidden, enc_attn
+
+
 def make_s2tt_decoder_pcc_inputs(
     model: SeamlessM4Tv2Model,
     processor: AutoProcessor,
     *,
     tgt_lang: str = DEFAULT_TGT_LANG,
     wav_seconds: float = 1.0,
+    enc_seq_len: int | None = None,
     seed: int = 42,
 ) -> TextDecoderPccInputs:
-    """S2TT-style inputs: 16 kHz audio → processor features → speech-encoder hidden + decoder seed."""
-    torch.manual_seed(seed)
-    n_samples = int(16_000 * wav_seconds)
-    wav = (torch.randn(n_samples, dtype=torch.float32) * 0.01).numpy().reshape(-1)
-    audio = processor(audios=wav, sampling_rate=16_000, return_tensors="pt")
-    input_features = audio["input_features"].to(dtype=next(model.parameters()).dtype)
-    enc_mask = audio["attention_mask"]
-    encoder_hidden, enc_attn = _hf_speech_encoder_hidden_and_mask(model, input_features, enc_mask)
+    """S2TT-style inputs: 16 kHz audio → processor features → speech-encoder hidden + decoder seed.
+
+    When ``enc_seq_len`` is set, lengthen audio until the subsampled speech-encoder timeline is at
+    least that long, then truncate to exactly ``enc_seq_len`` (decoder PCC at a fixed cross-attn K).
+    """
+    if enc_seq_len is not None:
+        if enc_seq_len < 1:
+            raise ValueError(f"enc_seq_len must be >= 1, got {enc_seq_len}")
+        seconds = max(wav_seconds, 1.0)
+        encoder_hidden, enc_attn, got = _s2tt_encoder_timeline_from_wav(
+            model, processor, wav_seconds=seconds, seed=seed
+        )
+        while got < enc_seq_len:
+            seconds *= 1.5
+            encoder_hidden, enc_attn, got = _s2tt_encoder_timeline_from_wav(
+                model, processor, wav_seconds=seconds, seed=seed
+            )
+        encoder_hidden, enc_attn = _truncate_encoder_timeline(encoder_hidden, enc_attn, enc_seq_len)
+    else:
+        encoder_hidden, enc_attn, _ = _s2tt_encoder_timeline_from_wav(
+            model, processor, wav_seconds=wav_seconds, seed=seed
+        )
+
     dec_ids = decoder_seed_ids(model, tgt_lang)
     dec_mask = torch.ones_like(dec_ids)
     return TextDecoderPccInputs(
