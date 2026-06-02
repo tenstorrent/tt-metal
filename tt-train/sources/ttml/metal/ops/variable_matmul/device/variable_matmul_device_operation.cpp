@@ -144,26 +144,22 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
             out_M_tiles);
     }
 
-    // On-device offsets validation.
-    const bool has_offsets = tensor_args.offsets_tensor.has_value();
-    const bool role_active = operation_attributes.offsets_role != OffsetsRole::None;
+    // EP path is mandatory: every call must provide an offsets_tensor and a non-None role.
     TT_FATAL(
-        has_offsets == role_active,
-        "variable_matmul: offsets_tensor and offsets_role must both be set or both be unset.");
-    if (role_active) {
-        const auto role = operation_attributes.offsets_role;
+        tensor_args.offsets_tensor.has_value(),
+        "variable_matmul: offsets_tensor is required (use InputAndOutputRow or InputAndWeightK).");
+    const auto role = operation_attributes.offsets_role;
+    TT_FATAL(
+        role == OffsetsRole::InputAndOutputRow || role == OffsetsRole::InputAndWeightK,
+        "variable_matmul: offsets_role must be InputAndOutputRow or InputAndWeightK.");
+    if (role == OffsetsRole::InputAndOutputRow) {
         TT_FATAL(
-            role == OffsetsRole::InputAndOutputRow || role == OffsetsRole::InputAndWeightK,
-            "variable_matmul: unsupported OffsetsRole value.");
-        if (role == OffsetsRole::InputAndOutputRow) {
-            TT_FATAL(
-                tensor_args.output_tensor.has_value(),
-                "variable_matmul: OffsetsRole::InputAndOutputRow requires a caller-provided output_tensor.");
-        }
-        const auto& off = tensor_args.offsets_tensor.value();
-        TT_FATAL(off.dtype() == ttnn::DataType::UINT32, "variable_matmul: offsets_tensor must be UINT32.");
-        TT_FATAL(off.layout() == ttnn::Layout::ROW_MAJOR, "variable_matmul: offsets_tensor must be ROW_MAJOR.");
+            tensor_args.output_tensor.has_value(),
+            "variable_matmul: OffsetsRole::InputAndOutputRow requires a caller-provided output_tensor.");
     }
+    const auto& off = tensor_args.offsets_tensor.value();
+    TT_FATAL(off.dtype() == ttnn::DataType::UINT32, "variable_matmul: offsets_tensor must be UINT32.");
+    TT_FATAL(off.layout() == ttnn::Layout::ROW_MAJOR, "variable_matmul: offsets_tensor must be ROW_MAJOR.");
 }
 
 VariableMatmulDeviceOperation::spec_return_value_t VariableMatmulDeviceOperation::compute_output_specs(

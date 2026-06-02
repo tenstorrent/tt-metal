@@ -249,21 +249,16 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     // OFFSETS_ACTIVE / OFFSET_* are the only kernel defines variable_matmul uses today.
     std::map<std::string, std::string> defines;
 
-    // On-device offsets (EP). When active, dataflow kernels read
-    // offsets_tensor[offsets_start_index] (and offsets_start_index+1 for InputRow) at
-    // startup and use the values to override the matching RT-derived offsets. For
-    // InputRow the compute kernel also needs M values; dm_in0_sender writes them to a
-    // small control CB that compute waits on.
-    const bool offsets_active =
-        operation_attributes.offsets_role != OffsetsRole::None && tensor_args.offsets_tensor.has_value();
-    // Orthogonal offset flags derived from the role. Each kernel branch keys off these (not
-    // off the role enum), so future role combinations are just a matter of listing flags here.
+    // EP is mandatory: the dataflow kernels always read offsets_tensor[start..start+2] and
+    // use the values to override the RT-derived offsets. For InputAndOutputRow the compute
+    // kernel also needs M values; dm_in0_sender publishes them via cb_ctrl.
+    // Orthogonal offset flags derived from the role — kernel branches key off these.
     const auto role = operation_attributes.offsets_role;
-    const bool offset_m_axis = offsets_active && role == OffsetsRole::InputAndOutputRow;
-    const bool offset_in0_row = offsets_active && role == OffsetsRole::InputAndOutputRow;
-    const bool offset_out_row = offsets_active && role == OffsetsRole::InputAndOutputRow;
-    const bool offset_in0_k = offsets_active && role == OffsetsRole::InputAndWeightK;
-    const bool offset_in1_k = offsets_active && role == OffsetsRole::InputAndWeightK;
+    const bool offset_m_axis = role == OffsetsRole::InputAndOutputRow;
+    const bool offset_in0_row = role == OffsetsRole::InputAndOutputRow;
+    const bool offset_out_row = role == OffsetsRole::InputAndOutputRow;
+    const bool offset_in0_k = role == OffsetsRole::InputAndWeightK;
+    const bool offset_in1_k = role == OffsetsRole::InputAndWeightK;
     // `use_offset` / `use_offset_in1` — when true, the dm kernel adds the row/K offset to
     // the per-tile address. Computed once and shared across all four dm kernel CTA lists
     // (in0 sender + in0 receiver, in1 sender + in1 receiver). Sender and receiver MUST
@@ -271,11 +266,10 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     const bool use_offset_in0 =
         operation_attributes.effective_M_tiles > 0 || parent_K_tiles_in0 > K_tiles || offset_in0_k;
     const bool use_offset_in1 = parent_K_tiles_in1 > K_tiles || offset_in1_k;
-    // Both dm kernels need the offsets accessor + RT args whenever any flag is active —
-    // they each read the offsets tensor to derive their own slice of the override values.
-    // compute reads its override values from cb_ctrl, not directly from offsets.
-    const bool in0_needs_offsets = offsets_active;
-    const bool in1_needs_offsets = offsets_active;
+    // Both dm kernels always read the offsets tensor (each one derives its own slice).
+    // Compute reads its override values from cb_ctrl, not directly from offsets.
+    constexpr bool in0_needs_offsets = true;
+    constexpr bool in1_needs_offsets = true;
     std::map<std::string, std::string> in0_defines = defines;
     std::map<std::string, std::string> in1_defines = defines;
     std::map<std::string, std::string> compute_offsets_defines;  // merged into compute_defines below
@@ -285,7 +279,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         }
     };
     for (auto* m : {&in0_defines, &in1_defines, &compute_offsets_defines}) {
-        set_flag(*m, "OFFSETS_ACTIVE", offsets_active);
+        set_flag(*m, "OFFSETS_ACTIVE", true);
         set_flag(*m, "OFFSET_M_AXIS", offset_m_axis);
         set_flag(*m, "OFFSET_IN0_ROW", offset_in0_row);
         set_flag(*m, "OFFSET_OUT_ROW", offset_out_row);
@@ -770,11 +764,10 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     // every role, so RT-arg updates must match — otherwise the kernel's `offsets_start_index`
     // arg keeps the value from the first build and subsequent cache-hit invocations read
     // offsets[0] instead of offsets[e].
-    const bool offsets_active =
-        operation_attributes.offsets_role != OffsetsRole::None && tensor_args.offsets_tensor.has_value();
-    const bool in0_needs_offsets = offsets_active;
-    const bool in1_needs_offsets = offsets_active;
-    const uint32_t offsets_addr = offsets_active ? tensor_args.offsets_tensor.value().buffer()->address() : 0U;
+    // EP is mandatory — offsets_tensor is always set.
+    constexpr bool in0_needs_offsets = true;
+    constexpr bool in1_needs_offsets = true;
+    const uint32_t offsets_addr = tensor_args.offsets_tensor.value().buffer()->address();
     constexpr uint32_t IN0_OFFSETS_ADDR_IDX = 18;  // appended after K_tiles (idx 17).
     constexpr uint32_t IN0_OFFSETS_START_IDX_IDX = 19;
     constexpr uint32_t IN1_OFFSETS_ADDR_IDX = 17;

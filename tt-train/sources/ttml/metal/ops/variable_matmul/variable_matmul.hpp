@@ -44,12 +44,13 @@ ttnn::Tensor variable_matmul(
     // Write-at-offset output (optional). When set, matmul writes into a row range of
     // this caller-provided parent. EP path overrides the row offset via offsets_tensor.
     std::optional<ttnn::Tensor> output_tensor = std::nullopt,
-    // EP path: when offsets_tensor is set, the dataflow kernel reads
-    // offsets_tensor[offsets_start_index..start_index+2] at runtime and derives the
-    // matching row/K ranges (M-range for InputRow/OutputRow/InputAndOutputRow,
-    // K-range for InputK/WeightK/InputAndWeightK).
+    // EP path: the dataflow kernel reads offsets_tensor[offsets_start_index..start_index+2]
+    // at runtime and derives the matching row/K ranges per the OffsetsRole. Both
+    // offsets_tensor and offsets_role are REQUIRED — variable_matmul is an EP-only op.
+    // The std::optional / default here is for argument-ordering only; runtime validation
+    // enforces that they be set.
     std::optional<ttnn::Tensor> offsets_tensor = std::nullopt,
-    OffsetsRole offsets_role = OffsetsRole::None,
+    OffsetsRole offsets_role = OffsetsRole::InputAndOutputRow,
     uint32_t offsets_start_index = 0,
     // effective_M_tiles also bounds the host-side output_tensor validation on the EP
     // path (matters when token_capacity is non-tile-aligned).

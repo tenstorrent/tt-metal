@@ -25,18 +25,17 @@ struct VariableMatmulConfig {
 // from a device tensor at runtime and derives the matching row/K offsets. Lets moe_ffn
 // avoid offsets.to_vector() under MeshDevice EP.
 enum class OffsetsRole : uint32_t {
-    None = 0,
     // Reads offsets[start..start+2] and uses the same range for BOTH the in0 read window
     // AND the output write window. Lets moe_ffn use a single shared output tensor of shape
     // [T_cap, N] instead of E per-expert intermediates — each expert's matmul reads
     // grouped[offsets[e]:offsets[e+1]] and writes into the corresponding row range of the
     // shared output. The upper-bound constraint on per-expert size disappears: every
     // expert's actual rows fit naturally into its slice of the shared [T_cap, N] tensor.
-    InputAndOutputRow = 5,
+    InputAndOutputRow = 1,
     // Reads offsets[start..start+2] and uses the same range for BOTH the in0 K-slice and
     // the in1 K-slice. Used in moe_ffn backward dW matmuls where both operands are shared
     // [T_cap, *] tensors and only the expert's K-row range should participate in the K-reduce.
-    InputAndWeightK = 6,
+    InputAndWeightK = 2,
 };
 
 struct VariableMatmulParams {
@@ -67,7 +66,7 @@ struct VariableMatmulParams {
     //              via cb_ctrl so compute can override RT args).
     //   InputK:    offsets[start] → in0_k_offset_tiles.
     //   WeightK:   offsets[start] → in1_k_offset_tiles.
-    OffsetsRole offsets_role = OffsetsRole::None;
+    OffsetsRole offsets_role = OffsetsRole::InputAndOutputRow;
     uint32_t offsets_start_index = 0;
 };
 

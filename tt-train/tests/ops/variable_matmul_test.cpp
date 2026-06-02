@@ -103,20 +103,6 @@ protected:
 // produces zero output for zero input across cores.
 
 // Both transposes simultaneously.
-TEST_F(VariableMatmulTest, TransposeBoth_Correctness_128x128x512) {
-    const uint32_t M = 128, K = 128, N = 512;
-    auto* device = &ttml::autograd::ctx().get_device();
-
-    auto input_km = create_random_device_tensor(K, M, device);   // stored [K, M]
-    auto weight_nk = create_random_device_tensor(N, K, device);  // stored [N, K]
-
-    auto cfg = kConfig;
-    auto result = ttml::metal::variable_matmul(input_km, weight_nk, cfg, /*transpose_a=*/true, /*transpose_b=*/true);
-    auto ref = ttnn::matmul(input_km, weight_nk, /*transpose_a=*/true, /*transpose_b=*/true);
-
-    float err = max_abs_error(result, ref);
-    EXPECT_LT(err, 2.0F) << "transpose_a+b max_abs_error: " << err;
-}
 
 // ---------------------------------------------------------------------------
 // HiFi4-vs-HiFi4 minimal_matmul parity tests. variable_matmul is a superset of
@@ -127,90 +113,13 @@ TEST_F(VariableMatmulTest, TransposeBoth_Correctness_128x128x512) {
 // variable_matmul's core path.
 // ---------------------------------------------------------------------------
 
-TEST_F(VariableMatmulTest, MinimalParity_NoTranspose) {
-    const uint32_t M = 128, K = 128, N = 512;
-    auto* device = &ttml::autograd::ctx().get_device();
-
-    auto input = create_random_device_tensor(M, K, device);
-    auto weight = create_random_device_tensor(K, N, device);
-
-    auto result = ttml::metal::variable_matmul(input, weight, kConfig);
-    auto ref = minimal_matmul_hifi4(input, weight, kConfig);
-
-    EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable vs minimal (no transpose) not bit-exact";
-}
-
 // Non-tile-aligned M (matches DeepSeek 16B with TP=8: moe_inter_dim=1408/8 = 176). The
 // TILE-layout physical storage rounds to ceil(176/32)*32 = 192; variable_matmul must
 // process all 6 M-tiles, write the same as minimal_matmul, and present logical_shape M=176
 // to the caller. Output's physical tile 5 has 16 valid rows + 16 padded zeros.
-TEST_F(VariableMatmulTest, MinimalParity_NoTranspose_NonTileAlignedM_176) {
-    const uint32_t M = 176, K = 128, N = 256;
-    auto* device = &ttml::autograd::ctx().get_device();
-
-    auto input = create_random_device_tensor(M, K, device);
-    auto weight = create_random_device_tensor(K, N, device);
-
-    auto result = ttml::metal::variable_matmul(input, weight, kConfig);
-    auto ref = minimal_matmul_hifi4(input, weight, kConfig);
-
-    EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable vs minimal (M=176, non-tile-aligned) not bit-exact";
-}
-
-TEST_F(VariableMatmulTest, MinimalParity_TransposeB) {
-    const uint32_t M = 128, K = 128, N = 512;
-    auto* device = &ttml::autograd::ctx().get_device();
-
-    auto input = create_random_device_tensor(M, K, device);
-    auto weight_nk = create_random_device_tensor(N, K, device);  // stored [N, K]
-
-    const auto& cfg = kConfig;
-    auto result = ttml::metal::variable_matmul(input, weight_nk, cfg, /*transpose_a=*/false, /*transpose_b=*/true);
-    // minimal_matmul has no transpose flag; pre-transpose the weight to compare apples-to-apples.
-    auto weight_kn = ttnn::transpose(weight_nk, -2, -1);
-    auto ref = minimal_matmul_hifi4(input, weight_kn, kConfig);
-
-    EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(transpose_b) vs minimal not bit-exact";
-}
-
-TEST_F(VariableMatmulTest, MinimalParity_TransposeA) {
-    const uint32_t M = 128, K = 128, N = 512;
-    auto* device = &ttml::autograd::ctx().get_device();
-
-    auto input_km = create_random_device_tensor(K, M, device);  // stored [K, M]
-    auto weight = create_random_device_tensor(K, N, device);
-
-    const auto& cfg = kConfig;
-    auto result = ttml::metal::variable_matmul(input_km, weight, cfg, /*transpose_a=*/true, /*transpose_b=*/false);
-    auto input_mk = ttnn::transpose(input_km, -2, -1);
-    auto ref = minimal_matmul_hifi4(input_mk, weight, kConfig);
-
-    EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(transpose_a) vs minimal not bit-exact";
-}
 
 // Production-scale parity at moe_ffn dW_down shape (transpose_a; K=1024).
 // Even at K=1024, two HiFi4 reductions in the same order should agree well within rtol=1e-2.
-TEST_F(VariableMatmulTest, MinimalParity_MixtralDWDown_TransposeA) {
-    const VariableMatmulConfig cfg{
-        .M_block_size = 4,
-        .K_block_size = 8,
-        .N_block_size = 8,
-        .subblock_h = 2,
-        .subblock_w = 2,
-        .compute_with_storage_grid_size = {10, 10},
-    };
-    const uint32_t M = 14336, K = 1024, N = 4096;
-    auto* device = &ttml::autograd::ctx().get_device();
-
-    auto input_km = create_random_device_tensor(K, M, device);
-    auto weight = create_random_device_tensor(K, N, device);
-
-    auto result = ttml::metal::variable_matmul(input_km, weight, cfg, /*transpose_a=*/true, /*transpose_b=*/false);
-    auto input_mk = ttnn::transpose(input_km, -2, -1);
-    auto ref = minimal_matmul_hifi4(input_mk, weight, cfg);
-
-    EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(MixtralDWDown,tA) vs minimal not bit-exact";
-}
 
 // ---------------------------------------------------------------------------
 // K-axis OffsetsRole bit-exact parity. variable_matmul with a K-offset reads only the
