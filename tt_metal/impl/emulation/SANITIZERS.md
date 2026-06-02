@@ -34,8 +34,8 @@ emulator selection.
 | # | Category | Where it fires | Trigger |
 |---|---|---|---|
 | 1 | Use-After-Free | host entry points | Access through a Buffer whose backing memory was deallocated |
-| 2 | L1 Alignment | host entry points | `WriteToDeviceL1`/`ReadFromDeviceL1` address not 4-byte aligned |
-| 3 | DRAM Alignment | host entry points | `WriteToDeviceDRAMChannel`/`ReadFromDeviceDRAMChannel` address not 32-byte aligned (WH) |
+| 2 | L1 Alignment | host entry points | `WriteToDeviceL1`/`ReadFromDeviceL1` address not aligned to the transfer's `Cluster::get_alignment_requirements()` (DMA alignment when DMA-backed; `1` — i.e. no-op — for host/UMD pokes such as emule's memory-backed I/O) |
+| 3 | DRAM Alignment | host entry points | `WriteToDeviceDRAMChannel`/`ReadFromDeviceDRAMChannel` address not aligned to the transfer's `Cluster::get_alignment_requirements()` (DMA alignment when DMA-backed; `1` — i.e. no-op — for host/UMD pokes such as emule's memory-backed I/O) |
 | 4 | Metadata Overflow | `ConfigureDeviceWithProgram` | Program's static CB region overruns lowest occupied L1 address |
 | 5 | Out-of-Bounds Write (L1) | kernel (in `__emule_local_l1_to_ptr`) | Kernel L1 access at-or-above `l1_unreserved_base` doesn't hit any live tensor extent |
 | 6 | Out-of-Bounds Write (DRAM) | kernel (in `__emule_dram_ptr`) | Kernel DRAM access doesn't hit any live DRAM tensor extent |

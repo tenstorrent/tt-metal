@@ -37,30 +37,46 @@ inline void check_buffer_allocated(const tt::tt_metal::Buffer& buffer, const cha
     }
 }
 
-inline void check_host_l1_alignment(uint32_t address, const char* op) {
+// `alignment` is the transfer's real requirement from Cluster::get_alignment_requirements(device, size)
+// (DMA alignment when DMA-backed, else 1). The host->L1 data path
+// (Cluster::write_core -> UMD write_to_device) accepts byte-granular writes and
+// WriteToBuffer applies no separate floor, so a hardcoded word/NoC alignment
+// here would false-positive legitimate writes (e.g. row-major remainders).
+// Register pokes that genuinely need 4-byte alignment go through write_reg,
+// not this path.
+inline void check_host_l1_alignment(uint32_t address, uint32_t alignment, const char* op) {
     if (!emule_asan_enabled()) {
         return;
     }
-    if (address % 4 != 0) {
+    if (alignment > 1 && address % alignment != 0) {
         fprintf(
             stderr,
-            "[ASAN ERROR] L1 Alignment: %s host address 0x%x must be 4-byte aligned\n",
+            "[ASAN ERROR] L1 Alignment: %s host address 0x%x must be %u-byte aligned\n",
             op,
-            address);
+            address,
+            alignment);
         std::abort();
     }
 }
 
-inline void check_host_dram_alignment(uint32_t address, const char* op) {
+// `alignment` is the transfer's real requirement, obtained at the call site
+// from Cluster::get_alignment_requirements(device, size): the DMA alignment
+// when a DMA engine backs the transfer, otherwise 1. A value of 1 means the
+// host/UMD poke path imposes no alignment (e.g. emule's memory-backed I/O, or
+// the unaligned row-major page remainders that WriteToBuffer issues by design),
+// so the check must be a no-op. Passing the value in keeps this header free of
+// MetalContext/Cluster includes.
+inline void check_host_dram_alignment(uint32_t address, uint32_t alignment, const char* op) {
     if (!emule_asan_enabled()) {
         return;
     }
-    if (address % 32 != 0) {
+    if (alignment > 1 && address % alignment != 0) {
         fprintf(
             stderr,
-            "[ASAN ERROR] DRAM Alignment: %s host address 0x%x must be 32-byte aligned (WH)\n",
+            "[ASAN ERROR] DRAM Alignment: %s host address 0x%x must be %u-byte aligned\n",
             op,
-            address);
+            address,
+            alignment);
         std::abort();
     }
 }

@@ -218,7 +218,11 @@ namespace detail {
 
 bool WriteToDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, std::span<const std::uint8_t> host_buffer) {
-    emule::check_host_dram_alignment(address, "WriteToDeviceDRAMChannel");
+    emule::check_host_dram_alignment(
+        address,
+        MetalContext::instance().get_cluster().get_alignment_requirements(
+            device->id(), static_cast<uint32_t>(host_buffer.size())),
+        "WriteToDeviceDRAMChannel");
     TT_FATAL(
         address >= device->allocator()->get_base_allocator_addr(HalMemType::DRAM),
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
@@ -237,7 +241,11 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
 }
 
 bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::span<uint8_t> host_buffer) {
-    emule::check_host_dram_alignment(address, "ReadFromDeviceDRAMChannel");
+    emule::check_host_dram_alignment(
+        address,
+        MetalContext::instance().get_cluster().get_alignment_requirements(
+            device->id(), static_cast<uint32_t>(host_buffer.size())),
+        "ReadFromDeviceDRAMChannel");
     bool pass = true;
     MetalContext::instance().get_cluster().dram_barrier(device->id());
     MetalContext::instance().get_cluster().read_dram_vec(
@@ -259,7 +267,11 @@ bool WriteToDeviceL1(
     std::span<const std::uint8_t> host_buffer,
     CoreType core_type) {
     ZoneScoped;
-    emule::check_host_l1_alignment(address, "WriteToDeviceL1");
+    emule::check_host_l1_alignment(
+        address,
+        MetalContext::instance().get_cluster().get_alignment_requirements(
+            device->id(), static_cast<uint32_t>(host_buffer.size())),
+        "WriteToDeviceL1");
     auto worker_core = device->virtual_core_from_logical_core(logical_core, core_type);
     MetalContext::instance().get_cluster().write_core(device->id(), worker_core, host_buffer, address);
     return true;
@@ -291,7 +303,11 @@ bool ReadFromDeviceL1(
     uint32_t address,
     std::span<uint8_t> host_buffer,
     CoreType core_type) {
-    emule::check_host_l1_alignment(address, "ReadFromDeviceL1");
+    emule::check_host_l1_alignment(
+        address,
+        MetalContext::instance().get_cluster().get_alignment_requirements(
+            device->id(), static_cast<uint32_t>(host_buffer.size())),
+        "ReadFromDeviceL1");
     MetalContext::instance().get_cluster().l1_barrier(device->id());
     auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     MetalContext::instance().get_cluster().read_core(
@@ -306,7 +322,10 @@ bool ReadFromDeviceL1(
     uint32_t size,
     std::vector<uint32_t>& host_buffer,
     CoreType core_type) {
-    emule::check_host_l1_alignment(address, "ReadFromDeviceL1");
+    emule::check_host_l1_alignment(
+        address,
+        MetalContext::instance().get_cluster().get_alignment_requirements(device->id(), size),
+        "ReadFromDeviceL1");
     MetalContext::instance().get_cluster().l1_barrier(device->id());
     auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     host_buffer = MetalContext::instance().get_cluster().read_core(device->id(), virtual_core, address, size);
