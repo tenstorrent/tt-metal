@@ -7,6 +7,7 @@
 #include <dlfcn.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <sys/mman.h>
 
 #include <bit>
 #include <atomic>
@@ -77,6 +78,37 @@ using __emule_cb_state = tt_emule::CBSyncState;
 
 thread_local std::vector<uint32_t> __rt_args;
 thread_local std::vector<uint32_t> __common_rt_args;
+
+// Below-4GB scratch buffers mirroring the rt args. Kernels reach into rt-args
+// storage via `get_arg_addr(idx)`, which returns a pointer; upstream
+// silicon-side code paths (e.g. `shard_addr_gen_utils::get_shard_map`) then
+// truncate that pointer to `uint32_t` because real L1 addresses fit in 32
+// bits.  When `__rt_args.data()` lives on the heap above 4 GB the truncation
+// destroys the upper bits and the subsequent dereference segfaults; this
+// mmap MAP_32BIT scratch keeps `get_arg_addr` 32-bit-safe.  Capacity 341 ×
+// uint32_t matches the upstream tt-metal cap for unique + common rt args.
+constexpr size_t EMULE_RT_ARGS_CAP = 341;
+thread_local uint32_t* __rt_args_scratch = nullptr;
+thread_local uint32_t* __common_rt_args_scratch = nullptr;
+
+static uint32_t* __emule_alloc_32bit_scratch(size_t bytes) {
+    void* p = mmap(nullptr, bytes, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+    if (p == MAP_FAILED) {
+        throw std::runtime_error("emule: MAP_32BIT scratch allocation failed");
+    }
+    return static_cast<uint32_t*>(p);
+}
+
+static void __emule_ensure_rt_args_scratch() {
+    if (!__rt_args_scratch) {
+        __rt_args_scratch = __emule_alloc_32bit_scratch(EMULE_RT_ARGS_CAP * sizeof(uint32_t));
+    }
+    if (!__common_rt_args_scratch) {
+        __common_rt_args_scratch = __emule_alloc_32bit_scratch(EMULE_RT_ARGS_CAP * sizeof(uint32_t));
+    }
+}
+
 thread_local tt_emule::Core* __core = nullptr;
 thread_local tt_emule::Device* __device = nullptr;
 
@@ -1767,6 +1799,16 @@ static void launch_cores(
                             auto& ki = *ki_ptr;
                             __rt_args = ki.rt_args;
                             __common_rt_args = ki.common_rt_args;
+                            __emule_ensure_rt_args_scratch();
+                            if (ki.rt_args.size() > EMULE_RT_ARGS_CAP ||
+                                ki.common_rt_args.size() > EMULE_RT_ARGS_CAP) {
+                                throw std::runtime_error(
+                                    "emule: rt_args size exceeds EMULE_RT_ARGS_CAP");
+                            }
+                            std::memcpy(__rt_args_scratch, ki.rt_args.data(),
+                                        ki.rt_args.size() * sizeof(uint32_t));
+                            std::memcpy(__common_rt_args_scratch, ki.common_rt_args.data(),
+                                        ki.common_rt_args.size() * sizeof(uint32_t));
                             __emule_bridge_l1 = l1_data;
                             __emule_bridge_dram = dram_data;
                             __emule_cbs = cb_array;
