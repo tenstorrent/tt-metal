@@ -56,6 +56,17 @@ DEVICE_CONFIGS = {
         "tp_axis": 0,
         "cluster_axis": 0,
     },
+    "wh_4x8": {
+        "mesh_shape": (4, 8),
+        "fabric_config": "FABRIC_1D_RING",
+        "fabric_router_config_payload": None,
+        "topology": "Ring",
+        "num_links": 4,
+        "num_workers_per_link": 2,
+        "sp_axis": 0,
+        "tp_axis": 1,
+        "cluster_axis": 1,
+    },
 }
 
 DEFAULT_DEVICE_CONFIG = "bh_4x8"
@@ -109,9 +120,45 @@ SHAPES = [
     (9472, 5120, 3456, 12, 9, True, "ff1_gelu"),
     # cross_attn_kv: cross-attention KV via minimal_matmul_split, chunks=2 (11x10 grid)
     (128, 5120, 2560, 11, 10, False, "cross_attn_kv"),
+    # ── Flux2 WH Galaxy shapes (sp=4, tp=8 on 4×8 mesh, 1024×1024 image) ──
+    # MM: ff1 (8x9 grid)
+    (1024, 6144, 2304, 8, 9, False, "plain"),
+    (512, 6144, 2304, 8, 9, False, "plain"),
+    # MM: proj_out (8x9 grid)
+    (1024, 6144, 128, 8, 9, False, "plain"),
+    # MM: context embedder (8x9 grid)
+    (512, 15360, 768, 8, 9, False, "plain"),
+    # MM: small projection (8x9 grid)
+    (1024, 128, 768, 8, 9, False, "plain"),
+    # MM: ff projections also dispatched on 8x8 grid (full_grid.y-1)
+    (1024, 6144, 4608, 8, 8, False, "plain"),
+    (512, 6144, 4608, 8, 8, False, "plain"),
+    (1024, 6144, 768, 8, 8, False, "plain"),
+    (512, 6144, 768, 8, 8, False, "plain"),
+    # MM: ff projections also dispatched on 8x9 grid (full_grid)
+    (1024, 6144, 4608, 8, 9, False, "plain"),
+    (512, 6144, 4608, 8, 9, False, "plain"),
+    # AGMM: QKV projection, chunks=3 (8x8 grid, full_grid.y-1)
+    (1024, 768, 4608, 8, 8, True, "qkv"),
+    (512, 768, 4608, 8, 8, True, "qkv"),
+    # AGMM: to_out with addcmul (8x8 grid)
+    (1024, 768, 768, 8, 8, True, "to_out"),
+    (512, 768, 768, 8, 8, True, "to_out"),
+    # MM+RS: fused matmul + reduce scatter (8x7 compute grid within 8x9 full grid)
+    (1024, 2304, 6144, 8, 7, True, "mmrs"),
+    (512, 2304, 6144, 8, 7, True, "mmrs"),
+    (1024, 3072, 6144, 8, 7, True, "mmrs"),
+    (512, 3072, 6144, 8, 7, True, "mmrs"),
 ]
 
-SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]
+
+def _op_tag(is_agmm, uc):
+    if uc.startswith("mmrs"):
+        return "mmrs"
+    return "agmm" if is_agmm else "mm"
+
+
+SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{_op_tag(agmm, uc)}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]
 
 # Per-use-case configuration overrides applied in the worker.
 USE_CASE_CONFIGS = {
@@ -133,6 +180,9 @@ USE_CASE_CONFIGS = {
         "chunks": 2,
         "math_approx_mode": True,
         "use_matmul_split": True,
+    },
+    "mmrs": {
+        "chunk_width_in_mm_blocks": 1,
     },
 }
 
@@ -162,7 +212,7 @@ L1_BUDGET_KB = 1400
 PROFILER_BATCH_SIZE_AGMM = 8
 PROFILER_BATCH_SIZE_MM = 256
 
-CSV_FILE = "sweep_results_mm.csv"
+CSV_FILE = os.environ.get("SWEEP_CSV", "sweep_results_mm.csv")
 CSV_COLUMNS = [
     "device_config",
     "op_type",
@@ -419,6 +469,9 @@ def test_mm_sweep_worker(device_config, shape, m_block):
     uc_cfg = USE_CASE_CONFIGS[use_case]
 
     M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
+    if is_agmm and not use_case.startswith("mmrs"):
+        tp_size = cfg["mesh_shape"][cfg["tp_axis"]]
+        K_tiles = K_tiles // tp_size
 
     # Explicit combos override: JSON list of [k_blk, n_blk, sb_h, sb_w] tuples
     # When set, m_block must match the expected value and we skip normal generation.
@@ -447,7 +500,7 @@ def test_mm_sweep_worker(device_config, shape, m_block):
         if not kn_combos:
             pytest.skip(f"Empty batch [{batch_start}:{batch_end}]")
 
-    op_type = "agmm" if is_agmm else "mm"
+    op_type = _op_tag(is_agmm, use_case)
     if explicit_combos_str:
         logger.info(
             f"Worker [{device_config}] {op_type} ({use_case}): M={M} K={K} N={N} grid={cgx}x{cgy} "
@@ -459,7 +512,7 @@ def test_mm_sweep_worker(device_config, shape, m_block):
             f"m_block={m_block}, {len(kn_combos)} K/N combos (batch [{batch_start}:{batch_end}])"
         )
 
-    mesh_device = open_mesh(cfg, trace_region_size=4194304 if is_agmm else None)  # 4MB for trace region
+    mesh_device = open_mesh(cfg, trace_region_size=None)
     try:
         core_grid = ttnn.CoreCoord(cgx, cgy)
         dtype = ttnn.bfloat16
@@ -475,8 +528,78 @@ def test_mm_sweep_worker(device_config, shape, m_block):
         fused_activation = uc_cfg.get("fused_activation", None)
         chunks = uc_cfg.get("chunks", 1)
         scalar = uc_cfg.get("scalar", None)
+        is_mmrs = use_case.startswith("mmrs")
 
-        if is_agmm:
+        if is_mmrs:
+            # ----- MM+RS path: fused matmul + strided reduce scatter -----
+            tp_axis = cfg["tp_axis"]
+
+            tt_input = ttnn.from_torch(
+                torch.randn((1, 1, M, K), dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            tt_weight = ttnn.from_torch(
+                torch.randn((K, N), dtype=torch.float32),
+                dtype=dtype,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+            )
+
+            full_grid = mesh_device.compute_with_storage_grid_size()
+            ccl_cores = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_grid.x - 1, full_grid.y - 1))}
+            )
+            rs_semaphore_handles = [
+                ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
+                ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
+                ttnn.create_global_semaphore(mesh_device, ccl_cores, 0),
+            ]
+            barrier_semaphore = ttnn.create_global_semaphore(mesh_device, ccl_cores, 0)
+
+            rs_grid_offset = ttnn.CoreCoord(0, cgy)
+            chunk_width = uc_cfg.get("chunk_width_in_mm_blocks", 1)
+            rs_zone_capacity = (full_grid.y - cgy) * full_grid.x
+            num_workers_per_link = rs_zone_capacity // (2 * cfg["num_links"]) - 1
+
+            mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+            def run_op(k_blk, n_blk, sync=True):
+                if _explicit_subblocks and (k_blk, n_blk) in _explicit_subblocks:
+                    sb_h, sb_w = _explicit_subblocks[(k_blk, n_blk)]
+                else:
+                    sb_h, sb_w = pick_subblock(m_block, n_blk)
+                matmul_config = ttnn.MinimalMatmulConfig(
+                    M_block_size=m_block,
+                    K_block_size=k_blk,
+                    N_block_size=n_blk,
+                    subblock_h=sb_h,
+                    subblock_w=sb_w,
+                    compute_with_storage_grid_size=core_grid,
+                )
+                ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+                    input_tensor=tt_input,
+                    weight_tensor=tt_weight,
+                    dim=3,
+                    multi_device_global_semaphore=rs_semaphore_handles,
+                    reduce_scatter_core_grid_offset=rs_grid_offset,
+                    num_links=cfg["num_links"],
+                    config=matmul_config,
+                    num_buffers_per_channel=None,
+                    chunk_width_in_mm_blocks=chunk_width,
+                    num_workers_per_link=num_workers_per_link,
+                    memory_config_mm=mem_config,
+                    rs_output_mem_config=mem_config,
+                    topology=cfg["topology"],
+                    cluster_axis=cfg["cluster_axis"],
+                    compute_kernel_config=compute_config,
+                    barrier_semaphore=barrier_semaphore,
+                )
+                if sync:
+                    ttnn.synchronize_device(mesh_device)
+
+        elif is_agmm:
             # ----- AGMM path: sharded input + CCL infrastructure -----
             sp_axis = cfg["sp_axis"]
             tp_axis = cfg["tp_axis"]
@@ -691,32 +814,11 @@ def test_mm_sweep_worker(device_config, shape, m_block):
         # Measured run — only valid combos
         from tracy import signpost
 
-        if is_agmm:
-            # Capture a trace per combo (ops already compiled from warmup).
-            # Trace execution synchronizes all devices before dispatching,
-            # eliminating host dispatch skew that can stall fabric transfers.
-            trace_ids = []
-            for k_blk, n_blk in valid_combos:
-                trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-                run_op(k_blk, n_blk)
-                ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-                ttnn.synchronize_device(mesh_device)
-                trace_ids.append(trace_id)
-
-            # Only trace executions appear between signposts
-            signpost("start")
-            for trace_id in trace_ids:
-                ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-                ttnn.synchronize_device(mesh_device)
-            signpost("stop")
-
-            for trace_id in trace_ids:
-                ttnn.release_trace(mesh_device, trace_id)
-        else:
-            signpost("start")
-            for k_blk, n_blk in valid_combos:
-                run_op(k_blk, n_blk)
-            signpost("stop")
+        signpost("start")
+        for k_blk, n_blk in valid_combos:
+            run_op(k_blk, n_blk)
+            ttnn.synchronize_device(mesh_device)
+        signpost("stop")
 
         logger.info(f"Worker done: {len(valid_combos)} combos measured")
 
@@ -992,10 +1094,13 @@ def test_mm_sweep(device_config, shape):
     """
     from tracy.process_model_log import run_device_profiler
 
-    resolve_config(device_config)
+    cfg = resolve_config(device_config)
     M, K, N, cgx, cgy, is_agmm, use_case = shape
     M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
-    op_type = "agmm" if is_agmm else "mm"
+    if is_agmm and not use_case.startswith("mmrs"):
+        tp_size = cfg["mesh_shape"][cfg["tp_axis"]]
+        K_tiles = K_tiles // tp_size
+    op_type = _op_tag(is_agmm, use_case)
     shape_id = f"{M}_{K}_{N}_{cgx}x{cgy}_{op_type}_{use_case}"
     core_grid_str = f"{cgx}x{cgy}"
 
@@ -1349,7 +1454,10 @@ def main():
 
     for M, K, N, cgx, cgy, is_agmm, use_case in shapes:
         M_tiles, K_tiles, N_tiles = compute_tile_counts(M, K, N)
-        op_type = "agmm" if is_agmm else "mm"
+        if is_agmm and not use_case.startswith("mmrs"):
+            tp_size = cfg["mesh_shape"][cfg["tp_axis"]]
+            K_tiles = K_tiles // tp_size
+        op_type = _op_tag(is_agmm, use_case)
         shape_id = f"{M}_{K}_{N}_{cgx}x{cgy}_{op_type}_{use_case}"
         core_grid_str = f"{cgx}x{cgy}"
 

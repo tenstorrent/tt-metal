@@ -20,7 +20,7 @@ from ....parallel.manager import CCLManager
 from ....utils import cache, tensor
 from ....utils.check import assert_quality
 from ....utils.padding import PaddingConfig
-from .test_pipeline_flux2 import line_params_8k_flux2, line_params_flux2, ring_params_8k_flux2
+from .test_pipeline_flux2 import line_params_8k_flux2, line_params_flux2, ring_params_8k_flux2, ring_params_flux2
 
 _TRACE_REGION_SIZE = 31_000_000
 # Trace capture + Flux2 VAE-style L1_SMALL; align fabric with topology per case.
@@ -90,7 +90,7 @@ def test_modulation(mesh_device: ttnn.MeshDevice) -> None:
         [(1, 8), 0, 1, ttnn.Topology.Linear, 1, line_params_flux2_transformer],
         [(2, 4), 0, 1, ttnn.Topology.Linear, 1, line_params_flux2_transformer],
         [(4, 8), 0, 1, ttnn.Topology.Ring, 2, ring_params_8k_flux2],
-        [(4, 8), 0, 1, ttnn.Topology.Ring, 4, ring_params_8k_flux2],
+        [(4, 8), 0, 1, ttnn.Topology.Ring, 4, ring_params_flux2],
     ],
     ids=[
         "1x8_linear",
@@ -248,10 +248,13 @@ def test_transformer(
     [
         [(4, 8), 0, 1, ttnn.Topology.Ring, 2, False, ring_params_8k_flux2],
         [(4, 8), 0, 1, ttnn.Topology.Ring, 2, True, ring_params_8k_flux2],
+        # WH Galaxy
+        [(4, 8), 0, 1, ttnn.Topology.Ring, 4, True, ring_params_flux2],
     ],
     ids=[
         "bh_4x8_ring_nofsdp",
         "bh_4x8_ring_fsdp",
+        "wh_4x8_ring_fsdp",
     ],
     indirect=["mesh_device", "device_params"],
 )
