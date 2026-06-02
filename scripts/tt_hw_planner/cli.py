@@ -2351,6 +2351,207 @@ def _apply_local_weights_env(args: argparse.Namespace, model_id: str) -> None:
         )
 
 
+def _auto_enable_tt_probe(model_id: str) -> str:
+    """Set ``TT_PLANNER_PROBE_OUTPUT`` so the TT-side activation probe
+    (``agentic.tt_probe.install_probe``) runs and persists per-module
+    records every demo subprocess.
+
+    Without this the probe stays opt-in (its docstring expects the
+    user to set the env var manually), and the chain-divergence
+    diagnostic that runs on e2e PCC fail has no TT records to
+    compare against. Setting a deterministic per-model path here
+    makes the diagnostic available automatically. Probe overhead is
+    per-layer summary stats — small enough that always-on is
+    acceptable.
+
+    Returns the path that subprocess pytest runs will write to.
+    Idempotent across calls within the same cmd_up invocation.
+    """
+    from .module_tree import safe_identifier
+
+    path = f"/tmp/tt_hw_planner_probe_{safe_identifier(model_id)}.json"
+    os.environ["TT_PLANNER_PROBE_OUTPUT"] = path
+    return path
+
+
+def _run_chain_divergence_diagnostic(
+    model_id: str,
+    *,
+    demo_dir: Optional[Path] = None,
+    probe_output_path: Optional[str] = None,
+    threshold: float = 0.05,
+    hf_timeout_s: float = 300.0,
+) -> Optional[Any]:
+    """Best-effort chain-divergence diagnostic.
+
+    Loads TT-side probe records, runs HF probe live on CPU, calls
+    :func:`agentic.probe.compare_hf_tt_probes` and returns the first
+    module where the chain diverged.
+
+    Called from the e2e PCC failure path AFTER the strict gate stamps
+    ``ok=False``, BEFORE ``_maybe_escalate_pcc_fail`` fires. Purely
+    informational — does NOT mutate rc or routing. The escalation
+    behavior is unchanged; this just produces a diagnostic the user
+    (and downstream LLM repair prompts) can use to localize the
+    failure to a specific module rather than guessing.
+
+    Returns the ``ChainDivergenceResult`` or ``None`` on any setup
+    failure (TT records missing, HF probe couldn't load, prompt
+    unavailable, etc.). Never raises — failure modes log and degrade
+    so the caller's escalation path is never blocked.
+    """
+    import json
+
+    from .agentic.probe import compare_hf_tt_probes, probe_hf_modules
+    from .output_validation import load_demo_first_prompt
+
+    if probe_output_path is None:
+        probe_output_path = os.environ.get("TT_PLANNER_PROBE_OUTPUT")
+    if not probe_output_path:
+        print(
+            "  [chain-divergence] skipped: TT_PLANNER_PROBE_OUTPUT not set "
+            "(no TT-side activation records to compare against)",
+            file=sys.stderr,
+        )
+        return None
+
+    probe_path = Path(probe_output_path)
+    if not probe_path.is_file():
+        print(
+            f"  [chain-divergence] skipped: TT probe records file "
+            f"{probe_path} does not exist (probe may not have installed "
+            f"in the demo subprocess)",
+            file=sys.stderr,
+        )
+        return None
+
+    try:
+        with open(probe_path, "r", encoding="utf-8") as f:
+            tt_blob = json.load(f)
+    except Exception as exc:
+        print(
+            f"  [chain-divergence] skipped: could not read TT probe " f"records ({type(exc).__name__}: {exc})",
+            file=sys.stderr,
+        )
+        return None
+
+    tt_records = tt_blob.get("records") if isinstance(tt_blob, dict) else None
+    if not isinstance(tt_records, list) or not tt_records:
+        print(
+            f"  [chain-divergence] skipped: TT probe records empty or " f"malformed at {probe_path}",
+            file=sys.stderr,
+        )
+        return None
+
+    prompt_text: str = ""
+    if demo_dir is not None:
+        try:
+            prompt_text = load_demo_first_prompt(demo_dir) or ""
+        except Exception:
+            prompt_text = ""
+    if not prompt_text:
+        prompt_text = "Hello"
+
+    try:
+        hf_result = probe_hf_modules(
+            model_id=model_id,
+            prompt_text=prompt_text,
+            max_total_steps=4,
+            timeout_s=hf_timeout_s,
+            verbose=False,
+        )
+    except Exception as exc:
+        print(
+            f"  [chain-divergence] HF probe raised " f"{type(exc).__name__}: {exc}; skipping diagnostic",
+            file=sys.stderr,
+        )
+        return None
+    if hf_result is None:
+        print(
+            "  [chain-divergence] HF probe returned None (transformers "
+            "missing, model_id invalid, or other setup error); skipping",
+            file=sys.stderr,
+        )
+        return None
+
+    return compare_hf_tt_probes(hf_result, tt_records, threshold=threshold)
+
+
+def _log_chain_divergence(result: Any, *, model_id: str) -> None:
+    """Render the diagnostic as a short banner. Pure presentation."""
+    if result is None:
+        return
+    sep = "=" * 72
+    print()
+    print(sep)
+    print(f"  CHAIN-DIVERGENCE DIAGNOSTIC for {model_id}")
+    print(sep)
+    print(f"  Paired modules : {result.paired_modules}")
+    print(f"  Unpaired (HF)  : {len(result.unpaired_hf_modules)}")
+    print(f"  Unpaired (TT)  : {len(result.unpaired_tt_modules)}")
+    print(f"  Threshold      : {result.threshold:.4f}")
+    print(f"  Note           : {result.note}")
+    if result.first_divergence is not None:
+        d = result.first_divergence
+        print()
+        print(f"  FIRST DIVERGENCE (in HF-trace order):")
+        print(f"    module     : {d.qualified_name}  ({d.class_name})")
+        print(f"    step       : {d.step}")
+        print(f"    max drift  : {d.max_drift:.4f}")
+        print(f"    per-stat   :")
+        for stat, drift in sorted(d.relative_drift.items(), key=lambda kv: -kv[1]):
+            print(f"      {stat:10s}  drift={drift:.4f}  hf={d.hf_stats.get(stat)}  tt={d.tt_stats.get(stat)}")
+    print(sep)
+
+
+def _persist_chain_divergence(result: Any, *, demo_dir: Optional[Path]) -> Optional[Path]:
+    """Write the diagnostic to ``<demo_dir>/chain_divergence.json``.
+    Best-effort; persistence failure never blocks escalation."""
+    if result is None or demo_dir is None:
+        return None
+    import json
+    from dataclasses import asdict
+
+    out_path = demo_dir / "chain_divergence.json"
+    try:
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(asdict(result), f, indent=2, default=str)
+        return out_path
+    except Exception as exc:
+        print(
+            f"  [chain-divergence] could not persist diagnostic to " f"{out_path}: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return None
+
+
+def _run_and_log_chain_divergence(model_id: str, *, demo_dir: Optional[Path] = None) -> None:
+    """Convenience: run diagnostic + log + persist in one call. Used
+    at each e2e PCC fail site so the wiring is a one-liner."""
+    result = _run_chain_divergence_diagnostic(model_id, demo_dir=demo_dir)
+    _log_chain_divergence(result, model_id=model_id)
+    _persist_chain_divergence(result, demo_dir=demo_dir)
+
+
+def _find_demo_dir_safe(model_id: str) -> Optional[Path]:
+    """Resolve the demo dir for ``model_id``, returning ``None`` on any
+    error.
+
+    Single-source-of-truth wrapper around
+    :func:`bringup_loop.find_demo_dir` so the three e2e PCC fail sites
+    don't each have to lazy-import + try/except. ``find_demo_dir`` itself
+    already returns ``None`` on no-match, but it transitively imports
+    ``discovery.BRINGUP_ROOT()`` which can raise in misconfigured envs;
+    catching here keeps the diagnostic site one-liners.
+    """
+    try:
+        from .bringup_loop import find_demo_dir
+
+        return find_demo_dir(model_id)
+    except Exception:
+        return None
+
+
 def _exit_if_hf_weight_failure(model_id: str, captured_output: str) -> None:
     """Short-circuit the bring-up flow if captured pytest output shows
     an HF weight download/load failure.
@@ -7268,6 +7469,10 @@ def cmd_up(args) -> int:
     _model_id = getattr(args, "model_id", "") or ""
     if _model_id:
         _apply_local_weights_env(args, _model_id)
+        # Auto-enable the TT-side activation probe so chain-divergence
+        # diagnostic has records to compare against if e2e PCC fails.
+        # Idempotent; sets a deterministic per-model path.
+        _auto_enable_tt_probe(_model_id)
     if not getattr(args, "isolation", "none") == "worktree":
         return _cmd_up_core(args)
     return _cmd_up_isolated(args)
@@ -7864,6 +8069,10 @@ def _cmd_up_core(args) -> int:
             # flow that brought up Qwen.
             _pcc_result, _pcc_prompt = _run_strict_pcc_gate(args, MODEL, _captured_output, _auto_mode)
             if _pcc_result is not None and not _pcc_result.ok:
+                # Chain-divergence diagnostic BEFORE escalation: pure
+                # diagnostic, doesn't change routing. Best-effort; any
+                # failure inside degrades silently.
+                _run_and_log_chain_divergence(MODEL, demo_dir=_find_demo_dir_safe(MODEL))
                 _esc_rc = _maybe_escalate_pcc_fail(args, MODEL, _PCC_FAIL_RC, _auto_mode)
                 _rc_supp = _esc_rc if _esc_rc is not None else _PCC_FAIL_RC
         if _rc_supp == 0:
@@ -8168,6 +8377,7 @@ def _cmd_up_core(args) -> int:
             # to Path A on fail, preserve legacy non-auto bypass.
             _pcc_result, _pcc_prompt = _run_strict_pcc_gate(args, MODEL, _captured_output, _auto_mode)
             if _pcc_result is not None and not _pcc_result.ok:
+                _run_and_log_chain_divergence(MODEL, demo_dir=_find_demo_dir_safe(MODEL))
                 _esc_rc_cold = _maybe_escalate_pcc_fail(args, MODEL, _PCC_FAIL_RC, _auto_mode)
                 _rc_cold = _esc_rc_cold if _esc_rc_cold is not None else _PCC_FAIL_RC
         if _rc_cold == 0:
@@ -8925,6 +9135,9 @@ def _cmd_up_core(args) -> int:
                             f"passed PCC≥0.99 but the stitched pipeline "
                             f"diverged from HF reference."
                         )
+                        # Chain-divergence diagnostic — localizes which
+                        # module diverged so the next iter can target it.
+                        _run_and_log_chain_divergence(MODEL, demo_dir=_find_demo_dir_safe(MODEL))
             except Exception as _gate_exc:
                 # Defensive: post-success gate runs are diagnostic, not
                 # gating in the legacy sense. A crash here shouldn't

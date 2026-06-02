@@ -395,4 +395,224 @@ def probe_hf_modules(
     )
 
 
-__all__ = ["HFModuleStats", "HFProbeResult", "probe_hf_modules"]
+# ─── HF ↔ TT chain divergence comparison ─────────────────────────────
+#
+# When the end-to-end PCC gate fails, both probes have already run
+# (HF live via ``probe_hf_modules``, TT-side via the
+# :mod:`.tt_probe` instrumentation that persists records to JSON).
+# What's missing is the comparator that pairs records by
+# ``(qualified_name, step)`` and surfaces the first module where the
+# TT-side activation drifts beyond a relative-tolerance threshold.
+#
+# Why summary-stat drift, not Pearson PCC?
+# ----------------------------------------
+# Both probes record SUMMARY STATISTICS per layer output, not raw
+# tensors (the raw tensors would be too large to ship across the
+# pytest subprocess boundary). So we compute relative drift in
+# (mean, std, l2, abs_max) instead of PCC. The metric is coarser than
+# per-tensor Pearson, but the goal here is LOCALIZATION ("which
+# module diverged"), not VERIFICATION ("is the output numerically
+# faithful"). The strict-PCC gate already did the verification step
+# and said "no"; this comparator says WHERE.
+
+
+@dataclass(frozen=True)
+class ModuleDivergence:
+    """One row of the HF vs TT comparison at a specific
+    ``(qualified_name, step)``.
+
+    ``relative_drift`` carries the per-statistic ratio
+    ``|hf - tt| / max(|hf|, |tt|, eps)`` for each summary stat.
+    ``max_drift`` is the dominant signal, used to compare against the
+    threshold.
+    """
+
+    qualified_name: str
+    class_name: str
+    step: int
+    hf_stats: Dict[str, Any]
+    tt_stats: Dict[str, Any]
+    relative_drift: Dict[str, float]
+    max_drift: float
+
+
+@dataclass
+class ChainDivergenceResult:
+    """Output of :func:`compare_hf_tt_probes`.
+
+    ``first_divergence`` is the first ``(qualified_name, step)`` (in
+    HF-trace order) where any summary statistic exceeded
+    ``threshold``. ``None`` means every paired module was within
+    tolerance — useful for the caller to know the divergence is in an
+    UNPAIRED module (i.e. TT side never produced records for it).
+
+    ``unpaired_hf_modules`` / ``unpaired_tt_modules`` flag the
+    asymmetry cases: an HF module with no TT counterpart usually
+    means TT-side probe didn't hook that module (potential missing
+    component); a TT module with no HF counterpart is rare and
+    usually means the TT side ran a path HF doesn't.
+    """
+
+    first_divergence: Optional[ModuleDivergence]
+    table: List[ModuleDivergence]
+    paired_modules: int
+    unpaired_hf_modules: List[str]
+    unpaired_tt_modules: List[str]
+    threshold: float
+    note: str
+
+
+_DRIFT_STATS = ("mean", "std", "l2", "abs_max")
+_DRIFT_EPS = 1e-8
+
+
+def _relative_drift(hf_val: float, tt_val: float) -> float:
+    """Relative deviation between two scalar stats.
+
+    ``|hf - tt| / max(|hf|, |tt|, eps)`` — symmetric and bounded.
+    Eps prevents divide-by-zero when both sides are zero (in which
+    case the drift is 0 — they agree). Returns ``inf`` if either
+    side is NaN (treat as divergent).
+    """
+    if hf_val != hf_val or tt_val != tt_val:  # NaN check
+        return float("inf")
+    denom = max(abs(hf_val), abs(tt_val), _DRIFT_EPS)
+    return abs(hf_val - tt_val) / denom
+
+
+def compare_hf_tt_probes(
+    hf_result: HFProbeResult,
+    tt_records: List[Dict[str, Any]],
+    *,
+    threshold: float = 0.05,
+) -> ChainDivergenceResult:
+    """Pair HF probe records with TT probe records by
+    ``(qualified_name, step)`` and return the first module where any
+    summary statistic exceeded ``threshold`` relative drift.
+
+    Parameters
+    ----------
+    hf_result
+        Live HF probe output (run on CPU with hooks across every
+        non-container module).
+    tt_records
+        TT-side records as a list of dicts, typically loaded from
+        the JSON file ``tt_probe`` writes. Each dict must carry at
+        minimum ``qualified_name``, ``step``, and the four summary
+        stats in ``_DRIFT_STATS``.
+    threshold
+        Relative-drift cutoff. ``0.05`` (5%) is a reasonable default
+        for "the layer's output is meaningfully different." Tightening
+        catches subtler drift; loosening avoids false positives from
+        sampling noise.
+
+    Returns
+    -------
+    A :class:`ChainDivergenceResult`. Never raises; malformed inputs
+    produce an empty table with a descriptive ``note``.
+
+    Pure (no I/O, no side effects). Unit-testable with synthetic
+    record lists.
+    """
+    if not isinstance(hf_result, HFProbeResult):
+        return ChainDivergenceResult(
+            first_divergence=None,
+            table=[],
+            paired_modules=0,
+            unpaired_hf_modules=[],
+            unpaired_tt_modules=[],
+            threshold=threshold,
+            note="invalid hf_result (not an HFProbeResult)",
+        )
+    if not isinstance(tt_records, list):
+        return ChainDivergenceResult(
+            first_divergence=None,
+            table=[],
+            paired_modules=0,
+            unpaired_hf_modules=[],
+            unpaired_tt_modules=[],
+            threshold=threshold,
+            note="invalid tt_records (not a list)",
+        )
+
+    # Index TT records by (qualified_name, step) for O(1) lookup.
+    tt_index: Dict[Tuple[str, int], Dict[str, Any]] = {}
+    for rec in tt_records:
+        if not isinstance(rec, dict):
+            continue
+        qn = rec.get("qualified_name")
+        st = rec.get("step")
+        if isinstance(qn, str) and isinstance(st, int):
+            tt_index[(qn, st)] = rec
+
+    table: List[ModuleDivergence] = []
+    first: Optional[ModuleDivergence] = None
+    unpaired_hf: List[str] = []
+    seen_tt_keys = set()
+
+    for hf_rec in hf_result.records:
+        key = (hf_rec.qualified_name, hf_rec.step)
+        tt_rec = tt_index.get(key)
+        if tt_rec is None:
+            unpaired_hf.append(f"{hf_rec.qualified_name}@{hf_rec.step}")
+            continue
+        seen_tt_keys.add(key)
+        drift_map: Dict[str, float] = {}
+        for stat_key in _DRIFT_STATS:
+            hf_val = getattr(hf_rec, stat_key, None)
+            tt_val = tt_rec.get(stat_key)
+            if hf_val is None or tt_val is None:
+                continue
+            try:
+                drift_map[stat_key] = _relative_drift(float(hf_val), float(tt_val))
+            except (TypeError, ValueError):
+                continue
+        if not drift_map:
+            # No comparable stats; record but don't gate on it.
+            continue
+        max_drift = max(drift_map.values())
+        div = ModuleDivergence(
+            qualified_name=hf_rec.qualified_name,
+            class_name=hf_rec.class_name,
+            step=hf_rec.step,
+            hf_stats={k: getattr(hf_rec, k, None) for k in _DRIFT_STATS},
+            tt_stats={k: tt_rec.get(k) for k in _DRIFT_STATS},
+            relative_drift=drift_map,
+            max_drift=max_drift,
+        )
+        table.append(div)
+        if first is None and max_drift > threshold:
+            first = div
+
+    unpaired_tt = [f"{qn}@{st}" for (qn, st) in tt_index.keys() if (qn, st) not in seen_tt_keys]
+
+    # Note-resolution table:
+    #   • no paired modules        → "no paired modules ..."
+    #   • paired, divergence found → "ok" (caller acts on first_divergence)
+    #   • paired, no divergence, no orphans → "ok" (genuine clean comparison)
+    #   • paired, no divergence, orphans present → "check unpaired modules"
+    note = "ok"
+    if not table:
+        note = "no paired modules — TT and HF probes shared no (qualified_name, step) keys"
+    elif first is None and (unpaired_hf or unpaired_tt):
+        note = "all paired modules within threshold — divergence may be in unpaired modules"
+
+    return ChainDivergenceResult(
+        first_divergence=first,
+        table=table,
+        paired_modules=len(table),
+        unpaired_hf_modules=unpaired_hf,
+        unpaired_tt_modules=unpaired_tt,
+        threshold=threshold,
+        note=note,
+    )
+
+
+__all__ = [
+    "HFModuleStats",
+    "HFProbeResult",
+    "probe_hf_modules",
+    "ModuleDivergence",
+    "ChainDivergenceResult",
+    "compare_hf_tt_probes",
+]
