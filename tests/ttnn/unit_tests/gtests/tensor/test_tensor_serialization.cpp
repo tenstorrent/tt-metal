@@ -95,9 +95,7 @@ TEST_F(TensorSerializationFlatbufferTest, WithMemoryConfig) {
         test_data,
         TensorSpec(
             base_spec.logical_shape(),
-            TensorLayout(
-                base_spec.data_type(),
-                base_spec.page_config(),
+            base_spec.tensor_layout().with_memory_config(
                 MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1})));
 
     EXPECT_TRUE(original_tensor.storage_type() == StorageType::HOST);
