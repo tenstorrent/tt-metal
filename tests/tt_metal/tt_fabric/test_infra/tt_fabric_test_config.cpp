@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <optional>
 #include <variant>
-#include "routing/tt_fabric_test_common_types.hpp"
+#include "tt_fabric_test_common_types.hpp"
 #include "tt-metalium/core_coord.hpp"
 
 namespace tt::tt_fabric::fabric_tests {
