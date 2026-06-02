@@ -13,7 +13,7 @@ Analyze branch changes to determine affected build products, trace which tests/s
    `sanity-tests.yaml` encapsulates these workflows:
    - `ttnn-post-commit.yaml`
    - `models-post-commit.yaml`
-   - `tt-train-post-commit.yaml`
+   - `tt-train-tests.yaml`
    - `run-profiler-regression.yaml`
    - `t3000-fast-tests-impl.yaml`
    - `ops-post-commit.yaml`

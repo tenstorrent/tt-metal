@@ -381,21 +381,78 @@
 # tt-train (team:train)
 # =============================================================================
 
-- name: tt-train nightly tests
+- name: tt-train cpp nightly unit tests
   # ENABLE_NIGHTLY_TT_TRAIN_TESTS is inlined in cmd.
   cmd: 'ENABLE_NIGHTLY_TT_TRAIN_TESTS=1 build/tt-train/tests/ttml_tests --gtest_filter=*NIGHTLY_*'
   skus:
-    wh_n150:
+    wh_n150_civ2:
       timeout: 40
-    wh_n300:
+    wh_n300_civ2:
       timeout: 40
-    bh_p100:
+    bh_p100a_civ2_viommu:
       timeout: 40
     bh_p150b_civ2:
       timeout: 40
   owner_id: U07K00A281X # Kevin Wu
   team: train
-  category: train
+  category: train_unit
+
+# Non-nightly unit tests
+- name: tt-train cpp non-nightly unit tests
+  cmd: build/tt-train/tests/ttml_tests --gtest_filter="-*NIGHTLY*"
+  skus:
+    # wh_n150_civ2 is used for smoke test
+    wh_n300_civ2:
+      timeout: 30
+    bh_p100a_civ2_viommu:
+      timeout: 30
+    bh_p150b_civ2:
+      timeout: 30
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  category: train_unit
+
+# Non-nightly smoke tests
+- name: tt-train cpp smoke tests
+  cmd: |
+    mkdir -p generated/test_reports
+    build/tt-train/tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml --gtest_filter="-*NIGHTLY*"
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  category: train_smoke
+
+- name: tt-train python unit tests
+  cmd: python -m pytest tt-train/tests/python
+  skus:
+    wh_n150_civ2:
+      timeout: 30
+    wh_n300_civ2:
+      timeout: 30
+    bh_p100a_civ2_viommu:
+      timeout: 30
+    bh_p150b_civ2:
+      timeout: 30
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  category: train_unit
+
+- name: tt-train run models
+  cmd: python tt-train/scripts/run_models.py
+  skus:
+    wh_n150_civ2:
+      timeout: 240
+    wh_n300_civ2:
+      timeout: 240
+    bh_p100a_civ2_viommu:
+      timeout: 240
+    bh_p150b_civ2:
+      timeout: 240
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  category: train_model
 
 # =============================================================================
 # ttsim simulator — runs on ubuntu-latest via sim_<arch> SKUs.
