@@ -387,8 +387,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     }
 
     TT_FATAL(
-        N_global == N_local_kv * args.ring_size,
-        "Gathered K seq length must equal per-device K shard times ring size. Got N_global: {}, N_local_kv: {}, "
+        N_global >= N_local_kv * args.ring_size,
+        "Gathered K seq length must be >= per-device K shard times ring size. Got N_global: {}, N_local_kv: {}, "
         "ring_size: {}",
         N_global,
         N_local_kv,

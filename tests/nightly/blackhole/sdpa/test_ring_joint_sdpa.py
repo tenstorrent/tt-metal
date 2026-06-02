@@ -822,12 +822,15 @@ def run_ring_joint_sdpa_chunked(
     indexed_nd_sharded_kv_cache: bool = False,
     cache_batch_idx: int = 1,
     cache_batch: int = 2,
+    persistent_buffer_mode: str = "exact_per_chunk",
 ):
     """
     Validate ring joint SDPA chunked-prefill against a full-sequence torch oracle.
 
     SUT: n_chunks calls; each call passes a short Q chunk at absolute positions
     [i*c, (i+1)*c) against a K/V cache holding the first (i+1)*c rows.
+    If persistent_buffer_mode="reuse_max", one max-length persistent K/V buffer
+    pair is allocated once and reused across all chunks and iterations.
 
     num_iterations > 1 switches to determinism mode: replay the full n_chunks
     sequence num_iterations times and require bit-exact equality of per-chunk
@@ -842,9 +845,16 @@ def run_ring_joint_sdpa_chunked(
     assert total_seq % sp_size == 0, f"total_seq {total_seq} must divide sp_size {sp_size}"
     assert chunk_size % sp_size == 0, f"chunk_size {chunk_size} must divide sp_size {sp_size}"
     assert total_seq % chunk_size == 0, f"total_seq {total_seq} must be a multiple of chunk_size {chunk_size}"
+    assert persistent_buffer_mode in (
+        "exact_per_chunk",
+        "reuse_max",
+    ), f"Unsupported persistent_buffer_mode={persistent_buffer_mode}"
     if indexed_nd_sharded_kv_cache:
         assert BATCH_SIZE == 1, "Indexed K/V cache test path assumes query batch is 1"
         assert 0 <= cache_batch_idx < cache_batch, f"cache_batch_idx {cache_batch_idx} must be in [0, {cache_batch})"
+        assert (
+            persistent_buffer_mode == "exact_per_chunk"
+        ), "Reusable max buffers are not combined with indexed K/V cache"
 
     n_chunks = total_seq // chunk_size
 
@@ -992,11 +1002,33 @@ def run_ring_joint_sdpa_chunked(
             )
             return out[:, :, :expected_q_len, :]
 
+        def create_persistent_buffers(seq_len, kv_buffer_batch):
+            persistent_output_buffer_k = ttnn.from_torch(
+                torch.zeros(kv_buffer_batch, nhk, seq_len, d_k),
+                dtype=kv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_k_shard_dims
+                ),
+            )
+            persistent_output_buffer_v = ttnn.from_torch(
+                torch.zeros(kv_buffer_batch, nhv, seq_len, d_v),
+                dtype=kv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_persistent_shard_dims
+                ),
+            )
+            return persistent_output_buffer_k, persistent_output_buffer_v
+
         logger.info(
             f"Chunked prefill: model={model.name}, total_seq={total_seq}, "
             f"sp_size={sp_size}, per-device Q seq_len={total_seq // sp_size}, "
             f"q_chunk={q_chunk_size}, k_chunk={k_chunk_size}, "
-            f"indexed_nd_sharded_kv_cache={indexed_nd_sharded_kv_cache}"
+            f"indexed_nd_sharded_kv_cache={indexed_nd_sharded_kv_cache}, "
+            f"persistent_buffer_mode={persistent_buffer_mode}"
         )
 
         # Chunked K/V cache layout: device d's local slab c holds global rows
@@ -1008,6 +1040,9 @@ def run_ring_joint_sdpa_chunked(
 
         k_memory_config = nd_sharded_dram_memory_config(mesh_device, d_k) if indexed_nd_sharded_kv_cache else None
         v_memory_config = nd_sharded_dram_memory_config(mesh_device, d_v) if indexed_nd_sharded_kv_cache else None
+        shared_persistent_buffers = (
+            create_persistent_buffers(total_seq, b) if persistent_buffer_mode == "reuse_max" else None
+        )
 
         # SUT: per-chunk calls with growing K/V cache + growing logical_n.
         # In determinism mode (num_iterations > 1), the entire n_chunks sequence is
@@ -1040,25 +1075,13 @@ def run_ring_joint_sdpa_chunked(
                 tt_K = upload_k(K_input, memory_config=k_memory_config)
                 tt_V = upload_v(V_input, memory_config=v_memory_config)
 
-                # AllGather output buffer sized to post-gather K/V: N_global == (i+1) * chunk_size.
-                persistent_output_buffer_k = ttnn.from_torch(
-                    torch.zeros(kv_buffer_batch, nhk, e, d_k),
-                    dtype=kv_dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=mesh_device,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(
-                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=persistent_k_shard_dims
-                    ),
-                )
-                persistent_output_buffer_v = ttnn.from_torch(
-                    torch.zeros(kv_buffer_batch, nhv, e, d_v),
-                    dtype=kv_dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=mesh_device,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(
-                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=kv_persistent_shard_dims
-                    ),
-                )
+                if persistent_buffer_mode == "reuse_max":
+                    persistent_output_buffer_k, persistent_output_buffer_v = shared_persistent_buffers
+                else:
+                    # AllGather output buffer sized to post-gather K/V: N_global == (i+1) * chunk_size.
+                    persistent_output_buffer_k, persistent_output_buffer_v = create_persistent_buffers(
+                        e, kv_buffer_batch
+                    )
 
                 try:
                     tt_out = call_sdpa(
@@ -2014,7 +2037,7 @@ CHUNKED_CONFIGS, CHUNKED_CONFIG_IDS = _generate_chunked_configs()
     ids=CHUNKED_CONFIG_IDS,
 )
 def test_ring_joint_attention_sdpa_chunked_accuracy(model_name, q_chunk_size, k_chunk_size, chunk_size):
-    """Validate ring joint SDPA chunked prefill against a full-sequence oracle."""
+    """Validate ring joint SDPA chunked prefill with reusable max-sized K/V buffers."""
     mesh_config = MESH_CONFIG
 
     run_ring_joint_sdpa_chunked(
@@ -2023,6 +2046,7 @@ def test_ring_joint_attention_sdpa_chunked_accuracy(model_name, q_chunk_size, k_
         chunk_size=chunk_size,
         q_chunk_size=q_chunk_size,
         k_chunk_size=k_chunk_size,
+        persistent_buffer_mode="reuse_max",
     )
 
 
