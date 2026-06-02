@@ -28,7 +28,7 @@ inputs:
       is placed at <root>/sim/ and TT_METAL_SIMULATOR_HOME is set to that path.
       Default '/work' assumes the action is invoked inside the standard dev
       container whose workdir is /work. For containerless callers (e.g. an
-      ubuntu-latest runner with a plain checkout), pass `${{ github.workspace }}`.
+      ubuntu-latest runner with a plain checkout), pass the workspace path.
     required: false
     default: '/work'
 
