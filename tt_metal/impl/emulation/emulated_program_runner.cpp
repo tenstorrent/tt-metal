@@ -1693,12 +1693,18 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
     tt_emule::Core* core,
     const CoreCoord& logical_core,
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dfb_impls) {
-    // Reset L1 bump allocator so DFB allocations don't accumulate across runs.
-    core->reset_l1_bump();
     core->reset_dfb_sync();
     if (dfb_impls.empty()) {
+        // No DFBs to allocate (always the case on WH/BH; DFBs are Quasar-only),
+        // so the L1 bump allocator never grows and there's nothing to reset.
+        // Skipping reset also leaves the mmap-init zeros at MEM_ZEROS_BASE
+        // undisturbed for kernels that NOC-read the region.
         return {};
     }
+    // DFB fallback path (Quasar): start the bump allocator at 0.  When Quasar
+    // bring-up needs to protect MEM_ZEROS from bump-allocator overlap, dispatch
+    // its per-arch MEM_ZEROS_BASE here.
+    core->reset_l1_bump();
     if (!core->tile_counters()) {
         core->init_tile_counters(4);
     }
