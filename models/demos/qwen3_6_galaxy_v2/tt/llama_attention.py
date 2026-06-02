@@ -1949,25 +1949,31 @@ class TtLlamaAttention(LightweightModule):
             # MEMCFG (height-sharded [ceil(n_local_heads/32)*32, hd] on B cores) —
             # the exact (progcfg, sharded-memcfg) pair the probe validated.
             #
-            # EMPIRICAL VERDICT (this integration, gated runs): the sharded-output
-            # path is COHERENT and faster up to 32k context — demo ISL-32k decode
-            # 13.86 → 19.46 tok/s/user (1.4×), text stays coherent; ISL-128 stays
-            # coherent at 20.5 tok/s. But at ISL-128k it GARBLES despite a 2.2×
-            # decode win (8.26 → 18.08 tok/s/user). Root cause is NOT a layout bug
-            # (the probe shows the kernel at ctx=131072 is PCC 0.99974 vs torch —
-            # MORE accurate than single-core's 0.99502 — and 8× faster): it is
-            # fidelity COMPOUNDING. The multi-core cross-core softmax reduction
-            # differs from single-core by PCC ~0.995, and that per-layer delta
-            # accumulates across the 16 full-attention layers over a 131072-deep
-            # softmax until it breaks coherence (same mechanism documented for the
-            # 64L logits-PCC 0.9996→0.16 collapse). SDPA already runs HiFi4 +
-            # fp32_dest_acc_en, so there is no fidelity lever left. Therefore the
-            # default stays "0"; flip to "1" ONLY for context ≤ 32k.
-            if os.environ.get("QWEN36_SDPA_MULTICORE", "0") == "1":
+            # 128k RESOLUTION: an earlier integration garbled at 128k with the HiFi4 +
+            # fp32_dest_acc_en compute config (mojibake), which we wrongly attributed to
+            # "fidelity compounding." Diffing against llama70b (coherent at batch-1 128k
+            # multi-core) found the real cause: the SDPA compute_kernel_config. HiFi4 +
+            # fp32_dest_acc_en corrupts the multi-core cross-core flash-decode combine at
+            # the 131072-deep softmax. Using llama70b's validated decode config
+            # (SDPA_DECODE_COMPUTE_PROGCFG = HiFi2, fp32_dest_acc_en=False) — see below —
+            # makes multi-core coherent at every context, so the flag is now default-on.
+            # QWEN36_SDPA_MULTICORE (default "1"): multi-core paged SDPA decode
+            # ((8,6)+sub_core_grids(48)) vs single-core (1,1). It MUST pair with the
+            # HiFi2/no-fp32 decode compute config (SDPA_DECODE_COMPUTE_PROGCFG —
+            # llama70b's validated one): HiFi4+fp32_dest_acc_en corrupts the cross-core
+            # flash-decode combine at the 128k-deep softmax (128k mojibake — the
+            # qwen-specific bug vs llama70b, which uses this config and is coherent at
+            # batch-1 128k). With the decode config, multi-core is coherent at every
+            # context (ISL-128 -> 248068; 64k & 128k coherent) and 2.2x faster decode at
+            # 128k (8.3 -> 18.3 tok/s/user). Set QWEN36_SDPA_MULTICORE=0 to fall back to
+            # single-core (1,1)+HiFi4 (DRAM output).
+            _sdpa_compute_cfg = self.compute_kernel_config_hifi4
+            if os.environ.get("QWEN36_SDPA_MULTICORE", "1") == "1":
                 _sdpa_progcfg = self.model_config["PAGED_SDPA_DECODE_PROGCFG"]
                 _sdpa_out_memcfg = self.model_config["SCORES_BATCHED_MM_OUTPUT_MEMCFG"](
                     self.batch_size_per_device_group
                 )
+                _sdpa_compute_cfg = self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"]
             else:
                 _sdpa_progcfg = ttnn.SDPAProgramConfig(
                     compute_with_storage_grid_size=(1, 1),
@@ -1984,7 +1990,7 @@ class TtLlamaAttention(LightweightModule):
                 cur_pos_tensor=current_pos,
                 scale=self.scale,
                 program_config=_sdpa_progcfg,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
+                compute_kernel_config=_sdpa_compute_cfg,
                 memory_config=_sdpa_out_memcfg,
             )
             q_1bnd.deallocate(True)
