@@ -41,7 +41,6 @@ Two scopes:
 """
 
 import math
-import os
 import zlib
 import pytest
 import torch
@@ -61,13 +60,14 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import round_up as _roun
 # to the unharvested case; on P100 the same parametrization runs at ring=7*recv_per_bank.
 
 
-pytestmark = [
-    run_for_blackhole("DRAM-core prefetcher requires Blackhole"),
-    pytest.mark.skipif(
-        os.environ.get("TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES", "0") != "1",
-        reason="TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES not set",
-    ),
-]
+pytestmark = run_for_blackhole("DRAM-core prefetcher requires Blackhole")
+
+
+@pytest.fixture(autouse=True)
+def _require_dram_core_prefetcher(device):
+    """Skip unless programmable DRAM cores are available on this device."""
+    if not ttnn.experimental.is_dram_core_prefetcher_supported(device):
+        pytest.skip("programmable DRAM cores unavailable; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1")
 
 
 def _bank_receivers_row_major(bank_idx: int, recv_per_bank: int, ring_cols: int):

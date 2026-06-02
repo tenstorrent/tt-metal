@@ -53,13 +53,14 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from tests.ttnn.unit_tests.operations.prefetcher_common import round_up as _round_up
 
 
-pytestmark = [
-    run_for_blackhole("DRAM-core prefetcher requires Blackhole"),
-    pytest.mark.skipif(
-        os.environ.get("TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES", "0") != "1",
-        reason="TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES not set",
-    ),
-]
+pytestmark = run_for_blackhole("DRAM-core prefetcher requires Blackhole")
+
+
+@pytest.fixture(autouse=True)
+def _require_dram_core_prefetcher(device):
+    """Skip unless programmable DRAM cores are available on this device."""
+    if not ttnn.experimental.is_dram_core_prefetcher_supported(device):
+        pytest.skip("programmable DRAM cores unavailable; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1")
 
 
 def _select_num_dram_banks(available_banks: int) -> int:

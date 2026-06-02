@@ -16,6 +16,23 @@
 namespace ttnn::operations::experimental {
 
 void bind_dram_core_prefetcher(nb::module_& mod) {
+    ttnn::bind_function<"is_dram_core_prefetcher_supported", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Return True if the DRAM-core (DRISC) prefetcher is supported on `mesh_device`,
+            i.e. programmable DRAM cores are available (Blackhole with
+            TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1). When this returns False,
+            start_dram_core_prefetcher would raise, so callers can use this to skip instead.
+
+            Args:
+                mesh_device (ttnn.MeshDevice): the mesh device to query.
+
+            Returns:
+                bool
+        )doc",
+        &is_dram_core_prefetcher_supported,
+        nb::arg("mesh_device"));
+
     ttnn::bind_function<"start_dram_core_prefetcher", "ttnn.experimental.">(
         mod,
         R"doc(

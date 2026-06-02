@@ -584,6 +584,11 @@ void DramCorePrefetcherManager::stop() {
 // -----------------------------------------------------------------------------
 namespace tt::tt_metal::experimental {
 
+bool IsDramCorePrefetcherSupported(const distributed::MeshDevice& mesh_device) {
+    const auto& hal = MetalContext::instance(mesh_device.impl().get_context_id()).hal();
+    return hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
+}
+
 void StartDramCorePrefetcher(distributed::MeshDevice& mesh_device, const DramCorePrefetcherConfig& config) {
     auto& manager = mesh_device.impl().dram_core_prefetcher(&mesh_device);
     manager.start(config);

@@ -9,6 +9,10 @@
 
 namespace ttnn::operations::experimental {
 
+bool is_dram_core_prefetcher_supported(tt::tt_metal::distributed::MeshDevice* mesh_device) {
+    return tt::tt_metal::experimental::IsDramCorePrefetcherSupported(*mesh_device);
+}
+
 void start_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device) {
     tt::tt_metal::experimental::StartDramCorePrefetcher(*mesh_device, {});
 }

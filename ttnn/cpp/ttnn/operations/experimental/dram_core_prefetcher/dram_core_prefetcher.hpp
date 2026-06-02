@@ -38,6 +38,11 @@ namespace ttnn::operations::experimental {
 //   3. stop_dram_core_prefetcher(device)
 //      - Sends the stop sentinel, joins the worker, waits for the kernels
 //        to exit. Caller must call this before destroying the device.
+// Returns true if the DRAM-core prefetcher is supported on `mesh_device`
+// (programmable DRAM cores are available). Use this to skip rather than fail
+// when start_dram_core_prefetcher would otherwise raise.
+bool is_dram_core_prefetcher_supported(tt::tt_metal::distributed::MeshDevice* mesh_device);
+
 void start_dram_core_prefetcher(tt::tt_metal::distributed::MeshDevice* mesh_device);
 
 void queue_dram_core_prefetcher_request(

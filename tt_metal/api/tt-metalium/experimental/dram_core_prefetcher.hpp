@@ -34,6 +34,13 @@ class GlobalCircularBuffer;
 
 struct DramCorePrefetcherConfig {};
 
+// Returns true if the DRAM-core prefetcher is supported on `mesh_device`, i.e.
+// programmable DRAM cores are available (Blackhole with
+// TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1). When this returns false,
+// StartDramCorePrefetcher would TT_FATAL, so callers (e.g. tests) can use this
+// to skip rather than fail.
+bool IsDramCorePrefetcherSupported(const distributed::MeshDevice& mesh_device);
+
 // One prefetch work item: a weight tensor plus the number of K-blocks to split
 // its K dimension into. `block_count` is used in place of the GCB ring size when
 // dividing K (k_block_w_tiles = ceil(K_tiles / block_count)), so different
