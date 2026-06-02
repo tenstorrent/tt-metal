@@ -12,6 +12,7 @@
 // should be flagged by the NOC transaction debug tool -- see TODO below.
 
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
+#include "internal/tt-2xx/quasar/noc_nonblocking_api.h"
 
 template <typename Dst>
 inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const dst_args_t<Dst>& args) const {
@@ -74,5 +75,8 @@ inline void Noc::write_zeros_l1_barrier() const {
     // is done here, after the ack, rather than in async_write_zeros: init_wr_cmd_buf() resets
     // cmd buffer 0, and resetting before the ack could disturb the pending iDMA ack we just
     // waited on.
+    //
+    // TODO: Quasar has architecture different enough that we may want to get out of using
+    // noc_nonblocking_api. Refactor this when we move away from it.
     init_wr_cmd_buf(noc_local_xy());
 }

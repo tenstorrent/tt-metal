@@ -122,25 +122,6 @@ FORCE_INLINE void copy_padding(
     }
 }
 
-template <uint32_t PaddingConfigCBId, uint32_t OutCBId, uint32_t StickNBytes>
-FORCE_INLINE void zero_padding(Noc noc, experimental::CB padding_config_cb, experimental::CB out_cb) {
-    const uint32_t padding_config_l1_addr = padding_config_cb.get_read_ptr();
-    volatile tt_l1_ptr uint16_t* config_data = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(padding_config_l1_addr);
-
-    uint16_t nsticks = 1;
-    for (uint16_t j = 0; nsticks != 0; j += 2) {
-        uint16_t dst_local_idx = config_data[j + 0];
-        nsticks = config_data[j + 1];
-        if (nsticks == 0) {
-            break;
-        }
-        noc.async_write_zeros(
-            out_cb,
-            static_cast<uint32_t>(nsticks) * StickNBytes,
-            {.offset_bytes = static_cast<uint32_t>(dst_local_idx) * StickNBytes});
-    }
-}
-
 template <bool IsBlockSharded, bool IsWidthSharded, bool IsColumnMajor>
 static inline void resolve_destination_coords(
     uint16_t destination_noc_x,
@@ -339,7 +320,10 @@ void kernel_main() {
 
     if constexpr (padding_config_cb_id != 0) {
         if constexpr (pad_val_u32 == 0) {
-            zero_padding<padding_config_cb_id, out_cb_id, aligned_stick_nbytes>(noc, padding_config_cb, out_cb);
+            // Use MEM_ZEROS_BASE if we are zero padded
+            constexpr uint32_t padding_region_size = MEM_ZEROS_SIZE;
+            copy_padding<padding_config_cb_id, out_cb_id, aligned_stick_nbytes, padding_region_size>(
+                noc, padding_config_cb, out_cb, MEM_ZEROS_BASE);
         } else {
             constexpr uint16_t pad_val = static_cast<uint16_t>(pad_val_u32);
             constexpr uint32_t num_elements_to_fill = aligned_stick_nbytes / elem_nbytes;
@@ -373,5 +357,4 @@ void kernel_main() {
 
     noc.async_read_barrier();
     noc.async_write_barrier();
-    noc.write_zeros_l1_barrier();
 }

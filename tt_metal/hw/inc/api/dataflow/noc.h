@@ -674,6 +674,13 @@ public:
     /**
      * @brief Zeroes a local-L1 destination buffer (overload 1).
      *
+     * @note Quasar: this temporarily reprograms the overlay write command buffer (cmd buffer 0)
+     *       into iDMA zero mode; it is restored to normal write mode only by
+     *       write_zeros_l1_barrier(). Do NOT issue any other NOC write (noc.async_write /
+     *       noc_async_write, also cmd buffer 0) on the same core between this call and
+     *       write_zeros_l1_barrier() -- those writes would run in zero mode and corrupt their
+     *       data. Barrier first, then reuse cmd buffer 0.
+     *
      * @see write_zeros_l1_barrier.
      *
      * @param dst Destination object (CircularBuffer or DataflowBuffer)
