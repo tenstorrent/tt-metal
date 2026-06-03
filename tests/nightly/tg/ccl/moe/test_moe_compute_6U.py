@@ -1651,7 +1651,7 @@ def _run_moe_compute_impl(
     tilize_golden_outputs = torch.stack(tilize_golden_layer_outputs)
     del tilize_golden_layer_outputs
 
-    logger.info(f"Done creating goldens and input tensors")
+    logger.info(f"Done creating tilize goldens and input tensors")
 
     #########################################
     # CREATE MATMUL INPUT TENSORS
