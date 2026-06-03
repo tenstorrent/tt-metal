@@ -209,6 +209,11 @@ def _list_init_test_cases() -> list[pytest.param]:
         pytest.param((1, 8), 1, 128, 8192, 500000.0, "llama3", True, id="1x8-b1-hd128-llama3-fused"),
         # T3K Qwen2.5-72B: no scaling, theta=1000000
         pytest.param((1, 8), 1, 128, 8192, 1000000.0, "none", True, id="1x8-b1-hd128-none-fused"),
+        # NOTE: Phi-4 (head_dim=128, no scaling, theta=250000) adds no new RoPE mechanism vs the
+        # existing hd128 / "none" rows; its decode path is validated end-to-end (M5 token-accuracy,
+        # 97-99% top-1 vs the TTTv1 reference) and via the attention module test's real rope. A
+        # dedicated row was omitted because the harness's "none"-scaling decode reference path
+        # (non-doubled table) is incompatible with RotarySetup1D decode regardless of model.
 
         # === Slow tests (remaining from CSV) ===
         # (1,1) batch=32
