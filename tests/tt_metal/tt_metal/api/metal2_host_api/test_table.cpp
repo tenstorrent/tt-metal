@@ -5,20 +5,22 @@
 //---------------------------------------------------------------------------------
 // Unit tests for the Metal 2.0 Host API Table<K, V> container (table.hpp).
 //
-// Pure host-side data-structure tests — no device required. The core behaviors
-// are exercised against BOTH storage backings (the default vector-backed base and
-// the unordered_map-backed base) via a typed test suite, so the swappable-backing
-// contract is validated end to end.
+// Pure host-side data-structure tests — no device required.
 //---------------------------------------------------------------------------------
 
 #include <gtest/gtest.h>
 
+#include <concepts>
+#include <iterator>
 #include <map>
 #include <span>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+#include <tt_stl/optional_reference.hpp>
 
 #include <tt-metalium/experimental/metal2_host_api/table.hpp>
 
@@ -26,67 +28,31 @@ namespace {
 
 namespace m2 = tt::tt_metal::experimental;
 
-// A user-defined alternative backing (std::unordered_map), defined here in the test
-// rather than shipped in the public header. Plugging it into Table's third template
-// parameter exercises the swappable-backing extensibility point.
-template <typename K, typename V>
-class UnorderedMapBackedTableBase {
-    using Storage = std::unordered_map<K, V>;
+using StrIntTable = m2::Table<std::string, int>;
 
-public:
-    using key_type = K;
-    using mapped_type = V;
-    using value_type = typename Storage::value_type;
-    using size_type = std::size_t;
-    using iterator = typename Storage::iterator;
-    using const_iterator = typename Storage::const_iterator;
+// ---- iterator contract (compile-time) ----------------------------------------
 
-    iterator begin() { return entries_.begin(); }
-    iterator end() { return entries_.end(); }
-    const_iterator begin() const { return entries_.begin(); }
-    const_iterator end() const { return entries_.end(); }
-    const_iterator cbegin() const { return entries_.cbegin(); }
-    const_iterator cend() const { return entries_.cend(); }
-
-    bool empty() const noexcept { return entries_.empty(); }
-    size_type size() const noexcept { return entries_.size(); }
-    void clear() noexcept { entries_.clear(); }
-
-    iterator find(const K& key) { return entries_.find(key); }
-    const_iterator find(const K& key) const { return entries_.find(key); }
-
-    std::pair<iterator, bool> insert(const value_type& entry) { return entries_.insert(entry); }
-    std::pair<iterator, bool> insert(value_type&& entry) { return entries_.insert(std::move(entry)); }
-
-    // Order-independent equality via std::unordered_map::operator== (the more
-    // optimal implementation this backing exists to demonstrate).
-    [[nodiscard]] bool operator==(const UnorderedMapBackedTableBase& other) const { return entries_ == other.entries_; }
-
-private:
-    Storage entries_;
-};
-
-// The two backings under test, both presenting as Table<std::string, int>.
-using VectorBacked = m2::Table<std::string, int>;
-using UnorderedBacked = m2::Table<std::string, int, UnorderedMapBackedTableBase<std::string, int>>;
-
-template <typename TableT>
-class TableTest : public ::testing::Test {};
-
-using Backings = ::testing::Types<VectorBacked, UnorderedBacked>;
-TYPED_TEST_SUITE(TableTest, Backings);
+static_assert(std::forward_iterator<StrIntTable::iterator>, "Table::iterator must model std::forward_iterator");
+static_assert(
+    std::forward_iterator<StrIntTable::const_iterator>, "Table::const_iterator must model std::forward_iterator");
+static_assert(
+    std::convertible_to<StrIntTable::iterator, StrIntTable::const_iterator>,
+    "Table::iterator must implicitly convert to const_iterator");
+static_assert(
+    !std::convertible_to<StrIntTable::const_iterator, StrIntTable::iterator>,
+    "Table::const_iterator must not convert to mutable iterator");
 
 // ---- construction / emptiness ------------------------------------------------
 
-TYPED_TEST(TableTest, DefaultConstructedIsEmpty) {
-    TypeParam t;
+TEST(TableTest, DefaultConstructedIsEmpty) {
+    StrIntTable t;
     EXPECT_TRUE(t.empty());
     EXPECT_EQ(t.size(), 0u);
     EXPECT_EQ(t.begin(), t.end());
 }
 
-TYPED_TEST(TableTest, InitializerListConstruction) {
-    TypeParam t{{"a", 1}, {"b", 2}, {"c", 3}};
+TEST(TableTest, InitializerListConstruction) {
+    StrIntTable t{{"a", 1}, {"b", 2}, {"c", 3}};
     EXPECT_FALSE(t.empty());
     EXPECT_EQ(t.size(), 3u);
     EXPECT_EQ(*t.get("a"), 1);
@@ -94,25 +60,55 @@ TYPED_TEST(TableTest, InitializerListConstruction) {
     EXPECT_EQ(*t.get("c"), 3);
 }
 
-TYPED_TEST(TableTest, SpanConstruction) {
-    std::vector<typename TypeParam::value_type> entries{{"a", 1}, {"b", 2}};
-    std::span<const typename TypeParam::value_type> entries_view(entries);
-    TypeParam t(entries_view);
+TEST(TableTest, SpanConstruction) {
+    std::vector<StrIntTable::value_type> entries{{"a", 1}, {"b", 2}};
+    std::span<const StrIntTable::value_type> entries_view(entries);
+    StrIntTable t(entries_view);
     EXPECT_EQ(t.size(), 2u);
     EXPECT_EQ(*t.get("a"), 1);
     EXPECT_EQ(*t.get("b"), 2);
 }
 
+TEST(TableTest, RangeConstructionFromUnorderedMap) {
+    std::unordered_map<std::string, int> src{{"a", 1}, {"b", 2}, {"c", 3}};
+    StrIntTable t(src);
+    EXPECT_EQ(t.size(), 3u);
+    EXPECT_EQ(*t.get("a"), 1);
+    EXPECT_EQ(*t.get("b"), 2);
+    EXPECT_EQ(*t.get("c"), 3);
+}
+
+TEST(TableTest, RangeConstructionFromMap) {
+    std::map<std::string, int> src{{"a", 1}, {"b", 2}};
+    StrIntTable t(src);
+    EXPECT_EQ(t.size(), 2u);
+    EXPECT_EQ(*t.get("a"), 1);
+    EXPECT_EQ(*t.get("b"), 2);
+}
+
+TEST(TableTest, RangeConstructionFromVectorOfPlainPairs) {
+    std::vector<std::pair<std::string, int>> src{{"a", 1}, {"b", 2}};  // non-const key
+    StrIntTable t(src);
+    EXPECT_EQ(t.size(), 2u);
+    EXPECT_EQ(*t.get("a"), 1);
+    EXPECT_EQ(*t.get("b"), 2);
+}
+
+TEST(TableTest, RangeConstructionDuplicateThrows) {
+    std::vector<std::pair<std::string, int>> src{{"a", 1}, {"a", 2}};
+    EXPECT_ANY_THROW(StrIntTable{src});
+}
+
 // ---- operator[] --------------------------------------------------------------
 
-TYPED_TEST(TableTest, SubscriptInsertsDefaultOnMiss) {
-    TypeParam t;
+TEST(TableTest, SubscriptInsertsDefaultOnMiss) {
+    StrIntTable t;
     EXPECT_EQ(t["a"], 0);  // default-constructed int
     EXPECT_EQ(t.size(), 1u);
 }
 
-TYPED_TEST(TableTest, SubscriptAssignThenOverwrite) {
-    TypeParam t;
+TEST(TableTest, SubscriptAssignThenOverwrite) {
+    StrIntTable t;
     t["a"] = 1;
     EXPECT_EQ(t.size(), 1u);
     EXPECT_EQ(*t.get("a"), 1);
@@ -121,24 +117,24 @@ TYPED_TEST(TableTest, SubscriptAssignThenOverwrite) {
     EXPECT_EQ(*t.get("a"), 2);
 }
 
-TYPED_TEST(TableTest, SubscriptReadsExistingWithoutOverwriting) {
-    TypeParam t{{"a", 5}};
+TEST(TableTest, SubscriptReadsExistingWithoutOverwriting) {
+    StrIntTable t{{"a", 5}};
     EXPECT_EQ(t["a"], 5);
     EXPECT_EQ(t.size(), 1u);
 }
 
 // ---- insert (insert-if-absent) -----------------------------------------------
 
-TYPED_TEST(TableTest, InsertNewKey) {
-    TypeParam t;
+TEST(TableTest, InsertNewKey) {
+    StrIntTable t;
     auto [it, inserted] = t.insert({"a", 1});
     EXPECT_TRUE(inserted);
     EXPECT_EQ(it->second, 1);
     EXPECT_EQ(t.size(), 1u);
 }
 
-TYPED_TEST(TableTest, InsertExistingKeyDoesNotOverwrite) {
-    TypeParam t{{"a", 1}};
+TEST(TableTest, InsertExistingKeyDoesNotOverwrite) {
+    StrIntTable t{{"a", 1}};
     auto [it, inserted] = t.insert({"a", 2});
     EXPECT_FALSE(inserted);
     EXPECT_EQ(it->second, 1);  // unchanged
@@ -146,18 +142,44 @@ TYPED_TEST(TableTest, InsertExistingKeyDoesNotOverwrite) {
     EXPECT_EQ(*t.get("a"), 1);
 }
 
+// ---- erase -------------------------------------------------------------------
+
+TEST(TableTest, EraseRemovesPresentKey) {
+    StrIntTable t{{"a", 1}, {"b", 2}};
+    EXPECT_EQ(t.erase("a"), 1u);
+    EXPECT_EQ(t.size(), 1u);
+    EXPECT_FALSE(t.get("a"));
+    EXPECT_EQ(*t.get("b"), 2);  // surviving entry intact
+}
+
+TEST(TableTest, EraseAbsentKeyIsNoop) {
+    StrIntTable t{{"a", 1}};
+    EXPECT_EQ(t.erase("missing"), 0u);
+    EXPECT_EQ(t.size(), 1u);
+    EXPECT_EQ(*t.get("a"), 1);
+}
+
+TEST(TableTest, EraseThenReinsert) {
+    StrIntTable t{{"a", 1}};
+    EXPECT_EQ(t.erase("a"), 1u);
+    EXPECT_TRUE(t.empty());
+    auto [it, inserted] = t.insert({"a", 2});
+    EXPECT_TRUE(inserted);
+    EXPECT_EQ(*t.get("a"), 2);
+}
+
 // ---- emplace (insert-if-absent, in place) ------------------------------------
 
-TYPED_TEST(TableTest, EmplaceNewKey) {
-    TypeParam t;
+TEST(TableTest, EmplaceNewKey) {
+    StrIntTable t;
     auto [it, inserted] = t.emplace("a", 1);
     EXPECT_TRUE(inserted);
     EXPECT_EQ(it->second, 1);
     EXPECT_EQ(t.size(), 1u);
 }
 
-TYPED_TEST(TableTest, EmplaceExistingKeyDoesNotOverwrite) {
-    TypeParam t;
+TEST(TableTest, EmplaceExistingKeyDoesNotOverwrite) {
+    StrIntTable t;
     t.emplace("a", 1);
     auto [it, inserted] = t.emplace("a", 2);
     EXPECT_FALSE(inserted);
@@ -167,22 +189,22 @@ TYPED_TEST(TableTest, EmplaceExistingKeyDoesNotOverwrite) {
 
 // ---- get ---------------------------------------------------------------------
 
-TYPED_TEST(TableTest, GetPresentAndAbsent) {
-    TypeParam t{{"a", 7}};
+TEST(TableTest, GetPresentAndAbsent) {
+    StrIntTable t{{"a", 7}};
     auto present = t.get("a");
     ASSERT_TRUE(present);
     EXPECT_EQ(*present, 7);
     EXPECT_FALSE(t.get("missing"));
 }
 
-TYPED_TEST(TableTest, GetMutatesThroughReference) {
-    TypeParam t{{"a", 1}};
+TEST(TableTest, GetMutatesThroughReference) {
+    StrIntTable t{{"a", 1}};
     *t.get("a") = 42;
     EXPECT_EQ(*t.get("a"), 42);
 }
 
-TYPED_TEST(TableTest, GetOnConstTable) {
-    const TypeParam t{{"a", 3}};
+TEST(TableTest, GetOnConstTable) {
+    const StrIntTable t{{"a", 3}};
     auto v = t.get("a");
     ASSERT_TRUE(v);
     EXPECT_EQ(*v, 3);
@@ -191,8 +213,8 @@ TYPED_TEST(TableTest, GetOnConstTable) {
 
 // ---- find --------------------------------------------------------------------
 
-TYPED_TEST(TableTest, FindHitAndMiss) {
-    TypeParam t{{"a", 1}};
+TEST(TableTest, FindHitAndMiss) {
+    StrIntTable t{{"a", 1}};
     auto it = t.find("a");
     ASSERT_NE(it, t.end());
     EXPECT_EQ(it->second, 1);
@@ -201,8 +223,8 @@ TYPED_TEST(TableTest, FindHitAndMiss) {
 
 // ---- size / clear ------------------------------------------------------------
 
-TYPED_TEST(TableTest, Clear) {
-    TypeParam t{{"a", 1}, {"b", 2}};
+TEST(TableTest, Clear) {
+    StrIntTable t{{"a", 1}, {"b", 2}};
     EXPECT_EQ(t.size(), 2u);
     t.clear();
     EXPECT_TRUE(t.empty());
@@ -211,8 +233,8 @@ TYPED_TEST(TableTest, Clear) {
 
 // ---- iteration ---------------------------------------------------------------
 
-TYPED_TEST(TableTest, IterationVisitsAllEntries) {
-    TypeParam t{{"a", 1}, {"b", 2}, {"c", 3}};
+TEST(TableTest, IterationVisitsAllEntries) {
+    StrIntTable t{{"a", 1}, {"b", 2}, {"c", 3}};
     std::map<std::string, int> seen;
     for (const auto& [k, v] : t) {
         seen[k] = v;
@@ -220,8 +242,8 @@ TYPED_TEST(TableTest, IterationVisitsAllEntries) {
     EXPECT_EQ(seen, (std::map<std::string, int>{{"a", 1}, {"b", 2}, {"c", 3}}));
 }
 
-TYPED_TEST(TableTest, RangeConstructsStdMap) {
-    TypeParam t{{"a", 1}, {"b", 2}};
+TEST(TableTest, RangeConstructsStdMap) {
+    StrIntTable t{{"a", 1}, {"b", 2}};
     std::map<std::string, int> m(t.begin(), t.end());
     EXPECT_EQ(m.size(), 2u);
     EXPECT_EQ(m.at("a"), 1);
@@ -230,39 +252,35 @@ TYPED_TEST(TableTest, RangeConstructsStdMap) {
 
 // ---- equality (order independent) --------------------------------------------
 
-TYPED_TEST(TableTest, EqualityIsOrderIndependent) {
-    TypeParam a{{"a", 1}, {"b", 2}};
-    TypeParam b;
+TEST(TableTest, EqualityIsOrderIndependent) {
+    StrIntTable a{{"a", 1}, {"b", 2}};
+    StrIntTable b;
     b["b"] = 2;
     b["a"] = 1;  // inserted in the opposite order
     EXPECT_EQ(a, b);
 }
 
-TYPED_TEST(TableTest, InequalityCases) {
-    TypeParam base{{"a", 1}, {"b", 2}};
-    EXPECT_NE(base, (TypeParam{{"a", 1}}));             // different size
-    EXPECT_NE(base, (TypeParam{{"a", 1}, {"b", 99}}));  // different value
-    EXPECT_NE(base, (TypeParam{{"a", 1}, {"z", 2}}));   // different key
+TEST(TableTest, InequalityCases) {
+    StrIntTable base{{"a", 1}, {"b", 2}};
+    EXPECT_NE(base, (StrIntTable{{"a", 1}}));             // different size
+    EXPECT_NE(base, (StrIntTable{{"a", 1}, {"b", 99}}));  // different value
+    EXPECT_NE(base, (StrIntTable{{"a", 1}, {"z", 2}}));   // different key
 }
 
 // ---- duplicate-key rejection at construction ---------------------------------
 
-TYPED_TEST(TableTest, InitializerListDuplicateThrows) {
-    auto build = [] { return TypeParam{{"a", 1}, {"a", 2}}; };
+TEST(TableTest, InitializerListDuplicateThrows) {
+    auto build = [] { return StrIntTable{{"a", 1}, {"a", 2}}; };
     EXPECT_ANY_THROW(build());
 }
 
-TYPED_TEST(TableTest, SpanDuplicateThrows) {
-    std::vector<typename TypeParam::value_type> dup{{"a", 1}, {"a", 2}};
-    std::span<const typename TypeParam::value_type> sp(dup);
-    EXPECT_ANY_THROW(TypeParam{sp});
+TEST(TableTest, SpanDuplicateThrows) {
+    std::vector<StrIntTable::value_type> dup{{"a", 1}, {"a", 2}};
+    std::span<const StrIntTable::value_type> sp(dup);
+    EXPECT_ANY_THROW(StrIntTable{sp});
 }
 
-}  // namespace
-
-// ---- genericity over other K/V types + move semantics (default backing) ------
-
-namespace {
+// ---- genericity over other K/V types -----------------------------------------
 
 TEST(TableMiscTest, IntKeyStringValue) {
     m2::Table<int, std::string> t;
@@ -272,6 +290,49 @@ TEST(TableMiscTest, IntKeyStringValue) {
     EXPECT_EQ(*t.get(1), "one");
     EXPECT_EQ(*t.get(2), "two");
     EXPECT_FALSE(t.get(3));
+}
+
+// ---- reference-valued tables (V is a reference) ------------------------------
+
+TEST(TableRefTest, StoresAndGetsReferences) {
+    int a = 1;
+    int b = 2;
+    m2::Table<std::string, int&> t;
+    t.emplace("a", a);
+    t.emplace("b", b);
+    EXPECT_EQ(t.size(), 2u);
+    ASSERT_TRUE(t.get("a"));
+    EXPECT_EQ(*t.get("a"), 1);
+    EXPECT_EQ(*t.get("b"), 2);
+    EXPECT_FALSE(t.get("missing"));
+}
+
+TEST(TableRefTest, GetYieldsLiveReference) {
+    int a = 1;
+    m2::Table<std::string, int&> t;
+    t.emplace("a", a);
+    *t.get("a") = 42;           // mutate the referent through the table
+    EXPECT_EQ(a, 42);           // underlying object changed
+    a = 7;                      // change the object directly
+    EXPECT_EQ(*t.get("a"), 7);  // table observes it (live reference, not a copy)
+}
+
+TEST(TableRefTest, ConstReferenceMappedYieldsConstReferent) {
+    const int x = 5;
+    m2::Table<std::string, const int&> t;
+    t.emplace("x", x);
+    static_assert(std::is_same_v<decltype(t.get("x")), ttsl::optional_reference<const int>>);
+    EXPECT_EQ(*t.get("x"), 5);
+}
+
+TEST(TableRefTest, EraseThenRebindViaEmplace) {
+    int a = 1;
+    int b = 2;
+    m2::Table<std::string, int&> t;
+    t.emplace("a", a);
+    EXPECT_EQ(t.erase("a"), 1u);
+    t.emplace("a", b);  // rebind the key to a different object
+    EXPECT_EQ(*t.get("a"), 2);
 }
 
 }  // namespace
