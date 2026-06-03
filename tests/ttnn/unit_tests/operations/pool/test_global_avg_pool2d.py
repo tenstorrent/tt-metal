@@ -11,6 +11,8 @@ from models.common.utility_functions import skip_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
 
+pytestmark = pytest.mark.use_module_device
+
 
 @pytest.mark.parametrize(
     "input_shape",

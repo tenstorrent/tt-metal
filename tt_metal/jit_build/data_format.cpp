@@ -19,8 +19,9 @@ static const std::set<DataFormat> ALL_VALID_FORMATS = {
     DataFormat::Bfp8,      DataFormat::Bfp8_b,   DataFormat::Bfp4,      DataFormat::Bfp4_b,  DataFormat::Bfp2,
     DataFormat::Bfp2_b,    DataFormat::Float16,  DataFormat::Float16_b, DataFormat::Float32, DataFormat::RawUInt32,
     DataFormat::RawUInt16, DataFormat::RawUInt8, DataFormat::Tf32,      DataFormat::Lf8,     DataFormat::Fp8_e4m3,
-    DataFormat::MxFp4,     DataFormat::Int8,     DataFormat::Int16,     DataFormat::Int32,   DataFormat::UInt8,
-    DataFormat::UInt32,    DataFormat::UInt16,
+    DataFormat::MxFp4,     DataFormat::MxFp6P,   DataFormat::MxFp6R,    DataFormat::MxFp8R,  DataFormat::MxFp8P,
+    DataFormat::Int8,      DataFormat::Int16,    DataFormat::Int32,     DataFormat::UInt8,   DataFormat::UInt32,
+    DataFormat::UInt16,
 };
 
 static const std::unordered_map<DataFormat, DataFormat> CONVERT_EXP_WIDTH = {
@@ -41,13 +42,20 @@ bool is_bfp_format(DataFormat data_format) {
         (data_format == DataFormat::Bfp2_b) || (data_format == DataFormat::Bfp2));
 }
 
-bool is_mx_format(DataFormat data_format) { return (data_format == DataFormat::MxFp4); }
+bool is_mx_format(DataFormat data_format) {
+    return (
+        (data_format == DataFormat::MxFp4) || (data_format == DataFormat::MxFp6P) ||
+        (data_format == DataFormat::MxFp6R) || (data_format == DataFormat::MxFp8R) ||
+        (data_format == DataFormat::MxFp8P));
+}
 
 bool is_exp_b_format(DataFormat data_format) {
     return (
         (data_format == DataFormat::Tf32 || data_format == DataFormat::Float16_b) ||
         (data_format == DataFormat::Bfp8_b) || (data_format == DataFormat::Bfp4_b) ||
-        (data_format == DataFormat::Bfp2_b) || (data_format == DataFormat::MxFp4));
+        (data_format == DataFormat::Bfp2_b) || (data_format == DataFormat::MxFp4) ||
+        (data_format == DataFormat::MxFp6P) || (data_format == DataFormat::MxFp6R) ||
+        (data_format == DataFormat::MxFp8R) || (data_format == DataFormat::MxFp8P));
 }
 
 ExpPrecision get_exp_precision(DataFormat data_format) {
@@ -129,6 +137,10 @@ std::vector<DataFormat> get_unpack_src_formats(std::span<const DataFormat> data_
 
 DataFormat get_single_unpack_dst_format(
     const DataFormat src_format, const DataFormat /*pack_format*/, const DataFormat unpack_conditional_dst_format) {
+    // NOTE: DataFormat::UInt8 is intentionally not remapped to Int8 here. The unpacker's 4-bit
+    // OutDataFormat register field has no UInt8 encoding; the LLK applies masked_data_format()
+    // at the register-write site so UInt8 (=30) lands as INT8 (=14) in the bitfield. We preserve
+    // UInt8 in the dst format because downstream LLK paths (e.g. math-MOP selection) key off the original dtype value.
     DataFormat dst_format = src_format;
     if (src_format == DataFormat::Float32) {
         TT_FATAL(

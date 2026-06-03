@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "argmax_device_operation.hpp"
+#include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "argmax_utils.hpp"
@@ -166,6 +167,13 @@ void ArgMaxDeviceOperation::validate_on_program_cache_miss(
             "(ROW_MAJOR tensors reduced along height are converted to TILE internally; use use_multicore=False for "
             "that path.)",
             input_tensor_a.layout());
+    }
+
+    if (args.use_multicore && args.sub_core_grids.has_value()) {
+        ReduceOpDeviceGridValidationOptions grid_opts;
+        grid_opts.sub_grid_contained_in_device_grid = &args.sub_core_grids.value();
+        grid_opts.sub_grid_label = "Multicore argmax sub_core_grids";
+        validate_reduce_op_tensor(tensor_args.input, "Argmax", "input", &grid_opts);
     }
 }
 

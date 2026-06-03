@@ -23,6 +23,7 @@
 #include "api/compute/lcm.h"
 #include "api/compute/xlogy.h"
 #include "api/compute/binary_comp.h"
+#include "api/compute/isclose.h"
 #include "api/compute/atan2.h"
 #include "api/compute/bcast.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
@@ -31,6 +32,10 @@
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
+#ifdef ISCLOSE_OP
+    const uint32_t rtol_bits = get_arg_val<uint32_t>(ISCLOSE_RTOL_RT_ARG_IDX);
+    const uint32_t atol_bits = get_arg_val<uint32_t>(ISCLOSE_ATOL_RT_ARG_IDX);
+#endif
 
     constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
 
@@ -71,6 +76,7 @@ void kernel_main() {
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         exp_cb_bcast.wait_front(num_tiles_per_cycle);
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
+        pack_reconfig_data_format(cb_out, cb_llk_post);
         unary_bcast_init<BroadcastType::ROW>(cb_bcast, cb_llk_post);
 
         tile_regs_acquire();
@@ -110,7 +116,11 @@ void kernel_main() {
 #if HAS_ACTIVATIONS(POST)
             BINARY_SFPU_INIT
 #endif
+#if ISCLOSE_OP
+            BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2, rtol_bits, atol_bits);
+#else
             BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
+#endif
             PROCESS_POST_ACTIVATIONS(i * 2);
         }
         tile_regs_commit();

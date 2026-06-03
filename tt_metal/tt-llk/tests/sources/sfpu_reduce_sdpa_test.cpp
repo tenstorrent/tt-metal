@@ -59,7 +59,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     // Initialize datacopy from srcA to dest
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* tilize */, false /* is_int_fpu_en */>(
+    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* is_int_fpu_en */, PackMode::Default>(
         4 /* num_faces */, formats.math);
     _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
@@ -96,13 +96,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     // Configure packer hardware
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(
-        formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, 16 * 16 * 4 /* tile_size */);
 
-    _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(formats.pack_dst);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
 
     // Initialize destination for packing
-    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, false /* untilize */>();
+    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, PackMode::Default>();
 
     _llk_packer_wait_for_math_done_();
 
@@ -112,13 +111,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     ckernel::sfpu::_init_reduce_max_col_subblock_4x2_<DataFormat::Float16_b>();
 
-    _llk_math_eltwise_unary_sfpu_start_(0);
+    _llk_math_eltwise_sfpu_start_(0);
     ckernel::sfpu::_reduce_max_col_subblock_4x2_prologue_();
-    ckernel::sfpu::_calculate_reduce_max_col_subblock_4x2_<PoolType::MAX, REDUCE_COL, DataFormat::Float16_b>(BLOCK_RT_DIM);
+    ckernel::sfpu::_calculate_reduce_max_col_subblock_4x2_<PoolType::MAX, ReduceDim::REDUCE_COL, DataFormat::Float16_b>(BLOCK_RT_DIM);
 
     ckernel::sfpu::_reduce_max_col_subblock_4x2_epilogue_();
 
-    _llk_math_eltwise_unary_sfpu_done_();
+    _llk_math_eltwise_sfpu_done_();
 
     // Wait for math to finish and pack tiles back to L1
 
@@ -126,7 +125,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         LLK_ASSERT(
             (i < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()), "Block tile index exceeds maximum destination tiles");
-        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(i, L1_ADDRESS(params.buffer_Res[i]));
+        _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(params.buffer_Res[i]));
     }
     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

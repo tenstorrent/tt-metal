@@ -32,13 +32,12 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
-    auto physical_system_desc =
-        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+    auto physical_system_desc = tt::tt_metal::run_physical_system_discovery(
+        *cluster.get_cluster_desc(), distributed_context, rtoptions.get_target_device());
     // Run discovery again to ensure that state is cleared before re-discovery
     physical_system_desc.clear();
     auto new_psd = tt::tt_metal::run_physical_system_discovery(
-        driver_ref,
+        *cluster.get_cluster_desc(),
         distributed_context,
         rtoptions.get_target_device(),
         /*run_global_discovery*/ true,
@@ -161,9 +160,8 @@ TEST(PhysicalDiscovery, TestUmdUniqueIdSerializationRoundtrip) {
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
-    auto physical_system_desc =
-        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+    auto physical_system_desc = tt::tt_metal::run_physical_system_discovery(
+        *cluster.get_cluster_desc(), distributed_context, rtoptions.get_target_device());
 
     auto unique_chip_ids = cluster.get_unique_chip_ids();
     std::unordered_map<AsicID, ChipId> asic_id_to_chip_id;
@@ -189,9 +187,8 @@ TEST(PhysicalDiscovery, PrintHostTopology) {
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
-    auto physical_system_desc =
-        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+    auto physical_system_desc = tt::tt_metal::run_physical_system_discovery(
+        *cluster.get_cluster_desc(), distributed_context, rtoptions.get_target_device());
 
     if (*(distributed_context->rank()) == 0) {
         auto all_hostnames = physical_system_desc.get_all_hostnames();
@@ -221,9 +218,8 @@ TEST(PhysicalMappingGeneration, Generate2x4SliceToPCIeDeviceMapping) {
     if (cluster.get_cluster_type() != tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
         GTEST_SKIP() << "Splitting a Galaxy into 2x4 Cross-Tray slices is only supported for Blackhole Galaxy Systems.";
     }
-    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
-    auto physical_system_desc =
-        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+    auto physical_system_desc = tt::tt_metal::run_physical_system_discovery(
+        *cluster.get_cluster_desc(), distributed_context, rtoptions.get_target_device());
 
     // Each rank builds its local PCI device ID -> logical ID mapping.
     // UMD TT_VISIBLE_DEVICES expects logical IDs (BDF-sorted indices), not PCI device IDs.
@@ -290,21 +286,43 @@ TEST(PhysicalMappingGeneration, Generate2x4SliceToPCIeDeviceMapping) {
             }
         }
 
-        // A Slice is defined as a 2x4 Grid that spans 2 Trays. Each tray contributes a 2x2 Grid to the slice.
-        // Note that this definition corresponds to the tray layout for BH Galaxy Rev A & B
-        const std::unordered_map<uint32_t, std::unordered_map<TrayID, std::vector<ASICLocation>>> devices_per_slice = {
-            {0,
-             {{TrayID{1}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}},
-              {TrayID{3}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}}}},
-            {1,
-             {{TrayID{1}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}},
-              {TrayID{3}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}}}},
-            {2,
-             {{TrayID{2}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}},
-              {TrayID{4}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}}}},
-            {3,
-             {{TrayID{2}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}},
-              {TrayID{4}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}}}}};
+        // A slice is a host-local 2x4 grid that spans 2 trays. These 8-device slices are the canonical building
+        // blocks used to compose 4x2, 4x4, and future wider stages.
+        //
+        // Blackhole Galaxy Rev C swaps UBB tray IDs 2 and 3 relative to Rev A/B. Keep the discovered tray IDs intact
+        // and choose the logical slice composition table based on the discovered PSD revision.
+        const std::unordered_map<uint32_t, std::unordered_map<TrayID, std::vector<ASICLocation>>>
+            devices_per_slice_rev_ab = {
+                {0,
+                 {{TrayID{1}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}},
+                  {TrayID{3}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}}}},
+                {1,
+                 {{TrayID{1}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}},
+                  {TrayID{3}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}}}},
+                {2,
+                 {{TrayID{2}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}},
+                  {TrayID{4}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}}}},
+                {3,
+                 {{TrayID{2}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}},
+                  {TrayID{4}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}}}}};
+
+        const std::unordered_map<uint32_t, std::unordered_map<TrayID, std::vector<ASICLocation>>>
+            devices_per_slice_rev_c = {
+                {0,
+                 {{TrayID{1}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}},
+                  {TrayID{2}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}}}},
+                {1,
+                 {{TrayID{1}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}},
+                  {TrayID{2}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}}}},
+                {2,
+                 {{TrayID{3}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}},
+                  {TrayID{4}, {ASICLocation{3}, ASICLocation{4}, ASICLocation{7}, ASICLocation{8}}}}},
+                {3,
+                 {{TrayID{3}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}},
+                  {TrayID{4}, {ASICLocation{1}, ASICLocation{2}, ASICLocation{5}, ASICLocation{6}}}}}};
+
+        const auto& devices_per_slice =
+            physical_system_desc.is_bh_galaxy_rev_c() ? devices_per_slice_rev_c : devices_per_slice_rev_ab;
         const auto& pcie_id_to_asic_location = physical_system_desc.get_pcie_id_to_asic_location();
         const auto& pcie_devices_per_tray = physical_system_desc.get_pcie_devices_per_tray();
 
@@ -343,9 +361,8 @@ TEST(PhysicalMappingGeneration, GenerateTrayToPCIeDeviceMapping) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
 
-    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
-    auto physical_system_desc =
-        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+    auto physical_system_desc = tt::tt_metal::run_physical_system_discovery(
+        *cluster.get_cluster_desc(), distributed_context, rtoptions.get_target_device());
     const auto& pcie_devices_per_tray = physical_system_desc.get_pcie_devices_per_tray();
     auto my_host = physical_system_desc.my_host_name();
     // Build PCI device ID -> logical ID mapping. UMD now interprets TT_VISIBLE_DEVICES integers as
@@ -378,9 +395,8 @@ TEST(PhysicalMappingGeneration, GeneratePCIeToLogicalMapping) {
     auto distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context_ptr();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    auto& driver_ref = const_cast<tt::umd::Cluster&>(*cluster.get_driver());
-    auto physical_system_desc =
-        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+    auto physical_system_desc = tt::tt_metal::run_physical_system_discovery(
+        *cluster.get_cluster_desc(), distributed_context, rtoptions.get_target_device());
     auto my_host = physical_system_desc.my_host_name();
 
     // Build PCI device ID -> logical ID mapping. UMD TT_VISIBLE_DEVICES expects logical IDs.

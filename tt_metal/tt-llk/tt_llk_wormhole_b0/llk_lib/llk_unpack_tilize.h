@@ -48,8 +48,10 @@ inline void _llk_unpack_tilize_init_(
     const std::uint32_t unpack_dst_format = 0,
     const std::uint32_t ct_dim            = 0,
     const std::uint32_t face_r_dim        = FACE_R_DIM,
-    const bool narrow_tile                = false)
+    const bool narrow_tile                = false,
+    const std::uint32_t num_faces         = 4)
 {
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
 
     // In case of 32-bit numbers, we have to unpack into dest register
@@ -61,6 +63,7 @@ inline void _llk_unpack_tilize_init_(
         "Unsupported unpacker format conversion.");
 
     const std::uint32_t block_c_dim = ct_dim * (narrow_tile ? FACE_C_DIM : TILE_C_DIM);
+    const bool narrow_layout        = narrow_tile || (num_faces == 1);
 
     // Set face dim
     TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
@@ -78,7 +81,7 @@ inline void _llk_unpack_tilize_init_(
     TTI_REG2FLOP(
         1, 0, 0, 0, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::FACE_DIM_1x16); // GPR preloaded with  16 | (16 << 16)
 
-    _llk_unpack_tilize_mop_config_(narrow_tile, unpack_to_dest);
+    _llk_unpack_tilize_mop_config_(narrow_layout, unpack_to_dest);
 }
 
 // Internal function to implement unpacking to source register
@@ -197,6 +200,7 @@ inline void _llk_unpack_tilize_(
     std::uint32_t top_face_offset_address = SCALE_DATUM_SIZE(unpack_src_format, tile_index) << (narrow_tile ? 0 : 1);
     // Each iteration unpacks 2 face_r_dimx16 faces (1st 0,1 2nd 2,3 unless tile is <=16x32)
     // For narrow tile we unpack 1 face in each iteration
+    // For num_faces == 1 we unpack a single face per tile
     // Offset address is in 16B words
     // Datum count = tile_index*face_r_dim (/16 to get word count)
 
@@ -204,7 +208,7 @@ inline void _llk_unpack_tilize_(
     std::uint32_t bot_face_offset_address = SCALE_DATUM_SIZE(unpack_src_format, face_r_dim * block_c_dim_16B); //*N rows / 16 to get 16B word aligned address
 
     // Program srcA and srcB base addresses
-    std::uint32_t num_loops = narrow_tile ? 2 : num_faces / 2;
+    std::uint32_t num_loops = (num_faces == 1) ? 1 : (narrow_tile ? 2 : num_faces >> 1);
 
     if (!unpack_to_dest)
     {

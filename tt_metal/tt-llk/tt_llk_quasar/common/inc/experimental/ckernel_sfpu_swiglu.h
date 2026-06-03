@@ -56,7 +56,7 @@ namespace sfpu
 //     |x| < L: relu(x+L) = x+L        → outer relu = L - x  → result = +L - (L-x) = x
 
 // Loads the 3 hoisted constants into LREG4/5/6. Call exactly once per SFPU
-// section (after `_llk_math_eltwise_unary_sfpu_init_` and before the per-face
+// section (after `_llk_math_eltwise_sfpu_init_` and before the per-face
 // `_calculate_swiglu_` loop). The values persist for the whole section.
 //
 // `+L` and `+2L` are loaded as BF16 (1 SFPLOADI each) since 7.0f and 14.0f

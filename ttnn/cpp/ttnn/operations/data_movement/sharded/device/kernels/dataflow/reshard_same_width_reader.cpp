@@ -32,8 +32,7 @@ void kernel_main() {
             uint32_t bank_id = args[args_idx++];
             uint32_t src_offset = args[args_idx++];
             uint32_t addr = src_addr + src_offset;
-            DPRINT << "addr: " << addr << ENDL();
-            DEVICE_PRINT("addr: {}\n", addr);
+            DPRINT("addr: {}\n", addr);
             uint32_t units_to_transfer = args[args_idx++];
             uint32_t read_size = units_to_transfer * remote_unit_size_padded;
             noc_async_read(

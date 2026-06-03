@@ -3,10 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/device/fast_reduce_nc_program_factory.hpp"
-#include <tt-metalium/work_split.hpp>
+
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/work_split.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -49,7 +51,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dim
 
 }  // namespace
 
-FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
+tt::tt_metal::ProgramDescriptor FastReduceNCProgramFactory::create_descriptor(
     const FastReduceNCParams& operation_attributes,
     const FastReduceNCInputs& tensor_args,
     Tensor& tensor_return_value) {
@@ -57,7 +59,6 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto* device = tensor_args.input.device();
-    auto program = Program();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -147,29 +148,50 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     const auto intermed_cb_data_format = (fp32_dest_acc_en) ? tt::DataFormat::Float32 : output_data_format;
     const auto intermed_cb_single_tile_size = tt::tile_size(intermed_cb_data_format);
 
+    ProgramDescriptor desc;
+
     ////////////////////////////////////////////////////////////////////////////
     //                         CircularBuffer Setup
     ////////////////////////////////////////////////////////////////////////////
-    tt_metal::CircularBufferConfig cb_scr0_config =
-        tt_metal::CircularBufferConfig(in0_t * input_tile_size, {{CBIndex::c_0, input_data_format}})
-            .set_page_size(CBIndex::c_0, input_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_scr0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in0_t * input_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_0),
+            .data_format = input_data_format,
+            .page_size = input_tile_size,
+        }}},
+    });
 
-    tt_metal::CircularBufferConfig cb_scr1_config =
-        tt_metal::CircularBufferConfig(in1_t * cb_1_tile_size, {{CBIndex::c_1, cb_1_data_format}})
-            .set_page_size(CBIndex::c_1, cb_1_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_scr1_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in1_t * cb_1_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_1),
+            .data_format = cb_1_data_format,
+            .page_size = cb_1_tile_size,
+        }}},
+    });
 
-    tt_metal::CircularBufferConfig cb_intermed0_config =
-        tt_metal::CircularBufferConfig(
-            intermed0_t * intermed_cb_single_tile_size, {{CBIndex::c_24, intermed_cb_data_format}})
-            .set_page_size(CBIndex::c_24, intermed_cb_single_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = intermed0_t * intermed_cb_single_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_24),
+            .data_format = intermed_cb_data_format,
+            .page_size = intermed_cb_single_tile_size,
+        }}},
+    });
 
-    tt_metal::CircularBufferConfig cb_output_config =
-        tt_metal::CircularBufferConfig(out0_t * output_tile_size, {{CBIndex::c_16, output_data_format}})
-            .set_page_size(CBIndex::c_16, output_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out0_t * output_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(CBIndex::c_16),
+            .data_format = output_data_format,
+            .page_size = output_tile_size,
+        }}},
+    });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
@@ -185,48 +207,62 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
     const auto* const writer_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/writer_reduce_nc.cpp";
 
-    tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
-        program, reader_kernel_file, all_cores, tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+    KernelDescriptor reader_kernel_desc;
+    reader_kernel_desc.kernel_source = reader_kernel_file;
+    reader_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_kernel_desc.core_ranges = all_cores;
+    reader_kernel_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_kernel_desc.config = ReaderConfigDescriptor{};
 
-    tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
-        program, writer_kernel_file, all_cores, tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    KernelDescriptor writer_kernel_desc;
+    writer_kernel_desc.kernel_source = writer_kernel_file;
+    writer_kernel_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_kernel_desc.core_ranges = all_cores;
+    writer_kernel_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_kernel_desc.config = WriterConfigDescriptor{};
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> compute_args_group_1 = {
         num_cols_per_core_group_1, num_reduce_input_tile, input_granularity};
-    std::map<std::string, std::string> compute_defines;
+    KernelDescriptor::Defines compute_defines;
     if (fp32_dest_acc_en) {
-        compute_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines.emplace_back("FP32_DEST_ACC_EN", "1");
     }
     const auto* const compute_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reduce_nc.cpp";
-    tt_metal::CreateKernel(
-        program,
-        compute_kernel_file,
-        core_group_1,
-        tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_args_group_1,
-            .defines = compute_defines});
 
-    std::optional<KernelHandle> compute_kernel_2_id = std::nullopt;
+    KernelDescriptor compute_kernel_1_desc;
+    compute_kernel_1_desc.kernel_source = compute_kernel_file;
+    compute_kernel_1_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_kernel_1_desc.core_ranges = core_group_1;
+    compute_kernel_1_desc.compile_time_args = compute_args_group_1;
+    compute_kernel_1_desc.defines = compute_defines;
+    compute_kernel_1_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode,
+    };
+
+    std::optional<KernelDescriptor> compute_kernel_2_desc;
     if (!core_group_2.ranges().empty()) {
         const std::vector<uint32_t> compute_args_group_2 = {
             num_cols_per_core_group_2, num_reduce_input_tile, input_granularity};
-        compute_kernel_2_id = tt_metal::CreateKernel(
-            program,
-            compute_kernel_file,
-            core_group_2,
-            tt_metal::ComputeConfig{
-                .math_fidelity = math_fidelity,
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .math_approx_mode = math_approx_mode,
-                .compile_args = compute_args_group_2,
-                .defines = compute_defines});
+        KernelDescriptor k2;
+        k2.kernel_source = compute_kernel_file;
+        k2.source_type = KernelDescriptor::SourceType::FILE_PATH;
+        k2.core_ranges = core_group_2;
+        k2.compile_time_args = compute_args_group_2;
+        k2.defines = compute_defines;
+        k2.config = ComputeConfigDescriptor{
+            .math_fidelity = math_fidelity,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = dst_full_sync_en,
+            .math_approx_mode = math_approx_mode,
+        };
+        compute_kernel_2_desc = std::move(k2);
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -270,6 +306,9 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
         }
     }
 
+    auto* const input_buffer = tensor_args.input.buffer();
+    auto* const output_buffer = tensor_return_value.buffer();
+
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = ordered_cores[i];
 
@@ -282,11 +321,9 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
             TT_THROW("Core not in specified core ranges.");
         }
 
-        tt_metal::SetRuntimeArgs(
-            program,
-            reader_kernel_id,
+        reader_kernel_desc.emplace_runtime_args(
             core,
-            {tensor_args.input.buffer()->address(),
+            {input_buffer,
              num_reduce_input_tile,
              /*id_range_length=*/num_tiles_per_core * num_cores_to_be_used,
              tile_offset,
@@ -294,47 +331,23 @@ FastReduceNCProgramFactory::cached_program_t FastReduceNCProgramFactory::create(
              reduce_tile_size,
              inner_tile_size});
 
-        tt_metal::SetRuntimeArgs(
-            program,
-            writer_kernel_id,
+        writer_kernel_desc.emplace_runtime_args(
             core,
-            {tensor_return_value.buffer()->address(),
+            {output_buffer,
              /*id_range_length=*/num_tiles_per_core * num_cores_to_be_used,
              tile_offset});
 
         tile_offset += shard_factor;
     }
 
-    return cached_program_t{
-        std::move(program),
-        {/* reader_kernel_id = */ reader_kernel_id,
-         /* writer_kernel_id = */ writer_kernel_id,
-         /* num_cores_to_be_used = */ num_cores_to_be_used,
-         /* num_cores_x = */ num_cores_x,
-         /* ordered_cores = */ std::move(ordered_cores)}};
-}
-
-void FastReduceNCProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const FastReduceNCParams&,
-    const FastReduceNCInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    const auto* input_buffer = tensor_args.input.buffer();
-    const auto* output_buffer = tensor_return_value.buffer();
-    auto& program = cached_program.program;
-    const auto& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    const auto& num_cores_to_be_used = cached_program.shared_variables.num_cores_to_be_used;
-    const auto& ordered_cores = cached_program.shared_variables.ordered_cores;
-    auto& reader_kernel_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-    auto& writer_kernel_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-    for (uint32_t i = 0; i < num_cores_to_be_used; ++i) {
-        CoreCoord core = ordered_cores[i];
-        auto& reader_kernel_args = reader_kernel_args_by_core[core.x][core.y];
-        reader_kernel_args[0] = input_buffer->address();
-        auto& writer_kernel_args = writer_kernel_args_by_core[core.x][core.y];
-        writer_kernel_args[0] = output_buffer->address();
+    desc.kernels.push_back(std::move(reader_kernel_desc));
+    desc.kernels.push_back(std::move(writer_kernel_desc));
+    desc.kernels.push_back(std::move(compute_kernel_1_desc));
+    if (compute_kernel_2_desc.has_value()) {
+        desc.kernels.push_back(std::move(*compute_kernel_2_desc));
     }
+
+    return desc;
 }
 
 }  // namespace ttnn::experimental::prim

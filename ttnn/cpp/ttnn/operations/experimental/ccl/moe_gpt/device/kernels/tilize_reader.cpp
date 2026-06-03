@@ -387,7 +387,7 @@ void kernel_main() {
 
     const uint32_t indices_base = get_read_ptr(indices_tensor_cb_id);
     const uint32_t scores_base = get_read_ptr(scores_tensor_cb_id);
-    const uint32_t expert_activation_base = get_write_ptr(expert_activation_cb_id);
+    const uint32_t expert_activation_base = get_read_ptr(expert_activation_cb_id);
 
     // Cache source_device_mapping - only changes every tokens_per_device tokens
     // Reduces mapping loads from 512 to 16 (dispatch_devices)
@@ -590,7 +590,7 @@ void kernel_main() {
                 // Pull this core's expert_activation buffer rows
                 if (remote_activated_count > 0) {
                     // Source: remote core's expert_activation buffer, rows start at 0
-                    uint32_t remote_activation_addr = get_write_ptr(expert_activation_cb_id);
+                    uint32_t remote_activation_addr = get_read_ptr(expert_activation_cb_id);
                     uint64_t remote_activation_noc_addr =
                         get_noc_addr(remote_noc_x, remote_noc_y, remote_activation_addr);
 
@@ -646,7 +646,7 @@ void kernel_main() {
         // Skip if address is 0 (fused mode: no output tensors allocated)
         if (expert_activation_output_address != 0) {
             uint32_t expert_activation_write_size = (num_activated_tokens + 1) * aligned_activation_row_bytes;
-            uint64_t expert_activation_dram_addr = get_noc_addr(0, expert_activation_output_tensor_addr_gen);
+            uint64_t expert_activation_dram_addr = expert_activation_output_tensor_addr_gen.get_noc_addr(0);
             noc_async_write(expert_activation_base, expert_activation_dram_addr, expert_activation_write_size);
         }
 
@@ -836,7 +836,7 @@ void kernel_main() {
                 uint32_t token_id = *reinterpret_cast<uint32_t*>(e_t_expert_addr + (chunk_start + i) * e_t_entry_size);
                 // read the token from the input tensor at the tilize subtoken offset and size
                 noc_async_read(
-                    get_noc_addr(token_id, input_tensor_addr_gen) + global_subtoken_offset,
+                    input_tensor_addr_gen.get_noc_addr(token_id) + global_subtoken_offset,
                     get_write_ptr(tilize_input_cb_id) + i * subtoken_size,
                     subtoken_size);
             }

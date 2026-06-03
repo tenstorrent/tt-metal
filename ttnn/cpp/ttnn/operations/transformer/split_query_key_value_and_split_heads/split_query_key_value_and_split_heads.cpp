@@ -17,7 +17,8 @@ std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_
     const std::tuple<Tensor, Tensor, Tensor>& outputs,
     const uint32_t sequence_size,
     const uint32_t sequence_size_padded,
-    const bool transpose_key) {
+    const bool transpose_key,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
     auto [query, key, value] = outputs;
 
     auto batch_size = query.logical_shape()[0];
@@ -27,27 +28,34 @@ std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_
 
     auto num_kv_heads = value.logical_shape()[1];
 
+    // Forward `memory_config` to the inner reshapes so callers that pass an explicit
+    // layout (e.g. via the public op below) can lock in the spec their downstream ops
+    // are tuned for. With a nullopt, ttnn::reshape derives the spec as before.
     query = ttnn::reshape(
         query,
         ttnn::Shape({batch_size, num_heads, sequence_size, head_size}),
-        ttnn::Shape({batch_size, num_heads, sequence_size_padded, head_size_padded}));
+        ttnn::Shape({batch_size, num_heads, sequence_size_padded, head_size_padded}),
+        memory_config);
 
     if (transpose_key) {
         key = ttnn::reshape(
             key,
             ttnn::Shape({batch_size, num_kv_heads, head_size, sequence_size}),
-            ttnn::Shape({batch_size, num_kv_heads, head_size_padded, sequence_size_padded}));
+            ttnn::Shape({batch_size, num_kv_heads, head_size_padded, sequence_size_padded}),
+            memory_config);
     } else {
         key = ttnn::reshape(
             key,
             ttnn::Shape({batch_size, num_kv_heads, sequence_size, head_size}),
-            ttnn::Shape({batch_size, num_kv_heads, sequence_size_padded, head_size_padded}));
+            ttnn::Shape({batch_size, num_kv_heads, sequence_size_padded, head_size_padded}),
+            memory_config);
     }
 
     value = ttnn::reshape(
         value,
         ttnn::Shape({batch_size, num_kv_heads, sequence_size, head_size}),
-        ttnn::Shape({batch_size, num_kv_heads, sequence_size_padded, head_size_padded}));
+        ttnn::Shape({batch_size, num_kv_heads, sequence_size_padded, head_size_padded}),
+        memory_config);
     return {query, key, value};
 }
 }  // namespace ttnn::operations::transformer::detail
@@ -116,7 +124,8 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
             {std::get<0>(outputs), std::get<1>(outputs), std::get<2>(outputs)},
             sequence_size,
             sequence_size_padded,
-            transpose_key);
+            transpose_key,
+            memory_config);
     }
 
     uint32_t hidden_dim_padded = 0, hidden_dim = 0;
@@ -196,7 +205,8 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
                 memory_config.value_or(input_tensor.memory_config())),
             sequence_size,
             sequence_size_padded,
-            transpose_key);
+            transpose_key,
+            memory_config);
     }
     const auto input_tensor_4d = ttnn::experimental::view(
         input_tensor, ttnn::Shape{padded_input_shape[0], 1, padded_input_shape[1], padded_input_shape[2]});
@@ -215,7 +225,7 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
         transpose_key,
         memory_config.value_or(input_tensor.memory_config()));
     return ttnn::operations::transformer::detail::reshape_outputs_of_split_query_key_value_and_split_heads(
-        outputs, sequence_size, sequence_size_padded, transpose_key);
+        outputs, sequence_size, sequence_size_padded, transpose_key, memory_config);
 }
 
 }  // namespace ttnn::transformer

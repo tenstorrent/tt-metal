@@ -52,6 +52,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.TILE_SIZE_UNPACK_A,
         params.TILE_SIZE_UNPACK_B);
 
+    // Must come after _llk_unpack_hw_configure_, otherwise the ALU stoch-rnd
+    // bits programmed here are overwritten by configure_unpack_AB().
+    _llk_unpack_configure_stoch_rnd_<StochRndType::None>();
+
     _llk_unpack_AB_init_<BROADCAST_TYPE>(tensor_shape, transpose);
 
 #ifdef EN_DEST_REUSE
@@ -152,13 +156,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const bool narrow_tile = (tensor_shape.num_faces_c_dim == 1);
 
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
         formats.pack_src, formats.pack_dst, tile_size, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
 
-    _llk_pack_init_wrapper_<false /* untilize */, false /* zero_output */>(
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(
         formats.pack_dst, tensor_shape.face_r_dim, tensor_shape.total_col_dim(), num_faces, partial_face, narrow_tile);
 
-    _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, false /* untilize */>(tensor_shape.face_r_dim, narrow_tile);
+    _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>(tensor_shape.face_r_dim, narrow_tile);
 
 #ifdef EN_DEST_REUSE
     const std::uint32_t output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
@@ -177,7 +181,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             LLK_ASSERT(
                 (static_cast<std::uint32_t>(tile) < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                 "Block tile index exceeds maximum destination tiles");
-            _llk_pack_<dest_sync, is_fp32_dest_acc_en, false /* untilize */>(tile, L1_ADDRESS(params.buffer_Res[res_tile_idx]));
+            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile, L1_ADDRESS(params.buffer_Res[res_tile_idx]));
         }
         _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }

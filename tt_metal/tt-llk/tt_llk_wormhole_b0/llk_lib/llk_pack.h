@@ -33,6 +33,29 @@ inline void finalize_multitile_pack_tail()
     // normal single-tile state for the next caller.
     TTI_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, 0xf, 0, 1, 0, 1);
 }
+
+// Keep the multi-tile path out of line to share this pack sequence across call
+// sites and reduce TRISC code size. The single-tile hot path stays inline.
+static __attribute__((noinline, noclone)) void pack_multitile(const std::uint32_t tile_index, const std::uint32_t address)
+{
+    set_dst_write_addr(tile_index);
+    LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
+    std::uint32_t new_l1_addr = (1 << 31) | address;
+    TT_SETDMAREG(0, LOWER_HALFWORD(address), 0, LO_16(p_gpr_pack::OUTPUT_ADDR));
+    TT_SETDMAREG(0, UPPER_HALFWORD(new_l1_addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));
+    TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::OUTPUT_ADDR);
+    // The programmed MOP performs the blocked sequence for this whole call;
+    // the explicit tail below is only the final close/reset step.
+    mop_run(1, 1);
+    if (llk_pack_internal::configured_zero_output == p_pacr::P_ZERO_OUTPUT_ENABLED)
+    {
+        finalize_multitile_pack_tail<true>();
+    }
+    else
+    {
+        finalize_multitile_pack_tail<false>();
+    }
+}
 } // namespace llk_pack_internal
 
 inline std::uint32_t _llk_pack_output_size_bytes_(const std::uint32_t pack_dst_format, const std::uint32_t datum_count)
@@ -69,7 +92,7 @@ inline std::uint32_t _llk_pack_output_addr_offset_words_(
     return tile_size >> 4;
 }
 
-template <bool untilize = false>
+template <PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_configure_addrmod_()
 {
     addr_mod_pack_t {
@@ -78,7 +101,7 @@ inline void _llk_pack_configure_addrmod_()
     }
         .set(ADDR_MOD_0);
 
-    if constexpr (untilize)
+    if constexpr (pack_mode == PackMode::Untilize)
     {
         addr_mod_pack_t {
             .y_src = {.incr = 1, .clr = 0, .cr = 1},
@@ -104,7 +127,7 @@ inline void _llk_pack_configure_addrmod_()
         .set(ADDR_MOD_2);
 }
 
-template <bool untilize = false, bool zero_output = false>
+template <PackMode pack_mode = PackMode::Default, bool zero_output = false>
 inline void _llk_pack_mop_config_(
     const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim = FACE_R_DIM,
@@ -116,7 +139,7 @@ inline void _llk_pack_mop_config_(
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     LLK_ASSERT(num_tiles >= 1, "num_tiles must be >= 1");
 
-    if constexpr (!untilize)
+    if constexpr (pack_mode != PackMode::Untilize)
     {
         if (num_tiles > 1)
         {
@@ -138,7 +161,7 @@ inline void _llk_pack_mop_config_(
     llk_pack_internal::configured_num_tiles   = num_tiles;
     llk_pack_internal::configured_zero_output = ZERO_OUTPUT_FLAG;
 
-    if constexpr (!untilize)
+    if constexpr (pack_mode != PackMode::Untilize)
     {
         if (partial_face && IS_BFP_FORMAT(pack_dst_format))
         {
@@ -218,7 +241,7 @@ inline void _llk_pack_set_fp32_dest_acc_(bool enable)
     cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(enable);
 }
 
-template <bool is_fp32_dest_acc_en, bool untilize = false>
+template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_hw_configure_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
@@ -230,11 +253,10 @@ inline void _llk_pack_hw_configure_(
     const std::uint32_t relu_config = 0)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    configure_pack<is_fp32_dest_acc_en, untilize>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
+    configure_pack<is_fp32_dest_acc_en, pack_mode>(pack_src_format, pack_dst_format, tile_size, face_r_dim, num_faces, partial_face, narrow_tile, relu_config);
 }
 
-// TODO NC: Clean up as the part of tt-metal#34587
-template <bool untilize = false, bool zero_output = false, bool tilize = false /*unused*/, bool skip_addrmod_config = false, bool skip_packer_strides = false>
+template <PackMode pack_mode = PackMode::Default, bool zero_output = false, bool skip_addrmod_config = false, bool skip_packer_strides = false>
 inline void _llk_pack_init_(
     const std::uint32_t pack_dst_format,
     const std::uint32_t face_r_dim = FACE_R_DIM,
@@ -243,19 +265,21 @@ inline void _llk_pack_init_(
     const bool narrow_tile         = false,
     const std::uint32_t num_tiles  = 1)
 {
+    static_assert(
+        pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Wormhole B0 pack init supports only PackMode::Default and PackMode::Untilize");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     if constexpr (!skip_addrmod_config)
     {
-        _llk_pack_configure_addrmod_<untilize>();
+        _llk_pack_configure_addrmod_<pack_mode>();
     }
-    _llk_pack_mop_config_<untilize, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
+    _llk_pack_mop_config_<pack_mode, zero_output>(pack_dst_format, face_r_dim, num_faces, partial_face, narrow_tile, num_tiles);
 
     if constexpr (!skip_packer_strides)
     {
         set_packer_l1_offset(pack_dst_format, face_r_dim);
     }
     const std::uint32_t face_dim   = face_r_dim * FACE_C_DIM;
-    const std::uint32_t pack_x_dim = (narrow_tile || !untilize) ? face_dim : FACE_R_DIM;
+    const std::uint32_t pack_x_dim = (narrow_tile || pack_mode != PackMode::Untilize) ? face_dim : FACE_R_DIM;
     TT_SETADCXX(p_setadc::PAC, pack_x_dim - 1, 0x0);
 }
 
@@ -264,31 +288,16 @@ inline void _llk_pack_uninit_(const std::uint32_t face_r_dim)
     TT_SETADCXX(p_setadc::PAC, face_r_dim * FACE_C_DIM - 1, 0x0);
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en, bool untilize = false>
+template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {
-    if constexpr (!untilize)
+    static_assert(
+        pack_mode == PackMode::Default || pack_mode == PackMode::Untilize, "Wormhole B0: _llk_pack_ supports PackMode::Default and PackMode::Untilize only");
+    if constexpr (pack_mode != PackMode::Untilize)
     {
         if (llk_pack_internal::configured_num_tiles > 1)
         {
-            set_dst_write_addr(tile_index);
-            LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
-            std::uint32_t new_l1_addr = (1 << 31) | address;
-            TT_SETDMAREG(0, LOWER_HALFWORD(address), 0, LO_16(p_gpr_pack::OUTPUT_ADDR));
-            TT_SETDMAREG(0, UPPER_HALFWORD(new_l1_addr), 0, HI_16(p_gpr_pack::OUTPUT_ADDR));
-            TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_pack::OUTPUT_ADDR);
-            // The programmed MOP performs the blocked sequence for this whole
-            // call; the explicit tail below is only the final close/reset step,
-            // not a second multi-tile MOP.
-            mop_run(1, 1);
-            if (llk_pack_internal::configured_zero_output == p_pacr::P_ZERO_OUTPUT_ENABLED)
-            {
-                llk_pack_internal::finalize_multitile_pack_tail<true>();
-            }
-            else
-            {
-                llk_pack_internal::finalize_multitile_pack_tail<false>();
-            }
+            llk_pack_internal::pack_multitile(tile_index, address);
             return;
         }
     }
@@ -299,7 +308,7 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 
     mop_run(1, 1);
 
-    if constexpr (untilize)
+    if constexpr (pack_mode == PackMode::Untilize)
     {
         TTI_PACR(ADDR_MOD_2, 0, 0xf, 0, 0, 1, 1); // close tile
     }

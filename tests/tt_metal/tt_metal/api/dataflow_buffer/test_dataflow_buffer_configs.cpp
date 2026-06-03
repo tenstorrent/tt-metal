@@ -21,7 +21,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "device_fixture.hpp"
@@ -91,7 +90,7 @@ void validate_dfb_tile_counters(
             uint8_t expected_tensix_id = (risc_id - 8) % 4;
             for (uint8_t tc = 0; tc < rc->config.num_tcs_to_rr; tc++) {
                 auto ptc = rc->config.packed_tile_counter[tc];
-                uint8_t actual_tensix_id = dfb::get_tensix_id(ptc);
+                uint8_t actual_tensix_id = ::dfb::get_tensix_id(ptc);
                 EXPECT_EQ(actual_tensix_id, expected_tensix_id)
                     << "Tensix producer RISC " << (int)risc_id << " TC[" << (int)tc
                     << "] must use tensix_id=" << (int)expected_tensix_id << " but has " << (int)actual_tensix_id;
@@ -105,7 +104,7 @@ void validate_dfb_tile_counters(
             uint8_t expected_tensix_id = (risc_id - 8) % 4;
             for (uint8_t tc = 0; tc < rc->config.num_tcs_to_rr; tc++) {
                 auto ptc = rc->config.packed_tile_counter[tc];
-                uint8_t actual_tensix_id = dfb::get_tensix_id(ptc);
+                uint8_t actual_tensix_id = ::dfb::get_tensix_id(ptc);
                 EXPECT_EQ(actual_tensix_id, expected_tensix_id)
                     << "Tensix consumer RISC " << (int)risc_id << " TC[" << (int)tc
                     << "] must use tensix_id=" << (int)expected_tensix_id << " but has " << (int)actual_tensix_id;
@@ -160,7 +159,7 @@ void validate_dfb_tile_counters(
                 // For ALL mode, consumer TCs are different from producer TC (remapper-based)
                 // Accumulate the consumer TC IDs into expected_consumer_tcs
                 if (consumer_idx < 4) {
-                    uint8_t consumer_tc_id = dfb::get_counter_id(consumer_ptc);
+                    uint8_t consumer_tc_id = ::dfb::get_counter_id(consumer_ptc);
                     expected_consumer_tcs |= (consumer_tc_id & 0x1F) << (consumer_idx * 5);
                     consumer_idx++;
                 }
@@ -170,21 +169,21 @@ void validate_dfb_tile_counters(
                     "ALL: Producer {} TC[{}]=(tensix:{}, tc:{}) -> Consumer {} TC[{}]=(tensix:{}, tc:{})",
                     producer_risc_id,
                     producer_tc_slot,
-                    dfb::get_tensix_id(producer_ptc),
-                    dfb::get_counter_id(producer_ptc),
+                    ::dfb::get_tensix_id(producer_ptc),
+                    ::dfb::get_counter_id(producer_ptc),
                     consumer_risc_id,
                     consumer_tc_slot,
-                    dfb::get_tensix_id(consumer_ptc),
-                    dfb::get_counter_id(consumer_ptc));
+                    ::dfb::get_tensix_id(consumer_ptc),
+                    ::dfb::get_counter_id(consumer_ptc));
             } else {
                 // For STRIDED mode, producer and consumer should share the exact same TC
                 EXPECT_EQ(producer_ptc, consumer_ptc)
                     << "STRIDED: Producer " << (int)producer_risc_id << " TC[" << (int)producer_tc_slot
                     << "] should share TC with Consumer " << (int)consumer_risc_id << " TC[" << (int)consumer_tc_slot
-                    << "]. Producer has (tensix:" << (int)dfb::get_tensix_id(producer_ptc)
-                    << ", tc:" << (int)dfb::get_counter_id(producer_ptc)
-                    << "), Consumer has (tensix:" << (int)dfb::get_tensix_id(consumer_ptc)
-                    << ", tc:" << (int)dfb::get_counter_id(consumer_ptc) << ")";
+                    << "]. Producer has (tensix:" << (int)::dfb::get_tensix_id(producer_ptc)
+                    << ", tc:" << (int)::dfb::get_counter_id(producer_ptc)
+                    << "), Consumer has (tensix:" << (int)::dfb::get_tensix_id(consumer_ptc)
+                    << ", tc:" << (int)::dfb::get_counter_id(consumer_ptc) << ")";
 
                 log_info(
                     tt::LogTest,
@@ -193,8 +192,8 @@ void validate_dfb_tile_counters(
                     producer_tc_slot,
                     consumer_risc_id,
                     consumer_tc_slot,
-                    dfb::get_tensix_id(producer_ptc),
-                    dfb::get_counter_id(producer_ptc));
+                    ::dfb::get_tensix_id(producer_ptc),
+                    ::dfb::get_counter_id(producer_ptc));
             }
         }
 
@@ -227,7 +226,8 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB1Sx1SConfig) {
         .consumer_risc_mask = 0x10,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -256,7 +256,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4SConfig) {
         .consumer_risc_mask = 0x1E,
         .num_consumers = 4,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -290,7 +291,8 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB4Sx1SConfig) {
         .consumer_risc_mask = 0x10,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -322,7 +324,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx1SConfig) {
         .consumer_risc_mask = 0x10,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -354,7 +357,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4SConfig) {
         .consumer_risc_mask = 0xF0,
         .num_consumers = 4,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -386,7 +390,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4SConfig) {
         .consumer_risc_mask = 0x3C,
         .num_consumers = 4,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -424,7 +429,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2SConfig) {
         .consumer_risc_mask = 0x30,
         .num_consumers = 2,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -456,7 +462,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx1BConfig) {
         .consumer_risc_mask = 0x2,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::ALL,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -485,7 +492,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4BConfig) {
         .consumer_risc_mask = 0x1E,
         .num_consumers = 4,
         .cap = dfb::AccessPattern::ALL,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -519,7 +527,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx1BConfig) {
         .consumer_risc_mask = 0x10,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::ALL,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -551,7 +560,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx4BConfig) {
         .consumer_risc_mask = 0xF0,
         .num_consumers = 4,
         .cap = dfb::AccessPattern::ALL,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -607,7 +617,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB4Sx2BConfig) {
         .consumer_risc_mask = 0x30,
         .num_consumers = 2,
         .cap = dfb::AccessPattern::ALL,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -658,7 +669,8 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB2Sx4BConfig) {
         .consumer_risc_mask = 0x3C,
         .num_consumers = 4,
         .cap = dfb::AccessPattern::ALL,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreCoord logical_core = CoreCoord(0, 0);
@@ -746,7 +758,8 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_NoImplicitSync) {
         .consumer_risc_mask = 0x2,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));  // 2 cores: (0,0) and (1,0)
@@ -782,7 +795,7 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_NoImplicitSync) {
                 for (const auto& rc : found_grp->hw_risc_configs) {
                     for (uint8_t tc = 0; tc < rc.config.num_tcs_to_rr; tc++) {
                         auto ptc = rc.config.packed_tile_counter[tc];
-                        EXPECT_EQ(dfb::get_counter_id(ptc), tc)
+                        EXPECT_EQ(::dfb::get_counter_id(ptc), tc)
                             << "Core (" << x << "," << y << ") RISC " << (int)rc.risc_id
                             << " TC[" << (int)tc << "] should have counter_id=" << (int)tc;
                     }
@@ -807,7 +820,8 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_1P1C_Strided_ImplicitSync) {
         .consumer_risc_mask = 0x2,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = true};
+        .enable_producer_implicit_sync = true,
+        .enable_consumer_implicit_sync = true};
 
     Program program = CreateProgram();
     CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(1, 0)));  // 2 cores
@@ -844,7 +858,8 @@ TEST_F(MeshDeviceFixture, MultiCoreDFB_HomogeneousGrid_SingleGroup) {
         .consumer_risc_mask = 0x2,
         .num_consumers = 1,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false};
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
 
     Program program = CreateProgram();
     // 4 cores in a 2x2 grid — all identical config → should produce 1 DfbGroup.
@@ -920,7 +935,8 @@ TEST_F(MeshDeviceFixture, TensixIntraTest1xDFB1Sx1SConfig) {
         .consumer_risc_mask = 0x100,  // bit 8 = Neo0 (same as producer — intentional for INTRA)
         .num_consumers = 1,
         .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = false,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false,
         .tensix_scope = experimental::dfb::TensixScope::INTRA};
 
     Program program = CreateProgram();

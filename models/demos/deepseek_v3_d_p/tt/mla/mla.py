@@ -7,6 +7,7 @@ from typing import Callable, Optional
 
 import torch
 from loguru import logger
+from tracy import signpost
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -506,6 +507,7 @@ class ttMLA:
         on_layer_complete: Optional[Callable[[int], None]] = None,
         actual_isl: Optional[int] = None,
     ) -> ttnn.Tensor:
+        signpost(header="MLA_START")
         num_heads_local = self.num_heads // self.tp_factor
         seq_len_local = hidden_states.shape[2]
 
@@ -721,4 +723,5 @@ class ttMLA:
             )
         else:
             out = v_out
+        signpost(header="MLA_END")
         return out

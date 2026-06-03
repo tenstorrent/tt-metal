@@ -148,7 +148,7 @@ jobs:
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           submodules: recursive
@@ -162,17 +162,16 @@ jobs:
         run: |
           echo "Checking GitHub CLI, jq, and zstd installation..."
 
-          # Check and install GitHub CLI
-          if ! command -v gh >/dev/null 2>&1; then
-            echo "Installing GitHub CLI 2.81.0..."
-            apt-get update
-            wget -O gh_2.81.0_linux_amd64.deb https://github.com/cli/cli/releases/download/v2.81.0/gh_2.81.0_linux_amd64.deb
-            apt-get install -y --no-install-recommends ./gh_2.81.0_linux_amd64.deb
-            rm -f gh_2.81.0_linux_amd64.deb
-            echo "GitHub CLI 2.81.0 installed successfully"
-          else
-            echo "GitHub CLI is already installed"
-          fi
+          # Always force-install our pinned GitHub CLI version.
+          # Runners may have an older gh pre-installed that lacks --commit support
+          # (added in gh v2.29). Skipping install when gh exists silently inherits
+          # that old version and breaks download_artifacts.sh.
+          echo "Installing GitHub CLI 2.81.0 (force)..."
+          apt-get update -q
+          wget -q -O gh_2.81.0_linux_amd64.deb https://github.com/cli/cli/releases/download/v2.81.0/gh_2.81.0_linux_amd64.deb
+          apt-get install -y --no-install-recommends ./gh_2.81.0_linux_amd64.deb
+          rm -f gh_2.81.0_linux_amd64.deb
+          echo "GitHub CLI 2.81.0 installed successfully"
 
           # Check and install jq and zstd
           if ! command -v jq >/dev/null 2>&1 || ! command -v zstd >/dev/null 2>&1; then

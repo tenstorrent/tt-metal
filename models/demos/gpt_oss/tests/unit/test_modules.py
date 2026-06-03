@@ -45,8 +45,14 @@ def run_attention_component(
     is_decode,
     is_row_sharded,
     pcc_threshold,
+    page_table=None,
 ):
-    """Test attention component - extracted from decoder layer"""
+    """Test attention component - extracted from decoder layer.
+
+    When ``page_table`` is provided, attention runs through the paged kv-cache
+    code path; the decoder_layer must have been constructed with a matching
+    ``paged_attention_config``.
+    """
 
     # Create input
     batch_size, seq_len, hidden_size = hidden_shape
@@ -84,7 +90,7 @@ def run_attention_component(
         tt_hidden_states,
         rope_mats=rope_mats,
         position_idx=tt_position_idx,
-        page_table=None,
+        page_table=page_table,
         kv_cache=None,
         is_decode=is_decode,
     )
@@ -309,6 +315,7 @@ def run_fused_throughput_experts_component(
     cluster_axis = 0
     tokens_per_device = num_tokens // mesh_device.shape[cluster_axis]  # e.g., 128 // 4 = 32
 
+    # Extract TT experts from decoder layer
     tt_experts = decoder_layer.mlp.experts
     tt_config = tt_experts.config
 
@@ -409,10 +416,11 @@ def run_fused_throughput_experts_component(
         dev_tensors = ttnn.get_device_tensors(tt_output)
         per_row = [ttnn.to_torch(dev_tensors[r * mesh_cols]) for r in range(mesh_rows)]
         tt_output_torch = torch.cat(per_row, dim=-2)[..., :hidden_size]
+
         assert not torch.isnan(tt_output_torch).any(), "NaN detected in fused expert output"
         assert not torch.isinf(tt_output_torch).any(), "Inf detected in fused expert output"
-        # reference_output: [num_tokens, hidden_size]
 
+        # reference_output: [num_tokens, hidden_size]
         tt_flat = tt_output_torch.reshape(-1, hidden_size)[:num_tokens].float()
         ref_flat = reference_output.reshape(-1, hidden_size)[:num_tokens].float()
 
@@ -422,8 +430,23 @@ def run_fused_throughput_experts_component(
             f"Output range: [{tt_flat.min():.4f}, {tt_flat.max():.4f}]."
         )
     finally:
-        # Always clean up fused config resources
-        pass
+        for attr in [
+            "dispatch_sparse",
+            "dispatch_indices",
+            "dispatch_scores",
+            "combine_preallocated",
+            "tt_dispatch_mapping",
+            "tt_moe_gpt_mapping",
+            "tt_w0_w1",
+            "tt_w2",
+        ]:
+            tensor = getattr(fused_config, attr, None)
+            if tensor is not None:
+                try:
+                    ttnn.deallocate(tensor)
+                except Exception as e:
+                    logger.debug(f"Failed to deallocate {attr}: {e}")
+        ttnn.synchronize_device(mesh_device)
 
 
 def run_experts_component(mesh_device, hidden_shape, config, reference_layer, decoder_layer, is_decode, pcc_threshold):
@@ -534,7 +557,7 @@ def setup_reference_layer(setup, layer_idx=0):
     return reference_layer
 
 
-def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer_idx=0):
+def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer_idx=0, paged_attention_config=None):
     logger.info("Setting up TT decoder layer...")
     reference_state = reference_layer.state_dict()
     config = setup["config"]
@@ -542,12 +565,13 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
     reference_state_swizzled = convert_hf_qkv_to_meta_format(reference_state, config.head_dim)
     max_seq_len = getattr(config, "max_position_embeddings", 131072)
     rope_scaling = rope_scaling_model_factory(config.rope_scaling)
+    rope_theta = getattr(config, "rope_theta", None) or getattr(config, "default_theta", 10000.0)
     rope_setup = RotarySetup(
         device=setup["mesh_device"],
         batch_size=1,
         head_dim=config.head_dim,
         max_seq_len=max_seq_len,
-        rope_theta=getattr(config, "rope_theta", 10000.0),
+        rope_theta=rope_theta,
         rope_scaling=rope_scaling,
         datatype=ttnn.bfloat16,
     )
@@ -563,9 +587,21 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
         transformation_mats=transformation_mats,
         max_seq_len=max(seq_len, 128),
         max_local_batch_size=local_batch_size,
+        paged_attention_config=paged_attention_config,
+        # Mirror production `create_tt_model` (models/demos/gpt_oss/demo/text_demo.py):
+        # throughput experts is gated on global_batch_size > 1, not tokens-per-step > 1.
+        # Single-user prefill on a multi-row mesh runs the low-throughput path in
+        # production (multi-user prefill is staged through `batched_prefill` with one
+        # user per row). The DeepSeek prefill kernels assume each row contributes a
+        # disjoint slice of tokens; feeding them a single user's seq either replicated
+        # across rows (8× duplication of all-reduced expert outputs) or sharded across
+        # rows (correct for experts but breaks the layer's self-attention, which needs
+        # the full seq per chip) gives a fundamentally inconsistent test setup. Gate
+        # on `local_batch_size > 1` so the throughput path is only exercised in the
+        # batched configurations it's actually designed for.
         use_throughput_experts=setup["mesh_device"].shape[0] > 1
-        and local_batch_size * seq_len > 1
-        and throughput_experts_supported_on_arch(),  # high throughput experts don't support single user decode currently
+        and local_batch_size > 1
+        and throughput_experts_supported_on_arch(),
     )
     return decoder_layer
 
@@ -595,8 +631,18 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
         "layer_0",
     ],
 )
+@pytest.mark.parametrize(
+    # Cover both the legacy non-paged kv-cache path and the paged path that vLLM
+    # and the hybrid kv-cache-groups manager exercise. The paged path was a real
+    # test gap — it goes through paged_fill_cache / paged_update_cache /
+    # paged_scaled_dot_product_attention_decode, none of which the non-paged
+    # path touches.
+    "paged",
+    [False, True],
+    ids=["unpaged", "paged"],
+)
 def test_decoder(
-    mesh_device, device_params, batch_size, seq_len, layer_idx, test_modules, test_thresholds, reset_seeds
+    mesh_device, device_params, batch_size, seq_len, layer_idx, paged, test_modules, test_thresholds, reset_seeds
 ):
     """
     Test decoder layer components.
@@ -649,9 +695,44 @@ def test_decoder(
         is_row_sharded = False
         local_batch_size = batch_size
 
+    # Paged attention: when enabled, allocate a PagedAttentionConfig sized to fit the
+    # longest seq_len in the parametrize matrix (one user per call here), then build
+    # a page_table tensor with sequential block ids. Both the decoder layer's kv cache
+    # allocation and the per-call paged_fill_cache / paged_sdpa_decode invocations are
+    # gated by the same config + page_table, so the test exercises the full paged path
+    # end-to-end (in contrast to the legacy `paged=False` path which goes through
+    # ttnn.fill_cache + non-paged SDPA).
+    paged_attention_config = None
+    page_table_tt = None
+    if paged:
+        from models.tt_transformers.tt.common import PagedAttentionConfig
+
+        paged_block_size = 64
+        effective_seq_len = max(seq_len, 128)
+        paged_blocks_per_seq = max((effective_seq_len + paged_block_size - 1) // paged_block_size, 1)
+        paged_max_blocks = local_batch_size * paged_blocks_per_seq
+        paged_attention_config = PagedAttentionConfig(block_size=paged_block_size, max_num_blocks=paged_max_blocks)
+        page_table_torch = torch.arange(paged_max_blocks, dtype=torch.int32).reshape(
+            local_batch_size, paged_blocks_per_seq
+        )
+        page_table_tt = ttnn.from_torch(
+            page_table_torch,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
     # Create reference model
     reference_layer = setup_reference_layer(setup, layer_idx=layer_idx)
-    decoder_layer = setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer_idx=layer_idx)
+    decoder_layer = setup_decoder_layer(
+        setup,
+        reference_layer,
+        local_batch_size,
+        seq_len,
+        layer_idx=layer_idx,
+        paged_attention_config=paged_attention_config,
+    )
 
     # Create input
     hidden_states = torch.randn(batch_size, seq_len, config.hidden_size)
@@ -661,7 +742,13 @@ def test_decoder(
 
     # Create attention mask like the working attention test
     mask = torch.triu(torch.full((1, 1, seq_len, seq_len), -float("inf")), diagonal=1)
-    if reference_layer.attention_type == "sliding_attention":
+    # Newer transformers expose layer type via ``config.layer_types[i]`` rather than
+    # a ``GptOssDecoderLayer.attention_type`` attribute. Probe both.
+    layer_attn_type = (
+        getattr(reference_layer, "attention_type", None)
+        or getattr(config, "layer_types", [None] * (layer_idx + 1))[layer_idx]
+    )
+    if layer_attn_type == "sliding_attention":
         mask += torch.tril(torch.full((1, 1, seq_len, seq_len), -float("inf")), diagonal=-config.sliding_window)
 
     # Handle decode mode for TT model like original
@@ -673,10 +760,14 @@ def test_decoder(
 
     # For TTNN: use precompute_freqs and gather_cos_sin to get cos/sin tensors
     # TODO: To test longer sequences we will need to change this so we can apply rope scaling using Yarn implementation
+    # Newer GptOssConfig drops the top-level ``rope_theta`` attribute (it's now bundled
+    # in ``rope_parameters``); the class still exposes ``default_theta`` as the
+    # canonical base.
+    rope_theta = getattr(config, "rope_theta", None) or getattr(config, "default_theta", 150000.0)
     cos_full, sin_full = precompute_freqs(
         dim=config.head_dim,
         end=max_seq_len * 2,
-        theta=config.rope_theta,
+        theta=rope_theta,
         scale_factor=None,
         orig_context_len=131072,
     )
@@ -740,10 +831,26 @@ def test_decoder(
     modules_to_test = set(test_modules.split(","))
     run_all = "all" in modules_to_test
 
-    logger.info(f"Running tests: {test_modules}")
+    # The paged/unpaged dimension only changes behavior for components that touch
+    # the kv cache (attention + the full decoder layer). Skip the paged variant
+    # for runs that ask for only non-kv components — and inside ``should_test``,
+    # gate non-kv components on ``not paged`` so an "all" invocation doesn't run
+    # router / experts / mlp / rms_norm twice with identical inputs. The kv-using
+    # components still execute under both paged settings.
+    KV_USING_MODULES = {"attention", "decoder"}
+    if paged and not run_all and not (modules_to_test & KV_USING_MODULES):
+        pytest.skip(
+            f"paged variant only exercises kv-cache-using components ({sorted(KV_USING_MODULES)}); "
+            f"requested modules {sorted(modules_to_test)} don't touch the kv cache"
+        )
 
-    # Helper to check if a module should be tested
+    logger.info(f"Running tests: {test_modules} (paged={paged})")
+
+    # Helper to check if a module should be tested. Non-kv components only run on
+    # the unpaged variant (their behavior is independent of paged kv-cache state).
     def should_test(module_name):
+        if paged and module_name not in KV_USING_MODULES:
+            return False
         return run_all or module_name in modules_to_test
 
     if should_test("router"):
@@ -779,7 +886,8 @@ def test_decoder(
 
     if should_test("experts"):
         if decoder_layer.mlp.use_throughput_experts:
-            logger.info(f"Testing High Throughput Experts (EP=32) for mesh shape {tuple(mesh_device.shape)}...")
+            logger.info(f"Testing High Throughput Experts (EP=32) for mesh shape {mesh_shape}...")
+            ttnn.synchronize_device(setup["mesh_device"])
             hidden_states_throughput_experts = hidden_states.reshape(1, 1, batch_size * seq_len, -1)
             run_throughput_experts_component(
                 setup["mesh_device"],
@@ -804,7 +912,7 @@ def test_decoder(
             )
 
     if should_test("attention"):
-        logger.info("Testing Attention...")
+        logger.info("Testing Attention (paged={})...", paged)
         run_attention_component(
             setup["mesh_device"],
             hidden_states.shape,
@@ -817,6 +925,7 @@ def test_decoder(
             is_decode=is_decode,
             is_row_sharded=is_row_sharded,
             pcc_threshold=pcc_thresholds["attention"],
+            page_table=page_table_tt,
         )
 
     if should_test("rms_norm"):
@@ -865,7 +974,11 @@ def test_decoder(
             reference_output = reference_layer(hidden_states, position_embeddings=position_embeddings_ref)
 
         tt_output = decoder_layer(
-            tt_hidden_states, position_embeddings=rope_mats, position_idx=tt_position_idx, is_decode=is_decode
+            tt_hidden_states,
+            position_embeddings=rope_mats,
+            position_idx=tt_position_idx,
+            page_table=page_table_tt,
+            is_decode=is_decode,
         )
 
         # Compare outputs

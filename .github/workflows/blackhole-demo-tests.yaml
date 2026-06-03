@@ -11,29 +11,17 @@ on:
       model:
         description: 'Select model to test'
         required: false
-        default: 'llama3.1-8b'
+        default: 'unet-shallow'
         type: choice
         options:
           - all
-          - whisper
-          - llama3.1-8b
-          - llama3-8b
           - unet-shallow
           - stable_diffusion_xl
-          - llama3.3-70b
-          - qwen3-32b
-          - qwen2.5-32b-instruct
-          - qwen2.5-72b-instruct
-          - qwen2.5-vl-32b-instruct
-          - qwen2.5-vl-72b
-          - qwen3-vl-32b
           - mistral-small-3.1-24b
-          - gpt-oss-20b
-          - gpt-oss-120b
           - mochi
           - flux.1-dev
-          - mochi
           - wan2.2-t2v-a14b
+          - z-image-turbo
       system-type:
         description: 'Select system type to test'
         required: false
@@ -114,7 +102,7 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github
@@ -142,6 +130,7 @@ jobs:
               systems = yaml.safe_load(f) or {}
 
           sku_to_system = {s["sku"]: s["name"] for s in systems.get("systems", [])}
+
           selected_model = os.environ["SELECTED_MODEL"]
           system_filter = os.environ["SYSTEM_TYPE_FILTER"]
 
