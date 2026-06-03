@@ -371,13 +371,15 @@ def create_mesh_device(
     use_axis = ttnn.DispatchCoreAxis.COL
 
     try:
-        # Specify WORKER explicitly: DispatchCoreConfig(axis=...) alone leaves the
-        # core *type* at the system default (which can be ETH on multi-chip
-        # clusters), which we want to avoid here (see the ROW path above).
+        # NB: pass axis only and let the core *type* default. Unlike the ROW path
+        # above (which forces WORKER to dodge ETH-allocation failures), the default
+        # type here keeps dispatch OFF the worker grid, leaving the full worker grid
+        # free for compute — forcing WORKER instead collides with ops that use the
+        # whole grid ("Illegal kernel placement ... on dispatch cores", e.g. add).
         return ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(*mesh_shape),
             l1_small_size=l1_small_size,
-            dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER, use_axis),
+            dispatch_core_config=ttnn.DispatchCoreConfig(axis=use_axis),
         )
     except Exception:
         # requested dispatch axis was rejected — caller falls back to a plain device open
