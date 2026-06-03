@@ -46,10 +46,20 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
+    import os as _os
+
     mesh_shape = get_mesh_shape()
     if mesh_shape:
         try:
-            device = create_mesh_device(mesh_shape)
+            # Prefer WORKER COL (every traced slice config runs on COL; the
+            # auto-detect over-routes the module to ROW from a single x=7/8-8
+            # master config). Defer to TTNN_DISPATCH_AXIS so CI's two-pass holds.
+            _axis = (
+                None
+                if _os.environ.get("TTNN_DISPATCH_AXIS", "").strip().lower() in ("col", "row")
+                else ttnn.DispatchCoreAxis.COL
+            )
+            device = create_mesh_device(mesh_shape, dispatch_core_axis=_axis)
             device_name = ttnn.get_arch_name()
             yield (device, device_name)
             ttnn.close_mesh_device(device)
@@ -99,6 +109,37 @@ def _slice_input_shard_axis_and_factor(placement_dict):
             axis = d
             factor *= n
     return axis, factor
+
+
+def invalidate_vector(test_vector) -> tuple:
+    """Exclude the distributed mesh-partition slice whose bound tensors weren't traced.
+
+    One traced config (8dc9af…) calls ttnn.slice in its tensor-parallel form
+    (slice_dim + num_devices, with starts/ends passed as device TENSORS that shard
+    the input across the mesh). The tracer captured only the starts/ends tensor
+    *shapes*, not their *values*, so the exact per-device slice bounds are
+    unrecoverable — the generic golden has to guess (defaulting to a [0:dim/2]
+    index slice), which doesn't match the partition the op actually performs. Rather
+    than assert against a fabricated golden, mark these unreconstructable.
+
+    Regular slice configs (no num_devices, or with concrete list starts/ends) are
+    unaffected.
+    """
+
+    def _present(v):
+        return v is not None and v != "__ABSENT__"
+
+    num_devices = test_vector.get("num_devices")
+    starts_val = test_vector.get("starts")
+    ends_val = test_vector.get("ends")
+    # tensor-form bounds: a *_shape is recorded but no concrete value list.
+    tensor_bounds = _present(test_vector.get("starts_shape")) or _present(test_vector.get("ends_shape"))
+    if _present(num_devices) and tensor_bounds and not (_present(starts_val) or _present(ends_val)):
+        return (
+            True,
+            "tensor-parallel slice (slice_dim+num_devices) with untraced starts/ends tensor values — slice bounds unrecoverable",
+        )
+    return False, None
 
 
 def run(
