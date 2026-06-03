@@ -34,22 +34,6 @@ constexpr auto kWriterKernelPath =
 constexpr uint32_t kSrcCbIndex = 0;
 constexpr uint32_t kNumInputTilesDoubleBuffered = 2;
 
-// Count distinct values along the cluster axis among the participating devices to determine
-// sp_factor without round-tripping to the mesh view.
-uint32_t sp_factor_for_tensor(const Tensor& tensor, uint32_t cluster_axis) {
-    const auto device_coords = tensor.device_storage().get_coords();
-    TT_FATAL(!device_coords.empty(), "device_coords is empty when computing sp_factor");
-    uint32_t min_v = std::numeric_limits<uint32_t>::max();
-    uint32_t max_v = 0;
-    for (const auto& c : device_coords) {
-        TT_FATAL(c.dims() > cluster_axis, "cluster_axis {} out of range for coord rank {}", cluster_axis, c.dims());
-        const uint32_t v = c[cluster_axis];
-        min_v = std::min(min_v, v);
-        max_v = std::max(max_v, v);
-    }
-    return max_v - min_v + 1;
-}
-
 // Validation of the runtime-arg-dependent constraints (slot_idx, layer_idx, kv_actual_global).
 // These args are intentionally kept out of the program hash so successive chunks reuse the cached
 // program, so they bypass validate_on_program_cache_miss on the 2nd+ call — this helper is invoked
@@ -81,7 +65,11 @@ void validate_runtime_args(
         args.num_layers);
 
     // Verify cluster-axis sizing: the cache holds `sp_factor` copies of the per-chip slot globally.
-    const uint32_t sp_factor = sp_factor_for_tensor(cache, args.cluster_axis);
+    // sp_factor is just the mesh extent along the cluster axis (mirrors how ring-joint SDPA derives
+    // num_devices from cluster_axis).
+    const auto& mesh_view = cache.device()->get_view();
+    TT_FATAL(mesh_view.is_mesh_2d(), "update_padded_kv_cache requires a 2D mesh");
+    const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     const uint32_t chunk_local_tokens = input_shape[-2];
     const uint32_t global_cache_capacity = sp_factor * cache_shape[-2];
     TT_FATAL(
@@ -163,14 +151,17 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
     // linearization (num_layers) and which mesh dim is sp (cluster_axis) — not per-call data.
     const auto& cache = tensor_args.cache;
     const auto& input = tensor_args.input;
+    // Hash the full padded shapes, not just their volumes: the descriptor derives Wt, input_Ht,
+    // cache_HtWt/CHtWt and the work split from specific dimensions, so two differently-shaped
+    // tensors that happen to share a volume must NOT collide onto the same cached program.
     return tt::tt_metal::operation::hash_operation<UpdatePaddedKvCacheDeviceOperation>(
         args.num_layers,
         args.cluster_axis,
         input.dtype(),
         input.memory_config(),
-        input.padded_shape().volume(),
+        input.padded_shape(),
         cache.memory_config(),
-        cache.padded_shape().volume());
+        cache.padded_shape());
 }
 
 tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFactory::create_descriptor(
@@ -199,7 +190,9 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     const uint32_t cache_CHtWt = cache_shape[1] * cache_HtWt;
 
     // Per-chip kernel inputs: kernel does the update_idxt + start_id math itself from these.
-    const uint32_t sp_factor = sp_factor_for_tensor(cache, args.cluster_axis);
+    // sp_factor is the mesh extent along the cluster axis (validated 2D in validate_runtime_args).
+    const auto& mesh_view = device->get_view();
+    const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     const uint32_t my_sp_coord = ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.cluster_axis);
     const uint32_t kv_actual_global_t = args.kv_actual_global / TILE_HEIGHT;
 
