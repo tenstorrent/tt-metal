@@ -57,6 +57,16 @@ def open_galaxy_mesh(
             )
         yield parent, submeshes
     finally:
+        # Close submeshes before the parent. Otherwise tt-metal throws
+        # "MeshDevice cq ID 0 is in use by parent mesh ID N during close of
+        # mesh ID M" and leaves device firmware state torn down out-of-order
+        # — Device 10 in particular ends up wedged for the next process and
+        # subsequent ttnn.open_mesh_device() hangs 10s in firmware init.
+        for sm in reversed(submeshes):
+            try:
+                ttnn.close_mesh_device(sm)
+            except Exception:
+                pass
         ttnn.close_mesh_device(parent)
         if enable_fabric:
             ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)

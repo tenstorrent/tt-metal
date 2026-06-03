@@ -1225,25 +1225,51 @@ class SigLIPVisionTowerTTNN:
         config: SigLIPConfig,
         weights: Dict[str, torch.Tensor],
         device: ttnn.Device,
+        layer_range: Optional[Tuple[int, int]] = None,
+        holds_patch_embed: bool = True,
+        holds_pos_embed: bool = True,
+        holds_post_ln: bool = True,
     ):
         """
         Initialize vision tower.
 
         Args:
-            config: SigLIP configuration
-            weights: PyTorch weights (will be converted)
-            device: TTNN device
+            config:            SigLIP configuration
+            weights:           PyTorch weights (will be converted)
+            device:            TTNN device
+            layer_range:       half-open (lo, hi) over [0, num_hidden_layers).
+                               Defaults to the full range. Used by Option C
+                               to construct only a slice of the encoder on
+                               one chip.
+            holds_patch_embed: if False, the patch-embedding op is NOT built
+                               and forward expects a pre-embedded hidden_states.
+                               Use forward_from_hidden(...) in that case.
+            holds_pos_embed:   if False, skip the positional-embedding add.
+            holds_post_ln:     if False, skip the final layer norm. The last
+                               slice in a multi-chip split sets this True.
         """
         self.config = config
         self.device = device
+        self.layer_lo, self.layer_hi = layer_range if layer_range is not None else (0, config.num_hidden_layers)
+        if not (0 <= self.layer_lo < self.layer_hi <= config.num_hidden_layers):
+            raise ValueError(
+                f"SigLIP layer_range {(self.layer_lo, self.layer_hi)} out of bounds "
+                f"for num_hidden_layers={config.num_hidden_layers}"
+            )
+        self.holds_patch_embed = holds_patch_embed
+        self.holds_pos_embed = holds_pos_embed
+        self.holds_post_ln = holds_post_ln
 
-        # Patch embedding (Unfold + TTNN linear)
-        self.patch_embed = PatchEmbeddingTTNN(config, weights, device)
+        # Patch embedding (Unfold + TTNN linear) — only built when this slice
+        # is the first chip in the chain.
+        self.patch_embed = PatchEmbeddingTTNN(config, weights, device) if holds_patch_embed else None
 
         # Position embedding on device (handle both formats)
         pos_emb = weights.get("position_embedding.weight") or weights.get(
             "vision_model.embeddings.position_embedding.weight"
         )
+        if not holds_pos_embed:
+            pos_emb = None
 
         if pos_emb is not None:
             # Calculate target number of patches based on config
@@ -1288,9 +1314,9 @@ class SigLIPVisionTowerTTNN:
             self.position_ids = None
             self.pos_emb_weights = None
 
-        # Initialize TTNN transformer blocks
+        # Initialize TTNN transformer blocks (only the layer_range slice).
         self.blocks = []
-        for i in range(config.num_hidden_layers):
+        for i in range(self.layer_lo, self.layer_hi):
             block_weights = self._get_layer_weights(weights, i)
             self.blocks.append(SigLIPBlockTTNN(config, block_weights, device))
 
@@ -1299,9 +1325,13 @@ class SigLIPVisionTowerTTNN:
         self.bs_enabled = _siglip_bs_enabled()
         self._bs_memcfgs_cache: Dict[Tuple[int, int], Tuple] = {}
 
-        # Final layer norm weights (handle both formats)
+        # Final layer norm weights (handle both formats) — only on the
+        # slice that owns the tail.
         post_ln_weight = weights.get("post_layernorm.weight") or weights.get("vision_model.post_layernorm.weight")
         post_ln_bias = weights.get("post_layernorm.bias") or weights.get("vision_model.post_layernorm.bias")
+        if not holds_post_ln:
+            post_ln_weight = None
+            post_ln_bias = None
 
         if post_ln_weight is not None:
             self.post_ln_weight = tensor_1d_to_2d_ttnn(post_ln_weight, device, dtype=ttnn.bfloat16)
@@ -1344,6 +1374,13 @@ class SigLIPVisionTowerTTNN:
                     layer_weights[new_key] = value
         return layer_weights
 
+    def forward_from_hidden(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
+        """Run only this slice's encoder layers + optional post_ln on already-
+        embedded hidden_states. Used by the multi-chip split where chip 0
+        does patch_embed and chips 1+ resume from the activation.
+        """
+        return self._run_blocks_and_post_ln(hidden_states)
+
     def forward(self, pixel_values: torch.Tensor) -> ttnn.Tensor:
         """
         Process images to embeddings (TTNN).
@@ -1354,6 +1391,12 @@ class SigLIPVisionTowerTTNN:
         Returns:
             TTNN tensor (batch_size, num_patches, hidden_size)
         """
+        if self.patch_embed is None:
+            raise RuntimeError(
+                "SigLIPVisionTowerTTNN.forward called on a slice without "
+                "holds_patch_embed=True. Use forward_from_hidden(hidden) "
+                "instead and feed it the pre-patched activation."
+            )
         # Patch embedding (hybrid - Unfold on host, linear on device)
         hidden_states = self.patch_embed.forward(pixel_values)
 
@@ -1415,6 +1458,13 @@ class SigLIPVisionTowerTTNN:
 
             hidden_states = ttnn.add(hidden_states, positional_embeddings, memory_config=ttnn.L1_MEMORY_CONFIG)
 
+        return self._run_blocks_and_post_ln(hidden_states)
+
+    def _run_blocks_and_post_ln(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
+        """Run this slice's encoder blocks + optional post_ln on an already-
+        embedded hidden_states. Shared between forward() and
+        forward_from_hidden().
+        """
         if self.bs_enabled:
             # Tier 2 — enter BS once before the encoder loop, exit once after.
             # Saves 27*2*2=108 LN reshards + lets matmuls consume BS directly.
@@ -1424,9 +1474,6 @@ class SigLIPVisionTowerTTNN:
             mc_hidden, mc_qkv, mc_attn, mc_intermediate = self._get_bs_memcfgs(int(b), int(num_patches))
             hidden_states = ttnn.to_memory_config(hidden_states, mc_hidden, dtype=ttnn.bfloat16)
 
-            # Plumb (n_batch, n_seq) through so attention.forward_bs can un-flatten
-            # the batch dim around SDPA — otherwise SDPA attends across the b stacked
-            # images. See attention.forward_bs for the full reasoning.
             for block in self.blocks:
                 hidden_states = block.forward_bs(
                     hidden_states,
@@ -1438,14 +1485,12 @@ class SigLIPVisionTowerTTNN:
                     n_seq=int(num_patches),
                 )
 
-            # Exit BS once: BS → L1 interleaved → 3D shape for post_ln + projector.
             hidden_states = ttnn.sharded_to_interleaved(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
             hidden_states = ttnn.reshape(hidden_states, (int(b), int(num_patches), int(hidden)))
         else:
             for block in self.blocks:
                 hidden_states = block.forward(hidden_states)
 
-        # Final layer norm (on device)
         if self.post_ln_weight is not None:
             hidden_states = ttnn.layer_norm(
                 hidden_states,
