@@ -370,9 +370,9 @@ If a PR exists, read it and check whether the PR body or comments contain a link
 - `pr_number`
 - `ci_run_url` (the run link from the PR)
 - `test_pass_evidence` (the exact line from the PR proving the test passed)
-- Set `action_required: "assume_horizontal"` or `action_required: "probe_verification"` accordingly
+- Set `action_required: "pr_ci_proof_check"`
 
-Note: You are providing the evidence — main BrAIn will run `verify-pr-proof.py` to formally confirm it. Just record what you found.
+Note: You are providing the evidence — the verify agent will run `verify-pr-proof.py` to formally confirm it. Just record what you found.
 
 ---
 
@@ -385,22 +385,6 @@ GET /repos/tenstorrent/tt-metal/actions/runs?head_sha={midpoint_sha}
 ```
 
 For each midpoint in the binary search space, if a run exists at that SHA on the relevant workflow, check its job log for the test. Record in `bisect_log_reads`. If existing reads narrow to a single commit, set `fix_commit_sha` and reduce `candidate_fix_commits` accordingly.
-
----
-
-## "Assume Horizontal" Rule
-
-Apply this rule (set `action_required: "assume_horizontal"`) when ALL five conditions hold:
-
-1. Confirmed failure-to-pass transition (thresholds met, single error signature, adjacency ≤4, gap ≤168h).
-2. At least one commit in the range has `fix_layer == test_layer`.
-3. Existing CI logs were checked for all midpoints and genuinely could not narrow further (or range is ≤4 commits with no midpoints available).
-4. The test is NOT currently failing on main.
-5. No vertical escape was identified for the same candidate.
-
-If conditions hold: set `action_required: "assume_horizontal"`, `confirmation_method: "assumed_horizontal"`, `confidence: "assumed"`.
-
-If a single fix commit can be identified via diff analysis + existing logs: set `action_required: "probe_verification"` so main BrAIn can run BEFORE/AFTER to prove it.
 
 ---
 
@@ -436,9 +420,9 @@ Return a single JSON object. Do not wrap in markdown. Do not add prose outside t
       "fix_commit_message": "...",
       "candidate_fix_commits": ["sha1", "sha2"],
       "fix_pr": "42760",
-      "action_required": "probe_verification|assume_horizontal|pr_ci_proof_check",
-      "confirmation_method": "assumed_horizontal|bisect|pr_ci_proof|null",
-      "confidence": "high|medium|low|assumed",
+      "action_required": "probe_verification|pr_ci_proof_check",
+      "confirmation_method": "bisect|pr_ci_proof|null",
+      "confidence": "high|medium|low",
       "pr_proof_evidence": null,
       "bisect_log_reads": [],
       "opus_reasoning": "..."
@@ -457,8 +441,7 @@ Return a single JSON object. Do not wrap in markdown. Do not add prose outside t
 - `hardware`: the runner label from the failing job (N150, N300, P150, P100, T3K, Galaxy)
 - `architecture`: `wormhole_b0` for N150/N300/T3K/Galaxy, `blackhole` for P150/P100/P150b
 - `action_required`:
-  - `assume_horizontal` → main BrAIn records directly, no probes needed
-  - `probe_verification` → main BrAIn dispatches BEFORE/AFTER probes at `fix_commit_sha^` and `fix_commit_sha`
-  - `pr_ci_proof_check` → main BrAIn runs `verify-pr-proof.py` first, then decides
+  - `probe_verification` → verify agent dispatches BEFORE/AFTER probes at `fix_commit_sha^` and `fix_commit_sha`
+  - `pr_ci_proof_check` → verify agent runs `verify-pr-proof.py` first, then may run probes
 - `fix_commit_sha`: single best guess (required if `action_required` is `probe_verification`); null if range can't be narrowed
 - `candidate_fix_commits`: all same-layer or cross-layer commits in range (always populate)
