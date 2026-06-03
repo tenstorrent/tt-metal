@@ -1,7 +1,12 @@
 # Option B (TP=8) with L1-resident weights — analytical assessment
 
 **Date**: 2026-06-03
-**Status**: Analytical only. **Not yet measured on hardware.**
+**Status**: **Validated empirically on hardware (commit `221d9f72d34`).**
+The hypothesis below was confirmed: TP=8 shrinks the per-chip matmul CB
+region from ~733 KB / bank (Option C SigLIP MLP) to ~110 KB / bank, and
+L1-resident weights fit comfortably above the shrunk CB region. Init
+succeeds, the forward kernels run the L1 matmuls without the
+`validate_circular_buffer_region` collision that blocks Option C.
 **Companion**: [L1_PLACEMENT_FINDINGS.md](./L1_PLACEMENT_FINDINGS.md)
 (why we're asking this question after the Option C investigation).
 
