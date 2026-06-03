@@ -112,9 +112,37 @@ if __name__ == "__main__":
         choices=["online", "offline", "disabled"],
         help="W&B mode. If unset, uses WANDB_MODE env var or wandb default.",
     )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="llama",
+        choices=["llama", "qwen"],
+        help="Model family to train: 'llama' (single device) or 'qwen' (Qwen3, tensor-parallel).",
+    )
+    parser.add_argument(
+        "--model_id",
+        type=str,
+        default=None,
+        help="HuggingFace model id. Defaults per --model "
+        "(llama: meta-llama/Llama-3.2-1B-Instruct, qwen: Qwen/Qwen3-32B).",
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to the GRPO training YAML. Defaults per --model.",
+    )
     args = parser.parse_args()
 
-    model_id = "meta-llama/Llama-3.2-1B-Instruct"
+    _DEFAULT_MODEL_ID = {
+        "llama": "meta-llama/Llama-3.2-1B-Instruct",
+        "qwen": "Qwen/Qwen3-32B",
+    }
+    _DEFAULT_CONFIG = {
+        "llama": "tt-train/configs/training_configs/grpo_boolq_llama_1dev.yaml",
+        "qwen": "tt-train/configs/training_configs/grpo_boolq_qwen_32b.yaml",
+    }
+    model_id = args.model_id or _DEFAULT_MODEL_ID[args.model]
     tokenizer = AutoTokenizer.from_pretrained(model_id)
 
     system_prompt = "You are a wordy professor. Explain in 3 long sentences before saying Yes or No."
@@ -132,10 +160,7 @@ if __name__ == "__main__":
     dataset = load_dataset("google/boolq", split="train").shuffle(seed=42).map(format_boolq)
 
     tt_metal_root = get_tt_metal_runtime_root()
-    config_path = os.path.join(
-        tt_metal_root,
-        "tt-train/configs/training_configs/grpo_boolq_llama_1dev.yaml",
-    )
+    config_path = args.config or os.path.join(tt_metal_root, _DEFAULT_CONFIG[args.model])
     raw = load_config(config_path)
     training_config = TrainingConfig(raw)
     device_config = DeviceConfig(raw)
@@ -171,16 +196,32 @@ if __name__ == "__main__":
             wandb_enabled = True
             print(f"   - W&B logging enabled (project={args.wandb_project}, run={args.wandb_run_name or '<auto>'})")
 
-    completer = LlamaGRPOCompleter(
-        ctx=LlamaCompletionCtx(
-            max_tokens_to_complete=grpo_config.max_completion_length,
-            temperature=grpo_config.temperature,
-            completions_per_prompt=grpo_config.num_generations,
-        ),
-        transformer_config=transformer_config,
-        device_config=device_config,
-        model_source=model_id,
-    )
+    if args.model == "qwen":
+        # Imported lazily: utils.qwen_completer pulls in the vendored distributed
+        # Qwen3 stack, which is unnecessary for the Llama path.
+        from utils.qwen_completer import QwenCompletionCtx, QwenGRPOCompleter
+
+        completer = QwenGRPOCompleter(
+            ctx=QwenCompletionCtx(
+                max_tokens_to_complete=grpo_config.max_completion_length,
+                temperature=grpo_config.temperature,
+                completions_per_prompt=grpo_config.num_generations,
+            ),
+            device_config=device_config,
+            model_source=model_id,
+            max_seq_len=transformer_config.max_sequence_length,
+        )
+    else:
+        completer = LlamaGRPOCompleter(
+            ctx=LlamaCompletionCtx(
+                max_tokens_to_complete=grpo_config.max_completion_length,
+                temperature=grpo_config.temperature,
+                completions_per_prompt=grpo_config.num_generations,
+            ),
+            transformer_config=transformer_config,
+            device_config=device_config,
+            model_source=model_id,
+        )
 
     grpo_trainer = GRPOTrainer(
         completer=completer,

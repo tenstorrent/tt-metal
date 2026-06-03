@@ -115,6 +115,29 @@ def get_available_device_memory_in_bytes() -> int:
     return total_dram
 
 
+def log_device_dram_usage(label: str) -> None:
+    """Print per-device DRAM allocated/free at the current point in execution.
+
+    The allocator's MemoryView fields are all *per DRAM bank*; per-device totals
+    are the field x num_banks. This logs both so the numbers line up with the
+    allocator's OOM message (which is also reported per-bank).
+    """
+    device = ttml.autograd.AutoContext.get_instance().get_device()
+    mv = ttnn.device.get_memory_view(device, ttnn.BufferType.DRAM)
+    gb = 1024.0**3
+    banks = mv.num_banks
+    per_dev_total = mv.total_bytes_per_bank * banks / gb
+    per_dev_alloc = mv.total_bytes_allocated_per_bank * banks / gb
+    per_dev_free = mv.total_bytes_free_per_bank * banks / gb
+    largest_free = mv.largest_contiguous_bytes_free_per_bank * banks / gb
+    print(
+        f"[DRAM {label}] per-device: allocated={per_dev_alloc:.2f} GB / "
+        f"{per_dev_total:.2f} GB  free={per_dev_free:.2f} GB  "
+        f"largest_contiguous_free={largest_free:.2f} GB  ({banks} banks)",
+        flush=True,
+    )
+
+
 class PerformanceMeter:
     def __init__(self, cfg, window_size=10):
         self.cfg = cfg

@@ -1,0 +1,49 @@
+# Qwen3-32B GRPO on BoolQ (tensor-parallel).
+#
+# Qwen3-32B has 8 KV heads, so the TP degree must divide 8 (max TP = 8).
+# Default mesh is [dp=4, tp=8] = 32 devices, matching a single BlackHole galaxy
+# (single_bh_galaxy_mesh_graph_descriptor.textproto). For an 8-device setup use
+# [1, 8] (TP only) with a matching 1x8 mesh graph descriptor.
+#
+# DP divisibility constraints (with dp_size = mesh_shape[0]):
+#   - batch_size       % dp_size == 0   (reward groups must not straddle DP devices)
+#   - micro_batch_size % dp_size == 0
+#   - batch_size * num_generations % dp_size == 0
+#
+# TT_MESH_GRAPH_DESC_PATH must describe a mesh matching `mesh_shape` below.
+training_config:
+  model_config: "${TT_METAL_RUNTIME_ROOT}/tt-train/configs/model_configs/qwen3_32B.yaml"
+
+  optimizer:
+    type: MorehAdamW
+    lr: 1.0e-6
+    beta1: 0.9
+    beta2: 0.99
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    kahan_summation: false
+
+  grpo_config:
+    epsilon: 0.2
+    # SANITY TEST: bare-minimum batch to probe the OOM. batch_size must be a
+    # multiple of dp_size (4), so 4 is the floor; num_generations=1 makes the
+    # expanded generation batch B = batch_size * num_generations = 4 = 1 seq/device
+    # (vs 16 = 4/device normally). micro_batch_size tracks B per the config's
+    # "micro_batch == batch_size * num_generations" convention.
+    batch_size: 4               # multiple of dp_size (4)
+    micro_batch_size: 16 # was 16
+    num_iterations: 1
+    gradient_accumulation_steps: 4 # was 4
+    logging_steps: 1
+    checkpointing: false        # TP checkpointing not yet supported (see GRPOTrainer)
+    checkpoint_interval: 5
+    prompts_to_train: 800
+    temperature: 1.0
+    max_completion_length: 128
+    num_generations: 4 # was 4
+    warmup_steps: 0
+
+device_config:
+  enable_ddp: true              # DP+TP (mesh dim 0 = DP). Use false for [1, 8].
+  mesh_shape: [4, 8]            # [dp, tp]; tp must divide num_kv_heads (8)

@@ -347,19 +347,47 @@ class GRPOTrainer:
         optimizer = create_optimizer(tt_model, self.optimizer_dict)
         base_lr = optimizer.get_lr()
 
-        # Device-parallelism state. The trainer currently only handles either
-        # single-device or DDP; tensor parallelism is not supported here. We
-        # gate the multi-device sharding paths on ``ddp_enabled`` rather than
-        # ``num_devices > 1`` so this assumption is explicit at the call sites.
+        # Report per-device DRAM after the optimizer is created: the delta vs the
+        # "after weight load" log shows how much the optimizer state (e.g. AdamW
+        # moments on the trainable params) adds on top of the weights.
+        from ttml.common.utils import log_device_dram_usage
+
+        log_device_dram_usage("after optimizer creation")
+
+        # Device-parallelism state. The trainer supports single-device, data
+        # parallelism (DDP), and tensor parallelism (TP), as well as DP+TP.
+        #
+        #   - Legacy (no TP): every device is a DP shard. The batch dim is
+        #     sharded across the whole mesh and gradients are all-reduced over
+        #     it. This preserves the original behaviour exactly.
+        #   - TP (e.g. a vocab-sharded Qwen3 model): the model weights are
+        #     sharded across the TP axis (mesh dim 1) and the batch is sharded
+        #     across the DP axis (mesh dim 0) only / replicated across TP. TP
+        #     gradients are reduced inside the model's RowParallel ops during
+        #     backward, so only DP gradients need an explicit all-reduce.
         autograd_ctx = ttml.autograd.AutoContext.get_instance()
         device = autograd_ctx.get_device()
         num_devices: int = device.get_num_devices()
-        ddp_enabled: bool = (
-            autograd_ctx.is_parallelism_context_initialized()
-            and autograd_ctx.get_parallelism_context().is_ddp_enabled()
-        )
-        dp_mapper: Any = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0) if ddp_enabled else None
-        dp_composer: Any = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0) if ddp_enabled else None
+        pctx_initialized = autograd_ctx.is_parallelism_context_initialized()
+        tp_enabled: bool = pctx_initialized and autograd_ctx.get_parallelism_context().is_tp_enabled()
+        ddp_enabled: bool = pctx_initialized and autograd_ctx.get_parallelism_context().is_ddp_enabled()
+
+        if tp_enabled:
+            # TP (mesh dim 1) shards the model; DP (mesh dim 0) shards the batch.
+            tp_size = autograd_ctx.get_parallelism_context().get_tp_size()
+            dp_size = max(1, num_devices // tp_size)
+            # Shard the batch dim (0) across the DP axis (mesh dim 0) only.
+            dp_mapper: Any = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0, 0) if dp_size > 1 else None
+            dp_composer: Any = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0) if dp_size > 1 else None
+            # Number of batch shards == DP degree (TP replicates the batch).
+            batch_shards = dp_size
+            sync_dp_grads = dp_size > 1
+        else:
+            # Legacy: every device is a DP shard (single-device or DDP).
+            dp_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0) if ddp_enabled else None
+            dp_composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0) if ddp_enabled else None
+            batch_shards = num_devices
+            sync_dp_grads = ddp_enabled
 
         dataset = self.dataset.select(range(min(grpo_cfg.prompts_to_train, len(self.dataset))))
         prompts = [tokenizer.encode(row["prompt"]) for row in dataset]
@@ -394,7 +422,7 @@ class GRPOTrainer:
                 rewards_np,
                 grpo_cfg.num_generations,
                 dp_mapper,
-                num_devices,
+                batch_shards,
             )
             accum_rewards.append(rewards_np)
             accum_completion_lens.extend(len(c) for c in completions_batch)
@@ -415,8 +443,8 @@ class GRPOTrainer:
                     iter_micro_batch(prompts_batch, completions_batch, grpo_cfg.micro_batch_size),
                 ):
                     B = len(c)
-                    start_local = (i * grpo_cfg.micro_batch_size) // num_devices
-                    end_local = start_local + B // num_devices
+                    start_local = (i * grpo_cfg.micro_batch_size) // batch_shards
+                    end_local = start_local + B // batch_shards
 
                     adv_slice_val = ttnn.slice(advantages_tt, [start_local, 0], [end_local, 1])
                     adv_ttml = ttml.autograd.create_tensor(adv_slice_val, requires_grad=False)
@@ -446,7 +474,7 @@ class GRPOTrainer:
                     )
                     optimizer.set_lr(base_lr * warmup_factor)
 
-                    if ddp_enabled:
+                    if sync_dp_grads:
                         ttml.core.distributed.synchronize_gradients(tt_model.parameters())
 
                     for cb in self.callbacks:
@@ -489,7 +517,17 @@ class GRPOTrainer:
                     accum_generation_time_s = 0.0
                     step_t0 = time.perf_counter()
 
-                    if grpo_cfg.checkpointing and num_steps % grpo_cfg.checkpoint_interval == 0:
+                    if grpo_cfg.checkpointing and tp_enabled:
+                        # TP shards params across the vocab/feature dim (not the
+                        # batch dim), so the dp_composer-based gather in
+                        # save_checkpoint cannot reconstruct full weights yet.
+                        if num_steps % grpo_cfg.checkpoint_interval == 0:
+                            logging.warning(
+                                "GRPO checkpointing is not yet supported under tensor parallelism; "
+                                "skipping checkpoint at step %d.",
+                                num_steps,
+                            )
+                    elif grpo_cfg.checkpointing and num_steps % grpo_cfg.checkpoint_interval == 0:
                         ckpt_dir = os.path.join(grpo_cfg.output_dir, "checkpoints", f"grpo_step_{num_steps}")
                         save_checkpoint(
                             tt_model,
