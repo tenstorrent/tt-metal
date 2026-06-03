@@ -255,6 +255,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::DeepSeekPrefill::PostCombineReduce
         TTNN::Ops::Experimental::DeepSeek::MoE::MoEGateMM
         TTNN::Ops::Experimental::DeepSeek::MoE::DeepSeekMoeGate
+        TTNN::Ops::Experimental::DeepSeek::MoE::GeneralizedMoeGate
         TTNN::Ops::Experimental::TopkRouterGpt
         TTNN::Ops::Experimental::Deepseek::MLA::Matmul_WO
         TTNN::Ops::Experimental::MoEGPT
@@ -510,6 +511,7 @@ add_subdirectory(cpp/ttnn/operations/experimental/matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/minimal_matmul)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate)
+add_subdirectory(cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate)
 add_subdirectory(cpp/ttnn/operations/experimental/topk_router_gpt)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo)
 add_subdirectory(cpp/ttnn/operations/experimental/ccl/moe_gpt)

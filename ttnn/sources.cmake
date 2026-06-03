@@ -165,6 +165,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/deepseek_moe_gate_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/generalized_moe_gate_nanobind.cpp
     cpp/ttnn/operations/experimental/topk_router_gpt/topk_router_gpt_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.cpp
