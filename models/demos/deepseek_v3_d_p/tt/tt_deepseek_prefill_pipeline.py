@@ -214,15 +214,20 @@ class TtDeepSeekPrefillPipeline:
     def set_layer_ack_channel(self, layer_ack_channel) -> None:
         """Register the per-layer-ack channel (docs/scheduler/prefill.md §3.11).
 
-        Future-faithful: the runner's ONLY per-layer migration duty is to bump
-        this counter once per layer. The scheduler reads the delta and drives
-        the migration worker; the runner has no IPC with the worker.
+        `layer_ack_channel` is the scheduler-facing counter — a
+        `ttnn.InterProcessCounterChannel` on `/tt_prefill_layer_acks_<service_id>`
+        (the same segment the scheduler connects to). The runner's ONLY per-layer
+        migration duty is to bump this counter once per layer; the scheduler reads
+        the delta and drives the migration worker. No IPC with the worker.
+
+        Per-layer cadence means NUM_LAYERS acks per chunk, so the scheduler must
+        be configured with layers_per_chunk == NUM_LAYERS.
         """
         assert self.compiled, "Call compile() before set_layer_ack_channel()"
         self._layer_ack_channel = layer_ack_channel
 
     def _build_layer_ack_callback(self):
-        """Per-layer hook → increment the LayerAck counter once per layer.
+        """Per-layer hook → bump the scheduler-facing counter once per layer.
 
         The ack carries NO payload (no slot/range/layer): the scheduler
         correlates acks with the chunk it pushed (its InFlightChunkFIFO) and
@@ -233,6 +238,6 @@ class TtDeepSeekPrefillPipeline:
         channel = self._layer_ack_channel
 
         def on_layer_complete(layer_idx: int) -> None:
-            channel.increment()
+            channel.inject(1)
 
         return on_layer_complete

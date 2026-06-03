@@ -30,10 +30,6 @@ ttnn disaggregation types, whose API differs from the legacy _migration one:
   * KvCacheLocation is default-constructed; fields set by assignment
 """
 
-import mmap
-import os
-import struct
-
 from loguru import logger
 
 import ttnn
@@ -142,42 +138,3 @@ def build_and_serialize_kv_chunk_table(*, mesh_device, kvpe_cache, seq_len, num_
     _serialize_table_to_path(table, path)
     logger.info(f"[migration] KV chunk address table serialized to {path} (entries={table.total_entries()})")
     return path
-
-
-class ShmLayerAckChannel:
-    """Producer side of the LayerAck channel (prefill.md §3.11).
-
-    A named POSIX shm segment holding a single 64-bit counter the runner bumps
-    once per layer; the scheduler reads the delta. Lock-free SPSC: an aligned
-    8-byte store on x86-64 is atomic, and a monotonic counter needs nothing more.
-
-    NOTE(layer-ack): minimal stand-in for the engine's ShmLayerAckChannel; the
-    layout (one little-endian uint64 at offset 0) is intended to match.
-    """
-
-    _SIZE = 8  # one uint64 counter
-
-    def __init__(self, name: str, create: bool = True):
-        # POSIX shm name "/foo" maps to /dev/shm/foo on Linux.
-        self._name = name
-        shm_path = "/dev/shm/" + name.lstrip("/")
-        flags = os.O_RDWR | (os.O_CREAT if create else 0)
-        fd = os.open(shm_path, flags, 0o600)
-        try:
-            if create:
-                os.ftruncate(fd, self._SIZE)
-            self._buf = mmap.mmap(fd, self._SIZE, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE)
-        finally:
-            os.close(fd)
-        if create:
-            struct.pack_into("<Q", self._buf, 0, 0)
-        self._count = 0
-        logger.info(f"[migration] LayerAck channel ready at {shm_path}")
-
-    def increment(self) -> None:
-        """Bump the counter by one (called once per layer from the prefill loop)."""
-        self._count += 1
-        struct.pack_into("<Q", self._buf, 0, self._count)
-
-    def close(self) -> None:
-        self._buf.close()

@@ -17,7 +17,6 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_orde
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.runners.h2d_socket_sync_op import h2d_socket_sync
-from models.demos.deepseek_v3_d_p.tt.runners.integration_setup import PREFILL_EP_ID
 from models.demos.deepseek_v3_d_p.tt.tt_deepseek_prefill_pipeline import (
     TtDeepSeekPrefillPipeline,
     TtPrefillPipelineConfig,
@@ -442,6 +441,7 @@ def run_request_loop(
     pipeline: TtDeepSeekPrefillPipeline,
     h2d_service: ttnn.H2DStreamService,
     ack_channel: ttnn.InterProcessCounterChannel,
+    emit_chunk_ack: bool = True,
 ) -> None:
     """Request loop: token IDs + per-iter control metadata arrive over the H2D
     socket service, pushed by a separate producer process (prefill_h2d_producer.py
@@ -463,9 +463,12 @@ def run_request_loop(
     """
     import time as _time
 
+    _ack_mode = (
+        f"per-chunk ({PREFILL_LAYERS_PER_CHUNK} ack(s)/chunk)" if emit_chunk_ack else "per-layer (pipeline-driven)"
+    )
     logger.info(
         f"[request] entering request loop — blocks on h2d_socket_sync for each push; "
-        f"injects {PREFILL_LAYERS_PER_CHUNK} ack(s) per chunk to the scheduler. "
+        f"ack cadence: {_ack_mode}. "
         f"Runs until SIGTERM/SIGINT (Ctrl-C). Drive it with prefill_h2d_producer.py / the scheduler."
     )
 
@@ -512,16 +515,21 @@ def run_request_loop(
             actual_start=actual_start,
         )
         _dt_ms = (_time.perf_counter() - _t0) * 1000.0
-        # Scheduler-facing ack: the scheduler's ack_reader_thread counts off
-        # exactly SchedulerParams::layers_per_chunk acks per pushed chunk
-        # before retiring the InFlightChunkFIFO head. With layers_per_chunk=1
-        # (our bring-up cadence) we inject once per chunk; production
-        # per-layer cadence would inject(1) inside a per-layer loop instead.
-        ack_channel.inject(PREFILL_LAYERS_PER_CHUNK)
+        # Scheduler-facing ack. The scheduler's ack_reader_thread counts off
+        # exactly SchedulerParams::layers_per_chunk acks per pushed chunk before
+        # retiring the InFlightChunkFIFO head. Per-chunk cadence (migration off):
+        # emit them here. Per-layer cadence (migration on): the pipeline already
+        # injected one per layer inside pipeline.prefill — skip to avoid
+        # double-counting.
+        if emit_chunk_ack:
+            ack_channel.inject(PREFILL_LAYERS_PER_CHUNK)
+            _acks = PREFILL_LAYERS_PER_CHUNK
+        else:
+            _acks = f"per-layer ({pipeline.config.num_layers})"
         logger.info(
             f"[request] iter={i} num_tokens={MAX_SEQ_LEN} "
             f"pipeline.prefill() = {_dt_ms:.2f} ms first_token={first_token} "
-            f"acks_injected={PREFILL_LAYERS_PER_CHUNK}"
+            f"acks_injected={_acks}"
         )
 
         # Per-chunk KV-PCC validation against the offline golden. Same hook
@@ -557,11 +565,6 @@ def _print_config() -> None:
         (
             "PREFILL_MIGRATION_TABLE_PATH",
             os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"),
-            False,
-        ),
-        (
-            "PREFILL_LAYER_ACK_SHM",
-            os.environ.get("PREFILL_LAYER_ACK_SHM", f"/prefill_{PREFILL_EP_ID}_layer_ack"),
             False,
         ),
         ("PREFILL_DEBUG", os.environ.get("PREFILL_DEBUG", "0"), False),
@@ -644,18 +647,15 @@ def main() -> None:
         probe_dram_allocatable_base(mesh_device, "after-compile")
 
     if enable_migration:
-        from models.demos.deepseek_v3_d_p.tt.runners.integration_setup import (
-            ShmLayerAckChannel,
-            build_and_serialize_kv_chunk_table,
-        )
+        from models.demos.deepseek_v3_d_p.tt.runners.integration_setup import build_and_serialize_kv_chunk_table
 
         # The runner's whole migration footprint (docs/scheduler/prefill.md): it
         # has NO IPC with the migration_worker. It only —
         #   (1) builds + serializes the KV chunk address table at startup (it owns
         #       the device, so only it knows the KV cache NoC addresses). The IS
         #       forwards this path to the worker via SET_TABLE.
-        #   (2) emits a LayerAck (one shm counter bump) per layer; the scheduler
-        #       reads the delta and drives the worker.
+        #   (2) emits a per-layer ack on the scheduler-facing counter channel —
+        #       wired below once the request-loop ack_channel exists.
         table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
         build_and_serialize_kv_chunk_table(
             mesh_device=mesh_device,
@@ -665,10 +665,6 @@ def main() -> None:
             mesh_shape=GLOBAL_MESH_SHAPE,
             path=table_path,
         )
-
-        ack_shm_name = os.environ.get("PREFILL_LAYER_ACK_SHM", f"/prefill_{PREFILL_EP_ID}_layer_ack")
-        pipeline.set_layer_ack_channel(ShmLayerAckChannel(ack_shm_name, create=True))
-        logger.info("[migration] table published + LayerAck channel set; runner emits one ack per layer")
 
     if os.environ.get("PREFILL_STANDALONE", "0") == "1":
         # Truly standalone: file input, no H2D socket service at all.
@@ -706,8 +702,21 @@ def main() -> None:
             f"(scheduler attaches via shm_layer_ack_name('{service_id}'))"
         )
 
+        # Ack cadence:
+        #  * migration ON  → per-LAYER: the pipeline bumps this same counter once
+        #    per layer (NUM_LAYERS acks/chunk), enabling per-layer migration
+        #    overlap. The scheduler must run with layers_per_chunk == NUM_LAYERS.
+        #    run_request_loop does NOT also emit a chunk ack (would double-count).
+        #  * migration OFF → per-CHUNK: run_request_loop emits PREFILL_LAYERS_PER_CHUNK.
+        if enable_migration:
+            pipeline.set_layer_ack_channel(ack_channel)
+            logger.info(
+                f"[migration] per-layer LayerAck enabled on {ack_shm_name} — "
+                f"{NUM_LAYERS} acks/chunk; run the scheduler with layers_per_chunk={NUM_LAYERS}"
+            )
+
         logger.info("Setup complete, entering request loop")
-        run_request_loop(pipeline, h2d_service, ack_channel)
+        run_request_loop(pipeline, h2d_service, ack_channel, emit_chunk_ack=not enable_migration)
 
         # Release everything while the mesh + command queues + service core
         # are still alive. H2D service's dtor frees a command queue + service-core
