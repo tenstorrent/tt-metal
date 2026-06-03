@@ -6,7 +6,6 @@
   "dataset_revision": "81c7ee3cf3317e51beb97327df55926cd5bbfadb",
   "context_length": 24,
   "prediction_length": 24,
-  "num_time_features": 2,
   "lags_sequence": [
     1,
     2,
