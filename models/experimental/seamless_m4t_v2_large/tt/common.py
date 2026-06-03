@@ -157,8 +157,15 @@ def matmul_multicast_1d_program_config(
     m: int,
     k: int,
     n: int,
+    force_in0_block_w: Optional[int] = None,
 ) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
-    """``MatmulMultiCoreReuseMultiCast1DProgramConfig`` (``mcast_in0=True``), aligned with Devstral2."""
+    """``MatmulMultiCoreReuseMultiCast1DProgramConfig`` (``mcast_in0=True``), aligned with Devstral2.
+
+    ``force_in0_block_w`` pins the K-block to a specific value (clamped to a divisor of ``k_tiles``)
+    instead of the per_core_M/N-derived cap. Used to keep ``in0_block_w`` — hence the K-reduction
+    order, hence the bit-exact output — fixed when ``m`` (per_core_M) grows past where the cap would
+    otherwise shrink it (e.g. wide chunked-linear chunks). Caller owns the L1-fit check.
+    """
     m_tiles = max(1, math.ceil(m / TILE))
     n_tiles = max(1, math.ceil(n / TILE))
     k_tiles = max(1, math.ceil(k / TILE))
@@ -166,12 +173,15 @@ def matmul_multicast_1d_program_config(
     num_cores = grid_x * grid_y
     per_core_M = m_tiles
     per_core_N = max(1, math.ceil(n_tiles / num_cores))
-    cap = min(
-        8,
-        max(1, 64 // per_core_M),
-        max(1, 128 // per_core_N),
-    )
-    in0_block_w = _largest_divisor_at_most(k_tiles, cap)
+    if force_in0_block_w is not None:
+        in0_block_w = _largest_divisor_at_most(k_tiles, force_in0_block_w)
+    else:
+        cap = min(
+            8,
+            max(1, 64 // per_core_M),
+            max(1, 128 // per_core_N),
+        )
+        in0_block_w = _largest_divisor_at_most(k_tiles, cap)
     out_subblock_w = _largest_divisor_at_most(per_core_N, 4)
     out_subblock_h = _largest_divisor_at_most(per_core_M, max(1, 4 // out_subblock_w))
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
