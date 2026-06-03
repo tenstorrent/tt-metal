@@ -95,12 +95,12 @@ void kernel_main() {
     constexpr auto cb_updated_running_var = get_compile_time_arg_val(8);
     constexpr auto cb_momentum = get_compile_time_arg_val(9);
     constexpr auto cb_one = get_compile_time_arg_val(10);
-    // CT-args 11..13 (cb_tmp1/2/3) are no longer used — the chain threads the result through DEST.
-    constexpr auto cb_writer_updated_mean = get_compile_time_arg_val(14);
-    constexpr auto cb_writer_updated_var = get_compile_time_arg_val(15);
-    constexpr bool stat_needs_typecast = get_compile_time_arg_val(16) == 1;
-    constexpr uint32_t tc_in_fmt = get_compile_time_arg_val(17);
-    constexpr uint32_t tc_out_fmt = get_compile_time_arg_val(18);
+    // The former cb_tmp1/2/3 CT-args are gone — the chain threads the result through DEST.
+    constexpr auto cb_writer_updated_mean = get_compile_time_arg_val(11);
+    constexpr auto cb_writer_updated_var = get_compile_time_arg_val(12);
+    constexpr bool stat_needs_typecast = get_compile_time_arg_val(13) == 1;
+    constexpr uint32_t tc_in_fmt = get_compile_time_arg_val(14);
+    constexpr uint32_t tc_out_fmt = get_compile_time_arg_val(15);
     constexpr bool needs_mean_typecast = old_running_mean_has_value && stat_needs_typecast;
     constexpr bool needs_var_typecast = old_running_var_has_value && stat_needs_typecast;
 

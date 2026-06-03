@@ -308,39 +308,8 @@ tt::tt_metal::ProgramDescriptor RunningStatistics::RunningStatisticsProgramFacto
         writer_updated_v_cb = wv_cb;
     }
 
-    // Intermediate buffers required for updation of running stats
-    uint32_t tmp1_cb = static_cast<uint32_t>(tt::CBIndex::c_9);
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = interm_single_tile_size * b_num_tiles_per_cb,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tmp1_cb),
-            .data_format = interm_data_format,
-            .page_size = interm_single_tile_size,
-        }}},
-    });
-
-    uint32_t tmp2_cb = static_cast<uint32_t>(tt::CBIndex::c_10);
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = interm_single_tile_size * b_num_tiles_per_cb,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tmp2_cb),
-            .data_format = interm_data_format,
-            .page_size = interm_single_tile_size,
-        }}},
-    });
-
-    uint32_t tmp3_cb = static_cast<uint32_t>(tt::CBIndex::c_11);
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = interm_single_tile_size * b_num_tiles_per_cb,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tmp3_cb),
-            .data_format = interm_data_format,
-            .page_size = interm_single_tile_size,
-        }}},
-    });
+    // The compute kernels thread the running-stat update through DEST slots, so the former
+    // cb_tmp1/2/3 intermediate buffers (CBIndex c_9/c_10/c_11) are no longer allocated.
 
     std::vector<uint32_t> reader_compile_time_args = {
         batch_mean_tensor_cb,
@@ -401,10 +370,7 @@ tt::tt_metal::ProgramDescriptor RunningStatistics::RunningStatisticsProgramFacto
               updated_m_cb,
               updated_v_cb,
               momentum_cb,
-              one_cb,
-              tmp1_cb,
-              tmp2_cb,
-              tmp3_cb}) {
+              one_cb}) {
             unpack_to_dest_mode[cb_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }
     }
@@ -424,9 +390,6 @@ tt::tt_metal::ProgramDescriptor RunningStatistics::RunningStatisticsProgramFacto
         updated_v_cb,
         momentum_cb,
         one_cb,
-        tmp1_cb,
-        tmp2_cb,
-        tmp3_cb,
         writer_updated_m_cb,
         writer_updated_v_cb,
         static_cast<uint32_t>(stat_format_needs_typecast),
