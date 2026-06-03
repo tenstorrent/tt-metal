@@ -169,7 +169,10 @@ class DistributedNorm(LightweightModule):
             if "LAYERNORM" not in self.tt_ccl.all_gather_buffers:
                 import torch as _torch
 
-                _M = x.shape[-2]
+                # Fixed 32-row tile-padded stats buffer (mirrors get_all_gather_buffers):
+                # the decode-mode rms_allgather always operates on the (1,1,32,M) tile-padded
+                # batch, so the stats shard is (32,128) regardless of the logical row count.
+                _M = 32
                 _go = ttnn.CoreCoord(1, 0)
                 _stats_cfg = ttnn.create_sharded_memory_config(
                     shape=(_M, 128),

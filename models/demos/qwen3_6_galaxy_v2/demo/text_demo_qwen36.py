@@ -403,11 +403,19 @@ def test_qwen36_demo_batch1(bh_glx_mesh):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=ttnn.bfloat16,
         )
-        x_emb_3d = ttnn.slice(
-            x_emb_flat, [0, 0, 0], [1, 1, x_emb_flat.shape[-1]], memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        x_emb_flat.deallocate(True)
-        x_emb = ttnn.unsqueeze_to_4D(x_emb_3d)
+        if os.environ.get("QWEN36_DECODE_L1_RESIDUAL", "0") == "1" or os.environ.get("QWEN36_DECODE_32ROW", "0") == "1":
+            # 32-row carry (llama70b batch-1 contract): keep all 32 tile-padded rows
+            # ([1,1,32,H/4], row 0 = real token) so the decode-mode L1 norm (rms_allgather)
+            # has its required (1,1,32,M) shape. NOTE: ttnn.reshape is a VIEW aliasing
+            # x_emb_flat — do NOT deallocate x_emb_flat (it would free the shared buffer →
+            # use-after-free → NaN). Mirrors the perf harness 32-row branch.
+            x_emb = ttnn.reshape(x_emb_flat, ttnn.Shape([1, 1, x_emb_flat.shape[-2], x_emb_flat.shape[-1]]))
+        else:
+            x_emb_3d = ttnn.slice(
+                x_emb_flat, [0, 0, 0], [1, 1, x_emb_flat.shape[-1]], memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            x_emb_flat.deallocate(True)
+            x_emb = ttnn.unsqueeze_to_4D(x_emb_3d)
         lm_head_out = model.forward(
             x_emb,
             current_pos=cur_pos_tt,
