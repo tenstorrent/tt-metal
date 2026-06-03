@@ -181,51 +181,55 @@ void H2DSocket::init_receiver_tlb(const std::shared_ptr<MeshDevice>& mesh_device
     const auto& cluster = MetalContext::instance().get_cluster();
 
     // Receiver core type is recorded explicitly at construction (the DRAM-recv
-    // ctor sets Dram, every other path is Tensix). Don't infer it here from
-    // coordinates — logical coords overlap across core types so a
-    // worker_cores(DRAM,…) containment check is unreliable — nor from the
-    // DRAM-L1 NOC offset, which only says "this write needs an L1 offset".
-    const bool is_dram_recv = (recv_core_type_ == RecvCoreType::Dram);
-    const CoreType recv_umd_core_type = is_dram_recv ? CoreType::DRAM : CoreType::TENSIX;
+    // ctor sets Dram, every other path is Tensix). Used only to resolve the
+    // virtual coordinate — logical coords overlap across core types, so this
+    // can't be inferred from coordinates here.
+    const CoreType recv_umd_core_type = (recv_core_type_ == RecvCoreType::Dram) ? CoreType::DRAM : CoreType::TENSIX;
 
     if (mesh_device) {
         recv_device_id = mesh_device->get_device(recv_core_.device_coord)->id();
         recv_virtual_core = mesh_device->virtual_core_from_logical_core(recv_core_.core_coord, recv_umd_core_type);
-        // DRAM cores don't have static TLB windows on Blackhole; skip TLB
-        // acquisition and force the cluster.write_core path below.
-        if (!is_dram_recv) {
-            receiver_core_tlb_ = cluster.get_driver()
-                                     ->get_chip(recv_device_id)
-                                     ->get_tlb_manager()
-                                     ->get_tlb_window(tt_xy_pair(recv_virtual_core.x, recv_virtual_core.y));
-        }
     } else {
         recv_device_id = device_id.value();
         recv_virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
             recv_device_id, recv_core_.core_coord, recv_umd_core_type);
     }
+
     // For DRAM-core recv, every host NOC write to the DRISC L1 needs the DRAM-L1
     // NOC offset added on top of the local L1 address (DRAM cores have two NOC
     // spaces: low addresses route to DRAM bank, high addresses route to L1).
     // Captured into the lambdas below so write() can keep passing local addresses.
     const uint64_t l1_offset = dram_l1_noc_offset_;
-    auto arch = MetalContext::instance().hal().get_arch();
-    if (arch == tt::ARCH::BLACKHOLE && mesh_device && !is_dram_recv) {
-        // This process owns a mesh_device and hence has statically initialized TLBs.
-        // Entire device address space for Blackhole is statically mapped.
-        // Safe to use static TLBs without requiring the driver to do a reconfig.
-        // Skip the TLB path for DRAM recv: the DRAM-L1 NOC offset puts the target
-        // address (e.g. 0x2000000000+0xe000) outside the per-core TLB window's
-        // bounds. Fall through to cluster.write_core below.
+
+    // Take the static-TLB path only when UMD reports that our actual write target
+    // lives inside a static window for this core — ask the TLB manager rather than
+    // assuming based on core type. On Blackhole, Tensix/Eth cores get a static
+    // window mapping L1, so their writes land inside it; DRAM cores also get a
+    // static window, but it maps the DRAM-bank space at [0, 4 GB) while our writes
+    // target device_addr + l1_offset (a high DRAM-L1 NOC address, e.g.
+    // 0x2000000000+…) outside that window, so is_tlb_mapped reports false and we
+    // fall through to cluster.write_core. Also gated on owning a mesh_device
+    // (statically initialized TLBs) and Blackhole — on Wormhole B0 the device
+    // address space isn't fully statically mapped and a mapped window may still
+    // need a per-write driver reconfig.
+    const tt_xy_pair tlb_core(recv_virtual_core.x, recv_virtual_core.y);
+    const bool target_in_static_tlb =
+        mesh_device && MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE &&
+        cluster.get_driver()
+            ->get_chip(recv_device_id)
+            ->get_tlb_manager()
+            ->is_tlb_mapped(tlb_core, static_cast<uint64_t>(aligned_data_buf_start_) + l1_offset, fifo_size_);
+
+    if (target_in_static_tlb) {
+        receiver_core_tlb_ =
+            cluster.get_driver()->get_chip(recv_device_id)->get_tlb_manager()->get_tlb_window(tlb_core);
         pcie_writer = [this, l1_offset](void* data, uint32_t num_bytes, uint64_t device_addr) {
             receiver_core_tlb_->write_block(device_addr + l1_offset, data, num_bytes);
         };
     } else {
-        // Mesh Device not owned - use dynamic TLBs through UMD.
-        // Wormhole B0 may require the driver to do a reconfig of the TLB for each write,
-        // since the device address space is not statically mapped. Also used for the
-        // DRAM-recv path above, since the DRAM-L1 NOC offset is outside any static TLB
-        // window on Blackhole.
+        // Mesh device not owned, non-Blackhole, or no static window covers the
+        // target: use dynamic TLBs through UMD (the driver may reconfigure the TLB
+        // per write). Covers Wormhole B0 and the DRAM-recv L1 path described above.
         pcie_writer = [recv_device_id, recv_virtual_core, l1_offset](
                           void* data, uint32_t num_bytes, uint64_t device_addr) {
             const auto& cluster = MetalContext::instance().get_cluster();
