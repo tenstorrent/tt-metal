@@ -47,7 +47,9 @@ class KBEntry:
     def from_dict(cls, d: dict) -> "KBEntry":
         d = dict(d)
         d["pattern_kind"] = PatternKind(d["pattern_kind"])
-        d["placement_observations"] = [PlacementObservation.from_dict(o) for o in d.get("placement_observations", [])]
+        # Keep placement_observations as raw dicts for portability; callers that need
+        # PlacementObservation objects call PlacementObservation.from_dict() themselves.
+        d["placement_observations"] = list(d.get("placement_observations", []))
         return cls(**d)
 
 

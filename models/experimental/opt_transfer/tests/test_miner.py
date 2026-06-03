@@ -70,3 +70,41 @@ def test_build_kb_is_cached(tmp_path):
     n = client.calls
     build_kb(client=client, cache_root=tmp_path / "c", kb_root=tmp_path / "kb", limit_ops=20)
     assert client.calls == n
+
+
+from models.experimental.opt_transfer.schema import PlacementObservation
+
+
+class PlacementFakeClient:
+    def extract_entries(self, op, available, used, golden_src) -> list:
+        obs = PlacementObservation(
+            op=f"ttnn.{op}",
+            tensor_role="activation",
+            size_descriptor={"dims": "[seq, hidden]"},
+            memory_config={"buffer": "L1", "layout": "interleaved", "shard_spec_template": None},
+            program_config=None,
+            condition={"var": "seq", "op": "<=", "value": 1024},
+            source="x",
+        )
+        return [
+            KBEntry(
+                id=op,
+                fused_op=f"ttnn.{op}",
+                category="auto",
+                pattern_kind=PatternKind.CHAIN,
+                torch_pattern=[op],
+                signature={},
+                config_template={},
+                weight_transform=None,
+                source="x",
+                placement_observations=[obs.to_dict()],
+            ).to_dict()
+        ]
+
+
+def test_build_kb_preserves_placement_observations(tmp_path):
+    entries = build_kb(client=PlacementFakeClient(), cache_root=tmp_path / "c", kb_root=tmp_path / "kb", limit_ops=5)
+    e = entries[0]
+    assert e.placement_observations
+    assert e.placement_observations[0]["memory_config"]["buffer"] == "L1"
+    assert e.placement_observations[0]["condition"] == {"var": "seq", "op": "<=", "value": 1024}

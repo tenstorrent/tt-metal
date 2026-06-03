@@ -44,7 +44,12 @@ EXTRACT_SYSTEM = (
     "Given a ttnn op, its registered golden source (if any), unit-test examples, and model "
     "call sites, emit KBEntry JSON dicts. The torch_pattern MUST be taken from the golden/test "
     "source (the unoptimized subsequence the op replaces) — do not invent it. Fill pattern_kind, "
-    "config_template (use {DIM} placeholders), weight_transform, category. Return a JSON list only."
+    "config_template (use {DIM} placeholders), weight_transform, category. "
+    "ALSO emit placement_observations: for each tensor whose "
+    "memory_config/program_config and size regime you can read from the call site or test, add "
+    "{op, tensor_role, size_descriptor, memory_config:{buffer:'L1'|'DRAM',layout,shard_spec_template}, "
+    "program_config, condition:{var,op,value} or null, source}. Capture size-conditional placement "
+    "(e.g. 'L1 if seq<=1024 else DRAM') as a condition. Return a JSON list only."
 )
 
 
