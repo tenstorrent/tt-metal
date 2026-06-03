@@ -1871,7 +1871,7 @@ ALWI void elem_push_at_end(const E& e, uint32_t Ht, uint32_t Wt) {
 }  // namespace detail
 
 template <class... Es>
-ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
+ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
     using Chain = EltwiseChain<Es...>;
 
     // ---- Compile-time invariant checks ----
@@ -1945,6 +1945,48 @@ ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
     // End-of-chain upfront-policy lifecycle.
     (detail::elem_pop_upfront_end(elts, Ht, Wt), ...);
     (detail::elem_push_at_end(elts, Ht, Wt), ...);
+}
+
+// =============================================================================
+// 11c. Public eltwise_chain — strips compile-time-disabled optional elements before
+// any stage runs. OptionalChainElement<false, _> carries `is_disabled = true`; we drop
+// every such element (type AND instance) from the pack here, then forward the survivors
+// to eltwise_chain_impl. "Disabled == absent": the impl, and therefore every stage (the
+// invariant static_asserts, hoist decisions, reconfig fold, per-tile loop), only ever
+// sees enabled elements. Detection is member-based so the chain needs no knowledge of
+// OptionalChainElement (which depends on the chain, not the reverse).
+//
+// Implementation: tuple-cat the kept elements (each chain_keep yields a 0- or 1-tuple),
+// then expand with a direct std::get<I> call into eltwise_chain_impl. We deliberately do
+// NOT use std::apply — its INVOKE indirection routes through a callable and can defeat
+// `always_inline`, which on a Tensix MATH kernel pushes the compute body out of line and
+// miscompiles it. The std::get expansion calls eltwise_chain_impl directly (no closure).
+// =============================================================================
+
+template <class T, class = void>
+struct chain_element_disabled : std::false_type {};
+template <class T>
+struct chain_element_disabled<T, std::void_t<decltype(T::is_disabled)>>
+    : std::bool_constant<T::is_disabled> {};
+
+template <class E>
+ALWI auto chain_keep(E e) {
+    if constexpr (chain_element_disabled<E>::value) {
+        return std::tuple<>{};
+    } else {
+        return std::tuple<E>{e};
+    }
+}
+
+template <class Tup, std::size_t... I>
+ALWI void chain_dispatch(EltwiseShape shape, Tup tup, std::index_sequence<I...>) {
+    eltwise_chain_impl(shape, std::get<I>(tup)...);
+}
+
+template <class... Es>
+ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
+    auto kept = std::tuple_cat(chain_keep(elts)...);
+    chain_dispatch(shape, kept, std::make_index_sequence<std::tuple_size_v<decltype(kept)>>{});
 }
 
 // =============================================================================

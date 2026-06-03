@@ -56,63 +56,22 @@ struct OptionalChainElement<true, Inner> : Inner {
     using Inner::Inner;
 };
 
-// COND == false: inherit Inner's tag (so chain traits classify it the same way) but
-// emit nothing in any hook. Tag-only type — no Inner construction, no Inner state.
+// COND == false: a trivial inert marker. `eltwise_chain` strips every element carrying
+// `is_disabled == true` from the pack before any stage runs (see eltwise_chain.inl §11c),
+// so the disabled element never reaches a trait scan or a runtime hook — no tag
+// impersonation, no CB-id / pack-slot / lifecycle stubs, no no-op hooks are needed. This
+// is self-checking: if a future stage forgets to drop it, the missing member fails to
+// compile loudly rather than silently misbehaving.
 template <class Inner>
-struct OptionalChainElement<false, Inner>
-    : std::conditional_t<
-          is_pack_tile_op_v<Inner>,
-          PackTileTag,
-          std::conditional_t<
-              is_copy_tile_op_v<Inner>,
-              CopyTileTag,
-              std::conditional_t<
-                  is_binary_fpu_op_v<Inner>,
-                  BinaryFpuTag,
-                  std::conditional_t<
-                      is_dest_reuse_binary_op_v<Inner>,
-                      DestReuseBinaryTag,
-                      std::conditional_t<
-                          is_unary_bcast_op_v<Inner>,
-                          UnaryBcastTag,
-                          std::conditional_t<
-                              is_fill_tile_op_v<Inner>,
-                              FillTileTag,
-                              std::conditional_t<is_rand_tile_op_v<Inner>, RandTileTag, DestOnlyTag>>>>>>> {
-    static constexpr bool is_upfront = false;
-    static constexpr bool clashes_with_fpu = false;
-    static constexpr uint32_t cb_a_id() { return 0; }
-    static constexpr uint32_t cb_b_id() { return 0; }
-    static constexpr uint32_t pack_cb_id() { return 0; }
-    // Writer-collision detection (`writer_pair_collide`) reads `pack_dst_slot` on every
-    // PackTile-tagged element. The disabled stub emits nothing, so the value is inert —
-    // but it must exist for the trait to compile when Inner is a PackTile.
-    static constexpr Dst pack_dst_slot = Dst::D0;
-    static constexpr InputLifecycle a_policy() { return InputLifecycle::CallerManaged; }
-    static constexpr InputLifecycle b_policy() { return InputLifecycle::CallerManaged; }
+struct OptionalChainElement<false, Inner> {
+    static constexpr bool is_disabled = true;
 
-    // Variadic ctor swallows any args the caller would pass to the inner element
-    // so kernel-side construction `OptionalChainElement<false, Inner>{...}` doesn't
-    // need to gate the ctor args on COND. Provides a default ctor too.
+    // Variadic ctor swallows any args the caller would pass to the inner element so
+    // kernel-side construction `OptionalChainElement<false, Inner>{...}` compiles
+    // unchanged regardless of COND. Provides a default ctor too.
     constexpr OptionalChainElement() noexcept = default;
     template <class... Ignored>
     constexpr explicit OptionalChainElement(Ignored&&...) noexcept {}
-
-    static constexpr uint32_t lane_width = 1;
-    static ALWI void init() {}
-    // Shared per-tile hooks + the 2-arg exec (dest-only inner path).
-    ALWI void wait_per_tile(uint32_t) const {}
-    ALWI void exec(uint32_t, uint32_t) const {}
-    ALWI void pop_per_tile(uint32_t) const {}
-    ALWI void reserve_per_tile(uint32_t) const {}
-    ALWI void push_per_tile(uint32_t) const {}
-
-    // No-op stubs for the (Ht, Wt) walk — CB-reader/writer inner path.
-    ALWI void wait_upfront(uint32_t, uint32_t) const {}
-    ALWI void exec(uint32_t, uint32_t, uint32_t, uint32_t) const {}
-    ALWI void pop_upfront_end(uint32_t, uint32_t) const {}
-    ALWI void reserve_upfront(uint32_t, uint32_t) const {}
-    ALWI void push_at_end(uint32_t, uint32_t) const {}
 };
 
 }  // namespace compute_kernel_lib
