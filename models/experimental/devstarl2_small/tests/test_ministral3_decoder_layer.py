@@ -87,15 +87,11 @@ def trust_remote_ministral(monkeypatch):
     monkeypatch.setattr(mc.ModelArgs, "get_hf_model_cls", _get_hf_model_cls_devstral_safe)
 
 
-_MESH_DEVICE = [
-    {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-        os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-    )
-]
+_MESH_DEVICE = [{"P150": (1, 1), "BH-QB": (1, 4)}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))]
 
 
 @torch.no_grad()
-@pytest.mark.timeout(7200)
+@pytest.mark.timeout(300)
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("mesh_device", _MESH_DEVICE, indirect=True)
 @pytest.mark.parametrize("batch_size", (1,))

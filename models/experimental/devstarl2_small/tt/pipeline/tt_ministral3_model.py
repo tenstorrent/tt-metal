@@ -28,15 +28,17 @@ def _ensure_fp8_scalar_compat() -> None:
 
 _ensure_fp8_scalar_compat()
 
-import torch
-import ttnn
+import torch  # noqa: E402
+import ttnn  # noqa: E402
 
-from models.common.lightweightmodule import LightweightModule
-from models.experimental.devstarl2_small.tt.tt_ministral3_decoder_layer import TtMinistral3DecoderLayer
-from models.experimental.devstarl2_small.tt.tt_ministralrmsnorm import TtMinistralRMSNorm
-from models.experimental.devstarl2_small.tt.tt_ministral_rotary_emb import TtMinistral3RotaryEmbedding
-from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.embedding import Embedding
+from models.common.lightweightmodule import LightweightModule  # noqa: E402
+from models.experimental.devstarl2_small.tt.tt_ministral3_decoder_layer import TtMinistral3DecoderLayer  # noqa: E402
+from models.experimental.devstarl2_small.tt.tt_ministralrmsnorm import (  # noqa: E402
+    TtMinistralRMSNorm,
+)
+from models.experimental.devstarl2_small.tt.tt_ministral_rotary_emb import TtMinistral3RotaryEmbedding  # noqa: E402
+from models.tt_transformers.tt.common import Mode  # noqa: E402
+from models.tt_transformers.tt.embedding import Embedding  # noqa: E402
 
 if TYPE_CHECKING:
     from transformers.models.ministral3.configuration_ministral3 import Ministral3Config

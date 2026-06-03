@@ -10,6 +10,8 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.experimental.devstarl2_small.devstral_utils.dram_sharded_matmul import width_sharded_l1_memcfg
+from models.experimental.devstarl2_small.tt.tt_ministralrmsnorm import ministral_prefill_block_shard_mem_cfg
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode, pad_to_size
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
@@ -20,6 +22,8 @@ def _ff1_shard_n(args) -> int:
 
 
 _TILE = 32
+_FF1_1D_GRID_X = 8
+_FF1_1D_GRID_Y = 4
 
 
 def _padded_seq_len(seq_len: int) -> int:
@@ -42,23 +46,42 @@ def _ff1_matmul_grid(args, seq_len: int, mesh_device) -> ttnn.CoreGrid:
     return ttnn.CoreGrid(y=rows, x=cols)
 
 
-def _ff1_block_sharded_input_mem_cfg(args, seq_len: int, grid: ttnn.CoreGrid) -> ttnn.MemoryConfig:
-    padded_seq = _padded_seq_len(seq_len)
-    return ttnn.create_sharded_memory_config(
-        (1, 1, padded_seq, int(args.dim)),
-        core_grid=grid,
-        strategy=ttnn.ShardStrategy.BLOCK,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    )
+def _ff1_ws_input_mem_cfg(args, seq_len: int) -> ttnn.MemoryConfig:
+    m_tiles = _padded_seq_len(seq_len) // _TILE
+    k_tiles = int(args.dim) // _TILE
+    return width_sharded_l1_memcfg(m_tiles, k_tiles, _FF1_1D_GRID_X, _FF1_1D_GRID_Y)
 
 
-def _prepare_ff1_block_sharded_input(x: ttnn.Tensor, sharded_mem_cfg: ttnn.MemoryConfig) -> ttnn.Tensor:
+def _ff1_ws_output_mem_cfg(args, seq_len: int) -> ttnn.MemoryConfig:
+    m_tiles = _padded_seq_len(seq_len) // _TILE
+    n_tiles = _ff1_shard_n(args) // _TILE
+    return width_sharded_l1_memcfg(m_tiles, n_tiles, _FF1_1D_GRID_X, _FF1_1D_GRID_Y)
+
+
+def _ff2_ws_input_mem_cfg(args, seq_len: int) -> ttnn.MemoryConfig:
+    m_tiles = _padded_seq_len(seq_len) // _TILE
+    k_tiles = _ff1_shard_n(args) // _TILE
+    return width_sharded_l1_memcfg(m_tiles, k_tiles, _FF1_1D_GRID_X, _FF1_1D_GRID_Y)
+
+
+def _ff2_ws_output_mem_cfg(args, seq_len: int) -> ttnn.MemoryConfig:
+    m_tiles = _padded_seq_len(seq_len) // _TILE
+    n_tiles = int(args.dim) // _TILE
+    return width_sharded_l1_memcfg(m_tiles, n_tiles, _FF1_1D_GRID_X, _FF1_1D_GRID_Y)
+
+
+def _use_1d_mlp_dram_weights(args) -> bool:
+    """Sweep 1D_ws/dram/ws uses interleaved DRAM weights (not DRAM width-sharded)."""
+    return not args.is_galaxy and int(args.dim) == 5120 and int(args.hidden_dim) // int(args.num_devices) == 8192
+
+
+def _prepare_ff1_ws_input(x: ttnn.Tensor, ws_mem_cfg: ttnn.MemoryConfig) -> ttnn.Tensor:
     mc = x.memory_config()
-    if mc.is_sharded() and mc == sharded_mem_cfg:
+    if mc.is_sharded() and mc == ws_mem_cfg:
         return x
     if mc.is_sharded():
         x = ttnn.sharded_to_interleaved(x, ttnn.DRAM_MEMORY_CONFIG)
-    return ttnn.interleaved_to_sharded(x, sharded_mem_cfg)
+    return ttnn.interleaved_to_sharded(x, ws_mem_cfg)
 
 
 def _ff1_linear_sweep_fits_device(mesh_device) -> bool:
@@ -79,20 +102,18 @@ def _ff1_linear_sweep_enabled(args, seq_len: int, full_seq_len: int, mesh_device
     return int(seq_len) <= 128 and int(args.dim) == 5120 and _ff1_shard_n(args) == 8192
 
 
-def _ff1_linear_sweep_program_config() -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
-    # 2D dram/ds/dram 8x4 w4: 193.43us vs minimal_matmul 8x8 M8K8N8 ~382us on 128×5120×8192.
-    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
-        in0_block_w=4,
+def _ff1_linear_sweep_program_config() -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    # 1D_ws/dram/ws 8x4 w5: ~147us vs Tracy 128×5120×8192 ~192us (test_matmul_128x5120x8192_sweep).
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(_FF1_1D_GRID_X, _FF1_1D_GRID_Y),
+        in0_block_w=5,
         out_subblock_h=1,
         out_subblock_w=4,
-        out_block_h=1,
-        out_block_w=32,
-        per_core_M=1,
-        per_core_N=32,
-        transpose_mcast=False,
-        fused_activation=None,
+        per_core_M=4,
+        per_core_N=8,
         fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
     )
 
 
@@ -108,20 +129,18 @@ def _ff2_linear_sweep_enabled(args, seq_len: int, full_seq_len: int, mesh_device
     return int(seq_len) <= 128 and int(args.dim) == 5120 and _ff1_shard_n(args) == 8192
 
 
-def _ff2_linear_sweep_program_config() -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
-    # 2D dram/ds/dram 8x4 w8: ~189us vs default matmul ~319us; matches Tracy MatmulDeviceOperation ~188us.
-    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
-        in0_block_w=8,
+def _ff2_linear_sweep_program_config() -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    # 1D_ws/dram/ws 8x4 w4 (Kt=256, kt/core=8): 128×8192×5120 prefill FF2.
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(_FF1_1D_GRID_X, _FF1_1D_GRID_Y),
+        in0_block_w=4,
         out_subblock_h=1,
-        out_subblock_w=4,
-        out_block_h=1,
-        out_block_w=20,
-        per_core_M=1,
-        per_core_N=20,
-        transpose_mcast=False,
-        fused_activation=None,
+        out_subblock_w=1,
+        per_core_M=4,
+        per_core_N=5,
         fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
     )
 
 
@@ -153,22 +172,41 @@ class TtMinistralMLP(LightweightModule):
         self.prefetcher = prefetcher
 
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix("MLP", layer_num)
-        torch_weight = lambda name: torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
-        pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.hidden_dim)
+
+        def torch_weight(name):
+            return torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
+
+        def pad_hidden_dim(tensor, dim):
+            return pad_to_size(tensor, dim=dim, size=args.hidden_dim)
+
         hidden_dim_string = f".hidden_dim_{args.hidden_dim}" if args.hidden_dim != args.unpadded_hidden_dim else ""
-
-        if args.dummy_weights:
-            cache_name = lambda _: None
-        else:
-            cache_name = lambda name: weight_cache_path / f"{state_dict_prefix}.{name}{hidden_dim_string}"
-
         w1_w3_mem_config = args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
         w2_mem_config = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
+        use_1d_dram_weights = _use_1d_mlp_dram_weights(args)
 
-        def as_sharded_tensor(name, type, dims):
+        if args.dummy_weights:
+
+            def cache_name(_name, _interleaved_dram=False):
+                return None
+
+        else:
+
+            def _weight_cache_suffix(tensor_name: str, interleaved_dram: bool) -> str:
+                if use_1d_dram_weights and interleaved_dram:
+                    return f"{hidden_dim_string}_dram_il"
+                return hidden_dim_string
+
+            def cache_name(name, interleaved_dram=False):
+                return weight_cache_path / f"{state_dict_prefix}.{name}{_weight_cache_suffix(name, interleaved_dram)}"
+
+        def as_sharded_tensor(name, type, dims, *, interleaved_dram: bool | None = None):
             raw_weight = torch_weight(name[:2])
             padded_weight = pad_hidden_dim(raw_weight, dims[0] if args.is_galaxy else dims[-1])
             torch_tensor = padded_weight.unsqueeze(0).unsqueeze(0)
+            if interleaved_dram is None:
+                use_interleaved_dram = args.is_galaxy or (use_1d_dram_weights and "w2" not in name)
+            else:
+                use_interleaved_dram = interleaved_dram
 
             result = ttnn.as_tensor(
                 torch_tensor,
@@ -177,9 +215,11 @@ class TtMinistralMLP(LightweightModule):
                 mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=args.cluster_shape),
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=(
-                    ttnn.DRAM_MEMORY_CONFIG if args.is_galaxy else w2_mem_config if "w2" in name else w1_w3_mem_config
+                    ttnn.DRAM_MEMORY_CONFIG
+                    if use_interleaved_dram
+                    else (w2_mem_config if "w2" in name else w1_w3_mem_config)
                 ),
-                cache_file_name=cache_name(name),
+                cache_file_name=cache_name(name, use_interleaved_dram),
             )
             return result
 
@@ -200,7 +240,13 @@ class TtMinistralMLP(LightweightModule):
         )
 
         self.w1 = as_sharded_tensor("w1_sharded", ff1_3_dtype, dims=w1_dims)
-        self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
+        # Devstral 1D path: width-sharded W2 for decode linear + interleaved W2 for 128-token FF2 prefill sweep.
+        if use_1d_dram_weights and not args.is_galaxy:
+            self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims, interleaved_dram=False)
+            self.w2_prefill_sweep = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims, interleaved_dram=True)
+        else:
+            self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
+            self.w2_prefill_sweep = self.w2
         self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
 
         self.activation_type = (
@@ -215,6 +261,22 @@ class TtMinistralMLP(LightweightModule):
                 self.prefetcher.insert_tensor(self.w2)
 
             self.prefetcher.register_callback(register_weights)
+
+    def get_prefill_ff1_input_mem_config(self, full_seq_len: int) -> ttnn.MemoryConfig | None:
+        cfg_seq = int(full_seq_len)
+        max_chunk = min(int(self.args.prefill_len_cutoff), int(self._PREFILL_MLP_M_CAP))
+        max_chunk = max(max_chunk, 1)
+        chunk = max_chunk
+        while chunk > 1 and cfg_seq % chunk != 0:
+            chunk -= 1
+        if cfg_seq > chunk:
+            cfg_seq = chunk
+        if not _ff1_input_block_sharding_enabled(self.args, cfg_seq, full_seq_len):
+            return None
+        if not _ff1_linear_sweep_enabled(self.args, cfg_seq, full_seq_len, self.mesh_device):
+            return None
+        # RMSNorm stays BLOCK-sharded; MLP converts to WIDTH-sharded L1 for 1D matmul.
+        return ministral_prefill_block_shard_mem_cfg(self.args, cfg_seq)
 
     def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
         full_seq_len = int(x.shape[-2])
@@ -259,32 +321,29 @@ class TtMinistralMLP(LightweightModule):
             and _ff1_input_block_sharding_enabled(self.args, cfg_seq, full_seq_len)
             and _ff1_linear_sweep_enabled(self.args, cfg_seq, full_seq_len, self.mesh_device)
         ):
-            ff1_grid = _ff1_matmul_grid(self.args, cfg_seq, self.mesh_device)
-            ff1_in_mem = _ff1_block_sharded_input_mem_cfg(self.args, cfg_seq, ff1_grid)
-            ff1_x = _prepare_ff1_block_sharded_input(x, ff1_in_mem)
+            ff1_in_mem = _ff1_ws_input_mem_cfg(self.args, cfg_seq)
+            ff1_x = _prepare_ff1_ws_input(x, ff1_in_mem)
             ff1_input_sharded = ff1_x is not x
 
         if mode == Mode.PREFILL and not TG:
             if _ff1_linear_sweep_enabled(self.args, cfg_seq, full_seq_len, self.mesh_device):
                 pc_ff13 = _ff1_linear_sweep_program_config()
-                mem_ff13 = self.args.get_mlp_ff1_3_mem_config(mode, self.prefetcher)
-                w1_out = ttnn.linear(
+                mem_ff13 = _ff1_ws_output_mem_cfg(self.args, cfg_seq)
+                w1_out = ttnn.matmul(
                     ff1_x,
                     self.w1,
-                    dtype=ttnn.bfloat8_b,
-                    core_grid=None,
-                    compute_kernel_config=li_ff1_3_compute_kernel_cfg,
                     program_config=pc_ff13,
                     memory_config=mem_ff13,
+                    compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                    dtype=ttnn.bfloat8_b,
                 )
-                w3_out = ttnn.linear(
+                w3_out = ttnn.matmul(
                     ff1_x,
                     self.w3,
-                    dtype=ttnn.bfloat8_b,
-                    core_grid=None,
-                    compute_kernel_config=li_ff1_3_compute_kernel_cfg,
                     program_config=pc_ff13,
                     memory_config=mem_ff13,
+                    compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                    dtype=ttnn.bfloat8_b,
                 )
             else:
                 grid = self.args.mlp1_3_grid(cfg_seq)
@@ -475,19 +534,34 @@ class TtMinistralMLP(LightweightModule):
                 config=pc_2,
             )
         else:
-            w2_out = ttnn.linear(
-                w2_in,
-                self.w2,
-                compute_kernel_config=li_ff2_compute_kernel_cfg,
-                dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
-                program_config=pc_2,
-                memory_config=self.args.get_mlp_ff2_mem_config(mode, self.prefetcher),
-                core_grid=None,
-                global_cb=self.prefetcher.global_cb if self.prefetcher is not None and mode == Mode.DECODE else None,
-                sub_device_id=self.prefetcher.worker_sub_device_id
-                if self.prefetcher is not None and mode == Mode.DECODE
-                else None,
-            )
+            if use_ff2_sweep:
+                w2_in = _prepare_ff1_ws_input(w2_in, _ff2_ws_input_mem_cfg(self.args, cfg_seq))
+                mem_ff2 = _ff2_ws_output_mem_cfg(self.args, cfg_seq)
+                w2_out = ttnn.matmul(
+                    w2_in,
+                    self.w2_prefill_sweep,
+                    program_config=pc_2,
+                    memory_config=mem_ff2,
+                    compute_kernel_config=li_ff2_compute_kernel_cfg,
+                    dtype=ttnn.bfloat8_b,
+                )
+                w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.DRAM_MEMORY_CONFIG)
+            else:
+                w2_out = ttnn.linear(
+                    w2_in,
+                    self.w2,
+                    compute_kernel_config=li_ff2_compute_kernel_cfg,
+                    dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
+                    program_config=pc_2,
+                    memory_config=self.args.get_mlp_ff2_mem_config(mode, self.prefetcher),
+                    core_grid=None,
+                    global_cb=self.prefetcher.global_cb
+                    if self.prefetcher is not None and mode == Mode.DECODE
+                    else None,
+                    sub_device_id=self.prefetcher.worker_sub_device_id
+                    if self.prefetcher is not None and mode == Mode.DECODE
+                    else None,
+                )
         ttnn.deallocate(w2_in)
 
         w2_out_reduced = tt_all_reduce(

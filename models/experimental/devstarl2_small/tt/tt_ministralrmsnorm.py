@@ -7,7 +7,6 @@ from __future__ import annotations
 import os
 
 import ttnn
-
 from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.common import Mode
 
@@ -45,6 +44,15 @@ def _block_shard_grid(args, seq_len: int) -> ttnn.CoreGrid:
     col_tiles = int(args.dim) // _TILE
     rows, cols = args.find_prefill_grid(row_tiles, col_tiles)
     return ttnn.CoreGrid(y=rows, x=cols)
+
+
+def ministral_prefill_block_shard_mem_cfg(args, seq_len: int) -> ttnn.MemoryConfig:
+    """BLOCK-sharded L1 layout shared by prefill RMSNorm output and QKV/FF1 matmul in0."""
+    return _block_sharded_norm_configs(args, seq_len)[0]
+
+
+def ministral_prefill_block_shard_grid(args, seq_len: int) -> ttnn.CoreGrid:
+    return _block_shard_grid(args, seq_len)
 
 
 def _block_sharded_norm_configs(
@@ -122,6 +130,40 @@ def _interleaved_tile_to_block_shard(x: ttnn.Tensor, sharded_mem_cfg: ttnn.Memor
     return ttnn.interleaved_to_sharded(x, sharded_mem_cfg)
 
 
+def ministral_prefill_block_shard_add_eligible(seq_len: int) -> bool:
+    """Block-sharded L1 residual adds (same eligibility as block-sharded prefill RMSNorm)."""
+    if not _block_sharded_prefill_norm_enabled():
+        return False
+    return int(seq_len) <= _PREFILL_NORM_M_CAP
+
+
+def ministral_prefill_is_block_sharded_l1(x: ttnn.Tensor) -> bool:
+    mc = x.memory_config()
+    return (
+        mc.is_sharded()
+        and mc.buffer_type == ttnn.BufferType.L1
+        and mc.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    )
+
+
+def ministral_prefill_prepare_block_shard_input(x: ttnn.Tensor, args, seq_len: int) -> ttnn.Tensor:
+    """DRAM interleaved or mismatched shard -> BLOCK-sharded L1 (no-op if already on target memcfg)."""
+    sharded_mem_cfg = ministral_prefill_block_shard_mem_cfg(args, seq_len)
+    return _interleaved_tile_to_block_shard(x, sharded_mem_cfg)
+
+
+def ministral_prefill_block_shard_norm_config(
+    args, seq_len: int, *, output_mem_cfg: ttnn.MemoryConfig | None = None
+) -> dict:
+    """norm_config for RMSNorm.forward(in_sharded=True) on block-sharded prefill activations."""
+    sharded_mem_cfg, program_config = _block_sharded_norm_configs(args, seq_len)
+    out_cfg = output_mem_cfg if output_mem_cfg is not None else sharded_mem_cfg
+    return {
+        "sharded_program_config": program_config,
+        "sharded_output_config": out_cfg,
+    }
+
+
 class TtMinistralRMSNorm(RMSNorm):
     # post_attention=False → attention_norm; True → ffn_norm.
 
@@ -157,14 +199,25 @@ class TtMinistralRMSNorm(RMSNorm):
             tt_ccl=tt_ccl,
         )
 
-    def _block_sharded_norm_chunk(self, x: ttnn.Tensor, seq_len: int) -> ttnn.Tensor:
-        # Materialize slice/views; do not deallocate caller tensor (residual is still live).
-        x_owned = _owned_dram_interleaved_tile(x)
-        owned_input = x_owned is not x
+    def _block_sharded_norm_chunk(
+        self,
+        x: ttnn.Tensor,
+        seq_len: int,
+        *,
+        keep_sharded_output: bool = False,
+        output_mem_cfg: ttnn.MemoryConfig | None = None,
+    ) -> ttnn.Tensor:
         sharded_mem_cfg, program_config = _block_sharded_norm_configs(self.args, seq_len)
-        x_sharded = _interleaved_tile_to_block_shard(x_owned, sharded_mem_cfg)
-        if owned_input:
-            ttnn.deallocate(x_owned)
+        if x.memory_config().is_sharded() and x.memory_config() == sharded_mem_cfg:
+            x_sharded = x
+            owned_input = False
+        else:
+            # Materialize slice/views; do not deallocate caller tensor (residual is still live).
+            x_owned = _owned_dram_interleaved_tile(x)
+            owned_input = x_owned is not x
+            x_sharded = _interleaved_tile_to_block_shard(x_owned, sharded_mem_cfg)
+            if owned_input:
+                ttnn.deallocate(x_owned)
         out = ttnn.rms_norm(
             x_sharded,
             epsilon=self.eps,
@@ -173,14 +226,30 @@ class TtMinistralRMSNorm(RMSNorm):
             memory_config=sharded_mem_cfg,
             compute_kernel_config=self.compute_kernel_config_hifi2,
         )
-        ttnn.deallocate(x_sharded)
+        if x_sharded is not x:
+            ttnn.deallocate(x_sharded)
+        if keep_sharded_output:
+            if output_mem_cfg is not None and out.memory_config() != output_mem_cfg:
+                out = ttnn.to_memory_config(out, output_mem_cfg)
+            return out
         return _prefill_output_dram_tile(out)
 
-    def _forward_block_sharded_prefill(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def _forward_block_sharded_prefill(
+        self,
+        x: ttnn.Tensor,
+        *,
+        keep_sharded_output: bool = False,
+        output_mem_cfg: ttnn.MemoryConfig | None = None,
+    ) -> ttnn.Tensor:
         full_seq_len = int(x.shape[-2])
         n_chunks, chunk_seq = _prefill_chunk_seq(full_seq_len)
         if n_chunks == 1:
-            return self._block_sharded_norm_chunk(x, full_seq_len)
+            return self._block_sharded_norm_chunk(
+                x,
+                full_seq_len,
+                keep_sharded_output=keep_sharded_output,
+                output_mem_cfg=output_mem_cfg,
+            )
 
         feat = int(x.shape[-1])
         parts: list[ttnn.Tensor] = []
@@ -192,7 +261,14 @@ class TtMinistralRMSNorm(RMSNorm):
                 (1, 1, end, feat),
                 memory_config=x.memory_config(),
             )
-            parts.append(self._block_sharded_norm_chunk(sl, chunk_seq))
+            parts.append(
+                self._block_sharded_norm_chunk(
+                    sl,
+                    chunk_seq,
+                    keep_sharded_output=False,
+                    output_mem_cfg=None,
+                )
+            )
             ttnn.deallocate(sl)
 
         out = parts[0]
@@ -201,6 +277,8 @@ class TtMinistralRMSNorm(RMSNorm):
             out = ttnn.concat([prev, part], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(prev)
             ttnn.deallocate(part)
+        if keep_sharded_output and output_mem_cfg is not None:
+            return _interleaved_tile_to_block_shard(out, output_mem_cfg)
         return out
 
     def forward(
@@ -220,14 +298,16 @@ class TtMinistralRMSNorm(RMSNorm):
             raise ValueError(f"Invalid mode: {mode}")
 
         distributed = self.is_distributed and self.is_distributed(mode)
-        if (
-            mode == Mode.PREFILL
-            and not distributed
-            and _block_sharded_prefill_norm_enabled()
-            and not in_sharded
-            and not out_sharded
-        ):
-            return self._forward_block_sharded_prefill(x)
+        requested_output_sharded_cfg = None
+        if out_sharded and norm_config is not None:
+            requested_output_sharded_cfg = norm_config.get("sharded_output_config")
+
+        if mode == Mode.PREFILL and not distributed and _block_sharded_prefill_norm_enabled() and not in_sharded:
+            return self._forward_block_sharded_prefill(
+                x,
+                keep_sharded_output=out_sharded,
+                output_mem_cfg=requested_output_sharded_cfg,
+            )
 
         return super().forward(
             x,
@@ -238,4 +318,12 @@ class TtMinistralRMSNorm(RMSNorm):
         )
 
 
-__all__ = ["TtMinistralRMSNorm"]
+__all__ = [
+    "TtMinistralRMSNorm",
+    "ministral_prefill_block_shard_add_eligible",
+    "ministral_prefill_block_shard_mem_cfg",
+    "ministral_prefill_block_shard_grid",
+    "ministral_prefill_block_shard_norm_config",
+    "ministral_prefill_is_block_sharded_l1",
+    "ministral_prefill_prepare_block_shard_input",
+]

@@ -6,16 +6,51 @@ from __future__ import annotations
 
 import math
 import os
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 
 import ttnn
-
+from models.experimental.devstarl2_small.tt.tt_ministralrmsnorm import (
+    ministral_prefill_block_shard_grid,
+    ministral_prefill_block_shard_mem_cfg,
+)
 from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.common import Mode
+
+_TILE = 32
 
 
 def _qkv_shard_n(args) -> int:
     return int(args.qkv_size) // int(args.num_devices)
+
+
+def _qkv_block_sharding_enabled(args, seq_len: int) -> bool:
+    """Block-sharded in0 for 128×5120×1536 QKV (norm out → matmul, no sharded_to_interleaved)."""
+    return _qkv_linear_sweep_enabled(args, seq_len)
+
+
+def _qkv_block_shard_program_config(args, seq_len: int) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+    padded_seq = ((int(seq_len) + _TILE - 1) // _TILE) * _TILE
+    qkv_n = _qkv_shard_n(args)
+    grid = ministral_prefill_block_shard_grid(args, seq_len)
+    grid_x, grid_y = int(grid.x), int(grid.y)
+    per_core_m = (padded_seq // _TILE) // grid_y
+    per_core_k = (int(args.dim) // _TILE) // grid_x
+    per_core_n = (qkv_n // _TILE) // grid_x
+    out_subblock_w = max(w for w in range(1, per_core_n + 1) if per_core_n % w == 0 and w <= 4)
+    in0_block_w = next(d for d in (4, 2, 1) if per_core_k % d == 0)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=out_subblock_w,
+        out_block_h=per_core_m,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=True,
+    )
 
 
 def _qkv_linear_sweep_enabled(args, seq_len: int) -> bool:
@@ -54,10 +89,13 @@ def _prepare_qkv_linear_sweep_input(x: ttnn.Tensor) -> ttnn.Tensor:
     return ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
 
 
-def _typecast_if_needed(x: ttnn.Tensor, dtype) -> ttnn.Tensor:
+def _typecast_if_needed(x: ttnn.Tensor, dtype, memory_config=None) -> ttnn.Tensor:
     if x.dtype == dtype:
         return x
-    return ttnn.typecast(x, dtype=dtype)
+    kwargs = {"dtype": dtype}
+    if memory_config is not None:
+        kwargs["memory_config"] = memory_config
+    return ttnn.typecast(x, **kwargs)
 
 
 @contextmanager
@@ -91,22 +129,56 @@ def _skip_identity_typecast():
 
 
 @contextmanager
-def _qkv_linear_sweep_program_config_override(args, seq_len: int):
-    if not _qkv_linear_sweep_enabled(args, seq_len):
+def _qkv_linear_sweep_program_config_override(args, seq_len: int, *, block_sharded_in0: bool = False):
+    if not _qkv_linear_sweep_enabled(args, seq_len) and not block_sharded_in0:
         yield
         return
     orig_get_pc = args.get_attn_qkv_program_config
+    orig_get_mm = args.get_attn_qkv_mm_mem_config
 
     def get_pc_override(mode, sl=1, prefetcher=None):
+        if mode == Mode.PREFILL and block_sharded_in0 and _qkv_block_sharding_enabled(args, sl):
+            return _qkv_block_shard_program_config(args, sl)
         if mode == Mode.PREFILL and _qkv_linear_sweep_enabled(args, sl):
             return _qkv_linear_sweep_program_config()
         return orig_get_pc(mode, sl, prefetcher)
 
+    def get_mm_override(mode, prefetcher=None):
+        if mode == Mode.PREFILL and block_sharded_in0:
+            return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+        return orig_get_mm(mode, prefetcher)
+
     args.get_attn_qkv_program_config = get_pc_override
+    args.get_attn_qkv_mm_mem_config = get_mm_override
     try:
         yield
     finally:
         args.get_attn_qkv_program_config = orig_get_pc
+        args.get_attn_qkv_mm_mem_config = orig_get_mm
+
+
+@contextmanager
+def _qkv_block_shard_linear_patch(attn: "TtMinistralAttention", seq_len: int):
+    """DRAM QKV output after block-sharded matmul (parent all_reduce expects interleaved DRAM)."""
+    orig_linear = ttnn.linear
+    block_out = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.BLOCK_SHARDED, ttnn.BufferType.L1)
+
+    def linear(x, weight, **kwargs):
+        if id(weight) != id(attn.wqkv) or not x.memory_config().is_sharded():
+            return orig_linear(x, weight, **kwargs)
+        kwargs = dict(kwargs)
+        kwargs["memory_config"] = block_out
+        kwargs["program_config"] = _qkv_block_shard_program_config(attn.args, seq_len)
+        out = orig_linear(x, weight, **kwargs)
+        if out.memory_config().is_sharded():
+            return ttnn.sharded_to_interleaved(out, ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+
+    ttnn.linear = linear
+    try:
+        yield
+    finally:
+        ttnn.linear = orig_linear
 
 
 class TtMinistralAttention(Attention):
@@ -150,6 +222,18 @@ class TtMinistralAttention(Attention):
         self.rotary_embedding_decode = rotary_embedding_decode_wrapped
         self.rotary_embedding_prefill = rotary_embedding_prefill_wrapped
         self._prefill_position_ids_for_llama4_scale: ttnn.Tensor | None = None
+
+    def get_prefill_qkv_input_mem_config(self, full_seq_len: int) -> ttnn.MemoryConfig | None:
+        """BLOCK-sharded L1 in0 for QKV when norm and matmul share the same shard grid."""
+        if not _qkv_block_sharding_enabled(self.args, int(full_seq_len)):
+            return None
+        return ministral_prefill_block_shard_mem_cfg(self.args, int(full_seq_len))
+
+    def _prefill_kv_fill_input_mem_config(self) -> ttnn.MemoryConfig:
+        """L1 interleaved K/V tiles for fill_cache (UpdateKVCache in0)."""
+        if os.environ.get("TT_MINISTRAL3_KV_PREFILL_L1", "1").strip().lower() in ("0", "false", "no"):
+            return ttnn.DRAM_MEMORY_CONFIG
+        return ttnn.L1_MEMORY_CONFIG
 
     def _hf_rope_prefill_legacy(self, q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats):
         """Legacy HF prefill rope (full TILE cos/sin from TtMinistral3RotaryEmbedding)."""
@@ -315,12 +399,21 @@ class TtMinistralAttention(Attention):
         qkv_seq_len = int(x_prefill.shape[-2])
         if batch_size > 1:
             qkv_seq_len *= int(x_prefill.shape[-3]) * batch_size
-        use_qkv_sweep = _qkv_linear_sweep_enabled(self.args, qkv_seq_len)
+        qkv_block_in = (
+            _qkv_block_sharding_enabled(self.args, qkv_seq_len)
+            and x_prefill.memory_config().is_sharded()
+            and x_prefill.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        )
+        use_qkv_sweep = _qkv_linear_sweep_enabled(self.args, qkv_seq_len) and not qkv_block_in
         if use_qkv_sweep:
             x_prefill = _prepare_qkv_linear_sweep_input(x_prefill)
 
         try:
-            with _qkv_linear_sweep_program_config_override(self.args, qkv_seq_len), _skip_identity_typecast():
+            with (
+                _qkv_linear_sweep_program_config_override(self.args, qkv_seq_len, block_sharded_in0=qkv_block_in),
+                _qkv_block_shard_linear_patch(self, qkv_seq_len) if qkv_block_in else nullcontext(),
+                _skip_identity_typecast(),
+            ):
                 return super().forward_prefill(
                     x_prefill,
                     rot_mats,
