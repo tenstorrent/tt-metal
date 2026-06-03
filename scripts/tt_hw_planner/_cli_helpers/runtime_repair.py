@@ -24,6 +24,7 @@ def _runtime_repair_loop(
     sep: str,
     model_light: Optional[str] = None,
     model_heavy: Optional[str] = None,
+    model_super_heavy: Optional[str] = None,
 ) -> int:
     """LLM-driven runtime-repair driver for fast-path failures.
 
@@ -122,12 +123,13 @@ def _runtime_repair_loop(
             model_default=agent_model,
             model_light=model_light,
             model_heavy=model_heavy,
+            model_super_heavy=model_super_heavy,
             complexity_bonus=0,
             failure_class=info.exception_type or "",
             attempts_so_far=iter_idx - 1,
             force_heavy=consecutive_no_edit_iters >= 1,
         )
-        if (model_light or model_heavy) and _iter_model_reason != "default":
+        if (model_light or model_heavy or model_super_heavy) and _iter_model_reason != "default":
             print(f"  [auto:runtime-repair] tiered model pick: " f"{_iter_model} ({_iter_model_reason})")
         forced_edit_mode = consecutive_no_edit_iters >= 1
 

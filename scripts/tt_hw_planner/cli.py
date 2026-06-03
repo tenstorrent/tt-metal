@@ -7846,6 +7846,7 @@ def cmd_bringup(args) -> int:
         "auto_model": None,
         "auto_model_light": None,
         "auto_model_heavy": None,
+        "auto_model_super_heavy": None,
         "auto_agent_timeout": 600,
         # 4 parallel agents so the brain can iterate multiple
         # ADAPT/NEW components concurrently (LLM-edit + apply happens
@@ -7996,19 +7997,26 @@ def _cmd_up_core(args) -> int:
     _repair_loop_default_model = getattr(args, "auto_model", None) or (
         "opus" if _repair_loop_provider == "claude" else "sonnet-4"
     )
-    _repair_model_light, _repair_model_heavy = _resolve_tiered_model_aliases(
+    (
+        _repair_model_light,
+        _repair_model_heavy,
+        _repair_model_super_heavy,
+    ) = _resolve_tiered_model_aliases(
         provider=_repair_loop_provider,
         auto_model=_repair_loop_default_model,
         auto_model_light=getattr(args, "auto_model_light", None),
         auto_model_heavy=getattr(args, "auto_model_heavy", None),
+        auto_model_super_heavy=getattr(args, "auto_model_super_heavy", None),
         auto_model_tiered=bool(getattr(args, "auto_model_tiered", False)),
     )
-    if _repair_model_light or _repair_model_heavy:
+    if _repair_model_light or _repair_model_heavy or _repair_model_super_heavy:
+        _super_label = f" → super_heavy={_repair_model_super_heavy}" if _repair_model_super_heavy else ""
         print(
             f"  [auto:{_repair_loop_provider}] tiered model switching "
             f"enabled for repair loops: "
             f"light={_repair_model_light or _repair_loop_default_model}, "
             f"heavy={_repair_model_heavy or _repair_loop_default_model}"
+            f"{_super_label}"
         )
 
     if getattr(args, "regen_demo_only", False):
@@ -8426,6 +8434,7 @@ def _cmd_up_core(args) -> int:
                 sep=sep,
                 model_light=_repair_model_light,
                 model_heavy=_repair_model_heavy,
+                model_super_heavy=_repair_model_super_heavy,
             )
 
         if _rc_supp == 0:
@@ -8737,6 +8746,7 @@ def _cmd_up_core(args) -> int:
                 sep=sep,
                 model_light=_repair_model_light,
                 model_heavy=_repair_model_heavy,
+                model_super_heavy=_repair_model_super_heavy,
             )
 
         if _rc_cold == 0:
@@ -9259,17 +9269,19 @@ def _cmd_up_core(args) -> int:
         model_alias = getattr(args, "auto_model", None)
         if not model_alias:
             model_alias = "opus" if provider == "claude" else "sonnet-4"
-        model_light, model_heavy = _resolve_tiered_model_aliases(
+        model_light, model_heavy, model_super_heavy = _resolve_tiered_model_aliases(
             provider=provider,
             auto_model=model_alias,
             auto_model_light=getattr(args, "auto_model_light", None),
             auto_model_heavy=getattr(args, "auto_model_heavy", None),
+            auto_model_super_heavy=getattr(args, "auto_model_super_heavy", None),
             auto_model_tiered=bool(getattr(args, "auto_model_tiered", False)),
         )
-        if model_light or model_heavy:
+        if model_light or model_heavy or model_super_heavy:
+            _super_label = f" → super_heavy={model_super_heavy}" if model_super_heavy else ""
             print(
                 f"  [auto:{provider}] tiered model switching enabled: "
-                f"light={model_light or model_alias}, heavy={model_heavy or model_alias}"
+                f"light={model_light or model_alias}, heavy={model_heavy or model_alias}{_super_label}"
             )
 
         seed_report_raw = _parse_pytest_report()
@@ -9338,6 +9350,7 @@ def _cmd_up_core(args) -> int:
                 allow_partial_cpu=getattr(args, "allow_partial_cpu", False),
                 model_light=model_light,
                 model_heavy=model_heavy,
+                model_super_heavy=model_super_heavy,
                 parallel_agents=getattr(args, "parallel_agents", 1),
                 only_component=getattr(args, "auto_only_component", None),
             )
@@ -9413,6 +9426,7 @@ def _cmd_up_core(args) -> int:
                         allow_partial_cpu=getattr(args, "allow_partial_cpu", False),
                         model_light=model_light,
                         model_heavy=model_heavy,
+                        model_super_heavy=model_super_heavy,
                         parallel_agents=1,
                         only_component=None,
                     )
@@ -9966,6 +9980,17 @@ def main(argv: Optional[List[str]] = None) -> int:
             "components, repeated failures, HANG / L1_OOM / "
             "PARTIAL_CPU_FALLBACK / DEVICE_NEEDS_RESET / TT_FATAL_OPAQUE). "
             "Falls back to --auto-model when --auto-model-light is unset."
+        ),
+    )
+    pup.add_argument(
+        "--auto-model-super-heavy",
+        default=None,
+        help=(
+            "Tiered mode: model alias for the THIRD tier — fires when the "
+            "heavy tier (sonnet) has plateaued (attempts ≥ 5 OR consecutive "
+            "same-class failures ≥ 3). Default for claude under "
+            "--auto-model-tiered is 'opus'. Set this explicitly to override "
+            "or to enable super_heavy when not using --auto-model-tiered."
         ),
     )
     pup.add_argument(

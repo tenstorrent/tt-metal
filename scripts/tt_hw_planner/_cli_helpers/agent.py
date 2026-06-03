@@ -21,6 +21,53 @@ def _bringup_cwd() -> Path:
     return REPO_ROOT
 
 
+def _extract_agent_result_text(agent_log: Path) -> Optional[str]:
+    """Scan an agent stdout log for the structured `"result":"..."` line
+    the Claude CLI emits on success and return the unquoted result text.
+
+    The Claude session emits one line per event as JSON (or as a `cli_output
+    |` prefixed line). The final SUCCESS event has shape
+    ``{"type":"result","subtype":"success","is_error":false,...,
+       "result":"<text>",...}``. We pull `result` out so the brain can
+    persist what the prior agent said it did, and feed it into the next
+    iter's prompt as cross-iter memory.
+
+    Returns ``None`` if the log doesn't exist, doesn't contain a parseable
+    result line, or the result event is missing. Best-effort; failures
+    are swallowed because this is decoration on the attempt log.
+    """
+    try:
+        if not agent_log.is_file():
+            return None
+        text = agent_log.read_text(errors="ignore")
+    except Exception:
+        return None
+    # The Claude CLI streams JSON events; the final `result` event is what
+    # we want. There may be multiple `"result":` substrings in the file (e.g.
+    # quoted inside an earlier message) — we scan for the LAST event whose
+    # outer envelope is `"type":"result"` and pull its `result` string.
+    candidates: List[str] = []
+    for m in re.finditer(r'\{"type":"result"[^\n]*\}', text):
+        chunk = m.group(0)
+        try:
+            obj = json.loads(chunk)
+        except Exception:
+            continue
+        r = obj.get("result")
+        if isinstance(r, str) and r.strip():
+            candidates.append(r)
+    if candidates:
+        return candidates[-1]
+    # Fallback: simple regex if the JSON envelope isn't a strict one-liner.
+    m = re.search(r'"result"\s*:\s*"((?:[^"\\]|\\.)*)"', text[-50000:])
+    if m:
+        try:
+            return json.loads('"' + m.group(1) + '"')
+        except Exception:
+            return m.group(1)
+    return None
+
+
 def _invoke_agent(
     prompt: str,
     *,
@@ -465,6 +512,8 @@ def _pick_agent_model_for_iter(
     failure_class: str,
     attempts_so_far: int,
     force_heavy: bool = False,
+    model_super_heavy: Optional[str] = None,
+    consecutive_same_class: int = 0,
 ) -> Tuple[str, str]:
     """Pick the agent model alias for this iteration.
 
@@ -473,25 +522,47 @@ def _pick_agent_model_for_iter(
     `--auto-model-tiered`). When neither is set, returns
     `(model_default, "default")` — the legacy single-model behavior.
 
-    When tiered, escalates to the heavy model if ANY of:
-      - ``force_heavy`` is True (used by the repair loops to escalate
-        immediately on a no-edit iter, since "the agent already
-        had its shot and produced nothing" is a stronger signal than
-        attempts-so-far thresholds)
-      - complexity_bonus >= 2 (palette > 30 ops, or LLM gaps present)
-      - failure_class is one of the device-side / partial-CPU classes
-        in `_HEAVY_FAILURE_CLASSES`
-      - attempts_so_far >= 2 (light model has already had a shot)
+    When tiered, escalates progressively:
+
+    - **super_heavy** (opus, typically) fires when sonnet (heavy) has
+      ALREADY been tried and is plateauing. Specifically:
+        * ``attempts_so_far >= 5`` (light + heavy both had shots)
+        * OR ``consecutive_same_class >= 3`` (heavy is repeating the
+          same error class — needs deeper reasoning to break out)
+      Only fires when ``model_super_heavy`` is provided; otherwise the
+      tier ladder caps at heavy as before.
+
+    - **heavy** (sonnet, typically) fires when light has had a shot:
+        * ``force_heavy`` (used by repair loops on no-edit iters)
+        * ``complexity_bonus >= 2`` (palette > 30 ops, or LLM gaps)
+        * ``failure_class`` in ``_HEAVY_FAILURE_CLASSES``
+        * ``attempts_so_far >= 2``
+
+    - **light** (haiku) is the default first-iter model.
 
     Returns `(chosen_model, reason)` where `reason` is a short tag for
     the log line — useful for post-mortems.
     """
     from ..cli import _HEAVY_FAILURE_CLASSES
 
-    if not model_light and not model_heavy:
+    if not model_light and not model_heavy and not model_super_heavy:
         return (model_default, "default")
     light = model_light or model_default
     heavy = model_heavy or model_default
+    super_heavy = model_super_heavy or None
+
+    # Super-heavy tier (opus). Only fires if explicitly enabled AND the
+    # heavy tier has demonstrably plateaued. Triggers:
+    #   - attempts_so_far >= 5: heavy has had at least 3-4 shots
+    #     (assuming light ran iters 1, heavy iters 2-4)
+    #   - consecutive_same_class >= 3: heavy is producing patches that
+    #     all hit the same error class — needs deeper reasoning
+    if super_heavy:
+        if attempts_so_far >= 5:
+            return (super_heavy, f"super_heavy:attempts={attempts_so_far}")
+        if consecutive_same_class >= 3:
+            return (super_heavy, f"super_heavy:consec_same_class={consecutive_same_class}")
+
     if force_heavy:
         return (heavy, "heavy:forced(no-edit-or-stuck-iter)")
     if complexity_bonus >= 2:
@@ -510,36 +581,46 @@ def _resolve_tiered_model_aliases(
     auto_model_light: Optional[str],
     auto_model_heavy: Optional[str],
     auto_model_tiered: bool,
-) -> Tuple[Optional[str], Optional[str]]:
-    """Resolve --auto-model-light / --auto-model-heavy / --auto-model-tiered
-    into the (light, heavy) pair to feed into `_run_auto_iterate_loop`.
+    auto_model_super_heavy: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Resolve tiered model aliases into ``(light, heavy, super_heavy)``.
 
-    Returns (None, None) when tiered mode is OFF — the loop then uses the
-    legacy single-model path with `auto_model`.
+    Returns ``(None, None, None)`` when tiered mode is OFF and no
+    explicit tier flags are set — the loop then uses the legacy
+    single-model path with ``auto_model``.
 
-    When `--auto-model-tiered` is set, applies provider defaults
-    (claude: haiku -> sonnet for the bulk of iters; opus is reserved
-    for explicit `--auto-model-heavy=opus`. cursor: sonnet-4 -> opus
-    preserved for now since cursor's tier ladder differs). Explicit
-    `--auto-model-light` / `--auto-model-heavy` always override.
-    If only ONE of light/heavy is given (no tiered shortcut), the
-    unset side falls back to `auto_model` inside the picker.
+    When ``--auto-model-tiered`` is set, applies provider defaults:
+      * claude: ``haiku → sonnet → opus`` (3-tier auto-escalation)
+      * cursor: ``sonnet-4 → opus`` (2-tier; cursor's ladder differs;
+        super_heavy stays None)
 
-    2026-05-26: Haiku-first default switched from Sonnet to halve
-    per-iter wall time on simpler components (FFN, RMSNorm, etc.).
-    Sonnet becomes the escalation tier; Opus opt-in only via explicit
-    --auto-model-heavy=opus for users who need maximal reasoning.
+    Explicit ``--auto-model-light`` / ``--auto-model-heavy`` /
+    ``--auto-model-super-heavy`` always override the defaults.
+
+    2026-06-03: Added super_heavy tier (opus by default for claude).
+    Previously haiku → sonnet was the entire ladder; opus was opt-in
+    only via explicit ``--auto-model-heavy=opus``. The 3-tier ladder
+    lets opus auto-fire when sonnet plateaus (attempts ≥ 5 or
+    consecutive same-class failures ≥ 3) — the typical
+    "sonnet keeps producing similar patches that hit the same error"
+    pattern that needs stronger reasoning to break.
+
+    Backward compat: callers receiving the previous 2-tuple shape will
+    get a TypeError on unpack — the call site update is mechanical
+    (add a 3rd variable name).
     """
-    if not auto_model_light and not auto_model_heavy and not auto_model_tiered:
-        return (None, None)
+    if not auto_model_light and not auto_model_heavy and not auto_model_super_heavy and not auto_model_tiered:
+        return (None, None, None)
     if auto_model_tiered:
         if provider == "claude":
-            default_light, default_heavy = "haiku", "sonnet"
+            default_light, default_heavy, default_super = "haiku", "sonnet", "opus"
         else:
-            default_light, default_heavy = "sonnet-4", "opus"
+            # cursor: 2-tier only for now; super stays unset
+            default_light, default_heavy, default_super = "sonnet-4", "opus", None
     else:
-        default_light, default_heavy = auto_model, auto_model
+        default_light, default_heavy, default_super = auto_model, auto_model, None
     return (
         auto_model_light or default_light,
         auto_model_heavy or default_heavy,
+        auto_model_super_heavy or default_super,
     )

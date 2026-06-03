@@ -143,17 +143,19 @@ def cmd_promote(args) -> int:
     model_alias = getattr(args, "auto_model", None)
     if not model_alias:
         model_alias = "opus" if provider == "claude" else "sonnet-4"
-    model_light, model_heavy = _resolve_tiered_model_aliases(
+    model_light, model_heavy, model_super_heavy = _resolve_tiered_model_aliases(
         provider=provider,
         auto_model=model_alias,
         auto_model_light=getattr(args, "auto_model_light", None),
         auto_model_heavy=getattr(args, "auto_model_heavy", None),
+        auto_model_super_heavy=getattr(args, "auto_model_super_heavy", None),
         auto_model_tiered=bool(getattr(args, "auto_model_tiered", False)),
     )
-    if model_light or model_heavy:
+    if model_light or model_heavy or model_super_heavy:
+        _super_label = f" → super_heavy={model_super_heavy}" if model_super_heavy else ""
         print(
             f"  [auto:{provider}] tiered model switching enabled: "
-            f"light={model_light or model_alias}, heavy={model_heavy or model_alias}"
+            f"light={model_light or model_alias}, heavy={model_heavy or model_alias}{_super_label}"
         )
 
     if bool(getattr(args, "op_synth", False)) and not bool(getattr(args, "no_op_synth", False)):
@@ -224,4 +226,5 @@ def cmd_promote(args) -> int:
         allow_partial_cpu=getattr(args, "allow_partial_cpu", False),
         model_light=model_light,
         model_heavy=model_heavy,
+        model_super_heavy=model_super_heavy,
     )

@@ -188,6 +188,7 @@ def _run_auto_iterate_loop(
     allow_partial_cpu: bool = False,
     model_light: Optional[str] = None,
     model_heavy: Optional[str] = None,
+    model_super_heavy: Optional[str] = None,
     parallel_agents: int = 1,
     only_component: Optional[str] = None,
 ) -> int:
@@ -2690,13 +2691,18 @@ def _run_auto_iterate_loop(
         if not skip_agent_patch:
             _iter_complexity_bonus = _component_complexity_bonus(iter_target_component) if iter_target_component else 0
             _iter_attempts_so_far = attempts_per_component.get(iter_target_component, 0) if iter_target_component else 0
+            _iter_consec_same = (
+                consecutive_same_class_attempts.get(iter_target_component, 0) if iter_target_component else 0
+            )
             _iter_model, _iter_model_reason = _pick_agent_model_for_iter(
                 model_default=model,
                 model_light=model_light,
                 model_heavy=model_heavy,
+                model_super_heavy=model_super_heavy,
                 complexity_bonus=_iter_complexity_bonus,
                 failure_class=failure_class,
                 attempts_so_far=_iter_attempts_so_far,
+                consecutive_same_class=_iter_consec_same,
             )
             if (model_light or model_heavy) and _iter_model_reason != "default":
                 print(
