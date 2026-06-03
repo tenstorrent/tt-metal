@@ -69,13 +69,21 @@ class Qwen35ForCausalLM(Generator):
         return super().decode_forward(*args, **kwargs)
 
     def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
-        if getattr(self, "_warmed_prefill", False):
+        # The plugin's warmup_model() is two-phase: it calls this first with
+        # enable_trace=False (compile), then resets ``already_warmed_up_prefill``
+        # and calls again with enable_trace=True (capture). Only the traced phase
+        # captures the chunk-prefill trace; capture_prefill_trace_chunked compiles
+        # its own programs before capturing, so the non-traced phase is a no-op.
+        # The guard attribute MUST be named ``already_warmed_up_prefill`` so the
+        # plugin's between-phase reset (model_runner.warmup_model) clears it.
+        if not enable_trace:
             return
-        self._warmed_prefill = True
+        if getattr(self, "already_warmed_up_prefill", False):
+            return
+        self.already_warmed_up_prefill = True
         num_blocks = math.ceil(_PREFILL_WARMUP_BUCKET / _BLOCK_SIZE)
         page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
-        if enable_trace:
-            self.model[0].capture_prefill_trace_chunked(self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK)
+        self.model[0].capture_prefill_trace_chunked(self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK)
 
     def warmup_model_decode(self, kv_cache, enable_trace, max_batch_size, num_blocks, *args, **kwargs):
         if not enable_trace:
