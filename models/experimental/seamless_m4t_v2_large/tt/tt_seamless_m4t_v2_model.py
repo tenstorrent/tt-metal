@@ -1139,8 +1139,13 @@ class TTSeamlessM4Tv2Model:
         *,
         batch_size: int = 1,
         cache_seq_len: Optional[int] = None,
+        selffeed: bool = False,
     ) -> None:
-        """Capture Metal trace for one KV decode step (single max SDPA bucket on BH)."""
+        """Capture Metal trace for one KV decode step (single max SDPA bucket on BH).
+
+        ``selffeed=True`` (only the on-device self-feed loop) bakes the cross-shard combine + token
+        self-write into the trace. The host token path passes ``False`` so its trace stays lean — it
+        reads ``tok_tt`` and uploads the next token itself, so an in-trace self-write would be wasted."""
         rt = self._ensure_kv_decode_runtime(batch_size)
         config_cache_len = int(cache_seq_len) if cache_seq_len is not None else self._fixed_decode_trace_sdpa_len()
         if config_cache_len in rt.trace_ids_by_cache_seq_len:
@@ -1167,7 +1172,7 @@ class TTSeamlessM4Tv2Model:
         ttnn.synchronize_device(self.device)
         for _t in compile_tok:
             ttnn.deallocate(_t)
-        if self._ondevice_decode_feedback:
+        if selffeed:
             # Phase-1b: pre-compile the on-device combine + token self-write so they don't JIT in capture.
             compile_self = self._ondevice_global_argmax_token(compile_logits)
             ttnn.copy(compile_self, rt.token_tt)
@@ -1193,7 +1198,7 @@ class TTSeamlessM4Tv2Model:
                 cross_attn_cache,
                 cache_seq_len=config_cache_len,
             )
-            if self._ondevice_decode_feedback:
+            if selffeed:
                 # Self-feed: combine to the global token and write it into the buffer the decoder reads
                 # at the top of the next replay. The read (embedding) precedes this write within the
                 # trace, so back-to-back replays consume their predecessor's token with no host roundtrip.
@@ -1298,6 +1303,7 @@ class TTSeamlessM4Tv2Model:
                 cross_attn_cache,
                 batch_size=batch_size,
                 cache_seq_len=cache_seq_len,
+                selffeed=True,
             )
             return
         self._upload_pos_only(position, batch_size)
