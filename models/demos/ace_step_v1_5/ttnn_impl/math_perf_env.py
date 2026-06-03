@@ -1495,7 +1495,7 @@ def ace_step_lm_prefill_l1_enabled() -> bool:
 
 
 def ace_step_lm_unified_decode_shard_enabled() -> bool:
-    """Unify decode WIDTH_SHARDED specs to residual grid (fewer ``ReshardDeviceOperation``). Default on."""
+    """Reserved hook for decode WIDTH_SHARD shard unification (currently no-op). Default on."""
     return os.environ.get("ACE_STEP_LM_UNIFIED_DECODE_SHARD", "1").lower() not in ("0", "false", "no", "off")
 
 
@@ -1520,7 +1520,7 @@ def ace_step_prefill_block_sharded_norm_enabled() -> bool:
 
 
 def ace_step_lm_sdpa_gather_unified_enabled() -> bool:
-    """Align post-SDPA ``gather_users`` WIDTH with residual grid. Default on."""
+    """Reserved hook for post-SDPA gather WIDTH alignment (currently no-op). Default on."""
     return os.environ.get("ACE_STEP_LM_SDPA_GATHER_UNIFIED", "1").lower() not in ("0", "false", "no", "off")
 
 
