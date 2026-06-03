@@ -30,7 +30,7 @@ using namespace tt::tt_metal;
 
 // Tests skipped on specific architectures: map from filename to arch list.
 // These are skipped rather than run, and reported as SKIPPED.
-static const std::vector<std::pair<std::string_view, tt::ARCH>> kSkippedTests = {
+const std::vector<std::pair<std::string_view, tt::ARCH>> kSkippedTests = {
     // TODO: re-enable once root cause of FAIL_IF self-test failure on Wormhole is identified.
     {"00-self-16.cpp", tt::ARCH::WORMHOLE_B0},
 };
