@@ -403,10 +403,18 @@ If `not_found` for either: the test did not run. This is a dispatch input error.
 | BEFORE result | AFTER result | Verdict |
 |---|---|---|
 | FAIL | PASS | `confirmed` ✅ (`confirmation_method: "bisect"`, `confidence: "proven"`) |
-| FAIL | FAIL | `refuted` (fix didn't address this test) |
-| PASS | anything | `refuted` (test wasn't failing at this commit) |
+| FAIL | FAIL | `refuted` (fix didn't address this test — exhausted all candidate commits) |
+| PASS | anything | See BEFORE=PASS rule below |
 | not_found | anything | `aborted_wrong_test` |
 | anything | not_found | `aborted_wrong_test` |
+
+**BEFORE=PASS rule:** When the test passes at the parent of the assumed fix commit, the fix hypothesis is wrong. Before returning a verdict:
+
+1. Check `candidate_fix_commits` in the finding — are there other commits that haven't been probed yet?
+2. If yes: update campaign-state.json with the new fix hypothesis (next candidate commit), return `refuted_wrong_fix`. Main BrAIn will re-spawn you with the next candidate.
+3. If all `candidate_fix_commits` have been tried and BEFORE=PASS for all of them: return `refuted`. The transition is real but the fix is not in any identified commit — likely an infra change or firmware update outside the visible range.
+
+**`refuted` should only be returned after exhausting all candidate commits.** `refuted_wrong_fix` means "wrong hypothesis, more to try."
 
 ---
 
@@ -443,10 +451,17 @@ Append to `confirmed-escapes.json`:
 Write escape_id to `seen-escapes.json` with `status: "confirmed"`.
 Update `campaign-state.json`: candidate status = `"confirmed"`, `confluence_updated: false`, `dm_sent: false`.
 
+### If verdict == "refuted_wrong_fix":
+
+Write escape_id to `seen-escapes.json` with `status: "refuted_wrong_fix"`, including `tried_commits: [list of all fix_commit_shas attempted so far]`.
+Update candidate in `campaign-state.json` to `status: "refuted_wrong_fix"`, set `next_fix_candidate` to the next untried commit from `candidate_fix_commits`.
+Do NOT delete probe branches yet (main BrAIn may re-spawn you).
+
 ### If verdict == "refuted":
 
-Write escape_id to `seen-escapes.json` with `status: "refuted"`.
+Write escape_id to `seen-escapes.json` with `status: "refuted"`, `refute_reason: "all candidate commits exhausted"`.
 Update candidate in `campaign-state.json` to `status: "refuted"`.
+Delete probe branches.
 
 ### Always:
 
@@ -464,7 +479,7 @@ Return a single JSON object (no prose, no markdown wrapping):
 
 ```json
 {
-  "verdict": "confirmed|refuted|inconclusive_timeout|aborted_wrong_test|already_processed",
+  "verdict": "confirmed|refuted|refuted_wrong_fix|inconclusive_timeout|aborted_wrong_test|already_processed",
   "escape_id": "...",
   "escape_type": "vertical|horizontal",
   "test_name": "...",
