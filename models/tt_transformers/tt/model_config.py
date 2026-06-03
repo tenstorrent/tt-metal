@@ -506,6 +506,10 @@ class ModelArgs:
             "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
             "Meta-Llama-3-8B-Instruct": "models/tt_transformers/model_params/Meta-Llama-3-8B",
             "Qwen3.6-27B": "models/tt_transformers/model_params/Qwen3.6-27B",
+            "gemma-4-26B-A4B-it": "models/demos/gemma4/configs/gemma-4-26B-A4B-it",
+            "gemma-4-31B-it": "models/demos/gemma4/configs/gemma-4-31B-it",
+            "gemma-4-E2B-it": "models/demos/gemma4/configs/gemma-4-E2B-it",
+            "gemma-4-E4B-it": "models/demos/gemma4/configs/gemma-4-E4B-it",
         }.items()
     }
 
