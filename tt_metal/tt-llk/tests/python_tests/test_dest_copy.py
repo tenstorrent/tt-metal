@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
@@ -13,26 +12,27 @@ from helpers.test_config import TestConfig
 
 
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float32,
-            DataFormat.Float16,
-            DataFormat.Float16_b,
-            DataFormat.Int32,
-            DataFormat.Int8,
-            DataFormat.UInt32,
-            DataFormat.UInt16,
-            DataFormat.UInt8,
-        ],
-        same=True,
+    formats=(
+        input_output_formats(
+            [
+                DataFormat.Float32,
+                DataFormat.Float16,
+                DataFormat.Float16_b,
+                DataFormat.Int32,
+                DataFormat.Int8,
+                DataFormat.UInt32,
+                DataFormat.UInt16,
+                DataFormat.UInt8,
+            ],
+            same=True,
+        )
+        if get_chip_architecture() == ChipArchitecture.BLACKHOLE
+        else []
     ),
 )
 def test_dump_dest(formats):
 
     formats = formats[0]
-
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("The RISC-DEST debug window is only available on Blackhole.")
 
     input_dimensions = [32, 32]
 

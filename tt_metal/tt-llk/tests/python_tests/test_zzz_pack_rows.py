@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import PackRowsGolden, get_golden_generator
@@ -38,6 +37,24 @@ dimension_combinations = [
 ]
 
 
+def _valid_pack_rows_dimensions(dest_acc, formats):
+    valid = []
+    for dim in dimension_combinations:
+        try:
+            get_num_blocks_and_num_tiles_in_block(
+                DestSync.Half,
+                dest_acc,
+                formats,
+                dim,
+                [32, 32],
+                BlocksCalculationAlgorithm.Standard,
+            )
+            valid.append(dim)
+        except ValueError:
+            pass
+    return valid
+
+
 @parametrize(
     formats=input_output_formats(
         [
@@ -51,7 +68,7 @@ dimension_combinations = [
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     num_rows_to_pack=[1, 16, 50, 64],
-    dimensions=dimension_combinations,
+    dimensions=lambda dest_acc, formats: _valid_pack_rows_dimensions(dest_acc, formats),
 )
 def test_pack_rows(
     formats,
@@ -61,18 +78,14 @@ def test_pack_rows(
 ):
     row_num_datums = 16
 
-    try:
-        num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-            DestSync.Half,
-            dest_acc,
-            formats,
-            dimensions,
-            [32, 32],  # tile_dimensions (pack_rows uses 32x32 tiles)
-            BlocksCalculationAlgorithm.Standard,
-        )
-    except ValueError as e:
-        # Skip test cases where tile count is not evenly divisible by block size
-        pytest.skip(f"Skipping incompatible dimension: {str(e)}")
+    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        dimensions,
+        [32, 32],
+        BlocksCalculationAlgorithm.Standard,
+    )
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -96,10 +109,9 @@ def test_pack_rows(
     configuration = TestConfig(
         "sources/pack_rows_test.cpp",
         formats,
-        templates=[
-            generate_input_dim(dimensions, dimensions),
-        ],
+        templates=[],
         runtimes=[
+            generate_input_dim(dimensions, dimensions),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             NUM_ROWS_TO_PACK(num_rows_to_pack),

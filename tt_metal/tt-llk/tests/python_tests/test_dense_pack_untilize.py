@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from conftest import skip_for_wormhole
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, DestSync, format_dict
 from helpers.param_config import (
@@ -69,9 +69,12 @@ def print_stimuli_and_golden(src_A, golden, input_dimensions, r_dim):
         print(f"R{row}S{segment}\t", golden[i : i + 16])
 
 
-@skip_for_wormhole
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
+    formats=(
+        input_output_formats([DataFormat.Float16_b])
+        if get_chip_architecture() != ChipArchitecture.WORMHOLE
+        else []
+    ),
     dest_acc=[DestAccumulation.No],
     input_dimensions=[[32, 32], [32, 64], [32, 128], [32, 256]],
     r_dim=[1, 2, 4, 8, 16],

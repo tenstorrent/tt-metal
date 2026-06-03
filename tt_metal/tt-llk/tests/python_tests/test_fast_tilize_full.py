@@ -9,7 +9,6 @@ Expected output: standard tilized tiles (4 faces of 16x16 per tile).
 Uses TilizeGolden from the existing test infrastructure.
 """
 
-import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -35,16 +34,22 @@ from helpers.utils import passed_test
 TILE_R = 32
 TILE_C = 32
 
+_IS_BH = get_chip_architecture() == ChipArchitecture.BLACKHOLE
+
 
 @parametrize(
-    formats=[
-        *input_output_formats([DataFormat.Float16_b], same=True),
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b),
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp4_b),
-        InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
-        InputOutputFormat(DataFormat.Float32, DataFormat.Bfp8_b),
-        InputOutputFormat(DataFormat.Float32, DataFormat.Bfp4_b),
-    ],
+    formats=(
+        [
+            *input_output_formats([DataFormat.Float16_b], same=True),
+            InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b),
+            InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp4_b),
+            InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+            InputOutputFormat(DataFormat.Float32, DataFormat.Bfp8_b),
+            InputOutputFormat(DataFormat.Float32, DataFormat.Bfp4_b),
+        ]
+        if _IS_BH
+        else []
+    ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dimensions=[
         (1, 1),
@@ -59,9 +64,6 @@ TILE_C = 32
     ],
 )
 def test_fast_tilize_full(formats, dest_acc, dimensions):
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("BH only")
-
     input_height_tiles, input_width_tiles = dimensions
     assert input_width_tiles >= 1, "ct_dim must be >= 1"
 
@@ -156,7 +158,9 @@ def test_fast_tilize_full(formats, dest_acc, dimensions):
 # or configuration bugs that only manifest with many tiles.
 # ============================================================
 @parametrize(
-    formats=[*input_output_formats([DataFormat.Float16_b], same=True)],
+    formats=(
+        [*input_output_formats([DataFormat.Float16_b], same=True)] if _IS_BH else []
+    ),
     dest_acc=[DestAccumulation.No],
     dimensions=[
         (1, 1),
@@ -171,9 +175,6 @@ def test_fast_tilize_full(formats, dest_acc, dimensions):
     ],
 )
 def test_fast_tilize_large(formats, dest_acc, dimensions):
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("BH only")
-
     input_height_tiles, input_width_tiles = dimensions
     input_dimensions = [input_height_tiles * TILE_R, input_width_tiles * TILE_C]
     tile_count = input_height_tiles * input_width_tiles
@@ -230,12 +231,16 @@ def test_fast_tilize_large(formats, dest_acc, dimensions):
 # Catches PACR_FLUSH overflow that writes beyond the last tile.
 # ============================================================
 @parametrize(
-    formats=[
-        *input_output_formats([DataFormat.Float16_b], same=True),
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b),
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp4_b),
-        InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
-    ],
+    formats=(
+        [
+            *input_output_formats([DataFormat.Float16_b], same=True),
+            InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp8_b),
+            InputOutputFormat(DataFormat.Float16_b, DataFormat.Bfp4_b),
+            InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b),
+        ]
+        if _IS_BH
+        else []
+    ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     dimensions=[
         (1, 1),
@@ -246,9 +251,6 @@ def test_fast_tilize_large(formats, dest_acc, dimensions):
     ],
 )
 def test_fast_tilize_overflow_guard(formats, dest_acc, dimensions):
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("BH only")
-
     input_height_tiles, input_width_tiles = dimensions
     input_dimensions = [input_height_tiles * TILE_R, input_width_tiles * TILE_C]
     tile_count = input_height_tiles * input_width_tiles

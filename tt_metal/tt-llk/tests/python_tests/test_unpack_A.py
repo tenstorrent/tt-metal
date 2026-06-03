@@ -6,7 +6,6 @@ from itertools import product
 
 import pytest
 import torch
-from conftest import skip_for_blackhole
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -313,6 +312,14 @@ def filter_params_with_constraints(all_params):
 # Apply constraint filtering
 all_params = filter_params_with_constraints(all_params)
 
+# Sort by compile-affecting params so variants sharing an ELF run consecutively,
+# minimizing device ELF reloads in the consumer phase.
+# Template params: testname(0), formats(1), broadcast_type(2), disable_src_zero(3),
+#                  acc_to_dest(4), stochastic_rnd(5), reuse_dest(6), face_r_dim(10)
+# Runtime params (vary fastest): transpose(7,8), num_faces(9), input_dimensions(11)
+_COMPILE_KEY_INDICES = (0, 1, 2, 3, 4, 5, 6, 10)
+all_params.sort(key=lambda p: tuple(str(p[i]) for i in _COMPILE_KEY_INDICES))
+
 
 def create_simple_ids(all_params):
     """Create comprehensive but readable IDs for unpack_A tests"""
@@ -359,15 +366,18 @@ def create_simple_ids(all_params):
 
 param_ids = create_simple_ids(all_params)
 
-
 # When tests are randomised, they fail in various ways: https://github.com/tenstorrent/tt-llk/issues/1108
-@skip_for_blackhole
+_skip_blackhole = get_chip_architecture() == ChipArchitecture.BLACKHOLE
+_filtered_params = [] if _skip_blackhole else all_params
+_filtered_ids = [] if _skip_blackhole else param_ids
+
+
 @pytest.mark.parametrize(
     "testname, formats, broadcast_type, disable_src_zero, acc_to_dest, "
     "stochastic_rnd, reuse_dest, transpose_of_faces, "
     "within_face_16x16_transpose, num_faces, face_r_dim, input_dimensions",
-    all_params,
-    ids=param_ids,
+    _filtered_params,
+    ids=_filtered_ids,
 )
 def test_unpack_comprehensive(
     testname,

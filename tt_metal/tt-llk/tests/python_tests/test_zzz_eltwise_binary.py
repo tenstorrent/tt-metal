@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -115,14 +114,18 @@ def _get_valid_tile_dimensions(transpose_srca, broadcast_type):
 @parametrize(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     formats=lambda dest_acc: _get_valid_formats(dest_acc),
-    broadcast_type=[
-        BroadcastType.None_,
-        BroadcastType.Row,
-        BroadcastType.Column,
-        BroadcastType.Scalar,
-    ],
     math_op=[MathOperation.Elwmul, MathOperation.Elwadd, MathOperation.Elwsub],
     math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    broadcast_type=lambda transpose_srca: (
+        [BroadcastType.None_, BroadcastType.Row, BroadcastType.Column]
+        if transpose_srca == Transpose.Yes
+        else [
+            BroadcastType.None_,
+            BroadcastType.Row,
+            BroadcastType.Column,
+            BroadcastType.Scalar,
+        ]
+    ),
     transpose_srca=[Transpose.Yes, Transpose.No],
     input_dimensions=[[256, 32]],
     tile_dimensions=lambda transpose_srca, broadcast_type: _get_valid_tile_dimensions(
@@ -132,16 +135,13 @@ def _get_valid_tile_dimensions(transpose_srca, broadcast_type):
 def test_eltwise_binary(
     dest_acc,
     formats,
-    broadcast_type,
     math_op,
     math_fidelity,
+    broadcast_type,
     transpose_srca,
     input_dimensions,
     tile_dimensions,
 ):
-    if transpose_srca == Transpose.Yes and broadcast_type == BroadcastType.Scalar:
-        pytest.skip("SrcA transpose is not supported with scalar broadcast")
-
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
     num_faces = num_faces_r_dim * num_faces_c_dim
 

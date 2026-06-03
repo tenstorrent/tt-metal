@@ -11,7 +11,6 @@ Tests the LLK pack kernel with:
 """
 
 
-import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.constraints import (
@@ -53,6 +52,83 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.utils import passed_test
+
+
+def _valid_relu_types(formats, dest_acc):
+    """Return relu types compatible with the inferred pack_src format.
+
+    Threshold-based relu (MinThresholdRelu, MaxThresholdRelu) is not supported
+    when pack_src is an integer format, so those types are excluded for such
+    combinations.
+    """
+    all_relu_types = [
+        PackerReluType.NoRelu,
+        PackerReluType.ZeroRelu,
+        PackerReluType.MinThresholdRelu,
+        PackerReluType.MaxThresholdRelu,
+    ]
+
+    unpack_to_dest = (
+        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+    )
+    data_formats = infer_data_formats(
+        input_format=formats.input_format,
+        output_format=formats.output_format,
+        is_fp32_dest_acc_en=dest_acc,
+        unpacking_to_dest=unpack_to_dest,
+    )
+
+    # Blackhole workaround: force Float32 intermediate for DestAccumulation.Yes
+    if (
+        dest_acc == DestAccumulation.Yes
+        and get_chip_architecture() == ChipArchitecture.BLACKHOLE
+        and not formats.input_format.is_integer()
+    ):
+        data_formats.pack_src = DataFormat.Float32
+
+    if data_formats.pack_src.is_integer():
+        return [
+            rt
+            for rt in all_relu_types
+            if rt
+            not in [PackerReluType.MinThresholdRelu, PackerReluType.MaxThresholdRelu]
+        ]
+
+    return all_relu_types
+
+
+def _valid_dest_indices(dest_acc, dest_sync, formats, input_dimensions):
+    """Return only dest indices that produce a valid block decomposition.
+
+    For non-zero dest_index values, num_tiles_in_block is reduced by
+    dest_index.  If the reduced value is non-positive or does not evenly
+    divide tile_cnt_A, the index is invalid and excluded.
+    """
+    indices = get_valid_dest_indices(dest_sync, dest_acc, formats, input_dimensions)
+
+    tile_cnt_A = (input_dimensions[0] // TILE_DIMENSIONS[0]) * (
+        input_dimensions[1] // TILE_DIMENSIONS[1]
+    )
+
+    _, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        dest_sync,
+        dest_acc,
+        formats,
+        input_dimensions,
+        TILE_DIMENSIONS,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    valid = []
+    for idx in indices:
+        if idx == 0:
+            valid.append(idx)
+        else:
+            adjusted = num_tiles_in_block - idx
+            if adjusted > 0 and tile_cnt_A % adjusted == 0:
+                valid.append(idx)
+
+    return valid
 
 
 def is_relu_threshold_tolerance_issue(
@@ -128,43 +204,37 @@ def is_relu_threshold_tolerance_issue(
 
 
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-            DataFormat.Float32,
-            DataFormat.Int32,
-            DataFormat.Bfp8_b,
-        ]
-    ),
+    formats=[
+        f
+        for f in input_output_formats(
+            [
+                DataFormat.Float16_b,
+                DataFormat.Float16,
+                DataFormat.Float32,
+                DataFormat.Int32,
+                DataFormat.Bfp8_b,
+            ]
+        )
+        if not (
+            (f.input_format == DataFormat.Int32) ^ (f.output_format == DataFormat.Int32)
+        )
+    ],
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
     input_dimensions=[[32, 32], [64, 64], [32, 64], [64, 32]],
-    relu_type=[
-        PackerReluType.NoRelu,
-        PackerReluType.ZeroRelu,
-        PackerReluType.MinThresholdRelu,
-        PackerReluType.MaxThresholdRelu,
-    ],
     dest_sync=[DestSync.Half, DestSync.Full],
-    dest_index=lambda dest_acc, dest_sync, formats, input_dimensions: get_valid_dest_indices(
-        dest_sync, dest_acc, formats, input_dimensions
+    relu_type=lambda formats, dest_acc: _valid_relu_types(formats, dest_acc),
+    dest_index=lambda dest_acc, dest_sync, formats, input_dimensions: _valid_dest_indices(
+        dest_acc, dest_sync, formats, input_dimensions
     ),
 )
 def test_pack(
     formats,
     dest_acc,
     input_dimensions,
-    relu_type,
     dest_sync,
+    relu_type,
     dest_index,
 ):
-
-    if (formats.input_format == DataFormat.Int32) ^ (
-        formats.output_format == DataFormat.Int32
-    ):
-        pytest.skip(
-            "Pack does not support mixing Int32 with other formats. Check format conversions in packer for more information."
-        )
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -202,15 +272,6 @@ def test_pack(
     ):
         data_formats.pack_src = DataFormat.Float32
 
-    if data_formats.pack_src.is_integer() and relu_type in [
-        PackerReluType.MinThresholdRelu,
-        PackerReluType.MaxThresholdRelu,
-    ]:
-        pytest.skip(
-            "Pack source format cannot be an integer format with ReLu Type: "
-            + str(relu_type)
-        )
-
     tensor_average = (
         torch.mean(golden_tensor).item()
         if not formats.output_format.is_integer()
@@ -241,10 +302,6 @@ def test_pack(
 
     if dest_index != 0:
         num_tiles_in_block = num_tiles_in_block - dest_index
-        if num_tiles_in_block <= 0 or tile_cnt_A % num_tiles_in_block != 0:
-            pytest.skip(
-                f"Dest index {dest_index} is not valid for tile count {tile_cnt_A} and num_tiles_in_block {num_tiles_in_block}."
-            )
         num_blocks = tile_cnt_A // num_tiles_in_block
 
     configuration = TestConfig(

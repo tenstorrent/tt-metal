@@ -289,7 +289,6 @@ class StimuliConfig:
         - Always strides through buffer at MAX_TILE_ELEMENTS (1024) intervals
         - Packs either full tiles (1024 elements) or partial tiles (num_faces * face_r_dim * 16)
         """
-        addresses = []
         packed_data_list = []
 
         # Elements to pack per tile:
@@ -321,11 +320,14 @@ class StimuliConfig:
             start_idx = MAX_TILE_ELEMENTS * ind
             tile_data = buffer[start_idx : start_idx + tile_elements]
             packed_data = _pack_tile(tile_data)
-            addresses.append(base_address + ind * tile_size)
+            if isinstance(packed_data, list):
+                packed_data = bytes(packed_data)
+            pad_len = tile_size - len(packed_data)
+            if pad_len > 0:
+                packed_data += b"\x00" * pad_len
             packed_data_list.append(packed_data)
 
-        for addr, data in zip(addresses, packed_data_list):
-            write_to_device(location, addr, data)
+        write_to_device(location, base_address, b"".join(packed_data_list))
 
     @staticmethod
     def write_matrix_w_tile_dimensions(
@@ -346,7 +348,6 @@ class StimuliConfig:
         - Strides through buffer based on actual tile_dimensions (tile_r * tile_c)
         - Always writes all elements for the given tile dimensions
         """
-        addresses = []
         packed_data_list = []
 
         tile_r, tile_c = tile_dimensions
@@ -372,11 +373,14 @@ class StimuliConfig:
             start_idx = tile_elements * ind
             tile_data = buffer[start_idx : start_idx + tile_elements]
             packed_data = _pack_tile(tile_data)
-            addresses.append(base_address + ind * tile_size)
+            if isinstance(packed_data, list):
+                packed_data = bytes(packed_data)
+            pad_len = tile_size - len(packed_data)
+            if pad_len > 0:
+                packed_data += b"\x00" * pad_len
             packed_data_list.append(packed_data)
 
-        for addr, data in zip(addresses, packed_data_list):
-            write_to_device(location, addr, data)
+        write_to_device(location, base_address, b"".join(packed_data_list))
 
     def write(self, location: str = "0,0"):
         """

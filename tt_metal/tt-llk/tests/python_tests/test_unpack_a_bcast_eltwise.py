@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
-from conftest import skip_for_blackhole
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     DestAccumulation,
@@ -27,16 +26,24 @@ from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test
 
 
-@skip_for_blackhole
+def _valid_reuse_counts(input_dimensions):
+    input_tiles = input_dimensions[0] * input_dimensions[1] // 1024
+    return [c for c in [2, 4, 8] if input_tiles % c == 0]
+
+
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-        ]
+    formats=(
+        input_output_formats(
+            [
+                DataFormat.Float16_b,
+            ]
+        )
+        if get_chip_architecture() != ChipArchitecture.BLACKHOLE
+        else []
     ),
     mathop=[MathOperation.Elwsub, MathOperation.Elwadd, MathOperation.Elwmul],
     dest_acc=[DestAccumulation.No],
-    srca_reuse_count=[2, 4, 8],
+    srca_reuse_count=lambda input_dimensions: _valid_reuse_counts(input_dimensions),
     math_fidelity=[
         MathFidelity.LoFi,
     ],
@@ -58,12 +65,6 @@ def test_unp_bcast_sub_sdpa(
     # Precompute constants
     input_tiles = input_dimensions[0] * input_dimensions[1] // 1024
     reuse_factor = input_tiles // srca_reuse_count
-
-    if input_tiles % srca_reuse_count != 0:
-        pytest.skip("Input tiles must be divisible by reuse factor")
-
-    if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
-        pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -123,12 +124,12 @@ def test_unp_bcast_sub_sdpa(
         "sources/unpack_a_bcast_eltwise_test.cpp",
         formats,
         templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),
             DEST_SYNC(),
         ],
         runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
             TILE_COUNT(tile_cnt_A),
             SRCA_REUSE_COUNT(srca_reuse_count),
         ],

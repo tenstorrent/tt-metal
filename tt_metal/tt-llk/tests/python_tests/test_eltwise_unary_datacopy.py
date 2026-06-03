@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.constraints import (
@@ -40,9 +39,6 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 
-# Sub-byte block-float formats need extra handling: tilize is unsupported and
-# the golden must round-trip the input through the format's quantization to
-# match what the hardware actually sees after unpack from L1.
 SUB_BYTE_BFP_FORMATS = (DataFormat.Bfp4_b, DataFormat.Bfp2_b)
 
 
@@ -86,6 +82,18 @@ def get_valid_num_faces_datacopy(tilize):
     return [1, 2, 4]
 
 
+def _datacopy_formats():
+    base = [
+        DataFormat.Float32,
+        DataFormat.Float16,
+        DataFormat.Float16_b,
+        DataFormat.Bfp8_b,
+    ]
+    if get_chip_architecture() != ChipArchitecture.WORMHOLE:
+        base.append(DataFormat.Fp8_e4m3)
+    return input_output_formats(base)
+
+
 def _run_unary_datacopy_test(
     formats,
     dest_acc,
@@ -102,12 +110,6 @@ def _run_unary_datacopy_test(
     quantization (needed for sub-byte block-float inputs whose unpacked
     values differ from the raw stimuli).
     """
-
-    if get_chip_architecture() == ChipArchitecture.WORMHOLE and (
-        formats.input_format == DataFormat.Fp8_e4m3
-        or formats.output_format == DataFormat.Fp8_e4m3
-    ):
-        pytest.skip("Fp8_e4m3 not supported on wormhole")
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -192,26 +194,18 @@ def _run_unary_datacopy_test(
 
 
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float32,
-            DataFormat.Float16,
-            DataFormat.Float16_b,
-            DataFormat.Bfp8_b,
-            DataFormat.Fp8_e4m3,
-        ]
-    ),
-    dest_acc=get_valid_dest_accumulation_modes,
-    num_faces=get_valid_num_faces_datacopy,
-    tilize=get_valid_tilize_datacopy,
+    formats=_datacopy_formats(),
+    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    tilize=lambda formats: get_valid_tilize_datacopy(formats),
     input_dimensions=[[64, 64], [32, 256], [128, 256]],
+    num_faces=lambda tilize: get_valid_num_faces_datacopy(tilize),
 )
 def test_unary_datacopy(
     formats,
     dest_acc,
-    num_faces,
     tilize,
     input_dimensions,
+    num_faces,
 ):
     _run_unary_datacopy_test(formats, dest_acc, num_faces, tilize, input_dimensions)
 
@@ -231,16 +225,16 @@ def test_unary_datacopy(
         or fmt.output_format in SUB_BYTE_BFP_FORMATS
     ],
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
-    num_faces=lambda tilize: get_valid_num_faces_datacopy(tilize),
     tilize=Tilize.No,
     input_dimensions=[[32, 32], [64, 64], [32, 256], [128, 256]],
+    num_faces=lambda tilize: get_valid_num_faces_datacopy(tilize),
 )
 def test_unary_datacopy_sub_byte_bfp(
     formats,
     dest_acc,
-    num_faces,
     tilize,
     input_dimensions,
+    num_faces,
 ):
     _run_unary_datacopy_test(
         formats,

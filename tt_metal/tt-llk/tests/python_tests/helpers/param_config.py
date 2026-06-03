@@ -290,6 +290,8 @@ def _params_solve_dependencies(**kwargs: any) -> List[Tuple]:
 
 
 def parametrize(**kwargs: any):
+    kwargs.pop("compile_keys", None)
+
     parameters = tuple(kwargs.keys())
     parameters_string = ",".join(parameters)
     parameter_values = _params_solve_dependencies(**kwargs)

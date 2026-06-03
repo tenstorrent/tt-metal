@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
@@ -18,23 +17,23 @@ from helpers.utils import passed_test
 
 
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-            DataFormat.Float32,
-            DataFormat.Bfp8_b,
-        ]
-    ),
+    formats=[
+        f
+        for f in input_output_formats(
+            [
+                DataFormat.Float16_b,
+                DataFormat.Float16,
+                DataFormat.Float32,
+                DataFormat.Bfp8_b,
+            ]
+        )
+        if f.input_format != DataFormat.Bfp8_b
+    ],
 )
 def test_unpack_untilize(
     formats,
 ):
     formats = formats[0]
-    if formats.input_format == DataFormat.Bfp8_b:
-        pytest.skip(
-            "BFP8 format is not supported for unpack_untilize operation for multiple tiles"
-        )
 
     input_dimensions = [32, 64]
     if formats.input_format == DataFormat.Float32:

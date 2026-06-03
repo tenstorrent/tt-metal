@@ -6,7 +6,6 @@ Replicates ttnn tilize compute kernel flow (compute_kernel_hw_startup +
 fast_tilize_init/block/uninit) through the LLK test infra.
 """
 
-import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
@@ -30,13 +29,15 @@ TILE_C = 32
 
 
 @parametrize(
-    formats=[*input_output_formats([DataFormat.Float16_b], same=True)],
+    formats=(
+        [*input_output_formats([DataFormat.Float16_b], same=True)]
+        if get_chip_architecture() == ChipArchitecture.BLACKHOLE
+        else []
+    ),
     dest_acc=[DestAccumulation.No],
     dimensions=[(1, 2), (1, 4), (1, 8), (2, 4), (2, 8), (10, 12)],
 )
 def test_fast_tilize_metal_api(formats, dest_acc, dimensions):
-    if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip("BH only")
 
     rt, ct = dimensions
     input_dimensions = [rt * TILE_R, ct * TILE_C]

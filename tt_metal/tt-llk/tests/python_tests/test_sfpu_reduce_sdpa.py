@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from conftest import skip_for_coverage
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     DestAccumulation,
@@ -24,11 +23,14 @@ from helpers.utils import passed_test
 
 
 # Has a compilation error on coverage, https://github.com/tenstorrent/tt-llk/issues/884
-@skip_for_coverage
 @parametrize(
-    formats=input_output_formats(
-        [DataFormat.Float16_b],  # Only Float16_b is supported for SDPA reduce
-        same=True,
+    formats=(
+        input_output_formats(
+            [DataFormat.Float16_b],  # Only Float16_b is supported for SDPA reduce
+            same=True,
+        )
+        if not TestConfig.WITH_COVERAGE
+        else []
     ),
     dest_acc=[DestAccumulation.No],
     mathop=[MathOperation.ReduceColumn],
@@ -54,21 +56,6 @@ def test_sfpu_reduce_sdpa(
 
     src_A = tilize_block(src_A, input_dimensions).flatten()
 
-    # GOLDEN GENERATION
-    # *******************************************************
-
-    # Undo tilization so src_A is standard [32, 32]
-    src_A_untilized = untilize_block(src_A, formats.input_format, input_dimensions)
-
-    # Take max along the height (dim=0) for each column
-    col_max = torch.max(src_A_untilized, dim=0).values
-
-    # Construct golden tensor: first row is column max, others are zero
-    golden_tensor = torch.zeros_like(src_A_untilized)
-    golden_tensor[0, :] = col_max
-
-    # *******************************************************
-
     configuration = TestConfig(
         "sources/sfpu_reduce_sdpa_test.cpp",
         formats,
@@ -90,6 +77,22 @@ def test_sfpu_reduce_sdpa(
         unpack_to_dest=False,  # Must be False since math kernel does A2D copy
         dest_acc=dest_acc,
     )
+
+    # GOLDEN GENERATION
+    # *******************************************************
+
+    # Undo tilization so src_A is standard [32, 32]
+    src_A_untilized = untilize_block(src_A, formats.input_format, input_dimensions)
+
+    # Take max along the height (dim=0) for each column
+    col_max = torch.max(src_A_untilized, dim=0).values
+
+    # Construct golden tensor: first row is column max, others are zero
+    golden_tensor = torch.zeros_like(src_A_untilized)
+    golden_tensor[0, :] = col_max
+
+    # *******************************************************
+
     res_from_L1 = configuration.run().result
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])

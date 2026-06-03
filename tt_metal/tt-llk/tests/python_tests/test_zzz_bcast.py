@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
@@ -56,6 +55,61 @@ supported_formats = [
     DataFormat.Bfp8_b,
 ]
 
+# Filter out BH-unsupported formats at import time.
+if get_chip_architecture() == ChipArchitecture.BLACKHOLE:
+    supported_formats = [
+        f
+        for f in supported_formats
+        if f
+        not in (
+            DataFormat.Float32,
+            DataFormat.Int32,
+            DataFormat.UInt32,
+            DataFormat.UInt16,
+        )
+    ]
+
+
+def _valid_dest_acc(formats):
+    """32-bit formats require dest accumulation; exclude DestAccumulation.No for them."""
+    if formats.input_format.is_32_bit():
+        return [DestAccumulation.Yes]
+    return [DestAccumulation.Yes, DestAccumulation.No]
+
+
+def _valid_bcast_types(tile_dimensions, formats, dest_acc):
+    """Filter broadcast types based on tile geometry and known HW constraints."""
+    all_types = [
+        BroadcastType.None_,
+        BroadcastType.Column,
+        BroadcastType.Row,
+        BroadcastType.Scalar,
+    ]
+
+    result = []
+    for bt in all_types:
+        # TODO: pgardner - Column broadcast for tiny tiles needs kernel support
+        if tile_dimensions != [32, 32] and bt == BroadcastType.Column:
+            continue
+
+        # TODO: pgardner - Bfp8_b requires minimum 16 exponents per face
+        if tile_dimensions[0] < 16 and formats.input_format == DataFormat.Bfp8_b:
+            continue
+
+        # TODO: pgardner - known WH issue with row broadcast + dest accumulation
+        if (
+            get_chip_architecture() == ChipArchitecture.WORMHOLE
+            and bt == BroadcastType.Row
+            and dest_acc == DestAccumulation.Yes
+            and formats.input_format in (DataFormat.Float16_b, DataFormat.Bfp8_b)
+        ):
+            continue
+
+        result.append(bt)
+
+    return result
+
+
 # Sweep tile dimensions from tiny ([1,32]..[16,32]) through full ([32,32]).
 # Tiny tiles have fewer faces (num_faces=2) and variable face_r_dim;
 # full 32x32 tiles have 4 faces with face_r_dim=16.
@@ -67,13 +121,10 @@ supported_formats = [
     # tile_dimensions=[[1, 32], [2, 32], [4, 32], [8, 32], [16, 32], [32, 32]],
     tile_dimensions=[[32, 32]],
     formats=input_output_formats(supported_formats, same=True),
-    broadcast_type=[
-        BroadcastType.None_,
-        BroadcastType.Column,
-        BroadcastType.Row,
-        BroadcastType.Scalar,
-    ],
-    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
+    dest_acc=lambda formats: _valid_dest_acc(formats),
+    broadcast_type=lambda tile_dimensions, formats, dest_acc: _valid_bcast_types(
+        tile_dimensions, formats, dest_acc
+    ),
 )
 def test_unpack_bcast(
     tile_dimensions,
@@ -81,43 +132,6 @@ def test_unpack_bcast(
     broadcast_type,
     dest_acc,
 ):
-    # --- Skips -----------------------------------------------------------
-
-    if dest_acc == DestAccumulation.No and formats.input_format in (
-        DataFormat.Float32,
-        DataFormat.Int32,
-        DataFormat.UInt32,
-    ):
-        pytest.skip("32-bit formats require dest accumulation")
-
-    if (
-        get_chip_architecture() == ChipArchitecture.BLACKHOLE
-        and formats.input_format
-        in (DataFormat.Float32, DataFormat.Int32, DataFormat.UInt32, DataFormat.UInt16)
-    ):
-        pytest.skip("Unsupported for BH yet")
-
-    # --- Skips from bugs --------------------------------------------------
-
-    # TODO: pgardner - Column broadcast for tiny tiles needs kernel support
-    if tile_dimensions != [32, 32] and broadcast_type == BroadcastType.Column:
-        pytest.skip("Column broadcast not yet implemented for tiny tiles")
-
-    # TODO: pgardner - Bfp8_b requires minimum 16 exponents per face
-    if tile_dimensions[0] < 16 and formats.input_format == DataFormat.Bfp8_b:
-        pytest.skip("Bfp8_b not supported for tile height < 16")
-
-    # TODO: pgardner - known WH issue with row broadcast + dest accumulation
-    if (
-        get_chip_architecture() == ChipArchitecture.WORMHOLE
-        and broadcast_type == BroadcastType.Row
-        and dest_acc == DestAccumulation.Yes
-        and formats.input_format in (DataFormat.Float16_b, DataFormat.Bfp8_b)
-    ):
-        pytest.skip(
-            "Row broadcast with dest_acc=Yes broken on Wormhole for Float16_b/Bfp8_b"
-        )
-
     # --- Tile geometry ---------------------------------------------------
     # get_tile_params returns (face_r_dim, num_faces_r_dim, num_faces_c_dim).
     # For tiny tiles (e.g. [4,32]): face_r_dim=4, num_faces=2.
@@ -136,22 +150,6 @@ def test_unpack_bcast(
         input_dimensions_B=input_dimensions,
         tile_dimensions=tile_dimensions,
     )
-
-    # --- Golden model ----------------------------------------------------
-    # Broadcast types use BroadcastGolden which handles all face geometries.
-    # Datacopy (None_) golden is just the input cast to the output format.
-    if broadcast_type != BroadcastType.None_:
-        generate_broadcast_golden = get_golden_generator(BroadcastGolden)
-        golden_tensor = generate_broadcast_golden(
-            broadcast_type,
-            src_A,
-            formats.output_format,
-            num_faces=num_faces,
-            tile_cnt=tile_cnt_A,
-            face_r_dim=face_r_dim,
-        )
-    else:
-        golden_tensor = src_A.to(format_dict[formats.output_format])
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
@@ -206,6 +204,22 @@ def test_unpack_bcast(
         unpack_to_dest=formats.input_format.is_32_bit()
         and dest_acc == DestAccumulation.Yes,
     )
+
+    # --- Golden model ----------------------------------------------------
+    # Broadcast types use BroadcastGolden which handles all face geometries.
+    # Datacopy (None_) golden is just the input cast to the output format.
+    if broadcast_type != BroadcastType.None_:
+        generate_broadcast_golden = get_golden_generator(BroadcastGolden)
+        golden_tensor = generate_broadcast_golden(
+            broadcast_type,
+            src_A,
+            formats.output_format,
+            num_faces=num_faces,
+            tile_cnt=tile_cnt_A,
+            face_r_dim=face_r_dim,
+        )
+    else:
+        golden_tensor = src_A.to(format_dict[formats.output_format])
 
     res_from_L1 = configuration.run().result
 

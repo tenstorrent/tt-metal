@@ -134,38 +134,6 @@ def test_math_matmul(
         is_matrix_A=False,  # matrix B (In1/SrcA) uses f0,f2 for 2-face mode
     )
 
-    in1_golden = in1
-    if transpose == Transpose.Yes:
-        t_matrix = get_golden_generator(TransposeGolden)
-
-        in1_golden = t_matrix.transpose_faces_multi_tile(
-            in1,
-            formats.input_format,
-            num_tiles=tile_cnt_in1,
-            tilize=True,
-            input_dimensions=in1_dimensions,
-        )
-        in1_golden = t_matrix.transpose_within_faces_multi_tile(
-            in1_golden,
-            formats.input_format,
-            num_tiles=tile_cnt_in1,
-            untilize=True,
-            input_dimensions=in1_dimensions,
-        )
-
-    generate_golden = get_golden_generator(MatmulGolden)
-    golden_tensor = generate_golden(
-        in0,
-        in1_golden,
-        formats.output_format,
-        math_fidelity,
-        input_A_dimensions=in0_dimensions,
-        input_B_dimensions=in1_dimensions,
-        tilize=True,  # Golden cannot model FPU strided for tilized data computation, so we tilize output after computation
-        input_A_format=formats.input_format,
-        input_B_format=formats.input_format,
-    )
-
     tilized_in0 = tilize_block(
         in0, dimensions=in0_dimensions, stimuli_format=formats.input_format
     )
@@ -224,6 +192,39 @@ def test_math_matmul(
         ),
         dest_acc=matmul_config.dest_acc,
     )
+
+    in1_golden = in1
+    if transpose == Transpose.Yes:
+        t_matrix = get_golden_generator(TransposeGolden)
+
+        in1_golden = t_matrix.transpose_faces_multi_tile(
+            in1,
+            formats.input_format,
+            num_tiles=tile_cnt_in1,
+            tilize=True,
+            input_dimensions=in1_dimensions,
+        )
+        in1_golden = t_matrix.transpose_within_faces_multi_tile(
+            in1_golden,
+            formats.input_format,
+            num_tiles=tile_cnt_in1,
+            untilize=True,
+            input_dimensions=in1_dimensions,
+        )
+
+    generate_golden = get_golden_generator(MatmulGolden)
+    golden_tensor = generate_golden(
+        in0,
+        in1_golden,
+        formats.output_format,
+        math_fidelity,
+        input_A_dimensions=in0_dimensions,
+        input_B_dimensions=in1_dimensions,
+        tilize=True,  # Golden cannot model FPU strided for tilized data computation, so we tilize output after computation
+        input_A_format=formats.input_format,
+        input_B_format=formats.input_format,
+    )
+
     res_from_L1 = configuration.run().result
 
     assert len(res_from_L1) == len(

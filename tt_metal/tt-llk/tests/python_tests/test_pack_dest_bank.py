@@ -185,7 +185,11 @@ def test_pack_dest_bank(
 
 
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
+    formats=(
+        input_output_formats([DataFormat.Float16_b])
+        if get_chip_architecture() == ChipArchitecture.WORMHOLE
+        else []
+    ),
     dest_acc=[DestAccumulation.No],
     l1_acc=[L1Accumulation.No, L1Accumulation.Yes],
     num_faces=4,
@@ -195,8 +199,6 @@ def test_pack_dest_bank(
 def test_pack_dest_bank_two_blocked_packs_of_4(
     formats, dest_acc, l1_acc, num_faces, tilize, dest_index
 ):
-    if get_chip_architecture() != ChipArchitecture.WORMHOLE:
-        pytest.skip("Wormhole-specific blocked pack regression")
 
     input_dimensions = [128, 64]
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(

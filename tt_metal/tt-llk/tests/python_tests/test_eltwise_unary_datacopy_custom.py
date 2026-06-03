@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from conftest import skip_for_wormhole
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import DataCopyGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, format_dict
@@ -18,9 +18,12 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test
 
 
-@skip_for_wormhole
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
+    formats=(
+        input_output_formats([DataFormat.Float16_b])
+        if get_chip_architecture() != ChipArchitecture.WORMHOLE
+        else []
+    ),
     dest_acc=[DestAccumulation.No],
 )
 def test_unary_datacopy_custom(

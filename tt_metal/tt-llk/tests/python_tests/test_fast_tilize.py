@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
-from conftest import skip_for_blackhole
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, format_dict
@@ -53,10 +52,17 @@ def generate_input_dimensions(max_size: int) -> list[tuple[int, int]]:
     return dimensions
 
 
-@skip_for_blackhole
 @parametrize(
-    formats=input_output_formats(
-        [DataFormat.Float32, DataFormat.Float16_b, DataFormat.Bfp8_b]
+    formats=(
+        [
+            fmt
+            for fmt in input_output_formats(
+                [DataFormat.Float32, DataFormat.Float16_b, DataFormat.Bfp8_b]
+            )
+            if fmt.input_format != DataFormat.Bfp8_b
+        ]
+        if get_chip_architecture() != ChipArchitecture.BLACKHOLE
+        else []
     ),
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
     dimensions=generate_input_dimensions(25),
@@ -66,11 +72,7 @@ def test_fast_tilize(
     dest_acc,
     dimensions,
 ):
-
     input_height, input_width = dimensions
-
-    if formats.input == DataFormat.Bfp8_b:
-        pytest.skip("Bfp8_b input format is not supported for fast tilize")
 
     input_dimensions = [input_height * 32, input_width * 32]
 

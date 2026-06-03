@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import WhereGolden, get_golden_generator
@@ -22,6 +21,14 @@ def torch_equal_nan(a, b):
     return torch.all((a == b) | (torch.isnan(a) & torch.isnan(b)))
 
 
+def _valid_where_dest_acc(formats):
+    if formats.input_format == DataFormat.Float32:
+        return [DestAccumulation.Yes]
+    if formats.input_format == DataFormat.Float16_b:
+        return [DestAccumulation.No]
+    return [DestAccumulation.No, DestAccumulation.Yes]
+
+
 @parametrize(
     formats=input_output_formats(
         [
@@ -31,7 +38,7 @@ def torch_equal_nan(a, b):
         ],
         same=True,
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=lambda formats: _valid_where_dest_acc(formats),
     mathop=MathOperation.TTNNWhere,
     test_case=["mixed", "all_ones", "all_zeros"],
 )
@@ -41,16 +48,6 @@ def test_ttnn_where(
     mathop,
     test_case,
 ):
-
-    if (
-        formats.input == DataFormat.Float32 and formats.output == DataFormat.Float32
-    ) and dest_acc == DestAccumulation.No:
-        pytest.skip("DataFormat.Float32 not supported with DestAccumulation.No")
-
-    if (
-        formats.input == DataFormat.Float16_b and formats.output == DataFormat.Float16_b
-    ) and dest_acc == DestAccumulation.Yes:
-        pytest.skip("DataFormat.Float16_b not supported with DestAccumulation.Yes")
 
     input_dimensions = [32, 32]  # Single tile dimensions
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
@@ -143,7 +140,7 @@ def test_ttnn_where(
         ],
         same=True,
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    dest_acc=lambda formats: _valid_where_dest_acc(formats),
     mathop=MathOperation.TTNNWhere,
     height=[32],
     width=[32],
@@ -155,17 +152,6 @@ def test_ttnn_where_mcw(
     height,
     width,
 ):
-    # Generate dtype dynamically based on current input format
-
-    if (
-        formats.input == DataFormat.Float32 and formats.output == DataFormat.Float32
-    ) and dest_acc == DestAccumulation.No:
-        pytest.skip("DataFormat.Float32 not supported with DestAccumulation.No")
-
-    if (
-        formats.input == DataFormat.Float16_b and formats.output == DataFormat.Float16_b
-    ) and dest_acc == DestAccumulation.Yes:
-        pytest.skip("DataFormat.Float16_b not supported with DestAccumulation.Yes")
 
     # Create alternating pattern for condition (0, 1, 0, 1, ...)
     pattern = torch.arange(height * width) % 2

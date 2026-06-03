@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 import torch
-from conftest import skip_for_quasar
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
     DestAccumulation,
@@ -112,9 +112,10 @@ SUPPORTED_FORMATS = input_output_formats(
 )
 
 
-@skip_for_quasar
 @parametrize(
-    formats=SUPPORTED_FORMATS,
+    formats=(
+        SUPPORTED_FORMATS if get_chip_architecture() != ChipArchitecture.QUASAR else []
+    ),
     bcast_dim=[BroadcastType.ROW, BroadcastType.COL],
     eltwise_op=SUPPORTED_ELTWISE_OPS,
     dest_acc=[DestAccumulation.Yes],
@@ -132,11 +133,6 @@ def test_sfpu_binary_bcast(
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
-    )
-
-    op = _BINARY_OPS[eltwise_op]
-    golden_tensor = _golden_sfpu_binary_bcast(
-        src_A, src_B, bcast_dim, op, formats.output_format
     )
 
     # Only Float32 (plus dest_acc=Yes) can skip srcA/srcB and unpack straight to
@@ -166,6 +162,11 @@ def test_sfpu_binary_bcast(
         ),
         dest_acc=dest_acc,
         unpack_to_dest=unpack_to_dest,
+    )
+
+    op = _BINARY_OPS[eltwise_op]
+    golden_tensor = _golden_sfpu_binary_bcast(
+        src_A, src_B, bcast_dim, op, formats.output_format
     )
 
     res_from_L1 = configuration.run().result

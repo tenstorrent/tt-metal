@@ -3,15 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from conftest import skip_for_coverage, skip_for_quasar
 from fuser.fuser_config_parser import FUSER_CONFIG_DIR, FuserConfigSchema
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.test_config import TestConfig
 
 yaml_files = sorted(FUSER_CONFIG_DIR.glob("*.yaml"))
-test_names = [f.stem for f in yaml_files]
+_all_test_names = [f.stem for f in yaml_files]
+test_names = (
+    _all_test_names
+    if get_chip_architecture() != ChipArchitecture.QUASAR
+    and not TestConfig.WITH_COVERAGE
+    else []
+)
 
 
-@skip_for_quasar
-@skip_for_coverage
 @pytest.mark.parametrize("test_name", test_names, ids=test_names)
 def test_fuser(
     test_name,

@@ -30,6 +30,7 @@ from ttexalens.tt_exalens_lib import (
 
 from . import device as device_module
 from . import golden_generators as golden_generators_module
+from . import stimuli_generator as stimuli_generator_module
 from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .data_format_inference import data_formats, is_format_combination_outlier
 from .device import (
@@ -503,6 +504,7 @@ class TestConfig:
         if compile_producer:
             TestConfig.BUILD_MODE = BuildMode.PRODUCE
             golden_generators_module.get_golden_generator = dummy_golden_generator
+            stimuli_generator_module.generator._PRODUCE_MODE = True
 
         if compile_consumer:
             TestConfig.BUILD_MODE = BuildMode.CONSUME

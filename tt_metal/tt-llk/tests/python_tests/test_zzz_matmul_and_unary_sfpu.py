@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import pytest
 import torch
-from conftest import skip_for_blackhole, skip_for_coverage, skip_for_wormhole
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -36,41 +34,55 @@ from helpers.utils import passed_test
 
 # SFPI Issue link:
 # When some of these SPFU ops get compiled with coverage, `#pragma GCC unroll X` marked loops become invalid assembly
-@skip_for_coverage
-@skip_for_blackhole
-@skip_for_wormhole
 @parametrize(
     test_name="sources/matmul_and_unary_sfpu_test.cpp",
-    formats=input_output_formats(
-        [
-            DataFormat.Float16,
-            DataFormat.Float16_b,
-            DataFormat.Float32,
-            DataFormat.Bfp8_b,
-        ],
-        same=True,
+    formats=(
+        input_output_formats(
+            [
+                DataFormat.Float16,
+                DataFormat.Float16_b,
+                DataFormat.Float32,
+                DataFormat.Bfp8_b,
+            ],
+            same=True,
+        )
+        if (
+            not TestConfig.WITH_COVERAGE
+            and get_chip_architecture()
+            not in (ChipArchitecture.BLACKHOLE, ChipArchitecture.WORMHOLE)
+        )
+        else []
     ),
     mathop=[
         MathOperation.Abs,
         MathOperation.Celu,
-        MathOperation.Cos,
+        # MathOperation.Cos,   # not fully functional yet
         # MathOperation.Gelu,
         MathOperation.Hardsigmoid,
         MathOperation.Log,
         MathOperation.Reciprocal,
         # MathOperation.Silu,
-        MathOperation.Sin,
+        # MathOperation.Sin,   # not fully functional yet
         MathOperation.Sqrt,
         MathOperation.Square,
     ],
     approx_mode=[ApproximationMode.No, ApproximationMode.Yes],
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
-    math_fidelity=[
-        MathFidelity.LoFi,
-        # MathFidelity.HiFi2, TODO: FIND OUT WHY
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=lambda mathop: (
+        [
+            # MathFidelity.LoFi,  # Square in LoFi is not fully functional yet
+            # MathFidelity.HiFi2,  # TODO: FIND OUT WHY
+            MathFidelity.HiFi3,
+            MathFidelity.HiFi4,
+        ]
+        if mathop == MathOperation.Square
+        else [
+            MathFidelity.LoFi,
+            # MathFidelity.HiFi2,  # TODO: FIND OUT WHY
+            MathFidelity.HiFi3,
+            MathFidelity.HiFi4,
+        ]
+    ),
 )
 def test_matmul_and_unary_sfpu(
     test_name,
@@ -81,24 +93,6 @@ def test_matmul_and_unary_sfpu(
     math_fidelity,
 ):
     input_dimensions = [32, 32]
-
-    if mathop in [MathOperation.Cos, MathOperation.Sin]:
-        pytest.skip("Cos and Sin operations are not fully functional yet")
-    if mathop == MathOperation.Square and math_fidelity == MathFidelity.LoFi:
-        pytest.skip("Square operation in LoFi is not fully functional yet")
-    if (
-        formats.input_format == formats.output_format == DataFormat.Float16
-        and mathop
-        in [
-            MathOperation.Log,
-            MathOperation.Sqrt,
-            MathOperation.Square,
-            MathOperation.Hardsigmoid,
-        ]
-        and dest_acc == DestAccumulation.No
-        and get_chip_architecture() == ChipArchitecture.BLACKHOLE
-    ):
-        pytest.skip("BFP8 does not support Log and Reciprocal operations")
 
     torch_format = format_dict.get(formats.output_format)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -136,12 +130,14 @@ def test_matmul_and_unary_sfpu(
         test_name,
         formats,
         templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
             MATH_FIDELITY(math_fidelity),
             APPROX_MODE(approx_mode),
             MATH_OP(mathop=mathop),
         ],
-        runtimes=[TILE_COUNT(tile_cnt_A)],
+        runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            TILE_COUNT(tile_cnt_A),
+        ],
         variant_stimuli=StimuliConfig(
             src_A,
             formats.input_format,

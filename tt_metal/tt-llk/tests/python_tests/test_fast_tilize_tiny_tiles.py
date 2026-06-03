@@ -1,9 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
-from conftest import skip_for_blackhole
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, format_dict, format_tile_sizes
 from helpers.param_config import input_output_formats, parametrize
@@ -33,22 +32,30 @@ WIDTHS = [
 ]  # base case, two banks, three banks, and Deepseek model sizes
 
 
-@skip_for_blackhole
 @parametrize(
-    formats=input_output_formats([DataFormat.Float32, DataFormat.Float16_b]),
+    formats=(
+        input_output_formats([DataFormat.Float32, DataFormat.Float16_b])
+        if get_chip_architecture() != ChipArchitecture.BLACKHOLE
+        else []
+    ),
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
-    dimensions=[(1, w) for w in WIDTHS],
+    dimensions=lambda formats: [
+        (1, w)
+        for w in WIDTHS
+        if not (
+            w == 224
+            and (
+                formats.input_format == DataFormat.Float32
+                or formats.output_format == DataFormat.Float32
+            )
+        )
+    ],
 )
 def test_fast_tilize_tiny_tiles(
     formats,
     dest_acc,
     dimensions,
 ):
-
-    if (
-        formats.input == DataFormat.Float32 or formats.output == DataFormat.Float32
-    ) and dimensions[1] == 224:
-        pytest.skip("Can't do 226 tiles for Float32")
 
     input_height, input_width = dimensions
 

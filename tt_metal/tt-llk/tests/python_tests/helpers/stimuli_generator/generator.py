@@ -26,6 +26,9 @@ from .utils import (
     calculate_tile_and_face_counts_w_tile_dimensions,
 )
 
+_PRODUCE_MODE = False
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Public: single-face generator
 # ─────────────────────────────────────────────────────────────────────────────
@@ -354,6 +357,16 @@ def generate_stimuli(
 
     num_elements_A = input_dimensions_A[0] * input_dimensions_A[1]
     num_elements_B = input_dimensions_B[0] * input_dimensions_B[1]
+
+    if _PRODUCE_MODE:
+        dtype_A = _get_dtype_for_format(stimuli_format_A)
+        dtype_B = _get_dtype_for_format(stimuli_format_B)
+        return (
+            torch.zeros(num_elements_A, dtype=dtype_A),
+            tile_cnt_A,
+            torch.zeros(num_elements_B, dtype=dtype_B),
+            tile_cnt_B,
+        )
 
     srcA_tensor = _generate_source_tensor(
         stimuli_format=stimuli_format_A,

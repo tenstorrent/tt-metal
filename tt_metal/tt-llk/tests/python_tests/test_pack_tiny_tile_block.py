@@ -13,7 +13,7 @@ sparse-to-dense packing into a contiguous L1 block.
 """
 
 import torch
-from conftest import skip_for_wormhole
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     DestAccumulation,
@@ -126,13 +126,16 @@ def _make_config(
 # ── Main test ───────────────────────────────────────────────────────────────
 
 
-@skip_for_wormhole
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16,
-            DataFormat.Float16_b,
-        ]
+    formats=(
+        input_output_formats(
+            [
+                DataFormat.Float16,
+                DataFormat.Float16_b,
+            ]
+        )
+        if get_chip_architecture() != ChipArchitecture.WORMHOLE
+        else []
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     tile_dims=[
@@ -169,13 +172,16 @@ def test_pack_tiny_tile_block(
 # ── Reconfig test: init 32x32 → reconfig to tiny → multi-tile MOP pack ─────
 
 
-@skip_for_wormhole
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16,
-            DataFormat.Float16_b,
-        ]
+    formats=(
+        input_output_formats(
+            [
+                DataFormat.Float16,
+                DataFormat.Float16_b,
+            ]
+        )
+        if get_chip_architecture() != ChipArchitecture.WORMHOLE
+        else []
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     tile_dims=[

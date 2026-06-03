@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
@@ -19,14 +18,18 @@ from helpers.utils import passed_test
 
 
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-            DataFormat.Bfp8_b,  # Pack Untilize doesn't work for block float formats (Bfp8_b); we only include as input format in our test
-            DataFormat.Float32,
-        ]
-    ),
+    formats=[
+        fmt
+        for fmt in input_output_formats(
+            [
+                DataFormat.Float16_b,
+                DataFormat.Float16,
+                DataFormat.Bfp8_b,
+                DataFormat.Float32,
+            ]
+        )
+        if fmt.output_format != DataFormat.Bfp8_b
+    ],
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
     math_fidelity=[
         MathFidelity.LoFi,
@@ -40,8 +43,6 @@ def test_matmul_pack_untilize(
     dest_acc,
     math_fidelity,
 ):
-    if formats.output == DataFormat.Bfp8_b:
-        pytest.skip("Pack untilize does not support Bfp8_b")
 
     torch_format = format_dict[formats.output_format]
     input_dimensions = [32, 32]

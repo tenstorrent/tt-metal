@@ -4,7 +4,7 @@
 
 import pytest
 import torch
-from conftest import skip_for_coverage, skip_for_wormhole
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -38,10 +38,15 @@ from helpers.utils import passed_test
 from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 
 
-@skip_for_coverage
-@skip_for_wormhole
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
+    formats=(
+        input_output_formats([DataFormat.Float16_b])
+        if (
+            not TestConfig.WITH_COVERAGE
+            and get_chip_architecture() != ChipArchitecture.WORMHOLE
+        )
+        else []
+    ),
     dest_acc=[DestAccumulation.No],
     math_fidelity=[MathFidelity.LoFi],
     input_dimensions=[[32, 32]],
@@ -169,12 +174,12 @@ def test_sdpa_reinits(
         formats,
         templates=[
             MATH_FIDELITY(math_fidelity),
-            generate_input_dim(input_dimensions, input_dimensions),
             BROADCAST_TYPE(BroadcastType.Column),
             MATH_OP(mathop=MathOperation.Elwsub),
             DEST_SYNC(),
         ],
         runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
             NUM_FACES(),
             TILE_COUNT(output_tile_cnt),
         ],

@@ -4,7 +4,6 @@
 import logging
 from dataclasses import dataclass
 
-import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -56,12 +55,7 @@ class CT_DIM(TemplateParameter):
     ),
     mathop=[MathOperation.Elwsub],
     dest_acc=[DestAccumulation.No],
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=[MathFidelity.LoFi],
     broadcast_type=[BroadcastType.Column],
     input_dimensions_A=[[32, w] for w in range(32, 257, 32)],
     input_dimensions_B=[[32, 32]],
@@ -76,9 +70,6 @@ def test_eltwise_bcast_col_custom(
     input_dimensions_A,
     input_dimensions_B,
 ):
-    if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
-        pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
-
     ct_dim = input_dimensions_A[1] // 32
     logger.info(
         "Running ct_dim=%d  srcA=%s  srcB=%s",
@@ -129,12 +120,14 @@ def test_eltwise_bcast_col_custom(
         formats,
         templates=[
             MATH_FIDELITY(math_fidelity),
-            generate_input_dim(input_dimensions_A, input_dimensions_A),
             MATH_OP(mathop=mathop),
             BROADCAST_TYPE(broadcast_type),
             CT_DIM(ct_dim),
         ],
-        runtimes=[TILE_COUNT(tile_cnt_A)],
+        runtimes=[
+            generate_input_dim(input_dimensions_A, input_dimensions_A),
+            TILE_COUNT(tile_cnt_A),
+        ],
         variant_stimuli=StimuliConfig(
             src_A_tilized,
             formats.input_format,

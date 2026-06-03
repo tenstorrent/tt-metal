@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
@@ -29,25 +28,45 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test
 
 
-@parametrize(
-    formats=input_output_formats(
+def _tilize_sweep_formats():
+    fmts = input_output_formats(
         [
             DataFormat.Float32,
             DataFormat.Float16,
             DataFormat.Float16_b,
             DataFormat.Bfp8_b,
         ]
-    ),
-    stoch_rnd_type=[
+    )
+    return [f for f in fmts if f.input_format != DataFormat.Bfp8_b]
+
+
+def _tilize_sweep_num_faces(formats):
+    if (
+        get_chip_architecture() == ChipArchitecture.BLACKHOLE
+        and formats.output_format == DataFormat.Bfp8_b
+    ):
+        return [4]
+    return [4, 2, 1]
+
+
+def _tilize_sweep_stoch_rnd(formats):
+    if formats.output_format == DataFormat.Bfp8_b:
+        return [StochasticRounding.No, StochasticRounding.Fpu]
+    return [
         StochasticRounding.No,
         StochasticRounding.Fpu,
         StochasticRounding.Pack,
         StochasticRounding.All,
-    ],
+    ]
+
+
+@parametrize(
+    formats=_tilize_sweep_formats(),
+    stoch_rnd_type=lambda formats: _tilize_sweep_stoch_rnd(formats),
     transpose=[Transpose.No],
     narrow_tile=[NarrowTile.No],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    num_faces=[4, 2, 1],
+    num_faces=lambda formats: _tilize_sweep_num_faces(formats),
     input_dimensions=[[32, 32], [64, 64], [32, 64], [32, 128], [128, 32]],
 )
 def test_unpack_tilize_comprehensive(
@@ -60,40 +79,6 @@ def test_unpack_tilize_comprehensive(
     input_dimensions,
 ):
     """Comprehensive parameter sweep test for unpack_tilize operation."""
-
-    # Get architecture for architecture-specific skips
-    arch = get_chip_architecture()
-
-    # BFP8_b input format not supported by tilize unpacker
-    # Tilize unpacker cannot correctly read row-major BFP8_b data with shared exponents
-    # Note: BFP8_b input works in regular unpack mode (test_eltwise_unary_datacopy with tilize_en=false)
-    if formats.input_format == DataFormat.Bfp8_b:
-        pytest.skip(
-            "BFP8_b input format not supported by tilize unpacker: "
-            "cannot read row-major BFP8_b shared exponent data"
-        )
-
-    # Blackhole BFP8_b output fails for num_faces=1,2 due to hardcoded tilize packer values
-    # Root cause: llk_pack.h has hardcoded MOP_OUTER_LOOP=2, PACK_INTF_SEL for 4-face tiles
-    # The packer tries to process 2+ faces even when only 1-2 faces exist, corrupting BFP8_b output
-    if (
-        arch == ChipArchitecture.BLACKHOLE
-        and formats.output_format == DataFormat.Bfp8_b
-        and num_faces in [1, 2]
-    ):
-        pytest.skip(
-            "Blackhole BFP8_b output fails for num_faces=1,2: tilize packer has hardcoded "
-            "MOP_OUTER_LOOP=2 and PACK_INTF_SEL values that don't adapt to tiny tiles"
-        )
-
-    # Bfp8_b output + Stochastic Rounding Pack/All causes output corruption (value -508 becomes 0)
-    if formats.output_format == DataFormat.Bfp8_b and stoch_rnd_type in [
-        StochasticRounding.Pack,
-        StochasticRounding.All,
-    ]:
-        pytest.skip(
-            "Bfp8_b output with StochasticRounding.Pack/All causes the resulting value to be 0 when input is -508"
-        )
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,

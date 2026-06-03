@@ -1,6 +1,5 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
@@ -30,35 +29,31 @@ from helpers.test_variant_parameters import (
 from helpers.utils import passed_test
 
 
+def _unpack_tilize_float_formats():
+    base_formats = [
+        DataFormat.Float16_b,
+        DataFormat.Float16,
+        DataFormat.Float32,
+        DataFormat.Bfp8_b,
+    ]
+    if get_chip_architecture() == ChipArchitecture.BLACKHOLE:
+        base_formats.append(DataFormat.Fp8_e4m3)
+    fmts = input_output_formats(base_formats)
+    return [f for f in fmts if f.input_format != DataFormat.Bfp8_b]
+
+
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-            DataFormat.Float32,
-            DataFormat.Bfp8_b,  # Unpack Tilize doesn't work for block float formats (Bfp8_b) due to shared exponent at start of input tensor
-            DataFormat.Fp8_e4m3,
-        ]
+    formats=_unpack_tilize_float_formats(),
+    num_faces=lambda formats: (
+        [FACES_PER_TILE]
+        if formats.output_format == DataFormat.Bfp8_b
+        else [2, FACES_PER_TILE]
     ),
-    num_faces=[2, 4],
 )
 def test_unpack_tilize_float(
     formats,
     num_faces,
 ):
-    if (
-        formats.input_format == DataFormat.Fp8_e4m3
-        or formats.output_format == DataFormat.Fp8_e4m3
-    ) and get_chip_architecture() != ChipArchitecture.BLACKHOLE:
-        pytest.skip(
-            "Unpack Tilize does not support Fp8_e4m3 format on non-BLACKHOLE architectures"
-        )
-
-    if formats.input_format == DataFormat.Bfp8_b:
-        pytest.skip("Unpack Tilize does not support Bfp8_b input format")
-
-    if formats.output_format == DataFormat.Bfp8_b and num_faces != FACES_PER_TILE:
-        pytest.skip("Bfp8_b output format only works with num_faces=4")
 
     unpack_tilize(formats, num_faces=num_faces)
 
