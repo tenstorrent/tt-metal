@@ -25,7 +25,7 @@ from .spec import StimuliSpec
 
 def _get_dtype_for_format(stimuli_format: DataFormat) -> torch.dtype:
     """Return the torch dtype to use for *stimuli_format*."""
-    if stimuli_format in (DataFormat.Bfp8_b, DataFormat.Bfp4_b):
+    if stimuli_format in (DataFormat.Bfp8_b, DataFormat.Bfp4_b, DataFormat.Bfp2_b):
         return torch.bfloat16
     if stimuli_format == DataFormat.Tf32:
         return torch.float32
