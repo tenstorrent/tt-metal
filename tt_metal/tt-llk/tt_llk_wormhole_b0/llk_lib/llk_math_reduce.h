@@ -28,34 +28,35 @@ inline void reduce_row_perform_transpose()
 {
     if constexpr (enforce_fp32_accumulation)
     {
-        // Move back to B and transpose in 2 parts, first hi16 bits then lo16 bits
+        // Transpose 32-bit data in dest using SrcA format override to control
+        // MOVB2D hi16/lo16 behavior instead of bit 11. SrcA=Tf32 makes MOVB2D
+        // write hi16 (Adj32 addressing), SrcA=Float32 writes lo16.
 
-        // move hi16 bits D2B
-        // we avoid clobbering weights in src B by moving to rows 16 - 31
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
+
+        // hi16: D2B, transpose, re-read for multi-tile accumulation, B2D
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        // note: transpose on src B on works on rows 16 - 31
         TTI_TRNSPSRCB;
-        // move row D2B again for cases of reducing across multiple tiles
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
 
-        // move hi16 bits B2D
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
 
-        // move lo16 bits D2B
+        // lo16: D2B, transpose, re-read, B2D
         TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        // transpose face
         TTI_TRNSPSRCB;
-        // move row again for cases of reducing multiple tiles
         TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
 
-        // move lo16 bits B2D
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Float32));
         TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
         TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
         TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
         TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
     }
     else
     {
@@ -305,13 +306,7 @@ inline void _llk_math_reduce_init_()
     if constexpr (enforce_fp32_accumulation)
     {
         static_assert(is_fp32_dest_acc_en, "FP32 Dest must be enabled for FP32 accumulation");
-        // MOVB2D/D2B depends on SrcA ALU Format - Hi/Lo16 does not work with Tf32 (only on WH)
-        // This is needed because FP32 data from L1 that is unpacked to Src registers is reduced to Tf32
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
-
-        // Every workaround we tried without bit 11 results in data corruption (tt-llk#1568).
-        // Setting it here in init pairs with the restore in uninit clearing it.
-        _llk_math_dbg_feature_disable_();
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
@@ -323,10 +318,7 @@ inline void _llk_math_reduce_uninit_(const std::uint32_t srca_data_format)
 {
     if constexpr (enforce_fp32_accumulation)
     {
-        // Clear bit 11 (restore from workaround for budabackend#1372)
-        // Uses helper from llk_math_common.h which includes tensix_sync()
-        _llk_math_dbg_feature_enable_();
-        // Restore SrcA format (init changes it to Float32 for MOVB2D/D2B Hi/Lo16 workaround on WH)
-        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(srca_data_format);
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
     }
+    (void)srca_data_format;
 }
