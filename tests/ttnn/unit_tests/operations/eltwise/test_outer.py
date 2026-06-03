@@ -46,7 +46,9 @@ def _pcc_threshold(dtype):
 
 
 def _golden(a_pt, b_pt):
-    return a_pt.unsqueeze(-1) * b_pt.unsqueeze(-2)
+    if a_pt.dim() == 1 and b_pt.dim() == 1:
+        return torch.outer(a_pt, b_pt)
+    return torch.einsum("...i,...j->...ij", a_pt, b_pt)
 
 
 @pytest.mark.parametrize("a_shape, b_shape", SHAPE_PAIRS)
