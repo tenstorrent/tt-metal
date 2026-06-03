@@ -44,29 +44,92 @@ rewiring the generator to construct the model the same way the **demo** does.
   follow that precedent.
 - **max_context: 262144 (256k)** — user-confirmed the model supports 256k.
 
-## Components (5 independently-testable units)
+## Dependency decision: transformers stays at 4.53.0 (NO bump)
+
+Investigated and rejected a transformers bump (the checkpoint's
+`config.json` carries `"transformers_version": "4.57.1"`, which only records
+the Qwen-internal fork that *wrote* it):
+
+- `model_type: qwen3_5` / `Qwen3_5ForConditionalGeneration` exists in **no
+  public transformers release** — verified absent in 4.53.0, **4.57.1**,
+  4.57.6, and 5.10.1 (downloaded wheels; no `qwen3_5` in any auto-mapping,
+  no `Qwen3_5` class anywhere). There is **no `auto_map` / remote-code** in
+  the HF repo, so `trust_remote_code=True` cannot help either.
+- Weight loading bypasses transformers entirely (raw safetensors).
+- Tokenizer resolves by name (`"tokenizer_class": "Qwen2Tokenizer"`) — fine
+  on 4.53.0.
+- A bump would also collide with tt-metal's hard `transformers == 4.53.0`
+  pin (`tt_metal/python_env/requirements-dev.txt:35`).
+
+The only thing that needs `qwen3_5` is vLLM's `AutoConfig.from_pretrained`
+(see Component 2). We solve that with a config registration, not a bump.
+
+## Components (5 units; Component 2 has two parts)
 
 ### 1. `models/demos/qwen3_6_galaxy_v2/tt/generator_vllm.py` — rewrite
 
-- `initialize_vllm_text_transformer(...)`: build the **qwen36** model args
-  object (the exact config the demo constructs, with `is_qwen36=True` /
-  full-grid), then construct the **local** `qwen3_6_galaxy_v2`
-  `TtTransformer`. Drop all `llama3_70b_galaxy` model/config imports.
-- `allocate_vllm_kv_cache(...)`: match qwen36 KV layout — `n_kv_heads = 4`,
-  bf8 default, honor the `QWEN36_KV_BF8` env flag (already in the codebase).
-- Text serving class named to match the HF arch:
-  `class Qwen3_5ForConditionalGeneration(WarmupForwardMixin, Generator)`
-  with `model_capabilities` mirroring the parent (prefix caching /
-  async-decode flags as currently supported). `prefill_forward` /
-  `decode_forward` inherited from `Generator`; decode trace **enabled**
-  (works e2e per confirmation).
-- **Interface:** `initialize_vllm_model` / `allocate_kv_cache` classmethods
-  per the tt-inference-server SKILL text-only pattern.
+The file currently has a `QwenForCausalLM` class + a qwen init fn, but every
+import/constructor points at parent `llama3_70b_galaxy`. Concrete changes:
+
+- **Imports:** redirect all four parent imports to local v2:
+  `qwen3_6_galaxy_v2.tt.generator.Generator`,
+  `qwen3_6_galaxy_v2.tt.llama_model.TtTransformer`,
+  `qwen3_6_galaxy_v2.tt.model_config.LlamaOptimizations`,
+  `qwen3_6_galaxy_v2.tt.qwen36_model_config.TtQwen36ModelArgs`. Drop the
+  parent `qwen_model_config.TtQwenModelArgs` import.
+- **Model args:** construct `TtQwen36ModelArgs(submesh, instruct=...,
+  max_batch_size=..., max_seq_len=...)`. `linear_attention_pattern`
+  auto-loads from HF `config.layer_types` in `__init__`; RoPE is built and
+  threaded internally by the local `TtTransformer` — **no manual wiring**
+  (the demo's `_build_partial_rope_cos_sin_tt` is eager-probe scaffolding,
+  not needed here).
+- **Weight load (the verified risk):** do **NOT** call
+  `args.load_state_dict()` — its `from_hf_url=True` branch runs
+  `AutoModelForCausalLM.from_pretrained`, which raises *"Unrecognized
+  configuration class"* on this VLM checkpoint (confirmed). Mirror the demo
+  instead: load raw safetensors from the snapshot dir (resolve via
+  `huggingface_hub.snapshot_download` / `model.safetensors.index.json`) and
+  pass the raw HF `state_dict` (`model.language_model.*` keys) straight into
+  `TtTransformer`. (Equivalently, set `args.from_hf_url = False` so
+  `load_state_dict()` takes the `load_hf_state_dict` + qwen36-remap path —
+  but the CKPT_DIR must then be a local dir, not a hub id.)
+- **TtTransformer call:** `dtype=ttnn.bfloat8_b`, `use_paged_kv_cache=True`,
+  `mode="prefill"`, **drop `enable_prefetcher_performance_mode=True`**
+  (prefetcher permanently off in v2 → pass `False`/omit).
+- `allocate_vllm_kv_cache(...)`: match qwen36 KV layout — `n_kv_heads = 8`
+  (padded from 4), `head_dim = 256`; honor the `QWEN36_KV_BF8` env flag for
+  dtype instead of hard-coding bf8.
+- **Serving class:** named to match the HF arch
+  (`Qwen3_5ForConditionalGeneration(WarmupForwardMixin, Generator)`),
+  subclassing the **local** `Generator`. `initialize_vllm_model` default
+  `max_seq_len=262144`. `prefill_forward`/`decode_forward`/`allocate_kv_cache`/
+  `cache_path` delegate as in the existing class. Set `model_capabilities`
+  to what's actually validated, not the inherited Llama defaults. Decode
+  trace **enabled** (works e2e per confirmation).
+- **Delete the dead Llama path** (`initialize_vllm_text_transformer`,
+  `LlamaForCausalLM`, unused `input_processor_*`).
 - **Test:** import + `initialize_vllm_model` construction smoke (per-device
   DRAM footprint sane; ShardTensor2dMesh weights, not replicated — per
   CLAUDE.md galaxy rule).
 
-### 2. `tt-vllm-plugin/tt_vllm_plugin/__init__.py` — add registration
+### 2. `tt-vllm-plugin` — register the model AND the `qwen3_5` config
+
+**2a. Config registration (new — the real vLLM blocker).** At plugin import,
+register `qwen3_5` so vLLM's `AutoConfig.from_pretrained` can parse the
+checkpoint:
+```python
+from transformers import AutoConfig
+AutoConfig.register("qwen3_5", Qwen3_5Config)  # thin config exposing the
+# fields vLLM plumbing needs (num_hidden_layers, hidden_size,
+# num_attention_heads, max_position_embeddings, vocab_size, …) sourced from
+# the checkpoint's text_config. The TT model still reads config.json itself.
+```
+Open detail for the plan: register a thin flat config built from `text_config`
+vs. reuse a `Qwen3VL`-style text-config extraction. Architecture name stays
+`Qwen3_5ForConditionalGeneration` so the platform "TT" prefix resolves to our
+class.
+
+**2b. Model registration** in `__init__.py`:
 
 ```python
 ModelRegistry.register_model(
@@ -121,6 +184,12 @@ single-layer PCC test while being wrong at full depth (CLAUDE.md warning).
 
 ## Risks
 
+- **`qwen3_5` config registration must satisfy vLLM plumbing.** The thin
+  config must surface the right text params (layers/heads/dim/max_pos/vocab)
+  for scheduler + KV-cache sizing; getting these from `text_config` wrong
+  would misconfigure paging. Validate the registered config against the
+  checkpoint at server start. (The `AutoModelForCausalLM` weight-load risk is
+  now *resolved* — generator uses the raw-safetensors loader; see Component 1.)
 - vLLM may try to treat a `*ForConditionalGeneration` arch as multimodal.
   Mitigation: our registered text class is a plain `Generator` subclass (no
   `SupportsMultiModal`); text-only requests carry no media. Verify vLLM
