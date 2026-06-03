@@ -9,7 +9,7 @@
 #ifdef ARCH_QUASAR
 #include "llk_math_eltwise_ternary_sfpu_where.h"
 #else
-#include "ckernel_sfpu_where.h"
+#include "sfpu/ckernel_sfpu_where.h"
 #include "llk_math_eltwise_ternary_sfpu_macros.h"
 #endif
 #endif

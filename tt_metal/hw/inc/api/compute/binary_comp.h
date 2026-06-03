@@ -41,18 +41,21 @@ namespace ckernel {
  */
 // clang-format on
 
-#ifndef ARCH_QUASAR
+#if defined(TRISC_MATH) && !defined(ARCH_QUASAR)
 namespace detail {
 
 // Dispatches the integer relational compare to the appropriate ckernel functor based on the
 // runtime DataFormat. This was previously the body of `llk_math_eltwise_binary_sfpu_rel_int_impl`
 // in the (now-deleted) BH wrapper.
+//
+// Guarded by TRISC_MATH because the template signature references SfpuType, which is only
+// brought into scope on the math thread (via llk_math_binary_sfpu_api.h). All callers wrap the
+// invocation in MATH((...)) so the function is never reached on unpack/pack threads.
 template <SfpuType OP, DataFormat data_format>
 ALWI void rel_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format. Supported: Int32, UInt32, UInt16");
-#ifdef TRISC_MATH
     if constexpr (data_format == DataFormat::Int32) {
         SFPU_BINARY_CALL_MODE(
             DST_SYNC_MODE,
@@ -74,7 +77,6 @@ ALWI void rel_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
             idst1,
             odst);
     }
-#endif
 }
 
 }  // namespace detail
