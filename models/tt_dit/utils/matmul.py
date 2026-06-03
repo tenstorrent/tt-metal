@@ -231,6 +231,9 @@ grid_12_9_configs = {
     # x_c_merged_fused: concat([spatial, prompt_sp_sharded], dim=1) → M=4096+128=4224
     # Same M_per_core as (4096,…) on 9-row grid (ceil(132/9)=ceil(128/9)=15); same blocking.
     (4224, 6144, 4608): (11, 4, 10, (1, 2)),
+    # M=2048: M_tiles=64, M_per_core=ceil(64/9)=8 — M_block=8 fills each core exactly.
+    # Same K/N as (1024, 6144, 4608); reuse that blocking. Unverified estimate.
+    (2048, 6144, 4608): (8, 8, 6, (4, 1)),
     # (4096, 6144,  768): (11, 4,  4, (1, 4)),  # 642.2 μs,  13.6% util  to_out spatial
     # (128,  6144,  768): ( 2, 12, 4, (2, 2)),  # 97.0 μs,    2.8% util  to_out prompt
 }
