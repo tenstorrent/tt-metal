@@ -17,6 +17,7 @@ on:
 
 permissions:
   packages: write
+  contents: read
 
 jobs:
   check-harbor:
