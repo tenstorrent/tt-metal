@@ -20,6 +20,12 @@ except ModuleNotFoundError:
     sys.path.insert(0, str(REPO_ROOT))
     from models.demos.utils import model_targets
 
+LOWER_IS_BETTER_METRICS = {
+    "prefill_time_to_token",
+    "compile_prefill",
+    "compile_decode",
+}
+
 TARGETS_YAML_RELATIVE_PATH = Path("models/model_targets.yaml")
 BENCHMARK_DIR_RELATIVE_PATH = Path("generated/benchmark_data")
 TESTS_YAML_RELATIVE_PATH = Path("tests/pipeline_reorg/models_e2e_tests.yaml")
@@ -159,15 +165,21 @@ def _check_metric(
     measured_value: float,
     tolerance: float,
 ) -> str | None:
-    """Compare measured and expected values using directional tolerance bands."""
-
+    """Compare measured and expected values using asymmetric regression bounds."""
     lower_bound = expected_value * (1 - tolerance)
     upper_bound = expected_value * (1 + tolerance)
-    if measured_value < lower_bound:
-        return (
-            f"{metric_name}: measured={measured_value} < lower_bound={lower_bound} "
-            f"(expected={expected_value}, tolerance={tolerance})"
-        )
+    if metric_name in LOWER_IS_BETTER_METRICS:
+        if measured_value > expected_value:
+            return f"{metric_name}: measured={measured_value} > expected={expected_value}"
+        if measured_value < lower_bound:
+            return (
+                f"{metric_name}: measured={measured_value} < lower_bound={lower_bound} "
+                f"(expected={expected_value}, tolerance={tolerance})"
+            )
+        return None
+
+    if measured_value < expected_value:
+        return f"{metric_name}: measured={measured_value} < expected={expected_value}"
     if measured_value > upper_bound:
         return (
             f"{metric_name}: measured={measured_value} > upper_bound={upper_bound} "
