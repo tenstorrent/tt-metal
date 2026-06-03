@@ -54,8 +54,7 @@ FORCE_INLINE constexpr void prepare_local_cache(
 }
 
 // Issues an async read of one token's weight stick (or a chunk of it) into the destination L1
-// address. PADDED/BINARY builds consult the local cache populated by prepare_local_cache;
-// other builds read straight from the weights TensorAccessor. Caller must barrier before use.
+// address. Caller must barrier before use.
 template <typename T>
 FORCE_INLINE void read_token_async(
     const Noc& noc,
