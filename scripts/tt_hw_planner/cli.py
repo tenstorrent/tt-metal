@@ -7652,6 +7652,32 @@ def _maybe_escalate_pcc_fail(
         return original_rc
 
 
+# Suffixes for session-scoped working-state files that auto_iterate.py
+# uses INSIDE a single `up` run (rollback snapshots, pre-iter floors,
+# .bak backups). Capturing these into a per-model overlay leaks
+# session-local state across runs — e.g. a `.best_native` captured
+# from a FAILED iter becomes the next run's starting snapshot and the
+# regression-detection logic keeps restoring it (Phi-3.5 attention
+# case, 2026-06-03). Per the docstring of ``_snapshot_best_native_stub``
+# in ``auto_iterate.py`` these are explicitly described as
+# "session-scoped" / "in-session" — they should not survive across
+# sessions.
+_SESSION_LOCAL_OVERLAY_SUFFIXES = (
+    ".py.best_native",
+    ".py.preiter_native",
+    ".py.last_good_native",
+    ".py.auto_stabilize.bak",
+    ".py.bak",
+)
+
+
+def _is_session_local_artifact(rel_path: str) -> bool:
+    """Whether ``rel_path`` is a per-session working-state artifact
+    that should be excluded from overlay capture. See
+    :data:`_SESSION_LOCAL_OVERLAY_SUFFIXES` for the suffix list."""
+    return any(rel_path.endswith(suf) for suf in _SESSION_LOCAL_OVERLAY_SUFFIXES)
+
+
 def _capture_worktree_deltas_as_overlay(worktree_path, model_id):
     """Capture every modified file in `worktree_path` as a per-model overlay.
 
@@ -7682,6 +7708,15 @@ def _capture_worktree_deltas_as_overlay(worktree_path, model_id):
     The fix adds an explicit demo-dir scan as a SECONDARY capture pass:
     every ``_stubs/*.py`` and ``tests/pcc/*.py`` under the model's demo dir
     that differs from HEAD also gets captured. Belt-and-suspenders.
+
+    BUG-2 FIX (2026-06-03): ``.py.best_native`` and the other
+    session-scoped working-state snapshots (``_SESSION_LOCAL_OVERLAY_SUFFIXES``)
+    are skipped. Capturing them poisoned the next run's
+    ``.best_native``-rollback floor with a FAILED iter's stub, making
+    the regression-detection logic keep restoring a broken wrapper
+    (Phi-3.5 attention TT_FATAL'd on use_hf_rope=True from iter_005,
+    overlay captured the bad stub, next run's iter 1 wrote a correct
+    wrapper, regression detector rolled back to the bad overlay).
     """
     import subprocess as _subprocess
 
@@ -7695,6 +7730,8 @@ def _capture_worktree_deltas_as_overlay(worktree_path, model_id):
         if rel_path in seen_paths:
             return False
         seen_paths.add(rel_path)
+        if _is_session_local_artifact(rel_path):
+            return False
         _subprocess.run(
             ["git", "add", "--", rel_path],
             cwd=str(worktree_path),
