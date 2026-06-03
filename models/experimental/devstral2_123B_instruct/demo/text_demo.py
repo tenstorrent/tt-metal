@@ -45,6 +45,9 @@ pytest CLI option churn)::
     DEVSTRAL2_NUM_LAYERS=         # unset/empty = full num_hidden_layers
     DEVSTRAL2_TRACE_PREFILL=1     # 0 = never capture prefill trace (default: on)
     DEVSTRAL2_DECODE_TRACE_2CQ=1  # 0 = single CQ decode (default: on)
+    DEVSTRAL2_ONDEVICE_SAMPLING=0 # unset = on-device greedy sampling (single-CQ); 0 = host argmax
+    DEVSTRAL2_SAMPLE_IN_TRACE=0   # 1 = fold sampling into decode trace (needs L1 headroom)
+    DEVSTRAL2_VERBOSE_SAMPLING=0 # 1 = log every on-device argmax/top-k step
     DEVSTRAL2_MIN_MAX_SEQ_LEN=98304  # KV floor (must be >= prompt + max_new; 96K default)
     MESH_DEVICE=N150|N300|N150x4|P150x4|T3K|TG    # default 1x4 (Quietbox)
 
@@ -71,6 +74,15 @@ from models.experimental.devstral2_123B_instruct.demo.decode_trace_2cq import (
     num_command_queues_for_decode,
     signal_decode_step_done,
     stage_decode_inputs,
+)
+from models.experimental.devstral2_123B_instruct.demo.on_device_sampling import (
+    OnDeviceSampler,
+    build_sampler,
+    on_device_sampling_enabled,
+    quiet_per_token_sampling_logs,
+    sample_first_token_from_prefill_logits,
+    sample_in_decode_trace,
+    supports_on_device_sampling,
 )
 from models.experimental.devstral2_123B_instruct.tests._devstral_weights import (
     model_prefill_weight_keys,
@@ -325,6 +337,20 @@ def _logits_to_torch(tt_logits: ttnn.Tensor, mesh_device, vocab_size: int) -> to
     return out
 
 
+def _first_token_from_prefill_logits(
+    prefill_logits: ttnn.Tensor,
+    mesh_device,
+    vocab_size: int,
+    local_pos: int,
+    sampler: Optional[OnDeviceSampler],
+) -> int:
+    """First generated token: on-device argmax when ``sampler`` is set, else host ``torch.argmax``."""
+    if sampler is not None:
+        return sample_first_token_from_prefill_logits(sampler, prefill_logits, local_pos=local_pos)
+    logits_torch = _logits_to_torch(prefill_logits, mesh_device, vocab_size)
+    return int(logits_torch[local_pos].argmax().item())
+
+
 def _build_state_dict(num_layers: int, *, want_lm_head: bool):
     """Download embed + ``num_layers`` decoder blocks + final norm (+ optional lm_head)."""
     base_keys = model_prefill_weight_keys(num_layers)
@@ -344,6 +370,7 @@ def _generate(
     max_new_tokens: int,
     num_layers_override: Optional[int],
 ) -> str:
+    quiet_per_token_sampling_logs()
     logger.info(f"Loading tokenizer for {DEVSTRAL2_LARGE_REPO_ID}...")
     tokenizer = AutoTokenizer.from_pretrained(DEVSTRAL2_LARGE_REPO_ID, trust_remote_code=True)
 
@@ -435,8 +462,33 @@ def _generate(
     decode_tok_dev = _input_ids_to_tt(decode_tok_host_init, mesh_device)
     decode_pos_dev = _current_pos_to_tt(torch.tensor([prompt_len], dtype=torch.long), mesh_device)
 
+    # On-device sampling: first token from last prefill row + decode via ``ttnn.argmax`` (force-argmax).
+    # Each step transfers one int32 token instead of a full sharded vocab row D2H (host fallback if disabled).
+    sampler: Optional[OnDeviceSampler] = None
+    if on_device_sampling_enabled():
+        if not supports_on_device_sampling(args, mesh_device):
+            logger.warning(
+                f"On-device sampling requested but unsupported on mesh {tuple(mesh_device.shape)} "
+                f"(vocab {args.vocab_size} / {args.num_devices} devices); using host argmax."
+            )
+        elif decode_trace_2cq_enabled():
+            logger.warning(
+                "On-device sampling is single-CQ only; ignoring DEVSTRAL2_DECODE_TRACE_2CQ=1 and "
+                "running single-CQ decode. Set DEVSTRAL2_DECODE_TRACE_2CQ=0 to silence this."
+            )
+            sampler = build_sampler(args, mesh_device, tt_ccl)
+        else:
+            sampler = build_sampler(args, mesh_device, tt_ccl)
+
+    fold_sampling_in_trace = sampler is not None and sample_in_decode_trace(mesh_device)
+    if sampler is not None and not fold_sampling_in_trace:
+        logger.info(
+            "On-device sampling runs after decode trace replay (not inside the trace) to avoid "
+            "L1 circular-buffer clashes on Blackhole. Set DEVSTRAL2_SAMPLE_IN_TRACE=1 to override."
+        )
+
     decode_2cq: Optional[DecodeTrace2CQ] = None
-    if decode_trace_2cq_enabled():
+    if decode_trace_2cq_enabled() and sampler is None:
         decode_2cq = DecodeTrace2CQ.create(mesh_device, decode_tok_dev, decode_pos_dev)
         logger.info("Decode trace 2CQ enabled (CQ1=input H2D, CQ0=forward/trace).")
 
@@ -541,9 +593,11 @@ def _generate(
 
             last_chunk_start = (num_prefill_chunks - 1) * kv_block_size
             ttnn.synchronize_device(mesh_device)
-            logits_torch = _logits_to_torch(prefill_trace_logits, mesh_device, args.vocab_size)
             local_pos = (prompt_len - 1) - last_chunk_start
-            next_token = int(logits_torch[local_pos].argmax().item())
+            next_token = _first_token_from_prefill_logits(
+                prefill_trace_logits, mesh_device, args.vocab_size, local_pos, sampler
+            )
+            prefill_trace_logits.deallocate(True)
             logger.info(
                 f"Chunked prefill trace ({num_prefill_chunks} chunk(s)): "
                 f"TT forward={stats['tt_prefill_s'] * 1000:.0f}ms"
@@ -566,9 +620,10 @@ def _generate(
             last_chunk_start = (num_prefill_chunks - 1) * kv_block_size
             ttnn.synchronize_device(mesh_device)
             stats["tt_prefill_s"] = _time_tt_op(t_tt_prefill)
-            logits_torch = _logits_to_torch(prefill_trace_logits, mesh_device, args.vocab_size)
             local_pos = (prompt_len - 1) - last_chunk_start
-            next_token = int(logits_torch[local_pos].argmax().item())
+            next_token = _first_token_from_prefill_logits(
+                prefill_trace_logits, mesh_device, args.vocab_size, local_pos, sampler
+            )
             prefill_trace_logits.deallocate(True)
             logger.info(
                 f"Chunked prefill ({num_prefill_chunks} chunk(s)): " f"TT forward={stats['tt_prefill_s'] * 1000:.0f}ms"
@@ -584,6 +639,13 @@ def _generate(
             prefill_trace_id = None
 
         # ── Decode: 1) untraced compile, 2) capture trace at iter 1, 3) replay ───
+        def _read_next_token() -> int:
+            """On-device sampled token (one int32 D2H) when enabled, else host argmax over logits."""
+            if sampler is not None:
+                return sampler.tt_read_token(0)
+            logits_torch = _logits_to_torch(decode_trace_logits, mesh_device, args.vocab_size)
+            return int(logits_torch[0].argmax().item())
+
         generated = [next_token]
         current_pos = prompt_len
         for iteration in range(max_new_tokens - 1):
@@ -593,33 +655,51 @@ def _generate(
 
             if iteration == 0:
                 # Untraced compile pass (kernel cache only; do not sample — avoids an extra
-                # decode step and KV write before trace capture).
+                # decode step and KV write before trace capture). When on-device sampling is on,
+                # the sampling pipeline is run here too so its kernels are warm before capture.
                 t_compile = time.perf_counter()
+                if sampler is not None:
+                    sampler.advance_seed()
                 stage_decode_inputs(decode_2cq, mesh_device, decode_tok_dev, decode_pos_dev, next_token, current_pos)
                 tt_out = model(decode_tok_dev, mode="decode", current_pos=decode_pos_dev)
+                if sampler is not None:
+                    sampler.sample_into_buffer(tt_out)
                 tt_out.deallocate(True)
                 ttnn.synchronize_device(mesh_device)
                 signal_decode_step_done(decode_2cq)
                 compile_ms = (time.perf_counter() - t_compile) * 1000
                 logger.info(f"Decode compile pass: {compile_ms:.0f}ms")
 
-                # Capture trace bound to (decode_tok_dev, decode_pos_dev).
+                # Capture trace bound to (decode_tok_dev, decode_pos_dev). On BH, sampling runs
+                # after execute_trace (see fold_sampling_in_trace) so top-k CBs do not share L1
+                # with the 123B decode graph inside one trace.
                 t_capture = time.perf_counter()
+                if sampler is not None:
+                    sampler.advance_seed()
                 stage_decode_inputs(decode_2cq, mesh_device, decode_tok_dev, decode_pos_dev, next_token, current_pos)
                 decode_trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
                 decode_trace_logits = model(decode_tok_dev, mode="decode", current_pos=decode_pos_dev)
+                if fold_sampling_in_trace:
+                    sampler.sample_into_buffer(decode_trace_logits)
                 ttnn.end_trace_capture(mesh_device, decode_trace_id, cq_id=0)
                 ttnn.synchronize_device(mesh_device)
                 signal_decode_step_done(decode_2cq)
                 capture_decode_s = _time_tt_op(t_capture)
-                suffix = " (2CQ)" if decode_2cq is not None else ""
+                suffix = " (2CQ)" if decode_2cq is not None else (" (on-device sampling)" if sampler else "")
                 logger.info(f"Decode trace captured in {capture_decode_s * 1000:.0f}ms{suffix} (TT forward only)")
 
-                logits_torch = _logits_to_torch(decode_trace_logits, mesh_device, args.vocab_size)
-                next_token = int(logits_torch[0].argmax().item())
+                if sampler is not None and not fold_sampling_in_trace:
+                    ttnn.execute_trace(mesh_device, decode_trace_id, cq_id=0, blocking=True)
+                    ttnn.synchronize_device(mesh_device)
+                    sampler.advance_seed()
+                    sampler.sample_into_buffer(decode_trace_logits)
+
+                next_token = _read_next_token()
                 generated.append(next_token)
                 current_pos += 1
             else:
+                if sampler is not None:
+                    sampler.advance_seed()
                 stage_decode_inputs(decode_2cq, mesh_device, decode_tok_dev, decode_pos_dev, next_token, current_pos)
                 t_decode = time.perf_counter()
                 ttnn.execute_trace(mesh_device, decode_trace_id, cq_id=0, blocking=False)
@@ -628,8 +708,11 @@ def _generate(
                 stats["tt_decode_s"] += _time_tt_op(t_decode)
                 stats["tt_decode_steps"] += 1
 
-                logits_torch = _logits_to_torch(decode_trace_logits, mesh_device, args.vocab_size)
-                next_token = int(logits_torch[0].argmax().item())
+                if sampler is not None and not fold_sampling_in_trace:
+                    sampler.advance_seed()
+                    sampler.sample_into_buffer(decode_trace_logits)
+
+                next_token = _read_next_token()
                 generated.append(next_token)
                 current_pos += 1
         decoded = tokenizer.decode(generated, skip_special_tokens=True)
@@ -638,6 +721,8 @@ def _generate(
             ttnn.release_trace(mesh_device, prefill_trace_id)
         if decode_trace_id is not None:
             ttnn.release_trace(mesh_device, decode_trace_id)
+        if sampler is not None:
+            sampler.deallocate()
 
     logger.info("=== Prompt ===")
     logger.info(prompt)
