@@ -1061,6 +1061,16 @@ static std::map<std::string, std::string> build_kernel_defines(
     std::map<std::string, std::string> defines;
     kernel.process_defines([&](const std::string& k, const std::string& v) { defines[k] = v; });
 
+    // Opt-in deadlock-watchdog timeout. Off by default so <chrono> stays out of
+    // the kernel include graph (~1s faster cold JIT compile; see
+    // tt-emule include/jit_hw/emule_wait.h). Set TT_EMULE_WAIT_TIMEOUT=1 to
+    // restore the bounded cv.wait_for + per-op hang diagnostic. Routed through
+    // the defines map (not a bare -D) so it lands in both the wrapper and the
+    // JIT cache key — toggling it invalidates stale cached .so files.
+    if (std::getenv("TT_EMULE_WAIT_TIMEOUT")) {
+        defines["EMULE_WAIT_TIMEOUT"] = "1";
+    }
+
     auto arch = MetalContext::instance().get_cluster().arch();
     if (arch == ARCH::QUASAR) {
         defines["ARCH_QUASAR"] = "1";
