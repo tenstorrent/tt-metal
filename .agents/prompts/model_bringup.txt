@@ -1,1 +1,24 @@
 /goal Use $model-bringup for HF_MODEL in the current tt-metal checkout.
+
+## Experiment Boundary
+
+The purpose of this experiment is to evaluate and improve the quality of our model bringup skills. For the experiment to be meaningful, we need you to avoid looking for or using historical bringup attempts or wholesale importing model code from tt_transformers, models/demos/ or basically anywhere except the allowed models/common/. We're looking for a good-faith clean-room bringup of the model using only the allowed materials.
+
+You have all night, do not worry about the amount of time or tokens available. We want your methodical best work, not quick fixes or shortcuts. Take a deep breath, take your time and do it right. We will be going through all the outputs and logs to learn from your experiences.
+
+Allowed sources:
+- The current tt-metal checkout.
+- HuggingFace config, tokenizer, and weights for the target model.
+- Public architecture documentation.
+- Existing tt-metal model code from the current snapshot as a reference, subject to the de novo rule.
+- Shared helpers from `models.common` where appropriate.
+
+Forbidden sources include but are not limited to:
+- Prior autoport implementations of the same target model.
+- Patch files, git bundles, archived branches, tarballs, session logs, memory files, or docs from previous experiments.
+- External directories such as `/localdev/*experiment*`, `/localdev/*archive*`, `/home/*/.claude`, or prior Codex/Claude attempt folders.
+- Applying patches with `git apply` or cherry-picking commits that were not produced during the current run.
+
+If an exact-model prior artifact is discovered, do not open or apply it. Record the path in the work log and continue clean-room.
+
+Always do your absolute best to stay within the spirit of the experiment - otherwise all the work will be in vain and the run will have to be repeated another night.
