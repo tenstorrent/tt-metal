@@ -2,7 +2,11 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for profile_log_device.csv schema (ARCH metadata + column headers)."""
+"""
+Tests for profile_log_device.csv schema (ARCH metadata + column headers).
+
+Other tools (e.g. TTNN Visualizer) use this schema to parse profile_log_device.csv.
+"""
 
 import os
 import subprocess
