@@ -781,10 +781,36 @@ bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_graine
             }
             return checker;
         }
+        if (filter_type.value() == "mesh_scope") {
+            TT_FATAL(
+                detail::mesh_scope_mapper.to_enum.contains(filter_value.value()),
+                "Unsupported mesh_scope filter value: '{}'. Supported values are: all, intra_mesh, inter_mesh.",
+                filter_value.value());
+            const MeshTrafficScope mesh_scope = detail::mesh_scope_mapper.to_enum.at(filter_value.value());
+            bool checker = false;
+            if (test_config.patterns.has_value()) {
+                auto& patterns = test_config.patterns.value();
+                for (const auto& high_level_pattern : patterns) {
+                    if (high_level_pattern.mesh_scope == mesh_scope) {
+                        checker = true;
+                        break;
+                    }
+                }
+                if (checker) {
+                    patterns.erase(
+                        std::remove_if(
+                            patterns.begin(),
+                            patterns.end(),
+                            [&](const auto& p) { return p.mesh_scope != mesh_scope; }),
+                        patterns.end());
+                }
+            }
+            return checker;
+        }
         log_info(
             tt::LogTest,
             "Unsupported filter type: '{}'. Supported types are: name, topology, benchmark_mode, "
-            "sync, num_links, ntype, ftype, num_packets, size, pattern",
+            "sync, num_links, ntype, ftype, num_packets, size, pattern, mesh_scope",
             filter_type.value());
         return false;
     }
@@ -1013,6 +1039,16 @@ HighLevelPatternConfig YamlConfigParser::parse_high_level_pattern_config(const Y
     if (pattern_yaml["iterations"]) {
         config.iterations = parse_scalar<uint32_t>(pattern_yaml["iterations"]);
     }
+
+    if (pattern_yaml["mesh_scope"]) {
+        const auto mesh_scope_str = parse_scalar<std::string>(pattern_yaml["mesh_scope"]);
+        TT_FATAL(
+            detail::mesh_scope_mapper.to_enum.contains(mesh_scope_str),
+            "Unsupported mesh_scope: '{}'. Supported values are: all, intra_mesh, inter_mesh.",
+            mesh_scope_str);
+        config.mesh_scope = detail::mesh_scope_mapper.to_enum.at(mesh_scope_str);
+    }
+
     return config;
 }
 
@@ -1202,8 +1238,10 @@ std::vector<TestConfig> TestConfigBuilder::expand_high_level_patterns(ParsedTest
                     num_devices,
                     p_config.name);
             } else if (p.type == "sequential_all_to_all") {
-                // Dynamically calculate iterations for sequential_all_to_all patterns based on all device pairs
-                auto all_pairs = this->route_manager_.get_all_to_all_unicast_pairs();
+                // Dynamically calculate iterations for sequential_all_to_all patterns based on the
+                // device pairs that survive the requested intra/inter-mesh filter.
+                auto all_pairs =
+                    this->filter_pairs_by_mesh_scope(this->route_manager_.get_all_to_all_unicast_pairs(), p.mesh_scope);
                 uint32_t num_pairs = static_cast<uint32_t>(all_pairs.size());
                 max_iterations = std::max(max_iterations, num_pairs);
                 log_info(
@@ -1685,13 +1723,13 @@ void TestConfigBuilder::expand_patterns_into_test(
 
         if (pattern.type == "all_to_all") {
             if (defaults.ftype == ChipSendType::CHIP_UNICAST) {
-                expand_one_or_all_to_all_unicast(test, defaults, HighLevelTrafficPattern::AllToAll);
+                expand_one_or_all_to_all_unicast(test, defaults, HighLevelTrafficPattern::AllToAll, pattern.mesh_scope);
             } else {
                 expand_one_or_all_to_all_multicast(test, defaults, HighLevelTrafficPattern::AllToAll);
             }
         } else if (pattern.type == "one_to_all") {
             if (defaults.ftype == ChipSendType::CHIP_UNICAST) {
-                expand_one_or_all_to_all_unicast(test, defaults, HighLevelTrafficPattern::OneToAll);
+                expand_one_or_all_to_all_unicast(test, defaults, HighLevelTrafficPattern::OneToAll, pattern.mesh_scope);
             } else {
                 expand_one_or_all_to_all_multicast(test, defaults, HighLevelTrafficPattern::OneToAll);
             }
@@ -1712,7 +1750,7 @@ void TestConfigBuilder::expand_patterns_into_test(
         } else if (pattern.type == "neighbor_exchange") {
             expand_neighbor_exchange(test, defaults);
         } else if (pattern.type == "sequential_all_to_all") {
-            expand_sequential_all_to_all_unicast(test, defaults, iteration_idx);
+            expand_sequential_all_to_all_unicast(test, defaults, iteration_idx, pattern.mesh_scope);
         } else if (pattern.type == "sequential_neighbor_exchange") {
             expand_sequential_neighbor_exchange(test, defaults, iteration_idx);
         } else {
@@ -1721,8 +1759,50 @@ void TestConfigBuilder::expand_patterns_into_test(
     }
 }
 
+std::vector<std::pair<FabricNodeId, FabricNodeId>> TestConfigBuilder::filter_pairs_by_mesh_scope(
+    const std::vector<std::pair<FabricNodeId, FabricNodeId>>& all_pairs, MeshTrafficScope mesh_scope) const {
+    // On single-mesh systems every pair is intra-mesh, so adjacency filtering does not apply.
+    if (!device_info_provider_.is_multi_mesh()) {
+        if (mesh_scope == MeshTrafficScope::INTER_MESH) {
+            log_warning(
+                LogTest, "mesh_scope 'inter_mesh' requested on a single-mesh system; no inter-mesh pairs exist.");
+            return {};
+        }
+        return all_pairs;
+    }
+
+    const auto mesh_adjacency_map = device_info_provider_.get_mesh_adjacency_map();
+    std::vector<std::pair<FabricNodeId, FabricNodeId>> filtered_pairs;
+    filtered_pairs.reserve(all_pairs.size());
+    for (const auto& pair : all_pairs) {
+        const MeshId src_mesh_id = pair.first.mesh_id;
+        const MeshId dst_mesh_id = pair.second.mesh_id;
+        const bool same_mesh = (src_mesh_id == dst_mesh_id);
+        bool dst_is_adjacent = false;
+        auto it = mesh_adjacency_map.find(src_mesh_id);
+        if (it != mesh_adjacency_map.end()) {
+            dst_is_adjacent = it->second.contains(dst_mesh_id);
+        }
+
+        bool keep = false;
+        switch (mesh_scope) {
+            case MeshTrafficScope::INTRA_MESH: keep = same_mesh; break;
+            case MeshTrafficScope::INTER_MESH: keep = (!same_mesh && dst_is_adjacent); break;
+            case MeshTrafficScope::ALL:
+            default: keep = (same_mesh || dst_is_adjacent); break;
+        }
+        if (keep) {
+            filtered_pairs.push_back(pair);
+        }
+    }
+    return filtered_pairs;
+}
+
 void TestConfigBuilder::expand_one_or_all_to_all_unicast(
-    ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, HighLevelTrafficPattern pattern_type) {
+    ParsedTestConfig& test,
+    const ParsedTrafficPatternConfig& base_pattern,
+    HighLevelTrafficPattern pattern_type,
+    MeshTrafficScope mesh_scope) {
     log_debug(
         LogTest,
         "Expanding {}_unicast pattern for test: {}",
@@ -1743,34 +1823,21 @@ void TestConfigBuilder::expand_one_or_all_to_all_unicast(
                 filtered_pairs.push_back(pair);
             }
         }
-        add_senders_from_pairs(test, filtered_pairs, base_pattern);
-    } else if (device_info_provider_.is_multi_mesh()) {
-        const auto mesh_adjacency_map = device_info_provider_.get_mesh_adjacency_map();
-
-        std::vector<std::pair<FabricNodeId, FabricNodeId>> filtered_pairs;
-        for (const auto& pair : all_pairs) {
-            MeshId src_mesh_id = pair.first.mesh_id;
-            MeshId dst_mesh_id = pair.second.mesh_id;
-            bool same_mesh = (src_mesh_id == dst_mesh_id);
-            bool dst_is_adjacent = false;
-            auto it = mesh_adjacency_map.find(src_mesh_id);
-            if (it != mesh_adjacency_map.end()) {
-                dst_is_adjacent = it->second.contains(dst_mesh_id);
-            }
-            if (same_mesh || dst_is_adjacent) {
-                filtered_pairs.push_back(pair);
-            }
+        if (mesh_scope != MeshTrafficScope::ALL) {
+            filtered_pairs = this->filter_pairs_by_mesh_scope(filtered_pairs, mesh_scope);
         }
-
-        log_info(
-            LogTest,
-            "Multi-mesh all_to_all: filtered {} pairs to {} pairs with adjacent mesh destinations",
-            all_pairs.size(),
-            filtered_pairs.size());
-
         add_senders_from_pairs(test, filtered_pairs, base_pattern);
     } else {
-        add_senders_from_pairs(test, all_pairs, base_pattern);
+        auto filtered_pairs = this->filter_pairs_by_mesh_scope(all_pairs, mesh_scope);
+        if (device_info_provider_.is_multi_mesh() || mesh_scope != MeshTrafficScope::ALL) {
+            log_info(
+                LogTest,
+                "all_to_all (mesh_scope={}): filtered {} pairs to {} pairs",
+                detail::mesh_scope_mapper.to_string(mesh_scope, "MeshTrafficScope"),
+                all_pairs.size(),
+                filtered_pairs.size());
+        }
+        add_senders_from_pairs(test, filtered_pairs, base_pattern);
     }
 }
 
@@ -1799,14 +1866,17 @@ void TestConfigBuilder::expand_full_device_random_pairing(
 }
 
 void TestConfigBuilder::expand_sequential_all_to_all_unicast(
-    ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern, uint32_t iteration_idx) {
+    ParsedTestConfig& test,
+    const ParsedTrafficPatternConfig& base_pattern,
+    uint32_t iteration_idx,
+    MeshTrafficScope mesh_scope) {
     log_debug(
         LogTest,
         "Expanding sequential_all_to_all_unicast pattern for test: {} (iteration {})",
         test.name,
         iteration_idx);
 
-    auto all_pairs = this->route_manager_.get_all_to_all_unicast_pairs();
+    auto all_pairs = this->filter_pairs_by_mesh_scope(this->route_manager_.get_all_to_all_unicast_pairs(), mesh_scope);
 
     if (all_pairs.empty()) {
         log_warning(LogTest, "No valid pairs found for sequential_all_to_all pattern");

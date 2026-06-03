@@ -136,6 +136,12 @@ enum class HighLevelTrafficPattern {
     SequentialAllToAll,
 };
 
+// Mesh scope filter for high-level patterns on multi-mesh systems.
+// ALL:        intra-mesh pairs plus inter-mesh pairs to adjacent meshes (default).
+// INTRA_MESH: only same-mesh pairs.
+// INTER_MESH: only inter-mesh pairs to adjacent meshes.
+enum class MeshTrafficScope { ALL, INTRA_MESH, INTER_MESH };
+
 // Channel trimming mode for test config expansion
 enum class ChannelTrimmingMode { NONE, CAPTURE, REPLAY };
 
@@ -154,6 +160,7 @@ struct HighLevelPatternConfig {
     std::string type;
     std::optional<uint32_t> iterations;
     bool is_sequential = false;
+    MeshTrafficScope mesh_scope = MeshTrafficScope::ALL;
 };
 
 struct ParsedTestConfig {
