@@ -1,4 +1,8 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Refreshing status table (PASS / HANG? / FAIL / RUN / STALE / PENDING) over the
 # outer-loop logs in one log dir.
 #

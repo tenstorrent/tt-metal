@@ -1,4 +1,8 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Shared config + helpers for the DeepSeek-V3 prefill stress scripts.
 # Sourced (not executed) by stress.sh / watch.sh / tail.sh / watch_multiple_dirs.sh.
 #

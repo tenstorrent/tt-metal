@@ -1,4 +1,8 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Tails the newest log_NN file in the log dir.
 #
 # Usage: tail.sh [log_name] [loop_count]    (REFRESH overridable via env)

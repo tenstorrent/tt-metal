@@ -1,4 +1,8 @@
 #!/bin/bash
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Outer loop: each iteration does `tt-smi -glx_reset` then a foreground pytest run
 # (no timeout — stays alive on hang for manual debug). Per-run log: <log_dir>/log_NN.
 #
