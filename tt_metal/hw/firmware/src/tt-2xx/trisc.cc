@@ -110,7 +110,9 @@ void init_sync_registers() {
 
 inline void enable_cc_stack() {
 #if defined(UCK_CHLKC_MATH)
-    TTI_SFPENCC(3, 10);  // Enable all the SPFU lanes
+    constexpr uint32_t SFPENCC_IMM12_BOTH = 3;
+    constexpr uint32_t SFPENCC_MOD1_EI_RI = 10;
+    TTI_SFPENCC(SFPENCC_IMM12_BOTH, SFPENCC_MOD1_EI_RI);  // Enable all the SFPU lanes
 #endif
 }
 
