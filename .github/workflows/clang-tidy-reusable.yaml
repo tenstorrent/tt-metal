@@ -283,11 +283,9 @@ jobs:
       - name: Publish ctcache summary
         if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         run: |
-          # clang-tidy-cache stats are per-container (fresh Docker env each run), so
-          # "Cache misses" = entries this job computed and wrote to S3 — no cross-job pollution.
+          # clang-tidy-cache stats are per-container (fresh Docker env each run) — no cross-job pollution.
           {
             echo '## ctcache Summary'
-            echo '> Cache misses = new entries written to S3 by this job'
             if command -v clang-tidy-cache &>/dev/null; then
               echo '```'
               clang-tidy-cache --show-stats 2>/dev/null || echo "stats unavailable"
