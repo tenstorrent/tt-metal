@@ -1823,9 +1823,7 @@ void TestConfigBuilder::expand_one_or_all_to_all_unicast(
                 filtered_pairs.push_back(pair);
             }
         }
-        if (mesh_scope != MeshTrafficScope::ALL) {
-            filtered_pairs = this->filter_pairs_by_mesh_scope(filtered_pairs, mesh_scope);
-        }
+        filtered_pairs = this->filter_pairs_by_mesh_scope(filtered_pairs, mesh_scope);
         add_senders_from_pairs(test, filtered_pairs, base_pattern);
     } else {
         auto filtered_pairs = this->filter_pairs_by_mesh_scope(all_pairs, mesh_scope);
