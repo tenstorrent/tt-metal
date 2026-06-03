@@ -243,6 +243,13 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+      bh_quietbox_2:
+        entries:
           - batch_size: 1
             seq_len: null
             status: TODO
@@ -262,9 +269,13 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U08TJ70UFRT # Harry Andrews
-            team: models
-            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_quietbox_2:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
   gemma-4-e2b:
     aliases: ["gemma-4-e2b", "google/gemma-4-E2B-it"]
     skus:
@@ -278,7 +289,13 @@ targets:
             owner_id: U08TJ70UFRT # Harry Andrews
             team: models
             note: "TODO gap tracked from active models_e2e_tests.yaml combo"
-
+      bh_p150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
   gemma-4-e4b:
     aliases: ["gemma-4-e4b", "google/gemma-4-E4B-it"]
     skus:
@@ -289,9 +306,20 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
-            owner_id: U08TJ70UFRT # Harry Andrews
-            team: models
-            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_p300:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+      bh_quietbox_2:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
   gpt-oss-120b:
     aliases: ["gpt-oss-120b", "openai/gpt-oss-120b", "T3K_gpt-oss-120b", "GLX_gpt-oss-120b"]
     skus:
@@ -339,7 +367,13 @@ targets:
             accuracy: {}
             owner_id: U08TJ70UFRT # Stuti Raizada
             team: models
-
+      bh_galaxy:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
   gpt-oss-20b:
     aliases: ["gpt-oss-20b", "openai/gpt-oss-20b", "T3K_gpt-oss-20b", "GLX_gpt-oss-20b"]
     skus:
@@ -430,7 +464,7 @@ targets:
             seq_len: 512
             status: active
             perf:
-              'decode_t/s/u': 6.3
+              'decode_t/s/u': 6.1
               prefill_time_to_first_token: 319
             accuracy:
               top1: 90
@@ -439,11 +473,9 @@ targets:
             seq_len: 712
             status: active
             perf:
-              'decode_t/s/u': 28.3
-              prefill_time_to_first_token: 104
-            accuracy:
-              top1: 90
-              top5: 97
+              'decode_t/s/u': 8.8
+              prefill_time_to_first_token: 180
+            accuracy: {}
       wh_n300:
         entries:
           - batch_size: 1
@@ -472,7 +504,7 @@ targets:
             seq_len: 512
             status: active
             perf:
-              'decode_t/s/u': 10.2
+              'decode_t/s/u': 10.1
               prefill_time_to_first_token: 135
             accuracy:
               top1: 90
@@ -481,31 +513,34 @@ targets:
             seq_len: 712
             status: active
             perf:
-              'decode_t/s/u': 28.3
-              prefill_time_to_first_token: 104
-            accuracy:
-              top1: 90
-              top5: 97
+              'decode_t/s/u': 20.3
+              prefill_time_to_first_token: 71
+            accuracy: {}
+      bh_p300:
+        entries:
+          - batch_size: 64
+            seq_len: 131072
+            status: TODO
+            perf: {}
+            accuracy: {}
       wh_llmbox_perf:
         entries:
           - batch_size: 1
             seq_len: 512
             status: active
             perf:
-              'decode_t/s/u': 5.7
+              'decode_t/s/u': 5.5
               prefill_time_to_first_token: 115
             accuracy:
-              top1: 90
-              top5: 98
+              top1: 89.5
+              top5: 97.5
           - batch_size: 32
             seq_len: 712
             status: active
             perf:
-              'decode_t/s/u': 64.3
+              'decode_t/s/u': 57.0
               prefill_time_to_first_token: 53
-            accuracy:
-              top1: 90
-              top5: 98
+            accuracy: {}
       wh_galaxy_perf:
         entries:
           - batch_size: 1
@@ -516,15 +551,13 @@ targets:
             accuracy:
               top1: 88
               top5: 97
-      # p300x2 == bh_quietbox_2 (2x P300 = 4 dies). Numbers measured on the
-      # BH migration branch CI run (workflow 26664009397, ci-token-matching).
-      p300x2:
+      bh_quietbox_2:
         entries:
           - status: active
             perf:
               prefill_time_to_token: 0.053
-              decode_t/s/u: 23.0
-              decode_t/s: 23.0
+              decode_t/s/u: 21.8
+              decode_t/s: 21.7
             accuracy:
               top1: 90.0
               top5: 97.6
@@ -535,6 +568,13 @@ targets:
     aliases: ["llama3.1-8b-dp"]
     skus:
       wh_llmbox_perf:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+      bh_p300:
         entries:
           - batch_size: 1
             seq_len: null
@@ -719,7 +759,7 @@ targets:
               top5: 100
       # p300x2 == bh_quietbox_2. Measured on workflow run 26785408151
       # (ci-eval-32 invocation).
-      p300x2:
+      bh_quietbox_2:
         entries:
           - batch_size: 32
             status: active
@@ -731,18 +771,6 @@ targets:
               top1: 96.0
               top5: 100.0
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
-            team: models
-  llama3.3-70b-dp-galaxy:
-    aliases: ["llama3.3-70b-dp-galaxy"]
-    skus:
-      wh_galaxy_perf:
-        entries:
-          - batch_size: 1
-            seq_len: null
-            status: TODO
-            perf: {}
-            accuracy: {}
-            owner_id: U08BH66EXAL # Radoica Draskic
             team: models
   llama3.3-70b-galaxy:
     aliases: ["llama3.3-70b-galaxy"]
@@ -776,7 +804,7 @@ targets:
             accuracy:
               top1: 96
               top5: 100
-  mamba-2.8b-slimpj:
+  mamba-2.8b:
     aliases: ["mamba-2.8b-slimpj", "state-spaces/mamba-2.8b-slimpj"]
     skus:
       wh_n150:
@@ -817,7 +845,7 @@ targets:
             status: active
             perf:
               'decode_t/s/u': 10.45
-              prefill_time_to_first_token: 278
+              prefill_time_to_first_token: 245
             accuracy:
               top1: 95
               top5: 99
@@ -825,11 +853,10 @@ targets:
             seq_len: 744
             status: active
             perf:
-              'decode_t/s/u': 29.75
-              prefill_time_to_first_token: 100.24
-            accuracy:
-              top1: 95
-              top5: 99
+              'decode_t/s/u': 22.35
+              prefill_time_to_first_token: 101
+              prefill_time_to_first_token_tolerance: 0.2
+            accuracy: {}
       wh_n300:
         entries:
           - batch_size: 1
@@ -927,6 +954,13 @@ targets:
             accuracy:
               top1: 98
               top5: 99
+      bh_quietbox_2:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
   qwen2.5-72b:
     aliases: ["Qwen2.5-72B", "Qwen/Qwen2.5-72B-Instruct"]
     skus:
@@ -960,6 +994,13 @@ targets:
             status: TODO
             perf: {}
             accuracy: {}
+      bh_quietbox_2:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
             owner_id: U07RY6B5FLJ # Gongyu Wang
             team: models
   qwen2.5-7b:
@@ -972,7 +1013,7 @@ targets:
             status: active
             perf:
               'decode_t/s/u': 7.0
-              prefill_time_to_first_token: 308
+              prefill_time_to_first_token: 304
             accuracy:
               top1: 84
               top5: 96
@@ -995,14 +1036,19 @@ targets:
             status: active
             perf:
               'decode_t/s/u': 22.4
-              prefill_time_to_first_token: 190
-            accuracy:
-              top1: 96
-              top5: 99
+              prefill_time_to_first_token: 102
+            accuracy: {}
   qwen2.5-vl-32b:
     aliases: ["Qwen2.5-VL-32B", "Qwen/Qwen2.5-VL-32B-Instruct"]
     skus:
       wh_llmbox_perf:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+      bh_quietbox_2:
         entries:
           - batch_size: null
             seq_len: null
@@ -1031,9 +1077,7 @@ targets:
             perf:
               'decode_t/s/u': 22.9
               prefill_time_to_first_token: 123
-            accuracy:
-              top1: 89
-              top5: 97
+            accuracy: {}
       # p300x2 == bh_quietbox_2. Measured on workflow run 26785408151
       # (ci-eval-32 invocation; decode_t/s = batch_size * decode_t/s/u).
       bh_quietbox_2:
@@ -1082,6 +1126,13 @@ targets:
     aliases: ["whisper"]
     skus:
       wh_n150:
+        entries:
+          - batch_size: null
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+      bh_p150:
         entries:
           - batch_size: null
             seq_len: null
