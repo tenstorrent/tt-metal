@@ -74,13 +74,8 @@ class TokenAccuracy:
         return accuracy_top1, accuracy_top5
 
 
-def _accuracy_target_seq_len(optimizations):
-    return 512 if getattr(optimizations, "__name__", "").lower() == "performance" else 1024
-
-
-def get_accuracy_thresholds(model_args):
+def get_accuracy_thresholds(model_args, seq_len: int):
     """Resolve accuracy thresholds from centralized model targets."""
-    seq_len = _accuracy_target_seq_len(model_args.optimizations)
     centralized_targets = resolve_accuracy_targets(
         model_name=model_args.base_model_name,
         sku=model_args.device_name,
@@ -91,7 +86,7 @@ def get_accuracy_thresholds(model_args):
         raise ValueError(
             "Could not find centralized accuracy targets for "
             f"{model_args.base_model_name} on {model_args.device_name} "
-            f"(batch_size=1, seq_len={seq_len}, mode={model_args.optimizations.__name__})"
+            f"(batch_size=1, seq_len={seq_len})"
         )
 
     # Preserve previous behavior for integer-rounded CI checks.
@@ -1465,13 +1460,6 @@ def test_demo_text(
         batch_size=global_batch_size,
         seq_len=max_seq_len,
     )
-    if not resolved_perf_targets and global_batch_size == 32 and max_seq_len != 1024:
-        resolved_perf_targets = resolve_perf_targets(
-            model_name=model_name,
-            sku=tt_device_name,
-            batch_size=global_batch_size,
-            seq_len=1024,
-        )
     if not resolved_perf_targets:
         logger.info(
             f"Model {model_name} does not have centralized performance targets set for "
@@ -1572,7 +1560,7 @@ def test_demo_text(
 
         if not json_config_file:
             # Get accuracy thresholds from centralized model targets unless the config is loaded from json.
-            min_top1_acc, min_top5_acc = get_accuracy_thresholds(model_args[0])
+            min_top1_acc, min_top5_acc = get_accuracy_thresholds(model_args[0], seq_len=max(prefill_lens))
             verify_accuracy(
                 measurements={
                     "top1_token_accuracy": total_top1_acc,

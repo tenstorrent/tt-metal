@@ -6,7 +6,7 @@ import pytest
 
 from models.common.utility_functions import is_wormhole_b0
 from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
-
+from models.demos.utils.device_sku import get_current_device_sku_name
 
 @pytest.mark.parametrize(
     "perf_mode, max_seq_len, has_expected_perf_metrics, greedy_sampling, expected_greedy_output_path",
@@ -57,7 +57,7 @@ def test_demo(
             "decode_t/s": 26 * batch_size,
             "decode_t/s/u": 26,
         }  # performance targets that we aim for (wormhole)
-        verify_sku = "wh_n150"
+        verify_sku = get_current_device_sku_name()
         verify_batch_size = batch_size
         verify_seq_len = max_seq_len
     else:

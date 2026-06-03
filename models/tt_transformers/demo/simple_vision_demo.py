@@ -629,13 +629,6 @@ def test_multimodal_demo_text(
             batch_size=max_batch_size,
             seq_len=max_seq_len,
         )
-        if resolved_perf_targets is None and max_seq_len != max(prefill_lens).item():
-            resolved_perf_targets = resolve_perf_targets(
-                model_name=base_model_name,
-                sku=tt_device_name,
-                batch_size=max_batch_size,
-                seq_len=max(prefill_lens).item(),
-            )
 
         perf_targets = {}
         if resolved_perf_targets:

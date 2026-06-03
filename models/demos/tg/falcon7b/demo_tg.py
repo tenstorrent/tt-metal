@@ -65,14 +65,24 @@ def test_demo_multichip(
         assert num_devices == 32, "32 devices are expected for perf and greedy output verification"
 
     if has_expected_perf_metrics:
+        assert galaxy_type in ["4U", "6U"], f"Unexpected galaxy type: {galaxy_type} for perf mode"
         assert max_seq_len in [128, 1024, 2048], f"Unexpected max_seq_len: {max_seq_len} for perf mode"
-        verify_sku = "wh_galaxy_perf"
-        verify_batch_size = global_batch_size
-        verify_seq_len = max_seq_len
+        expected_perf_dict = {
+            "4U": {
+                128: {"prefill_t/s": 24100, "decode_t/s/u": 6.90},
+                1024: {"prefill_t/s": 21200, "decode_t/s/u": 6.30},
+                2048: {"prefill_t/s": 20400, "decode_t/s/u": 6.60},
+            },
+            "6U": {
+                128: {"prefill_t/s": 63160, "decode_t/s/u": 11.60},
+                1024: {"prefill_t/s": 98900, "decode_t/s/u": 11.50},
+                2048: {"prefill_t/s": 80370, "decode_t/s/u": 10.97},
+            },
+        }
+        expected_perf_metrics = expected_perf_dict[galaxy_type][max_seq_len]
+        expected_perf_metrics["decode_t/s"] = global_batch_size * expected_perf_metrics["decode_t/s/u"]
     else:
-        verify_sku = None
-        verify_batch_size = None
-        verify_seq_len = None
+        expected_perf_metrics = None
 
     if perf_mode:
         json_perf_targets = {
@@ -91,12 +101,8 @@ def test_demo_multichip(
         mesh_device=mesh_device,
         perf_mode=perf_mode,
         greedy_sampling=greedy_sampling,
-        expected_perf_metrics=None,
+        expected_perf_metrics=expected_perf_metrics,
         expected_greedy_output_path=expected_greedy_output_path,
         json_perf_targets=json_perf_targets,
         is_ci_env=is_ci_env,
-        model_name="falcon-7b" if has_expected_perf_metrics else None,
-        sku=verify_sku if has_expected_perf_metrics else None,
-        target_batch_size=verify_batch_size if has_expected_perf_metrics else None,
-        target_seq_len=verify_seq_len if has_expected_perf_metrics else None,
     )
