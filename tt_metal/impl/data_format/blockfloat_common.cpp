@@ -922,6 +922,52 @@ std::vector<uint32_t> pack_as_bfp_tiles(
 
         const uint32_t num_threads = pick_num_pack_threads(num_tiles, num_float_in_tile);
 
+#if defined(TT_BFP_HOST_TILIZER_OPENMP) && TT_BFP_HOST_TILIZER_OPENMP
+        if (host_tilizer_use_openmp()) {
+            // OpenMP dispatch path. Workers are drawn from OpenMP's persistent
+            // thread pool (no per-call pthread_create) and woken up in parallel
+            // rather than spawned serially. Used to A/B against the std::thread
+            // path at small tile counts, where per-call spawn overhead dominates.
+            //
+            // No explicit num_threads<=1 guard: `#pragma omp parallel for` with
+            // a team size of 1 runs the body inline in the calling thread with
+            // negligible overhead, so the pragma handles the single-thread case
+            // by itself.
+            const uint32_t tiles_per_thread = (num_tiles + num_threads - 1) / num_threads;
+            omp_set_num_threads(static_cast<int>(num_threads));
+#pragma omp parallel for schedule(static)
+            for (int32_t t = 0; t < static_cast<int32_t>(num_threads); ++t) {
+                const uint32_t begin = static_cast<uint32_t>(t) * tiles_per_thread;
+                if (begin >= num_tiles) {
+                    continue;
+                }
+                const uint32_t end = std::min(begin + tiles_per_thread, num_tiles);
+                pack_tile_range<BfpFormat, T>(
+                    input_base,
+                    row_major_input,
+                    is_exp_a,
+                    tile_W,
+                    face_H,
+                    face_W,
+                    subtiles_in_tile_row,
+                    subtiles_in_tile_col,
+                    num_exp_dwords_per_tile,
+                    exponent_padding,
+                    l1_alignment,
+                    num_float_in_tile,
+                    bfp_dwords_per_tile,
+                    begin,
+                    end,
+                    output_base);
+            }
+            return packed_result;
+        }
+#endif
+
+        // std::thread dispatch path: keeps an explicit serial branch for
+        // num_threads<=1 because spawning even one std::thread worker has
+        // measurable pthread_create overhead at small tile counts. This is the
+        // small-N regression the OpenMP path was added to address.
         if (num_threads <= 1) {
             pack_tile_range<BfpFormat, T>(
                 input_base,
@@ -943,43 +989,6 @@ std::vector<uint32_t> pack_as_bfp_tiles(
         } else {
             const uint32_t tiles_per_thread = (num_tiles + num_threads - 1) / num_threads;
 
-#if defined(TT_BFP_HOST_TILIZER_OPENMP) && TT_BFP_HOST_TILIZER_OPENMP
-            if (host_tilizer_use_openmp()) {
-                // OpenMP dispatch path. Same per-thread tile-range partitioning
-                // as the std::thread path below, but workers are drawn from
-                // OpenMP's persistent thread pool (no per-call pthread_create)
-                // and woken up in parallel rather than spawned serially. Used
-                // to A/B against the std::thread path at small tile counts,
-                // where per-call spawn overhead dominates.
-                omp_set_num_threads(static_cast<int>(num_threads));
-#pragma omp parallel for schedule(static)
-                for (int32_t t = 0; t < static_cast<int32_t>(num_threads); ++t) {
-                    const uint32_t begin = static_cast<uint32_t>(t) * tiles_per_thread;
-                    if (begin >= num_tiles) {
-                        continue;
-                    }
-                    const uint32_t end = std::min(begin + tiles_per_thread, num_tiles);
-                    pack_tile_range<BfpFormat, T>(
-                        input_base,
-                        row_major_input,
-                        is_exp_a,
-                        tile_W,
-                        face_H,
-                        face_W,
-                        subtiles_in_tile_row,
-                        subtiles_in_tile_col,
-                        num_exp_dwords_per_tile,
-                        exponent_padding,
-                        l1_alignment,
-                        num_float_in_tile,
-                        bfp_dwords_per_tile,
-                        begin,
-                        end,
-                        output_base);
-                }
-                return packed_result;
-            }
-#endif
             // Default parallel path: std::thread. Each worker owns a disjoint,
             // contiguous range of tiles - inputs and outputs do not overlap so
             // no synchronization is needed. We use std::thread directly
