@@ -3087,6 +3087,35 @@ def _final_outcome_banner(
                     print(f"  {line}")
         except Exception:
             pass
+
+        # 2026-06-03: surface harness-skipped components. These are
+        # components whose auto-generated PCC test SKIPPED at the
+        # harness layer (couldn't synthesize inputs, path resolved
+        # to a container, etc.). They were silently dropped from the
+        # iteration queue and would otherwise be counted as graduated.
+        # Showing them here makes false-graduation runs honest.
+        try:
+            import json as _json
+
+            harness_skipped_path = Path(_dd) / "harness_skipped.json"
+            if harness_skipped_path.is_file():
+                _data = _json.loads(harness_skipped_path.read_text())
+                _comps = _data.get("harness_skipped_components", []) if isinstance(_data, dict) else []
+                if _comps:
+                    print()
+                    print(
+                        f"  ⚠ HARNESS-SKIPPED ({len(_comps)} component(s)): the auto-PCC test could not "
+                        f"build inputs and SKIPPED at the harness layer. These were NOT graduated "
+                        f"despite the 'all graduated' banner — they need a test-fixture fix:"
+                    )
+                    for c in _comps:
+                        print(f"    - {c}")
+                    print(
+                        f"  → Fix candidate submodule paths or _make_arg_for() kwargs in "
+                        f"tests/pcc/test_<comp>.py, or invoke the skip-diagnoser."
+                    )
+        except Exception:
+            pass
     print(sep)
 
 

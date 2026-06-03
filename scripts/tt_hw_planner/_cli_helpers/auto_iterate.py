@@ -12,6 +12,72 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 
+def _persist_harness_skipped_for_outcome(demo_dir: Path, harness_skipped: Set[str]) -> None:
+    """Write ``<demo_dir>/harness_skipped.json`` so the OUTCOME banner
+    can surface components that ended the run still harness-blocked
+    (test scaffold couldn't even RUN — e.g. inputs incompatible,
+    submodule path lands on uncallable container, etc.).
+
+    Best-effort: any I/O failure is silently swallowed. The file is
+    only written when there's something to report.
+
+    Why this file exists (2026-06-03): the seamless-m4t bring-up
+    showed that harness-SKIPped components were silently dropped from
+    the candidate pool, then the OUTCOME banner reported "all
+    graduated rc=0" because the queue was empty. Surfacing the
+    harness-skipped set in the banner makes that false-success
+    visible: SUCCESS rc=0 with 22 components in harness_skipped.json
+    is materially different from SUCCESS rc=0 with no skipped
+    components, and the banner now distinguishes them.
+    """
+    if not harness_skipped:
+        return
+    try:
+        import json as _json
+
+        path = demo_dir / "harness_skipped.json"
+        path.write_text(
+            _json.dumps(
+                {"harness_skipped_components": sorted(harness_skipped)},
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _is_eligible_for_graduation(stub_path: Path) -> bool:
+    """Pure check: is this stub's code real enough to count as graduated?
+
+    Returns True iff:
+      1. The stub file exists on disk
+      2. The stub does NOT delegate to torch (i.e. NOT a Phase-1
+         torch-wrapper or `_get_torch_submodule` fallback)
+
+    Caller is responsible for verifying pytest passed; this only
+    validates the stub-code-is-real half of the graduation criterion
+    (the other half is pytest-passed, which the caller decides from
+    the pytest report).
+
+    Why this function exists (2026-06-03): the auto-iterate loop has
+    5+ sites that decide "should this component be appended to
+    graduated_this_run?" Each rolled its own inline check, some with
+    the torch-wrapper guard and some without. Future graduation sites
+    should call this helper to inherit the canonical criterion
+    automatically, preventing the drift that historically allowed
+    torch-wrapper trivial-PCC-passes to be miscounted as real
+    graduations (the seamless-m4t bug case).
+    """
+    from ..cli import _stub_uses_torch_wrapper
+
+    if not stub_path.is_file():
+        return False
+    if _stub_uses_torch_wrapper(stub_path):
+        return False
+    return True
+
+
 def _should_snapshot_best_native(
     *,
     snap_exists: bool,
@@ -415,6 +481,18 @@ def _run_auto_iterate_loop(
 
     skipped_components_this_run: set = set(seed_report.get("skipped_components", []) or [])
 
+    # 2026-06-03: track HARNESS-side SKIPs separately from regular SKIPs.
+    # A harness-SKIP means pytest couldn't even RUN the test (e.g., the
+    # auto-generated test scaffold can't synthesize valid inputs, or the
+    # resolved submodule path lands on an uncallable container). These
+    # are NOT graduations — they're tool/scaffold gaps that need
+    # diagnosis or manual fixing. Surfacing them separately in the
+    # OUTCOME banner prevents the seamless-m4t-style false "all
+    # graduated" outcome where 22 of 23 components were silently
+    # dropped from the candidate pool via harness SKIP and the
+    # orchestrator reported rc=0 success.
+    harness_skipped_this_run: set = set()
+
     _seed_harness_markers = (
         "HF reference forward",
         "_make_arg_for()",
@@ -436,6 +514,7 @@ def _run_auto_iterate_loop(
                 continue
             if any(mark in reason for mark in _seed_harness_markers):
                 _seed_harness_components.setdefault(comp, []).append(reason)
+                harness_skipped_this_run.add(comp)
         for comp, reasons in _seed_harness_components.items():
             stub_path = demo_dir / "_stubs" / f"{_safe_id(comp)}.py"
             try:
@@ -3534,6 +3613,31 @@ def _run_auto_iterate_loop(
         skipped_components_this_run -= report_passed
         skipped_components_this_run -= report_failed
 
+        # 2026-06-03: capture HARNESS-pattern SKIPs separately into
+        # harness_skipped_this_run for the OUTCOME banner. A passing
+        # iter (component eventually graduates) removes it from this
+        # set so the banner only surfaces components that ended the
+        # run still harness-blocked.
+        _iter_per_skipped = report.get("per_skipped", {}) if isinstance(report, dict) else {}
+        if isinstance(_iter_per_skipped, dict):
+            _iter_harness_markers = (
+                "HF reference forward",
+                "_make_arg_for()",
+                "synthetic inputs from _make_arg_for",
+                "incompatible with this submodule's expected shapes",
+                "the synthetic inputs",
+                "Module [ModuleList]",
+            )
+            for entry in _iter_per_skipped.values():
+                if not isinstance(entry, dict):
+                    continue
+                comp = str(entry.get("component") or "").strip()
+                reason = str(entry.get("reason") or "").strip()
+                if comp and reason and any(mark in reason for mark in _iter_harness_markers):
+                    harness_skipped_this_run.add(comp)
+        harness_skipped_this_run -= report_passed
+        harness_skipped_this_run -= set(graduated_this_run)
+
         # 2026-06-01 Qwen2.5-14B audit Fix A+B: in-loop validation-sweep
         # symmetry with pre-flight graduation (line 1359-1370).
         #
@@ -4729,7 +4833,9 @@ def _run_auto_iterate_loop(
                 f"        --auto-max-iters 12 --auto-agent-timeout 1500\n"
             )
         if (skipped_set or ungraduated_now) and not allow_partial_cpu:
+            _persist_harness_skipped_for_outcome(demo_dir, harness_skipped_this_run)
             return 1
+        _persist_harness_skipped_for_outcome(demo_dir, harness_skipped_this_run)
         return 0
 
     banner(f"AUTO-ITERATE exhausted {max_iters} iter(s); final pytest did not pass even with CPU fallback")
