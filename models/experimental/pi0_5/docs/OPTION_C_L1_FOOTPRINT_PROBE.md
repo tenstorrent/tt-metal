@@ -1,0 +1,198 @@
+# pi0.5 Option C — L1 + DRAM footprint probe
+
+**Date**: 2026-06-03
+**Host**: g11blx01 (32-chip Blackhole Galaxy)
+**Checkpoint**: `/home/tt-admin/pi05_cache/pi05_libero_upstream`
+
+## Goal
+
+Produce an *empirical* per-chip memory footprint table for Option C at
+the deployment-target depth (`vlm_depth=18, expert_depth=18`) on the
+real libero_upstream checkpoint, with a workload that mirrors
+`tests/perf/test_perf_ttnn_full_e2e_trace.py` exactly so the numbers
+are directly comparable.
+
+This was motivated by the disconnect between the analytical
+per-chip plan in `PI0_5_GALAXY_DEPLOYMENT_PLAN.md` (122 MB / chip on
+prefill, 30 MB / chip on denoise) and the **measured 122 MB / chip on
+Option B** in `OPTION_B_STATUS.md` — we had no equivalent measurement
+for Option C and the e2e bench ran in shrunk mode
+(`vlm_depth=2, expert_depth=1`) because the replicated upload was not
+known to fit at full depth.
+
+## What the probe does
+
+File: `models/experimental/pi0_5/tests/test_option_c_l1_footprint_probe.py`.
+Opt-in via `PI0_OC_L1_PROBE=1`.
+
+Per submesh, per phase, reads:
+
+- L1: used / free / cap per chip (via `ttnn._ttnn.device.GetMemoryView(submesh, BufferType.L1)`)
+- DRAM: used / free / cap per chip (same API with `BufferType.DRAM`)
+
+Phases captured:
+
+1. `baseline (pre-init)` — memory floor before any uploads
+2. `after Pi0_5PipelineC.initialize` — all weights uploaded
+3. `after warmup forward` — peak with activations, KV, masks live
+
+If `initialize()` or `run_inference()` OOMs, the snapshot is still
+captured before the exception re-raises, so the cliff is visible.
+
+A separate parametrised test, `test_oc_l1_depth_sweep`, walks
+(2,1) → (4,2) → (8,4) → (12,8) → (18,18) for bisecting an OOM cliff if
+full depth fails — gated by `PI0_OC_L1_PROBE_DEPTH_SWEEP=1`.
+
+### Workload — matches `test_perf_ttnn_full_e2e_trace.py`
+
+```
+LANG_SEQ_LEN          = 256
+PREFIX_LEN            = 256 + LANG_SEQ_LEN     # 512
+ACTION_DIM            = 32
+ACTION_HORIZON        = 10                     # libero_upstream config.json
+ACTION_HORIZON_PADDED = 32                     # tile-aligned
+NUM_DENOISE_STEPS     = 10                     # PI05_NUM_DENOISE_STEPS
+BATCH_SIZE            = 1
+pixel_values          = torch.randn(1, 3, 224, 224)   # 1 RGB 224x224 image
+lang_tokens           = torch.randint(0, 256000, (1, 256), int32)
+noisy_actions         = zeros(1, 32, 32); rows 0:10 = randn(1, 10, 32)
+```
+
+The noisy-actions construction matches
+`ttnn_pi0_5_model.sample_actions` exactly: zero-pad to
+action_horizon_padded, then fill only rows 0:action_horizon with
+N(0,1). The padding rows are masked out by SDPA anyway, but matching
+exactly removes one variable when comparing numerics later.
+
+### Env flags — matched to the trace test invocation
+
+```
+PI0_UPSTREAM_MASKS=1
+QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT=1
+QWEN_NLP_CREATE_HEADS_HEAD_SPLIT=1
+PI05_CHECKPOINT_DIR=/home/tt-admin/pi05_cache/pi05_libero_upstream
+PI05_NUM_DENOISE_STEPS=10
+```
+
+Probe knobs:
+
+```
+PI0_OC_L1_PROBE              = 1            (required to opt in)
+PI0_OC_L1_PROBE_VLM_DEPTH    = 18           (default)
+PI0_OC_L1_PROBE_EXPERT_DEPTH = 18           (default)
+PI0_OC_L1_PROBE_RUN_FORWARD  = 1            (default)
+PI0_OC_L1_PROBE_DEPTH_SWEEP  = unset        (1 to enable sweep)
+PI0_OC_L1_PROBE_CHECKPOINT   = …            (overrides PI05_CHECKPOINT_DIR)
+```
+
+## Result — full depth, real ckpt (2026-06-03)
+
+```
+Stage     Chips   L1 post-init    L1 post-fwd     DRAM post-init     DRAM post-fwd
+──────────────────────────────────────────────────────────────────────────────
+vision      4        0.0 MB         0.0 MB             0.0 MB             0.1 MB
+prefill    18        0.0 MB         9.4 MB          2112.9 MB          2113.4 MB
+denoise     6        0.0 MB         9.4 MB           575.9 MB           576.6 MB
+
+L1   cap per chip: 175.4 MB    (120 banks × 1,461,760 bytes)
+DRAM cap per chip: ~34 GB
+```
+
+Test wall-clock: 54 s (load weights + open mesh + init + forward +
+2nd snapshot + teardown).
+
+## What it tells us
+
+### 1. Today everything is in DRAM. L1 is essentially free.
+
+Each prefill chip carries **2,112.9 MB of DRAM weights** — all 18 VLM
+transformer layers replicated per chip, plus the embed/lm_head table.
+18 × ~110 MB/layer at bf8 ≈ 1,980 MB, + ~527 MB embed table ≈ 2,507 MB
+upper bound, vs 2,112.9 MB observed; the gap is mostly tile alignment
+and the dtype mix from [[pi0-5-dtype-map]].
+
+Each denoise chip carries **575.9 MB of DRAM weights** — all 18 expert
+layers replicated. 18 × ~32.8 MB/layer ≈ 590 MB upper bound, matches
+within rounding.
+
+L1 sees only **~9.4 MB / chip of transient activations** during
+forward — KV cache, mask, intermediate hidden states. The 175 MB L1
+cap is barely touched.
+
+### 2. The vision stage is host-resident
+
+`Pi0_5PipelineC` defaults `embed_on_host=True`, so `StageVision` uses
+`Pi0_5OptionCVisionSlice` (CPU path) rather than
+`Pi0_5OptionCVisionSliceSplit` (3-chip SigLIP split + projector chip).
+The 4 vision chips are opened but never receive an upload. Net:
+0.0 MB on chip across all phases. SigLIP-27's ~565 MB of weights live
+in host RAM as PyTorch tensors and don't show up here.
+
+### 3. "Move weights to L1" is *not* a memory_config default flip
+
+The L1-resident plan in `tt/option_c/README.md` reads "every weight,
+bias, and activation in L1 (`memory_config=ttnn.L1_MEMORY_CONFIG`)."
+The natural reading is "flip the default in the upload helpers to L1."
+
+That reading does **not** work for Option C today:
+
+- Replicated 18 VLM layers in L1 needs 2,113 MB / chip vs 175 MB cap — **12× over**.
+- Replicated 18 expert layers in L1 needs 576 MB / chip vs 175 MB cap — **3× over**.
+
+The plan requires **layer-paired sharding** (1 VLM layer per prefill
+chip, 3 expert layers per denoise chip), which is the placement
+`PI0_5_GALAXY_DEPLOYMENT_PLAN.md` §3.1 originally proposed:
+
+```
+prefill chip (1 VLM layer):            ≈ 122 MB / chip   → fits 175 MB cap
+denoise chip (3 expert layers + suff): ≈  98 MB / chip   → fits 175 MB cap
+vision chip (9 SigLIP layers, bf8 attn): ≈ 157 MB / chip → tight but fits
+```
+
+### 4. Layer-paired sharding already exists at the slice level
+
+- `Pi0_5OptionCVLMSlicePaired` (`tt/option_c/vlm_slice.py`) — 1 layer per micro-submesh.
+- `Pi0_5OptionCExpertSlicePaired` (`tt/option_c/expert_slice.py`) — N layers per micro-submesh.
+- `Pi0_5OptionCVisionSliceSplit` (`tt/option_c/vision_slice.py`) — SigLIP across 3 chips + projector chip.
+
+Smoke tests #8–#11 in `test_option_c_smoke.py` exercise all three at
+the slice level. The gap is at the `Pi0_5PipelineC` level: no
+constructor flag plumbs `layer_paired_l1` through to
+`StagePrefill.__init__` / `StageDenoise.__init__`, and `device_siglip`
+is not exposed on `StageVision` from the pipeline either. The stages
+already accept these flags — they default to `False`.
+
+## Concrete next steps
+
+1. **Wire `layer_paired_l1=True` and `device_siglip=True` through `Pi0_5PipelineC`.**
+   Adds 2 dataclass fields and forwards them at `initialize()`-time. Stage
+   constructors already accept them. The `run_inference` transport path
+   probably needs to route via the stages' `first_chip_submesh` /
+   `last_chip_submesh` properties (it currently uses `self.submeshes[i]`,
+   which is the full submesh and is wrong in paired mode). This is the
+   real surgical work.
+
+2. **Re-run this probe.** Expected:
+   - prefill   L1 ~110–125 MB / chip   DRAM ~0
+   - denoise   L1 ~95–100 MB / chip    DRAM ~0
+   - vision    L1 ~150–160 MB / chip   DRAM ~0  (was 0 / 0 before)
+
+3. **Re-run Option C e2e bench at full depth.** Today the bench is
+   shrunk (`vlm_depth=2, expert_depth=1`); after sharding lands we can
+   benchmark the real-config workload directly comparable to the
+   analytical 8.90 ms total in `PI0_5_GALAXY_DEPLOYMENT_PLAN.md` §3.1.
+
+4. **Probe Option B for parity.** Same probe shape against
+   `Pi0_5PipelineB` so the comparison doc (`OPTION_B_VS_C_COMPARISON.md`)
+   has measured per-chip numbers on both architectures instead of one
+   measured and one analytical.
+
+## Pointers
+
+- Probe: `models/experimental/pi0_5/tests/test_option_c_l1_footprint_probe.py`
+- Pipeline-level work needed: `models/experimental/pi0_5/tt/option_c/pipeline.py`
+- Slice-level paired/split (already done): `vlm_slice.py`, `expert_slice.py`, `vision_slice.py`
+- Stage-level flags (already exposed): `stage_prefill.py`, `stage_denoise.py`, `stage_vision.py`
+- Trace test (workload reference): `models/experimental/pi0_5/tests/perf/test_perf_ttnn_full_e2e_trace.py`
+- Analytical plan: `models/experimental/pi0_5/docs/PI0_5_GALAXY_DEPLOYMENT_PLAN.md`
+- Option B measured baseline: `models/experimental/pi0_5/docs/OPTION_B_STATUS.md`
