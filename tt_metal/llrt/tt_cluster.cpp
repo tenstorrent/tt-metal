@@ -486,12 +486,18 @@ void Cluster::start_driver(umd::DeviceParams& device_params) const {
 
         for (const auto& mmio_device_id : mmio_device_ids) {
             futures.emplace_back(tt_metal::detail::async([this, mmio_device_id]() {
+                bool include_dram_tlbs = (this->target_type_ == TargetDevice::Silicon);
+                if (this->target_type_ == TargetDevice::Simulator && rtoptions_.get_simulator_enabled()) {
+                    // Functional ttsim (libttsim.so) does not model BH DRAM TLBs and crashes if they
+                    // are configured. RTL sim uses a directory simulator path and still needs them.
+                    include_dram_tlbs = (rtoptions_.get_simulator_path().extension() != ".so");
+                }
                 ll_api::configure_static_tlbs(
                     this->arch_,
                     mmio_device_id,
                     this->get_soc_desc(mmio_device_id),
                     *this->driver_,
-                    this->target_type_ == TargetDevice::Silicon);
+                    include_dram_tlbs);
             }));
         }
 
@@ -730,7 +736,10 @@ std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_y(ChipId chi
 }
 
 int Cluster::get_device_aiclk(const ChipId& chip_id) const {
-    if (this->target_type_ != tt::TargetDevice::Silicon) {
+    // Functional ttsim (.so) clock queries are unreliable; RTL sim uses a directory path and
+    // metal/umd unit tests expect a non-zero AICLK (see test_dram_kernels, watcher tests).
+    if (this->target_type_ == TargetDevice::Simulator && rtoptions_.get_simulator_enabled() &&
+        rtoptions_.get_simulator_path().extension() == ".so") {
         return 0;
     }
     return this->driver_->get_chip(chip_id)->get_clock();
