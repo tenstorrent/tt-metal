@@ -50,7 +50,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import Profiler
-from models.demos.ace_step_v1_5.run_prompt_to_wav import _DEFAULT_CKPT_DIR, _ensure_variant
+from models.demos.ace_step_v1_5.demo.run_prompt_to_wav import _DEFAULT_CKPT_DIR, _ensure_variant
 from models.demos.ace_step_v1_5.ttnn_impl.e2e_model_tt import AceStepE2EModel, E2EConfig
 
 

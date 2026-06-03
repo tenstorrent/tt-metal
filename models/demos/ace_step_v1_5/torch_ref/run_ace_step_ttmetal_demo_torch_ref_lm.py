@@ -418,7 +418,7 @@ def main() -> None:
                 "Could not find ACE-Step-1.5 repo (needed for acestep imports). "
                 "Pass --ace-step-repo-root or set ACE_STEP_REPO_ROOT."
             )
-        from models.demos.ace_step_v1_5.ref_decoder_compare import ensure_acestep_repo_on_path
+        from models.demos.ace_step_v1_5.demo.ref_decoder_compare import ensure_acestep_repo_on_path
 
         ensure_acestep_repo_on_path(root)
         return root
