@@ -208,6 +208,12 @@ class TtMistral4Attention(LightweightModule):
         # Paged latent KV cache: tokens-per-block. Must be a multiple of TILE_SIZE
         # and of the flash-MLA q/k chunk size (128) so chunk_start_idx alignment holds.
         self.block_size = int(os.environ.get("MISTRAL4_KV_BLOCK_SIZE", "128"))
+        # Sliding-window attention for decode: MISTRAL4_SWA_WINDOW=<N> limits each
+        # decode step to attending over only the last N tokens of the KV cache.
+        # Caps attention DRAM bandwidth at O(W) regardless of total context length.
+        # Must be a multiple of block_size (128). 0 = disabled (full attention).
+        _swa = int(os.environ.get("MISTRAL4_SWA_WINDOW", "0"))
+        self.swa_window = _swa if _swa > 0 else None
 
         if compute_kernel_config is None:
             compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -1042,6 +1048,7 @@ class TtMistral4Attention(LightweightModule):
             program_config=self._mla_decode_pc,
             compute_kernel_config=self.attn_compute_kernel_config,
             memory_config=_mem,
+            sliding_window_size=self.swa_window,
         )  # [1, 1, N_HEADS, KV_LORA_RANK]
         ttnn.deallocate(q_decode)
         if _free_pos_tensor:

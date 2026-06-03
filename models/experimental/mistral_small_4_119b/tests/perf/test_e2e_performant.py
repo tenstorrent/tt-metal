@@ -293,10 +293,14 @@ def _e2e_perf_device_params():
         "expected_compile_time, expected_inference_time"
     ),
     [
-        (1, 1, 128, 32, 3, 600.0, 0.05),
+        (1, 1, 16, 32, 3, 600.0, 0.05),
+        (36, 24, 16, 32, 3, 3600.0, 0.15),
         (36, 24, 128, 32, 3, 3600.0, 0.15),
+        (36, 24, 4000, 32, 3, 3600.0, 0.15),
+        (36, 24, 8192, 32, 3, 3600.0, 0.15),
+        (36, 24, 16384, 32, 3, 3600.0, 0.15),
     ],
-    ids=["L1V1", "L36V24"],
+    ids=["L1V1", "L36V24", "L36V24_128", "L36V24_4K", "L36V24_8K", "L36V24_16K"],
 )
 @pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
 @pytest.mark.parametrize("device_params", [_e2e_perf_device_params()], indirect=True)
