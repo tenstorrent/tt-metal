@@ -13,7 +13,7 @@ Stages:
                 until SIGINT/SIGTERM; otherwise shut it down once the trailing
                 checks finish. Requires ``--mesh-device``.
   sampling      Run the canonical pytest plugin sampling tests against the
-                live server.
+                live server. ``--sampling-profile`` selects full vs smoke.
   qualitative   Run qualitative prompts and save completions for manual
                 review.
   benchmark     Fire synthetic random-token prompts at the server under
@@ -27,6 +27,7 @@ checks, shut down). Full launch with the typical tuning flags:
         --model-dir models/autoports/<model_name> \\
         --hf-model <hf-model-id> \\
         --mesh-device N150 \\
+        --max-num-seqs 32 \\
         --max-model-len 32768 \\
         --tt-config '{"trace_region_size": 85000000, "fabric_config": "FABRIC_1D"}'
 
@@ -46,6 +47,8 @@ omit ``serve`` from the stages:
 
     python -m models.common.readiness_check.run_vllm_server \\
         --stages sampling \\
+        --max-num-seqs 32 \\
+        --sampling-profile smoke \\
         --server-url http://localhost:8000 \\
         --model-dir models/autoports/<model_name> \\
         --hf-model <hf-model-id>
@@ -113,6 +116,16 @@ DEFAULT_BENCH_PROMPT_LEN = 128
 DEFAULT_BENCH_OUTPUT_LEN = 128
 DEFAULT_BENCH_NUM_REQUESTS = 32
 DEFAULT_BENCH_CONCURRENCY = 8
+
+SAMPLING_PROFILE_FULL = "full"
+SAMPLING_PROFILE_SMOKE = "smoke"
+DEFAULT_SAMPLING_PROFILE = SAMPLING_PROFILE_FULL
+_SMOKE_SAMPLING_TESTS: tuple[str, ...] = (
+    "test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch",
+    "test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy",
+    "test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab",
+    "test_host_only_params.py::TestHostOnlyParameters::test_min_p",
+)
 
 # Always enforce on-device sampling. A ported model that cannot serve sampling
 # from the device is not production-ready; the readiness check fails fast here
@@ -291,6 +304,8 @@ def _run_plugin_sampling_tests(
     hf_model: str,
     log_file: Path,
     server_log: Path,
+    max_num_seqs: int,
+    sampling_profile: str,
 ) -> bool:
     """
     Invoke `vllm-tt-plugin/tests/tt/` against the live server. This is the same
@@ -303,16 +318,35 @@ def _run_plugin_sampling_tests(
     in the pytest output, with the real cause buried in the server log.
     """
     tests_dir = _find_plugin_tests_dir()
+    if sampling_profile == SAMPLING_PROFILE_FULL:
+        test_targets: List[str] = [str(tests_dir)]
+    elif sampling_profile == SAMPLING_PROFILE_SMOKE:
+        test_targets = []
+        for rel_nodeid in _SMOKE_SAMPLING_TESTS:
+            rel_path, _, selector = rel_nodeid.partition("::")
+            nodeid = str(tests_dir / rel_path)
+            if selector:
+                nodeid += f"::{selector}"
+            test_targets.append(nodeid)
+    else:
+        raise RuntimeError(
+            f"Unsupported sampling profile {sampling_profile!r}. "
+            f"Expected one of: {SAMPLING_PROFILE_FULL}, {SAMPLING_PROFILE_SMOKE}."
+        )
+
     cmd = [
         sys.executable,
         "-m",
         "pytest",
-        str(tests_dir),
+        *test_targets,
         "-v",
         f"--tt-server-url={server_url}",
         f"--tt-model-name={hf_model}",
+        f"--tt-max-num-seqs={max_num_seqs}",
     ]
     print("\n=== Running plugin sampling tests ===")
+    print(f"  profile: {sampling_profile} ({len(test_targets)} target(s))")
+    print(f"  tt-max-num-seqs: {max_num_seqs}")
     print(f"  cmd: {' '.join(shlex.quote(c) for c in cmd)}")
     print(f"  log: {log_file}")
 
@@ -636,6 +670,17 @@ def _main() -> None:
     )
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--max-num-seqs", type=int, default=DEFAULT_MAX_NUM_SEQS)
+    parser.add_argument(
+        "--sampling-profile",
+        type=str,
+        choices=(SAMPLING_PROFILE_FULL, SAMPLING_PROFILE_SMOKE),
+        default=DEFAULT_SAMPLING_PROFILE,
+        help=(
+            "Sampling test selection profile. "
+            f"`{SAMPLING_PROFILE_FULL}` runs the full plugin suite; "
+            f"`{SAMPLING_PROFILE_SMOKE}` runs a small integration sanity subset."
+        ),
+    )
     parser.add_argument("--block-size", type=int, default=DEFAULT_BLOCK_SIZE)
     parser.add_argument(
         "--server-timeout",
@@ -761,6 +806,8 @@ def _main() -> None:
                     hf_model=args.hf_model,
                     log_file=sampling_log,
                     server_log=server_log,
+                    max_num_seqs=args.max_num_seqs,
+                    sampling_profile=args.sampling_profile,
                 )
                 if not ok:
                     print("\nSampling tests failed — skipping remaining stages.")
