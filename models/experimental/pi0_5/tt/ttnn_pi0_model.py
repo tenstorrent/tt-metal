@@ -88,6 +88,9 @@ class PI0ModelTTNN:
             t_ttnn = ttnn.reshape(t_ttnn, (1,))
             self._precomputed_timesteps.append(t_ttnn)
 
+        # Default initial flow-matching noise buffer (seeded). sample_actions() reuses it for a
+        # deterministic, reproducible policy and reallocates it when the input batch size differs;
+        # the traced denoising path also reads it. Pass an explicit `noise=` to override.
         x_t_torch = torch.randn(1, self.config.action_horizon, self.config.action_dim)
         self.x_t_ttnn = ttnn.from_torch(
             x_t_torch,
@@ -243,6 +246,7 @@ class PI0ModelTTNN:
         lang_tokens: torch.Tensor,
         lang_masks: torch.Tensor,
         state: torch.Tensor,
+        noise: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Sample actions via denoising (TTNN inference).
@@ -258,6 +262,10 @@ class PI0ModelTTNN:
             lang_tokens: Language tokens (PyTorch)
             lang_masks: Language masks (PyTorch)
             state: Robot state (PyTorch)
+            noise: Optional initial flow-matching noise (batch_size, action_horizon, action_dim).
+                If None, a cached deterministic noise buffer is used (reallocated to match state's
+                batch dimension) for a reproducible policy; pass a tensor for matched-noise
+                comparisons or seeded sampling.
 
         Returns:
             Sampled actions (PyTorch)
@@ -278,8 +286,34 @@ class PI0ModelTTNN:
         # Create timesteps as Python list: [1.0, 0.9, 0.8, ..., 0.0]
         timesteps = [1.0 - i / num_steps for i in range(num_steps + 1)]
 
-        # Step 3: Sample initial noise
-        x_t_ttnn = self.x_t_ttnn
+        # Step 3: Initial flow-matching noise. By default we reuse a cached, seeded noise buffer so
+        # the policy is deterministic and reproducible (the right choice for closed-loop robot eval);
+        # the buffer is (re)allocated whenever the input batch size changes, so batch_size > 1 now
+        # produces a correctly-sized action tensor. Pass `noise` to inject a specific tensor (e.g.
+        # for matched-noise ttnn-vs-torch comparisons or seeded sampling).
+        batch_size = state.shape[0]
+        if noise is not None:
+            x_t_ttnn = (
+                noise
+                if isinstance(noise, ttnn.Tensor)
+                else ttnn.from_torch(
+                    noise,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+            )
+        else:
+            if self.x_t_ttnn is None or self.x_t_ttnn.shape[0] != batch_size:
+                self.x_t_ttnn = ttnn.from_torch(
+                    torch.randn(batch_size, self.config.action_horizon, self.config.action_dim),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                )
+            x_t_ttnn = self.x_t_ttnn
 
         # Step 4: Denoising loop (stays on device!)
         for i in range(num_steps):

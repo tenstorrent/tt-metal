@@ -76,6 +76,10 @@ def adarms_norm_ttnn(
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
     # Use fused C++ op if available (source build custom op)
     if use_fused and hasattr(ttnn.experimental, "fused_adaptive_rms"):
+        # The fused op slices the modulation with rank-3 start/end/step vectors, so it requires a
+        # rank-3 cond. Match the fallback path's reshape for 2D [batch, cond_dim] conditioning.
+        if len(cond.shape) == 2:
+            cond = ttnn.reshape(cond, (cond.shape[0], 1, -1))
         return ttnn.experimental.fused_adaptive_rms(x, dense_weight, dense_bias, cond, eps)
     """
     Adaptive RMSNorm (Pi0.5) using TTNN operations.

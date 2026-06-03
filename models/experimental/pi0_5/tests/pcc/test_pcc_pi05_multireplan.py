@@ -128,9 +128,6 @@ def test_pcc_pi05_multireplan(device):
             model_torch.denoising.sample_noise = saved
 
     def ttnn_sample(inp):
-        model_ttnn.x_t_ttnn = ttnn.from_torch(
-            x0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
         imgs = [
             ttnn.from_torch(
                 im, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -142,7 +139,7 @@ def test_pcc_pi05_multireplan(device):
         st = ttnn.from_torch(inp["state"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         with torch.no_grad():
             out = model_ttnn.sample_actions(
-                images=imgs, img_masks=inp["img_masks"], lang_tokens=lt, lang_masks=lm, state=st
+                images=imgs, img_masks=inp["img_masks"], lang_tokens=lt, lang_masks=lm, state=st, noise=x0
             )
         return ttnn.to_torch(out) if isinstance(out, ttnn.Tensor) else out
 

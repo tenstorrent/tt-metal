@@ -54,13 +54,10 @@ class PrefixEmbeddingTTNN:
         self.embed_image_fn = embed_image_fn
         self.embed_language_fn = embed_language_fn
 
-        self.prefix_att_masks = ttnn.zeros(
-            (1, 544),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        # Zero attention mask, built lazily to match the actual concatenated prefix shape
+        # (batch, seq_len) instead of a hardcoded 2-image/32-token/batch-1 contract. Cached and
+        # reused while the shape is stable (the LIBERO contract yields (1, 544) = 2*256 + 32).
+        self.prefix_att_masks = None
 
     def embed_images(
         self,
@@ -183,7 +180,18 @@ class PrefixEmbeddingTTNN:
         prefix_embs = ttnn.concat(embs, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
         prefix_pad_masks = ttnn.concat(pad_masks, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        # Create zeros mask directly on device (no host transfer needed)
+        # Zero attention mask sized to the actual prefix (batch, seq_len); cached and reused while
+        # the shape is stable, so callers with a different image count / language length / batch get
+        # a correctly-shaped mask instead of the fixed (1, 544) tensor.
+        att_shape = (prefix_embs.shape[0], prefix_embs.shape[1])
+        if self.prefix_att_masks is None or tuple(self.prefix_att_masks.shape) != att_shape:
+            self.prefix_att_masks = ttnn.zeros(
+                att_shape,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
         prefix_att_masks = self.prefix_att_masks
 
         return prefix_embs, prefix_pad_masks, prefix_att_masks

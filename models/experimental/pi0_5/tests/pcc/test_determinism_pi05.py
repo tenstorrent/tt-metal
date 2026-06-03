@@ -108,17 +108,6 @@ def build_ttnn_inputs(inputs, device):
     return images_ttnn, lang_tokens_ttnn, lang_masks_ttnn, state_ttnn
 
 
-def reset_initial_noise(model_ttnn, x0_torch):
-    """Overwrite model's x_t_ttnn slot with a fixed initial noise tensor."""
-    model_ttnn.x_t_ttnn = ttnn.from_torch(
-        x0_torch,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=model_ttnn.device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-
-
 def _resolve_checkpoint() -> Path:
     """Return the checkpoint path, skipping the pytest run if a local path is absent."""
     ckpt = Path(CHECKPOINT_PATH)
@@ -147,7 +136,6 @@ def run_determinism(device, runs: int = DEFAULT_RUNS):
 
     outputs = []
     for _ in range(runs):
-        reset_initial_noise(model_ttnn, x0)
         with torch.no_grad():
             out = model_ttnn.sample_actions(
                 images=images_ttnn,
@@ -155,6 +143,7 @@ def run_determinism(device, runs: int = DEFAULT_RUNS):
                 lang_tokens=lang_tokens_ttnn,
                 lang_masks=lang_masks_ttnn,
                 state=state_ttnn,
+                noise=x0,
             )
         if isinstance(out, ttnn.Tensor):
             out = ttnn.to_torch(out)
@@ -219,7 +208,6 @@ def main():
         print(f"\n4. Running TTNN sample_actions {args.runs}×...")
         outputs = []
         for r in range(args.runs):
-            reset_initial_noise(model_ttnn, x0)
             t_start = time.time()
             with torch.no_grad():
                 out = model_ttnn.sample_actions(
@@ -228,6 +216,7 @@ def main():
                     lang_tokens=lang_tokens_ttnn,
                     lang_masks=lang_masks_ttnn,
                     state=state_ttnn,
+                    noise=x0,
                 )
             if isinstance(out, ttnn.Tensor):
                 out = ttnn.to_torch(out)
