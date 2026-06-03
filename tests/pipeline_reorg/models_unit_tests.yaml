@@ -424,7 +424,7 @@
       timeout: 25
       tier: 1
     wh_galaxy:
-      timeout: 30
+      timeout: 40
       tier: 1
     # Blackhole
     bh_quietbox_2:
