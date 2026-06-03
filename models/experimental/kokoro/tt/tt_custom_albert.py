@@ -26,7 +26,6 @@ import math
 from dataclasses import dataclass
 from typing import Union
 
-import numpy as np
 import torch
 import torch.nn as nn
 
@@ -894,7 +893,7 @@ class TTCustomAlbert:
         token_type_e = ttnn.embedding(tids_tt, self.params.token_type_emb, layout=ttnn.TILE_LAYOUT)
         ttnn.deallocate(tids_tt)
 
-        position_ids = torch.from_numpy(np.tile(np.arange(T, dtype=np.int32), (B, 1)))
+        position_ids = torch.arange(T, dtype=torch.int32).unsqueeze(0).expand(B, -1)
         pids_tt = ttnn.from_torch(
             position_ids,
             dtype=ttnn.uint32,
@@ -942,7 +941,7 @@ class TTCustomAlbert:
         B, T = input_ids.shape
 
         if token_type_ids is None:
-            token_type_ids = torch.from_numpy(np.zeros((B, T), dtype=np.int32))
+            token_type_ids = torch.zeros(B, T, dtype=torch.int32)
 
         emb = self._embed(input_ids, token_type_ids)
 
