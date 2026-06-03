@@ -4,9 +4,11 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import torch
+from diffusers import MochiTransformer3DModel as TorchMochiTransformer3DModel
 from diffusers.models.embeddings import (
     MochiCombinedTimestepCaptionEmbedding as TorchMochiCombinedTimestepCaptionEmbedding,
 )
@@ -22,6 +24,7 @@ from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm, RMSNorm
 from ...parallel.config import DiTParallelConfig
 from ...parallel.manager import CCLManager
+from ...utils import cache
 from ...utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ...utils.padding import pad_vision_seq_parallel
 from ...utils.substate import pop_substate, rename_substate
@@ -656,18 +659,14 @@ class MochiTransformer3DModel(Module):
         logger.info(f"Spatial output after permuting: {spatial_BCTHW.shape}")
         return spatial_BCTHW
 
-    def forward(
+    def forward_full(
         self,
-        spatial: ttnn.Tensor,
-        prompt: ttnn.Tensor,
-        timestep: ttnn.Tensor,
-        prompt_attention_mask: ttnn.Tensor,
-    ) -> ttnn.Tensor:
-        """
-        Inputs are all torch tensors
-        Output is torch tensor
-        """
-
+        spatial: torch.Tensor,
+        prompt: torch.Tensor,
+        timestep: torch.Tensor,
+        prompt_attention_mask: torch.Tensor,
+    ) -> torch.Tensor:
+        """The full forward function including preprocessing and postprocessing using PyTorch."""
         B, C, T, H, W = spatial.shape
         pH, pW = H // self.patch_size, W // self.patch_size
         N = T * pH * pW
@@ -677,6 +676,32 @@ class MochiTransformer3DModel(Module):
         temb_11BD, prompt_1BLP = self.prepare_timestep_text_features(timestep, prompt, prompt_attention_mask)
 
         spatial_1BNI, N = self.preprocess_spatial_input(spatial)
+
+        proj_out_1BNI = self.forward(
+            temb_11BD=temb_11BD,
+            prompt_1BLP=prompt_1BLP,
+            rope_cos_1HND=rope_cos_1HND,
+            rope_sin_1HND=rope_sin_1HND,
+            spatial_1BNI=spatial_1BNI,
+            trans_mat=trans_mat,
+            N=N,
+        )
+
+        spatial_out = self.postprocess_spatial_output(proj_out_1BNI, T, H, W, N)
+
+        return spatial_out
+
+    def forward(
+        self,
+        *,
+        temb_11BD: ttnn.Tensor,
+        prompt_1BLP: ttnn.Tensor,
+        rope_cos_1HND: ttnn.Tensor,
+        rope_sin_1HND: ttnn.Tensor,
+        spatial_1BNI: ttnn.Tensor,
+        trans_mat: ttnn.Tensor,
+        N: int,
+    ) -> ttnn.Tensor:
         spatial_1BND = self.patch_embed(spatial_1BNI)
 
         for idx, block in enumerate(self.transformer_blocks):
@@ -715,6 +740,66 @@ class MochiTransformer3DModel(Module):
 
         proj_out_1BNI = self.proj_out(spatial_norm_1BND, compute_kernel_config=self.hifi4_compute_kernel_config)
 
-        spatial_out = self.postprocess_spatial_output(proj_out_1BNI, T, H, W, N)
+        return proj_out_1BNI
 
-        return spatial_out
+
+class MochiCheckpoint:
+    """A Mochi checkpoint: fetches weights and builds loaded transformers."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        torch_transformer = TorchMochiTransformer3DModel.from_pretrained(
+            name,
+            subfolder="transformer",
+            torch_dtype=torch.float32,
+        )
+        self._config = torch_transformer.config
+        self._state_dict = torch_transformer.state_dict()
+
+        self.patch_size: int = self._config.patch_size
+        self.in_channels: int = self._config.in_channels
+
+    def build(
+        self,
+        *,
+        ccl_manager: CCLManager,
+        parallel_config: DiTParallelConfig,
+        is_fsdp: bool,
+    ) -> MochiTransformer3DModel:
+        """Construct a ``MochiTransformer3DModel`` for this checkpoint (weights NOT loaded).
+
+        Loading is deferred so the caller can manage the lifecycle (deallocate / reload).
+        """
+        c = self._config
+        return MochiTransformer3DModel(
+            patch_size=c.patch_size,
+            num_attention_heads=c.num_attention_heads,
+            attention_head_dim=c.attention_head_dim,
+            num_layers=c.num_layers,
+            pooled_projection_dim=c.pooled_projection_dim,
+            in_channels=c.in_channels,
+            text_embed_dim=c.text_embed_dim,
+            time_embed_dim=c.time_embed_dim,
+            activation_fn=c.activation_fn,
+            mesh_device=ccl_manager.mesh_device,
+            ccl_manager=ccl_manager,
+            parallel_config=parallel_config,
+            is_fsdp=is_fsdp,
+        )
+
+    def load(
+        self,
+        model: MochiTransformer3DModel,
+        *,
+        mesh_device: ttnn.MeshDevice,
+        parallel_config: DiTParallelConfig,
+    ) -> None:
+        """Load (or reload) weights for a previously-built transformer."""
+        cache.load_model(
+            tt_model=model,
+            get_torch_state_dict=lambda: self._state_dict,
+            model_name=os.path.basename(self._name),
+            subfolder="transformer",
+            parallel_config=parallel_config,
+            mesh_shape=tuple(mesh_device.shape),
+        )
