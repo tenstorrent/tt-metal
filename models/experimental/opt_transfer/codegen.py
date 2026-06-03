@@ -2,9 +2,12 @@ import torch
 from models.experimental.opt_transfer.transforms import apply_transform
 
 
-def build_fused_qkv(proposal, weights, device, dims):
+def build_fused_qkv(proposal, weights, device, dims, placement=None):
     """Return a callable x(torch[B,S,embed]) -> (q,k,v) torch[B,H,S,D] that runs the
-    concatenated-QKV matmul + nlp_create_qkv_heads on device. Mirrors the verified path."""
+    concatenated-QKV matmul + nlp_create_qkv_heads on device. Mirrors the verified path.
+
+    placement: optional MemoryPlacement controlling the nlp_create_qkv_heads output memory
+    config. When None (default), hardcodes ttnn.DRAM_MEMORY_CONFIG (backward-compatible)."""
     import ttnn
 
     H = proposal.config["num_heads"]
@@ -23,12 +26,13 @@ def build_fused_qkv(proposal, weights, device, dims):
         B, S, _ = x.shape
         x_tt = ttnn.from_torch(x.reshape(B, 1, S, embed), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         qkv = ttnn.linear(x_tt, W_tt, bias=B_tt, compute_kernel_config=ckc)
+        mem = placement_to_memory_config(placement) if placement is not None else ttnn.DRAM_MEMORY_CONFIG
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             qkv,
             num_heads=H,
             num_kv_heads=proposal.config["num_kv_heads"],
             transpose_k_heads=proposal.config.get("transpose_k_heads", False),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=mem,
         )
         return ttnn.to_torch(q), ttnn.to_torch(k), ttnn.to_torch(v)
 
