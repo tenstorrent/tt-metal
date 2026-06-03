@@ -40,6 +40,7 @@ class StageVLM:
         submesh,
         config: PaliGemmaConfig,
         weights: Dict[str, Dict[str, torch.Tensor]],
+        tp_shard: bool = False,
     ) -> None:
         if spec.vlm_layer_range[1] <= spec.vlm_layer_range[0]:
             raise ValueError("StageVLM requires non-empty vlm_layer_range")
@@ -47,6 +48,7 @@ class StageVLM:
         self.submesh = submesh
         self.config = config
         self.weights = weights
+        self.tp_shard = tp_shard
         self.layer_lo, self.layer_hi = spec.vlm_layer_range
         self.num_layers = self.layer_hi - self.layer_lo
         self.slice: Optional[Pi0_5SubmeshVLMSlice] = None
@@ -63,6 +65,7 @@ class StageVLM:
             layer_range=(self.layer_lo, self.layer_hi),
             holds_embed_tokens=self.spec.holds_embed_tokens,
             holds_vlm_final_norm=self.spec.holds_vlm_final_norm,
+            tp_shard=self.tp_shard,
         )
 
     def forward(

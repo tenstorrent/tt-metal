@@ -58,6 +58,20 @@ class Pi0_5PipelineB:
     submeshes: List
     config: PaliGemmaConfig
     weights: Dict[str, Dict[str, torch.Tensor]]
+    # When True, build the VLM stages and the expert stage with their
+    # TP=8 sharded path (Pi0_5SubmeshTPGemmaBlock / Pi0_5SubmeshTPAdaRMSBlock).
+    # Default False keeps the replicated path that the bench / smoke tests
+    # use today. Requires `open_galaxy_mesh(layout, enable_fabric=True)` so
+    # the inner all_reduces have a configured fabric.
+    tp_shard: bool = False
+    # When True, after initialize(), walk every constructed block and migrate
+    # its weight tensors to L1 via ttnn.to_memory_config(t, L1_MEMORY_CONFIG).
+    # Ignored when tp_shard=False (the replicated path puts ~125 MB / chip of
+    # weights — too big to fit above the matmul kernel's static CB region on
+    # a single chip; TP=8 shards each layer 8 ways which both reduces the
+    # weight load AND shrinks the per-chip matmul shape -> shrinks the CB
+    # region, which is what makes the L1 placement viable here).
+    weights_l1: bool = False
     stage_0: Optional[Stage0Vision] = None
     stage_1: Optional[StageVLM] = None
     stage_2: Optional[StageVLM] = None
@@ -67,15 +81,23 @@ class Pi0_5PipelineB:
     def initialize(self) -> None:
         s = self.layout.stages
         self.stage_0 = Stage0Vision(s[0], self.submeshes[0], self.config, self.weights)
-        self.stage_1 = StageVLM(s[1], self.submeshes[1], self.config, self.weights)
-        self.stage_2 = StageVLM(s[2], self.submeshes[2], self.config, self.weights)
-        self.stage_3 = Stage3Expert(s[3], self.submeshes[3], self.config, self.weights)
+        self.stage_1 = StageVLM(s[1], self.submeshes[1], self.config, self.weights, tp_shard=self.tp_shard)
+        self.stage_2 = StageVLM(s[2], self.submeshes[2], self.config, self.weights, tp_shard=self.tp_shard)
+        self.stage_3 = Stage3Expert(s[3], self.submeshes[3], self.config, self.weights, tp_shard=self.tp_shard)
         self.kv_migrator = KVMigration(expert_submesh=self.submeshes[3])
 
         self.stage_0.initialize()
         self.stage_1.initialize()
         self.stage_2.initialize()
         self.stage_3.initialize(self.kv_migrator)
+
+        # Opt-in L1 migration. Walks every block on every stage and moves
+        # matmul + norm weights from DRAM to L1. See OPTION_B_L1_ASSESSMENT.md
+        # for the per-bank arithmetic that motivates this path.
+        if self.weights_l1 and self.tp_shard:
+            from ._l1_migration import migrate_pipeline_weights_to_l1
+
+            migrate_pipeline_weights_to_l1(self)
 
     def run_one_step(
         self,
