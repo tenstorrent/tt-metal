@@ -700,7 +700,12 @@ ttnn::Tensor quantize_weights_via_host(
     const ttnn::Tensor& device_tensor, ttnn::DataType dtype, const std::optional<ttnn::MemoryConfig>& memory_config) {
     auto host_tensor = ttnn::from_device(device_tensor);
     auto cast_tensor = ttnn::to_dtype(host_tensor, dtype);
-    host_tensor.deallocate(/*force=*/true);
+    // to_dtype is a no-op when the dtype already matches, returning host_tensor itself.
+    // Only free host_tensor when the cast produced a distinct tensor; otherwise the
+    // deallocate would invalidate cast_tensor (the value we return / pass to to_device).
+    if (host_tensor.dtype() != dtype) {
+        host_tensor.deallocate(/*force=*/true);
+    }
 
     if (!memory_config.has_value()) {
         return cast_tensor;

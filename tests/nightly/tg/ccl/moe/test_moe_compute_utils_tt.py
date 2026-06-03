@@ -20,7 +20,7 @@ import ttnn
 # Force torch CPU ops to use all cores. bf16 matmul on CPU is single-thread on
 # some torch builds even with OMP_NUM_THREADS set; this is the runtime knob that
 # keeps host-side golden compute fast. See test_moe_compute_6U.py for context.
-torch.set_num_threads(os.cpu_count())
+torch.set_num_threads(os.cpu_count() or 1)
 
 from ttnn.experimental.moe_compute_utils import (
     add_shared_expert_weights as torch_add_shared_expert_weights,

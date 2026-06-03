@@ -16,7 +16,7 @@ import torch
 # Required to keep compute_matmul_golden's fp32-cast fast path actually
 # parallel — without it, the golden compute can take ~30 s/layer on BH-LB
 # shape instead of ~33 ms.
-torch.set_num_threads(os.cpu_count())
+torch.set_num_threads(os.cpu_count() or 1)
 
 import ttnn
 from ttnn.operations.ccl import MoEActivationFunction
@@ -242,13 +242,14 @@ _MODELS_1x16 = [
     MoEModelConfig("kimi_k25",            N=2048, hidden_size=7168, selected_experts_k=8, experts_per_device_values=(6,), num_layers=3, num_iterations=2),
     MoEModelConfig("deepseek_v4_flash",   N=2048, hidden_size=4096, selected_experts_k=6),
 
-    # these next few are skipped because they are known failures. Not using xfail for the sake of reducing test runtime.
+    # these next few are known failures. xfail(run=False) keeps them tracked as expected
+    # failures (visibility/metrics) without paying their runtime, since they are slow.
     MoEModelConfig("deepseek_v4_pro",     N=3072, hidden_size=7168, selected_experts_k=6, experts_per_device_values=(6,), num_layers=3, num_iterations=2,
-                   marks=(pytest.mark.skip(reason="Combine AllClose fails for specific output values (hidden=7168, N=3072) — likely selective_reduce_combine kernel bug"),)),
+                   marks=(pytest.mark.xfail(run=False, reason="Combine AllClose fails for specific output values (hidden=7168, N=3072) — likely selective_reduce_combine kernel bug"),)),
     MoEModelConfig("mistral_large_3",     N=4096, hidden_size=7168, selected_experts_k=4, num_layers=3, num_iterations=2,
-                   marks=(pytest.mark.skip(reason="L1 overflow: N=4096 A2A buffer (12*12*2048=288KB) exceeds Wormhole L1 budget by ~21KB"),)),
+                   marks=(pytest.mark.xfail(run=False, reason="L1 overflow: N=4096 A2A buffer (12*12*2048=288KB) exceeds Wormhole L1 budget by ~21KB"),)),
     MoEModelConfig("ling_1t",             N=2048, hidden_size=8192, selected_experts_k=8, num_layers=3, num_iterations=2,
-                   marks=(pytest.mark.skip(reason="Wormhole L1 too small for hidden=8192: dim=4 overflows mux L1 by 93KB, dim=2 overflows combine CB (2MB > 1MB bank)"),)),
+                   marks=(pytest.mark.xfail(run=False, reason="Wormhole L1 too small for hidden=8192: dim=4 overflows mux L1 by 93KB, dim=2 overflows combine CB (2MB > 1MB bank)"),)),
 ]
 
 _MODELS_1x8 = [
@@ -2297,6 +2298,9 @@ def _run_moe_compute_impl(
     # rather than holding them until teardown. In trace mode the trace must be released
     # first — its captured buffers reference the tensors below.
     if enable_trace and trace_id is not None:
+        # The trace ran with blocking=False; synchronize before releasing so we don't
+        # tear down trace buffers while execution is still in flight.
+        ttnn.synchronize_device(mesh_device)
         ttnn.release_trace(mesh_device, trace_id)
 
     for iter_outputs in moe_compute_outputs:
