@@ -124,6 +124,7 @@ def test_unp_bcast_sub_sdpa(
         formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
+            MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),
             DEST_SYNC(),
         ],
