@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import Any, Optional, Tuple
 
 import ttnn
@@ -804,6 +805,22 @@ def build_ln_sharded_config(
     return cached
 
 
+def _all_gather_num_links() -> int:
+    """Ethernet links for the TP ``all_gather`` (env ``SEAMLESS_ALL_GATHER_NUM_LINKS``, default 2).
+
+    The gather of ``[1, ..., H]`` across TP devices is latency-bound at decode shapes (tiny
+    payload); driving it over both ethernet links of the BH QB 1x4 line cut AllGather kernel
+    time 17% (6167->5111us, -3.5% end-to-end) in the 2026_06_03 t2tt profile vs a single link.
+    Default 2 = the BH QB per-hop link count (3+ errors: only 2 links exist). Override per
+    topology; falls back to 1 on a bad/zero value.
+    """
+    try:
+        n = int(os.environ.get("SEAMLESS_ALL_GATHER_NUM_LINKS", "2"))
+    except ValueError:
+        return 1
+    return n if n >= 1 else 1
+
+
 def all_reduce_sum_replicate(
     x: ttnn.Tensor,
     mesh_device: ttnn.Device,
@@ -845,11 +862,12 @@ def all_reduce_sum_replicate(
     # Stack the per-device partials on the leading (non-tiled) dim: [1, ..., H] → [tp, ..., H].
     # Requires a unit leading dim so dim 0 sums purely across devices, not batch.
     assert int(x.shape[0]) == 1, f"all_reduce_sum_replicate expects a unit leading dim, got shape {x.shape}"
+    num_links = _all_gather_num_links()
     try:
         gathered = ttnn.all_gather(
             x,
             dim=0,
-            num_links=1,
+            num_links=num_links,
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
             memory_config=memory_config,
@@ -859,7 +877,7 @@ def all_reduce_sum_replicate(
         gathered = ttnn.all_gather(
             x,
             dim=0,
-            num_links=1,
+            num_links=num_links,
             cluster_axis=cluster_axis,
             memory_config=memory_config,
         )

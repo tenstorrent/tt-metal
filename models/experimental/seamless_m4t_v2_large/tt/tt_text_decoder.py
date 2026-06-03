@@ -662,6 +662,23 @@ class TTSeamlessM4Tv2Decoder:
         return ttnn.permute(x, (0, 2, 1, 3))
 
     @staticmethod
+    def _heads_fused(x: ttnn.Tensor, num_heads: int) -> ttnn.Tensor:
+        """Heads-major ``[B, num_heads, S, head_dim]`` via fused ``nlp_create_qkv_heads``.
+
+        Replaces ``_heads`` (``reshape`` + ``permute``) for the cross-attn K/V at ``enc_seq=512``,
+        where the reshape materializes a tile-padded ``[B, S, num_heads, head_dim]`` (heads padded
+        4->32) — ~27µs each. ``num_kv_heads=0`` runs the kernel on a single tensor and the Q-slot
+        output is already non-transposed ``[B, num_heads, S, head_dim]`` (same idiom as the Whisper
+        cross-attention KV path), so SDPA sees the identical layout with no separate permute.
+        ``x``: ``[B, S, num_heads*head_dim]`` (3D) or ``[B, 1, S, num_heads*head_dim]`` (4D).
+        """
+        if len(x.shape) == 3:
+            x = ttnn.unsqueeze(x, 1)
+        return ttnn.experimental.nlp_create_qkv_heads(
+            x, num_heads=num_heads, num_kv_heads=0, memory_config=ttnn.L1_MEMORY_CONFIG
+        )[0]
+
+    @staticmethod
     def _cross_q_heads_decode(q: ttnn.Tensor, *, num_heads: int) -> ttnn.Tensor:
         """Decode cross Q via ``nlp_create_qkv_heads`` (``num_kv_heads=0``)."""
         if len(q.shape) == 3:
@@ -1027,9 +1044,10 @@ class TTSeamlessM4Tv2Decoder:
                     program_config=pc_kv_single,
                 )
 
-            qh = self._heads(q, batch, seq_q, num_local_heads, head_dim)
-            kh = self._heads(k, batch, seq_k, num_local_heads, head_dim)
-            vh = self._heads(v, batch, seq_k, num_local_heads, head_dim)
+            # Fused head-split (avoids the ~27µs reshape+permute per K/V at enc_seq=512).
+            qh = self._heads_fused(q, num_local_heads)
+            kh = self._heads_fused(k, num_local_heads)
+            vh = self._heads_fused(v, num_local_heads)
 
             ttnn.deallocate(q)
             if kv_packed is not None:
