@@ -157,20 +157,7 @@ class TtMistral4TextModel:
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
             cache_file_name=_cf("language_model.lm_head.weight"),  # bump or remove the cache, layout changed!
         )
-        _num_devices = mesh_device.get_num_devices()
-        # N tiles per device: 131072 / num_devices / 32; spread across 64 cores.
-        # Single P150: 131072/1/32/64 = 64. P150×8: 131072/8/32/64 = 8.
-        # _lm_per_core_N = max(1, (131072 // _num_devices // 32) // 64)
-        # self.lm_head_program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        #     compute_with_storage_grid_size=(8, 8),  # 64 cores on BH
-        #     in0_block_w=1,  # K tiles per inner loop
-        #     out_subblock_h=1,
-        #     out_subblock_w=1,
-        #     per_core_M=1,  # M=32 → 1 tile row
-        #     per_core_N=_lm_per_core_N,  # tiles per core; dynamic per device count
-        #     fuse_batch=True,
-        #     mcast_in0=True,
-        # )
+
         NT_per_device = N_PER_DEVICE // TILE  # 512
         self.lm_head_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
             in0_block_w=8,
@@ -399,12 +386,13 @@ class TtMistral4TextModel:
         ``m_tiles = chunk//32`` program config) and gather each chunk's logits to host, where
         the full ``[seq_len, vocab]`` tensor is reassembled. DS would assert here (M == 1 tile).
         """
-        x = _rms_norm(x, self.final_norm_w, self.compute_kernel_config, ttnn.L1_MEMORY_CONFIG)
         seq_len = x.shape[2]
         chunk = self._prefill_chunk
         pc = self._lm_head_prefill_pc(chunk // 32)
         # lm_head_weight is column-sharded across devices (dim=1 of [hidden, vocab]); each
         # device produces partial logits [1, 1, chunk, vocab/n_devices], concatenated on host.
+        # Norm is applied per chunk (rows are independent) so no full [seq, HIDDEN] activation
+        # stays resident in L1 at long context.
         blocks = []
         for s in range(0, seq_len, chunk):
             e = min(s + chunk, seq_len)
@@ -412,6 +400,7 @@ class TtMistral4TextModel:
             xb = ttnn.slice(x, [0, 0, s, 0], [1, 1, e, HIDDEN_SIZE])
             if real < chunk:
                 xb = ttnn.pad(xb, [(0, 0), (0, 0), (0, chunk - real), (0, 0)], value=0.0)
+            xb = _rms_norm(xb, self.final_norm_w, self.compute_kernel_config, ttnn.L1_MEMORY_CONFIG)
             lb = ttnn.linear(
                 xb,
                 self.lm_head_weight_prefill,
@@ -847,6 +836,15 @@ class TtMistral4TextModel:
                     ttnn.deallocate(last)
                 last = xc
             else:
+                # Retain each chunk output in DRAM, not L1. Accumulating all chunks'
+                # [chunk, HIDDEN] outputs in L1 (last_only=False) starves later chunks'
+                # projection matmuls of L1 headroom and clashes their circular buffers at
+                # long context (assert.hpp:104). last_only=True keeps only one chunk, so the
+                # e2e/decode path is unaffected.
+                if xc.memory_config().buffer_type != ttnn.BufferType.DRAM:
+                    xc_dram = ttnn.to_memory_config(xc, ttnn.DRAM_MEMORY_CONFIG)
+                    ttnn.deallocate(xc)
+                    xc = xc_dram
                 outs.append(xc)
         ttnn.deallocate(x)
         if last_only:
