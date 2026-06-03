@@ -96,13 +96,15 @@ def is_valid_reduce_dimension(mathop, dest_acc, formats, dim):
     ),
     mathop=lambda reduce_pool: get_supported_reduce_axioms(reduce_pool),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    input_bounds=lambda formats: get_format_input_bounds(formats),
     reduce_pool=[ReducePool.Min, ReducePool.Max, ReducePool.Sum, ReducePool.Average],
     dimension_combinations=lambda mathop, dest_acc, formats: [
         dim
         for dim in dimension_combinations
         if is_valid_reduce_dimension(mathop, dest_acc, formats, dim)
     ],
+    input_bounds=lambda formats, dimension_combinations: get_format_input_bounds(
+        formats
+    ),
 )
 def test_sfpu_reduce(
     formats,
@@ -221,12 +223,12 @@ def test_sfpu_reduce(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     mathop=[MathOperation.ReduceRow],
     reduce_pool=[ReducePool.Max],
-    input_bounds=lambda formats: get_format_input_bounds(formats),
     input_dimensions=lambda mathop, dest_acc, formats: [
         dim
         for dim in [[32, 32], [64, 64], [64, 128], [128, 64], [256, 32], [32, 256]]
         if is_valid_reduce_dimension(mathop, dest_acc, formats, dim)
     ],
+    input_bounds=lambda formats, input_dimensions: get_format_input_bounds(formats),
 )
 def test_reduce_row_max(
     formats, dest_acc, mathop, reduce_pool, input_bounds, input_dimensions

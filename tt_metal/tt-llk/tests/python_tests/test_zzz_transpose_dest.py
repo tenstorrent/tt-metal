@@ -92,6 +92,13 @@ def generate_transpose_dest_float_combinations(formats_list):
                 for unpack_to_dest in unpack_to_dest_list
             )
 
+    # Group by ELF identity to minimize ELF-load thrashing. With compile_time_formats=False
+    # and an explicit unpack_to_dest, formats is pure runtime here; the ELF is defined only by
+    # (math_transpose_faces, dest_acc, unpack_to_dest). Sorting by that key keeps same-ELF
+    # cases adjacent (fmt varies within a group) so each ELF loads once. Sorting only reorders
+    # the list, so the set of cases is unchanged.
+    combinations.sort(key=lambda c: (str(c[2]), str(c[1]), str(c[3])))
+
     return combinations
 
 

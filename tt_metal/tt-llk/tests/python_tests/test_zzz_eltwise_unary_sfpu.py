@@ -128,21 +128,21 @@ FLOAT_TEST_PARAMS = list(
     chain(
         (
             (fmt, approx, mathop, fast, dest)
-            for fmt, approx, mathop, fast, dest in product(
-                FORMATS,
+            for approx, mathop, fast, dest, fmt in product(
                 [ApproximationMode.No, ApproximationMode.Yes],
                 SUPPORTED_FAST_MODE_OPS,
                 [FastMode.No, FastMode.Yes],
                 [DestAccumulation.No, DestAccumulation.Yes],
+                FORMATS,
             )
         ),
         (
             (fmt, approx, mathop, FastMode.No, dest)
-            for fmt, approx, mathop, dest in product(
-                FORMATS,
+            for approx, mathop, dest, fmt in product(
                 [ApproximationMode.No, ApproximationMode.Yes],
                 [op for op in ALL_MATHOPS if op not in SUPPORTED_FAST_MODE_OPS],
                 [DestAccumulation.No, DestAccumulation.Yes],
+                FORMATS,
             )
         ),
     )
@@ -240,18 +240,17 @@ FLOAT_TEST_PARAMS_BFP4_B = list(
     chain(
         (
             (fmt, approx, mathop, fast, dest)
-            for fmt, approx, mathop, fast, dest in product(
-                FORMATS_INCLUDE_BFP4_B,
+            for approx, mathop, fast, dest, fmt in product(
                 [ApproximationMode.No, ApproximationMode.Yes],
                 [op for op in SUPPORTED_FAST_MODE_OPS if op in MATHOPS_INCLUDE_BFP4_B],
                 [FastMode.No, FastMode.Yes],
                 [DestAccumulation.No, DestAccumulation.Yes],
+                FORMATS_INCLUDE_BFP4_B,
             )
         ),
         (
             (fmt, approx, mathop, FastMode.No, dest)
-            for fmt, approx, mathop, dest in product(
-                FORMATS_INCLUDE_BFP4_B,
+            for approx, mathop, dest, fmt in product(
                 [ApproximationMode.No, ApproximationMode.Yes],
                 [
                     op
@@ -259,6 +258,7 @@ FLOAT_TEST_PARAMS_BFP4_B = list(
                     if op not in SUPPORTED_FAST_MODE_OPS
                 ],
                 [DestAccumulation.No, DestAccumulation.Yes],
+                FORMATS_INCLUDE_BFP4_B,
             )
         ),
     )

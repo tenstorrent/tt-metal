@@ -128,15 +128,6 @@ def is_relu_threshold_tolerance_issue(
 
 
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-            DataFormat.Float16,
-            DataFormat.Float32,
-            DataFormat.Int32,
-            DataFormat.Bfp8_b,
-        ]
-    ),
     input_dimensions=[[32, 32], [64, 64], [32, 64], [64, 32]],
     dest_sync=[DestSync.Half, DestSync.Full],
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
@@ -148,6 +139,15 @@ def is_relu_threshold_tolerance_issue(
     ],
     dest_index=lambda dest_acc, dest_sync, formats, input_dimensions: get_valid_dest_indices(
         dest_sync, dest_acc, formats, input_dimensions
+    ),
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+            DataFormat.Float32,
+            DataFormat.Int32,
+            DataFormat.Bfp8_b,
+        ]
     ),
 )
 def test_pack(

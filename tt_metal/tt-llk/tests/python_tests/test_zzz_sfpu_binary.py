@@ -389,6 +389,13 @@ def _golden_sfpu_binary_bcast(
 
 
 @parametrize(
+    mathop=[
+        MathOperation.SfpuElwadd,
+        MathOperation.SfpuElwsub,
+        MathOperation.SfpuElwmul,
+    ],
+    bcast_dim=[BroadcastType.ROW, BroadcastType.COL],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     formats=input_output_formats(
         [
             DataFormat.Float32,
@@ -397,13 +404,6 @@ def _golden_sfpu_binary_bcast(
             DataFormat.Bfp8_b,
         ]
     ),
-    bcast_dim=[BroadcastType.ROW, BroadcastType.COL],
-    mathop=[
-        MathOperation.SfpuElwadd,
-        MathOperation.SfpuElwsub,
-        MathOperation.SfpuElwmul,
-    ],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 def test_sfpu_binary_bcast(
     formats,

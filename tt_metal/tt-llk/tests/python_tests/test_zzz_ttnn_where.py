@@ -23,6 +23,8 @@ def torch_equal_nan(a, b):
 
 
 @parametrize(
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=MathOperation.TTNNWhere,
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
@@ -31,8 +33,6 @@ def torch_equal_nan(a, b):
         ],
         same=True,
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    mathop=MathOperation.TTNNWhere,
     test_case=["mixed", "all_ones", "all_zeros"],
 )
 def test_ttnn_where(
@@ -135,6 +135,10 @@ def test_ttnn_where(
 # MCW test with dynamic format sweeping like main test
 # Use same input/output format - no mixing
 @parametrize(
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=MathOperation.TTNNWhere,
+    height=[32],
+    width=[32],
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
@@ -143,10 +147,6 @@ def test_ttnn_where(
         ],
         same=True,
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    mathop=MathOperation.TTNNWhere,
-    height=[32],
-    width=[32],
 )
 def test_ttnn_where_mcw(
     formats,
