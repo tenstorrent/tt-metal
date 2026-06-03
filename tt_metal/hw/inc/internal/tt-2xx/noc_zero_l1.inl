@@ -33,7 +33,10 @@ inline void Noc::async_write_zeros(const Dst& dst, uint32_t size_bytes, const ds
     // the 8 backend engines via per-packet VC autoincrement wrapping the 8 write-VCs
     // (CMDBUF_WR_REQ_VC..+7). idma_acked_cmdbuf_0 returns true only after every
     // backend packet has acked.
-    overlay::reset_cmdbuf_0();
+    //
+    // No reset_cmdbuf_0() here: resetting per-call would be unsafe when callers batch
+    // several async_write_zeros before a single barrier — a CMDBUF_RESET on the next
+    // call may disturb a previous zero whose iDMA ack is still pending.
     overlay::idma_setup_as_copy_cmdbuf_0(/*wrapping_en=*/false);              // MISC.idma_en + MISC.write_trans
     overlay::set_axi_opt_1_cmdbuf_0(/*src_protocol=*/4, /*decouple_aw=*/1);   // flip to zero mode
     overlay::setup_ongoing_cmdbuf_0(

@@ -27,6 +27,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
@@ -55,6 +56,7 @@ constexpr const char* OUT_TENSOR = "out";
 
 constexpr const char* L1_PRODUCER = "l1_producer";
 constexpr const char* DRAM_CONSUMER = "dram_consumer";
+constexpr const char* L1_BATCHED_PRODUCER = "l1_batched_producer";
 
 constexpr uint32_t kStatusOk = 0xCAFEBABEu;
 
@@ -197,6 +199,106 @@ TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApi) {
             return;  // First mismatch is enough; bail to avoid spamming the log.
         }
     }
+}
+
+// Batched L1 zeroing: a kernel issues several noc.async_write_zeros() calls into disjoint
+// chunks of one DFB entry and then barriers once.
+TEST_F(MeshDeviceSingleCardFixture, ZeroMemoryApiBatchedL1) {
+    auto& mesh_device = *devices_[0];
+    IDevice* dev = mesh_device.get_devices()[0];
+
+    constexpr uint32_t scratch_bytes = 32 * 1024;
+    constexpr uint32_t num_chunks = 4;  // 4 disjoint 8 KB L1 zeros, then a single barrier
+    constexpr uint32_t num_pages = 4;
+    constexpr uint32_t page_size_bytes = 4 * 1024;
+    constexpr uint32_t total_words = num_pages * (page_size_bytes / sizeof(uint32_t));
+    constexpr uint32_t flag_addr = 100 * 1024;
+    const experimental::NodeCoord node{0, 0};
+
+    // L1 status flag: sentinel that the batched producer demotes to kStatusOk on success.
+    std::vector<uint32_t> flag_init{0xBAADF00Du};
+    tt_metal::detail::WriteToDeviceL1(dev, node, flag_addr, flag_init);
+
+    auto tensor = MeshTensor::allocate_on_device(
+        mesh_device, make_flat_dram_tensor_spec(page_size_bytes, num_pages), TensorTopology{});
+    std::vector<uint32_t> stamped(total_words, 0xFFFFFFFFu);
+    detail::WriteToBuffer(*tensor.mesh_buffer().get_reference_buffer(), stamped);
+
+    experimental::DataflowBufferSpec scratch_spec{
+        .unique_id = SCRATCH_DFB,
+        .entry_size = scratch_bytes,
+        .num_entries = 1,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    };
+
+    experimental::KernelSpec producer_spec{
+        .unique_id = L1_BATCHED_PRODUCER,
+        .source =
+            std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_l1_producer.cpp"},
+        .num_threads = 1,
+        .compiler_options = {.defines = {{"ZERO_NUM_CHUNKS", std::to_string(num_chunks)}}},
+        .dfb_bindings =
+            {{.dfb_spec_name = SCRATCH_DFB,
+              .accessor_name = "scratch",
+              .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+              .access_pattern = experimental::DFBAccessPattern::STRIDED}},
+        .runtime_arg_schema = {.runtime_arg_names = {"total_bytes", "flag_addr"}},
+        .hw_config = make_dm_config(DataMovementProcessor::RISCV_0, NOC::RISCV_0_default),
+    };
+
+    experimental::KernelSpec consumer_spec{
+        .unique_id = DRAM_CONSUMER,
+        .source =
+            std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/dataflow/zero_memory_api_dram_consumer.cpp"},
+        .num_threads = 1,
+        .dfb_bindings =
+            {{.dfb_spec_name = SCRATCH_DFB,
+              .accessor_name = "scratch",
+              .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+              .access_pattern = experimental::DFBAccessPattern::STRIDED}},
+        .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "out"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"page_start", "page_end", "page_size"}},
+        .hw_config = make_dm_config(DataMovementProcessor::RISCV_1, NOC::RISCV_1_default),
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "zero_memory_api_batched_l1",
+        .kernels = {producer_spec, consumer_spec},
+        .dataflow_buffers = {scratch_spec},
+        .tensor_parameters = {{.unique_id = OUT_TENSOR, .spec = tensor.tensor_spec()}},
+        .work_units = {{.name = "main", .kernels = {L1_BATCHED_PRODUCER, DRAM_CONSUMER}, .target_nodes = node}},
+    };
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel_spec_name = L1_BATCHED_PRODUCER,
+            .runtime_arg_values = {{.node = node, .args = {{"total_bytes", scratch_bytes}, {"flag_addr", flag_addr}}}},
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel_spec_name = DRAM_CONSUMER,
+            .runtime_arg_values =
+                {{.node = node, .args = {{"page_start", 0u}, {"page_end", num_pages}, {"page_size", page_size_bytes}}}},
+        },
+    };
+    params.tensor_args = {{.tensor_parameter_name = OUT_TENSOR, .tensor = tensor}};
+    experimental::SetProgramRunArgs(program, params);
+
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range(mesh_device.shape());
+    workload.add_program(device_range, std::move(program));
+    auto& cq = mesh_device.mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/true);
+
+    // The batched producer's in-kernel verify is the primary signal: kStatusOk only if
+    // every byte across all chunks is zero after the single barrier.
+    std::vector<uint32_t> flag_out;
+    tt_metal::detail::ReadFromDeviceL1(dev, node, flag_addr, sizeof(uint32_t), flag_out);
+    ASSERT_EQ(flag_out.size(), 1u);
+    EXPECT_EQ(flag_out[0], kStatusOk) << "Batched L1 zero status word was 0x" << std::hex << flag_out[0]
+                                      << " (expected 0x" << kStatusOk << "); a non-OK value means a batched zero was "
+                                      << "lost (stale bytes remained after the single barrier).";
 }
 
 }  // namespace tt::tt_metal

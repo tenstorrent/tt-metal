@@ -72,8 +72,18 @@ void kernel_main() {
 #endif
 
     Noc noc;
+#ifdef ZERO_NUM_CHUNKS
+    // Issue ZERO_NUM_CHUNKS disjoint async_write_zeros into this one entry, then barrier
+    // ONCE.
+    const uint32_t chunk_bytes = total_bytes / ZERO_NUM_CHUNKS;  // host picks an exact divisor
+    for (uint32_t c = 0; c < ZERO_NUM_CHUNKS; ++c) {
+        noc.async_write_zeros(dfb, chunk_bytes, {.offset_bytes = c * chunk_bytes});
+    }
+    noc.write_zeros_l1_barrier();
+#else
     noc.async_write_zeros(dfb, total_bytes);
     noc.write_zeros_l1_barrier();
+#endif
 
     // Verify every byte is now 0.
     for (uint32_t i = 0; i < num_words; ++i) {
