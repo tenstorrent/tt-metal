@@ -578,14 +578,18 @@ public:
     // applies via experimental::UpdateTensorArgs — no Program rebuild,
     // no heap allocation.
     //
-    // Limitation: every TensorArgument returned by the factory must reference a
-    // MeshTensor reachable from tensor_args or tensor_return_value.
+    // Design: every TensorArgument returned by the factory must reference a
+    // MeshTensor reachable from tensor_args or tensor_return_value. The factory
+    // has no path to declare op-owned resource tensors (halo lookup tables, etc.) —
+    // by design, mirroring the descriptor-side split between ProgramDescriptor
+    // (single-program, no workload-scoped resources) and WorkloadDescriptor
+    // (multi-program, with `semaphores` + `buffers` for op-owned resources).
+    // Tensor is a natively mesh-wide memory object and Program is single-device,
+    // so SPMD ops have no natural place to carry workload-scoped resources.
     //
-    // TODO: support op-owned resource tensors (the prepare_resources analog
-    // from the descriptor adapter) — will require extending shared_variables_t
-    // and the io_tensor enumeration to include factory-produced tensors.
-    //
-    // TODO: consider replacing with a general MeshWorkloadSpecFactoryAdapter?
+    // Ops that need op-owned resources (single-program or multi-program) should
+    // route through the future MeshWorkloadSpecFactoryConcept analog of
+    // WorkloadDescriptorConcept, not this concept.
     // -----------------------------------------------------------------------
     template <ProgramSpecFactoryConcept ProgramSpecFactory>
     struct ProgramSpecMeshWorkloadFactoryAdapter {
@@ -652,8 +656,9 @@ public:
 
         // Match each TensorArgument's MeshTensor reference back to its index in the
         // io_tensor enumeration. Cache-miss path only.
-        // TT_FATALs on a TensorArgument that doesn't reference an io_tensor (see
-        // adapter-level TODO on op-owned resource tensor support).
+        // TT_FATALs on a TensorArgument that doesn't reference an io_tensor — see
+        // the adapter-level Design comment on why op-owned resource tensors are
+        // not supported on this concept.
         //
         // NOTE on host perf: the index-based binding scheme is what makes a
         // fast cache-hit path possible, but the current straightforward
@@ -675,7 +680,8 @@ public:
                 TT_FATAL(
                     it != io_mesh_tensors.end(),
                     "TensorArgument '{}' must reference a MeshTensor reachable from tensor_args or "
-                    "tensor_return_value (got non-io_tensor MeshTensor)",
+                    "tensor_return_value. ProgramSpecFactoryConcept does not support op-owned "
+                    "resource tensors; route through the multi-program factory concept if you need them.",
                     tensor_arg.tensor_parameter_name);
                 bindings.push_back(
                     {tensor_arg.tensor_parameter_name,
