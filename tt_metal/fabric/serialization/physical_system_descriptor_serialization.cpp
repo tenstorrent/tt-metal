@@ -201,6 +201,13 @@ void physical_system_descriptor_to_proto(
     proto_desc->mutable_ethernet_firmware_version()->set_minor(descriptor.get_ethernet_firmware_version().minor);
     proto_desc->mutable_ethernet_firmware_version()->set_patch(descriptor.get_ethernet_firmware_version().patch);
 
+    // Set firmware bundle version (optional)
+    if (descriptor.get_firmware_bundle_version().has_value()) {
+        proto_desc->mutable_firmware_bundle_version()->set_major(descriptor.get_firmware_bundle_version()->major);
+        proto_desc->mutable_firmware_bundle_version()->set_minor(descriptor.get_firmware_bundle_version()->minor);
+        proto_desc->mutable_firmware_bundle_version()->set_patch(descriptor.get_firmware_bundle_version()->patch);
+    }
+
     // Convert pcie_devices_per_tray map
     for (const auto& [host_name, tray_map] : descriptor.get_pcie_devices_per_tray()) {
         auto* proto_host_pcie_map = proto_desc->add_pcie_devices_per_tray();
@@ -299,6 +306,14 @@ std::unique_ptr<PhysicalSystemDescriptor> proto_to_physical_system_descriptor(
     descriptor->get_ethernet_firmware_version().major = proto_desc.ethernet_firmware_version().major();
     descriptor->get_ethernet_firmware_version().minor = proto_desc.ethernet_firmware_version().minor();
     descriptor->get_ethernet_firmware_version().patch = proto_desc.ethernet_firmware_version().patch();
+
+    // Set firmware bundle version (optional)
+    if (proto_desc.has_firmware_bundle_version()) {
+        descriptor->get_firmware_bundle_version() = tt::umd::FirmwareBundleVersion(
+            proto_desc.firmware_bundle_version().major(),
+            proto_desc.firmware_bundle_version().minor(),
+            proto_desc.firmware_bundle_version().patch());
+    }
 
     // Convert pcie_devices_per_tray map
     auto& pcie_devices_per_tray = descriptor->get_pcie_devices_per_tray();
