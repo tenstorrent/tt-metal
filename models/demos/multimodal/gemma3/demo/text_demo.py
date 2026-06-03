@@ -20,7 +20,7 @@ from models.demos.multimodal.gemma3.tt.gemma_e2e_model import TtGemmaModel
 from models.demos.multimodal.gemma3.tt.gemma_multimodal_generator import GemmaMultimodalGenerator as Generator
 from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_accuracy, verify_perf
-from models.demos.utils.model_targets import resolve_accuracy_targets, resolve_perf_targets
+from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 from models.tt_transformers.tt.generator import create_submeshes
