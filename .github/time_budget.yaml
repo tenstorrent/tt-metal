@@ -180,6 +180,8 @@ models:
     bh_p150b_civ2: 55
     bh_p150: 60
     bh_p300: 50
+    bh_loudbox: 120
+    bh_llmbox: 45
     bh_quietbox_2: 235
     bh_galaxy: 78
   unit:
