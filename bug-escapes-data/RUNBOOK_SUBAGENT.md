@@ -61,7 +61,7 @@ You will be given:
 - The path to `seen-escapes.json` — check this first; skip any escape ID already present
 - The path to `confirmed-escapes.json` — for reference
 - The campaign mode: **backfill** (90-day window) or **incremental** (2-day window)
-- A target count: how many confirmed or assumed findings to return (default: 1)
+- A target count: how many findings to return (default: 1). **When target is 1: stop as soon as you find one qualifying candidate (Opus verdict PROCEED_TO_BISECT). Do not continue scanning further candidates.**
 
 ---
 
