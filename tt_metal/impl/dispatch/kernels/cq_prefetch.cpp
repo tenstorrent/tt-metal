@@ -140,12 +140,12 @@ FORCE_INLINE void cmddat_invalidate_after_noc_read(uintptr_t cached_start, uint3
 }
 
 FORCE_INLINE void quasar_cmddat_pre_retire_barrier_sync(uint32_t trid) {
-    asm volatile("fence" ::: "memory");
-    for (volatile int delay = 0; delay < static_cast<int>(quasar_cmddat_pre_retire_iters); ++delay) {
-        (void)delay;
-    }
+//    asm volatile("fence" ::: "memory");
+//    for (volatile int delay = 0; delay < static_cast<int>(quasar_cmddat_pre_retire_iters); ++delay) {
+//        (void)delay;
+//    }
     (void)__builtin_riscv_ttrocc_scmdbuf_tr_ack_trid(trid);
-    asm volatile("fence" ::: "memory");
+//    asm volatile("fence" ::: "memory");
 }
 
 // After fetch_q_get_cmds returns committed cmddat; before uncached cmd header read in process_cmd.

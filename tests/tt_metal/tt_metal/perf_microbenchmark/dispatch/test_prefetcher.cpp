@@ -3356,17 +3356,19 @@ protected:
         SmokeTestHelper helper(device_, device_data, commands_per_iteration, info);
 
         auto pad_host = [this](Common::DeviceData& dd) { pad_host_data(dd); };
-        for (uint32_t length : payload_lengths) {
-            helper.add_host_write(length, pad_host);
+        // Mirror execute_generated_commands: each outer iteration replays the full command batch,
+        // appending one completion-queue page per host write.
+        for (uint32_t iter = 0; iter < num_iterations; ++iter) {
+            for (uint32_t length : payload_lengths) {
+                helper.add_host_write(length, pad_host);
+            }
         }
 
         const bool wait_for_completion = false;
         const bool wait_for_host_writes = true;
         execute_generated_commands(
             commands_per_iteration, device_data, worker_range.size(), num_iterations, wait_for_completion, wait_for_host_writes);
-
-        refresh_completion_data();
-        EXPECT_TRUE(device_data.validate(device_)) << "SD prefetch/dispatch repro failed validation: " << case_name;
+        // execute_generated_commands already refresh_completion_data() + validate().
     }
 
     uint32_t get_dram_data_size_words() const {

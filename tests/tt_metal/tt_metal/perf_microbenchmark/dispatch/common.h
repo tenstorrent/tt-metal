@@ -506,6 +506,7 @@ inline bool DeviceData::validate_host(
 inline bool DeviceData::validate(distributed::MeshDevice::IDevice* device) {
     bool failed = false;
     std::unordered_set<CoreCoord> validated_cores;
+    host_data_index = 0;
 
     for (const auto& [core, bank_device_data] : this->all_data) {
         for (const auto& [bank, one_core_data] : bank_device_data) {
