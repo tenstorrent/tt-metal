@@ -14,7 +14,7 @@
 namespace ckernel::sfpu {
 
 sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
-    sfpi::vFloat f, j, r, y;
+    sfpi::vFloat f, j, r, y, abs_y;
     sfpi::vInt i;
     i = sfpi::float_to_int16(x, sfpi::RoundMode::NearestEven);
     j = sfpi::int32_to_float(i, sfpi::RoundMode::NearestEven);
@@ -24,23 +24,27 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
     r = r * f + 0x1.5f4p-10f;
     r = r * f + 0x1.3b4p-7f;
     i = sfpi::abs(i);
-    r = r * f + sfpi::vConstFloatPrgm2;
+    y = r * f + sfpi::vConstFloatPrgm2;
     i = sfpi::reinterpret<sfpi::vInt>(sfpi::copysgn(sfpi::reinterpret<sfpi::vFloat>(i), j));
-    y = r * f + sfpi::vConstFloatPrgm1;
-    r = y * f + sfpi::vConstFloatPrgm0;
+    r = y * f + sfpi::vConstFloatPrgm1;
     y *= std::numeric_limits<float>::infinity();
+    r = r * f + sfpi::vConstFloatPrgm0;
+    abs_y = sfpi::abs(y);
     r = r * f + 1.0f;
 
-    sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias);
-    e += i;
-    v_block {
-        // e < 255
-        sfpi::vInt e_lt_255 = __builtin_rvtt_sfpiadd_i(e.get(), -255, sfpi::SFPIADD_MOD1_CC_LT0);
-        y = sfpi::setexp(r, e);
-        v_if(e_lt_255 < -254) { y = 0.0f; }
-        v_endif;
+    v_if(abs_y >= 0.0f) {
+        sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias);
+        e += i;
+        v_block {
+            // e < 255
+            sfpi::vInt e_lt_255 = __builtin_rvtt_sfpiadd_i(e.get(), -255, sfpi::SFPIADD_MOD1_CC_LT0);
+            y = sfpi::setexp(r, e);
+            v_if(e_lt_255 < -254) { y = 0.0f; }
+            v_endif;
+        }
+        v_endblock;
     }
-    v_endblock;
+    v_endif;
 
     return y;
 }
