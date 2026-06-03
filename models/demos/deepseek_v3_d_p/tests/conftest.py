@@ -515,7 +515,8 @@ def weight_cache_path(variant, model_path):
         return None
     arch = "bh" if is_blackhole() else "wh"
     num_devices = ttnn.get_num_devices()
-    env_cache = os.getenv("TT_DS_PREFILL_TTNN_CACHE")
+    env_name = variant.ttnn_cache_env or "TT_DS_PREFILL_TTNN_CACHE"
+    env_cache = os.getenv(env_name)
     if env_cache:
         cache_dir = Path(env_cache) / f"{variant.name}_{arch}_{num_devices}dev"
     else:

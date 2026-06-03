@@ -30,23 +30,8 @@
     export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_HOST_REF_CACHE=/tmp/deepseek_v3_transformer_ref_cache DEEPSEEK_V3_TRACE_DIR=/mnt/MLPerf/deepseek-prefill-cache MESH_DEVICE=TG
     uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
     export DEEPSEEK_V3_MLA_REF_CACHE=/mnt/MLPerf/deepseek-prefill-cache/test_mla_output
-    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "8x4 and random and max_sl and check_pcc and sequential and ring and (seq128k or seq100k)" -vvv --tb=short
-    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_kimi_mla -k "8x4 and random and max_sl and check_pcc and sequential and ring and (seq5k or seq25k)" -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "8x4 and random and max_sl and check_pcc and balanced and ring" -vvv --tb=short
   test_type: mla
-  test_group: module
-  skus:
-    bh_galaxy:
-      timeout: 30
-  owner_id: U08RL15T4N8
-  team: models
-
-- name: "(Galaxy) DeepSeek Prefill - MoE"
-  cmd: |
-    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528 DEEPSEEK_V3_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_TTNN_CACHE=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI TT_DS_PREFILL_HOST_REF_CACHE=/tmp/deepseek_v3_transformer_ref_cache DEEPSEEK_V3_TRACE_DIR=/mnt/MLPerf/deepseek-prefill-cache MESH_DEVICE=TG
-    uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -k "mesh-8x4 and perf-device-256" -vvv --tb=short
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "mesh-8x4" -vvv --tb=short
-  test_type: moe
   test_group: module
   skus:
     bh_galaxy:
@@ -64,6 +49,7 @@
   skus:
     bh_galaxy:
       timeout: 30
+
   owner_id: U08RL15T4N8
   team: models
 
@@ -77,5 +63,41 @@
   skus:
     bh_galaxy:
       timeout: 30
+  owner_id: U08RL15T4N8
+  team: models
+
+- name: "(Galaxy) DeepSeek Prefill - Kimi MLA"
+  cmd: |
+    export MESH_DEVICE=TG KIMI_MLA_REF_CACHE=/mnt/MLPerf/kimi-prefill-cache/test_mla_output
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_kimi_mla -k "8x4 and random and max_sl and check_pcc and sequential and ring and (seq5k or seq25k)" -vvv --tb=short
+  test_type: kimi_mla
+  test_group: module
+  skus:
+    bh_galaxy:
+      timeout: 30
+  owner_id: U08RL15T4N8
+  team: models
+
+- name: "(Galaxy) DeepSeek Prefill - Kimi MoE"
+  cmd: |
+    export MESH_DEVICE=TG
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_moe -k "mesh-8x4" -vvv --tb=short
+  test_type: kimi_moe
+  test_group: module
+  skus:
+    bh_galaxy:
+      timeout: 30
+  owner_id: U08RL15T4N8
+  team: models
+
+- name: "(Galaxy) DeepSeek Prefill - Kimi Prefill Block"
+  cmd: |
+    export MESH_DEVICE=TG
+    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_kimi_prefill_block -k "mesh-8x4 and (pcc-prompt_5k or pcc-prompt_25k) and moe" -vvv --tb=short --timeout=1800
+  test_type: kimi_prefill_block
+  test_group: module
+  skus:
+    bh_galaxy:
+      timeout: 90
   owner_id: U08RL15T4N8
   team: models

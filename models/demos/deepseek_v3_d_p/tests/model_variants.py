@@ -46,6 +46,7 @@ class TestVariant:
         reference_moe_cls: Optional[type] = None,
         ref_cache_env: Optional[str] = None,
         mla_ref_cache_env: Optional[str] = None,
+        ttnn_cache_env: Optional[str] = None,
         moe_pcc_threshold: float = 0.999,
         mla_pcc_threshold: float = 0.999,
         supports_pretrained: bool = True,
@@ -62,6 +63,7 @@ class TestVariant:
         self.reference_moe_cls = reference_moe_cls
         self.ref_cache_env = ref_cache_env
         self.mla_ref_cache_env = mla_ref_cache_env
+        self.ttnn_cache_env = ttnn_cache_env
         self.moe_pcc_threshold = moe_pcc_threshold
         self.mla_pcc_threshold = mla_pcc_threshold
         self.supports_pretrained = supports_pretrained
@@ -80,6 +82,7 @@ DSV3 = TestVariant(
     reference_moe_cls=DSv3RefMoE,
     ref_cache_env="TT_DS_PREFILL_HOST_REF_CACHE",
     mla_ref_cache_env="DEEPSEEK_V3_MLA_REF_CACHE",
+    ttnn_cache_env="TT_DS_PREFILL_TTNN_CACHE",
 )
 
 KIMI = TestVariant(
@@ -95,6 +98,7 @@ KIMI = TestVariant(
     reference_moe_cls=KimiRefMoE,
     ref_cache_env="TT_KIMI_PREFILL_HOST_REF_CACHE",
     mla_ref_cache_env="KIMI_MLA_REF_CACHE",
+    ttnn_cache_env="TT_KIMI_PREFILL_TTNN_CACHE",
     mla_pcc_threshold=0.995,
     moe_pcc_threshold=0.987,
 )

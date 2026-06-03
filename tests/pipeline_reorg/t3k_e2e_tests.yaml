@@ -130,7 +130,7 @@
     pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_dispatch_combine.py -vvv --tb=short -k "random and (linear-8-1link or mesh-4x2 or mesh-2x4)"
     pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -vvv --tb=short -k "mesh-4x2" --timeout 900
     pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_ring_joint_mla.py -k '4x2 and single_run and pcc_check' -vvv --tb=short
-    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "2x4 and random and scaled_sl and check_pcc and line and (seq128k or seq100k)" -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "2x4 and random and scaled_sl and check_pcc and line" -vvv --tb=short
   skus:
     wh_llmbox:
       timeout: 45
