@@ -313,7 +313,6 @@ TEST_F(DispatchContextFixture, ServiceCoreGridCap) {
         << "FD grid must be smaller than SD grid (dispatch column excluded by YAML)";
 
     const auto free_cores = internal::ServiceCoreManager::get().get_claimable_cores(device);
-    ASSERT_FALSE(free_cores.empty()) << "Expected at least one free dispatch core";
 
     internal::ServiceCoreManager::get().claim(device, free_cores);
 
@@ -326,8 +325,8 @@ TEST_F(DispatchContextFixture, ServiceCoreGridCap) {
     experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device.get());
     experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device.get());
 
-    EXPECT_TRUE(internal::ServiceCoreManager::get().get_claimable_cores(device).empty())
-        << "All free dispatch cores were claimed; none should be available in FD";
+    // All cores claimed — get_claimable_cores() must fatal rather than return an empty vector.
+    EXPECT_THROW(internal::ServiceCoreManager::get().get_claimable_cores(device), std::exception);
 
     experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device.get());
 
@@ -336,8 +335,13 @@ TEST_F(DispatchContextFixture, ServiceCoreGridCap) {
     EXPECT_EQ(capped_grid.x, fd_grid.x) << "SD grid x must be capped to FD grid x when service cores are claimed";
     EXPECT_EQ(capped_grid.y, fd_grid.y) << "SD grid y must be capped to FD grid y when service cores are claimed";
 
-    // Cleanup.
+    // Phase 5: release service cores and verify the full SD grid is restored.
     internal::ServiceCoreManager::get().release(device, free_cores);
+
+    const CoreCoord restored_grid = device->compute_with_storage_grid_size();
+    EXPECT_EQ(restored_grid.x, sd_grid.x) << "SD grid x must be restored to original after release";
+    EXPECT_EQ(restored_grid.y, sd_grid.y) << "SD grid y must be restored to original after release";
+
     internal::ServiceCoreManager::get().on_device_close(device->id());
 }
 
@@ -382,7 +386,6 @@ TEST_F(DispatchContextFixture, PersistentServiceMultiCycle) {
         experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device.get());
 
         auto free = internal::ServiceCoreManager::get().get_claimable_cores(device);
-        ASSERT_FALSE(free.empty()) << "No free dispatch cores on cycle " << cycle;
         CoreCoord svc_core = free[free.size() / 2];
 
         internal::ServiceCoreManager::get().claim(device, free);
@@ -503,7 +506,6 @@ TEST_F(DispatchContextFixture, FDWorkloadAndServiceKernelConcurrent) {
     IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
 
     auto claimable = internal::ServiceCoreManager::get().get_claimable_cores(device);
-    ASSERT_FALSE(claimable.empty()) << "No claimable service cores available";
     internal::ServiceCoreManager::get().claim(device, claimable);
 
     // Allocate L1 communication words on each service core.
@@ -621,7 +623,6 @@ TEST_F(DispatchContextFixture, ServiceCoreAllocatorCorrectness) {
     IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
 
     auto claimable = internal::ServiceCoreManager::get().get_claimable_cores(device);
-    ASSERT_FALSE(claimable.empty());
     CoreCoord core = claimable[0];
     internal::ServiceCoreManager::get().claim(device, {core});
 
@@ -661,6 +662,41 @@ TEST_F(DispatchContextFixture, ServiceCoreAllocatorCorrectness) {
     EXPECT_THROW(internal::ServiceCoreManager::get().allocate_l1(device, core, k1p5MB), std::runtime_error);
 
     internal::ServiceCoreManager::get().release(device, {core});
+}
+
+// Verify TT_FATAL fires on every documented misuse path:
+//   - get_claimable_cores / claim before FD is active
+//   - allocate_l1 / deallocate_l1 / bytes_available on an unclaimed core
+TEST_F(DispatchContextFixture, ServiceCoreFatalGuards) {
+    if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        GTEST_SKIP() << "This test requires Slow Dispatch mode.";
+    }
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (!cluster.is_ubb_galaxy() && cluster.arch() != tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Service-core APIs require BH or UBB Galaxy.";
+    }
+
+    auto mesh_device = MeshDevice::create(MeshDeviceConfig(MeshShape(1, 1)));
+    IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
+
+    // Before FD is active, both query and claim must fatal.
+    EXPECT_THROW(internal::ServiceCoreManager::get().get_claimable_cores(device), std::exception);
+    EXPECT_THROW(internal::ServiceCoreManager::get().claim(device, {{0, 0}}), std::exception);
+
+    // Bring FD up and claim one core so we can test the unclaimed-core guards.
+    experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device.get());
+    auto free = internal::ServiceCoreManager::get().get_claimable_cores(device);
+    CoreCoord svc_core = free[0];
+    internal::ServiceCoreManager::get().claim(device, {svc_core});
+
+    // {0,0} is a worker-grid core — never a service core — so all three guards must fatal on it.
+    CoreCoord unclaimed{0, 0};
+    EXPECT_THROW(internal::ServiceCoreManager::get().allocate_l1(device, unclaimed, 4), std::exception);
+    EXPECT_THROW(internal::ServiceCoreManager::get().deallocate_l1(device, unclaimed, 0), std::exception);
+    EXPECT_THROW(internal::ServiceCoreManager::get().bytes_available(device, unclaimed), std::exception);
+
+    internal::ServiceCoreManager::get().release(device, {svc_core});
+    experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device.get());
 }
 
 }  // namespace tt::tt_metal::distributed::test

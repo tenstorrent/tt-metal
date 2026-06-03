@@ -65,11 +65,12 @@ class ServiceCoreManager {
 public:
     static ServiceCoreManager& get();
 
-    // Returns dispatch-column cores not yet allocated to FD infra or claimed as service
-    // cores. TT_FATALs if no manual FD session is active — the dispatch pool is only in
-    // its final post-allocation state after initialize_fast_dispatch() completes, so
-    // calling this before that would return a misleading set.
-    // Use this to discover available cores before calling claim().
+    // Returns dispatch-column cores not yet allocated to FD infra or claimed as service cores.
+    // TT_FATALs if:
+    //   - no manual FD session is active (the pool is only fully partitioned after
+    //     initialize_fast_dispatch() completes; calling before that returns a misleading set)
+    //   - no cores are available (all dispatch-column cores are in use by FD or already claimed)
+    // Use this immediately before claim() — the query and then claim is the intended idiom.
     std::vector<CoreCoord> get_claimable_cores(IDevice* device) const;
 
     // Reserve one or more free FD-column cores for service use. Constructs a per-core L1
@@ -98,9 +99,17 @@ public:
     // are always valid (mirrors BankManager's lockstep L1 path). TT_FATALs on OOM.
     // Each service core owns a completely independent L1 range - no interaction with
     // the worker-grid BankManager.
+    // Allocates top-down (from L1_END downward) so service buffers and CBs (which grow up
+    // from DEFAULT_UNRESERVED) stay in disjoint zones — same convention as worker-core L1 buffers.
     DeviceAddr allocate_l1(IDevice* device, CoreCoord core, size_t size);
     void deallocate_l1(IDevice* device, CoreCoord core, DeviceAddr addr);
     size_t bytes_available(IDevice* device, CoreCoord core) const;
+    // Returns the lowest start address currently handed out by the per-core L1 allocator,
+    // or nullopt if nothing has been allocated on that core yet.
+    // Because allocate_l1() allocates top-down (bottom_up=false), this is the frontier —
+    // the lowest point service buffers have reached. Used by validate_circular_buffer_region
+    // to detect collisions with CBs that grow up from DEFAULT_UNRESERVED.
+    std::optional<DeviceAddr> lowest_allocated_address(ChipId device_id, CoreCoord core) const;
 
     // Returns the FD-mode compute grid snapshotted at first claim() for a device, or
     // nullopt if no service cores are currently claimed. Used internally to cap

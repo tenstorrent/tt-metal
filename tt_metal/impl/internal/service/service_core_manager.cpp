@@ -122,7 +122,25 @@ std::vector<CoreCoord> ServiceCoreManager::get_claimable_cores(IDevice* device) 
         MetalContext::instance().rtoptions().get_fast_dispatch(),
         "get_claimable_cores() requires Fast Dispatch to be active. "
         "Call initialize_fast_dispatch() first.");
-    return MetalContext::instance().get_dispatch_core_manager().get_available_dispatch_cores(device->id());
+    auto available = MetalContext::instance().get_dispatch_core_manager().get_available_dispatch_cores(device->id());
+    // Filter out cores already claimed in this session so consecutive calls reflect current state.
+    const auto claimed = claimed_cores(device->id());
+    if (!claimed.empty()) {
+        std::vector<CoreCoord> out;
+        out.reserve(available.size());
+        for (const auto& c : available) {
+            if (!claimed.count(c)) {
+                out.push_back(c);
+            }
+        }
+        available = std::move(out);
+    }
+    TT_FATAL(
+        !available.empty(),
+        "No claimable dispatch-column cores on device {}. "
+        "All dispatch-column cores are in use by FD infra or already claimed as service cores.",
+        device->id());
+    return available;
 }
 
 void ServiceCoreManager::on_device_close(ChipId device_id) { impl_->devices.erase(device_id); }
@@ -157,7 +175,7 @@ DeviceAddr ServiceCoreManager::allocate_l1(IDevice* device, CoreCoord core, size
         dit != impl_->devices.end() && dit->second.cores.contains(core),
         "internal::ServiceCoreManager::allocate_l1 called on unclaimed core {}",
         core);
-    auto addr = dit->second.cores.at(core).alloc->allocate(size);
+    auto addr = dit->second.cores.at(core).alloc->allocate(size, /*bottom_up=*/false);
     TT_FATAL(addr.has_value(), "internal::ServiceCoreManager: L1 OOM on core {} ({} bytes requested)", core, size);
     return *addr;
 }
@@ -183,6 +201,26 @@ size_t ServiceCoreManager::bytes_available(IDevice* device, CoreCoord core) cons
         total += end - start;
     }
     return total;
+}
+
+std::optional<DeviceAddr> ServiceCoreManager::lowest_allocated_address(ChipId device_id, CoreCoord core) const {
+    auto dit = impl_->devices.find(device_id);
+    if (dit == impl_->devices.end()) {
+        return std::nullopt;
+    }
+    auto cit = dit->second.cores.find(core);
+    if (cit == dit->second.cores.end()) {
+        return std::nullopt;
+    }
+    const auto ranges = cit->second.alloc->allocated_addresses();
+    if (ranges.empty()) {
+        return std::nullopt;
+    }
+    DeviceAddr lo = ranges.front().first;
+    for (const auto& [start, end] : ranges) {
+        lo = std::min(lo, start);
+    }
+    return lo;
 }
 
 }  // namespace tt::tt_metal::internal
