@@ -145,10 +145,44 @@ def _to_fp32_if_needed(x: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> tupl
     return out, True
 
 
+def _batch_is_full_length(input_lengths: torch.LongTensor, seq_len: int) -> bool:
+    """True when every row uses all ``seq_len`` tokens (no padding; common in ``TTKModel.forward``)."""
+    return bool((input_lengths == seq_len).all().item())
+
+
+def _attention_keep_mask_bt(input_lengths: torch.LongTensor, seq_len: int) -> torch.Tensor:
+    """``[B, T]`` bool; ``True`` on real tokens (PL-BERT ``attention_mask`` uses ``.int()`` of this)."""
+    B = int(input_lengths.shape[0])
+    positions = torch.arange(seq_len, device=input_lengths.device).unsqueeze(0).expand(B, -1)
+    return (positions + 1) <= input_lengths.unsqueeze(1)
+
+
 def _text_mask_from_input_lengths(input_lengths: torch.LongTensor, seq_len: int) -> torch.Tensor:
     """``[B, T]`` bool mask; ``True`` marks padded positions (same as reference ``KModel``)."""
-    text_mask = torch.arange(seq_len).unsqueeze(0).expand(input_lengths.shape[0], -1)
-    return torch.gt(text_mask + 1, input_lengths.unsqueeze(1))
+    return ~_attention_keep_mask_bt(input_lengths, seq_len)
+
+
+def _keep_mask_btl_tt(
+    input_lengths: torch.LongTensor,
+    seq_len: int,
+    *,
+    device: ttnn.Device,
+    dtype: ttnn.DataType,
+    memory_config: ttnn.MemoryConfig,
+) -> ttnn.Tensor:
+    """Upload ``[B, T, 1]`` keep mask (``1`` = real token) for DurationEncoder / AdaIN paths.
+
+    Built on CPU then uploaded: ``input_lengths`` is a CPU long tensor and TTNN has no
+    ``arange``+compare shortcut cheaper than a single ``from_torch`` for ``T <= 512``.
+    """
+    keep = _attention_keep_mask_bt(input_lengths, seq_len).to(torch.float32).unsqueeze(-1)
+    return ttnn.from_torch(
+        keep,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
 
 
 # BH BF16 MACs accumulate rounding error over 512-token sequences; PLBERT PCC ~0.94 at T=512
@@ -315,12 +349,16 @@ class TTKModel:
         """
         p = self.params
         dev = self.device
-        _, T = input_ids.shape
+        B, T = input_ids.shape
         prosody_dtype = ttnn.float32 if self._use_fp32_prosody_boundary else ttnn.bfloat16
-        text_mask = _text_mask_from_input_lengths(input_lengths, T)
+        full_length = _batch_is_full_length(input_lengths, T)
+        text_mask: torch.Tensor | None = None if full_length else _text_mask_from_input_lengths(input_lengths, T)
 
         # 1. PL-BERT
-        bert_out = self._bert(input_ids, attention_mask=(~text_mask).int())
+        if full_length:
+            bert_out = self._bert(input_ids, attention_mask=None)
+        else:
+            bert_out = self._bert(input_ids, attention_mask=_attention_keep_mask_bt(input_lengths, T).int())
 
         # 2. bert_encoder
         bert_for_enc = bert_out
@@ -353,13 +391,10 @@ class TTKModel:
         )
 
         # 4. DurationEncoder
-        keep_mask = ttnn.from_torch(
-            (~text_mask).to(torch.float32).unsqueeze(-1),
-            dtype=prosody_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=dev,
-            memory_config=mc,
-        )
+        if full_length:
+            keep_mask = ttnn.ones([B, T, 1], dtype=prosody_dtype, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc)
+        else:
+            keep_mask = _keep_mask_btl_tt(input_lengths, T, device=dev, dtype=prosody_dtype, memory_config=mc)
         d_nlc = self._predictor._text_encoder.forward(
             d_en_bct=d_en_bct,
             style_bs=s_pred_tt,
@@ -423,7 +458,7 @@ class TTKModel:
         self,
         input_ids: torch.LongTensor,
         input_lengths: torch.LongTensor,
-        text_mask: torch.Tensor,
+        text_mask: torch.Tensor | None,
         d_nlc: ttnn.Tensor,
         s_pred_tt: ttnn.Tensor,
         aln_tt: ttnn.Tensor,
