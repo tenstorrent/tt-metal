@@ -138,19 +138,15 @@ inline bool _is_src_fmt_int32_dest_compatible_(const DataFormat src_reg_fmt)
  * @brief Sets up ALU formats
  * @tparam EN_IMPLIED_MATH_FORMAT: If set to true, will imply math dest format
  * from SrcA reg format
- * @tparam EN_FP32_DEST_FORMAT: Set to true to use math dest in Float32
- * otherwise default behaviour is Float16/Float16_b depending on input
- * format exponent width
- * @tparam EN_INT32_DEST_FORMAT: Set to true to use math dest in Int32
- * otherwise default behaviour is Float16/Float16_b depending on input
- * format exponent width
+ * @tparam EN_32BIT_DEST: Set to true to use math dest in 32bit mode
  * @param srcA_format: Input srcA format, used to set ALU configs if not implied math format
  * values = Dataformat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
  * @param srcB_format: Input srcB format, used to set ALU configs if not implied math format
  * values = Dataformat enum, ex: <Float16/Float16_b/Tf32/Int8/Int16/UInt8>
+ * @param en_int32_dest_format: Set to true to use destination register in Int32 format
  */
-template <bool EN_IMPLIED_MATH_FORMAT, bool EN_FP32_DEST_FORMAT, bool EN_INT32_DEST_FORMAT>
-inline void _configure_alu_formats_(DataFormat srcA_format, DataFormat srcB_format)
+template <bool EN_IMPLIED_MATH_FORMAT, bool EN_32BIT_DEST>
+inline void _configure_alu_formats_(DataFormat srcA_format, DataFormat srcB_format, bool en_int32_dest_format)
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::WAIT_SFPU, p_stall::MATH);
 
@@ -168,9 +164,9 @@ inline void _configure_alu_formats_(DataFormat srcA_format, DataFormat srcB_form
     alu_config.f.ALU_FORMAT_SPEC_REG0_SrcA         = SRCA_FORMAT_MASKED;
     alu_config.f.ALU_FORMAT_SPEC_REG1_SrcB         = SRCB_FORMAT_MASKED;
 
-    alu_config.f.ALU_ACC_CTRL_Fp32_enabled      = EN_FP32_DEST_FORMAT;
-    alu_config.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = EN_FP32_DEST_FORMAT;
-    alu_config.f.ALU_ACC_CTRL_INT8_math_enabled = EN_INT32_DEST_FORMAT;
+    alu_config.f.ALU_ACC_CTRL_Fp32_enabled      = EN_32BIT_DEST;
+    alu_config.f.ALU_ACC_CTRL_SFPU_Fp32_enabled = EN_32BIT_DEST;
+    alu_config.f.ALU_ACC_CTRL_INT8_math_enabled = en_int32_dest_format;
 
     for (std::uint32_t i = 0; i < NUM_WORDS_ALU_FORMAT; i++)
     {
@@ -196,20 +192,8 @@ inline void _configure_default_alu_data_format_state_(DataFormat srcA_format, Da
         return;
     }
 
-    const bool EN_FP32_DEST_FORMAT  = _is_src_fmt_fp32_dest_compatible_(srcA_format) && _is_src_fmt_fp32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
-    const bool EN_INT32_DEST_FORMAT = _is_src_fmt_int32_dest_compatible_(srcA_format) && _is_src_fmt_int32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
-    if (EN_FP32_DEST_FORMAT)
-    {
-        _configure_alu_formats_<EN_IMPLIED_MATH_FORMAT, true /* EN_FP32_DEST_FORMAT */, false /* EN_INT32_DEST_FORMAT */>(srcA_format, srcB_format);
-    }
-    else if (EN_INT32_DEST_FORMAT)
-    {
-        _configure_alu_formats_<EN_IMPLIED_MATH_FORMAT, false /* EN_FP32_DEST_FORMAT */, true /* EN_INT32_DEST_FORMAT */>(srcA_format, srcB_format);
-    }
-    else
-    {
-        _configure_alu_formats_<EN_IMPLIED_MATH_FORMAT, false /* EN_FP32_DEST_FORMAT */, false /* EN_INT32_DEST_FORMAT */>(srcA_format, srcB_format);
-    }
+    const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) && _is_src_fmt_int32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
+    _configure_alu_formats_<EN_IMPLIED_MATH_FORMAT, EN_32BIT_DEST>(srcA_format, srcB_format, en_int32_dest_format);
 
     data_format_config_set = DataFormatConfigSet::DEFAULT;
 }
@@ -232,8 +216,7 @@ inline void _configure_mov_ops_explicit_alu_data_format_state_(DataFormat srcA_f
         return;
     }
 
-    _configure_alu_formats_<false /* EN_IMPLIED_MATH_FORMAT */, EN_32BIT_DEST /* EN_FP32_DEST_FORMAT */, false /* EN_INT32_DEST_FORMAT */>(
-        srcA_format, srcB_format);
+    _configure_alu_formats_<false /* EN_IMPLIED_MATH_FORMAT */, EN_32BIT_DEST>(srcA_format, srcB_format, false /* en_int32_dest_format */);
 
     data_format_config_set = DataFormatConfigSet::MOV_OPS_EXPLICIT_FMT;
 }
