@@ -4,13 +4,146 @@
 
 #include "common.hpp"
 
+#include <algorithm>
 #include <numeric>
 #include <tuple>
 
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <ttnn/tensor/layout/tensor_layout.hpp>
+#include <ttnn/tensor/layout/page_config.hpp>
 
 namespace ttnn::prim {
+RmPlan make_rm_plan(
+    const tt::tt_metal::Shape& padded_shape,
+    const tt::tt_metal::Shape& logical_shape,
+    uint32_t tile_height,
+    uint32_t tile_width,
+    tt::DataFormat src_cb_data_format,
+    tt::DataFormat dst_cb_data_format,
+    tt::tt_metal::ReduceOpMath math_op,
+    tt::tt_metal::ReduceOpDim dim) {
+    RmPlan plan{};
+    plan.H_logical = logical_shape[2];
+    plan.W_logical = logical_shape[3];
+    plan.rm_rows_per_tile = tile_height;
+    plan.Wt = tt::div_up(padded_shape[3], tile_width);
+    plan.Ht_rm = tt::div_up(plan.H_logical, plan.rm_rows_per_tile);
+
+    // Only supports ReduceOpDim::W or ReduceOpDim::H.
+    //
+    // k_rm_max_tiles_per_chunk caps the reduction-axis chunk size (wt_tiles_per_chunk for W
+    // reduce, ht_tiles_per_chunk for H reduce). It's an L1 staging-buffer budget on the reduction
+    // axis. 8 was picked experimentally — the staging CB page lands at ~32 KB for bf16 and
+    // ~64 KB for fp32 at chunk=8, which fits L1 comfortably alongside the other CBs. Tune later
+    // if a different perf / L1-utilization trade-off is needed.
+    constexpr uint32_t k_rm_max_tiles_per_chunk = 8;
+    if (dim == tt::tt_metal::ReduceOpDim::W) {
+        plan.wt_tiles_per_chunk = std::clamp(plan.Wt, 1u, k_rm_max_tiles_per_chunk);
+        plan.ht_tiles_per_chunk = 1;
+    } else {
+        plan.wt_tiles_per_chunk = 1;
+        plan.ht_tiles_per_chunk = std::clamp(plan.Ht_rm, 1u, k_rm_max_tiles_per_chunk);
+    }
+
+    // The RM dense path is gated to BF16/FP32 at validate_rm_preconditions;
+    // so the unpacked-format byte sizes are always well-defined here.
+    plan.src_datum_size = tt::datum_size(src_cb_data_format);
+    plan.dst_datum_size = tt::datum_size(dst_cb_data_format);
+    plan.chunk_row_bytes = plan.wt_tiles_per_chunk * tile_width * plan.src_datum_size;
+    // One CB page = one logical RM row (chunk-wide). The compute kernel uses
+    // compute_kernel_lib::tilize, whose asymmetric mode requires one input page per row so each
+    // tile-block consumes up to TILE_HEIGHT pages.
+    plan.rm_staging_page_size = plan.chunk_row_bytes;
+    plan.padding_identity_bits = dense_rm_padding_identity_bits(src_cb_data_format, math_op);
+
+    return plan;
+}
+
+void validate_rm_preconditions(
+    const tt::tt_metal::MeshTensor& input,
+    const tt::tt_metal::MeshTensor& output,
+    tt::tt_metal::ReduceOpMath math_op,
+    bool negate,
+    tt::tt_metal::ReduceOpDim dim,
+    std::string_view dim_label) {
+    TT_FATAL(
+        dim == tt::tt_metal::ReduceOpDim::W || dim == tt::tt_metal::ReduceOpDim::H,
+        "{} RM path only supports ReduceOpDim::W or ReduceOpDim::H, got {}",
+        dim_label,
+        static_cast<int>(dim));
+    TT_FATAL(
+        input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+            output.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+        "{} RM path only supports interleaved tensors (input layout {}, output layout {})",
+        dim_label,
+        static_cast<int>(input.memory_config().memory_layout()),
+        static_cast<int>(output.memory_config().memory_layout()));
+    TT_FATAL(
+        math_op == tt::tt_metal::ReduceOpMath::SUM,
+        "{} RM path only supports SUM (mean lowered from AVG), got {}",
+        dim_label,
+        math_op);
+    TT_FATAL(!negate, "{} RM path does not currently support 'negate'", dim_label);
+}
+
+std::vector<uint32_t> build_rm_reader_ct_args(
+    const RmPlan& plan, uint32_t scaler_bits, const tt::tt_metal::MeshTensor& src, tt::tt_metal::ReduceOpDim dim) {
+    // Slots 0-7 are shared by both paths. The reader's REDUCE_COL (H) branch additionally consumes
+    // H_logical at slot 8; the W path omits it, so the source TensorAccessor args follow at slot 8 (W)
+    // or slot 9 (H). The kernel is templated on REDUCE_DIM so the unused slot is genuinely dropped.
+    // Only supports ReduceOpDim::W or ReduceOpDim::H
+    std::vector<uint32_t> args = {
+        scaler_bits,
+        plan.W_logical,
+        plan.src_datum_size,
+        plan.padding_identity_bits,
+        plan.Wt,
+        plan.wt_tiles_per_chunk,
+        plan.rm_rows_per_tile,
+        plan.ht_tiles_per_chunk,
+    };
+    if (dim == tt::tt_metal::ReduceOpDim::H) {
+        args.push_back(plan.H_logical);
+    }
+    tt::tt_metal::TensorAccessorArgs(src).append_to(args);
+    return args;
+}
+
+std::vector<uint32_t> build_rm_writer_ct_args(
+    const RmPlan& plan, const tt::tt_metal::MeshTensor& dst, tt::tt_metal::ReduceOpDim dim) {
+    // Slot 0 (datum_bytes) is shared. The writer's REDUCE_COL (H) branch additionally consumes
+    // Wt, W_logical, and wt_tiles_per_chunk at slots 1-3; the W path omits them, so the dst
+    // TensorAccessor args follow at slot 1 (W) or slot 4 (H). The kernel is templated on REDUCE_DIM
+    // so the unused slots are genuinely dropped.
+    // Only supports ReduceOpDim::W or ReduceOpDim::H
+    std::vector<uint32_t> args = {
+        plan.dst_datum_size,
+    };
+    if (dim == tt::tt_metal::ReduceOpDim::H) {
+        args.push_back(plan.Wt);
+        args.push_back(plan.W_logical);
+        args.push_back(plan.wt_tiles_per_chunk);
+    }
+    tt::tt_metal::TensorAccessorArgs(dst).append_to(args);
+    return args;
+}
+
+std::vector<uint32_t> build_rm_compute_ct_args(const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits) {
+    return {
+        Ht_arg,
+        plan.Wt,
+        1u,  // NC (kept literal-1 per the existing RM compute contract; not hoisted into the plan)
+        post_mul_scaler_bits,
+        plan.wt_tiles_per_chunk,
+        plan.ht_tiles_per_chunk,
+    };
+}
+
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
     const tt::tt_metal::Tensor& input_tensor, tt::tt_metal::ReduceOpDim reduce_dim) {
     uint32_t num_tiles = input_tensor.physical_volume() / input_tensor.tensor_spec().tile().get_tile_hw();
@@ -34,12 +167,13 @@ tt::tt_metal::TensorSpec build_reduce_output_tensor_spec(
     tt::tt_metal::DataType output_dtype,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::MemoryConfig& input_mem_config,
-    tt::tt_metal::ReduceOpDim reduce_dim) {
+    tt::tt_metal::ReduceOpDim reduce_dim,
+    tt::tt_metal::Layout output_layout) {
     using namespace tt::tt_metal;
 
     TensorSpec tensor_spec(
         output_shape,
-        TensorLayout(output_dtype, PageConfig(Layout::TILE), MemoryConfig(output_mem_config.buffer_type())));
+        TensorLayout(output_dtype, PageConfig(output_layout), MemoryConfig(output_mem_config.buffer_type())));
 
     TensorMemoryLayout mem_layout = output_mem_config.memory_layout();
 
