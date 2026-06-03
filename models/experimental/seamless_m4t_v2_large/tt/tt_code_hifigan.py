@@ -40,6 +40,18 @@ _HIFIGAN_MAX_CONV1D_TLEN = 4096
 # ~O(n^2) in the chunk count. Going 512 -> 3968 cut the 1546-unit (≈31 s audio) vocoder from
 # ~20 min to ~30 s at unchanged PCC (0.9994 vs 0.9995).
 _VOCODER_CONV1D_INTERIOR = 3968
+# Channel-aware chunking. HiFi-GAN halves channels at each upsample, so the late stages (16-64 ch)
+# fit far more time rows in the same L1 as the widest conv — yet a fixed-row ``interior`` chunks them
+# just as finely (the late, low-channel, long-timeline stages dominate the chunk count and thus the
+# ~37k vocoder ops + the O(n²) per-chunk timeline slicing). Size the chunk interior to a constant
+# *element* budget (``interior * in_channels``) so low-channel stages chunk much wider. Budget =
+# baseline interior × widest HiFi-GAN channel (proven safe at 3968). The result is clamped to
+# ``[_VOCODER_CONV1D_INTERIOR, _VOCODER_CONV1D_MAX_INTERIOR]`` (the floor keeps the widest convs
+# unchanged; the cap is the conv1d single-shot row ceiling) and tile-aligned. See ``_chunk_interior``.
+_VOCODER_CONV1D_ELEM_BUDGET = 3968 * 512
+# 32768 is the ceiling that fits the conv1d in the speech-path ``l1_small`` (65536 OOMs L1_SMALL);
+# it already collapses the late-stage chunk counts ~6-7× (e.g. 16-channel stage 82 → 11 chunks).
+_VOCODER_CONV1D_MAX_INTERIOR = 32768
 
 # Bucket the upsampled unit length ``t_audio`` to this multiple. The whole vocoder timeline
 # (frame index, duration-expansion mask, HiFi-GAN conv chunking) is shape-specialized by
@@ -682,7 +694,11 @@ class TTSeamlessM4Tv2CodeHifiGan:
 
         # HF stores symmetric same-padding per layer; that is the overlap needed between chunks.
         halo = int(padding)
-        interior = _VOCODER_CONV1D_INTERIOR
+        # Channel-aware interior: low-channel late stages (the bulk of the chunk count) chunk far
+        # wider at the same L1 footprint as the widest conv. Tile-aligned; clamped so the widest
+        # convs are unchanged and the conv1d single-shot row ceiling is respected.
+        interior = (_VOCODER_CONV1D_ELEM_BUDGET // max(1, int(in_channels)) // 32) * 32
+        interior = max(_VOCODER_CONV1D_INTERIOR, min(_VOCODER_CONV1D_MAX_INTERIOR, interior))
         fixed_in = interior + 2 * halo
         if seq <= fixed_in:
             return self._conv1d_run(
