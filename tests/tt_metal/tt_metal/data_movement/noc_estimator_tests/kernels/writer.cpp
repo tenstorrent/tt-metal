@@ -156,8 +156,7 @@ void kernel_main() {
             mcast_end_y = tmp;
         }
 
-        constexpr NocOptions mcast_mode =
-            loopback ? NocOptions::MCAST_INCL_SRC : NocOptions::DEFAULT;
+        constexpr Noc::McastMode mcast_mode = loopback ? Noc::McastMode::INCLUDE_SRC : Noc::McastMode::EXCLUDE_SRC;
 
         {
             DeviceZoneScopedN("RISCV0");
@@ -202,8 +201,7 @@ void kernel_main() {
             mcast_end_y = tmp;
         }
 
-        constexpr NocOptions mcast_mode =
-            loopback ? NocOptions::MCAST_INCL_SRC : NocOptions::DEFAULT;
+        constexpr Noc::McastMode mcast_mode = loopback ? Noc::McastMode::INCLUDE_SRC : Noc::McastMode::EXCLUDE_SRC;
 
         {
             DeviceZoneScopedN("RISCV0");
