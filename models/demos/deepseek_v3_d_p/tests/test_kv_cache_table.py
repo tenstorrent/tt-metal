@@ -26,8 +26,8 @@ from tests.ttnn.utils_for_testing import assert_equal
 # sp x tp
 @pytest.mark.parametrize(
     "mesh_device",
-    [(32, 4), (8, 4)],
-    ids=["32x4", "8x4"],
+    [(8, 4)],
+    ids=["8x4"],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -44,9 +44,9 @@ from tests.ttnn.utils_for_testing import assert_equal
     indirect=True,
 )
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
-@pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
+@pytest.mark.parametrize("seq_len", [25 * 1024], ids=["seq25k"])
 @pytest.mark.timeout(0)  # Disable timeout — first run computes and caches CPU reference for large seq lengths
-def test_mla_disaggregation(
+def test_kv_cache_table(
     use_pretrained,
     request,
     mesh_device,
@@ -116,9 +116,7 @@ def test_mla_disaggregation(
     # Initialize KVPE cache
     kvpe_cache_head_dim = config.qk_rope_head_dim + config.kv_lora_rank  # 576
 
-    # Initialise kvpe cache with 2 layers, but run only 1 layer.
-    # Other layer should be zeros
-    num_kvpe_cache_layers = 2
+    num_kvpe_cache_layers = 1
     tt_kvpe_cache = init_kvpe_cache(
         kvpe_cache_head_dim=kvpe_cache_head_dim,
         mesh_device=mesh_device,
@@ -171,36 +169,15 @@ def test_mla_disaggregation(
     # remember layer0 results
     tt_kvpe_cache_torch_layer0 = tt_kvpe_cache_torch[:1, :1, :, :]
 
-    # assert layer1 is zeros
-    tt_kvpe_cache_torch_layer1 = tt_kvpe_cache_torch[1:2, :1, :, :]
-    torch_layer_zeros = torch.zeros(1, 1, seq_len, kvpe_cache_head_dim)
-    logger.info(f"Checking that layer 1 is all zeros")
-    assert_equal(tt_kvpe_cache_torch_layer1, torch_layer_zeros)
-    logger.info(f"Check complete")
-
     # reorder into position continuous torch cache
     tt_kvpe_cache_torch_layer0 = reverse_reorder_tensor_chunks(tt_kvpe_cache_torch_layer0, chunk_order, seq_dim=2)
 
-    # migrate layer0 of tt_kvpe_cache into layer1 of tt_kvpe_cache
-
-    # perform migration
-
-    # now assert equality of tt_kvpe_cache_torch_layer0 with tt_kvpe_cache_torch_layer1
-    # tt_kvpe_cache_torch = ttnn.to_torch(
-    #     tt_kvpe_cache,
-    #     mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    # ).to(torch.bfloat16)
-    # tt_kvpe_cache_torch_layer1 = tt_kvpe_cache_torch[1:2, :1, :, :]
-    # tt_kvpe_cache_torch_layer1 = reverse_reorder_tensor_chunks(tt_kvpe_cache_torch_layer1, chunk_order, seq_dim=2)
-    # assert_equal(tt_kvpe_cache_torch_layer0, tt_kvpe_cache_torch_layer1)
-    # we can also make sure layer 0 didn't get polluted
-    # assert_equal(tt_kvpe_cache_torch_layer0, tt_kvpe_cache_torch_layer0_new)
-    # ...
-
-    logger.info("Starting synchronize call")
-    ttnn.synchronize_device(mesh_device)
-    logger.info("Synchronize call ended")
-
-    logger.debug("  Distributed synchronization started")
-    ttnn.distributed_context_barrier()
-    logger.debug("✓ Distributed synchronization completed")
+    # Walk every chunk in layer 0, read it back via the address table, and
+    # compare against the corresponding 32-token slice of the gathered cache.
+    chunk_shape = [1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, kvpe_cache_head_dim]
+    for position in range(0, seq_len, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK):
+        raw_bytes = lookup_table.read_device_chunk(layer=0, position=position, slot=0)
+        chunk_tt = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes(raw_bytes, chunk_shape)
+        chunk_torch = ttnn.to_torch(chunk_tt).to(torch.bfloat16)
+        expected_chunk = tt_kvpe_cache_torch_layer0[:, :, position : position + NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, :]
+        assert_equal(chunk_torch, expected_chunk)
