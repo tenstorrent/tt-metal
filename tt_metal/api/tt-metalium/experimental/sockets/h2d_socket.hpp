@@ -87,20 +87,36 @@ public:
      *
      * L2CPU receivers differ from Tensix receivers in three ways that this
      * constructor handles:
-     *   - The device-side socket-config buffer and H2D data FIFO live in
-     *     LIM (the L2CPU's on-chip SRAM) which has no allocator inside
-     *     tt-metal, so the caller must pre-reserve those addresses (see
-     *     tt-llm-engine/x280/include/socket_layout.h for the
-     *     conventional layout used by the X280 migration worker).
+     *   - The device-side socket-config buffer and (in HOST_PUSH mode) the
+     *     H2D data FIFO live in LIM (the L2CPU's on-chip SRAM) which has
+     *     no allocator inside tt-metal, so the caller must pre-reserve
+     *     those addresses (see tt-llm-engine/x280/include/socket_layout.h
+     *     for the conventional layout used by the X280 migration worker).
      *   - The config buffer is written via @c cluster.write_core directly
      *     to the L2CPU tile -- fast dispatch can't target L2CPUs.
      *   - The runtime TLB used by @c write() is programmed against the
      *     L2CPU's NOC coord (@c recv_l2cpu.core_coord) instead of a Tensix
      *     worker virtual coord.
      *
-     * Only @ref H2DMode::HOST_PUSH is supported in this overload;
-     * DEVICE_PULL would require an X280-side DEVICE_PULL implementation
-     * which Phase 1 does not provide.
+     * Both @ref H2DMode::HOST_PUSH and @ref H2DMode::DEVICE_PULL are
+     * supported:
+     *   - HOST_PUSH: the host writes payload bytes directly into the LIM
+     *     data ring at @c data_fifo_address via the L2CPU's static
+     *     2 MiB TLB. The X280 firmware reads them via plain LIM loads.
+     *     Used by socket_echo and (in the Phase 2 migration worker) for
+     *     the 64 B command ring.
+     *   - DEVICE_PULL: tt-metal allocates a pinned host-RAM data ring
+     *     (plus a bytes_acked counter at its tail). The host writes
+     *     payloads into pinned RAM via @c memcpy and notifies the X280;
+     *     the X280 firmware pulls the payload from PCIe via
+     *     @c socket_pull_payload in
+     *     @c tt-llm-engine/x280/include/socket_api.h. Used by the
+     *     Phase 2 migration worker for the WRITE-payload data ring.
+     *     In this mode @c data_fifo_address is a LIM-resident logical
+     *     anchor that the X280 firmware uses as the wire's @c fifo_addr
+     *     (ring offsets are computed as
+     *     @c read_ptr - fifo_addr); the LIM bytes at that address are
+     *     never touched by the host.
      *
      * @param mesh_device          Mesh containing the target L2CPU.
      * @param recv_l2cpu           MeshCoreCoord identifying the receiving
@@ -120,10 +136,15 @@ public:
      *                                 tt::umd::CoordSystem::TRANSLATED);
      *                             @endcode
      * @param fifo_size            Ring size in bytes. Must be a multiple
-     *                             of the PCIe alignment and small enough
-     *                             that the data FIFO fits inside a single
+     *                             of the PCIe alignment. In HOST_PUSH
+     *                             mode it must also be small enough that
+     *                             the data FIFO fits inside a single
      *                             2 MiB TLB window starting at
-     *                             @c data_fifo_address.
+     *                             @c data_fifo_address (enforced by
+     *                             TT_FATAL in the constructor); the
+     *                             DEVICE_PULL path has no such limit
+     *                             because the data lives in pinned host
+     *                             RAM, not LIM.
      * @param config_buffer_address  Pre-reserved LIM address (on the
      *                               L2CPU tile) for the
      *                               @c receiver_socket_md wire struct.
@@ -132,15 +153,28 @@ public:
      *                               into a writable LIM region.
      * @param data_fifo_address    Pre-reserved LIM address (on the
      *                               L2CPU tile) for the H2D data ring.
-     *                               Must be PCIe-aligned and disjoint
-     *                               from the config buffer.
+     *                               HOST_PUSH: the actual ring base in
+     *                               LIM; the host writes payloads here
+     *                               via the L2CPU's static 2 MiB TLB
+     *                               and must be PCIe-aligned and inside
+     *                               that window.
+     *                               DEVICE_PULL: a logical anchor; the
+     *                               X280 firmware uses
+     *                               @c (read_ptr - fifo_addr) as the
+     *                               byte offset into the pinned host
+     *                               buffer. Must still be PCIe-aligned
+     *                               and disjoint from the config buffer.
+     * @param h2d_mode             Transfer mode; defaults to HOST_PUSH
+     *                             for backward compatibility with the
+     *                             Phase 1 socket_echo firmware.
      */
     H2DSocket(
         const std::shared_ptr<MeshDevice>& mesh_device,
         const MeshCoreCoord& recv_l2cpu,
         uint32_t fifo_size,
         uint32_t config_buffer_address,
-        uint32_t data_fifo_address);
+        uint32_t data_fifo_address,
+        H2DMode h2d_mode = H2DMode::HOST_PUSH);
 
     /**
      * @brief Connects to an existing H2DSocket from another process.

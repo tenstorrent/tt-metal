@@ -60,23 +60,41 @@ void py_module_types(nb::module_& mod) {
                 const tt::tt_metal::distributed::MeshCoreCoord&,
                 uint32_t,
                 uint32_t,
-                uint32_t>(),
+                uint32_t,
+                tt::tt_metal::distributed::H2DMode>(),
             nb::arg("mesh_device"),
             nb::arg("recv_l2cpu"),
             nb::arg("fifo_size"),
             nb::arg("config_buffer_address"),
             nb::arg("data_fifo_address"),
+            nb::arg("h2d_mode") = tt::tt_metal::distributed::H2DMode::HOST_PUSH,
             R"doc(
                 Construct an H2DSocket targeting an L2CPU (X280) receiver.
 
                 L2CPUs have no allocator in tt-metal, so the caller must reserve LIM
-                addresses for both the receiver_socket_md config blob and the H2D data
-                FIFO. The X280 firmware on the receiving tile must already know to read
-                these addresses (see ``tt-llm-engine/x280/include/socket_layout.h``
-                for the canonical layout used by the migration worker).
+                addresses for both the receiver_socket_md config blob and (in
+                HOST_PUSH mode) the H2D data FIFO. The X280 firmware on the receiving
+                tile must already know to read these addresses (see
+                ``tt-llm-engine/x280/include/socket_layout.h`` for the canonical
+                layout used by the migration worker).
 
-                Only HOST_PUSH mode is supported in Phase 1; DEVICE_PULL is not
-                implemented on the X280 side.
+                Both transfer modes are supported:
+
+                * ``HOST_PUSH`` (default): the host writes payload bytes directly into
+                  the LIM data ring at ``data_fifo_address`` via the L2CPU's static
+                  2 MiB TLB. The X280 firmware reads them via plain LIM loads. Used
+                  by socket_echo and, in the Phase 2 migration worker, for the 64 B
+                  command ring.
+                * ``DEVICE_PULL``: tt-metal allocates a pinned host-RAM data ring
+                  (plus a bytes_acked counter at its tail). The host writes payloads
+                  into pinned RAM via ``memcpy`` and notifies the X280; the X280
+                  firmware pulls the payload from PCIe via ``socket_pull_payload``
+                  in ``tt-llm-engine/x280/include/socket_api.h``. Used by the
+                  Phase 2 migration worker for the WRITE-payload data ring. In this
+                  mode ``data_fifo_address`` is a LIM-resident logical anchor (the
+                  X280 firmware computes ring byte offsets as
+                  ``read_ptr - fifo_addr``); the LIM bytes at that address are
+                  never touched by the host.
 
                 Args:
                     mesh_device (MeshDevice): Mesh containing the L2CPU.
@@ -87,13 +105,19 @@ void py_module_types(nb::module_& mod) {
                         pair can be passed directly. Enumerate via
                         ``cluster.get_soc_desc(device_id).get_cores(CoreType.L2CPU,
                         CoordSystem.TRANSLATED)``.
-                    fifo_size (int): Ring size in bytes. PCIe-aligned and small enough
-                        for the data FIFO to fit in one 2 MiB TLB window starting at
-                        ``data_fifo_address``.
+                    fifo_size (int): Ring size in bytes. PCIe-aligned. In HOST_PUSH
+                        mode also small enough for the data FIFO to fit in one 2 MiB
+                        TLB window starting at ``data_fifo_address``; the DEVICE_PULL
+                        path has no such limit because the data lives in pinned host
+                        RAM, not LIM.
                     config_buffer_address (int): Pre-reserved LIM address on the L2CPU
                         for the receiver_socket_md wire struct.
-                    data_fifo_address (int): Pre-reserved LIM address on the L2CPU for
-                        the H2D data ring.
+                    data_fifo_address (int): HOST_PUSH: actual LIM ring base for the
+                        H2D data ring. DEVICE_PULL: LIM-resident logical anchor used
+                        by the firmware for ring-offset arithmetic; the LIM bytes are
+                        not touched by the host.
+                    h2d_mode (H2DMode, optional): Transfer mode. Defaults to
+                        ``HOST_PUSH`` (the Phase 1 socket_echo mode).
             )doc")
         .def(
             "get_page_size",

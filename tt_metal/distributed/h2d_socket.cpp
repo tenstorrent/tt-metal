@@ -314,13 +314,14 @@ H2DSocket::H2DSocket(
     const MeshCoreCoord& recv_l2cpu,
     uint32_t fifo_size,
     uint32_t config_buffer_address,
-    uint32_t data_fifo_address) :
+    uint32_t data_fifo_address,
+    H2DMode h2d_mode) :
     recv_core_(recv_l2cpu),
     buffer_type_(BufferType::L1),
     fifo_size_(fifo_size),
     pcie_alignment_(MetalContext::instance().hal().get_alignment(HalMemType::HOST)),
     pinned_memory_(nullptr),
-    h2d_mode_(H2DMode::HOST_PUSH),
+    h2d_mode_(h2d_mode),
     mesh_device_(mesh_device.get()),
     is_l2cpu_(true) {
     MeshCoordinateRangeSet recv_device_range_set;
@@ -344,27 +345,35 @@ H2DSocket::H2DSocket(
         config_buffer_address,
         pcie_alignment);
 
-    // Phase-1 cap: the L2CPU static TLB is a single 2 MiB window anchored
-    // at LIM base 0x08000000 (see tlb_config.cpp). The H2D FIFO writes
-    // are issued through that window via pcie_writer, so the FIFO must
-    // end strictly inside [0x08000000, 0x08200000). Going past that
+    // HOST_PUSH only: the L2CPU static TLB is a single 2 MiB window
+    // anchored at LIM base 0x08000000 (see tlb_config.cpp). The H2D FIFO
+    // writes are issued through that window via pcie_writer, so the FIFO
+    // must end strictly inside [0x08000000, 0x08200000). Going past that
     // boundary would surface later as TlbWindow::validate() throwing
     // "Out of bounds access" on the first wrapping write -- catch it
     // here instead.
-    constexpr uint64_t l2cpu_tlb_window_end = 0x08200000ULL;
-    TT_FATAL(
-        static_cast<uint64_t>(data_fifo_address) + static_cast<uint64_t>(fifo_size_) <= l2cpu_tlb_window_end,
-        "L2CPU H2D data FIFO [0x{:x}, 0x{:x}) does not fit in the 2 MiB static "
-        "TLB window [0x08000000, 0x{:x}). Reduce fifo_size or move data_fifo_address "
-        "earlier in LIM.",
-        data_fifo_address,
-        static_cast<uint64_t>(data_fifo_address) + static_cast<uint64_t>(fifo_size_),
-        l2cpu_tlb_window_end);
-    TT_FATAL(
-        data_fifo_address >= 0x08000000ULL,
-        "L2CPU H2D data FIFO address 0x{:x} must lie inside the LIM region "
-        "[0x08000000, 0x08200000) covered by the static TLB.",
-        data_fifo_address);
+    //
+    // DEVICE_PULL doesn't hit the L2CPU TLB for data (the host writes
+    // payloads into pinned RAM with memcpy and the X280 firmware pulls
+    // from PCIe via socket_pull_payload), so the data ring can be any
+    // size; data_fifo_address is just a LIM-resident logical anchor for
+    // ring offset arithmetic on the firmware side.
+    if (h2d_mode_ == H2DMode::HOST_PUSH) {
+        constexpr uint64_t l2cpu_tlb_window_end = 0x08200000ULL;
+        TT_FATAL(
+            static_cast<uint64_t>(data_fifo_address) + static_cast<uint64_t>(fifo_size_) <= l2cpu_tlb_window_end,
+            "L2CPU H2D data FIFO [0x{:x}, 0x{:x}) does not fit in the 2 MiB static "
+            "TLB window [0x08000000, 0x{:x}). Reduce fifo_size or move data_fifo_address "
+            "earlier in LIM. (HOST_PUSH only; DEVICE_PULL has no such limit.)",
+            data_fifo_address,
+            static_cast<uint64_t>(data_fifo_address) + static_cast<uint64_t>(fifo_size_),
+            l2cpu_tlb_window_end);
+        TT_FATAL(
+            data_fifo_address >= 0x08000000ULL,
+            "L2CPU H2D data FIFO address 0x{:x} must lie inside the LIM region "
+            "[0x08000000, 0x08200000) covered by the static TLB.",
+            data_fifo_address);
+    }
 
     // Cache the externally-supplied LIM addresses; the existing
     // write_socket_metadata path uses these via is_l2cpu_ instead of
@@ -373,18 +382,37 @@ H2DSocket::H2DSocket(
     aligned_data_buf_start_ = data_fifo_address;
     write_ptr_ = 0;
 
-    // Same bytes_acked pinned-buffer machinery as the Tensix HOST_PUSH path
-    // -- the X280 firmware writes back into this counter via PCIe NOC just
-    // like a Tensix kernel does.
-    std::string shm_name = generate_shm_name("h2d-l2cpu");
-    PinnedBufferInfo bytes_acked_info =
-        init_bytes_acked_buffer(mesh_device, recv_device_range_set, pcie_alignment, shm_name);
-    bytes_acked_ptr_ = host_buffer_.get();
-
-    // DEVICE_PULL would require an X280 implementation of pulling from
-    // host pinned RAM, which Phase 1 does not provide. data_info stays
-    // zeroed since the X280 H2D path is HOST_PUSH only.
+    // Pinned host RAM layout mirrors the Tensix paths: HOST_PUSH only
+    // needs the 4 B bytes_acked counter (data lives in LIM), DEVICE_PULL
+    // additionally needs the entire data FIFO co-located with bytes_acked
+    // so the X280 can pull from a single contiguous PCIe range.
+    std::string shm_name = generate_shm_name(h2d_mode_ == H2DMode::DEVICE_PULL ? "h2d-l2cpu-pull" : "h2d-l2cpu-push");
+    PinnedBufferInfo bytes_acked_info{};
     PinnedBufferInfo data_info{};
+    if (h2d_mode_ == H2DMode::DEVICE_PULL) {
+        // Same pinned-buffer layout the Tensix DEVICE_PULL path uses:
+        // [data ring | bytes_acked] contiguous in a single PinnedMemory,
+        // with bytes_acked sitting at offset fifo_size_ from the data
+        // base. The X280 firmware's create_h2d_socket_receiver_device_pull
+        // reads h2d.data_addr_* and h2d.bytes_acked_addr_* out of the
+        // receiver_socket_md and uses both.
+        data_info = init_host_data_buffer(mesh_device, recv_device_range_set, pcie_alignment, shm_name);
+        bytes_acked_info = data_info;
+        auto bytes_acked_addr = (static_cast<uint64_t>(data_info.addr_hi) << 32 | data_info.addr_lo) + fifo_size_;
+        bytes_acked_info.addr_hi = static_cast<uint32_t>(bytes_acked_addr >> 32);
+        bytes_acked_info.addr_lo = static_cast<uint32_t>(bytes_acked_addr & 0xFFFFFFFFull);
+        bytes_acked_ptr_ = host_buffer_.get() + (fifo_size_ / sizeof(uint32_t));
+        TT_FATAL(
+            bytes_acked_info.pcie_xy_enc == data_info.pcie_xy_enc,
+            "L2CPU DEVICE_PULL: bytes_acked and data pinned memory must be mapped to the same PCIe core.");
+    } else {
+        // HOST_PUSH (default; socket_echo + Phase 2 migration cmd ring):
+        // same bytes_acked-only allocation Phase 1 used. data_info stays
+        // zeroed because the data lives in LIM at aligned_data_buf_start_
+        // and the X280 firmware reads it via plain LIM loads.
+        bytes_acked_info = init_bytes_acked_buffer(mesh_device, recv_device_range_set, pcie_alignment, shm_name);
+        bytes_acked_ptr_ = host_buffer_.get();
+    }
     write_socket_metadata(mesh_device, bytes_acked_info, data_info);
     init_receiver_tlb(mesh_device);
 

@@ -179,6 +179,67 @@ void bind_ttnn_cluster(nb::module_& mod) {
             target tile via UMD's UC TLB window with Strict ordering.
             Companion to ``write_to_core_immediate``.
         )doc");
+
+    // ------------------------------------------------------------------------
+    // DRAM bank table snapshot, used by the X280 migration worker (and any
+    // other host-driven kernel) to populate the same per-bank NOC routing
+    // table that BRISC sees on Tensix. Mirrors
+    // RiscFirmwareInitializer::generate_device_bank_to_noc_tables for NOC=0
+    // (see tt_metal/distributed/cluster_noc_helpers.cpp::get_dram_bank_table
+    // and tt_metal/impl/device/firmware/risc_firmware_initializer.cpp lines
+    // 476-512). Equivalent to tt-blaze's dram_bank_to_noc_xy[NOC0] +
+    // bank_to_dram_offset[] (blaze/ops/migration/kernels/op.hpp lines
+    // 282-291).
+    // ------------------------------------------------------------------------
+
+    mod.def(
+        "get_dram_bank_table",
+        [](uint32_t device_id) -> nb::list {
+            auto table = tt::tt_metal::distributed::get_dram_bank_table(device_id);
+            nb::list out;
+            for (const auto& e : table) {
+                nb::dict d;
+                d["bank_id"] = e.bank_id;
+                d["noc_x"] = e.noc_x;
+                d["noc_y"] = e.noc_y;
+                d["base_addr"] = e.base_addr;
+                d["bank_size"] = e.bank_size;
+                out.append(d);
+            }
+            return out;
+        },
+        nb::arg("device_id"),
+        R"doc(
+            Return BRISC-equivalent ``dram_bank_to_noc_xy[NOC0]`` +
+            ``bank_to_dram_offset[]`` for an opened device.
+
+            Each entry is a dict with the keys ``bank_id``, ``noc_x``,
+            ``noc_y``, ``base_addr``, ``bank_size``. ``noc_x`` / ``noc_y``
+            are TRANSLATED on virtualized-DRAM SKUs (Blackhole) and raw
+            NOC0 elsewhere -- i.e. the same value the BRISC kernel uses
+            when issuing a NOC transaction with NOC_INDEX=0. ``base_addr``
+            is the per-bank offset (matches
+            ``Allocator::get_bank_offset(BufferType::DRAM, bank_id)``);
+            ``bank_size`` is the DRAM view size.
+
+            Args:
+                device_id (int): Logical chip id (matches
+                    ``IDevice::id()`` / the value used with
+                    ``ttnn.open_mesh_device``).
+
+            Returns:
+                list[dict]: ``allocator.get_num_banks(DRAM)`` entries,
+                indexed by ``bank_id``.
+
+            Notes:
+                - The device must be opened first (e.g. via
+                  ``ttnn.open_mesh_device``); otherwise this throws.
+                - Intended consumer is the X280 migration worker (see
+                  ``x280/host_ttnn/utils/_dram_bank_table.py``) which
+                  packs these entries into the LIM-resident
+                  ``x280_dram_bank_table_t`` so the firmware can route
+                  to any DRAM bank just like a Tensix migration kernel.
+        )doc");
 }
 
 }  // namespace
