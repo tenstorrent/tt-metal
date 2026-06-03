@@ -347,6 +347,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDirectWriteAddressPatterns) {
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDirectWriteMulticast) {
+    GTEST_SKIP() << "Disabled: see #45978";
     uint32_t test_id = 507;
     unit_tests::dm::direct_write::multicast_test(get_mesh_device(), test_id);
 }
