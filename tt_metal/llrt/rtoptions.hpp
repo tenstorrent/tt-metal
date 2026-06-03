@@ -792,6 +792,7 @@ public:
     bool get_numa_based_affinity() const { return numa_based_affinity; }
 
     bool get_dram_backed_cq() const { return dram_backed_cq; }
+    void set_dram_backed_cq(bool enable) { dram_backed_cq = enable; }
 
     bool get_simulator_direct_tensor_writes() const { return simulator_direct_tensor_writes; }
 
