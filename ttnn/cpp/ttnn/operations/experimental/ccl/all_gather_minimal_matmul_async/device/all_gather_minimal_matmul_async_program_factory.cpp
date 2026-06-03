@@ -498,9 +498,23 @@ all_gather_minimal_matmul_async_factory_helper(
         sender_device_coord, forward_coord, backward_coord, device);
 
     auto full_grid_size = device->compute_with_storage_grid_size();
-    TT_FATAL(
-        !((transpose_core_grid ? grid_size.x : grid_size.y) % num_links),
-        "The number of in0 rows must be a multiple of num_links");
+    // Place the fsdp muxes in the last column (packed along the in1/Y axis) only when the matmul
+    // actually leaves that column free — i.e. a transpose grid narrower than the physical grid (the
+    // 7x8-on-an-8-wide-device case). On a full-width grid the last column is a worker column, so
+    // fall back to the original bottom-row mux layout to avoid colliding with the matmul.
+    const bool fsdp_mux_in_column = transpose_core_grid && (grid_size.x < full_grid_size.x);
+    // The in0 sender axis is grouped by num_workers_per_link; each group owns one mux per
+    // direction, so it must form exactly num_links groups (the last group may be short when the
+    // axis isn't a multiple of num_workers_per_link — the per-mux client-count clamp handles that).
+    {
+        uint32_t in0_axis = transpose_core_grid ? grid_size.x : grid_size.y;
+        TT_FATAL(
+            (in0_axis + num_workers_per_link - 1) / num_workers_per_link == num_links,
+            "The in0 sender axis ({}) must form exactly num_links ({}) groups of num_workers_per_link ({})",
+            in0_axis,
+            num_links,
+            num_workers_per_link);
+    }
     uint32_t num_mux_cores = num_links * 2;  // 2 being the number of directions
     TT_FATAL(
         (transpose_core_grid ? full_grid_size.y : full_grid_size.x) >= num_mux_cores,
@@ -655,15 +669,23 @@ all_gather_minimal_matmul_async_factory_helper(
             uint32_t dir = mux_id % 2;
             if (fsdp_mux_connection_valid(dir)) {
                 uint32_t link = mux_id / 2;
-                uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
-                if (mux_x_index >= full_grid_size.x) {
-                    mux_x_index = mux_x_index - full_grid_size.x;
+                // Transpose grid (in1 chain runs along X): the fsdp muxes live in the LAST column
+                // (freed by the 7-wide matmul), packed along the in1 sender axis (Y) at rows
+                // 0..2*num_links-1. Each row's chain-tail sender then reaches its mux with a short
+                // horizontal NOC_1 hop, instead of the old long vertical write down to a bottom mux
+                // row (which ran against NOC_1's up/left bias). Non-transpose keeps the bottom-row
+                // layout with the -1 NOC_1 shift.
+                CoreCoord fsdp_mux_logical_core;
+                if (fsdp_mux_in_column) {
+                    fsdp_mux_logical_core = CoreCoord(full_grid_size.x - 1, link * 2 + dir);  // 2 = #directions
+                } else {
+                    uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
+                    if (mux_x_index >= full_grid_size.x) {
+                        mux_x_index = mux_x_index - full_grid_size.x;
+                    }
+                    mux_x_index = (mux_x_index == 0) ? (full_grid_size.x - 1) : (mux_x_index - 1);
+                    fsdp_mux_logical_core = CoreCoord(mux_x_index, full_grid_size.y - 2);
                 }
-                // in1 uses NOC_1 (writes up/left): place the fsdp mux one column to the LEFT of its
-                // sender so the sender->mux hop routes with the NOC direction, not against it. The
-                // sender stays put; only the mux shifts. (in0 on NOC_0 biases the opposite way.)
-                mux_x_index = (mux_x_index == 0) ? (full_grid_size.x - 1) : (mux_x_index - 1);
-                auto fsdp_mux_logical_core = CoreCoord(mux_x_index, full_grid_size.y - 2);
                 fsdp_mux_core_ranges.emplace_back(fsdp_mux_logical_core);
             }
         }
@@ -1043,13 +1065,18 @@ all_gather_minimal_matmul_async_factory_helper(
             uint32_t dir = mux_id % 2;
             if (fsdp_mux_connection_valid(dir)) {
                 uint32_t link = mux_id / 2;
-                uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
-                if (mux_x_index >= full_grid_size.x) {
-                    mux_x_index = mux_x_index - full_grid_size.x;
+                // Match the (transpose-conditional) column placement in the create loop above.
+                CoreCoord fsdp_mux_logical_core;
+                if (fsdp_mux_in_column) {
+                    fsdp_mux_logical_core = CoreCoord(full_grid_size.x - 1, link * 2 + dir);  // 2 = #directions
+                } else {
+                    uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
+                    if (mux_x_index >= full_grid_size.x) {
+                        mux_x_index = mux_x_index - full_grid_size.x;
+                    }
+                    mux_x_index = (mux_x_index == 0) ? (full_grid_size.x - 1) : (mux_x_index - 1);
+                    fsdp_mux_logical_core = CoreCoord(mux_x_index, full_grid_size.y - 2);
                 }
-                // Match the -1 (NOC_1 up/left) fsdp mux placement above.
-                mux_x_index = (mux_x_index == 0) ? (full_grid_size.x - 1) : (mux_x_index - 1);
-                auto fsdp_mux_logical_core = CoreCoord(mux_x_index, full_grid_size.y - 2);
 
                 std::vector<uint32_t> fsdp_mux_rt_args;
                 const auto src_node_id = device->get_fabric_node_id(sender_device_coord);
@@ -1309,34 +1336,15 @@ all_gather_minimal_matmul_async_factory_helper(
             N_end_tile,
             defer_write_k_block,
         };
-        // FSDP fabric senders are co-located with their mux's column: the sender->mux write is then
-        // a short same-column hop to the mux on row grid.y-2, instead of every row relaying from the
-        // fixed chain tail (which forced long cross-column writes and a hot tail column). Each row's
-        // backward/forward mux columns come from in1_idx; the sender is this row's core sitting in
-        // that column. Co-location only applies to transpose grids (the in1 chain runs along X there,
-        // so a sender can occupy any column); non-transpose falls back to the chain tail.
+        // FSDP fabric senders are the in1 chain tail — the last two cores of in1_core_order, one per
+        // direction (size-2 backward, size-1 forward). For a transpose grid the in1 chain runs along
+        // X, so the tail relays a short horizontal NOC_1 hop to its mux in the freed last column (see
+        // the fsdp mux create loop); for non-transpose the tail relays to the bottom-row mux. Each
+        // mux is shared by a group of num_workers_per_link consecutive rows along the in1 sender axis.
         uint32_t fsdp_worker_idx = in1_idx % num_workers_per_link;
         uint32_t fsdp_group_base = in1_idx - fsdp_worker_idx;
-        uint32_t fsdp_mux_col_backward = fsdp_group_base + (num_workers_per_link - 1);
-        if (fsdp_mux_col_backward >= full_grid_size.x) {
-            fsdp_mux_col_backward -= full_grid_size.x;
-        }
-        uint32_t fsdp_mux_col_forward = fsdp_group_base + num_workers_per_link;
-        if (fsdp_mux_col_forward >= full_grid_size.x) {
-            fsdp_mux_col_forward -= full_grid_size.x;
-        }
         uint32_t fsdp_backward_sender_index = static_cast<uint32_t>(in1_core_order.size()) - 2;
         uint32_t fsdp_forward_sender_index = static_cast<uint32_t>(in1_core_order.size()) - 1;
-        if (transpose_core_grid) {
-            for (uint32_t ci = 0; ci < in1_core_order.size(); ++ci) {
-                if (in1_core_order[ci].x == fsdp_mux_col_backward) {
-                    fsdp_backward_sender_index = ci;
-                }
-                if (in1_core_order[ci].x == fsdp_mux_col_forward) {
-                    fsdp_forward_sender_index = ci;
-                }
-            }
-        }
 
         // FSDP-only per-core args: kernel parses these under FSDP_FUSED. The two sender indices tell
         // the kernel which cores in this row's chain relay (backward / forward direction).
@@ -1373,24 +1381,30 @@ all_gather_minimal_matmul_async_factory_helper(
             // direction it actually sends in (backward / forward). The termination master is the
             // group's worker-0 client, which now lives in the mux's column at the group-base row.
             if (is_in1_backward_sender) {
-                // Sender column = group base + (nwpl-1); the mux sits one column to its LEFT, since
-                // in1 uses NOC_1 (writes up/left). The sender stays put; only the mux shifts. The
-                // termination master is the group's worker-0 client (a sender), so it stays in the
-                // SENDER column, not the shifted mux column.
-                uint32_t fsdp_sender_col_backward =
-                    ((in1_idx / num_workers_per_link) * num_workers_per_link) + (num_workers_per_link - 1);
-                if (fsdp_sender_col_backward >= full_grid_size.x) {
-                    fsdp_sender_col_backward -= full_grid_size.x;
-                }
-                uint32_t fsdp_mux_index_backward =
-                    (fsdp_sender_col_backward == 0) ? (full_grid_size.x - 1) : (fsdp_sender_col_backward - 1);
-                auto fsdp_mux_logical_backward = CoreCoord(fsdp_mux_index_backward, full_grid_size.y - 2);
-                CoreCoord fsdp_mux_virtual_backward = device->worker_core_from_logical_core(fsdp_mux_logical_backward);
-                // Non-transpose keeps the chain-tail sender (core_order[size-2]) on the original axis.
+                // Backward sender = chain tail core_order[size-2]. Transpose: its mux is in the last
+                // column at the group's backward row ((group)*2 + 0); the sender reaches it with a
+                // horizontal NOC_1 hop. Non-transpose: the original bottom-row mux with the -1 shift.
+                // The termination master is the group's worker-0 client — the backward sender of the
+                // group-base row, which sits in the chain-tail column on the in1 axis.
                 auto second_last_in1_core = in1_core_order[in1_core_order.size() - 2];
-                auto fsdp_term_master_logical_backward = transpose_core_grid
-                                                             ? CoreCoord(fsdp_sender_col_backward, in1_idx - worker_idx)
-                                                             : CoreCoord(in1_idx - worker_idx, second_last_in1_core.y);
+                CoreCoord fsdp_mux_logical_backward;
+                CoreCoord fsdp_term_master_logical_backward;
+                if (fsdp_mux_in_column) {
+                    fsdp_mux_logical_backward =
+                        CoreCoord(full_grid_size.x - 1, (in1_idx / num_workers_per_link) * 2 + 0);
+                    fsdp_term_master_logical_backward = CoreCoord(second_last_in1_core.x, in1_idx - worker_idx);
+                } else {
+                    uint32_t fsdp_sender_col_backward =
+                        ((in1_idx / num_workers_per_link) * num_workers_per_link) + (num_workers_per_link - 1);
+                    if (fsdp_sender_col_backward >= full_grid_size.x) {
+                        fsdp_sender_col_backward -= full_grid_size.x;
+                    }
+                    uint32_t fsdp_mux_index_backward =
+                        (fsdp_sender_col_backward == 0) ? (full_grid_size.x - 1) : (fsdp_sender_col_backward - 1);
+                    fsdp_mux_logical_backward = CoreCoord(fsdp_mux_index_backward, full_grid_size.y - 2);
+                    fsdp_term_master_logical_backward = CoreCoord(in1_idx - worker_idx, second_last_in1_core.y);
+                }
+                CoreCoord fsdp_mux_virtual_backward = device->worker_core_from_logical_core(fsdp_mux_logical_backward);
                 CoreCoord fsdp_term_master_virtual_backward =
                     device->worker_core_from_logical_core(fsdp_term_master_logical_backward);
                 fabric_mux_connection_rt_args(
@@ -1407,21 +1421,28 @@ all_gather_minimal_matmul_async_factory_helper(
                     in1_term_sync_id,
                     in1_args);
             } else {
-                // Forward fabric sender (in1_core_order_index == size - 1).
-                uint32_t fsdp_sender_col_forward =
-                    ((in1_idx / num_workers_per_link) * num_workers_per_link) + num_workers_per_link;
-                if (fsdp_sender_col_forward >= full_grid_size.x) {
-                    fsdp_sender_col_forward -= full_grid_size.x;
+                // Forward fabric sender (in1_core_order_index == size - 1) = chain tail back().
+                // Transpose: mux in the last column at the group's forward row ((group)*2 + 1).
+                // Non-transpose: original bottom-row mux with the -1 shift. Term master = the group's
+                // worker-0 forward sender (chain tail) at the group-base row.
+                CoreCoord fsdp_mux_logical_forward;
+                CoreCoord fsdp_term_master_logical_forward;
+                if (fsdp_mux_in_column) {
+                    fsdp_mux_logical_forward =
+                        CoreCoord(full_grid_size.x - 1, (in1_idx / num_workers_per_link) * 2 + 1);
+                    fsdp_term_master_logical_forward = CoreCoord(last_in1_core.x, in1_idx - worker_idx);
+                } else {
+                    uint32_t fsdp_sender_col_forward =
+                        ((in1_idx / num_workers_per_link) * num_workers_per_link) + num_workers_per_link;
+                    if (fsdp_sender_col_forward >= full_grid_size.x) {
+                        fsdp_sender_col_forward -= full_grid_size.x;
+                    }
+                    uint32_t fsdp_mux_index_forward =
+                        (fsdp_sender_col_forward == 0) ? (full_grid_size.x - 1) : (fsdp_sender_col_forward - 1);
+                    fsdp_mux_logical_forward = CoreCoord(fsdp_mux_index_forward, full_grid_size.y - 2);
+                    fsdp_term_master_logical_forward = CoreCoord(in1_idx - worker_idx, last_in1_core.y);
                 }
-                // Mux one column to the LEFT of the forward sender (NOC_1 up/left); sender stays.
-                uint32_t fsdp_mux_index_forward =
-                    (fsdp_sender_col_forward == 0) ? (full_grid_size.x - 1) : (fsdp_sender_col_forward - 1);
-                auto fsdp_mux_logical_forward = CoreCoord(fsdp_mux_index_forward, full_grid_size.y - 2);
                 CoreCoord fsdp_mux_virtual_forward = device->worker_core_from_logical_core(fsdp_mux_logical_forward);
-                // Term master is the worker-0 sender, which stays in the SENDER column (not the mux).
-                auto fsdp_term_master_logical_forward = transpose_core_grid
-                                                            ? CoreCoord(fsdp_sender_col_forward, in1_idx - worker_idx)
-                                                            : CoreCoord(in1_idx - worker_idx, last_in1_core.y);
                 CoreCoord fsdp_term_master_virtual_forward =
                     device->worker_core_from_logical_core(fsdp_term_master_logical_forward);
                 fabric_mux_connection_rt_args(
