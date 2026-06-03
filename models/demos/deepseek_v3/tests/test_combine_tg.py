@@ -13,7 +13,7 @@ Configuration:
 - Batch: 64 (reduced from quad's 512 due to L1 constraints)
 
 Run with:
-'MESH_DEVICE=TG USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/tg_moe_tests/individual_ops/test_combine_tg.py -v'
+'MESH_DEVICE=TG USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/test_combine_tg.py -v'
 """
 
 import os

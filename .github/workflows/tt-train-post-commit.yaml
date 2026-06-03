@@ -35,7 +35,7 @@ on:
         default: false
       gtest_filter:
         required: false
-        default: "*"
+        default: "-*NIGHTLY*"
         type: string
         description: "Filter for gtest"
       ref:
@@ -54,14 +54,12 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        test-group:
-          [
-            {
-              name: tt-train,
-              cmd: ctest -E NIGHTLY --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml,
-            },
-          ]
-        test-group-py: [{ name: tt-train, cmd: python -m pytest tests/python }]
+        test-group: [
+          {name: tt-train, cmd: ./tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml},
+        ]
+        test-group-py: [
+          {name: tt-train, cmd: python -m pytest tests/python},
+        ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     # tt-train in N300 is timing out on CIv2-viommu: https://github.com/tenstorrent/tt-metal/issues/29443
     runs-on: >-
@@ -121,6 +119,8 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         if: ${{ !inputs.wheel-artifact-name }}
+        env:
+          GTEST_FILTER: ${{ inputs.gtest_filter }}
         run: |
           cd /work/build/tt-train
           mkdir -p generated/test_reports

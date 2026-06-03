@@ -13,7 +13,8 @@ on:
           - module
           - long-seq-module
           - final-op-unit
-        default: "all"
+          - tg-moe
+        default: 'all'
       platform:
         required: false
         type: choice

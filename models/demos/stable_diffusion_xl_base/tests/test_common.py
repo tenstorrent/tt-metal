@@ -128,7 +128,7 @@ def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, token
             device=ttnn_device,
             mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
         )
-        _, _ = tt_text_encoder(tt_tokens_1, ttnn_device)
+        _, _ = tt_text_encoder(tt_tokens_1)
 
     dummy_ids_2 = tokenizer_2(
         dummy_prompt,
@@ -144,7 +144,7 @@ def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, token
         device=ttnn_device,
         mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
     )
-    _, _ = tt_text_encoder_2(tt_tokens_2, ttnn_device)
+    _, _ = tt_text_encoder_2(tt_tokens_2)
     ttnn.synchronize_device(ttnn_device)
 
 
