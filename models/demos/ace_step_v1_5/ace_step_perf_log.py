@@ -223,7 +223,6 @@ class AceStepPerfRecorder:
             module_timings,
             wall_ms=total_ms,
             params=self.params,
-            show_tokens_per_sec=bool(self.params.get("llm_debug")),
         )
         _perf_banner("end perf summary")
 
@@ -353,7 +352,7 @@ def emit_key_metrics(
     *,
     wall_ms: float,
     params: Optional[Dict[str, Any]] = None,
-    show_tokens_per_sec: bool = False,
+    show_tokens_per_sec: bool = True,
 ) -> None:
     """Print the ACE-Step BENCHMARK.md *Key Metrics* table."""
     if not ace_step_perf_logging_enabled():
@@ -375,11 +374,12 @@ def emit_key_metrics(
     ]
 
     tps = metrics.get("tokens_per_sec")
-    if show_tokens_per_sec and tps is not None:
-        n_tok = metrics.get("lm_num_tokens", "?")
-        rows.append(("Tokens/sec", f"{tps:.1f}", f"LLM throughput ({n_tok} new tokens)"))
-    elif show_tokens_per_sec:
-        rows.append(("Tokens/sec", "n/a", "LM token stats unavailable (was preprocess cached?)"))
+    if show_tokens_per_sec:
+        if tps is not None:
+            n_tok = metrics.get("lm_num_tokens", "?")
+            rows.append(("Tokens/sec", f"{tps:.1f}", f"LLM token generation throughput ({n_tok} new tokens)"))
+        else:
+            rows.append(("Tokens/sec", "n/a", "LM token stats unavailable (cached preprocess or LM skipped?)"))
 
     for name, value, desc in rows:
         print(f"[ace_step_v1_5][perf]   {name:<22s} {value:>12s}  {desc}", flush=True)
@@ -387,7 +387,7 @@ def emit_key_metrics(
     print(f"[ace_step_v1_5][perf] {bar}", flush=True)
 
     log_extra = ""
-    if show_tokens_per_sec and tps is not None:
+    if tps is not None:
         log_extra = f" tokens_per_sec={tps:.1f}"
     logger.info(
         "ACE-Step key metrics: wall={:.2f}s LM={:.2f}s DiT={:.2f}s VAE={:.2f}s{}",
@@ -481,6 +481,17 @@ def emit_benchmark_wall_breakdown(
                 sub_ms = _sum(sub_labels)
                 if sub_ms > 0:
                     _row(sub, sub_ms, indent="  ")
+            if params:
+                num_tokens = params.get("lm_num_tokens")
+                lm_gen_time_s = params.get("lm_gen_time_s")
+                n_tok = int(num_tokens) if num_tokens is not None else 0
+                gen_s = float(lm_gen_time_s) if lm_gen_time_s is not None else 0.0
+                if n_tok > 0 and gen_s > 0.0:
+                    tps = float(n_tok) / gen_s
+                    print(
+                        f"[ace_step_v1_5][perf]     {'├─ LM throughput':<34s} {tps:10.1f}  " f"{'tokens/sec':>12s}",
+                        flush=True,
+                    )
         if name == "DiT Diffusion (total)" and ms > 0:
             for sub, sub_labels in (
                 ("├─ Mask prep", frozenset({"dit_mask_prep"})),
@@ -571,7 +582,6 @@ def emit_session_summary(state: SessionPerfState, *, params: Optional[Dict[str, 
                 last.modules_ms,
                 wall_ms=last.total_ms,
                 params=params,
-                show_tokens_per_sec=bool((params or {}).get("llm_debug")),
             )
         warmup = [s for s in state.pass_snapshots if s.is_warmup]
         if warmup and timed:

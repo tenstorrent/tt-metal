@@ -540,8 +540,9 @@ def main() -> None:
         "--llm-debug",
         action="store_true",
         help=(
-            "Deep LLM perf logging: show Tokens/sec in KEY METRICS and enable constrained-decoding debug logs "
-            "(ACE-Step BENCHMARK.md --llm-debug)."
+            "Deep LLM perf logging: extra constrained-decoding debug logs "
+            "(ACE-Step BENCHMARK.md --llm-debug). Tokens/sec is always printed in KEY METRICS "
+            "when the 5 Hz LM runs on this pass."
         ),
     )
     args = ap.parse_args()
