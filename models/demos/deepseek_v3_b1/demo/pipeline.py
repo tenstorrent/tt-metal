@@ -724,8 +724,5 @@ class Pipeline:
 
         ttnn.distributed_context_barrier()
 
-        logger.info("TEARDOWN block.terminate() START")
         self._pipeline_block.terminate()
-        logger.info("TEARDOWN block.terminate() DONE; final synchronize_device START")
         ttnn.synchronize_device(self._mesh_device)
-        logger.info("TEARDOWN final synchronize_device DONE")

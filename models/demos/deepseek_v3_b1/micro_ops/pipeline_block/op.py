@@ -62,7 +62,6 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 import torch
-from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.demo.pipeline_routing import (
@@ -1125,17 +1124,8 @@ class PipelineBlock:
         return ttnn.generic_op([dummy_tensor, dummy_tensor], mesh_program_descriptor)
 
     def _terminate_from_plan(self):
-        rank = int(ttnn.distributed_context_get_rank())
-        logger.info(
-            "TEARDOWN[{}] _terminate_from_plan: {} fwd(s), host_io={}",
-            rank,
-            len(self._plan_forwarders),
-            self.host_io is not None,
-        )
-        for i, forwarder in enumerate(self._plan_forwarders):
-            logger.info("TEARDOWN[{}] forwarder[{}].terminate(False) START", rank, i)
+        for forwarder in self._plan_forwarders:
             forwarder.terminate(False)
-            logger.info("TEARDOWN[{}] forwarder[{}].terminate(False) DONE", rank, i)
         if self.host_io is not None:
             # Plan-path host I/O only exists on split (multi-host) stages, where the idle peer
             # rank owns no host_io and so does NOT call it. synchronize_device is collective
@@ -1143,10 +1133,7 @@ class PipelineBlock:
             # extra collective sync the peer never matches -> the two split halves deadlock. Pass
             # sync=False; the outer Pipeline.terminate synchronize_device (called by every rank)
             # drains the device symmetrically and still waits for the D2H/forwarder kernels.
-            logger.info("TEARDOWN[{}] host_io.terminate(sync=False) START", rank)
             self.host_io.terminate(False)
-            logger.info("TEARDOWN[{}] host_io.terminate(sync=False) DONE", rank)
-        logger.info("TEARDOWN[{}] _terminate_from_plan DONE", rank)
 
     def run(self):
         if self.parallel_devices:
