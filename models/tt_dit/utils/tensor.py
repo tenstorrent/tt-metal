@@ -630,6 +630,131 @@ def upsample(
     return x
 
 
+def rope_double_last_dim_device(tt_x: ttnn.Tensor) -> ttnn.Tensor:
+    if ttnn.has_storage_type_of(tt_x, ttnn.StorageType.HOST):
+        msg = "rope_double_last_dim_device requires device-backed input"
+        raise ValueError(msg)
+
+    shape = list(tt_x.shape)
+    last = shape[-1]
+    if last % 32 != 0:
+        msg = f"rope_double_last_dim_device requires last dim to be tile-aligned, got {last}"
+        raise ValueError(msg)
+
+    rank = len(shape)
+    expanded_shape = shape[:-1] + [2, last]
+    transposed_shape = shape[:-1] + [last, 2]
+    doubled_shape = shape[:-1] + [2 * last]
+
+    concatenated = ttnn.concat([tt_x, tt_x], dim=-1)
+    reshaped = ttnn.reshape(concatenated, expanded_shape)
+    transposed = ttnn.transpose(reshaped, rank - 1, rank)
+    if list(transposed.shape) != transposed_shape:
+        msg = (
+            f"rope_double_last_dim_device: transpose produced shape {list(transposed.shape)}, "
+            f"expected {transposed_shape}"
+        )
+        raise RuntimeError(msg)
+    return ttnn.reshape(transposed, doubled_shape)
+
+
+def mesh_partition_with_padding(
+    tt_x: ttnn.Tensor,
+    dim: int,
+    cluster_axis: int,
+    cluster_size: int,
+) -> ttnn.Tensor:
+    """Shard a replicated device tensor along ``dim`` across ``cluster_axis``.
+
+    Pads the sharded dim with zeros so it divides evenly by ``cluster_size``
+    (no-op when already divisible), then calls ``ttnn.mesh_partition``. This
+    mirrors the semantic of ``from_torch(..., mesh_axes=[..., cluster_axis, ...])``
+    but consumes a tensor that has already been assembled on device (replicated
+    across the submesh) rather than a host tensor.
+
+    Parameters
+    ----------
+    tt_x:
+        Device-resident tensor, replicated across the cluster axis being
+        partitioned.
+    dim:
+        Tensor dimension to shard. Negative indices are resolved against the
+        tensor rank.
+    cluster_axis:
+        Mesh axis along which to scatter the shards (``0`` or ``1`` for a 2D
+        mesh).
+    cluster_size:
+        Number of devices along ``cluster_axis``. Used purely for padding
+        calculation; ``ttnn.mesh_partition`` will still query the actual mesh
+        layout at runtime.
+
+    Returns
+    -------
+    ttnn.Tensor
+        The partitioned tensor. Output shape matches the input except
+        ``output.shape[dim] == ceil(input.shape[dim] / cluster_size)``.
+    """
+    if ttnn.has_storage_type_of(tt_x, ttnn.StorageType.HOST):
+        msg = "mesh_partition_with_padding requires device-backed input"
+        raise ValueError(msg)
+    if cluster_size < 1:
+        msg = f"cluster_size must be >= 1, got {cluster_size}"
+        raise ValueError(msg)
+    if cluster_size == 1:
+        # No real partition needed; the tensor is already the per-rank shard.
+        return tt_x
+
+    rank = len(tt_x.shape)
+    resolved_dim = dim % rank
+    size = int(tt_x.shape[resolved_dim])
+    padded = ((size + cluster_size - 1) // cluster_size) * cluster_size
+    if padded > size:
+        pad_spec = [(0, 0)] * rank
+        pad_spec[resolved_dim] = (0, padded - size)
+        tt_x = ttnn.pad(tt_x, pad_spec, value=0.0)
+
+    return ttnn.mesh_partition(tt_x, dim=dim, cluster_axis=cluster_axis)
+
+
+def pack_latents_device(
+    tt_x: ttnn.Tensor,
+    batch_size: int,
+    num_channels: int,
+    height: int,
+    width: int,
+) -> ttnn.Tensor:
+    """Device-side equivalent of the Qwen-style ``_pack_latents`` packing.
+
+    Transforms a device tensor from ``[B, C, H, W]`` (or ``[B, C, 1, H, W]``, which
+    is first collapsed via reshape) into the packed latent shape expected by the
+    Qwen transformer: ``[B, (H/2)*(W/2), C*4]``.
+
+    This mirrors the host path ``latents.view(B, C, H/2, 2, W/2, 2)
+    .permute(0, 2, 4, 1, 3, 5).reshape(B, (H/2)*(W/2), C*4)`` exactly.
+
+    Row-major layout is used for the reshape + permute + reshape sequence since
+    the intermediate 6D views are not naturally tile-aligned; the result is
+    converted back to TILE layout before returning.
+    """
+    if ttnn.has_storage_type_of(tt_x, ttnn.StorageType.HOST):
+        msg = "pack_latents_device requires device-backed input"
+        raise ValueError(msg)
+    if height % 2 != 0 or width % 2 != 0:
+        msg = f"pack_latents_device requires even H and W, got H={height} W={width}"
+        raise ValueError(msg)
+
+    original_layout = tt_x.layout
+    if original_layout != ttnn.Layout.ROW_MAJOR:
+        tt_x = ttnn.to_layout(tt_x, ttnn.Layout.ROW_MAJOR)
+
+    tt_x = ttnn.reshape(tt_x, [batch_size, num_channels, height, width])
+    tt_x = ttnn.reshape(tt_x, [batch_size, num_channels, height // 2, 2, width // 2, 2])
+    tt_x = ttnn.permute(tt_x, (0, 2, 4, 1, 3, 5))
+    tt_x = ttnn.reshape(tt_x, [batch_size, (height // 2) * (width // 2), num_channels * 4])
+
+    return ttnn.to_layout(tt_x, ttnn.Layout.TILE)
+
+
 def unflatten(x: ttnn.Tensor, dim: int, sizes: Sequence[int]) -> ttnn.Tensor:
     """Expands a dimension of the input tensor over multiple dimensions.
 
