@@ -266,7 +266,11 @@ TopologyMappingResult run_topology_mapping(
         for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
             const auto& mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
             const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
-            if (!is_1d && mesh_shape.mesh_size() % 32 == 0) {
+            // Only anchor when a host owns less than a full galaxy (per-host slice < 32 chips). With coarser
+            // slicing (a host owns a full galaxy or more) the existing placement already maps node 0 onto the
+            // physical corner, so the anchor is unnecessary and would needlessly change established mappings.
+            const bool sub_galaxy_sliced = mesh_graph.get_mesh_shape(mesh_id, MeshHostRankId{0}).mesh_size() < 32;
+            if (!is_1d && mesh_shape.mesh_size() % 32 == 0 && sub_galaxy_sliced) {
                 // Single galaxy (==32 chips): pin all four corners to the four tray corners (one per tray).
                 // Multi-galaxy (>32): pin only the NW corner to avoid over-constraining the multi-galaxy solve.
                 const bool nw_corner_only = mesh_shape.mesh_size() > 32;
