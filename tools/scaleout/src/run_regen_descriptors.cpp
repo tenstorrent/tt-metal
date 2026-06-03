@@ -126,7 +126,7 @@ int main(int argc, char** argv) {
 
         std::cout << "\nDone." << std::endl;
         std::cout << "  Input dead channel endpoints: " << summary.input_dead_channels << std::endl;
-        std::cout << "  Cables pruned:                " << summary.pruned_cables.size() << std::endl;
+        std::cout << "  Cables pruned from FSD:       " << summary.pruned_cables.size() << std::endl;
         std::cout << "  Channels in regenerated FSD:  " << summary.channels_remaining << std::endl;
         std::cout << "\n  Wrote:" << std::endl;
         std::cout << "    " << summary.output_fsd_path << std::endl;
@@ -134,7 +134,8 @@ int main(int argc, char** argv) {
         std::cout << "    " << summary.output_deployment_descriptor_path << std::endl;
 
         if (!summary.pruned_cables.empty()) {
-            std::cout << "\nPruned cables:" << std::endl;
+            std::cout << "\nPruned cables (removed from FSD; inter-node ones also from cabling descriptor):"
+                      << std::endl;
             for (const auto& [endpoint_a, endpoint_b] : summary.pruned_cables) {
                 std::cout << "  - " << endpoint_a << " <-> " << endpoint_b << std::endl;
             }

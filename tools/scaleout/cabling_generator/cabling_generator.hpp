@@ -199,17 +199,6 @@ public:
     // Mutating counterpart to find_cables_containing_channels: walks the resolved graph and
     // removes every cable whose expansion intersects the dead set, applying the
     // dead-channel == dead-cable policy.
-    //
-    // Side effects on this CablingGenerator:
-    //   - chip_connections_ rebuilt with dead cables' channels excluded
-    //     (drives emit_factory_system_descriptor()).
-    //   - graph-level internal_connections in root_instance_ have dead cables erased
-    //     (drives emit_cabling_descriptor() -- only graph-level connections appear in the
-    //     emitted cabling textproto).
-    //   - per-node inter_board_connections also have dead cables erased, for in-memory
-    //     consistency. (These are not part of the emitted cabling textproto today.)
-    //
-    // Returns the set of cables that were pruned, for diagnostics.
     std::set<PhysicalPortConnection> prune_dead_channels(const std::set<PhysicalChannelEndpoint>& dead_channels);
 
 private:
