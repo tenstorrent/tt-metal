@@ -41,6 +41,83 @@
             sub_device_id);                                                          \
     }
 
+#define TTNN_BINARY_OP_TENSOR_TENSOR_UINT8_IMPL(NAME, OP_TYPE)                                                \
+    Tensor NAME(                                                                                              \
+        const Tensor& lhs,                                                                                    \
+        const Tensor& rhs,                                                                                    \
+        const std::optional<const DataType>& output_dtype,                                                    \
+        const std::optional<MemoryConfig>& memory_config,                                                     \
+        const std::optional<Tensor>& output,                                                                  \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,                          \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,                           \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,                           \
+        const std::optional<CoreRangeSet>& sub_core_grids,                                                    \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                                      \
+        const std::optional<Tensor> lhs_cast =                                                                \
+            lhs.dtype() == DataType::UINT8 ? ttnn::typecast(lhs, DataType::UINT16) : std::optional<Tensor>{}; \
+        const Tensor& a = lhs_cast.has_value() ? *lhs_cast : lhs;                                             \
+        const std::optional<Tensor> rhs_cast =                                                                \
+            rhs.dtype() == DataType::UINT8 ? ttnn::typecast(rhs, DataType::UINT16) : std::optional<Tensor>{}; \
+        const Tensor& b = rhs_cast.has_value() ? *rhs_cast : rhs;                                             \
+        return ttnn::detail::invoke_binary_ng(                                                                \
+            a,                                                                                                \
+            b,                                                                                                \
+            operations::binary::BinaryOpType::OP_TYPE,                                                        \
+            output_dtype,                                                                                     \
+            memory_config,                                                                                    \
+            output,                                                                                           \
+            post_activations,                                                                                 \
+            lhs_activations,                                                                                  \
+            rhs_activations,                                                                                  \
+            /*fast_and_approximate_mode*/ false,                                                              \
+            sub_core_grids,                                                                                   \
+            sub_device_id);                                                                                   \
+    }
+
+#define TTNN_BINARY_OP_TENSOR_FLOAT_UINT8_IMPL(NAME, OP_TYPE)                                                 \
+    Tensor NAME(                                                                                              \
+        const Tensor& lhs,                                                                                    \
+        float rhs,                                                                                            \
+        const std::optional<const DataType>& output_dtype,                                                    \
+        const std::optional<MemoryConfig>& memory_config,                                                     \
+        const std::optional<Tensor>& output,                                                                  \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,                          \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,                           \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,                           \
+        const std::optional<CoreRangeSet>& sub_core_grids,                                                    \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                                      \
+        const std::optional<Tensor> lhs_cast =                                                                \
+            lhs.dtype() == DataType::UINT8 ? ttnn::typecast(lhs, DataType::UINT16) : std::optional<Tensor>{}; \
+        const Tensor& a = lhs_cast.has_value() ? *lhs_cast : lhs;                                             \
+        return ttnn::detail::invoke_binary_ng(                                                                \
+            a,                                                                                                \
+            rhs,                                                                                              \
+            operations::binary::BinaryOpType::OP_TYPE,                                                        \
+            output_dtype,                                                                                     \
+            memory_config,                                                                                    \
+            output,                                                                                           \
+            post_activations,                                                                                 \
+            lhs_activations,                                                                                  \
+            rhs_activations,                                                                                  \
+            /*fast_and_approximate_mode*/ false,                                                              \
+            sub_core_grids,                                                                                   \
+            sub_device_id);                                                                                   \
+    }
+
+#define TTNN_BINARY_OP_FLOAT_TENSOR_UINT8_IMPL(NAME, OP_TYPE)                                                 \
+    Tensor NAME(                                                                                              \
+        float lhs,                                                                                            \
+        const Tensor& rhs,                                                                                    \
+        const std::optional<const DataType>& dtype,                                                           \
+        const std::optional<MemoryConfig>& memory_config,                                                     \
+        const std::optional<Tensor>& output) {                                                                \
+        const std::optional<Tensor> rhs_cast =                                                                \
+            rhs.dtype() == DataType::UINT8 ? ttnn::typecast(rhs, DataType::UINT16) : std::optional<Tensor>{}; \
+        const Tensor& b = rhs_cast.has_value() ? *rhs_cast : rhs;                                             \
+        return operations::binary::relational_binary<operations::binary::BinaryOpType::OP_TYPE>(              \
+            lhs, b, dtype, memory_config, output);                                                            \
+    }
+
 #define TTNN_BINARY_OP_TENSOR_FLOAT_IMPL(NAME, OP_TYPE)                              \
     Tensor NAME(                                                                     \
         const Tensor& lhs,                                                           \
@@ -582,6 +659,74 @@ Tensor invoke_binary_ng(
         sub_device_id);
 }
 
+Tensor invoke_binary_ng_isclose(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    float rtol,
+    float atol,
+    bool equal_nan,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const auto fa = lhs.dtype() == DataType::INT32 ? ttnn::typecast(lhs, DataType::FLOAT32) : lhs;
+    const auto fb = rhs.dtype() == DataType::INT32 ? ttnn::typecast(rhs, DataType::FLOAT32) : rhs;
+
+    const auto input_a_rm = fa.layout() == Layout::ROW_MAJOR;
+    const auto input_b_rm = fb.layout() == Layout::ROW_MAJOR;
+    const auto input_a_sharded = fa.memory_config().is_sharded();
+    const auto input_b_sharded = fb.memory_config().is_sharded();
+
+    using BinaryOpType = ttnn::operations::binary_ng::BinaryOpType;
+
+    if (input_a_rm && input_b_rm && !input_a_sharded && !input_b_sharded) {
+        return ttnn::prim::binary_ng(
+            fa,
+            fb,
+            BinaryOpType::ISCLOSE,
+            std::nullopt,
+            memory_config,
+            output,
+            std::nullopt,
+            {},
+            {},
+            {},
+            std::nullopt,
+            sub_core_grids,
+            std::nullopt,
+            rtol,
+            atol,
+            equal_nan);
+    }
+
+    const auto input_a = operations::binary::detail::to_layout(fa, Layout::TILE);
+    const auto input_b = operations::binary::detail::to_layout(fb, Layout::TILE);
+    auto result = ttnn::prim::binary_ng(
+        input_a,
+        input_b,
+        BinaryOpType::ISCLOSE,
+        std::nullopt,
+        memory_config,
+        output,
+        std::nullopt,
+        {},
+        {},
+        {},
+        std::nullopt,
+        sub_core_grids,
+        std::nullopt,
+        rtol,
+        atol,
+        equal_nan);
+
+    // if both inputs are in row major, convert the output to row major
+    // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
+    // since it leads to better perf
+    if (input_a_rm && input_b_rm) {
+        return operations::binary::detail::to_layout(result, Layout::ROW_MAJOR);
+    }
+    return result;
+}
+
 }  // namespace ttnn::detail
 
 namespace ttnn::operations::binary {
@@ -821,204 +966,24 @@ TTNN_BINARY_OP_INPLACE_IMPL(add_, ADD)
 TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(subtract, SUB)
 TTNN_BINARY_OP_TENSOR_FLOAT_IMPL(subtract, SUB)
 TTNN_BINARY_OP_INPLACE_IMPL(subtract_, SUB)
-TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(eq, EQ)
-Tensor eq(
-    const Tensor& lhs,
-    float rhs,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    return operations::binary::relational_binary<operations::binary::BinaryOpType::EQ>(
-        lhs,
-        rhs,
-        dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        sub_core_grids,
-        sub_device_id);
-}
-Tensor eq(
-    float lhs,
-    const Tensor& rhs,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output) {
-    return operations::binary::relational_binary<operations::binary::BinaryOpType::EQ>(
-        lhs, rhs, dtype, memory_config, output);
-}
-TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(ne, NE)
-Tensor ne(
-    const Tensor& lhs,
-    float rhs,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    return operations::binary::relational_binary<operations::binary::BinaryOpType::NE>(
-        lhs,
-        rhs,
-        dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        sub_core_grids,
-        sub_device_id);
-}
-Tensor ne(
-    float lhs,
-    const Tensor& rhs,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output) {
-    return operations::binary::relational_binary<operations::binary::BinaryOpType::NE>(
-        lhs, rhs, dtype, memory_config, output);
-}
-TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(ge, GE)
-Tensor ge(
-    const Tensor& lhs,
-    float rhs,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    return operations::binary::relational_binary<operations::binary::BinaryOpType::GE>(
-        lhs,
-        rhs,
-        dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        sub_core_grids,
-        sub_device_id);
-}
-Tensor ge(
-    float lhs,
-    const Tensor& rhs,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output) {
-    return operations::binary::relational_binary<operations::binary::BinaryOpType::GE>(
-        lhs, rhs, dtype, memory_config, output);
-}
-TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(gt, GT)
-Tensor gt(
-    const Tensor& lhs,
-    float rhs,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    return operations::binary::relational_binary<operations::binary::BinaryOpType::GT>(
-        lhs,
-        rhs,
-        dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        sub_core_grids,
-        sub_device_id);
-}
-Tensor gt(
-    float lhs,
-    const Tensor& rhs,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output) {
-    return operations::binary::relational_binary<operations::binary::BinaryOpType::GT>(
-        lhs, rhs, dtype, memory_config, output);
-}
-TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(le, LE)
-Tensor le(
-    const Tensor& lhs,
-    float rhs,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    return operations::binary::relational_binary<operations::binary::BinaryOpType::LE>(
-        lhs,
-        rhs,
-        dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        sub_core_grids,
-        sub_device_id);
-}
-Tensor le(
-    float lhs,
-    const Tensor& rhs,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output) {
-    return operations::binary::relational_binary<operations::binary::BinaryOpType::LE>(
-        lhs, rhs, dtype, memory_config, output);
-}
-TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(lt, LT)
-Tensor lt(
-    const Tensor& lhs,
-    float rhs,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    const std::optional<CoreRangeSet>& sub_core_grids,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    return operations::binary::relational_binary<operations::binary::BinaryOpType::LT>(
-        lhs,
-        rhs,
-        dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        sub_core_grids,
-        sub_device_id);
-}
-Tensor lt(
-    float lhs,
-    const Tensor& rhs,
-    const std::optional<const DataType>& dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output) {
-    return operations::binary::relational_binary<operations::binary::BinaryOpType::LT>(
-        lhs, rhs, dtype, memory_config, output);
-}
+TTNN_BINARY_OP_TENSOR_TENSOR_UINT8_IMPL(eq, EQ)
+TTNN_BINARY_OP_TENSOR_FLOAT_UINT8_IMPL(eq, EQ)
+TTNN_BINARY_OP_FLOAT_TENSOR_UINT8_IMPL(eq, EQ)
+TTNN_BINARY_OP_TENSOR_TENSOR_UINT8_IMPL(ne, NE)
+TTNN_BINARY_OP_TENSOR_FLOAT_UINT8_IMPL(ne, NE)
+TTNN_BINARY_OP_FLOAT_TENSOR_UINT8_IMPL(ne, NE)
+TTNN_BINARY_OP_TENSOR_TENSOR_UINT8_IMPL(ge, GE)
+TTNN_BINARY_OP_TENSOR_FLOAT_UINT8_IMPL(ge, GE)
+TTNN_BINARY_OP_FLOAT_TENSOR_UINT8_IMPL(ge, GE)
+TTNN_BINARY_OP_TENSOR_TENSOR_UINT8_IMPL(gt, GT)
+TTNN_BINARY_OP_TENSOR_FLOAT_UINT8_IMPL(gt, GT)
+TTNN_BINARY_OP_FLOAT_TENSOR_UINT8_IMPL(gt, GT)
+TTNN_BINARY_OP_TENSOR_TENSOR_UINT8_IMPL(le, LE)
+TTNN_BINARY_OP_TENSOR_FLOAT_UINT8_IMPL(le, LE)
+TTNN_BINARY_OP_FLOAT_TENSOR_UINT8_IMPL(le, LE)
+TTNN_BINARY_OP_TENSOR_TENSOR_UINT8_IMPL(lt, LT)
+TTNN_BINARY_OP_TENSOR_FLOAT_UINT8_IMPL(lt, LT)
+TTNN_BINARY_OP_FLOAT_TENSOR_UINT8_IMPL(lt, LT)
 TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(logical_and, LOGICAL_AND)
 TTNN_BINARY_OP_TENSOR_FLOAT_IMPL(logical_and, LOGICAL_AND)
 TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(logical_or, LOGICAL_OR)
@@ -1286,6 +1251,9 @@ TTNN_BINARY_OP_INPLACE_RELATIONAL_IMPL(ne_, NE)
 TTNN_BINARY_OP_INPLACE_INVOKE_IMPL(rsub_, RSUB)
 TTNN_BINARY_OP_INPLACE_INVOKE_IMPL(bias_gelu_, BIAS_GELU)
 #undef TTNN_BINARY_OP_TENSOR_TENSOR_IMPL
+#undef TTNN_BINARY_OP_FLOAT_TENSOR_UINT8_IMPL
+#undef TTNN_BINARY_OP_TENSOR_FLOAT_UINT8_IMPL
+#undef TTNN_BINARY_OP_TENSOR_TENSOR_UINT8_IMPL
 #undef TTNN_BINARY_OP_TENSOR_FLOAT_IMPL
 #undef TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL
 #undef TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL
@@ -1327,6 +1295,17 @@ Tensor hypot(
         {},
         /*fast_and_approximate_mode*/ false,
         std::nullopt);
+}
+
+Tensor isclose(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    float rtol,
+    float atol,
+    bool equal_nan,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    return ttnn::detail::invoke_binary_ng_isclose(
+        input_a, input_b, rtol, atol, equal_nan, output_mem_config, std::nullopt);
 }
 
 }  // namespace ttnn

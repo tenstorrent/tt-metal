@@ -18,14 +18,33 @@
 
 namespace ckernel {
 /**
+ * Controls whether `welford_init` resets the running mean and M2 accumulators.
+ *
+ * ClearStats (default): Clears the previous mean and M2 values stored in the registers. Use for a
+ *     fresh Welford pass.
+ * PreserveStats: Leaves the running mean and M2 accumulators (LREG4/5) intact. Use when re-arming
+ *     the SFPU replay buffer mid-pass after another op (e.g. `transpose_wh_tile` on the
+ *     unpack-to-DEST fp32 path) has clobbered the welford recurrence slots.
+ */
+enum class WelfordInitMode : uint8_t {
+    ClearStats,
+    PreserveStats,
+};
+
+/**
  * @brief Initializes the Welford's algorithm.
  * Programs the address mod and replay buffers for the Welford's algorithm.
- * Clears the previous mean and m2 values stored in the registers.
+ * Clears the previous mean and m2 values stored in the registers when `mode` is `ClearStats`.
  * This call is blocking and is only available on the compute engine.
+ * @tparam mode Controls whether the running mean and M2 accumulators are cleared.
+ *              See @ref WelfordInitMode.
  */
+template <WelfordInitMode mode = WelfordInitMode::ClearStats>
 ALWI void welford_init() {
     MATH((llk_math_welfords_sfpu_init()));
-    MATH((llk_math_welfords_sfpu_clear_previous_mean_and_m2()));
+    if constexpr (mode == WelfordInitMode::ClearStats) {
+        MATH((llk_math_welfords_sfpu_clear_previous_mean_and_m2()));
+    }
 }
 
 /**

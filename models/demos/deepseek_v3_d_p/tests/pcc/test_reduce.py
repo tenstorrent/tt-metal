@@ -163,7 +163,7 @@ def test_ttnn_reduce(
         mesh_mapper=indices_mapper,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
-        dtype=ttnn.int32,
+        dtype=ttnn.uint16,
     )
     tt_expert_dispatch_table = ttnn.from_torch(
         expert_dispatch_table,

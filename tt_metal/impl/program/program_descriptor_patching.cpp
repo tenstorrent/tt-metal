@@ -12,10 +12,13 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include <tt_stl/assert.hpp>
 
 #include <algorithm>
 #include <cstdint>
+#include <span>
 #include <string_view>
 #include <unordered_set>
 #include <vector>
@@ -23,7 +26,7 @@
 namespace tt::tt_metal {
 
 ResolvedBindings resolve_bindings(
-    Program& program, const ProgramDescriptor& desc, const std::vector<Buffer*>& tensor_buffers) {
+    Program& program, const ProgramDescriptor& desc, std::span<Buffer* const> tensor_buffers) {
     ResolvedBindings result;
 
     // If the same Buffer* appears in tensor_buffers more than once (e.g. matmul(X, X),
@@ -96,37 +99,107 @@ ResolvedBindings resolve_bindings(
         }
     }
 
-    // Only resolve CB bindings when the factory actually opted into the fast path
-    // by declaring at least one runtime-arg buffer binding, whether via
-    // emplace_runtime_args() or emplace_common_runtime_args()
-    // (i.e. when !result.rt_args.empty()).
-    // Without this guard, sharded operations that use the old API (passing
-    // buffer->address() as uint32_t) would have non-empty resolved_bindings
-    // due to CB entries alone, causing the adapter to take the fast path and
-    // skip the full runtime-arg rebuild on cache hits.
-    if (!result.rt_args.empty()) {
+    // Resolve every `.buffer = ...` CB binding whose buffer comes from
+    // tensor_args / tensor_return_value, so the cache-hit fast path can patch
+    // it.  CB buffers that come from elsewhere (e.g. a GlobalCircularBuffer
+    // referenced by `operation_attributes`, or any other workload-scoped
+    // resource the factory injects directly into a CBDescriptor) are SKIPPED
+    // here rather than fatal:
+    //
+    //   - Such buffers have stable addresses across dispatches by design —
+    //     the caller owns the resource and keeps it alive for the cache
+    //     entry's lifetime.  Cache-hit patching would be a no-op.
+    //   - Fatalling would make `emplace_runtime_args(buffer)` and
+    //     `cbs[i].buffer = buffer` semantically asymmetric for the same buffer
+    //     and break legitimate factories (e.g. `dram_prefetcher`'s reader CB
+    //     pegged to a GlobalCircularBuffer's backing buffer).
+    //
+    // Runtime-arg buffer bindings stay strict (find_idx) above — they must
+    // map to a tensor_args/return slot because raw rt-args ARE the only
+    // mechanism by which input/output addresses can change between dispatches.
+    //
+    // The CB-resolution gate (whether to use the result on cache hit) lives
+    // in DescriptorMeshWorkloadAdapter::apply_descriptor and is contract-aware:
+    //   - contract 1: fast-path only when rt-arg bindings are present;
+    //     otherwise rebuild the descriptor.
+    //   - contract 2: always fast-path; no rebuild fallback.
+    {
         auto program_cbs = program.circular_buffers();
         for (uint32_t ci = 0; ci < static_cast<uint32_t>(desc.cbs.size()); ++ci) {
-            if (desc.cbs[ci].buffer) {
-                result.cbs.push_back(
-                    {program_cbs[ci]->id(), find_idx(desc.cbs[ci].buffer, "cbs"), desc.cbs[ci].address_offset});
+            const auto& cb_desc = desc.cbs[ci];
+            TT_FATAL(
+                !(cb_desc.buffer && cb_desc.tensor),
+                "CBDescriptor cannot specify both buffer and tensor as the globally-allocated backing storage");
+
+            Buffer* cb_buffer = cb_desc.buffer;
+            if (!cb_buffer && cb_desc.tensor) {
+                cb_buffer = cb_desc.tensor->mesh_buffer().get_reference_buffer();
+            }
+            if (cb_buffer) {
+                auto it = std::find(tensor_buffers.begin(), tensor_buffers.end(), cb_buffer);
+                if (it != tensor_buffers.end()) {
+                    result.cbs.push_back(
+                        {program_cbs[ci]->id(), static_cast<uint32_t>(it - tensor_buffers.begin()), cb_desc.address_offset});
+                }
+                // else: stable, non-tensor buffer; pegged at create time, no patching needed.
             }
         }
     }
+
+    // Sort rt_args by (is_common, kernel_idx, core, arg_idx) so that bindings sharing
+    // the same (kernel, core) RuntimeArgsData are contiguous.  apply_resolved_bindings
+    // amortises the GetRuntimeArgs lookup across each group instead of doing one
+    // lookup per binding — significant win on multi-core ops with several Buffer*
+    // slots per core.
+    std::sort(result.rt_args.begin(), result.rt_args.end(), [](const auto& a, const auto& b) {
+        if (a.is_common != b.is_common) {
+            return !a.is_common;  // per-core first, then common
+        }
+        if (a.kernel_idx != b.kernel_idx) {
+            return a.kernel_idx < b.kernel_idx;
+        }
+        if (!a.is_common) {
+            if (a.core.x != b.core.x) {
+                return a.core.x < b.core.x;
+            }
+            if (a.core.y != b.core.y) {
+                return a.core.y < b.core.y;
+            }
+        }
+        return a.arg_idx < b.arg_idx;
+    });
 
     return result;
 }
 
 void apply_resolved_bindings(
-    Program& program, const ResolvedBindings& bindings, const std::vector<Buffer*>& current_buffers) {
+    Program& program, const ResolvedBindings& bindings, std::span<Buffer* const> current_buffers) {
+    // bindings.rt_args is sorted by (is_common, kernel_idx, core, arg_idx) at resolve
+    // time, so consecutive entries share the same RuntimeArgsData reference whenever
+    // they target the same (is_common, kernel_idx, core).  Cache the live reference
+    // across that run instead of re-deriving it via GetRuntimeArgs per binding.
+    //
+    // The reference is re-derived on every apply call (not stored across calls) so
+    // first-enqueue retargeting of rt_args_data to the command-sequence buffer is
+    // observed correctly.
+    RuntimeArgsData* current_data = nullptr;
+    uint32_t prev_kernel_idx = 0;
+    CoreCoord prev_core{};
+    bool prev_is_common = false;
+    bool first = true;
+
     for (const auto& b : bindings.rt_args) {
-        // Re-derive the RuntimeArgsData reference on every call via GetRuntimeArgs /
-        // GetCommonRuntimeArgs rather than storing a cross-call raw pointer.  This is
-        // safe across first-enqueue (when the dispatch path retargets rt_args_data to
-        // the command-sequence buffer) because we look up the live struct each time.
-        RuntimeArgsData& data =
-            b.is_common ? GetCommonRuntimeArgs(program, b.kernel_idx) : GetRuntimeArgs(program, b.kernel_idx, b.core);
-        data[b.arg_idx] = current_buffers[b.tensor_buffer_idx]->address();
+        const bool group_changed = first || b.is_common != prev_is_common || b.kernel_idx != prev_kernel_idx ||
+                                   (!b.is_common && b.core != prev_core);
+        if (group_changed) {
+            current_data = b.is_common ? &GetCommonRuntimeArgs(program, b.kernel_idx)
+                                       : &GetRuntimeArgs(program, b.kernel_idx, b.core);
+            prev_is_common = b.is_common;
+            prev_kernel_idx = b.kernel_idx;
+            prev_core = b.core;
+            first = false;
+        }
+        (*current_data)[b.arg_idx] = current_buffers[b.tensor_buffer_idx]->address();
     }
     for (const auto& cb : bindings.cbs) {
         UpdateDynamicCircularBufferAddress(

@@ -24,7 +24,6 @@ target_sources(
         ${TTNN_OP_CREATION_SRCS}
 )
 
-target_include_directories(ttnn_op_creation PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(ttnn_op_creation PUBLIC TTNN::Core PRIVATE TT::Metalium)
 
-install(TARGETS ttnn_op_creation LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_creation FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

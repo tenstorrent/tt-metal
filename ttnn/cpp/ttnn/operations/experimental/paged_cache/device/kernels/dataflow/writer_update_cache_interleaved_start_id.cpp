@@ -34,8 +34,11 @@ void kernel_main() {
 
     constexpr uint32_t St = get_compile_time_arg_val(15);
     uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(16));  // semaphore for receiver
+    // 0 = legacy unbounded behavior; nonzero = wrap update_idx mod this value before
+    // page_table lookup (bounded sliding-window cache support).
+    constexpr uint32_t cache_position_modulo = get_compile_time_arg_val(17);
 
-    constexpr auto s0_args = TensorAccessorArgs<17>();
+    constexpr auto s0_args = TensorAccessorArgs<18>();
 
     constexpr uint32_t head_offset_t = Wt * St;
 
@@ -55,12 +58,17 @@ void kernel_main() {
         cb_wait_front(cb_index_id, 1);
         uint32_t index_cb_ptr = get_read_ptr(cb_index_id);
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_ptr);
-        const uint32_t update_idx = index_ptr[my_batch_idx];
+        const uint32_t raw_update_idx = index_ptr[my_batch_idx];
 
-        if (update_idx == (uint32_t)-1) {
+        if (raw_update_idx == (uint32_t)-1) {
             // Passing update_idx = -1 tells us to skip update for this user
             skip_update = true;
         } else {
+            // Wrap into the bounded sliding-window cache when enabled, so positions past
+            // the physical capacity are addressed correctly (cache_position_modulo is a
+            // multiple of block_size, so this preserves the intra-block offset).
+            const uint32_t update_idx =
+                cache_position_modulo > 0 ? raw_update_idx % cache_position_modulo : raw_update_idx;
             if constexpr (is_paged_cache) {
                 cb_wait_front(page_table_cb_id, 1);
                 uint32_t page_table_cb_rd_ptr = get_read_ptr(page_table_cb_id);
@@ -102,7 +110,7 @@ void kernel_main() {
         if (!skip_update) {
             uint32_t out_l1_read_addr = get_read_ptr(cache_cb_id);
             for (uint32_t curr_cache_id = cache_id; curr_cache_id < cache_id + Wt; ++curr_cache_id) {
-                noc_async_write_tile(curr_cache_id, s0, out_l1_read_addr);
+                noc_async_write_page(curr_cache_id, s0, out_l1_read_addr);
                 out_l1_read_addr += cache_tile_bytes;
             }
 

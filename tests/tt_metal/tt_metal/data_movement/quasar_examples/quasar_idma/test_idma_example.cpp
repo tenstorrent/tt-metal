@@ -6,7 +6,7 @@
 #include "device_fixture.hpp"
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/host_api.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_metal {
@@ -31,15 +31,39 @@ constexpr auto kIdma1DStrided =
 static void run_kernel(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const std::string& kernel_path,
-    CoreCoord core,
-    std::vector<uint32_t> compile_args = {}) {
-    Program program = CreateProgram();
-    experimental::quasar::CreateKernel(
-        program,
-        kernel_path,
-        core,
-        experimental::quasar::QuasarDataMovementConfig{
-            .num_threads_per_cluster = 1, .compile_args = std::move(compile_args)});
+    experimental::KernelSpec::CompileTimeArgs compile_time_args) {
+    constexpr const char* DM_KERNEL = "idma";
+    const experimental::NodeCoord node{0, 0};
+
+    experimental::KernelSpec dm_kernel_spec{
+        .unique_id = DM_KERNEL,
+        .source = kernel_path,
+        .num_threads = 1,
+        .compile_time_args = std::move(compile_time_args),
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
+    };
+
+    experimental::WorkUnitSpec main_wu{
+        .name = "main",
+        .kernels = {DM_KERNEL},
+        .target_nodes = node,
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "idma",
+        .kernels = {dm_kernel_spec},
+        .work_units = {main_wu},
+    };
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {{
+        .kernel_spec_name = DM_KERNEL,
+    }};
+    experimental::SetProgramRunArgs(program, params);
+
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
     workload.add_program(device_range, std::move(program));
@@ -65,7 +89,7 @@ bool run_idma_basic_test(const std::shared_ptr<distributed::MeshDevice>& mesh_de
     }
     tt_metal::detail::WriteToDeviceL1(device, core, src_base, src_data);
 
-    run_kernel(mesh_device, kIdmaBasic, core, {src_base, dst_base});
+    run_kernel(mesh_device, kIdmaBasic, {{"src_addr", src_base}, {"dst_addr", dst_base}});
 
     std::vector<uint32_t> dst_data;
     tt_metal::detail::ReadFromDeviceL1(device, core, dst_base, total_bytes, dst_data);
@@ -118,7 +142,7 @@ bool run_idma_1d_strided_test(const std::shared_ptr<distributed::MeshDevice>& me
         }
     }
 
-    run_kernel(mesh_device, kIdma1DStrided, core, {src_base, dst_base});
+    run_kernel(mesh_device, kIdma1DStrided, {{"src_addr", src_base}, {"dst_addr", dst_base}});
 
     std::vector<uint32_t> dst_data;
     tt_metal::detail::ReadFromDeviceL1(device, core, dst_base, num_elements * elem_size, dst_data);

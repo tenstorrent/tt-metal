@@ -38,6 +38,8 @@
 #include "remapper_common.hpp"
 #include "overlay_addresses.h"
 
+namespace overlay {
+
 /**
  * @brief Generic API for Counter Remapper Configuration
  *
@@ -870,5 +872,7 @@ public:
         return clientL_configs[0];
     }
 };
+
+}  // namespace overlay
 
 #endif  // __DM__REMAPPER_API_HPP__

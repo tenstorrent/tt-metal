@@ -109,7 +109,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ZONE_SCOPED("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, false /* tilize */, is_int_fpu_en>(
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
             4 /* num_faces */, formats.math);
 
         for (std::uint32_t block_tile = 0; block_tile < TILE_CNT; block_tile++)
@@ -203,10 +203,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     {
         ZONE_SCOPED("INIT")
-        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, false /* untilize */, false /* tilize */>(
+        _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(
             formats.pack_src, formats.pack_dst, TILE_WIDTH * TILE_HEIGHT, FACE_R_DIM, TILE_C_DIM, 4 /* num_faces */);
-        _llk_pack_init_with_src_wrapper_<false /* untilize */, false /* zero_output */, false /* tilize */>(
-            formats.pack_src, formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces, false, false, TILE_CNT);
+        _llk_pack_init_with_src_wrapper_<PackMode::Default, false /* zero_output */>(
+            formats.pack_src, formats.pack_dst, FACE_R_DIM, TILE_C_DIM, num_faces, false /* partial_face */, false /* narrow_tile */, TILE_CNT /* num_tiles */);
         reconfigure_packer_l1_acc(L1_ACC);
         _llk_pack_dest_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
         _llk_packer_wait_for_math_done_();
@@ -224,7 +224,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
-                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(0, PERF_ADDRESS(PERF_OUTPUT, block * NUM_TILES_IN_BLOCK));
+                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, PERF_ADDRESS(PERF_OUTPUT, block * NUM_TILES_IN_BLOCK));
                 }
             }
         }
@@ -235,7 +235,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t block_start = 0; block_start < TILE_CNT; block_start += MAX_TILES_DEST)
                 {
                     _llk_packer_wait_for_math_done_();
-                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, false>(0, PERF_ADDRESS(PERF_OUTPUT, block_start));
+                    _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(0, PERF_ADDRESS(PERF_OUTPUT, block_start));
                     _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                 }
             }

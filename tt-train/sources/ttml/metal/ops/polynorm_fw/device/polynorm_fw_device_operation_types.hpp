@@ -8,18 +8,18 @@
 
 namespace ttml::metal::ops::polynorm3_fw::device {
 
-struct operation_attributes_t {
+struct PolyNorm3FWAttributes {
     float epsilon{1e-5F};
 };
 
-struct tensor_args_t {
+struct PolyNorm3FWTensorArgs {
     const ttnn::Tensor& input;
     const ttnn::Tensor& weight;
     const ttnn::Tensor& bias;
     std::optional<ttnn::Tensor> preallocated_output = std::nullopt;
 };
 
-using spec_return_value_t = std::vector<ttnn::TensorSpec>;
-using tensor_return_value_t = ttnn::Tensor;
+using PolyNorm3FWSpecReturn = std::vector<ttnn::TensorSpec>;
+using PolyNorm3FWTensorReturn = ttnn::Tensor;
 
 }  // namespace ttml::metal::ops::polynorm3_fw::device

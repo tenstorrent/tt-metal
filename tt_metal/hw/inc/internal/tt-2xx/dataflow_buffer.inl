@@ -41,8 +41,8 @@ inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
             ready = true;
             for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
                 dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
-                ASSERT(llk_intf_get_capacity(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) >= num_entries);
-                if (llk_intf_get_free_space(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) < num_entries) {
+                ASSERT(overlay::llk_intf_get_capacity(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) >= num_entries);
+                if (overlay::llk_intf_get_free_space(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) < num_entries) {
                     ready = false;
                     break;
                 }
@@ -50,8 +50,8 @@ inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
         }
     } else {
         uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
-        ASSERT(llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
-        while (llk_intf_get_free_space(tensix_id, tc_id) < num_entries);
+        ASSERT(overlay::llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
+        while (overlay::llk_intf_get_free_space(tensix_id, tc_id) < num_entries);
     }
 #endif
     WAYPOINT("RBD");
@@ -68,8 +68,8 @@ inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
         // DM-DM BLOCKED: post to all N TCs; wr_ptr tracked on slot 0
         for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
             dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
-            ASSERT(llk_intf_get_capacity(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) >= num_entries);
-            llk_intf_inc_posted(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc), num_entries);
+            ASSERT(overlay::llk_intf_get_capacity(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) >= num_entries);
+            overlay::llk_intf_inc_posted(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc), num_entries);
         }
         local_dfb_interface_.tc_slots[0].wr_ptr += (num_entries * local_dfb_interface_.stride_size);
         if (local_dfb_interface_.tc_slots[0].wr_ptr >= local_dfb_interface_.tc_slots[0].limit) {
@@ -78,8 +78,8 @@ inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
         // tc_idx deliberately not advanced
     } else {
         uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
-        ASSERT(llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
-        llk_intf_inc_posted(tensix_id, tc_id, num_entries);
+        ASSERT(overlay::llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
+        overlay::llk_intf_inc_posted(tensix_id, tc_id, num_entries);
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr += (num_entries * local_dfb_interface_.stride_size);
         if (local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr >= local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].limit) {
             local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
@@ -102,8 +102,8 @@ inline void DataflowBuffer::wait_front_impl(uint16_t num_entries) {
     llk_wait_tiles(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
-    ASSERT(llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
-    while (llk_intf_get_occupancy(tensix_id, tc_id) < num_entries);
+    ASSERT(overlay::llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
+    while (overlay::llk_intf_get_occupancy(tensix_id, tc_id) < num_entries);
 #endif
     WAYPOINT("WFD");
 }
@@ -119,8 +119,8 @@ inline void DataflowBuffer::pop_front_impl(uint16_t num_entries) {
     llk_pop_tiles(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
-    ASSERT(llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
-    llk_intf_inc_acked(tensix_id, tc_id, num_entries);
+    ASSERT(overlay::llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
+    overlay::llk_intf_inc_acked(tensix_id, tc_id, num_entries);
     local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr += (num_entries * local_dfb_interface_.stride_size);
     if (local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr >= local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].limit) {
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
@@ -153,7 +153,7 @@ inline void DataflowBuffer::finish_impl() {
 #elif !defined(COMPILE_FOR_TRISC)
             uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
             all_acked &=
-                (fast_llk_intf_read_acked(tensix_id, tc_id) == fast_llk_intf_read_posted(tensix_id, tc_id));
+                (overlay::fast_llk_intf_read_acked(tensix_id, tc_id) == overlay::fast_llk_intf_read_posted(tensix_id, tc_id));
 #endif
         }
     }
@@ -203,10 +203,10 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
     auto read_actual_slot0 = [&]() -> uint16_t {
         if constexpr (is_producer) {
             return static_cast<uint16_t>(
-                fast_llk_intf_read_posted(dfb::get_tensix_id(ptc0), dfb::get_counter_id(ptc0)));
+                overlay::fast_llk_intf_read_posted(dfb::get_tensix_id(ptc0), dfb::get_counter_id(ptc0)));
         } else {
             return static_cast<uint16_t>(
-                fast_llk_intf_read_acked(dfb::get_tensix_id(ptc0), dfb::get_counter_id(ptc0)));
+                overlay::fast_llk_intf_read_acked(dfb::get_tensix_id(ptc0), dfb::get_counter_id(ptc0)));
         }
     };
 
@@ -270,14 +270,14 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
             uint8_t tc_id     = dfb::get_counter_id(ptc);
             uint16_t expected = transactions_issued / N + (i < (transactions_issued % N) ? 1u : 0u);
             if constexpr (is_producer) {
-                uint16_t actual = static_cast<uint16_t>(fast_llk_intf_read_posted(tensix_id, tc_id));
+                uint16_t actual = static_cast<uint16_t>(overlay::fast_llk_intf_read_posted(tensix_id, tc_id));
                 if (actual < expected) {
-                    fast_llk_intf_inc_posted(tensix_id, tc_id, expected - actual);
+                    overlay::fast_llk_intf_inc_posted(tensix_id, tc_id, expected - actual);
                 }
             } else {
-                uint16_t actual = static_cast<uint16_t>(fast_llk_intf_read_acked(tensix_id, tc_id));
+                uint16_t actual = static_cast<uint16_t>(overlay::fast_llk_intf_read_acked(tensix_id, tc_id));
                 if (actual < expected) {
-                    fast_llk_intf_inc_acked(tensix_id, tc_id, expected - actual);
+                    overlay::fast_llk_intf_inc_acked(tensix_id, tc_id, expected - actual);
                 }
             }
         }
@@ -293,7 +293,7 @@ inline void DataflowBuffer::write_barrier_impl(const Noc &noc) const {
         return;
     } else {
         for (uint8_t i = 0; i < local_dfb_interface_.num_txn_ids; i++) {
-            noc.async_write_barrier<Noc::BarrierMode::TXN_ID>(local_dfb_interface_.txn_ids[i]);
+            noc.async_write_barrier<NocOptions::TXN_ID>({.trid = local_dfb_interface_.txn_ids[i]});
         }
     }
 }
@@ -306,8 +306,8 @@ inline uint32_t DataflowBuffer::prepare_implicit_read() {
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
     const uint32_t txn_id = local_dfb_interface_.txn_ids[ptxn_id_index_];
     WAYPOINT("PIRW");
-    while (fast_llk_intf_read_posted(tensix_id, tc_id) < (ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc));
-    while (fast_llk_intf_get_free_space(tensix_id, tc_id) < 1);
+    while (overlay::fast_llk_intf_read_posted(tensix_id, tc_id) < (ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc));
+    while (overlay::fast_llk_intf_get_free_space(tensix_id, tc_id) < 1);
     WAYPOINT("PIRD");
     return txn_id;
 }
@@ -336,8 +336,8 @@ inline uint32_t DataflowBuffer::prepare_implicit_write() {
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
     const uint32_t txn_id = local_dfb_interface_.txn_ids[ctxn_id_index_];
     WAYPOINT("PIWW");
-    while (fast_llk_intf_read_acked(tensix_id, tc_id) < (ctxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc));
-    while (fast_llk_intf_get_occupancy(tensix_id, tc_id) < 1);
+    while (overlay::fast_llk_intf_read_acked(tensix_id, tc_id) < (ctxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc));
+    while (overlay::fast_llk_intf_get_occupancy(tensix_id, tc_id) < 1);
     WAYPOINT("PIWD");
     return txn_id;
 }
@@ -362,8 +362,8 @@ inline void DataflowBuffer::commit_implicit_write() {
 // These are member functions of Noc but must be defined here because they need the complete
 // DataflowBuffer type (circular dependency: dataflow_buffer.h includes noc.h, not vice versa).
 
-template <Noc::TxnIdMode txn_id_mode, typename Src>
-std::enable_if_t<txn_id_mode == Noc::TxnIdMode::ENABLED>
+template <NocOptions opts, typename Src>
+std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
 Noc::async_read(
     const Src& src,
     DataflowBuffer& dst,
@@ -372,7 +372,7 @@ Noc::async_read(
     uint32_t txn_id = dst.prepare_implicit_read();
     noc_async_read_set_trid(txn_id, noc_id_);
     while (noc_available_transactions(noc_id_, txn_id) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
-    // DPRINT << "Issue the read" << ENDL();
+    // DPRINT("Issue the read\n");
     noc_async_read<NOC_MAX_BURST_SIZE + 1, true>(
         get_src_ptr<AddressType::NOC>(src, src_args),
         dst.get_write_ptr(),
@@ -382,8 +382,8 @@ Noc::async_read(
     dst.commit_implicit_read();
 }
 
-template <Noc::TxnIdMode txn_id_mode, typename Dst>
-std::enable_if_t<txn_id_mode == Noc::TxnIdMode::ENABLED>
+template <NocOptions opts, typename Dst>
+std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
 Noc::async_write(
     DataflowBuffer& src,
     const Dst& dst,
@@ -394,7 +394,7 @@ Noc::async_write(
     auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, src.get_entry_size());
-    // DPRINT << "Issue the write" << ENDL();
+    // DPRINT("Issue the write\n");
     ncrisc_noc_fast_write_any_len<noc_mode, true, /*one_packet*/false>(
         noc_id_,
         write_cmd_buf,
@@ -406,7 +406,7 @@ Noc::async_write(
         false,   // linked
         1,       // num_dests
         true,    // multicast_path_reserve
-        false,   // posted == false (Noc::ResponseMode::NON_POSTED)
+        false,   // posted == false (NocOptions::POSTED not set)
         txn_id);
     src.commit_implicit_write();
 }

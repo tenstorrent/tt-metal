@@ -141,16 +141,6 @@ void GridSampleOperation::validate_on_program_cache_miss(
         tt::constants::TILE_WIDTH,
         input_tensor.padded_shape()[-1],
         input_tensor.padded_shape());
-    const uint32_t max_tiles_per_reduction = 8;
-    TT_FATAL(
-        input_tensor.padded_shape()[-1] <= tt::constants::TILE_WIDTH * max_tiles_per_reduction,
-        "Wide reduction not supported: input tensor width {} exceeds maximum {} (TILE_WIDTH {} * max_tiles {}), padded "
-        "shape: {}",
-        input_tensor.padded_shape()[-1],
-        tt::constants::TILE_WIDTH * max_tiles_per_reduction,
-        tt::constants::TILE_WIDTH,
-        max_tiles_per_reduction,
-        input_tensor.padded_shape());
 }
 
 TensorSpec GridSampleOperation::compute_output_specs(
@@ -319,8 +309,16 @@ ttnn::Tensor grid_sample(
     bool align_corners,
     bool use_precomputed_grid,
     bool batch_output_channels,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = GridSampleOperation;
+    const auto resolved_compute_kernel_config = ttnn::init_device_compute_kernel_config(
+        input_tensor.device()->arch(),
+        compute_kernel_config,
+        /*default_fidelity=*/tt::tt_metal::MathFidelity::HiFi4,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/false,
+        /*default_l1_acc=*/false);
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .mode = mode,
@@ -329,6 +327,7 @@ ttnn::Tensor grid_sample(
             .use_precomputed_grid = use_precomputed_grid,
             .batch_output_channels = batch_output_channels,
             .output_mem_config = memory_config.value_or(grid.memory_config()),
+            .compute_kernel_config = resolved_compute_kernel_config,
         },
         OperationType::tensor_args_t{.input_tensor = input_tensor, .grid = grid});
 }

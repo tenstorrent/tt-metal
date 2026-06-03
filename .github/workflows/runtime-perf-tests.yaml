@@ -1,10 +1,9 @@
 name: "(Runtime) Performance Tests"
 
-# Weekly schedule for dispatch perf baselines; staggered to reduce runner contention.
-# Manual validation completed before enabling (see PR #40962 discussion).
+# Every 4 hours for dispatch perf baselines (matches prior fast-dispatch-frequent cadence).
 on:
   schedule:
-    - cron: "0 6 * * 0" # 06:00 UTC every Sunday
+    - cron: "0 */4 * * *" # every 4 hours
   workflow_dispatch:
     inputs:
       wormhole:

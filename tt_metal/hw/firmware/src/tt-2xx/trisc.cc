@@ -15,7 +15,6 @@
 #include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
-#include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 #include "api/debug/ring_buffer.h"
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
@@ -112,8 +111,7 @@ void init_sync_registers() {
 extern "C" uint32_t _start1() {
     configure_csr();
     uint32_t hartid = internal_::get_hw_thread_idx();
-    DPRINT << "hartid: " << hartid << ENDL();
-    DEVICE_PRINT("hartid: {}\n", hartid);
+    DPRINT("hartid: {}\n", hartid);
     volatile tt_l1_ptr uint8_t* const trisc_run = &((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE + MEM_L1_UNCACHED_BASE))
                                                        ->subordinate_sync.map[hartid];  // first entry is for NCRISC
     WAYPOINT("I");
@@ -130,10 +128,9 @@ extern "C" uint32_t _start1() {
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
     *trisc_run = RUN_SYNC_MSG_DONE;
-
+    setup_isr_csrs();
     DeviceProfilerInit();
-    DPRINT << "TRISC-FW: initialized" << ENDL();
-    DEVICE_PRINT("TRISC-FW: initialized\n");
+    DPRINT("TRISC-FW: initialized\n");
     while (1) {
         WAYPOINT("W");
         while (*trisc_run != RUN_SYNC_MSG_GO) {
@@ -149,8 +146,7 @@ extern "C" uint32_t _start1() {
         uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
         launch_msg_t* launch_msg = &(mailboxes->launch[launch_msg_rd_ptr]);
 
-        uint32_t kernel_config_base = launch_msg->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
-
+        uintptr_t kernel_config_base = launch_msg->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
 
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
         uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
@@ -197,7 +193,7 @@ extern "C" uint32_t _start1() {
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 
         WAYPOINT("R");
-        uint32_t kernel_lma =
+        uintptr_t kernel_lma =
             (kernel_config_base +
              launch_msg->kernel_config.kernel_text_offset[hartid]);  // TODO verify if depends on kernel
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
@@ -206,11 +202,9 @@ extern "C" uint32_t _start1() {
         DEVICE_PRINT_KERNEL_FINISHED();
 
         // Signal completion
-        DPRINT << "SIGNALING COMPLETION " << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
-        DEVICE_PRINT("SIGNALING COMPLETION {:x}\n", (uint32_t)*trisc_run);
+        DPRINT("SIGNALING COMPLETION {:x}\n", (uint32_t)*trisc_run);
         tensix_sync();
         *trisc_run = RUN_SYNC_MSG_DONE;
-        DPRINT << "COMPLETION SIGNED OFF" << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();
-        DEVICE_PRINT("COMPLETION SIGNED OFF {:x}\n", (uint32_t)*trisc_run);
+        DPRINT("COMPLETION SIGNED OFF {:x}\n", (uint32_t)*trisc_run);
     }
 }

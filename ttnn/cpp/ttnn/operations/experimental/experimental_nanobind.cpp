@@ -12,6 +12,7 @@
 #include "ttnn/operations/experimental/conv3d/conv3d_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.hpp"
+#include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc_fused/deepseek_moe_fast_reduce_nc_fused_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/integral_image/intimg_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_grouped_gate/deepseek_grouped_gate_nanobind.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write_nanobind.hpp"
@@ -55,7 +56,9 @@
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_nanobind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_nanobind.hpp"
+#include "ttnn/operations/experimental/dram_core_prefetcher/dram_core_prefetcher_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
+#include "ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_consumer_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/isin/isin_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.hpp"
@@ -74,6 +77,7 @@
 #include "ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/deepseek_moe_gate_nanobind.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -113,6 +117,7 @@ void py_module(nb::module_& mod) {
 
     reduction::detail::bind_fast_reduce_nc(mod);
     reduction::detail::bind_deepseek_moe_fast_reduce_nc(mod);
+    reduction::detail::bind_deepseek_moe_fast_reduce_nc_fused(mod);
     reduction::detail::bind_reduction_intimg_operation(mod);
     reduction::detail::bind_deepseek_grouped_gate(mod);
 
@@ -145,6 +150,8 @@ void py_module(nb::module_& mod) {
     gelu_backward::detail::bind_experimental_gelu_backward_operation(mod);
 
     test::bind_test_hang_device_operation(mod);
+    test::bind_test_dram_prefetcher_consumer(mod);
+    bind_dram_core_prefetcher(mod);
 
     // CCL ops
     auto m_experimental_ccl = mod.def_submodule("ccl_experimental", "experimental collective communication operations");
@@ -157,6 +164,7 @@ void py_module(nb::module_& mod) {
 
     isin::detail::bind_isin_operation(mod);
     deepseek::moe::detail::bind_moe_gate_mm(mod);
+    deepseek::moe::detail::bind_deepseek_moe_gate(mod);
     topk_router_gpt::detail::bind_topk_router_gpt(mod);
     deepseek::mla::detail::bind_matmul_wo(mod);
     moe_gpt::detail::bind_moe_gpt(mod);

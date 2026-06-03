@@ -110,12 +110,18 @@ User Visible Data Types
 
 The following data types are visible to the programmer:
 
-  * ``vFloat``
-  * ``vInt``
-  * ``vUInt``
+  * ``vFloat``, ``vFloat16a``, ``vFloat16b`` - floating point
+  * ``vInt`` - 2's complement integer
+  * ``vUInt``, ``vUInt16``- unsigned integer
+  * ``vSMag``, ``vSMag16``- sign-magnitude integer
   * enum ``LRegs``
 
-Each of the ``v`` types is a strongly typed wrapper around the weakly typed compiler data type ``__rvtt_vec_t``. The width of this type depends on the target architecture. On Wormhole and Blackhole this is a vector of 32 32-bit values. Users should be aware that vector length may change with future architectures
+Each of the ``v`` types is a strongly typed wrapper around the weakly
+typed compiler data type ``__rvtt_vec_t``. All types have the same element
+format, but possibly with a restricted range. The width of this type
+depends on the target architecture. On Wormhole, Blackhole & Quasar this is
+a vector of 32 32-bit values. Users should be aware that vector length
+may change with future architectures.
 
 LRegs are the SFPU's general purpose vector registers.  ``LRegs`` enumerates these registers.
 
@@ -172,10 +178,10 @@ However note that ``v_if`` and alike works via predication. In other words, both
 .. code-block:: c++
 
     v_if (a < b) {
-        DEVICE_PRINT("a < b\n");
+        DPRINT("a < b\n");
     } v_else {
         dst_reg[0] = b;
-        DEVICE_PRINT("a >= b\n");
+        DPRINT("a >= b\n");
     }
     v_endif;
 
@@ -348,19 +354,16 @@ Returns the count of leading (left-most) zeros of ''v'' ignoring the sign bit.
 
 .. code-block:: c++
 
-    vFloat int32_to_float(vInt in, int round_mode = 1)
-    vUInt float_to_fp16a(vFloat in, int round_mode = 1)
-    vUInt float_to_fp16b(vFloat in, int round_mode = 1)
-    vUInt float_to_uint8(vFloat in, int round_mode = 1)
-    vUInt float_to_int8(vFloat in, int round_mode = 1)
-    vUInt int32_to_uint8(vInt in, vUInt descale, int round_mode = 1)
-    vUInt int32_to_uint8(vInt in, unsigned int descale, int round_mode = 1)
-    vUInt int32_to_int8(vInt in, vUInt descale, int round_mode = 1)
-    vUInt int32_to_int8(vInt in, unsigned int descale, int round_mode = 1)
-    vUInt float_to_uint16(vFloat in, int round_mode = 1)
-    vUInt float_to_int16(vFloat in, int round_mode = 1)
+    template<typename ToType, typename FromType>
+    ToType convert (FromType in, RoundMode rounding = RoundMode::Stochastic)
+    template<typename ToType, typename FromType>
+    ToType convert (FromType in, unsigned descale, RoundMode rounding = RoundMode::Stochastic)
 
-Returns the rounded value performing round-to-even when ''round_mode'' is 0 and stochastic rounding when ''round_mode'' is 1.
+Returns the rounded value performing round-to-even when ''rounding''
+is ''RoundMode::NearestEven'', stochastic rounding when ''rounding'' is
+''RoundMode::Stochastic'', and round-to-zero when it is
+''RoundMode::Zero'' (not available on WormHole).  Not all
+conversions are supported, and a compilation error will occur if not available.
 
 Immediate Floating Point Values
 -------------------------------

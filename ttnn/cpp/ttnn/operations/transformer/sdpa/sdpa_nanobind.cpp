@@ -27,9 +27,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
-    const ttnn::Tensor& joint_tensor_q,
-    const ttnn::Tensor& joint_tensor_k,
-    const ttnn::Tensor& joint_tensor_v,
+    const std::optional<ttnn::Tensor>& joint_tensor_q,
+    const std::optional<ttnn::Tensor>& joint_tensor_k,
+    const std::optional<ttnn::Tensor>& joint_tensor_v,
     ttnn::Tensor& persistent_output_buffer_k,
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
@@ -47,9 +47,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     CoreCoord ccl_core_grid_offset,
     bool use_column_major_ccl,
     bool is_causal,
-    bool is_balanced) {
+    bool is_balanced,
+    std::optional<uint32_t> cache_batch_idx,
+    std::optional<uint32_t> kv_actual_isl) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
+
     auto outputs = ttnn::transformer::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,
@@ -74,7 +77,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         is_balanced,
         scale,
         compute_kernel_config,
-        strategy);
+        strategy,
+        cache_batch_idx,
+        kv_actual_isl);
     return outputs;
 }
 
@@ -396,9 +401,9 @@ void bind_sdpa(nb::module_& mod) {
             input_tensor_k (ttnn.Tensor): Original keys     [b x nh x N/num_devices x dh].
             input_tensor_v (ttnn.Tensor): Original values   [b x nh x N/num_devices x dh].
 
-            joint_tensor_q (ttnn.Tensor): Joint queries     [b x nh x L x dh].
-            joint_tensor_k (ttnn.Tensor): Joint keys        [b x nh x L x dh].
-            joint_tensor_v (ttnn.Tensor): Joint values      [b x nh x L x dh].
+            joint_tensor_q (ttnn.Tensor, optional): Joint queries     [b x nh x L x dh]. Defaults to None.
+            joint_tensor_k (ttnn.Tensor, optional): Joint keys        [b x nh x L x dh]. Defaults to None.
+            joint_tensor_v (ttnn.Tensor, optional): Joint values      [b x nh x L x dh]. Defaults to None.
 
         Keyword args:
             persistent_output_buffer_k (ttnn.Tensor): Persistent buffer for gathered K tensor.
@@ -421,6 +426,21 @@ void bind_sdpa(nb::module_& mod) {
                 If False (default), uses row-major allocation. Defaults to False.
             is_causal (bool): Whether to use causal attention masking. Defaults to False.
             is_balanced (bool): Whether to use balanced attention computation. Defaults to False.
+            cache_batch_idx (int, optional): Selects the shared K/V cache batch slot when K and V are full caches.
+            kv_actual_isl (int, optional): Prior valid global KV length before this fixed-size chunk.
+                When passed, enables KV-pad-aware rotation and derives current valid tokens as
+                logical_n - kv_actual_isl.
+
+        Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
+        length is less than input_tensor_k's (Q is the latest slab; K is the populated
+        prefix from chunk 0 through the current chunk). The op derives chunk_size and
+        the absolute Q-row offset from the shapes plus sp_size — no extra args needed.
+        Chunked prefill is mathematically causal; callers must pass is_causal=True.
+        When cache_batch_idx is provided, input_tensor_k and input_tensor_v may be whole caches.
+        The same cache_batch_idx selects the K and V cache slot, and the full K/V sequence
+        dimension is treated as valid. When kv_actual_isl is provided, the chunked path switches
+        to KV-pad-aware rotation: logical_n remains the total valid KV length after this iteration,
+        while kv_actual_isl marks the prior valid cache length before the current chunk.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
@@ -436,9 +456,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("input_tensor_q").noconvert(),
         nb::arg("input_tensor_k").noconvert(),
         nb::arg("input_tensor_v").noconvert(),
-        nb::arg("joint_tensor_q").noconvert(),
-        nb::arg("joint_tensor_k").noconvert(),
-        nb::arg("joint_tensor_v").noconvert(),
+        nb::arg("joint_tensor_q") = nb::none(),
+        nb::arg("joint_tensor_k") = nb::none(),
+        nb::arg("joint_tensor_v") = nb::none(),
         nb::kw_only(),
         nb::arg("persistent_output_buffer_k").noconvert(),
         nb::arg("persistent_output_buffer_v").noconvert(),
@@ -457,7 +477,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("ccl_core_grid_offset"),
         nb::arg("use_column_major_ccl") = false,
         nb::arg("is_causal").noconvert() = false,
-        nb::arg("is_balanced").noconvert() = false);
+        nb::arg("is_balanced").noconvert() = false,
+        nb::arg("cache_batch_idx").noconvert() = nb::none(),
+        nb::arg("kv_actual_isl").noconvert() = nb::none());
 
     const auto* exp_ring_joint_doc = R"doc(
         ExpRingJointAttention operation that efficiently performs non-causal attention over two

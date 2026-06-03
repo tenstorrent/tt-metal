@@ -35,7 +35,7 @@ void kernel_main() {
 
     // multicast local L1 buffer to all destination cores
     MulticastEndpoint dst_mcast_endpoint;
-    noc.async_write_multicast<Noc::McastMode::INCLUDE_SRC>(
+    noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
         local_buffer,
         dst_mcast_endpoint,
         src_buffer_size,

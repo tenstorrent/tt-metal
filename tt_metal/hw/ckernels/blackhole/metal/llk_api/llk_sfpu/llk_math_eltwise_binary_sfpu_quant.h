@@ -17,31 +17,31 @@ inline void llk_math_eltwise_binary_sfpu_quant_int32_init(const uint zero_point)
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_quant_int32(
-    uint dst_index0, uint dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    uint dst_index0, uint dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_quant_int32<APPROXIMATE>, dst_index0, dst_index1, odst, vector_mode);
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_requant_int32_init(const uint zero_point) {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::requant_int32>(sfpu::quant_init<APPROXIMATE>, zero_point);
+    llk_math_eltwise_binary_sfpu_init<SfpuType::requant_int32>(sfpu::requant_init<APPROXIMATE>, zero_point);
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_requant_int32(
-    uint dst_index0, uint dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    uint dst_index0, uint dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_requant_int32<APPROXIMATE>, dst_index0, dst_index1, odst, vector_mode);
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_dequant_int32_init(const uint zero_point) {
-    llk_math_eltwise_binary_sfpu_init<SfpuType::dequant_int32>(sfpu::quant_init<APPROXIMATE>, zero_point);
+    llk_math_eltwise_binary_sfpu_init<SfpuType::dequant_int32>(sfpu::dequant_init<APPROXIMATE>, zero_point);
 }
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_binary_sfpu_dequant_int32(
-    uint dst_index0, uint dst_index1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
+    uint dst_index0, uint dst_index1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::calculate_dequant_int32<APPROXIMATE>, dst_index0, dst_index1, odst, vector_mode);
 }

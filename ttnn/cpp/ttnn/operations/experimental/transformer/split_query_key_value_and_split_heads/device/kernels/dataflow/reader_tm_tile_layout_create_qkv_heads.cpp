@@ -39,7 +39,7 @@ void kernel_main() {
         for (uint32_t block_idx = 0; block_idx < out_num_blocks_per_tensor; block_idx++) {
             cb_reserve_back(cb_id, block_size);
             for (uint32_t i = 0; i < block_size; i++) {
-                noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr);
+                noc_async_read_page(in0_tensor_tile_id, s0, l1_write_addr);
                 l1_write_addr += single_tile_size_bytes;
                 in0_tensor_tile_id++;
             }

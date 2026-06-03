@@ -232,6 +232,7 @@ int __attribute__((noinline)) main(void) {
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
+    noc_clear_all_packet_tags();
     uint8_t prev_noc_mode = DM_DEDICATED_NOC;
     ncrisc_noc_full_sync();
 

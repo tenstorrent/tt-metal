@@ -1,6 +1,8 @@
 # Source files for ttnn_op_experimental_padded_slice.
 # Module owners should update this file when adding/removing/renaming source files.
 
+set(TTNN_OP_EXPERIMENTAL_PADDED_SLICE_API_HEADERS padded_slice.hpp)
+
 set(TTNN_OP_EXPERIMENTAL_PADDED_SLICE_SRCS
     padded_slice.cpp
     device/padded_slice_device_operation.cpp
