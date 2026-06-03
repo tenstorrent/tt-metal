@@ -516,35 +516,59 @@ void WriteToDeviceSharded(
     const size_t remainder_bytes = page_size - aligned_bytes;
     TT_ASSERT(buffer.aligned_page_size() >= page_size);  // Check that we don't write to the end of the buffer
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
-    for (auto mapped_page : buffer_page_mapping) {
-        auto core = buffer_page_mapping.all_cores[mapped_page.core_id];
+    const bool can_write_page_ranges = buffer.aligned_page_size() == page_size;
+
+    auto write_pages = [&](uint32_t core_id, uint32_t device_page, uint32_t host_page, uint32_t num_pages) {
+        if (num_pages == 0) {
+            return;
+        }
+        auto core = buffer_page_mapping.all_cores[core_id];
         if (logical_core_filter != nullptr && !logical_core_filter->contains(core)) {
-            continue;
+            return;
         }
         auto bank_id = allocator->get_bank_ids_from_logical_core(buffer.buffer_type(), core)[0];
         auto bank_offset = allocator->get_bank_offset(buffer.buffer_type(), bank_id);
-        auto data_index = mapped_page.host_page * page_size;
-        auto write_chunk = [&](size_t offset, size_t size_in_bytes) {
+        size_t data_index = static_cast<size_t>(host_page) * page_size;
+        auto write_chunk = [&](uint32_t write_device_page, size_t offset, size_t size_in_bytes) {
             if (size_in_bytes == 0) {
                 return;
             }
             std::span<const std::uint8_t> page(host_buffer.data() + data_index + offset, size_in_bytes);
             if (buffer.is_l1()) {
                 auto absolute_address =
-                    buffer.address() + bank_offset + (mapped_page.device_page * buffer.aligned_page_size()) + offset;
+                    buffer.address() + bank_offset + (write_device_page * buffer.aligned_page_size()) + offset;
                 auto core_coordinates =
                     device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
                 MetalContext::instance().get_cluster().write_core(
                     device->id(), core_coordinates, page, absolute_address);
             } else {
-                auto bank_local_address =
-                    buffer.address() + (mapped_page.device_page * buffer.aligned_page_size()) + offset;
+                auto bank_local_address = buffer.address() + (write_device_page * buffer.aligned_page_size()) + offset;
                 WriteToDeviceDRAMChannel(device, bank_id, bank_local_address, page);
             }
         };
 
-        write_chunk(0, aligned_bytes);
-        write_chunk(aligned_bytes, remainder_bytes);
+        if (can_write_page_ranges) {
+            write_chunk(device_page, 0, static_cast<size_t>(num_pages) * page_size);
+            return;
+        }
+
+        for (uint32_t page = 0; page < num_pages; page++) {
+            data_index = static_cast<size_t>(host_page + page) * page_size;
+            write_chunk(device_page + page, 0, aligned_bytes);
+            write_chunk(device_page + page, aligned_bytes, remainder_bytes);
+        }
+    };
+
+    for (uint32_t core_id = 0; core_id < buffer_page_mapping.all_cores.size(); core_id++) {
+        for (const auto& core_page_mapping : buffer_page_mapping.core_page_mappings[core_id]) {
+            for (const auto& host_range : core_page_mapping.host_ranges) {
+                write_pages(
+                    core_id,
+                    core_page_mapping.device_start_page + host_range.device_page_offset,
+                    host_range.host_page_start,
+                    host_range.num_pages);
+            }
+        }
     }
 }
 

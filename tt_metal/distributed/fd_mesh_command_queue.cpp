@@ -10,11 +10,11 @@
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
-#include <cstring>
 #include <functional>
 #include <optional>
 #include <type_traits>
@@ -56,6 +56,9 @@
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include "dispatch/simple_trace_allocator.hpp"
+#if defined(TT_UMD_BUILD_SIMULATION)
+#include "buffers/simulator_direct_write.hpp"
+#endif
 
 namespace tt::tt_metal {
 struct ProgramCommandSequence;
@@ -613,12 +616,24 @@ bool FDMeshCommandQueue::write_shard_to_device(
         return false;
     }
 
-    in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture. trace id: {}", trace_id_.value());
 
     auto* device_buffer = buffer.get_device_buffer(device_coord);
-    auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
+    auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
+    auto shard_view = device_buffer->view(region_value);
 
+#if defined(TT_UMD_BUILD_SIMULATION)
+    const tt_sim::DirectWriteGuard tt_sim_direct_write_guard{
+        .target = this->get_target_device_type(),
+        .cq_idle = !in_use_.load(std::memory_order_acquire),
+        .rtoptions = &MetalContext::instance(mesh_device_->impl().get_context_id()).rtoptions(),
+    };
+    if (tt_sim::try_direct_write(tt_sim_direct_write_guard, *shard_view, src, region_value, logical_core_filter)) {
+        return false;
+    }
+#endif
+
+    in_use_ = true;
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
     return buffer_dispatch::write_to_device_buffer(
         src,
