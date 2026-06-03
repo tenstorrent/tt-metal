@@ -1453,7 +1453,8 @@ D2HSocket* MeshDeviceImpl::get_realtime_profiler_socket() const {
 
 DramCorePrefetcherManager& MeshDeviceImpl::dram_core_prefetcher(MeshDevice* mesh_device) {
     if (!dram_core_prefetcher_) {
-        dram_core_prefetcher_ = std::make_unique<DramCorePrefetcherManager>(mesh_device);
+        dram_core_prefetcher_ =
+            std::make_unique<DramCorePrefetcherManager>(mesh_device, std::bind(&MeshDeviceImpl::lock_api, this));
     }
     return *dram_core_prefetcher_;
 }

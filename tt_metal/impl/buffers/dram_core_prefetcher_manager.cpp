@@ -160,8 +160,11 @@ bool layout_equal(const DramCorePrefetcherTensorLayout& a, const DramCorePrefetc
 
 }  // namespace
 
-DramCorePrefetcherManager::DramCorePrefetcherManager(MeshDevice* mesh_device) : mesh_device_(mesh_device) {
+DramCorePrefetcherManager::DramCorePrefetcherManager(
+    MeshDevice* mesh_device, std::function<std::lock_guard<std::mutex>()> lock_api_function) :
+    mesh_device_(mesh_device), lock_api_function_(std::move(lock_api_function)) {
     TT_FATAL(mesh_device_ != nullptr, "DramCorePrefetcherManager requires a non-null MeshDevice");
+    TT_FATAL(static_cast<bool>(lock_api_function_), "DramCorePrefetcherManager requires a valid lock_api_function");
 }
 
 DramCorePrefetcherManager::~DramCorePrefetcherManager() { stop(); }
@@ -248,6 +251,7 @@ void DramCorePrefetcherManager::build_and_launch_programs(uint32_t stage_ring_ba
 }
 
 void DramCorePrefetcherManager::start(const experimental::DramCorePrefetcherConfig& config) {
+    auto lock = lock_api_function_();
     (void)config;
     TT_FATAL(
         !active_, "A DRAM-core prefetcher is already active on this mesh device. Call StopDramCorePrefetcher first.");
@@ -434,6 +438,7 @@ void DramCorePrefetcherManager::queue(
     const experimental::GlobalCircularBuffer& gcb,
     const std::optional<MeshCoordinateRangeSet>& device_subset,
     const std::vector<experimental::DramCorePrefetcherInput>& tensors) {
+    auto lock = lock_api_function_();
     TT_FATAL(active_, "QueueDramCorePrefetcherRequest called before StartDramCorePrefetcher");
     TT_FATAL(
         experimental::sender_core_type(gcb) == experimental::SenderCoreType::Dram,
@@ -534,6 +539,10 @@ void DramCorePrefetcherManager::worker_loop() {
 }
 
 void DramCorePrefetcherManager::stop() {
+    // Note: the MeshDevice close path (close_impl) calls stop() without holding
+    // api_mutex_, and the destructor only reaches here after active_ is already
+    // false, so taking the lock here never self-deadlocks.
+    auto lock = lock_api_function_();
     if (!active_) {
         return;
     }

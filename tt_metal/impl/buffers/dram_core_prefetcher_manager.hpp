@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -60,7 +61,11 @@ class MeshDevice;
 //   * Destructor calls stop().
 class DramCorePrefetcherManager {
 public:
-    explicit DramCorePrefetcherManager(MeshDevice* mesh_device);
+    // `lock_api_function` grabs the owning MeshDevice's api_mutex_ (bound from
+    // MeshDeviceImpl::lock_api). start()/queue()/stop() take it for the duration
+    // of the call so prefetcher operations serialize against the rest of the
+    // device API, mirroring MeshCommandQueueBase.
+    DramCorePrefetcherManager(MeshDevice* mesh_device, std::function<std::lock_guard<std::mutex>()> lock_api_function);
     ~DramCorePrefetcherManager();
 
     DramCorePrefetcherManager(const DramCorePrefetcherManager&) = delete;
@@ -108,6 +113,8 @@ private:
     MeshCoordinateRangeSet full_mesh_subset() const;
 
     MeshDevice* mesh_device_;
+    // Grabs the owning MeshDevice's api_mutex_ for the duration of an API call.
+    std::function<std::lock_guard<std::mutex>()> lock_api_function_;
     bool active_ = false;
     uint32_t stage_ring_base_ = 0;
     uint32_t stage_ring_size_ = 0;
