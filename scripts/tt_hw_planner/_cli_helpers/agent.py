@@ -556,9 +556,9 @@ def _pick_agent_model_for_iter(
         * ``failure_class`` in ``_HEAVY_FAILURE_CLASSES``
         * ``attempts_so_far >= 2``
 
-    - **light** is the default first-iter model. For claude this now
-      resolves to sonnet (haiku was dropped from the iter-loop ladder
-      2026-06-03); for cursor it's sonnet-4.
+    - **light** is the default first-iter model. For claude this is
+      haiku (fast-pass to produce a starting stub); for cursor it's
+      sonnet-4.
 
     Returns `(chosen_model, reason)` where `reason` is a short tag for
     the log line — useful for post-mortems.
@@ -612,30 +612,26 @@ def _resolve_tiered_model_aliases(
     single-model path with ``auto_model``.
 
     When ``--auto-model-tiered`` is set, applies provider defaults:
-      * claude: ``sonnet → opus`` (2-tier reasoning ladder). Both the
-        "light" and "heavy" tier resolve to sonnet so the picker's
-        existing light/heavy/super_heavy code paths still work — the
-        agent picks sonnet for iter 1 + iter 2, opus from iter 3.
+      * claude: ``haiku → sonnet → opus`` (3-tier auto-escalation;
+        haiku for iter 1 as fast-pass, sonnet at iter 2 if iter 1
+        failed, opus from iter 3 via lowered super_heavy thresholds).
       * cursor: ``sonnet-4 → opus`` (2-tier; cursor's ladder differs;
         super_heavy stays None)
 
     Explicit ``--auto-model-light`` / ``--auto-model-heavy`` /
     ``--auto-model-super-heavy`` always override the defaults.
 
-    2026-06-03 (initial 3-tier): Added super_heavy tier (opus by default
-    for claude). Previously haiku → sonnet was the entire ladder; opus
-    was opt-in only via explicit ``--auto-model-heavy=opus``.
-
-    2026-06-03 (haiku removal): Dropped haiku from the iter-loop
-    reasoning ladder. The Phi-3.5 attention case showed haiku's iter-1
-    output (a KeyError-producing wrapper) was systematically discarded
-    by later sonnet iters — burning an iter slot to produce something
-    that taught the next iter nothing. Sonnet at iter-1 + opus from
-    iter-3 is the new ladder. Haiku is still used elsewhere for cheap
-    classification / verify tasks (late_discovery_classifier,
-    llm_verify, env_fix, setup_step_recovery) where its cost-per-call
-    is the right trade-off — it's only dropped from the reasoning
-    iter loop.
+    2026-06-03 history (chronological):
+      * Initial 3-tier add: super_heavy = opus by default for claude,
+        with attempts ≥ 5 / consec ≥ 3 triggers.
+      * Threshold lowering: attempts 5→3, consec 3→2. Opus engages
+        sooner so sonnet doesn't burn budget repeating the same class.
+      * Haiku drop (REVERTED): briefly tried light=sonnet to skip
+        haiku's flawed iter-1 outputs, but Phi-3.5 run #4 proved
+        sonnet at iter 1 burned its 480s deliverable deadline
+        investigating without writing — haiku's "produce SOMETHING
+        fast" property is load-bearing. Ladder restored to
+        haiku → sonnet → opus.
 
     Backward compat: callers receiving the previous 2-tuple shape will
     get a TypeError on unpack — the call site update is mechanical
@@ -645,12 +641,15 @@ def _resolve_tiered_model_aliases(
         return (None, None, None)
     if auto_model_tiered:
         if provider == "claude":
-            # 2026-06-03: haiku dropped from the iter-loop reasoning
-            # ladder (see docstring above). light == heavy == sonnet so
-            # the picker's existing light/heavy/super_heavy paths still
-            # apply but both resolve to sonnet — opus kicks in via the
-            # super_heavy thresholds.
-            default_light, default_heavy, default_super = "sonnet", "sonnet", "opus"
+            # 2026-06-03 (revised): keep haiku as the iter-1 fast-pass.
+            # An earlier revision dropped haiku entirely (light==heavy==
+            # sonnet) but Phi-3.5 run #4 showed sonnet at iter 1 burned
+            # its 480s deliverable deadline investigating without
+            # writing _synth_responses/. Haiku's "produce SOMETHING
+            # fast" property is load-bearing — even a flawed first stub
+            # gives later iters a concrete starting point. Ladder:
+            # haiku (iter 1) → sonnet (iter 2) → opus (iter 3+).
+            default_light, default_heavy, default_super = "haiku", "sonnet", "opus"
         else:
             # cursor: 2-tier only for now; super stays unset
             default_light, default_heavy, default_super = "sonnet-4", "opus", None

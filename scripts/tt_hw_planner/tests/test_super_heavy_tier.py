@@ -166,26 +166,28 @@ def test_tier_ladder_end_to_end():
 # ─── _resolve_tiered_model_aliases — provider defaults ──────────────
 
 
-def test_claude_tiered_defaults_are_sonnet_opus():
-    """2026-06-03: haiku was dropped from the iter-loop reasoning
-    ladder (Phi-3.5 attention case showed iter-1 haiku output was
-    systematically thrown away by later sonnet iters). The claude
-    tiered ladder is now sonnet → opus; both light and heavy resolve
-    to sonnet so the picker's existing tier-discrimination code paths
-    still work."""
+def test_claude_tiered_defaults_are_haiku_sonnet_opus():
+    """2026-06-03 (revised): claude tiered ladder is haiku → sonnet
+    → opus. An earlier revision dropped haiku entirely but Phi-3.5
+    run #4 showed sonnet at iter 1 burned its 480s deliverable
+    deadline investigating without writing the response file —
+    haiku's "produce SOMETHING fast" property is load-bearing.
+    Threshold lowering (attempts 5→3, consec 3→2 for super_heavy
+    super-tier engagement) is preserved so opus still fires at iter 3
+    if iter 2 didn't graduate."""
     from scripts.tt_hw_planner._cli_helpers.agent import _resolve_tiered_model_aliases
 
     light, heavy, super_heavy = _resolve_tiered_model_aliases(
         provider="claude",
-        auto_model="sonnet",
+        auto_model="haiku",
         auto_model_light=None,
         auto_model_heavy=None,
         auto_model_super_heavy=None,
         auto_model_tiered=True,
     )
-    assert light == "sonnet", "iter-1 starts at sonnet (haiku no longer in reasoning ladder)"
-    assert heavy == "sonnet", "heavy tier also resolves to sonnet — opus is via super_heavy"
-    assert super_heavy == "opus", "claude tiered mode must default super_heavy=opus"
+    assert light == "haiku", "iter-1 fast-pass is haiku (load-bearing for producing a starting stub)"
+    assert heavy == "sonnet", "iter-2 escalation is sonnet"
+    assert super_heavy == "opus", "iter-3+ super-tier is opus"
 
 
 def test_explicit_super_heavy_overrides_default():
