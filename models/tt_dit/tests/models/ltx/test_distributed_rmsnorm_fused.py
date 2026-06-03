@@ -117,3 +117,62 @@ def test_distributed_rmsnorm_fused_parity(mesh_device, sp_axis, tp_axis, dim, ca
     )
     # Both paths implement the same RMSNorm (+ gamma, + head-split); differences are only kernel numerics.
     assert_with_pcc(ref, fused, pcc=0.999)
+
+
+@pytest.mark.parametrize("device_params", [line_params], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)
+@pytest.mark.parametrize("sp_axis, tp_axis", [(1, 0)], ids=["sp1tp0_tp2"])  # LTX bh_2x4sp1tp0
+@pytest.mark.parametrize("dim", [4096, 2048], ids=["video4096", "audio2048"])
+@pytest.mark.parametrize("case", ["block", "qk"], ids=["block", "qk"])
+@pytest.mark.parametrize("seq_len", [4096, 16384], ids=["seq4k", "seq16k"])
+def test_distributed_rmsnorm_perf(mesh_device, sp_axis, tp_axis, dim, case, seq_len):
+    """Op-level perf: time the full norm (wan pre+all_gather+post) vs the fused all_gather_rms_norm op."""
+    import time
+
+    if mesh_device.get_num_devices() < 8:
+        pytest.skip("needs 8 devices for a 2x4 mesh")
+
+    tp = tuple(mesh_device.shape)[tp_axis]
+    affine = case == "qk"
+    num_heads_per_device = (NUM_HEADS // tp) if case == "qk" else 1
+    B = 1
+
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    norm = DistributedRMSNorm(
+        embedding_dim=dim,
+        norm_eps=1e-6,
+        norm_elementwise_affine=affine,
+        bias=False,
+        mesh_axis=tp_axis,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+    )
+    torch.manual_seed(1234)
+    if affine:
+        norm.load_torch_state_dict({"weight": (torch.rand(dim) * 2 - 1).to(torch.bfloat16)})
+
+    x = (torch.randn(1, B, seq_len, dim) * 4 - 1).to(torch.bfloat16)
+    x_tt = bf16_tensor_2dshard(x, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
+
+    def run(fused):
+        os.environ["LTX_FUSED_AGRMS"] = "1" if fused else "0"
+        os.environ["LTX_FUSED_AGRMS_QK"] = "1" if fused else "0"  # so the head-split (qk) path is actually fused
+        return norm(x_tt, num_heads_per_device=num_heads_per_device)
+
+    def time_path(fused, iters=50, warmup=5):
+        for _ in range(warmup):
+            run(fused)
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        for _ in range(iters):
+            _ = run(fused)
+        ttnn.synchronize_device(mesh_device)
+        return (time.perf_counter() - t0) / iters * 1e6  # us / norm
+
+    wan_us = time_path(False)
+    fused_us = time_path(True)
+    os.environ.pop("LTX_FUSED_AGRMS", None)
+    logger.info(
+        f"PERF[{case} dim={dim} seq={seq_len} tp={tp}] "
+        f"wan(pre+AG+post)={wan_us:.1f}us  fused(no-mux)={fused_us:.1f}us  speedup={wan_us / fused_us:.2f}x"
+    )

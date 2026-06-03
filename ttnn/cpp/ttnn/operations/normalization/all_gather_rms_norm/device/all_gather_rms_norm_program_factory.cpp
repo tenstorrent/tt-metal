@@ -70,9 +70,10 @@ CBDescriptor make_cb(uint32_t index, uint32_t num_tiles, tt::DataFormat df, cons
 // Build the per-coord ProgramDescriptor.  The fabric args depend on the sender coordinate (ring_index +
 // forward/backward neighbor lookups), so this runs once per coord inside create_workload_descriptor().
 //
-// TODO(LLK): this lays out CBs, kernels (pointing at the stub kernel files), semaphores and runtime args
-// for the fused pre-stats -> all-gather -> post-normalize pipeline.  The actual compute/dataflow math
-// lives in the kernel stubs and is not yet implemented.
+// Lays out the fused pre-stats -> all-gather -> post-normalize pipeline: each worker core computes its
+// row-slice's per-device E[x^2] partial, the multi-device path all-gathers those partials across the ring
+// over the fabric mux, and the compute kernel finishes the normalization (+ optional gamma/beta and the
+// num_heads head-split).  A single device performs the whole reduce locally (no fabric).
 tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     const AllGatherRMSNormParams& args,
     const ttnn::MeshCoordinate& sender_device_coord,
