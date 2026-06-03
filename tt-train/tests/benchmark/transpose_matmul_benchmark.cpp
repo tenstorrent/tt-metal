@@ -13,6 +13,7 @@
 
 #include "core/compute_kernel_config.hpp"
 #include "core/random.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
@@ -79,22 +80,45 @@ void run_matmul_bench(benchmark::State& state, bool transpose_a, bool transpose_
 
     const auto& cfg = kBaseConfig;
 
+    // EP-only API: build a trivial offsets tensor [0, M] and a pre-allocated output, then call
+    // through InputAndOutputRow with the full M range. Equivalent to a non-EP matmul.
+    const std::vector<uint32_t> offsets_host = {0U, M};
+    auto offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device.get(), ttnn::Layout::ROW_MAJOR);
+    auto output = create_random_tensor(ttnn::Shape({1, 1, M, N}), DataType::BFLOAT16, 44, device.get());
+    const uint32_t M_tiles = M / 32U;
+
+    auto run_once = [&]() {
+        ttml::metal::variable_matmul(
+            input,
+            weight,
+            cfg,
+            transpose_a,
+            transpose_b,
+            /*compute_kernel_config=*/std::nullopt,
+            /*output_tensor=*/output,
+            /*offsets_tensor=*/offsets,
+            /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
+            /*offsets_start_index=*/0,
+            /*effective_M_tiles=*/M_tiles);
+    };
+
     for (int i = 0; i < kWarmupIterations; ++i) {
-        auto out = ttml::metal::variable_matmul(input, weight, cfg, transpose_a, transpose_b);
+        run_once();
         distributed::Synchronize(device.get(), std::nullopt);
-        out.deallocate();
     }
 
     for (auto _ : state) {
         auto start = std::chrono::high_resolution_clock::now();
-        auto out = ttml::metal::variable_matmul(input, weight, cfg, transpose_a, transpose_b);
+        run_once();
         distributed::Synchronize(device.get(), std::nullopt);
         auto end = std::chrono::high_resolution_clock::now();
         double time_us = std::chrono::duration<double, std::micro>(end - start).count();
         state.SetIterationTime(time_us / 1e6);
         report_counters(state, time_us, M, K, N);
-        out.deallocate();
     }
+    output.deallocate();
+    offsets.deallocate();
 
     input.deallocate();
     weight.deallocate();
