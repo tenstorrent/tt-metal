@@ -17,7 +17,8 @@
 // 1024-col column-block): convert e4m3 -> fp32 (copy_tile), tilize, multiply each tile by its
 // group's per-row scale broadcast from column 0 (mul_tiles_bcast_cols), and untilize to the output
 // dtype (bf16 or fp32). The reader builds the per-group column-0 broadcast operands from the scale
-// tensor. Requires H % 128 == 0; work is split across cores over tile-rows.
+// tensor. Requires H % 128 == 0; work is split across cores over rows (each core gets a contiguous,
+// not necessarily tile-aligned, row range).
 
 namespace ttnn::experimental::prim::per_token_cast_back {
 
@@ -60,7 +61,6 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         common::COL_BLOCK_ELEMS /
         common::SCALE_GROUP_SIZE;  // 8 groups of 128 elements per column block of 1024 elements
 
-    const uint32_t tile_rows = tt::div_up(M, tile_h);                        // last tile-row may be partial
     const uint32_t num_col_blocks = tt::div_up(H, common::COL_BLOCK_ELEMS);  // last col-block may be partial
     const uint32_t e4m3_col_block_bytes = common::COL_BLOCK_ELEMS;  // 1 byte/elem
     const uint32_t out_elem_bytes = output.element_size();
@@ -75,8 +75,11 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
 
     auto* device = input_e4m3.device();
     auto compute_grid = device->compute_with_storage_grid_size();
+    // Split on rows (not tile-rows) so horizontal tensors (small M, large H) use the whole grid;
+    // the op is DRAM/NoC-bound, so spreading rows across more cores spreads the data movement. Each
+    // core's contiguous row range need not be tile-aligned (kernels address by absolute DRAM page).
     auto [num_cores, all_cores, core_group_1, core_group_2, rows_per_core_g1, rows_per_core_g2] =
-        split_work_to_cores(compute_grid, tile_rows);
+        split_work_to_cores(compute_grid, M);
 
     const DataFormat fp8_df = DataFormat::Fp8_e4m3;
     const DataFormat fp32_df = DataFormat::Float32;
@@ -171,15 +174,25 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         const auto& core = all_cores_vec[i];
         uint32_t rows_for_core =
             core_group_1.contains(core) ? rows_per_core_g1 : (core_group_2.contains(core) ? rows_per_core_g2 : 0);
+        const uint32_t num_tile_rows = tt::div_up(rows_for_core, tile_h);  // last tile-row may be partial
 
         SetRuntimeArgs(
             program,
             reader_kernel_id,
             core,
-            {src_e4m3_buffer->address(), src_scale_buffer->address(), rows_for_core, num_col_blocks, row_offset, M, H});
+            {src_e4m3_buffer->address(),
+             src_scale_buffer->address(),
+             num_tile_rows,
+             num_col_blocks,
+             row_offset,
+             rows_for_core,
+             H});
         SetRuntimeArgs(
-            program, writer_kernel_id, core, {dst_buffer->address(), rows_for_core, num_col_blocks, row_offset, M, H});
-        SetRuntimeArgs(program, compute_kernel_id, core, {rows_for_core, num_col_blocks});
+            program,
+            writer_kernel_id,
+            core,
+            {dst_buffer->address(), num_tile_rows, num_col_blocks, row_offset, rows_for_core, H});
+        SetRuntimeArgs(program, compute_kernel_id, core, {num_tile_rows, num_col_blocks});
         row_offset += rows_for_core;
     }
 

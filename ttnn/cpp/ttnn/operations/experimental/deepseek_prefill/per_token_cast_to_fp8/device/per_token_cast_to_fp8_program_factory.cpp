@@ -18,7 +18,8 @@
 // Per (tile-row, 1024-col column-block) the compute kernel tilizes the input, computes a per-128
 // group amax = max(|x|), forms scale = clamp(amax, 1e-4) / 448 and 1/scale, divides, and untilizes
 // to e4m3. The writer extracts column 0 of the per-group scale tiles into the [.., H/128] scale
-// output. Requires H % 128 == 0; work is split across cores over tile-rows.
+// output. Requires H % 128 == 0; work is split across cores over rows (each core gets a contiguous,
+// not necessarily tile-aligned, row range).
 
 namespace ttnn::experimental::prim::per_token_cast_to_fp8 {
 
@@ -58,7 +59,6 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
     const uint32_t COL_BLOCK_TILES = common::COL_BLOCK_ELEMS / tile_w;                         // 32 for 32-wide tiles
     constexpr uint32_t GROUPS_PER_BLOCK = common::COL_BLOCK_ELEMS / common::SCALE_GROUP_SIZE;  // 8
 
-    const uint32_t tile_rows = tt::div_up(M, tile_h);                        // last tile-row may be partial
     const uint32_t num_col_blocks = tt::div_up(H, common::COL_BLOCK_ELEMS);  // last col-block may be partial
     const uint32_t scale_groups = H / common::SCALE_GROUP_SIZE;
     const uint32_t in_elem_bytes = input.element_size();
@@ -74,8 +74,11 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
 
     auto* device = input.device();
     auto compute_grid = device->compute_with_storage_grid_size();
+    // Split on rows (not tile-rows) so horizontal tensors (small M, large H) use the whole grid;
+    // the op is DRAM/NoC-bound, so spreading rows across more cores spreads the data movement. Each
+    // core's contiguous row range need not be tile-aligned (kernels address by absolute DRAM page).
     auto [num_cores, all_cores, core_group_1, core_group_2, rows_per_core_g1, rows_per_core_g2] =
-        split_work_to_cores(compute_grid, tile_rows);
+        split_work_to_cores(compute_grid, M);
 
     const DataFormat input_df = datatype_to_dataformat_converter(input.dtype());
     const DataFormat fp32_df = DataFormat::Float32;
@@ -191,15 +194,25 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
         const auto& core = all_cores_vec[i];
         uint32_t rows_for_core =
             core_group_1.contains(core) ? rows_per_core_g1 : (core_group_2.contains(core) ? rows_per_core_g2 : 0);
+        const uint32_t num_tile_rows = tt::div_up(rows_for_core, tile_h);  // last tile-row may be partial
 
         SetRuntimeArgs(
-            program, reader_kernel_id, core, {src_buffer->address(), rows_for_core, num_col_blocks, row_offset, M, H});
+            program,
+            reader_kernel_id,
+            core,
+            {src_buffer->address(), num_tile_rows, num_col_blocks, row_offset, rows_for_core, H});
         SetRuntimeArgs(
             program,
             writer_kernel_id,
             core,
-            {dst_e4m3_buffer->address(), dst_scale_buffer->address(), rows_for_core, num_col_blocks, row_offset, M, H});
-        SetRuntimeArgs(program, compute_kernel_id, core, {rows_for_core, num_col_blocks});
+            {dst_e4m3_buffer->address(),
+             dst_scale_buffer->address(),
+             num_tile_rows,
+             num_col_blocks,
+             row_offset,
+             rows_for_core,
+             H});
+        SetRuntimeArgs(program, compute_kernel_id, core, {num_tile_rows, num_col_blocks});
         row_offset += rows_for_core;
     }
 

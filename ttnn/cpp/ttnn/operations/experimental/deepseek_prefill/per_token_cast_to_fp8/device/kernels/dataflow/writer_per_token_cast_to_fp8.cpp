@@ -40,9 +40,9 @@ void kernel_main() {
     uint32_t scale_addr = get_arg_val<uint32_t>(1);
     uint32_t num_tile_rows = get_arg_val<uint32_t>(2);
     uint32_t num_col_blocks = get_arg_val<uint32_t>(3);
-    uint32_t start_tile_row = get_arg_val<uint32_t>(4);
-    uint32_t m_total = get_arg_val<uint32_t>(5);  // total rows (M); last tile-row may be partial
-    uint32_t h_total = get_arg_val<uint32_t>(6);  // total width (H); last col-block may be partial
+    uint32_t start_row = get_arg_val<uint32_t>(4);  // absolute first row for this core (not tile-aligned)
+    uint32_t num_rows = get_arg_val<uint32_t>(5);   // rows for THIS core; last tile-row may be partial
+    uint32_t h_total = get_arg_val<uint32_t>(6);    // total width (H); last col-block may be partial
 
     constexpr uint32_t cb_e4m3 = get_compile_time_arg_val(0);
     constexpr uint32_t e4m3_col_block_bytes = get_compile_time_arg_val(1);  // 1024
@@ -77,8 +77,8 @@ void kernel_main() {
     constexpr uint32_t e4m3_elem_bytes = e4m3_col_block_bytes / COL_BLOCK_ELEMS;  // 1 byte/elem
 
     for (uint32_t tr = 0; tr < num_tile_rows; ++tr) {
-        uint32_t row_base = (start_tile_row + tr) * tile_h;
-        uint32_t rows_this = std::min(tile_h, m_total - row_base);  // real rows in this tile-row
+        uint32_t row_base = start_row + tr * tile_h;
+        uint32_t rows_this = std::min(tile_h, num_rows - tr * tile_h);  // real rows in this tile-row
         for (uint32_t c = 0; c < num_col_blocks; ++c) {
             uint32_t real_col_elems = std::min(COL_BLOCK_ELEMS, h_total - c * COL_BLOCK_ELEMS);
             uint32_t real_col_bytes = real_col_elems * e4m3_elem_bytes;  // real e4m3 width

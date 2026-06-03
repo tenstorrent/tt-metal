@@ -21,6 +21,9 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/experimental/minimal_matmul/device/kernels/matmul_dataflow_common.hpp"  // fill_zeros_async
 
+/**
+ *
+ */
 template <
     uint32_t face_h,
     uint32_t face_w,
@@ -65,9 +68,9 @@ void kernel_main() {
     uint32_t scale_addr = get_arg_val<uint32_t>(1);
     uint32_t num_tile_rows = get_arg_val<uint32_t>(2);
     uint32_t num_col_blocks = get_arg_val<uint32_t>(3);
-    uint32_t start_tile_row = get_arg_val<uint32_t>(4);
-    uint32_t m_total = get_arg_val<uint32_t>(5);  // total rows (M); last tile-row may be partial
-    uint32_t h_total = get_arg_val<uint32_t>(6);  // total width (H); last col-block may be partial
+    uint32_t start_row = get_arg_val<uint32_t>(4);  // absolute first row for this core (not tile-aligned)
+    uint32_t num_rows = get_arg_val<uint32_t>(5);   // rows for THIS core; last tile-row may be partial
+    uint32_t h_total = get_arg_val<uint32_t>(6);    // total width (H); last col-block may be partial
 
     constexpr uint32_t cb_e4m3 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_scale_bcast = get_compile_time_arg_val(1);
@@ -100,8 +103,8 @@ void kernel_main() {
     uint32_t scratch = get_write_ptr(cb_scale_scratch);
 
     for (uint32_t tr = 0; tr < num_tile_rows; ++tr) {
-        uint32_t row_base = (start_tile_row + tr) * tile_h;
-        uint32_t rows_this = std::min(tile_h, m_total - row_base);  // real rows in this tile-row
+        uint32_t row_base = start_row + tr * tile_h;
+        uint32_t rows_this = std::min(tile_h, num_rows - tr * tile_h);  // real rows in this tile-row
 
         // --- read all real tokens' full scale rows once, aligned; zero-pad rows beyond M ---
         for (uint32_t s = 0; s < tile_h; ++s) {

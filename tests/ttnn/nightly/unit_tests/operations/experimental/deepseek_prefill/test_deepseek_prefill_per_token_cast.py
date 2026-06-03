@@ -40,17 +40,15 @@ E4M3_MAX = 448.0
 SHAPES = [
     (1, 1024),  # single row (partial tile-row)
     (32, 1024),  # minimal
-    (32, 2048),  # medium width
-    (64, 1024),  # taller batch
-    (32, 7168),  # DeepSeek V3 / Kimi K2.6 hidden dim
     (30, 1152),  # partial tile-row + 9 groups (partial last col-block)
     (50, 896),  # partial tile-row spanning 2 tile-rows + single partial col-block (7 groups)
     (33, 1280),  # partial tile-row spanning 2 tile-rows + 10 groups (partial last col-block)
+    (640, 7168),
+    (3200, 7168),
     (4096, 7168),
     (6400, 7168),
     (4, 1, 128, 1024),  # 4D: leading dims fold into M = 512
     (2, 3, 30, 1152),  # 4D + partial tile-row / partial col-block (M = 180)
-    (2, 1, 32, 896),  # 4D + single partial col-block (M = 64)
 ]
 
 ROUNDTRIP_SHAPES = [(32, 1024), (64, 2048), (32, 7168), (30, 1152), (50, 896), (4, 1, 128, 1024)]

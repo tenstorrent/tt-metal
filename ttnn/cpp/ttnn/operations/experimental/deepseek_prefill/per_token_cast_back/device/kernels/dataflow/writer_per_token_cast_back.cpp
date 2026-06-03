@@ -17,9 +17,9 @@ void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t num_tile_rows = get_arg_val<uint32_t>(1);
     uint32_t num_col_blocks = get_arg_val<uint32_t>(2);
-    uint32_t start_tile_row = get_arg_val<uint32_t>(3);
-    uint32_t m_total = get_arg_val<uint32_t>(4);  // total rows (M); last tile-row may be partial
-    uint32_t h_total = get_arg_val<uint32_t>(5);  // total width (H); last col-block may be partial
+    uint32_t start_row = get_arg_val<uint32_t>(3);  // absolute first row for this core (not tile-aligned)
+    uint32_t num_rows = get_arg_val<uint32_t>(4);   // rows for THIS core; last tile-row may be partial
+    uint32_t h_total = get_arg_val<uint32_t>(5);    // total width (H); last col-block may be partial
 
     constexpr uint32_t cb_out_fp32 = get_compile_time_arg_val(0);
     constexpr uint32_t col_block_bytes = get_compile_time_arg_val(1);  // COL_BLOCK_ELEMS * out_elem_size
@@ -32,8 +32,8 @@ void kernel_main() {
     const auto dst = TensorAccessor(dst_args, dst_addr);
 
     for (uint32_t tr = 0; tr < num_tile_rows; ++tr) {
-        const uint32_t row_base = (start_tile_row + tr) * tile_h;
-        uint32_t rows_this = std::min(tile_h, m_total - row_base);  // real rows in this tile-row
+        const uint32_t row_base = start_row + tr * tile_h;
+        uint32_t rows_this = std::min(tile_h, num_rows - tr * tile_h);  // real rows in this tile-row
         for (uint32_t c = 0; c < num_col_blocks; ++c) {
             uint32_t real_col_elems = std::min(COL_BLOCK_ELEMS, h_total - c * COL_BLOCK_ELEMS);
             uint32_t real_col_bytes = real_col_elems * out_elem_bytes;  // real output width
