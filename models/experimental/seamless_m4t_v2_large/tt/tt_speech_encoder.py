@@ -2128,6 +2128,11 @@ class TTSeamlessM4Tv2SpeechEncoder:
             eps=self.layer_norm_eps,
             batch=batch,
             seq_len=lens_a,
+            # Adapter FFN LN at the post-downsample seq (~input/8). Its block-sharded CB clashes with
+            # persistent L1 once that seq exceeds ~512 (input ≳4096). Sharded vs interleaved differ at
+            # ~1e-7, so keep sharded up to the clash boundary (demo / ≤3584-input untouched) and use
+            # interleaved only beyond.
+            use_sharded=(lens_a <= 512),
         )
         ff = self._relu_ffn(h2, layer.ffn, batch=batch, seq_len=lens_a)
         ttnn.deallocate(h2)
@@ -2338,6 +2343,12 @@ class TTSeamlessM4Tv2SpeechEncoder:
             eps=self.layer_norm_eps,
             batch=batch,
             seq_len=int(h.shape[1]),
+            # Final output LN, post-adapter (seq ≈ input/8). The block-sharded path's persistent L1 CB
+            # clashes once the post-adapter seq exceeds ~512 (input ≳4096). Sharded vs interleaved LN
+            # differ at ~1e-7 (NOT bit-identical), so keep sharded up to the clash boundary — leaving
+            # the demo / ≤3584-input decode path untouched — and switch to (clash-free) interleaved
+            # only beyond, where there's no prior baseline to preserve.
+            use_sharded=(int(h.shape[1]) <= 512),
         )
 
     def __call__(
