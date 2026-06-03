@@ -488,8 +488,8 @@ ALWI void fast_tilize_block(
     uint32_t num_units = dest_size / unit_dim;
 
     while (packed_tiles < block) {
-        uint32_t read_tile_index = input_tile_index + packed_tiles;
-        uint32_t write_tile_index = output_tile_index + packed_tiles;
+        UNPACK(uint32_t read_tile_index = input_tile_index + packed_tiles);
+        PACK(uint32_t write_tile_index = output_tile_index + packed_tiles);
 
         MATH((llk_math_wait_for_dest_available()));
         PACK((llk_packer_wait_for_math_done()));

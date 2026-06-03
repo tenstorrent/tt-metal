@@ -23,6 +23,11 @@ from models.common.utility_functions import profiler
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.tt.mla.utils import (
+    create_balanced_chunk_order,
+    reorder_tensor_chunks,
+    reverse_reorder_tensor_chunks,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
@@ -268,6 +273,10 @@ def test_prefill_block(
 
     # Shard input to device: [1, 1, isl_total, emb_dim] → [1, 1, isl_per_chip, emb_dim/tp]
     tt_input_4d = torch_input.unsqueeze(0)  # [1, 1, isl_total, emb_dim]
+    if is_balanced == True:
+        chunk_order = create_balanced_chunk_order(sp_factor)
+        tt_input_4d = reorder_tensor_chunks(tt_input_4d, chunk_order, seq_dim=2)
+
     tt_input = ttnn.from_torch(
         tt_input_4d,
         device=mesh_device,
@@ -313,6 +322,8 @@ def test_prefill_block(
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 3), mesh_shape=mesh_device.shape),
         ).to(torch.bfloat16)
         # Remove leading batch dim: [1, 1, isl_total, emb_dim] → [1, isl_total, emb_dim]
+        if is_balanced:
+            tt_output_host = reverse_reorder_tensor_chunks(tt_output_host, chunk_order, seq_dim=-2)
         tt_output_host = tt_output_host.squeeze(0)
 
         if layer_type == "dense":
@@ -331,6 +342,8 @@ def test_prefill_block(
         # --- KVPE cache validation ---
         if ref_kvpe is not None and tt_kvpe is not None:
             kv_lora_rank = config.kv_lora_rank
+            if is_balanced:
+                tt_kvpe = reverse_reorder_tensor_chunks(tt_kvpe, chunk_order, seq_dim=2)
             _, kv_pcc = comp_pcc(ref_kvpe[:, :, :, :kv_lora_rank].float(), tt_kvpe[:, :, :, :kv_lora_rank].float())
             _, pe_pcc = comp_pcc(ref_kvpe[:, :, :, kv_lora_rank:].float(), tt_kvpe[:, :, :, kv_lora_rank:].float())
             logger.info(f"KVPE cache KV part PCC: {kv_pcc:.6f} (threshold: {PCC_THRESHOLD_KVPE})")
