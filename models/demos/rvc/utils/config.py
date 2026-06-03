@@ -6,8 +6,6 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-import torch
-
 MISSING: Any = "???"
 
 
@@ -34,28 +32,6 @@ AVAILABLE_ACT_FNS = Literal[
 def _get_rvc_base_dir() -> str:
     """Return the base directory for the RVC demo (models/demos/rvc/)."""
     return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-
-
-class Config:
-    def __init__(self):
-        self.device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.instead: str | None = None
-        self.x_pad, self.x_query, self.x_center, self.x_max = self.device_config()
-
-    def params_config(self) -> tuple:
-        x_pad = 0
-        x_query = 1
-        x_center = 12
-        x_max = 16
-        return x_pad, x_query, x_center, x_max
-
-    def use_cpu(self) -> None:
-        self.device = torch.device("cpu")
-        self.instead = "cpu"
-        self.x_pad, self.x_query, self.x_center, self.x_max = self.params_config()
-
-    def device_config(self) -> tuple:
-        return self.params_config()
 
 
 def _get_configs_dir() -> str:
@@ -205,12 +181,6 @@ class HubertPretrainingTask:
     ):
         super().__init__()
         self.cfg = cfg
-
-    def valid_step(self, sample, model, criterion):
-        model.eval()
-        with torch.no_grad():
-            loss, sample_size = criterion(model, sample)
-        return loss, sample_size
 
 
 @dataclass
