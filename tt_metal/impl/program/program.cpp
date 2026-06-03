@@ -1653,25 +1653,7 @@ void detail::ProgramImpl::set_cb_data_fmt_and_tile(
                 const DataFormat data_format = circular_buffer->data_format(buffer_index);
                 const auto& tile_opt = circular_buffer->tile(buffer_index);
                 const auto& unpack_geom = circular_buffer->unpack_face_geometry(buffer_index);
-                build_options.set_cb_dataformat_all_cores(cb_index, data_format);
-                if (tile_opt.has_value() || unpack_geom.has_value()) {
-                    Tile default_tile{};
-                    const Tile& tile = tile_opt.value_or(default_tile);
-                    uint32_t num_faces = unpack_geom.has_value() ? unpack_geom->num_faces : tile.get_num_faces();
-                    uint32_t face_r_dim = unpack_geom.has_value() ? unpack_geom->face_r_dim : tile.get_face_shape()[0];
-                    build_options.set_cb_tile_dims_all_cores(
-                        cb_index,
-                        num_faces,
-                        tile.get_partial_face(),
-                        face_r_dim,
-                        tile.get_narrow_tile(),
-                        tile.get_tile_shape()[0],
-                        tile.get_tile_shape()[1]);
-                    build_options.set_cb_tile_size_all_cores(cb_index, tile.get_tile_size(data_format));
-                } else {
-                    Tile t;
-                    build_options.set_cb_tile_size_all_cores(cb_index, t.get_tile_size(data_format));
-                }
+                build_options.set_cb_data_fmt_tile_and_face_geometry(cb_index, data_format, tile_opt, unpack_geom);
             }
         }
     }
