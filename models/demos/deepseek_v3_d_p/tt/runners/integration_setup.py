@@ -13,10 +13,11 @@ entire integration footprint is two things:
       to a path; the inference server (which owns prefill->decode handoff) feeds
       that path to the worker via SET_TABLE. The runner never talks to the worker.
 
-  (2) PER LAYER — increment a single 64-bit counter in a named POSIX shm segment
-      (the LayerAckChannel, prefill.md §3.11). The scheduler reads the delta and
-      decides what to migrate; slot/range/layer correlation is the scheduler's
-      job (its InFlightChunkFIFO), so the ack carries no payload.
+  (2) PER LAYER — bump the scheduler-facing layer-ack counter once per layer
+      (prefill.md §3.11). That is NOT in this module: the runner/pipeline use the
+      engine's ttnn.InterProcessCounterChannel on /tt_prefill_layer_acks_<id>
+      directly (prefill_runner + pipeline.set_layer_ack_channel). This module
+      provides only duty (1) — the table builder.
 
 Everything else — CONNECT, MIGRATE, completion tracking — belongs to the
 scheduler + worker, not the runner.
@@ -33,14 +34,6 @@ ttnn disaggregation types, whose API differs from the legacy _migration one:
 from loguru import logger
 
 import ttnn
-
-# Endpoint ids — disaggregated prefill/decode convention (lower id = decode).
-DECODE_EP_ID = 0
-PREFILL_EP_ID = 1
-
-# Sentinel dst_slot sent by the inference server when a request must NOT trigger
-# migration (e.g. warmup probes, scheduler-skipped requests).
-INVALID_SLOT_ID = 0xFFFFFFFF
 
 # DRAM banks per Blackhole device — used when packing NOC addresses for the table.
 BH_NUM_DRAM_BANKS = 8
@@ -124,17 +117,12 @@ def _build_prefill_table(mesh, tt_kvpe_cache, seq_len, num_layers, mesh_shape):
     return table
 
 
-def _serialize_table_to_path(table, path: str) -> None:
-    """Serialize a KvChunkAddressTable to a protobuf file for the worker's SET_TABLE."""
-    _disaggregation().export_to_protobuf_file(table, path)
-
-
 def build_and_serialize_kv_chunk_table(*, mesh_device, kvpe_cache, seq_len, num_layers, mesh_shape, path) -> str:
     """STARTUP step (1): build the KV chunk address table from the device layout
     and serialize it to ``path`` for the inference server to forward via SET_TABLE.
 
     Returns the path on success."""
     table = _build_prefill_table(mesh_device, kvpe_cache, seq_len, num_layers, mesh_shape)
-    _serialize_table_to_path(table, path)
+    _disaggregation().export_to_protobuf_file(table, path)
     logger.info(f"[migration] KV chunk address table serialized to {path} (entries={table.total_entries()})")
     return path
