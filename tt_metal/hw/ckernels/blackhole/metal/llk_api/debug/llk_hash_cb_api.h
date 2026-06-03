@@ -8,7 +8,7 @@
 
 #ifdef DEBUG_CB_HASH
 #include "internal/circular_buffer_interface.h"
-#include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #endif
 
 // Scalar FNV-1a over a circular buffer's L1 bytes, printed via DPRINT.
@@ -32,8 +32,8 @@ inline void llk_hash_cb(uint32_t cb_id, uint32_t num_tiles, uint32_t label) {
         h = (h ^ p[i]) * 0x01000193u;
     }
 
-    DPRINT << "hash[0x" << HEX() << label << "] cb=" << DEC() << cb_id << " tiles=" << num_tiles << " = 0x" << HEX()
-           << h << DEC() << ENDL();
+    // main made old-style DPRINT a hard error; use fmt-style DEVICE_PRINT (needs TT_METAL_DEVICE_PRINT=1).
+    DEVICE_PRINT("hash[0x{:x}] cb={} tiles={} = 0x{:08x}", label, cb_id, num_tiles, h);
 #else
     (void)cb_id;
     (void)num_tiles;

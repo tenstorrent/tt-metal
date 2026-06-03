@@ -27,7 +27,7 @@
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
-#include "api/debug/dprint.h"  // craq-sim progress markers
+#include "api/debug/device_print.h"  // craq-sim progress markers (DEVICE_PRINT; compiles out when DPRINT not enabled)
 #include "../../../unified_kernels/rmsnorm.hpp"
 #include "../../../unified_kernels/mcast.hpp"
 #include "../../../unified_kernels/matmul.hpp"
@@ -3788,9 +3788,9 @@ void kernel_main() {
     constexpr uint32_t termination_semaphore_addr = get_named_compile_time_arg_val("termination_semaphore_addr");
     deepseek_b1_ops::PersistentLoop<persistent_mode == 1> loop(termination_semaphore_addr, num_iterations);
     uint32_t __craqsim_iter = 0;
-    DPRINT << "[CRAQSIM] kernel_main start" << ENDL();
+    DEVICE_PRINT("[CRAQSIM] kernel_main start");
     while (loop.next()) {
-        DPRINT << "[CRAQSIM] iter " << __craqsim_iter << " begin" << ENDL();
+        DEVICE_PRINT("[CRAQSIM] iter {} begin", __craqsim_iter);
         {
             DeviceZoneScopedN("MLA_CB_RECONFIG");
             unified_kernels::reconfig_cb_interfaces(mla_cb_config);
@@ -3816,12 +3816,12 @@ void kernel_main() {
         }
 #endif
 #endif
-        DPRINT << "[CRAQSIM] iter " << __craqsim_iter << " mla_body start" << ENDL();
+        DEVICE_PRINT("[CRAQSIM] iter {} mla_body start", __craqsim_iter);
         {
             DeviceZoneScopedN("MLA");
             mla_body();
         }
-        DPRINT << "[CRAQSIM] iter " << __craqsim_iter << " mla_body end" << ENDL();
+        DEVICE_PRINT("[CRAQSIM] iter {} mla_body end", __craqsim_iter);
         {
             DeviceZoneScopedN("MOE_CB_RECONFIG");
             unified_kernels::reconfig_cb_interfaces(moe_cb_config);
@@ -3839,15 +3839,15 @@ void kernel_main() {
             }
             setup_moe_sharded_buffers();
         }
-        DPRINT << "[CRAQSIM] iter " << __craqsim_iter << " moe_body start" << ENDL();
+        DEVICE_PRINT("[CRAQSIM] iter {} moe_body start", __craqsim_iter);
         {
             DeviceZoneScopedN("MOE");
             moe_body();
         }
-        DPRINT << "[CRAQSIM] iter " << __craqsim_iter << " moe_body end" << ENDL();
+        DEVICE_PRINT("[CRAQSIM] iter {} moe_body end", __craqsim_iter);
         __craqsim_iter++;
     }
-    DPRINT << "[CRAQSIM] kernel_main done after " << __craqsim_iter << " iters" << ENDL();
+    DEVICE_PRINT("[CRAQSIM] kernel_main done after {} iters", __craqsim_iter);
 
     // ====================================================================
     // Mcast: Teardown persistent mcast
