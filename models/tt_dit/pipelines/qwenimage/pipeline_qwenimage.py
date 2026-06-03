@@ -396,7 +396,7 @@ class QwenImagePipeline(PipelineAPIMixin):
         num_inference_steps: int,
         seed: int = 0,
         traced: bool = False,
-        vae_traced: bool | None = None,
+        vae_traced: bool | None = False,
         encoder_traced: bool | None = None,
         on_event: PipelineEventCallback | None = None,
     ) -> list[Image.Image]:
