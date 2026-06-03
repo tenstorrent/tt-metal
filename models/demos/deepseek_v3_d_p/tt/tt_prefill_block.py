@@ -321,6 +321,13 @@ class TtPrefillBlock(LightweightModule):
             gate_fallback_mode=gate_fallback_mode,
             weight_cache_path=weight_cache_path,
             layer_idx=layer_idx,
+            # DIAGNOSTIC: disable shared-expert/dispatch sub-device overlap. This removes the MoE
+            # sub-device-manager create/load/clear entirely (shared + dispatch run sequentially on
+            # the full grid) — the one thing the MoE block does that the (always-deterministic) dense
+            # block does not. If MoE determinism passes with this False, the non-determinism is in the
+            # sub-device-overlap machinery; if it still fails, sub-devices are exonerated. Python-only,
+            # no rebuild needed. See [[ring-sdpa-dispatch-nondeterminism]].
+            overlap_shared_expert_with_dispatch=True,
         )
 
     def forward(

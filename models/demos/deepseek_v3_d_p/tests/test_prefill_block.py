@@ -9,8 +9,16 @@ Validates output shapes and PCC against torch reference.
 
 Uses HF DeepseekV3Model layer as the reference: creates a model with random weights,
 extracts those weights into our TT state_dict format, and compares forward passes.
+
+Runs the block forward for `num_iterations` iterations, producing per-iteration PCC
+numbers under two mutually exclusive validation modes:
+  * pcc_validation: compare each iteration's output (and KVPE) against the torch reference.
+  * determinism_check: compare iter N>=1 against the iter-0 baseline (near-bit-identical).
+Per-iteration PCC is buffered and printed as a summary; the assertion is deferred until
+after all iterations and the timing report.
 """
 
+import time
 from pathlib import Path
 
 import pytest
@@ -41,6 +49,17 @@ PCC_THRESHOLD_DENSE = 0.996
 PCC_THRESHOLD_MOE_GATE_HOST = 0.996
 PCC_THRESHOLD_MOE_GATE_DEVICE = 0.992
 PCC_THRESHOLD_KVPE = 0.999
+# Determinism: every iteration is expected to be (near-)bit-identical to iter 0.
+DETERMINISM_PCC_THRESHOLD = 0.9999
+
+
+def _threshold_for(label, determinism_check, output_threshold):
+    """Resolve the PCC threshold for a given per-iteration result label."""
+    if determinism_check:
+        return DETERMINISM_PCC_THRESHOLD
+    if label.endswith("_kv") or label.endswith("_pe"):
+        return PCC_THRESHOLD_KVPE
+    return output_threshold
 
 
 @pytest.mark.parametrize(
@@ -61,6 +80,8 @@ PCC_THRESHOLD_KVPE = 0.999
     ids=["dense", "moe-gate_device"],
 )
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "non_balanced"])
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
+@pytest.mark.parametrize("num_iterations", [1, 5, 25, 2000], ids=["iter1", "iter5", "iter25", "iter2000"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -102,6 +123,8 @@ def test_prefill_block(
     num_links,
     topology,
     pcc_validation,
+    determinism_check,
+    num_iterations,
     input_source,
     tokenizer,
     is_ci_env,
@@ -111,6 +134,15 @@ def test_prefill_block(
         pytest.skip("Skip non-PCC test in CI to save time")
     if (is_ci_env or is_ci_v2_env) and not is_balanced:
         pytest.skip("Skip non_balanced variant in CI — runnable locally for non_balanced-mode validation")
+
+    # determinism_check and pcc_validation are mutually exclusive validation modes:
+    # determinism compares iter N against iter 0; pcc_validation compares against torch reference.
+    if determinism_check and pcc_validation:
+        pytest.skip("determinism_check and pcc_validation are mutually exclusive — pick one validation mode")
+
+    # Determinism check needs at least 2 iterations (iter 0 is the baseline)
+    if determinism_check and num_iterations < 2:
+        pytest.skip("determinism_check requires num_iterations >= 2 (iter 0 is the baseline)")
 
     profiler.clear()
     profiler.start("total_test_time")
@@ -290,23 +322,55 @@ def test_prefill_block(
         num_kvpe_cache_layers=1,
     )
 
+    # --- Output PCC threshold (used in pcc_validation mode) ---
+    if layer_type == "dense":
+        output_threshold = PCC_THRESHOLD_DENSE
+    else:
+        if gate_fallback_mode == GateComputeMode.DEVICE:
+            output_threshold = PCC_THRESHOLD_MOE_GATE_DEVICE
+        else:
+            output_threshold = PCC_THRESHOLD_MOE_GATE_HOST
+
+    # --- Forward (with per-iteration validation, buffered) ---
+    # Two validation modes are supported, both producing per-iteration PCC numbers:
+    #   * pcc_validation: compare each iter's output (and KVPE) against the torch reference.
+    #   * determinism_check: compare iter N>=1 against the iter-0 baseline.
+    need_validation = pcc_validation or determinism_check
+    do_return_kv = need_validation  # block returns its KVPE slice when return_kv_cache=True
+    kv_lora_rank = config.kv_lora_rank
+
+    # Determinism-mode baselines captured from iter 0 (None until then).
+    baseline_output = None
+    baseline_kvpe = None
+
     profiler.start("tt_forward")
     logger.info("Running TtPrefillBlock forward...")
-    tt_output, tt_kvpe = block(tt_input, rope_tensors, tt_kvpe_cache, return_kv_cache=pcc_validation)
-    ttnn.synchronize_device(mesh_device)
-    profiler.end("tt_forward")
-    logger.info("Forward pass completed successfully")
+    # Buffer of per-iteration PCC results: list of (iter_idx, list[(label, pcc)]).
+    # PCC is computed every iteration but assertions are deferred until after
+    # all iterations complete and the full summary has been printed.
+    per_iter_pcc_buffer = []
+    shape_validated = False
+    for i in range(num_iterations):
+        logger.info(f"Starting iteration: {i}")
+        start_time = time.time()
+        tt_output, tt_kvpe = block(tt_input, rope_tensors, tt_kvpe_cache, return_kv_cache=do_return_kv)
+        ttnn.synchronize_device(mesh_device)
+        end_time = time.time()
+        logger.info(f"Iteration {i}: {end_time - start_time} seconds")
 
-    # --- Validate output shape ---
-    expected_per_device_shape = [1, 1, isl_per_chip, emb_dim // tp_factor]
-    output_shape = list(tt_output.shape)
-    assert (
-        output_shape == expected_per_device_shape
-    ), f"Output shape mismatch: got {output_shape}, expected {expected_per_device_shape}"
-    logger.info(f"Output shape: {output_shape} (matches expected)")
+        # --- Validate output shape (once) ---
+        if not shape_validated:
+            expected_per_device_shape = [1, 1, isl_per_chip, emb_dim // tp_factor]
+            output_shape = list(tt_output.shape)
+            assert (
+                output_shape == expected_per_device_shape
+            ), f"Output shape mismatch: got {output_shape}, expected {expected_per_device_shape}"
+            logger.info(f"Output shape: {output_shape} (matches expected)")
+            shape_validated = True
 
-    # --- PCC check ---
-    if torch_output is not None:
+        if not need_validation:
+            continue
+
         profiler.start("pcc_validation")
         tt_output_host = ttnn.to_torch(
             tt_output,
@@ -315,33 +379,81 @@ def test_prefill_block(
         # Remove leading batch dim: [1, 1, isl_total, emb_dim] → [1, isl_total, emb_dim]
         tt_output_host = tt_output_host.squeeze(0)
 
-        if layer_type == "dense":
-            pcc_threshold = PCC_THRESHOLD_DENSE
-        else:
-            if gate_fallback_mode == GateComputeMode.DEVICE:
-                pcc_threshold = PCC_THRESHOLD_MOE_GATE_DEVICE
-            else:
-                pcc_threshold = PCC_THRESHOLD_MOE_GATE_HOST
+        iter_pcc = []
 
-        _, pcc = comp_pcc(torch_output.float(), tt_output_host.float())
-        profiler.end("pcc_validation")
-        logger.info(f"PCC: {pcc:.6f} (threshold: {pcc_threshold})")
-        assert pcc > pcc_threshold, f"PCC {pcc:.6f} below threshold {pcc_threshold}"
+        # Determinism iter 0: snapshot output + KVPE baseline for later iterations to
+        # compare against. No PCC this iteration.
+        if determinism_check and i == 0:
+            baseline_output = tt_output_host.clone()
+            if tt_kvpe is not None:
+                baseline_kvpe = tt_kvpe.clone()
+            per_iter_pcc_buffer.append((i, iter_pcc))
+            logger.info(
+                f"Iteration {i}: captured baseline for determinism check "
+                f"(output{', KVPE' if baseline_kvpe is not None else ''})"
+            )
+            profiler.end("pcc_validation")
+            continue
+
+        # Resolve reference: iter-0 baseline (determinism) or torch reference (pcc_validation).
+        if determinism_check:
+            ref_output = baseline_output
+            ref_kvpe_cmp = baseline_kvpe
+        else:
+            ref_output = torch_output
+            ref_kvpe_cmp = ref_kvpe
+
+        if ref_output is not None:
+            _, pcc = comp_pcc(ref_output.float(), tt_output_host.float())
+            iter_pcc.append(("output", pcc))
 
         # --- KVPE cache validation ---
-        if ref_kvpe is not None and tt_kvpe is not None:
-            kv_lora_rank = config.kv_lora_rank
-            _, kv_pcc = comp_pcc(ref_kvpe[:, :, :, :kv_lora_rank].float(), tt_kvpe[:, :, :, :kv_lora_rank].float())
-            _, pe_pcc = comp_pcc(ref_kvpe[:, :, :, kv_lora_rank:].float(), tt_kvpe[:, :, :, kv_lora_rank:].float())
-            logger.info(f"KVPE cache KV part PCC: {kv_pcc:.6f} (threshold: {PCC_THRESHOLD_KVPE})")
-            logger.info(f"KVPE cache PE part PCC: {pe_pcc:.6f} (threshold: {PCC_THRESHOLD_KVPE})")
-            assert kv_pcc > PCC_THRESHOLD_KVPE, f"KVPE KV PCC {kv_pcc:.6f} below threshold {PCC_THRESHOLD_KVPE}"
-            assert pe_pcc > PCC_THRESHOLD_KVPE, f"KVPE PE PCC {pe_pcc:.6f} below threshold {PCC_THRESHOLD_KVPE}"
+        if ref_kvpe_cmp is not None and tt_kvpe is not None:
+            _, kv_pcc = comp_pcc(ref_kvpe_cmp[:, :, :, :kv_lora_rank].float(), tt_kvpe[:, :, :, :kv_lora_rank].float())
+            _, pe_pcc = comp_pcc(ref_kvpe_cmp[:, :, :, kv_lora_rank:].float(), tt_kvpe[:, :, :, kv_lora_rank:].float())
+            iter_pcc.append(("kvpe_kv", kv_pcc))
+            iter_pcc.append(("kvpe_pe", pe_pcc))
 
-        logger.success(
-            f"TtPrefillBlock test passed "
-            f"(layer_type={layer_type}, gate_fallback_mode={gate_fallback_mode}, PCC={pcc:.4f})"
-        )
+        per_iter_pcc_buffer.append((i, iter_pcc))
+        profiler.end("pcc_validation")
+
+    profiler.end("tt_forward")
+    logger.info("Forward pass completed successfully")
+
+    # --- PCC summary (print buffered per-iteration results, then defer assertion) ---
+    if need_validation:
+        ref_source = "iter0_baseline" if determinism_check else "torch"
+        failures = []  # list of (iter_idx, label, pcc)
+        for iter_idx, iter_pcc in per_iter_pcc_buffer:
+            logger.info(f"\n{'='*60}")
+            if determinism_check and iter_idx == 0:
+                logger.info(f"Iteration {iter_idx} (baseline — no comparison)")
+                logger.info(f"{'='*60}")
+                continue
+            logger.info(f"Iteration {iter_idx} PCC results (ref={ref_source})")
+            logger.info(f"{'Stage':<20s}  {'PCC':>10s}  {'Threshold':>10s}  {'Status':>8s}")
+            logger.info(f"{'-'*60}")
+            for label, pcc in iter_pcc:
+                label_threshold = _threshold_for(label, determinism_check, output_threshold)
+                status = "PASS" if pcc > label_threshold else ("FAIL" if pcc >= 0 else "ERROR")
+                logger.info(f"{label:<20s}  {pcc:>10.6f}  {label_threshold:>10.4f}  {status:>8s}")
+                if pcc <= label_threshold:
+                    failures.append((iter_idx, label, pcc))
+            logger.info(f"{'='*60}")
+
+        has_pcc_failures = len(failures) > 0
+        mode_label = "determinism" if determinism_check else "PCC"
+        if not has_pcc_failures:
+            logger.success(
+                f"TtPrefillBlock {mode_label} test passed across {num_iterations} iteration(s) "
+                f"(layer_type={layer_type}, gate_fallback_mode={gate_fallback_mode}, ref_source={ref_source})"
+            )
+        else:
+            pcc_failure_msg = "; ".join(f"iter {it} {label}: {pcc:.6f}" for it, label, pcc in failures)
+            logger.error(
+                f"TtPrefillBlock {mode_label} test has failures "
+                f"(layer_type={layer_type}, failures={len(failures)} across {num_iterations} iteration(s))"
+            )
     else:
         logger.success(
             f"TtPrefillBlock smoke test passed (layer_type={layer_type}, gate_fallback_mode={gate_fallback_mode})"
@@ -354,3 +466,7 @@ def test_prefill_block(
     logger.info(f"{'='*60}")
     for key in profiler.times:
         logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
+
+    # Deferred PCC failure check (after timing report)
+    if need_validation and has_pcc_failures:
+        pytest.fail(f"PCC below threshold at: {pcc_failure_msg}")
