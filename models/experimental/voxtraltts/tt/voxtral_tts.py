@@ -262,7 +262,7 @@ class VoxtralTTSPipeline:
         self,
         text: str,
         voice: str = "casual_male",
-        max_tokens: int = 65000,
+        max_tokens: int = 65536,
         seed: int = 0,
         *,
         fixed_step_count: bool = False,

@@ -13,7 +13,9 @@ Tenstorrent device via ``VoxtralTTSPipeline.forward_device_resident()``.  The on
 Modes
 -----
 ``text`` (default)
-    ``text`` + ``voice`` in JSON → ``pipe.forward_device_resident()`` → ``.wav``
+    ``text`` + ``voice`` in JSON → ``pipe.forward_device_resident()`` → ``.wav``.
+    Alternatively use ``text_paragraphs``: a JSON array of short strings; the demo
+    joins them with spaces into one prompt for the tokenizer (readable in the file).
 
 ``codes``
     Pre-computed ``[1,37,T]`` codes tensor → ``pipe.decode_waveform_from_codes_tt()``
@@ -75,7 +77,9 @@ class DataArgs:
     prompts_file: str = "models/experimental/voxtraltts/demo/data/sample_prompts.json"
     output_dir: str = "generated/voxtraltts_demo"
     mode: str = "text"
-    max_speech_tokens: int = 250
+    # Match :meth:`VoxtralTTSPipeline.forward_device_resident` default: generate until
+    # END_AUDIO or this cap. Use a smaller --max-speech-tokens for quick smoke tests.
+    max_speech_tokens: int = 65536
     seed: int = 0
     default_voice: str = "casual_male"
     warmup_iters: int = 0
@@ -112,7 +116,13 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
     p.add_argument("--output-dir", type=str, default=DataArgs.output_dir)
     p.add_argument("--mode", type=str, choices=("text", "codes", "latents"), default="text")
     p.add_argument("--text-max-seq-len", type=int, default=4096)
-    p.add_argument("--max-speech-tokens", type=int, default=DataArgs.max_speech_tokens)
+    p.add_argument(
+        "--max-speech-tokens",
+        type=int,
+        default=DataArgs.max_speech_tokens,
+        help="Autoregressive acoustic steps (upper bound). Default matches the TT pipeline "
+        "(65536); generation stops at END_AUDIO sooner for normal prompts.",
+    )
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--warmup-iters", type=int, default=0)
     p.add_argument("--default-voice", type=str, default="casual_male")
@@ -184,6 +194,15 @@ def load_prompt_items(path: str, default_voice: str) -> list[dict[str, Any]]:
             row = dict(row)
             row.setdefault("id", i)
             row.setdefault("voice", default_voice)
+            # Readable multi-line prompts: optional ``text_paragraphs`` list → one ``text`` string (space-joined).
+            if not (row.get("text") or "").strip():
+                paras = row.get("text_paragraphs")
+                if isinstance(paras, list) and paras:
+                    row["text"] = " ".join(str(p).strip() for p in paras if str(p).strip())
+            if not (row.get("text") or "").strip():
+                raise ValueError(
+                    f"Prompt entry {i} needs non-empty ``text`` or ``text_paragraphs`` (got keys={list(row.keys())})"
+                )
             out.append(row)
         else:
             raise ValueError(f"Bad prompt entry {i}: {type(row)}")
