@@ -21,6 +21,7 @@ from loguru import logger
 
 import ttnn
 from models.tt_dit.models.transformers.ltx.attention_ltx import LTXAttention
+from models.tt_dit.models.transformers.ltx.rope_ltx import LTXRopeType as TTRopeType
 from models.tt_dit.models.transformers.ltx.rope_ltx import precompute_freqs_cis
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
@@ -67,8 +68,11 @@ def test_ltx_self_attention(
     seq_len = 256  # Small for fast test
 
     # INTERLEAVED matches rope_ltx.py precompute_freqs_cis which returns (B, N, D) format
+    # The model implements SPLIT rope (load-time Q/K permute + rotary_embedding_llama); it is SPLIT-trained
+    # (interleaved gives PCC ~0.09). The reference must therefore use SPLIT to match -- the prior INTERLEAVED
+    # reference was stale after the RoPE-fusion refactor (commit acd6c3e) and caused a ~64.5% PCC mismatch.
     torch_model = TorchAttention(
-        query_dim=dim, heads=num_heads, dim_head=head_dim, norm_eps=1e-6, rope_type=LTXRopeType.INTERLEAVED
+        query_dim=dim, heads=num_heads, dim_head=head_dim, norm_eps=1e-6, rope_type=LTXRopeType.SPLIT
     )
     torch_model.eval()
     torch_state = torch_model.state_dict()
@@ -104,22 +108,34 @@ def test_ltx_self_attention(
     grid_t, grid_h, grid_w = torch.meshgrid(t_ids, h_ids, w_ids, indexing="ij")
     indices_grid = torch.stack([grid_t.flatten(), grid_h.flatten(), grid_w.flatten()], dim=-1).float().unsqueeze(0)
 
-    cos_freq, sin_freq = precompute_freqs_cis(
-        indices_grid, dim=dim, out_dtype=torch.float32, max_pos=[20, 2048, 2048], num_attention_heads=num_heads
+    # Reference golden: SPLIT-layout cos/sin -> apply_split_rotary_emb rotates (i, i+D/2) pairs. Shape
+    # (B, num_heads, seq, head_dim/2); the reference reshapes (B,T,dim) q/k internally to apply it.
+    cos_split, sin_split = precompute_freqs_cis(
+        indices_grid,
+        dim=dim,
+        out_dtype=torch.float32,
+        max_pos=[20, 2048, 2048],
+        num_attention_heads=num_heads,
+        rope_type=TTRopeType.SPLIT,
     )
-    # Reshape for apply: (B, seq_len, num_heads, head_dim)
-    cos_apply = cos_freq.reshape(B, seq_len, num_heads, head_dim)
-    sin_apply = sin_freq.reshape(B, seq_len, num_heads, head_dim)
-
-    # PyTorch forward
-    # LTX-2 Attention applies RoPE to q/k in (B, T, inner_dim) shape before multi-head split.
-    # So pe should be (B, T, dim) for interleaved mode.
-    pe_flat_cos = cos_freq.squeeze(0) if cos_freq.ndim == 3 else cos_freq  # (B, T, dim)
-    pe_flat_sin = sin_freq.squeeze(0) if sin_freq.ndim == 3 else sin_freq
     with torch.no_grad():
-        torch_out = torch_model(x, pe=(pe_flat_cos, pe_flat_sin))
+        torch_out = torch_model(x, pe=(cos_split, sin_split))
 
     logger.info(f"PyTorch output shape: {torch_out.shape}")
+
+    # TT path feeds INTERLEAVED cos/sin ([f0,f0,f1,f1,...]) to rotary_embedding_llama -- correct for the
+    # load-time-permuted Q/K (interleaved pair (2i,2i+1) == split pair (i,i+D/2)), so it computes the same
+    # split rope as the reference above.
+    cos_int, sin_int = precompute_freqs_cis(
+        indices_grid,
+        dim=dim,
+        out_dtype=torch.float32,
+        max_pos=[20, 2048, 2048],
+        num_attention_heads=num_heads,
+        rope_type=TTRopeType.INTERLEAVED,
+    )
+    cos_apply = cos_int.reshape(B, seq_len, num_heads, head_dim)
+    sin_apply = sin_int.reshape(B, seq_len, num_heads, head_dim)
 
     # Prepare TT tensors
     # spatial: (1, B, N, D) fractured on SP/TP
