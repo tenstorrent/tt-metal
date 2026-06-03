@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "noc_dm_gate.hpp"
 
 /**
  * ChainConfig: Runtime args for store-and-forward chain configuration.
