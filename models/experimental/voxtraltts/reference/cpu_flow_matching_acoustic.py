@@ -347,6 +347,10 @@ class FlowMatchingAudioTransformerRef(nn.Module):
         codes = output_codes + len(AudioSpecialTokens.all_special_tokens())
         if collect_fm_debug:
             assert fm_debug is not None
+            # Debug-only (numerics unchanged): expose the continuous pre-round FSQ value whose
+            # ``round()`` yields the acoustic codes, for numerical-accuracy PCC / round-flip analysis.
+            fm_debug["sampled"] = sampled.float()
+            fm_debug["scaled_x"] = scaled_x.float()
             return codes, fm_debug
         return codes
 
