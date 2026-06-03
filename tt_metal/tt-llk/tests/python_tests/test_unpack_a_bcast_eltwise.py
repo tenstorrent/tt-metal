@@ -37,9 +37,6 @@ from helpers.utils import passed_test
     mathop=[MathOperation.Elwsub, MathOperation.Elwadd, MathOperation.Elwmul],
     dest_acc=[DestAccumulation.No],
     srca_reuse_count=[2, 4, 8],
-    math_fidelity=[
-        MathFidelity.LoFi,
-    ],
     input_dimensions=[
         [128, 32],
         [32, 128],
@@ -124,11 +121,8 @@ def test_unp_bcast_sub_sdpa(
         formats,
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
-            MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),
             DEST_SYNC(),
-            TILE_COUNT(tile_cnt_A),
-            SRCA_REUSE_COUNT(srca_reuse_count),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),
