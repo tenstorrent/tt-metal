@@ -36,6 +36,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     dram_matmul_program_config,
     ensure_interleaved_bsh,
     ensure_l1_width_sharded_activation,
+    matmul_multicast_1d_program_config,
     matmul_program_config,
     MATMUL_1D_SEQ_THRESHOLD,
     sdpa_program_config,
@@ -49,6 +50,16 @@ from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import get_tp, me
 # 4 × TILE (128 rows) — fewer dispatches than the original 1×TILE (32) without exceeding the
 # matmul's L1 budget. Demo's ~1639 unit rows go from ~51 dispatches → ~13.
 _HARD_UPSAMPLE_MATMUL_CHUNK_ROWS = 4 * TILE
+
+# Long-seq T2U linears (encoder/decoder FFN + projections) were chunked 1 tile (32 rows) at a time
+# via ``matmul_program_config`` — ~seq/32 slice+matmul+concat ops per linear (128 at seq=4096), the
+# bulk of the T2U device ops. Mirror the speech-encoder fix: chunk 16 tiles (512 rows) with a 1D
+# multicast PC whose K-block is pinned to the 32-row baseline (``in0_block_w=8``, the hard cap at
+# per_core_M=1 for K=1024/4096/8192) so the K-reduction — hence the output — is bit-for-bit unchanged
+# while emitting ~16× fewer ops. 512 is the L1 ceiling (the in0 activation CB = per_core_M*in0_block_w
+# scales with the row count; wider clashes, as on the speech encoder).
+_T2U_LINEAR_CHUNK_ROWS = 16 * TILE
+_T2U_LINEAR_IN0_BLOCK_W = 8
 
 # TP long-seq self-attn: fused SDPA L1 scratch scales with full ``S`` on 1×4 meshes (decoder @ 4096).
 # Use DRAM chunked Q@K^T like speech-encoder relative scores (``scores_mc = DRAM`` when ``tp>1, S>=128``).
@@ -406,7 +417,11 @@ def _linear_matmul_1d_chunked(
     elif len(x.shape) == 2:
         x = ttnn.reshape(x, (batch, seq, k))
 
-    chunk_m = TILE
+    # 512-row chunks via a 1D multicast PC with the K-block pinned to the 32-row baseline (bit-identical,
+    # ~16× fewer ops). The PC is fixed at ``m=chunk_m`` for every chunk, so a short final chunk is
+    # zero-padded up to ``chunk_m`` (the pad rows' output is discarded by the trim — M-independent).
+    chunk_m = _T2U_LINEAR_CHUNK_ROWS
+    pc = matmul_multicast_1d_program_config(device, m=chunk_m, k=k, n=n, force_in0_block_w=_T2U_LINEAR_IN0_BLOCK_W)
     chunks: list[ttnn.Tensor] = []
     for start in range(0, m_actual, chunk_m):
         end = min(start + chunk_m, m_actual)
@@ -418,7 +433,19 @@ def _linear_matmul_1d_chunked(
             [1, 1, 1],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        pc = matmul_program_config(device, token_rows=chunk_rows, in_dim=k, out_dim=n)
+        if chunk_rows < chunk_m:
+            pad = ttnn.full(
+                [batch, chunk_m - chunk_rows, k],
+                0.0,
+                dtype=x_chunk.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            padded = ttnn.concat([x_chunk, pad], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(x_chunk)
+            ttnn.deallocate(pad)
+            x_chunk = padded
         out_chunk = ttnn.linear(
             x_chunk,
             weight,
@@ -429,11 +456,15 @@ def _linear_matmul_1d_chunked(
             compute_kernel_config=compute_kernel_config,
         )
         ttnn.deallocate(x_chunk)
+        # The 1D multicast PC emits a 4D ``[1,1,M,N]`` output; normalize back to ``[batch,M,N]`` so the
+        # trim/concat below (and downstream ops) see the same 3D shape the old per-chunk PC produced.
+        padded_n = int(out_chunk.shape[-1])
+        out_chunk = ttnn.reshape(out_chunk, (batch, chunk_m, padded_n))
         if chunk_rows < chunk_m:
             out_chunk = ttnn.slice(
                 out_chunk,
                 [0, 0, 0],
-                [batch, chunk_rows, int(out_chunk.shape[-1])],
+                [batch, chunk_rows, padded_n],
                 [1, 1, 1],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
