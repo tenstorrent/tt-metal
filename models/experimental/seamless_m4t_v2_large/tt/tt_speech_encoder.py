@@ -19,6 +19,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
     all_reduce_sum_replicate,
     MATMUL_1D_SEQ_THRESHOLD,
     TILE,
+    matmul_multicast_1d_program_config,
     matmul_program_config,
     pick_largest_height_shard_nhw_cores,
     speech_encoder_matmul_program_config,
@@ -41,7 +42,12 @@ _PROFILER_LAYER_DRAIN_INTERVAL = 8
 _MIN_BLOCK_LN_TOKEN_ROWS = 32
 # Short-seq linears use ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` (see ``common.matmul_program_config``).
 # Long mel (> ``MATMUL_1D_SEQ_THRESHOLD``) uses chunked 1D matmuls to avoid 2D multicast L1 overflow.
-_LONG_SEQ_LINEAR_CHUNK_ROWS = TILE
+# Chunk width = 8 tiles (256 rows). The old 1-tile (32-row) chunk slices every long-seq linear into
+# ~seq/32 pieces (≈94 at seq=3000) — each a slice + matmul + copy + untilize — which is the bulk of
+# the encoder's ~130k device ops. 256 rows is the widest chunk that keeps the 1D-multicast
+# ``in0_block_w`` at 8 (per_core_M=8 → the cap stays 8), so the K-reduction — and the output — is
+# bit-identical to 32-row chunking while emitting ~8× fewer ops (and far fewer host dispatches).
+_LONG_SEQ_LINEAR_CHUNK_ROWS = 8 * TILE
 _LONG_SEQ_LINEAR_DRAM_ROWS = 256
 # Above this mel-frame count the residual/hidden state in the conformer layer is kept in DRAM
 # rather than L1. The empirical threshold is where the per-layer L1 footprint (sharded LN +
@@ -355,11 +361,20 @@ class TTSeamlessM4Tv2SpeechEncoder:
         return self._tuned_matmul_pc(token_rows, in_dim, out_dim)
 
     def _chunked_linear_matmul_pc(self, in_dim: int, out_dim: int):
-        """1D multicast PC for one ``_LONG_SEQ_LINEAR_CHUNK_ROWS`` tile of activations."""
-        chunk_rows = _LONG_SEQ_LINEAR_CHUNK_ROWS
-        if (in_dim == 1024 and out_dim in (1024, 2048, 4096, 3072)) or (in_dim == 4096 and out_dim == 1024):
-            return self._tuned_matmul_pc(chunk_rows, in_dim, out_dim)
-        return self._matmul_program_config(chunk_rows, in_dim, out_dim)
+        """1D-on-N multicast PC for a ``_LONG_SEQ_LINEAR_CHUNK_ROWS``-row activation chunk.
+
+        Always 1D multicast: ``matmul_program_config`` switches to 2D multicast above 128 rows,
+        which the chunked path must avoid (its whole purpose is to keep each matmul in L1). At chunk
+        widths ≤ 256 (per_core_M ≤ 8) the 1D ``in0_block_w`` stays 8 for K=1024/4096 — identical to
+        the old 32-row chunking — so the K-reduction, hence the output, is bit-for-bit unchanged
+        (only per_core_M and the M-direction subblock grow, neither of which touches the reduction).
+        """
+        key = ("chunk1d", _LONG_SEQ_LINEAR_CHUNK_ROWS, in_dim, out_dim)
+        cached = self._matmul_pc_cache.get(key)
+        if cached is None:
+            cached = matmul_multicast_1d_program_config(self.device, m=_LONG_SEQ_LINEAR_CHUNK_ROWS, k=in_dim, n=out_dim)
+            self._matmul_pc_cache[key] = cached
+        return cached
 
     @staticmethod
     def _trim_matmul_rows(out: ttnn.Tensor, rows: int, cols: int) -> ttnn.Tensor:
