@@ -56,7 +56,7 @@ def test_fused_qkv_matches_separate_projection_goldens():
 
 def test_build_fused_dispatches_by_fused_op():
     @register_emitter("test.op")
-    def _e(proposal, entry, weights, device, dims):
+    def _e(proposal, entry, weights, device, dims, placement=None):
         return lambda x: ("ran", x)
 
     p = FusionProposal("e", "test.op", ["n"], {}, None, "", "")

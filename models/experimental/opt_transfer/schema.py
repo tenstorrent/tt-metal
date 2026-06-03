@@ -91,6 +91,7 @@ class BringupState(TypedDict, total=False):
     graph_summary: list
     proposals: list
     applied: list
+    placements: dict
     per_block_pcc: dict
     full_pcc: float
     drift: dict

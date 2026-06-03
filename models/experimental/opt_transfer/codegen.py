@@ -60,18 +60,21 @@ def register_emitter(fused_op):
     return deco
 
 
-def build_fused(proposal, entry, weights, device, dims):
+def build_fused(proposal, entry, weights, device, dims, placement=None):
     """Dispatch a resolved FusionProposal to its emitter -> callable(input)->output(s).
-    A KB op with no registered emitter raises (the graph routes that to handoff)."""
+    A KB op with no registered emitter raises (the graph routes that to handoff).
+
+    placement: optional MemoryPlacement forwarded to the emitter. When None (default),
+    each emitter uses its own default (typically DRAM) for backward compatibility."""
     if proposal.fused_op not in _EMITTERS:
         raise KeyError(
             f"no codegen emitter for {proposal.fused_op}; KB knows the op but codegen "
             f"can't emit it yet (register one + add a J6 model-shape test)"
         )
-    return _EMITTERS[proposal.fused_op](proposal, entry, weights, device, dims)
+    return _EMITTERS[proposal.fused_op](proposal, entry, weights, device, dims, placement=placement)
 
 
 # the verified QKV emitter becomes the first registered emitter
 @register_emitter("ttnn.experimental.nlp_create_qkv_heads")
-def _emit_qkv(proposal, entry, weights, device, dims):
-    return build_fused_qkv(proposal, weights, device, dims)
+def _emit_qkv(proposal, entry, weights, device, dims, placement=None):
+    return build_fused_qkv(proposal, weights, device, dims, placement=placement)

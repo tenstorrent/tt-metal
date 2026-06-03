@@ -30,6 +30,9 @@ class Fakes:
         state["perf"] = {"naive_ms": 100.0, "fused_ms": 60.0}
         return state
 
+    def placement(self, state):
+        return state
+
     def repair(self, state):
         state["iteration"] = state.get("iteration", 0) + 1
         return state
@@ -77,6 +80,9 @@ class GateFakes:
         s["perf"] = {"naive_ms": 100.0, "fused_ms": 100.0 - self.gain}
         return s
 
+    def placement(self, s):
+        return s
+
     def repair(self, s):
         s["iteration"] = s.get("iteration", 0) + 1
         return s
@@ -112,6 +118,9 @@ class RepairFakes:
     def match(self, s):
         self.seen_diag.append(s.get("diagnosis"))
         s["proposals"] = [{"entry_id": "x"}]
+        return s
+
+    def placement(self, s):
         return s
 
     def gate(self, s):
@@ -158,3 +167,48 @@ def test_checkpointer_persists_state_under_thread():
     g.invoke({"model": "m", "iteration": 0}, cfg)
     snap = g.get_state(cfg)
     assert snap.values["status"] == "pass"  # state retrievable from the checkpoint
+
+
+class PlacementFakes:
+    def __init__(self):
+        self.placed = False
+
+    def trace(self, s):
+        s["graph_summary"] = [{"name": "q"}]
+        return s
+
+    def match(self, s):
+        s["proposals"] = [{"entry_id": "x"}]
+        return s
+
+    def placement(self, s):
+        self.placed = True
+        s["placements"] = {"x": {"buffer": "L1"}}
+        return s
+
+    def gate(self, s):
+        s["applied"] = ["x"]
+        return s
+
+    def codegen(self, s):
+        return s
+
+    def verify(self, s):
+        s["full_pcc"] = 0.999
+        return s
+
+    def perf(self, s):
+        s["perf"] = {"naive_ms": 100.0, "fused_ms": 60.0}
+        return s
+
+    def repair(self, s):
+        s["iteration"] = s.get("iteration", 0) + 1
+        return s
+
+
+def test_graph_runs_placement_before_gate():
+    f = PlacementFakes()
+    out = build_graph(f).invoke({"model": "m", "iteration": 0})
+    assert f.placed is True
+    assert out["status"] == "pass"
+    assert out["placements"] == {"x": {"buffer": "L1"}}

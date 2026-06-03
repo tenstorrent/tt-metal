@@ -55,8 +55,32 @@ class RealImpl:
         state["applied"] = [p.entry_id for p in applied]
         return state
 
+    def placement(self, state):
+        from models.experimental.opt_transfer.placement import decide_placement, L1Budget, tensor_bytes
+        from models.experimental.opt_transfer.config import CONFIG
+        from models.experimental.opt_transfer.schema import PlacementObservation
+
+        arch_budget = CONFIG.l1_budgets.get(self.cfg.get("arch", "wormhole_b0"))
+        budget = L1Budget(arch_budget["per_core_bytes"], arch_budget["num_cores"])
+        kb_by_id = {e.id: e for e in self.kb}
+        dims = {"seq": self.cfg.get("seq", 64), "hidden": self.cfg["embed_dim"]}
+        placements = {}
+        for p in self._proposals:
+            entry = kb_by_id.get(p.entry_id)
+            obs = (
+                [PlacementObservation.from_dict(o) for o in getattr(entry, "placement_observations", [])]
+                if entry
+                else []
+            )
+            size = tensor_bytes([dims["seq"], dims["hidden"]], "bf16")
+            placements[p.entry_id] = decide_placement(obs, size, dims, budget).__dict__
+        self._placements = placements  # runtime objects on self (LangGraph strips state keys)
+        state["placements"] = placements
+        return state
+
     def codegen(self, state):
         from models.experimental.opt_transfer.codegen import build_fused
+        from models.experimental.opt_transfer.schema import MemoryPlacement
 
         dims = {"H": self.cfg["num_heads"], "D": self.cfg["head_dim"], "embed": self.cfg["embed_dim"]}
         kb_by_id = {e.id: e for e in self.kb}
@@ -68,7 +92,9 @@ class RealImpl:
                 n: {"weight": getattr(ref, n).weight.detach(), "bias": getattr(ref, n).bias.detach()}
                 for n in p.matched_nodes
             }
-            runners.append(build_fused(p, kb_by_id[p.entry_id], weights, self.device, dims))
+            placement_dict = getattr(self, "_placements", {}).get(p.entry_id)
+            placement = MemoryPlacement(**placement_dict) if placement_dict else None
+            runners.append(build_fused(p, kb_by_id[p.entry_id], weights, self.device, dims, placement=placement))
         self._runners = runners
         return state
 
@@ -222,6 +248,7 @@ def build_graph(impl, max_iterations: int = None, checkpointer=None):
     wf = StateGraph(BringupState)
     wf.add_node("trace", impl.trace)
     wf.add_node("match", impl.match)
+    wf.add_node("placement", impl.placement)
     wf.add_node("gate", impl.gate)
     wf.add_node("codegen", impl.codegen)
     wf.add_node("verify", verify_node)
@@ -231,7 +258,8 @@ def build_graph(impl, max_iterations: int = None, checkpointer=None):
 
     wf.set_entry_point("trace")
     wf.add_edge("trace", "match")
-    wf.add_edge("match", "gate")
+    wf.add_edge("match", "placement")
+    wf.add_edge("placement", "gate")
     wf.add_edge("gate", "codegen")
     wf.add_edge("codegen", "verify")
     wf.add_conditional_edges("verify", route, {"perf": "perf", "repair": "repair", "handoff": "handoff"})
