@@ -113,7 +113,7 @@ Grep for "{function_name}" in tt_metal/hw/ckernels/{arch}/metal/llk_api/llk_pack
 # Layer 3 — compute API
 Grep for "{wrapper_function_name}" in tt_metal/hw/inc/api/compute/pack*.h
 Grep for "{wrapper_function_name}" in tt_metal/hw/inc/api/compute/tilize.h
-Grep for "{wrapper_function_name}" in tt_metal/hw/inc/api/compute/untilize.h
+Grep for "{wrapper_function_name}" in tt_metal/hw/inc/api/compute/tilize.h
 
 # Metal integration tests
 Grep for "{operation}" in tests/tt_metal/tt_metal/llk/ (*.cpp files)

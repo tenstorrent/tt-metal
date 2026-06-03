@@ -55,7 +55,6 @@
 #include "llk_unpack_AB_api.h"
 #include "llk_unpack_reduce_api.h"
 #include "llk_unpack_tilize_api.h"
-#include "llk_unpack_untilize_api.h"
 #endif
 #include "llk_io_unpack.h"
 #define UNPACK(...) __VA_ARGS__

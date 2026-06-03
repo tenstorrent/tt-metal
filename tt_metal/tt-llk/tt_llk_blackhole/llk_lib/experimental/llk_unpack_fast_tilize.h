@@ -125,7 +125,7 @@ inline void _llk_unpack_fast_tilize_block_(
     [[maybe_unused]] const std::uint32_t unit_dim,
     [[maybe_unused]] const std::uint32_t num_faces = 4)
 {
-    // Standard BH unpacker context dance (see _llk_unpack_untilize_pass_).
+    // Standard BH unpacker context dance.
     // Programs REG3 Base_address for the current cfg context via cfg[] write,
     // then synchronises Trisc<->T6 so the MOP runs with that base in place.
     volatile std::uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
