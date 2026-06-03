@@ -617,7 +617,7 @@
     pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device"
   model: shallow-unet
   skus:
-    bh_p150_perf:
+    bh_p150:
       timeout: 5
       tier: 2
   owner_id: U06ECNVR0EN # Evan Smal
