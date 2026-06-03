@@ -12,6 +12,40 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 
+def _should_snapshot_best_native(
+    *,
+    snap_exists: bool,
+    prior_pcc: Optional[float],
+    new_pcc: Optional[float],
+) -> bool:
+    """Pure decision: should we (over)write the ``.best_native`` snapshot?
+
+    Mirrors the docstring rules of the nested
+    ``_snapshot_best_native_stub`` inside ``_run_auto_iterate_loop``.
+    Extracted to module level so the rule table is unit-testable
+    without spinning up the whole iter loop.
+
+    Rules (in order):
+      * WRITE if no prior snapshot exists (any native body > none).
+      * SKIP if new PCC is None (no quality signal — preserve prior).
+      * WRITE if prior PCC is None (replace unmeasured with measurable).
+      * WRITE if new PCC strictly improves over prior.
+      * SKIP otherwise.
+
+    The "SKIP if new PCC is None" rule existed in the docstring but
+    NOT in the code from before 2026-06-03 — a TT_FATAL iter that
+    crashed pre-PCC measurement would silently overwrite a prior
+    measurable snapshot.
+    """
+    if not snap_exists:
+        return True
+    if new_pcc is None:
+        return False
+    if prior_pcc is None:
+        return True
+    return new_pcc > prior_pcc
+
+
 def _brain_sync_graduated_to_main_tree(
     *,
     MODEL: str,
@@ -794,7 +828,11 @@ def _run_auto_iterate_loop(
             return
         snap_path = stub_path.with_suffix(".py.best_native")
         prior = best_pcc_per_component.get(comp)
-        if snap_path.is_file() and prior is not None and pcc is not None and pcc <= prior:
+        if not _should_snapshot_best_native(
+            snap_exists=snap_path.is_file(),
+            prior_pcc=prior,
+            new_pcc=pcc,
+        ):
             return
         try:
             snap_path.write_text(stub_path.read_text(encoding="utf-8"), encoding="utf-8")
