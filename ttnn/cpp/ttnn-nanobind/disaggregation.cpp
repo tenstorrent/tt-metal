@@ -11,6 +11,16 @@
 #include <tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
+namespace tt::tt_metal::experimental::disaggregation {
+// Protobuf serializer free-functions. Declared in impl/.../kv_chunk_address_table_protobuf.hpp,
+// which is not on ttnn's include path; the definitions link from libtt_metal (the .cpp is
+// compiled into the `impl` target). Forward-declared here to bind without the impl header.
+std::string export_to_protobuf(const KvChunkAddressTable& table);
+void export_to_protobuf_file(const KvChunkAddressTable& table, const std::string& path);
+KvChunkAddressTable import_from_protobuf(const std::string& data);
+KvChunkAddressTable import_from_protobuf_file(const std::string& path);
+}  // namespace tt::tt_metal::experimental::disaggregation
+
 namespace ttnn::disaggregation {
 
 void bind_disaggregation_api(nb::module_& mod) {
@@ -173,6 +183,20 @@ void bind_disaggregation_api(nb::module_& mod) {
             &KvChunkAddressTable::num_position_chunks,
             "Number of position chunks (computed from config).")
         .def("total_entries", &KvChunkAddressTable::total_entries, "Total number of entries in the table.");
+
+    // Protobuf serialization free-functions — used to publish a table to the
+    // migration_worker (SET_TABLE consumes a serialized protobuf file path).
+    mod.def(
+        "export_to_protobuf_file",
+        &export_to_protobuf_file,
+        nb::arg("table"),
+        nb::arg("path"),
+        "Serialize a KvChunkAddressTable to a protobuf file at `path`.");
+    mod.def(
+        "import_from_protobuf_file",
+        &import_from_protobuf_file,
+        nb::arg("path"),
+        "Load a KvChunkAddressTable from a protobuf file at `path`.");
 }
 
 }  // namespace ttnn::disaggregation

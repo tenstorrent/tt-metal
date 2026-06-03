@@ -32,6 +32,12 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reorder_tensor_chunks
 from models.demos.deepseek_v3_d_p.tt.runners.h2d_socket_sync_op import h2d_socket_sync
+
+# _tokens_to_host_tensor lives in the producer (the runner no longer carries a
+# host-side input builder — its request loop reads via h2d_socket_sync). The
+# producer's copy is identical reorder logic and asserts the same MAX_SEQ_LEN
+# length this test pads to.
+from models.demos.deepseek_v3_d_p.tt.runners.prefill_h2d_producer import _tokens_to_host_tensor
 from models.demos.deepseek_v3_d_p.tt.runners.prefill_runner import (
     GLOBAL_MESH_SHAPE,
     H2D_MAPPER_CONFIG,
@@ -39,7 +45,6 @@ from models.demos.deepseek_v3_d_p.tt.runners.prefill_runner import (
     H2D_SYNC_WORKER_CORES,
     MAX_SEQ_LEN,
     _build_h2d_service,
-    _tokens_to_host_tensor,
 )
 
 _INPUT_JSON = Path(__file__).parents[1] / "tt" / "runners" / "standalone_input.json"

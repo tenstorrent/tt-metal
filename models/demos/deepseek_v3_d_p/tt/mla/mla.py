@@ -653,7 +653,11 @@ class ttMLA:
         # streams clean zeros (not residual data from a prior request) for the
         # decode side. Slice the cache to batch=cache_layer_idx so the page math
         # in zero_cache_range hits this layer's slot, not layer 0.
-        if on_layer_complete is not None:
+        # TEMP(table-send bring-up): disabled — kvpe_cache[cache_layer_idx] does an
+        # unsupported squeeze/view on the ND-sharded cache (rank-4 -> rank-3), which
+        # TT_FATALs. Re-enable + fix (rank-preserving ttnn.slice) when wiring real
+        # migration; not needed for the no-migrate table-send experiment.
+        if False and on_layer_complete is not None:
             assert actual_isl is not None, "actual_isl required when on_layer_complete is set"
             seq_len_local = kvpe_cache.shape[2]
             seq_len_total = seq_len_local * self.sp_factor

@@ -13,14 +13,11 @@ from transformers import AutoConfig
 import ttnn
 from models.common.utility_functions import comp_pcc, is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.tt.mla.utils import (
-    create_balanced_chunk_order,
-    reorder_tensor_chunks,
-    reverse_reorder_tensor_chunks,
-)
+from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reverse_reorder_tensor_chunks
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.runners.h2d_socket_sync_op import h2d_socket_sync
+from models.demos.deepseek_v3_d_p.tt.runners.integration_setup import PREFILL_EP_ID
 from models.demos.deepseek_v3_d_p.tt.tt_deepseek_prefill_pipeline import (
     TtDeepSeekPrefillPipeline,
     TtPrefillPipelineConfig,
@@ -315,11 +312,9 @@ def _build_h2d_service(mesh_device: ttnn.MeshDevice) -> ttnn.H2DStreamService:
 
 
 def _make_global_spec() -> ttnn.TensorSpec:
-    """Per-iter input spec shared by `_build_h2d_service` (sets the service's
-    global tensor shape) and `_tokens_to_host_tensor` (matches the host
-    tensor's distributed-spec to the service's per-shard expectation).
-    Shape `(sp_factor, 1, chunk_per_chip)` uint32 ROW_MAJOR DRAM. The H2D
-    payload size is per-CHUNK (what the scheduler pushes per iter), not
+    """Per-iter input spec used by `_build_h2d_service` to set the service's
+    global tensor shape: `(sp_factor, 1, chunk_per_chip)` uint32 ROW_MAJOR DRAM.
+    The H2D payload size is per-CHUNK (what the scheduler pushes per iter), not
     per-slot — so this scales with CHUNK_SIZE, not MAX_SEQ_LEN."""
     sp_factor = GLOBAL_MESH_SHAPE[0]
     chunk_per_chip = CHUNK_SIZE // sp_factor
@@ -328,37 +323,6 @@ def _make_global_spec() -> ttnn.TensorSpec:
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         buffer_type=ttnn.BufferType.DRAM,
-    )
-
-
-def _tokens_to_host_tensor(token_ids: list[int], mapper) -> ttnn.Tensor:
-    """Build the pre-distributed host tensor consumed by `service.forward_to_tensor`.
-
-    Applies the `is_balanced` chunk reorder host-side, reshapes to
-    `(sp_factor, 1, isl_per_chip)`, then runs `ttnn.from_torch` with the
-    supplied mapper to produce a multi-device-host tensor whose per-shard
-    spec equals `H2DStreamService.get_per_shard_spec()`. The service streams
-    each shard's bytes directly to its target coord — no bytes round-trip,
-    no internal mapper invocation.
-    """
-    sp_factor = GLOBAL_MESH_SHAPE[0]
-    assert len(token_ids) == CHUNK_SIZE, f"token_ids must be a single CHUNK_SIZE={CHUNK_SIZE}, got {len(token_ids)}"
-    isl_per_chip = CHUNK_SIZE // sp_factor
-
-    if IS_BALANCED:
-        chunk_order = create_balanced_chunk_order(sp_factor)
-        t = torch.tensor(token_ids, dtype=torch.int64).unsqueeze(0).unsqueeze(0).unsqueeze(-1)
-        t = reorder_tensor_chunks(t, chunk_order, seq_dim=2)
-        token_ids_sharded = t.squeeze(0).squeeze(-1).reshape(sp_factor, 1, isl_per_chip)
-    else:
-        token_ids_sharded = torch.tensor(token_ids, dtype=torch.int64).reshape(sp_factor, 1, isl_per_chip)
-
-    # uint32 bit pattern is what the device sees; int32 carries the same bits
-    # for any non-negative token id (DeepSeek vocab fits in 18 bits anyway).
-    return ttnn.from_torch(
-        token_ids_sharded.to(torch.int32),
-        spec=_make_global_spec(),
-        mesh_mapper=mapper,
     )
 
 
@@ -507,7 +471,6 @@ def run_request_loop(
 
     i = 0
     while not _shutdown:
-        _t0 = _time.perf_counter()
         tt_tokens, tt_metadata = h2d_socket_sync(
             h2d_service,
             H2D_SYNC_WORKER_CORES,
@@ -539,6 +502,8 @@ def run_request_loop(
                 )
         except Exception as _e:
             logger.warning(f"[request] iter={i} token-shard dump failed: {_e}")
+        # Time ONLY the prefill compute, not the h2d_socket_sync wait above.
+        _t0 = _time.perf_counter()
         first_token = pipeline.prefill(
             input_tensor=tt_tokens,
             slot_id=slot_id,
@@ -546,13 +511,13 @@ def run_request_loop(
             dst_slot=None,
             actual_start=actual_start,
         )
+        _dt_ms = (_time.perf_counter() - _t0) * 1000.0
         # Scheduler-facing ack: the scheduler's ack_reader_thread counts off
         # exactly SchedulerParams::layers_per_chunk acks per pushed chunk
         # before retiring the InFlightChunkFIFO head. With layers_per_chunk=1
         # (our bring-up cadence) we inject once per chunk; production
         # per-layer cadence would inject(1) inside a per-layer loop instead.
         ack_channel.inject(PREFILL_LAYERS_PER_CHUNK)
-        _dt_ms = (_time.perf_counter() - _t0) * 1000.0
         logger.info(
             f"[request] iter={i} num_tokens={MAX_SEQ_LEN} "
             f"pipeline.prefill() = {_dt_ms:.2f} ms first_token={first_token} "
@@ -589,6 +554,16 @@ def _print_config() -> None:
         ("PREFILL_STANDALONE_ITERS", os.environ.get("PREFILL_STANDALONE_ITERS", "5"), False),
         ("PREFILL_H2D_SERVICE_ID", os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill"), False),
         ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0"), False),
+        (
+            "PREFILL_MIGRATION_TABLE_PATH",
+            os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"),
+            False,
+        ),
+        (
+            "PREFILL_LAYER_ACK_SHM",
+            os.environ.get("PREFILL_LAYER_ACK_SHM", f"/prefill_{PREFILL_EP_ID}_layer_ack"),
+            False,
+        ),
         ("PREFILL_DEBUG", os.environ.get("PREFILL_DEBUG", "0"), False),
         ("PREFILL_TRACE_SYNCS", os.environ.get("PREFILL_TRACE_SYNCS", "0"), False),
         ("PREFILL_KV_VALIDATE", str(int(PREFILL_KV_VALIDATE)), False),
@@ -624,27 +599,9 @@ def main() -> None:
 
     enable_migration = os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1"
 
-    if enable_migration:
-        # tt-run's --rank-bindings-mapping has set up sub-contexts at the C++
-        # level; lazy-init the Python handle and assert we landed in prefill.
-        from models.demos.deepseek_v3_d_p.tt.runners.migration_setup import (
-            PREFILL_SUBCTX_ID,
-            ensure_distributed_context,
-            get_distributed_info,
-        )
-
-        ensure_distributed_context()
-        subctx_id, local_rank, local_size, world_rank, world_size = get_distributed_info()
-        assert subctx_id == PREFILL_SUBCTX_ID, (
-            f"prefill_runner expects PREFILL_SUBCTX_ID={PREFILL_SUBCTX_ID}, "
-            f"got subctx_id={subctx_id}. Wrong rank-bindings-mapping or layout."
-        )
-        logger.info(
-            f"prefill_runner subctx={subctx_id} local={local_rank}/{local_size} "
-            f"world={world_rank}/{world_size} mesh={GLOBAL_MESH_SHAPE} migration=ON"
-        )
-    else:
-        logger.info(f"prefill_runner standalone mesh={GLOBAL_MESH_SHAPE} migration=OFF")
+    # In the disaggregated worker model the migration_worker is a separate prun
+    # job; the runner does no MPI rank translation and needs no tt-run sub-context.
+    logger.info(f"prefill_runner mesh={GLOBAL_MESH_SHAPE} migration={'ON' if enable_migration else 'OFF'}")
 
     if PREFILL_DEBUG:
         from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
@@ -687,17 +644,31 @@ def main() -> None:
         probe_dram_allocatable_base(mesh_device, "after-compile")
 
     if enable_migration:
-        from models.demos.deepseek_v3_d_p.tt.runners.migration_setup import DECODE_EP_ID, setup_prefill_migration
+        from models.demos.deepseek_v3_d_p.tt.runners.integration_setup import (
+            ShmLayerAckChannel,
+            build_and_serialize_kv_chunk_table,
+        )
 
-        endpoint = setup_prefill_migration(
+        # The runner's whole migration footprint (docs/scheduler/prefill.md): it
+        # has NO IPC with the migration_worker. It only —
+        #   (1) builds + serializes the KV chunk address table at startup (it owns
+        #       the device, so only it knows the KV cache NoC addresses). The IS
+        #       forwards this path to the worker via SET_TABLE.
+        #   (2) emits a LayerAck (one shm counter bump) per layer; the scheduler
+        #       reads the delta and drives the worker.
+        table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
+        build_and_serialize_kv_chunk_table(
             mesh_device=mesh_device,
             kvpe_cache=pipeline.kvpe_cache,
             seq_len=MAX_SEQ_LEN,
             num_layers=NUM_LAYERS,
             mesh_shape=GLOBAL_MESH_SHAPE,
+            path=table_path,
         )
-        pipeline.setup_migration(endpoint, DECODE_EP_ID)
-        logger.info("[migration] pipeline.setup_migration() done; per-layer migrations fire on every prefill request")
+
+        ack_shm_name = os.environ.get("PREFILL_LAYER_ACK_SHM", f"/prefill_{PREFILL_EP_ID}_layer_ack")
+        pipeline.set_layer_ack_channel(ShmLayerAckChannel(ack_shm_name, create=True))
+        logger.info("[migration] table published + LayerAck channel set; runner emits one ack per layer")
 
     if os.environ.get("PREFILL_STANDALONE", "0") == "1":
         # Truly standalone: file input, no H2D socket service at all.
