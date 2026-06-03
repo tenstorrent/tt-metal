@@ -636,6 +636,12 @@ def _normalize_for_hash(obj):
         if "shard_spec" in obj and obj["shard_spec"] is None:
             obj["shard_spec"] = "None"
 
+        # allowed_worker_cores: a newer program_config field that older traces predate.
+        # Drop it when unset (None) so the hash stays stable across ttnn versions — a
+        # default-None value carries no config identity that pre-existing hashes lacked.
+        if "allowed_worker_cores" in obj and obj["allowed_worker_cores"] is None:
+            del obj["allowed_worker_cores"]
+
         for k in list(obj.keys()):
             v = obj[k]
             # Serialized Shape objects → plain int lists
