@@ -10,8 +10,13 @@ import os
 from loguru import logger
 
 import ttnn
-from conftest import bh_2d_mesh_device_context
+from conftest import reset_fabric, set_fabric
 from models.demos.deepseek_v3_b1.demo.pipeline import create_fabric_router_config
+from models.demos.deepseek_v3_b1.demo.stage_family import (
+    fabric_config_for_stage_family,
+    query_global_stage_mesh_shape,
+    stage_family_from_shape,
+)
 
 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS_DEFAULT = "30000"
 FABRIC_PACKET_SIZE_BYTES = 15232
@@ -23,8 +28,17 @@ LM_HEAD_RANK_64_PROCS = 62
 LM_HEAD_RANK_16_PROCS = 14
 
 
+def _fabric_config_for_topology(mesh_shape: ttnn.MeshShape, num_procs: int):
+    """Infer fabric config from MGD-derived stage shape plus deployment layout."""
+
+    stage_family = stage_family_from_shape(mesh_shape)
+    num_stages_hint = 4 if stage_family.value == "4x2" and num_procs == 4 else None
+    return fabric_config_for_stage_family(stage_family, num_stages=num_stages_hint)
+
+
 def _fabric_config_for_num_procs(num_procs: int):
-    """Infer fabric config from process count: 4 → FABRIC_2D, 16/64 → FABRIC_2D_TORUS_Y."""
+    """Legacy helper kept for tests that validate current worker setup assumptions."""
+
     if num_procs == 4:
         return ttnn.FabricConfig.FABRIC_2D
     if num_procs in (16, 64):
@@ -72,21 +86,30 @@ def open_mesh_device(*, enable_speculative_decode: bool = True):
         os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS_DEFAULT
 
     num_procs = int(ttnn.distributed_context_get_size())
+    mesh_shape = query_global_stage_mesh_shape()
+    logger.info(f"Queried global stage mesh shape from MGD: {mesh_shape}")
+    fabric_config = _fabric_config_for_topology(mesh_shape, num_procs)
     worker_l1_size = _worker_l1_size_for_rank(
         num_procs=num_procs,
         enable_speculative_decode=enable_speculative_decode,
     )
     device_params = {
-        "fabric_config": _fabric_config_for_num_procs(num_procs),
         "fabric_router_config": create_fabric_router_config(FABRIC_PACKET_SIZE_BYTES),
         "worker_l1_size": worker_l1_size,
     }
 
-    logger.info("Opening mesh device...")
-    with bh_2d_mesh_device_context(device_params) as mesh_device:
+    logger.info("Opening mesh device with MGD-derived shape {} and fabric {}", mesh_shape, fabric_config)
+    set_fabric(fabric_config, fabric_router_config=device_params.pop("fabric_router_config"))
+    mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, **device_params)
+    try:
         logger.info(
             "Mesh device opened (id={}, shape={})",
             mesh_device.get_system_mesh_id(),
             mesh_device.shape,
         )
         yield mesh_device
+    finally:
+        for submesh in mesh_device.get_submeshes():
+            ttnn.close_mesh_device(submesh)
+        ttnn.close_mesh_device(mesh_device)
+        reset_fabric(fabric_config)

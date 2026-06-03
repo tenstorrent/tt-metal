@@ -15,14 +15,16 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.mesh_device_context import _worker_l1_size_for_rank
-from models.demos.deepseek_v3_b1.demo.pipeline import create_pipeline_configuration_from_num_procs
+from models.demos.deepseek_v3_b1.demo.pipeline import create_pipeline_configuration_from_stage_count
+from models.demos.deepseek_v3_b1.demo.pipeline_routing import build_local_stage_socket_plans, build_stage_routing
+from models.demos.deepseek_v3_b1.demo.stage_family import stage_family_from_shape
 from models.demos.deepseek_v3_b1.demo.weight_provider import (
     CacheWeightProvider,
     StateDictWeightProvider,
     SyntheticWeightProvider,
     WeightProvider,
 )
-from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import StageMetadata
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineConfigEntry
 from models.demos.deepseek_v3_b1.model import (
     TOKEN_ID_BYTES,
     DecodeResult,
@@ -76,9 +78,17 @@ class ModelPipeline:
         self.top_p = top_p
         self.temperature = temperature
         num_procs = int(ttnn.distributed_context_get_size())
-        if num_procs not in (4, 16, 64):
-            raise RuntimeError(f"Pod pipeline requires 4, 16, or 64 distributed processes; got {num_procs}")
-        if not enable_speculative_decode and num_procs not in (16, 64):
+        stage_family = stage_family_from_shape(self.mesh_device.shape)
+        allocation = ttnn._ttnn.multi_device.experimental.resolve_blitz_decode_pipeline_allocation()
+        num_stages = len(allocation.stages)
+        my_rank = int(ttnn.distributed_context_get_rank())
+        local_stage_plans = build_local_stage_socket_plans(allocation, my_rank)
+        if len(local_stage_plans) != 1:
+            raise RuntimeError(
+                f"Expected exactly one local stage plan for rank {my_rank}, got {len(local_stage_plans)}"
+            )
+        local_stage_plan = local_stage_plans[0]
+        if not enable_speculative_decode and stage_family.value == "4x2" and num_stages not in (16, 64):
             raise RuntimeError("Base decode is currently supported only for the 16- and 64-process pipelines")
         ttnn.enable_asynchronous_slow_dispatch(self.mesh_device)
         self.enable_speculative_decode = enable_speculative_decode
@@ -149,8 +159,9 @@ class ModelPipeline:
             )
         else:
             raise ValueError(f"Unknown weights_mode: {weights_mode!r}")
-        config = create_pipeline_configuration_from_num_procs(
-            num_procs,
+        config = create_pipeline_configuration_from_stage_count(
+            num_stages,
+            stage_family,
             provider,
             fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
             persistent_mode=lm_head_persistent_mode,
@@ -161,22 +172,31 @@ class ModelPipeline:
             num_slots=num_slots,
             enable_sram_bspm=enable_sram_bspm,
         )
-        if config.num_stages != num_procs:
-            raise RuntimeError(f"Pipeline configuration has {config.num_stages} stages but {num_procs} processes")
+        if config.num_stages != num_stages:
+            raise RuntimeError(f"Pipeline configuration has {config.num_stages} stages but {num_stages} stages")
 
         logger.info("Building pipeline")
-        # Propagate an identical, explicit pipeline_config and stages_metadata
-        # to every rank. Without this, each rank independently calls
-        # generate_blitz_decode_pipeline() and the submesh-aware code paths
-        # added in #42002 can produce inconsistent entry/exit MeshCoordinates
-        # across ranks, causing the inter-mesh MeshSocket handshake in
-        # SpecEmbeddingPipelineBlock.__init__'s h2d_host_io to time out.
-        pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline()
-        stages_metadata = {i: StageMetadata(rank=i, mesh_id=i) for i in range(num_procs)}
+        pipeline_config = [
+            PipelineConfigEntry(
+                stage.entry_endpoint.mesh_coord,
+                (stage.exit_endpoint if stage.exit_endpoint is not None else stage.entry_endpoint).mesh_coord,
+            )
+            for stage in allocation.stages
+        ]
+        if allocation.initialize_loopback:
+            pipeline_config.append(
+                PipelineConfigEntry(
+                    allocation.loopback_entry_endpoint.mesh_coord,
+                    allocation.host_egress_endpoint.mesh_coord,
+                )
+            )
+        stages_metadata = build_stage_routing(allocation)
         self.pipeline = config.build_pipeline(
             self.mesh_device,
+            my_stage_idx=local_stage_plan.logical_stage_index,
             stages_metadata=stages_metadata,
             pipeline_config=pipeline_config,
+            stage_plan=local_stage_plan,
         )
 
         logger.info("Setting up and running pipeline")

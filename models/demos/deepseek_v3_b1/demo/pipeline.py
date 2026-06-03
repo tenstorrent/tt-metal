@@ -15,6 +15,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.demo.decoder_stage import DenseDecoderStage, MoEDecoderStage
+from models.demos.deepseek_v3_b1.demo.pipeline_routing import LocalStageSocketPlan, StageRouting
 from models.demos.deepseek_v3_b1.demo.stage import (
     DEFAULT_ACTIVATION_FIFO_PAGES,
     BaseLMHeadStage,
@@ -25,6 +26,7 @@ from models.demos.deepseek_v3_b1.demo.stage import (
     StageContext,
     StageKind,
 )
+from models.demos.deepseek_v3_b1.demo.stage_family import StageFamily
 from models.demos.deepseek_v3_b1.demo.weight_provider import WeightProvider
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlockKind, StageMetadata
 
@@ -39,14 +41,17 @@ def create_passthrough_pipeline_configuration(
     weight_provider: WeightProvider,
     num_procs: int,
     *,
-    payload: PassthroughPayload = PassthroughPayload.ACTIVATION,
+    host_loopback: bool = False,
 ) -> PipelineConfiguration:
     """N-stage pipeline: stage 0 is :class:`EmbeddingStage`; stages 1..N-1 are :class:`PassthroughStage`.
 
-    Default ``payload`` is :attr:`~PassthroughPayload.ACTIVATION` so D2D FIFO/page sizes match
-    :class:`EmbeddingStage` downstream (embedding rows). Use :attr:`~PassthroughPayload.TOKEN` only
-    when every stage before the passthrough chain emits token-sized pages (not this factory's
-    embedding-first layout).
+    The embedding forwards its row plus the DeepseekMetadata struct (the real-model config), so the
+    ring carries ``ACTIVATION_W_TOKEN_META`` end to end.
+
+    ``host_loopback`` selects the return path: ``False`` uses fabric loopback (D2H on stage 0);
+    ``True`` uses MPI loopback (D2H on the last stage). With ``False``, the synthetic-weights smoke
+    hits a D2H pinned-buffer address anomaly under investigation (see
+    ``docs/d2h_socket_loopback_pinned_address_bug.md``), so the smoke prefers ``host_loopback=True``.
 
     Stage indices 0 .. num_procs-1 must match the distributed mesh count (e.g. 4, 16, 64).
     """
@@ -56,12 +61,15 @@ def create_passthrough_pipeline_configuration(
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
         return EmbeddingStage(
             weight_provider.load_embedding(device),
-            loopback_payload=PassthroughPayload.ACTIVATION,
+            loopback_payload=PassthroughPayload.ACTIVATION_W_TOKEN_META,
+            host_loopback=host_loopback,
         )
 
     stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]] = {0: stage_0}
     for i in range(1, num_procs):
-        stage_factories[i] = lambda _d, p=payload: PassthroughStage(p)
+        stage_factories[i] = lambda _d: PassthroughStage(
+            PassthroughPayload.ACTIVATION_W_TOKEN_META, host_loopback=host_loopback
+        )
     return PipelineConfiguration(stage_factories)
 
 
@@ -442,12 +450,16 @@ def create_pipeline_configuration_from_num_procs(
 ) -> PipelineConfiguration:
     """Pick topology from process count (4 -> single_galaxy, 16 -> single_pod, 64 -> sp4)."""
     if num_procs == 4:
-        return create_single_galaxy_pipeline_configuration(
+        if enable_speculative_decode:
+            return create_single_galaxy_spec_decode_pipeline_configuration(
+                weight_provider,
+                fp32_dest_acc_en=fp32_dest_acc_en,
+                persistent_mode=persistent_mode,
+            )
+        return create_single_galaxy_deepseek_pipeline_configuration(
             weight_provider,
-            fp32_dest_acc_en=fp32_dest_acc_en,
-            persistent_mode=persistent_mode,
-            enable_mtp=enable_mtp,
-            enable_sram_bspm=enable_sram_bspm,
+            lm_head_fp32_dest_acc_en=fp32_dest_acc_en,
+            lm_head_persistent_mode=persistent_mode,
         )
     if num_procs == 16:
         if enable_speculative_decode:
@@ -478,6 +490,37 @@ def create_pipeline_configuration_from_num_procs(
     raise ValueError(f"Unsupported num_procs: {num_procs}")
 
 
+def create_pipeline_configuration_from_stage_count(
+    num_stages: int,
+    stage_family: StageFamily,
+    weight_provider: WeightProvider,
+    *,
+    fp32_dest_acc_en: bool = True,
+    persistent_mode: bool = True,
+    enable_mtp: bool = False,
+    enable_speculative_decode: bool = True,
+    dense_layer_id_override: int | None = None,
+    moe_layer_id_override: int | None = None,
+    num_slots: int = 64,
+) -> PipelineConfiguration:
+    """Pick the model role map from logical stage count and derived stage family."""
+
+    if stage_family == StageFamily.STAGE_4X2 and num_stages in (4, 16, 64):
+        return create_pipeline_configuration_from_num_procs(
+            num_stages,
+            weight_provider,
+            fp32_dest_acc_en=fp32_dest_acc_en,
+            persistent_mode=persistent_mode,
+            enable_mtp=enable_mtp,
+            enable_speculative_decode=enable_speculative_decode,
+            dense_layer_id_override=dense_layer_id_override,
+            moe_layer_id_override=moe_layer_id_override,
+            num_slots=num_slots,
+        )
+
+    return create_passthrough_pipeline_configuration(weight_provider, num_stages)
+
+
 class PipelineConfiguration:
     """Maps stage IDs to stage factories. Each host builds only its stage (lazy weights)."""
 
@@ -495,8 +538,9 @@ class PipelineConfiguration:
         self,
         mesh_device: ttnn.MeshDevice,
         my_stage_idx: int | None = None,
-        stages_metadata: dict[int, StageMetadata] | None = None,
+        stages_metadata: dict[int, StageMetadata | StageRouting] | None = None,
         pipeline_config: list | None = None,
+        stage_plan: LocalStageSocketPlan | None = None,
         host_loopback: bool = False,
     ) -> Pipeline:
         """Create a Pipeline for this process's stage.
@@ -519,6 +563,7 @@ class PipelineConfiguration:
             my_stage_idx,
             stages_metadata=stages_metadata,
             pipeline_config=pipeline_config,
+            stage_plan=stage_plan,
             host_loopback=host_loopback,
         )
 
@@ -531,8 +576,9 @@ class Pipeline:
         mesh_device: ttnn.MeshDevice,
         stage_kind: StageKind,
         my_stage_idx: int,
-        stages_metadata: dict[int, StageMetadata] | None = None,
+        stages_metadata: dict[int, StageMetadata | StageRouting] | None = None,
         pipeline_config: list | None = None,
+        stage_plan: LocalStageSocketPlan | None = None,
         host_loopback: bool = False,
     ) -> None:
         self._mesh_device = mesh_device
@@ -552,6 +598,7 @@ class Pipeline:
             pipeline_config=self._pipeline_config,
             my_stage_idx=self._my_stage_idx,
             stages_metadata=stages_metadata,
+            stage_plan=stage_plan,
         )
         self._pipeline_block: PipelineBlockKind | None = None
 
@@ -617,8 +664,10 @@ class Pipeline:
     def write_token(self, token_tensor: ttnn.Tensor) -> None:
         self._block.write_token(token_tensor)
 
-    def read_output(self, output_tensor: ttnn.Tensor) -> None:
-        self._block.read_output(output_tensor)
+    def read_output(self, output_tensor: ttnn.Tensor):
+        # Returns the block's result. The fabric/D2H path writes into output_tensor and returns
+        # None; the host-loopback path returns the MPI-received tensor on the first stage.
+        return self._block.read_output(output_tensor)
 
     def export_host_socket_descriptors(self, prefix: str) -> None:
         self._block.export_host_socket_descriptors(prefix)
@@ -640,12 +689,13 @@ class Pipeline:
              to L1 but no core observes it yet: they are all blocked at the
              iteration gate (``persistent_next_iter_sem``) or mid-iteration.
           3. Barrier — all ranks have written their termination flags.
-          4. Stage 0 pushes a dummy token and drains the round-trip result.
-             The token naturally triggers ``persistent_next_iter_sem`` via the
-             pipeline's socket/d2d flow, providing both the gate release AND
-             the data payload.  All cores complete this final iteration
-             together, loop back to the top-of-loop termination check, see the
-             flag, and break.
+          4. Stage 0 pushes a dummy token; the D2H-owning stage drains the
+             round-trip result (stage 0 for fabric loopback, the last stage for
+             host/no loopback). The token naturally triggers
+             ``persistent_next_iter_sem`` via the pipeline's socket/d2d flow,
+             providing both the gate release AND the data payload.  All cores
+             complete this final iteration together, loop back to the
+             top-of-loop termination check, see the flag, and break.
           5. Barrier — non-stage-0 ranks wait for the dummy round-trip.
              (No ``synchronize_device`` here: d2d/host_io kernels are still
              running and would block.)
@@ -665,9 +715,17 @@ class Pipeline:
 
         if self._pipeline_block.is_first_pipeline_stage():
             self._pipeline_block.push_dummy_token()
-            self._pipeline_block.drain_dummy_output()
+        # Drain the dummy round-trip on whichever stage owns the D2H socket: stage 0 for fabric
+        # loopback, the last stage for host/no loopback. drain_dummy_output no-ops without a D2H
+        # socket, so calling it on every rank is safe. Without draining on the last stage, host
+        # loopback leaves the dummy page unread, the D2H FIFO stays full, and the persistent D2H
+        # kernel blocks in socket_reserve_pages (no termination check) — hanging teardown.
+        self._pipeline_block.drain_dummy_output()
 
         ttnn.distributed_context_barrier()
 
+        logger.info("TEARDOWN block.terminate() START")
         self._pipeline_block.terminate()
+        logger.info("TEARDOWN block.terminate() DONE; final synchronize_device START")
         ttnn.synchronize_device(self._mesh_device)
+        logger.info("TEARDOWN final synchronize_device DONE")

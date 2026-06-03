@@ -17,6 +17,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_b1.demo.pipeline_routing import LocalStageSocketPlan, StageRouting
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.metadata.metadata import (
     METADATA_TENSOR_BYTES,
@@ -116,7 +117,8 @@ class StageContext:
     mesh_device: ttnn.MeshDevice
     pipeline_config: list
     my_stage_idx: int
-    stages_metadata: dict[int, StageMetadata] | None = None
+    stages_metadata: dict[int, StageMetadata | StageRouting] | None = None
+    stage_plan: LocalStageSocketPlan | None = None
 
     @property
     def my_mesh_id(self) -> int:
@@ -234,6 +236,7 @@ class EmbeddingStage(StageKind):
             my_stage_idx=my_stage_idx,
             stages_metadata=ctx.stages_metadata,
             pipeline_config=pipeline_config,
+            stage_plan=ctx.stage_plan,
         )
 
     @staticmethod
@@ -326,6 +329,7 @@ class PassthroughStage(StageKind):
             my_stage_idx=my_stage_idx,
             stages_metadata=ctx.stages_metadata,
             pipeline_config=ctx.pipeline_config,
+            stage_plan=ctx.stage_plan,
         )
 
 
@@ -387,6 +391,7 @@ class SpecLMHeadStage(StageKind):
             my_stage_idx=my_stage_idx,
             stages_metadata=ctx.stages_metadata,
             pipeline_config=ctx.pipeline_config,
+            stage_plan=ctx.stage_plan,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -671,6 +676,7 @@ class BaseLMHeadStage(StageKind):
             my_stage_idx=my_stage_idx,
             stages_metadata=ctx.stages_metadata,
             pipeline_config=ctx.pipeline_config,
+            stage_plan=ctx.stage_plan,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:

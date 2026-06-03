@@ -14,9 +14,15 @@ from __future__ import annotations
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
+from models.demos.deepseek_v3_b1.demo.pipeline import create_passthrough_pipeline_configuration
+from models.demos.deepseek_v3_b1.demo.pipeline_routing import build_local_stage_socket_plans, build_stage_routing
+from models.demos.deepseek_v3_b1.demo.stage import ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
+from models.demos.deepseek_v3_b1.demo.weight_provider import SyntheticWeightProvider
+from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import (
     MeshWrapper,
     SocketInterface,
@@ -24,15 +30,18 @@ from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import (
     _group_by_device,
 )
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
+from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size, ttnn_dtype_from_torch_dtype
+from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineConfigEntry
+from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
 from models.demos.deepseek_v3_b1.tests.unit_tests.stage_size_test_utils import (
     EdgeTransport,
     LocalRole,
     LocalStageSocketPlan,
     build_local_stage_socket_plan,
-    get_generic_stage_size_loopback_topology_config_from_env,
+    get_generic_stage_size_loopback_topology_config,
 )
 
-GENERIC_STAGE_SIZE_LOOPBACK_CONFIG = get_generic_stage_size_loopback_topology_config_from_env()
+GENERIC_STAGE_SIZE_LOOPBACK_CONFIG = get_generic_stage_size_loopback_topology_config()
 PIPELINE_ENDPOINT_CORE_COORD = ttnn.CoreCoord(0, 0)
 
 
@@ -398,3 +407,136 @@ def test_generic_stage_size_loopback_smoke(
 
     ttnn.distributed_context_barrier()
     _terminate_components(mesh_device, host_io, forwarders)
+
+
+def _build_first_stage_input():
+    """Build the stage-0 H2D token tensor and the expected embedding row (rank 0 only).
+
+    Writes a token id at uint32 word 7 of the DeepseekMetadata struct; expected == the embedding
+    row for that id.
+    """
+    token_id = 17
+    token_size_datums = DeepseekMetadata.aligned_size_bytes() // dtype_size(torch.uint32)
+    torch_input = torch.zeros(1, token_size_datums, dtype=torch.uint32)
+    torch_input[0, 7] = token_id
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=ttnn_dtype_from_torch_dtype(torch.uint32), layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+    generator = torch.Generator().manual_seed(42)
+    expected = torch.randn(
+        LogicalModelDimensions.VOCAB_SIZE,
+        LogicalModelDimensions.HIDDEN_SIZE,
+        generator=generator,
+        dtype=torch.bfloat16,
+    )[token_id]
+    return input_tensor, expected
+
+
+def _make_readback_tensor():
+    """A bf16 host tensor sized to the ring payload (embedding row + trailing DeepseekMetadata struct)."""
+    num_elems = ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES // dtype_size(torch.bfloat16)
+    return ttnn.from_torch(
+        torch.zeros(1, num_elems, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+
+
+@pytest.mark.parametrize(
+    "loopback_mode",
+    [
+        "host",
+        pytest.param(
+            "fabric",
+            marks=pytest.mark.skip(
+                reason="fabric loopback (D2H on stage 0, with the embedding) hits a D2H pinned-buffer "
+                "address anomaly under investigation; see docs/d2h_socket_loopback_pinned_address_bug.md"
+            ),
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("topology_config", "mesh_device", "device_params"),
+    [
+        (
+            GENERIC_STAGE_SIZE_LOOPBACK_CONFIG,
+            GENERIC_STAGE_SIZE_LOOPBACK_CONFIG.mesh_device_param,
+            GENERIC_STAGE_SIZE_LOOPBACK_CONFIG.make_device_params(),
+        )
+    ],
+    ids=[f"{GENERIC_STAGE_SIZE_LOOPBACK_CONFIG.name}-pipeline"],
+    indirect=["mesh_device", "device_params"],
+)
+def test_pipeline_level_passthrough_transport_loopback(topology_config, mesh_device, device_params, loopback_mode):
+    """Drive real Pipeline/PipelineBlock plumbing with allocation-derived routing.
+
+    Runs the fused embedding kernel (the real model's config) and returns the activation via the
+    last stage's D2H + MPI to rank 0 (the production host-loopback return path).
+
+    The fabric-loopback variant is intentionally skipped: it hits a D2H pinned-buffer address
+    anomaly that is still under investigation (see the docs note above).
+    """
+
+    if not is_slow_dispatch():
+        pytest.skip("Skipping test in fast dispatch mode")
+
+    use_fabric_loopback = loopback_mode == "fabric"
+    host_loopback = loopback_mode == "host"
+
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+    allocation = ttnn._ttnn.multi_device.experimental.resolve_blitz_decode_pipeline_allocation(use_fabric_loopback)
+    num_stages = len(allocation.stages)
+    logger.info(f"num stages: {num_stages}")
+    my_rank = int(ttnn.distributed_context_get_rank())
+    local_stage_plans = build_local_stage_socket_plans(allocation, my_rank)
+    assert (
+        len(local_stage_plans) == 1
+    ), f"Expected exactly one local stage plan for rank {my_rank}, got {len(local_stage_plans)}"
+    stage_plan = local_stage_plans[0]
+
+    pipeline_config = [
+        PipelineConfigEntry(
+            stage.entry_endpoint.mesh_coord,
+            (stage.exit_endpoint if stage.exit_endpoint is not None else stage.entry_endpoint).mesh_coord,
+        )
+        for stage in allocation.stages
+    ]
+    if allocation.initialize_loopback:
+        # Fabric loopback only: the linear (host-loopback) allocation has no loopback entry.
+        pipeline_config.append(
+            PipelineConfigEntry(
+                allocation.loopback_entry_endpoint.mesh_coord,
+                allocation.host_egress_endpoint.mesh_coord,
+            )
+        )
+
+    config = create_passthrough_pipeline_configuration(
+        SyntheticWeightProvider(), num_stages, host_loopback=host_loopback
+    )
+    pipeline = config.build_pipeline(
+        mesh_device,
+        my_stage_idx=stage_plan.logical_stage_index,
+        stages_metadata=build_stage_routing(allocation),
+        pipeline_config=pipeline_config,
+        stage_plan=stage_plan,
+    )
+    try:
+        pipeline.setup_and_run()
+        last_stage_idx = num_stages - 1
+
+        if pipeline.my_stage_idx == 0:
+            input_tensor, expected = _build_first_stage_input()
+            output_tensor = _make_readback_tensor()
+            pipeline.write_token(input_tensor)
+            returned = pipeline.read_output(output_tensor)
+            # Host loopback returns the MPI-received tensor; fabric writes into output_tensor.
+            result_torch = (returned if host_loopback else ttnn.to_torch(output_tensor)).reshape(-1)
+            assert torch.equal(
+                result_torch[: LogicalModelDimensions.HIDDEN_SIZE], expected
+            ), f"{loopback_mode} loopback mismatch"
+        elif host_loopback and pipeline.my_stage_idx == last_stage_idx:
+            # Host loopback: the last stage reads the looped activation from its D2H and MPI-sends
+            # it to rank 0.
+            pipeline.read_output(_make_readback_tensor())
+
+        pipeline.barrier()
+    finally:
+        pipeline.terminate()

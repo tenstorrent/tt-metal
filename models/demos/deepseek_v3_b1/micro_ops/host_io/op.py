@@ -37,6 +37,8 @@ Kernel implementation uses polling loops with termination checks to avoid indefi
 blocking on socket_wait_for_pages() and cb_wait_front() operations.
 """
 
+from loguru import logger
+
 import ttnn
 from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import get_tensor_accessor_args
@@ -637,11 +639,25 @@ class HostInterface:
         raise ValueError("Upstream socket not available")
 
     def terminate(self, sync_devices):
+        rank = int(ttnn.distributed_context_get_rank())
+        logger.info(
+            "TEARDOWN[{}] host_io.terminate: h2d={} d2h={} sync={}",
+            rank,
+            self.h2d_socket is not None,
+            self.d2h_socket is not None,
+            sync_devices,
+        )
         if self.h2d_socket:
+            logger.info("TEARDOWN[{}] h2d_socket.barrier() START", rank)
             self.h2d_socket.barrier()
+            logger.info("TEARDOWN[{}] h2d_socket.barrier() DONE", rank)
         if self.d2h_socket:
+            logger.info("TEARDOWN[{}] d2h_socket.barrier() START", rank)
             self.d2h_socket.barrier()
+            logger.info("TEARDOWN[{}] d2h_socket.barrier() DONE", rank)
 
         ttnn.reset_global_semaphore_value(self.termination_semaphore, 1)
         if sync_devices:
+            logger.info("TEARDOWN[{}] host_io.terminate synchronize_device START", rank)
             ttnn.synchronize_device(self.mesh_device)
+            logger.info("TEARDOWN[{}] host_io.terminate synchronize_device DONE", rank)
