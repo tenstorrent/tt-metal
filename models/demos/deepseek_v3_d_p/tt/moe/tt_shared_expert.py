@@ -11,6 +11,7 @@ This module demonstrates:
 - SiLU activation fusion
 """
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -20,6 +21,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -262,6 +264,15 @@ class TtSharedExpert(LightweightModule):
         self.num_devices = mesh_device.get_num_devices()
         self.num_links = num_links
         self.topology = topology
+        # Shared per-mesh CCL semaphore pool (same singleton MLA uses). Routing the shared-expert
+        # reduce_scatter through this coordinated, double-buffered pool keeps it from being handed
+        # a semaphore that MLA's still-draining ring-SDPA tail (cluster_axis=1) is writing to —
+        # the root cause of the balanced-routing period-2 non-determinism.
+        self.tt_ccl = get_tt_ccl(mesh_device)
+        # Persistent reduce_scatter intermediate buffers, keyed by input shape; allocated lazily on
+        # first use and reused every iteration so the op never re-allocates (see forward()).
+        self._rs_intermediate_cache: dict = {}
+        self._rs_output_cache: dict = {}
         self.activations_dtype = activations_dtype
         self.weights_dtype = weights_dtype
         self.compute_kernel_config = compute_kernel_config
@@ -466,12 +477,42 @@ class TtSharedExpert(LightweightModule):
 
         # 4) Reduce-scatter across mesh columns when TP > 1.
         if self.mesh_device.shape[1] > 1:
-            output = ttnn.reduce_scatter(
+            # Pin the reduce_scatter INTERMEDIATE buffer to a stable, persistently-owned DRAM
+            # address. The default path allocates a fresh intermediate every call; under the MoE
+            # sub-device overlap that fresh buffer ping-pongs onto a region MLA's still-draining
+            # ring-SDPA reduce_scatter (cluster_axis=1) just freed and is still writing — corrupting
+            # the partial sums on alternating (period-2) iterations. A persistent buffer can never
+            # be re-handed to MLA, so the alias is impossible.
+            rs_intermediate = self._get_persistent_rs_intermediate(output_full)
+            # DIAG exp2 (env-gated, REMOVE before PR): zero the persistent intermediate in place each
+            # iter (same address preserved) to test whether the residual ~0.945 drift is a cross-
+            # iteration STALE READ of leftover content in the pinned intermediate. If setting this
+            # makes iters≥2 PASS → stale-read confirmed; if no change → not stale content.
+            if os.environ.get("DS_DIAG_ZERO_RS_INTERMEDIATE"):
+                ttnn.fill(rs_intermediate, 0.0, output_tensor=rs_intermediate)
+            # DIAG exp1 (env-gated, REMOVE before PR): also pin the reduce_scatter OUTPUT buffer
+            # (persistent_output_buffers[1]) so the op's return value is no longer fresh-allocated
+            # each iter and can't land on a region MLA's final reduce_scatter just freed. Tests
+            # whether the fresh-output alias is the last ~0.0003 residual.
+            persistent_bufs = [rs_intermediate]
+            if os.environ.get("DS_DIAG_PIN_OUTPUT"):
+                # Pin the output to a stable address (kills the fresh-alloc alias onto MLA's freed
+                # region) but do NOT zero it: the line writer OVERWRITES the output via plain
+                # noc_async_write (kernel line 402), fully covering the shard each iter — it is not an
+                # accumulator, so pre-zeroing is both unnecessary and (per exp1) harmful.
+                rs_output = self._get_persistent_rs_output(output_full)
+                persistent_bufs.append(rs_output)
+            output = ttnn.experimental.reduce_scatter_minimal_async(
                 output_full,
+                persistent_output_buffers=persistent_bufs,
                 dim=-1,
-                cluster_axis=1,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=1),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
                 num_links=self.num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 topology=self.topology,
+                cluster_axis=1,
                 subdevice_id=self.subdevice_id,
             )
         else:
@@ -479,3 +520,42 @@ class TtSharedExpert(LightweightModule):
         logger.debug(f"After shared_expert_ffn: {output.shape}")
 
         return output
+
+    def _get_persistent_rs_intermediate(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        """Lazily allocate (and cache, keyed by input shape) the persistent reduce_scatter
+        intermediate buffer. Line (Linear) topology requires a double-sized first dim for the
+        forward/backward halves: shape = [2, *input_shape]. Allocated in interleaved DRAM with the
+        input's dtype/layout, replicated across the mesh (per-device local scratch)."""
+        in_shape = list(input_tensor.shape)
+        key = tuple(in_shape)
+        if key not in self._rs_intermediate_cache:
+            intermediate_shape = [2] + in_shape
+            self._rs_intermediate_cache[key] = ttnn.from_torch(
+                torch.zeros(intermediate_shape),
+                device=self.mesh_device,
+                layout=input_tensor.layout,
+                dtype=input_tensor.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self._rs_intermediate_cache[key]
+
+    def _get_persistent_rs_output(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
+        """Lazily allocate (and cache, keyed by input shape) the persistent reduce_scatter OUTPUT
+        buffer. The output is the scattered result: same shape as the RS input but with the last
+        (scatter) dim divided across the cluster_axis=1 columns. Interleaved DRAM, input dtype/layout,
+        replicated across the mesh."""
+        in_shape = list(input_tensor.shape)
+        key = tuple(in_shape)
+        if key not in self._rs_output_cache:
+            num_cols = self.mesh_device.shape[1]
+            out_shape = in_shape[:-1] + [in_shape[-1] // num_cols]
+            self._rs_output_cache[key] = ttnn.from_torch(
+                torch.zeros(out_shape),
+                device=self.mesh_device,
+                layout=input_tensor.layout,
+                dtype=input_tensor.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self._rs_output_cache[key]
