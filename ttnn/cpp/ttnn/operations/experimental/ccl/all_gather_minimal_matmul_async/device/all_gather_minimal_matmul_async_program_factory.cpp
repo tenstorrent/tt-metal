@@ -4,7 +4,6 @@
 
 #include "all_gather_minimal_matmul_async_device_operation.hpp"
 #include "all_gather_minimal_matmul_async_program_factory.hpp"
-#include "agmm_profiling_config.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
@@ -635,18 +634,15 @@ all_gather_minimal_matmul_async_factory_helper(
             defines["TERNARY_B_IS_FLOAT32"] = "1";
         }
     }
+    const char* env_profiling_mode = std::getenv("AGMM_MATMUL_ISOLATION");
+    bool matmul_isolation = false;
+    if (env_profiling_mode != nullptr && std::string(env_profiling_mode) == "1") {
+        defines["MATMUL_ISOLATION_MODE"] = "1";
+        matmul_isolation = true;
+    }
     in0_defines = defines;
     in0_defines["READ_FROM_LOCAL_INPUT"] = "1";
     in0_defines["IS_IN0"] = "1";
-
-    // ── Profiling-only defines (delete this block when profiling is complete) ──
-    const bool matmul_isolation = agmm_profiling_config::matmul_isolation_enabled();
-    std::vector<std::pair<std::string, std::string>> profiling_defines = agmm_profiling_config::get_profiling_defines();
-    for (const auto& [key, val] : profiling_defines) {
-        in0_defines[key] = val;
-    }
-    // ── end profiling block ──
-
     in0_fabric_defines = in0_defines;
     in0_fabric_defines["USE_MUX"] = "1";
     auto in1_defines = defines;
@@ -848,15 +844,10 @@ all_gather_minimal_matmul_async_factory_helper(
         fused_ternary_input_b,
         true);
 
-    tt::tt_metal::CoreRangeSet in0_receiver_no_fabric_cores =
-        matmul_isolation ? tt::tt_metal::CoreRangeSet(std::vector<tt::tt_metal::CoreRange>{
-                               in0_receiver_cores_no_fabric, in0_receiver_cores_fabric})
-                         : tt::tt_metal::CoreRangeSet(in0_receiver_cores_no_fabric);
-
     auto in0_receiver_no_fabric_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/dm_in0_sender.cpp",
-        in0_receiver_no_fabric_cores,
+        in0_receiver_cores_no_fabric,
         tt::tt_metal::DataMovementConfig{
             .processor = in0_risc,
             .noc = in0_noc,
@@ -913,17 +904,15 @@ all_gather_minimal_matmul_async_factory_helper(
             fused_ternary_input_b,
             true);
 
-        in0_receiver_fabric_kernels_id = CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/"
-            "dm_in0_sender.cpp",
-            in0_receiver_cores_fabric,
-            tt::tt_metal::DataMovementConfig{
-                .processor = in0_risc,
-                .noc = in0_noc,
-                .compile_args = in0_receiver_fabric_compile_time_args,
-                .defines = in0_fabric_defines});
-    }
+    auto in0_receiver_fabric_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/kernels/dm_in0_sender.cpp",
+        in0_receiver_cores_fabric,
+        tt::tt_metal::DataMovementConfig{
+            .processor = in0_risc,
+            .noc = in0_noc,
+            .compile_args = in0_receiver_fabric_compile_time_args,
+            .defines = in0_fabric_defines});
 
     // For in1's primary accessor: when fsdp_fused, the kernel reads from PWB (gathered weight),
     // so the main accessor describes the PWB. When not fsdp_fused, it describes the weight tensor
@@ -1046,8 +1035,8 @@ all_gather_minimal_matmul_async_factory_helper(
             .compile_args = compute_compile_time_args,
             .defines = compute_defines});
 
-    // mux kernel (skipped in matmul isolation profiling mode)
-    tt::tt_metal::KernelHandle mux_kernel_id = tt::tt_metal::KernelHandle{};
+    // mux kernel
+    tt::tt_metal::KernelHandle mux_kernel_id{};
     if (!matmul_isolation) {
         mux_kernel_id = tt::tt_metal::CreateKernel(
             program,
@@ -1146,13 +1135,8 @@ all_gather_minimal_matmul_async_factory_helper(
             in0_common_args.push_back(mm_output_tensor.buffer()->address());
         }
         tt::tt_metal::SetCommonRuntimeArgs(program, in0_sender_kernels_id, in0_common_args);
-        if (matmul_isolation) {
-            // Fabric and no-fabric receivers share one kernel in isolation mode.
-            tt::tt_metal::SetCommonRuntimeArgs(program, in0_receiver_no_fabric_kernels_id, in0_common_args);
-        } else {
-            tt::tt_metal::SetCommonRuntimeArgs(program, in0_receiver_fabric_kernels_id, in0_common_args);
-            tt::tt_metal::SetCommonRuntimeArgs(program, in0_receiver_no_fabric_kernels_id, in0_common_args);
-        }
+        tt::tt_metal::SetCommonRuntimeArgs(program, in0_receiver_fabric_kernels_id, in0_common_args);
+        tt::tt_metal::SetCommonRuntimeArgs(program, in0_receiver_no_fabric_kernels_id, in0_common_args);
     }
 
     // in1 common args: [in1_addr, in2_addr, [ternary_a, ternary_b, broadcast_ternary_b],
@@ -1269,7 +1253,7 @@ all_gather_minimal_matmul_async_factory_helper(
             in0_injector_virtual_core.y,
             in0_core_order_index,
             in0_core_order.size()};
-        if (!matmul_isolation && in0_core_order_index > (in0_core_order.size() - 3)) {
+        if (in0_core_order_index > (in0_core_order.size() - 3)) {
             uint32_t worker_idx = in0_idx % num_workers_per_link;
             auto last_in0_core = in0_core_order.back();
 
@@ -1337,11 +1321,11 @@ all_gather_minimal_matmul_async_factory_helper(
         if (in0_core_order_index == 0) {
             // in0 sender
             SetRuntimeArgs(program, in0_sender_kernels_id, core, in0_args);
-        } else if (!matmul_isolation && in0_core_order_index > (in0_core_order.size() - 3)) {
+        } else if (in0_core_order_index > (in0_core_order.size() - 3)) {
             // in0 receiver fabric
             SetRuntimeArgs(program, in0_receiver_fabric_kernels_id, core, in0_args);
         } else {
-            // in0 receiver no fabric (also used for fabric-position cores in matmul isolation mode)
+            // in0 receiver no fabric
             SetRuntimeArgs(program, in0_receiver_no_fabric_kernels_id, core, in0_args);
         }
 
@@ -1620,18 +1604,14 @@ void AllGatherMinimalMatmulAsyncProgramFactory::override_runtime_arguments(
 
         // Update in0 common args (no per-core loop needed)
         auto& in0_sender_common = tt::tt_metal::GetCommonRuntimeArgs(program, shared_variables.in0_sender_kernels_id);
+        auto& in0_receiver_fabric_common =
+            tt::tt_metal::GetCommonRuntimeArgs(program, shared_variables.in0_receiver_fabric_kernels_id);
         auto& in0_receiver_no_fabric_common =
             tt::tt_metal::GetCommonRuntimeArgs(program, shared_variables.in0_receiver_no_fabric_kernels_id);
         for (size_t i = 0; i < in0_common.size(); ++i) {
             in0_sender_common[i] = in0_common[i];
+            in0_receiver_fabric_common[i] = in0_common[i];
             in0_receiver_no_fabric_common[i] = in0_common[i];
-        }
-        if (shared_variables.in0_receiver_fabric_kernels_id != shared_variables.in0_receiver_no_fabric_kernels_id) {
-            auto& in0_receiver_fabric_common =
-                tt::tt_metal::GetCommonRuntimeArgs(program, shared_variables.in0_receiver_fabric_kernels_id);
-            for (size_t i = 0; i < in0_common.size(); ++i) {
-                in0_receiver_fabric_common[i] = in0_common[i];
-            }
         }
 
         // Update in1 common args
