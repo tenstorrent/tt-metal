@@ -139,11 +139,11 @@ def infer_unpack_out(
     if input_format.is_mx_format():
         return DataFormat.Float16_b
 
-    # Sub-byte BFP formats (Bfp4_b) can only exist in L1.
+    # Sub-byte BFP formats can only exist in L1.
     # The Wormhole HW unpacker only supports BFP4_b → BFP8_b conversion
     # (not BFP4_b → Float16_b). The unpacker expands 4-bit mantissas to 8-bit
     # in the BFP8_b register format, preserving the shared exponent structure.
-    if input_format == DataFormat.Bfp4_b:
+    if input_format in [DataFormat.Bfp4_b, DataFormat.Bfp2_b]:
         return DataFormat.Bfp8_b
 
     if (
@@ -273,7 +273,7 @@ def infer_pack_in(
 
     # Sub-byte BFP formats cannot be used as pack_src (packer in_data_format).
     # The packer reads 16-bit (or 32-bit with dest_acc) data from dest and converts to BFP for L1.
-    if output_format == DataFormat.Bfp4_b:
+    if output_format in [DataFormat.Bfp4_b, DataFormat.Bfp2_b]:
         return (
             DataFormat.Float32
             if is_fp32_dest_acc_en == DestAccumulation.Yes

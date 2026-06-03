@@ -112,7 +112,7 @@ def test_fast_tilize_full(formats, dest_acc, dimensions):
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
-    # For Bfp4_b, _bfp4_block_aware_compare inside passed_test tilizes its
+    # For Bfp4_b, _bfp_block_aware_compare inside passed_test tilizes its
     # inputs to align BFP blocks, but our golden/result are already tilized.
     # Compare directly on the tilized data using the block-aware ULP comparator
     # without the extra tilize step.

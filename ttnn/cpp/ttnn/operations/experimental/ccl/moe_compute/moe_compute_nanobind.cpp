@@ -7,9 +7,13 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
+#include <nanobind/stl/tuple.h>
+#include <nanobind/stl/vector.h>
 
 #include "moe_compute_nanobind.hpp"
 #include "moe_compute.hpp"
+#include "moe_compute_utils.hpp"
 #include "device/kernels/moe_ring_common.h"
 #include "device/hostdevcommon/config.hpp"
 
@@ -139,5 +143,185 @@ void bind_get_moe_combine_cores(nb::module_& mod) {
             nb::arg("mesh_device"),
             nb::arg("combine_token_parallel_cores"),
             nb::arg("combine_data_parallel_cores")));
+
+    const auto* bbox_doc =
+        R"doc(Return the logical CoreRange bounding box of tilize + matmul + combine worker cores.
+This matches the `all_worker_cores_bounding_box` used by the tilize kernel's per-expert count mcast.)doc";
+    ttnn::bind_function<"get_moe_worker_mcast_bounding_box", "ttnn.experimental.">(
+        mod,
+        bbox_doc,
+        ttnn::overload_t(
+            nb::overload_cast<ttnn::MeshDevice*, const uint32_t, const uint32_t, const uint32_t, const uint32_t>(
+                &ttnn::experimental::get_moe_worker_mcast_bounding_box),
+            nb::arg("mesh_device"),
+            nb::arg("combine_token_parallel_cores"),
+            nb::arg("combine_data_parallel_cores"),
+            nb::arg("hidden_size"),
+            nb::arg("bh_ring_size") = 12));
+}
+
+void bind_moe_compute_utils(nb::module_& mod) {
+    nb::class_<ttnn::experimental::WeightCoreShardMaps>(mod, "WeightCoreShardMaps")
+        .def_ro("w0_w1_shard_map", &ttnn::experimental::WeightCoreShardMaps::w0_w1_shard_map)
+        .def_ro("w2_shard_map", &ttnn::experimental::WeightCoreShardMaps::w2_shard_map)
+        .def_ro("dram_core_range_set", &ttnn::experimental::WeightCoreShardMaps::dram_core_range_set);
+
+    ttnn::bind_function<"get_weight_core_shard_maps", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Compute per-ring-position shard maps for W0/W1 and W2 weight tensors,
+        plus the DRAM-bank ``CoreRangeSet`` used by the packed weight tensors'
+        memory configs.
+
+        Uses ``shard_tiles`` (Euclidean rhythm) for W0/W1 and ``w2_shard_tiles``
+        (complementary when ``Nt%n_cores + Ht%n_cores == n_cores``) for W2. Ring
+        ordering: DRAM bank logical coords sorted by ``(y, x)`` descending.
+
+        Returns an object with ``w0_w1_shard_map``, ``w2_shard_map``, and
+        ``dram_core_range_set`` attributes.
+        )doc",
+        &ttnn::experimental::get_weight_core_shard_maps,
+        nb::arg("mesh_device"),
+        nb::arg("hidden_size"),
+        nb::arg("intermediate_size"));
+
+    nb::class_<ttnn::experimental::WeightMemoryConfigs>(mod, "WeightMemoryConfigs")
+        .def_ro("w0_w1", &ttnn::experimental::WeightMemoryConfigs::w0_w1)
+        .def_ro("w2", &ttnn::experimental::WeightMemoryConfigs::w2);
+
+    ttnn::bind_function<"get_weight_mem_configs", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Build the DRAM-sharded ``MemoryConfig`` for the packed W0/W1 and W2
+        weight tensors. Shard maps and DRAM-bank ``CoreRangeSet`` are computed
+        internally from ``hidden_size`` and ``intermediate_size``.
+
+        When ``has_bias`` is true, padded K (for W0/W1) and N (for W2) grow by
+        one tile and are re-aligned to a multiple of ``BLOCK_TILES_H`` tiles.
+
+        Returns an object with ``w0_w1`` and ``w2`` ``MemoryConfig`` attributes.
+        )doc",
+        &ttnn::experimental::get_weight_mem_configs,
+        nb::arg("mesh_device"),
+        nb::kw_only(),
+        nb::arg("num_layers"),
+        nb::arg("experts_per_device"),
+        nb::arg("hidden_size"),
+        nb::arg("intermediate_size"),
+        nb::arg("has_bias") = false);
+
+    ttnn::bind_function<"add_shared_expert_weights", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Append per-device shared experts after routed experts along the experts dim.
+
+        Inputs are multi-device tensors sharded on dim 1 (experts). Each device's
+        routed shard holds its assigned routed experts; each device's shared shard
+        holds its assigned shared experts, already in the correct slot order.
+        Callers own the device → shared-expert mapping and produce the
+        pre-arranged ``shared_w*`` tensors.
+
+        Returns ``(output_w0, output_w1, output_w2)`` in TILE_LAYOUT, each the result of
+        concatenating routed + shared along dim 1.
+        )doc",
+        &ttnn::experimental::add_shared_expert_weights,
+        nb::arg("routed_w0").noconvert(),
+        nb::arg("routed_w1").noconvert(),
+        nb::arg("routed_w2").noconvert(),
+        nb::arg("shared_w0").noconvert(),
+        nb::arg("shared_w1").noconvert(),
+        nb::arg("shared_w2").noconvert());
+
+    ttnn::bind_function<"prepare_w0_w1_tensor_for_moe_compute", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Pack W0/W1 into the interleaved, padded, per-core layout the MoE kernel
+        reads. See ``ttnn.experimental.moe_compute_utils`` for the layout
+        contract. Output local shape:
+        ``(num_cores, L, E, groups_per_core, K_padded, 4*TILE_SIZE)`` in TILE_LAYOUT.
+
+        The per-core shard map is derived internally from ``K`` (hidden_size)
+        and ``N`` (intermediate_size) via ``get_weight_core_shard_maps``.
+        )doc",
+        &ttnn::experimental::prepare_w0_w1_tensor_for_moe_compute,
+        nb::arg("tt_w0").noconvert(),
+        nb::arg("tt_w1").noconvert(),
+        nb::kw_only(),
+        nb::arg("L"),
+        nb::arg("E"),
+        nb::arg("K"),
+        nb::arg("N"));
+
+    ttnn::bind_function<"prepare_w2_tensor_for_moe_compute", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Pack W2 into the ring-rotated per-core layout the MoE kernel reads.
+        Output local shape:
+        ``(num_cores, L, E, w2_groups_per_core, N_padded, 4*TILE_SIZE)`` in TILE_LAYOUT.
+
+        The per-core shard maps are derived internally from ``K`` (hidden_size)
+        and ``N`` (intermediate_size) via ``get_weight_core_shard_maps``.
+        )doc",
+        &ttnn::experimental::prepare_w2_tensor_for_moe_compute,
+        nb::arg("tt_w2").noconvert(),
+        nb::kw_only(),
+        nb::arg("L"),
+        nb::arg("E"),
+        nb::arg("N"),
+        nb::arg("K"));
+
+    ttnn::bind_function<"prepare_w0_w1_tensor_with_bias", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Bias-aware W0/W1 packer. Concatenates kernel-format bias tiles after
+        weight tiles along K, then delegates to
+        ``prepare_w0_w1_tensor_for_moe_compute``.
+
+        Bias inputs are PyTorch-format ``(L, E, N)``; they get expanded to a
+        ``(L, E, TILE_SIZE, N)`` tile with only row 0 populated before concat.
+        )doc",
+        &ttnn::experimental::prepare_w0_w1_tensor_with_bias,
+        nb::arg("tt_w0").noconvert(),
+        nb::arg("tt_w1").noconvert(),
+        nb::arg("tt_b0").noconvert(),
+        nb::arg("tt_b1").noconvert(),
+        nb::kw_only(),
+        nb::arg("L"),
+        nb::arg("E"),
+        nb::arg("K"),
+        nb::arg("N"));
+
+    ttnn::bind_function<"prepare_w2_tensor_with_bias", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Bias-aware W2 packer. Weight tiles get ring-rotated as usual; the bias
+        tile row is column-sharded and concatenated along N **without**
+        rotation, then N is padded to a multiple of BLOCK_TILES_H tiles.
+
+        Bias input is PyTorch-format ``(L, E, K)``; it gets expanded to a
+        ``(L, E, TILE_SIZE, K)`` tile with only row 0 populated.
+        )doc",
+        &ttnn::experimental::prepare_w2_tensor_with_bias,
+        nb::arg("tt_w2").noconvert(),
+        nb::arg("tt_b2").noconvert(),
+        nb::kw_only(),
+        nb::arg("L"),
+        nb::arg("E"),
+        nb::arg("N"),
+        nb::arg("K"));
+
+    ttnn::bind_function<"quantize_weights_via_host", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Round-trip a device tensor through host to change its dtype and
+        re-upload it under the supplied memory config. Used to quantize the
+        packed MoE weight tensors to ``bfloat4_b`` on the DRAM-sharded mem
+        config the kernel consumes.
+        )doc",
+        &ttnn::experimental::quantize_weights_via_host,
+        nb::arg("device_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("dtype"),
+        nb::arg("memory_config"));
 }
 }  // namespace ttnn::operations::experimental::ccl
