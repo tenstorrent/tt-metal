@@ -82,6 +82,7 @@ class Qwen35DecoderLayer:
         chunk_page_table=None,
         chunk_start_idx=None,
         chunk_start_idx_tensor=None,
+        valid_len=None,
     ):
         _norm_mode = Mode.PREFILL if mode == "prefill" else Mode.DECODE
         # In decode the norm output stays in L1 (as the old rms_norm_ttnn(memory_config=L1) did);
@@ -102,7 +103,9 @@ class Qwen35DecoderLayer:
             )
         else:
             deltanet_mode = "chunk" if mode == "prefill" else "recurrent"
-            attn_output = self.attention.forward(attn_input, mode=deltanet_mode, chunk_size=chunk_size)
+            attn_output = self.attention.forward(
+                attn_input, mode=deltanet_mode, chunk_size=chunk_size, valid_len=valid_len
+            )
         ttnn.deallocate(attn_input)
 
         h = ttnn.add(x, attn_output)

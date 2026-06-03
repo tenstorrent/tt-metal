@@ -26,9 +26,23 @@ def unpack_rope(packed):
 
 def prefill_dispatch(model, tokens, page_table, prompt_lens, use_trace):
     """All prefill is model-owned. traced -> chunk-outer trace; non-traced -> paged.
-    Both fill the paged KV cache + finalize GDN state, so decode continues correctly."""
+    Both fill the paged KV cache + finalize GDN state, so decode continues correctly.
+
+    Short prompts (T < one chunk, i.e. the whole prompt would otherwise take the eager
+    tail) route to the masked fixed-bucket path: it runs at one of a few pre-warmed bucket
+    lengths, so it never compiles a new program at request time and can't clobber the parked
+    trace — the short-prompt hang fix. Longer prompts keep the chunk-outer trace (the final
+    partial chunk still takes the eager tail; bounding that is a follow-up).
+
+    NOTE (vLLM block allocation): the masked path writes K/V for the full bucket, so the
+    page_table must map enough blocks to cover the rounded-up bucket length (<= 2048 -> 32
+    blocks of 64), not just the real prompt length.
+    """
     T = int(prompt_lens[0]) if prompt_lens is not None else tokens.shape[1]
     if use_trace:
+        chunk = getattr(model, "_chunked_chunk_size", None) or 2048
+        if T < chunk:
+            return model.prefill_masked_bucket(tokens, page_table, actual_len=T)
         return model.prefill_traced_chunked(tokens, page_table, actual_len=T)
     return model.prefill_paged(tokens, page_table)
 

@@ -352,7 +352,7 @@ class Qwen35Model:
             x = x_new
         return x
 
-    def capture_prefill_trace_chunked(self, device, page_table, chunk_size=2048):
+    def capture_prefill_trace_chunked(self, device, page_table, chunk_size=2048, warmup_masked_buckets=True):
         """Capture ONE chunk's all-layer prefill forward as a single trace, replayed per
         chunk by prefill_traced_chunked.
 
@@ -445,6 +445,15 @@ class Qwen35Model:
         ttnn.deallocate(warmup_out)
         ttnn.synchronize_device(device)
 
+        # ---- Compile the masked short-prompt bucket programs while still OUTSIDE the trace. ----
+        # The GDN is already in in-place mode here, so these compile in the SAME state mode as
+        # serving; doing it before begin_trace_capture means a real short prompt later replays
+        # an already-compiled bucket instead of compiling (which would clobber the parked trace).
+        # The dummy prefills dirty the in-place state + KV cache; the reset below re-zeros state
+        # before capture, and real requests overwrite the cache.
+        if warmup_masked_buckets:
+            self.warmup_prefill_masked_buckets(page_table)
+
         # ---- Capture the trace. ----
         self._reset_dn_state_inplace()
         self._chunked_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
@@ -499,6 +508,144 @@ class Qwen35Model:
             ttnn.deallocate(x)
             x = x_new
         return x
+
+    # Fixed bucket lengths for the masked tail/short-prompt prefill. Every real length
+    # rounds up to one of these, so only this many programs ever compile — small enough to
+    # warm up before a trace is parked (vs the unbounded per-length eager tail). All are
+    # multiples of the GDN sub-chunk (128) so the chunk kernel adds no internal pad. The
+    # masked GDN path runs in DRAM (see gated_deltanet_forward_ttnn), which keeps bucket 512
+    # off the L1 circular-buffer clash that the eager L1 path hits at that exact size.
+    _PREFILL_MASK_BUCKETS = (128, 256, 512, 1024, 2048)
+
+    @classmethod
+    def _mask_bucket_for(cls, length):
+        """Smallest fixed bucket >= length (falls back to the next 128-multiple)."""
+        for b in cls._PREFILL_MASK_BUCKETS:
+            if length <= b:
+                return b
+        return ((length + 127) // 128) * 128
+
+    def _forward_prefill_chunk_masked(self, token_buf, valid_len, chunk_start, page_table, bucket):
+        """Single masked fixed-bucket prefill forward over `bucket` positions.
+
+        token_buf is [1, bucket]: the first valid_len positions are real, the rest are
+        right-padding (value irrelevant). Attention runs over the full bucket — padded query
+        outputs are discarded and padded K/V land in cache slots past valid_len that decode
+        overwrites before reading. GDN layers receive valid_len so the chunk kernel zeroes the
+        padded positions out of the recurrent scan (identity updates) and captures the conv
+        state at the real boundary, leaving both states decode-correct. Mirrors
+        _forward_prefill_chunk_eager but at a fixed bucket length with masking. Returns the
+        last-layer hidden state [1, bucket, hidden_size]."""
+        block_size = 64
+        tok = ttnn.from_torch(
+            token_buf.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+        )
+        x = self.embd(tok)
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(tok)
+        cos, sin = self.rope.get_rot_mats(torch.arange(chunk_start, chunk_start + bucket).unsqueeze(0))
+        full_pt = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        blk0 = chunk_start // block_size
+        blkN = math.ceil((chunk_start + bucket) / block_size)
+        chunk_pt = ttnn.from_torch(
+            page_table[:, blk0:blkN].contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+        )
+        for layer in self.layers:
+            if layer.is_full_attention:
+                x_new = layer.forward(
+                    x,
+                    cos=cos,
+                    sin=sin,
+                    mode="prefill",
+                    page_table=full_pt,
+                    chunk_page_table=chunk_pt,
+                    chunk_start_idx=chunk_start,
+                )
+            else:
+                x_new = layer.forward(
+                    x, mode="prefill", chunk_size=layer.attention.long_prefill_chunk_size, valid_len=valid_len
+                )
+            ttnn.deallocate(x)
+            x = x_new
+        return x
+
+    def prefill_masked_bucket(self, token_ids, page_table, actual_len, chunk_start=0, bucket=None):
+        """Masked fixed-bucket prefill for a segment of `actual_len` real tokens.
+
+        Pads the segment up to a fixed bucket length, runs all layers ONCE, and masks the GDN
+        recurrent + conv state so they reflect exactly `actual_len` real tokens — numerically
+        equivalent to the eager exact-length path (prefill_paged) but using one of only a few
+        bucket-sized programs instead of compiling a fresh program per prompt length. That
+        bounded program set is what makes warmup able to compile every code path before a trace
+        is parked, so a short request can never trigger the compile-clobbers-trace hang.
+
+        `chunk_start` is the segment's absolute start position (0 for a from-scratch short
+        prompt; num_full*chunk_size for the tail of a long prompt — the carried GDN/KV state
+        must already be in place). Returns ttnn.Tensor (host) [1, 1, vocab_size]: the logit
+        after position actual_len-1.
+        """
+        B_batch, _ = token_ids.shape
+        assert B_batch == 1, "masked-bucket prefill is single-sequence"
+        if bucket is None:
+            bucket = self._mask_bucket_for(actual_len)
+        assert 1 <= actual_len <= bucket, f"actual_len {actual_len} not in [1, {bucket}]"
+
+        if chunk_start == 0:
+            # In the vLLM/traced flow the GDN state lives in external in-place buffers whose
+            # addresses are baked into the decode trace, so the chunk forward writes state
+            # there in place (_chunk_inplace_state). Zero those buffers in place rather than
+            # reassigning (reset_state) — otherwise decode would read stale external buffers.
+            # Detect via the GDN flag (set before the trace is parked) so warmup, which runs
+            # before begin_trace_capture, takes the same path as serving.
+            inplace = any(
+                (not l.is_full_attention) and getattr(l.attention, "_chunk_inplace_state", False) for l in self.layers
+            )
+            if inplace:
+                self._reset_dn_state_inplace()
+            else:
+                self.reset_state(batch_size=1)
+
+        real = token_ids[:, :actual_len].to(torch.int32)
+        if bucket > actual_len:
+            pad = torch.zeros(1, bucket - actual_len, dtype=torch.int32)
+            token_buf = torch.cat([real, pad], dim=1)
+        else:
+            token_buf = real
+
+        hidden = self._forward_prefill_chunk_masked(token_buf, actual_len, chunk_start, page_table, bucket)
+        ttnn.synchronize_device(self.device)
+
+        # Select the last real position (actual_len-1) with a one-hot row matmul rather than a
+        # static slice: the slice start would vary with the prompt length and compile a fresh
+        # program each time, whereas the matmul's program is fixed per bucket (only the one-hot
+        # values change). Keeps the whole masked path to one program set per bucket.
+        sel = torch.zeros(1, 1, bucket, dtype=torch.float32)
+        sel[0, 0, actual_len - 1] = 1.0
+        sel_tt = ttnn.from_torch(sel, dtype=hidden.dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+        x_last = ttnn.matmul(sel_tt, hidden)
+        ttnn.deallocate(sel_tt)
+        x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
+        x_last = self.norm(x_last, mode=Mode.PREFILL)
+        logits = ttnn.linear(x_last, self.lm_head_weight)
+        return logits.cpu()
+
+    def warmup_prefill_masked_buckets(self, page_table, buckets=None):
+        """Compile every masked-bucket prefill program up front (warmup).
+
+        For each bucket runs two dummy prefills: one at the exact bucket length (the no-mask
+        program) and one shorter (the masked program — the GDN mask multiply + the conv-state
+        and logit one-hot matmuls). After this, a real short prompt of ANY length rounds up to
+        an already-compiled bucket and never compiles at request time — the root cause of the
+        trace-clobber hang. MUST run while the GDN is in its serving state mode and BEFORE any
+        trace is parked; capture_prefill_trace_chunked calls this just before begin_trace_capture.
+        Requires page_table to cover the largest bucket (max 2048 -> 32 blocks of 64)."""
+        if buckets is None:
+            buckets = self._PREFILL_MASK_BUCKETS
+        for b in buckets:
+            for vlen in sorted({b, max(1, b - 1)}):  # exact (no mask) + masked variant
+                toks = torch.zeros(1, vlen, dtype=torch.int32)
+                self.prefill_masked_bucket(toks, page_table, actual_len=vlen, bucket=b)
+        ttnn.synchronize_device(self.device)
 
     def prefill_traced_chunked(self, token_ids, page_table, actual_len):
         """Prefill by replaying the captured per-chunk trace for each FULL 2048-token chunk,

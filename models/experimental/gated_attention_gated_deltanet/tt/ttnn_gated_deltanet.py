@@ -6,6 +6,8 @@
 TTNN implementation of the Gated DeltaNet layer.
 """
 
+import torch
+
 import ttnn
 
 from tt.ttnn_delta_rule_ops import (
@@ -172,7 +174,16 @@ def _causal_conv1d_decode_t1_inplace(
 
 
 def _causal_conv1d_fir(
-    x, weight, bias, kernel_size, device, memory_config=None, conv_state=None, weight_taps=None, bias_dev=None
+    x,
+    weight,
+    bias,
+    kernel_size,
+    device,
+    memory_config=None,
+    conv_state=None,
+    weight_taps=None,
+    bias_dev=None,
+    valid_len=None,
 ):
     """
     Manual FIR decomposition of depthwise causal conv1d + SiLU.
@@ -217,11 +228,27 @@ def _causal_conv1d_fir(
         )
         x_padded = ttnn.concat([pad, x], dim=1, memory_config=mc)
 
-    # New conv state: last kernel_size-1 tokens from x_padded, kept on device
+    # New conv state: the kernel_size-1 input tokens ending at the real boundary.
     total_len = (kernel_size - 1) + T
-    start = total_len - (kernel_size - 1)
-    new_state = x_padded[:, start:, :]
-    new_state = ttnn.to_layout(new_state, ttnn.TILE_LAYOUT)
+    if valid_len is None:
+        # Default: the last kernel_size-1 tokens of x.
+        new_state = x_padded[:, total_len - (kernel_size - 1) :, :]
+        new_state = ttnn.to_layout(new_state, ttnn.TILE_LAYOUT)
+    else:
+        # Fixed-bucket masking: x is right-padded to a bucket length T but only the first
+        # valid_len positions are real; the decode conv window must come from the real tail
+        # x[valid_len-(K-1):valid_len], i.e. x_padded[:, valid_len : valid_len+(K-1)] (x[i]
+        # is at x_padded index (K-1)+i). A static slice there would compile a new program per
+        # valid_len value — defeating the bounded-program goal — so select those rows with a
+        # one-hot matmul instead: the program depends only on shapes (fixed per bucket), and
+        # only the one-hot VALUES depend on valid_len.
+        sel = torch.zeros(B, kernel_size - 1, total_len, dtype=torch.float32)
+        for j in range(kernel_size - 1):
+            sel[:, j, valid_len + j] = 1.0
+        sel_tt = ttnn.from_torch(sel, dtype=x_padded.dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        xp = ttnn.to_layout(x_padded, ttnn.TILE_LAYOUT)
+        new_state = ttnn.matmul(sel_tt, xp, memory_config=mc)
+        ttnn.deallocate(sel_tt)
 
     # Precompute weight taps if not provided
     if weight_taps is None:
@@ -439,6 +466,10 @@ def gated_deltanet_forward_ttnn(
     use_inplace_state=False,
     # Pre-cached float32 masks for the chunk-parallel prefill kernel (gated_delta_attn_seq).
     chunk_seq_masks=None,
+    # Fixed-bucket masked prefill: hidden_states is right-padded to a bucket length T but
+    # only the first valid_len positions are real. Zeros the padded positions out of the
+    # recurrent scan and captures the conv state at the real boundary. None = no padding.
+    valid_len=None,
 ):
     """
     TTNN forward pass for the Gated DeltaNet layer.
@@ -469,7 +500,13 @@ def gated_deltanet_forward_ttnn(
 
     B = hidden_states.shape[0]
     T = hidden_states.shape[1]
-    mc = _seq_memory_config(T)
+    # Masked fixed-bucket prefill (valid_len set) rounds the real length UP to a bucket, so
+    # T is a bucket size rather than the real length. At bucket 512 the GDN's L1 interleaved
+    # buffers clash with its ops' static circular buffers (seq_len 512 sits exactly on the
+    # _seq_memory_config L1 threshold); force DRAM on the masked path so every bucket is
+    # robust. Prefill is compute-bound, so the lost L1 win is marginal. Non-masked paths
+    # (decode, the eager/traced chunk prefill) keep their original L1/DRAM selection.
+    mc = None if valid_len is not None else _seq_memory_config(T)
 
     # 1. Linear projections — fused QKV when available (1 matmul instead of 3)
     ckc = compute_kernel_config
@@ -521,6 +558,7 @@ def gated_deltanet_forward_ttnn(
                 conv_state=fused_conv_state,
                 weight_taps=fused_conv_weight_taps,
                 bias_dev=fused_conv_bias_dev,
+                valid_len=valid_len,
             )
             new_fused_conv_state = new_fused_conv_state_raw
             # Extract per-stream conv states for decode transition
@@ -613,6 +651,7 @@ def gated_deltanet_forward_ttnn(
                 conv_state=fused_conv_state,
                 weight_taps=fused_conv_weight_taps,
                 bias_dev=fused_conv_bias_dev,
+                valid_len=valid_len,
             )
             # Split after conv
             q = qkv[:, :, :q_dim]
@@ -778,6 +817,7 @@ def gated_deltanet_forward_ttnn(
             initial_state=recurrent_state,
             device=device,
             cached_masks=chunk_seq_masks,
+            valid_len=valid_len,
         )
     elif T == 1:
         if use_inplace_state and recurrent_state is not None:

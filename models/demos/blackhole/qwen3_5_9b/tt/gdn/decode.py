@@ -15,10 +15,13 @@ from models.demos.blackhole.qwen3_5_9b.tt.gdn.state import init_recurrent_state,
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn
 
 
-def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None):
+def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None):
     """Non-kernel GDN forward. mode='chunk' (prefill, may delegate to the prefill kernel) or
     'recurrent' (single-token decode). Reads weights/state/dims off the gdn instance; updates
-    gdn's recurrent + conv state in place or by reassignment per the trace-capture flags."""
+    gdn's recurrent + conv state in place or by reassignment per the trace-capture flags.
+
+    valid_len: for fixed-bucket masked prefill — x is right-padded to T but only the first
+    valid_len positions are real (see gated_deltanet_forward_ttnn). None = no padding."""
     w = gdn.weights
     if chunk_size is None:
         chunk_size = gdn.long_prefill_chunk_size if mode == "chunk" else 64
@@ -94,6 +97,7 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None):
         mega_g_dim=w.mega_g_dim,
         use_inplace_state=gdn.use_inplace_state,
         chunk_seq_masks=seq_masks,
+        valid_len=valid_len,
     )
 
     if gdn._chunk_inplace_state and mode == "chunk":
