@@ -40,8 +40,15 @@ def test_super_heavy_fires_on_attempts_5():
     assert "attempts=5" in reason
 
 
-def test_super_heavy_fires_on_consecutive_same_class_3():
-    from scripts.tt_hw_planner._cli_helpers.agent import _pick_agent_model_for_iter
+def test_super_heavy_fires_on_consecutive_same_class_threshold():
+    """consec_same_class >= threshold triggers opus even when attempts
+    are still below the attempts threshold. Tests with attempts=2
+    (below 3) and consec=2 (at threshold) so the trigger is unambiguous.
+    """
+    from scripts.tt_hw_planner._cli_helpers.agent import (
+        _SUPER_HEAVY_CONSEC_SAME_CLASS_THRESHOLD,
+        _pick_agent_model_for_iter,
+    )
 
     model, reason = _pick_agent_model_for_iter(
         model_default="haiku",
@@ -50,8 +57,8 @@ def test_super_heavy_fires_on_consecutive_same_class_3():
         model_super_heavy="opus",
         complexity_bonus=0,
         failure_class="API_SIGNATURE",
-        attempts_so_far=3,
-        consecutive_same_class=3,
+        attempts_so_far=2,
+        consecutive_same_class=_SUPER_HEAVY_CONSEC_SAME_CLASS_THRESHOLD,
     )
     assert model == "opus"
     assert "super_heavy" in reason
@@ -59,7 +66,11 @@ def test_super_heavy_fires_on_consecutive_same_class_3():
 
 
 def test_super_heavy_not_fires_when_thresholds_not_met():
-    from scripts.tt_hw_planner._cli_helpers.agent import _pick_agent_model_for_iter
+    from scripts.tt_hw_planner._cli_helpers.agent import (
+        _SUPER_HEAVY_ATTEMPTS_THRESHOLD,
+        _SUPER_HEAVY_CONSEC_SAME_CLASS_THRESHOLD,
+        _pick_agent_model_for_iter,
+    )
 
     model, reason = _pick_agent_model_for_iter(
         model_default="haiku",
@@ -68,10 +79,10 @@ def test_super_heavy_not_fires_when_thresholds_not_met():
         model_super_heavy="opus",
         complexity_bonus=0,
         failure_class="API_SIGNATURE",
-        attempts_so_far=3,
-        consecutive_same_class=1,
+        attempts_so_far=_SUPER_HEAVY_ATTEMPTS_THRESHOLD - 1,
+        consecutive_same_class=_SUPER_HEAVY_CONSEC_SAME_CLASS_THRESHOLD - 1,
     )
-    # attempts=3 → heavy escalation already, but NOT super_heavy
+    # Both below threshold → heavy escalation only, not super_heavy
     assert model == "sonnet"
 
 
@@ -114,9 +125,24 @@ def test_light_still_fires_on_iter_1_with_super_heavy_enabled():
     assert reason == "light"
 
 
-def test_heavy_fires_on_iter_2_then_super_heavy_on_iter_5():
-    """End-to-end tier ladder smoke test."""
-    from scripts.tt_hw_planner._cli_helpers.agent import _pick_agent_model_for_iter
+def test_tier_ladder_end_to_end():
+    """End-to-end tier ladder smoke test.
+
+    With the 2026-06-03 thresholds (attempts=3, consec=2), the ladder
+    is:
+      attempts=0 → haiku   (light, iter 1)
+      attempts=1 → haiku   (light, no heavy trigger yet)
+      attempts=2 → sonnet  (heavy:attempts=2)
+      attempts=3 → opus    (super_heavy:attempts=3)
+      attempts≥3 → opus    (continues)
+
+    Opus engages a full iter earlier than the old (5, 3) defaults,
+    matching the Phi-3.5 attention observation that two sonnet iters
+    on the same STATE_DICT_KEY didn't break through."""
+    from scripts.tt_hw_planner._cli_helpers.agent import (
+        _SUPER_HEAVY_ATTEMPTS_THRESHOLD,
+        _pick_agent_model_for_iter,
+    )
 
     kwargs = dict(
         model_default="haiku",
@@ -129,31 +155,36 @@ def test_heavy_fires_on_iter_2_then_super_heavy_on_iter_5():
     )
     # iter 1: light
     assert _pick_agent_model_for_iter(attempts_so_far=0, **kwargs)[0] == "haiku"
-    # iter 2-4: heavy
+    assert _pick_agent_model_for_iter(attempts_so_far=1, **kwargs)[0] == "haiku"
+    # iter 2: heavy
     assert _pick_agent_model_for_iter(attempts_so_far=2, **kwargs)[0] == "sonnet"
-    assert _pick_agent_model_for_iter(attempts_so_far=3, **kwargs)[0] == "sonnet"
-    assert _pick_agent_model_for_iter(attempts_so_far=4, **kwargs)[0] == "sonnet"
-    # iter 5+: super_heavy
-    assert _pick_agent_model_for_iter(attempts_so_far=5, **kwargs)[0] == "opus"
+    # iter 3+ (at attempts threshold): super_heavy
+    assert _pick_agent_model_for_iter(attempts_so_far=_SUPER_HEAVY_ATTEMPTS_THRESHOLD, **kwargs)[0] == "opus"
     assert _pick_agent_model_for_iter(attempts_so_far=10, **kwargs)[0] == "opus"
 
 
 # ─── _resolve_tiered_model_aliases — provider defaults ──────────────
 
 
-def test_claude_tiered_defaults_include_opus_as_super_heavy():
+def test_claude_tiered_defaults_are_sonnet_opus():
+    """2026-06-03: haiku was dropped from the iter-loop reasoning
+    ladder (Phi-3.5 attention case showed iter-1 haiku output was
+    systematically thrown away by later sonnet iters). The claude
+    tiered ladder is now sonnet → opus; both light and heavy resolve
+    to sonnet so the picker's existing tier-discrimination code paths
+    still work."""
     from scripts.tt_hw_planner._cli_helpers.agent import _resolve_tiered_model_aliases
 
     light, heavy, super_heavy = _resolve_tiered_model_aliases(
         provider="claude",
-        auto_model="haiku",
+        auto_model="sonnet",
         auto_model_light=None,
         auto_model_heavy=None,
         auto_model_super_heavy=None,
         auto_model_tiered=True,
     )
-    assert light == "haiku"
-    assert heavy == "sonnet"
+    assert light == "sonnet", "iter-1 starts at sonnet (haiku no longer in reasoning ladder)"
+    assert heavy == "sonnet", "heavy tier also resolves to sonnet — opus is via super_heavy"
     assert super_heavy == "opus", "claude tiered mode must default super_heavy=opus"
 
 

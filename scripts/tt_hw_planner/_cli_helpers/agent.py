@@ -503,6 +503,16 @@ def _invoke_agent(
                 pass
 
 
+# Thresholds for escalating to super_heavy (opus) in
+# _pick_agent_model_for_iter. Lowered 2026-06-03 from (5, 3) to (3, 2)
+# after the Phi-3.5 attention case showed sonnet plateauing on the
+# same STATE_DICT_KEY for two consecutive iters before opus engaged.
+# Lower values get opus's deeper reasoning into play sooner, not after
+# the iter budget is half-spent on sonnet retries that aren't moving.
+_SUPER_HEAVY_ATTEMPTS_THRESHOLD = 3
+_SUPER_HEAVY_CONSEC_SAME_CLASS_THRESHOLD = 2
+
+
 def _pick_agent_model_for_iter(
     *,
     model_default: str,
@@ -526,11 +536,19 @@ def _pick_agent_model_for_iter(
 
     - **super_heavy** (opus, typically) fires when sonnet (heavy) has
       ALREADY been tried and is plateauing. Specifically:
-        * ``attempts_so_far >= 5`` (light + heavy both had shots)
-        * OR ``consecutive_same_class >= 3`` (heavy is repeating the
-          same error class — needs deeper reasoning to break out)
+        * ``attempts_so_far >= _SUPER_HEAVY_ATTEMPTS_THRESHOLD`` (3 by
+          default: light iter-1 + one heavy iter-2 didn't graduate)
+        * OR ``consecutive_same_class >= _SUPER_HEAVY_CONSEC_SAME_CLASS_THRESHOLD``
+          (2 by default: heavy is repeating the same error class —
+          don't burn a second heavy iter on it)
       Only fires when ``model_super_heavy`` is provided; otherwise the
       tier ladder caps at heavy as before.
+
+      Defaults were lowered 2026-06-03 (attempts 5→3, consec 3→2) after
+      the Phi-3.5 attention case showed sonnet hitting the same
+      STATE_DICT_KEY twice without breakthrough — opus's deeper
+      reasoning should engage sooner, not after burning 2 more sonnet
+      iters.
 
     - **heavy** (sonnet, typically) fires when light has had a shot:
         * ``force_heavy`` (used by repair loops on no-edit iters)
@@ -538,7 +556,9 @@ def _pick_agent_model_for_iter(
         * ``failure_class`` in ``_HEAVY_FAILURE_CLASSES``
         * ``attempts_so_far >= 2``
 
-    - **light** (haiku) is the default first-iter model.
+    - **light** is the default first-iter model. For claude this now
+      resolves to sonnet (haiku was dropped from the iter-loop ladder
+      2026-06-03); for cursor it's sonnet-4.
 
     Returns `(chosen_model, reason)` where `reason` is a short tag for
     the log line — useful for post-mortems.
@@ -553,14 +573,16 @@ def _pick_agent_model_for_iter(
 
     # Super-heavy tier (opus). Only fires if explicitly enabled AND the
     # heavy tier has demonstrably plateaued. Triggers:
-    #   - attempts_so_far >= 5: heavy has had at least 3-4 shots
-    #     (assuming light ran iters 1, heavy iters 2-4)
-    #   - consecutive_same_class >= 3: heavy is producing patches that
-    #     all hit the same error class — needs deeper reasoning
+    #   - attempts_so_far >= _SUPER_HEAVY_ATTEMPTS_THRESHOLD (3): heavy
+    #     has had at least one shot (light iter-1 + heavy iter-2 both
+    #     failed) so we escalate before sonnet burns more budget.
+    #   - consecutive_same_class >= _SUPER_HEAVY_CONSEC_SAME_CLASS_THRESHOLD (2):
+    #     heavy repeated the same error class once already — don't
+    #     wait for a third sonnet attempt, give opus the slot.
     if super_heavy:
-        if attempts_so_far >= 5:
+        if attempts_so_far >= _SUPER_HEAVY_ATTEMPTS_THRESHOLD:
             return (super_heavy, f"super_heavy:attempts={attempts_so_far}")
-        if consecutive_same_class >= 3:
+        if consecutive_same_class >= _SUPER_HEAVY_CONSEC_SAME_CLASS_THRESHOLD:
             return (super_heavy, f"super_heavy:consec_same_class={consecutive_same_class}")
 
     if force_heavy:
@@ -590,20 +612,30 @@ def _resolve_tiered_model_aliases(
     single-model path with ``auto_model``.
 
     When ``--auto-model-tiered`` is set, applies provider defaults:
-      * claude: ``haiku → sonnet → opus`` (3-tier auto-escalation)
+      * claude: ``sonnet → opus`` (2-tier reasoning ladder). Both the
+        "light" and "heavy" tier resolve to sonnet so the picker's
+        existing light/heavy/super_heavy code paths still work — the
+        agent picks sonnet for iter 1 + iter 2, opus from iter 3.
       * cursor: ``sonnet-4 → opus`` (2-tier; cursor's ladder differs;
         super_heavy stays None)
 
     Explicit ``--auto-model-light`` / ``--auto-model-heavy`` /
     ``--auto-model-super-heavy`` always override the defaults.
 
-    2026-06-03: Added super_heavy tier (opus by default for claude).
-    Previously haiku → sonnet was the entire ladder; opus was opt-in
-    only via explicit ``--auto-model-heavy=opus``. The 3-tier ladder
-    lets opus auto-fire when sonnet plateaus (attempts ≥ 5 or
-    consecutive same-class failures ≥ 3) — the typical
-    "sonnet keeps producing similar patches that hit the same error"
-    pattern that needs stronger reasoning to break.
+    2026-06-03 (initial 3-tier): Added super_heavy tier (opus by default
+    for claude). Previously haiku → sonnet was the entire ladder; opus
+    was opt-in only via explicit ``--auto-model-heavy=opus``.
+
+    2026-06-03 (haiku removal): Dropped haiku from the iter-loop
+    reasoning ladder. The Phi-3.5 attention case showed haiku's iter-1
+    output (a KeyError-producing wrapper) was systematically discarded
+    by later sonnet iters — burning an iter slot to produce something
+    that taught the next iter nothing. Sonnet at iter-1 + opus from
+    iter-3 is the new ladder. Haiku is still used elsewhere for cheap
+    classification / verify tasks (late_discovery_classifier,
+    llm_verify, env_fix, setup_step_recovery) where its cost-per-call
+    is the right trade-off — it's only dropped from the reasoning
+    iter loop.
 
     Backward compat: callers receiving the previous 2-tuple shape will
     get a TypeError on unpack — the call site update is mechanical
@@ -613,7 +645,12 @@ def _resolve_tiered_model_aliases(
         return (None, None, None)
     if auto_model_tiered:
         if provider == "claude":
-            default_light, default_heavy, default_super = "haiku", "sonnet", "opus"
+            # 2026-06-03: haiku dropped from the iter-loop reasoning
+            # ladder (see docstring above). light == heavy == sonnet so
+            # the picker's existing light/heavy/super_heavy paths still
+            # apply but both resolve to sonnet — opus kicks in via the
+            # super_heavy thresholds.
+            default_light, default_heavy, default_super = "sonnet", "sonnet", "opus"
         else:
             # cursor: 2-tier only for now; super stays unset
             default_light, default_heavy, default_super = "sonnet-4", "opus", None
