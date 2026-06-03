@@ -18,6 +18,7 @@
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -60,7 +61,7 @@ namespace tt::tt_metal::experimental {
 // ============================================================================
 
 // A name identifying a KernelSpec within a ProgramSpec.
-using KernelSpecName = std::string;
+using KernelSpecName = ttsl::StrongType<std::string, struct KernelSpecNameTag>;
 
 //------------------------------------------------
 // KernelSpec
@@ -135,7 +136,7 @@ struct KernelSpec {
     // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
     // The kernel constructs the accessor via SemaphoreAccessor(sem::<accessor_name>)
     struct SemaphoreBinding {
-        SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
+        SemSpecName semaphore_spec_name;        // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
     };
     std::vector<SemaphoreBinding> semaphore_bindings;
@@ -144,7 +145,7 @@ struct KernelSpec {
     // Declares that this kernel accesses a tensor parameter (declared at the ProgramSpec level)
     // The kernel constructs the accessor via TensorAccessor(ta::<accessor_name>)
     struct TensorBinding {
-        TensorParameterName tensor_parameter_name;  // identify the TensorBinding within the ProgramSpec
+        TensorParamName tensor_parameter_name;      // identify the TensorBinding within the ProgramSpec
         std::string accessor_name;                  // tensor accessor name (used in the kernel source code)
     };
     std::vector<TensorBinding> tensor_bindings;

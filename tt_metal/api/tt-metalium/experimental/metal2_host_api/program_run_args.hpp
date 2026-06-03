@@ -78,7 +78,7 @@ struct ProgramRunArgs {
     ////////////////////////////////////////////////////////////////////////
     struct TensorArgument {
         // Tensor identifier (matches a TensorParameter::unique_id in the ProgramSpec)
-        TensorParameterName tensor_parameter_name;
+        TensorParamName tensor_parameter_name;
 
         // The actual MeshTensor argument
         // (Non-owning reference. Will become MeshTensorView when available; existing callsites won't change.)

@@ -589,7 +589,7 @@ public:
     // -----------------------------------------------------------------------
     template <ProgramSpecFactoryConcept ProgramSpecFactory>
     struct ProgramSpecMeshWorkloadFactoryAdapter {
-        using TensorParameterName = tt::tt_metal::experimental::TensorParameterName;
+        using TensorParamName = tt::tt_metal::experimental::TensorParamName;
         using TensorArgument = tt::tt_metal::experimental::ProgramRunArgs::TensorArgument;
 
         // Stored across cache entries: for each TensorArgument in a program's
@@ -597,7 +597,7 @@ public:
         // reflection-driven enumeration) it was bound to. Pointer identity is
         // only valid within a single call; the index is stable across calls.
         struct ResolvedTensorBinding {
-            TensorParameterName tensor_parameter_name;
+            TensorParamName tensor_parameter_name;
             std::size_t io_tensor_idx;
         };
 
@@ -648,7 +648,7 @@ public:
                     it != io_mesh_tensors.end(),
                     "TensorArgument '{}' must reference a MeshTensor reachable from tensor_args or "
                     "tensor_return_value (got non-io_tensor MeshTensor)",
-                    tensor_arg.tensor_parameter_name);
+                    tensor_arg.tensor_parameter_name.get());
                 bindings.push_back(
                     {tensor_arg.tensor_parameter_name,
                      static_cast<std::size_t>(std::distance(io_mesh_tensors.begin(), it))});
