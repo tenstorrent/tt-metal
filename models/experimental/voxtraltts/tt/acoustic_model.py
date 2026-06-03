@@ -563,12 +563,50 @@ class VoxtralTTAcousticModel:
         ttnn.deallocate(codes_u32)
         return out
 
+    def _fm_round_acoustic_codes_from_sampled_tt(self, sampled_tt: ttnn.Tensor, bsz: int) -> torch.Tensor:
+        """Clamp → scale → ``round`` in fp32; host ``[bsz, n_acoustic]`` long (pre special-token offset)."""
+        scaled_host = self._fm_pre_round_scaled_from_sampled_tt(sampled_tt, bsz)
+        return scaled_host.round().long()
+
+    def fm_pre_round_scaled_codes_tt(
+        self,
+        llm_hidden_tt: ttnn.Tensor,
+        noise_tt: ttnn.Tensor,
+        cfg_scalar: float,
+    ) -> ttnn.Tensor:
+        """Continuous pre-``round`` FSQ value ``[bsz, 1, n_acoustic]`` (``round`` of this -> acoustic codes).
+
+        Numerical-accuracy probe: this is the continuous signal whose ``round`` produces the discrete
+        acoustic codes, so its PCC vs the reference isolates op accuracy from FSQ-boundary code flips.
+        """
+        llm_tile = self._llm_hidden_tile_bf16(llm_hidden_tt)
+        bsz = int(llm_hidden_tt.shape[0])
+        sampled_tt = self._fm_decode_sampled_tt(llm_tile, noise_tt, cfg_scalar)
+        if llm_tile is not llm_hidden_tt and llm_tile.is_allocated():
+            ttnn.deallocate(llm_tile)
+        scaled = self.fm_pre_round_scaled_tt(sampled_tt)
+        out = ttnn.reshape(scaled, (bsz, 1, self.n_acoustic_out))
+        if out is not scaled and scaled.is_allocated():
+            ttnn.deallocate(scaled)
+        return out
+
     def _fm_decode_codes_tt(
         self,
         llm_hidden_tt: ttnn.Tensor,
         noise_tt: ttnn.Tensor,
         cfg_scalar: float,
     ) -> ttnn.Tensor:
+        bsz = int(llm_hidden_tt.shape[0])
+        sampled_tt = self._fm_decode_sampled_tt(llm_hidden_tt, noise_tt, cfg_scalar)
+        return self._fm_round_acoustic_codes_tt(sampled_tt, bsz)
+
+    def _fm_decode_sampled_tt(
+        self,
+        llm_hidden_tt: ttnn.Tensor,
+        noise_tt: ttnn.Tensor,
+        cfg_scalar: float,
+    ) -> ttnn.Tensor:
+        """Run the flow-matching Euler ODE; return the continuous ``sampled`` tensor (pre-clamp/scale/round)."""
         bsz = int(llm_hidden_tt.shape[0])
         sampled_tt = ttnn.typecast(
             ttnn.clone(noise_tt),
@@ -603,9 +641,11 @@ class VoxtralTTAcousticModel:
             v_t_tt = ttnn.add(v_cond_scaled, v_uncond_scaled, dtype=self.dtype, memory_config=self._fm_dram_mem_config)
             ttnn.deallocate(v_cond_scaled)
             ttnn.deallocate(v_uncond_scaled)
+
             v_t_3d = ttnn.reshape(v_t_tt, (bsz, 1, self.n_acoustic_out))
             ttnn.deallocate(v_t_tt)
+            # check for torch or ttnn
             sampled_tt = self._euler_integrate_sampled(sampled_tt, v_t_3d, dt_val)
 
         ttnn.deallocate(tt_llm_batched)
-        return self._fm_round_acoustic_codes_tt(sampled_tt, bsz)
+        return sampled_tt
