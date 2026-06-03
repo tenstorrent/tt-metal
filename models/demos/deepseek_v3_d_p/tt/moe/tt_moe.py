@@ -420,6 +420,13 @@ class TtMoe(LightweightModule):
         logger.debug(f"[TtMoe.forward] INPUT SHAPES:")
         logger.debug(f"  x.shape={x.shape}")
 
+        # Per-call seq_len_per_chip: x has shape (dispatch_group_size, seq_per_chip, emb).
+        # For multi-chunk-per-slot prefill each forward processes only
+        # chunk_size_per_chip rows; routing_setup + combine need this size
+        # rather than the construction-time max_seq_len_per_chip. For
+        # single-chunk (x.shape[1] == self.seq_len_per_chip) the values match.
+        actual_seq_len_per_chip = x.shape[1]
+
         # ========================================
         # Gate: compute weights/indices/offsets/counts from x
         # ========================================
@@ -431,7 +438,7 @@ class TtMoe(LightweightModule):
         tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
             ttnn_top_k_experts_indices=indices,
             num_routed_experts=self.num_routed_experts,
-            seq_len_per_chip=self.seq_len_per_chip,
+            seq_len_per_chip=actual_seq_len_per_chip,
             num_experts_per_tok=self.num_experts_per_tok,
         )
         signpost(header="moe_gate_calculate_dispatch_offsets")
@@ -565,6 +572,7 @@ class TtMoe(LightweightModule):
             metadata,
             tt_expert_token_counts,
             tt_expert_region_offsets,
+            seq_len_per_chip=actual_seq_len_per_chip,
         )
         logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape} {combined_output.dtype=}")
 

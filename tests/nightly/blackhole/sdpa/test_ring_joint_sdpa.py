@@ -890,8 +890,10 @@ def run_ring_joint_sdpa_chunked(
     tp_axis = 0
     num_links = 2
 
+    logger.info(f"[chunked-test] opening mesh device shape=({mesh_config.tp_size}, {sp_size})")
     mesh_shape = ttnn.MeshShape(mesh_config.tp_size, sp_size)
     mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+    logger.info("[chunked-test] mesh device opened")
 
     try:
         sdpa_compute_grid = (mesh_config.sdpa_cols, mesh_config.grid_rows)
@@ -903,17 +905,24 @@ def run_ring_joint_sdpa_chunked(
         )
         worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
         worker_sub_device_id = ttnn.SubDeviceId(0)
+        logger.info("[chunked-test] creating sub-device manager")
         sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
         mesh_device.load_sub_device_manager(sub_device_manager)
         mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+        logger.info("[chunked-test] sub-device manager loaded")
 
+        logger.info("[chunked-test] creating global semaphores")
         ccl_semaphore_handles = create_global_semaphores(mesh_device, ccl_sub_device_crs, 0)
+        logger.info("[chunked-test] global semaphores created")
 
         torch.manual_seed(CHUNKED_PREFILL_SEED)
+        logger.info(f"[chunked-test] building torch tensors (total_seq={total_seq}, nhq={nhq}, nhk={nhk}, nhv={nhv})")
         Q_full = fa_rand(b, nhq, total_seq, d_q)
         K_full = fa_rand(b, nhk, total_seq, d_k)
         V_full = fa_rand(b, nhv, total_seq, d_v)
+        logger.info("[chunked-test] computing torch reference (full causal SDPA)")
         ref_full = torch_sdpa_reference(Q_full, K_full, V_full, is_causal=True)
+        logger.info("[chunked-test] torch reference computed")
 
         sdpa_input_shard_dims = [None, None]
         sdpa_input_shard_dims[sp_axis] = 2
@@ -1049,10 +1058,12 @@ def run_ring_joint_sdpa_chunked(
         # replayed and per-chunk outputs from iteration 0 are compared bit-exact.
         reference_outputs = None
         per_chunk_results = []
+        logger.info(f"[chunked-test] starting chunk loop: n_chunks={n_chunks}, num_iterations={num_iterations}")
         for it in range(num_iterations):
             iter_outputs = [] if num_iterations > 1 else None
             for i in range(n_chunks):
                 s, e = i * chunk_size, (i + 1) * chunk_size
+                logger.info(f"[chunked-test] iter={it} chunk={i} range=[{s}, {e}) starting")
 
                 K_balanced = to_balanced_growing_cache_layout(K_full, sp_size, chunk_size, i)
                 V_balanced = to_balanced_growing_cache_layout(V_full, sp_size, chunk_size, i)
@@ -1071,9 +1082,11 @@ def run_ring_joint_sdpa_chunked(
                     K_input = K_balanced
                     V_input = V_balanced
 
+                logger.info(f"[chunked-test] iter={it} chunk={i} uploading Q/K/V to device")
                 tt_Q = upload_q(Q_chunk)
                 tt_K = upload_k(K_input, memory_config=k_memory_config)
                 tt_V = upload_v(V_input, memory_config=v_memory_config)
+                logger.info(f"[chunked-test] iter={it} chunk={i} Q/K/V uploaded")
 
                 if persistent_buffer_mode == "reuse_max":
                     persistent_output_buffer_k, persistent_output_buffer_v = shared_persistent_buffers
@@ -1083,6 +1096,7 @@ def run_ring_joint_sdpa_chunked(
                         e, kv_buffer_batch
                     )
 
+                logger.info(f"[chunked-test] iter={it} chunk={i} calling SDPA op (logical_n={e})")
                 try:
                     tt_out = call_sdpa(
                         tt_Q,
@@ -1109,8 +1123,10 @@ def run_ring_joint_sdpa_chunked(
                         f"Chunked prefill SDPA call raised on iter {it}, chunk {i} "
                         f"(Q rows [{s}, {e}), logical_n={e}): {type(exc).__name__}: {exc}"
                     )
+                logger.info(f"[chunked-test] iter={it} chunk={i} SDPA op returned, reading back to host")
 
                 out_i = to_host(tt_out, chunk_size)
+                logger.info(f"[chunked-test] iter={it} chunk={i} readback complete")
 
                 if num_iterations > 1:
                     iter_outputs.append(out_i)

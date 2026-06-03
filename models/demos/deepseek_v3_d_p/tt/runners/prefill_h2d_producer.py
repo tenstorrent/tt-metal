@@ -51,19 +51,21 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reorder_tensor_chunks
 
-# Per-iter control metadata payload: 4 × int32 = 16 bytes. Must match the
-# runner's H2D_METADATA_SIZE_BYTES and field order in prefill_runner.py.
-_METADATA_SIZE_BYTES = 16
-_INVALID_SLOT_ID = -1  # mirrors migration_setup.INVALID_SLOT_ID; means "no dst_slot, skip migration"
+# Per-iter control metadata payload — matches the prefill scheduler's
+# PrefillMetadata wire struct (12 bytes, 3 × uint32). Must equal the
+# runner's H2D_METADATA_SIZE_BYTES. Source-of-truth definition lives in
+# include/tt_llm_engine/scheduler/prefill/prefill_metadata.hpp.
+_METADATA_SIZE_BYTES = 12
 
 
-def _pack_metadata(actual_isl: int, slot_id: int, dst_slot: int) -> bytes:
-    """4 little-endian int32s — [actual_isl, slot_id, dst_slot, reserved].
+def _pack_metadata(slot_id: int, actual_start: int, actual_end: int) -> bytes:
+    """3 little-endian uint32s — [slot_id, actual_start, actual_end].
 
-    The runner decodes these in the same order; reserved is left 0 for now,
-    space for a future field (e.g. task_id, priority).
+    Matches the scheduler's PrefillMetadata layout: slot_id selects the
+    per-slot KV-cache buffer; [actual_start, actual_end) is the absolute
+    KV-position range of the real (non-pad) tokens in the chunk.
     """
-    return struct.pack("<iiii", actual_isl, slot_id, dst_slot, 0)
+    return struct.pack("<III", slot_id, actual_start, actual_end)
 
 
 _sp = int(os.environ.get("PREFILL_SP", 8))
@@ -145,17 +147,17 @@ def main() -> None:
             f"task_id={task_id} prompt has {len(token_ids)} tokens but MAX_SEQ_LEN={MAX_SEQ_LEN}. "
             f"Set PREFILL_MAX_SEQ_LEN to match the runner."
         )
-    actual_isl = len(token_ids)  # captured BEFORE padding — runner uses this for MLA
+    actual_isl = len(token_ids)  # captured BEFORE padding — runner derives this from actual_end - actual_start
     if len(token_ids) < MAX_SEQ_LEN:
         token_ids = token_ids + [1] * (MAX_SEQ_LEN - len(token_ids))
-    # Pack per-iter control bytes. slot_id=0 / dst_slot=INVALID for this demo
-    # (no migration); when wired into the inference server these come from
-    # the request envelope.
-    metadata = _pack_metadata(actual_isl=actual_isl, slot_id=0, dst_slot=_INVALID_SLOT_ID)
+    # Single-chunk-per-prefill mode: pack the whole prompt as one chunk
+    # starting at KV position 0 on slot 0. Matches the scheduler's
+    # PrefillMetadata wire format. Multi-chunk / multi-slot is what the
+    # real prefill scheduler will drive; this demo producer just emits
+    # the minimal single-chunk envelope.
+    metadata = _pack_metadata(slot_id=0, actual_start=0, actual_end=actual_isl)
     assert len(metadata) == _METADATA_SIZE_BYTES, f"metadata pack expected {_METADATA_SIZE_BYTES}B, got {len(metadata)}"
-    logger.info(
-        f"[producer] metadata: actual_isl={actual_isl} slot_id=0 dst_slot={_INVALID_SLOT_ID} ({len(metadata)}B)"
-    )
+    logger.info(f"[producer] metadata: slot_id=0 actual_start=0 actual_end={actual_isl} ({len(metadata)}B)")
 
     # Shape-only mapper: this process has no MeshDevice. The mapper sits on
     # host only — used by ttnn.from_torch to produce the per-shard host

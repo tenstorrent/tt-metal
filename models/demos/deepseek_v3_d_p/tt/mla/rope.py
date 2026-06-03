@@ -71,19 +71,25 @@ class RotarySetup:
         self.is_balanced = is_balanced
         self.sp_factor = mesh_device.shape[sp_axis]
 
-    def get_rope_tensors(self, seq_len: int) -> dict[str, ttnn.Tensor]:
+    def get_rope_tensors(self, seq_len: int, chunk_start: int = 0) -> dict[str, ttnn.Tensor]:
         """Get cos, sin, and transformation matrices sharded over SP axis.
 
+        For multi-chunk prefill the chunk's tokens occupy logical positions
+        [chunk_start, chunk_start + seq_len); cos/sin are sliced from that
+        absolute window of the precomputed tables. chunk_start=0 reproduces
+        the single-chunk path.
+
         If is_balanced, cos/sin are reordered according to balanced chunk order
-        before sharding so each SP device gets rope values matching its chunk positions.
+        AFTER the absolute slice so each SP device gets rope values matching
+        its (permuted) chunk positions.
         """
         cos_matrix_torch, sin_matrix_torch = get_cos_sin_matrix(self.hf_config)
 
-        assert (
-            seq_len <= self.hf_config.max_seq_len
-        ), f"seq_len {seq_len} must be less than or equal to max_seq_len {self.hf_config.max_seq_len}"
-        cos_matrix_torch = cos_matrix_torch[..., :seq_len, :]
-        sin_matrix_torch = sin_matrix_torch[..., :seq_len, :]
+        assert chunk_start + seq_len <= self.hf_config.max_seq_len, (
+            f"chunk_start + seq_len ({chunk_start} + {seq_len}) must be <= " f"max_seq_len {self.hf_config.max_seq_len}"
+        )
+        cos_matrix_torch = cos_matrix_torch[..., chunk_start : chunk_start + seq_len, :]
+        sin_matrix_torch = sin_matrix_torch[..., chunk_start : chunk_start + seq_len, :]
 
         if self.is_balanced:
             chunk_order = create_balanced_chunk_order(self.sp_factor)

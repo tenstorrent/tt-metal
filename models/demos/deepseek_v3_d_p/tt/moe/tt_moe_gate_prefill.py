@@ -407,10 +407,11 @@ class TtMoEGatePrefill(LightweightModule):
 
     def _device_grouped_gate(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run deepseek_grouped_gate on device."""
-        logger.debug(f"[MoeGate] _device_grouped_gate: logits.shape={logits.shape}, bias.shape={self.bias.shape}")
-        return ttnn.experimental.deepseek_grouped_gate(
+        bias = self._bias_for_logits(logits)
+        logger.debug(f"[MoeGate] _device_grouped_gate: logits.shape={logits.shape}, bias.shape={bias.shape}")
+        result = ttnn.experimental.deepseek_grouped_gate(
             logits,
-            self.bias,
+            bias,
             n_groups=self.config.n_expert_groups,
             summed_experts_per_group=self.config.n_expert_groups // self.config.n_limited_groups,
             topk_groups=self.config.n_limited_groups,
@@ -418,11 +419,34 @@ class TtMoEGatePrefill(LightweightModule):
             route_scale=self.config.route_scale,
             epsilon=1e-20,
         )
+        if bias is not self.bias:
+            ttnn.deallocate(bias)
+        return result
+
+    def _bias_for_logits(self, logits: ttnn.Tensor) -> ttnn.Tensor:
+        """Return a bias tensor matching the per-device seq dim of `logits`.
+
+        `self.bias` is pre-allocated to (sp_dim, n_experts) at construction,
+        where sp_dim = max_seq_len / sp_factor. For multi-chunk-per-slot the
+        per-forward logits have fewer rows (chunk_size / sp_factor); the
+        moe_grouped_topk kernel asserts `scores.shape == bias.shape`, so the
+        bias must be sliced to match.
+
+        Each row of `self.bias` is the same per-expert vector (the bias was
+        constructed by `bias_torch.repeat(sp_dim).view(sp_dim, -1)`), so a
+        prefix-slice is value-preserving. Caller is responsible for dealloc
+        of any newly-allocated slice.
+        """
+        actual_sp_dim = logits.shape[-2]
+        if actual_sp_dim == self.bias.shape[-2]:
+            return self.bias
+        return ttnn.slice(self.bias, [0, 0], [actual_sp_dim, self.bias.shape[-1]])
 
     def _device_grouped_gate_fp32(self, logits: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run moe_grouped_topk on device with fp32 typecast."""
+        bias = self._bias_for_logits(logits)
         logits_f32 = ttnn.typecast(logits, ttnn.float32)
-        bias_f32 = ttnn.typecast(self.bias, ttnn.float32)
+        bias_f32 = ttnn.typecast(bias, ttnn.float32)
         ttnn_scores, ttnn_top_k_experts_indices = ttnn.experimental.deepseek_prefill.moe_grouped_topk(
             logits_f32,
             bias_f32,
@@ -436,6 +460,8 @@ class TtMoEGatePrefill(LightweightModule):
         )
         ttnn.deallocate(logits_f32)
         ttnn.deallocate(bias_f32)
+        if bias is not self.bias:
+            ttnn.deallocate(bias)
         return ttnn_scores, ttnn_top_k_experts_indices
 
     def _host_grouped_gate(self, host_logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

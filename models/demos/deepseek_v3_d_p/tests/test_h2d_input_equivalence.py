@@ -83,7 +83,9 @@ def test_h2d_socket_input_equivalence(mesh_device):
     actual_isl = len(token_ids)
     if len(token_ids) < MAX_SEQ_LEN:
         token_ids = token_ids + [1] * (MAX_SEQ_LEN - len(token_ids))
-    slot_id, dst_slot = 0, -1
+    # PrefillMetadata wire format: (slot_id, actual_start, actual_end).
+    # Single-chunk demo: whole prompt on slot 0 starting at KV pos 0.
+    slot_id, actual_start, actual_end = 0, 0, actual_isl
     logger.info(f"[equiv] actual_isl={actual_isl} padded_len={len(token_ids)}")
 
     # --- reference: what _prepare_input_tensor would feed the model (no socket) ---
@@ -94,7 +96,7 @@ def test_h2d_socket_input_equivalence(mesh_device):
     service = _build_h2d_service(mesh_device)
     mapper = ttnn.create_mesh_mapper(mesh_device, H2D_MAPPER_CONFIG)
     host_tokens = _tokens_to_host_tensor(token_ids, mapper)
-    metadata = struct.pack("<iiii", actual_isl, slot_id, dst_slot, 0)
+    metadata = struct.pack("<III", slot_id, actual_start, actual_end)
     service.forward_to_tensor(host_tokens, metadata=metadata)
     delivered, tt_metadata = h2d_socket_sync(
         service, H2D_SYNC_WORKER_CORES, metadata_size_bytes=H2D_METADATA_SIZE_BYTES
@@ -110,8 +112,8 @@ def test_h2d_socket_input_equivalence(mesh_device):
     # --- (2) metadata round-trips intact ---
     meta = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()
     assert (
-        int(meta[0]) == actual_isl and int(meta[1]) == slot_id and int(meta[2]) == dst_slot
-    ), f"metadata mismatch: got {meta[:3].tolist()} expected [{actual_isl}, {slot_id}, {dst_slot}]"
-    logger.info(f"[equiv] PASS: metadata round-trip [actual_isl,slot_id,dst_slot]={meta[:3].tolist()}")
+        int(meta[0]) == slot_id and int(meta[1]) == actual_start and int(meta[2]) == actual_end
+    ), f"metadata mismatch: got {meta[:3].tolist()} expected [{slot_id}, {actual_start}, {actual_end}]"
+    logger.info(f"[equiv] PASS: PrefillMetadata round-trip " f"[slot_id,actual_start,actual_end]={meta[:3].tolist()}")
 
     del service

@@ -162,6 +162,7 @@ class TtDeepSeekPrefillPipeline:
         dst_slot: Optional[int] = None,
         *,
         input_tensor: Optional[ttnn.Tensor] = None,
+        actual_start: int = 0,
     ) -> int:
         """Run one prefill pass and return the first generated token.
 
@@ -196,6 +197,7 @@ class TtDeepSeekPrefillPipeline:
             number_of_non_padded_tokens=actual_isl,
             on_layer_complete=on_layer_complete,
             temperature=0.0,
+            actual_start=actual_start,
         )
         return int(first_token_id)
 

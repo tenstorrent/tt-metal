@@ -228,6 +228,7 @@ class TtPrefillTransformer(LightweightModule):
         read_profiler: bool = False,
         temperature: Union[float, list[float]] = 0.0,
         on_layer_complete: Optional[Callable[[int, ttnn.Tensor], None]] = None,
+        actual_start: int = 0,
     ):
         """
         Forward pass: embed -> [block x N] -> norm -> lm_head.
@@ -254,7 +255,15 @@ class TtPrefillTransformer(LightweightModule):
                             where "first_token" is a list of results for each temperature
                             (None if return_intermediates=False)
         """
-        rope_tensors = self.rope_setup.get_rope_tensors(self.seq_len)
+        # Per-forward chunk size derived from the input tensor. token_ids is
+        # SP-sharded with shape [1, 1, chunk_size_per_chip]; the global chunk
+        # size is chunk_size_per_chip * sp_factor. This is the seq length of
+        # the rope window we slice; for single-chunk-per-slot it equals
+        # self.seq_len (= max_seq_len = chunk_size), and for multi-chunk-per-slot
+        # it is the (smaller) chunk_size while self.seq_len holds the slot's
+        # capacity used for KV cache sizing.
+        chunk_size_global = token_ids.shape[2] * self.rope_setup.sp_factor
+        rope_tensors = self.rope_setup.get_rope_tensors(chunk_size_global, chunk_start=actual_start)
         intermediates = {} if return_intermediates else None
 
         h = self.embed(token_ids)  # [1, seq_per_chip, emb_dim/tp]
@@ -274,6 +283,7 @@ class TtPrefillTransformer(LightweightModule):
                 return_intermediates=return_intermediates,
                 on_layer_complete=on_layer_complete,
                 actual_isl=number_of_non_padded_tokens,
+                actual_start=actual_start,
             )
             signpost(f"forward_layer_{i}_end")
             if return_intermediates:

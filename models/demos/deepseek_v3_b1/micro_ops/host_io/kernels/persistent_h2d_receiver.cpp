@@ -118,7 +118,9 @@ void kernel_main() {
     }
 
     bool terminated = false;
+    uint32_t recv_iter = 0;
     while (!terminated) {
+        DPRINT("[recv] iter={} start drain", recv_iter);
         // Drain exactly one full tensor's worth of data: num_socket_pages chunks.
         for (uint32_t chunk = 0; chunk < num_socket_pages; ++chunk) {
             // Polling wait with termination check so shutdown stays responsive
@@ -134,6 +136,11 @@ void kernel_main() {
                 cb_l1_addr,
                 socket_page_size);
             noc_async_read_barrier();
+            DPRINT(
+                "[recv] iter={} chunk={} pcie_read first_u32={}",
+                recv_iter,
+                chunk,
+                *reinterpret_cast<volatile uint32_t*>(cb_l1_addr));
 
             // Fan out pages_per_chunk tensor pages from the scratch buffer to the device tensor.
             const uint32_t base_page = chunk * pages_per_chunk;
@@ -148,6 +155,11 @@ void kernel_main() {
             // iteration's PCIe read. The trailing barrier after the outer loop guarantees
             // per-transfer durability.
             noc_async_write_barrier();
+            DPRINT(
+                "[recv] iter={} chunk={} backing_written first_u32_at_cb={}",
+                recv_iter,
+                chunk,
+                *reinterpret_cast<volatile uint32_t*>(cb_l1_addr));
 
             // Early host release: data is now in L1, free the pinned FIFO slot so the host can
             // refill it while we NoC-write this chunk to DRAM. `update_socket_config` is
@@ -220,6 +232,7 @@ void kernel_main() {
             // 1. Multicast atomic-inc of the data_ready semaphore to every
             //    worker core. Each worker observes (cur - last_seen) >= 1 on
             //    its local copy and proceeds to consume the new tensor.
+            DPRINT("[recv] iter={} sem_inc_about_to_fire last_consumed={}", recv_iter, last_consumed);
             noc_semaphore_inc_multicast(worker_mcast_addr, /*incr=*/1, /*num_dests=*/num_workers);
 
             // 2. Wait for EXACTLY num_workers more increments on the consumed
@@ -236,6 +249,8 @@ void kernel_main() {
                     break;
                 }
             }
+            DPRINT("[recv] iter={} got_ack last_consumed={}", recv_iter, last_consumed);
+            recv_iter++;
         }
     }
 

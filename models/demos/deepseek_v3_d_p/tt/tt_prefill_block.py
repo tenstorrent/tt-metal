@@ -333,6 +333,7 @@ class TtPrefillBlock(LightweightModule):
         return_intermediates: bool = False,
         on_layer_complete: Optional[Callable[[int, ttnn.Tensor], None]] = None,
         actual_isl: Optional[int] = None,
+        actual_start: int = 0,
     ):
         """
         Args:
@@ -359,6 +360,7 @@ class TtPrefillBlock(LightweightModule):
             cache_layer_idx=cache_layer_idx,
             on_layer_complete=on_layer_complete,
             actual_isl=actual_isl,
+            actual_start=actual_start,
         )
         ttnn.deallocate(attn_norm_out)
         x = ttnn.add(x, mla_out)

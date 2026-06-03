@@ -506,6 +506,7 @@ class ttMLA:
         cache_layer_idx: int = 0,
         on_layer_complete: Optional[Callable[[int], None]] = None,
         actual_isl: Optional[int] = None,
+        actual_start: int = 0,
     ) -> ttnn.Tensor:
         signpost(header="MLA_START")
         num_heads_local = self.num_heads // self.tp_factor
@@ -645,6 +646,7 @@ class ttMLA:
         # TODO: concat rope and nope, workaround remove with ttnn.narrow or fusion
         tt_kvpe = ttnn.concat([tt_kv_nope, tt_kv_rope], dim=-1)
         ttnn.deallocate(tt_kv_rope)
+        ttnn.deallocate(tt_kv_nope)
         tt_kvpe = ttnn.typecast(tt_kvpe, dtype=ttnn.bfloat8_b)
 
         # Zero the padding region of THIS layer's slot before fill so migration
@@ -657,37 +659,81 @@ class ttMLA:
             seq_len_total = seq_len_local * self.sp_factor
             zero_cache_padding_zigzag(
                 kvpe_cache=kvpe_cache[cache_layer_idx],
-                global_end_token=actual_isl,
+                global_end_token=actual_start + actual_isl,
                 sp_factor=self.sp_factor,
                 seq_len=seq_len_total,
                 decode_chunk_align=DECODE_CHUNK_ALIGN,
                 tp_factor=self.tp_factor,
             )
 
-        ttnn.kv_cache.fill_cache_for_user_(kvpe_cache, tt_kvpe, cache_layer_idx)
+        # update_idx is per-device row offset into this layer's slot. Chunk N's
+        # per-device tt_kvpe spans rows [N*chunk_size_local, (N+1)*chunk_size_local)
+        # of the device cache, where chunk_size_local = chunk_size / sp_factor.
+        # actual_start is a global position, so per-device offset = actual_start // sp.
+        ttnn.kv_cache.fill_cache_for_user_(
+            kvpe_cache, tt_kvpe, cache_layer_idx, update_idx=actual_start // self.sp_factor
+        )
+        ttnn.deallocate(tt_kvpe)
 
         if on_layer_complete is not None:
             on_layer_complete(self.layer_idx)
 
-        tt_v_embedding = ttnn.linear(
-            tt_kv_nope,
+        # ---- Chunked-prefill K/V data path -----------------------------------
+        # For chunk N's attention we need to see K/V for ALL prior chunks +
+        # this chunk. Slice the slot's cache rows [0, actual_end_local) per
+        # device — this is the accumulated K (+ rope) including the chunk
+        # we just wrote above. Derive V on-the-fly by running wkv_b2 on the
+        # kv_nope portion of the slice.
+        #
+        # For chunk 0 (actual_start=0): accumulated length == chunk_size so
+        # Q == K, is_chunked() returns false, and the kernel uses the legacy
+        # causal path. The result must be numerically equivalent to the
+        # pre-chunked behavior (modulo the bf8 cache-vs-bf16 precision delta
+        # on V's input — still well within PCC tolerance).
+        # For chunk N>0: K has actual_end rows, Q has chunk_size rows, so
+        # is_chunked() returns true and the kernel uses absolute-coord
+        # causal masking — this is where the cascading attention error from
+        # the deferred path gets fixed.
+        accumulated_end = actual_start + actual_isl
+        actual_end_local = accumulated_end // self.sp_factor
+
+        sdpa_k = ttnn.slice(
+            kvpe_cache,
+            [cache_layer_idx, 0, 0, 0],
+            [cache_layer_idx + 1, 1, actual_end_local, kvpe_cache.shape[-1]],
+        )
+        # The cache is NdSharded DRAM; the slice inherits that layout. Both the
+        # wkv_b2 matmul (for V) and the SDPA op want interleaved DRAM input.
+        sdpa_k = ttnn.to_memory_config(sdpa_k, ttnn.DRAM_MEMORY_CONFIG)
+
+        # Extract the kv_nope portion (first kv_lora_rank channels) of the
+        # accumulated K for the V projection.
+        sdpa_k_nope = ttnn.slice(
+            sdpa_k,
+            [0, 0, 0, 0],
+            [1, 1, actual_end_local, self.kv_lora_rank],
+        )
+
+        sdpa_v = ttnn.linear(
+            sdpa_k_nope,
             self.wkv_b2_weight,
             compute_kernel_config=self.default_compute_kernel_config,
-            **self._get_mm_kwargs("wkv_b2", seq_len_local),
+            **self._get_mm_kwargs("wkv_b2", actual_end_local),
         )
+        ttnn.deallocate(sdpa_k_nope)
 
         attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tt_q,
-            tt_kvpe,
-            tt_v_embedding,
+            sdpa_k,
+            sdpa_v,
             self.joint_q,
             self.joint_kv,
             self.joint_v,
             persistent_output_buffer_k=self.persistent_k_output_buffer,
             persistent_output_buffer_v=self.persistent_v_output_buffer,
             joint_strategy="rear",
-            logical_n=seq_len_local * self.sp_factor,
-            program_config=self._get_sdpa_program_config(seq_len_local),
+            logical_n=accumulated_end,
+            program_config=self._get_sdpa_program_config(actual_end_local),
             compute_kernel_config=self.default_compute_kernel_config,
             dim=2,
             multi_device_global_semaphore=self.tt_ccl.ring_attention_ccl_semaphore_handles,
@@ -702,6 +748,8 @@ class ttMLA:
             scale=self.scale,
             is_balanced=self.is_balanced,
         )
+        ttnn.deallocate(sdpa_k)
+        ttnn.deallocate(sdpa_v)
 
         v_out = ttnn.experimental.nlp_concat_heads(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         v_out = ttnn.linear(

@@ -46,8 +46,12 @@ def _detect_devices_without_opening():
     This is required for performance tests that use run_device_profiler().
     """
     import glob
+    import os
 
-    device_files = glob.glob("/dev/tenstorrent/*")
+    # Only count numeric-named entries (real devices). Skips stray files like
+    # control nodes or symlinks that would inflate the count and break mesh
+    # detection (e.g. 33 entries on a 32-device Galaxy).
+    device_files = [f for f in glob.glob("/dev/tenstorrent/*") if os.path.basename(f).isdigit()]
     return len(device_files)
 
 

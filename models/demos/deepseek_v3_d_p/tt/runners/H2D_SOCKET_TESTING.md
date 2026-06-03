@@ -56,8 +56,8 @@ Notes:
   waits for the descriptor file).
 
 Expected: the runner logs, per iter,
-`[standalone] iter=i metadata: actual_isl=1021 slot_id=0 dst_slot=-1` and a
-`first_token=...`, then `Shutdown complete` with a clean (exit 0) teardown.
+`[request] iter=i metadata: slot_id=0 actual_start=0 actual_end=1021 actual_isl=1021`
+and a `first_token=...`, then `Shutdown complete` with a clean (exit 0) teardown.
 
 > **Generated tokens are NOT reproducible run-to-run** (prefill output is
 > non-deterministic — same input gives different first tokens across processes).
@@ -79,7 +79,7 @@ pytest -xvs models/demos/deepseek_v3_d_p/tests/test_h2d_input_equivalence.py
 
 Expected: `1 passed`, with
 `[equiv] PASS: 32 device shards byte-identical (socket == non-socket input)` and
-`[equiv] PASS: metadata round-trip [actual_isl,slot_id,dst_slot]=[1021, 0, -1]`.
+`[equiv] PASS: PrefillMetadata round-trip [slot_id,actual_start,actual_end]=[0, 0, 1021]`.
 
 ---
 

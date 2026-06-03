@@ -21,6 +21,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/debug/dprint.h"
 
 // CT-arg layout (must stay in sync with h2d_socket_sync_op.py).
 constexpr uint32_t data_ready_sem_addr = get_compile_time_arg_val(0);
@@ -57,6 +58,8 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* data_ready = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_ready_sem_addr);
 
+    DPRINT("[wrk] kernel_start data_ready={} start_page={} end_page={}", *data_ready, start_page, end_page);
+
     // 1. Wait for the service core to signal a fresh transfer, then reset.
     //    The next service-core multicast-inc will set this back to 1. The
     //    service core multicasts metadata into L1 BEFORE flipping this sem,
@@ -65,7 +68,9 @@ void kernel_main() {
     while (*data_ready == 0) {
         invalidate_l1_cache();
     }
+    const uint32_t sem_after_wait = *data_ready;
     *data_ready = 0;
+    DPRINT("[wrk] sem_satisfied sem_was={}", sem_after_wait);
 
     // 2. (Optional) Snapshot metadata from this worker's local L1 into the
     //    metadata output tensor on DRAM. Gated on `start_page == 0` so a
@@ -90,11 +95,16 @@ void kernel_main() {
     for (uint32_t p = start_page; p < end_page; ++p) {
         noc_async_read(backing.get_noc_addr(p), cb_l1, page_size);
         noc_async_read_barrier();
+        if (p == start_page) {
+            DPRINT("[wrk] read_backing page={} first_u32={}", p, *reinterpret_cast<volatile uint32_t*>(cb_l1));
+        }
 
         const uint64_t out_noc = output.get_noc_addr(p);
         noc_async_write(cb_l1, out_noc, page_size);
         noc_async_write_barrier();
     }
+
+    DPRINT("[wrk] copy_done about_to_ack");
 
     // 4. Ack the service core. Exactly one inc per worker per transfer; the
     //    service core's poll checks (cur - last_consumed) == num_workers.

@@ -32,6 +32,8 @@ TtDispatchModule produces the dispatched_buffer and metadata consumed here.
 """
 
 
+from typing import Optional
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
@@ -100,6 +102,7 @@ class TtCombineModule(LightweightModule):
         dispatched_metadata: ttnn.Tensor,
         expert_token_counts: ttnn.Tensor,
         expert_region_offsets: ttnn.Tensor,
+        seq_len_per_chip: Optional[int] = None,
     ):
         """
         Route expert-processed tokens back to origin devices and accumulate weighted contributions.
@@ -140,6 +143,13 @@ class TtCombineModule(LightweightModule):
                 f"fp8_output=True requires dispatched_buffer in TILE_LAYOUT (got {dispatched_buffer.layout})"
             )
 
+        # Per-call seq_len_per_chip override for multi-chunk-per-slot prefill,
+        # where each forward processes only chunk_size_per_chip rows instead of
+        # the max_seq_len_per_chip the module was constructed with. The kernel
+        # uses this to size the output and the per-token routing math.
+        # None falls back to the constructor-time value (single-chunk).
+        effective_seq_len_per_chip = seq_len_per_chip if seq_len_per_chip is not None else self.seq_len_per_chip
+
         output = ttnn.experimental.deepseek_prefill.combine(
             dispatched_buffer,
             dispatched_metadata,
@@ -148,7 +158,7 @@ class TtCombineModule(LightweightModule):
             dispatch_group_size=self.dispatch_group_size,
             experts_per_chip=self.experts_per_chip,
             num_experts_per_tok=self.num_experts_per_tok,
-            seq_len_per_chip=self.seq_len_per_chip,
+            seq_len_per_chip=effective_seq_len_per_chip,
             cluster_axis=self.cluster_axis,
             num_links=self.num_links,
             topology=self.topology,
