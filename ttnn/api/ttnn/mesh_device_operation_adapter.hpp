@@ -622,6 +622,34 @@ public:
             return result;
         }
 
+        // A ProgramSpecFactoryConcept factory uses UpdateTensorArgs as its sole
+        // per-dispatch update mechanism — tensor bindings are the only state that
+        // mutates between dispatches that share a cache entry. Any runtime argument
+        // declared in the returned ProgramSpec is therefore frozen at cache-miss
+        // time, and would be silently stale on every subsequent cache hit.
+        //
+        // This is exactly the silent cache-hit corruption bug class the concept exists
+        // to rule out, so we reject any spec that declares one.
+        //
+        // Factories that genuinely need per-dispatch RTAs belong on a different
+        // factory concept (one with explicit per-dispatch mutable state).
+        static void assert_no_runtime_args(const tt::tt_metal::experimental::ProgramSpec& spec) {
+            for (const auto& kernel : spec.kernels) {
+                const auto& schema = kernel.runtime_arg_schema;
+                const auto& adv = kernel.advanced_options;
+                TT_FATAL(
+                    schema.runtime_arg_names.empty() && schema.common_runtime_arg_names.empty() &&
+                        adv.num_runtime_varargs == 0 && adv.num_common_runtime_varargs == 0 &&
+                        adv.num_runtime_varargs_per_node.empty(),
+                    "Kernel '{}' declares runtime arguments, but a ProgramSpecFactoryConcept "
+                    "factory has no per-dispatch update path for them — they would be silently "
+                    "stale on every program-cache hit. Move constants to compile-time args, "
+                    "route tensor-derived values through TensorParameter bindings, or move "
+                    "the op to a factory concept with explicit per-dispatch mutable state.",
+                    kernel.unique_id);
+            }
+        }
+
         // Match each TensorArgument's MeshTensor reference back to its index in the
         // io_tensor enumeration. Cache-miss path only.
         // TT_FATALs on a TensorArgument that doesn't reference an io_tensor (see
@@ -677,6 +705,7 @@ public:
             // factory tensor_args and are identical for every stamped program; copy
             // per range into the cached shared state.
             auto artifacts = ProgramSpecFactory::create_program_spec(attrs, tensor_args, tensor_return_value);
+            assert_no_runtime_args(artifacts.spec);
             auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
             auto bindings = resolve_bindings(artifacts.run_params.tensor_args, io_mesh_tensors);
 
