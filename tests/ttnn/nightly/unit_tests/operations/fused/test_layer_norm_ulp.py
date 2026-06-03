@@ -593,6 +593,89 @@ def test_rms_norm_ulp_sharded_non_tile_aligned_multi_width_shard(device, w, dist
     assert passed, f"[sharded rms multi-shard dtype={dtype} w={w} dist={distribution}] {msg}"
 
 
+# Fused residual add (a + b computed on-device) over a non-tile-aligned width, on the legacy
+# (non-Welford) path. The normalized input is compute-produced, so the column mask must still exclude
+# the padding columns from the statistics. num_cores_w=2 splits the width across shards (RMSNorm only;
+# LayerNorm rejects a non-tile-aligned width across multiple width shards).
+@pytest.mark.parametrize("w", [40, 72, 200])
+@pytest.mark.parametrize("distribution", ["normal", "centered_uniform"])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("norm", ["layernorm", "rmsnorm"])
+@pytest.mark.parametrize("num_cores_w", [1, 2])
+def test_norm_ulp_sharded_non_tile_aligned_residual(device, w, distribution, dtype, norm, num_cores_w):
+    """Sharded layer_norm / rms_norm with a fused residual add over a non-tile-aligned width.
+
+    The residual sum a + b is computed on-device, so the normalized input is compute-produced rather
+    than host-tilized; the column mask must still exclude the padding columns from the statistics.
+    Both the input and residual tile padding are poisoned so any read of the padded columns is
+    observable.
+    """
+    if norm == "layernorm" and num_cores_w > 1:
+        pytest.skip("LayerNorm does not support a non-tile-aligned width split across multiple width shards")
+    torch.manual_seed(0)
+    h = 32
+    shard_w = math.ceil(w / num_cores_w / 32) * 32
+    padded_w = shard_w * num_cores_w
+    eps = 1e-12
+
+    torch_a = _make_ln_input(h, w, dtype, distribution)
+    torch_b = _make_ln_input(h, w, dtype, distribution)
+    torch_sum = torch_a + torch_b
+    if norm == "layernorm":
+        golden = torch.nn.functional.layer_norm(torch_sum, normalized_shape=[w])
+    else:
+        ms = torch_sum.to(torch.float32).pow(2).mean(dim=-1, keepdim=True)
+        golden = (torch_sum.to(torch.float32) * torch.rsqrt(ms + eps)).to(dtype)
+
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, 0))}),
+        [h, shard_w],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+
+    def to_sharded_poisoned(t):
+        tt = ttnn.from_torch(t, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_mem_config)
+        return ttnn.fill_implicit_tile_padding(tt, PAD_VALUE)
+
+    tt_a = to_sharded_poisoned(torch_a)
+    tt_b = to_sharded_poisoned(torch_b)
+
+    if norm == "layernorm":
+        actual = ttnn_layer_norm_sharded(
+            device, tt_a, use_welford=False, block_ht=h // 32, block_wt=shard_w // 32, subblock_w=1, residual=tt_b
+        )
+    else:
+        actual = ttnn_rms_norm_sharded(
+            device, tt_a, block_ht=h // 32, block_wt=shard_w // 32, subblock_w=1, residual=tt_b
+        )
+    actual = actual[..., :w]
+
+    if dtype == torch.float32:
+        ulp_threshold, atol_fraction = _FP32_ULP_THRESHOLD, _FP32_NEAR_ZERO_ATOL_FRACTION
+    else:
+        ulp_threshold, atol_fraction = (
+            _SHARDED_NONALIGNED_BF16_ULP_THRESHOLD,
+            _SHARDED_NONALIGNED_BF16_NEAR_ZERO_ATOL_FRACTION,
+        )
+    passed, max_ulp, max_atol_err, atol_tol, msg, ulp_stats = measure_ulp_with_near_zero_atol(
+        golden, actual, ulp_threshold, atol_fraction
+    )
+    spec = f"sharded {norm} residual shape_hw=({h},{w}) padded_w={padded_w} dist={distribution} dtype={dtype}"
+    logger.info(
+        f"ttnn {norm} ULP (sharded residual) | {spec} | ulp mean={ulp_stats['mean']:.3g} p95={ulp_stats['p95']:.3g} p99={ulp_stats['p99']:.3g} max={max_ulp:.4g}/{ulp_threshold} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
+    )
+    if ulp_stats["worst"]:
+        logger.info(f"  worst: {ulp_stats['worst']}")
+    if not passed:
+        logger.info(f"  {msg}")
+    assert passed, f"[sharded {norm} residual dtype={dtype} w={w} dist={distribution}] {msg}"
+
+
 @pytest.mark.parametrize("use_welford", [True, False])
 def test_layer_norm_ulp_sharded_non_tile_aligned_multi_width_shard_rejected(device, use_welford):
     """LayerNorm (non-RMS) over a non-tile-aligned width split across multiple width shards is

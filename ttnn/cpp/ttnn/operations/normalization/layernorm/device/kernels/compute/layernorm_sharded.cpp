@@ -337,12 +337,12 @@ void kernel_main() {
     }
     cb_xmm2.push_back(num_tiles_per_block);
 
-#if defined(RMSNORM) && defined(DO_COL_MASK) && !defined(FUSE_PRE_ADD)
-    // RMSNorm has no mean-subtraction stage, so its statistic is the mean of squares of the raw
-    // input. Squaring the input leaves the padding columns holding (pad_value)^2; zero them in place
-    // before the reduce so they do not enter the mean of squares. The host-built mask
-    // (cb_col_mask_packed) carries each width shard's own validity (full, partial, or all-padding
-    // tiles), tilized into the compute data format so it aligns with the compute-produced squared
+#if defined(RMSNORM) && defined(DO_COL_MASK)
+    // RMSNorm has no mean-subtraction stage, so its statistic is the mean of squares of the input
+    // (the raw input, or the fused residual sum a + b). Squaring it leaves the padding columns holding
+    // (pad_value)^2; zero them in place before the reduce so they do not enter the mean of squares.
+    // The host-built mask (cb_col_mask_packed) carries each width shard's own validity (full, partial,
+    // or all-padding tiles), tilized into the compute data format so it aligns with the compute-produced squared
     // tiles in the FPU multiply (the same alignment the variance multiply relies on). It is
     // buffer-backed (resident), so it is read by tile index without a producer push / wait_front.
     reconfig_data_format(cb_xmm2_id, cb_col_mask_packed);

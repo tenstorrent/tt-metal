@@ -347,7 +347,6 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         mcast_noc_y.push_back(device->worker_core_from_logical_core({core_start_offset.x, y}).y);
     }
 
-    const bool fuse_pre_add = b.has_value();
     // LayerNorm masks the host-tilized input at the E[x] site with a per-block mask (one partial tile
     // at the end), which is only correct when a single width shard owns the whole row. RMSNorm instead
     // masks the compute-produced squares with the per-shard host mask, which carries each shard's own
@@ -358,17 +357,9 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         "multiple width shards ({}); use a single width shard or a tile-aligned width.",
         logical_K,
         last_core_width_index + 1);
-    // The non-Welford reduce excludes the padding via a column mask (below), which masks the
-    // host-tilized input. A fused residual add produces the input on-device with a different datum
-    // layout that the host-built mask does not match, so that case must use the Welford path.
-    TT_FATAL(
-        !col_mask_needed || use_welford || !fuse_pre_add,
-        "Sharded layer_norm with a non-tile-aligned width ({}) and a fused residual add requires the "
-        "Welford program config (use_welford=true).",
-        logical_K);
     // Legacy (non-Welford) path: zero the padding columns so they do not enter the statistics (E[x]
-    // and variance for layernorm, the mean of squares for RMSNorm). Guards above guarantee no fused
-    // residual add, and a single width shard except for RMSNorm.
+    // and variance for layernorm, the mean of squares for RMSNorm). Guard above guarantees a single
+    // width shard except for RMSNorm.
     const bool do_col_mask = col_mask_needed && !use_welford;
     // Valid (logical) columns in the final width tile; the rest of that tile is padding.
     const uint32_t last_tile_valid_w = logical_K - (Kt - 1) * tile_width;

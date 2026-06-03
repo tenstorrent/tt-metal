@@ -193,7 +193,6 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
             - If TILE: `weight` and `bias` last dim must match input's last dim in both logical and padded shape; their padded height (second-to-last dim) must equal TILE_HEIGHT (i.e. 32).
             - If ROW_MAJOR: `weight` and `bias` last padded dim must be TILE_WIDTH and the stick count must align with the input width.
             - If sharded and the logical width is not a multiple of TILE_WIDTH (i.e. 32), the entire row (including its tile padding) must fit in a single width shard; such a width split across multiple width shards is not supported.
-            - If sharded and the logical width is not a multiple of TILE_WIDTH, providing a `residual_input_tensor` (fused pre-add) requires the Welford program config (`use_welford=True`); the non-Welford reduction supports a non-tile-aligned width only without a residual.
 
         )doc";
 
