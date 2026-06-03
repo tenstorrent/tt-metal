@@ -152,10 +152,18 @@ tt-perf-report "$ARTIFACT_DIR/tracy/<layer_kind_id>/decode_ops.csv" \
   --end-signpost PERF_DECODE_END \
   --csv "$ARTIFACT_DIR/tracy/<layer_kind_id>/decode_perf_report.csv" \
   --no-advice \
+  > "$ARTIFACT_DIR/tracy/<layer_kind_id>/decode_perf_report.console.log"
+tt-perf-report "$ARTIFACT_DIR/tracy/<layer_kind_id>/decode_ops.csv" \
+  --start-signpost PERF_DECODE \
+  --end-signpost PERF_DECODE_END \
+  --no-summary \
+  --no-advice \
   > "$ARTIFACT_DIR/tracy/<layer_kind_id>/decode_perf_report.txt"
 ```
 
 Use the same shape for prefill, with `PREFILL` signpost names and `prefill_*` filenames. If the installed `tt-perf-report` version does not support one of these flags, run `tt-perf-report --help`, use the closest supported flag set, and record the exact command in the bringup log.
+
+The `*_perf_report.txt` file is for the human-readable table. Do not redirect the stdout from a `--csv` run into that filename; `--csv` mode prints command/status boilerplate such as "Writing CSV output..." rather than the rendered report table. Keep that chatter in `*_perf_report.console.log` if it is useful for provenance.
 
 When calculating latency from the report, prefer the filtered `tt-perf-report` CSV for the signposted window. Check the time column units. Some versions expose `Device Time` in microseconds; raw Tracy ops CSVs often expose `DEVICE KERNEL DURATION [ns]`. Record which column and unit you used in `functional_decoder.md`.
 
