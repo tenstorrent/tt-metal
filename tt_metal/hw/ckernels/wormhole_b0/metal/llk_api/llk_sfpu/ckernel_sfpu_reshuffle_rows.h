@@ -34,7 +34,7 @@ namespace sfpu {
  * - Employs transpose operations to work around SFPLOAD/SFPSTORE 4-row granularity constraints
  * - Processes both even/odd columns simultaneously using +2 offset addressing
  *
- * @param idx_addr L1 address of the mask tile containing destination row mappings (uint8_t[32])
+ * @param idx_addr: L1 address of the mask tile containing destination row mappings (uint8_t[32])
  */
 template <bool APPROXIMATION_MODE>
 inline void calculate_reshuffle_rows(uint idx_addr) {

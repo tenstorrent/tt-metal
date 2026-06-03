@@ -44,9 +44,11 @@ constexpr std::uint32_t ROWS_PER_FACE = 16;
 // ============================================================================
 /**
  * @brief Apply sign magnitude conversion to four LREGs
+ *
  * Assume you loaded 4 LREGs into p_sfpu::LREG0-3 and want to convert them to sign magnitude and store in
  * p_sfpu::LREG4-7.
- * @tparam INSTR_MOD_CAST The instruction mode for cast operations
+ *
+ * @tparam INSTR_MOD_CAST: The instruction mode for cast operations
  */
 template <InstrModCast INSTR_MOD_CAST>
 inline void convert_to_sign_magnitude_x4_lregs() {
@@ -58,9 +60,10 @@ inline void convert_to_sign_magnitude_x4_lregs() {
 
 /**
  * @brief Load data from face into LREG0-3
- * @tparam INSTRUCTION_MODE The instruction mode for load operations
- * @param face_addr Base address of face
- * @param column_offset Column offset for the current iteration, load all rows for even columns (0) or odd columns (2)
+ *
+ * @tparam INSTRUCTION_MODE: The instruction mode for load operations
+ * @param face_addr: Base address of face
+ * @param column_offset: Column offset for the current iteration, load all rows for even columns (0) or odd columns (2)
  * of the face
  */
 template <InstrModLoadStore INSTRUCTION_MODE>
@@ -75,10 +78,11 @@ inline void load_face_data(std::uint32_t face_addr, std::uint32_t column_offset)
 
 /**
  * @brief Load data from upper and lower faces into LREG0-7
- * @tparam INSTRUCTION_MODE The instruction mode for load operations
- * @param upper_face_addr Base address of upper face (Face 0 or Face 1)
- * @param lower_face_addr Base address of lower face (Face 2 or Face 3)
- * @param column_offset Column offset for the current iteration
+ *
+ * @tparam INSTRUCTION_MODE: The instruction mode for load operations
+ * @param upper_face_addr: Base address of upper face (Face 0 or Face 1)
+ * @param lower_face_addr: Base address of lower face (Face 2 or Face 3)
+ * @param column_offset: Column offset for the current iteration
  */
 template <InstrModLoadStore INSTRUCTION_MODE>
 inline void load_face_data(std::uint32_t upper_face_addr, std::uint32_t lower_face_addr, std::uint32_t column_offset) {
@@ -109,13 +113,14 @@ inline void load_face_data(std::uint32_t upper_face_addr, std::uint32_t lower_fa
 
 /**
  * @brief Perform integer averaging with proper handling of negative numbers
- * @tparam INSTRUCTION_MODE The instruction mode (determines signed vs unsigned)
  *
  * For integer formats, we need to handle negative numbers properly for division by 32.
  * Since Blackhole only supports logical shift (not arithmetic), we need to:
  * 1. Check if the number is negative using condition codes (only for signed formats)
  * 2. If negative, negate it, shift right by 5 bits, then negate back
  * 3. If positive, just shift right by 5 bits
+ *
+ * @tparam INSTRUCTION_MODE: The instruction mode (determines signed vs unsigned)
  */
 template <InstrModLoadStore INSTRUCTION_MODE>
 inline void perform_int_average() {
@@ -214,8 +219,7 @@ inline void perform_reduce_col_sum_avg() {
 }
 
 /**
- * @brief Performs two horizontal reductions in parallel (LREG0/LREG1 and LREG4/LREG5), interleaving
- *        instructions to hide SFPSHFT2 latency.
+ * @brief Performs two horizontal reductions in parallel (LREG0/LREG1 and LREG4/LREG5), interleaving instructions to hide SFPSHFT2 latency.
  *
  * SFPU hardware operates on 8 column slices in parallel but independently; column slices cannot
  * directly communicate. SFPSHFT2 is the only instruction that moves data across columns.
@@ -234,7 +238,7 @@ inline void perform_reduce_col_sum_avg() {
  *   Phase 3: Shift by 1 and add -> 2 sums become 1 sum (col 7).
  *   Phase 4: Rotate right by 1  -> move the single sum from col 7 to col 0.
  *
- * @tparam is_integer_mode True for integer types (uses SFPIADD), false for float (uses SFPADD)
+ * @tparam is_integer_mode: True for integer types (uses SFPIADD), false for float (uses SFPADD)
  */
 template <bool is_integer_mode>
 inline void horizontal_reduce() {
@@ -341,7 +345,8 @@ inline void record_horizontal_reduce_max() {
 
 /**
  * @brief Executes horizontal max reduction: phase 1 inline, phases 2-4 via replay buffer.
- *        record_horizontal_reduce_max() must have been called before first use.
+ *
+ * @pre @ref record_horizontal_reduce_max must be called once before first use.
  */
 inline void horizontal_reduce_max() {
     // Phase 1 (inline): Shift by 4 and max -> 8 values become 4 maxes (cols 4-7).
@@ -377,8 +382,8 @@ inline void horizontal_reduce_max() {
  * 4. Use horizontal_reduce_max to consolidate 8 SFPU columns into column 0
  * 5. Store the per-row max into column 0
  *
- * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B, or INT32 for sign-magnitude int max)
- * @param tile_row_offset Base row offset for this tile in the dest register
+ * @tparam INSTRUCTION_MODE: Load/store instruction mode (FP32, FP16B, or INT32 for sign-magnitude int max)
+ * @param tile_row_offset: Base row offset for this tile in the dest register
  */
 template <InstrModLoadStore INSTRUCTION_MODE>
 inline void perform_reduce_row_max_tile(std::uint32_t tile_row_offset) {
@@ -447,7 +452,7 @@ inline void perform_reduce_row_max_tile(std::uint32_t tile_row_offset) {
  * comparator; sign-magnitude integers have the same ordering as IEEE floats for MAX, so
  * no conversion to 2's complement is needed — we operate directly on sign-magnitude data.
  *
- * @param tile_row_offset Base row offset for this tile in the dest register
+ * @param tile_row_offset: Base row offset for this tile in the dest register
  */
 inline void perform_reduce_row_max_int32_tile(std::uint32_t tile_row_offset) {
     constexpr InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::INT32;
@@ -460,9 +465,9 @@ inline void perform_reduce_row_max_int32_tile(std::uint32_t tile_row_offset) {
  *
  * Mirrors sum_first_columns_across_tiles but uses SFPSWAP instead of SFPADD.
  *
- * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B, or INT32 for sign-magnitude int max)
- * @param tile_row_base Base address of the first tile in this row of tiles
- * @param block_ct_dim Number of tiles along x axis of tensor (column tiles)
+ * @tparam INSTRUCTION_MODE: Load/store instruction mode (FP32, FP16B, or INT32 for sign-magnitude int max)
+ * @param tile_row_base: Base address of the first tile in this row of tiles
+ * @param block_ct_dim: Number of tiles along x axis of tensor (column tiles)
  */
 template <InstrModLoadStore INSTRUCTION_MODE>
 inline void max_first_columns_across_tiles(std::uint32_t tile_row_base, std::uint32_t block_ct_dim) {
@@ -503,8 +508,8 @@ inline void max_first_columns_across_tiles(std::uint32_t tile_row_base, std::uin
  * Sign-magnitude integers have the same ordering as IEEE floats for MAX comparison,
  * so we reuse the FP32 variant directly — no 2's complement conversion needed.
  *
- * @param tile_row_base Base address of the first tile in this row of tiles
- * @param block_ct_dim Number of tiles along x axis of tensor (column tiles)
+ * @param tile_row_base: Base address of the first tile in this row of tiles
+ * @param block_ct_dim: Number of tiles along x axis of tensor (column tiles)
  */
 inline void max_first_columns_across_tiles_int32(std::uint32_t tile_row_base, std::uint32_t block_ct_dim) {
     max_first_columns_across_tiles<InstrModLoadStore::INT32>(tile_row_base, block_ct_dim);
@@ -517,9 +522,9 @@ inline void max_first_columns_across_tiles_int32(std::uint32_t tile_row_base, st
  * accumulates the per-tile column-0 maxima across tiles using compare-and-swap into
  * tile 0's column 0.
  *
- * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B, or INT32 for sign-magnitude int max)
- * @param block_ct_dim Number of tiles along x axis of tensor (column tiles)
- * @param block_rt_dim Number of tiles along y axis of tensor (row tiles)
+ * @tparam INSTRUCTION_MODE: Load/store instruction mode (FP32, FP16B, or INT32 for sign-magnitude int max)
+ * @param block_ct_dim: Number of tiles along x axis of tensor (column tiles)
+ * @param block_rt_dim: Number of tiles along y axis of tensor (row tiles)
  */
 template <InstrModLoadStore INSTRUCTION_MODE>
 inline void perform_reduce_row_max(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim) {
@@ -638,9 +643,9 @@ inline void perform_reduce_row_sum_tile(std::uint32_t tile_row_offset) {
  * - Store LREG0-3 back to tile 0.
  * LREG4-7 hold the other tiles' data so loads and adds can be pipelined without NOPs.
  *
- * @tparam INSTRUCTION_MODE The load/store instruction mode
- * @param tile_row_base Base address of the first tile in this row of tiles
- * @param block_ct_dim Number of tiles along x axis of tensor (column tiles)
+ * @tparam INSTRUCTION_MODE: The load/store instruction mode
+ * @param tile_row_base: Base address of the first tile in this row of tiles
+ * @param block_ct_dim: Number of tiles along x axis of tensor (column tiles)
  */
 template <InstrModLoadStore INSTRUCTION_MODE>
 inline void sum_first_columns_across_tiles(std::uint32_t tile_row_base, std::uint32_t block_ct_dim) {
@@ -712,6 +717,7 @@ inline void perform_reduce_row_sum(std::uint32_t block_ct_dim, std::uint32_t blo
 
 /**
  * @brief Runtime validation helper for supported data formats for reduce sfpu kernel
+ *
  */
 constexpr bool is_supported_reduce_format(DataFormat format) {
     return format == DataFormat::Int32 || format == DataFormat::UInt32 || format == DataFormat::Float32 ||
@@ -720,7 +726,8 @@ constexpr bool is_supported_reduce_format(DataFormat format) {
 
 /**
  * @brief Configure address mode for SFPU reduce Max/Min kernel.
- * @param num_cols The number of columns in the tensor block of multiple tiles
+ *
+ * @param num_cols: The number of columns in the tensor block of multiple tiles
  * @note One tile is 64 rows in dest
  */
 inline void configure_addrmod_max_min(std::uint32_t num_cols) {
@@ -754,13 +761,16 @@ inline void configure_addrmod_max_min(std::uint32_t num_cols) {
 // ============================================================================
 
 /**
- * @brief Initialization for SFPU reduce MAX/MIN kernel on 32x32 tile for Int32 format. Due to RTL bug INT32_2S_COMP
- * LOAD/STORE has no effect. Must cast to INT_SIGN_MAGN_TO_INT32_2S_COMP before swapping. Since CAST and SWAP are both
- * SIMPLE instructions, cannot be integrated together in LOADMACRO sequence. Therefore, we need to initialize the kernel
- * with manual loads and stores in order to perform the CAST and SWAP operations.
- * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT
+ * @brief Initialization for SFPU reduce MAX/MIN kernel on 32x32 tile for Int32 format.
+ *
+ * Due to a Blackhole RTL bug, INT32_2S_COMP LOAD/STORE has no effect. Must cast to
+ * INT_SIGN_MAGN_TO_INT32_2S_COMP before swapping. Since CAST and SWAP are both SIMPLE instructions,
+ * they cannot be integrated together in a LOADMACRO sequence. Therefore, the kernel is initialized
+ * with manual loads and stores to perform the CAST and SWAP operations.
+ *
+ * @tparam INSTRUCTION_MODE: The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT
  * (FP32, FP16B)
- * @tparam pool_type The pool type (MAX or MIN) to determine swap direction
+ * @tparam pool_type: The pool type (MAX or MIN) to determine swap direction
  */
 template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type>
 inline void init_reduce_max_min_int32() {
@@ -780,13 +790,14 @@ inline void init_reduce_max_min_int32() {
 
 /**
  * @brief Initialization for SFPU reduce MAX/MIN kernel.
- *        Sets up LOADMACRO sequences for compare-and-swap operations, configures address modifiers,
- *        and records replay buffers for efficient column-wise maximum/minimum reduction.
  *
- * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT
+ * Sets up LOADMACRO sequences for compare-and-swap operations, configures address modifiers,
+ * and records replay buffers for efficient column-wise maximum/minimum reduction.
+ *
+ * @tparam INSTRUCTION_MODE: The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT
  * (FP32, FP16B)
- * @tparam pool_type The pool type (MAX or MIN) to determine swap direction
- * @param num_cols The number of columns to process (typically 32 for a single tile, or multiple of 32 for block
+ * @tparam pool_type: The pool type (MAX or MIN) to determine swap direction
+ * @param num_cols: The number of columns to process (typically 32 for a single tile, or multiple of 32 for block
  * operations)
  */
 template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type>
@@ -834,12 +845,13 @@ inline void init_reduce_max_min(std::uint32_t num_cols) {
 
 /**
  * @brief Initialization for SFPU reduce SUM and AVG kernels.
- *        Records replay buffers for column-wise summation using tree reduction.
- *        Two buffers are recorded:
- *        - Positions 0-5: Full tree reduce for both LREG groups (used by both col and row reduce)
- *        - Positions 6-8: Half tree reduce for LREG0-3 only (used by optimized col reduce)
  *
- * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT
+ * Records replay buffers for column-wise summation using tree reduction.
+ * Two buffers are recorded:
+ * - Positions 0-5: Full tree reduce for both LREG groups (used by both col and row reduce)
+ * - Positions 6-8: Half tree reduce for LREG0-3 only (used by optimized col reduce)
+ *
+ * @tparam INSTRUCTION_MODE: The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT
  * (FP32, FP16B)
  */
 template <InstrModLoadStore INSTRUCTION_MODE>
@@ -896,13 +908,15 @@ inline void init_reduce_sum_avg() {
 
 /**
  * @brief Column-wise maximum/minimum reduction kernel for SFPU reduce MAX/MIN operation on 32x32 tile for Int32 format.
+ *
  * Due to RTL bug INT32_2S_COMP LOAD/STORE has no effect. Must cast to INT_SIGN_MAGN_TO_INT32_2S_COMP before swapping.
  * Since CAST and SWAP are both SIMPLE instructions, cannot be integrated together in SAME LOADMACRO sequence.
  * Therefore, we need to calculate the kernel with manual loads and stores in order to perform the CAST and SWAP
  * operations after loads.
- * @tparam INSTRUCTION_MODE The instruction mode (INT32_2S_COMP for Int32 with MAX/MIN)
- * @tparam pool_type The pool type (MAX or MIN) to determine swap direction
- * @tparam reduce_dim The reduction dimension (currently only REDUCE_COL is supported)
+ *
+ * @tparam INSTRUCTION_MODE: The instruction mode (INT32_2S_COMP for Int32 with MAX/MIN)
+ * @tparam pool_type: The pool type (MAX or MIN) to determine swap direction
+ * @tparam reduce_dim: The reduction dimension (currently only REDUCE_COL is supported)
  */
 template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type, ReduceDim reduce_dim>
 inline void calculate_reduce_max_min_int32() {
@@ -972,23 +986,24 @@ inline void calculate_reduce_max_min_int32() {
 
 /**
  * @brief Column-wise maximum/minimum reduction kernel for SFPU reduce MAX/MIN operation.
- *        Processes a block of tiles vertically (block_height tiles stacked) and computes the maximum or minimum value
- *        for each of the columns across all rows in the block. The maximum/minimum values are placed into
- *        the first row of the output tile (row 0 of faces 0 and 1) in tilized format for each tile in the top row of
+ *
+ * Processes a block of tiles vertically (block_height tiles stacked) and computes the maximum or minimum value
+ * for each of the columns across all rows in the block. The maximum/minimum values are placed into
+ * the first row of the output tile (row 0 of faces 0 and 1) in tilized format for each tile in the top row of
  * tiles in the block.
  *
- *        Algorithm:
- *        - Initializes LREG4-7 with the first face pair's data (even/odd columns from faces 0 and 1)
- *        - For each tile in the block, performs compare-and-swap operations using replay buffers to find maxima/minima
- *        - Uses SFPSWAP instruction for comparisons to determine maximum/minimum between two lregs storing column data
- *        - Transposes and sorts results to align maxima/minima correctly across LREG4-7
- *        - Stores final maximum/minimum values to row 0 (32 datums across faces 0 and 1)
+ * Algorithm:
+ * - Initializes LREG4-7 with the first face pair's data (even/odd columns from faces 0 and 1)
+ * - For each tile in the block, performs compare-and-swap operations using replay buffers to find maxima/minima
+ * - Uses SFPSWAP instruction for comparisons to determine maximum/minimum between two lregs storing column data
+ * - Transposes and sorts results to align maxima/minima correctly across LREG4-7
+ * - Stores final maximum/minimum values to row 0 (32 datums across faces 0 and 1)
  *
- * @tparam pool_type The pool type (MAX or MIN)
- * @tparam reduce_dim The reduction dimension (currently only REDUCE_COL is supported)
- * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT
+ * @tparam pool_type: The pool type (MAX or MIN)
+ * @tparam reduce_dim: The reduction dimension (currently only REDUCE_COL is supported)
+ * @tparam INSTRUCTION_MODE: The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT
  * (FP32, FP16B)
- * @param block_height The number of tiles in the vertical block to reduce (default is 1 for single tile).
+ * @param block_height: The number of tiles in the vertical block to reduce (default is 1 for single tile).
  *                     For example, block_height=4 means reduce across 4 vertically stacked tiles (128 rows total).
  */
 template <PoolType pool_type, ReduceDim reduce_dim, InstrModLoadStore INSTRUCTION_MODE>
@@ -1049,19 +1064,20 @@ inline void calculate_reduce_max_min(const std::uint32_t block_height) {
 
 /**
  * @brief Column-wise sum/average reduction kernel for SFPU reduce SUM and AVG operations.
- *        Computes the sum or average of each column, placing the 32 output values into the first row
- *        of the output tile (row 0 of faces 0 and 1).
  *
- *        Uses a 4-iteration approach that processes vertically aligned face pairs (0+2, 1+3) to optimize
- *        column operations and minimize load/store operations. Each iteration handles 8 columns using
- *        transpose operations and replay buffers for tree reduction.
+ * Computes the sum or average of each column, placing the 32 output values into the first row
+ * of the output tile (row 0 of faces 0 and 1).
  *
- *        For AVG mode: Integer formats use arithmetic shift with condition codes to handle negative numbers;
- *        float formats multiply by 1/32 constant.
+ * Uses a 4-iteration approach that processes vertically aligned face pairs (0+2, 1+3) to optimize
+ * column operations and minimize load/store operations. Each iteration handles 8 columns using
+ * transpose operations and replay buffers for tree reduction.
  *
- * @tparam pool_type The reduction operation, currently supported: (SUM, AVG)
- * @tparam reduce_dim The reduction dimension (currently only REDUCE_COL is supported)
- * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT
+ * For AVG mode: Integer formats use arithmetic shift with condition codes to handle negative numbers;
+ * float formats multiply by 1/32 constant.
+ *
+ * @tparam pool_type: The reduction operation, currently supported: (SUM, AVG)
+ * @tparam reduce_dim: The reduction dimension (currently only REDUCE_COL is supported)
+ * @tparam INSTRUCTION_MODE: The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT
  * (FP32, FP16B)
  */
 template <PoolType pool_type, ReduceDim reduce_dim, InstrModLoadStore INSTRUCTION_MODE>
@@ -1098,14 +1114,16 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
 
 /**
  * @brief Unified reduction kernel wrapper for a 32x32 tile.
- *        Determines the instruction mode from format, then dispatches to the appropriate reduction kernel.
- * @tparam pool_type The reduction operation, currently supported: (SUM, AVG, MAX, MIN)
- * @tparam reduce_dim The reduction dimension: REDUCE_COL for column-wise, REDUCE_ROW for row-wise (MAX only,
+ *
+ * Determines the instruction mode from format, then dispatches to the appropriate reduction kernel.
+ *
+ * @tparam pool_type: The reduction operation, currently supported: (SUM, AVG, MAX, MIN)
+ * @tparam reduce_dim: The reduction dimension: REDUCE_COL for column-wise, REDUCE_ROW for row-wise (MAX only,
  * FP32/Int32).
- * @tparam format The data format, currently supported: (Int32, UInt32, UInt16, Float32, Float16_b)
- * @param block_ct_dim Block dimension (used for SUM/AVG column reduction to specify number of columns, default is 1 for
+ * @tparam format: The data format, currently supported: (Int32, UInt32, UInt16, Float32, Float16_b)
+ * @param block_ct_dim: Block dimension (used for SUM/AVG column reduction to specify number of columns, default is 1 for
  * single tile)
- * @param block_rt_dim Block dimension (used for MAX/MIN reduction to specify block height, or SUM/MAX row reduction;
+ * @param block_rt_dim: Block dimension (used for MAX/MIN reduction to specify block height, or SUM/MAX row reduction;
  * default is 1 for single tile)
  */
 template <PoolType pool_type, ReduceDim reduce_dim, DataFormat format>
@@ -1155,10 +1173,12 @@ inline void calculate_reduce(uint32_t block_ct_dim = 1, uint32_t block_rt_dim = 
 
 /**
  * @brief Unified reduction init kernel wrapper for SFPU reduce kernel.
- *        Determines the instruction mode from format, then dispatches to the appropriate init kernel.
- * @tparam pool_type The reduction operation, currently supported: (SUM, AVG, MAX, MIN)
- * @tparam format The data format, currently supported: (Int32, UInt32, UInt16, Float32, Float16_b)
- * @param block_ct_dim Block dimension (used for MAX/MIN reduction to specify number of columns, default is 1 for single
+ *
+ * Determines the instruction mode from format, then dispatches to the appropriate init kernel.
+ *
+ * @tparam pool_type: The reduction operation, currently supported: (SUM, AVG, MAX, MIN)
+ * @tparam format: The data format, currently supported: (Int32, UInt32, UInt16, Float32, Float16_b)
+ * @param block_ct_dim: Block dimension (used for MAX/MIN reduction to specify number of columns, default is 1 for single
  * tile)
  */
 template <PoolType pool_type, DataFormat format>
