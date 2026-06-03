@@ -35,7 +35,7 @@ followed by activation upload.
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import torch
 import ttnn
@@ -50,6 +50,91 @@ from models.experimental.pi0_5.tt.ttnn_siglip import (
 
 from .transport import send_activation_via_host
 from .vlm_slice import _upload_l1_replicated
+
+
+# ----------------------------------------------------------------------------#
+# L1 weight migration helpers                                                 #
+# ----------------------------------------------------------------------------#
+
+
+def _to_l1(t: Optional["ttnn.Tensor"]) -> Optional["ttnn.Tensor"]:
+    """Move a tensor to L1 and deallocate the DRAM source.
+
+    `ttnn.to_memory_config(t, L1)` allocates a NEW L1 tensor and copies
+    from `t` — leaving `t` (in DRAM) alive until Python GC drops the
+    reference. With ~135 MB of weights to migrate per vision chip, that
+    transient peak (DRAM + L1 simultaneously) trips the L1 allocator on
+    the first big buffer. Explicit deallocate keeps the per-step peak
+    bounded by one buffer.
+    """
+    if t is None:
+        return None
+    new_t = ttnn.to_memory_config(t, ttnn.L1_MEMORY_CONFIG)
+    ttnn.deallocate(t)
+    return new_t
+
+
+def _migrate_tower_weights_to_l1(tower: SigLIPVisionTowerTTNN) -> None:
+    """Move every weight tensor in a SigLIPVisionTowerTTNN to L1, in place.
+
+    The upstream SigLIPVisionTowerTTNN uploads weights with ttnn's default
+    DRAM memory config (see ttnn_siglip.py). Threading a memory_config
+    parameter through 6 nested constructors would be a wide cross-cutting
+    refactor that affects single-device callers too; a post-construction
+    walk is contained, reversible, and easy to audit.
+
+    Attribute names are verified against ttnn_siglip.py — break if a name
+    changes there; the change should be caught by the next probe run.
+    """
+    # PatchEmbedding (only on the first chip's tower).
+    pe = getattr(tower, "patch_embed", None)
+    if pe is not None:
+        if hasattr(pe, "_linear_weight") and pe._linear_weight is not None:
+            pe._linear_weight = _to_l1(pe._linear_weight)
+        if hasattr(pe, "_linear_bias") and pe._linear_bias is not None:
+            pe._linear_bias = _to_l1(pe._linear_bias)
+
+    # Positional embedding (only on the chip that holds it).
+    if getattr(tower, "pos_emb_weights", None) is not None:
+        tower.pos_emb_weights = _to_l1(tower.pos_emb_weights)
+
+    # Post-LN (only on the last slice's tower).
+    if getattr(tower, "post_ln_weight", None) is not None:
+        tower.post_ln_weight = _to_l1(tower.post_ln_weight)
+    if getattr(tower, "post_ln_bias", None) is not None:
+        tower.post_ln_bias = _to_l1(tower.post_ln_bias)
+
+    # Every transformer block on this chip.
+    for block in tower.blocks:
+        if getattr(block, "ln1_weight", None) is not None:
+            block.ln1_weight = _to_l1(block.ln1_weight)
+        if getattr(block, "ln1_bias", None) is not None:
+            block.ln1_bias = _to_l1(block.ln1_bias)
+        if getattr(block, "ln2_weight", None) is not None:
+            block.ln2_weight = _to_l1(block.ln2_weight)
+        if getattr(block, "ln2_bias", None) is not None:
+            block.ln2_bias = _to_l1(block.ln2_bias)
+        # Attention QKV (concatenated) + output projection.
+        attn = block.attention
+        attn.wqkv = _to_l1(attn.wqkv)
+        if attn.bqkv is not None:
+            attn.bqkv = _to_l1(attn.bqkv)
+        attn.wo = _to_l1(attn.wo)
+        # MLP fc1 / fc2.
+        mlp = block.mlp
+        mlp.fc1_weight = _to_l1(mlp.fc1_weight)
+        if getattr(mlp, "fc1_bias", None) is not None:
+            mlp.fc1_bias = _to_l1(mlp.fc1_bias)
+        mlp.fc2_weight = _to_l1(mlp.fc2_weight)
+        if getattr(mlp, "fc2_bias", None) is not None:
+            mlp.fc2_bias = _to_l1(mlp.fc2_bias)
+
+
+def _migrate_projector_weights_to_l1(projector: MultiModalProjectorTTNN) -> None:
+    """Move MultiModalProjectorTTNN's `weight` and `bias` to L1 in place."""
+    projector.weight = _to_l1(projector.weight)
+    if projector.bias is not None:
+        projector.bias = _to_l1(projector.bias)
 
 
 class Pi0_5OptionCVisionSlice:
@@ -226,6 +311,7 @@ class Pi0_5OptionCVisionSliceSplit:
         micro_submeshes: List,
         layers_per_chip: int = 9,
         siglip_depth: int = 27,
+        weights_in_l1: bool = False,
     ) -> None:
         if len(micro_submeshes) != 4:
             raise ValueError(
@@ -257,20 +343,23 @@ class Pi0_5OptionCVisionSliceSplit:
             hi = lo + layers_per_chip
             is_first = chunk_idx == 0
             is_last = chunk_idx == num_siglip_chips - 1
-            self.siglip_chunks.append(
-                SigLIPVisionTowerTTNN(
-                    config=config.siglip_config,
-                    weights=vlm_vision,
-                    device=micro_submeshes[chunk_idx],
-                    layer_range=(lo, hi),
-                    holds_patch_embed=is_first,
-                    holds_pos_embed=is_first,
-                    holds_post_ln=is_last,
-                )
+            tower = SigLIPVisionTowerTTNN(
+                config=config.siglip_config,
+                weights=vlm_vision,
+                device=micro_submeshes[chunk_idx],
+                layer_range=(lo, hi),
+                holds_patch_embed=is_first,
+                holds_pos_embed=is_first,
+                holds_post_ln=is_last,
             )
+            if weights_in_l1:
+                _migrate_tower_weights_to_l1(tower)
+            self.siglip_chunks.append(tower)
 
         # mm_projector lives on chip 3.
         self.mm_projector = MultiModalProjectorTTNN(vlm_projector, micro_submeshes[3])
+        if weights_in_l1:
+            _migrate_projector_weights_to_l1(self.mm_projector)
 
         # Host-resident language embed table — same fallback as the host
         # vision slice. Vocab sharding is the next-step follow-up.

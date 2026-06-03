@@ -112,6 +112,11 @@ class Pi0_5PipelineC:
     # mutually exclusive at the slice level — passing device_siglip=True
     # overrides embed_on_host.
     device_siglip: bool = False
+    # When True (and `device_siglip=True`), every SigLIP weight tensor +
+    # the mm_projector weight/bias are migrated to L1 after construction —
+    # the deployment plan §3.1 placement (~140-160 MB L1 / vision chip).
+    # Ignored when device_siglip is False (host path has no on-chip weights).
+    vision_weights_l1: bool = False
 
     stage_0: Optional[StageVision] = None
     stage_1: Optional[StagePrefill] = None
@@ -141,6 +146,7 @@ class Pi0_5PipelineC:
             self.weights,
             embed_on_host=self.embed_on_host,
             device_siglip=self.device_siglip,
+            vision_weights_l1=self.vision_weights_l1,
         )
         self.stage_1 = StagePrefill(
             s[1],

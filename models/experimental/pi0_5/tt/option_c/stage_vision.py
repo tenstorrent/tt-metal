@@ -35,6 +35,7 @@ class StageVision:
         weights: Dict[str, Dict[str, torch.Tensor]],
         embed_on_host: bool = True,
         device_siglip: bool = False,
+        vision_weights_l1: bool = False,
     ) -> None:
         if spec.stage_idx != 0:
             raise AssertionError(f"StageVision must be stage 0, got {spec.stage_idx}")
@@ -52,6 +53,7 @@ class StageVision:
         self.weights = weights
         self.embed_on_host = embed_on_host
         self.device_siglip = device_siglip
+        self.vision_weights_l1 = vision_weights_l1
         # Populated in initialize() when device_siglip=True.
         self.micro_submeshes: Optional[list] = None
         self.slice = None  # Pi0_5OptionCVisionSlice or Pi0_5OptionCVisionSliceSplit
@@ -72,6 +74,7 @@ class StageVision:
                 config=self.config,
                 weights=self.weights,
                 micro_submeshes=self.micro_submeshes,
+                weights_in_l1=self.vision_weights_l1,
             )
         else:
             self.slice = Pi0_5OptionCVisionSlice(

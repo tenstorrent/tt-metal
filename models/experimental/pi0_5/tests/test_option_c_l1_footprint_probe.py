@@ -121,6 +121,9 @@ DEPTH_SWEEP = os.environ.get("PI0_OC_L1_PROBE_DEPTH_SWEEP") == "1"
 # probe run reproduces the baseline numbers in OPTION_C_L1_FOOTPRINT_PROBE.md.
 LAYER_PAIRED_L1 = os.environ.get("PI0_OC_L1_PROBE_LAYER_PAIRED") == "1"
 DEVICE_SIGLIP = os.environ.get("PI0_OC_L1_PROBE_DEVICE_SIGLIP") == "1"
+# When DEVICE_SIGLIP=1, migrate every SigLIP / mm_projector weight to L1.
+# Ignored when DEVICE_SIGLIP=0 (host path has no on-chip weights to move).
+VISION_WEIGHTS_L1 = os.environ.get("PI0_OC_L1_PROBE_VISION_WEIGHTS_L1") == "1"
 EXPERT_LAYERS_PER_CHIP = int(os.environ.get("PI0_OC_L1_PROBE_EXPERT_LAYERS_PER_CHIP", "3"))
 # L1 small / static-CB reservation, per-bank. 24576 bytes = 24 KB is the
 # value every working pi0.5 single-device test uses (see README.md:172,
@@ -253,6 +256,7 @@ def _echo_env() -> None:
     print(f"  PI0_OC_L1_PROBE_DEPTH_SWEEP            = {DEPTH_SWEEP}")
     print(f"  PI0_OC_L1_PROBE_LAYER_PAIRED           = {LAYER_PAIRED_L1}")
     print(f"  PI0_OC_L1_PROBE_DEVICE_SIGLIP          = {DEVICE_SIGLIP}")
+    print(f"  PI0_OC_L1_PROBE_VISION_WEIGHTS_L1      = {VISION_WEIGHTS_L1}")
     print(f"  PI0_OC_L1_PROBE_EXPERT_LAYERS_PER_CHIP = {EXPERT_LAYERS_PER_CHIP}")
 
 
@@ -338,6 +342,7 @@ def test_oc_l1_footprint_probe_full_depth():
             action_horizon=ACTION_HORIZON,
             layer_paired_l1=LAYER_PAIRED_L1,
             device_siglip=DEVICE_SIGLIP,
+            vision_weights_l1=VISION_WEIGHTS_L1,
             expert_layers_per_chip=EXPERT_LAYERS_PER_CHIP,
         )
 

@@ -242,9 +242,82 @@ chip" placement, either:
 - Have the wrapper post-process the constructed slice to move each
   weight tensor to L1.
 
-That's the same class of work as the prefill/denoise L1-residency
-follow-up; they can be done together once the MLP CB clash is fixed
-(see OPEN_ISSUE_MLP_CB_CLASH.md).
+### Vision-weights-in-L1 probe (2026-06-03)
+
+The post-process migration helper landed
+(`vision_slice.py::_migrate_tower_weights_to_l1`,
+`_migrate_projector_weights_to_l1`) and the flag chain is wired through:
+
+```
+Pi0_5PipelineC.vision_weights_l1=True
+  → StageVision.vision_weights_l1=True
+    → Pi0_5OptionCVisionSliceSplit(weights_in_l1=True)
+      → after each SigLIPVisionTowerTTNN is constructed, walk every
+        weight tensor and run ttnn.to_memory_config(t, L1) + deallocate
+        the DRAM source.
+```
+
+The helper migrates: PatchEmbedding `_linear_weight` / `_linear_bias`,
+positional embedding, post-LN, and for every block `ln{1,2}_{weight,bias}`,
+`attention.{wqkv, bqkv, wo}`, `mlp.{fc1_weight, fc1_bias, fc2_weight,
+fc2_bias}`. MultiModalProjectorTTNN gets the same treatment for its
+`weight` / `bias`.
+
+Probe with `PI0_OC_L1_PROBE_DEVICE_SIGLIP=1 PI0_OC_L1_PROBE_VISION_WEIGHTS_L1=1`:
+
+```
+[FAIL] initialize() raised: RuntimeError: TT_FATAL @
+    tt_metal/impl/allocator/bank_manager.cpp:462: false
+info: Out of Memory: Not enough space to allocate 5640192 B L1 buffer
+across 120 banks, where each bank needs to store 47872 B, but bank size
+is 1461760 B (allocated: 1417216 B, free: 44544 B, largest free block:
+44544 B)
+```
+
+Per-chip arithmetic at the failure point:
+- L1 cap: **175.4 MB / chip** (120 banks × 1,461,760 bytes)
+- L1 allocated when OOM hit: **170 MB / chip** (almost saturated)
+- Next buffer requested: **5.6 MB**
+- Free: **5.3 MB** → over by ~300 KB
+
+The migration walked most of the per-chip SigLIP weights — ~170 MB
+already moved to L1 — before hitting the cliff on the last bank's
+worth.
+
+**Why the deployment plan's 157 MB target doesn't match:** today's
+`SigLIPAttentionTTNN` uploads Q/K/V/O at **bf16**, not bf8_b. From
+PI0_5_GALAXY_DEPLOYMENT_PLAN.md §1.1:
+
+| Tensor                  | dtype today | bytes / layer |
+|-------------------------|-------------|---------------|
+| attn q/k/v/o × 4        | bf16        | 10.6 MB       |
+| mlp.fc1 + fc2           | bf8_b       | 9.92 MB       |
+| layernorms              | bf16        | tiny          |
+| **per encoder layer**   | mixed       | **~20.7 MB**  |
+| × 9 layers (vision chip)| —           | **~186 MB**   |
+
+That's already over the 175 MB L1 cap before patch_embed / pos_embed
+land on chip 0. The deployment plan §1.1 already flags this:
+
+> If attention weights are also dropped to bf8_b (currently bf16 on the
+> assumption that QKVO bandwidth doesn't dominate at 1152-wide),
+> per-layer drops to ~15.6 MB, total ~140 MB. Worth measuring before
+> committing to a sharding plan.
+
+So **plumbing is correct; the cliff is fundamental at the current
+dtype mix**. Two paths forward:
+
+1. **bf8 attn QKVO in SigLIPAttentionTTNN.** Modifies the upstream
+   class. The single-device pi0.5 path uses it too, so this is a PCC
+   risk (numerics shift) that needs separate validation. Lands the
+   deployment plan's 140 MB / chip number; full SigLIP in L1.
+
+2. **Partial L1 placement** (MLP + LN only, leave attn in DRAM).
+   Doesn't touch dtypes. Per chip: ~90 MB L1 (MLP) + ~90 MB DRAM
+   (attn). The mixed placement adds the same per-op DRAM bouncing
+   pattern as `rms_norm` already does in vlm_slice.py:298 for the
+   in-L1 MLP working set, since MLP outputs feed straight into the
+   in-DRAM attn. Less invasive but less complete than option 1.
 
 ### Status — open
 
