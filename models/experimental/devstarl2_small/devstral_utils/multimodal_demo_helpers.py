@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import torch
 import torch.nn.functional as F
@@ -20,7 +20,13 @@ from models.tt_transformers.tt.model_config import ModelArgs
 try:
     from tests.scripts.common import get_updated_device_params
 except ImportError:  # minimal fallback if tests package not on PYTHONPATH
-    get_updated_device_params = lambda p: p  # type: ignore[assignment]
+
+    def get_updated_device_params(p):
+        return p
+
+
+if TYPE_CHECKING:
+    from models.experimental.devstarl2_small.tt.pipeline.tt_ministral3_model import TtMinistral3Model
 
 DEFAULT_MODEL_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"
 

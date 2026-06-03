@@ -39,11 +39,7 @@ def _tt_to_torch_3d(tt_tensor: ttnn.Tensor, mesh_device) -> torch.Tensor:
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
+    [{"P150": (1, 1), "BH-QB": (1, 4)}.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))],
     indirect=True,
 )
 @pytest.mark.parametrize("seq_len", (128,))
