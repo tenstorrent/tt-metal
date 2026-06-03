@@ -206,9 +206,13 @@ python -m models.common.readiness_check.run_vllm_server \
   --model-dir models/autoports/<model_name> \
   --hf-model <hf-model-id-or-local-path> \
   --mesh-device <N150|N300|T3K|TG> \
+  --max-num-seqs <int> \
   --max-model-len <int> \
+  --sampling-profile <full|smoke> \
   --tt-config '{"trace_region_size": <bytes>, "fabric_config": <fabric mode>}'
 ```
+
+For final bringup evidence, use `--sampling-profile full` by default. `--sampling-profile smoke` is appropriate for fast iteration. For batch-1 MoE bring-up loops, `--sampling-profile smoke` is acceptable as final sampling evidence and `full` may be skipped entirely because it is very slow in that case.
 
 Record the exact working server invocation, sampling tests, qualitative verdict, benchmark workload, TTFT P50/P99, ITL P50/P99, aggregate output throughput, and mean per-user decode t/s/u.
 

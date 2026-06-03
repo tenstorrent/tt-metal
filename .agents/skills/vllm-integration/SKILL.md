@@ -63,7 +63,9 @@ python -m models.common.readiness_check.run_vllm_server \
   --model-dir models/autoports/<model_name> \
   --hf-model <hf-model-id-or-local-path> \
   --mesh-device <N150|N300|T3K|TG> \
+  --max-num-seqs <int> \
   --max-model-len <int> \
+  --sampling-profile <full|smoke> \
   --tt-config '{"trace_region_size": <bytes>, "fabric_config": <fabric mode>}'
 ```
 
@@ -82,6 +84,8 @@ To attach checks to an existing server from another shell:
 ```bash
 python -m models.common.readiness_check.run_vllm_server \
   --stages sampling \
+  --max-num-seqs <int> \
+  --sampling-profile <full|smoke> \
   --server-url http://localhost:8000 \
   --model-dir ... --hf-model ...
 ```
@@ -90,9 +94,13 @@ The runner enforces on-device sampling (`sample_on_device_mode: all` in the TT p
 
 Check stages:
 
-- `sampling`: runs the canonical TT plugin pytest suite against the live server.
+- `sampling`: runs the canonical TT plugin pytest suite against the live server. `--sampling-profile full` runs the whole suite; `--sampling-profile smoke` runs a small integration sanity subset for slow bring-up loops.
 - `qualitative`: saves greedy and sampled completions for prompts from `models/common/readiness_check/vllm_prompts.txt`; read the outputs and judge coherence, topic, repetition, gibberish, and wrong-language drift.
 - `benchmark`: runs the configured synthetic workload and records TTFT P50/P99, ITL P50/P99, aggregate output throughput, and mean per-user decode t/s/u.
+
+`--max-num-seqs` is passed to both server launch and sampling pytest (`--tt-max-num-seqs`).
+
+For final vLLM-integration evidence, use `--sampling-profile full`. Use `--sampling-profile smoke` for faster inner-loop iteration. For batch-1 MoE bring-up loops, `--sampling-profile smoke` is acceptable as the final sampling gate and `full` may be skipped entirely because it is very slow in that regime.
 
 Reproducibility-only sampling failures are out of scope when they are the only failures. Typical names include `test_top1_is_greedy`, `test_topk`, `test_uniform_seed_deterministic`, `test_specific_seed_reproducible`, `test_same_seeds_reproduce_across_batches`, `test_*_mixed_batch`, and `test_mixed_params_batch`. Correctness failures, missing logprobs, crashes, gibberish output, or wrong logprob values remain in scope.
 
