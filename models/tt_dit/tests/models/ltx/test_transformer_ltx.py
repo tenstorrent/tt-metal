@@ -97,7 +97,9 @@ _RUN_PCC_DEFAULT = {"1": False, "0": True}.get(os.environ.get("LTX_SKIP_PCC"), T
 # Parametrize lists
 # ---------------------------------------------------------------------------
 _LTX_TRANSFORMER_MESH_PARAMS = [
-    pytest.param((1, 1), 0, 1, 1, {}, ttnn.Topology.Linear, False, id="1x1sp0tp1"),
+    # No 1x1 (sp=1) config: real-grid shapes require SP padding, and video self-attention only
+    # masks padded keys via ring SDPA's logical_n (sp>1). Plain SDPA (sp=1) would attend padded
+    # keys and corrupt real outputs. Production never runs sp=1.
     # 2x4sp0tp1 keeps is_fsdp=True for FSDP-path coverage on a 2D mesh.
     pytest.param((2, 4), 0, 1, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp0tp1"),
     # 2x4sp1tp0 mirrors production BH 2x4: is_fsdp=False (production loads via dynamic_load, not
@@ -108,11 +110,12 @@ _LTX_TRANSFORMER_MESH_PARAMS = [
     pytest.param((4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="line_bh_4x8sp1tp0"),
 ]
 
-# 1080p fast-pipeline latent volumes, sp/tile-aligned (TILE * sp_factor = 128
-# for sp=4). Production pads stage_1 9690→9728 and stage_2 38760→38784.
+# 1080p fast-pipeline real latent grids (F, H_lat, W_lat) — the exact (latent_frames, h//32,
+# w//32) production feeds RoPE. These are NOT tile/SP-aligned, so the test SP-pads the sequence
+# (round F·H·W up to TILE * sp_factor) exactly like LTXPipeline._sp_pad_len, then crops back.
 _LTX_TRANSFORMER_SHAPE_PARAMS = [
-    pytest.param(19, 16, 32, id="stage_1"),  # F·H·W = 9728
-    pytest.param(19, 32, 64, id="stage_2"),  # F·H·W = 38912
+    pytest.param(19, 17, 30, id="stage_1"),  # F·H·W = 9690 (real); SP-padded on device
+    pytest.param(19, 34, 60, id="stage_2"),  # F·H·W = 38760 (real); SP-padded on device
 ]
 
 _LTX_TRANSFORMER_MODALITY_PARAMS = [
@@ -137,6 +140,40 @@ def _interleaved_to_bhnd(t: torch.Tensor, num_heads: int) -> torch.Tensor:
     B, N, dim = t.shape
     head_dim = dim // num_heads
     return t.reshape(B, N, num_heads, head_dim).permute(0, 2, 1, 3).contiguous()
+
+
+def _sp_pad_len(n_real: int, sp_factor: int) -> int:
+    """Round a seq len up to ttnn.TILE_SIZE * sp_factor (mirrors LTXPipeline._sp_pad_len)."""
+    divisor = ttnn.TILE_SIZE * sp_factor
+    return ((n_real + divisor - 1) // divisor) * divisor
+
+
+def _pad_seq_dim(t: torch.Tensor, n_pad: int, dim: int = -2) -> torch.Tensor:
+    """Zero-pad a torch tensor's sequence dim up to n_pad (no-op if already ≥ n_pad)."""
+    n = t.shape[dim]
+    if n_pad <= n:
+        return t
+    shape = list(t.shape)
+    shape[dim] = n_pad
+    out = torch.zeros(shape, dtype=t.dtype)
+    idx = [slice(None)] * t.ndim
+    idx[dim] = slice(0, n)
+    out[tuple(idx)] = t
+    return out
+
+
+def _pad_rope_bhnd(cos_i: torch.Tensor, sin_i: torch.Tensor, pad_to: int | None):
+    """Right-pad BHND INTERLEAVED freqs on the seq dim (2) with identity rotation (cos=1, sin=0).
+
+    Same convention as LTXPipeline._pad_video_rope_sp: padded slots are no-op rotations; SDPA
+    still masks them out via logical_n / padding masks.
+    """
+    if pad_to is None or pad_to <= cos_i.shape[2]:
+        return cos_i, sin_i
+    pad = pad_to - cos_i.shape[2]
+    cos_i = torch.nn.functional.pad(cos_i, (0, 0, 0, pad), value=1.0)
+    sin_i = torch.nn.functional.pad(sin_i, (0, 0, 0, pad), value=0.0)
+    return cos_i, sin_i
 
 
 def _diffusers_qk_to_split(t: torch.Tensor, num_heads: int, head_dim: int) -> torch.Tensor:
@@ -528,21 +565,23 @@ def _video_masks(video_N, video_N_real, *, mesh_device, sp_axis):
     return bf16_tensor(pad, device=mesh_device, mesh_axis=sp_axis, shard_dim=2)
 
 
-def _tt_rope(freqs_fn, *args, mesh_device, sp_axis, tp_axis):
-    """Build INTERLEAVED freqs for the TT runtime: precompute → BHND reshape → 2D shard."""
+def _tt_rope(freqs_fn, *args, mesh_device, sp_axis, tp_axis, pad_to=None):
+    """Build INTERLEAVED freqs for the TT runtime: precompute → BHND reshape → SP-pad → 2D shard."""
     cos_i, sin_i = freqs_fn(*args, rope_type=LTXRopeType.INTERLEAVED)
     cos_i = _interleaved_to_bhnd(cos_i, NUM_HEADS)
     sin_i = _interleaved_to_bhnd(sin_i, NUM_HEADS)
+    cos_i, sin_i = _pad_rope_bhnd(cos_i, sin_i, pad_to)
     tt_cos = bf16_tensor_2dshard(cos_i, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
     tt_sin = bf16_tensor_2dshard(sin_i, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
     return tt_cos, tt_sin
 
 
-def _tt_rope_full(freqs_fn, *args, mesh_device, tp_axis):
-    """INTERLEAVED freqs replicated full-seq (cross-attn K side): BHND reshape, no SP shard."""
+def _tt_rope_full(freqs_fn, *args, mesh_device, tp_axis, pad_to=None):
+    """INTERLEAVED freqs replicated full-seq (cross-attn K side): BHND reshape, SP-pad, no SP shard."""
     cos_i, sin_i = freqs_fn(*args, rope_type=LTXRopeType.INTERLEAVED)
     cos_i = _interleaved_to_bhnd(cos_i, NUM_HEADS)
     sin_i = _interleaved_to_bhnd(sin_i, NUM_HEADS)
+    cos_i, sin_i = _pad_rope_bhnd(cos_i, sin_i, pad_to)
     tt_cos = bf16_tensor(cos_i, device=mesh_device, mesh_axis=tp_axis, shard_dim=1)
     tt_sin = bf16_tensor(sin_i, device=mesh_device, mesh_axis=tp_axis, shard_dim=1)
     return tt_cos, tt_sin
@@ -642,9 +681,11 @@ def test_ltx_transformer_block(
     if not has_audio and checkpoint_variant != "fast":
         pytest.skip("checkpoint_variant only affects AV mode (video uses random scaled weights)")
     checkpoint_22b = _resolve_checkpoint_22b(checkpoint_variant)
-    video_N = F * H * W
-    video_N_real = video_N  # test shapes are already SP/tile-aligned → no video padding
     sp_factor = tuple(mesh_device.shape)[sp_axis]
+    # Real latent grid → SP-padded sequence (mirrors LTXPipeline). video_N is the padded device
+    # length; video_N_real is the logical token count fed to SDPA's logical_n / padding masks.
+    video_N_real = F * H * W
+    video_N = _sp_pad_len(video_N_real, sp_factor)
     # Audio seq length mirrors the fast pipeline so op sizes / padding match production.
     audio_N, audio_N_real = _audio_seq_lens(F, sp_factor)
     assert video_N % (32 * sp_factor) == 0, f"video_N={video_N} not sp/tile-aligned for sp={sp_factor}"
@@ -691,9 +732,9 @@ def test_ltx_transformer_block(
         tt_block.load_torch_state_dict({k: v.detach().clone() for k, v in conv.items()})
         del dummy
 
-    # Inputs
+    # Inputs (real-grid token count; the TT side gets a zero-padded copy below).
     torch.manual_seed(INPUT_SEED)
-    x = torch.randn(1, video_N, DIM, dtype=torch.float32)
+    x = torch.randn(1, video_N_real, DIM, dtype=torch.float32)
     context = torch.randn(1, PROMPT_LEN, CTX_DIM, dtype=torch.float32)
     temb = torch.randn(1, 1, 9 * DIM, dtype=torch.float32)  # 9 adaln params
     prompt_temb = torch.randn(1, 1, 2 * DIM, dtype=torch.float32)  # 2 adaln params for prompt
@@ -707,20 +748,26 @@ def test_ltx_transformer_block(
         )
         logger.info(f"torch block output {tuple(torch_out.shape)}")
 
-    # TT video tensors. Runtime rope is INTERLEAVED + trans_mat.
-    spatial = x.unsqueeze(0)
+    # TT video tensors. Runtime rope is INTERLEAVED + trans_mat. Sequence is SP-padded to video_N;
+    # rope pads with identity rotation; video_N (logical) goes to the block for SDPA masking.
+    spatial = _pad_seq_dim(x, video_N, dim=1).unsqueeze(0)
     tt_spatial = bf16_tensor_2dshard(spatial, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
     tt_prompt = bf16_tensor(context.unsqueeze(0), device=mesh_device)
-    tt_temb = bf16_tensor(temb.reshape(1, 9, DIM).unsqueeze(0), device=mesh_device, mesh_axis=tp_axis, shard_dim=3)
-    tt_prompt_temb = bf16_tensor(prompt_temb.reshape(1, 2, DIM).unsqueeze(0), device=mesh_device)
-    tt_cos, tt_sin = _tt_rope(_video_rope_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis)
+    # Outer-param layout (coeff, B=1, 1, D) so the block's chunk(dim=0) is a free tile-aligned slice.
+    tt_temb = bf16_tensor(
+        temb.reshape(9, DIM).unsqueeze(1).unsqueeze(1), device=mesh_device, mesh_axis=tp_axis, shard_dim=3
+    )
+    tt_prompt_temb = bf16_tensor(prompt_temb.reshape(2, DIM).unsqueeze(1).unsqueeze(1), device=mesh_device)
+    tt_cos, tt_sin = _tt_rope(
+        _video_rope_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis, pad_to=video_N
+    )
     tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
 
     forward_kwargs = dict(
         video_1BND=tt_spatial,
         video_prompt=tt_prompt,
         video_temb=tt_temb,
-        video_N=video_N,
+        video_N=video_N_real,
         video_rope_cos=tt_cos,
         video_rope_sin=tt_sin,
         trans_mat=tt_trans_mat,
@@ -738,13 +785,13 @@ def test_ltx_transformer_block(
 
         a_cos, a_sin = _tt_rope(_audio_rope_freqs, audio_N, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis)
         vx_cos, vx_sin = _tt_rope(
-            _video_cross_pe_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis
+            _video_cross_pe_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis, pad_to=video_N
         )
         ax_cos, ax_sin = _tt_rope(
             _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis
         )
         vx_cos_full, vx_sin_full = _tt_rope_full(
-            _video_cross_pe_freqs, F, H, W, mesh_device=mesh_device, tp_axis=tp_axis
+            _video_cross_pe_freqs, F, H, W, mesh_device=mesh_device, tp_axis=tp_axis, pad_to=video_N
         )
         ax_cos_full, ax_sin_full = _tt_rope_full(
             _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, tp_axis=tp_axis
@@ -762,14 +809,22 @@ def test_ltx_transformer_block(
             ),
             audio_prompt=bf16_tensor(a_ctx.unsqueeze(0), device=mesh_device),
             audio_temb=bf16_tensor(
-                a_temb.reshape(1, 9, AUDIO_DIM).unsqueeze(0), device=mesh_device, mesh_axis=tp_axis, shard_dim=3
+                a_temb.reshape(9, AUDIO_DIM).unsqueeze(1).unsqueeze(1),
+                device=mesh_device,
+                mesh_axis=tp_axis,
+                shard_dim=3,
             ),
-            audio_prompt_temb=bf16_tensor(a_prompt_temb.reshape(1, 2, AUDIO_DIM).unsqueeze(0), device=mesh_device),
+            audio_prompt_temb=bf16_tensor(
+                a_prompt_temb.reshape(2, AUDIO_DIM).unsqueeze(1).unsqueeze(1), device=mesh_device
+            ),
             av_ca_temb=bf16_tensor(
-                av_ca_v.reshape(1, 5, DIM).unsqueeze(0), device=mesh_device, mesh_axis=tp_axis, shard_dim=3
+                av_ca_v.reshape(5, DIM).unsqueeze(1).unsqueeze(1), device=mesh_device, mesh_axis=tp_axis, shard_dim=3
             ),
             av_ca_audio_temb=bf16_tensor(
-                av_ca_a.reshape(1, 5, AUDIO_DIM).unsqueeze(0), device=mesh_device, mesh_axis=tp_axis, shard_dim=3
+                av_ca_a.reshape(5, AUDIO_DIM).unsqueeze(1).unsqueeze(1),
+                device=mesh_device,
+                mesh_axis=tp_axis,
+                shard_dim=3,
             ),
             audio_N=audio_N,
             audio_rope_cos=a_cos,
@@ -803,15 +858,17 @@ def test_ltx_transformer_block(
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape)),
     ).squeeze(0)
 
-    assert tt_v_torch.shape == (1, video_N, DIM), f"video shape {tt_v_torch.shape}"
+    # Crop the SP-padding tail off the gathered video before checking/comparing real tokens.
+    tt_v_torch = tt_v_torch[:, :video_N_real, :]
+    assert tt_v_torch.shape == (1, video_N_real, DIM), f"video shape {tt_v_torch.shape}"
     assert torch.isfinite(tt_v_torch).all(), "video output NaN/Inf"
 
     if has_audio:
         tt_a_torch = ttnn.to_torch(
             tt_a,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape)),
-        ).squeeze(0)
-        assert tt_a_torch.shape == (1, audio_N, AUDIO_DIM), f"audio shape {tt_a_torch.shape}"
+        ).squeeze(0)[:, :audio_N_real, :]
+        assert tt_a_torch.shape == (1, audio_N_real, AUDIO_DIM), f"audio shape {tt_a_torch.shape}"
         assert torch.isfinite(tt_a_torch).all(), "audio output NaN/Inf"
 
     if do_pcc:
@@ -845,9 +902,12 @@ def _run_inner_step(
     if not has_audio and checkpoint_variant != "fast":
         pytest.skip("checkpoint_variant only affects AV mode (video uses random scaled weights)")
     checkpoint_22b = _resolve_checkpoint_22b(checkpoint_variant)
-    video_N = F * H * W
-    audio_N = AUDIO_N
     sp_factor = tuple(mesh_device.shape)[sp_axis]
+    # Real latent grid → SP-padded sequence (mirrors LTXPipeline). video_N_real is the logical
+    # token count (SDPA logical_n / pad masks); video_N is the padded on-device length.
+    video_N_real = F * H * W
+    video_N = _sp_pad_len(video_N_real, sp_factor)
+    audio_N = AUDIO_N
     assert video_N % (32 * sp_factor) == 0
     if has_audio:
         assert audio_N % (32 * sp_factor) == 0
@@ -874,8 +934,10 @@ def _run_inner_step(
         state_dict = {k: v.detach().clone() for k, v in state_dict.items()}
 
     # === Inputs ===
+    # Real-grid latent for the torch reference; the TT side gets a zero-padded copy (video_N).
     torch.manual_seed(INPUT_SEED)
-    video_lat = torch.randn(1, video_N, IN_CHANNELS, dtype=torch.float32)
+    video_lat_real = torch.randn(1, video_N_real, IN_CHANNELS, dtype=torch.float32)
+    video_lat = _pad_seq_dim(video_lat_real, video_N, dim=1)
     video_prompt = torch.randn(1, PROMPT_LEN, CTX_DIM, dtype=torch.float32)
     sigma_val = TIMESTEP_VAL if not has_audio else 0.5  # AV path uses production sigma=0.5
     timestep_torch = torch.tensor([sigma_val])
@@ -890,7 +952,7 @@ def _run_inner_step(
     # The torch LTXModel computes rope internally from positions; only the TT side builds freqs.
     if do_pcc and not has_audio:
         ref_video = _diffusers_video_model_ref(
-            torch_model, video_lat=video_lat, video_prompt=video_prompt, sigma_val=sigma_val, F=F, H=H, W=W
+            torch_model, video_lat=video_lat_real, video_prompt=video_prompt, sigma_val=sigma_val, F=F, H=H, W=W
         )
         logger.info(f"ref video {tuple(ref_video.shape)} range=[{ref_video.min():.3f}, {ref_video.max():.3f}]")
         del torch_model
@@ -903,7 +965,7 @@ def _run_inner_step(
         t0 = time.time()
         ref_video, ref_audio = _diffusers_av_model_ref(
             ref_model,
-            video_lat=video_lat,
+            video_lat=video_lat_real,
             video_prompt=video_prompt,
             audio_lat=audio_lat,
             audio_prompt=audio_prompt,
@@ -938,7 +1000,9 @@ def _run_inner_step(
 
     # === Build TT-side RoPE / cross-PE / prompt tensors (INTERLEAVED + trans_mat) ===
     tt_video_prompt = bf16_tensor(video_prompt.unsqueeze(0), device=mesh_device)
-    tt_vc, tt_vs = _tt_rope(_video_rope_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis)
+    tt_vc, tt_vs = _tt_rope(
+        _video_rope_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis, pad_to=video_N
+    )
     tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
 
     call_kwargs = dict(
@@ -946,24 +1010,26 @@ def _run_inner_step(
         video_prompt_1BLP=tt_video_prompt,
         video_rope_cos=tt_vc,
         video_rope_sin=tt_vs,
-        video_N=video_N,
+        video_N=video_N_real,
         trans_mat=tt_trans_mat,
         timestep_torch=timestep_torch,
     )
     if has_audio:
         a_cos, a_sin = _tt_rope(_audio_rope_freqs, audio_N, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis)
         vx_cos, vx_sin = _tt_rope(
-            _video_cross_pe_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis
+            _video_cross_pe_freqs, F, H, W, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis, pad_to=video_N
         )
         ax_cos, ax_sin = _tt_rope(
             _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, sp_axis=sp_axis, tp_axis=tp_axis
         )
         vx_cos_full, vx_sin_full = _tt_rope_full(
-            _video_cross_pe_freqs, F, H, W, mesh_device=mesh_device, tp_axis=tp_axis
+            _video_cross_pe_freqs, F, H, W, mesh_device=mesh_device, tp_axis=tp_axis, pad_to=video_N
         )
         ax_cos_full, ax_sin_full = _tt_rope_full(
             _audio_cross_pe_freqs, audio_N, mesh_device=mesh_device, tp_axis=tp_axis
         )
+        # Zero padded video tokens as V→A cross-attention keys (matches LTXPipeline._prepare_video_masks).
+        v_pad_sp = _video_masks(video_N, video_N_real, mesh_device=mesh_device, sp_axis=sp_axis)
         call_kwargs.update(
             audio_1BNI_torch=audio_lat.unsqueeze(0),
             audio_prompt_1BLP=bf16_tensor(audio_prompt.unsqueeze(0), device=mesh_device),
@@ -978,6 +1044,7 @@ def _run_inner_step(
             video_cross_pe_sin_full=vx_sin_full,
             audio_cross_pe_cos_full=ax_cos_full,
             audio_cross_pe_sin_full=ax_sin_full,
+            video_padding_mask=v_pad_sp,
         )
 
     # === Forward ===
@@ -985,16 +1052,17 @@ def _run_inner_step(
     result = tt_model(**call_kwargs) if use_forward_alias else tt_model.forward(**call_kwargs)
     logger.info(f"TT forward: {time.time() - t0:.1f}s")
 
+    # Crop the SP-padding tail off the gathered video output before checking/comparing real tokens.
     if has_audio:
         tt_v_dev, tt_a_dev = result
-        tt_video = LTXTransformerModel.device_to_host(tt_v_dev).squeeze(0)
+        tt_video = LTXTransformerModel.device_to_host(tt_v_dev).squeeze(0)[:, :video_N_real, :]
         tt_audio = LTXTransformerModel.device_to_host(tt_a_dev).squeeze(0)
-        assert tt_video.shape == (1, video_N, OUT_CHANNELS), f"video shape {tt_video.shape}"
+        assert tt_video.shape == (1, video_N_real, OUT_CHANNELS), f"video shape {tt_video.shape}"
         assert tt_audio.shape == (1, audio_N, AUDIO_IN_CHANNELS), f"audio shape {tt_audio.shape}"
         assert torch.isfinite(tt_video).all() and torch.isfinite(tt_audio).all(), "NaN/Inf in TT output"
     else:
-        tt_video = LTXTransformerModel.device_to_host(result).squeeze(0)
-        assert tt_video.shape == (1, video_N, OUT_CHANNELS), f"video shape {tt_video.shape}"
+        tt_video = LTXTransformerModel.device_to_host(result).squeeze(0)[:, :video_N_real, :]
+        assert tt_video.shape == (1, video_N_real, OUT_CHANNELS), f"video shape {tt_video.shape}"
         assert torch.isfinite(tt_video).all(), "NaN/Inf in TT output"
 
     del tt_model

@@ -94,15 +94,18 @@ class LTXTransformerBlock(Module):
             fsdp_mesh_axis=fsdp_mesh_axis,
         )
         self.adaln_coeff = 9 if cross_attention_adaln else 6
+        # Outer-param layout (coeff, 1, 1, D): keeps each modulation parameter on the
+        # non-tiled dim 0 so per-block ttnn.chunk(dim=0) is a free tile-aligned slice
+        # (no untilize/slice/tilize). D stays on dim 3 for TP sharding.
         self.scale_shift_table = Parameter(
-            total_shape=[1, 1, self.adaln_coeff, video_dim],
+            total_shape=[self.adaln_coeff, 1, 1, video_dim],
             mesh_axes=[None, None, None, parallel_config.tensor_parallel.mesh_axis],
             device=mesh_device,
             dtype=ttnn.bfloat16,
         )
         if cross_attention_adaln:
             self.prompt_scale_shift_table = Parameter(
-                total_shape=[1, 1, 2, video_dim],
+                total_shape=[2, 1, 1, video_dim],
                 mesh_axes=[None, None, None, None],
                 device=mesh_device,
                 dtype=ttnn.bfloat16,
@@ -130,14 +133,14 @@ class LTXTransformerBlock(Module):
                 ccl_manager=ccl_manager,
             )
             self.audio_scale_shift_table = Parameter(
-                total_shape=[1, 1, self.adaln_coeff, audio_dim],
+                total_shape=[self.adaln_coeff, 1, 1, audio_dim],
                 mesh_axes=[None, None, None, parallel_config.tensor_parallel.mesh_axis],
                 device=mesh_device,
                 dtype=ttnn.bfloat16,
             )
             if cross_attention_adaln:
                 self.audio_prompt_scale_shift_table = Parameter(
-                    total_shape=[1, 1, 2, audio_dim],
+                    total_shape=[2, 1, 1, audio_dim],
                     mesh_axes=[None, None, None, None],
                     device=mesh_device,
                     dtype=ttnn.bfloat16,
@@ -160,13 +163,13 @@ class LTXTransformerBlock(Module):
                 **attn_kwargs,
             )
             self.scale_shift_table_a2v_ca_audio = Parameter(
-                total_shape=[1, 1, 5, audio_dim],
+                total_shape=[5, 1, 1, audio_dim],
                 mesh_axes=[None, None, None, parallel_config.tensor_parallel.mesh_axis],
                 device=mesh_device,
                 dtype=ttnn.bfloat16,
             )
             self.scale_shift_table_a2v_ca_video = Parameter(
-                total_shape=[1, 1, 5, video_dim],
+                total_shape=[5, 1, 1, video_dim],
                 mesh_axes=[None, None, None, parallel_config.tensor_parallel.mesh_axis],
                 device=mesh_device,
                 dtype=ttnn.bfloat16,
@@ -206,15 +209,17 @@ class LTXTransformerBlock(Module):
             tables_scale_idxs["scale_shift_table_a2v_ca_video"] = [0, 2]
         for key, scale_idxs in tables_scale_idxs.items():
             if key in state:
-                t = state[key].unsqueeze(0).unsqueeze(0).clone()
-                t[:, :, scale_idxs, :] += 1.0
+                # Reference table is [coeff, D]; reshape to outer-param [coeff, 1, 1, D]
+                # so dim 0 indexes the parameters (matches the (coeff,1,1,D) Parameter).
+                t = state[key].unsqueeze(1).unsqueeze(1).clone()
+                t[scale_idxs, :, :, :] += 1.0
                 state[key] = t.to(dtype=torch.bfloat16)
 
     def forward(
         self,
         video_1BND: ttnn.Tensor,
         video_prompt: ttnn.Tensor,
-        video_temb: ttnn.Tensor,  # (1, B, 9, video_dim)
+        video_temb: ttnn.Tensor,  # (adaln_coeff, B, 1, video_dim)
         video_N: int,
         video_rope_cos: ttnn.Tensor,
         video_rope_sin: ttnn.Tensor,
@@ -247,7 +252,7 @@ class LTXTransformerBlock(Module):
     ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor]:
         # Video modulation; `_p1` chunks carry +1 baked into the scale slot (see _prepare_torch_state).
         shifted_v = self.scale_shift_table.data + video_temb
-        chunks = ttnn.chunk(shifted_v, self.adaln_coeff, dim=2)
+        chunks = ttnn.chunk(shifted_v, self.adaln_coeff, dim=0)
         v_shift_sa, v_scale_sa_p1, v_gate_sa = chunks[0], chunks[1], chunks[2]
         v_shift_ff, v_scale_ff_p1, v_gate_ff = chunks[3], chunks[4], chunks[5]
         if self.cross_attention_adaln:
@@ -272,14 +277,20 @@ class LTXTransformerBlock(Module):
             video_ca_input = ttnn.addcmul(v_shift_ca, self.norm2(video_1BND), v_scale_ca_p1)
             if video_prompt_temb is not None:
                 shifted_prompt_v = self.prompt_scale_shift_table.data + video_prompt_temb
-                v_kv_shift, v_kv_scale_p1 = ttnn.chunk(shifted_prompt_v, 2, dim=2)
+                v_kv_shift, v_kv_scale_p1 = ttnn.chunk(shifted_prompt_v, 2, dim=0)
                 video_prompt_mod = ttnn.addcmul(v_kv_shift, video_prompt, v_kv_scale_p1)
             else:
                 video_prompt_mod = video_prompt
-            video_ca_out = self.attn2(
-                spatial_1BND=video_ca_input, N=video_N, prompt_1BLP=video_prompt_mod, kv_replicated=True
+            # Fold the gated residual (video_1BND + video_ca_out * v_gate_ca) into to_out's epilogue,
+            # mirroring attn1's fused path — avoids a separate full-sequence addcmul pass.
+            video_1BND = self.attn2(
+                spatial_1BND=video_ca_input,
+                N=video_N,
+                prompt_1BLP=video_prompt_mod,
+                kv_replicated=True,
+                addcmul_residual=video_1BND,
+                addcmul_gate=v_gate_ca,
             )
-            video_1BND = ttnn.addcmul(video_1BND, video_ca_out, v_gate_ca)
         else:
             # 6-output mode: cross-attention with fixed norm (no AdaLN shift/scale/gate)
             video_ca_input = self.norm2(video_1BND)
@@ -313,7 +324,7 @@ class LTXTransformerBlock(Module):
 
         # Audio path (has_audio=True from here)
         shifted_a = self.audio_scale_shift_table.data + audio_temb
-        a_chunks = ttnn.chunk(shifted_a, self.adaln_coeff, dim=2)
+        a_chunks = ttnn.chunk(shifted_a, self.adaln_coeff, dim=0)
         a_shift_sa, a_scale_sa_p1, a_gate_sa = a_chunks[0], a_chunks[1], a_chunks[2]
         a_shift_ff, a_scale_ff_p1, a_gate_ff = a_chunks[3], a_chunks[4], a_chunks[5]
         if self.cross_attention_adaln:
@@ -339,7 +350,7 @@ class LTXTransformerBlock(Module):
             audio_ca_input = ttnn.addcmul(a_shift_ca, self.audio_norm2(audio_1BND), a_scale_ca_p1)
             if audio_prompt_temb is not None:
                 shifted_prompt_a = self.audio_prompt_scale_shift_table.data + audio_prompt_temb
-                a_kv_shift, a_kv_scale_p1 = ttnn.chunk(shifted_prompt_a, 2, dim=2)
+                a_kv_shift, a_kv_scale_p1 = ttnn.chunk(shifted_prompt_a, 2, dim=0)
                 audio_prompt_mod = ttnn.addcmul(a_kv_shift, audio_prompt, a_kv_scale_p1)
             else:
                 audio_prompt_mod = audio_prompt
@@ -358,10 +369,10 @@ class LTXTransformerBlock(Module):
         if not skip_cross_attn:
             # Chunk layout [scale, shift, scale, shift, gate]: scale slots (idx 0, 2) have +1 baked in.
             shifted_av = self.scale_shift_table_a2v_ca_video.data + av_ca_temb
-            v_ca_scale_p1, v_ca_shift, a_ca_scale_v_p1, a_ca_shift_v, v_ca_gate = ttnn.chunk(shifted_av, 5, dim=2)
+            v_ca_scale_p1, v_ca_shift, a_ca_scale_v_p1, a_ca_shift_v, v_ca_gate = ttnn.chunk(shifted_av, 5, dim=0)
 
             shifted_av_a = self.scale_shift_table_a2v_ca_audio.data + av_ca_audio_temb
-            a_scale_a2v_p1, a_shift_a2v, a_scale_v2a_p1, a_shift_v2a, a_ca_gate = ttnn.chunk(shifted_av_a, 5, dim=2)
+            a_scale_a2v_p1, a_shift_a2v, a_scale_v2a_p1, a_shift_v2a, a_ca_gate = ttnn.chunk(shifted_av_a, 5, dim=0)
 
             video_normed_xattn = self.norm3(video_1BND)
             audio_normed_xattn = self.audio_norm3(audio_1BND)
@@ -769,49 +780,54 @@ class LTXTransformerModel(Module):
         adaln_coeff = 9 if self.cross_attention_adaln else 6
         video_modulation, video_emb_ts = self.adaln_single(timestep)
         B = video_modulation.shape[2]
-        video_mod_1BCD = ttnn.reshape(video_modulation, (1, B, adaln_coeff, self.inner_dim))
+        video_mod_CB1D = ttnn.reshape(video_modulation, (1, B, adaln_coeff, self.inner_dim))
         if self.parallel_config.tensor_parallel.factor > 1:
-            video_mod_1BCD = ttnn.mesh_partition(
-                video_mod_1BCD, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
+            video_mod_CB1D = ttnn.mesh_partition(
+                video_mod_CB1D, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
             )
+        # Move the coeff axis to dim 0 once per step so each block's chunk(dim=0) is free.
+        video_mod_CB1D = ttnn.permute(video_mod_CB1D, (2, 1, 0, 3))
 
         # Video prompt modulation (2 params, only for 9-output mode)
-        video_prompt_1B2D = None
+        video_prompt_2B1D = None
         if self.cross_attention_adaln:
             video_prompt_mod, _ = self.prompt_adaln_single(timestep)
-            video_prompt_1B2D = ttnn.reshape(video_prompt_mod, (1, B, 2, self.inner_dim))
+            video_prompt_2B1D = ttnn.reshape(video_prompt_mod, (1, B, 2, self.inner_dim))
+            video_prompt_2B1D = ttnn.permute(video_prompt_2B1D, (2, 1, 0, 3))
 
         # Audio modulation (only when has_audio)
-        audio_mod_1BCD = None
-        audio_prompt_1B2D = None
+        audio_mod_CB1D = None
+        audio_prompt_2B1D = None
         av_ca_video_temb = None
         av_ca_audio_temb = None
         audio_emb_ts = None
 
         if self.has_audio:
             audio_modulation, audio_emb_ts = self.audio_adaln_single(timestep)
-            audio_mod_1BCD = ttnn.reshape(audio_modulation, (1, B, adaln_coeff, self.audio_inner_dim))
+            audio_mod_CB1D = ttnn.reshape(audio_modulation, (1, B, adaln_coeff, self.audio_inner_dim))
             if self.parallel_config.tensor_parallel.factor > 1:
-                audio_mod_1BCD = ttnn.mesh_partition(
-                    audio_mod_1BCD, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
+                audio_mod_CB1D = ttnn.mesh_partition(
+                    audio_mod_CB1D, dim=3, cluster_axis=self.parallel_config.tensor_parallel.mesh_axis
                 )
+            audio_mod_CB1D = ttnn.permute(audio_mod_CB1D, (2, 1, 0, 3))
 
             if self.cross_attention_adaln:
                 audio_prompt_mod, _ = self.audio_prompt_adaln_single(timestep)
-                audio_prompt_1B2D = ttnn.reshape(audio_prompt_mod, (1, B, 2, self.audio_inner_dim))
+                audio_prompt_2B1D = ttnn.reshape(audio_prompt_mod, (1, B, 2, self.audio_inner_dim))
+                audio_prompt_2B1D = ttnn.permute(audio_prompt_2B1D, (2, 1, 0, 3))
 
-            # Cross-attention timestep conditioning
+            # Cross-attention timestep conditioning; concat on the param axis (dim 0).
             av_ca_video_ss, _ = self.av_ca_video_scale_shift_adaln_single(timestep)
-            av_ca_video_ss = ttnn.reshape(av_ca_video_ss, (1, B, 4, self.inner_dim))
+            av_ca_video_ss = ttnn.permute(ttnn.reshape(av_ca_video_ss, (1, B, 4, self.inner_dim)), (2, 1, 0, 3))
             av_ca_a2v_gate, _ = self.av_ca_a2v_gate_adaln_single(timestep)
-            av_ca_a2v_gate = ttnn.reshape(av_ca_a2v_gate, (1, B, 1, self.inner_dim))
-            av_ca_video_temb = ttnn.concat([av_ca_video_ss, av_ca_a2v_gate], dim=2)
+            av_ca_a2v_gate = ttnn.permute(ttnn.reshape(av_ca_a2v_gate, (1, B, 1, self.inner_dim)), (2, 1, 0, 3))
+            av_ca_video_temb = ttnn.concat([av_ca_video_ss, av_ca_a2v_gate], dim=0)
 
             av_ca_audio_ss, _ = self.av_ca_audio_scale_shift_adaln_single(timestep)
-            av_ca_audio_ss = ttnn.reshape(av_ca_audio_ss, (1, B, 4, self.audio_inner_dim))
+            av_ca_audio_ss = ttnn.permute(ttnn.reshape(av_ca_audio_ss, (1, B, 4, self.audio_inner_dim)), (2, 1, 0, 3))
             av_ca_v2a_gate, _ = self.av_ca_v2a_gate_adaln_single(timestep)
-            av_ca_v2a_gate = ttnn.reshape(av_ca_v2a_gate, (1, B, 1, self.audio_inner_dim))
-            av_ca_audio_temb = ttnn.concat([av_ca_audio_ss, av_ca_v2a_gate], dim=2)
+            av_ca_v2a_gate = ttnn.permute(ttnn.reshape(av_ca_v2a_gate, (1, B, 1, self.audio_inner_dim)), (2, 1, 0, 3))
+            av_ca_audio_temb = ttnn.concat([av_ca_audio_ss, av_ca_v2a_gate], dim=0)
 
             if self.parallel_config.tensor_parallel.factor > 1:
                 av_ca_video_temb = ttnn.mesh_partition(
@@ -832,21 +848,21 @@ class LTXTransformerModel(Module):
             result = block(
                 video_1BND=video_1BND,
                 video_prompt=video_prompt_1BLP,
-                video_temb=video_mod_1BCD,
+                video_temb=video_mod_CB1D,
                 video_N=video_N,
                 video_rope_cos=video_rope_cos,
                 video_rope_sin=video_rope_sin,
                 trans_mat=trans_mat,
-                video_prompt_temb=video_prompt_1B2D,
+                video_prompt_temb=video_prompt_2B1D,
                 audio_1BND=audio_1BND,
                 audio_prompt=audio_prompt_1BLP,
-                audio_temb=audio_mod_1BCD,
+                audio_temb=audio_mod_CB1D,
                 av_ca_temb=av_ca_video_temb,
                 audio_N=audio_N,
                 audio_rope_cos=audio_rope_cos,
                 audio_rope_sin=audio_rope_sin,
                 av_ca_audio_temb=av_ca_audio_temb,
-                audio_prompt_temb=audio_prompt_1B2D,
+                audio_prompt_temb=audio_prompt_2B1D,
                 video_cross_pe_cos=video_cross_pe_cos,
                 video_cross_pe_sin=video_cross_pe_sin,
                 audio_cross_pe_cos=audio_cross_pe_cos,

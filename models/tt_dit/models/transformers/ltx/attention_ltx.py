@@ -105,14 +105,17 @@ class LTXAttention(Module):
             ccl_manager=ccl_manager,
         )
 
-        # Per-head gate, sharded on num_heads to match the SDPA-output head layout.
+        # Per-head gate, sharded on num_heads to match the SDPA-output head layout. bf16 matches the
+        # reference (which runs the gate in the model's working dtype). Sigmoid is a standalone op:
+        # fusing it into the matmul trips minimal_matmul's sigmoid VecMode assert (needs C/RC). The
+        # ×2 stays a separate multiply (2·sigmoid is nonlinear, can't fold).
         self.apply_gated_attention = apply_gated_attention
         if apply_gated_attention:
             self.to_gate_logits = ColParallelLinear(
                 in_features=self.query_input_dim,
                 out_features=self.num_heads,
                 bias=True,
-                dtype=ttnn.float32,
+                dtype=ttnn.bfloat16,
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
@@ -247,6 +250,7 @@ class LTXAttention(Module):
         addcmul_gate: ttnn.Tensor,
         compute_kernel_config=None,
         parallel_config: DiTParallelConfig | None = None,
+        dtype=None,
     ) -> ttnn.Tensor:
         """Fused to_out projection + addcmul: output = residual + (matmul(x, W) + bias) * gate."""
         to_out = self.to_out
@@ -290,6 +294,7 @@ class LTXAttention(Module):
                 scalar=1.0,
                 addcmul_input_tensor1=addcmul_residual,
                 addcmul_input_tensor2=addcmul_gate,
+                dtype=dtype,
             )[0]
         else:
             M, K, N_out = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
@@ -305,6 +310,7 @@ class LTXAttention(Module):
                 bias_tensor=to_out.bias.data if to_out.bias is not None else None,
                 config=matmul_config,
                 compute_kernel_config=compute_kernel_config or to_out.compute_config,
+                dtype=dtype,
             )
         return output
 
@@ -318,10 +324,10 @@ class LTXAttention(Module):
         gate_logits = self.to_gate_logits(spatial_1BND, parallel_config=qkv_parallel_config)
         gate = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)
 
-        # (1, B, N, H_local) -> (B, H_local, N, 1)
-        gate = ttnn.squeeze(gate, 0)
-        gate = ttnn.transpose(gate, -2, -1)
-        gate = ttnn.unsqueeze(gate, -1)
+        # (1, B, N, H_local) -> (B, H_local, N, 1) in one pass: the N<->H_local swap is the real
+        # data movement, and the leading unit axis is parked into the trailing broadcast slot (over
+        # E). Replaces squeeze+transpose+unsqueeze (the unsqueeze was a retile, not a free view).
+        gate = ttnn.permute(gate, (1, 3, 2, 0))
         return gate
 
     def forward(
