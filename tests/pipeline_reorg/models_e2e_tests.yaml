@@ -607,3 +607,18 @@
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+
+# ── UNet ───────────────────────────────────────────────────────────
+
+# Trace-perf (end-to-end) test. The correctness counterpart lives in
+# models_unit_tests.yaml as "Shallow UNet unit tests".
+- name: Shallow UNet e2e tests
+  cmd: |
+    pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device"
+  model: shallow-unet
+  skus:
+    bh_p150_perf:
+      timeout: 5
+      tier: 2
+  owner_id: U06ECNVR0EN # Evan Smal
+  team: models

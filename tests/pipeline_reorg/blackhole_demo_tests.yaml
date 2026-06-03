@@ -23,15 +23,6 @@
 # Exceptions: bh_p300 (LFC) entries keep file-path / HF_HUB_CACHE form because the LFC
 # server hosts checkpoints in a layout that does not match the canonical hub cache.
 
-- name: unet-shallow performance
-  cmd: pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device"
-  skus:
-    bh_p150_perf:
-      timeout: 5
-  owner_id: U06ECNVR0EN # Evan Smal
-  team: models
-  model-name: unet-shallow
-
 # ─── mistral-small-3.1-24b ──────────────────────────────────────────────────
 
 - name: mistral-small-3.1-24b e2e tests
