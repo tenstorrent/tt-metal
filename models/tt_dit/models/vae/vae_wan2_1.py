@@ -342,8 +342,9 @@ class WanCausalConv3d(Module):
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4 if dtype == ttnn.float32 else ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
+            math_fidelity=ttnn.MathFidelity.HiFi4
+            if (is_blackhole() and dtype == ttnn.float32)
+            else ttnn.MathFidelity.HiFi2,  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
@@ -780,8 +781,9 @@ class WanConv2d(Module):
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4 if dtype == ttnn.float32 else ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
+            math_fidelity=ttnn.MathFidelity.HiFi4
+            if (is_blackhole() and dtype == ttnn.float32)
+            else ttnn.MathFidelity.HiFi2,  # Do not use HiFi3/4 with fp32_dest_acc on WH due to accuracy issues.
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
