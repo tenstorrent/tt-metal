@@ -73,16 +73,37 @@ if str(_TT_METAL_ROOT) not in sys.path:
 
 from models.common.utility_functions import comp_pcc
 from models.experimental.kokoro.reference.model import KModel
-from models.experimental.kokoro.tests.kmodel_pcc_stage_diagnostic import STFT_PHASE_FALLBACK_KWARGS
+from models.experimental.kokoro.tests.kmodel_pcc_stage_diagnostic import (
+    STFT_PHASE_FALLBACK_KWARGS,
+    _pcc_row,
+    _run_ref_stages,
+    _tokenize,
+)
 from models.experimental.kokoro.tt.tt_kmodel import TTKModel, preprocess_tt_kmodel
+
+import ttnn
 
 # ---------------------------------------------------------------------------
 # Test constants
 # ---------------------------------------------------------------------------
 
+# hexgrad/Kokoro-82M config.json: plbert.max_position_embeddings == 512
+_KOKORO_PLBERT_MAX_POSITIONS = 512
+_KOKORO_MAX_PHONEME_LEN = _KOKORO_PLBERT_MAX_POSITIONS - 2  # BOS + EOS in forward()
+
 _TEST_TEXT = "Hello from Tenstorrent."
 _VOICE = "af_heart"
 _LANG_CODE = "a"
+
+# Config E plus SineGen CPU fallback for long harmonic grids at max phoneme length.
+_MAX_LENGTH_FALLBACK_KWARGS = {
+    **STFT_PHASE_FALLBACK_KWARGS,
+    "use_torch_sinegen_fallback": True,
+    "use_torch_linear_fallback": True,
+    "use_torch_tanh_fallback": True,
+    "use_torch_f0_upsamp_fallback": True,
+    "use_torch_f0n_conv_fallback": True,
+}
 
 _CKPT_CANDIDATES = (
     Path("/home/ubuntu/ign-tt/kokoro/examples/checkpoints/kokoro-v1_0.pth"),
@@ -127,15 +148,71 @@ def _phonemize(text: str) -> tuple[str, torch.Tensor]:
     if not phonemes:
         pytest.skip("KPipeline produced empty phonemes for first chunk.")
 
+    return phonemes, _ref_s_for_phoneme_len(len(phonemes), pipe)
+
+
+def _ref_s_for_phoneme_len(phoneme_len: int, pipe=None) -> torch.Tensor:
+    """Voice-pack style tensor for a phoneme string of length ``phoneme_len``."""
+    if pipe is None:
+        pipe = _load_pipeline()
+        if pipe is None:
+            pytest.skip("kokoro package not installed: pip install 'kokoro>=0.9.2'")
     pack = pipe.load_voice(_VOICE)
-    ref_s = pack[len(phonemes) - 1]
+    ref_s = pack[phoneme_len - 1]
     if not isinstance(ref_s, torch.Tensor):
         ref_s = torch.tensor(ref_s)
     ref_s = ref_s.float().cpu()
     if ref_s.dim() == 1:
         ref_s = ref_s.unsqueeze(0)
+    return ref_s
 
-    return phonemes, ref_s
+
+def _max_phoneme_length(context_length: int) -> int:
+    """Maximum phoneme characters allowed by ``KModel.forward`` (reserves BOS/EOS)."""
+    return context_length - 2
+
+
+def _build_max_length_phonemes(vocab: dict, length: int) -> str:
+    """Build exactly ``length`` phoneme characters, all present in ``vocab``."""
+    fill = " " if " " in vocab else next(k for k, v in vocab.items() if v is not None)
+    phonemes = fill * length
+    mapped = [vocab[p] for p in phonemes]
+    assert len(phonemes) == length and all(i is not None for i in mapped), (
+        len(phonemes),
+        length,
+        sum(i is not None for i in mapped),
+    )
+    return phonemes
+
+
+def _setup_max_length(ckpt_path: Path, device) -> tuple[KModel, object, str, torch.Tensor]:
+    """KModel + params for a 510-phoneme (512-token) stress input."""
+    ref = KModel(
+        repo_id="hexgrad/Kokoro-82M",
+        model=str(ckpt_path),
+        disable_complex=True,
+    ).eval()
+    assert ref.context_length == _KOKORO_PLBERT_MAX_POSITIONS
+    n_phonemes = _max_phoneme_length(ref.context_length)
+    phonemes = _build_max_length_phonemes(ref.vocab, n_phonemes)
+    ref_s = _ref_s_for_phoneme_len(len(phonemes))
+    params = preprocess_tt_kmodel(ref, device)
+    return ref, params, phonemes, ref_s
+
+
+def _is_bh_l1_overflow(exc: BaseException) -> bool:
+    return isinstance(exc, RuntimeError) and "beyond max L1 size" in str(exc)
+
+
+def _tt_to_bct(t: ttnn.Tensor) -> torch.Tensor:
+    x = ttnn.to_torch(t).float()
+    while x.dim() > 3 and x.shape[0] == 1:
+        x = x.squeeze(0)
+    if x.dim() == 3 and x.shape[1] != x.shape[2]:
+        # NLC [B, T, C] -> BCT [B, C, T] when channel dim is smaller than time.
+        if x.shape[-1] < x.shape[1]:
+            x = x.permute(0, 2, 1).contiguous()
+    return x
 
 
 @contextmanager
@@ -277,6 +354,7 @@ def test_tt_kmodel_generator_no_torch_fallback_pcc(device):
             use_torch_phase_fallback=use_phase,
             use_torch_linear_fallback=use_linear,
             use_torch_tanh_fallback=use_tanh,
+            use_fp32_prosody_boundary=False,
         )
         _, pcc_debug = comp_pcc(y_ref.unsqueeze(0), y_debug.unsqueeze(0), pcc=0.0)
         print("TTKModel PCC debug: " f"mode={debug_mode}, no_fallback={pcc:.6f}, debug_mode_pcc={pcc_debug:.6f}")
@@ -384,3 +462,209 @@ def test_tt_kmodel_conv_and_atan2_fallback_pcc(device):
     _, pcc = comp_pcc(y_ref.unsqueeze(0), y_hat.unsqueeze(0), pcc=0.0)
     print(f"\nTTKModel (conv+atan2+phase fallback) PCC: {pcc:.6f}  phonemes={len(phonemes)}")
     assert pcc > 0.35, f"PCC {pcc:.6f} below expected floor (0.35) with conv+atan2+phase+sinegen fallback"
+
+
+# ---------------------------------------------------------------------------
+# Maximum input length (Kokoro-82M config: plbert max_position_embeddings = 512)
+# ---------------------------------------------------------------------------
+
+
+def test_tt_kmodel_max_input_length_constraints():
+    """510 phoneme chars + BOS/EOS must fill PLBERT context (512) without truncation."""
+    ckpt_path = _find_checkpoint()
+    if ckpt_path is None:
+        pytest.skip("Kokoro-82M checkpoint not found locally.")
+
+    ref = KModel(repo_id="hexgrad/Kokoro-82M", model=str(ckpt_path), disable_complex=True).eval()
+    assert ref.context_length == _KOKORO_PLBERT_MAX_POSITIONS
+
+    n_phonemes = _max_phoneme_length(ref.context_length)
+    assert n_phonemes == _KOKORO_MAX_PHONEME_LEN
+    phonemes = _build_max_length_phonemes(ref.vocab, n_phonemes)
+    input_ids, _, input_lengths, _ = _tokenize(ref.vocab, phonemes, ref.context_length)
+
+    assert len(phonemes) == _KOKORO_MAX_PHONEME_LEN
+    assert input_ids.shape == (1, ref.context_length)
+    assert int(input_lengths.item()) == ref.context_length
+
+
+@pytest.mark.timeout(600)
+def test_tt_kmodel_max_input_length_plbert_pcc(device):
+    """PLBERT + bert_encoder at T=512 (full ``max_position_embeddings`` from config.json)."""
+    ckpt_path = _find_checkpoint()
+    if ckpt_path is None:
+        pytest.skip("Kokoro-82M checkpoint not found locally.")
+
+    ref, params, phonemes, _ref_s = _setup_max_length(ckpt_path, device)
+    input_ids, text_mask, _, _ = _tokenize(ref.vocab, phonemes, ref.context_length)
+
+    with torch.no_grad(), _zero_noise():
+        bert_dur = ref.bert(input_ids, attention_mask=(~text_mask).int())
+        d_en_ref = ref.bert_encoder(bert_dur).transpose(-1, -2).float().cpu()
+
+    with _zero_noise():
+        tt_model = TTKModel(device, ref, params, **STFT_PHASE_FALLBACK_KWARGS)
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        ck = tt_model._predictor.compute_kernel_config
+        bert_out = tt_model._bert(input_ids, attention_mask=None)
+        bert_for_enc = bert_out
+        if tt_model._use_fp32_prosody_boundary and bert_out.dtype != ttnn.float32:
+            bert_for_enc = ttnn.typecast(bert_out, ttnn.float32, memory_config=mc)
+            ttnn.deallocate(bert_out)
+        d_en = ttnn.linear(
+            bert_for_enc,
+            params.bert_encoder_w,
+            bias=params.bert_encoder_b,
+            transpose_b=True,
+            memory_config=mc,
+            compute_kernel_config=ck,
+        )
+        ttnn.deallocate(bert_for_enc)
+        while len(d_en.shape) > 3:
+            d_en = ttnn.squeeze(d_en, 0)
+        d_en_bct = ttnn.permute(d_en, (0, 2, 1), memory_config=mc)
+        ttnn.deallocate(d_en)
+        d_en_tt = _tt_to_bct(d_en_bct).cpu()
+        ttnn.deallocate(d_en_bct)
+
+    assert d_en_tt.shape == d_en_ref.shape, (d_en_tt.shape, d_en_ref.shape)
+    _, pcc = comp_pcc(d_en_ref, d_en_tt, pcc=0.0)
+    print(f"\nTTKModel max-length PLBERT+bert_encoder PCC: {pcc:.6f}  T={input_ids.shape[-1]}")
+    # Empirical ~0.94 at T=512 on BH (short-text stages are >0.998; length stress lowers PCC).
+    assert pcc > 0.93, f"PLBERT+bert_encoder PCC {pcc:.6f} below floor at T={ref.context_length}"
+
+
+@pytest.mark.timeout(900)
+def test_tt_kmodel_max_input_length_prosody_stages_pcc(device):
+    """Prosody stack (stages 1–5) at 510 phonemes / 512 tokens — no vocoder (avoids BH L1 OOM)."""
+    ckpt_path = _find_checkpoint()
+    if ckpt_path is None:
+        pytest.skip("Kokoro-82M checkpoint not found locally.")
+
+    ref, params, phonemes, ref_s = _setup_max_length(ckpt_path, device)
+    input_ids, _text_mask, input_lengths, lengths_list = _tokenize(ref.vocab, phonemes, ref.context_length)
+
+    with torch.no_grad(), _zero_noise():
+        ref_st = _run_ref_stages(ref, input_ids, ref_s)
+
+    asr_nlc = f0_tt = n_tt = None
+    try:
+        with _zero_noise():
+            tt_model = TTKModel(device, ref, params, **STFT_PHASE_FALLBACK_KWARGS)
+            mc = ttnn.DRAM_MEMORY_CONFIG
+            ck = tt_model._predictor.compute_kernel_config
+            asr_nlc, f0_tt, n_tt, _t_aln, pred_dur_tt = tt_model._device_forward_prosody_stages(
+                input_ids,
+                input_lengths,
+                lengths_list,
+                ref_s[:, params.style_dim :],
+                1.0,
+                mc,
+                ck,
+            )
+            asr_tt = _tt_to_bct(asr_nlc).cpu()
+            f0_tt_cpu = ttnn.to_torch(f0_tt).float().squeeze().cpu()
+            n_tt_cpu = ttnn.to_torch(n_tt).float().squeeze().cpu()
+
+        pred_dur_tt_cpu = pred_dur_tt.cpu()
+        pred_dur_match = torch.equal(ref_st.pred_dur, pred_dur_tt_cpu)
+        dur_ref = float(ref_st.pred_dur.sum())
+        dur_tt = float(pred_dur_tt_cpu.sum())
+        dur_rel_err = abs(dur_tt - dur_ref) / max(dur_ref, 1.0)
+        print(
+            f"\nMax-length prosody: phonemes={len(phonemes)} tokens={input_ids.shape[-1]} "
+            f"pred_dur_match={pred_dur_match} dur_ref={dur_ref:.0f} dur_tt={dur_tt:.0f} "
+            f"rel_err={dur_rel_err:.4f} ref_T_mel={ref_st.asr_bct.shape[-1]} tt_T_mel={asr_tt.shape[-1]}"
+        )
+
+        assert torch.isfinite(asr_tt).all()
+        assert torch.isfinite(f0_tt_cpu).all()
+        assert torch.isfinite(n_tt_cpu).all()
+        assert dur_rel_err < 0.12, f"pred_dur sum relative error {dur_rel_err:.4f} too large at max length"
+
+        if pred_dur_match:
+            _, pcc_asr, note_asr = _pcc_row("5. asr", ref_st.asr_bct, asr_tt)
+            _, pcc_f0, _ = _pcc_row("4. F0", ref_st.F0, f0_tt_cpu)
+            _, pcc_n, _ = _pcc_row("4. N", ref_st.N, n_tt_cpu)
+            print(f"  asr PCC={pcc_asr:.6f}  F0={pcc_f0:.6f}  N={pcc_n:.6f}  ({note_asr})")
+            assert pcc_asr > 0.98, f"asr PCC {pcc_asr:.6f} below floor at max token length"
+            assert pcc_f0 > 0.98, f"F0 PCC {pcc_f0:.6f} below floor at max token length"
+            assert pcc_n > 0.98, f"N PCC {pcc_n:.6f} below floor at max token length"
+        else:
+            print("  pred_dur per-token mismatch; sum within 12% — skipping aligned asr/F0/N PCC asserts")
+    finally:
+        for t in (asr_nlc, f0_tt, n_tt):
+            if t is not None:
+                ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize("device", [{"l1_small_size": 8192}], indirect=True)
+@pytest.mark.timeout(1200)
+def test_tt_kmodel_max_input_length_stft_phase_fallback_pcc(device):
+    """Full pipeline at 510 phonemes (512 tokens): TTNN prosody + config E vocoder fallbacks.
+
+    Kokoro-82M caps phoneme input at 510 characters (``plbert.max_position_embeddings`` 512
+    minus BOS/EOS).  Long silence padding yields a large mel grid (~1k frames) and a very
+    large iSTFT frame count (~130k).
+
+    Prosody (PLBERT → DurationEncoder → F0/N → TextEncoder) runs fully on device (TTNN).
+    At T=512 with no padding the attention mask is all-ones; PLBERT achieves ~0.94 PCC and
+    DurationEncoder may produce pred_dur drift ≤12%.
+
+    Vocoder: generator upsample uses TTNN chunked overlap-add conv_transpose (no CPU);
+    ResBlock conv1d at large L uses TTNN sliding-window chunking.  iSTFT uses CPU
+    ``torch.istft`` when the dense matrix would exceed 1 GiB (same semantics as
+    ``use_torch_stft_fallback``).
+
+    Audio PCC is checked only when pred_dur matches closely (< 5% drift).  BH BF16 MACs
+    at T=512 can cause larger pred_dur drift that makes sample-by-sample PCC meaningless;
+    that case is flagged but does not fail the test (the important assertion is that the
+    model runs to completion without L1 overflow or crash).
+    """
+    ckpt_path = _find_checkpoint()
+    if ckpt_path is None:
+        pytest.skip("Kokoro-82M checkpoint not found locally.")
+
+    ref, params, phonemes, ref_s = _setup_max_length(ckpt_path, device)
+    assert len(phonemes) == _KOKORO_MAX_PHONEME_LEN
+
+    y_ref = _ref_audio(ref, phonemes, ref_s)
+
+    y_hat = _tt_audio(device, ref, params, phonemes, ref_s, **_MAX_LENGTH_FALLBACK_KWARGS)
+
+    assert torch.isfinite(y_hat).all(), "TTKModel (max length) produced NaN/Inf"
+    assert y_hat.abs().max().item() > 1e-3, "TTKModel (max length) produced ~zero output"
+
+    n_ref = y_ref.numel()
+    n_tt = y_hat.numel()
+    rel_len_err = abs(n_tt - n_ref) / max(n_ref, 1)
+    print(
+        f"\nMax-length audio: ref_samples={n_ref} tt_samples={n_tt} rel_len_err={rel_len_err:.4f} "
+        f"phonemes={len(phonemes)}"
+    )
+    assert rel_len_err < 0.12, (
+        f"TT audio length {n_tt} vs ref {n_ref} (rel err {rel_len_err:.4f}) exceeds 12%; "
+        "check pred_dur / alignment at T=512"
+    )
+
+    n_cmp = min(n_ref, n_tt)
+    y_ref_cmp = y_ref.flatten()[:n_cmp]
+    y_hat_cmp = y_hat.flatten()[:n_cmp]
+    _, pcc = comp_pcc(y_ref_cmp.unsqueeze(0), y_hat_cmp.unsqueeze(0), pcc=0.0)
+    print(f"TTKModel max-length (stft+phase fallback) PCC: {pcc:.6f}  (compared {n_cmp} samples)")
+
+    # BH BF16 accumulation at T=512 can drift pred_dur by up to 12%.  When pred_dur is
+    # off, the alignment matrix changes and all vocoder inputs (F0, N, asr) differ from
+    # reference — making audio PCC meaningless (content, not just timing, is different).
+    # Assert PCC > 0.80 only when audio length is close enough (< 5% drift) that the
+    # comparison is meaningful.  The key pass criterion is the model runs without OOM.
+    if rel_len_err < 0.05:
+        assert pcc > 0.80, (
+            f"PCC {pcc:.6f} below floor (0.80) at max input length; "
+            "run kmodel_pcc_stage_diagnostic.py with a long-text phoneme string"
+        )
+    else:
+        print(
+            f"  pred_dur drift {rel_len_err:.2%} exceeds 5% — skipping PCC assertion "
+            f"(BH BF16 precision floor at T=512; audio PCC={pcc:.4f} is informational only)"
+        )

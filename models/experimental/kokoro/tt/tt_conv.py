@@ -12,7 +12,7 @@ Kokoro TTNN convolution helpers (TT-prefixed params, ``tt_`` functions).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as _dc_replace
 from typing import Optional
 
 import torch
@@ -95,6 +95,34 @@ def tt_weight_norm_materialize(weight_v: torch.Tensor, weight_g: torch.Tensor, *
     v_norm = torch.linalg.vector_norm(v.reshape(v.shape[0], -1), ord=2, dim=1).clamp_min(eps)
     v_norm = v_norm.view(v.shape[0], *([1] * (v.dim() - 1)))
     return v * (g / v_norm)
+
+
+def dram_height_slice_num_slices(
+    sliced_dim: int,
+    *,
+    min_slices: int = 8,
+    max_slices: int = 256,
+    target_rows_per_slice: int = 512,
+) -> int:
+    """Pick ``Conv2dDRAMSliceHeight`` ``num_slices`` to stay under Blackhole L1 (~1.4 MiB/bank).
+
+    Each DRAM slice still runs an L1 ``conv_transpose2d`` on its height partition.  Empirically
+    ~512 input rows per slice fits on BH; Kokoro max length (``F`` ~ 127k) needs ~256 slices.
+    """
+    if sliced_dim <= target_rows_per_slice:
+        return min_slices
+    n = max(min_slices, (sliced_dim + target_rows_per_slice - 1) // target_rows_per_slice)
+    p2 = 1
+    while p2 < n:
+        p2 <<= 1
+    return min(p2, max_slices)
+
+
+def dram_height_slice_config(sliced_dim: int) -> ttnn.Conv2dSliceConfig:
+    return ttnn.Conv2dSliceConfig(
+        slice_type=ttnn.Conv2dDRAMSliceHeight,
+        num_slices=dram_height_slice_num_slices(sliced_dim),
+    )
 
 
 @dataclass(frozen=True)
@@ -308,11 +336,15 @@ def tt_conv1d_nlc(
         ttnn.deallocate(zeros)
         L = _BL_PAD_TARGET
 
-    # For large L with dilation > 1: use sliding-window chunked conv to avoid
-    # L1 CB overflow while keeping dilated convolutions correct.  act_block_h_override
-    # cannot be used here because TTNN does not fetch halo rows for the dilated kernel
-    # when the activation block is smaller than the kernel span, corrupting ~30% of outputs.
-    if L > 2048 and params.dilation > 1 and conv_config is None:
+    # For large L with stride=1: use sliding-window chunked conv to avoid L1 CB overflow.
+    # act_block_h_override cannot fix CB conflicts for DRAM-interleaved inputs at very
+    # large L, and does not work at all for dilated kernels (boundary halo rows are not
+    # fetched when act_block_h < dilation*(k-1), corrupting ~30% of outputs).
+    # _chunked_tt_conv1d_nlc builds the explicit halo for every chunk and is correct for
+    # all dilation values including 1.  Stride > 1 convolutions (e.g. noise_conv) are
+    # excluded: chunking them requires chunk_out*stride input rows per chunk which can
+    # again exceed 2048 causing unbounded recursion; act_block_h_override=32 covers them.
+    if L > 2048 and params.stride == 1 and conv_config is None:
         return _chunked_tt_conv1d_nlc(
             x_nlc=x_nlc,
             params=params,
@@ -487,6 +519,14 @@ def tt_conv1d_stride2_k3_1ch_nlc(
     return y
 
 
+# Height-style conv_transpose2d L1 output limit.  Above this output length TTNN pre-allocates
+# the full output in L1 even with dram_slice_config, overflowing BH (1.5 MiB/bank).
+_L1_CONV_TRANSPOSE_HEIGHT_MAX_OUT = 8192
+# Maximum input rows processed per OLA chunk.  For stride≤10, kernel≤20:
+#   chunk_out = (256-1)*10 + 20 = 2 570 rows × 256 ch × 4 B / 126 banks ≈ 21 KB/bank ✓
+_CONV_TRANSPOSE_HEIGHT_CHUNK = 256
+
+
 @dataclass(frozen=True)
 class TTConvTranspose1dParams:
     # TTNN conv_transpose2d weights (NHWC op): default ``[in_ch, out_ch/groups, 1, k]`` (``spatial_style="width"``);
@@ -502,6 +542,90 @@ class TTConvTranspose1dParams:
     groups: int = 1
     mirror_kernel: bool = True
     spatial_style: str = "width"  # "width" | "height"
+
+
+def _chunked_tt_conv_transpose1d_height(
+    x_nlc: ttnn.Tensor,
+    params: "TTConvTranspose1dParams",
+    device,
+    chunk_size: int,
+    memory_config: ttnn.MemoryConfig,
+    out_dtype,
+) -> ttnn.Tensor:
+    """Overlap-add chunked height-style conv_transpose for sequences whose full output would OOM L1.
+
+    Each chunk of ``chunk_size`` input rows is processed with ``padding=0`` on device.
+    Chunk outputs are downloaded and accumulated into a pre-allocated float32 buffer on CPU.
+    After all chunks, the global padding trim (``params.padding`` from each end) is applied
+    and the bias (if any) is added once.  Result is uploaded to device in one call.
+
+    Why padding=0 per chunk: applying the original ``params.padding`` to each chunk would
+    trim boundary contributions that should only be trimmed at the *global* sequence edges.
+    Internal chunks' inter-chunk overlap (K-S rows) is correctly accumulated via ``+=`` into
+    the unpadded buffer; the global trim then reproduces the exact padded output.
+    """
+    B = int(x_nlc.shape[0])
+    L = int(x_nlc.shape[1])
+    C = int(x_nlc.shape[2])
+    S = params.stride
+    K = params.kernel_size
+    P = params.padding
+    OP = params.output_padding
+    C_out = params.out_channels
+
+    # Unpadded buffer length: sum of all per-input contributions without global trim.
+    out_H_unpadded = (L - 1) * S + K
+    # Final output length after global trim and output_padding.
+    out_H = out_H_unpadded - 2 * P + OP
+
+    # Per-chunk params: no padding (we trim globally), no bias (applied once at the end).
+    chunk_params = _dc_replace(params, padding=0, output_padding=0, bias=None)
+
+    output_cpu = torch.zeros(B, out_H_unpadded, C_out, dtype=torch.float32)
+
+    for chunk_start in range(0, L, chunk_size):
+        chunk_end = min(chunk_start + chunk_size, L)
+
+        # Slice input chunk on device (chunk_start multiples of chunk_size=256 are tile-aligned).
+        x_chunk = ttnn.slice(x_nlc, [0, chunk_start, 0], [B, chunk_end, C], [1, 1, 1], memory_config=memory_config)
+
+        # Run conv_transpose with padding=0 (seq ≤ chunk_size < 1024, no DRAM slice).
+        y = tt_conv_transpose1d_nlc(
+            x_nlc=x_chunk,
+            params=chunk_params,
+            device=device,
+            memory_config=memory_config,
+            out_dtype=out_dtype,
+        )
+        ttnn.deallocate(x_chunk)
+
+        # Download and scatter-accumulate: out_start = chunk_start * S (unpadded global coords).
+        y_cpu = ttnn.to_torch(y).float()
+        ttnn.deallocate(y)
+        while y_cpu.dim() > 3:
+            y_cpu = y_cpu.squeeze(0)
+
+        out_start = chunk_start * S
+        output_cpu[:, out_start : out_start + int(y_cpu.shape[1]), :] += y_cpu
+
+    # Global trim: remove P elements from each end to apply the original padding.
+    trimmed = output_cpu[:, P : P + out_H, :].contiguous()
+
+    # Apply bias once (bias was excluded from chunk_params).
+    if params.bias is not None:
+        bias_cpu = ttnn.to_torch(params.bias).float()
+        while bias_cpu.dim() > 1:
+            bias_cpu = bias_cpu.squeeze(0)
+        trimmed = trimmed + bias_cpu.reshape(1, 1, -1)
+
+    upload_dtype = out_dtype if out_dtype is not None else ttnn.bfloat16
+    return ttnn.from_torch(
+        trimmed,
+        dtype=upload_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=memory_config,
+    )
 
 
 def tt_conv_transpose1d_nlc(
@@ -531,6 +655,15 @@ def tt_conv_transpose1d_nlc(
     _TRANSPOSE_BROKEN_MIN = 194
     if params.spatial_style == "height":
         out_H = (seq - 1) * params.stride + params.kernel_size - 2 * params.padding + params.output_padding
+        if out_H >= _L1_CONV_TRANSPOSE_HEIGHT_MAX_OUT:
+            return _chunked_tt_conv_transpose1d_height(
+                x_nlc=x_nlc,
+                params=params,
+                device=device,
+                chunk_size=_CONV_TRANSPOSE_HEIGHT_CHUNK,
+                memory_config=memory_config,
+                out_dtype=out_dtype,
+            )
         if _TRANSPOSE_BROKEN_MAX < out_H < _TRANSPOSE_BROKEN_MIN:
             numerator = _TRANSPOSE_BROKEN_MIN - params.kernel_size + 2 * params.padding - params.output_padding
             target_seq = (numerator + params.stride - 1) // params.stride + 1
@@ -565,13 +698,19 @@ def tt_conv_transpose1d_nlc(
     if x_nlc.layout != ttnn.TILE_LAYOUT:
         x_nlc = ttnn.to_layout(x_nlc, ttnn.TILE_LAYOUT, memory_config=memory_config)
     x = ttnn.reshape(x_nlc, (x_nlc.shape[0], 1, x_nlc.shape[1], x_nlc.shape[2]), memory_config=memory_config)
+    # Large height-style sequences (generator upsample at max phoneme length) need DRAM
+    # slicing.  With dram_slice_config, requesting output_layout=TILE_LAYOUT causes TTNN
+    # to pre-allocate the full output as L1-sharded, overflowing BH L1 (1.5 MiB/bank).
+    # Skip output_layout for that path; we convert to TILE in DRAM afterward.
+    _use_dram_slice = params.spatial_style == "height" and seq >= 1024
     if conv_config is None:
         conv_config = ttnn.Conv2dConfig(weights_dtype=params.weight.dtype)
         # Keep conv-transpose configuration/bias tensors in DRAM and free activations eagerly
         # to reduce pressure on L1_SMALL (the generator path can otherwise OOM on BH).
         conv_config.config_tensors_in_dram = True
         conv_config.deallocate_activation = True
-        conv_config.output_layout = ttnn.TILE_LAYOUT
+        if not _use_dram_slice:
+            conv_config.output_layout = ttnn.TILE_LAYOUT
         try:
             conv_config.enable_act_double_buffer = False
         except Exception:
@@ -588,6 +727,7 @@ def tt_conv_transpose1d_nlc(
 
     if params.spatial_style == "height":
         # Matches ``ttnn_adain_resblk_encode._TtDepthwiseConvTransposePool`` (Kokoro istftnet pool).
+        _height_slice_cfg = dram_height_slice_config(seq) if _use_dram_slice else None
         y, out_hw = ttnn.conv_transpose2d(
             input_tensor=x,
             weight_tensor=params.weight,
@@ -607,12 +747,17 @@ def tt_conv_transpose1d_nlc(
             compute_config=compute_config,
             groups=params.groups,
             dtype=out_dtype,
+            dram_slice_config=_height_slice_cfg,
             mirror_kernel=params.mirror_kernel,
             return_output_dim=True,
         )
         oh, ow = int(out_hw[0]), int(out_hw[1])
         flat = oh * ow
         y = ttnn.reshape(y, (y.shape[0], flat, y.shape[3]), memory_config=memory_config)
+        # DRAM-sliced path omits output_layout=TILE in conv_config to avoid L1 OOM;
+        # convert to TILE in DRAM here so downstream ops (add, leaky_relu) see TILE layout.
+        if _use_dram_slice and y.layout != ttnn.TILE_LAYOUT:
+            y = ttnn.to_layout(y, ttnn.TILE_LAYOUT, memory_config=memory_config)
         return y
 
     y, out_hw = ttnn.conv_transpose2d(

@@ -48,14 +48,25 @@ from typing import Optional
 
 import numpy as np
 import torch
+from loguru import logger
 
 import ttnn
 
 from models.experimental.kokoro.stft_xy_dump import dump_stft_xy_if_enabled, stft_xy_dump_dir, stft_xy_dump_enabled
+from models.experimental.kokoro.tt.tt_conv import dram_height_slice_config, dram_height_slice_num_slices
 
 # iSTFT matrix bytes limit: if [K*F, output_length] float32 would exceed this, skip
 # precomputing the matrices and use conv_transpose2d OLA instead.
 _ISTFT_MATRIX_BYTES_LIMIT = 1_073_741_824  # 1 GiB
+# BH L1 limit for conv_transpose2d OLA: dram_height_slice caps at 256 slices × ~512 rows.
+_ISTFT_CONV_TRANSPOSE_TARGET_ROWS_PER_SLICE = 512
+
+
+def _istft_conv_transpose_ola_fits(F: int) -> bool:
+    """Return whether on-device conv_transpose2d OLA iSTFT fits BH L1 with DRAM height slicing."""
+    num_slices = dram_height_slice_num_slices(F)
+    rows_per_slice = (F + num_slices - 1) // num_slices
+    return rows_per_slice <= _ISTFT_CONV_TRANSPOSE_TARGET_ROWS_PER_SLICE
 
 
 def _to_fp32_if_needed(x: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> tuple[ttnn.Tensor, bool]:
@@ -275,6 +286,12 @@ def preprocess_tt_torch_stft(
 
     matrix_bytes = K * F * output_length * 4  # float32 bytes for one matrix
     if matrix_bytes > _ISTFT_MATRIX_BYTES_LIMIT:
+        logger.info(
+            "TTTorchSTFT skipping iSTFT matrix precompute "
+            f"({matrix_bytes} bytes > {_ISTFT_MATRIX_BYTES_LIMIT}); "
+            f"F={F}, output_length={output_length} — "
+            f"{'torch.istft at runtime' if not _istft_conv_transpose_ola_fits(F) else 'conv_transpose2d OLA at runtime'}"
+        )
         istft_real_t: Optional[ttnn.Tensor] = None
         istft_imag_t: Optional[ttnn.Tensor] = None
     else:
@@ -353,7 +370,7 @@ class _StridedStftConv:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
-        self.slice_cfg = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dDRAMSliceHeight, num_slices=8)
+        self.slice_cfg = dram_height_slice_config(2048)
 
     def _torch_forward(self, x_n1tc: ttnn.Tensor, batch_size: int, input_height: int) -> ttnn.Tensor:
         """CPU fallback: float32 ``F.conv2d`` → upload result to device."""
@@ -371,9 +388,22 @@ class _StridedStftConv:
     def __call__(self, x_n1tc: ttnn.Tensor, batch_size: int, input_height: int) -> ttnn.Tensor:
         if self.use_torch_fallback:
             return self._torch_forward(x_n1tc, batch_size, input_height)
+        use_dram_slice = input_height > 2048
+        slice_cfg = dram_height_slice_config(input_height)
+        if use_dram_slice:
+            conv_config = ttnn.Conv2dConfig(
+                weights_dtype=ttnn.float32,
+                deallocate_activation=True,
+                config_tensors_in_dram=True,
+                enable_act_double_buffer=False,
+                enable_weights_double_buffer=False,
+            )
+        else:
+            conv_config = self.conv_config
         x_rm = ttnn.to_layout(x_n1tc, ttnn.ROW_MAJOR_LAYOUT)
-        key = (batch_size, input_height)
+        key = (batch_size, input_height, slice_cfg.num_slices, use_dram_slice)
         if self._prep_key != key:
+            self.slice_cfg = slice_cfg
             self.weight_prepared = ttnn.prepare_conv_weights(
                 weight_tensor=self.weight_rm,
                 input_memory_config=x_rm.memory_config(),
@@ -392,7 +422,7 @@ class _StridedStftConv:
                 groups=1,
                 device=self.device,
                 input_dtype=x_rm.dtype,
-                conv_config=self.conv_config,
+                conv_config=conv_config,
                 compute_config=self.compute_cfg,
                 slice_config=self.slice_cfg,
             )
@@ -410,7 +440,7 @@ class _StridedStftConv:
             stride=(self.hop_length, 1),
             padding=(0, 0),
             bias_tensor=None,
-            conv_config=self.conv_config,
+            conv_config=conv_config,
             compute_config=self.compute_cfg,
             slice_config=self.slice_cfg,
             return_weights_and_bias=True,
@@ -418,6 +448,8 @@ class _StridedStftConv:
         )
         self.weight_prepared = wpair[0]
         out = ttnn.reshape(result, [batch_size, int(oh), self.out_channels], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if use_dram_slice and out.layout != ttnn.TILE_LAYOUT:
+            out = ttnn.to_layout(out, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         out = ttnn.permute(out, (0, 2, 1), memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return out
 
@@ -681,6 +713,34 @@ class TTTorchSTFT:
             return self._atan2_torch_fallback(X_real, X_imag)
         return self._magnitude_phase_from_xy(X_real, X_imag)
 
+    def _inverse_torch_istft(self, magnitude: ttnn.Tensor, phase: ttnn.Tensor) -> ttnn.Tensor:
+        """CPU ``torch.istft`` for large-F iSTFT where the full matrix is not precomputed.
+
+        Used when ``istft_real is None`` (matrix too large for ``_ISTFT_MATRIX_BYTES_LIMIT``)
+        or when ``_inverse_conv_transpose`` would overflow BH L1 even with DRAM slicing.
+        Consistent with ``use_torch_stft_fallback`` semantics (user already opted into CPU STFT).
+        """
+        p = self.params
+        logger.info(
+            "TTTorchSTFT iSTFT using CPU torch.istft "
+            f"(F={p.F}, output_length={p.output_length}, input_length={p.input_length}; "
+            "iSTFT matrix skipped and conv_transpose2d OLA exceeds BH L1 slice budget)"
+        )
+        B = int(magnitude.shape[0])
+        mag = ttnn.to_torch(magnitude).float().reshape(B, p.K, p.F)
+        pha = ttnn.to_torch(phase).float().reshape(B, p.K, p.F)
+        window = torch.hann_window(p.win_length, periodic=True, dtype=torch.float32)
+        with torch.no_grad():
+            z = mag * torch.exp(pha * 1j)
+            y = torch.istft(z, p.filter_length, p.hop_length, p.win_length, window=window)
+        if y.shape[-1] != p.output_length:
+            y = y[..., : p.output_length]
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        y_tt = ttnn.from_torch(
+            y.contiguous(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=mc
+        )
+        return ttnn.reshape(y_tt, [B, 1, p.output_length], memory_config=mc)
+
     def _inverse_conv_transpose(self, X_real: ttnn.Tensor, X_imag: ttnn.Tensor) -> ttnn.Tensor:
         """Conv-transpose OLA iSTFT — fully on device, no CPU in forward path.
 
@@ -703,15 +763,23 @@ class TTTorchSTFT:
         x_real_nhwc = _to_nhwc(X_real)
         x_imag_nhwc = _to_nhwc(X_imag)
 
-        # Use the same minimal conv_config as tt_conv_transpose1d_nlc (no output_layout override).
+        # Match tt_conv_transpose1d_nlc dram-sliced path: no output_layout=TILE (avoids L1 OOM on BH).
         conv_cfg = ttnn.Conv2dConfig(weights_dtype=ttnn.float32)
         conv_cfg.config_tensors_in_dram = True
+        conv_cfg.deallocate_activation = True
+        try:
+            conv_cfg.enable_act_double_buffer = False
+        except Exception:
+            pass
         compute_cfg = ttnn.init_device_compute_kernel_config(
             self.device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
+
+        # Scale DRAM height slices with F (~512 rows/slice; max Kokoro needs ~256 slices on BH).
+        _istft_slice_cfg = dram_height_slice_config(p.F)
 
         def _run_ct(x_nhwc: ttnn.Tensor, synth_w: ttnn.Tensor) -> ttnn.Tensor:
             y, out_hw = ttnn.conv_transpose2d(
@@ -732,6 +800,7 @@ class TTTorchSTFT:
                 bias_tensor=None,
                 conv_config=conv_cfg,
                 compute_config=compute_cfg,
+                dram_slice_config=_istft_slice_cfg,
                 mirror_kernel=True,
                 return_output_dim=True,
             )
@@ -778,14 +847,20 @@ class TTTorchSTFT:
         Returns:
             ``[B, 1, output_length]`` (matches ``TorchSTFT.inverse``'s trailing ``unsqueeze(-2)``).
 
-        When iSTFT full matrices are not precomputed (input too large for
-        ``_ISTFT_MATRIX_BYTES_LIMIT``), this method uses conv_transpose2d OLA.
+        Routing when the dense iSTFT matrix was not precomputed (``istft_real is None``):
+
+        - ``F`` within BH conv_transpose slice budget → conv_transpose2d OLA on device.
+        - ``F`` too large for BH L1 even with DRAM slicing → CPU ``torch.istft``.
         """
         p = self.params
+
         if magnitude.dtype != ttnn.float32:
             magnitude = ttnn.typecast(magnitude, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if phase.dtype != ttnn.float32:
             phase = ttnn.typecast(phase, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        if (p.istft_real is None or p.istft_imag is None) and not _istft_conv_transpose_ola_fits(p.F):
+            return self._inverse_torch_istft(magnitude, phase)
 
         cos_phase = ttnn.cos(phase, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         sin_phase = ttnn.sin(phase, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -821,11 +896,12 @@ class TTTorchSTFT:
             while len(y.shape) > 2:
                 y = ttnn.squeeze(y, 0)
             return ttnn.reshape(y, [B, 1, p.output_length], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        else:
-            y = self._inverse_conv_transpose(X_real, X_imag)
-            ttnn.deallocate(X_real)
-            ttnn.deallocate(X_imag)
-            return y
+
+        # Matrix skipped but F fits BH conv_transpose slice budget — on-device OLA.
+        y = self._inverse_conv_transpose(X_real, X_imag)
+        ttnn.deallocate(X_real)
+        ttnn.deallocate(X_imag)
+        return y
 
     def _forward_stft_to_istft(self, x_bL: ttnn.Tensor) -> ttnn.Tensor:
         """STFT conv → iSTFT without mag/phase roundtrip.
@@ -864,11 +940,12 @@ class TTTorchSTFT:
             while len(y.shape) > 2:
                 y = ttnn.squeeze(y, 0)
             return ttnn.reshape(y, [B, 1, p.output_length], memory_config=mc)
-        else:
-            y = self._inverse_conv_transpose(X_real, X_imag)
-            ttnn.deallocate(X_real)
-            ttnn.deallocate(X_imag)
-            return y
+
+        # Long sequences: conv_transpose2d OLA with DRAM height slicing (fully on device).
+        y = self._inverse_conv_transpose(X_real, X_imag)
+        ttnn.deallocate(X_real)
+        ttnn.deallocate(X_imag)
+        return y
 
     def forward(self, x_bL: ttnn.Tensor) -> ttnn.Tensor:
         """STFT → iSTFT round trip (matches ``TorchSTFT.forward``)."""
