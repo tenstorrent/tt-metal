@@ -145,9 +145,48 @@ struct KernelDescriptor {
     Defines defines;
 
     // vector of pairs, where runtime_args[i].first is the core coord and runtime_args[i].second is the vector of
+    // Named runtime args use "ns.field" convention (e.g. "demo.num_tiles").
+    // The name is split on '.' to produce namespace hierarchy in the generated header.
+    // Common: same value on all cores. Per-core: different value per core.
+    struct NamedCommonRuntimeArg {
+        std::string name;
+        uint32_t value;
+    };
+    using NamedCommonRuntimeArgs = std::vector<NamedCommonRuntimeArg>;
+    struct NamedPerCoreRuntimeArg {
+        std::string name;
+        std::vector<std::pair<CoreCoord, uint32_t>> core_values;
+    };
+    using NamedPerCoreRuntimeArgs = std::vector<NamedPerCoreRuntimeArg>;
+
+    // Array variant: named RT arg that occupies N contiguous slots.
+    // Generates ArrayArg (with length) in the kernel header instead of Arg.
+    struct NamedCommonRuntimeArgArray {
+        std::string name;
+        std::vector<uint32_t> values;
+    };
+    using NamedCommonRuntimeArgArrays = std::vector<NamedCommonRuntimeArgArray>;
+    // Per-core array variant: each core gets its own array of N contiguous RT arg slots.
+    struct NamedPerCoreRuntimeArgArray {
+        std::string name;
+        std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> core_values;
+    };
+    using NamedPerCoreRuntimeArgArrays = std::vector<NamedPerCoreRuntimeArgArray>;
+
     // runtime args for that core
     RuntimeArgs runtime_args;
     CommonRuntimeArgs common_runtime_args;
+    // Named common runtime args: ordered (name, value) pairs.
+    // Names define the index mapping compiled into the kernel for compile-time resolution.
+    // Values are set as common runtime args (appended after any positional common_runtime_args).
+    NamedCommonRuntimeArgs named_common_runtime_args;
+    // Per-core named runtime args: each entry has a name and per-core values.
+    // Values are merged into runtime_args by program.cpp; indices auto-assigned by position.
+    NamedPerCoreRuntimeArgs named_per_core_runtime_args;
+    // Array variant: each entry occupies N contiguous common RT arg slots.
+    NamedCommonRuntimeArgArrays named_common_runtime_arg_arrays;
+    // Per-core array variant: each core gets its own array of N contiguous RT arg slots.
+    NamedPerCoreRuntimeArgArrays named_per_core_runtime_arg_arrays;
 
     std::optional<KernelBuildOptLevel> opt_level = std::nullopt;
 

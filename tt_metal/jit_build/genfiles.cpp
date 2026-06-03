@@ -204,12 +204,13 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     const vector<string>& rta_names = settings.get_runtime_arg_names();
     const vector<string>& crta_names = settings.get_common_runtime_arg_names();
 
-    // The kernel's CRTA buffer is laid out as three back-to-back sections:
-    //   [ user-named CRTAs | TensorBinding section | varargs ]
-    // The boundaries are precomputed at spec-resolution time and stored on the kernel,
-    // so we read them directly here. The vararg helpers below need the vararg-section
-    // start offset to skip past sections 1 and 2.
-    const KernelCrtaLayout crta_layout = settings.get_crta_layout();
+    // TensorBinding addresses occupy a structurally-separate, position-indexed section appended
+    // immediately after the user-named CRTAs in the kernel's CRTA buffer.
+    // We need to know how many there are so the vararg helpers below skip past the binding
+    // section to land at the first user vararg.
+    uint32_t tensor_binding_count = 0;
+    settings.process_tensor_binding_handles(
+        [&tensor_binding_count](const std::string&, uint32_t, uint32_t, uint32_t) { ++tensor_binding_count; });
 
     // Named CTAs come through the legacy unordered_map path (Kernel internal storage).
     // The order in which we emit them DOES matter!
@@ -266,13 +267,14 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     // indexing: get_vararg(0) is the first vararg, regardless of named-arg count. When
     // there are no named args, the offset is zero and these helpers are just thin wrappers
     // around get_arg_val / get_common_arg_val.
-    // CRTA-side note: the vararg section starts at crta_layout.vararg_section_offset,
-    // which already accounts for both the user-named CRTAs and the TensorBinding section.
+    // CRTA-side note: the kernel's CRTA buffer holds [user-named CRTAs, TensorBinding
+    // address section, varargs]. The vararg base must skip past the binding section as well.
     const uint32_t named_rta_words = static_cast<uint32_t>(rta_names.size());
+    const uint32_t named_crta_words = static_cast<uint32_t>(crta_names.size()) + tensor_binding_count;
     content << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { return get_arg_val<uint32_t>(" << named_rta_words
             << " + idx); }\n"
             << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("
-            << crta_layout.vararg_section_offset << " + idx); }\n";
+            << named_crta_words << " + idx); }\n";
 
     write_file(path, content.str());
 }

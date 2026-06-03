@@ -184,6 +184,12 @@ public:
     }
     KernelCrtaLayout get_crta_layout() const override { return crta_layout_; }
     bool is_metal2_kernel() const override { return is_metal2_kernel_; }
+
+    // Named runtime arg namespace support (ProgramDescriptor path).
+    void set_named_runtime_arg_namespaces(const NamedRuntimeArgNamespaces& ns) { named_runtime_arg_namespaces_ = ns; }
+    void set_named_ct_arg_namespaces(const NamedCTArgNamespaces& ns) { named_ct_arg_namespaces_ = ns; }
+    void process_named_runtime_args(std::function<void(const NamedRuntimeArgNamespaces&)> fn) const override;
+    void process_named_ct_arg_namespaces(std::function<void(const NamedCTArgNamespaces&)> fn) const override;
     void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
     void validate_runtime_args_size(
@@ -269,6 +275,9 @@ protected:
     const std::vector<std::string> common_runtime_arg_names_;
     const std::vector<TensorBindingHandle> tensor_binding_handles_;
     const KernelCrtaLayout crta_layout_;
+    // Named arg namespace maps, populated from ProgramDescriptor path.
+    NamedRuntimeArgNamespaces named_runtime_arg_namespaces_;
+    NamedCTArgNamespaces named_ct_arg_namespaces_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};

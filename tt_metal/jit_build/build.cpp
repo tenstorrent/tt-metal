@@ -19,7 +19,9 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -530,6 +532,80 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
                 ss << "\"";
                 defines += ss.str() + " ";
             });
+
+        // Generate named_args_generated.h: each namespace becomes a struct with
+        // both CT constexpr values and RT arg descriptors (rt_args::Arg/ArrayArg).
+        {
+            // Accumulate RT entries per namespace.
+            std::map<std::string, std::vector<NamedRuntimeArgEntry>> rt_by_ns;
+            settings->process_named_runtime_args([&rt_by_ns](const NamedRuntimeArgNamespaces& namespaces) {
+                for (const auto& [ns, entries] : namespaces) {
+                    rt_by_ns[ns].insert(rt_by_ns[ns].end(), entries.begin(), entries.end());
+                }
+            });
+
+            // Accumulate CT entries per namespace.
+            std::map<std::string, std::vector<std::pair<std::string, uint32_t>>> ct_by_ns;
+            settings->process_named_ct_arg_namespaces([&ct_by_ns](const NamedCTArgNamespaces& namespaces) {
+                for (const auto& [ns, entries] : namespaces) {
+                    ct_by_ns[ns].insert(ct_by_ns[ns].end(), entries.begin(), entries.end());
+                }
+            });
+
+            // Collect all non-empty namespaces from both CT and RT maps.
+            std::set<std::string> all_ns;
+            for (const auto& [ns, unused] : ct_by_ns) {
+                all_ns.insert(ns);
+            }
+            for (const auto& [ns, unused] : rt_by_ns) {
+                if (!ns.empty()) {
+                    all_ns.insert(ns);
+                }
+            }
+
+            // Emit one struct per namespace containing both CT fields and RT descriptors.
+            std::ostringstream header_ct;
+            for (const auto& ns : all_ns) {
+                if (!ns.empty()) {
+                    header_ct << "struct " << ns << " {\n";
+                }
+                // CT fields
+                if (auto it = ct_by_ns.find(ns); it != ct_by_ns.end()) {
+                    for (const auto& [field, value] : it->second) {
+                        header_ct << "    static constexpr uint32_t " << field << " = " << value << ";\n";
+                    }
+                }
+                // RT descriptors
+                if (auto it = rt_by_ns.find(ns); it != rt_by_ns.end()) {
+                    for (const auto& entry : it->second) {
+                        const char* dispatch_str = entry.dispatch == RuntimeArgDispatch::COMMON
+                                                       ? "rt_args::Dispatch::COMMON"
+                                                       : "rt_args::Dispatch::PER_CORE";
+                        if (entry.length > 1) {
+                            header_ct << "    static constexpr rt_args::ArrayArg " << entry.field << " = {"
+                                      << entry.index << ", " << entry.length << ", " << dispatch_str << "};\n";
+                        } else {
+                            header_ct << "    static constexpr rt_args::Arg " << entry.field << " = {" << entry.index
+                                      << ", " << dispatch_str << "};\n";
+                        }
+                    }
+                }
+                if (!ns.empty()) {
+                    header_ct << "};\n";
+                }
+            }
+
+            auto ct_str = header_ct.str();
+            if (!ct_str.empty()) {
+                std::string header_path = out_dir + "named_args_generated.h";
+                std::ostringstream content;
+                content << "#pragma once\n#include \"api/rt_arg.h\"\n\n";
+                content << "namespace ct_args {\n" << ct_str << "}\n";
+                std::ofstream f(header_path);
+                f << content.str();
+                defines += fmt::format("-include {} ", header_path);
+            }
+        }
 
         cmd += fmt::format("-{} ", settings->get_compiler_opt_level());
     } else {

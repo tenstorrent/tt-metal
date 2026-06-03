@@ -29,18 +29,13 @@ class Allocator;
 
 // Implementation of SharedMemoryStatsProvider
 
-SharedMemoryStatsProvider::SharedMemoryStatsProvider(
-    uint64_t asic_id, int device_id, bool tracking_disabled, bool verbose) :
+SharedMemoryStatsProvider::SharedMemoryStatsProvider(uint64_t asic_id, int device_id) :
     asic_id_(asic_id),
     device_id_(device_id),
     shm_fd_(-1),
     region_(nullptr),
-    // Per-PID tracking is enabled by default and disabled by TT_METAL_SHM_TRACKING_DISABLED=1.
-    // The flag is captured once at construction (passed in by Device::initialize from its
-    // MetalContext's rtoptions) -- it's a process-wide debug toggle, no need to look it up
-    // again per allocation.
-    per_pid_tracking_enabled_(!tracking_disabled),
-    verbose_enabled_(verbose),
+    per_pid_tracking_enabled_(true)  // Enabled by default, disable with TT_METAL_SHM_TRACKING_DISABLED=1
+    ,
     is_creator_(false) {
     // Format: /tt_device_<chip_unique_id>_memory
     // chip_unique_id from UMD is globally unique and never changes
@@ -120,7 +115,16 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(
     TT_ASSERT(device_id_ >= 0, "Negative device_id {} passed to SHM provider", device_id_);
     region_->device_id = static_cast<uint32_t>(device_id_);
 
-    if (verbose_enabled_) {
+    // Check if tracking should be disabled (enabled by default)
+    const auto& rtopts = MetalContext::instance().rtoptions();
+    if (rtopts.get_shm_tracking_disabled()) {
+        per_pid_tracking_enabled_ = false;
+    }
+
+    // Verbose logging for initialization
+    bool verbose_enabled = rtopts.get_shm_verbose();
+
+    if (verbose_enabled) {
         log_info(
             tt::LogMetal,
             "SHM Provider initialized: device_id={}, asic_id=0x{:x}, shm_name={}, is_creator={}, region_={}, "
@@ -295,8 +299,10 @@ void SharedMemoryStatsProvider::initialize_region() {
 }
 
 void SharedMemoryStatsProvider::record_allocation(pid_t pid, uint64_t size, ShmBufferType type, uint32_t chip_id) {
+    bool verbose_enabled = MetalContext::instance().rtoptions().get_shm_verbose();
+
     if (!region_) {
-        if (verbose_enabled_) {
+        if (verbose_enabled) {
             log_warning(
                 tt::LogMetal,
                 "SHM record_allocation SKIPPED: region_ is nullptr (pid={}, size={} B, type={}, chip_id={})",
@@ -308,7 +314,7 @@ void SharedMemoryStatsProvider::record_allocation(pid_t pid, uint64_t size, ShmB
         return;
     }
 
-    if (verbose_enabled_) {
+    if (verbose_enabled) {
         static const char* type_names[] = {"DRAM", "L1", "L1_SMALL", "TRACE", "CB"};
         auto type_idx = static_cast<size_t>(type);
         const char* type_name = (type_idx < 5) ? type_names[type_idx] : "UNKNOWN";
@@ -374,8 +380,10 @@ void SharedMemoryStatsProvider::record_allocation(pid_t pid, uint64_t size, ShmB
 }
 
 void SharedMemoryStatsProvider::record_deallocation(pid_t pid, uint64_t size, ShmBufferType type, uint32_t chip_id) {
+    bool verbose_enabled = MetalContext::instance().rtoptions().get_shm_verbose();
+
     if (!region_) {
-        if (verbose_enabled_) {
+        if (verbose_enabled) {
             log_warning(
                 tt::LogMetal,
                 "SHM record_deallocation SKIPPED: region_ is nullptr (pid={}, size={} B, type={}, chip_id={})",
@@ -387,7 +395,7 @@ void SharedMemoryStatsProvider::record_deallocation(pid_t pid, uint64_t size, Sh
         return;
     }
 
-    if (verbose_enabled_) {
+    if (verbose_enabled) {
         static const char* type_names[] = {"DRAM", "L1", "L1_SMALL", "TRACE", "CB"};
         auto type_idx = static_cast<size_t>(type);
         const char* type_name = (type_idx < 5) ? type_names[type_idx] : "UNKNOWN";

@@ -16,10 +16,7 @@ class Device;
 // for real-time monitoring by external tools (e.g. tt-smi-ui)
 class ShmTrackingProcessor : public IGraphProcessor {
 public:
-    // verbose: process-wide TT_METAL_SHM_VERBOSE flag, captured at construction time from
-    // the owning Device's MetalContext rtoptions so the processor does not need to walk
-    // MetalContext slots later. The flag is process-wide, so capturing once is correct.
-    explicit ShmTrackingProcessor(bool verbose);
+    ShmTrackingProcessor();
     ~ShmTrackingProcessor() override = default;
 
     // ShmTrackingProcessor is a permanent background processor; it must not
