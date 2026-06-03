@@ -346,17 +346,17 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         "width shards ({}); use a single width shard or a tile-aligned width.",
         logical_K,
         last_core_width_index + 1);
-    // The non-Welford reduce excludes the padding via a column mask (below); that masking is wired
-    // only for plain layernorm. RMSNorm and the fused residual add on a non-tile-aligned width must
-    // use the Welford path.
+    // The non-Welford reduce excludes the padding via a column mask (below), which masks the
+    // host-tilized input. A fused residual add produces the input on-device with a different datum
+    // layout that the host-built mask does not match, so that case must use the Welford path.
     TT_FATAL(
-        !col_mask_needed || use_welford || (!rms_norm && !fuse_pre_add),
-        "Sharded layer_norm with a non-tile-aligned width ({}) on the non-Welford path supports only "
-        "plain layernorm (no rms_norm, no residual add); set use_welford=true for those cases.",
+        !col_mask_needed || use_welford || !fuse_pre_add,
+        "Sharded layer_norm with a non-tile-aligned width ({}) and a fused residual add requires the "
+        "Welford program config (use_welford=true).",
         logical_K);
-    // Legacy (non-Welford) plain-layernorm path: zero the padding columns of the last width tile so
-    // they do not enter E[x] or the variance. Guards above guarantee single width shard, no rmsnorm,
-    // no residual when this is set.
+    // Legacy (non-Welford) path: zero the padding columns of the last width tile so they do not enter
+    // the statistics (E[x] and variance for layernorm, the mean of squares for RMSNorm). Guards above
+    // guarantee a single width shard and no fused residual add when this is set.
     const bool do_col_mask = col_mask_needed && !use_welford;
     // Valid (logical) columns in the final width tile; the rest of that tile is padding.
     const uint32_t last_tile_valid_w = logical_K - (Kt - 1) * tile_width;
