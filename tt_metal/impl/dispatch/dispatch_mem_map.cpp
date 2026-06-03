@@ -22,6 +22,7 @@ DispatchMemMap::DispatchMemMap(
     uint32_t num_hw_cqs,
     const Hal& hal,
     bool is_galaxy_cluster,
+    bool are_fd_kernels_on_same_core,
     const tt::llrt::RunTimeOptions& rtoptions) :
     settings(DispatchSettings(
         num_hw_cqs,
@@ -123,8 +124,18 @@ DispatchMemMap::DispatchMemMap(
         device_cq_addrs_[ttsl::as_underlying_type<CommandQueueDeviceAddrType>(CommandQueueDeviceAddrType::UNRESERVED)];
     cmddat_q_base_ = align(prefetch_dispatch_unreserved_base + settings.prefetch_q_size_, pcie_alignment);
     scratch_db_base_ = align(cmddat_q_base_ + settings.prefetch_cmddat_q_size_, pcie_alignment);
-    dispatch_buffer_base_ =
-        align(prefetch_dispatch_unreserved_base, 1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
+    if (are_fd_kernels_on_same_core) {
+        // All FD kernels share one core (Quasar 1CQ), so dispatch_buffer must not alias
+        // any of prefetch_q / cmddat_q / scratch_db / ringbuffer. scratch_db and
+        // ringbuffer are two views of the same region rooted at scratch_db_base_, so
+        // the prefetch footprint ends at scratch_db_base_ + max(scratch_db, ringbuffer).
+        uint32_t prefetch_top =
+            scratch_db_base_ + std::max(settings.prefetch_scratch_db_size_, settings.prefetch_ringbuffer_size_);
+        dispatch_buffer_base_ = align(prefetch_top, 1u << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
+    } else {
+        dispatch_buffer_base_ =
+            align(prefetch_dispatch_unreserved_base, 1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
+    }
     dispatch_buffer_block_size_pages_ = settings.dispatch_pages_ / DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
     const uint32_t dispatch_cb_end = dispatch_buffer_base_ + settings.dispatch_size_;
 
@@ -136,6 +147,11 @@ DispatchMemMap::DispatchMemMap(
         scratch_db_base_ + settings.prefetch_ringbuffer_size_,
         l1_size);
 
+    TT_ASSERT(
+        dispatch_cb_end + (are_fd_kernels_on_same_core ? settings.dispatch_s_buffer_size_ : 0) <= l1_size,
+        "Dispatch layout overflows L1 (dispatch_cb_end=0x{:X}, l1_size=0x{:X})",
+        dispatch_cb_end,
+        l1_size);
     TT_ASSERT(dispatch_cb_end < l1_size);
 
     const uint32_t dispatch_s_buffer_base = (core_type == CoreType::WORKER) ? dispatch_cb_end : dispatch_buffer_base_;
