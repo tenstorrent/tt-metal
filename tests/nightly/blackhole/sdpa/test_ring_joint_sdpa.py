@@ -40,9 +40,20 @@ import pytest
 from tests.nightly.sdpa_perf_utils import MeshConfig
 
 MESH_CONFIG = MeshConfig.detect()
-# TEMP sweep override: force sp=4 ring (tp=2) on the 8-device box for the 1280/1248 seq sweeps.
+# TEMP sweep override: select the chunked-prefill ring size via CHUNKED_SP_SIZE env (4 or 8).
+# Both run as a REAL ring on the P150_X8 cube graph (Q3); see the physical_device_ids pinning at
+# mesh-open below.
+#   sp=4 -> two rings of 4 (tp=2, cube faces [0,1,3,2] / [4,5,7,6])
+#   sp=8 -> one ring of 8 (tp=1, default order — the fabric already cycles it through the cube)
+_CHUNKED_SP_SIZE = int(os.environ.get("CHUNKED_SP_SIZE", "4"))
+assert _CHUNKED_SP_SIZE in (4, 8), f"CHUNKED_SP_SIZE must be 4 or 8, got {_CHUNKED_SP_SIZE}"
 MESH_CONFIG = MeshConfig(
-    is_galaxy=False, num_devices=MESH_CONFIG.num_devices, sp_size=4, tp_size=2, grid_cols=12, grid_rows=10
+    is_galaxy=False,
+    num_devices=MESH_CONFIG.num_devices,
+    sp_size=_CHUNKED_SP_SIZE,
+    tp_size=(2 if _CHUNKED_SP_SIZE == 4 else 1),
+    grid_cols=12,
+    grid_rows=10,
 )
 
 # ============================================================================
@@ -987,7 +998,9 @@ def run_ring_mla_sdpa(
 # ============================================================================
 # CHUNKED-PREFILL VALIDATION
 # ============================================================================
-CHUNKED_PREFILL_PER_DEVICE_CHUNK = 1280
+# TEMP sweep override: per-device chunk (the user's "seq_len") is env-driven so a single driver can
+# sweep 640 / 1280 / 1248 without editing the file. chunk_size = per_device_chunk * sp_size.
+CHUNKED_PREFILL_PER_DEVICE_CHUNK = int(os.environ.get("CHUNKED_PER_DEVICE_CHUNK", "1280"))
 CHUNKED_PREFILL_N_CHUNKS = 11
 CHUNKED_PREFILL_CHUNK_SIZE = CHUNKED_PREFILL_PER_DEVICE_CHUNK * MESH_CONFIG.sp_size
 CHUNKED_PREFILL_TOTAL_SEQ = CHUNKED_PREFILL_CHUNK_SIZE * CHUNKED_PREFILL_N_CHUNKS
@@ -999,8 +1012,11 @@ CHUNKED_PREFILL_PCC_THRESHOLD = 0.99
 CHUNKED_PREFILL_HEADS_PER_RING = 16
 CHUNKED_PREFILL_SEED = 1234
 # TEMP sweep toggle: run the chunked path with V in latent space (rematerialized on-device
-# from the first d_v columns of K; no separate V tensor / V all-gather).
-CHUNKED_LATENT_V = True
+# from the first d_v columns of K; no separate V tensor / V all-gather). Env-driven for the sweep.
+CHUNKED_LATENT_V = os.environ.get("CHUNKED_LATENT_V", "0") == "1"
+# TEMP sweep toggle: skip the torch oracle + PCC assertions entirely (perf-only runs, incl. the
+# DM-disabled compute-ceiling runs whose outputs are garbage). Independent of any kernel macro.
+CHUNKED_SKIP_PCC = os.environ.get("CHUNKED_SKIP_PCC", "0") == "1"
 
 
 def run_ring_joint_sdpa_chunked(
@@ -1069,8 +1085,9 @@ def run_ring_joint_sdpa_chunked(
     num_links = 2
 
     mesh_shape = ttnn.MeshShape(mesh_config.tp_size, sp_size)
-    # P150_X8 is a cube graph (Q3), not a 2x4 grid: row-major [0,1,2,3] is NOT a 4-cycle.
-    # For sp=4 rings, pin physical ids so each sp-row is a real cube face (and tp links exist).
+    # P150_X8 is a cube graph (Q3), not a 2x4 grid: a plain row-major device order is NOT a cycle.
+    # For sp=4 we must pin physical ids so each sp-row is a real cube face (and the tp links exist).
+    # For sp=8 the default order already cycles all 8 through the cube, so no pinning is needed.
     open_kwargs = {}
     if mesh_config.tp_size == 2 and sp_size == 4:
         # Ring A: 0-1-3-2 (wrap 2-0); Ring B: 4-5-7-6 (wrap 6-4); tp links 0-4,1-5,3-7,2-6.
@@ -1108,7 +1125,12 @@ def run_ring_joint_sdpa_chunked(
         # Latent V: V is the first d_v columns of the single-head latent K, rematerialized
         # on-device from K (no separate V tensor and no V all-gather).
         V_full = K_full[:, :, :, :d_v].contiguous() if latent_v else fa_rand(b, nhv, total_seq, d_v)
-        ref_full, _ = torch_joint_sdpa_reference(Q_full, K_full, V_full, joint_Q, joint_K, joint_V, is_causal=True)
+        # Perf-only sweep: skip the expensive CPU oracle entirely when not checking PCC.
+        ref_full = (
+            None
+            if CHUNKED_SKIP_PCC
+            else torch_joint_sdpa_reference(Q_full, K_full, V_full, joint_Q, joint_K, joint_V, is_causal=True)[0]
+        )
 
         sdpa_input_shard_dims = [None, None]
         sdpa_input_shard_dims[sp_axis] = 2
@@ -1293,9 +1315,14 @@ def run_ring_joint_sdpa_chunked(
         # replayed and per-chunk outputs from iteration 0 are compared bit-exact.
         reference_outputs = None
         per_chunk_results = []
+        # Perf-isolation: only run the largest chunk (full prefix + last Q chunk). The KV cache is
+        # re-uploaded fresh each chunk, so the last chunk is self-contained and reproduces its
+        # in-sequence measurement without running chunks 0..n-2.
+        only_last_chunk = os.environ.get("CHUNKED_ONLY_LAST_CHUNK") == "1"
+        chunk_indices = [n_chunks - 1] if only_last_chunk else list(range(n_chunks))
         for it in range(num_iterations):
             iter_outputs = [] if num_iterations > 1 else None
-            for i in range(n_chunks):
+            for i in chunk_indices:
                 s, e = i * chunk_size, (i + 1) * chunk_size
 
                 K_balanced = to_balanced_growing(K_full, i)
@@ -1352,6 +1379,10 @@ def run_ring_joint_sdpa_chunked(
                     iter_outputs.append(out_i)
                     continue
 
+                # Perf-only sweep: oracle skipped, nothing to compare.
+                if CHUNKED_SKIP_PCC:
+                    continue
+
                 expected_i = ref_full[:, :, s:e, :]
                 passed, pcc = comp_pcc(expected_i, out_i, pcc_threshold)
                 rmse = torch.sqrt(((expected_i - out_i) ** 2).mean()).item()
@@ -1387,7 +1418,12 @@ def run_ring_joint_sdpa_chunked(
             details = "; ".join(
                 f"chunk {i} (logical_n={e}): PCC={pcc}, RMSE={rmse:.6f}" for i, e, pcc, rmse in failures
             )
-            pytest.fail(f"Chunked prefill PCC failures (threshold={pcc_threshold}): {details}")
+            # Compute-ceiling mode (TT_RING_JOINT_DISABLE_NOC_DM=1) intentionally skips NoC data
+            # movement, so outputs are garbage — don't fail on PCC, we only want the timing.
+            if os.environ.get("TT_RING_JOINT_DISABLE_NOC_DM") == "1":
+                logger.warning(f"NoC-DM disabled (compute-ceiling mode): ignoring PCC failures: {details}")
+            else:
+                pytest.fail(f"Chunked prefill PCC failures (threshold={pcc_threshold}): {details}")
 
     finally:
         ttnn.close_mesh_device(mesh_device)
@@ -2081,7 +2117,8 @@ CHUNKED_PREFILL_MODEL_CONFIGS = {
         is_balanced=True,
         q_dtype=ttnn.bfloat16,
         kv_dtype=ttnn.bfloat8_b,
-        q_chunk_sizes=[64],
+        # TEMP sweep override: q_chunk env-driven (32 / 64 / 96 / 128) for the perf sweep.
+        q_chunk_sizes=[int(os.environ.get("CHUNKED_Q_CHUNK", "64"))],
         k_chunk_sizes=[256, 384, 512, 640, 768],
         seq_len=CHUNKED_PREFILL_CHUNK_SIZE,  # unused by chunked path
     ),
@@ -2200,21 +2237,31 @@ def test_ring_joint_attention_create_chunked_perf_table(model_name, q_chunk_size
     core_counts = r["CORE COUNT"].tolist()
     fpu_util_col = r.get("PM FPU UTIL (%)", [])
 
+    # Perf-isolation: with CHUNKED_ONLY_LAST_CHUNK=1 the accuracy node ran just the largest chunk,
+    # so only one chunk's worth of ops is profiled; map it back to chunk index n_chunks-1.
+    only_last_chunk = os.environ.get("CHUNKED_ONLY_LAST_CHUNK") == "1"
+    num_profiled_chunks = 1 if only_last_chunk else n_chunks
+    base_chunk = (n_chunks - 1) if only_last_chunk else 0
+
     # Tracy emits one entry per (chunk, device). Group every devs_per_chunk consecutive
     # entries into a chunk and take the max duration (critical path: chunk completes when
     # the slowest device finishes).
-    assert (
-        len(durations) % n_chunks == 0
-    ), f"RingJointSDPADeviceOperation entry count ({len(durations)}) is not a multiple of n_chunks ({n_chunks})"
-    devs_per_chunk = len(durations) // n_chunks
+    assert len(durations) % num_profiled_chunks == 0, (
+        f"RingJointSDPADeviceOperation entry count ({len(durations)}) is not a multiple of "
+        f"num_profiled_chunks ({num_profiled_chunks})"
+    )
+    devs_per_chunk = len(durations) // num_profiled_chunks
     expected_devs = mesh_config.tp_size * mesh_config.sp_size
     assert (
         devs_per_chunk == expected_devs
     ), f"Expected {expected_devs} entries per chunk (tp_size * sp_size), got {devs_per_chunk}"
 
-    chunk_durations = [max(durations[i * devs_per_chunk : (i + 1) * devs_per_chunk]) for i in range(n_chunks)]
+    chunk_durations = [
+        max(durations[i * devs_per_chunk : (i + 1) * devs_per_chunk]) for i in range(num_profiled_chunks)
+    ]
     chunk_core_counts = [
-        max(int(c) for c in core_counts[i * devs_per_chunk : (i + 1) * devs_per_chunk]) for i in range(n_chunks)
+        max(int(c) for c in core_counts[i * devs_per_chunk : (i + 1) * devs_per_chunk])
+        for i in range(num_profiled_chunks)
     ]
 
     q_per_dev = chunk_size // ring_size
@@ -2226,7 +2273,8 @@ def test_ring_joint_attention_create_chunked_perf_table(model_name, q_chunk_size
     flops_per_cycle_per_core = constants["mm_flops_per_cycle_per_core"]
 
     per_chunk_rows = []
-    for i, (dur_ns, ccount) in enumerate(zip(chunk_durations, chunk_core_counts)):
+    for idx, (dur_ns, ccount) in enumerate(zip(chunk_durations, chunk_core_counts)):
+        i = base_chunk + idx
         prefix_k = i * chunk_size
         # Rectangle: Q_chunk (q_per_dev rows on this device) vs prefix K/V (i * chunk_size rows), non-causal.
         rect_flops = 2 * q_per_dev * prefix_k * (d_q + d_v) * nh_per_dev
@@ -2278,8 +2326,15 @@ def test_ring_joint_attention_create_chunked_perf_table(model_name, q_chunk_size
         )
 
     utils = [row["util"] for row in per_chunk_rows]
-    assert all(0.0 <= u <= 100.0 for u in utils), f"Math util out of [0, 100]: {[f'{u:.1f}' for u in utils]}"
-    assert utils[-1] > utils[0], (
-        f"Expected last chunk util ({utils[-1]:.1f}%) > first chunk util ({utils[0]:.1f}%) "
-        f"— prefix grows with chunk index, so util should increase."
-    )
+    # Compute-ceiling (DM-disabled) runs measure a shorter duration against the same FLOPs, so util
+    # can legitimately exceed 100%; only enforce the lower bound and finite-ness when skipping PCC.
+    if CHUNKED_SKIP_PCC:
+        assert all(u >= 0.0 for u in utils), f"Math util negative: {[f'{u:.1f}' for u in utils]}"
+    else:
+        assert all(0.0 <= u <= 100.0 for u in utils), f"Math util out of [0, 100]: {[f'{u:.1f}' for u in utils]}"
+    # Monotonicity only makes sense across multiple chunks; CHUNKED_ONLY_LAST_CHUNK profiles one.
+    if not only_last_chunk and not CHUNKED_SKIP_PCC:
+        assert utils[-1] > utils[0], (
+            f"Expected last chunk util ({utils[-1]:.1f}%) > first chunk util ({utils[0]:.1f}%) "
+            f"— prefix grows with chunk index, so util should increase."
+        )

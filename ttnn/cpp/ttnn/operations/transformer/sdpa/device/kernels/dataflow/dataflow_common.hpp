@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
+#include "noc_dm_gate.hpp"
 #include <tt-metalium/constants.hpp>
 #include "api/debug/assert.h"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"

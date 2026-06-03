@@ -328,7 +328,9 @@ void kernel_main() {
                 uint32_t kt_read_ptr = kt_base_addr + sk * k_tile_bytes;
 #pragma GCC unroll 8
                 for (uint32_t vd = 0; vd < vDHt; ++vd) {
+#ifndef RING_JOINT_DISABLE_NOC_DM
                     noc_async_read_one_packet_with_state<true>(kt_read_ptr, v_write_ptr);
+#endif
                     v_write_ptr += k_tile_bytes;
                     kt_read_ptr += Sk_chunk_t * k_tile_bytes;
                 }
@@ -337,7 +339,9 @@ void kernel_main() {
             for (uint32_t sk = 0; sk < rows_to_materialize; ++sk) {
                 uint32_t kt_read_ptr = kt_base_addr + sk * k_tile_bytes;
                 for (uint32_t vd = 0; vd < vDHt; ++vd) {
+#ifndef RING_JOINT_DISABLE_NOC_DM
                     noc_async_read_one_packet_with_state<true>(kt_read_ptr, v_write_ptr);
+#endif
                     v_write_ptr += k_tile_bytes;
                     kt_read_ptr += Sk_chunk_t * k_tile_bytes;
                 }
