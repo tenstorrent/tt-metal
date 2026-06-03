@@ -25,11 +25,15 @@ class BgeM3Model(LightweightModule):
     _ADDITIVE_MASKED_VALUE = -100000.0
     _ADDITIVE_UNMASKED_VALUE = 0.0
     _MASK_DTYPE = ttnn.bfloat16
+    _POOLING_MODES = (None, "cls", "mean", "colbert")
 
-    def __init__(self, args, mesh_device, dtype, state_dict, optimizations=None):
+    def __init__(self, args, mesh_device, dtype, state_dict, optimizations=None, pooling=None):
         super().__init__()
         self.mesh_device = mesh_device
         self.pad_token_id = int(args.pad_token_id)
+        if pooling not in self._POOLING_MODES:
+            raise ValueError(f"pooling must be one of {self._POOLING_MODES}, got {pooling!r}")
+        self.pooling = pooling
         self._mask_dtype = _attention_mask_dtype(dtype, args.max_seq_len, args.max_batch_size)
         self._trace_id = None
         self._trace_device = None
@@ -253,7 +257,52 @@ class BgeM3Model(LightweightModule):
         if residual_sharded is not None:
             ttnn.deallocate(residual_sharded)
 
-        return hidden_states
+        if self.pooling is None:
+            return hidden_states
+        return self._apply_pooling(hidden_states, input_ids)
+
+    def _apply_pooling(self, hidden_states: ttnn.Tensor, input_ids: ttnn.Tensor) -> ttnn.Tensor:
+        """Trace-safe pooling head applied to the last hidden state [B, 1, S, D].
+
+        Modes:
+          * ``"cls"``     -> sentence embedding from the first token: [B, 1, 1, D]
+          * ``"mean"``    -> mask-weighted mean over valid tokens:    [B, 1, 1, D]
+          * ``"colbert"`` -> per-token ColBERT projection:            [B, 1, S, D]
+
+        No ``.item()`` / host sync, so the path stays inside
+        ``ttnn.begin_trace_capture``.
+        """
+        # Ensure rank-4 [B, 1, S, D].
+        while len(hidden_states.shape) < 4:
+            hidden_states = ttnn.unsqueeze(hidden_states, dim=1)
+        B, _, S, D = hidden_states.shape
+
+        if self.pooling == "cls":
+            if hidden_states.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            return ttnn.slice(hidden_states, [0, 0, 0, 0], [B, 1, 1, D])
+
+        if self.pooling == "mean":
+            if hidden_states.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            # Mask-weighted mean over valid tokens. The masked sum over S is a
+            # matmul: keep[B,1,1,S] @ hidden[B,1,S,D] -> [B,1,1,D] fuses the
+            # mask-multiply and the sequence reduction into a single op.
+            keep = ttnn.typecast(ttnn.ne(input_ids, self.pad_token_id), ttnn.bfloat16)
+            keep = ttnn.reshape(ttnn.to_layout(keep, ttnn.TILE_LAYOUT), [B, 1, 1, S])
+            summed = ttnn.matmul(keep, hidden_states)  # [B, 1, 1, D]
+            counts = ttnn.sum(keep, dim=-1, keepdim=True)  # [B, 1, 1, 1]
+            return ttnn.divide(summed, counts)
+
+        if self.pooling == "colbert":
+            if self.colbert_linear is None:
+                raise RuntimeError("pooling='colbert' requires colbert_linear weights in the checkpoint")
+            cfg_mem = self.colbert_linear.config.memory_config
+            if hidden_states.memory_config() != cfg_mem:
+                hidden_states = ttnn.to_memory_config(hidden_states, cfg_mem)
+            return self.colbert_linear(hidden_states)
+
+        raise ValueError(f"unknown pooling mode {self.pooling!r}")
 
     def capture_trace(
         self,
