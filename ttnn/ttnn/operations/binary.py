@@ -395,7 +395,11 @@ def torch_squared_difference(x, y, *args, **kwargs):
 
 
 def _golden_function_outer(input_tensor_a, input_tensor_b, *args, **kwargs):
-    return input_tensor_a.unsqueeze(-1) * input_tensor_b.unsqueeze(-2)
+    import torch
+
+    if input_tensor_a.dim() == 1 and input_tensor_b.dim() == 1:
+        return torch.outer(input_tensor_a, input_tensor_b)
+    return torch.einsum("...i,...j->...ij", input_tensor_a, input_tensor_b)
 
 
 ttnn.attach_golden_function(ttnn.outer, golden_function=_golden_function_outer)
