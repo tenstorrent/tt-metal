@@ -232,4 +232,3 @@ jobs:
             'docker-image-unresolved!' }}
       prereq-targets: 'tt_metal ttnn'
       scan-targets: ''
-
