@@ -24,7 +24,6 @@
 #include "api/socket_api.h"
 #include "api/tensor/tensor_accessor.h"
 #include "../../../unified_kernels/termination.hpp"
-#include "api/debug/dprint.h"
 
 // CT-arg layout (must stay in sync with build_persistent_h2d_program in
 // ttnn/core/tensor/socket_services.cpp). termination_semaphore_addr is placed

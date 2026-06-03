@@ -150,7 +150,7 @@ def h2d_socket_sync(
     for row in range(mesh_shape[0]):
         for col in range(mesh_shape[1]):
             coord = ttnn.MeshCoordinate(row, col)
-
+            # print(f"Launching H2D Socket Sync Kernel on device: {coord}, core: {worker_cores}")
             # Logical service core for this device → physical NoC coord.
             service_logical = service.get_service_core(coord)
             service_phys = mesh_device.worker_core_from_logical_core(service_logical)
@@ -182,11 +182,8 @@ def h2d_socket_sync(
 
             mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 
-    # io_tensors order: output first (so generic_op returns it), backing second
-    # so its buffer is reachable from the kernel via the address baked into CT args.
-    # Metadata output, when enabled, slots in between — same liveness rationale.
     io_tensors = [output, metadata_output, backing] if metadata_output is not None else [output, backing]
-    result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
+    ttnn.generic_op(io_tensors, mesh_program_descriptor)
     if metadata_output is not None:
-        return result, metadata_output
-    return result
+        return output, metadata_output
+    return output

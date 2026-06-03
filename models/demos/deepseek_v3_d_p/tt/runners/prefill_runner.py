@@ -296,7 +296,7 @@ def _build_h2d_service(mesh_device: ttnn.MeshDevice) -> ttnn.H2DStreamService:
     service = ttnn.H2DStreamService(
         mesh_device=mesh_device,
         global_spec=global_spec,
-        fifo_size_bytes=1 * per_chip_bytes,  # DEBUG: serialize at H2D level (1 in-flight) to test multi-chunk race
+        fifo_size_bytes=8 * per_chip_bytes,  # 8 in-flight chunks
         scratch_cb_size_bytes=per_chip_bytes,  # one page; service requires >= page_size
         mapper=mapper,
         worker_cores=H2D_SYNC_WORKER_CORES,
@@ -488,23 +488,6 @@ def run_request_loop(
             f"[request] iter={i} metadata: slot_id={slot_id} "
             f"actual_start={actual_start} actual_end={actual_end} actual_isl={actual_isl}"
         )
-        # TEMPORARY DEBUG: dump per-device token shards. Sync first so we read
-        # the actual H2D push, not stale scratch.
-        try:
-            ttnn.synchronize_device(pipeline.mesh_device)
-            _shards = ttnn.get_device_tensors(tt_tokens)
-            _all = []
-            for _d, _sh in enumerate(_shards[:8]):
-                _t = ttnn.to_torch(_sh).view(torch.int32).flatten()
-                _all.append(_t)
-                _last = _t[-1].item()
-                _first = _t[0].item()
-                _hash = int(_t.sum().item()) & 0xFFFFFFFF
-                logger.info(
-                    f"[request] iter={i} dev{_d}: first={_first} last={_last} " f"len={_t.numel()} sum_xor={_hash:08x}"
-                )
-        except Exception as _e:
-            logger.warning(f"[request] iter={i} token-shard dump failed: {_e}")
         # Time ONLY the prefill compute, not the h2d_socket_sync wait above.
         _t0 = _time.perf_counter()
         first_token = pipeline.prefill(
