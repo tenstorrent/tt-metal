@@ -64,7 +64,8 @@ consumers (sampling, repetition-penalty, CFG combine) keep working unchanged.
 
 **Memory (P1)**
 
-- ``ACE_STEP_LM_PREFILL_L1=1``: prefill activations in L1 (default **off**; Tracy sets ``1`` — can L1-clash on P150).
+- ``ACE_STEP_LM_PREFILL_L1``: prefill activations in L1 (default **on**; ``0`` opts out to DRAM).
+  Attention/MLP use swept ``l1/dram/l1`` + ``l1/dram/ws`` pins; residual skip stays DRAM.
 - ``ACE_STEP_LM_UNIFIED_DECODE_SHARD=1`` (default): reserved hook for decode shard unification
   (see :mod:`qwen_decode_shard`; currently no-op — matmul output grids differ from residual).
 - ``ACE_STEP_LM_DECODE_QK_NORM_SHARDED=1`` (default): sharded Q/K head norms (see :mod:`qwen_decode_qk_norm`).
@@ -86,13 +87,13 @@ consumers (sampling, repetition-penalty, CFG combine) keep working unchanged.
 
 **PCC / accuracy**
 
-Default path uses ``accuracy_decoder_config.json`` (**BF16** weights + HiFi4) when
-:func:`~math_perf_env.ace_step_five_hz_lm_bfloat8_weights_enabled` is false — prefill last-token
-PCC typically **~0.984** vs HuggingFace on P150.
-
-Set ``ACE_STEP_LM_BFLOAT8_WEIGHTS=1`` for HiFi2 + ``bfloat8_b`` decoder weights (lower DRAM BW,
-faster matmuls; HF logits PCC ~**0.90**). Embedding / ``lm_head`` dtype follows
-``create_tt_model`` (``bfloat16`` by default, ``bfloat8_b`` when the BFP8 env is set).
+Default path uses swept prefill matmul program configs (HiFi4 + BF16, 1D 8×4 w8):
+QKV 128×2048×4096 (l1/dram/l1), WO 128×2048×2048 (l1/dram/ws), MLP w1/w3 128×2048×6144 and
+w2 128×6144×2048 (l1/dram/ws) via :func:`~math_perf_env.ace_step_lm_prefill_qkv_sweep_enabled`
+and :func:`~math_perf_env.ace_step_lm_prefill_mlp_sweep_enabled` (both default on).
+Set ``ACE_STEP_LM_PREFILL_QKV_SWEEP=0`` / ``ACE_STEP_LM_PREFILL_MLP_SWEEP=0`` for stock configs.
+Explicit ``ACE_STEP_LM_BFLOAT8_WEIGHTS=1`` opts into HiFi2 + ``bfloat8_b`` weights without
+the pinned program config (unless sweep is also on).
 """
 
 from __future__ import annotations
@@ -115,6 +116,8 @@ from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
     ace_step_lm_head_sharded_norm_enabled,
     ace_step_lm_narrow_audio_vocab_enabled,
     ace_step_lm_prefill_l1_enabled,
+    ace_step_lm_prefill_mlp_sweep_enabled,
+    ace_step_lm_prefill_qkv_sweep_enabled,
     ace_step_lm_sdpa_concat_width_enabled,
     ace_step_lm_unified_decode_shard_enabled,
 )
@@ -124,6 +127,12 @@ from models.demos.ace_step_v1_5.ttnn_impl.qwen_decode_shard import ace_step_patc
 from models.demos.ace_step_v1_5.ttnn_impl.qwen_lm_head_sharded_norm import ace_step_apply_lm_head_sharded_norm
 from models.demos.ace_step_v1_5.ttnn_impl.qwen_prefill_l1 import (
     ace_step_apply_qwen_prefill_l1,
+    ace_step_patch_model_args_lm_prefill_mlp_ff1_3_matmul,
+    ace_step_patch_model_args_lm_prefill_mlp_ff2_matmul,
+    ace_step_patch_model_args_lm_prefill_qkv_matmul,
+    ace_step_patch_model_args_lm_prefill_wo_matmul,
+    ace_step_promote_attention_wqkv_to_dram_interleaved,
+    ace_step_promote_mlp_prefill_dram_interleaved,
     ace_step_qwen_prefill_l1_op_context,
 )
 from models.tt_transformers.tt.common import (
@@ -226,15 +235,14 @@ class QwenModelTtTransformers:
         # finds the right config / weights. Revert immediately after construction so other
         # ACE-Step components that read ``HF_MODEL`` aren't affected.
         with _hf_model_env(model_name):
+            _bf8_weights = ace_step_five_hz_lm_bfloat8_weights_enabled()
             if dtype is not None:
                 tt_dtype = dtype
-            elif ace_step_five_hz_lm_bfloat8_weights_enabled():
+            elif _bf8_weights:
                 tt_dtype = ttnn.bfloat8_b
             else:
                 tt_dtype = ttnn.bfloat16
-            lm_optimizations = (
-                ace_step_five_hz_lm_optimizations if ace_step_five_hz_lm_bfloat8_weights_enabled() else None
-            )
+            lm_optimizations = ace_step_five_hz_lm_optimizations if _bf8_weights else None
             (
                 self.model_args,
                 self.tt_model,
@@ -253,6 +261,14 @@ class QwenModelTtTransformers:
 
         if ace_step_lm_prefill_l1_enabled():
             ace_step_apply_qwen_prefill_l1(self.tt_model, self.model_args)
+        if ace_step_lm_prefill_qkv_sweep_enabled():
+            ace_step_patch_model_args_lm_prefill_qkv_matmul(self.model_args, device)
+            ace_step_patch_model_args_lm_prefill_wo_matmul(self.model_args, device)
+            ace_step_promote_attention_wqkv_to_dram_interleaved(self.tt_model)
+        if ace_step_lm_prefill_mlp_sweep_enabled():
+            ace_step_patch_model_args_lm_prefill_mlp_ff1_3_matmul(self.model_args, device)
+            ace_step_patch_model_args_lm_prefill_mlp_ff2_matmul(self.model_args, device)
+            ace_step_promote_mlp_prefill_dram_interleaved(self.tt_model)
         if ace_step_lm_unified_decode_shard_enabled():
             ace_step_patch_model_args_decode_unified_shard(self.model_args)
         if ace_step_lm_sdpa_concat_width_enabled():
@@ -306,26 +322,22 @@ class QwenModelTtTransformers:
     # ------------------------------------------------------------------
 
     def reset_kv_cache(self) -> None:
-        """Reset paged KV state by re-initializing per-layer paged buffers and reshuffling the page table.
+        """Reset paged KV state by reshuffling the page table and zeroing the cursor.
 
-        The simplest correct reset for a single-user paged setup is to drop the existing block
-        contents (they will be overwritten on next prefill anyway, since paged_fill_cache writes
-        to whichever blocks the page_table addresses) and zero the cursor. We also reshuffle the
-        page table so a stale `current_pos` cannot accidentally point at valid old data.
+        The KV buffers are allocated once at construction (``Attention.init_kv_cache`` runs in
+        the layer constructors). We deliberately do **not** re-allocate them here: ``paged_fill_cache``
+        overwrites whichever blocks the page table addresses on the next prefill, and decode fills
+        the remaining positions incrementally, so the previous contents are never read. Reshuffling
+        the page table additionally prevents a stale ``current_pos`` from pointing at valid old data.
+
+        Re-allocating per reset used to dominate device time: ``init_kv_cache`` builds the cache from
+        ``torch.zeros`` (FP32) and converts to bf16 TILE on device, i.e. a Tilize (FP32=>FP32) plus
+        Typecast (FP32=>BF16) over a multi-MB DRAM buffer, ×2 (K,V) ×every layer, on every prefill.
         """
         self._cursor = 0
         self._page_table_torch = _make_page_table(self.model_args.max_batch_size, self._paged_cfg)
-        # Re-init paged KV blocks in place. ``Attention.init_kv_cache`` allocates fresh ttnn
-        # tensors; we then rebuild ``tt_kv_cache`` so the in-flight reference matches.
-        for layer in self.tt_model.layers:
-            attn = layer.attention
-            if hasattr(attn, "init_kv_cache"):
-                try:
-                    attn.init_kv_cache(self.model_args, None)
-                except Exception:
-                    # init_kv_cache raises if paged_attention_config isn't on the Attention.
-                    # That path means there's nothing to reset anyway.
-                    pass
+        # KV buffers were allocated once at construction; paged_fill_cache overwrites
+        # the addressed blocks on the next prefill, so no re-allocation is needed.
         self.tt_kv_cache = [layer.attention.layer_past for layer in self.tt_model.layers]
         self.release_trace()
 
