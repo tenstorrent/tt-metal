@@ -3,6 +3,7 @@ project(ttml)
 set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/auto_context.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/autocast_tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/autograd/callback.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/graph.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/autograd/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core/clip_grad_norm.cpp
@@ -166,6 +167,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_group/moe_group.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_group/device/moe_group_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_group/device/moe_group_program_factory.cpp
+    # MoE Ungroup
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_ungroup/moe_ungroup.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_ungroup/device/moe_ungroup_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/moe_ungroup/device/moe_ungroup_program_factory.cpp
     # SwiGLU Elemwise Backward (fused eltwise backward)
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_device_operation.cpp

@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 #include "cross_core_data_exchange_common.hpp"
 #include "sort_dataflow_common.hpp"
@@ -42,6 +45,11 @@ void kernel_main() {
     // Output tensor config
     const auto output_tensor_accessor = TensorAccessor(value_tensor_args, output_tensor_buffer_addr);
 
+    Noc noc;
+    CircularBuffer value_tensor_cb(value_tensor_cb_index);
+    CircularBuffer physical_core_lookup_table_cb(physical_core_lookup_table_cb_index);
+    const uint32_t value_tile_bytes = get_tile_size(value_tensor_cb_index);
+
     for (uint32_t h = 0; h < Ht; h++) {
         // Generate input index tiles
         for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
@@ -54,15 +62,19 @@ void kernel_main() {
 
         // Write value tensor to DRAM
         for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
-            cb_wait_front(value_tensor_cb_index, one_tile);
-            const uint32_t l1_write_addr_val = get_read_ptr(value_tensor_cb_index);
+            value_tensor_cb.wait_front(one_tile);
             const uint32_t tile_offset = h * Wt + core_id * number_of_tiles_per_core + w;
 
-            noc_async_write_page(tile_offset, output_tensor_accessor, l1_write_addr_val);
-            noc_async_write_barrier();
+            noc.async_write(
+                value_tensor_cb,
+                output_tensor_accessor,
+                value_tile_bytes,
+                {.offset_bytes = 0},
+                {.page_id = tile_offset, .offset_bytes = 0});
+            noc.async_write_barrier();
 
-            cb_pop_front(value_tensor_cb_index, one_tile);
+            value_tensor_cb.pop_front(one_tile);
         }  // Wt loop
     }  // h loop
-    cb_push_back(physical_core_lookup_table_cb_index, one_tile);
+    physical_core_lookup_table_cb.push_back(one_tile);
 }

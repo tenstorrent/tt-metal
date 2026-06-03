@@ -35,6 +35,7 @@ tolerances = {
     DataFormat.UInt8: Tolerance(atol=0, rtol=0),
     DataFormat.Bfp8_b: Tolerance(atol=0.1, rtol=0.2),
     DataFormat.Bfp4_b: Tolerance(atol=0.125, rtol=0.3),
+    DataFormat.Bfp2_b: Tolerance(atol=0.5, rtol=0.4),
     DataFormat.MxFp8R: Tolerance(atol=0.2, rtol=0.3),
     DataFormat.MxFp8P: Tolerance(atol=0.2, rtol=0.3),
     DataFormat.MxFp4: Tolerance(atol=0.5, rtol=0.35),
@@ -192,23 +193,27 @@ def calculate_pcc(golden, input):
     return pcc_result
 
 
-def _bfp4_block_aware_compare(
-    golden: torch.Tensor, result: torch.Tensor, max_ulp_diff: int = 1
+def _bfp_block_aware_compare(
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    mantissa_bits: int,
+    max_ulp_diff: int = 1,
 ) -> torch.Tensor:
-    """Compare two BFP4_b tensors allowing small ULP differences per 16-element block.
+    """Compare two block-float tensors allowing small ULP differences per 16-element block.
 
-    BFP4_b shares an exponent across each 16-element block, so the ULP size
+    BFP formats share an exponent across each 16-element block, so the ULP size
     depends on the block's max magnitude.  Hardware and the Python golden can
-    disagree at BFP8→BFP4 truncation boundaries (e.g. 0.0 vs 0.5 printed as bf16).
-    After Bfp4 quantization (3-bit mantissa), treat differences up to
-    ``max_ulp_diff`` steps as acceptable.
+    disagree at BFP truncation boundaries (e.g. 0.0 vs 0.5 printed as bf16).
+    After quantization, treat differences up to ``max_ulp_diff`` steps as acceptable.
+
+    ``mantissa_bits`` is the number of mantissa bits the format reconstructs
+    per element (3 for Bfp4_b, 1 for Bfp2_b).
 
     Golden and result must already be in the same flat buffer order (tilized
     layout as produced by the tests).  We do not re-tilize here: inputs are
     already ordered in 16-element BFP blocks for the device.
     """
     BLOCK = 16
-    BFP4_MANTISSA_BITS = 3
 
     g_flat = golden.float().flatten()
     r_flat = result.float().flatten()
@@ -242,7 +247,7 @@ def _bfp4_block_aware_compare(
             continue
 
         block_exp = math.floor(math.log2(block_max))
-        one_ulp = 2.0 ** (block_exp - BFP4_MANTISSA_BITS + 1)
+        one_ulp = 2.0 ** (block_exp - mantissa_bits + 1)
 
         diff = (g_blk - r_blk).abs()
         ulp_ok = diff <= max_ulp_diff * one_ulp
@@ -300,8 +305,12 @@ def passed_test(
 
     if output_data_format == DataFormat.Bfp4_b:
         ulp = custom_bfp4_max_ulp_diff if custom_bfp4_max_ulp_diff is not None else 1
-        is_valid = _bfp4_block_aware_compare(
-            golden_tensor, res_tensor, max_ulp_diff=ulp
+        is_valid = _bfp_block_aware_compare(
+            golden_tensor, res_tensor, mantissa_bits=3, max_ulp_diff=ulp
+        )
+    elif output_data_format == DataFormat.Bfp2_b:
+        is_valid = _bfp_block_aware_compare(
+            golden_tensor, res_tensor, mantissa_bits=1, max_ulp_diff=1
         )
     else:
         is_close = torch.isclose(
@@ -412,6 +421,10 @@ def passed_test(
         target_pcc = pow(0.99, L1_to_L1_iterations)
     elif output_data_format == DataFormat.Bfp4_b:
         target_pcc = 0.97
+    elif output_data_format == DataFormat.Bfp2_b:
+        target_pcc = (
+            0.90  # Bfp2_b has only 1 mantissa bit; precision is severely limited
+        )
     elif output_data_format == DataFormat.MxFp4:
         target_pcc = 0.95  # MxFp4 E2M1 has very limited precision (only 8 positive and 8 negative representable values)
 
