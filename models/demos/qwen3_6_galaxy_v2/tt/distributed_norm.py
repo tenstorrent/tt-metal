@@ -153,6 +153,39 @@ class DistributedNorm(LightweightModule):
     def forward(self, x, res, mode):
         """Apply a norm, possibly gathering inputs if required."""
         if mode == "decode":
+            # fused_rms_minimal (the decode-mode sharded RMSNorm) fuses a residual
+            # add and dereferences residual_input_tensor unconditionally — passing
+            # None raises "bad optional access". qwen3.6 decode does its residual
+            # add separately (unfused), so feed a zero residual: rmsnorm(x+0)=rmsnorm(x).
+            if res is None:
+                res = ttnn.zeros_like(x)
+            # B1: the decode-mode fused RMSNorm (fused_rms_minimal) reads
+            # ``tt_ccl.all_gather_buffers["LAYERNORM"]`` as its ``stats`` tensor. qwen3.6's
+            # decode has always used the PREFILL DRAM norm, so the tt_ccl was only populated
+            # with the prefill per-seqlen all-gather buffers (keys 4096/2048/.../32) and never
+            # the decode "LAYERNORM" stats buffer → stats=None → "bad optional access". Build
+            # + register it lazily on first decode-norm call (semaphores already exist). Shape
+            # (1,1,32,128) WIDTH-sharded on core (1,0), replicated — mirrors get_all_gather_buffers.
+            if "LAYERNORM" not in self.tt_ccl.all_gather_buffers:
+                import torch as _torch
+
+                _M = x.shape[-2]
+                _go = ttnn.CoreCoord(1, 0)
+                _stats_cfg = ttnn.create_sharded_memory_config(
+                    shape=(_M, 128),
+                    core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(_go, _go)]),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                self.tt_ccl.all_gather_buffers["LAYERNORM"] = ttnn.from_torch(
+                    _torch.zeros((1, 1, _M, 128)),
+                    device=self.tt_ccl.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    memory_config=_stats_cfg,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.tt_ccl.mesh_device),
+                )
             return tt_sharded_distributed_rmsnorm(
                 x,
                 res,

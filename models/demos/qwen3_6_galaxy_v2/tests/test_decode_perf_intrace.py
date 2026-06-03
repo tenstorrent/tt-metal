@@ -61,10 +61,32 @@ _N_LAYERS = int(os.environ.get("QWEN36_N_LAYERS", "64"))
 _DECODE_STEPS = int(os.environ.get("QWEN36_DECODE_STEPS", "32"))  # set to ~3 for tracy capture
 _PATTERN = (["linear_attention"] * 3 + ["full_attention"]) * 16
 
+# Phase-3 integration knob: number of tile-rows the decode hidden carries.
+#   1  (default) -> byte-identical to the original single-logical-row batch-1
+#                   in-trace decode ([1,1,1,H/4]).
+#   32           -> the llama70b tile_padded_batch_rows convention: build the
+#                   model with max_batch_size=32 (so the KV cache + DeltaNet
+#                   state buffers + the validated batch-32 decode paths are
+#                   active) and carry the decode hidden as [1,1,32,H/4] with 1
+#                   REAL user in row 0 and 31 identical padding rows. Only row 0
+#                   is read for correctness (token 248068); the padding rows are
+#                   irrelevant. This exercises the 32-row primitives needed to
+#                   later flip the L1 backbone on.
+_PERF_DECODE_ROWS = int(os.environ.get("QWEN36_PERF_DECODE_ROWS", "1"))
+assert _PERF_DECODE_ROWS in (1, 32), f"QWEN36_PERF_DECODE_ROWS must be 1 or 32, got {_PERF_DECODE_ROWS}"
+
 # Paged-attention config — block_size=32 is the tile-aligned default.
 _PAGED_BLOCK_SIZE = 32
 # Ensure enough blocks to hold T_PREFILL + a margin for decode steps.
-_PAGED_MAX_NUM_BLOCKS = max(32, (_T_PREFILL + _DECODE_STEPS + _PAGED_BLOCK_SIZE - 1) // _PAGED_BLOCK_SIZE + 4)
+#   batch-1: a single user needs ceil((T+steps)/block)+4 blocks.
+#   batch-32: every user needs that many blocks AND max_num_blocks must be a
+#             multiple of max_batch_size so _build_paged_page_table reshapes
+#             cleanly to [max_batch_size, max_num_blocks//max_batch_size].
+_blocks_per_user = (_T_PREFILL + _DECODE_STEPS + _PAGED_BLOCK_SIZE - 1) // _PAGED_BLOCK_SIZE + 4
+if _PERF_DECODE_ROWS == 32:
+    _PAGED_MAX_NUM_BLOCKS = max(32, _blocks_per_user) * 32
+else:
+    _PAGED_MAX_NUM_BLOCKS = max(32, _blocks_per_user)
 
 
 @pytest.fixture(scope="module")
@@ -169,16 +191,114 @@ def _build_paged_page_table(mesh, args, paged_attention_config):
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh, dims=(None, None), mesh_shape=args.cluster_shape),
     )
-    return page_table_tt
+    # Return the torch page table too: the rows==32 broadcast (below) needs to
+    # know each user's physical-block mapping (page_table[u, :]) so it can copy
+    # user 0's KV blocks into rows 1..31's blocks.
+    return page_table_tt, page_table
+
+
+def _broadcast_user0_state_to_all_rows(model, mesh, args, page_table_torch):
+    """Phase-3 rows==32 only: after the batch-1 prefill (which seeds ONLY user 0
+    of every per-layer persistent buffer, leaving rows 1..31 as uninitialized
+    garbage), make ALL 32 users IDENTICAL copies of the real user 0 — mirroring
+    the batch-32 smoke (identical-in -> identical-out). This removes the
+    cross-user garbage contamination that made row-0's next token wrong.
+
+    For each of the 64 decoder layers:
+      - GDN (linear_attention) layers (48): broadcast row 0 -> rows 1..31 of the
+        ``dn_state_buffer`` ([B, n_v_per_row, K, V]) and ``conv_state_buffer``
+        ([B, conv_kernel-1, conv_per_row]). Both buffers are REPLICATED across
+        the mesh (every device holds the full [B, ...]), so the broadcast is a
+        pure host round-trip: gather one device's tensor, tile its row 0 to B
+        rows, write back with the buffer's exact replicate mapper + memory_config.
+      - Full-attn layers (16): broadcast user 0's paged KV pages to every user's
+        pages. The cache lives in ``attn.layer_past`` shaped
+        [max_num_blocks, n_kv_full=8, block_size, head_dim], row-sharded
+        dims=(1, None) (n_kv across the 8 mesh rows, cols replicate). We gather
+        the full cache (ConcatMesh2dToTensor dims=(1, 0): rows -> dim1 n_kv,
+        cols -> dim0 block replicas, then drop the replicas), copy user 0's
+        physical blocks (page_table[0, :]) into every user u's blocks
+        (page_table[u, :]), and rewrite with the same row-shard mapper. Distinct
+        physical blocks per user, IDENTICAL content -> every user's KV matches
+        user 0.
+    """
+    from models.demos.qwen3_6_galaxy_v2.tt.llama_attention import _qwen36_kv_cache_dtype
+
+    B = args.max_batch_size  # 32
+
+    for layer in model.layers:
+        attn = layer.attention
+        if getattr(layer, "is_linear_attention_layer", False):
+            # ---- GDN: broadcast row 0 -> rows 1..31 of dn + conv state ----
+            for buf_attr in ("dn_state_buffer", "conv_state_buffer"):
+                buf = getattr(attn, buf_attr)
+                host = ttnn.to_torch(ttnn.get_device_tensors(buf)[0])  # [B, ...] (replicated)
+                row0 = host[0:1]  # [1, ...]
+                bcast = row0.repeat(B, *([1] * (host.dim() - 1)))  # [B, ...] all == row 0
+                seed = ttnn.from_torch(
+                    bcast,
+                    device=mesh,
+                    dtype=buf.dtype,
+                    layout=buf.layout,
+                    memory_config=buf.memory_config(),
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
+                )
+                ttnn.copy(seed, buf)
+                seed.deallocate(True)
+        else:
+            # ---- Full-attn: broadcast user 0's KV pages to all users' pages ----
+            n_kv_full = attn.n_kv_heads  # 8 (padded), sharded across the 8 mesh rows
+            row_shard_kv = ttnn.ShardTensor2dMesh(mesh, dims=(1, None), mesh_shape=args.cluster_shape)
+            _kv_dtype = _qwen36_kv_cache_dtype()
+            n_vblocks = page_table_torch.shape[1]  # virtual blocks / user
+            new_layer_past = []
+            for cache_tt in attn.layer_past:
+                max_num_blocks = cache_tt.shape[0]
+                # Gather full cache: rows (n_kv shard) -> torch dim 1, cols
+                # (block replicas) -> torch dim 0; then drop the col replicas.
+                full = ttnn.to_torch(
+                    cache_tt,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(mesh, dims=(1, 0), mesh_shape=args.cluster_shape),
+                )  # [cols*max_num_blocks, n_kv_full, block, hd]
+                full = full[:max_num_blocks]  # drop replicated cols -> [max_num_blocks, n_kv_full, block, hd]
+                # Copy user 0's physical blocks into every user's physical blocks.
+                for u in range(1, B):
+                    for vblk in range(n_vblocks):
+                        src_phys = int(page_table_torch[0, vblk])
+                        dst_phys = int(page_table_torch[u, vblk])
+                        full[dst_phys] = full[src_phys]
+                new_layer_past.append(
+                    ttnn.from_torch(
+                        full,
+                        device=mesh,
+                        dtype=_kv_dtype,
+                        layout=ttnn.TILE_LAYOUT,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        mesh_mapper=row_shard_kv,
+                    )
+                )
+            for old in attn.layer_past:
+                old.deallocate(True)
+            attn.layer_past = new_layer_past
 
 
 def _build_tt_model_paged(mesh, state_dict, pattern: list[str], n_layers: int, paged_attention_config):
+    import math
+
     from models.demos.qwen3_6_galaxy_v2.tt.llama_model import TtTransformer
     from models.demos.qwen3_6_galaxy_v2.tt.qwen36_model_config import TtQwen36ModelArgs
 
     args = TtQwen36ModelArgs(mesh)
     args.n_layers = n_layers
     args.linear_attention_pattern = pattern
+    # Phase-3: size the KV cache + DeltaNet state buffers for _PERF_DECODE_ROWS
+    # users BEFORE construction (mirrors test_decode_batch2_isolated_pcc._build_tt_model).
+    # At rows==1 this leaves the default max_batch_size=1 untouched (byte-identical).
+    if _PERF_DECODE_ROWS != 1:
+        args.max_batch_size = _PERF_DECODE_ROWS
+        args.tile_padded_batch_rows = args.tile_size * int(math.ceil(_PERF_DECODE_ROWS / args.tile_size))
+        if getattr(args, "num_device_groups", 0):
+            args.batch_size_per_device_group = max(_PERF_DECODE_ROWS // args.num_device_groups, 1)
     weight_cache_path = args.weight_cache_path(ttnn.bfloat8_b)
     weight_cache_path.mkdir(parents=True, exist_ok=True)
     model = TtTransformer(
@@ -326,7 +446,7 @@ def test_qwen36_64L_decode_intrace_perf(bh_glx_mesh):
     paged_attention_config = PagedAttentionConfig(block_size=_PAGED_BLOCK_SIZE, max_num_blocks=_PAGED_MAX_NUM_BLOCKS)
     model, args = _build_tt_model_paged(bh_glx_mesh, state_dict, _PATTERN, _N_LAYERS, paged_attention_config)
     print(f"[perf] 64-layer TT model built (paged KV cache)")
-    page_table_tt = _build_paged_page_table(bh_glx_mesh, args, paged_attention_config)
+    page_table_tt, page_table_torch = _build_paged_page_table(bh_glx_mesh, args, paged_attention_config)
 
     # ---- TT PREFILL ----
     x_prefill = _embed_tokens_cpu(state_dict, ids_padded[:, :_T_PREFILL])
@@ -336,6 +456,21 @@ def test_qwen36_64L_decode_intrace_perf(bh_glx_mesh):
     ttnn.synchronize_device(bh_glx_mesh)
     prefill_ms = (time.time() - t0) * 1000
     print(f"[perf] prefill done in {prefill_ms:.1f} ms")
+
+    # ---- Phase-3 rows==32: broadcast user-0's seeded per-layer state to all 32
+    #      rows so every user is an IDENTICAL copy of the real user (no garbage
+    #      contaminating row 0 cross-user). At rows==1 this is a no-op (the default
+    #      path is byte-identical). Mirrors the batch-32 smoke's identical-users
+    #      seeding (GDN dn+conv state for the 48 GDN layers; paged KV for the 16
+    #      full-attn layers). ----
+    if _PERF_DECODE_ROWS == 32:
+        t0 = time.time()
+        _broadcast_user0_state_to_all_rows(model, bh_glx_mesh, args, page_table_torch)
+        ttnn.synchronize_device(bh_glx_mesh)
+        print(
+            f"[perf] broadcast user-0 state -> all {args.max_batch_size} rows "
+            f"(GDN dn+conv + full-attn paged KV) in {(time.time() - t0) * 1000:.1f} ms"
+        )
 
     # ---- First decode token from prefill output ----
     last_prompt_logits = _gather_prefill_logits_to_cpu(
@@ -407,16 +542,47 @@ def test_qwen36_64L_decode_intrace_perf(bh_glx_mesh):
             dtype=ttnn.bfloat16,
         )
         # ttnn.embedding output shape: [batch=1, num_indices=32, H/4=1280] (3D).
-        # Slice user 0 (first row) → [1, 1, 1280], then unsqueeze to 4D.
-        x_emb_3d = ttnn.slice(
-            x_emb_flat,
-            [0, 0, 0],
-            [1, 1, x_emb_flat.shape[-1]],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        x_emb_flat.deallocate(True)
-        # [1, 1, H/4] → [1, 1, 1, H/4]
-        x_emb = ttnn.unsqueeze_to_4D(x_emb_3d)
+        # Step 1 (QWEN36_DECODE_L1_RESIDUAL): the L1 residual decode contract carries the
+        # token as 32 tile-padded rows ([1,1,32,1280], llama70b tile_padded_batch_rows) so
+        # the decode-mode sharded RMSNorm (rms_allgather) gets its required (1,1,32,M)
+        # input. All 32 embedding rows are the SAME token (tt_out_tok holds 32 copies), so
+        # we keep them as-is (reshape 3D→4D) instead of slicing to row 0. Flag off keeps the
+        # prior 1-row contract (slice to row 0 → [1,1,1,1280]).
+        if (
+            os.environ.get("QWEN36_DECODE_L1_RESIDUAL", "0") == "1"
+            or os.environ.get("QWEN36_DECODE_32ROW", "0") == "1"
+            or _PERF_DECODE_ROWS == 32
+        ):
+            # [1, 32, H/4] → [1, 1, 32, H/4]
+            # Phase-3 32-row DRAM path: keep all 32 embedding rows (every row is
+            # the SAME real token, since tt_out_tok holds 32 identical copies) so
+            # the decode backbone carries the llama70b 32-row contract. The
+            # validated batch-32 decode paths (GDN forward_decode + full-attn
+            # _forward_decode_qwen36) thread all 32 rows through to the residual
+            # add when batch_size==32. Row 0 is the real user; rows 1..31 are
+            # identical padding. (L1_RESIDUAL=1 also takes this 32-row branch,
+            # additionally flipping the norms to the L1-sharded decode primitive.)
+            x_emb = ttnn.reshape(
+                x_emb_flat,
+                ttnn.Shape([1, 1, x_emb_flat.shape[-2], x_emb_flat.shape[-1]]),
+            )
+            # NOTE: ttnn.reshape here is a VIEW that aliases x_emb_flat's buffer (it only
+            # adds a leading dim, no data movement). Deallocating x_emb_flat would free the
+            # buffer x_emb points to → use-after-free → NaN/garbage in the decode hidden
+            # (the root cause of the wrong 32-row decode token). The buffer is freed when
+            # x_emb itself is deallocated downstream. (The else-branch slice COPIES, so its
+            # deallocate is safe — that's why the legacy 1-row path was unaffected.)
+        else:
+            # Slice user 0 (first row) → [1, 1, 1280], then unsqueeze to 4D.
+            x_emb_3d = ttnn.slice(
+                x_emb_flat,
+                [0, 0, 0],
+                [1, 1, x_emb_flat.shape[-1]],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            x_emb_flat.deallocate(True)
+            # [1, 1, H/4] → [1, 1, 1, H/4]
+            x_emb = ttnn.unsqueeze_to_4D(x_emb_3d)
 
         # --- 4. model forward ---
         lm_head_out = model.forward(
@@ -431,7 +597,7 @@ def test_qwen36_64L_decode_intrace_perf(bh_glx_mesh):
             start_pos=0,
             get_last_token=-1,
             kv_cache=None,
-            batch_size=1,
+            batch_size=_PERF_DECODE_ROWS,
         )
         # lm_head_out is list[ttnn.Tensor]; the qwen36 prefill primitive
         # returns one DRAM-interleaved [1,1,1,padded_vocab/4] per col-shard.
@@ -503,9 +669,22 @@ def test_qwen36_64L_decode_intrace_perf(bh_glx_mesh):
     ttnn.synchronize_device(bh_glx_mesh)
 
     # Sanity: confirm compile pass produced the expected next token (<think>=248068).
+    # The argmax reads ROW 0 of the gathered logits (the real user); at
+    # _PERF_DECODE_ROWS==32 rows 1..31 are identical padding (same token fed) so
+    # tt_out_tok[0] is row 0's next token either way.
     debug_tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out_tok)[0])
+    _compile_next_tok = int(debug_tt_out.reshape(-1)[0].item())
     print(
-        f"[perf] compile pass argmax → next token = {int(debug_tt_out.reshape(-1)[0].item())} (expected 248068=<think>)"
+        f"[perf] compile pass argmax → row-0 next token = {_compile_next_tok} (expected 248068=<think>) "
+        f"[QWEN36_PERF_DECODE_ROWS={_PERF_DECODE_ROWS}]"
+    )
+    # Phase-3 correctness gate: the full 64L hybrid decode must produce the
+    # coherent row-0 next token (248068=<think>) at the 32-row convention on the
+    # DRAM path — same gate as batch-1. This confirms the 32-row primitives RUN
+    # end-to-end with row-0 coherent.
+    assert _compile_next_tok == 248068, (
+        f"row-0 next token = {_compile_next_tok}, expected 248068 (<think>) "
+        f"at QWEN36_PERF_DECODE_ROWS={_PERF_DECODE_ROWS}"
     )
 
     # The compile pass incremented cur_pos / rot_idxs / tt_out_tok beyond what we want.

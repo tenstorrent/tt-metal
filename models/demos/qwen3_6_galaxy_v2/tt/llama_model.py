@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 from tqdm import tqdm
 
@@ -582,6 +584,14 @@ class TtTransformer(LightweightModule):
         Its implementation can take advantage of a few other functions which the
         model must implement.
         """
+        # qwen3.6 uses a REPLICATED batch (columns are H/4 TP, not data-parallel),
+        # so page_table / current_pos must be replicated — the llama70b L1-sharded
+        # column-split specs are invalid here. Normalize the flags so both the host
+        # mappers (prepare_decode_inputs_host) and the device shard specs
+        # (prepare_decode_shard_configs) agree on the replicated layout at B>1.
+        if self.is_qwen36 and tokens.shape[0] > 1:
+            is_cur_pos_sharded = False
+            is_page_table_sharded = False
         host_tensors = self.prepare_decode_inputs_host(
             tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
         )
@@ -652,6 +662,12 @@ class TtTransformer(LightweightModule):
         """
         cur_pos_memory_config = None
         page_table_memory_config = None
+        # qwen3.6 replicates page_table / current_pos across the mesh (columns are
+        # H/4 TP, not data-parallel); the L1 column-split shard specs are invalid
+        # here. Force replicated (None) configs to match prepare_decode_inputs_host.
+        if self.is_qwen36:
+            is_cur_pos_sharded = False
+            is_page_table_sharded = False
         if is_cur_pos_sharded:
             cur_pos_shard_spec = ttnn.ShardSpec(
                 self.args.sub_core_grids,
@@ -690,6 +706,18 @@ class TtTransformer(LightweightModule):
             B == self.args.max_batch_size
         ), f"Batch size {B} must be equal to max_batch_size {self.args.max_batch_size}"
 
+        # qwen3.6 batch-distribution: the decode activation is REPLICATED across all
+        # 32 devices (the 4 mesh columns are the H/4 tensor-parallel split, NOT
+        # data-parallel batch groups), so EVERY device runs all N users with
+        # my_batch_idx=0..N-1. page_table / current_pos must therefore be REPLICATED
+        # too (every device holds all N rows) — the llama70b column-shard convention
+        # (dims=(None,-2)/(None,0), 8 users/column) routes B>1 users to wrong pages /
+        # out-of-range rows. Force the replicated path and disable the L1-sharded
+        # column-split branches for qwen3.6 at B>1. (B==1 already replicated.)
+        if self.is_qwen36 and B > 1:
+            is_cur_pos_sharded = False
+            is_page_table_sharded = False
+
         # Necessary padding to be full tile sized when on device
         tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)
         tokens = ttnn.from_torch(
@@ -707,13 +735,16 @@ class TtTransformer(LightweightModule):
         if is_cur_pos_sharded:
             cur_pos_shard_dim = 1
             current_pos = current_pos.repeat(self.args.sub_core_grids.num_cores(), 1)
+        # qwen3.6: replicate current_pos at B>1 (see note above). Non-qwen36
+        # keeps the llama70b column-shard (dims=(None,0)) at B>1.
+        cur_pos_dims = (None, None) if (self.is_qwen36 or B == 1) else (None, cur_pos_shard_dim)
         current_pos_tt = ttnn.from_torch(
             current_pos,
             device=None,
             dtype=ttnn.int32,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
-                dims=(None, cur_pos_shard_dim) if (B > 1) else (None, None),
+                dims=cur_pos_dims,
                 mesh_shape=self.args.cluster_shape,
             ),
         )
@@ -725,13 +756,16 @@ class TtTransformer(LightweightModule):
                 ]
                 page_table = torch.cat(repeated_page_table_chunks, dim=0)
 
+            # qwen3.6: replicate page_table at B>1 (see note above). Non-qwen36
+            # keeps the llama70b column-shard (dims=(None,-2)) at B>1.
+            page_table_dims = (None, None) if (self.is_qwen36 or B == 1) else (None, -2)
             page_table = ttnn.from_torch(
                 page_table,
                 device=None,
                 dtype=ttnn.uint16 if is_page_table_sharded else ttnn.int32,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     self.mesh_device,
-                    dims=(None, -2) if (B > 1) else (None, None),
+                    dims=page_table_dims,
                     mesh_shape=self.args.cluster_shape,
                 ),
             )
@@ -936,6 +970,11 @@ class TtTransformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        # qwen3.6 current_pos is replicated (single-core DRAM), not L1 sub-core
+        # sharded — so plus_one must use the single-core grid (is_cur_pos_sharded
+        # False). Keep consistent with prepare_decode_inputs_host / shard configs.
+        if self.is_qwen36:
+            is_cur_pos_sharded = False
         rot_mats = self.rope_setup.get_rm_rot_mats(rot_mat_idxs)
         x_embd = self.embd(x)
         tt_logits = self.forward(
@@ -1114,6 +1153,28 @@ class TtTransformer(LightweightModule):
             # contract as prefill). Run the final norm + lm_head via the
             # prefill primitives (tt_distributed_rmsnorm; lm_head forward
             # with mode="prefill").
+            # Step 1 (QWEN36_DECODE_L1_RESIDUAL): with the L1 residual on, the decoder
+            # exits as a 32-row L1-sharded tensor ([1,1,32,1280]). The prefill norm
+            # primitive (rms_norm_pre/post_all_gather) and the prefill lm_head expect a
+            # DRAM-interleaved input, so convert back to DRAM here. The 32 rows are
+            # identical (batch-1), so the lm_head produces 32 identical logit rows and the
+            # caller's row-0 slice is correct. Flag off ⇒ already DRAM 1-row ⇒ no-op.
+            # 32-row carry (QWEN36_DECODE_32ROW DRAM baseline or QWEN36_DECODE_L1_RESIDUAL):
+            # the decoder exits with 32 tile-padded rows that are IDENTICAL single-user copies
+            # (row 0 = the real user). The final norm + lm_head must run SINGLE-USER on row 0 —
+            # running them at 32 rows does NOT preserve row 0 (the prefill lm_head/norm corrupt
+            # the row-0 logits at 32 rows, the root cause of the wrong decode token). Convert to
+            # DRAM (L1 case) and slice row 0 so norm + lm_head are byte-identical to batch-1.
+            _carry32_tail = (
+                os.environ.get("QWEN36_DECODE_32ROW", "0") == "1"
+                or os.environ.get("QWEN36_DECODE_L1_RESIDUAL", "0") == "1"
+            )
+            if _carry32_tail and x.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
+                x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            if _carry32_tail:
+                _xb, _, _xt, _xh = list(x.shape)
+                if _xt != 1:
+                    x = ttnn.slice(x, [0, 0, 0, 0], [_xb, 1, 1, _xh], memory_config=ttnn.DRAM_MEMORY_CONFIG)
             x, _ = self.norm(x, res=None, mode="prefill")
             if get_last_token != -1:
                 x = x[:, :, get_last_token:, :]

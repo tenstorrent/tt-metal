@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import os
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
@@ -312,14 +314,37 @@ class TtTransformerBlock(LightweightModule):
         # is_qwen36_prefill branch below for decode too; the skip_mem_cfg here
         # only governs the 70B decode path.
         is_qwen36_decode = self.is_qwen36 and mode == "decode"
+        # Step 1 (QWEN36_DECODE_L1_RESIDUAL, default OFF): move the qwen3.6 decode
+        # residual stream from DRAM to L1 (DECODE_RESIDUAL_MEMCFG) and run the norms
+        # via the decode-mode sharded primitive (norm_mlp_mode="decode" below). Read
+        # the flag ONCE here so both residual adds + the entry contract agree. Flag
+        # off ⇒ byte-identical to the DRAM path.
+        _l1_residual = is_qwen36_decode and os.environ.get("QWEN36_DECODE_L1_RESIDUAL", "0") == "1"
+        # QWEN36_DECODE_32ROW (default OFF): carry the decode hidden as 32 tile-padded
+        # rows ([1,1,32,H/4]) through the backbone — llama70b's BATCH-1 contract (1 real
+        # user in row 0, 31 tile-padding rows) — so the decode-mode sharded RMSNorm
+        # (rms_allgather, which requires logical (1,1,32,M)) is reachable at batch-1,
+        # WITHOUT yet moving the residual to L1. Attention (full-attn + GDN) runs
+        # SINGLE-USER on row 0 (sliced below) and its output is broadcast back to 32 rows
+        # for the residual add — so no batch-N attention path is exercised. ``_l1_residual``
+        # IMPLIES this 32-row carry (it additionally flips the norms + residual to L1 — Part
+        # B). Flag off ⇒ byte-identical to the legacy 1-row DRAM decode.
+        _carry32 = is_qwen36_decode and (os.environ.get("QWEN36_DECODE_32ROW", "0") == "1" or _l1_residual)
         skip_mem_cfg = (
             self.model_config["DECODE_RESIDUAL_MEMCFG"]
-            if (mode == "decode" and not is_qwen36_decode)
+            if ((mode == "decode" and not is_qwen36_decode) or _l1_residual)
             else ttnn.DRAM_MEMORY_CONFIG
         )
-        assert (
-            x.memory_config() == skip_mem_cfg
-        ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
+        if _l1_residual:
+            # Layer-0 entry: the embedding (or a test harness) may hand us a DRAM x.
+            # Convert once at entry so the residual lives in L1 from here on; layers
+            # 1..N-1 already receive the prior layer's L1 `out`, so this is a no-op there.
+            if x.memory_config() != skip_mem_cfg:
+                x = ttnn.to_memory_config(x, skip_mem_cfg)
+        else:
+            assert (
+                x.memory_config() == skip_mem_cfg
+            ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
 
         # qwen3.6 prefill sharding contract:
         #   - embedding produces col-sharded [B, 1, T, H/4] (see TtLlamaEmbedding)
@@ -348,7 +373,9 @@ class TtTransformerBlock(LightweightModule):
         # been verified at 64L. The attention dispatches to the decode forward
         # (_forward_decode_qwen36 for full-attention, forward_decode for DeltaNet).
         is_qwen36_path = self.is_qwen36 and mode in ("prefill", "decode")
-        norm_mlp_mode = "prefill"  # both prefill and decode use the prefill primitives
+        # Step 1: route the norms to the decode-mode L1 sharded primitive when the L1
+        # residual is on; otherwise keep the verified prefill (DRAM) norm primitive.
+        norm_mlp_mode = "decode" if _l1_residual else "prefill"
         attn_mode = mode  # "prefill" or "decode" dispatches to the right attention path
 
         if is_qwen36_path:
@@ -369,7 +396,48 @@ class TtTransformerBlock(LightweightModule):
             # x arrives col-sharded H/cols from the embedding (layer 0) or
             # from the prior layer's exit (layer > 0).  DistributedNorm
             # consumes col-sharded directly (gamma is col-sharded H/cols).
-            attn_in_sharded, _ = self.attention_norm(x, None, norm_mlp_mode)
+            #
+            # DRAM 32-row baseline (_carry32 without L1): the attention sub-path must be
+            # BYTE-IDENTICAL to the legacy batch-1 path so the GDN/full-attn decode blocks
+            # see the exact 1-row sharded input they were built for (feeding them a
+            # 32-row-derived/DRAM layout clashed the GDN seq op's static L1 CBs). RMSNorm is
+            # per-row, so we slice the residual to row 0 FIRST and norm just that 1 row —
+            # identical to baseline. The 32-row carry stays only on the residual/FF/MLP path
+            # below. The L1 path (norm_mlp_mode=="decode") instead norms all 32 rows
+            # (rms_allgather requires (1,1,32,M)) and slices AFTER the norm (block below).
+            _x_for_attn_norm = x
+            if _carry32 and not _l1_residual:
+                _xb, _, _xt, _xh = list(x.shape)
+                if _xt != 1:
+                    _x_for_attn_norm = ttnn.slice(
+                        x, [0, 0, 0, 0], [_xb, 1, 1, _xh], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    )
+            attn_in_sharded, _ = self.attention_norm(_x_for_attn_norm, None, norm_mlp_mode)
+            if _carry32 and not _l1_residual and _x_for_attn_norm is not x:
+                _x_for_attn_norm.deallocate(True)
+
+            # Step 1 (QWEN36_DECODE_L1_RESIDUAL): under the L1 residual the norm runs in
+            # "decode" mode (tt_sharded_distributed_rmsnorm → rms_allgather), which REQUIRES
+            # a 32-row input/output (logical [1,1,32,M]); the residual stream x is therefore
+            # carried as [1,1,32,1280] (llama70b tile_padded_batch_rows convention — at
+            # batch-1 all 32 rows hold the SAME token, see embedding). The attention blocks
+            # (full-attn _forward_decode_qwen36 + GDN forward_decode), however, reshape
+            # [B,1,T,H]→[B,T,H] treating dim-2 as the seq/time dim T and assert/slice to T=1.
+            # So just before attention we drop to a single logical row in DRAM ([1,1,1,1280]):
+            # row 0 is the correct token (all 32 rows identical). attn_out is then broadcast
+            # back to 32 rows for the L1 residual add below. norm_mlp_mode=="prefill" (flag
+            # off) already produces a DRAM 1-row tensor, so this is a no-op there.
+            # The DRAM 32-row baseline already sliced BEFORE the norm (above), so this
+            # post-norm slice is L1-only (norm ran at 32 rows for rms_allgather → drop to row 0).
+            if _l1_residual:
+                _ais = ttnn.to_memory_config(attn_in_sharded, ttnn.DRAM_MEMORY_CONFIG)
+                attn_in_sharded.deallocate(True)
+                _B_n, _, _T_n, _H_n = list(_ais.shape)
+                if _T_n != 1:
+                    _ais_r0 = ttnn.slice(_ais, [0, 0, 0, 0], [_B_n, 1, 1, _H_n], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                    _ais.deallocate(True)
+                    _ais = _ais_r0
+                attn_in_sharded = _ais
 
             if self.is_linear_attention_layer:
                 # V2-DN-TP: DeltaNet now consumes + produces COL-SHARDED H/4.
@@ -418,7 +486,14 @@ class TtTransformerBlock(LightweightModule):
                 if len(list(attn_out.shape)) == 3:
                     _B_a, _T_a, _H_a = list(attn_out.shape)
                     attn_out = ttnn.reshape(attn_out, ttnn.Shape([_B_a, 1, _T_a, _H_a]))
-                if mode == "decode":
+                # BATCH-32 full-attention decode: at batch>1 the N users live in
+                # dim-2 and MUST survive to the residual add (the residual stream
+                # x also carries N rows). ``_forward_decode_qwen36`` now threads
+                # the N users through and returns dim-2=N, so only collapse dim-2
+                # to 1 in the single-user path. At batch_size==1 attn_out is
+                # already T=1 (the caller feeds a 1-row embedding), so guarding
+                # this slice on batch_size==1 is byte-identical to the prior code.
+                if mode == "decode" and batch_size == 1:
                     _B_a, _, _T_a, _H_a = list(attn_out.shape)
                     if _T_a != 1:
                         attn_out_t1 = ttnn.slice(
@@ -430,12 +505,55 @@ class TtTransformerBlock(LightweightModule):
             # --- Residual add (col-sharded) ---
             # x and attn_out are both col-sharded H/cols, bf16.  No dtype
             # kwarg (see prior comment about regression on layer-3 PCC).
+            # Step 1 (L1 residual): attention returns a single logical row
+            # ([1,1,1,1280] DRAM). The residual stream x lives at 32 rows in L1
+            # (DECODE_RESIDUAL_MEMCFG), so broadcast attn_out's row 0 across all
+            # 32 rows (ttnn.repeat on dim 2) — at batch-1 every row is the same
+            # token — then add in the L1 layout. Flag off keeps the prior path
+            # (DRAM 1-row add). _carry32 (DRAM baseline) does the SAME broadcast;
+            # skip_mem_cfg is DRAM there (vs L1 for _l1_residual).
+            if _carry32:
+                _B_o, _, _T_o, _H_o = list(attn_out.shape)
+                if _T_o != 32:
+                    attn_out_b = ttnn.repeat(attn_out, ttnn.Shape((1, 1, 32 // _T_o, 1)))
+                    attn_out.deallocate(True)
+                    attn_out = attn_out_b
+                attn_out = ttnn.to_memory_config(attn_out, skip_mem_cfg)
             h_new = ttnn.add(x, attn_out, memory_config=skip_mem_cfg)
             x.deallocate(True)
             attn_out.deallocate(True)
 
             # --- FF norm (col-sharded → col-sharded) ---
-            ff_in_sharded, _ = self.ff_norm(h_new, None, norm_mlp_mode)
+            # Step 1 (L1 residual): ff_norm runs in "decode" mode → 32-row L1 output
+            # (SHARDED_FF12_RING_MEMCFG). _mlp_decode_qwen36 uses plain DRAM ttnn.linear +
+            # the prefill CCL pattern (no ring prog-config), so it accepts the 32 rows
+            # cleanly; convert its 32-row L1 input to DRAM first. NOTE: the L1 ring MLP
+            # (TtLlamaMLP.forward(mode="decode")) is NOT used here — it depends on the
+            # prefetcher global_circular_buffer, which the qwen3.6 decode path explicitly
+            # bypasses (llama_model.forward skips create_global_cb for is_qwen36_decode).
+            # Routing the ring MLP is left as a follow-up (needs a prefetcher-less ring
+            # path or a qwen36 global_cb). See task note.
+            #
+            # DRAM 32-row baseline: like the attention sub-path, run ff_norm + MLP SINGLE-USER
+            # (slice h_new to row 0) so they are byte-identical to the legacy batch-1 decode —
+            # _mlp_decode_qwen36 + the prefill-style MLP CCL were written for a 1-row decode
+            # token (batch_size=1) and corrupt row 0 when fed 32 rows. The 32-row carry stays
+            # only on the residual stream; the genuine 32-row norm/MLP materialize in the L1
+            # path (rms_allgather + ring MLP, _l1_residual), not here.
+            _h_for_ff_norm = h_new
+            if _carry32 and not _l1_residual:
+                _hb, _, _ht, _hh = list(h_new.shape)
+                if _ht != 1:
+                    _h_for_ff_norm = ttnn.slice(
+                        h_new, [0, 0, 0, 0], [_hb, 1, 1, _hh], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                    )
+            ff_in_sharded, _ = self.ff_norm(_h_for_ff_norm, None, norm_mlp_mode)
+            if _carry32 and not _l1_residual and _h_for_ff_norm is not h_new:
+                _h_for_ff_norm.deallocate(True)
+            if _l1_residual:
+                _ffin_dram = ttnn.to_memory_config(ff_in_sharded, ttnn.DRAM_MEMORY_CONFIG)
+                ff_in_sharded.deallocate(True)
+                ff_in_sharded = _ffin_dram
 
             # --- MLP (col-sharded → col-sharded) ---
             if mode == "decode":
@@ -444,6 +562,16 @@ class TtTransformerBlock(LightweightModule):
                 ff_out_sharded = self.feed_forward.forward(ff_in_sharded, norm_mlp_mode, batch_size=batch_size)
 
             # --- Final residual (col-sharded) ---
+            # _carry32: the MLP ran single-user (DRAM) or 32-row (L1); broadcast the row-0
+            # result back to 32 rows and place it in the residual layout (DRAM or L1) for the
+            # final add against the 32-row h_new.
+            if _carry32:
+                _B_f, _, _T_f, _H_f = list(ff_out_sharded.shape)
+                if _T_f != 32:
+                    ff_out_b = ttnn.repeat(ff_out_sharded, ttnn.Shape((1, 1, 32 // _T_f, 1)))
+                    ff_out_sharded.deallocate(True)
+                    ff_out_sharded = ff_out_b
+                ff_out_sharded = ttnn.to_memory_config(ff_out_sharded, skip_mem_cfg)
             out_sharded = ttnn.add(ff_out_sharded, h_new, memory_config=skip_mem_cfg)
             ff_out_sharded.deallocate(True)
             h_new.deallocate(True)
