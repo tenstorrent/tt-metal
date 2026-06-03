@@ -126,15 +126,17 @@ class Optimizations:
 
         # B1/S512 tuned matmul configs for AttnOut and MLPwo (Sweep 4.2).
         tuned_b1 = max_seq_len == 512 and max_batch == 1
-        wo_prg_tuned = (
-            _tuned_mlp_wo_program_config(
-                mesh_device,
-                hidden_size=hidden_size,
-                intermediate_size=intermediate_size,
+        tuned_b16 = max_seq_len == 512 and max_batch == 16
+        if tuned_b1:
+            wo_prg_tuned = _tuned_mlp_wo_program_config(
+                mesh_device, hidden_size=hidden_size, intermediate_size=intermediate_size
             )
-            if tuned_b1
-            else None
-        )
+        elif tuned_b16:
+            wo_prg_tuned = _b16_tuned_mlp_wo_program_config(
+                mesh_device, hidden_size=hidden_size, intermediate_size=intermediate_size
+            )
+        else:
+            wo_prg_tuned = None
         wo_minimal = _mlp_wo_minimal_matmul_config(
             mesh_device,
             max_seq_len,
@@ -176,6 +178,8 @@ class Optimizations:
             output_prg_config=(
                 _tuned_attention_output_program_config(mesh_device, hidden_size=hidden_size)
                 if tuned_b1
+                else _b16_tuned_attention_output_program_config(mesh_device, hidden_size=hidden_size)
+                if tuned_b16
                 else _attention_output_program_config(max_seq_len, max_batch, hidden_size, mesh_device)
             ),
         )
@@ -232,29 +236,36 @@ def _linear_activation_memory_config(max_seq_len, max_batch_size=None):
     return ttnn.L1_MEMORY_CONFIG
 
 
+# B8 (b*s=4096) DRAM activations. NOTE: tried extending the B32 L1 output
+# overrides to B8 (mlp_wi/wo, attn_output, create_heads) — ALL variants, even
+# create_heads alone, fail with "static CBs clash with L1 buffers" on the 11x10
+# grid: the SDPA/matmul static circular buffers leave no L1 headroom. Dead end
+# unless the SDPA grid is shrunk first to free L1. Kept at default (DRAM).
 def _mlp_wi_output_memory_config(max_seq_len, max_batch_size, mesh_device):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
-    if max_seq_len == 512 and max_batch == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
+    if max_seq_len == 512 and max_batch in (8, 32) and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         return ttnn.L1_MEMORY_CONFIG
     return _linear_activation_memory_config(max_seq_len, max_batch_size)
 
 
 def _mlp_wo_output_memory_config(max_seq_len, max_batch_size, mesh_device):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
-    if max_seq_len == 512 and max_batch == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
+    if max_seq_len == 512 and max_batch in (8, 32) and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         return ttnn.L1_MEMORY_CONFIG
     return _linear_activation_memory_config(max_seq_len, max_batch_size)
 
 
 def _attention_output_memory_config(max_seq_len, max_batch_size, mesh_device):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
-    if max_seq_len == 512 and max_batch == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
+    if max_seq_len == 512 and max_batch in (8, 32) and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         return ttnn.L1_MEMORY_CONFIG
     return _linear_activation_memory_config(max_seq_len, max_batch)
 
 
 def _create_heads_output_memory_config(max_seq_len, max_batch_size, mesh_device):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
+    # B8: create_heads output to L1 clashes with SDPA static CBs (program 15,
+    # 11x10 grid) - reverted. Stays at default (DRAM) for B8.
     if max_seq_len == 512 and max_batch == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         return ttnn.L1_MEMORY_CONFIG
     return _linear_activation_memory_config(max_seq_len, max_batch)
@@ -309,9 +320,10 @@ def matmul_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=N
 
 def mlp_wi_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, dtype=None):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
-    if max_seq_len == 512 and max_batch in (1, 32):
+    # B8 shares the B1/B32 fidelity policy (LoFi for bf8, HiFi2 otherwise) on the
+    # S512 shapes; fp32_dest_acc_en=False lifts subblock h*w cap to 8.
+    if max_seq_len == 512 and max_batch in (1, 8, 16, 32):
         fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
-        # fp32_dest_acc_en=False lifts subblock h*w cap to 8.
         return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
 
@@ -320,7 +332,7 @@ def mlp_wo_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=N
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len == 512 and max_batch == 1:
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch)
-    if max_seq_len == 512 and max_batch == 32:
+    if max_seq_len == 512 and max_batch in (8, 16, 32):
         # fp32_dest_acc_en=False for MinimalMatmul subblock 8x1 (h*w=8 > 4 cap).
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.LoFi, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
@@ -328,7 +340,7 @@ def mlp_wo_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=N
 
 def attention_qkv_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, dtype=None):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
-    if max_seq_len == 512 and max_batch in (1, 32):
+    if max_seq_len == 512 and max_batch in (1, 8, 16, 32):
         fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
         return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
@@ -336,7 +348,7 @@ def attention_qkv_compute_kernel_config(mesh_device, max_seq_len=None, max_batch
 
 def attention_output_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=None, dtype=None):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
-    if max_seq_len == 512 and max_batch in (1, 32):
+    if max_seq_len == 512 and max_batch in (1, 8, 16, 32):
         fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
         return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch, fp32_dest_acc_en=False)
     return matmul_compute_kernel_config(mesh_device, max_seq_len, max_batch)
@@ -347,7 +359,9 @@ def sdpa_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_size=Non
     if max_seq_len == 512 and max_batch == 1:
         fid = ttnn.MathFidelity.LoFi if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi2
         return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch)
-    if max_seq_len == 512 and max_batch == 32:
+    # NOTE: B16 SDPA LoFi gives no speedup (bandwidth-bound, not compute-bound)
+    # and drops PCC to 0.9357 (< 0.94 gate). Kept HiFi2.
+    if max_seq_len == 512 and max_batch in (8, 16, 32):
         # HiFi2 (vs HiFi4) speeds up SDPA without dropping PCC below 0.94.
         fid = ttnn.MathFidelity.HiFi2 if dtype == ttnn.bfloat8_b else ttnn.MathFidelity.HiFi4
         return _make_compute_kernel(mesh_device, fid, max_seq_len, max_batch)
@@ -361,7 +375,9 @@ def layernorm_compute_kernel_config(mesh_device, max_seq_len=None, max_batch_siz
     # B32/S512: HiFi2 too (test_model passes; speeds up LN reduction).
     # All other shapes: HiFi4 (conservative default).
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
-    if max_seq_len == 512 and max_batch in (1, 32):
+    # NOTE: B16 LN with fp32_dest_acc_en=False saves ~0.5ms but drops PCC to
+    # 0.9359 (below 0.94 gate) — reverted. B16 keeps fp32_dest_acc_en=True.
+    if max_seq_len == 512 and max_batch in (1, 8, 16, 32):
         return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi2, max_seq_len, max_batch_size)
     return _make_compute_kernel(mesh_device, ttnn.MathFidelity.HiFi4, max_seq_len, max_batch_size)
 
@@ -385,9 +401,74 @@ def _mlp_wi_program_config(mesh_device, max_seq_len, max_batch_size, *, hidden_s
             out_subblock_w=3,
             fused_activation=(ttnn.UnaryOpType.GELU, True),
         )
+    if max_batch == 16:
+        # NOTE: B32's _b32s512_sequence_program_config (per_core_M=seq_tiles/grid_y,
+        # fuse_batch=False) gives 56.3ms for B16 — it's designed for B32's batched
+        # layout, not B16's fused M=8192. The 2D fused config below is correct.
+        # Sweep winner for M=8192 K=1024 N=4096+GELU on the 11x10 grid:
+        # ibw=4 sub=2x4 = 277.7 µs vs 810 µs default ttnn.linear routing (2.9x).
+        return _b16s512_mlp_wi_program_config(mesh_device, hidden_size=hidden_size, intermediate_size=intermediate_size)
+    if max_batch == 8:
+        # Sweep winner for M=4096 K=1024 N=4096+GELU on the 11x10 grid:
+        # ibw=8 sub=1x4 = 101.9 µs vs 400 µs default ttnn.linear routing (3.9x).
+        return _b8s512_mlp_wi_program_config(mesh_device, hidden_size=hidden_size, intermediate_size=intermediate_size)
     if max_batch == 1:
         return _b1s512_mlp_wi_program_config(mesh_device, hidden_size=hidden_size, intermediate_size=intermediate_size)
     return None
+
+
+def _b16s512_mlp_wi_program_config(mesh_device, *, hidden_size, intermediate_size):
+    grid_x, grid_y = 11, 10
+    if mesh_device is None or not ttnn_is_blackhole(mesh_device):
+        return None
+    try:
+        g = mesh_device.compute_with_storage_grid_size()
+        if int(g.x) < grid_x or int(g.y) < grid_y:
+            return None
+    except Exception:
+        return None
+    m_tiles = (16 * 512) // 32  # 256
+    hidden_tiles = hidden_size // 32
+    intermediate_tiles = intermediate_size // 32
+    # NOTE: 1D mcast_in1 (per_core_N=full 128 tiles) overflows L1 (2.6MB > 1.57MB)
+    # for N=4096. All in0_block_w=8 variants also overflow L1 regardless of
+    # subblock size (8 K-tiles x per_core_N too big). ibw=4 sub=2x4 is the best
+    # feasible 2D mcast config for B16 MLP-wi.
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=min(4, hidden_tiles),
+        out_subblock_h=2,
+        out_subblock_w=4,
+        per_core_M=(m_tiles + grid_y - 1) // grid_y,
+        per_core_N=(intermediate_tiles + grid_x - 1) // grid_x,
+        transpose_mcast=False,
+        fused_activation=(ttnn.UnaryOpType.GELU, True),
+    )
+
+
+def _b8s512_mlp_wi_program_config(mesh_device, *, hidden_size, intermediate_size):
+    grid_x, grid_y = 11, 10
+    if mesh_device is None or not ttnn_is_blackhole(mesh_device):
+        return None
+    try:
+        g = mesh_device.compute_with_storage_grid_size()
+        if int(g.x) < grid_x or int(g.y) < grid_y:
+            return None
+    except Exception:
+        return None
+    m_tiles = (8 * 512) // 32  # 128
+    hidden_tiles = hidden_size // 32
+    intermediate_tiles = intermediate_size // 32
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=min(8, hidden_tiles),
+        out_subblock_h=1,
+        out_subblock_w=4,
+        per_core_M=(m_tiles + grid_y - 1) // grid_y,
+        per_core_N=(intermediate_tiles + grid_x - 1) // grid_x,
+        transpose_mcast=False,
+        fused_activation=(ttnn.UnaryOpType.GELU, True),
+    )
 
 
 def _b1s512_mlp_wi_program_config(mesh_device, *, hidden_size, intermediate_size):
@@ -531,6 +612,10 @@ def _qkv_program_config(max_seq_len, max_batch_size, hidden_size, qkv_out_dim, m
     )
 
 
+# NOTE: B16 QKV (M=8192 K=1024 N=3072) explicit 2D mcast configs were tried
+# (ibw8 sub2x1 overflows L1; ibw4 sub2x1 runs 51.22ms, worse than the 50.88ms
+# default routing). The default ttnn.linear path is best for B16 QKV — not
+# overridden.
 def _attention_output_program_config(max_seq_len, max_batch_size, hidden_size, mesh_device):
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if (
@@ -641,8 +726,47 @@ def _tuned_mlp_wo_program_config(mesh_device, *, hidden_size, intermediate_size)
     )
 
 
+# B16/S512 (M=8192) tuned matmul configs from the b16_matmuls sweep:
+#   AttnOut: g11x10 ibw8 sub2x1 = 89.1 us vs 100.7 us default (1.13x)
+#   MLPwo:   g11x10 ibw8 sub2x1 = 222.8 us vs 343 us default (1.54x)
+# QKV default (218.9 us) was optimal so it is not overridden.
+def _b16_tuned_attention_output_program_config(mesh_device, *, hidden_size):
+    return _tuned_mm2d_program_config(
+        mesh_device,
+        grid_x=11,
+        grid_y=10,
+        M=16 * 512,
+        K=hidden_size,
+        N=hidden_size,
+        in0_block_w=8,
+        out_subblock_h=2,
+        out_subblock_w=1,
+        fused_activation=None,
+    )
+
+
+def _b16_tuned_mlp_wo_program_config(mesh_device, *, hidden_size, intermediate_size):
+    return _tuned_mm2d_program_config(
+        mesh_device,
+        grid_x=11,
+        grid_y=10,
+        M=16 * 512,
+        K=intermediate_size,
+        N=hidden_size,
+        in0_block_w=8,
+        out_subblock_h=2,
+        out_subblock_w=1,
+        fused_activation=None,
+    )
+
+
 def _layernorm_sharded_config(max_seq_len, max_batch_size):
-    """Return (program_config, sharded_memcfg) for B1/S512, else (None, None)."""
+    """Return (program_config, sharded_memcfg) for B1/S512, else (None, None).
+
+    NOTE: a B8 sharded LN (shard_height=512=16 tiles/core, 8x B1) overflows L1
+    against the matmul L1-output buffers now in place (CB clash, program 19).
+    Kept B1-only.
+    """
     max_batch = 1 if max_batch_size is None else max(1, max_batch_size)
     if max_seq_len != 512 or max_batch != 1:
         return None, None

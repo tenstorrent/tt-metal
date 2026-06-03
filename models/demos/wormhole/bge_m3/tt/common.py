@@ -12,6 +12,7 @@ def create_tt_model(
     dtype=ttnn.bfloat16,
     state_dict=None,
     hf_model_name="BAAI/bge-m3",
+    pooling=None,
 ):
     """
     BGE-M3 version of create_tt_model that matches tt_transformers interface.
@@ -48,6 +49,7 @@ def create_tt_model(
         dtype=dtype,
         state_dict=state_dict,
         optimizations=optimizations,
+        pooling=pooling,
     )
 
     return bge_m3_model_args, model, state_dict
