@@ -1030,12 +1030,7 @@ void kernel_main() {
     // - The cross_device_semaphore is double-buffered externally to avoid races between iterations
 #ifndef SKIP_INIT_SEMAPHORE
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
-    detail::fabric_multicast_bidirectional_atomic_inc_ring_1d<
-        linearized_mesh_coord,
-        mesh_rows,
-        mesh_cols,
-        axis,
-        dispatch_devices>(
+    detail::fabric_multicast_bidirectional_atomic_inc_1d<linearized_mesh_coord, topology mesh_rows, mesh_cols, axis>(
         fabric_connections, atomic_inc_packet_header_pos, atomic_inc_packet_header_neg, init_noc_semaphore_addr);
     noc_async_writes_flushed();
 
