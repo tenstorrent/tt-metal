@@ -87,6 +87,17 @@ inline void _llk_math_eltwise_binary_broadcast_addrmod_()
     WAYPOINT("MBA0");
     static_assert((BROADCAST_TYPE != BroadcastType::NONE), "Broadcast type cannot be NONE for this operation");
 
+    // Quasar: addr_mod_t::set() below writes TENSIX_CFG directly from the MATH RISC-V core
+    // (volatile MMIO stores), unlike Wormhole where .set() emits SETC16 *instructions* that the
+    // backend auto-orders behind in-flight math. If a preceding op (e.g. a row reduce, whose
+    // Quasar reduce_uninit is a no-op on the MATH thread) is still draining in the math backend,
+    // the config-bus store races that backend over the config path and deadlocks (observed:
+    // MATH wedged at the ADDR_MOD_1 .set(), waypoint MBA3). Gate the config writes behind math
+    // completion, recovering the ordering WH gets implicitly.
+    WAYPOINT("MBAS");
+    TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::MATH, p_stall::WAIT_SFPU);
+    WAYPOINT("MBAT");
+
     constexpr std::uint8_t num_srb_rows_inc = (BROADCAST_TYPE == BroadcastType::COL) ? ELTWISE_MATH_ROWS : 0;
     constexpr bool math_fidelity_enable     = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
 
