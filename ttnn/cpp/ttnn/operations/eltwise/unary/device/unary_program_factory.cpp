@@ -411,6 +411,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::create_descriptor(
             uint32_t o_tiles = out_shard_pages(core);
             uint32_t out_start_id = ((i / num_shards_per_width) * (out_shard_height * oWt)) +
                                     ((i % num_shards_per_width) * out_shard_width);
+            // Compute args are scalar-only — no buffer resolution needed
             reader_desc.emplace_runtime_args(core, {input.buffer(), in_tiles, out_start_id});
             writer_desc.emplace_runtime_args(core, {output.buffer(), o_tiles, out_start_id});
             compute_desc.runtime_args.emplace_back(
