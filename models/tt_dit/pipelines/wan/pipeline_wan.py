@@ -1533,3 +1533,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             tracer = WanTransformer3DModel.combined_step._tracers.get(model)
             if tracer is not None:
                 tracer.release_trace()
+        # The text encoder's forward is ALSO @traced_function. Its trace is captured on
+        # the first traced run and bakes references to the encoder/VAE CCL persistent
+        # buffers (encoder_ccl_manager is vae_ccl_manager). Those buffers are freed by
+        # _clear_per_resolution_state on a resolution change, so a stale (never-released)
+        # encoder trace would replay into freed/reallocated memory -> corrupt prompt
+        # embeds -> degenerate denoise on every resolution after the first. Release it
+        # too so the encoder recaptures fresh for the new resolution.
+        enc = getattr(self, "tt_umt5_encoder", None)
+        if enc is not None:
+            for enc_tracer in list(type(enc).forward._tracers.values()):
+                enc_tracer.release_trace()

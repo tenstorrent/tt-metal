@@ -342,12 +342,16 @@ def test_resolution_sweep(
     results = {}
 
     # Optional debug subset: WAN_SWEEP_SHAPES="1x1152x2048,1x768x1024"
+    # Honors the exact order given and allows duplicates (e.g. "...,1x1536x2048,
+    # 1x768x1024,1x1536x2048" to test whether re-running a shape recovers).
     sweep_shapes = SHAPES
     shape_filter = os.environ.get("WAN_SWEEP_SHAPES")
     if shape_filter:
-        wanted = {s.strip() for s in shape_filter.split(",") if s.strip()}
-        sweep_shapes = [s for s in SHAPES if f"{s[0]}x{s[1]}x{s[2]}" in wanted]
-        logger.info(f"WAN_SWEEP_SHAPES set; running {len(sweep_shapes)} shape(s): {sorted(wanted)}")
+        by_key = {f"{s[0]}x{s[1]}x{s[2]}": s for s in SHAPES}
+        sweep_shapes = [by_key[k.strip()] for k in shape_filter.split(",") if k.strip()]
+        logger.info(
+            f"WAN_SWEEP_SHAPES set; running {len(sweep_shapes)} shape(s): {[f'{s[0]}x{s[1]}x{s[2]}' for s in sweep_shapes]}"
+        )
     # Bug-#1 bisection knob: WAN_REPEAT=N runs each swept shape N times back-to-back
     # (each is a separate capture/release cycle). If the 2nd identical-resolution traced
     # run is also corrupt, the bug is "any 2nd capture cycle", not resolution change.
@@ -355,9 +359,15 @@ def test_resolution_sweep(
     if repeat > 1:
         sweep_shapes = [s for s in sweep_shapes for _ in range(repeat)]
 
+    _labels = [f"{b}x{h}x{w}" for (b, h, w) in sweep_shapes]
     for rep_idx, (batch_size, height, width) in enumerate(sweep_shapes):
         label = f"{batch_size}x{height}x{width}"
-        save_suffix = f"_rep{rep_idx}" if repeat > 1 else ""
+        if repeat > 1:
+            save_suffix = f"_rep{rep_idx}"
+        elif _labels.count(label) > 1:
+            save_suffix = f"_pos{rep_idx}"
+        else:
+            save_suffix = ""
         prompts = [PROMPT] * batch_size
         logger.info(f"=== {label}{save_suffix} ===")
         try:
