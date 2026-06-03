@@ -8,12 +8,22 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+
+// ALWI is used by ckernel_sfpu_piecewise_rational.h (pulled in via ckernel_sfpu_erf.h).
+// In the full metal compute path it comes from compute_kernel_api.h; in the LLK test
+// harness that header is absent.  Template functions in headers are implicitly inline,
+// so a no-op fallback is sufficient for correctness.
+#ifndef ALWI
+#define ALWI
+#endif
+
 #include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
-#include "ckernel_sfpu_gelu.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "sfpu/ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_cdf.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
+#include "ckernel_sfpu_erf.h"  // ERF_LUT, ERF_NUM_DEGREE, ERF_DEN_DEGREE (INP_FLOAT32 branch for FP32 path)
+#include "ckernel_sfpu_piecewise_rational.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -105,20 +115,15 @@ sfpi_inline sfpi::vFloat x_times_exp_negative_tail(sfpi::vFloat x, sfpi::vFloat 
 // This ensures GELU(0) = 0 exactly and handles linear growth naturally.
 //
 // Three active regions (plus zero default):
-//   x >= 2.78125:          Identity (result = x)
-//   -3.125 <= x < 2.78125: Core CDF polynomial (degree-15 in u=x²)
-//   -13.1875 < x < -3.125: Inline Cody-Waite exp with correction polynomial
-//   x <= -13.1875:          Zero (BF16 natural saturation)
+//   x >= 2.78125:               Identity (result = x)
+//   -3.125 <= x < 2.78125:     Core CDF polynomial (degree-15 in u=x²)
+//   -5.54259443 < x < -3.125:  Moroz exp_21f with correction polynomial
+//   x <= -5.54259443:           Zero (matches torch.nn.functional.gelu saturation)
 //
-// The exp region uses inline Cody-Waite range reduction instead of the library
-// _sfpu_exp_f32_accurate_ call, skipping special-case checks (no overflow/
-// underflow/NaN possible in the known input range) and reducing Taylor degree
-// from 7 to 5. The correction factor (replacing the asymptotic Mills ratio
-// 1 - 1/x² + 3/x⁴ - ...) is a degree-4 minimax polynomial in x, fitted to
-// the TRUE erfc-based function. This eliminates the reciprocal call and its
-// LUT init entirely.
-//
-// Saturation thresholds verified by exhaustive BF16 sweep with RNE rounding.
+// The outer saturation at -5.54259443 (float32 bits 0xc0b15cef) is the first
+// FP32 value where libm erff(x/√2) returns exactly -1.0, making torch.gelu = 0.
+// In BF16, the nearest representable value below this threshold is -5.5625
+// (0xc0b2), so all BF16 inputs ≤ -5.5625 also return 0 as expected.
 // =============================================================================
 
 // Degree-15 CDF polynomial for Phi(x) over [-3.125, 2.78125]
@@ -151,16 +156,16 @@ constexpr float GELU_EXP_CORR_C4 = 1.0058581740e-05f;
 // Forward GELU Evaluation with CDF Polynomial Approximation
 // GELU(x) = x * Phi(x) where Phi is approximated piecewise
 sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
-    sfpi::vFloat result = sfpi::vConst0;  // Default: 0 for x <= -13.1875
+    sfpi::vFloat result = sfpi::vConst0;  // Default: 0 for x <= -5.54259443
     sfpi::vFloat x2 = x * x;              // Hoisted: used by both core CDF and exp regions
 
     // v_if/v_and narrowing pattern: start with widest region, progressively
     // narrow the mask. Each v_and overwrites the result for the narrowed set.
     // This avoids separate branch mask setup per region (v_elseif).
-    v_if(x > -13.1875f) {
-        // Exp-based region (-13.1875, -3.125): exp(-x²/2) · P(x)
+    v_if(x > -5.54259443f) {
+        // Exp-based region (-5.54259443, -3.125): exp(-x²/2) · P(x)
         // P(x) is a degree-4 correction polynomial fitted to the TRUE function
-        // GELU(x)·exp(x²/2) via minimax approximation over x ∈ (-13.1875, -3.125).
+        // GELU(x)·exp(x²/2) via minimax approximation over x ∈ (-5.54259443, -3.125).
         //
         // Uses Moroz exp_21f instead of Cody-Waite range reduction.
         // The intermediate t = -x²/2 is folded into the log2 constant,
@@ -230,8 +235,11 @@ void gelu_init() {
 
         _sfpu_load_imm32_(2, 0x38003852);
         _sfpu_load_imm32_(6, 0x7c00afa4);
+    } else if constexpr (is_fp32_dest_acc_en) {
+        // FP32 accurate mode: rational erf evaluation requires reciprocal init
+        sfpu_reciprocal_init<false>();
     }
-    // Accurate mode: no init needed (correction polynomial replaces reciprocal)
+    // BF16 accurate mode: no init needed (correction polynomial has no reciprocal)
 }
 
 template <int ITERATIONS>
@@ -263,18 +271,94 @@ inline void calculate_gelu_appx() {
     sfpi::l_reg[sfpi::LRegs::LReg6] = l6;
 }
 
+// FP32 erf: n16/d16 parity rational coefficients, MaxULP=1 vs FP64.
+// Split from ERF_LUT (ckernel_sfpu_erf.h INP_FLOAT32 branch) entries [2..18] (num) and [19..35] (den).
+// piecewise_rational_eval_parity_numer_denom() takes const float* — no std::array needed.
+constexpr float GELU_ERF_NUM[17] = {  // odd powers only (c0=0, c2=0, ..., c16=0)
+    0.0f,
+    1.1283791065e+00f,
+    0.0f,
+    2.1477432549e-01f,
+    0.0f,
+    6.2133435160e-02f,
+    0.0f,
+    5.6230435148e-03f,
+    0.0f,
+    6.1307044234e-04f,
+    0.0f,
+    1.7678321456e-05f,
+    0.0f,
+    2.7384647439e-08f,
+    0.0f,
+    -2.8632063387e-10f,
+    0.0f};
+constexpr float GELU_ERF_DEN[17] = {  // even powers only (c1=0, c3=0, ..., c15=0)
+    1.0f,
+    0.0f,
+    5.2367275953e-01f,
+    0.0f,
+    1.2961706519e-01f,
+    0.0f,
+    1.9642570987e-02f,
+    0.0f,
+    1.9545555115e-03f,
+    0.0f,
+    1.3179056987e-04f,
+    0.0f,
+    1.3156344494e-06f,
+    0.0f,
+    -3.5153888689e-09f,
+    0.0f,
+    -6.7350725691e-12f};
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu() {
     if constexpr (APPROXIMATION_MODE) {
         calculate_gelu_appx<ITERATIONS>();
+    } else if constexpr (is_fp32_dest_acc_en) {
+        // FP32 accurate mode: GELU(x) = x * 0.5 * (1 + erf(x/√2))
+        // using the n16/d16 piecewise rational erf (MaxULP=1 vs FP64).
+        // unroll 8 fills the SFPU pipeline across 8 independent dst-tile chains.
+        constexpr float INV_SQRT2 = 0.7071067811865475f;
+        constexpr float GELU_SAT = -5.54259443f;  // 0xc0b15cef: first x where libm erff=-1.0
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat x = sfpi::dst_reg[0];
+            sfpi::vFloat result = sfpi::vConst0;  // default 0 for x <= GELU_SAT
+            v_if(x > GELU_SAT) {
+                sfpi::vFloat scaled = x * INV_SQRT2;
+                sfpi::vFloat ax = sfpi::setsgn(scaled, 0);
+                sfpi::vFloat threshold = 10.0f;
+                sfpi::vec_min_max(ax, threshold);
+                scaled = sfpi::copysgn(ax, scaled);
+                sfpi::vFloat x2 = scaled * scaled;
+                sfpi::vFloat erf_n, erf_d;
+                piecewise_rational_eval_parity_numer_denom<16, 16>(
+                    GELU_ERF_NUM, GELU_ERF_DEN, scaled, x2, erf_n, erf_d);
+                sfpi::vFloat erf_val = erf_n * sfpu_reciprocal<false>(erf_d);
+                sfpi::vFloat neg_one = sfpi::vConstNeg1;
+                sfpi::vFloat pos_one = sfpi::vConst1;
+                sfpi::vec_min_max(neg_one, erf_val);
+                sfpi::vec_min_max(erf_val, pos_one);
+                result = x * 0.5f * (1.0f + erf_val);
+                // Stuck-erff guard: when rational rounds erf to -1.0 inside computation zone,
+                // glibc/torch overestimates erfc → first stuck level = x * 2^-25.
+                constexpr float HALF_ULP_AT_1 = 2.9802322387695313e-08f;  // 2^-25
+                v_if(erf_val == -1.0f) { result = x * HALF_ULP_AT_1; }
+                v_endif;
+            }
+            v_endif;
+            sfpi::dst_reg[0] = result;
+            sfpi::dst_reg++;
+        }
     } else {
-#pragma GCC unroll 0
+        // BF16 accurate mode: piecewise CDF with Max ULP=1 vs true GELU.
+        // unroll 8 fills the SFPU pipeline across 8 independent dst-tile chains.
+#pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
             sfpi::vFloat result = calculate_gelu_piecewise(in);
-            if constexpr (!is_fp32_dest_acc_en) {
-                result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
-            }
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg++;
         }
@@ -378,7 +462,7 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu_derivative_polynomial() {
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
         sfpi::vFloat result = calculate_gelu_derivative_simple<APPROXIMATION_MODE, is_fp32_dest_acc_en>(val);
