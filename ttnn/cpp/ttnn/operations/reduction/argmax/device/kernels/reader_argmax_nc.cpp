@@ -9,12 +9,9 @@
  * Reader kernel for register-based argmax over a non-HW dim (NC-style).
  *
  * For each output tile this kernel produces on its assigned core, it pushes
- * N = num_reduce_tiles value tiles into cb_in0. Indices are NOT staged through
+ * N = num_reduce_tiles value tiles into cb_in0. Indices are not staged through
  * a CB — the compute kernel materializes them as uint32 scalars inside DST via
- * fill_tile_int<UInt32>. This avoids a tt-metal limitation: UnpackToDestFp32
- * is only honored for Float32 CBs, and routing UInt32 indices through SrcA
- * (the fallback path) corrupts their low 16 bits when the CB is alternated
- * with a bf16/fp32 value CB.
+ * fill_tile_int<UInt32>.
  */
 
 namespace {
