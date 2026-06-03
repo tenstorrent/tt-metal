@@ -853,16 +853,13 @@ CablingGenerator::CablingGenerator(
         initialize_cluster(cluster_descriptor, deployment_descriptor);
         populate_deployment_hosts(deployment_descriptor, node_templates_, deployment_hosts_);
         // Ensure deployment_hosts_ is ordered by DFS-assigned host_id, not deployment file order.
+        // (rebuild_deployment_hosts_in_dfs_order keeps the current order when node names don't
+        // match hostnames, e.g. test fixtures.)
         std::unordered_map<std::string, Host> all_hosts;
         for (const auto& host : deployment_hosts_) {
             all_hosts[host.hostname] = host;
         }
-        const auto saved_hosts = deployment_hosts_;
         rebuild_deployment_hosts_in_dfs_order(all_hosts);
-        // Fall back to original order when node names don't match hostnames (e.g. test fixtures).
-        if (deployment_hosts_.size() != saved_hosts.size()) {
-            deployment_hosts_ = saved_hosts;
-        }
     }
 }
 
@@ -1995,6 +1992,11 @@ void CablingGenerator::rebuild_deployment_hosts_in_dfs_order(
     if (!root_instance_) {
         return;
     }
+    // DFS matching keys hosts by node name, which only lines up when node names equal hostnames
+    // (real deployments). Save the current (host_id-ordered) list so we can fall back when the
+    // names don't match (e.g. test fixtures where nodes are "node1" but hosts are "host0"),
+    // otherwise hosts would be silently dropped and deployment_hosts_ left incomplete.
+    std::vector<Host> previous = std::move(deployment_hosts_);
     deployment_hosts_.clear();
     auto collect = [&](auto& self, const ResolvedGraphInstance& graph) -> void {
         for (const auto& [name, is_node] : graph.children_order) {
@@ -2011,6 +2013,10 @@ void CablingGenerator::rebuild_deployment_hosts_in_dfs_order(
         }
     };
     collect(collect, *root_instance_);
+    // If DFS name-matching didn't place every host, keep the prior host_id-ordered list.
+    if (deployment_hosts_.size() != all_hosts.size()) {
+        deployment_hosts_ = std::move(previous);
+    }
 }
 
 void CablingGenerator::get_all_connections_of_type(
