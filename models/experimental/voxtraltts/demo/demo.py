@@ -26,8 +26,7 @@ Run (from tt-metal repo root)::
     export VOXTRAL_TTS_MODEL=mistralai/Voxtral-4B-TTS-2603
     ./python_env/bin/python models/experimental/voxtraltts/demo/demo.py \\
         --prompts models/experimental/voxtraltts/demo/data/sample_prompts.json \\
-        --output-dir /tmp/voxtraltts_out
-
+        --output-dir models/experimental/voxtraltts/demo/data
     python models/experimental/voxtraltts/demo/demo.py --text "this is a test message for VoxtralTTS. What is the architecture of the voxtral tts and how does it work?"
 
 """
