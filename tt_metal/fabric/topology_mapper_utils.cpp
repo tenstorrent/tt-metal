@@ -34,6 +34,59 @@
 
 namespace tt::tt_metal::experimental::tt_fabric {
 
+// Generate fixed ASIC position pinnings for Galaxy topology to ensure QSFP links align with fabric mesh
+// corner nodes (and the mesh is not folded). Shared by generate_rank_bindings (Phase 1) and ControlPlane
+// (Phase 2) so the galaxy pin placement is identical in both stages.
+//
+// * o o * < Corners pinned with *
+// o o o o
+// o o o o
+// * o o * < Corners pinned with *
+std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed_asic_position_pinnings_for_mesh(
+    MeshId mesh_id,
+    const tt::tt_metal::distributed::MeshShape& mesh_shape,
+    bool hard_pin_node_0,
+    bool nw_corner_only) {
+    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+
+    // Multi-process: anchor only the NW corner (fabric node 0) to tray 1 / asic 1. The auto-generated rank
+    // bindings orient each host's slice, so the other three corners would over-constrain the mapping; the
+    // single NW anchor still fixes orientation and keeps a torus mesh from folding (bottom half on top).
+    if (nw_corner_only) {
+        fixed_asic_position_pinnings.emplace_back(
+            FabricNodeId{mesh_id, 0}, std::vector<AsicPosition>{AsicPosition{1, 1}});
+        return fixed_asic_position_pinnings;
+    }
+
+    // Get all 4 possible corner ASIC positions
+    std::vector<AsicPosition> corner_asic_positions;
+    corner_asic_positions.emplace_back(AsicPosition{1, 1});  // Top left corner
+    corner_asic_positions.emplace_back(AsicPosition{2, 1});  // Top right corner
+    corner_asic_positions.emplace_back(AsicPosition{3, 1});  // Bottom left corner
+    corner_asic_positions.emplace_back(AsicPosition{4, 1});  // Bottom right corner
+
+    // Generate corner fabric node IDs for this mesh
+    std::vector<FabricNodeId> corner_fabric_node_ids;
+    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, 0});
+    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] - 1});
+    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] * (mesh_shape[0] - 1)});
+    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, (mesh_shape[1] * mesh_shape[0]) - 1});
+
+    fixed_asic_position_pinnings.reserve(corner_fabric_node_ids.size());
+    for (const auto& corner_fabric_node_id : corner_fabric_node_ids) {
+        // Special case: Hard pin NW corner (fabric node id 0) to asic 1 tray 1 if requested.
+        if (corner_fabric_node_id == FabricNodeId{MeshId{0}, 0} && hard_pin_node_0) {
+            fixed_asic_position_pinnings.emplace_back(
+                corner_fabric_node_id, std::vector<AsicPosition>{AsicPosition{1, 1}});
+            continue;
+        }
+
+        fixed_asic_position_pinnings.emplace_back(corner_fabric_node_id, corner_asic_positions);
+    }
+
+    return fixed_asic_position_pinnings;
+}
+
 TopologyMappingResult map_mesh_to_physical(
     MeshId mesh_id,
     const LogicalAdjacencyMap& logical_adjacency,

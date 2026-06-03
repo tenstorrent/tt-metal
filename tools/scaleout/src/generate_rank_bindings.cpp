@@ -253,6 +253,34 @@ TopologyMappingResult run_topology_mapping(
         config.pinnings.emplace_back(pos, fabric_node);
     }
 
+    // Anchor the NW corner (fabric node 0) of each Galaxy mesh to tray 1 / asic 1 here, at rank-binding
+    // generation time. The physical rank<->slice assignment is still being solved at this stage, so the
+    // anchor orients the generated binding itself (rank 0's slice lands on the physical NW corner) instead
+    // of being dropped later. This keeps a torus mesh from folding (bottom half placed on top) even under
+    // fine per-host slicing, where a corner ASIC would otherwise fall outside node 0's host-rank partition
+    // and the control-plane pin would be reconciled away. Uses the SAME shared helper as the control plane
+    // (nw_corner_only) so Phase 1 and Phase 2 place the galaxy pin identically.
+    const auto cluster_type_for_anchor = cluster.get_cluster_type();
+    if (cluster_type_for_anchor == tt::tt_metal::ClusterType::GALAXY ||
+        cluster_type_for_anchor == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {
+        for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+            const auto& mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+            const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
+            if (!is_1d && mesh_shape.mesh_size() % 32 == 0) {
+                // Single galaxy (==32 chips): pin all four corners to the four tray corners (one per tray).
+                // Multi-galaxy (>32): pin only the NW corner to avoid over-constraining the multi-galaxy solve.
+                const bool nw_corner_only = mesh_shape.mesh_size() > 32;
+                auto mesh_pinnings = get_galaxy_fixed_asic_position_pinnings_for_mesh(
+                    mesh_id, mesh_shape, /*hard_pin_node_0=*/true, /*nw_corner_only=*/nw_corner_only);
+                for (const auto& [fabric_node, positions] : mesh_pinnings) {
+                    for (const auto& position : positions) {
+                        config.pinnings.emplace_back(position, fabric_node);
+                    }
+                }
+            }
+        }
+    }
+
     // Set per-mesh validation modes based on mesh graph policy
     for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
         config.mesh_validation_modes[mesh_id] = mesh_graph.is_intra_mesh_policy_relaxed(mesh_id)

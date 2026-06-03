@@ -180,7 +180,64 @@ TEST_F(ControlPlaneFixture, TestControlPlaneInitNoMGD) {
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    EXPECT_NE(control_plane.get_mesh_graph().get_mesh_ids().size(), 0u);
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    EXPECT_NE(mesh_graph.get_mesh_ids().size(), 0u);
+
+    // Verify the galaxy tray/asic layout and that the corner pinnings are honored (multiprocess-safe:
+    // reads the topology mapper's global fabric_node->position mapping, not the local-only PSD). A galaxy
+    // is a 2x2 arrangement of trays (ids 1..4); each tray is a 4x2 grid of ASICs (locations 1..8) with
+    // asic_location==1 at the tray's outer corner. The NW corner (chip 0) of every galaxy mesh must land
+    // on a tray-corner ASIC (asic_location==1) -- this single anchor is what keeps a torus mesh from being
+    // folded (bottom half placed on top). A single 8x4 galaxy additionally pins all four logical corners
+    // to the four tray corners (trays {1,2,3,4}).
+    const auto& topology_mapper = control_plane.get_topology_mapper();
+    auto mapped_position = [&](const FabricNodeId& fn, uint32_t& loc_out, uint32_t& tray_out) {
+        try {
+            (void)topology_mapper.get_asic_id_from_fabric_node_id(fn);
+            loc_out = *topology_mapper.get_asic_location_for_fabric_node_id(fn);
+            tray_out = *topology_mapper.get_tray_id_for_fabric_node_id(fn);
+        } catch (...) {
+            return false;  // node/position not resolvable on this rank's view
+        }
+        return true;
+    };
+    for (const auto& mesh_id : mesh_graph.get_mesh_ids()) {
+        const auto mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+        if (mesh_shape.dims() != 2 || (mesh_shape.mesh_size() % 32u) != 0u) {
+            continue;  // galaxy corner pinning only applies to 2D galaxy meshes (multiples of 32 chips)
+        }
+        const uint32_t s0 = mesh_shape[0];
+        const uint32_t s1 = mesh_shape[1];
+        uint32_t loc = 0;
+        uint32_t tray = 0;
+
+        // NW corner (chip 0): anchored to a tray-corner ASIC for every galaxy mesh (no-fold guarantee).
+        if (mapped_position(FabricNodeId(mesh_id, 0), loc, tray)) {
+            EXPECT_EQ(loc, 1u) << "NW corner (mesh=" << *mesh_id
+                               << ", chip=0) must be anchored to a tray-corner ASIC (asic_location==1) to "
+                                  "prevent torus folding (bottom half placed on top).";
+        }
+
+        // Single 8x4 galaxy: all four logical corners are galaxy tray corners, one per tray {1,2,3,4}.
+        if (mesh_shape.mesh_size() == 32u) {
+            const uint32_t corners[4] = {0u, s1 - 1u, s1 * (s0 - 1u), (s1 * s0) - 1u};
+            std::unordered_set<uint32_t> trays;
+            uint32_t present = 0;
+            for (uint32_t c : corners) {
+                if (!mapped_position(FabricNodeId(mesh_id, c), loc, tray)) {
+                    continue;
+                }
+                ++present;
+                EXPECT_EQ(loc, 1u) << "single-galaxy corner (mesh=" << *mesh_id << ", chip=" << c
+                                   << ") must be a tray-corner ASIC (asic_location==1).";
+                trays.insert(tray);
+            }
+            if (present == 4u) {
+                EXPECT_EQ(trays, (std::unordered_set<uint32_t>{1u, 2u, 3u, 4u}))
+                    << "single-galaxy corners must cover all four trays {1,2,3,4} (one corner per tray).";
+            }
+        }
+    }
 }
 
 TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
