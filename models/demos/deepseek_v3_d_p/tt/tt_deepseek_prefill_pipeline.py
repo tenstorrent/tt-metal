@@ -2,8 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import math
-import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,19 +16,6 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_orde
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
-
-
-class BoundMigrationEndpoint:
-    def __init__(self, endpoint, remote_endpoint_id: int):
-        self._endpoint = endpoint
-        self._remote_id = remote_endpoint_id
-
-    def migrate_layer(self, layer: int, pos_start: int, pos_end: int, src_slot: int, dst_slot: int):
-        return self._endpoint.migrate_layer(self._remote_id, layer, pos_start, pos_end, src_slot, dst_slot)
-
-    def wait(self, uuid) -> None:
-        """Block until the migration with the given uuid is fully sent + acked."""
-        self._endpoint.wait_migration_send_completion(uuid)
 
 
 @dataclass
@@ -67,12 +52,12 @@ class TtDeepSeekPrefillPipeline:
         hf_config: PretrainedConfig,
         state_dict: dict,
         config: TtPrefillPipelineConfig,
-        migration_layer=None,
     ):
         self.mesh_device = mesh_device
         self.hf_config = hf_config
         self.config = config
-        self.migration_layer = migration_layer
+        # Per-layer LayerAck channel (set via set_layer_ack_channel after compile).
+        self._layer_ack_channel = None
 
         self.model_built = False
         self.kv_cache_allocated = False
@@ -168,7 +153,7 @@ class TtDeepSeekPrefillPipeline:
             dst_slot = slot_id
 
         tt_token_ids = self._prepare_input_tensor(token_ids)
-        on_layer_complete = self._build_migration_callback(slot_id, actual_isl, dst_slot)
+        on_layer_complete = self._build_layer_ack_callback()
 
         first_token_id, _first_token_prob, _ = self.model.forward(
             tt_token_ids,
@@ -204,46 +189,28 @@ class TtDeepSeekPrefillPipeline:
             ),
         )
 
-    def setup_migration(self, endpoint, remote_endpoint_id: int) -> None:
-        assert self.compiled, "Call compile() before setup_migration()"
-        self.migration_layer = BoundMigrationEndpoint(endpoint, remote_endpoint_id)
+    def set_layer_ack_channel(self, layer_ack_channel) -> None:
+        """Register the per-layer-ack channel (docs/scheduler/prefill.md §3.11).
 
-    def _build_migration_callback(self, slot_id: int, actual_isl: int, dst_slot: int):
-        from models.demos.deepseek_v3_d_p.tt.runners.migration_setup import INVALID_SLOT_ID
+        Future-faithful: the runner's ONLY per-layer migration duty is to bump
+        this counter once per layer. The scheduler reads the delta and drives
+        the migration worker; the runner has no IPC with the worker.
+        """
+        assert self.compiled, "Call compile() before set_layer_ack_channel()"
+        self._layer_ack_channel = layer_ack_channel
 
-        if self.migration_layer is None or dst_slot == INVALID_SLOT_ID:
+    def _build_layer_ack_callback(self):
+        """Per-layer hook → increment the LayerAck counter once per layer.
+
+        The ack carries NO payload (no slot/range/layer): the scheduler
+        correlates acks with the chunk it pushed (its InFlightChunkFIFO) and
+        issues the MigrationCmds. Returns None when no channel is set.
+        """
+        if self._layer_ack_channel is None:
             return None
-
-        mesh_device = self.mesh_device
-        migration_layer = self.migration_layer
-        last_layer_idx = self.config.num_layers - 1
-
-        kvpe_cache = self.kvpe_cache
+        channel = self._layer_ack_channel
 
         def on_layer_complete(layer_idx: int) -> None:
-            ttnn.synchronize_device(mesh_device)
-            end_pos = math.ceil(actual_isl / 128) * 128
-            logger.info(
-                f"[migration][prefill] on_layer_complete, migrating layer {layer_idx} from src_slot={slot_id} to dst_slot={dst_slot}. Start_pos={0}, End_pos={end_pos}"
-            )
-            if layer_idx == 0 and os.environ.get("PREFILL_DEBUG", "0") == "1":
-                # Metal-side: dump KV cache bytes via the ttnn shard-spec path.
-                from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import dump_kv_cache_shard_readback
-
-                dump_kv_cache_shard_readback(layer_idx, kvpe_cache)
-                # Blaze-side: dump the migration table for the same layer. Optional —
-                # only fires when blaze's prefill_runner_util is on PYTHONPATH.
-                try:
-                    from prefill_runner_util import dump_migration_table_at_layer
-
-                    dump_migration_table_at_layer(mesh_device, migration_layer, tag="3-pre-migrate")
-                except ImportError:
-                    pass
-            uuid = migration_layer.migrate_layer(layer_idx, 0, end_pos, slot_id, dst_slot)
-            ## Wait for each one for initial bringup
-            # if layer_idx == last_layer_idx:
-            logger.info(f"[migration][prefill] wait for migrate layer completion")
-            migration_layer.wait(uuid)
-            logger.info(f"[migration][prefill] done migrate layer")
+            channel.increment()
 
         return on_layer_complete

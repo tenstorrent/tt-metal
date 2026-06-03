@@ -14,7 +14,7 @@ from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.runners.migration_setup import INVALID_SLOT_ID
+from models.demos.deepseek_v3_d_p.tt.runners.integration_setup import INVALID_SLOT_ID, PREFILL_EP_ID
 from models.demos.deepseek_v3_d_p.tt.tt_deepseek_prefill_pipeline import (
     TtDeepSeekPrefillPipeline,
     TtPrefillPipelineConfig,
@@ -251,6 +251,11 @@ def _print_config() -> None:
         ("PREFILL_STANDALONE_INPUT", os.environ.get("PREFILL_STANDALONE_INPUT", "<default>")),
         ("PREFILL_STANDALONE_ITERS", os.environ.get("PREFILL_STANDALONE_ITERS", "1")),
         ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")),
+        (
+            "PREFILL_MIGRATION_TABLE_PATH",
+            os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"),
+        ),
+        ("PREFILL_LAYER_ACK_SHM", os.environ.get("PREFILL_LAYER_ACK_SHM", f"/prefill_{PREFILL_EP_ID}_layer_ack")),
         ("PREFILL_DEBUG", os.environ.get("PREFILL_DEBUG", "0")),
     ]
 
@@ -270,27 +275,9 @@ def main() -> None:
 
     enable_migration = os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1"
 
-    if enable_migration:
-        # tt-run's --rank-bindings-mapping has set up sub-contexts at the C++
-        # level; lazy-init the Python handle and assert we landed in prefill.
-        from models.demos.deepseek_v3_d_p.tt.runners.migration_setup import (
-            PREFILL_SUBCTX_ID,
-            ensure_distributed_context,
-            get_distributed_info,
-        )
-
-        ensure_distributed_context()
-        subctx_id, local_rank, local_size, world_rank, world_size = get_distributed_info()
-        assert subctx_id == PREFILL_SUBCTX_ID, (
-            f"prefill_runner expects PREFILL_SUBCTX_ID={PREFILL_SUBCTX_ID}, "
-            f"got subctx_id={subctx_id}. Wrong rank-bindings-mapping or layout."
-        )
-        logger.info(
-            f"prefill_runner subctx={subctx_id} local={local_rank}/{local_size} "
-            f"world={world_rank}/{world_size} mesh={GLOBAL_MESH_SHAPE} migration=ON"
-        )
-    else:
-        logger.info(f"prefill_runner standalone mesh={GLOBAL_MESH_SHAPE} migration=OFF")
+    # In the disaggregated worker model the migration_worker is a separate prun
+    # job; the runner does no MPI rank translation and needs no tt-run sub-context.
+    logger.info(f"prefill_runner mesh={GLOBAL_MESH_SHAPE} migration={'ON' if enable_migration else 'OFF'}")
 
     if PREFILL_DEBUG:
         from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
@@ -333,17 +320,31 @@ def main() -> None:
         probe_dram_allocatable_base(mesh_device, "after-compile")
 
     if enable_migration:
-        from models.demos.deepseek_v3_d_p.tt.runners.migration_setup import DECODE_EP_ID, setup_prefill_migration
+        from models.demos.deepseek_v3_d_p.tt.runners.integration_setup import (
+            ShmLayerAckChannel,
+            build_and_serialize_kv_chunk_table,
+        )
 
-        endpoint = setup_prefill_migration(
+        # The runner's whole migration footprint (docs/scheduler/prefill.md): it
+        # has NO IPC with the migration_worker. It only —
+        #   (1) builds + serializes the KV chunk address table at startup (it owns
+        #       the device, so only it knows the KV cache NoC addresses). The IS
+        #       forwards this path to the worker via SET_TABLE.
+        #   (2) emits a LayerAck (one shm counter bump) per layer; the scheduler
+        #       reads the delta and drives the worker.
+        table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
+        build_and_serialize_kv_chunk_table(
             mesh_device=mesh_device,
             kvpe_cache=pipeline.kvpe_cache,
             seq_len=MAX_SEQ_LEN,
             num_layers=NUM_LAYERS,
             mesh_shape=GLOBAL_MESH_SHAPE,
+            path=table_path,
         )
-        pipeline.setup_migration(endpoint, DECODE_EP_ID)
-        logger.info("[migration] pipeline.setup_migration() done; per-layer migrations fire on every prefill request")
+
+        ack_shm_name = os.environ.get("PREFILL_LAYER_ACK_SHM", f"/prefill_{PREFILL_EP_ID}_layer_ack")
+        pipeline.set_layer_ack_channel(ShmLayerAckChannel(ack_shm_name, create=True))
+        logger.info("[migration] table published + LayerAck channel set; runner emits one ack per layer")
 
     logger.info("Setup complete, entering request loop")
     if os.environ.get("PREFILL_STANDALONE", "0") == "1":
