@@ -13,9 +13,11 @@
 //   Init:               h_lane = 0x1C9DC5                 (= 0x811C9DC5 & 0x7FFFFF)
 //
 // Read-back design (see the Wormhole header for the full rationale):
-//   - All DEST access uses the proven copy_dest_values idiom: raw INT32
-//     SFPLOAD/SFPSTORE with ADDR_MOD_3 + sfpi::dst_reg++. Hand-rolled ADDR_MOD_7
-//     + explicit offsets do NOT round-trip 32-bit DEST datums through the packer.
+//   - All DEST access uses the proven INT32 SFPU idiom (see ckernel_sfpu_typecast):
+//     TTI_SFPLOAD/TTI_SFPSTORE with an addr_mod whose dest auto-increments by 2
+//     per step. Hand-rolled ADDR_MOD_7 + explicit offsets do NOT round-trip
+//     32-bit DEST datums through the packer. Everything is compile-time, so no
+//     TT_/sfpi (dst_reg) forms.
 //   - _store_to_dest zeroes the whole tile, then writes the 32 per-lane
 //     accumulators into DEST row 0; the host XOR-folds the packed tile and the
 //     zeroed rows cancel, leaving XOR(32 accumulators).
@@ -42,8 +44,10 @@ namespace ckernel::sfpu
 static constexpr std::uint32_t FNV23_INIT  = 0x1C9DC5u; // 0x811C9DC5 & 0x7FFFFF
 static constexpr std::uint32_t FNV23_PRIME = 0x000193u; // 0x01000193 & 0x7FFFFF
 
-// A 32x32 INT32 tile occupies 32 SFPU rows (32 lanes each). dst_reg++ walks them.
-static constexpr int DEST_ROWS = 32;
+// A 32x32 INT32 tile occupies 32 SFPU rows (32 lanes each). The addr_mod below
+// auto-increments the DEST pointer by DEST_ROW_STRIDE per SFPLOAD/SFPSTORE.
+static constexpr int DEST_ROWS       = 32;
+static constexpr int DEST_ROW_STRIDE = 2; // 32-bit DEST: 64 rows / 32 SFPU rows
 
 // LReg assignments. LReg7 reserved per ISA for indirect-mode encodings; use 0..6.
 static constexpr int LREG_W     = 0; // scratch / word load
@@ -53,13 +57,14 @@ static constexpr int LREG_ZERO  = 3; // 0 constant, for clearing dest rows
 
 inline void _llk_math_hash_cb_init_()
 {
-    // Configure the SFPU like the standard eltwise-unary-SFPU init so DEST
-    // addressing via ADDR_MOD_3 + dst_reg++ is well-defined.
+    // Configure the SFPU like the standard eltwise-unary-SFPU init. ADDR_MOD_3's
+    // dest auto-increments by DEST_ROW_STRIDE so a plain loop of TTI_SFPLOAD/
+    // TTI_SFPSTORE(..., ADDR_MOD_3, 0) walks the 32 SFPU rows of the tile.
     sfpu::_init_sfpu_config_reg();
     addr_mod_t {
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
-        .dest = {.incr = 0},
+        .dest = {.incr = DEST_ROW_STRIDE},
     }
         .set(ADDR_MOD_3);
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -74,7 +79,7 @@ inline void _llk_math_hash_cb_init_()
 }
 
 // Fold one DEST tile (already populated by the datacopy) into the 32 per-lane
-// accumulators in LREG_H. Walks all 32 SFPU rows of the tile with dst_reg++.
+// accumulators in LREG_H. Walks all 32 SFPU rows via the auto-incrementing addr_mod.
 inline void _llk_math_hash_cb_tile_(std::uint32_t /*dst_tile_idx*/)
 {
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -83,16 +88,14 @@ inline void _llk_math_hash_cb_tile_(std::uint32_t /*dst_tile_idx*/)
     for (int row = 0; row < DEST_ROWS; ++row)
     {
         // INT32 mode reads 32 bits verbatim (subject to the Dst UnshuffleFP32
-        // that applies to every 32b SFPLOAD).
-        TT_SFPLOAD(LREG_W, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
+        // that applies to every 32b SFPLOAD). ADDR_MOD_3 auto-advances the row.
+        TTI_SFPLOAD(LREG_W, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
 
         // h ^= w  (per-lane 32b XOR; top 9 bits dropped by next mul)
         TTI_SFPXOR(0, LREG_W, LREG_H, 0);
 
         // h *= prime (SFPMUL24_MOD1_LOWER masks operands and result to 23b)
         TTI_SFPMUL24(LREG_H, LREG_PRIME, p_sfpu::LCONST_0, LREG_H, sfpi::SFPMUL24_MOD1_LOWER);
-
-        sfpi::dst_reg++;
     }
 }
 
@@ -104,18 +107,17 @@ inline void _llk_math_hash_cb_store_to_dest_()
     TTI_SFPLOADI(LREG_ZERO, sfpi::SFPLOADI_MOD0_LOWER, 0u);
     TTI_SFPLOADI(LREG_ZERO, sfpi::SFPLOADI_MOD0_UPPER, 0u);
 
-    // Zero every row of the tile.
+    // Zero every row of the tile (ADDR_MOD_3 auto-advances the DEST row).
     math::reset_counters(p_setrwc::SET_ABD_F);
 #pragma GCC unroll 0
     for (int row = 0; row < DEST_ROWS; ++row)
     {
-        TT_SFPSTORE(LREG_ZERO, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
-        sfpi::dst_reg++;
+        TTI_SFPSTORE(LREG_ZERO, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
     }
 
     // Overwrite row 0 with the 32 per-lane accumulators.
     math::reset_counters(p_setrwc::SET_ABD_F);
-    TT_SFPSTORE(LREG_H, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
+    TTI_SFPSTORE(LREG_H, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
 
     // Drain the SFPU pipeline so the packer sees the final dest contents.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);

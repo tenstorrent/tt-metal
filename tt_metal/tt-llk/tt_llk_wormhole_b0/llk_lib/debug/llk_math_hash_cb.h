@@ -13,10 +13,12 @@
 //   Init:               h_lane = 0x1C9DC5                 (= 0x811C9DC5 & 0x7FFFFF)
 //
 // Read-back design (the part that makes this robust):
-//   - All DEST access uses the proven copy_dest_values idiom: raw INT32
-//     SFPLOAD/SFPSTORE with ADDR_MOD_3 + sfpi::dst_reg++. This is the only
-//     pattern that the packer's tile read agrees with; hand-rolled ADDR_MOD_7 +
-//     explicit offsets do NOT (they leave half of each 32-bit datum unwritten).
+//   - All DEST access uses the proven INT32 SFPU idiom (see ckernel_sfpu_typecast):
+//     TTI_SFPLOAD/TTI_SFPSTORE with an addr_mod whose dest auto-increments by 2
+//     per step (a 32-bit DEST tile is 64 rows = 32 SFPU rows × stride 2). This is
+//     the only pattern that the packer's tile read agrees with; hand-rolled
+//     ADDR_MOD_7 + explicit offsets do NOT (they leave half of each 32-bit datum
+//     unwritten). Everything is compile-time, so no TT_/sfpi (dst_reg) forms.
 //   - _store_to_dest first zeroes the whole tile, then writes the 32 per-lane
 //     accumulators into DEST row 0. The packer moves the tile to L1 and the host
 //     XOR-folds the whole tile: the 31 zeroed rows contribute an even number of
@@ -53,8 +55,10 @@ static constexpr std::uint32_t MASK23      = 0x7FFFFFu;
 // SFPIADD Mod1: LREG_DST (reg+reg, Mod1=0) | CC_NONE (no flag update, Mod1=4) = 4
 static constexpr int SFPIADD_MOD_NOFLAG = 4;
 
-// A 32x32 INT32 tile occupies 32 SFPU rows (32 lanes each). dst_reg++ walks them.
-static constexpr int DEST_ROWS = 32;
+// A 32x32 INT32 tile occupies 32 SFPU rows (32 lanes each). The addr_mod below
+// auto-increments the DEST pointer by DEST_ROW_STRIDE per SFPLOAD/SFPSTORE.
+static constexpr int DEST_ROWS       = 32;
+static constexpr int DEST_ROW_STRIDE = 2; // 32-bit DEST: 64 rows / 32 SFPU rows
 
 // LReg assignments (working registers kept < 8 for SFPXOR/SFPAND/SFPIADD/SFPSHFT VD constraint).
 static constexpr int LREG_W    = 0; // word loaded from Dst
@@ -66,13 +70,14 @@ static constexpr int LREG_ZERO = 5; // 0 constant, for clearing dest rows
 
 inline void _llk_math_hash_cb_init_()
 {
-    // Configure the SFPU like the standard eltwise-unary-SFPU init so DEST
-    // addressing via ADDR_MOD_3 + dst_reg++ is well-defined.
+    // Configure the SFPU like the standard eltwise-unary-SFPU init. ADDR_MOD_3's
+    // dest auto-increments by DEST_ROW_STRIDE so a plain loop of TTI_SFPLOAD/
+    // TTI_SFPSTORE(..., ADDR_MOD_3, 0) walks the 32 SFPU rows of the tile.
     sfpu::_init_sfpu_config_reg();
     addr_mod_t {
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
-        .dest = {.incr = 0},
+        .dest = {.incr = DEST_ROW_STRIDE},
     }
         .set(ADDR_MOD_3);
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -84,7 +89,7 @@ inline void _llk_math_hash_cb_init_()
 }
 
 // Fold one DEST tile (already populated by the datacopy) into the 32 per-lane
-// accumulators in LREG_H. Walks all 32 SFPU rows of the tile with dst_reg++.
+// accumulators in LREG_H. Walks all 32 SFPU rows via the auto-incrementing addr_mod.
 inline void _llk_math_hash_cb_tile_(std::uint32_t /*dst_tile_idx*/)
 {
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -92,7 +97,8 @@ inline void _llk_math_hash_cb_tile_(std::uint32_t /*dst_tile_idx*/)
 #pragma GCC unroll 0
     for (int row = 0; row < DEST_ROWS; ++row)
     {
-        TT_SFPLOAD(LREG_W, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
+        // ADDR_MOD_3 auto-advances the DEST row by DEST_ROW_STRIDE after the load.
+        TTI_SFPLOAD(LREG_W, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
 
         // h ^= w
         TTI_SFPXOR(0, LREG_W, LREG_H, 0);
@@ -102,25 +108,23 @@ inline void _llk_math_hash_cb_tile_(std::uint32_t /*dst_tile_idx*/)
         TTI_SFPMOV(0, LREG_H, LREG_TMP, 0); // TMP  = H × 1
 
         TTI_SFPMOV(0, LREG_H, LREG_TMP2, 0);
-        TT_SFPSHFT(1, 0, LREG_TMP2, 1);                          // TMP2 = H << 1
+        TTI_SFPSHFT(1, 0, LREG_TMP2, 1);                         // TMP2 = H << 1
         TTI_SFPIADD(0, LREG_TMP2, LREG_TMP, SFPIADD_MOD_NOFLAG); // TMP += TMP2 (×3)
 
         TTI_SFPMOV(0, LREG_H, LREG_TMP2, 0);
-        TT_SFPSHFT(4, 0, LREG_TMP2, 1);                          // TMP2 = H << 4
+        TTI_SFPSHFT(4, 0, LREG_TMP2, 1);                         // TMP2 = H << 4
         TTI_SFPIADD(0, LREG_TMP2, LREG_TMP, SFPIADD_MOD_NOFLAG); // TMP += TMP2 (×19)
 
         TTI_SFPMOV(0, LREG_H, LREG_TMP2, 0);
-        TT_SFPSHFT(7, 0, LREG_TMP2, 1);                          // TMP2 = H << 7
+        TTI_SFPSHFT(7, 0, LREG_TMP2, 1);                         // TMP2 = H << 7
         TTI_SFPIADD(0, LREG_TMP2, LREG_TMP, SFPIADD_MOD_NOFLAG); // TMP += TMP2 (×147)
 
         TTI_SFPMOV(0, LREG_H, LREG_TMP2, 0);
-        TT_SFPSHFT(8, 0, LREG_TMP2, 1);                          // TMP2 = H << 8
+        TTI_SFPSHFT(8, 0, LREG_TMP2, 1);                         // TMP2 = H << 8
         TTI_SFPIADD(0, LREG_TMP2, LREG_TMP, SFPIADD_MOD_NOFLAG); // TMP += TMP2 (×403 = ×0x193)
 
         TTI_SFPAND(0, LREG_MASK, LREG_TMP, 0); // TMP &= 0x7FFFFF
         TTI_SFPMOV(0, LREG_TMP, LREG_H, 0);    // H = TMP
-
-        sfpi::dst_reg++;
     }
 }
 
@@ -132,18 +136,17 @@ inline void _llk_math_hash_cb_store_to_dest_()
     TTI_SFPLOADI(LREG_ZERO, sfpi::SFPLOADI_MOD0_LOWER, 0u);
     TTI_SFPLOADI(LREG_ZERO, sfpi::SFPLOADI_MOD0_UPPER, 0u);
 
-    // Zero every row of the tile.
+    // Zero every row of the tile (ADDR_MOD_3 auto-advances the DEST row).
     math::reset_counters(p_setrwc::SET_ABD_F);
 #pragma GCC unroll 0
     for (int row = 0; row < DEST_ROWS; ++row)
     {
-        TT_SFPSTORE(LREG_ZERO, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
-        sfpi::dst_reg++;
+        TTI_SFPSTORE(LREG_ZERO, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
     }
 
     // Overwrite row 0 with the 32 per-lane accumulators.
     math::reset_counters(p_setrwc::SET_ABD_F);
-    TT_SFPSTORE(LREG_H, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
+    TTI_SFPSTORE(LREG_H, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
 
     // Drain the SFPU pipeline so the packer sees the final dest contents.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
