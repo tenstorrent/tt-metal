@@ -27,6 +27,7 @@ from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.tests.model_variants import DSV3
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
@@ -366,7 +367,7 @@ def test_prefill_block_loop(
         hf_model = None
     else:
         logger.info(f"Creating HF model with {num_layers_hf} layers (only layer {real_layer_idx} has real weights)...")
-        hf_model = create_hf_model_with_weights(config, num_layers_hf, hf_sd)
+        hf_model = create_hf_model_with_weights(DSV3, config, num_layers_hf, hf_sd)
 
     # ------------------------------------------------------------------
     # 2. Tokenize & embed (shared initial input)
@@ -419,6 +420,7 @@ def test_prefill_block_loop(
     block_kwargs = dict(
         mesh_device=mesh_device,
         config=config,
+        model_cfg=DeepSeekV3Config,
         state_dict=layer_sd,
         layer_idx=real_layer_idx,
         seq_len=isl_total,

@@ -10,6 +10,7 @@ This validates the full MoE pipeline:
 Gate → Dispatch → Routed Experts → Combine → Split → Add Shared.
 """
 
+import gc
 import random
 from pathlib import Path
 
@@ -22,7 +23,9 @@ import ttnn
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
+from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_moe
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
     compute_constants,
@@ -58,69 +61,9 @@ from tests.ttnn.utils_for_testing import comp_pcc
 # dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
 # integer N such that dgs*seq*N >= theoretical worst-case dispatch buffer.
 # Real traffic never approaches the worst case, so half-capacity is sufficient.
-@pytest.mark.parametrize(
-    "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check",
-    [
-        # fmt: off
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-256"),
-        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 8, 5, GateComputeMode.HOST_ALL, True, marks=pytest.mark.timeout(900)),
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.HOST_ALL, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")]),
-        # Perf: LB 8x1 dispatch/combine proxy. 64 experts + 2 picks/tok match one glx column's per-chip traffic (balanced_load=800).
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 8, GateComputeMode.HOST_ALL, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-host-64"),
-        # fmt: on
-    ],
-)
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
-    [
-        pytest.param(
-            (8, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-            id="linear-8",
-        ),
-        pytest.param(
-            (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
-        ),
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-def test_ttnn_moe(
+def run_model(
+    variant,
+    config,
     mesh_device,
     device_params,
     seq_len_per_chip,
@@ -133,12 +76,13 @@ def test_ttnn_moe(
     num_links,
     topology,
     gate_fallback_mode,
+    request,
 ):
-    """
-    Test TtMoe PCC against TorchMoe reference.
+    """TtMoe PCC body — shared between `test_ds_moe` / `test_kimi_moe`.
 
-    Both TtMoe and TorchMoe create their gate internally from gate_weights
-    and run forward(x) end-to-end. Validation compares intermediates directly.
+    The gate's grouping (n_group, topk_group) and route_scale are read from
+    the variant's HF config. DSv3 values are a no-op; Kimi values switch the
+    gate routing rule.
     """
 
     # Scoped: only the linear-8 / 64-expert / HOST_ALL / pcc-check case OOMs without this.
@@ -200,7 +144,7 @@ def test_ttnn_moe(
     # Step 1: Create weights (cache-aware)
     # ========================================
     moe_cache_dir = Path(
-        f"/tmp/deepseek_v3_moe_cache/{num_routed_experts}experts_{n_sp_devices}x{n_tp_devices}mesh_{emb_dim}emb_{hidden_dim}hid"
+        f"/tmp/{variant.name}_moe_cache/{num_routed_experts}experts_{n_sp_devices}x{n_tp_devices}mesh_{emb_dim}emb_{hidden_dim}hid"
     )
     moe_cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -302,6 +246,9 @@ def test_ttnn_moe(
             routed_expert_weights=all_routed_weights,
             shared_expert_weights=shared_expert_weights,
             gate_weights=gate_weights,
+            n_expert_groups=config.n_group,
+            n_limited_groups=config.topk_group,
+            route_scale=config.routed_scaling_factor,
         )
         profiler.end("torch_moe_creation")
 
@@ -339,6 +286,9 @@ def test_ttnn_moe(
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=moe_cache_dir,
         layer_idx=layer_idx,
+        n_expert_groups=config.n_group,
+        n_limited_groups=config.topk_group,
+        route_scale=config.routed_scaling_factor,
     )
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_moe_creation")
@@ -424,15 +374,18 @@ def test_ttnn_moe(
             logger.error(f"[{name}] FAILED - PCC: {pcc:.6f} below threshold {threshold}")
             all_passed = False
 
+    del torch_moe
+    gc.collect()
+
     if gate_fallback_mode == GateComputeMode.HOST_ALL:
         # Sparse tensor validation using slot-aware comparisons
         # fmt: off
         sparse_checks = [
-            ("dispatched_buffer", tt_intermediates.dispatched_buffer, torch_intermediates.dispatched_buffer,
+            ("dispatched_buffer", "dispatched_buffer", tt_intermediates.dispatched_buffer, torch_intermediates.dispatched_buffer,
             get_ep_mesh_composer(mesh_device), torch.bfloat16, validate_dispatch_buffer, {}),
-            ("dispatch_metadata", tt_intermediates.metadata, torch_intermediates.metadata,
+            ("dispatch_metadata", "metadata", tt_intermediates.metadata, torch_intermediates.metadata,
             get_ep_mesh_composer(mesh_device), None, validate_dispatch_metadata, {}),
-            ("expert_outputs", tt_intermediates.expert_outputs, torch_intermediates.expert_outputs,
+            ("expert_outputs", "expert_outputs", tt_intermediates.expert_outputs, torch_intermediates.expert_outputs,
             get_ep_mesh_composer(mesh_device), torch.bfloat16, validate_dispatch_buffer_pcc, {"pcc_threshold": 0.95}),
         ]
         # fmt: on
@@ -440,7 +393,9 @@ def test_ttnn_moe(
         expert_token_counts = torch_intermediates.expert_token_counts
         expert_region_offsets = torch_intermediates.expert_region_offsets
 
-        for name, tt_tensor, torch_tensor, composer, dtype, validate_fn, extra_kwargs in sparse_checks:
+        for i, (name, torch_field, tt_tensor, torch_tensor, composer, dtype, validate_fn, extra_kwargs) in enumerate(
+            sparse_checks
+        ):
             if tt_tensor is None or torch_tensor is None:
                 logger.warning(f"[{name}] validation SKIPPED")
                 continue
@@ -470,6 +425,11 @@ def test_ttnn_moe(
                 logger.error(f"[{name}] FAILED - {result.matches}/{result.total} slots matched")
                 result.log_mismatches(limit=5)
                 all_passed = False
+
+            del tt_host, torch_ref, tt_tensor, torch_tensor
+            sparse_checks[i] = None
+            setattr(torch_intermediates, torch_field, None)
+            gc.collect()
 
         # Validate combined_output (before reduce step)
         if tt_intermediates.combined_output is not None and torch_intermediates.combined_output is not None:
@@ -533,6 +493,29 @@ def test_ttnn_moe(
     logger.debug("Note: Final PCC expected to be low until full pipeline is enabled")
     profiler.end("pcc_validation")
 
+    # Upstream MoE reference cross-check. Returns None when the variant has no reference bundled.
+    profiler.start("reference")
+    ref_out = run_reference_moe(
+        variant,
+        config=config,
+        gate_weights=gate_weights,
+        routed_expert_weights=all_routed_weights,
+        shared_expert_weights=shared_expert_weights,
+        x=x,
+    )
+    if ref_out is not None and tt_output is not None:
+        logger.info("Running upstream MoE reference")
+        tt_final_host = ttnn.to_torch(tt_output, mesh_composer=get_tp_mesh_composer(mesh_device), dtype=torch.bfloat16)
+        _, ref_pcc = comp_pcc(ref_out.float(), tt_final_host.float())
+        threshold = variant.moe_pcc_threshold
+        if ref_pcc >= threshold:
+            logger.info(f"[reference_output] PASSED - PCC: {ref_pcc:.6f} (threshold: {threshold})")
+        else:
+            logger.error(f"[reference_output] FAILED - PCC: {ref_pcc:.6f} below threshold {threshold}")
+            all_passed = False
+        del ref_out
+    profiler.end("reference")
+
     assert all_passed, "One or more comparisons failed. See logs for details."
 
     profiler.end("test_ttnn_moe")
@@ -541,3 +524,178 @@ def test_ttnn_moe(
     logger.debug(f"{'='*60}")
     for key in profiler.times:
         logger.debug(f"{key}: {profiler.get(key) * 1000:.2f} ms")
+
+
+@pytest.mark.parametrize(
+    (
+        "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
+        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check"
+    ),
+    [
+        # fmt: off
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE,   False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-256"),
+        pytest.param(1600, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 8, 5, GateComputeMode.HOST_ALL, True,  marks=pytest.mark.timeout(900),                                       id="host-64-1600"),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 5, GateComputeMode.HOST_ALL, True,  marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.skipif(not is_galaxy(), reason="Requires Galaxy")], id="host-256-3200"),
+        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 2, 8, GateComputeMode.HOST_ALL, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-host-64"),
+        # fmt: on
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            2 if is_blackhole() else 1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+            id="linear-8",
+        ),
+        pytest.param(
+            (4, 2),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            2 if is_blackhole() else 1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="mesh-4x2",
+        ),
+        pytest.param(
+            (2, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            2 if is_blackhole() else 1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="mesh-2x4",
+        ),
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            2 if is_blackhole() else 1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
+def test_ds_moe(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    num_links,
+    topology,
+    gate_fallback_mode,
+    request,
+):
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        num_links,
+        topology,
+        gate_fallback_mode,
+        request,
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
+        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check"
+    ),
+    [
+        # fmt: off
+        pytest.param( 640, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.HOST_ALL, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-5k"),
+        pytest.param(3200, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.HOST_ALL, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-25k"),
+        # fmt: on
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
+            },
+            2 if is_blackhole() else 1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+def test_kimi_moe(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    num_links,
+    topology,
+    gate_fallback_mode,
+    request,
+):
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        num_links,
+        topology,
+        gate_fallback_mode,
+        request,
+    )

@@ -11,6 +11,7 @@ Uses HF DeepseekV3Model layer as the reference: creates a model with random weig
 extracts those weights into our TT state_dict format, and compares forward passes.
 """
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -19,9 +20,10 @@ from loguru import logger
 from transformers import DynamicCache
 
 import ttnn
-from models.common.utility_functions import profiler
+from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -30,68 +32,34 @@ from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     ABC_1K_PATH,
+    PROMPT_5K_PATH,
+    PROMPT_25K_PATH,
     create_hf_model,
     extract_layer_state_dict,
     get_4d_causal_mask,
     tokenize_prompt_to_isl,
 )
+
+_PROMPT_PATHS = {"abc_1k": ABC_1K_PATH, "prompt_5k": PROMPT_5K_PATH, "prompt_25k": PROMPT_25K_PATH}
 from tests.ttnn.utils_for_testing import comp_pcc
 
-PCC_THRESHOLD_DENSE = 0.996
-PCC_THRESHOLD_MOE_GATE_HOST = 0.996
-PCC_THRESHOLD_MOE_GATE_DEVICE = 0.992
-PCC_THRESHOLD_KVPE = 0.999
+
+@dataclass(frozen=True)
+class PrefillBlockThresholds:
+    dense: float = 0.996
+    moe_gate_host: float = 0.996
+    moe_gate_device: float = 0.992
+    kvpe_kv: float = 0.999
+    kvpe_pe: float = 0.999
 
 
-@pytest.mark.parametrize(
-    "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
-    [
-        ("random", False, 1024, 8),
-        ("abc_1k", False, 25 * 1024, 8),
-        ("abc_1k", True, 1024, 8),
-    ],
-    ids=["smoke-random", "perf-abc_25k", "pcc-abc_1k"],
-)
-@pytest.mark.parametrize(
-    "layer_type, gate_fallback_mode",
-    [
-        ("dense", None),
-        ("moe", GateComputeMode.DEVICE),
-    ],
-    ids=["dense", "moe-gate_device"],
-)
-@pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "non_balanced"])
-@pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology",
-    [
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            2,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
-        ),
-    ],
-    indirect=["mesh_device", "device_params"],
-)
-@pytest.mark.timeout(600)
-def test_prefill_block(
-    config_only,
+DSV3_THRESHOLDS = PrefillBlockThresholds()
+KIMI_THRESHOLDS = PrefillBlockThresholds(moe_gate_host=0.950)
+
+
+def run_model(
+    variant,
+    config,
     mesh_device,
     device_params,
     is_balanced,
@@ -106,6 +74,7 @@ def test_prefill_block(
     tokenizer,
     is_ci_env,
     is_ci_v2_env,
+    thresholds: PrefillBlockThresholds,
 ):
     if (is_ci_env or is_ci_v2_env) and pcc_validation == False:
         pytest.skip("Skip non-PCC test in CI to save time")
@@ -114,7 +83,6 @@ def test_prefill_block(
 
     profiler.clear()
     profiler.start("total_test_time")
-    config = config_only
     config.max_seq_len = isl_total
 
     sp_axis = 0
@@ -126,7 +94,7 @@ def test_prefill_block(
     isl_per_chip = isl_total // sp_factor
 
     # layer_idx=0 for dense (< NUM_DENSE_LAYERS=3), layer_idx=3 for MoE (>= 3)
-    layer_idx = 0 if layer_type == "dense" else DeepSeekV3Config.NUM_DENSE_LAYERS
+    layer_idx = 0 if layer_type == "dense" else config.first_k_dense_replace
 
     logger.info(f"mesh_shape={mesh_shape}, sp_factor={sp_factor}, tp_factor={tp_factor}")
     logger.info(
@@ -136,16 +104,18 @@ def test_prefill_block(
     )
 
     # --- Cache setup ---
-    is_dense = layer_idx < DeepSeekV3Config.NUM_DENSE_LAYERS
-    cache_dir = Path(f"/tmp/deepseek_v3_prefill_block/{layer_type}_{sp_factor}x{tp_factor}mesh_{isl_total}isl")
+    is_dense = layer_idx < config.first_k_dense_replace
+    cache_dir = Path(f"/tmp/{variant.name}_prefill_block/{layer_type}_{sp_factor}x{tp_factor}mesh_{isl_total}isl")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     init_checker(cache_dir)
     ttnn_cache_complete = TtPrefillBlock.check_cache_complete(cache_dir, layer_idx, is_dense)
     torch_ref_cache = cache_dir / f"torch_reference_{input_source}.pt"
 
-    ref_cache_loadable = torch_ref_cache.exists() and (pcc_validation or input_source == "abc_1k")
-    need_hf_model = not ttnn_cache_complete or ((pcc_validation or input_source == "abc_1k") and not ref_cache_loadable)
+    ref_cache_loadable = torch_ref_cache.exists() and (pcc_validation or input_source in _PROMPT_PATHS)
+    need_hf_model = not ttnn_cache_complete or (
+        (pcc_validation or input_source in _PROMPT_PATHS) and not ref_cache_loadable
+    )
     logger.info(
         f"Cache status: TTNN={ttnn_cache_complete}, ref_cache={torch_ref_cache.exists()}, "
         f"need_hf_model={need_hf_model}"
@@ -157,9 +127,9 @@ def test_prefill_block(
     if need_hf_model:
         profiler.start("weights_creation")
         torch.manual_seed(42)
-        hf_model = create_hf_model(config, num_layers)
+        hf_model = create_hf_model(variant, config, num_layers)
         hf_sd = hf_model.state_dict()
-        state_dict = extract_layer_state_dict(hf_sd, layer_idx, hf_model.layers[layer_idx])
+        state_dict = extract_layer_state_dict(variant, hf_sd, layer_idx, hf_model.layers[layer_idx])
         profiler.end("weights_creation")
     else:
         logger.info("TTNN cache complete, skipping torch weight creation")
@@ -177,16 +147,19 @@ def test_prefill_block(
             torch_output = ref_cached["torch_output"]
             ref_kvpe = ref_cached["ref_kvpe"]
         profiler.end("reference_loading")
-    elif input_source == "abc_1k":
+    elif input_source in _PROMPT_PATHS:
         profiler.start("tokenization")
-        prompts = load_prompts_from_json(str(ABC_1K_PATH))
+        prompt_path = _PROMPT_PATHS[input_source]
+        prompts = load_prompts_from_json(str(prompt_path))
         prompt_text = prompts[0] if isinstance(prompts, list) else prompts
         token_ids, attention_mask, tokens = tokenize_prompt_to_isl(
             tokenizer, max_isl=isl_total, prompt_text=prompt_text
         )
         attention_mask = get_4d_causal_mask(attention_mask, causal_only=True)
         profiler.end("tokenization")
-        logger.info(f"Tokenized ABC_1k input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}")
+        logger.info(
+            f"Tokenized {input_source} input shape: {token_ids.shape}, first 10 tokens: {token_ids[0, :10].tolist()}"
+        )
         with torch.no_grad():
             torch_input = hf_model.embed_tokens(token_ids).to(torch.bfloat16)
         logger.info(f"Embedded input shape: {torch_input.shape}")
@@ -198,7 +171,7 @@ def test_prefill_block(
         profiler.start("torch_reference")
         logger.info("Running torch reference forward...")
         position_ids = torch.arange(isl_total, dtype=torch.long).unsqueeze(0)
-        attention_mask = torch.zeros(1, 1, isl_total, isl_total, dtype=torch.bfloat16)
+        attention_mask = get_4d_causal_mask(torch.ones(1, isl_total), causal_only=True).to(torch.bfloat16)
         ref_cache = DynamicCache()
         with torch.no_grad():
             layer_out = hf_model.layers[layer_idx](
@@ -235,6 +208,7 @@ def test_prefill_block(
             cache_path=cache_dir,
             mesh_device=mesh_device,
             config=config,
+            model_cfg=variant.model_config,
             seq_len=isl_total,
             num_links=num_links,
             topology=topology,
@@ -248,6 +222,7 @@ def test_prefill_block(
     block_kwargs = dict(
         mesh_device=mesh_device,
         config=config,
+        model_cfg=variant.model_config,
         state_dict=state_dict,
         layer_idx=layer_idx,
         seq_len=isl_total,
@@ -316,12 +291,12 @@ def test_prefill_block(
         tt_output_host = tt_output_host.squeeze(0)
 
         if layer_type == "dense":
-            pcc_threshold = PCC_THRESHOLD_DENSE
+            pcc_threshold = thresholds.dense
         else:
             if gate_fallback_mode == GateComputeMode.DEVICE:
-                pcc_threshold = PCC_THRESHOLD_MOE_GATE_DEVICE
+                pcc_threshold = thresholds.moe_gate_device
             else:
-                pcc_threshold = PCC_THRESHOLD_MOE_GATE_HOST
+                pcc_threshold = thresholds.moe_gate_host
 
         _, pcc = comp_pcc(torch_output.float(), tt_output_host.float())
         profiler.end("pcc_validation")
@@ -333,10 +308,10 @@ def test_prefill_block(
             kv_lora_rank = config.kv_lora_rank
             _, kv_pcc = comp_pcc(ref_kvpe[:, :, :, :kv_lora_rank].float(), tt_kvpe[:, :, :, :kv_lora_rank].float())
             _, pe_pcc = comp_pcc(ref_kvpe[:, :, :, kv_lora_rank:].float(), tt_kvpe[:, :, :, kv_lora_rank:].float())
-            logger.info(f"KVPE cache KV part PCC: {kv_pcc:.6f} (threshold: {PCC_THRESHOLD_KVPE})")
-            logger.info(f"KVPE cache PE part PCC: {pe_pcc:.6f} (threshold: {PCC_THRESHOLD_KVPE})")
-            assert kv_pcc > PCC_THRESHOLD_KVPE, f"KVPE KV PCC {kv_pcc:.6f} below threshold {PCC_THRESHOLD_KVPE}"
-            assert pe_pcc > PCC_THRESHOLD_KVPE, f"KVPE PE PCC {pe_pcc:.6f} below threshold {PCC_THRESHOLD_KVPE}"
+            logger.info(f"KVPE cache KV part PCC: {kv_pcc:.6f} (threshold: {thresholds.kvpe_kv})")
+            logger.info(f"KVPE cache PE part PCC: {pe_pcc:.6f} (threshold: {thresholds.kvpe_pe})")
+            assert kv_pcc > thresholds.kvpe_kv, f"KVPE KV PCC {kv_pcc:.6f} below threshold {thresholds.kvpe_kv}"
+            assert pe_pcc > thresholds.kvpe_pe, f"KVPE PE PCC {pe_pcc:.6f} below threshold {thresholds.kvpe_pe}"
 
         logger.success(
             f"TtPrefillBlock test passed "
@@ -354,3 +329,168 @@ def test_prefill_block(
     logger.info(f"{'='*60}")
     for key in profiler.times:
         logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
+
+
+@pytest.mark.parametrize(
+    "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
+    [
+        ("random", False, 1024, 8),
+        ("prompt_25k", False, 25 * 1024, 8),
+        ("abc_1k", True, 1024, 8),
+    ],
+    ids=["smoke-random", "perf-prompt_25k", "pcc-abc_1k"],
+)
+@pytest.mark.parametrize(
+    "layer_type, gate_fallback_mode",
+    [("dense", None), ("moe", GateComputeMode.DEVICE)],
+    ids=["dense", "moe-gate_device"],
+)
+@pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "non_balanced"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (2, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="mesh-2x4",
+        ),
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.timeout(600)
+def test_ds_prefill_block(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    is_balanced,
+    isl_total,
+    dispatch_buffer_capacity_factor,
+    layer_type,
+    gate_fallback_mode,
+    num_links,
+    topology,
+    pcc_validation,
+    input_source,
+    tokenizer,
+    is_ci_env,
+    is_ci_v2_env,
+):
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        is_balanced,
+        isl_total,
+        dispatch_buffer_capacity_factor,
+        layer_type,
+        gate_fallback_mode,
+        num_links,
+        topology,
+        pcc_validation,
+        input_source,
+        tokenizer,
+        is_ci_env,
+        is_ci_v2_env,
+        thresholds=DSV3_THRESHOLDS,
+    )
+
+
+@pytest.mark.parametrize(
+    "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
+    [
+        ("random", False, 1024, 8),
+        ("random", False, 5 * 1024, 8),
+        ("random", False, 25 * 1024, 8),
+        ("abc_1k", True, 1024, 8),
+        ("prompt_5k", True, 5 * 1024, 8),
+        ("prompt_25k", True, 25 * 1024, 8),
+    ],
+    ids=["smoke-random", "perf-random-5k", "perf-random-25k", "pcc-abc_1k", "pcc-prompt_5k", "pcc-prompt_25k"],
+)
+@pytest.mark.parametrize(
+    "layer_type, gate_fallback_mode",
+    [("dense", None), ("moe", GateComputeMode.HOST_ALL)],
+    ids=["dense", "moe-gate_host"],
+)
+@pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
+@pytest.mark.timeout(900)
+def test_kimi_prefill_block(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    is_balanced,
+    isl_total,
+    dispatch_buffer_capacity_factor,
+    layer_type,
+    gate_fallback_mode,
+    num_links,
+    topology,
+    pcc_validation,
+    input_source,
+    tokenizer,
+    is_ci_env,
+    is_ci_v2_env,
+):
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        is_balanced,
+        isl_total,
+        dispatch_buffer_capacity_factor,
+        layer_type,
+        gate_fallback_mode,
+        num_links,
+        topology,
+        pcc_validation,
+        input_source,
+        tokenizer,
+        is_ci_env,
+        is_ci_v2_env,
+        thresholds=KIMI_THRESHOLDS,
+    )

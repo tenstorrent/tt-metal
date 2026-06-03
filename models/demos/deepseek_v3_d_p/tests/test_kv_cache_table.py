@@ -54,6 +54,7 @@ def test_kv_cache_table(
     is_ci_env,
     is_ci_v2_env,
     device_params,
+    variant,
 ):
     """
     Test comparing reference and TT MLA modules with same weights.

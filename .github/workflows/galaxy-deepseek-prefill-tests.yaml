@@ -12,6 +12,7 @@ on:
           - all
           - module
           - moe_gate
+          - moe
           - mla
           - kv_cache_table
           - prefill_block

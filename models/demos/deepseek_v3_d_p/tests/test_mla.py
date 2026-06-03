@@ -17,6 +17,7 @@ from ttnn.device import is_blackhole
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
+from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
@@ -118,35 +119,8 @@ def run_mla_inference(
     return tt_output, hidden_states, chunk_order, shard_dims
 
 
-# sp x tp
-@pytest.mark.parametrize(
-    "mesh_device",
-    [(32, 4), (8, 4), (2, 4)],
-    ids=["32x4", "8x4", "2x4"],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
-        },
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
-        },
-    ],
-    ids=["line", "ring"],
-    indirect=True,
-)
-@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
-@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
-@pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
-@pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
-@pytest.mark.timeout(0)  # Disable timeout — first run computes and caches CPU reference for large seq lengths
-def test_mla(
+def run_model(
+    variant,
     use_pretrained,
     request,
     mesh_device,
@@ -158,18 +132,13 @@ def test_mla(
     is_ci_v2_env,
     device_params,
 ):
-    """
-    Test comparing reference and TT MLA modules with same weights.
+    """MLA reference/TT comparison body — shared across `test_ds_mla` / `test_kimi_mla`."""
+    if use_pretrained and not variant.supports_pretrained:
+        pytest.skip(f"{variant.name!r}: pretrained weights not available")
 
-    Args:
-        use_pretrained: Whether to use pretrained weights
-        request: Pytest request object for conditional fixture loading
-        mesh_device: Mesh device fixture
-        seq_len: Sequence length
-    """
     weight_type = "Pretrained" if use_pretrained else "Random"
     logger.info("=" * 80)
-    logger.info(f"Test: Reference vs TT Comparison ({weight_type} Weights)")
+    logger.info(f"Test: Reference vs TT Comparison ({weight_type} Weights, variant={variant.name})")
     logger.info("=" * 80)
 
     # Conditionally load fixtures - only load what we need!
@@ -250,9 +219,9 @@ def test_mla(
     # Host comparison: Run reference forward pass if needed
     if skip_host_comparison == False:
         # Check for cached reference results to avoid expensive host attention computation
-        cache_dir = Path(os.environ.get("DEEPSEEK_V3_MLA_REF_CACHE", "/tmp/deepseek_v3_mla_ref_cache"))
-        cache_key = f"{weight_type.lower()}_seq{seq_len}"
-        cache_path = cache_dir / f"{cache_key}.pt"
+        env = variant.mla_ref_cache_env or "DEEPSEEK_V3_MLA_REF_CACHE"
+        cache_dir = Path(os.environ.get(env, f"/tmp/{variant.name}_mla_ref_cache"))
+        cache_path = cache_dir / f"{weight_type.lower()}_seq{seq_len}.pt"
 
         if cache_path.exists():
             logger.info(f"Loading cached reference results from {cache_path}")
@@ -265,6 +234,7 @@ def test_mla(
             assert not (
                 (is_ci_env or is_ci_v2_env) and not scale_down_sl
             ), "We should not execute CPU computation in the CI for max sl, output cache is missing"
+
             # Create position IDs
             position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0).expand(batch_size, seq_len)
 
@@ -341,6 +311,21 @@ def test_mla(
             ref_kvpe[:, :, :, kv_lora_rank:], tt_kvpe_cache_torch[:, :, :, kv_lora_rank:], 0.99
         )
         logger.info(f"KVPE cache PE part PCC is {pe_pcc_message}")
+
+        # Upstream MLA reference cross-check. Returns None when the variant has no reference bundled.
+        position_ids_ref = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
+        ref_out = run_reference_mla(
+            variant,
+            config=config,
+            weights=weights,
+            hidden_states=hidden_states,
+            position_ids=position_ids_ref,
+        )
+        if ref_out is not None:
+            logger.info(f"Running upstream MLA reference (model={variant.name})")
+            _, ref_pcc_message = assert_with_pcc(ref_out.unsqueeze(0), tt_output_cpu, variant.mla_pcc_threshold)
+            logger.info(f"[reference_output] PCC: {ref_pcc_message}")
+            del ref_out
     else:
         logger.info("Starting synchronize call")
         ttnn.synchronize_device(mesh_device)
@@ -351,3 +336,116 @@ def test_mla(
         logger.debug("✓ Distributed synchronization completed")
 
     logger.success(f"✓ Reference and TT comparison with {weight_type} weights successful")
+
+
+# sp x tp
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(32, 4), (8, 4), (2, 4)],
+    ids=["32x4", "8x4", "2x4"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+        },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+        },
+    ],
+    ids=["line", "ring"],
+    indirect=True,
+)
+@pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
+@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
+@pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
+@pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
+@pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.timeout(0)
+def test_ds_mla(
+    use_pretrained,
+    request,
+    mesh_device,
+    seq_len,
+    skip_host_comparison,
+    scale_down_sl,
+    is_balanced,
+    is_ci_env,
+    is_ci_v2_env,
+    device_params,
+    variant,
+):
+    run_model(
+        variant,
+        use_pretrained,
+        request,
+        mesh_device,
+        seq_len,
+        skip_host_comparison,
+        scale_down_sl,
+        is_balanced,
+        is_ci_env,
+        is_ci_v2_env,
+        device_params,
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+        },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+        },
+    ],
+    ids=["line", "ring"],
+    indirect=True,
+)
+@pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
+@pytest.mark.parametrize("scale_down_sl", [False], ids=["max_sl"])
+@pytest.mark.parametrize(
+    "seq_len",
+    [5 * 1024, 25 * 1024],
+    ids=["seq5k", "seq25k"],
+)
+@pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
+@pytest.mark.parametrize("is_balanced", [False], ids=["sequential"])
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
+@pytest.mark.timeout(0)
+def test_kimi_mla(
+    use_pretrained,
+    request,
+    mesh_device,
+    seq_len,
+    skip_host_comparison,
+    scale_down_sl,
+    is_balanced,
+    is_ci_env,
+    is_ci_v2_env,
+    device_params,
+    variant,
+):
+    run_model(
+        variant,
+        use_pretrained,
+        request,
+        mesh_device,
+        seq_len,
+        skip_host_comparison,
+        scale_down_sl,
+        is_balanced,
+        is_ci_env,
+        is_ci_v2_env,
+        device_params,
+    )
