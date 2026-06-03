@@ -158,12 +158,19 @@ tt-perf-report "$ARTIFACT_DIR/tracy/<layer_kind_id>/decode_ops.csv" \
   --start-signpost PERF_DECODE \
   --end-signpost PERF_DECODE_END \
   --csv "$ARTIFACT_DIR/tracy/<layer_kind_id>/decode_perf_report.csv" \
+  > "$ARTIFACT_DIR/tracy/<layer_kind_id>/decode_perf_report.console.log"
+tt-perf-report "$ARTIFACT_DIR/tracy/<layer_kind_id>/decode_ops.csv" \
+  --start-signpost PERF_DECODE \
+  --end-signpost PERF_DECODE_END \
+  --no-summary \
   > "$ARTIFACT_DIR/tracy/<layer_kind_id>/decode_perf_report.txt"
 ```
 
 Use the same pattern for prefill with `PERF_PREFILL` signposts and `prefill_*` filenames. If your installed `tt-perf-report` version uses different flags, run `tt-perf-report --help`, use the equivalent flags, and record the exact command. You'll have to add these signposts to your code, of course.
 
-`tt-perf-report` runs should keep advice enabled. If you also need a compact no-advice report for a table, run that as a secondary command and keep the advice-backed run in your work log and final reports.
+The `*_perf_report.txt` file is for the human-readable table. Do not redirect the stdout from a `--csv` run into that filename; `--csv` mode prints command/status boilerplate such as "Writing CSV output..." rather than the rendered report table. Keep that chatter in `*_perf_report.console.log` if it is useful for provenance.
+
+`tt-perf-report` runs should keep advice enabled. If you also need a compact no-advice table, run that as a secondary command with a distinct filename and keep the advice-backed table in your work log and final reports.
 
 Check time units before computing latency. Filtered `tt-perf-report` CSVs may expose `Device Time` in microseconds; raw Tracy ops CSVs often expose `DEVICE KERNEL DURATION [ns]`.
 
