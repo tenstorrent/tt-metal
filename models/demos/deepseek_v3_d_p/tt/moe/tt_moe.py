@@ -441,6 +441,7 @@ class TtMoe(LightweightModule):
             else ttnn.deallocate(gate_logits)
         )  # gate_logits is only used for debugging/intermediates, move to DRAM or deallocate immediately
 
+
         if self.debug_token_count:
             # DEBUG: Print full token counts per expert for monitoring (controlled by env var)
             _counts_4d = ttnn.unsqueeze_to_4D(tt_expert_token_counts)
@@ -517,6 +518,8 @@ class TtMoe(LightweightModule):
             tt_expert_offsets,
             self.tt_expert_dispatch_table,
         )
+        logger.info(f"Post Dispatch sync")
+        ttnn.synchronize_device(self.mesh_device)
         if self.overlap_shared_expert_with_dispatch:
             self.mesh_device.clear_loaded_sub_device_manager()
         x = ttnn.deallocate(x)
