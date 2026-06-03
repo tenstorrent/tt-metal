@@ -22,7 +22,7 @@
 ```
 models/experimental/opt_transfer/
   schema.py        # +PlacementObservation, +MemoryPlacement, +KBEntry.placement_observations
-  config.py        # +l1_budgets per arch, +gates["placement_min_gain_pct"]
+  config.py        # +l1_budgets per arch (placement moves reuse existing min_perf_gain_pct gate)
   placement.py     # NEW: tensor_bytes, L1Budget, eval_condition, decide_placement
   codegen.py       # placement_to_memory_config(); build_fused_qkv honors a `placement` arg
   verify.py        # +l1_feasible()
@@ -77,10 +77,9 @@ def test_memory_placement_defaults_interleaved():
     assert p.layout == "interleaved" and p.shard_spec is None
 
 
-def test_config_has_l1_budget_and_placement_gate():
+def test_config_has_l1_budget():
     assert CONFIG.l1_budgets["blackhole"]["per_core_bytes"] > 0
     assert CONFIG.l1_budgets["blackhole"]["num_cores"] > 0
-    assert CONFIG.gates["placement_min_gain_pct"] > 0
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -140,7 +139,7 @@ Append to `config.py` `Config`:
         "blackhole":   {"per_core_bytes": 1400 * 1024, "num_cores": 130},
     })
 ```
-And add to the `gates` dict: `"placement_min_gain_pct": 2.0,`.
+No new gate key is needed: placement moves reuse the existing `min_perf_gain_pct` gate. A placement-specific threshold (`placement_min_gain_pct`) is deferred to the dots.ocr profile-and-apply follow-on.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -697,7 +696,7 @@ git commit -m "test(opt_transfer): size-aware L1/DRAM placement runs PCC-neutral
 - §1 KB placement observations (size→memory/program config, conditions): MP1 (schema) + MP4 (mining). ✅
 - §2 size+budget-aware decision, don't-pin-large backstop, dataflow: MP2 (decision+budget) + MP5 (graph node wiring per-proposal). Dataflow propagation is per-proposal here; full producer→consumer chain optimization is noted as follow-on (interleaved-only scope). ✅ (chain-level = follow-on)
 - §2 emitters honor memory_config (stop hardcoding DRAM): MP3a (`placement_to_memory_config`) + MP3b (`build_fused_qkv` placement). ✅
-- §3 PCC gate: MP3b (PCC-neutral both placements). L1-budget feasibility: MP3a (`l1_feasible`). Perf gate decision: reuses existing `perf_gain_pct`/`perf_gate_pass` + `placement_min_gain_pct` (MP1); wired via the existing perf node (MP5). ✅
+- §3 PCC gate: MP3b (PCC-neutral both placements). L1-budget feasibility: MP3a (`l1_feasible`). Perf gate decision: reuses existing `min_perf_gain_pct` gate via the existing perf node (MP5). A placement-specific threshold (`placement_min_gain_pct`) is not wired here — it lands with the dots.ocr profile-and-apply follow-on. ✅
 - First vertical slice = QKV head-split placement on device: MP6. ✅
 - dots.ocr full integration + sharded templates + chain-level placement: explicitly deferred follow-ons (noted at MP6). ✅ (honest scope edges, not gaps)
 

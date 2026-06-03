@@ -37,10 +37,9 @@ def test_memory_placement_defaults_interleaved():
     assert p.layout == "interleaved" and p.shard_spec is None
 
 
-def test_config_has_l1_budget_and_placement_gate():
+def test_config_has_l1_budget():
     assert CONFIG.l1_budgets["blackhole"]["per_core_bytes"] > 0
     assert CONFIG.l1_budgets["blackhole"]["num_cores"] > 0
-    assert CONFIG.gates["placement_min_gain_pct"] > 0
 
 
 from models.experimental.opt_transfer.placement import tensor_bytes, L1Budget, eval_condition, decide_placement
@@ -62,6 +61,11 @@ def test_eval_condition_seq_threshold():
     assert eval_condition(cond, {"seq": 512}) is True
     assert eval_condition(cond, {"seq": 4891}) is False
     assert eval_condition(None, {"seq": 4891}) is True  # no condition = always applies
+
+
+def test_eval_condition_unknown_var_or_op_is_false():
+    assert eval_condition({"var": "batch", "op": "<=", "value": 4}, {"seq": 64}) is False
+    assert eval_condition({"var": "seq", "op": "!=", "value": 64}, {"seq": 64}) is False
 
 
 def _obs(buffer, condition=None):

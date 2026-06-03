@@ -38,7 +38,6 @@ class Config:
             "drift_first_divergence_min_frac": 0.9,
             "min_perf_gain_pct": 2.0,
             "max_iterations": 3,
-            "placement_min_gain_pct": 2.0,
         }
     )
     l1_budgets: dict = field(

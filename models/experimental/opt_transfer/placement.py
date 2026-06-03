@@ -39,6 +39,8 @@ class L1Budget:
 def eval_condition(condition, dims: dict) -> bool:
     if condition is None:
         return True
+    if condition.get("op") not in _OPS or condition.get("var") not in dims:
+        return False
     return _OPS[condition["op"]](dims[condition["var"]], condition["value"])
 
 
