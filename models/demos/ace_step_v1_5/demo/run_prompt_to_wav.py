@@ -93,7 +93,7 @@ _SHIFT_TIMESTEPS: dict[float, list[float]] = {
 
 
 def _prepend_ttnn_pkg_to_syspath() -> None:
-    tt_metal_root = str(Path(__file__).resolve().parents[3])
+    tt_metal_root = str(Path(__file__).resolve().parents[4])
     ttnn_pkg_root = str(Path(tt_metal_root) / "ttnn")
     for p in (tt_metal_root, ttnn_pkg_root):
         if p not in sys.path:
@@ -191,7 +191,7 @@ def _build_t_schedule(*, infer_steps: int, variant: str) -> list[float]:
 # Vendored ACE-Step copy bundled with the demo so it runs without an external clone of
 # https://github.com/ace-step/ACE-Step-1.5. ``_resolve_ace_step_repo_root`` prefers this
 # path (after explicit CLI / env overrides) so the demo is repo-independent by default.
-_VENDORED_ACESTEP_ROOT = Path(__file__).resolve().parent / "torch_ref" / "_vendored_acestep"
+_VENDORED_ACESTEP_ROOT = Path(__file__).resolve().parent.parent / "torch_ref" / "_vendored_acestep"
 
 
 _WELL_KNOWN_REPO_ROOTS = [
@@ -719,7 +719,7 @@ def main() -> None:
         },
     )
 
-    from models.demos.ace_step_v1_5.demo_session import AceStepDemoSession
+    from models.demos.ace_step_v1_5.demo.demo_session import AceStepDemoSession
 
     demo_session = AceStepDemoSession()
     if demo_session.session_perf.session_t0 is None:
@@ -744,7 +744,7 @@ def main() -> None:
                 "ACE_STEP_REPO_ROOT to an external checkout."
             )
 
-        from models.demos.ace_step_v1_5.ref_decoder_compare import ensure_acestep_repo_on_path
+        from models.demos.ace_step_v1_5.demo.ref_decoder_compare import ensure_acestep_repo_on_path
 
         ensure_acestep_repo_on_path(root)
         return root

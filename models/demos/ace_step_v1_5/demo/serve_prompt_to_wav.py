@@ -520,7 +520,7 @@ class AceStepModelRegistry:
 
 
 def _prepend_ttnn_pkg_to_syspath() -> None:
-    tt_metal_root = str(Path(__file__).resolve().parents[3])
+    tt_metal_root = str(Path(__file__).resolve().parents[4])
     ttnn_pkg_root = str(Path(tt_metal_root) / "ttnn")
     for p in (tt_metal_root, ttnn_pkg_root):
         if p not in sys.path:
@@ -670,7 +670,7 @@ _WELL_KNOWN_REPO_ROOTS = [
     Path.home() / "ACE-Step-1.5",
     Path("/opt") / "ACE-Step-1.5",
 ]
-_VENDORED_ACESTEP_ROOT = Path(__file__).resolve().parent / "torch_ref" / "_vendored_acestep"
+_VENDORED_ACESTEP_ROOT = Path(__file__).resolve().parent.parent / "torch_ref" / "_vendored_acestep"
 
 
 def _resolve_ace_step_repo_root(*, ckpt_dir: str | None, ace_step_repo_root: str | None) -> Path | None:
@@ -877,7 +877,7 @@ def main() -> None:
             "Cannot find ACE-Step 'acestep' package.  Pass --ace-step-repo-root " "or set ACE_STEP_REPO_ROOT."
         )
 
-    from models.demos.ace_step_v1_5.ref_decoder_compare import ensure_acestep_repo_on_path
+    from models.demos.ace_step_v1_5.demo.ref_decoder_compare import ensure_acestep_repo_on_path
 
     ensure_acestep_repo_on_path(ref_root)
 
