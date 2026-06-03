@@ -25,6 +25,7 @@ from models.common.utility_functions import is_blackhole, nearest_32
 from models.experimental.seamless_m4t_v2_large.tt.common import (
     all_reduce_sum_replicate,
     build_ln_sharded_config,
+    matmul_multicast_1d_program_config,
     matmul_program_config,
     sdpa_program_config,
     TILE,
@@ -460,6 +461,13 @@ class TTSeamlessM4Tv2Decoder:
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+        # Experimental: emit matmul outputs sharded (1D->WIDTH, 2D->BLOCK) per the perf-sweep
+        # winners, then sharded_to_interleaved back so downstream is unchanged. Applies to ALL
+        # matmuls through _linear (prefill + decode). The sharded matmul kernel time lands in the
+        # ops-perf CSV for comparison vs interleaved. NB: the sweep tuned the decode shapes (M=32);
+        # prefill shapes inherit the same 1D/2D rule but were not separately swept.
+        # See tests/perf/test_text_decoder_matmul_perf_report_sweep.py.
+        self._sharded_decode_out = os.environ.get("SEAMLESS_DECODE_SHARDED_OUT", "1") != "0"
         self._ln_sharded_cache: dict = {}
         self._matmul_pc_cache: dict = {}
         self._tile_padded_batch_rows = TILE * ((max_batch_size + TILE - 1) // TILE)
@@ -506,58 +514,23 @@ class TTSeamlessM4Tv2Decoder:
         """See ``common.sdpa_program_config`` — ``large_chunks=False`` for short speech encoder keys."""
         return sdpa_program_config(self.device, seq_q, seq_k, self._sdpa_pc_cache, large_chunks=large_chunks)
 
-    @staticmethod
-    def _pick_matmul_out_subblock_w(per_core_n: int, out_subblock_h: int = 1) -> int:
-        for w in (4, 3, 2, 1):
-            if per_core_n % w == 0 and w * out_subblock_h <= 4:
-                return w
-        return 1
-
     def _decode_matmul_pc(self, in_dim: int, out_dim: int) -> ttnn.ProgramConfig:
-        """Decode matmul PC (effective ``M=32`` tile rows); kept separate from prefill ``_matmul_pc`` for KV PCC."""
+        """Decode matmul PC (effective ``M=32`` tile rows).
+
+        Delegates to ``common.matmul_multicast_1d_program_config`` — the same 1D multicast builder
+        prefill uses for M<=128. Measured (perf sweep 2026_06_02, Blackhole) 1.0-1.48x faster than
+        the prior hand-rolled ``(cg.x, 1)`` grid across every decoder shape (QKV 8.0→6.1µs, out_proj
+        3.6→2.5µs, FFN fc1 10.9→8.9µs, fc2 14.0→11.0µs): the old grid wasted cores because cg.x=11
+        does not divide the N/K tile counts, and its 2048-N 2D branch collapsed back to 11x1.
+        ``_pick_matmul_1d_grid`` instead picks a divisor grid (8x3/8x8) with per_core_N≈1. Matmul
+        math is grid-invariant so cached K/V PCC is preserved; DRAM-width-sharding was measured
+        slower here (8-bank Blackhole pins it to 8 cores). See tests/perf/test_decode_dram_sharded_sweep.py.
+        """
         key = ("decode", in_dim, out_dim)
         cached = self._matmul_pc_cache.get(key)
         if cached is not None:
             return cached
-
-        cg = self.device.compute_with_storage_grid_size()
-        k_tiles = max(1, in_dim // TILE)
-        in0_block_w = min(4, k_tiles)
-        n_tiles = (out_dim + TILE - 1) // TILE
-        m_tiles = max(1, self._tile_padded_batch_rows // TILE)
-
-        if out_dim >= 2048 and cg.y > 1:
-            grid_y = min(cg.y, max(1, n_tiles // max(1, cg.x)))
-            while grid_y > 1 and n_tiles % (cg.x * grid_y) != 0:
-                grid_y -= 1
-            per_core_n = max(1, (n_tiles + cg.x * grid_y - 1) // (cg.x * grid_y))
-            per_core_m = max(1, (m_tiles + grid_y - 1) // grid_y)
-            out_subblock_w = self._pick_matmul_out_subblock_w(per_core_n)
-            result = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(cg.x, grid_y),
-                in0_block_w=in0_block_w,
-                out_subblock_h=1,
-                out_subblock_w=out_subblock_w,
-                per_core_M=per_core_m,
-                per_core_N=per_core_n,
-                transpose_mcast=False,
-                fused_activation=None,
-            )
-        else:
-            per_core_n = max(1, (out_dim + cg.x * TILE - 1) // (cg.x * TILE))
-            per_core_m = m_tiles
-            out_subblock_w = self._pick_matmul_out_subblock_w(per_core_n)
-            result = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-                compute_with_storage_grid_size=(cg.x, 1),
-                in0_block_w=in0_block_w,
-                out_subblock_h=1,
-                out_subblock_w=out_subblock_w,
-                per_core_M=per_core_m,
-                per_core_N=per_core_n,
-                fuse_batch=True,
-                mcast_in0=True,
-            )
-
+        result = matmul_multicast_1d_program_config(self.device, m=self._tile_padded_batch_rows, k=in_dim, n=out_dim)
         self._matmul_pc_cache[key] = result
         return result
 
@@ -589,6 +562,26 @@ class TTSeamlessM4Tv2Decoder:
         self._matmul_pc_cache[key] = cached
         return cached
 
+    def _sharded_decode_out_memcfg(self, program_config) -> Optional[ttnn.MemoryConfig]:
+        """L1 sharded output memcfg matching ``program_config``'s grid/per-core tiling.
+
+        1D multicast (projections) -> WIDTH_SHARDED; 2D multicast (KV-enc fill) -> BLOCK_SHARDED.
+        Returns ``None`` for unsupported program-config types (caller keeps interleaved output).
+        """
+        if isinstance(program_config, ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig):
+            layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
+        elif isinstance(program_config, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig):
+            layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        else:
+            return None
+        grid = program_config.compute_with_storage_grid_size
+        gx, gy = int(grid.x), int(grid.y)
+        shard = [int(program_config.per_core_M) * TILE, int(program_config.per_core_N) * TILE]
+        core_range = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))})
+        return ttnn.MemoryConfig(
+            layout, ttnn.BufferType.L1, ttnn.ShardSpec(core_range, shard, ttnn.ShardOrientation.ROW_MAJOR)
+        )
+
     def _linear(
         self,
         x: ttnn.Tensor,
@@ -608,15 +601,22 @@ class TTSeamlessM4Tv2Decoder:
                 int(weight.shape[-2]),
                 int(weight.shape[-1]),
             )
+        sharded_out_mem = None
+        if self._sharded_decode_out:
+            sharded_out_mem = self._sharded_decode_out_memcfg(program_config)
         out = ttnn.linear(
             x,
             weight,
             bias=bias,
             program_config=program_config,
-            memory_config=memory_config,
+            memory_config=sharded_out_mem if sharded_out_mem is not None else memory_config,
             compute_kernel_config=ck,
             activation=activation,
         )
+        if sharded_out_mem is not None:
+            # Convert back so downstream ops (reshape / create_heads / residual add) see the
+            # interleaved layout they expect; the sharded matmul itself is what the CSV captures.
+            out = ttnn.sharded_to_interleaved(out, memory_config, output_dtype=ttnn.bfloat16)
         # TP 1D multicast matmul may return ``[B, 1, S, N]`` or ``[1, 1, M, N]``; downstream
         # attention slices expect ``[B, S, N]``.
         if len(x.shape) == 3:
@@ -712,6 +712,7 @@ class TTSeamlessM4Tv2Decoder:
             qkv_w.bias,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             program_config=pc_qkv,
+            is_decode=True,
         )
         qkv_4d = ttnn.reshape(
             qkv,
@@ -825,6 +826,7 @@ class TTSeamlessM4Tv2Decoder:
                 attn_module.kv.bias,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 program_config=pc_kv_enc,
+                is_decode=True,
             )
             # TP: kv output dim is 2*local_hidden; split at local_hidden
             kv_half = int(kv_packed.shape[-1]) // 2

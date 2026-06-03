@@ -144,6 +144,28 @@ def _pick_matmul_1d_grid(device: ttnn.Device, *, n_tiles: int) -> tuple[int, int
     return max_x, max_y
 
 
+def _pick_matmul_2d_grid(device: ttnn.Device, *, m_tiles: int, n_tiles: int) -> tuple[int, int]:
+    """Pick a 2D mcast worker grid (gx splits N, gy splits M) maximizing cores via exact divisors.
+
+    The naive ``grid_x = cg.x`` choice collapses to a 1-row grid on devices whose grid width does
+    not divide ``n_tiles`` (e.g. Blackhole cg.x=11 with n_tiles=16 → 11x1, ~9x slower). Prefer the
+    largest ``gx*gy`` where ``gx | n_tiles`` and ``gy | m_tiles``; returns ``(0, 0)`` if no
+    multi-core divisor grid exists so the caller can keep its fallback.
+    """
+    grid = device.compute_with_storage_grid_size()
+    best_gx, best_gy, best_cores = 0, 0, 0
+    for gx in range(1, int(grid.x) + 1):
+        if n_tiles % gx:
+            continue
+        for gy in range(1, int(grid.y) + 1):
+            if m_tiles % gy:
+                continue
+            cores = gx * gy
+            if cores > best_cores or (cores == best_cores and gx > best_gx):
+                best_gx, best_gy, best_cores = gx, gy, cores
+    return best_gx, best_gy
+
+
 def _pick_matmul_out_subblock_w(per_core_n: int) -> int:
     for w in (4, 3, 2, 1):
         if per_core_n % w == 0 and w <= 4:
@@ -228,14 +250,23 @@ def matmul_program_config(
             n=out_dim,
         )
 
-    grid_y = min(cg.y, m_tiles)
-    while grid_y > 1 and n_tiles % (cg.x * grid_y) != 0:
-        grid_y -= 1
-    per_core_m = max(1, (m_tiles + grid_y - 1) // grid_y)
-    per_core_n = max(1, (n_tiles + cg.x * grid_y - 1) // (cg.x * grid_y))
+    # Prefer the largest exact-divisor grid (gx splits N, gy splits M); the naive (cg.x, grid_y)
+    # choice collapses to a 1-row grid when cg.x ∤ n_tiles (Blackhole 11x1 → ~6x slower on the
+    # cross-attn KV-enc fill). Fall back to the original heuristic if no multi-core divisor grid.
+    grid_x, grid_y = _pick_matmul_2d_grid(device, m_tiles=m_tiles, n_tiles=n_tiles)
+    if grid_x * grid_y > 1:
+        per_core_m = m_tiles // grid_y
+        per_core_n = n_tiles // grid_x
+    else:
+        grid_x = cg.x
+        grid_y = min(cg.y, m_tiles)
+        while grid_y > 1 and n_tiles % (cg.x * grid_y) != 0:
+            grid_y -= 1
+        per_core_m = max(1, (m_tiles + grid_y - 1) // grid_y)
+        per_core_n = max(1, (n_tiles + cg.x * grid_y - 1) // (cg.x * grid_y))
     out_subblock_w = _pick_matmul_out_subblock_w(per_core_n)
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=(cg.x, grid_y),
+        compute_with_storage_grid_size=(grid_x, grid_y),
         in0_block_w=in0_block_w,
         out_subblock_h=1,
         out_subblock_w=out_subblock_w,
