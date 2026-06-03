@@ -561,35 +561,39 @@ public:
     // ProgramSpecMeshWorkloadFactoryAdapter
     //
     // Adapts a ProgramSpecFactoryConcept factory (Metal 2.0, single-program /
-    // SPMD-flavored) for mesh dispatch. The op author writes ONLY
-    // create_program_artifacts, returning a single ProgramArtifacts (one ProgramSpec
-    // + ProgramRunArgs). The adapter stamps a Program from that spec onto
-    // each mesh coordinate range covered by the workload — mirroring the
-    // descriptor adapter's per-range build pattern.
+    // SPMD) for mesh dispatch. The op author writes ONLY create_program_artifacts,
+    // returning a single ProgramArtifacts (one ProgramSpec + ProgramRunArgs).
+    // The adapter stamps a Program from that spec onto each mesh coordinate
+    // range covered by the workload.
     //
-    // On cache miss: the adapter calls create_program_artifacts, builds one Program
-    // per coordinate range via experimental::MakeProgramFromSpec, applies
-    // the initial ProgramRunArgs via SetProgramRunArgs, then resolves
-    // each TensorArgument against the io_tensors enumerated from tensor_args /
-    // tensor_return_value (pointer-identity match within the call).
+    // On cache miss: The adapter calls create_program_artifacts, builds one Program
+    // per coordinate range (via experimental::MakeProgramFromSpec), applies
+    // the initial ProgramRunArgs (via experimental::SetProgramRunArgs), then
+    // resolves each TensorArgument against the io_tensors enumerated from
+    // tensor_args / tensor_return_value (pointer-identity match within the call).
     //
     // On cache hit: the adapter enumerates fresh io_tensors, mutates the
     // cached TensorArgument storage in place using the stored index bindings, and
-    // applies via experimental::UpdateTensorArgs — no Program rebuild,
-    // no heap allocation.
+    // applies the new MeshTensors to the existing (cached) Program
+    // (via experimental::UpdateTensorArgs).
     //
-    // Design: every TensorArgument returned by the factory must reference a
-    // MeshTensor reachable from tensor_args or tensor_return_value. The factory
-    // has no path to declare op-owned resource tensors (halo lookup tables, etc.) —
-    // by design, mirroring the descriptor-side split between ProgramDescriptor
-    // (single-program, no workload-scoped resources) and WorkloadDescriptor
-    // (multi-program, with `semaphores` + `buffers` for op-owned resources).
-    // Tensor is a natively mesh-wide memory object and Program is single-device,
-    // so SPMD ops have no natural place to carry workload-scoped resources.
+    // Requirements:
+    //  1. Every TensorArgument returned by the factory must reference a
+    //     MeshTensor reachable from tensor_args or tensor_return_value.
+    //  2. The factory must not declare ANY runtime arguments (other than its
+    //     TensorParameters) in the returned Program Spec. Runtime arguments
+    //     are forbidden because the infrastructure DELIBERATELY excludes
+    //     fast-path patching of non-tensor runtime arguments.
     //
-    // Ops that need op-owned resources (single-program or multi-program) should
-    // route through the future MeshWorkloadSpecFactoryConcept analog of
-    // WorkloadDescriptorConcept, not this concept.
+    // Unhandled use cases:
+    //  - Ops that need op-owned resources (single-program or multi-program)
+    //    should use the (future) MeshWorkloadSpecFactoryConcept analog of
+    //    WorkloadDescriptorConcept, not this concept.
+    //  - Ops that need fast-path patching of non-tensor mutable arguments
+    //    should use the (future) create_program_spec / create_program_run_args
+    //    mechanism.
+    //  - Ops that need different per-device Programs should use the (future)
+    //    MeshWorkloadSpecFactoryConcept.
     // -----------------------------------------------------------------------
     template <ProgramSpecFactoryConcept ProgramSpecFactory>
     struct ProgramSpecMeshWorkloadFactoryAdapter {
@@ -632,7 +636,7 @@ public:
         // declared in the returned ProgramSpec is therefore frozen at cache-miss
         // time, and would be silently stale on every subsequent cache hit.
         //
-        // This is exactly the silent cache-hit corruption bug class the concept exists
+        // This is exactly the silent cache-hit corruption bug class this concept exists
         // to rule out, so we reject any spec that declares one.
         //
         // Factories that genuinely need per-dispatch RTAs belong on a different
@@ -646,9 +650,9 @@ public:
                         adv.num_runtime_varargs == 0 && adv.num_common_runtime_varargs == 0 &&
                         adv.num_runtime_varargs_per_node.empty(),
                     "Kernel '{}' declares runtime arguments, but a ProgramSpecFactoryConcept "
-                    "factory has no per-dispatch update path for them — they would be silently "
-                    "stale on every program-cache hit. Move constants to compile-time args, "
-                    "route tensor-derived values through TensorParameter bindings, or move "
+                    "factory using create_program_artifacts has no per-dispatch update path "
+                    "for non-tensor arguments. Move constants to compile-time args, route "
+                    "tensor-derived values through TensorParameter bindings, or move "
                     "the op to a factory concept with explicit per-dispatch mutable state.",
                     kernel.unique_id);
             }
