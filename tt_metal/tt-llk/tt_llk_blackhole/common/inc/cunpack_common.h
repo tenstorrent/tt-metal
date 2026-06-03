@@ -983,9 +983,9 @@ inline void wait_for_dest_available()
 }
 
 // Restore srcA channel-1 Z-stride to the canonical baseline derived from unpack_dst_format.
-// This pairs with set_dst_write_addr to bracket the unpack-to-dest section without snapshotting
-// the prior register value into a GPR (per tt-llk#1015: each op restores to a documented
-// baseline rather than preserving caller-side state).
+// This pairs with set_dst_write_addr to bracket the unpack-to-dest section: rather than
+// snapshotting the prior register value into a GPR, we recompute the canonical baseline so the
+// restore is deterministic and order-independent.
 inline void unpack_to_dest_tile_done(std::uint32_t &context_id, const std::uint32_t unpack_dst_format)
 {
     t6_semaphore_post<p_stall::UNPACK0>(semaphore::UNPACK_TO_DEST);
