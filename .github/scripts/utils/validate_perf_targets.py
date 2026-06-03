@@ -458,7 +458,9 @@ def main() -> int:
             sku=sku,
         )
 
-        hard_failures_prefix = f"{benchmark_file.name}, model={model_name}, sku={sku}, batch_size={batch_size}, seq_len={seq_len}"
+        hard_failures_prefix = (
+            f"{benchmark_file.name}, model={model_name}, sku={sku}, batch_size={batch_size}, seq_len={seq_len}"
+        )
 
         for metric_name, expected in thresholds.items():
             if model_targets.is_tolerance_key(metric_name):
