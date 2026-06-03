@@ -3,7 +3,7 @@
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import DestAccumulation, L1Accumulation, Tilize, format_dict
@@ -42,7 +42,7 @@ def get_valid_tilize_datacopy(formats):
     Therefore we only test tilization on Blackhole
     """
 
-    chip_arch = get_chip_architecture()
+    chip_arch = TestConfig.CHIP_ARCH
 
     if chip_arch == ChipArchitecture.WORMHOLE:
         return [Tilize.No]
@@ -187,7 +187,7 @@ def test_pack_dest_bank(
 @parametrize(
     formats=(
         input_output_formats([DataFormat.Float16_b])
-        if get_chip_architecture() == ChipArchitecture.WORMHOLE
+        if TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
         else []
     ),
     dest_acc=[DestAccumulation.No],

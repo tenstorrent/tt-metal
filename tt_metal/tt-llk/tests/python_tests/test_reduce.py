@@ -3,6 +3,7 @@
 
 import math
 
+import pytest
 import torch
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import ReduceGolden, get_golden_generator
@@ -23,7 +24,7 @@ from helpers.param_config import (
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     IN_FACE_DIMS,
     INPUT_TILE_CNT,
@@ -94,7 +95,83 @@ def test_reduce(
         # If not reducing to one, we can use larger input dimensions to better test the reduction operation without excessive numerical errors in the accumulation.
         input_dimensions = [256, 32]
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    tile_cnt_A = (input_dimensions[0] // tile_dimensions[0]) * (
+        input_dimensions[1] // tile_dimensions[1]
+    )
+    tile_cnt_B = 1  # src_B is always 1 tile for reduce
+
+    # Float32 golden uses full FP32 accumulation; match that in HW whenever we
+    # pack Float32 from sub-32-bit float inputs (e.g. Float16_b), otherwise
+    # HiFi column/reduce-to-one cases can drift below PCC thresholds.
+    dest_acc = (
+        DestAccumulation.Yes
+        if (
+            formats.input_format.is_32_bit()
+            or is_dest_acc_needed(formats)
+            or (
+                formats.output_format == DataFormat.Float32
+                and not formats.input_format.is_32_bit()
+            )
+        )
+        else DestAccumulation.No
+    )
+
+    output_tile_count = 1 if is_reduce_to_one else tile_cnt_A
+
+    _, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+        DestSync.Half,
+        dest_acc,
+        formats,
+        input_dimensions,
+        tile_dimensions,
+        BlocksCalculationAlgorithm.Standard,
+    )
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=output_tile_count,
+        num_faces=tile_shape.total_num_faces(),
+        face_r_dim=tile_shape.face_r_dim,
+        tile_dimensions=tile_dimensions,
+        use_dense_tile_dimensions=True,
+    )
+
+    configuration = TestConfig(
+        "sources/reduce_test.cpp",
+        formats,
+        templates=[
+            MATH_OP(mathop=mathop_mapping[reduce_dim], pool_type=pool_type),
+            MATH_FIDELITY(math_fidelity),
+        ],
+        runtimes=[
+            IN_FACE_DIMS(
+                tile_shape.face_r_dim,
+                tile_shape.face_c_dim,
+                tile_shape.face_r_dim,
+                tile_shape.face_c_dim,
+            ),
+            INPUT_TILE_CNT(tile_cnt_A),
+            OUTPUT_TILE_CNT(output_tile_count),
+            NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            REDUCE_TO_ONE(is_reduce_to_one),
+            NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
+            NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
+        ],
+        variant_stimuli=stimuli,
+        dest_acc=dest_acc,
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -131,70 +208,7 @@ def test_reduce(
         input_format=formats.input_format,
     )
 
-    # Float32 golden uses full FP32 accumulation; match that in HW whenever we
-    # pack Float32 from sub-32-bit float inputs (e.g. Float16_b), otherwise
-    # HiFi column/reduce-to-one cases can drift below PCC thresholds.
-    dest_acc = (
-        DestAccumulation.Yes
-        if (
-            formats.input_format.is_32_bit()
-            or is_dest_acc_needed(formats)
-            or (
-                formats.output_format == DataFormat.Float32
-                and not formats.input_format.is_32_bit()
-            )
-        )
-        else DestAccumulation.No
-    )
-
-    output_tile_count = 1 if is_reduce_to_one else tile_cnt_A
-
-    _, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        tile_dimensions,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/reduce_test.cpp",
-        formats,
-        templates=[
-            MATH_OP(mathop=mathop_mapping[reduce_dim], pool_type=pool_type),
-            MATH_FIDELITY(math_fidelity),
-        ],
-        runtimes=[
-            IN_FACE_DIMS(
-                tile_shape.face_r_dim,
-                tile_shape.face_c_dim,
-                tile_shape.face_r_dim,
-                tile_shape.face_c_dim,
-            ),
-            INPUT_TILE_CNT(tile_cnt_A),
-            OUTPUT_TILE_CNT(output_tile_count),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            REDUCE_TO_ONE(is_reduce_to_one),
-            NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
-            NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=output_tile_count,
-            num_faces=tile_shape.total_num_faces(),
-            face_r_dim=tile_shape.face_r_dim,
-            tile_dimensions=tile_dimensions,
-            use_dense_tile_dimensions=True,
-        ),
-        dest_acc=dest_acc,
-    )
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 
@@ -274,46 +288,11 @@ def test_reduce_bfp4_b(
         # If not reducing to one, we can use larger input dimensions to better test the reduction operation without excessive numerical errors in the accumulation.
         input_dimensions = [256, 32]
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=tile_dimensions,
-        tile_dimensions=tile_dimensions,
+    tile_cnt_A = (input_dimensions[0] * input_dimensions[1]) // (
+        tile_dimensions[0] * tile_dimensions[1]
     )
+    tile_cnt_B = 1
 
-    if pool_type in [
-        ReducePool.Max,
-        ReducePool.Sum,
-    ]:  # result in srcA should be divided by 1
-        src_B = torch.full((tile_shape.total_tile_size(),), 1)
-    else:
-        # reduce average divides by length of elements in array we reduce
-        if reduce_dim == ReduceDimension.Row:
-            src_B = torch.full((tile_shape.total_tile_size(),), 1 / tile_dimensions[1])
-        elif reduce_dim == ReduceDimension.Column:
-            src_B = torch.full((tile_shape.total_tile_size(),), 1 / tile_dimensions[0])
-        else:  # Scalar
-            src_B = torch.full(
-                (tile_shape.total_tile_size(),),
-                1 / math.sqrt(tile_dimensions[0] * tile_dimensions[1]),
-            )
-
-    generate_golden = get_golden_generator(ReduceGolden)
-    golden_tensor = generate_golden(
-        src_A,
-        reduce_dim,
-        pool_type,
-        formats.output_format,
-        tile_cnt_A,
-        reduce_to_one=is_reduce_to_one,
-        tile_shape=tile_shape,
-        input_format=formats.input_format,
-    )
-
-    # Float32 golden uses full FP32 accumulation; match that in HW whenever we
-    # pack Float32 from sub-32-bit float inputs (e.g. Float16_b), otherwise
-    # HiFi column/reduce-to-one cases can drift below PCC thresholds.
     dest_acc = (
         DestAccumulation.Yes
         if (
@@ -338,6 +317,21 @@ def test_reduce_bfp4_b(
         BlocksCalculationAlgorithm.Standard,
     )
 
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=output_tile_count,
+        num_faces=tile_shape.total_num_faces(),
+        face_r_dim=tile_shape.face_r_dim,
+        tile_dimensions=tile_dimensions,
+        use_dense_tile_dimensions=True,
+    )
+
     configuration = TestConfig(
         "sources/reduce_test.cpp",
         formats,
@@ -359,22 +353,48 @@ def test_reduce_bfp4_b(
             NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
             NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
         ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=output_tile_count,
-            num_faces=tile_shape.total_num_faces(),
-            face_r_dim=tile_shape.face_r_dim,
-            tile_dimensions=tile_dimensions,
-            use_dense_tile_dimensions=True,
-        ),
+        variant_stimuli=stimuli,
         dest_acc=dest_acc,
     )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=tile_dimensions,
+        tile_dimensions=tile_dimensions,
+    )
+
+    if pool_type in [ReducePool.Max, ReducePool.Sum]:
+        src_B = torch.full((tile_shape.total_tile_size(),), 1)
+    else:
+        if reduce_dim == ReduceDimension.Row:
+            src_B = torch.full((tile_shape.total_tile_size(),), 1 / tile_dimensions[1])
+        elif reduce_dim == ReduceDimension.Column:
+            src_B = torch.full((tile_shape.total_tile_size(),), 1 / tile_dimensions[0])
+        else:
+            src_B = torch.full(
+                (tile_shape.total_tile_size(),),
+                1 / math.sqrt(tile_dimensions[0] * tile_dimensions[1]),
+            )
+
+    generate_golden = get_golden_generator(ReduceGolden)
+    golden_tensor = generate_golden(
+        src_A,
+        reduce_dim,
+        pool_type,
+        formats.output_format,
+        tile_cnt_A,
+        reduce_to_one=is_reduce_to_one,
+        tile_shape=tile_shape,
+        input_format=formats.input_format,
+    )
+
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 
@@ -385,7 +405,6 @@ def test_reduce_bfp4_b(
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
     if is_reduce_to_one:
-        # Lower the threshold for reduce to one cases as they are more prone to numerical errors, especially in lower precision formats
         assert passed_test(
             golden_tensor,
             res_tensor,

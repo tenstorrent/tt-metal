@@ -1,14 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 
 
 @parametrize(
@@ -26,7 +27,7 @@ from helpers.test_config import TestConfig
             ],
             same=True,
         )
-        if get_chip_architecture() == ChipArchitecture.BLACKHOLE
+        if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
         else []
     ),
 )
@@ -36,27 +37,38 @@ def test_dump_dest(formats):
 
     input_dimensions = [32, 32]
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
+    tile_cnt_B = tile_cnt_A
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+    )
+
+    configuration = TestConfig(
+        "sources/debug_dest_copy.cpp",
+        formats,
+        variant_stimuli=stimuli,
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
     )
 
-    configuration = TestConfig(
-        "sources/debug_dest_copy.cpp",
-        formats,
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-    )
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 

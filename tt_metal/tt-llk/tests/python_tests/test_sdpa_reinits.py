@@ -4,7 +4,7 @@
 
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -43,7 +43,7 @@ from ttexalens.tt_exalens_lib import read_from_device, write_to_device
         input_output_formats([DataFormat.Float16_b])
         if (
             not TestConfig.WITH_COVERAGE
-            and get_chip_architecture() != ChipArchitecture.WORMHOLE
+            and TestConfig.CHIP_ARCH != ChipArchitecture.WORMHOLE
         )
         else []
     ),

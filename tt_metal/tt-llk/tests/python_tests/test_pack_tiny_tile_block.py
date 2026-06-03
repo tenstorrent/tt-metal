@@ -12,8 +12,9 @@ Tile32x32 DEST slots, and _llk_pack_block_contiguous_ performs the
 sparse-to-dense packing into a contiguous L1 block.
 """
 
+import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     DestAccumulation,
@@ -24,7 +25,7 @@ from helpers.llk_params import (
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_INDEX,
     IN_TILE_DIMS,
@@ -53,17 +54,9 @@ def _make_config(
     # Stack tiles vertically so input_dimensions = (num_tiles * tile_r, tile_c)
     input_dimensions = [tile_r * num_tiles, tile_c]
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        tile_dimensions=list(tile_dims),
-    )
-
-    # Golden: input round-tripped through the output format
-    torch_format = format_dict[formats.output_format]
-    golden_tensor = src_A.to(torch_format)
+    # Tile count for tiny tiles: tiles stack vertically
+    tile_cnt_A = num_tiles
+    tile_cnt_B = tile_cnt_A
 
     # Determine DEST capacity (SyncHalf: 8 tiles FP16, 4 tiles FP32)
     capacity_divisor = (
@@ -86,6 +79,24 @@ def _make_config(
         f"{num_blocks} blocks of {num_tiles_in_block}"
     )
 
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
+        tile_dimensions=list(tile_dims),
+        use_dense_tile_dimensions=True,
+        operand_res_tile_size=calculate_tile_size_bytes(
+            formats.output_format, list(tile_dims), format_tile_sizes
+        ),
+    )
+
     configuration = TestConfig(
         "sources/pack_tiny_tile_block_test.cpp",
         formats,
@@ -100,27 +111,13 @@ def _make_config(
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
         ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            num_faces=num_faces,
-            face_r_dim=face_r_dim,
-            tile_dimensions=list(tile_dims),
-            use_dense_tile_dimensions=True,
-            operand_res_tile_size=calculate_tile_size_bytes(
-                formats.output_format, list(tile_dims), format_tile_sizes
-            ),
-        ),
+        variant_stimuli=stimuli,
         dest_acc=dest_acc,
     )
 
-    return configuration, golden_tensor, torch_format
+    torch_format = format_dict[formats.output_format]
+
+    return configuration, stimuli, input_dimensions, tile_dims, torch_format
 
 
 # ── Main test ───────────────────────────────────────────────────────────────
@@ -134,7 +131,7 @@ def _make_config(
                 DataFormat.Float16_b,
             ]
         )
-        if get_chip_architecture() != ChipArchitecture.WORMHOLE
+        if TestConfig.CHIP_ARCH != ChipArchitecture.WORMHOLE
         else []
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
@@ -155,9 +152,25 @@ def test_pack_tiny_tile_block(
     tile_dims,
     num_tiles,
 ):
-    configuration, golden_tensor, torch_format = _make_config(
-        tile_dims, num_tiles, formats, dest_acc
+    configuration, stimuli, input_dimensions, tile_dims_list, torch_format = (
+        _make_config(tile_dims, num_tiles, formats, dest_acc)
     )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        tile_dimensions=list(tile_dims_list),
+    )
+
+    golden_tensor = src_A.to(torch_format)
+
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 
@@ -180,7 +193,7 @@ def test_pack_tiny_tile_block(
                 DataFormat.Float16_b,
             ]
         )
-        if get_chip_architecture() != ChipArchitecture.WORMHOLE
+        if TestConfig.CHIP_ARCH != ChipArchitecture.WORMHOLE
         else []
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
@@ -203,16 +216,8 @@ def test_pack_tiny_tile_reconfig(formats, dest_acc, tile_dims, num_tiles):
 
     input_dimensions = [tile_r * num_tiles, tile_c]
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        tile_dimensions=list(tile_dims),
-    )
-
-    torch_format = format_dict[formats.output_format]
-    golden_tensor = src_A.to(torch_format)
+    tile_cnt_A = num_tiles
+    tile_cnt_B = tile_cnt_A
 
     capacity_divisor = (
         2
@@ -228,6 +233,24 @@ def test_pack_tiny_tile_reconfig(formats, dest_acc, tile_dims, num_tiles):
 
     assert num_blocks * num_tiles_in_block == tile_cnt_A
 
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
+        tile_dimensions=list(tile_dims),
+        use_dense_tile_dimensions=True,
+        operand_res_tile_size=calculate_tile_size_bytes(
+            formats.output_format, list(tile_dims), format_tile_sizes
+        ),
+    )
+
     configuration = TestConfig(
         "sources/pack_tiny_tile_reconfig_test.cpp",
         formats,
@@ -242,25 +265,26 @@ def test_pack_tiny_tile_reconfig(formats, dest_acc, tile_dims, num_tiles):
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
         ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            num_faces=num_faces,
-            face_r_dim=face_r_dim,
-            tile_dimensions=list(tile_dims),
-            use_dense_tile_dimensions=True,
-            operand_res_tile_size=calculate_tile_size_bytes(
-                formats.output_format, list(tile_dims), format_tile_sizes
-            ),
-        ),
+        variant_stimuli=stimuli,
         dest_acc=dest_acc,
     )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        tile_dimensions=list(tile_dims),
+    )
+
+    torch_format = format_dict[formats.output_format]
+    golden_tensor = src_A.to(torch_format)
+
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 

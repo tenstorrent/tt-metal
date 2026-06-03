@@ -4,8 +4,9 @@
 from dataclasses import dataclass
 from enum import Enum
 
+import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
     DestAccumulation,
@@ -18,7 +19,7 @@ from helpers.param_config import (
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     MATH_OP,
     TemplateParameter,
@@ -114,7 +115,7 @@ SUPPORTED_FORMATS = input_output_formats(
 
 @parametrize(
     formats=(
-        SUPPORTED_FORMATS if get_chip_architecture() != ChipArchitecture.QUASAR else []
+        SUPPORTED_FORMATS if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR else []
     ),
     bcast_dim=[BroadcastType.ROW, BroadcastType.COL],
     eltwise_op=SUPPORTED_ELTWISE_OPS,
@@ -128,17 +129,24 @@ def test_sfpu_binary_bcast(
 ):
     input_dimensions = [32, 32]
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-    )
+    tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
+    tile_cnt_B = tile_cnt_A
 
     # Only Float32 (plus dest_acc=Yes) can skip srcA/srcB and unpack straight to
     # DEST. Float16_b must flow through srcA for the SFPU to consume it.
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+    )
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=1,
     )
 
     configuration = TestConfig(
@@ -150,23 +158,30 @@ def test_sfpu_binary_bcast(
             INPUT_TILE_A(tile_index=0),
         ],
         runtimes=[],
-        variant_stimuli=StimuliConfig(
-            tilize(src_A, stimuli_format=formats.input_format),
-            formats.input_format,
-            tilize(src_B, stimuli_format=formats.input_format),
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=1,
-        ),
+        variant_stimuli=stimuli,
         dest_acc=dest_acc,
         unpack_to_dest=unpack_to_dest,
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
     )
 
     op = _BINARY_OPS[eltwise_op]
     golden_tensor = _golden_sfpu_binary_bcast(
         src_A, src_B, bcast_dim, op, formats.output_format
+    )
+
+    stimuli.set_buffers(
+        tilize(src_A, stimuli_format=formats.input_format),
+        tilize(src_B, stimuli_format=formats.input_format),
     )
 
     res_from_L1 = configuration.run().result

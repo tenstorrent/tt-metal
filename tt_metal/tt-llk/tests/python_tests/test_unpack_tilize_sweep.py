@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
 from helpers.llk_params import (
@@ -15,7 +16,7 @@ from helpers.llk_params import (
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     NARROW_TILE,
     NUM_FACES,
@@ -42,7 +43,7 @@ def _tilize_sweep_formats():
 
 def _tilize_sweep_num_faces(formats):
     if (
-        get_chip_architecture() == ChipArchitecture.BLACKHOLE
+        TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
         and formats.output_format == DataFormat.Bfp8_b
     ):
         return [4]
@@ -80,7 +81,46 @@ def test_unpack_tilize_comprehensive(
 ):
     """Comprehensive parameter sweep test for unpack_tilize operation."""
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
+    tile_cnt_B = tile_cnt_A
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+        num_faces=num_faces,
+        write_full_tiles=True,  # Tilize tests need full tiles in L1
+    )
+
+    configuration = TestConfig(
+        "sources/unpack_tilize_sweep_test.cpp",
+        formats,
+        templates=[
+            STOCHASTIC_ROUNDING(stoch_rnd_type),
+        ],
+        runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(transpose),
+            NARROW_TILE(narrow_tile),
+            NUM_FACES(num_faces),
+            TILE_COUNT(tile_cnt_A),
+        ],
+        variant_stimuli=stimuli,
+        unpack_to_dest=(formats.input_format in [DataFormat.Int32, DataFormat.UInt32]),
+        dest_acc=dest_acc,
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -99,35 +139,7 @@ def test_unpack_tilize_comprehensive(
     )
     golden_tensor = golden_tensor.to(torch_format)
 
-    configuration = TestConfig(
-        "sources/unpack_tilize_sweep_test.cpp",
-        formats,
-        templates=[
-            STOCHASTIC_ROUNDING(stoch_rnd_type),
-        ],
-        runtimes=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHIN_FACE(transpose),
-            NARROW_TILE(narrow_tile),
-            NUM_FACES(num_faces),
-            TILE_COUNT(tile_cnt_A),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            num_faces=num_faces,
-            write_full_tiles=True,  # Tilize tests need full tiles in L1
-        ),
-        unpack_to_dest=(formats.input_format in [DataFormat.Int32, DataFormat.UInt32]),
-        dest_acc=dest_acc,
-    )
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 

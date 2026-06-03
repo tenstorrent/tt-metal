@@ -1,14 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, format_dict, format_tile_sizes
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     INPUT_DIMENSIONS,
     LOOP_FACTOR,
@@ -35,7 +36,7 @@ WIDTHS = [
 @parametrize(
     formats=(
         input_output_formats([DataFormat.Float32, DataFormat.Float16_b])
-        if get_chip_architecture() != ChipArchitecture.BLACKHOLE
+        if TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE
         else []
     ),
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
@@ -64,7 +65,50 @@ def test_fast_tilize_tiny_tiles(
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(TILE_DIMENSIONS)
     num_faces = num_faces_r_dim * num_faces_c_dim
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    tile_cnt_A = input_height * input_width
+    tile_cnt_B = tile_cnt_A
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
+        tile_dimensions=TILE_DIMENSIONS,
+        use_dense_tile_dimensions=True,
+        operand_res_tile_size=format_tile_sizes[formats.output_format],
+    )
+
+    configuration = TestConfig(
+        "sources/fast_tilize_test.cpp",
+        formats,
+        templates=[],
+        runtimes=[
+            INPUT_DIMENSIONS(
+                full_rt_dim=input_height,
+                full_ct_dim=input_width,
+                block_ct_dim=input_width,
+                block_rt_dim=input_height,
+            ),
+            TILE_COUNT(tile_cnt_A),
+            LOOP_FACTOR(1),
+            NUM_FACES(num_faces),
+        ],
+        variant_stimuli=stimuli,
+        dest_acc=dest_acc,
+        compile_time_formats=True,
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -84,39 +128,7 @@ def test_fast_tilize_tiny_tiles(
         .to(format_dict[formats.output])
     )
 
-    configuration = TestConfig(
-        "sources/fast_tilize_test.cpp",
-        formats,
-        templates=[],
-        runtimes=[
-            INPUT_DIMENSIONS(
-                full_rt_dim=input_height,
-                full_ct_dim=input_width,
-                block_ct_dim=input_width,
-                block_rt_dim=input_height,
-            ),
-            TILE_COUNT(tile_cnt_A),
-            LOOP_FACTOR(1),
-            NUM_FACES(num_faces),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            num_faces=num_faces,
-            face_r_dim=face_r_dim,
-            tile_dimensions=TILE_DIMENSIONS,
-            use_dense_tile_dimensions=True,
-            operand_res_tile_size=format_tile_sizes[formats.output_format],
-        ),
-        dest_acc=dest_acc,
-        compile_time_formats=True,
-    )
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 

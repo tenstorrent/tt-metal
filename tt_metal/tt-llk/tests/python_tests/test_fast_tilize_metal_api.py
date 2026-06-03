@@ -6,15 +6,16 @@ Replicates ttnn tilize compute kernel flow (compute_kernel_hw_startup +
 fast_tilize_init/block/uninit) through the LLK test infra.
 """
 
+import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import TilizeGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
     NUM_FACES,
@@ -31,7 +32,7 @@ TILE_C = 32
 @parametrize(
     formats=(
         [*input_output_formats([DataFormat.Float16_b], same=True)]
-        if get_chip_architecture() == ChipArchitecture.BLACKHOLE
+        if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
         else []
     ),
     dest_acc=[DestAccumulation.No],
@@ -43,15 +44,15 @@ def test_fast_tilize_metal_api(formats, dest_acc, dimensions):
     input_dimensions = [rt * TILE_R, ct * TILE_C]
     tile_count = rt * ct
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-    )
-
-    golden = get_golden_generator(TilizeGolden)(
-        src_A, input_dimensions, formats.output_format
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_count,
+        tile_count_B=tile_count,
+        tile_count_res=tile_count,
     )
 
     cfg = TestConfig(
@@ -65,19 +66,27 @@ def test_fast_tilize_metal_api(formats, dest_acc, dimensions):
             NUM_FACES(4),
             NUM_GUARD_TILES(0),
         ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_count,
-        ),
+        variant_stimuli=stimuli,
         dest_acc=dest_acc,
         compile_time_formats=True,
     )
+
+    cfg.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+
+    golden = get_golden_generator(TilizeGolden)(
+        src_A, input_dimensions, formats.output_format
+    )
+
+    stimuli.set_buffers(src_A, src_B)
 
     res = cfg.run().result
     assert len(res) == len(golden)

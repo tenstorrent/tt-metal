@@ -28,14 +28,14 @@ from fast_untilize_common import (
     fast_untilize_dest_acc_modes,
     fast_untilize_formats,
 )
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import UntilizeGolden, get_golden_generator
 from helpers.llk_params import PerfRunType, format_dict
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     LOOP_FACTOR,
@@ -110,7 +110,7 @@ def make_fast_untilize_test_config(
 @parametrize(
     formats=(
         fast_untilize_formats()
-        if get_chip_architecture() == ChipArchitecture.BLACKHOLE
+        if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
         else []
     ),
     dest_acc=fast_untilize_dest_acc_modes,
@@ -131,7 +131,24 @@ def test_fast_untilize(formats, dest_acc, dimensions, dest_sync, stimulus_kind):
     ]
     tile_count = input_height_tiles * input_width_tiles
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    configuration = make_fast_untilize_test_config(
+        formats,
+        input_dimensions,
+        tile_count,
+        None,
+        tile_count,
+        None,
+        tile_count,
+        dest_acc,
+        dest_sync,
+        PerfRunType.L1_TO_L1,
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -150,18 +167,7 @@ def test_fast_untilize(formats, dest_acc, dimensions, dest_sync, stimulus_kind):
         input_format=formats.input_format,
     )
 
-    configuration = make_fast_untilize_test_config(
-        formats,
-        input_dimensions,
-        tile_count,
-        src_A,
-        tile_cnt_A,
-        src_B,
-        tile_cnt_B,
-        dest_acc,
-        dest_sync,
-        PerfRunType.L1_TO_L1,
-    )
+    configuration.variant_stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 
@@ -209,7 +215,7 @@ def test_fast_untilize(formats, dest_acc, dimensions, dest_sync, stimulus_kind):
 @parametrize(
     formats=(
         fast_untilize_formats()
-        if get_chip_architecture() == ChipArchitecture.BLACKHOLE
+        if TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
         else []
     ),
     dest_acc=fast_untilize_dest_acc_modes,
@@ -229,7 +235,26 @@ def test_fast_untilize_overflow_guard(
     tile_count = input_height_tiles * input_width_tiles
     guard_tiles = 5
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    configuration = make_fast_untilize_test_config(
+        formats,
+        input_dimensions,
+        tile_count,
+        None,
+        tile_count,
+        None,
+        tile_count,
+        dest_acc,
+        dest_sync,
+        perf_run_type,
+        tile_count_res=tile_count + guard_tiles,
+        guard_tiles=guard_tiles,
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -238,20 +263,7 @@ def test_fast_untilize_overflow_guard(
         spec_B=StimuliSpec.constant(0.5),
     )
 
-    configuration = make_fast_untilize_test_config(
-        formats,
-        input_dimensions,
-        tile_count,
-        src_A,
-        tile_cnt_A,
-        src_B,
-        tile_cnt_B,
-        dest_acc,
-        dest_sync,
-        perf_run_type,
-        tile_count_res=tile_count + guard_tiles,
-        guard_tiles=guard_tiles,
-    )
+    configuration.variant_stimuli.set_buffers(src_A, src_B)
 
     configuration.run().result
 

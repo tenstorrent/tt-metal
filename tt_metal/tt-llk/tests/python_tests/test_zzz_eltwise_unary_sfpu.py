@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from itertools import chain, product
+from dataclasses import dataclass
 
 import pytest
 import torch
@@ -28,7 +28,7 @@ from helpers.param_config import (
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     CLAMP_NEGATIVE,
@@ -195,51 +195,65 @@ def _is_valid_sfpu_float_combo(
     return True
 
 
-FLOAT_TEST_PARAMS = [
-    combo
-    for combo in chain(
-        (
-            (fmt, approx, mathop, fast, dest)
-            for fmt, approx, mathop, fast, dest in product(
-                FORMATS,
-                [ApproximationMode.No, ApproximationMode.Yes],
-                SUPPORTED_FAST_MODE_OPS,
-                [FastMode.No, FastMode.Yes],
-                [DestAccumulation.No, DestAccumulation.Yes],
-            )
-        ),
-        (
-            (fmt, approx, mathop, FastMode.No, dest)
-            for fmt, approx, mathop, dest in product(
-                FORMATS,
-                [ApproximationMode.No, ApproximationMode.Yes],
-                [op for op in ALL_MATHOPS if op not in SUPPORTED_FAST_MODE_OPS],
-                [DestAccumulation.No, DestAccumulation.Yes],
-            )
-        ),
-    )
-    if _is_valid_sfpu_float_combo(*combo)
-]
+@dataclass(frozen=True, repr=False)
+class SfpuConfig:
+    formats: InputOutputFormat
+    approx_mode: ApproximationMode
+    mathop: MathOperation
+    fast_mode: FastMode
+    dest_acc: DestAccumulation
+
+    def __repr__(self):
+        f = self.formats
+        return (
+            f"{self.mathop.name}-approx_{self.approx_mode.name}"
+            f"-fast_{self.fast_mode.name}-{self.dest_acc.name}"
+            f"-{f.input_format.name}->{f.output_format.name}"
+        )
+
+
+def _build_sfpu_configs(formats_list, mathops_list):
+    """Build SfpuConfig list with template params (mathop, approx, fast, dest_acc)
+    in outer loops and formats (runtime, doesn't affect compile hash) innermost."""
+    configs = []
+    for mathop in mathops_list:
+        fast_modes = (
+            [FastMode.No, FastMode.Yes]
+            if mathop in SUPPORTED_FAST_MODE_OPS
+            else [FastMode.No]
+        )
+        for approx in [ApproximationMode.No, ApproximationMode.Yes]:
+            for fast in fast_modes:
+                for dest in [DestAccumulation.No, DestAccumulation.Yes]:
+                    for fmt in formats_list:
+                        if _is_valid_sfpu_float_combo(fmt, approx, mathop, fast, dest):
+                            configs.append(SfpuConfig(fmt, approx, mathop, fast, dest))
+    return configs
+
+
+FLOAT_CONFIGS = _build_sfpu_configs(FORMATS, ALL_MATHOPS)
 
 
 # Skipped because of: https://github.com/tenstorrent/tt-llk/issues/1435
 @pytest.mark.nightly
 @pytest.mark.parametrize(
-    "formats,approx_mode,mathop,fast_mode,dest_acc",
-    FLOAT_TEST_PARAMS if not TestConfig.WITH_COVERAGE else [],
+    "config",
+    FLOAT_CONFIGS if not TestConfig.WITH_COVERAGE else [],
 )
 @pytest.mark.parametrize(
     "input_dimensions",
     [[64, 64], [128, 256]],
 )
 def test_eltwise_unary_sfpu_float(
-    formats: list[InputOutputFormat],
-    approx_mode: ApproximationMode,
-    mathop: MathOperation,
-    fast_mode: FastMode,
-    dest_acc: DestAccumulation,
+    config: SfpuConfig,
     input_dimensions: list[int],
 ):
+    formats = config.formats
+    approx_mode = config.approx_mode
+    mathop = config.mathop
+    fast_mode = config.fast_mode
+    dest_acc = config.dest_acc
+
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
@@ -251,55 +265,31 @@ def test_eltwise_unary_sfpu_float(
     )
 
 
-FLOAT_TEST_PARAMS_BFP4_B = [
-    combo
-    for combo in chain(
-        (
-            (fmt, approx, mathop, fast, dest)
-            for fmt, approx, mathop, fast, dest in product(
-                FORMATS_INCLUDE_BFP4_B,
-                [ApproximationMode.No, ApproximationMode.Yes],
-                [op for op in SUPPORTED_FAST_MODE_OPS if op in MATHOPS_INCLUDE_BFP4_B],
-                [FastMode.No, FastMode.Yes],
-                [DestAccumulation.No, DestAccumulation.Yes],
-            )
-        ),
-        (
-            (fmt, approx, mathop, FastMode.No, dest)
-            for fmt, approx, mathop, dest in product(
-                FORMATS_INCLUDE_BFP4_B,
-                [ApproximationMode.No, ApproximationMode.Yes],
-                [
-                    op
-                    for op in MATHOPS_INCLUDE_BFP4_B
-                    if op not in SUPPORTED_FAST_MODE_OPS
-                ],
-                [DestAccumulation.No, DestAccumulation.Yes],
-            )
-        ),
-    )
-    if _is_valid_sfpu_float_combo(*combo)
-]
+FLOAT_CONFIGS_BFP4_B = _build_sfpu_configs(
+    FORMATS_INCLUDE_BFP4_B, MATHOPS_INCLUDE_BFP4_B
+)
 
 
 # Skipped because of: https://github.com/tenstorrent/tt-llk/issues/1435
 @pytest.mark.nightly
 @pytest.mark.parametrize(
-    "formats,approx_mode,mathop,fast_mode,dest_acc",
-    FLOAT_TEST_PARAMS_BFP4_B if not TestConfig.WITH_COVERAGE else [],
+    "config",
+    FLOAT_CONFIGS_BFP4_B if not TestConfig.WITH_COVERAGE else [],
 )
 @pytest.mark.parametrize(
     "input_dimensions",
     [[64, 64], [128, 256]],
 )
 def test_eltwise_unary_sfpu_float_bfp4_b(
-    formats: list[InputOutputFormat],
-    approx_mode: ApproximationMode,
-    mathop: MathOperation,
-    fast_mode: FastMode,
-    dest_acc: DestAccumulation,
+    config: SfpuConfig,
     input_dimensions: list[int],
 ):
+    formats = config.formats
+    approx_mode = config.approx_mode
+    mathop = config.mathop
+    fast_mode = config.fast_mode
+    dest_acc = config.dest_acc
+
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
@@ -354,12 +344,10 @@ def eltwise_unary_sfpu(
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
+    tile_cnt_A = (input_dimensions[0] // TILE_DIMENSIONS[0]) * (
+        input_dimensions[1] // TILE_DIMENSIONS[1]
     )
+    tile_cnt_B = tile_cnt_A
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
@@ -368,6 +356,17 @@ def eltwise_unary_sfpu(
         input_dimensions,
         TILE_DIMENSIONS,
         BlocksCalculationAlgorithm.Standard,
+    )
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
     )
 
     configuration = TestConfig(
@@ -385,21 +384,23 @@ def eltwise_unary_sfpu(
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
         ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
+        variant_stimuli=stimuli,
         dest_acc=dest_acc,
         # If dest_acc is off, we unpack Float32 into 16-bit format in src registers (later copied over in dest reg for SFPU op)
         unpack_to_dest=(
             formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
         ),
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
     )
 
     generate_golden = get_golden_generator(UnarySFPUGolden)
@@ -411,6 +412,8 @@ def eltwise_unary_sfpu(
         formats.input_format,
         input_dimensions,
     )
+
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 
@@ -436,17 +439,6 @@ def test_exponential_clamp_negative(clamp_negative: bool):
     formats = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
     dest_acc = DestAccumulation.No
 
-    # Generate custom stimuli with range [-5, 0.7]
-    num_elements = input_dimensions[0] * input_dimensions[1]
-    src_A = torch.rand(num_elements, dtype=torch.bfloat16) * 5.7 - 5.0
-    # Set some values to be large and negative:
-    src_A[0] = -10000
-    src_A[1] = -1000
-    src_A[2] = -200
-    src_A[3] = -100
-    src_A[4] = -88.5
-
-    src_B = torch.zeros(num_elements, dtype=torch.bfloat16)
     tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
     tile_cnt_B = tile_cnt_A
 
@@ -457,6 +449,17 @@ def test_exponential_clamp_negative(clamp_negative: bool):
         input_dimensions,
         TILE_DIMENSIONS,
         BlocksCalculationAlgorithm.Standard,
+    )
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
     )
 
     configuration = TestConfig(
@@ -474,19 +477,26 @@ def test_exponential_clamp_negative(clamp_negative: bool):
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
         ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
+        variant_stimuli=stimuli,
         dest_acc=dest_acc,
         unpack_to_dest=False,
     )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    # Generate custom stimuli with range [-5, 0.7]
+    num_elements = input_dimensions[0] * input_dimensions[1]
+    src_A = torch.rand(num_elements, dtype=torch.bfloat16) * 5.7 - 5.0
+    # Set some values to be large and negative:
+    src_A[0] = -10000
+    src_A[1] = -1000
+    src_A[2] = -200
+    src_A[3] = -100
+    src_A[4] = -88.5
+
+    src_B = torch.zeros(num_elements, dtype=torch.bfloat16)
 
     generate_golden = get_golden_generator(UnarySFPUGolden)
     golden_tensor = generate_golden(
@@ -497,6 +507,8 @@ def test_exponential_clamp_negative(clamp_negative: bool):
         formats.input_format,
         input_dimensions,
     )
+
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 

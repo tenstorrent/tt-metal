@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.data_format_inference import infer_data_formats
 from helpers.format_config import DataFormat
@@ -24,7 +25,7 @@ from helpers.param_config import (
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     NUM_FACES,
@@ -43,7 +44,7 @@ def _pack_untilize_formats():
         DataFormat.Int32,
         DataFormat.Bfp8_b,
     ]
-    if get_chip_architecture() != ChipArchitecture.WORMHOLE:
+    if TestConfig.CHIP_ARCH != ChipArchitecture.WORMHOLE:
         base.append(DataFormat.Fp8_e4m3)
     fmts = input_output_formats(base)
     return [
@@ -81,7 +82,7 @@ def _pack_untilize_input_dimensions(formats, dest_acc):
     if TestConfig.WITH_COVERAGE:
         dims = [d for d in dims if d != [64, 512]]
     if (
-        get_chip_architecture() == ChipArchitecture.WORMHOLE
+        TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
         and formats.input_format
         in (DataFormat.Float16_b, DataFormat.Float16, DataFormat.Bfp8_b)
         and formats.output_format == DataFormat.Float32
@@ -108,19 +109,10 @@ def test_pack_untilize(
     tile_dst_ct_offset,
 ):
 
-    sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        spec_A=sfpu_false_spec,
-        spec_B=sfpu_false_spec,
+    tile_cnt_A = (input_dimensions[0] // TILE_DIMENSIONS[0]) * (
+        input_dimensions[1] // TILE_DIMENSIONS[1]
     )
-
-    generate_golden = get_golden_generator(UntilizeGolden)
-
-    golden_tensor = generate_golden(src_A, formats.output_format, input_dimensions)
+    tile_cnt_B = tile_cnt_A
 
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
@@ -137,6 +129,18 @@ def test_pack_untilize(
         BlocksCalculationAlgorithm.Untilize,
     )
 
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+        sfpu=False,
+    )
+
     configuration = TestConfig(
         "sources/pack_untilize_test.cpp",
         formats,
@@ -150,20 +154,29 @@ def test_pack_untilize(
             TILE_DST_CT_OFFSET(tile_dst_ct_offset),
         ],
         runtimes=[TILE_COUNT(tile_cnt_A), NUM_FACES(4)],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            sfpu=False,
-        ),
+        variant_stimuli=stimuli,
         dest_acc=dest_acc,
         unpack_to_dest=unpack_to_dest,
     )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    src_A, _, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        spec_A=sfpu_false_spec,
+        spec_B=sfpu_false_spec,
+    )
+
+    generate_golden = get_golden_generator(UntilizeGolden)
+    golden_tensor = generate_golden(src_A, formats.output_format, input_dimensions)
+
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 

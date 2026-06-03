@@ -110,6 +110,18 @@ class StimuliConfig:
 
         self._calculate_tile_sizes()
 
+    def set_buffers(self, buffer_A, buffer_B, buffer_C=None):
+        """Attach actual tensor data after deferred construction.
+
+        StimuliConfig can be created with buffer_A=None / buffer_B=None to
+        establish the struct layout for compilation.  Call this before
+        execution to provide the real stimuli tensors.
+        """
+        self.buffer_A = buffer_A
+        self.buffer_B = buffer_B
+        if buffer_C is not None:
+            self.buffer_C = buffer_C
+
     def _calculate_tile_sizes(self):
         """Compute tile sizes and L1 buffer addresses from current flags."""
         self.tile_size_A_bytes = calculate_tile_size_bytes(
@@ -133,7 +145,7 @@ class StimuliConfig:
 
         self.buf_b_addr = self.buf_a_addr + self.tile_size_A_bytes * self.tile_count_A
 
-        if self.buffer_C is not None:
+        if self._has_operand_c:
             self.tile_size_C_bytes = calculate_tile_size_bytes(
                 self.stimuli_C_format,
                 self.tile_dimensions,
@@ -201,9 +213,13 @@ class StimuliConfig:
             f"  buf_b_addr: 0x{self.buf_b_addr:08X}"
             f"  buf_res_addr: 0x{self.buf_res_addr:08X}"
         )
-        if self.buffer_C is not None:
+        if self._has_operand_c:
             lines += f"  buf_c_addr: 0x{self.buf_c_addr:08X}"
         return lines
+
+    @property
+    def _has_operand_c(self):
+        return self.tile_count_C is not None
 
     def generate_runtime_operands_values(self) -> list:
         values = [
@@ -215,7 +231,7 @@ class StimuliConfig:
             self.buf_res_tile_size,
         ]
 
-        if self.buffer_C is not None:
+        if self._has_operand_c:
             values.extend([self.buf_c_addr, self.tile_size_C_bytes])
 
         return values
@@ -228,7 +244,7 @@ class StimuliConfig:
         ]
         pack_formats = "IIIIII"
 
-        if self.buffer_C is not None:
+        if self._has_operand_c:
             lines.append("Operand buffer_C;")
             pack_formats += "II"
 
@@ -241,7 +257,7 @@ class StimuliConfig:
             f"constexpr Operand buffer_Res({hex(self.buf_res_addr)}, {self.buf_res_tile_size});",
         ]
 
-        if self.buffer_C is not None:
+        if self._has_operand_c:
             lines.append(
                 f"constexpr Operand buffer_C({hex(self.buf_c_addr)}, {self.tile_size_C_bytes});"
             )

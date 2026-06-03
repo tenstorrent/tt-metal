@@ -4,6 +4,7 @@
 import logging
 from dataclasses import dataclass
 
+import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -21,7 +22,7 @@ from helpers.llk_params import (
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     BROADCAST_TYPE,
     MATH_FIDELITY,
@@ -78,7 +79,42 @@ def test_eltwise_bcast_col_custom(
         input_dimensions_B,
     )
 
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    tile_cnt_A = (input_dimensions_A[0] // 32) * (input_dimensions_A[1] // 32)
+    tile_cnt_B = (input_dimensions_B[0] // 32) * (input_dimensions_B[1] // 32)
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+    )
+
+    configuration = TestConfig(
+        cpp_source,
+        formats,
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            MATH_OP(mathop=mathop),
+            BROADCAST_TYPE(broadcast_type),
+            CT_DIM(ct_dim),
+        ],
+        runtimes=[
+            generate_input_dim(input_dimensions_A, input_dimensions_A),
+            TILE_COUNT(tile_cnt_A),
+        ],
+        variant_stimuli=stimuli,
+        dest_acc=dest_acc,
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions_A,
         stimuli_format_B=formats.input_format,
@@ -115,31 +151,8 @@ def test_eltwise_bcast_col_custom(
         mathop, src_A, src_B_golden_expanded, formats.output_format, math_fidelity
     )
 
-    configuration = TestConfig(
-        cpp_source,
-        formats,
-        templates=[
-            MATH_FIDELITY(math_fidelity),
-            MATH_OP(mathop=mathop),
-            BROADCAST_TYPE(broadcast_type),
-            CT_DIM(ct_dim),
-        ],
-        runtimes=[
-            generate_input_dim(input_dimensions_A, input_dimensions_A),
-            TILE_COUNT(tile_cnt_A),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A_tilized,
-            formats.input_format,
-            src_B_tilized,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-        dest_acc=dest_acc,
-    )
+    stimuli.set_buffers(src_A_tilized, src_B_tilized)
+
     res_from_L1 = configuration.run().result
 
     res_from_L1 = untilize_block(

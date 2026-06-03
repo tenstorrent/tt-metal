@@ -3,7 +3,7 @@
 
 
 import pytest
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     ApproximationMode,
@@ -16,6 +16,7 @@ from helpers.param_config import input_output_formats, parametrize
 from helpers.perf import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import calculate_tile_and_face_counts
+from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     ITERATIONS,
@@ -249,7 +250,7 @@ def test_perf_eltwise_binary_sfpu_add_top_row(
     iterations,
     input_dimensions,
 ):
-    chip_arch = get_chip_architecture()
+    chip_arch = TestConfig.CHIP_ARCH
 
     # Skip DestAccumulation.No on Blackhole for SfpuAddTopRow
     if chip_arch == ChipArchitecture.BLACKHOLE and dest_acc == DestAccumulation.No:

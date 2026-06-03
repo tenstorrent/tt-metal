@@ -25,6 +25,7 @@ Validation:
 
 import sys
 
+import pytest
 import torch
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -40,7 +41,7 @@ from helpers.llk_params import DestAccumulation, TopKSortDirection, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     INPUT_DIMENSIONS,
@@ -289,8 +290,47 @@ def test_topk_sfpu(
     stable_sort: bool,
 ):
 
+    tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
+    tile_cnt_B = tile_cnt_A
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+    )
+
+    configuration = TestConfig(
+        test_name="sources/topk_test.cpp",
+        formats=formats,
+        templates=[
+            DEST_SYNC(),
+            TOPK(
+                topk_k=K,
+                topk_matrix_width=input_dimensions[1],
+                topk_sort_direction=sort_direction,
+                topk_stable_sort=stable_sort,
+            ),
+        ],
+        runtimes=[
+            INPUT_DIMENSIONS(input_dimensions[0] // 32, input_dimensions[1] // 32),
+            TILE_COUNT(tile_cnt_A),
+        ],
+        variant_stimuli=stimuli,
+        dest_acc=DestAccumulation.No,
+        unpack_to_dest=False,
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -310,35 +350,7 @@ def test_topk_sfpu(
 
     src_A = prepare_input_tensor_for_topk(src_A, formats, input_dimensions)
 
-    configuration = TestConfig(
-        test_name="sources/topk_test.cpp",
-        formats=formats,
-        templates=[
-            DEST_SYNC(),
-            TOPK(
-                topk_k=K,
-                topk_matrix_width=input_dimensions[1],
-                topk_sort_direction=sort_direction,
-                topk_stable_sort=stable_sort,
-            ),
-        ],
-        runtimes=[
-            INPUT_DIMENSIONS(input_dimensions[0] // 32, input_dimensions[1] // 32),
-            TILE_COUNT(tile_cnt_A),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-        dest_acc=DestAccumulation.No,
-        unpack_to_dest=False,
-    )
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])

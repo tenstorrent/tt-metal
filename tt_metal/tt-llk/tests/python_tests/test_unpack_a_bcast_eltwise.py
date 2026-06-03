@@ -1,8 +1,9 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     DestAccumulation,
@@ -13,7 +14,7 @@ from helpers.llk_params import (
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
     MATH_FIDELITY,
@@ -38,7 +39,7 @@ def _valid_reuse_counts(input_dimensions):
                 DataFormat.Float16_b,
             ]
         )
-        if get_chip_architecture() != ChipArchitecture.BLACKHOLE
+        if TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE
         else []
     ),
     mathop=[MathOperation.Elwsub, MathOperation.Elwadd, MathOperation.Elwmul],
@@ -66,7 +67,41 @@ def test_unp_bcast_sub_sdpa(
     input_tiles = input_dimensions[0] * input_dimensions[1] // 1024
     reuse_factor = input_tiles // srca_reuse_count
 
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
+    tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=reuse_factor,
+        tile_count_B=reuse_factor,
+        tile_count_res=reuse_factor,
+    )
+
+    configuration = TestConfig(
+        "sources/unpack_a_bcast_eltwise_test.cpp",
+        formats,
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            MATH_OP(mathop=mathop),
+            DEST_SYNC(),
+        ],
+        runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            TILE_COUNT(tile_cnt_A),
+            SRCA_REUSE_COUNT(srca_reuse_count),
+        ],
+        variant_stimuli=stimuli,
+        dest_acc=dest_acc,
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -120,31 +155,7 @@ def test_unp_bcast_sub_sdpa(
         : 1024 * reuse_factor
     ]
 
-    configuration = TestConfig(
-        "sources/unpack_a_bcast_eltwise_test.cpp",
-        formats,
-        templates=[
-            MATH_FIDELITY(math_fidelity),
-            MATH_OP(mathop=mathop),
-            DEST_SYNC(),
-        ],
-        runtimes=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            TILE_COUNT(tile_cnt_A),
-            SRCA_REUSE_COUNT(srca_reuse_count),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=reuse_factor,
-            tile_count_B=reuse_factor,
-            tile_count_res=reuse_factor,
-        ),
-        dest_acc=dest_acc,
-    )
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 

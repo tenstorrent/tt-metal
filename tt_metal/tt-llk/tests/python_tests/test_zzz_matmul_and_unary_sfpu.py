@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     MatmulGolden,
@@ -20,7 +21,7 @@ from helpers.llk_params import (
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
     MATH_FIDELITY,
@@ -48,7 +49,7 @@ from helpers.utils import passed_test
         )
         if (
             not TestConfig.WITH_COVERAGE
-            and get_chip_architecture()
+            and TestConfig.CHIP_ARCH
             not in (ChipArchitecture.BLACKHOLE, ChipArchitecture.WORMHOLE)
         )
         else []
@@ -95,7 +96,42 @@ def test_matmul_and_unary_sfpu(
     input_dimensions = [32, 32]
 
     torch_format = format_dict.get(formats.output_format)
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    tile_cnt_A = (input_dimensions[0] // 32) * (input_dimensions[1] // 32)
+    tile_cnt_B = tile_cnt_A
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+    )
+
+    configuration = TestConfig(
+        test_name,
+        formats,
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            APPROX_MODE(approx_mode),
+            MATH_OP(mathop=mathop),
+        ],
+        runtimes=[
+            generate_input_dim(input_dimensions, input_dimensions),
+            TILE_COUNT(tile_cnt_A),
+        ],
+        variant_stimuli=stimuli,
+        dest_acc=dest_acc,
+        L1_to_L1_iterations=2,
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -126,31 +162,7 @@ def test_matmul_and_unary_sfpu(
     )
     golden_tensor = golden_tensor.to(torch_format)
 
-    configuration = TestConfig(
-        test_name,
-        formats,
-        templates=[
-            MATH_FIDELITY(math_fidelity),
-            APPROX_MODE(approx_mode),
-            MATH_OP(mathop=mathop),
-        ],
-        runtimes=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            TILE_COUNT(tile_cnt_A),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-        dest_acc=dest_acc,
-        L1_to_L1_iterations=2,
-    )
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 

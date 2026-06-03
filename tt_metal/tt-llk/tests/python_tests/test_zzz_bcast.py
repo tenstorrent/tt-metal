@@ -2,6 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
+
+import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
@@ -22,11 +25,10 @@ from helpers.llk_params import (
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
-    parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
     BROADCAST_TYPE,
@@ -98,7 +100,7 @@ def _valid_bcast_types(tile_dimensions, formats, dest_acc):
 
         # TODO: pgardner - known WH issue with row broadcast + dest accumulation
         if (
-            get_chip_architecture() == ChipArchitecture.WORMHOLE
+            TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
             and bt == BroadcastType.Row
             and dest_acc == DestAccumulation.Yes
             and formats.input_format in (DataFormat.Float16_b, DataFormat.Bfp8_b)
@@ -110,28 +112,59 @@ def _valid_bcast_types(tile_dimensions, formats, dest_acc):
     return result
 
 
-# Sweep tile dimensions from tiny ([1,32]..[16,32]) through full ([32,32]).
-# Tiny tiles have fewer faces (num_faces=2) and variable face_r_dim;
-# full 32x32 tiles have 4 faces with face_r_dim=16.
-# BroadcastType.None_ is a datacopy (unpack A -> DEST -> pack to L1).
+@dataclass(frozen=True, repr=False)
+class BcastConfig:
+    tile_dimensions: tuple
+    formats: object
+    dest_acc: DestAccumulation
+    broadcast_type: BroadcastType
+
+    def __repr__(self):
+        f = self.formats
+        return (
+            f"{f.input_format.name}->{f.output_format.name}"
+            f"-{self.dest_acc.name}-{self.broadcast_type.name}"
+            f"-tile{self.tile_dimensions[0]}x{self.tile_dimensions[1]}"
+        )
 
 
-@parametrize(
-    # enable tiny tiles tests when they're added formally to the LLKs
-    # tile_dimensions=[[1, 32], [2, 32], [4, 32], [8, 32], [16, 32], [32, 32]],
-    tile_dimensions=[[32, 32]],
-    formats=input_output_formats(supported_formats, same=True),
-    dest_acc=lambda formats: _valid_dest_acc(formats),
-    broadcast_type=lambda tile_dimensions, formats, dest_acc: _valid_bcast_types(
-        tile_dimensions, formats, dest_acc
-    ),
-)
-def test_unpack_bcast(
-    tile_dimensions,
-    formats,
-    broadcast_type,
-    dest_acc,
-):
+def _sweep_bcast():
+    tile_dims_list = [[32, 32]]
+    fmt_list = input_output_formats(supported_formats, same=True)
+    combos = []
+    for da in [DestAccumulation.Yes, DestAccumulation.No]:
+        for bt in [
+            BroadcastType.None_,
+            BroadcastType.Column,
+            BroadcastType.Row,
+            BroadcastType.Scalar,
+        ]:
+            for td in tile_dims_list:
+                for fmt in fmt_list:
+                    if da not in _valid_dest_acc(fmt):
+                        continue
+                    if bt not in _valid_bcast_types(td, fmt, da):
+                        continue
+                    combos.append(
+                        BcastConfig(
+                            tile_dimensions=tuple(td),
+                            formats=fmt,
+                            dest_acc=da,
+                            broadcast_type=bt,
+                        )
+                    )
+    return combos
+
+
+ALL_BCAST_CONFIGS = _sweep_bcast()
+
+
+@pytest.mark.parametrize("config", ALL_BCAST_CONFIGS)
+def test_unpack_bcast(config: BcastConfig):
+    tile_dimensions = list(config.tile_dimensions)
+    formats = config.formats
+    broadcast_type = config.broadcast_type
+    dest_acc = config.dest_acc
     # --- Tile geometry ---------------------------------------------------
     # get_tile_params returns (face_r_dim, num_faces_r_dim, num_faces_c_dim).
     # For tiny tiles (e.g. [4,32]): face_r_dim=4, num_faces=2.
@@ -140,16 +173,10 @@ def test_unpack_bcast(
     num_faces = num_faces_r_dim * num_faces_c_dim
     input_dimensions = list(tile_dimensions)
 
-    # --- Stimuli generation ----------------------------------------------
-    # generate_stimuli(..., tile_dimensions=...) produces dense data for any tile size.
-    # For [32,32] this is equivalent to the legacy generate_stimuli path.
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-        tile_dimensions=tile_dimensions,
+    tile_cnt_A = (input_dimensions[0] // tile_dimensions[0]) * (
+        input_dimensions[1] // tile_dimensions[1]
     )
+    tile_cnt_B = tile_cnt_A
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
@@ -161,6 +188,21 @@ def test_unpack_bcast(
     )
 
     # --- Kernel configuration --------------------------------------------
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=tile_cnt_A,
+        num_faces=num_faces,
+        face_r_dim=face_r_dim,
+        tile_dimensions=tile_dimensions,
+        use_dense_tile_dimensions=True,
+    )
+
     configuration = TestConfig(
         "sources/unpack_A_test.cpp",
         formats,
@@ -186,28 +228,26 @@ def test_unpack_bcast(
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             NUM_BLOCKS(num_blocks),
         ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            num_faces=num_faces,
-            face_r_dim=face_r_dim,
-            tile_dimensions=tile_dimensions,
-            use_dense_tile_dimensions=True,
-        ),
+        variant_stimuli=stimuli,
         dest_acc=dest_acc,
         unpack_to_dest=formats.input_format.is_32_bit()
         and dest_acc == DestAccumulation.Yes,
     )
 
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    # --- Stimuli generation ----------------------------------------------
+    src_A, _, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+        tile_dimensions=tile_dimensions,
+    )
+
     # --- Golden model ----------------------------------------------------
-    # Broadcast types use BroadcastGolden which handles all face geometries.
-    # Datacopy (None_) golden is just the input cast to the output format.
     if broadcast_type != BroadcastType.None_:
         generate_broadcast_golden = get_golden_generator(BroadcastGolden)
         golden_tensor = generate_broadcast_golden(
@@ -220,6 +260,8 @@ def test_unpack_bcast(
         )
     else:
         golden_tensor = src_A.to(format_dict[formats.output_format])
+
+    stimuli.set_buffers(src_A, src_B)
 
     res_from_L1 = configuration.run().result
 

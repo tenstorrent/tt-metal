@@ -3,6 +3,7 @@
 
 from typing import List
 
+import pytest
 import torch
 from helpers.device import BootMode
 from helpers.format_config import DataFormat, FormatConfig, is_dest_acc_needed
@@ -15,7 +16,7 @@ from helpers.matmul_sweep import (
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_config import TestConfig
+from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     MATH_FIDELITY,
@@ -90,8 +91,43 @@ def test_matmul_custom(
     input_A_dimensions = format_dest_acc_and_dims[2][0]
     input_B_dimensions = format_dest_acc_and_dims[2][1]
 
+    # Calculate all matmul dimensions using helper function
+    matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
+
+    tile_cnt_A = (input_A_dimensions[0] // 32) * (input_A_dimensions[1] // 32)
+    tile_cnt_B = (input_B_dimensions[0] // 32) * (input_B_dimensions[1] // 32)
+
+    stimuli = StimuliConfig(
+        None,
+        formats.input_format,
+        None,
+        formats.input_format,
+        formats.output_format,
+        tile_count_A=tile_cnt_A,
+        tile_count_B=tile_cnt_B,
+        tile_count_res=matmul_dims.output_tile_cnt,
+    )
+
+    configuration = TestConfig(
+        "sources/matmul_custom_test.cpp",
+        formats,
+        templates=[MATH_FIDELITY(math_fidelity)],
+        runtimes=[
+            NUM_FACES(),
+            TILE_COUNT(matmul_dims.output_tile_cnt),
+            CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
+        ],
+        variant_stimuli=stimuli,
+        dest_acc=dest_acc,
+        boot_mode=boot_mode,
+    )
+
+    configuration.prepare()
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+    src_A, _, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_A_dimensions,
         stimuli_format_B=formats.input_format,
@@ -99,9 +135,6 @@ def test_matmul_custom(
         spec_A=sfpu_false_spec,
         spec_B=sfpu_false_spec,
     )
-
-    # Calculate all matmul dimensions using helper function
-    matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
 
     generate_golden = get_golden_generator(MatmulGolden)
     golden_tensor = generate_golden(
@@ -129,28 +162,7 @@ def test_matmul_custom(
         tilized_A = src_A
         tilized_B = src_B
 
-    configuration = TestConfig(
-        "sources/matmul_custom_test.cpp",
-        formats,
-        templates=[MATH_FIDELITY(math_fidelity)],
-        runtimes=[
-            NUM_FACES(),
-            TILE_COUNT(matmul_dims.output_tile_cnt),
-            CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
-        ],
-        variant_stimuli=StimuliConfig(
-            tilized_A.flatten(),
-            formats.input_format,
-            tilized_B.flatten(),
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=matmul_dims.output_tile_cnt,
-        ),
-        dest_acc=dest_acc,
-        boot_mode=boot_mode,
-    )
+    stimuli.set_buffers(tilized_A.flatten(), tilized_B.flatten())
 
     res_from_L1 = configuration.run().result
 
