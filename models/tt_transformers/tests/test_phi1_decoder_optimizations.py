@@ -10,6 +10,7 @@ from models.tt_transformers.demo.simple_text_demo import (
     is_greedy_sampling_request,
     model_name_matches_aliases,
     normalize_greedy_sampling_params,
+    resolve_hf_rope_mode,
     resolve_paged_attention_mode,
     should_disable_device_sampling,
 )
@@ -104,6 +105,16 @@ def test_non_phi_models_keep_default_paged_attention():
         data_parallel=1,
         max_seq_len=1024,
     )
+
+
+def test_phi1_defaults_to_hf_rope():
+    assert resolve_hf_rope_mode("microsoft/phi-1", False)
+    assert resolve_hf_rope_mode("Phi-1", False)
+
+
+def test_non_phi_models_keep_legacy_rope_default():
+    assert not resolve_hf_rope_mode("meta-llama/Llama-3.2-1B", False)
+    assert resolve_hf_rope_mode("meta-llama/Llama-3.2-1B", True)
 
 
 @pytest.mark.parametrize(

@@ -127,6 +127,17 @@ def resolve_paged_attention_mode(
     return paged_attention
 
 
+def resolve_hf_rope_mode(hf_model_identifier: str, use_hf_rope: bool) -> bool:
+    if use_hf_rope:
+        return True
+
+    # Phi-1 has been more stable on the HF rotary path during Wormhole bring-up.
+    if "phi-1" in hf_model_identifier.lower():
+        return True
+
+    return False
+
+
 def get_test_mesh_shape():
     mesh_device = os.environ.get("MESH_DEVICE")
     return MESH_DEVICE_SHAPE_MAP[mesh_device] if mesh_device in MESH_DEVICE_SHAPE_MAP else len(ttnn.get_device_ids())
@@ -1049,7 +1060,7 @@ def test_demo_text(
         use_prefetcher and is_prefetcher_supported(hf_dir, num_devices) and "Llama" in hf_dir and "8B" in hf_dir
     )
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
-    use_hf_rope = request.config.getoption("--use_hf_rope")
+    use_hf_rope = resolve_hf_rope_mode(hf_dir, request.config.getoption("--use_hf_rope"))
     is_device_perf_test = "device-perf" in test_id
 
     if stress_test and token_accuracy:
