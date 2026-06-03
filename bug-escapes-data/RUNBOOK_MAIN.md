@@ -93,7 +93,6 @@ For each finding in `findings[]`:
 
 | `action_required` | Next step |
 |---|---|
-| `assume_horizontal` | Go to step 5 (Record) directly. No verification needed. |
 | `pr_ci_proof_check` | Spawn verify agent with the finding. Verify agent handles the proof check and may also run probes. |
 | `probe_verification` | Spawn verify agent with the finding. |
 
@@ -118,38 +117,7 @@ The verify agent writes its own state updates to campaign-state.json and confirm
 For single-card hardware: you may spawn verify agents in parallel (one per candidate).
 For multi-card hardware (T3K, Galaxy): only one verify agent at a time per machine type.
 
-### 5. Record Confirmed Escape (for assumed_horizontal)
-
-For `assume_horizontal` findings, main BrAIn writes directly to `confirmed-escapes.json`:
-
-```json
-{
-  "escape_id": "...",
-  "escape_type": "horizontal",
-  "test_name": "...",
-  "test_filepath": "...",
-  "test_layer": ...,
-  "fix_commit_sha": "...",
-  "fix_commit_message": "...",
-  "fix_layer": ...,
-  "candidate_fix_commits": [...],
-  "fix_pr": "...",
-  "confirmation_method": "assumed_horizontal",
-  "confidence": "assumed",
-  "last_failure_run_id": "...",
-  "last_failure_job_id": "...",
-  "first_success_run_id": "...",
-  "first_success_job_id": "...",
-  "before_run_id": null,
-  "after_run_id": null,
-  "reasoning": "...",
-  "confirmed_at": "..."
-}
-```
-
-Write escape_id to `seen-escapes.json` with `status: "confirmed_horizontal"`.
-
-### 6. Interpret Verify Agent Output
+### 5. Interpret Verify Agent Output
 
 The verify agent returns a verdict JSON. Based on `verdict`:
 
@@ -160,7 +128,7 @@ The verify agent returns a verdict JSON. Based on `verdict`:
 | `inconclusive_timeout` | Update campaign-state.json with `status: "retry_next_session"`. No DM. |
 | `aborted_wrong_test` | Verify agent couldn't match test to workflow flag. DM @ebanerjeeTT with details. Do not retry automatically. |
 
-### 7. Confluence Updates
+### 6. Confluence Updates
 
 **Page IDs:**
 - `2424012846` — Vertical Bug Escapes (main tracking)
@@ -180,7 +148,7 @@ Update confirmed table and chart only after `verdict: "confirmed"`.
 - Confirmed (proven): `Test L{X} → Verified Fix L{Y} (proven)`
 - Confirmed (assumed): `Test L{X} → Assumed Fix L{X} (assumed)`
 
-### 8. DM @ebanerjeeTT
+### 7. DM @ebanerjeeTT
 
 **Always DM:**
 - Every confirmed escape: escape ID, test name, escape type, fix PR, method (proven vs assumed).
@@ -208,4 +176,4 @@ When no verify agents are running and no candidates are pending: immediately spa
 - Run find agent with 90-day window, thresholds ≥5/≥5/168h.
 - Process newest candidates first (find agent orders by `last_fail_ts DESC`).
 - Cap at 3 simultaneous verify agents to avoid runner contention.
-- For candidates >60 days old: CI logs may have expired. Find agent should flag this; verify agent should apply `assume_horizontal` more aggressively.
+- For candidates >60 days old: CI logs may have expired. Find agent should flag this; verify agent should note expiry in the verdict notes field.
