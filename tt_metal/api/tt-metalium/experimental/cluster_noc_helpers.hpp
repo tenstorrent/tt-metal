@@ -68,4 +68,41 @@ void noc_write_immediate(
  */
 std::uint32_t noc_read_reg_u32(std::uint32_t device_id, std::uint32_t x, std::uint32_t y, std::uint64_t addr);
 
+/**
+ * @brief One entry of the DRAM bank table used by tt-blaze's Tensix
+ *        migration kernel and mirrored by the X280 migration worker.
+ *
+ * Each entry maps a logical @c bank_id to the NOC coordinate of the DRAM
+ * controller that backs it plus the per-bank base address that goes into
+ * the BRISC's @c bank_to_dram_offset[] table. Coordinates are TRANSLATED
+ * on virtualized-DRAM SKUs (Blackhole) and raw NOC0 on the rest -- i.e.
+ * the same value @c RiscFirmwareInitializer programs into
+ * @c dram_bank_to_noc_xy[NOC0] for @c device_id.
+ */
+struct DramBankInfo {
+    std::uint32_t bank_id;
+    std::uint32_t noc_x;  // TRANSLATED on virtualized-DRAM SKUs, NOC0 elsewhere (NOC=0).
+    std::uint32_t noc_y;
+    std::uint64_t base_addr;  // = Allocator::get_bank_offset(BufferType::DRAM, bank_id).
+    std::uint64_t bank_size;  // = metal_SocDescriptor::dram_view_size.
+};
+
+/**
+ * @brief Snapshot of BRISC's @c dram_bank_to_noc_xy[NOC0] +
+ *        @c bank_to_dram_offset[] for an opened device.
+ *
+ * Reproduces the table that @c RiscFirmwareInitializer::
+ * @c generate_device_bank_to_noc_tables would multicast into Tensix L1 at
+ * boot, so an X280 (or any other host-driven kernel) can populate its own
+ * NOC translation table from Python and route DRAM transactions to any of
+ * the @c NUM_DRAM_BANKS banks the way a Tensix kernel would.
+ *
+ * Requires the device to be opened first (e.g. via @c
+ * ttnn.open_mesh_device); otherwise this throws.
+ *
+ * @param device_id Logical chip id (matches @c IDevice::id()).
+ * @return @c NUM_DRAM_BANKS entries indexed by @c bank_id.
+ */
+std::vector<DramBankInfo> get_dram_bank_table(std::uint32_t device_id);
+
 }  // namespace tt::tt_metal::distributed
