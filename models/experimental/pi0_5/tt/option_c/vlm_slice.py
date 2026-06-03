@@ -609,3 +609,221 @@ class Pi0_5OptionCVLMSlicePaired:
             if kv is not None:
                 out.append((global_i, kv))
         return out
+
+
+# ---------------------------------------------------------------------------- #
+# TP=2 slice — 9 (2,1) col-pair sub-meshes × 2 VLM layers per sub-mesh.        #
+# Mirrors Pi0_5OptionCVLMSlicePaired's host-bounce-between-chips pattern, only #
+# the unit is a (2,1) sub-mesh running one TP=2 block instead of a single chip #
+# running a full-replication block.                                            #
+# ---------------------------------------------------------------------------- #
+
+
+class Pi0_5OptionCVLMSliceTP:
+    """TP=tp_size VLM slice carved across multiple (tp_size, 1) sub-meshes.
+
+    Default layout (matches the (6,3) prefill submesh with `tp_size=2`):
+      - 9 (2,1) sub-meshes, ordered (0,0), (0,1), (0,2), (2,0), ..., (4,2).
+      - 2 VLM layers per sub-mesh (layers 0..1 on sub-mesh 0, 2..3 on
+        sub-mesh 1, ..., 16..17 on sub-mesh 8). Layers within a sub-mesh
+        run in sequence on the same (2,1) (no host bounce between them);
+        between sub-meshes activations are bounced through host.
+
+    Args:
+        config:               full PaliGemma config.
+        weights:              categorized weights dict.
+        tp_submeshes:         list of N (tp_size, 1) MeshDevices (build via
+                              `mesh_setup.create_tp_submeshes_2x1`).
+        layer_range:          half-open (lo, hi). `hi - lo` must equal
+                              `len(tp_submeshes) * layers_per_submesh`.
+        layers_per_submesh:   how many VLM layers each (tp_size,1) sub-mesh
+                              owns. With 9 sub-meshes and 18 VLM layers,
+                              default is 2.
+        tp_size:              TP factor inside each sub-mesh. Default 2.
+        holds_vlm_final_norm: if True, place model.norm.weight on the LAST
+                              sub-mesh and apply it after the final block.
+        holds_embed_tokens:   accepted for API parity; ignored — embed is
+                              vision-side in Option C.
+    """
+
+    def __init__(
+        self,
+        config: PaliGemmaConfig,
+        weights: Dict[str, Dict[str, torch.Tensor]],
+        tp_submeshes: List,
+        layer_range: Tuple[int, int],
+        layers_per_submesh: int = 2,
+        tp_size: int = 2,
+        holds_embed_tokens: bool = False,
+        holds_vlm_final_norm: bool = False,
+    ) -> None:
+        from .tp_block import Pi0_5OptionCSubmeshTPGemmaBlock
+
+        if not (0 <= layer_range[0] < layer_range[1] <= config.vlm_config.depth):
+            raise ValueError(
+                f"layer_range {layer_range} out of bounds for " f"vlm_config.depth={config.vlm_config.depth}"
+            )
+        expected_span = len(tp_submeshes) * layers_per_submesh
+        if layer_range[1] - layer_range[0] != expected_span:
+            raise ValueError(
+                f"layer_range span ({layer_range[1] - layer_range[0]}) must equal "
+                f"len(tp_submeshes)*layers_per_submesh = {len(tp_submeshes)}*"
+                f"{layers_per_submesh} = {expected_span}"
+            )
+        for i, sm in enumerate(tp_submeshes):
+            if sm.get_num_devices() != tp_size:
+                raise ValueError(f"tp_submeshes[{i}] has {sm.get_num_devices()} devices but tp_size={tp_size}")
+
+        self.config = config
+        self.tp_submeshes = tp_submeshes
+        self.layer_lo, self.layer_hi = layer_range
+        self.num_layers = self.layer_hi - self.layer_lo
+        self.layers_per_submesh = layers_per_submesh
+        self.tp_size = tp_size
+        self.holds_embed_tokens = holds_embed_tokens
+        self.holds_vlm_final_norm = holds_vlm_final_norm
+
+        lang = weights["vlm_language"]
+
+        # RoPE tables — one set per sub-mesh.
+        self.cos_metas: List = []
+        self.sin_metas: List = []
+        for sm in tp_submeshes:
+            cos, sin = precompute_freqs_cis_meta_format(
+                config.vlm_config.head_dim,
+                config.max_seq_len,
+                sm,
+            )
+            self.cos_metas.append(cos)
+            self.sin_metas.append(sin)
+
+        # Per-layer blocks. vlm_blocks[i] lives on
+        # tp_submeshes[i // layers_per_submesh].
+        self.vlm_blocks: List = []
+        for local_i in range(self.num_layers):
+            global_i = self.layer_lo + local_i
+            sm_idx = local_i // layers_per_submesh
+            sm = tp_submeshes[sm_idx]
+            self.vlm_blocks.append(
+                Pi0_5OptionCSubmeshTPGemmaBlock(
+                    config.vlm_config,
+                    lang,
+                    global_i,
+                    sm,
+                    self.cos_metas[sm_idx],
+                    self.sin_metas[sm_idx],
+                    tp_size=tp_size,
+                )
+            )
+
+        # Final RMSNorm on the LAST sub-mesh when this slice owns the tail.
+        self.vlm_norm: Optional["ttnn.Tensor"] = None
+        if holds_vlm_final_norm:
+            self.vlm_norm = tensor_1d_to_2d_ttnn(
+                lang["model.norm.weight"] + 1.0,
+                tp_submeshes[-1],
+                dtype=ttnn.bfloat16,
+            )
+
+    # ------------------------------------------------------------------ #
+    # Forward                                                             #
+    # ------------------------------------------------------------------ #
+
+    def forward(
+        self,
+        hidden_states: "ttnn.Tensor",
+        attention_mask: Optional["ttnn.Tensor"] = None,
+        position_ids: Optional["ttnn.Tensor"] = None,
+        past_key_values: Optional[List[Tuple["ttnn.Tensor", "ttnn.Tensor"]]] = None,
+        use_cache: bool = False,
+        cos_override: Optional["ttnn.Tensor"] = None,
+        sin_override: Optional["ttnn.Tensor"] = None,
+    ) -> Tuple["ttnn.Tensor", Optional[List[Optional[Tuple["ttnn.Tensor", "ttnn.Tensor"]]]]]:
+        """Run layers [layer_lo, layer_hi) across the chain of TP sub-meshes.
+
+        On entry, `hidden_states` and any `attention_mask` must live on
+        `tp_submeshes[0]` (replicated). Between consecutive sub-meshes the
+        activation is host-bounced and re-replicated on the next (2,1).
+        """
+        if past_key_values is not None and any(
+            past_key_values[self.layer_lo + i] is not None for i in range(self.num_layers)
+        ):
+            raise NotImplementedError("Pi0_5OptionCVLMSliceTP.forward does not yet accept past_key_values")
+
+        new_cache: Optional[List[Optional[Tuple["ttnn.Tensor", "ttnn.Tensor"]]]] = (
+            [None] * self.config.vlm_config.depth if use_cache else None
+        )
+
+        # Cache per-sub-mesh masks (DRAM, SDPA requirement). Keyed by id().
+        mask_cache_key = id(attention_mask) if attention_mask is not None else None
+        if not hasattr(self, "_per_submesh_mask_cache"):
+            self._per_submesh_mask_cache: Dict = {}
+        masks_per_submesh = self._per_submesh_mask_cache.get(mask_cache_key)
+        if attention_mask is not None and masks_per_submesh is None:
+            masks_per_submesh = [attention_mask]
+            for i in range(1, len(self.tp_submeshes)):
+                broadcast = send_activation_via_host(masks_per_submesh[0], self.tp_submeshes[i])
+                dram_mask = ttnn.to_memory_config(broadcast, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(broadcast)
+                masks_per_submesh.append(dram_mask)
+            self._per_submesh_mask_cache[mask_cache_key] = masks_per_submesh
+
+        h = hidden_states
+        current_sm_idx = 0
+        for local_i, block in enumerate(self.vlm_blocks):
+            global_i = self.layer_lo + local_i
+            sm_idx = local_i // self.layers_per_submesh
+            # If we crossed into a new sub-mesh, host-bounce the activation.
+            if sm_idx != current_sm_idx:
+                h_next = send_activation_via_host(h, self.tp_submeshes[sm_idx])
+                ttnn.deallocate(h)
+                h = h_next
+                current_sm_idx = sm_idx
+            mask_i = masks_per_submesh[sm_idx] if masks_per_submesh is not None else None
+            h_new, new_kv = block.forward(
+                h,
+                attention_mask=mask_i,
+                use_cache=use_cache,
+            )
+            if use_cache and new_kv is not None:
+                new_cache[global_i] = new_kv
+            ttnn.deallocate(h)
+            h = h_new
+
+        # Final RMSNorm on the last sub-mesh; mirror the DRAM bounce
+        # in the paired slice (rms_norm CB clash dodge).
+        if self.holds_vlm_final_norm and self.vlm_norm is not None:
+            h_dram = ttnn.to_memory_config(h, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(h)
+            h = ttnn.rms_norm(
+                h_dram,
+                weight=self.vlm_norm,
+                epsilon=self.config.vlm_config.rms_norm_eps,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(h_dram)
+
+        return h, new_cache
+
+    # ------------------------------------------------------------------ #
+    # KV migration emitter                                               #
+    # ------------------------------------------------------------------ #
+
+    def get_kv_cache_for_slice(
+        self,
+        new_cache: List[Optional[Tuple["ttnn.Tensor", "ttnn.Tensor"]]],
+    ) -> List[Tuple[int, Tuple["ttnn.Tensor", "ttnn.Tensor"]]]:
+        """Return (global_layer_idx, (K, V)) tuples for this slice's layers.
+
+        Each (K, V) lives on the (2,1) sub-mesh that ran the layer. KV is
+        sharded TP=N along the head axis, so the migration will need to
+        all-gather or sequentially read each chip's slice — TBD, not
+        implemented in this first cut.
+        """
+        out = []
+        for local_i in range(self.num_layers):
+            global_i = self.layer_lo + local_i
+            kv = new_cache[global_i] if new_cache is not None else None
+            if kv is not None:
+                out.append((global_i, kv))
+        return out

@@ -23,9 +23,13 @@ import ttnn
 
 from models.experimental.pi0_5.common.configs import PaliGemmaConfig
 
-from .mesh_setup import create_per_chip_submeshes
+from .mesh_setup import create_per_chip_submeshes, create_tp_submeshes_2x1
 from .stages import StageSpec
-from .vlm_slice import Pi0_5OptionCVLMSlice, Pi0_5OptionCVLMSlicePaired
+from .vlm_slice import (
+    Pi0_5OptionCVLMSlice,
+    Pi0_5OptionCVLMSlicePaired,
+    Pi0_5OptionCVLMSliceTP,
+)
 
 
 class StagePrefill:
@@ -44,11 +48,22 @@ class StagePrefill:
         config: PaliGemmaConfig,
         weights: Dict[str, Dict[str, torch.Tensor]],
         layer_paired_l1: bool = False,
+        prefill_tp_size: int = 1,
     ) -> None:
         if spec.stage_idx != 1:
             raise AssertionError(f"StagePrefill must be stage 1, got {spec.stage_idx}")
         if spec.vlm_layer_range[1] <= spec.vlm_layer_range[0]:
             raise ValueError(f"StagePrefill requires a non-empty vlm_layer_range; got {spec.vlm_layer_range}")
+        if prefill_tp_size not in (1, 2):
+            raise ValueError(
+                f"prefill_tp_size must be 1 or 2 (Option C currently only supports TP=2 "
+                f"via (2,1) col-pairs on the (6,3) prefill submesh); got {prefill_tp_size}"
+            )
+        if prefill_tp_size > 1 and layer_paired_l1:
+            raise ValueError(
+                "prefill_tp_size>1 and layer_paired_l1 are mutually exclusive — "
+                "TP slice already runs N layers per sub-mesh, paired places 1 layer per chip"
+            )
 
         self.spec = spec
         self.submesh = submesh
@@ -57,9 +72,11 @@ class StagePrefill:
         self.layer_lo, self.layer_hi = spec.vlm_layer_range
         self.num_layers = self.layer_hi - self.layer_lo
         self.layer_paired_l1 = layer_paired_l1
-        # Populated in initialize() when layer_paired_l1=True.
+        self.prefill_tp_size = prefill_tp_size
+        # Populated in initialize() when layer_paired_l1=True or TP > 1.
         self.micro_submeshes: Optional[List] = None
-        self.slice = None  # Pi0_5OptionCVLMSlice or Pi0_5OptionCVLMSlicePaired
+        self.tp_submeshes: Optional[List] = None
+        self.slice = None  # one of Pi0_5OptionCVLMSlice, *Paired, *TP
         self.last_kv_cache: Optional[List[Optional[Tuple["ttnn.Tensor", "ttnn.Tensor"]]]] = None
 
     def initialize(self) -> None:
@@ -73,7 +90,28 @@ class StagePrefill:
         if self.slice is not None:
             return  # idempotent
 
-        if self.layer_paired_l1:
+        if self.prefill_tp_size > 1:
+            # Carve the (6,3) submesh into N (tp,1) col-pair sub-meshes.
+            # For TP=2 we get 9 sub-meshes; layers per sub-mesh = num_layers/9.
+            self.tp_submeshes = create_tp_submeshes_2x1(self.submesh)
+            n_subs = len(self.tp_submeshes)
+            if self.num_layers % n_subs != 0:
+                raise ValueError(
+                    f"num_layers={self.num_layers} is not divisible by "
+                    f"len(tp_submeshes)={n_subs} — uneven layer placement not supported"
+                )
+            layers_per_sub = self.num_layers // n_subs
+            self.slice = Pi0_5OptionCVLMSliceTP(
+                config=self.config,
+                weights=self.weights,
+                tp_submeshes=self.tp_submeshes,
+                layer_range=(self.layer_lo, self.layer_hi),
+                layers_per_submesh=layers_per_sub,
+                tp_size=self.prefill_tp_size,
+                holds_embed_tokens=self.spec.holds_embed_tokens,
+                holds_vlm_final_norm=self.spec.holds_vlm_final_norm,
+            )
+        elif self.layer_paired_l1:
             self.micro_submeshes = create_per_chip_submeshes(self.submesh, self.num_layers)
             self.slice = Pi0_5OptionCVLMSlicePaired(
                 config=self.config,
@@ -97,9 +135,13 @@ class StagePrefill:
     def first_chip_submesh(self):
         """Submesh that callers must upload the input activation onto.
 
-        Replicated mode: the whole prefill submesh. Layer-paired mode: the
-        single-chip submesh owning the first layer in this stage's range.
+        - Replicated mode: the whole prefill submesh.
+        - Layer-paired mode: the single-chip submesh owning the first layer.
+        - TP mode: the first (tp_size,1) sub-mesh (which owns layers 0..N).
         """
+        if self.prefill_tp_size > 1:
+            assert self.tp_submeshes is not None, "first_chip_submesh accessed before initialize()"
+            return self.tp_submeshes[0]
         if self.layer_paired_l1:
             assert self.micro_submeshes is not None, "first_chip_submesh accessed before initialize()"
             return self.micro_submeshes[0]
@@ -109,9 +151,13 @@ class StagePrefill:
     def last_chip_submesh(self):
         """Submesh where the stage's final activation lives after `forward`.
 
-        Replicated mode: the whole prefill submesh. Layer-paired mode: the
-        single-chip submesh owning the last layer in this stage's range.
+        - Replicated mode: the whole prefill submesh.
+        - Layer-paired mode: the single-chip submesh owning the last layer.
+        - TP mode: the last (tp_size,1) sub-mesh.
         """
+        if self.prefill_tp_size > 1:
+            assert self.tp_submeshes is not None, "last_chip_submesh accessed before initialize()"
+            return self.tp_submeshes[-1]
         if self.layer_paired_l1:
             assert self.micro_submeshes is not None, "last_chip_submesh accessed before initialize()"
             return self.micro_submeshes[-1]

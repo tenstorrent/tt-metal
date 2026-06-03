@@ -55,7 +55,10 @@ from models.experimental.pi0_5.tt.option_c.expert_slice import (
 from models.experimental.pi0_5.tt.option_c.stage_prefill import StagePrefill
 from models.experimental.pi0_5.tt.option_c.stage_denoise import StageDenoise
 from models.experimental.pi0_5.tt.option_c.kv_migration import KVMigration
-from models.experimental.pi0_5.tt.option_c.mesh_setup import create_per_chip_submeshes
+from models.experimental.pi0_5.tt.option_c.mesh_setup import (
+    create_per_chip_submeshes,
+    create_tp_submeshes_2x1,
+)
 from models.experimental.pi0_5.tt.option_c.transport import send_activation_via_host
 
 
@@ -614,6 +617,33 @@ def test_expert_slice_layer_paired_l1_two_chips(galaxy_mesh):
 
 
 @pytest.mark.timeout(900)
+@pytest.mark.timeout(120)
+def test_prefill_tp_2x1_submesh_carving(galaxy_mesh):
+    """Carve the (6,3) prefill submesh into 9 (2,1) col-pair sub-meshes.
+
+    Step 1 sanity check for OPTION_C_TP_WITHIN_STAGE_PLAN.md — confirms
+    `create_tp_submeshes_2x1` returns exactly 9 sub-meshes, each with
+    exactly 2 devices. No forward, no weight upload, no fabric required.
+    """
+    _layout, _parent, submeshes = galaxy_mesh
+    prefill_mesh = submeshes[1]
+    assert prefill_mesh.shape[0] == 6 and prefill_mesh.shape[1] == 3, (
+        f"prefill submesh shape ({prefill_mesh.shape[0]},{prefill_mesh.shape[1]}) " f"is not (6,3)"
+    )
+
+    tp_subs = create_tp_submeshes_2x1(prefill_mesh)
+    try:
+        assert len(tp_subs) == 9, f"expected 9 (2,1) sub-meshes, got {len(tp_subs)}"
+        for i, sm in enumerate(tp_subs):
+            assert sm.get_num_devices() == 2, f"tp_submeshes[{i}] has {sm.get_num_devices()} devices, expected 2"
+            assert (
+                sm.shape[0] == 2 and sm.shape[1] == 1
+            ), f"tp_submeshes[{i}] shape ({sm.shape[0]},{sm.shape[1]}) is not (2,1)"
+        print(f"prefill (6,3) → 9 × (2,1) sub-meshes (2 chips each) OK")
+    finally:
+        _close_micro_submeshes(tp_subs)
+
+
 def test_vision_slice_device_siglip_split_dry_run(galaxy_mesh):
     """Pi0_5OptionCVisionSliceSplit constructs on real weights (no forward).
 

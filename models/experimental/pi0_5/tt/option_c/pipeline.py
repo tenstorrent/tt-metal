@@ -117,6 +117,21 @@ class Pi0_5PipelineC:
     # the deployment plan §3.1 placement (~140-160 MB L1 / vision chip).
     # Ignored when device_siglip is False (host path has no on-chip weights).
     vision_weights_l1: bool = False
+    # Tensor-parallel factor INSIDE stage 1 (prefill). When > 1, the (6,3)
+    # prefill submesh is carved into (prefill_tp_size, 1) col-pair sub-meshes
+    # and each sub-mesh runs N VLM layers with TP=prefill_tp_size sharding.
+    # Default 1 = no TP (replicated or layer-paired path, depending on
+    # `layer_paired_l1`). Currently supports 1 or 2 (the col-pair carving).
+    # See OPTION_C_TP_WITHIN_STAGE_PLAN.md for the per-bank arithmetic.
+    prefill_tp_size: int = 1
+    # When True (and `prefill_tp_size > 1`), walk every constructed TP block
+    # post-init and migrate matmul weights to L1 via to_memory_config + dealloc.
+    # The L1 path is only viable in TP mode because TP=2 shrinks the per-chip
+    # matmul shape, which in turn shrinks the kernel's static CB region —
+    # leaving enough L1 headroom above it for the weights to land cleanly.
+    # See OPTION_B_L1_ASSESSMENT.md for the validated arithmetic (Option B
+    # TP=8 path; Option C TP=2 has even more headroom: 0.46 vs 1.03 MB/bank).
+    prefill_weights_l1: bool = False
 
     stage_0: Optional[StageVision] = None
     stage_1: Optional[StagePrefill] = None
@@ -154,6 +169,7 @@ class Pi0_5PipelineC:
             self.config,
             self.weights,
             layer_paired_l1=self.layer_paired_l1,
+            prefill_tp_size=self.prefill_tp_size,
         )
         self.stage_2 = StageDenoise(
             s[2],
@@ -171,6 +187,14 @@ class Pi0_5PipelineC:
         self.stage_0.initialize()
         self.stage_1.initialize()
         self.stage_2.initialize(kv_migrator=self.kv_migrator)
+
+        # Opt-in L1 migration for the TP prefill path. Mirrors Option B's
+        # pattern. The migration helper walks each TP block on the slice
+        # and moves matmul weights from DRAM to L1.
+        if self.prefill_weights_l1 and self.prefill_tp_size > 1:
+            from ._l1_migration import migrate_prefill_weights_to_l1
+
+            migrate_prefill_weights_to_l1(self)
 
     # ------------------------------------------------------------------ #
     # End-to-end forward                                                 #

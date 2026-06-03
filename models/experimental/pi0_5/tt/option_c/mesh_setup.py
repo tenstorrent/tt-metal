@@ -121,6 +121,55 @@ def describe_submesh(submesh, name: str = "") -> str:
     return f"{prefix}submesh shape=({rows},{cols}) devices={n}"
 
 
+def create_tp_submeshes_2x1(parent_submesh) -> List:
+    """Carve a (6,3) prefill submesh into 9 (2,1) col-pair sub-meshes.
+
+    Layout — each '*' is a chip; the digit groups them into (2,1) sub-meshes:
+
+        col→  0   1   2
+     row↓  0  0   1   2     sub-mesh 0 = rows {0,1}, col 0   (2 chips)
+           1  0   1   2     sub-mesh 1 = rows {0,1}, col 1   (2 chips)
+           2  3   4   5     sub-mesh 2 = rows {0,1}, col 2   (2 chips)
+           3  3   4   5     ...
+           4  6   7   8     sub-mesh 6 = rows {4,5}, col 0
+           5  6   7   8     sub-mesh 7 = rows {4,5}, col 1
+                            sub-mesh 8 = rows {4,5}, col 2
+
+    Why (2,1) and not (1,2):
+        `create_submesh` requires axis divisibility, and (6,3)'s col axis = 3
+        is not divisible by 2. (2,1) tiles (6,3) cleanly (6 rows / 2 = 3
+        stripes × 3 cols = 9 sub-meshes). See OPTION_C_TP_WITHIN_STAGE_PLAN.md
+        §"Decisions / Prefill".
+
+    Note: each child sub-mesh is opened on the parent's existing fabric/L1
+    config; the caller must have opened the parent with
+    `open_galaxy_mesh(enable_fabric=True)` for ttnn.all_reduce inside a
+    sub-mesh to succeed.
+
+    Returns: list of 9 ``ttnn.MeshDevice`` children, each with exactly 2
+    devices, in (r, c) row-major order: [(0,0), (0,1), (0,2), (2,0), ...,
+    (4,2)]. Children are children of `parent_submesh`; closing the parent
+    closes them implicitly.
+    """
+    rows, cols = parent_submesh.shape[0], parent_submesh.shape[1]
+    if rows != 6 or cols != 3:
+        raise ValueError(f"create_tp_submeshes_2x1 requires a (6,3) parent submesh; got ({rows},{cols})")
+    tp_shape = ttnn.MeshShape(2, 1)
+    out: List = []
+    # 3 row-stripes × 3 cols = 9 sub-meshes.
+    for r0 in (0, 2, 4):
+        for c0 in range(cols):
+            sm = parent_submesh.create_submesh(tp_shape, ttnn.MeshCoordinate(r0, c0))
+            if sm.get_num_devices() != 2:
+                raise RuntimeError(
+                    f"create_tp_submeshes_2x1: expected 2 devices at row={r0},col={c0}, " f"got {sm.get_num_devices()}"
+                )
+            out.append(sm)
+    if len(out) != 9:
+        raise RuntimeError(f"create_tp_submeshes_2x1: expected 9 sub-meshes; got {len(out)}")
+    return out
+
+
 def create_per_chip_submeshes(parent_submesh, count: Optional[int] = None) -> List:
     """Carve `parent_submesh` into `count` single-chip (1, 1) sub-submeshes.
 

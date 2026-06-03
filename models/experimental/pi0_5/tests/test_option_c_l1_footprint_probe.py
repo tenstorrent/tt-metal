@@ -125,6 +125,14 @@ DEVICE_SIGLIP = os.environ.get("PI0_OC_L1_PROBE_DEVICE_SIGLIP") == "1"
 # Ignored when DEVICE_SIGLIP=0 (host path has no on-chip weights to move).
 VISION_WEIGHTS_L1 = os.environ.get("PI0_OC_L1_PROBE_VISION_WEIGHTS_L1") == "1"
 EXPERT_LAYERS_PER_CHIP = int(os.environ.get("PI0_OC_L1_PROBE_EXPERT_LAYERS_PER_CHIP", "3"))
+# Prefill TP within stage (carve (6,3) submesh into N (tp,1) sub-meshes).
+# When > 1, also opt into L1-resident matmul weights via the L1 migration
+# helper. Default 1 keeps the historic DRAM-replicated / layer-paired path.
+PREFILL_TP_SIZE = int(os.environ.get("PI0_OC_L1_PROBE_PREFILL_TP", "1"))
+# When PREFILL_TP_SIZE > 1, migrate matmul weights to L1 after init.
+# Aliased onto the existing PI0_OC_L1_PROBE_WEIGHTS_L1 knob so the same
+# flag drives Option B and Option C (track A spec).
+PREFILL_WEIGHTS_L1 = os.environ.get("PI0_OC_L1_PROBE_WEIGHTS_L1") == "1"
 # L1 small / static-CB reservation, per-bank. 24576 bytes = 24 KB is the
 # value every working pi0.5 single-device test uses (see README.md:172,
 # test_perf_ttnn_full_e2e_trace.py:95, libero_rollout.py:979, all of
@@ -132,7 +140,7 @@ EXPERT_LAYERS_PER_CHIP = int(os.environ.get("PI0_OC_L1_PROBE_EXPERT_LAYERS_PER_C
 # weights are live or the matmul kernel's static CB region collides with
 # L1-allocated buffers. 1 MB / bank (~120 MB / chip) is way too much and
 # OOMs the layer-paired weights — DON'T do that. None = ttnn default (0).
-_default_l1_small = "24576" if LAYER_PAIRED_L1 else ""
+_default_l1_small = "24576" if (LAYER_PAIRED_L1 or PREFILL_TP_SIZE > 1) else ""
 L1_SMALL_SIZE_RAW = os.environ.get("PI0_OC_L1_PROBE_L1_SMALL_SIZE", _default_l1_small)
 L1_SMALL_SIZE: Optional[int] = int(L1_SMALL_SIZE_RAW) if L1_SMALL_SIZE_RAW else None
 
@@ -258,6 +266,8 @@ def _echo_env() -> None:
     print(f"  PI0_OC_L1_PROBE_DEVICE_SIGLIP          = {DEVICE_SIGLIP}")
     print(f"  PI0_OC_L1_PROBE_VISION_WEIGHTS_L1      = {VISION_WEIGHTS_L1}")
     print(f"  PI0_OC_L1_PROBE_EXPERT_LAYERS_PER_CHIP = {EXPERT_LAYERS_PER_CHIP}")
+    print(f"  PI0_OC_L1_PROBE_PREFILL_TP             = {PREFILL_TP_SIZE}")
+    print(f"  PI0_OC_L1_PROBE_WEIGHTS_L1             = {PREFILL_WEIGHTS_L1}")
 
 
 # ----------------------------------------------------------------------------#
@@ -319,7 +329,9 @@ def test_oc_l1_footprint_probe_full_depth():
 
     results: Dict[str, List[Dict]] = {}
 
-    with open_galaxy_mesh(layout, l1_small_size=L1_SMALL_SIZE) as (_parent, submeshes):
+    # TP mode requires fabric so the inner all_reduces work.
+    enable_fabric = PREFILL_TP_SIZE > 1
+    with open_galaxy_mesh(layout, l1_small_size=L1_SMALL_SIZE, enable_fabric=enable_fabric) as (_parent, submeshes):
         assert len(submeshes) == 3, f"expected 3 submeshes, got {len(submeshes)}"
 
         # Stage submeshes we read for each phase. After Pi0_5PipelineC.initialize()
@@ -344,6 +356,8 @@ def test_oc_l1_footprint_probe_full_depth():
             device_siglip=DEVICE_SIGLIP,
             vision_weights_l1=VISION_WEIGHTS_L1,
             expert_layers_per_chip=EXPERT_LAYERS_PER_CHIP,
+            prefill_tp_size=PREFILL_TP_SIZE,
+            prefill_weights_l1=PREFILL_WEIGHTS_L1,
         )
 
         # initialize is one call today; if it OOMs we capture state at the
@@ -358,12 +372,17 @@ def test_oc_l1_footprint_probe_full_depth():
             print("[hint] re-run with PI0_OC_L1_PROBE_DEPTH_SWEEP=1 to bisect.")
             raise
 
-        # Re-target L1 reads to per-chip micro-submeshes when paired-mode
-        # stages have carved them. Each stage's first micro-submesh is
-        # representative of the per-chip footprint (in paired mode every
-        # chip in the stage holds a different layer's weights, so any one
-        # is a reasonable proxy for "is the per-chip placement happening").
+        # Re-target L1 reads to carved sub-meshes when stages have them.
+        # - paired mode → 1-chip micro_submeshes
+        # - TP mode → (tp_size, 1) tp_submeshes
+        # Each stage's first carved sub-mesh is a representative per-chip
+        # footprint sample.
         for i, stage in enumerate((pipe.stage_0, pipe.stage_1, pipe.stage_2)):
+            tp = getattr(stage, "tp_submeshes", None)
+            if tp:
+                l1_targets[i] = tp[0]
+                print(f"[probe] stage={STAGE_NAMES[i]} → reading L1 from " f"tp_submeshes[0] (1 of {len(tp)})")
+                continue
             micro = getattr(stage, "micro_submeshes", None)
             if micro:
                 l1_targets[i] = micro[0]

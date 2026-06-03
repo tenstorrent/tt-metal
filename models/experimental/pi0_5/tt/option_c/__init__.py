@@ -22,7 +22,11 @@ Key differences vs Option B:
 from .stages import StageLayout, StageSpec, build_default_layout, build_shrunk_layout
 from .mesh_setup import open_galaxy_mesh, describe_submesh
 from .vision_slice import Pi0_5OptionCVisionSlice
-from .vlm_slice import Pi0_5OptionCVLMSlice
+from .vlm_slice import (
+    Pi0_5OptionCVLMSlice,
+    Pi0_5OptionCVLMSlicePaired,
+    Pi0_5OptionCVLMSliceTP,
+)
 from .expert_slice import Pi0_5OptionCExpertSlice
 from .suffix_slice import Pi0_5OptionCSuffixSlice
 from .kv_migration import KVMigration
@@ -43,6 +47,8 @@ __all__ = [
     # Per-stage slices (weights + forward).
     "Pi0_5OptionCVisionSlice",
     "Pi0_5OptionCVLMSlice",
+    "Pi0_5OptionCVLMSlicePaired",
+    "Pi0_5OptionCVLMSliceTP",
     "Pi0_5OptionCExpertSlice",
     "Pi0_5OptionCSuffixSlice",
     # Stage orchestrators.
