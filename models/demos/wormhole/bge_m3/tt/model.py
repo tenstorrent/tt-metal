@@ -25,7 +25,7 @@ class BgeM3Model(LightweightModule):
     _ADDITIVE_MASKED_VALUE = -100000.0
     _ADDITIVE_UNMASKED_VALUE = 0.0
     _MASK_DTYPE = ttnn.bfloat16
-    _POOLING_MODES = (None, "cls", "mean", "colbert")
+    _POOLING_MODES = (None, "cls", "mean", "colbert", "sparse")
 
     def __init__(self, args, mesh_device, dtype, state_dict, optimizations=None, pooling=None):
         super().__init__()
@@ -268,6 +268,12 @@ class BgeM3Model(LightweightModule):
           * ``"cls"``     -> sentence embedding from the first token: [B, 1, 1, D]
           * ``"mean"``    -> mask-weighted mean over valid tokens:    [B, 1, 1, D]
           * ``"colbert"`` -> per-token ColBERT projection:            [B, 1, S, D]
+          * ``"sparse"``  -> per-token sparse (lexical) weights:      [B, 1, S, 1]
+
+        The model emits the raw head output; downstream post-processing
+        (crop CLS, attention masking, vocab scatter, normalization, scoring)
+        is the caller's responsibility -- this mirrors how the vLLM generator
+        wrapper consumes ``colbert_linear`` / ``sparse_linear``.
 
         No ``.item()`` / host sync, so the path stays inside
         ``ttnn.begin_trace_capture``.
@@ -301,6 +307,17 @@ class BgeM3Model(LightweightModule):
             if hidden_states.memory_config() != cfg_mem:
                 hidden_states = ttnn.to_memory_config(hidden_states, cfg_mem)
             return self.colbert_linear(hidden_states)
+
+        if self.pooling == "sparse":
+            if self.sparse_linear is None:
+                raise RuntimeError("pooling='sparse' requires sparse_linear weights in the checkpoint")
+            cfg_mem = self.sparse_linear.config.memory_config
+            if hidden_states.memory_config() != cfg_mem:
+                hidden_states = ttnn.to_memory_config(hidden_states, cfg_mem)
+            # Raw per-token sparse (lexical) weights [B, 1, S, 1] (relu inside
+            # sparse_linear). Caller does crop + vocab scatter + special-token
+            # masking to form the [B, vocab] sparse vector.
+            return self.sparse_linear(hidden_states)
 
         raise ValueError(f"unknown pooling mode {self.pooling!r}")
 
