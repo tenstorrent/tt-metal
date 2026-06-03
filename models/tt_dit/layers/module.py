@@ -382,6 +382,16 @@ class Parameter:
             msg = f"expected tensor shape {self.total_shape}, got {shape}"
             raise LoadingError(msg)
 
+        # Cast to the target dtype on host before uploading. Otherwise from_torch
+        # stages a higher-precision (e.g. fp32) copy on device and casts it down
+        # there, transiently doubling peak load memory — that fp32 staging is what
+        # OOMs the (replicated, ~4.2 GB fp32) text-encoder embedding on tight meshes.
+        # Block-float dtypes (bfloat8_b, ...) have no torch equivalent and must be
+        # converted on-device, so skip the host cast for those.
+        torch_dtype = tensor.torch_dtype_for(self.dtype)
+        if torch_dtype is not None and torch_tensor.dtype != torch_dtype:
+            torch_tensor = torch_tensor.to(torch_dtype)
+
         self.data = tensor.from_torch(
             torch_tensor,
             device=self.device,

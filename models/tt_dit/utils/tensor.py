@@ -307,6 +307,15 @@ _TTNN_TO_TORCH_DTYPE = {
 }
 
 
+def torch_dtype_for(ttnn_dtype: ttnn.DataType) -> torch.dtype | None:
+    """Torch dtype equivalent of a ttnn dtype, or None for device-only dtypes.
+
+    Block-float dtypes (bfloat8_b, bfloat4_b, ...) have no torch representation and
+    must be produced on-device, so they map to None.
+    """
+    return _TTNN_TO_TORCH_DTYPE.get(ttnn_dtype)
+
+
 def _host_buffer_to_torch(buf, padded_shape: list[int], tt_dtype: ttnn.DataType) -> torch.Tensor:
     """Zero-copy conversion of a HostBuffer to a torch tensor.
 

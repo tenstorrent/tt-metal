@@ -91,7 +91,15 @@ class T5Encoder(Module):
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
 
-        self.token_embeddings = Embedding(config.vocab_size, config.embed_dim, device=self.mesh_device)
+        # Optionally shard the embedding table along embed_dim across embedding_mesh_axis
+        # (the lookup then produces an embed_dim-sharded output that forward() all-gathers).
+        # Replicated (mesh_axis=None) by default.
+        self.token_embeddings = Embedding(
+            config.vocab_size,
+            config.embed_dim,
+            device=self.mesh_device,
+            mesh_axis=parallel_config.embedding_mesh_axis,
+        )
         self.encoder = T5Stack(config, self.mesh_device, self.ccl_manager, self.parallel_config)
         self.final_layer_norm = T5RMSNorm(  # final layer norm
             embedding_dim=self.config.embed_dim,
@@ -110,6 +118,12 @@ class T5Encoder(Module):
         self, prompt: ttnn.Tensor, *, attention_mask: ttnn.Tensor | None = None, zero_masking: bool = False
     ) -> list[ttnn.Tensor]:
         embeddings = self.token_embeddings(prompt)
+        # If the embedding table is embed_dim-sharded, the lookup output is sharded on the
+        # last (embed_dim) axis — gather it back to full embed_dim before the layers, which
+        # operate on the full residual stream (RMSNorm/residual need full embed_dim).
+        emb_axis = self.parallel_config.embedding_mesh_axis
+        if emb_axis is not None and self.mesh_device.shape[emb_axis] > 1:
+            embeddings = self.ccl_manager.all_gather(embeddings, dim=-1, mesh_axis=emb_axis, use_hyperparams=False)
         hidden_states = self.encoder(embeddings, attention_mask=attention_mask)
         output = self.final_layer_norm(hidden_states[-1])
         if zero_masking and attention_mask is not None:

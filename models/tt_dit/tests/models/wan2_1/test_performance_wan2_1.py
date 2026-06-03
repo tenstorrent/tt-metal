@@ -50,6 +50,13 @@ def _build_pipeline(
     )
     encoder_parallel_config = EncoderParallelConfig(
         tensor_parallel=ParallelFactor(factor=encoder_tp_factor, mesh_axis=encoder_tp_axis),
+        # FSDP-shard the encoder weights across the non-TP (sequence/data-parallel) axis,
+        # where they are otherwise replicated. Frees a factor of mesh[sp_axis] of encoder
+        # weight DRAM (4x on 4x4, 2x on 2x4).
+        fsdp_mesh_axis=(1 - encoder_tp_axis) if is_fsdp else None,
+        # TP-shard the large token-embedding table along embed_dim (gathered after lookup),
+        # cutting its resident DRAM by encoder_tp_factor.
+        embedding_mesh_axis=encoder_tp_axis if is_fsdp else None,
     )
     full_latent_T = (num_frames - 1) // 4 + 1
 

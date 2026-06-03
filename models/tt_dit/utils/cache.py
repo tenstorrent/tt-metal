@@ -31,8 +31,15 @@ class MissingCacheError(Exception):
 def config_id(parallel_config):
     config_id = ""
     for n, v in parallel_config._asdict().items():
-        if v is not None:
-            config_id += f"{''.join([w[0].upper() for w in n.split('_')])}{v.factor}_{v.mesh_axis}_"
+        if v is None:
+            continue
+        abbr = "".join([w[0].upper() for w in n.split("_")])
+        if hasattr(v, "factor") and hasattr(v, "mesh_axis"):
+            config_id += f"{abbr}{v.factor}_{v.mesh_axis}_"
+        else:
+            # Scalar config fields (e.g. fsdp_mesh_axis: int). Keeps cache keys for
+            # existing all-ParallelFactor configs byte-identical.
+            config_id += f"{abbr}{v}_"
     return config_id
 
 

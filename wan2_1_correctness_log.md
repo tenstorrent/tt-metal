@@ -410,3 +410,43 @@ shape recovers. ORDER-determined, not size-determined.
 - IN FLIGHT: exp_progcache — WAN_CLEAR_PROGCACHE=1 clears mesh_device program cache on
   resolution change. If 768 (2nd shape) becomes CLEAN, the model-level fix is per-resolution
   program-cache clear.
+
+## 2x4 OOM FIX (2026-06-03) — encoder FSDP + host-cast load (option A)
+Root cause recap: token_embeddings is a fully-replicated bf16 table (2.1GB resident, cached),
+but on a cache MISS the fp32 PyTorch weight was staged on-device (4.2GB) before the cast to
+bf16 -> that fp32 transient OOMs 2x4 (only ~325MB/bank free after the FSDP transformer).
+FIXES:
+1. Encoder FSDP: set EncoderParallelConfig.fsdp_mesh_axis = non-TP (SP/DP) axis (where encoder
+   weights were replicated). All encoder linears were already FSDP-ready -> weights shard 4x
+   (4x4) / 2x (2x4). cache.config_id() updated to handle the int fsdp_mesh_axis field (existing
+   cache keys unchanged). Verified 4x4 correctness (sharp); cache id now ...TP4_1_FMA0_...
+2. Host-cast load (Parameter.load_torch_tensor): cast the torch weight to the param's target
+   dtype on HOST before from_torch, so we don't stage a higher-precision (fp32) copy on device.
+   Skips block-float dtypes (no torch equiv). Eliminates the 4.2GB fp32 transient -> 2.1GB bf16.
+RESULT: 2x4 sp0tp1 now LOADS and runs. 768x1024 traced = sharp boxing cats (was OOM at load).
+Validating full 5-shape 2x4 sweep (big shapes test activation headroom). NEXT: explore B
+(TP-shard embedding) and C (FSDP-shard embedding) for more embedding-resident headroom.
+
+## OPTION A VALIDATED (2026-06-03)
+Full 5-shape 2x4 sp0tp1 traced sweep ALL PASS (no OOM): 768x1024=18.1s, 1024x1024=22.4s,
+1280x720=21.4s, 1536x2048=57.4s, 2048x1152=45.2s. All images sharp/correct (incl. the big
+1536x2048 & 2048x1152). 2x4 OOM is FIXED via encoder FSDP + host-cast load. 4x4 verified
+correct single-shape with the same changes. NEXT (optional, user-requested): explore B
+(TP-shard embedding -> resident 0.5GB, transient 1.05GB, +cheap activation gather) and C
+(FSDP-shard embedding on SP axis) for extra embedding-resident headroom beyond A.
+
+## OPTION B IMPLEMENTED (2026-06-03) — TP-shard the token embedding
+Added EncoderParallelConfig.embedding_mesh_axis (default None => replicated; other models
+unchanged, cache keys unchanged since config_id skips None). T5Encoder passes it to the
+Embedding (shards embed_dim) and all-gathers the lookup output back to full embed_dim before
+the layers (RMSNorm/residual need full width; gather is mathematically identical to replicated,
+and cheap: seq*embed_dim activation). Wired into Wan configs: embedding_mesh_axis = encoder TP
+axis when is_fsdp. Encoder cache key now ...FMA0_EMA1_. Embedding resident: 2.1GB -> ~525MB
+(tp_factor=4). Verified sharp on 2x4 AND 4x4 single-shape (correctness preserved). Validating
+full 5-shape 2x4 sweep. (Option C (FSDP-shard embedding on SP axis) would give only ~1.05GB vs
+B's 525MB and entangles with batch-DP on that axis — B supersedes it.)
+
+## OPTION B VALIDATED (2026-06-03)
+Full 5-shape 2x4 sp0tp1 traced sweep with B: ALL PASS, all sharp (768=18.2s, 1024=22.4s,
+1280x720=21.4s, 1536x2048=57.4s, 2048x1152=45.2s — same as A). Embedding resident cut 2.1GB->
+~525MB. Encoder memory work complete: A (encoder FSDP + host-cast load) + B (TP-shard embedding).

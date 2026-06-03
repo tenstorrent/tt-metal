@@ -21,6 +21,10 @@ class DiTParallelConfig(NamedTuple):
 class EncoderParallelConfig(NamedTuple):
     tensor_parallel: ParallelFactor
     fsdp_mesh_axis: int | None = None
+    # When set, shard the token-embedding table along embed_dim across this mesh axis
+    # (and all-gather the embedding output before the layers). Cuts the large embedding's
+    # resident DRAM by mesh[axis]. None => replicated (default; unchanged for other models).
+    embedding_mesh_axis: int | None = None
 
 
 class VAEParallelConfig(NamedTuple):

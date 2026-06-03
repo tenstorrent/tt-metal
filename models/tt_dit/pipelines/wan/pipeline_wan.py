@@ -613,8 +613,16 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 mesh_axis=sp_axis,
             ),
         )
+        _is_fsdp = is_fsdp if is_fsdp is not None else config["is_fsdp"]
         encoder_parallel_config = EncoderParallelConfig(
-            tensor_parallel=ParallelFactor(factor=h_factor, mesh_axis=tp_axis)
+            tensor_parallel=ParallelFactor(factor=h_factor, mesh_axis=tp_axis),
+            # FSDP-shard encoder weights across the non-TP (sequence/data-parallel) axis,
+            # where they are otherwise replicated — frees a factor of mesh[sp_axis] of
+            # encoder weight DRAM.
+            fsdp_mesh_axis=sp_axis if _is_fsdp else None,
+            # TP-shard the large token-embedding table along embed_dim (gathered after
+            # lookup), cutting its resident DRAM by the TP factor.
+            embedding_mesh_axis=tp_axis if _is_fsdp else None,
         )
         pipeline_class_ = pipeline_class or WanPipeline
         return pipeline_class_(
