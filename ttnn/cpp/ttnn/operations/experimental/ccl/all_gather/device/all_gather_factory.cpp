@@ -50,40 +50,35 @@ AllGatherFactory::cached_mesh_workload_t AllGatherFactory::create_mesh_workload(
     const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
     ttnn::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
 
-    // TODO only use sems if output not provided. need to wire this down to kernel level.
     // If output tensors are not persistent (globally allocated), we need to wait for all devices to be ready
     // before beginning our operation.
     // Since Fabric doesn't provide such capability within kernels, we need to manually sync using global semaphores.
-    // tt::tt_metal::GlobalSemaphore init_barrier_semaphore;
-    // tt::tt_metal::GlobalSemaphore final_barrier_semaphore;
-    // if (!tensor_args.persistent_output_tensor.has_value()) {
-    // Allocate semaphores in L1_SMALL to avoid fragmenting the larger L1 memory pool.
-    bool l1_small_size = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
-    auto sem_buffer_type = l1_small_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
-    if (sem_buffer_type != tt::tt_metal::BufferType::L1_SMALL) {
-        log_warning(
-            tt::LogOp,
-            "Allocating semaphores in L1, which may cause memory fragmentation and lead to memory allocation failures "
-            "for subsequent operations. Configure an L1_SMALL region to avoid this.");
-    }
+    const bool do_barrier_sync = !tensor_args.persistent_output_tensor.has_value();
+    std::optional<tt::tt_metal::GlobalSemaphore> init_barrier_sem;
+    std::optional<tt::tt_metal::GlobalSemaphore> final_barrier_sem;
+    if (do_barrier_sync) {
+        // Allocate semaphores in L1_SMALL to avoid fragmenting the larger L1 memory pool.
+        bool l1_small_size = mesh_device->allocator()->get_bank_size(tt::tt_metal::BufferType::L1_SMALL);
+        auto sem_buffer_type = l1_small_size > 0 ? tt::tt_metal::BufferType::L1_SMALL : tt::tt_metal::BufferType::L1;
+        if (sem_buffer_type != tt::tt_metal::BufferType::L1_SMALL) {
+            log_warning(
+                tt::LogOp,
+                "Allocating semaphores in L1, which may cause memory fragmentation and lead to memory allocation "
+                "failures for subsequent operations. Configure an L1_SMALL region to avoid this.");
+        }
 
-    auto init_barrier_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
-    auto final_barrier_semaphore =
-        ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
-    log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
-    log_debug(tt::LogOp, "All devices are ready, starting program execution");
-    //}
+        init_barrier_sem =
+            ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
+        final_barrier_sem =
+            ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type);
+        log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
+        tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
+        log_debug(tt::LogOp, "All devices are ready, starting program execution");
+    }
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(
-            operation_attributes,
-            coord,
-            tensor_args.input_tensor,
-            output_tensor,
-            final_barrier_semaphore,
-            init_barrier_semaphore);
+            operation_attributes, coord, tensor_args.input_tensor, output_tensor, init_barrier_sem, final_barrier_sem);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), std::move(cached_program.shared_variables));
     }
@@ -96,8 +91,8 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     const ttnn::MeshCoordinate& sender_device_coord,
     const Tensor& input,
     const Tensor& output_tensor,
-    const tt::tt_metal::GlobalSemaphore& semaphore,
-    const tt::tt_metal::GlobalSemaphore& barrier_semaphore) {
+    const std::optional<tt::tt_metal::GlobalSemaphore>& init_barrier_sem,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& final_barrier_sem) {
     const auto& input_tensor = input;
     tt::tt_metal::Program program{};
 
@@ -315,6 +310,7 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
         ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
         ns_load_balance ? n_hops : s_hops,  // rect_spine_hops_alt
+        init_barrier_sem.has_value(),       // do_barrier_sync
     };
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
@@ -337,6 +333,7 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         ew_load_balance ? w_hops : e_hops,  // rect_e_hops_alt
         ew_load_balance ? e_hops : w_hops,  // rect_w_hops_alt
         ns_load_balance ? s_hops : n_hops,  // rect_spine_hops_alt
+        init_barrier_sem.has_value(),       // do_barrier_sync
     };
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
 
@@ -406,8 +403,6 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         std::vector<uint32_t> reader_rt_args = {
             input_tensor.buffer()->address(),   // input tensor address
             output_tensor.buffer()->address(),  // output tensor address
-            semaphore.address(),                // out_ready_sem_bank_addr (absolute address)
-            barrier_semaphore.address(),        // barrier_sem
             input_tile_id_start,                // input_page_id_start
             input_tile_id_end,                  // input_page_id_end
             output_page_id_start,               // output page start
@@ -415,13 +410,15 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
             output_page_byte_offset,            // byte offset within output page (nonzero only in page-concat)
             num_worker_output_pages,            // number of output pages for this worker
             device_idx,                         // this device's index
-            owns_out_ready_sem,                 // owns_out_ready_sem (wait+reset)
-            drain_sync_core.x,                  // out_ready_sem_noc0_x
-            drain_sync_core.y,                  // out_ready_sem_noc0_y
-            out_ready_sem_wait_value,           // out_ready_sem_wait_value
-            barrier_core.x,                     // barrier_sem_noc0_x
-            barrier_core.y,                     // barrier_sem_noc0_y
-            barrier_wait_value,                 // barrier_wait_value
+            init_barrier_sem.has_value() ? init_barrier_sem->address() : 0,
+            barrier_core.x,      // init_barrier_sem_noc0_x
+            barrier_core.y,      // init_barrier_sem_noc0_y
+            barrier_wait_value,  // init_barrier_sem_wait_value
+            final_barrier_sem.has_value() ? final_barrier_sem->address() : 0,
+            drain_sync_core.x,         // final_barrier_sem_noc0_x
+            drain_sync_core.y,         // final_barrier_sem_noc0_y
+            out_ready_sem_wait_value,  // final_barrier_sem_wait_value
+            owns_out_ready_sem,        // owns_final_barrier_sem (wait+reset)
         };
         const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
         // Reader: E first, then S. Order must match the kernel's ranges[] construction
@@ -447,17 +444,17 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
 
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),  // output tensor address
-            semaphore.address(),                // out_ready_sem_bank_addr (absolute address)
-            barrier_semaphore.address(),        // barrier_sem
             output_page_id_start,               // output page start
             output_page_in_stripe_start,        // initial position within stripe
             output_page_byte_offset,            // byte offset within output page (nonzero only in page-concat)
             num_worker_output_pages,            // number of output pages for this worker
             device_idx,                         // this device's index
-            drain_sync_core.x,                  // out_ready_sem_noc0_x
-            drain_sync_core.y,                  // out_ready_sem_noc0_y
-            barrier_core.x,                     // barrier_sem_noc0_x
-            barrier_core.y,                     // barrier_sem_noc0_y
+            init_barrier_sem.has_value() ? init_barrier_sem->address() : 0,
+            barrier_core.x,  // init_barrier_sem_noc0_x
+            barrier_core.y,  // init_barrier_sem_noc0_y
+            final_barrier_sem.has_value() ? final_barrier_sem->address() : 0,
+            drain_sync_core.x,  // final_barrier_sem_noc0_x
+            drain_sync_core.y,  // final_barrier_sem_noc0_y
         };
 
         // Writer: W first, then N. Order must match the kernel's ranges[] construction
@@ -489,8 +486,8 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
         .sender_worker_cores = sender_worker_cores,
         .worker_sender_reader_kernel_id = worker_sender_reader_kernel_id,
         .worker_sender_writer_kernel_id = worker_sender_writer_kernel_id,
-        .semaphore = semaphore,
-        .barrier_semaphore = barrier_semaphore,
+        .init_barrier_sem = init_barrier_sem,
+        .final_barrier_sem = final_barrier_sem,
         .ring_index = device_idx,
     };
 
@@ -505,25 +502,27 @@ void AllGatherFactory::override_runtime_arguments(
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
-        log_trace(tt::LogOp, "DEBUG: semaphore: {}", shared_vars.semaphore.address());
-        log_trace(tt::LogOp, "DEBUG: barrier_semaphore: {}", shared_vars.barrier_semaphore.address());
+        const uint32_t init_barrier_sem_addr =
+            shared_vars.init_barrier_sem.has_value() ? shared_vars.init_barrier_sem->address() : 0;
+        const uint32_t final_barrier_sem_addr =
+            shared_vars.final_barrier_sem.has_value() ? shared_vars.final_barrier_sem->address() : 0;
         auto& worker_reader_sender_runtime_args_by_core =
             GetRuntimeArgs(program, shared_vars.worker_sender_reader_kernel_id);
         auto& worker_writer_sender_runtime_args_by_core =
             GetRuntimeArgs(program, shared_vars.worker_sender_writer_kernel_id);
 
         for (const auto& core : shared_vars.sender_worker_cores) {
-            // reader: [0]=input_addr, [1]=output_addr, [2]=out_ready_sem, [3]=barrier_sem
+            // reader: [0]=input_addr, [1]=output_addr, [9]=init_barrier_sem, [13]=final_barrier_sem
             auto& worker_reader_sender_runtime_args = worker_reader_sender_runtime_args_by_core[core.x][core.y];
             worker_reader_sender_runtime_args[0] = tensor_args.input_tensor.buffer()->address();
             worker_reader_sender_runtime_args[1] = output_tensor.buffer()->address();
-            worker_reader_sender_runtime_args[2] = shared_vars.semaphore.address();
-            worker_reader_sender_runtime_args[3] = shared_vars.barrier_semaphore.address();
-            // writer: [0]=output_addr, [1]=out_ready_sem, [2]=barrier_sem
+            worker_reader_sender_runtime_args[9] = init_barrier_sem_addr;
+            worker_reader_sender_runtime_args[13] = final_barrier_sem_addr;
+            // writer: [0]=output_addr, [6]=init_barrier_sem, [9]=final_barrier_sem
             auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
             worker_writer_sender_runtime_args[0] = output_tensor.buffer()->address();
-            worker_writer_sender_runtime_args[1] = shared_vars.semaphore.address();
-            worker_writer_sender_runtime_args[2] = shared_vars.barrier_semaphore.address();
+            worker_writer_sender_runtime_args[6] = init_barrier_sem_addr;
+            worker_writer_sender_runtime_args[9] = final_barrier_sem_addr;
         }
     }
 }
