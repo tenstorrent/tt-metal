@@ -354,7 +354,7 @@ jobs:
       ${{ needs.parse-platform.outputs.version }}
     needs: [parse-platform, build-docker-image]
     timeout-minutes: 100
-    runs-on: tt-gh-linux-16-core
+    runs-on: tt-gh-linux-32-core
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
