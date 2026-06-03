@@ -42,12 +42,15 @@ _PROFILER_LAYER_DRAIN_INTERVAL = 8
 _MIN_BLOCK_LN_TOKEN_ROWS = 32
 # Short-seq linears use ``MatmulMultiCoreReuseMultiCast1DProgramConfig`` (see ``common.matmul_program_config``).
 # Long mel (> ``MATMUL_1D_SEQ_THRESHOLD``) uses chunked 1D matmuls to avoid 2D multicast L1 overflow.
-# Chunk width = 8 tiles (256 rows). The old 1-tile (32-row) chunk slices every long-seq linear into
-# ~seq/32 pieces (≈94 at seq=3000) — each a slice + matmul + copy + untilize — which is the bulk of
-# the encoder's ~130k device ops. 256 rows is the widest chunk that keeps the 1D-multicast
-# ``in0_block_w`` at 8 (per_core_M=8 → the cap stays 8), so the K-reduction — and the output — is
-# bit-identical to 32-row chunking while emitting ~8× fewer ops (and far fewer host dispatches).
-_LONG_SEQ_LINEAR_CHUNK_ROWS = 8 * TILE
+# Chunk width = 16 tiles (512 rows). The old 1-tile (32-row) chunk sliced every long-seq linear into
+# ~seq/32 pieces (≈94 at seq=3000) — each a slice + matmul + copy + untilize — which was the bulk of
+# the encoder's ~130k device ops. We pin ``in0_block_w`` (the K-block) to its 32-row baseline value
+# (8 for K=1024/4096) via ``force_in0_block_w`` so the K-reduction — and the output — stays bit-exact
+# at this wider chunk (per_core_M=16 would otherwise let the 1D cap shrink in0_block_w to 4). 512 rows
+# emits ~16× fewer chunked-linear ops than the original and still fits L1 at the speech-path budget.
+_LONG_SEQ_LINEAR_CHUNK_ROWS = 16 * TILE
+# Baseline K-block (per_core_M=1 → cap=8); pinned so the wider chunk stays bit-identical.
+_LONG_SEQ_LINEAR_IN0_BLOCK_W = 8
 _LONG_SEQ_LINEAR_DRAM_ROWS = 256
 # Above this mel-frame count the residual/hidden state in the conformer layer is kept in DRAM
 # rather than L1. The empirical threshold is where the per-layer L1 footprint (sharded LN +
@@ -372,7 +375,13 @@ class TTSeamlessM4Tv2SpeechEncoder:
         key = ("chunk1d", _LONG_SEQ_LINEAR_CHUNK_ROWS, in_dim, out_dim)
         cached = self._matmul_pc_cache.get(key)
         if cached is None:
-            cached = matmul_multicast_1d_program_config(self.device, m=_LONG_SEQ_LINEAR_CHUNK_ROWS, k=in_dim, n=out_dim)
+            cached = matmul_multicast_1d_program_config(
+                self.device,
+                m=_LONG_SEQ_LINEAR_CHUNK_ROWS,
+                k=in_dim,
+                n=out_dim,
+                force_in0_block_w=_LONG_SEQ_LINEAR_IN0_BLOCK_W,
+            )
             self._matmul_pc_cache[key] = cached
         return cached
 
@@ -403,10 +412,13 @@ class TTSeamlessM4Tv2SpeechEncoder:
             return x_2d
         k = int(x_2d.shape[-1])
         pad_rows = pad_to - actual_rows
+        # Match the chunk's dtype — the activation may be bfloat8_b (FFN expand), and ``ttnn.concat``
+        # requires identical dtypes. (Latent until wide chunks made the last chunk partial: with the
+        # 256-bucketed mel seq, chunks ≤256 always divided it, so this pad path was never hit.)
         pad = ttnn.full(
             [pad_rows, k],
             0.0,
-            dtype=ttnn.bfloat16,
+            dtype=x_2d.dtype,
             layout=ttnn.TILE_LAYOUT,
             device=x_2d.device(),
             memory_config=ttnn.L1_MEMORY_CONFIG,
