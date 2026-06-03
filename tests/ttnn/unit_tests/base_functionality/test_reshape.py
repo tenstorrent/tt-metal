@@ -848,3 +848,55 @@ def test_reshape_nd_sharded(shape, shard_shape, output_shape, dim, interleaved, 
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.995)
+
+
+import sys
+
+sys.path.append("/home/maxim-artemov/workspace")
+import debug_import
+
+
+@pytest.mark.parametrize(
+    # Conv3d-style dim names. N=batch, D=depth, H=height, W=width, C=channels.
+    "N,D,H,W,C",
+    [
+        # [1, 128, 240, 240, 1],
+        # [1, 32, 40, 40, 1],
+        # [1, 8, 12, 12, 1],
+        [1, 1, 12, 12, 1],
+        [1, 1, 8, 8, 1],
+        # [1, 1, 24, 24, 1],
+        # [1, 8, 24, 24, 1],
+    ],
+)
+def test_reshape_conv2d(device, N, D, H, W, C):
+    import logging
+
+    def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
+        a = a.float().flatten() - a.float().mean()
+        b = b.float().flatten() - b.float().mean()
+        d = (a.pow(2).sum() * b.pow(2).sum()).sqrt()
+        return float((a * b).sum() / d) if d > 0 else 0.0
+
+    torch.manual_seed(0)
+    x = torch.randn(N, D, H, W, C, dtype=torch.bfloat16)
+    ref = x.float().permute(0, 4, 1, 2, 3).contiguous()  # NDHWC -> NCDHW
+
+    t = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    logging.info(f"POST from_torch(TILE):  shape={t.shape} padded={t.padded_shape}")
+    t = ttnn.untilize(t)
+    logging.info(f"POST untilize:          shape={t.shape} padded={t.padded_shape}")
+    t = ttnn.reshape(t, (N, C, D, H, W))
+    logging.info(f"POST reshape:           shape={t.shape} padded={t.padded_shape}")
+
+    out = ttnn.to_torch(t, device=device).to(torch.float32)
+
+    p = pcc(ref, out)
+
+    # debug_import.visualize_tensor_slices(ref - out, f"test_reshape-{N}_{D}_{H}_{W}_{C}.tmp.png")
+    logging.info(f"out  head[16]   : {out.flatten()[:16].tolist()}")
+    logging.info(f"ref  head[16]   : {ref.flatten()[:16].tolist()}")
+    logging.info(f"pcc             : {p:.6f}  ({'PASS' if p > 0.99 else 'FAIL'})")
+    logging.info(f"ref:\n{debug_import.tensor_to_aligned_string(ref)}")
+    logging.info(f"out:\n{debug_import.tensor_to_aligned_string(out)}")
+    assert 0.99 < p
