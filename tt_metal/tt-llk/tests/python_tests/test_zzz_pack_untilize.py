@@ -60,7 +60,12 @@ def _pack_untilize_dest_acc(formats):
     modes = get_valid_dest_accumulation_modes(formats)
     filtered = []
     for da in modes:
-        df = infer_data_formats(formats.input_format, formats.output_format, da, False)
+        try:
+            df = infer_data_formats(
+                formats.input_format, formats.output_format, da, False
+            )
+        except ValueError:
+            continue
         if (
             formats.input_format == DataFormat.Float16
             and df.pack_src.is_32_bit()

@@ -71,12 +71,15 @@ def _valid_relu_types(formats, dest_acc):
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
     )
-    data_formats = infer_data_formats(
-        input_format=formats.input_format,
-        output_format=formats.output_format,
-        is_fp32_dest_acc_en=dest_acc,
-        unpacking_to_dest=unpack_to_dest,
-    )
+    try:
+        data_formats = infer_data_formats(
+            input_format=formats.input_format,
+            output_format=formats.output_format,
+            is_fp32_dest_acc_en=dest_acc,
+            unpacking_to_dest=unpack_to_dest,
+        )
+    except ValueError:
+        return []
 
     # Blackhole workaround: force Float32 intermediate for DestAccumulation.Yes
     if (
