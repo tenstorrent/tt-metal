@@ -86,6 +86,11 @@ def emit_shape_test(entry, proposal, weights, dims, golden, sample_input, out_di
     return path
 
 
+def l1_feasible(total_bytes: int, l1_budget) -> bool:
+    """Pre-run guard: does this L1 choice fit the budget? (False -> caller falls back to DRAM)."""
+    return l1_budget.fits(total_bytes)
+
+
 def run_shape_test(path) -> tuple[bool, str]:
     """Run a generated model-shape test via pytest; return (passed, output)."""
     import subprocess

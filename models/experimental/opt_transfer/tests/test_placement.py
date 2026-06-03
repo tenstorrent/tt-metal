@@ -112,3 +112,22 @@ def test_decide_respects_donor_condition_false():
 def test_decide_defaults_dram_when_no_observation():
     p = decide_placement([], size_bytes=1024, dims={"seq": 8}, l1_budget=L1Budget(1_000_000, 100))
     assert p.buffer == "DRAM"
+
+
+from models.experimental.opt_transfer.codegen import placement_to_memory_config
+from models.experimental.opt_transfer.verify import l1_feasible
+from models.experimental.opt_transfer.schema import MemoryPlacement
+from models.experimental.opt_transfer.placement import L1Budget
+
+
+def test_placement_to_memory_config_maps_buffer():
+    import ttnn
+
+    assert placement_to_memory_config(MemoryPlacement("DRAM")) is ttnn.DRAM_MEMORY_CONFIG
+    assert placement_to_memory_config(MemoryPlacement("L1")) is ttnn.L1_MEMORY_CONFIG
+
+
+def test_l1_feasible():
+    b = L1Budget(1_000_000, 100)
+    assert l1_feasible(50_000_000, b) is True
+    assert l1_feasible(150_000_000, b) is False

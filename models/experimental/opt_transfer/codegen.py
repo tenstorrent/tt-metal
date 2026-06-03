@@ -35,6 +35,16 @@ def build_fused_qkv(proposal, weights, device, dims):
     return run
 
 
+def placement_to_memory_config(placement):
+    """Map a MemoryPlacement to a ttnn memory config. Interleaved only in this plan;
+    sharded layouts are a follow-on (raise so a sharded choice can't silently no-op)."""
+    import ttnn
+
+    if placement.layout != "interleaved":
+        raise NotImplementedError(f"sharded placement not yet supported: {placement.layout}")
+    return ttnn.L1_MEMORY_CONFIG if placement.buffer == "L1" else ttnn.DRAM_MEMORY_CONFIG
+
+
 _EMITTERS = {}
 
 
