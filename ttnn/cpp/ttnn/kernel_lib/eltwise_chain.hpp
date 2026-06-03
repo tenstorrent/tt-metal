@@ -1040,18 +1040,6 @@ template <class... Es>
 struct EltwiseChain;  // typed list of elements
 
 template <class Chain>
-struct chain_has_any_copy_tile;
-template <class Chain>
-struct chain_has_any_pack_tile;
-template <class Chain>
-struct chain_has_any_cb_reader;
-template <class Chain>
-struct chain_has_any_cb_writer;
-template <class Chain>
-struct chain_has_non_copy_tile_fpu_clash;
-template <class Chain>
-struct chain_loads_share_cb;
-template <class Chain>
 struct chain_has_duplicate_upfront_cbs;
 template <class Chain>
 struct chain_pack_writes_collide;
@@ -1066,18 +1054,6 @@ struct chain_hoist_math_mop;
 template <class Chain>
 struct chain_hoist_sfpu;
 
-template <class Chain>
-inline constexpr bool chain_has_any_copy_tile_v = chain_has_any_copy_tile<Chain>::value;
-template <class Chain>
-inline constexpr bool chain_has_any_pack_tile_v = chain_has_any_pack_tile<Chain>::value;
-template <class Chain>
-inline constexpr bool chain_has_any_cb_reader_v = chain_has_any_cb_reader<Chain>::value;
-template <class Chain>
-inline constexpr bool chain_has_any_cb_writer_v = chain_has_any_cb_writer<Chain>::value;
-template <class Chain>
-inline constexpr bool chain_has_non_copy_tile_fpu_clash_v = chain_has_non_copy_tile_fpu_clash<Chain>::value;
-template <class Chain>
-inline constexpr bool chain_loads_share_cb_v = chain_loads_share_cb<Chain>::value;
 template <class Chain>
 inline constexpr bool chain_has_duplicate_upfront_cbs_v = chain_has_duplicate_upfront_cbs<Chain>::value;
 template <class Chain>

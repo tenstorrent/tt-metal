@@ -1026,60 +1026,6 @@ struct EltwiseChain {
 // 9. Chain-shape trait predicates
 // =============================================================================
 
-template <class... Es> struct chain_has_any_copy_tile<EltwiseChain<Es...>>
-    : std::bool_constant<(is_copy_tile_op_v<Es> || ...)> {};
-
-template <class... Es> struct chain_has_any_pack_tile<EltwiseChain<Es...>>
-    : std::bool_constant<(is_pack_tile_op_v<Es> || ...)> {};
-
-template <class... Es> struct chain_has_any_cb_reader<EltwiseChain<Es...>>
-    : std::bool_constant<(is_cb_reader_op_v<Es> || ...)> {};
-
-template <class... Es> struct chain_has_any_cb_writer<EltwiseChain<Es...>>
-    : std::bool_constant<(is_cb_writer_op_v<Es> || ...)> {};
-
-template <class... Es> struct chain_has_non_copy_tile_fpu_clash<EltwiseChain<Es...>>
-    : std::bool_constant<((is_binary_fpu_op_v<Es>        ||
-                           is_dest_reuse_binary_op_v<Es> ||
-                           is_unary_bcast_op_v<Es>) || ...)> {};
-
-// chain_loads_share_cb — N-element fold (item 7). True when every CopyTile element in
-// the chain reads from the same CB (or chain has ≤1 CopyTile, in which case the
-// constraint is vacuously satisfied). Drives the hoist gate together with
-// chain_has_non_copy_tile_fpu_clash: hoisting init() is safe only when no element
-// reprograms hardware state another element relies on.
-
-namespace detail {
-template <class E>
-constexpr uint32_t copy_tile_cb_of() {
-    if constexpr (is_copy_tile_op_v<E>) return E::cb;
-    else                                 return NO_PREV_CB;
-}
-
-template <class... Es>
-constexpr bool copy_tiles_share_cb_v = []() {
-    if constexpr (sizeof...(Es) == 0) {
-        return true;
-    } else {
-        constexpr uint32_t cbs[] = {copy_tile_cb_of<Es>()...};
-        uint32_t seen = NO_PREV_CB;
-        for (auto cb : cbs) {
-            if (cb == NO_PREV_CB) continue;
-            if (seen == NO_PREV_CB) seen = cb;
-            else if (seen != cb) return false;
-        }
-        return true;
-    }
-}();
-}  // namespace detail
-
-template <class Chain>
-struct chain_loads_share_cb : std::true_type {};  // default (empty chain — vacuously true)
-
-template <class... Es>
-struct chain_loads_share_cb<EltwiseChain<Es...>>
-    : std::bool_constant<detail::copy_tiles_share_cb_v<Es...>> {};
-
 // chain_lane_width — N-element fold (item 2). Max of per-element `lane_width`. Bounds
 // the legal BlockSize at the chain call site via the static_assert
 // `BlockSize * chain_lane_width <= DEST_AUTO_LIMIT`. Each element writes to
