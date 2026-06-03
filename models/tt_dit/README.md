@@ -101,19 +101,21 @@ The test suite is organized into three main categories:
 
 Running tests:
 ```bash
+# Run tests from tt-metal/
+
 # Run unit tests
-python -m pytest tests/unit/
+python -m pytest  models/tt_dit/tests/unit/
 
 # Run all model tests
-python -m pytest tests/models/
+python -m pytest  models/tt_dit/tests/models/
 
 # Run specific model pipeline tests
-python -m pytest tests/models/sd35/test_pipeline_sd35.py -v
-python -m pytest tests/models/flux1/test_pipeline_flux1.py -v
-python -m pytest tests/models/motif/test_pipeline_motif.py -v
-python -m pytest tests/models/qwenimage/test_pipeline_qwenimage.py -v
-python -m pytest tests/models/mochi/test_pipeline_mochi.py -v
-python -m pytest tests/models/wan2_2/test_pipeline_wan.py -v
+python -m pytest models/tt_dit/tests/models/sd35/test_pipeline_sd35.py -v
+python -m pytest models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -v
+python -m pytest models/tt_dit/tests/models/motif/test_pipeline_motif.py -v
+python -m pytest models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py -v
+python -m pytest models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -v
+python -m pytest models/tt_dit/tests/models/wan2_2/test_pipeline_wan.py -v
 ```
 
 ## Key Features
