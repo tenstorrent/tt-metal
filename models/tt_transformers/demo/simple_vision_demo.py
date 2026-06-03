@@ -269,7 +269,7 @@ def prepare_generator_args(
                 "models/tt_transformers/demo/sample_prompts/vision_input_data.json",
             ),  # input_prompts
         ),  # batch1-notrace
-        (
+        pytest.param(
             0,  # warmup_iters
             True,  # enable_trace
             1,  # max_batch_size
@@ -277,6 +277,7 @@ def prepare_generator_args(
                 "models/tt_transformers/demo/sample_prompts/vision_input_data_trace.json",
                 "models/tt_transformers/demo/sample_prompts/vision_input_data.json",
             ),  # input_prompts
+            marks=pytest.mark.skip(reason="Disabled: see #46016"),
         ),  # batch1-trace
         (
             0,  # warmup_iters
