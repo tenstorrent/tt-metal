@@ -42,7 +42,7 @@ void kernel_main() {
 
     DeviceTimestampedData("Test id", test_id);
     DeviceTimestampedData("Stateful", 0);
-    DeviceTimestampedData("Posted writes", 0);
+DeviceTimestampedData("Posted writes", 1);
     DeviceTimestampedData("Number of transactions", num_writes);
     DeviceTimestampedData("Transaction size in bytes", 32);
     DeviceTimestampedData("Multicast", 1);
