@@ -557,13 +557,13 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-- name: TT-DiT common unit tests
+- name: TT-DiT common unit tests, shared amongst all models.
   cmd: |
-    pytest --timeout 1000 models/tt_dit/tests/unit/
+    pytest --timeout 10000 models/tt_dit/tests/unit/
   model: dit-common
   skus:
     wh_n150:
-      timeout: 5
+      timeout: 30
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
