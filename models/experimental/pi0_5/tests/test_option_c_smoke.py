@@ -642,24 +642,33 @@ def test_vision_slice_device_siglip_split_dry_run(galaxy_mesh):
         weights = loader.categorized_weights
         cfg = PaliGemmaConfig()
 
+        # Default layout: 4 SigLIP chunks (7+7+7+6 layers) with mm_projector
+        # co-located on chip 3 — see Pi0_5OptionCVisionSliceSplit docstring
+        # for the L1 fit rationale that motivated the redistribution.
+        expected_layers_per_chip = [7, 7, 7, 6]
         split = Pi0_5OptionCVisionSliceSplit(
             config=cfg,
             weights=weights,
             micro_submeshes=micro_submeshes,
-            layers_per_chip=9,
             siglip_depth=27,
         )
-        assert len(split.siglip_chunks) == 3
+        assert len(split.siglip_chunks) == 4
+        assert split.layers_per_chip == expected_layers_per_chip
+        assert split.projector_chip_idx == 3
+        expected_lo = 0
         for chunk_idx, chunk in enumerate(split.siglip_chunks):
-            assert chunk.layer_lo == chunk_idx * 9
-            assert chunk.layer_hi == (chunk_idx + 1) * 9
+            n = expected_layers_per_chip[chunk_idx]
+            assert chunk.layer_lo == expected_lo
+            assert chunk.layer_hi == expected_lo + n
             assert chunk.holds_patch_embed == (chunk_idx == 0)
             assert chunk.holds_pos_embed == (chunk_idx == 0)
-            assert chunk.holds_post_ln == (chunk_idx == 2)
+            assert chunk.holds_post_ln == (chunk_idx == 3)
+            expected_lo += n
         assert split.mm_projector is not None
         print(
-            f"option_c device-SigLIP split (4 chips × {9}+{9}+{9}+projector) OK — "
-            f"3 SigLIP chunks built, projector on chip 3"
+            f"option_c device-SigLIP split "
+            f"(4 chips × {'+'.join(map(str, expected_layers_per_chip))}, "
+            f"projector co-located on chip 3) OK"
         )
     finally:
         _close_micro_submeshes(micro_submeshes)

@@ -6,9 +6,13 @@
 
 ## Symptom
 
-When `Pi0_5PipelineC` runs with `layer_paired_l1=True` at any depth on
-the real libero_upstream checkpoint, `run_inference()` crashes inside
-the MLP matmul kernel:
+The same static-CB clash trips on **two** paired-mode paths now:
+
+- `Pi0_5PipelineC(layer_paired_l1=True)`: VLM prefill MLP (program ~788).
+- `Pi0_5PipelineC(device_siglip=True, vision_weights_l1=True)`: SigLIP
+  encoder MLP (program ~282).
+
+Both crash inside an MLP-style matmul kernel:
 
 ```
 RuntimeError: TT_THROW @ tt_metal/impl/program/program.cpp:1452: tt::exception
@@ -157,7 +161,13 @@ crashes at the static-CB clash.
   (rms_norm DRAM bounce), `:578` (paired-mode mirror)
 - Comment trail (predicts and documents this class of bug):
   `vlm_slice.py:50–63` (`_upload_replicated` docstring)
-- Repro: `models/experimental/pi0_5/tests/test_option_c_l1_footprint_probe.py`
-  with `PI0_OC_L1_PROBE_LAYER_PAIRED=1`
+- Repro (VLM MLP path):
+  `tests/test_option_c_l1_footprint_probe.py` with
+  `PI0_OC_L1_PROBE_LAYER_PAIRED=1`
+- Repro (SigLIP MLP path, added 2026-06-03):
+  `tests/test_option_c_l1_footprint_probe.py` with
+  `PI0_OC_L1_PROBE_DEVICE_SIGLIP=1 PI0_OC_L1_PROBE_VISION_WEIGHTS_L1=1`.
+  Confirms the issue is general: any L1-resident matmul weight path on
+  Option C trips the same kernel.
 - Measurement context: `OPTION_C_L1_FOOTPRINT_PROBE.md` "Status — open"
   section.

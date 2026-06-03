@@ -307,17 +307,57 @@ land on chip 0. The deployment plan §1.1 already flags this:
 So **plumbing is correct; the cliff is fundamental at the current
 dtype mix**. Two paths forward:
 
-1. **bf8 attn QKVO in SigLIPAttentionTTNN.** Modifies the upstream
-   class. The single-device pi0.5 path uses it too, so this is a PCC
-   risk (numerics shift) that needs separate validation. Lands the
-   deployment plan's 140 MB / chip number; full SigLIP in L1.
+1. **bf8 attn QKVO in SigLIPAttentionTTNN.** Already done — the
+   `SigLIPAttentionTTNN` constructor uploads Q/K/V/O at `bfloat8_b`
+   (lines 410-437). The deployment plan's "10.6 MB / layer" attn
+   numbers in §1.1 were based on bf16 (stale documentation). At bf8
+   the unpadded attn per-layer is ~5.3 MB.
 
-2. **Partial L1 placement** (MLP + LN only, leave attn in DRAM).
-   Doesn't touch dtypes. Per chip: ~90 MB L1 (MLP) + ~90 MB DRAM
-   (attn). The mixed placement adds the same per-op DRAM bouncing
-   pattern as `rms_norm` already does in vlm_slice.py:298 for the
-   in-L1 MLP working set, since MLP outputs feed straight into the
-   in-DRAM attn. Less invasive but less complete than option 1.
+2. **Padded shapes inflate the actual per-chip footprint.** The
+   SigLIPAttentionTTNN code pads `head_dim` 72 → 96 to land on the
+   32-element tile boundary, inflating Q/K/V/O outputs by 33% (1152
+   → 1536). At padded shapes per encoder layer is ~18 MB, not the
+   plan's 15.6 MB. With 9 layers / chip = ~163 MB + per-bank bias
+   overhead (~10 MB) ≈ 173 MB — within shouting distance of the
+   175.4 MB L1 cap but OOMs by ~5–7 MB on the last weight.
+
+### SigLIP redistribution: 7+7+7+6 across all 4 vision chips (2026-06-03)
+
+To get under the cap, the on-device SigLIP split was redistributed
+from `9+9+9 + projector-only` (3 SigLIP chips + 1 projector chip) to
+**`7+7+7+6` across all 4 vision chips with `mm_projector` co-located
+on chip 3**. Same number of host bounces (3) and same total compute
+(27 layer-times). The layout change is contained to
+`Pi0_5OptionCVisionSliceSplit` — no `stages.py` / `mesh_setup.py`
+touch, spare submesh stays at (2,2) = 4 chips.
+
+Probe with `PI0_OC_L1_PROBE_DEVICE_SIGLIP=1 PI0_OC_L1_PROBE_VISION_WEIGHTS_L1=1`:
+
+```
+[after warmup forward]
+  stage=vision    chips= 1  L1  used =   138.9 MB / chip   (cap 175.4 MB, free  36.5 MB)
+  stage=vision    chips= 1  DRAM used =     8.8 MB / chip
+```
+
+**Migration succeeded** — chip 0 holds 7 SigLIP layers + patch_embed +
+pos_embed all in L1 at 138.9 MB, comfortably inside the 175.4 MB cap
+with ~36 MB headroom. DRAM dropped from 181.9 MB (host-mode
+fallback) to 8.8 MB (transients only). This is the empirical proof
+that the deployment plan's "L1-resident SigLIP" target works on real
+weights — just with a more even distribution than the §3.1 sketch
+assumed.
+
+**Forward still crashes — same MLP static-CB issue as the prefill
+path.** `run_inference` trips
+`program.cpp:1452: Statically allocated circular buffers in program
+282 clash with L1 buffers...` inside the SigLIP encoder's MLP matmul.
+This is the same class of bug the `Pi0_5PipelineC(layer_paired_l1=True)`
+prefill path hits (see OPEN_ISSUE_MLP_CB_CLASH.md) — any matmul
+kernel with L1-resident weights AND L1-resident activations lands
+buffers in the address range its static CBs want. The fix is the
+same DRAM-bounce pattern that `vlm_slice.py:298` already uses for
+`rms_norm`, applied around the MLP matmul. **PCC verification of the
+L1-resident SigLIP placement is blocked on that fix.**
 
 ### Status — open
 
