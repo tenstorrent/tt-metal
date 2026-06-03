@@ -82,7 +82,9 @@ ALWI void assert_binary_output_cb_size(uint32_t cb, uint32_t chunk_size, uint32_
 
 template <BinaryOpType op_type>
 constexpr EltwiseBinaryType map_to_eltwise_type() {
-    return op_type == BinaryOpType::ADD ? ELWADD : op_type == BinaryOpType::SUB ? ELWSUB : ELWMUL;
+    return op_type == BinaryOpType::ADD   ? EltwiseBinaryType::ELWADD
+           : op_type == BinaryOpType::SUB ? EltwiseBinaryType::ELWSUB
+                                          : EltwiseBinaryType::ELWMUL;
 }
 
 template <BroadcastDim bcast_dim>
@@ -131,9 +133,9 @@ ALWI void binary_init(uint32_t icb_a, uint32_t icb_b) {
 
     // MUL/SQUARE use configured MATH_FIDELITY; ADD/SUB always use LoFi (matches eltwise_binary.h)
     if constexpr (uses_fpu_mul<op_type>()) {
-        MATH((llk_math_eltwise_binary_init_with_operands<elt_type, bcast_type, MATH_FIDELITY>(icb_a, icb_b)));
+        MATH((llk_math_eltwise_binary_init<elt_type, bcast_type, MATH_FIDELITY>(icb_a, icb_b)));
     } else {
-        MATH((llk_math_eltwise_binary_init_with_operands<elt_type, bcast_type, MathFidelity::LoFi>(icb_a, icb_b)));
+        MATH((llk_math_eltwise_binary_init<elt_type, bcast_type, MathFidelity::LoFi>(icb_a, icb_b)));
     }
     UNPACK((llk_unpack_AB_init<bcast_type>(icb_a, icb_b)));
 }
