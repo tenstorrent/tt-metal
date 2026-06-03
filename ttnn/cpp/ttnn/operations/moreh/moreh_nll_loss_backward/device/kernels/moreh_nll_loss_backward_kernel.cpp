@@ -4,112 +4,113 @@
 
 #include <cstdint>
 
-#include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Recip
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Negative
 #include "api/dataflow/circular_buffer.h"
+
+// moreh nll_loss backward (faithful port — keep the per-tile loop, small chains inside):
+//   input_grad = -(weight * output_grad)                [no divisor]
+//   input_grad = -(weight * output_grad) * (1/divisor)  [reduction == mean]
+//
+// output_grad and 1/divisor are scalars (broadcast). The divisor path keeps the
+// original's two per-tile stages with the 1-tile intermediate cb_tmp2; each stage is
+// its own eltwise_chain(1) inside the C++ tile loop (one tile_regs window each, same
+// as the original). cb_tmp2 is produced by stage 1 and consumed by stage 2 every
+// iteration, so the single-tile buffer interleaves cleanly. Held scalars
+// (output_grad, recip) are waited once externally and read CallerManaged in the
+// chains (the bcast_hw idiom for operands held across a tile loop).
+namespace ckl = compute_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t per_core_tile_cnt = get_compile_time_arg_val(0);
 
-    const uint32_t tile_offset = get_arg_val<uint32_t>(1);
-
+    using D = ckl::Dst;
     constexpr uint32_t cb_divisor = tt::CBIndex::c_3;
-    CircularBuffer cb_divisor_obj(cb_divisor);
-    constexpr uint32_t cb_output_grad = tt::CBIndex::c_0;
-    CircularBuffer cb_output_grad_obj(cb_output_grad);
-    constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;
-    CircularBuffer cb_tmp_weight_obj(cb_tmp_weight);
-    constexpr uint32_t cb_tmp1 = tt::CBIndex::c_25;
-    CircularBuffer cb_tmp1_obj(cb_tmp1);
-    constexpr uint32_t cb_tmp2 = tt::CBIndex::c_26;
-    CircularBuffer cb_tmp2_obj(cb_tmp2);
+    constexpr uint32_t cb_output_grad = tt::CBIndex::c_0;  // scalar (held)
+    constexpr uint32_t cb_tmp_weight = tt::CBIndex::c_24;  // streams 1 tile/iter
+    constexpr uint32_t cb_tmp1 = tt::CBIndex::c_25;        // recip(divisor) (held scalar)
+    constexpr uint32_t cb_tmp2 = tt::CBIndex::c_26;        // intermediate -(weight*og)
     constexpr uint32_t cb_input_grad = tt::CBIndex::c_16;
-    CircularBuffer cb_input_grad_obj(cb_input_grad);
 
-    constexpr uint32_t dst0 = 0;
-    constexpr uint32_t onetile = 1;
-
-    init_sfpu(cb_output_grad, tt::CBIndex::c_16);
+    init_sfpu(cb_output_grad, cb_input_grad);
 
 #if defined(DIVISOR)
-    cb_divisor_obj.wait_front(onetile);
-    cb_tmp1_obj.reserve_back(onetile);
+    // recip(divisor) -> cb_tmp1 (held scalar, one tile).
+    ckl::eltwise_chain(
+        1,
+        ckl::CopyTile<
+            cb_divisor,
+            D::D0,
+            ckl::InputLifecycle::Bulk,
+            ckl::OperandKind::Scalar,
+            ckl::CopyTileReconfig::Input>{},
+        ckl::Recip<D::D0>{},
+        ckl::PackTile<cb_tmp1, D::D0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
 
-    tile_regs_acquire();
-    copy_tile_init_with_dt(cb_divisor);
-    copy_tile(cb_divisor, 0, dst0);
-    recip_tile_init();
-    recip_tile(dst0);
-    tile_regs_commit();
-
-    tile_regs_wait();
-    pack_tile_with_dt(dst0, cb_tmp1);
-    tile_regs_release();
-
-    cb_tmp1_obj.push_back(onetile);
-#endif
-
-    cb_output_grad_obj.wait_front(onetile);
+    cb_wait_front(cb_tmp1, 1);         // held recip
+    cb_wait_front(cb_output_grad, 1);  // held output_grad
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
-#if defined(DIVISOR)
-        cb_tmp_weight_obj.wait_front(onetile);
-        cb_tmp2_obj.reserve_back(onetile);
+        // stage 1: cb_tmp2 = -(weight * output_grad)
+        ckl::eltwise_chain(
+            1,
+            ckl::BinaryFpu<
+                cb_tmp_weight,
+                cb_output_grad,
+                ckl::BinaryFpuOp::Mul,
+                ckl::BroadcastDim::Scalar,
+                ckl::BinaryDataFormatReconfig::Input,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::CallerManaged,
+                ckl::OperandKind::Scalar,
+                D::D0,
+                ckl::OperandKind::Scalar>{},
+            ckl::Negative<D::D0>{},
+            ckl::PackTile<cb_tmp2, D::D0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
 
-        tile_regs_acquire();
-        mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp_weight, cb_output_grad);
-        mul_tiles_bcast_scalar(cb_tmp_weight, cb_output_grad, 0, 0, dst0);
-        negative_tile_init();
-        negative_tile(dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_tmp2);
-        tile_regs_release();
-
-        cb_tmp2_obj.push_back(onetile);
-        cb_tmp_weight_obj.pop_front(onetile);
-
-        cb_input_grad_obj.reserve_back(onetile);
-        cb_tmp2_obj.wait_front(onetile);
-        cb_tmp1_obj.wait_front(onetile);
-
-        tile_regs_acquire();
-        mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp2, cb_tmp1);
-        mul_tiles_bcast_scalar(cb_tmp2, cb_tmp1, 0, 0, dst0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_input_grad);
-        tile_regs_release();
-
-        cb_input_grad_obj.push_back(onetile);
-        cb_tmp2_obj.pop_front(onetile);
-
-#else
-        cb_tmp_weight_obj.wait_front(onetile);
-
-        cb_input_grad_obj.reserve_back(onetile);
-
-        tile_regs_acquire();
-        mul_tiles_bcast_scalar_init_short_with_dt(cb_tmp_weight, cb_output_grad);
-        mul_tiles_bcast_scalar(cb_tmp_weight, cb_output_grad, 0, 0, dst0);
-        negative_tile_init();
-        negative_tile(dst0);
-
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_input_grad);
-        tile_regs_release();
-
-        cb_input_grad_obj.push_back(onetile);
-
-        cb_tmp_weight_obj.pop_front(onetile);
-#endif
+        // stage 2: input_grad = cb_tmp2 * (1/divisor)
+        ckl::eltwise_chain(
+            1,
+            ckl::BinaryFpu<
+                cb_tmp2,
+                cb_tmp1,
+                ckl::BinaryFpuOp::Mul,
+                ckl::BroadcastDim::Scalar,
+                ckl::BinaryDataFormatReconfig::Input,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::CallerManaged,
+                ckl::OperandKind::Scalar,
+                D::D0,
+                ckl::OperandKind::Scalar>{},
+            ckl::PackTile<cb_input_grad, D::D0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
     }
 
-#if defined(DIVISOR)
-    cb_divisor_obj.pop_front(onetile);
+    cb_pop_front(cb_output_grad, 1);
+    cb_pop_front(cb_tmp1, 1);
+#else
+    // input_grad = -(weight * output_grad).  Single stage per tile.
+    cb_wait_front(cb_output_grad, 1);  // held output_grad
+
+    for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
+        ckl::eltwise_chain(
+            1,
+            ckl::BinaryFpu<
+                cb_tmp_weight,
+                cb_output_grad,
+                ckl::BinaryFpuOp::Mul,
+                ckl::BroadcastDim::Scalar,
+                ckl::BinaryDataFormatReconfig::Input,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::CallerManaged,
+                ckl::OperandKind::Scalar,
+                D::D0,
+                ckl::OperandKind::Scalar>{},
+            ckl::Negative<D::D0>{},
+            ckl::PackTile<cb_input_grad, D::D0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+    }
+
+    cb_pop_front(cb_output_grad, 1);
 #endif
 }
