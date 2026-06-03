@@ -63,13 +63,19 @@
   team: models
 
 # TODO: Move DP tests to sweep pipelines when those come online
-- name: Llama 3.1-8B data-parallel e2e tests (T3K)
+- name: Llama 3.1-8B data-parallel e2e tests
   cmd: |
     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.1-8B-Instruct
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP-4 or performance-ci-b1-DP-8" --timeout 1000
   model: llama3.1-8b-dp
   skus:
     wh_llmbox_perf:
+      timeout: 20
+      tier: 2
+    # bh_quietbox_2 is 4-chip: the DP-8 case is auto-skipped when the chip count
+    # is below the DP factor, so it effectively runs the DP-4 case only.
+    # Migrated from the legacy blackhole_demo_tests.yaml DP entries.
+    bh_quietbox_2:
       timeout: 20
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
