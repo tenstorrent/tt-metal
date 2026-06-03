@@ -8,6 +8,7 @@ from models.tt_transformers.demo.conftest import _cli_bool
 from models.tt_transformers.demo.simple_text_demo import (
     get_parametrized_mesh_device,
     is_greedy_sampling_request,
+    model_name_matches_aliases,
     normalize_greedy_sampling_params,
     resolve_paged_attention_mode,
     should_disable_device_sampling,
@@ -43,6 +44,10 @@ def test_phi1_uses_host_sampling_only_in_accuracy_mode():
 
     assert should_disable_device_sampling("phi-1", "accuracy", greedy_sampling, num_devices=1)
     assert should_disable_device_sampling("phi-1", "accuracy", greedy_sampling, num_devices=2)
+    assert should_disable_device_sampling("Phi-1", "accuracy", greedy_sampling, num_devices=1)
+    assert should_disable_device_sampling(
+        "Unknown", "accuracy", greedy_sampling, num_devices=1, model_identifier="microsoft/phi-1"
+    )
     assert not should_disable_device_sampling("phi-1", "performance", greedy_sampling, num_devices=1)
     assert not should_disable_device_sampling("phi-1", "performance", greedy_sampling, num_devices=2)
     assert should_disable_device_sampling("phi-1", "performance", non_greedy_sampling, num_devices=1)
@@ -56,6 +61,12 @@ def test_greedy_sampling_normalization_matches_host_argmax_semantics():
 
     assert is_greedy_sampling_request(sampling_params)
     assert normalize_greedy_sampling_params(sampling_params) == {"temperature": 0, "top_p": 1.0, "top_k": 1}
+
+
+def test_model_name_alias_matching_is_case_insensitive_and_does_not_match_phi15():
+    assert model_name_matches_aliases("Phi-1", {"phi-1"})
+    assert model_name_matches_aliases("microsoft/phi-1", {"phi-1"})
+    assert not model_name_matches_aliases("Phi-1.5", {"phi-1"})
 
 
 def test_parametrized_mesh_device_uses_env_mapping_without_hardware_probe(monkeypatch):

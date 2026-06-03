@@ -79,12 +79,28 @@ def normalize_greedy_sampling_params(sampling_params: dict) -> dict:
     return normalized
 
 
+def model_name_matches_aliases(model_name: str | None, aliases: set[str]) -> bool:
+    normalized = (model_name or "").strip().lower()
+    return any(
+        normalized == alias or normalized.endswith(f"/{alias}") or normalized.startswith(f"{alias}-")
+        for alias in aliases
+    )
+
+
 def should_disable_device_sampling(
-    base_model_name: str, optimization_name: str, sampling_params: dict, num_devices: int = 1
+    base_model_name: str,
+    optimization_name: str,
+    sampling_params: dict,
+    num_devices: int = 1,
+    model_identifier: str | None = None,
 ) -> bool:
-    if base_model_name in models_not_supported_for_device_sampling:
+    if model_name_matches_aliases(
+        base_model_name, models_not_supported_for_device_sampling
+    ) or model_name_matches_aliases(model_identifier, models_not_supported_for_device_sampling):
         return True
-    if base_model_name not in accuracy_only_host_sampling_models:
+    if not model_name_matches_aliases(
+        base_model_name, accuracy_only_host_sampling_models
+    ) and not model_name_matches_aliases(model_identifier, accuracy_only_host_sampling_models):
         return False
     if optimization_name == "accuracy":
         return True
@@ -1247,6 +1263,7 @@ def test_demo_text(
             optimization_name,
             sampling_params,
             num_devices=model_args[0].num_devices,
+            model_identifier=hf_dir,
         ):
             device_sampling_params = None
 
