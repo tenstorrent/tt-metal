@@ -465,6 +465,49 @@ Tensor LayerNormDeviceOperation::create_output_tensors(
         operation_attributes.program_config);
 }
 
+// The non-Welford sharded reduce normalizes a non-tile-aligned width by zeroing the padding columns
+// of the final width tile with a column mask. Build it here so the op is self-contained (callers
+// never supply it): an all-ones logical tensor tilized with the input's sharding has its tile
+// padding filled with 0, which is exactly the mask (1.0 valid / 0.0 padding). The mask data format
+// matches the compute intermediates (fp32 when fp32 dest accumulation is enabled) so it aligns in
+// the variance multiply. Only plain (non-RMS, non-residual), non-distributed sharded layernorm on a
+// non-tile-aligned width needs it.
+static std::optional<Tensor> build_legacy_col_mask(
+    const Tensor& input,
+    const LayerNormProgramConfig& program_config,
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    LayerNormType norm_type,
+    DistributedLayerNormStage distributed_norm_stage,
+    const std::optional<const Tensor>& residual) {
+    if (!input.is_sharded() || norm_type != LayerNormType::LAYERNORM ||
+        distributed_norm_stage != DistributedLayerNormStage::NOT_DISTRIBUTED || residual.has_value()) {
+        return std::nullopt;
+    }
+    bool use_welford = false;
+    std::visit(
+        [&](const auto& pc) {
+            using ProgramConfigType = std::decay_t<decltype(pc)>;
+            if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
+                use_welford = pc.use_welford;
+            }
+        },
+        program_config);
+    if (use_welford) {
+        return std::nullopt;
+    }
+    const uint32_t tile_width = input.tensor_spec().tile().get_width();
+    const auto& logical_shape = input.logical_shape();
+    if (logical_shape[-1] % tile_width == 0) {
+        return std::nullopt;  // tile-aligned: no padding columns to mask
+    }
+    const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
+        get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
+    const DataType mask_dtype = fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16;
+    const TensorSpec mask_spec(logical_shape, TensorLayout(mask_dtype, Layout::TILE, input.memory_config()));
+    std::vector<float> ones(input.logical_volume(), 1.0f);
+    return Tensor::from_vector(ones, mask_spec, input.device());
+}
+
 Tensor layer_norm(
     const Tensor& input_tensor,
     float epsilon,
@@ -496,6 +539,13 @@ Tensor layer_norm(
         .bias = bias,
         .stats = stats,
         .recip_tensor = recip_tensor,
+        .col_mask = build_legacy_col_mask(
+            input_tensor,
+            program_config,
+            compute_kernel_config,
+            norm_type,
+            distributed_norm_stage,
+            residual_input_tensor),
     };
 
     return ttnn::device_operation::launch<LayerNormDeviceOperation>(operation_attributes, tensor_args);

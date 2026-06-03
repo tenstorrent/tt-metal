@@ -32,6 +32,9 @@ struct LayerNormInputs {
     std::optional<Tensor> bias;                   // beta
     std::optional<Tensor> stats;                  // for POST_ALL_GATHER
     std::optional<Tensor> recip_tensor;           // reciprocal LUT for welford algorithm
+    // Column mask for the non-Welford sharded reduce on a non-tile-aligned width (1.0 in valid
+    // columns, 0.0 in tile padding). Built internally by the op; not user-provided.
+    std::optional<Tensor> col_mask;
 };
 
 }  // namespace ttnn::prim

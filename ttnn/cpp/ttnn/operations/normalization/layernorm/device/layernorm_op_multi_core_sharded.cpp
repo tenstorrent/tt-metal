@@ -180,6 +180,10 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         recip_tensor = tensor_args.recip_tensor;
         reciprocal_CB_size_bytes = recip_tensor->buffer()->aligned_size_per_bank();
     }
+    // Column mask for the non-Welford non-tile-aligned path (built internally by the op), bound
+    // directly to a CB.
+    const std::optional<Tensor>& col_mask = tensor_args.col_mask;
+    uint32_t col_mask_CB_size_bytes = col_mask.has_value() ? col_mask->buffer()->aligned_size_per_bank() : 0;
 
     // Compute CB sizes using helper
     CBSizeParams cb_size_params{
@@ -302,8 +306,16 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     // Build runtime args using helper
     const auto& cores = corerange_to_cores(core_ranges.all_cores, core_ranges.all_cores.num_cores(), grid.row_wise);
 
-    // Compute packed values for writer
-    float winv = 1.0f / block_w;
+    uint32_t last_core_width_index =
+        grid.mcast_1d ? cores.size() - 1 : (grid.row_wise ? grid.grid_size.x - 1 : grid.grid_size.y - 1);
+    // A single width shard spans the whole row, so one core owns the entire (logical) width.
+    const bool single_width_shard = (last_core_width_index == 0);
+
+    // Compute packed values for writer.
+    // The reduction scaler divides by the per-core width. For a single width shard that is the
+    // logical width (excluding the tile padding the masking below zeroes out); for several width
+    // shards each shard owns a full block_w columns and the cross-core average finishes the divide.
+    float winv = 1.0f / (single_width_shard ? logical_K : block_w);
     float cinv = is_post_all_gather ? (1.0f / num_distributed_devices) : (1.0f / grid.num_blocks);
     auto bfloat_cinv = bfloat16(cinv);
     auto bfloat_cinv_one = bfloat16(1.0f);
@@ -321,20 +333,33 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         mcast_noc_y.push_back(device->worker_core_from_logical_core({core_start_offset.x, y}).y);
     }
 
-    uint32_t last_core_width_index =
-        grid.mcast_1d ? cores.size() - 1 : (grid.row_wise ? grid.grid_size.x - 1 : grid.grid_size.y - 1);
-
-    // Welford's partial-tile handling uses one last-tile width for both the per-core reduction
-    // and the cross-core combine. Those agree only when the width is tile-aligned or a single
-    // width shard spans the whole row; with several width shards each full shard would need the
-    // full tile width while only the final shard carries the partial tile. Reject that case
-    // rather than silently normalize some shards over their padding columns.
+    // Non-tile-aligned widths require excluding the tile padding from the statistics. The
+    // partial-tile width is applied uniformly across width shards (per-core reduction and
+    // cross-core combine), which is only consistent when a single width shard owns the whole row;
+    // with several width shards each full shard would need the full tile width while only the
+    // final shard carries the partial tile.
+    const bool col_mask_needed = (logical_K % tile_width != 0);
+    const bool fuse_pre_add = b.has_value();
     TT_FATAL(
-        !use_welford || (logical_K % tile_width == 0) || (last_core_width_index == 0),
-        "Sharded Welford layer_norm does not support a non-tile-aligned width ({}) split across "
-        "multiple width shards ({}); use a single width shard or a tile-aligned width.",
+        !col_mask_needed || single_width_shard,
+        "Sharded layer_norm does not support a non-tile-aligned width ({}) split across multiple "
+        "width shards ({}); use a single width shard or a tile-aligned width.",
         logical_K,
         last_core_width_index + 1);
+    // The non-Welford reduce excludes the padding via a column mask (below); that masking is wired
+    // only for plain layernorm. RMSNorm and the fused residual add on a non-tile-aligned width must
+    // use the Welford path.
+    TT_FATAL(
+        !col_mask_needed || use_welford || (!rms_norm && !fuse_pre_add),
+        "Sharded layer_norm with a non-tile-aligned width ({}) on the non-Welford path supports only "
+        "plain layernorm (no rms_norm, no residual add); set use_welford=true for those cases.",
+        logical_K);
+    // Legacy (non-Welford) plain-layernorm path: zero the padding columns of the last width tile so
+    // they do not enter E[x] or the variance. Guards above guarantee single width shard, no rmsnorm,
+    // no residual when this is set.
+    const bool do_col_mask = col_mask_needed && !use_welford;
+    // Valid (logical) columns in the final width tile; the rest of that tile is padding.
+    const uint32_t last_tile_valid_w = logical_K - (Kt - 1) * tile_width;
 
     RuntimeArgsContext rt_ctx{
         .grid = grid,
@@ -400,6 +425,11 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     // RMSNorm doesn't use Welford in this kernel path.
     kernel_config.welford_fp32_alias =
         use_welford && !rms_norm && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en;
+    kernel_config.last_tile_valid_w = last_tile_valid_w;
+    if (do_col_mask) {
+        kernel_config.compute_defines.emplace_back("DO_COL_MASK", "1");
+        kernel_config.writer_defines.emplace_back("DO_COL_MASK", "1");
+    }
 
     add_kernel_descriptors(program_descriptor, core_ranges, workers, grid, std::move(kernel_config));
 
@@ -439,6 +469,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     cb_config.stats_cb_size = cb_sizes.stats_cb_size;
     cb_config.stats_reduced_cb_size = cb_sizes.stats_reduced_cb_size;
     cb_config.reciprocal_CB_size_bytes = reciprocal_CB_size_bytes;
+    cb_config.col_mask_CB_size_bytes = col_mask_CB_size_bytes;
     cb_config.in_data_format = in_data_format;
     cb_config.cb_data_format = cb_data_format;
     cb_config.out_data_format = out_data_format;
@@ -459,6 +490,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     cb_config.beta_buffer = beta.has_value() ? beta.value().buffer() : nullptr;
     cb_config.stats_buffer = stats.has_value() ? stats.value().buffer() : nullptr;
     cb_config.recip_buffer = recip_tensor.has_value() ? recip_tensor.value().buffer() : nullptr;
+    cb_config.col_mask_buffer = col_mask.has_value() ? col_mask.value().buffer() : nullptr;
     cb_config.output_buffer = output_buffer;
     cb_config.output_reshard_buffer = output_reshard_buffer;
     cb_config.has_b = b.has_value();
@@ -469,6 +501,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     cb_config.is_pre_all_gather = is_pre_all_gather;
     cb_config.is_post_all_gather = is_post_all_gather;
     cb_config.skip_write_back = skip_write_back;
+    cb_config.do_col_mask = do_col_mask;
     // Enable the welford-fp32 alias only when the SrcA-routed transpose_tile would
     // otherwise truncate Float32 input to TF32. Restricting to !rms_norm because
     // RMSNorm doesn't use Welford in this kernel path.
