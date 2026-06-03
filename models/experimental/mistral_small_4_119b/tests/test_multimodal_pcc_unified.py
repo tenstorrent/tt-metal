@@ -65,8 +65,8 @@ def _log_memory_usage(label: str = ""):
         mem = proc.memory_info()
         percent = proc.memory_percent()
         logger.info(f"[Memory {label}] RSS: {mem.rss / 1e9:.2f}GB ({percent:.1f}%)")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Skipping memory usage logging for '{label}': {e}")
 
 
 pytest.importorskip("transformers")
