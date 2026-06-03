@@ -1635,6 +1635,13 @@ class TTSeamlessM4Tv2SpeechEncoder:
         # TP all_reduce: row-parallel output_dense gives partial sums; sum across devices.
         if self._tp > 1:
             out = all_reduce_sum_replicate(out, self.device, cluster_axis=self._cluster_axis)
+        # Long-seq: relocate the L1 all-reduce result to DRAM so it doesn't persist in L1 through the
+        # next LN (whose ~constant per-core CB then clashes at S≳3500). Plain value-preserving copy —
+        # the all-reduce itself stays in L1 (a DRAM all-reduce gives wrong values). See _layer_norm.
+        if self._tp > 1 and seq_len > _ATTN_QUERY_CHUNK_THRESHOLD:
+            out_dram = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(out)
+            out = out_dram
         return out
 
     def _relu_ffn(
@@ -1674,6 +1681,13 @@ class TTSeamlessM4Tv2SpeechEncoder:
         # TP all_reduce: row-parallel output_dense gives partial sums; sum across devices.
         if self._tp > 1:
             out = all_reduce_sum_replicate(out, self.device, cluster_axis=self._cluster_axis)
+        # Long-seq: relocate the L1 all-reduce result to DRAM so it doesn't persist in L1 through the
+        # next LN (whose ~constant per-core CB then clashes at S≳3500). Plain value-preserving copy —
+        # the all-reduce itself stays in L1 (a DRAM all-reduce gives wrong values). See _layer_norm.
+        if self._tp > 1 and seq_len > _ATTN_QUERY_CHUNK_THRESHOLD:
+            out_dram = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(out)
+            out = out_dram
         return out
 
     def _conv_module(
