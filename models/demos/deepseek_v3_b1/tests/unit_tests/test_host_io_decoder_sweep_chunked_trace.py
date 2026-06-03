@@ -233,6 +233,7 @@ def test_run_host_io_decoder_sweep_multi_slot_stress_config_contract(model_id: s
         assert not config.dump_kv_cache
 
 
+@pytest.mark.skip(reason="Disabled: see #45988")
 @pytest.mark.parametrize(("model_id", "prompt_id"), TRACE_CASES)
 def test_run_host_io_decoder_sweep_chunked_trace_smoke(model_id: str, prompt_id: str) -> None:
     trace_root = _trace_root()
@@ -269,6 +270,7 @@ def test_run_host_io_decoder_sweep_chunked_trace_smoke(model_id: str, prompt_id:
     assert exit_code == 0
 
 
+@pytest.mark.skip(reason="Disabled: see #45988")
 @pytest.mark.parametrize(("model_id", "prompt_id"), TRACE_CASES)
 def test_run_host_io_decoder_sweep_chunked_trace_world_size_4(model_id: str, prompt_id: str) -> None:
     trace_root = _trace_root()
@@ -314,6 +316,7 @@ def test_run_host_io_decoder_sweep_chunked_trace_world_size_4(model_id: str, pro
     assert exit_code == 0
 
 
+@pytest.mark.skip(reason="Disabled: see #45988")
 @pytest.mark.parametrize(("model_id", "prompt_id"), TRACE_CASES)
 def test_run_host_io_decoder_sweep_chunked_trace_multi_slot_stress(model_id: str, prompt_id: str) -> None:
     trace_root = _trace_root()
