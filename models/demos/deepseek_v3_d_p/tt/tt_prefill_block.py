@@ -2,7 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -371,13 +370,6 @@ class TtPrefillBlock(LightweightModule):
         ttnn.deallocate(attn_norm_out)
         x = ttnn.add(x, mla_out)
         ttnn.deallocate(mla_out)
-
-        # DIAGNOSTIC (DS_DIAG_MLA_MOE_SYNC): one-off sync to force MLA's ring-SDPA CCL tail to fully
-        # drain before MoE enqueues. NOT a fix (a sync here would violate the no-sync-in-loop
-        # constraint) — this only localizes whether MLA's still-draining tail is the colliding
-        # writer behind the balanced-routing period-2 non-determinism. REMOVE after diagnosis.
-        if os.environ.get("DS_DIAG_MLA_MOE_SYNC"):
-            ttnn.synchronize_device(self.mesh_device)
 
         # --- FFN ---
         ffn_norm_out = self.ffn_norm(x)
