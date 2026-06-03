@@ -314,6 +314,55 @@ def filter_params_with_constraints(all_params):
 all_params = filter_params_with_constraints(all_params)
 
 
+def _elf_locality_key(params):
+    """Group cases that share one compiled ELF so each ELF is loaded onto the cores
+    only once (minimizes ELF-load thrashing).
+
+    The ELF is defined by the template params (STOCHASTIC_ROUNDING, BROADCAST_TYPE,
+    ACC_TO_DEST, REUSE_DEST_TYPE, PARTIAL_FACE, DISABLE_SRC_ZERO_FLAG) plus the
+    build-time dest_acc (a function of acc_to_dest). face_r_dim only affects the ELF
+    through partial_face (face_r_dim < 16); its value otherwise feeds runtime params.
+    formats is effectively runtime here: the only build-affecting use is
+    unpack_to_dest = input_format.is_32_bit() and acc_to_dest, but the constraint
+    filter drops every (is_32_bit, acc_to_dest) case, so unpack_to_dest is always
+    False. Everything else (transpose, num_faces, dimensions, formats, ...) is runtime
+    and free to vary within a group.
+    """
+    (
+        testname,
+        formats,
+        broadcast_type,
+        disable_src_zero,
+        acc_to_dest,
+        stochastic_rnd,
+        reuse_dest,
+        transpose_of_faces,
+        within_face_16x16_transpose,
+        num_faces,
+        face_r_dim,
+        input_dimensions,
+    ) = params
+    partial_face = face_r_dim < 16
+    unpack_to_dest = formats.input_format.is_32_bit() and acc_to_dest
+    return (
+        testname,
+        stochastic_rnd.name,
+        broadcast_type.name,
+        bool(acc_to_dest),
+        reuse_dest.name,
+        bool(disable_src_zero),
+        partial_face,
+        unpack_to_dest,
+    )
+
+
+# Order so all cases sharing a compiled ELF run consecutively. The set of cases is
+# unchanged; only execution order changes. The sort is stable, so runtime variations
+# (formats/output, transpose, num_faces, dimensions, ...) keep their relative order
+# within each ELF group.
+all_params.sort(key=_elf_locality_key)
+
+
 def create_simple_ids(all_params):
     """Create comprehensive but readable IDs for unpack_A tests"""
     ids = []

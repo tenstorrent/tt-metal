@@ -27,12 +27,6 @@ from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test
 
 
-# Parameter order minimizes ELF-load thrashing: the custom parametrize() resolves
-# keys in declaration order (first = outermost/slowest loop, last = innermost/
-# fastest). ELF-defining params (dest_acc, mathop, math_fidelity, input_dimensions)
-# are kept outer; runtime-only params (formats is runtime-configured here, plus
-# srca_reuse_count) are innermost so each ELF is loaded once while its runtime
-# variants are exhausted.
 @skip_for_blackhole
 @parametrize(
     dest_acc=[DestAccumulation.No],

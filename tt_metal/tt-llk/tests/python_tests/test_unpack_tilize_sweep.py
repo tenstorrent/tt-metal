@@ -30,6 +30,13 @@ from helpers.utils import passed_test
 
 
 @parametrize(
+    stoch_rnd_type=[
+        StochasticRounding.No,
+        StochasticRounding.Fpu,
+        StochasticRounding.Pack,
+        StochasticRounding.All,
+    ],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     formats=input_output_formats(
         [
             DataFormat.Float32,
@@ -38,13 +45,6 @@ from helpers.utils import passed_test
             DataFormat.Bfp8_b,
         ]
     ),
-    stoch_rnd_type=[
-        StochasticRounding.No,
-        StochasticRounding.Fpu,
-        StochasticRounding.Pack,
-        StochasticRounding.All,
-    ],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     transpose=[Transpose.No],
     narrow_tile=[NarrowTile.No],
     num_faces=[4, 2, 1],
