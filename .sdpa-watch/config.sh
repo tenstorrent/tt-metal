@@ -26,8 +26,8 @@ PIPELINES=(
   "sanity-tests.yaml|Sanity|tests/ttnn/unit_tests/operations/sdpa|"
   "tt-metal-l2-nightly.yaml|L2 Nightly|tests/ttnn/nightly/unit_tests/operations/sdpa|sdpa"
   "blackhole-e2e-tests.yaml|Blackhole E2E|tests/nightly/blackhole/sdpa|sdpa"
-  "blackhole-post-commit.yaml|Blackhole Post-Commit|tests/ttnn/unit_tests/operations/sdpa|"
+  "blackhole-post-commit.yaml|Blackhole Post-Commit|tests/ttnn/unit_tests/operations/sdpa (ttnn-unit-tests / ttnn sdpa group only — deepseek blitz / per-core allocation jobs under ops-unit-tests are out-of-scope even if their logs mention test_sdpa_tail)|ttnn sdpa group"
   "perf-device-models.yaml|Perf Device Models|tests/nightly/blackhole/sdpa (SDPA_PERF_CHECKS=1 gated perf checks)|"
-  "t3000-e2e-tests.yaml|T3K E2E|t3k_DeepSeek_PREFILL (any failure in this job) + t3k_ccl_tests (only failures in tests/nightly/t3000/ccl/test_ring_joint_attention.py; other CCL tests in that job are out-of-scope)|t3k_DeepSeek_PREFILL|t3k_ccl_tests"
+  "t3000-e2e-tests.yaml|T3K E2E|t3k_ccl_tests only — in-scope failures are limited to tests/nightly/t3000/ccl/test_ring_joint_attention.py (ring-joint SDPA). Other CCL tests in that job are out-of-scope; DeepSeek MLA / prefill failures are not ours.|t3k_ccl_tests"
   "t3000-integration-tests.yaml|T3K Integration|Any failure in t3k_sd35_large_tests, t3k_flux1_tests, t3k_motif_tests, t3k_wan2.2_tests, t3k_mochi_tests (all exercise ring-joint SDPA indirectly via DiT attention)|t3k_sd35_large|t3k_flux1|t3k_motif|t3k_wan2|t3k_mochi"
 )
