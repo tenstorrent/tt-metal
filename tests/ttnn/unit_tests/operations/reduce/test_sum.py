@@ -64,10 +64,6 @@ def test_sum_global(device, batch_size, h, w, dtype):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-    # Global sum returns a scalar, so allclose already captures the meaningful error bound.
-    # Relative Frobenius reduces to a second scalar-relative gate and can reject acceptable
-    # BF16 results that still satisfy the explicit atol/rtol contract.
-    check_frobenius = False
 
     if dtype == ttnn.float32:
         pcc_threshold = 0.999
@@ -78,12 +74,12 @@ def test_sum_global(device, batch_size, h, w, dtype):
         pcc_threshold = 0.999
         rtol = 0.009
         atol = 65.280
-        frobenius_threshold = 0.009
+        frobenius_threshold = 0.013
     else:
         pcc_threshold = 0.999
         rtol = 0.062
         atol = 228.480
-        frobenius_threshold = 0.062
+        frobenius_threshold = 0.068
     # test for equivalance
     assert_numeric_metrics(
         torch_output_tensor,
@@ -92,7 +88,6 @@ def test_sum_global(device, batch_size, h, w, dtype):
         rtol=rtol,
         atol=atol,
         frobenius_threshold=frobenius_threshold,
-        check_frobenius=check_frobenius,
     )
 
 
