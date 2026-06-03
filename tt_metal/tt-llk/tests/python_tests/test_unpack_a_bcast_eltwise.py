@@ -37,6 +37,9 @@ from helpers.utils import passed_test
     mathop=[MathOperation.Elwsub, MathOperation.Elwadd, MathOperation.Elwmul],
     dest_acc=[DestAccumulation.No],
     srca_reuse_count=[2, 4, 8],
+    math_fidelity=[
+        MathFidelity.LoFi,
+    ],
     input_dimensions=[
         [128, 32],
         [32, 128],
