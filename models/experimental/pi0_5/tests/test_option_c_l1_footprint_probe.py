@@ -311,7 +311,15 @@ def test_oc_l1_footprint_probe_full_depth():
     _echo_env()
 
     cfg = PaliGemmaConfig()  # gemma_2b VLM + gemma_300m expert, full depth
-    layout = build_default_layout()  # full depth: 18 VLM + 18 expert
+    # Honour the VLM/EXPERT depth env knobs so we can probe shrunk-depth
+    # TP=2 paths (one layer per (2,1) sub-mesh = depth=9) for the CB-clash
+    # iteration. Defaults to (18, 18) = the existing full-depth behaviour.
+    if VLM_DEPTH_PROBE != 18 or EXPERT_DEPTH_PROBE != 18:
+        from models.experimental.pi0_5.tt.option_c.stages import build_shrunk_layout
+
+        layout = build_shrunk_layout(vlm_depth=VLM_DEPTH_PROBE, expert_depth=EXPERT_DEPTH_PROBE)
+    else:
+        layout = build_default_layout()  # full depth: 18 VLM + 18 expert
 
     print(f"\n[cfg] vlm_depth = {cfg.vlm_config.depth}  expert_depth = {cfg.expert_config.depth}")
     print(f"[layout] parent = {layout.parent_mesh_shape}  stages = {len(layout.stages)}")

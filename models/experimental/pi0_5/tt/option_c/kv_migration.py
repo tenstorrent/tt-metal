@@ -103,7 +103,21 @@ class KVMigration:
                 continue
             k_src, v_src = kv
             k_shards = ttnn.get_device_tensors(k_src)
-            src_chip_idx = 0 if len(k_shards) == 1 else layer_idx
+            n_shards = len(k_shards)
+            # Pick the source chip index:
+            # - n_shards == 1   → paired single-chip per layer: shard 0.
+            # - n_shards small (<= NUM_DENOISE_CHIPS-ish, typically 2)
+            #     → TP sub-mesh per layer: K/V are REPLICATED across the
+            #       (tp,1) sub-mesh because num_kv_heads=1 doesn't shard,
+            #       so shard 0 carries the full per-layer KV.
+            # - n_shards == NUM_PREFILL_CHIPS (replicated mode) → indexed
+            #       by global layer_idx.
+            if n_shards == 1:
+                src_chip_idx = 0
+            elif n_shards < NUM_PREFILL_CHIPS:
+                src_chip_idx = 0  # TP sub-mesh: replicated KV (num_kv_heads=1)
+            else:
+                src_chip_idx = layer_idx
 
             if denoise_micro_submeshes is not None:
                 dst = denoise_micro_submeshes[self.denoise_chip_for_vlm_layer(layer_idx)]
