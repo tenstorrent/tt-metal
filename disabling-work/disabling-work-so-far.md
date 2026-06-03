@@ -1,6 +1,6 @@
 # CI Disable Work — Status Log
 
-**Last updated:** _(none — fresh state log; update on first session)_
+**Last updated:** 2026-06-03T18:25 UTC
 
 > **Source of truth.** This file is the canonical record of automation-tracked PRs. Wiping it resets the automation to fresh-state view; stale GitHub PRs not listed here are intentionally invisible.
 
@@ -26,7 +26,7 @@
 
 | PR | Workflow | Lifecycle stage | Verification result | Ready to merge? | Notes |
 |----|----------|-----------------|---------------------|-----------------|-------|
-| _(none — fresh state log)_ | | | | | |
+| [#45979](https://github.com/tenstorrent/tt-metal/pull/45979) | `runtime-unit-tests.yaml` | `verifying` | pending | No | Verification dispatched 2026-06-03T18:19 UTC (run 26904326397) |
 
 ---
 
@@ -34,7 +34,7 @@
 
 | Run | Pipeline | Branch | Started | Status | Notes |
 |-----|----------|--------|---------|--------|-------|
-| _(none)_ | | | | | |
+| [26904326397](https://github.com/tenstorrent/tt-metal/actions/runs/26904326397) | `runtime-unit-tests.yaml` | `ci-disable/runtime-unit-tests-data-movement-2026-06-03-verify` | 2026-06-03T18:19 UTC | queued | Fresh build; targeted verification for PR #45979; pruned to runtime_data_movement only |
 
 **Policy:** Concurrent runs across PRs are allowed; each automation session may dispatch at most three new runs.
 
@@ -58,4 +58,36 @@
 
 ## Recent Activity
 
-- _(none — fresh state log; append new session entries to the top of this list, most recent first, per the `How to read/update this file` rules above)_
+- **2026-06-03T18:25 UTC** — Session start. PR #45979 created for `runtime-unit-tests.yaml` `runtime_data_movement` job: disabled 5 deterministically-failing GTest cases (`TensixDirectWriteMulticast`, `TensixDataMovementOneToAllMulticastSemaphore2x2_2_0`, `TensixDataMovementOneToAllMulticastLinkedSemaphoreLoopback2x2_2_0`, `TensixDataMovementOneToAllMulticastLinkedSemaphore5x5_2_0`, `TensixDataMovementOneToAllUnicastSemaphore2x2_2_0`). All 5 fail on both `wh_n150_civ2` and `bh_p150b_civ2`. Tracking issue #45978. Verification dispatched as run 26904326397 (fresh build; no SHA-matching successful source run for this workflow on main — workflow has been failing on every recent main run).
+
+---
+
+## PR #45979 — runtime-unit-tests.yaml (5 runtime_data_movement gtest disables)
+
+| Field | Value |
+|-------|-------|
+| PR | [#45979](https://github.com/tenstorrent/tt-metal/pull/45979) |
+| Disable issue | [#45978](https://github.com/tenstorrent/tt-metal/issues/45978) |
+| Timeout issue | — |
+| Branch | `ci-disable/runtime-unit-tests-data-movement-2026-06-03` |
+| Workflow file | `runtime-unit-tests.yaml` |
+| Lifecycle stage | `verifying` |
+| Last rebase | 2026-06-03 (created off `origin/main` at `0485c74b235`) |
+| Last revalidation | 2026-06-03 (evidence checked against run 26866206838) |
+| Verification run | [26904326397](https://github.com/tenstorrent/tt-metal/actions/runs/26904326397) — queued 2026-06-03T18:19 UTC (fresh build; no SHA-matching successful source run) |
+| Last touched by automation | 2026-06-03T18:25Z |
+| Readiness | Not yet verified |
+
+### Disables (with main evidence)
+
+Main-run evidence: see PR description.
+
+Summary (all 5 tests fail on `wh_n150_civ2` [job 79231037011] and `bh_p150b_civ2` [job 79231037021] in run 26866206838, completed 2026-06-03T06:33–06:37 UTC, head SHA `15806d0d564eff581a6eb21bea8c56f0b35867d5`):
+
+| Disabled test | SKUs failing | Job link |
+|---|---|---|
+| `GenericMeshDeviceFixture.TensixDirectWriteMulticast` | `wh_n150_civ2`, `bh_p150b_civ2` | [79231037011](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037011) / [79231037021](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037021) |
+| `GenericMeshDeviceFixture.TensixDataMovementOneToAllMulticastSemaphore2x2_2_0` | `wh_n150_civ2`, `bh_p150b_civ2` | [79231037011](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037011) / [79231037021](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037021) |
+| `GenericMeshDeviceFixture.TensixDataMovementOneToAllMulticastLinkedSemaphoreLoopback2x2_2_0` | `wh_n150_civ2`, `bh_p150b_civ2` | [79231037011](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037011) / [79231037021](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037021) |
+| `GenericMeshDeviceFixture.TensixDataMovementOneToAllMulticastLinkedSemaphore5x5_2_0` | `wh_n150_civ2`, `bh_p150b_civ2` | [79231037011](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037011) / [79231037021](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037021) |
+| `GenericMeshDeviceFixture.TensixDataMovementOneToAllUnicastSemaphore2x2_2_0` | `wh_n150_civ2`, `bh_p150b_civ2` | [79231037011](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037011) / [79231037021](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037021) |
