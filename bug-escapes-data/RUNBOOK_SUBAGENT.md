@@ -195,6 +195,8 @@ ORDER BY last_fail_ts DESC
 LIMIT 100;
 ```
 
+**Escape expiry:** If a candidate's `last_fail_ts` is older than 90 days from today, mark it `expired` in campaign-state.json and skip — CI logs are gone and probes cannot be set up for commits that old.
+
 **Snowflake gotchas:**
 - `CICD_TEST` has 5.8B rows — ALWAYS filter by date and LIMIT
 - `CICD_PIPELINE.PROJECT = 'tt-metal'` (not `tenstorrent/tt-metal`)
@@ -202,7 +204,16 @@ LIMIT 100;
 - LLK assert nightly runs (`J.NAME LIKE '%LLK asserts%'`) — exclude from island analysis
 - `j.FAILURE_SIGNATURE NOT LIKE 'InfraErrorV1%'` filters infra failures
 
-For each row: compute escape ID = `{CICD_TEST_CASE_ID}__{last_failing_sha[:8]}`. Check `seen-escapes.json` — if present, skip entirely.
+For each row: compute escape ID = `{CICD_TEST_CASE_ID}__{last_failing_sha[:8]}`. Check `seen-escapes.json`:
+
+- Status `confirmed*`, `refuted`, `expired`, `skipped_*`: **skip entirely**.
+- Status `refuted_wrong_fix`: add to a **retry queue** — process only after all new candidates are exhausted (see priority rule below).
+- Not present: new candidate — always prioritize these.
+
+**Priority rule (STRICTLY ENFORCED):**
+New candidates come first. Only attempt a `refuted_wrong_fix` retry if the new-candidate queue is completely empty. When you do retry, you MUST attempt different fix commits than the ones previously tried (check the existing candidate entry in campaign-state.json for what was already attempted). If no new commits remain to try, skip.
+
+**⚠️ Retrying `refuted_wrong_fix` is heavily discouraged.** A prior probe already showed BEFORE=PASS for the leading fix hypothesis, meaning the correct commit is non-obvious. New escapes almost always represent more actionable, lower-effort findings. Only retry if explicitly instructed or the new-candidate queue has been fully exhausted for the session.
 
 ---
 
