@@ -1,6 +1,6 @@
 # CI Disable Work — Status Log
 
-**Last updated:** 2026-06-03T22:35 UTC
+**Last updated:** 2026-06-03T23:35 UTC
 
 > **Source of truth.** This file is the canonical record of automation-tracked PRs. Wiping it resets the automation to fresh-state view; stale GitHub PRs not listed here are intentionally invisible.
 
@@ -26,14 +26,15 @@
 
 | PR | Workflow | Lifecycle stage | Verification result | Ready to merge? | Notes |
 |----|----------|-----------------|---------------------|-----------------|-------|
-| [#46017](https://github.com/tenstorrent/tt-metal/pull/46017) | `models-t2-e2e-tests.yaml` | `verifying` | pending | No | NEW 2026-06-03T22:31 UTC; test_multimodal_demo_text[batch1-trace] performance regression; verification dispatched as run 26917123038 (fresh build; model=llama3.2-90b-vision, sku=wh_llmbox_perf) |
-| [#46010](https://github.com/tenstorrent/tt-metal/pull/46010) | `blackhole-post-commit.yaml` | `verifying` | pending | No | NEW 2026-06-03T21:21 UTC; verification dispatched as run 26913761687 (fresh build; run-ops-unit-tests=true, P150 only); 8 test_sdpa_tail disables |
-| [#45999](https://github.com/tenstorrent/tt-metal/pull/45999) | `runtime-unit-tests.yaml` | `verified-pass` | pass | Yes | Run 26910857102 completed failure but verified-pass; rebased to 65a9acd34c9 2026-06-03T22:30Z |
-| [#45993](https://github.com/tenstorrent/tt-metal/pull/45993) | `blackhole-demo-tests.yaml` | `verified-pass` | pass | Yes | Run 26908439442 completed SUCCESS; rebased to f0d2341794d 2026-06-03T21:05Z |
-| [#45991](https://github.com/tenstorrent/tt-metal/pull/45991) | `runtime-integration-tests.yaml` | `verified-pass` | pass | Yes | Run 26907813785 completed failure but verified-pass; rebased to f0d2341794d 2026-06-03T21:05Z |
-| [#45990](https://github.com/tenstorrent/tt-metal/pull/45990) | `blackhole-post-commit.yaml` | `verified-pass` | pass | Yes | Run 26907794205 completed failure but verified-pass; rebased to 65a9acd34c9 2026-06-03T22:30Z |
-| [#45981](https://github.com/tenstorrent/tt-metal/pull/45981) | `t3000-unit-tests.yaml` | `verified-pass` | pass | Yes | Run 26904737723 completed failure but verified-pass; rebased to f0d2341794d 2026-06-03T21:05Z |
-| [#45979](https://github.com/tenstorrent/tt-metal/pull/45979) | `runtime-unit-tests.yaml` | `verified-pass` | pass | Yes | Run 26904326397 completed SUCCESS; rebased to 65a9acd34c9 2026-06-03T22:30Z |
+| [#46023](https://github.com/tenstorrent/tt-metal/pull/46023) | `runtime-unit-tests.yaml` | `verifying` | pending | No | NEW 2026-06-03T23:34 UTC; DispatchTelemetryHostL1WaitTest.WorkerWaitReportsUpstreamBlockedState failing on all 4 SKUs; verification dispatched as run 26919824610 (fresh build) |
+| [#46017](https://github.com/tenstorrent/tt-metal/pull/46017) | `models-t2-e2e-tests.yaml` | `verified-pass` | pass | Yes | Run 26917123038 completed SUCCESS 2026-06-03T23:03Z; batch1-trace SKIPPED; rebased to 5e2561dcd54 2026-06-03T23:09Z |
+| [#46010](https://github.com/tenstorrent/tt-metal/pull/46010) | `blackhole-post-commit.yaml` | `verified-pass` | pass | Yes | Run 26913761687 completed; all 8 sdpa_tail SKIPPED; other failures pre-existing; rebased to 5e2561dcd54 2026-06-03T23:09Z |
+| [#45999](https://github.com/tenstorrent/tt-metal/pull/45999) | `runtime-unit-tests.yaml` | `verified-pass` | pass | Yes | Run 26910857102 completed failure but verified-pass; rebased to 5e2561dcd54 2026-06-03T23:12Z |
+| [#45993](https://github.com/tenstorrent/tt-metal/pull/45993) | `blackhole-demo-tests.yaml` | `verified-pass` | pass | Yes | Run 26908439442 completed SUCCESS; rebased to 5e2561dcd54 2026-06-03T23:12Z |
+| [#45991](https://github.com/tenstorrent/tt-metal/pull/45991) | `runtime-integration-tests.yaml` | `verified-pass` | pass | Yes | Run 26907813785 completed failure but verified-pass; rebased to 5e2561dcd54 2026-06-03T23:12Z |
+| [#45990](https://github.com/tenstorrent/tt-metal/pull/45990) | `blackhole-post-commit.yaml` | `verified-pass` | pass | Yes | Run 26907794205 completed failure but verified-pass; rebased to 5e2561dcd54 2026-06-03T23:12Z |
+| [#45981](https://github.com/tenstorrent/tt-metal/pull/45981) | `t3000-unit-tests.yaml` | `verified-pass` | pass | Yes | Run 26904737723 completed failure but verified-pass; rebased to 5e2561dcd54 2026-06-03T23:12Z |
+| [#45979](https://github.com/tenstorrent/tt-metal/pull/45979) | `runtime-unit-tests.yaml` | `verified-pass` | pass | Yes | Run 26904326397 completed SUCCESS; rebased to 5e2561dcd54 2026-06-03T23:12Z |
 
 ---
 
@@ -41,8 +42,7 @@
 
 | Run | Pipeline | Branch | Started | Status | Notes |
 |-----|----------|--------|---------|--------|-------|
-| [26917123038](https://github.com/tenstorrent/tt-metal/actions/runs/26917123038) | `models-t2-e2e-tests.yaml` | `ci-disable/models-t2-e2e-tests-vision-batch1-2026-06-03` | 2026-06-03T22:31 UTC | in_progress | Fresh build; targeted verification for PR #46017; model=llama3.2-90b-vision, sku=wh_llmbox_perf; Llama 3.2-90B-Vision batch1-trace only |
-| [26913761687](https://github.com/tenstorrent/tt-metal/actions/runs/26913761687) | `blackhole-post-commit.yaml` | `ci-disable/blackhole-post-commit-sdpa-tail-2026-06-03-verify` | 2026-06-03T21:21 UTC | queued→in_progress | Fresh build; targeted verification for PR #46010; run-ops-unit-tests=true, P150 only; target: deepseek blitz op tests (slow+fast dispatch) |
+| [26919824610](https://github.com/tenstorrent/tt-metal/actions/runs/26919824610) | `runtime-unit-tests.yaml` | `ci-disable/runtime-unit-tests-dispatch-telemetry-2026-06-03-verify` | 2026-06-03T23:34 UTC | in_progress | Fresh build; targeted verification for PR #46023; wh+bh; runtime_sd_debug_tools_device_dispatch only |
 
 **Policy:** Concurrent runs across PRs are allowed; each automation session may dispatch at most three new runs.
 
@@ -52,6 +52,8 @@
 
 | Run | Pipeline | Branch | Started | Ended | Result | Notes |
 |-----|----------|--------|---------|-------|--------|-------|
+| [26917123038](https://github.com/tenstorrent/tt-metal/actions/runs/26917123038) | `models-t2-e2e-tests.yaml` | `ci-disable/models-t2-e2e-tests-vision-batch1-2026-06-03-verify` | 2026-06-03T22:31 UTC | 2026-06-03T23:03 UTC | **verified-pass** | conclusion: SUCCESS; Llama 3.2-90B-Vision batch1-trace test SKIPPED ("Disabled: see #46016"); 1 skipped 4 deselected |
+| [26913761687](https://github.com/tenstorrent/tt-metal/actions/runs/26913761687) | `blackhole-post-commit.yaml` | `ci-disable/blackhole-post-commit-sdpa-tail-2026-06-03-verify` | 2026-06-03T21:21 UTC | 2026-06-03T22:26 UTC | **verified-pass** | conclusion: failure but no regression; all 8 test_sdpa_tail SKIPPED; remaining failures (chunked-trace) are pre-existing (same as on main); job was already failing on main before PR #46010 |
 | [26910857102](https://github.com/tenstorrent/tt-metal/actions/runs/26910857102) | `runtime-unit-tests.yaml` | `ci-disable/runtime-unit-tests-descriptor-merger-2026-06-03-verify` | 2026-06-03T20:24 UTC | 2026-06-03T20:59 UTC | **verified-pass** | conclusion: failure but no regression; runtime_debug_tools was already failing on main (same job); disabled DescriptorMergerTests are SKIPPED; remaining failure is device hang in other tests (pre-existing) |
 | [26908439442](https://github.com/tenstorrent/tt-metal/actions/runs/26908439442) | `blackhole-demo-tests.yaml` | `ci-disable/blackhole-demo-tests-mistral-2026-06-03-verify` | 2026-06-03T19:37 UTC | 2026-06-03T20:24 UTC | **verified-pass** | conclusion: success; mistral-small e2e tests [bh_loudbox] PASSED |
 | [26907813785](https://github.com/tenstorrent/tt-metal/actions/runs/26907813785) | `runtime-integration-tests.yaml` | `ci-disable/runtime-integration-tests-indexed-fill-2026-06-03-verify` | 2026-06-03T19:25 UTC | 2026-06-03T20:19 UTC | **verified-pass** | conclusion: failure but no regression; runtime_fd_python_2 was already failing on main; D=4 disabled (SKIPPED), D=16 also fails with same underlying bug (pre-existing, masked by D=4 abort) |
@@ -71,6 +73,7 @@
 
 ## Recent Activity
 
+- **2026-06-03T23:35 UTC** — Session (23:01 UTC start). Examining lane (2 PRs classified): (1) PR #46010 (blackhole-post-commit sdpa-tail): run 26913761687 classified `verified-pass` — all 8 test_sdpa_tail SKIPPED; chunked-trace failures pre-existing (covered by PR #45990); rebased to 5e2561dcd54; evidence updated to run 26912651491 job 79399422886; issue #46009 synced. (2) PR #46017 (models-t2-e2e vision batch1): run 26917123038 classified `verified-pass` — SUCCESS; test_multimodal_demo_text batch1-trace SKIPPED; rebased to 5e2561dcd54; PR comment posted; issue #46016 unchanged. All 6 other `verified-pass` PRs rebased to 5e2561dcd54 (cherry-pick method) and force-pushed: #45979, #45981, #45990, #45991, #45993, #45999. Focus lane (1 new PR, 1 dispatch): New PR #46023 for `runtime-unit-tests.yaml` — `DispatchTelemetryHostL1WaitTest.WorkerWaitReportsUpstreamBlockedState` failing on wh_n150_civ2, wh_n300_civ2, bh_p150b_civ2, bh_p100a_civ2_viommu across 3+ consecutive main runs (26805031959, 26834614992, 26866206838) with GTest failure. Disable: `GTEST_SKIP() << "Disabled: see #46022"` in test_dispatch_telemetry.cpp. Tracking issue #46022. Verification dispatched as run 26919824610 (fresh build; wh+bh; runtime_sd_debug_tools_device_dispatch only). CI survey: extensive survey of blackhole-e2e-tests, t3000-unit-tests, t3000-e2e-tests, runtime-integration-tests, Single-card demo tests, nightly L2 tests, Single-card frequent model tests — no additional uncovered deterministic failures found (all other failures are device hangs/timeouts, infra failures, or non-consecutive). Focus slots filled: 1/3 (only 1 workflow with uncovered deterministic test-level failures found after full survey).
 - **2026-06-03T22:35 UTC** — Session (22:01 UTC start). Examining lane (3 PRs with rebase carve-out): (1) PR #45979 (runtime-unit-tests data-movement): rebased to `65a9acd34c9`, force-pushed; 5 GTest cases confirmed still failing on main run 26866206838; PR comment posted. (2) PR #45990 (blackhole-post-commit chunked-trace): rebased to `65a9acd34c9`, force-pushed; 3 tests still failing on main run 26901984996; PR comment posted. (3) PR #45999 (runtime-unit-tests descriptor-merger): rebased to `65a9acd34c9`, force-pushed; 10 DescriptorMergerTest cases still failing on main run 26866206838; PR comment posted. Focus lane (1 new PR): PR #46017 for `models-t2-e2e-tests.yaml` — disabled `test_multimodal_demo_text[wormhole_b0-device_params0-1-batch1-trace-normal-mesh_device0]` in `simple_vision_demo.py` (3 consecutive `AssertionError: Performance regression detected` failures on `wh_llmbox_perf`: runs 26863952291, 26798628102, 26735449307). Tracking issue #46016. Verification dispatched as run 26917123038 (fresh build; model=llama3.2-90b-vision, sku=wh_llmbox_perf). PR #46010 verification run 26913761687 still queued at session start — left as `verifying`. Pipeline survey: blackhole-e2e-tests FP8 dispatch failures have infra failures breaking consecutive streak (only 1 test-level failure); t3k multiprocess tests only 2 consecutive; all other surveyed pipelines either covered by existing PRs or have out-of-scope failures (timeouts, device crashes, Galaxy).
 - **2026-06-03T21:30 UTC** — Session (21:00 UTC start). All 5 active verification runs completed. Examining lane (3 PRs): (1) PR #45981 (t3000-unit-tests): run 26904737723 classified `verified-pass` (t3k_tttv2_fast_unit_tests PASSED; t3k_tt_metal_multiprocess_tests was pre-existing failure on main). Rebased to f0d2341794d, force-pushed. Evidence updated to latest main run 26902490775 job 79365805746. PR comment + issue #45980 synced. (2) PR #45993 (blackhole-demo-tests): run 26908439442 classified `verified-pass` (SUCCESS). Rebased to f0d2341794d, force-pushed. PR comment posted. (3) PR #45991 (runtime-integration-tests): run 26907813785 classified `verified-pass` (D=4 SKIPPED, D=16 fails with same underlying bug but job was already failing on main). Rebased to f0d2341794d, force-pushed. PR comment posted. Lightweight classification (no rebase this session): PR #45990 → `verified-pass` (deepseek blitz op tests pre-existing failure), PR comment posted; PR #45999 → `verified-pass` (runtime_debug_tools pre-existing failure, disabled tests SKIPPED), PR comment posted. Focus lane (1 new PR): Discovered that `test_sdpa_tail[*]` in `models/demos/deepseek_v3_b1/tests/unit_tests/test_sdpa_tail.py` failing deterministically across 3 consecutive main runs (26901984996, 26887785807, 26876041545) with `AttributeError: module 'ttnn' has no attribute 'FaceGeometry'` — this was incorrectly classified as out-of-scope in previous session. Created tracking issue #46009. PR #46010 for `blackhole-post-commit.yaml`: disabled all 8 `test_sdpa_tail` parametrizations via `@pytest.mark.skip(reason="Disabled: see #46009")`. Verification dispatched as run 26913761687 (fresh build; run-ops-unit-tests=true, P150 only). Note: PR #45990 and PR #46010 both target `blackhole-post-commit.yaml` with non-overlapping test sets (chunked trace vs sdpa_tail). Note: `test_indexed_slice[DataType.BFLOAT16-16-32-6-0]` (D=16) newly discovered in verification run for PR #45991 — NOT eligible for disable yet (not showing deterministic failures on main, blocked by D=4 abort). Will become eligible after PR #45991 merges and D=16 appears in 3 consecutive main failures.
 - **2026-06-03T20:30 UTC** — Session (20:02 UTC start). Examining lane: PR #45979 run 26904326397 completed SUCCESS → classified `verified-pass`. Branch rebased to ce03ba9ee12 and force-pushed. PR comment posted with verification result and revalidation log. Focus lane: 1 new PR created. PR #45999 for `runtime-unit-tests.yaml` `runtime_debug_tools` job: disabled 10 `DescriptorMergerTest` GTest cases failing with protobuf schema mismatch (`NodeDescriptor.Boards` has no field `tray_id`) deterministically on wh_n150_civ2 and bh_p150b_civ2 across 3 consecutive main runs. Tracking issue #45998. Verification dispatched as run 26910857102 (fresh build; no SHA-matching successful source run; pruned to runtime_debug_tools only). Note: extensive workflow survey conducted — all other failing pipelines (blackhole-e2e-tests, t3000-e2e-tests, blackhole-post-commit additional jobs, vllm-nightly T3K) are device timeouts/crashes (out of scope). Focus slots filled: 1/3 (only 1 workflow with uncovered deterministic pytest/GTest failures found after full survey). [NOTE: This session's "out of scope" classification of blackhole-post-commit additional jobs was PARTIALLY WRONG — test_sdpa_tail failures ARE in-scope (AttributeError, not timeout/crash). Corrected in next session.]
@@ -89,12 +92,12 @@
 | Timeout issue | — |
 | Branch | `ci-disable/blackhole-post-commit-sdpa-tail-2026-06-03` |
 | Workflow file | `blackhole-post-commit.yaml` |
-| Lifecycle stage | `verifying` |
-| Last rebase | 2026-06-03 (created off `origin/main` at `f0d2341794d`) |
-| Last revalidation | 2026-06-03 (evidence checked against runs 26901984996, 26887785807, 26876041545) |
-| Verification run | [26913761687](https://github.com/tenstorrent/tt-metal/actions/runs/26913761687) — dispatched 2026-06-03T21:21 UTC (fresh build; no SHA-matching successful source run; run-ops-unit-tests=true, P150 only) |
-| Last touched by automation | 2026-06-03T21:30Z |
-| Readiness | Not yet verified |
+| Lifecycle stage | `verified-pass` |
+| Last rebase | 2026-06-03T23:09Z (rebased to `5e2561dcd54`) |
+| Last revalidation | 2026-06-03T23:09Z (all 8 sdpa_tail confirmed still failing on main run 26912651491 job 79399422886; headSha `8574aad0975c2679670e5819f039f8630e062975`) |
+| Verification run | [26913761687](https://github.com/tenstorrent/tt-metal/actions/runs/26913761687) — completed 2026-06-03T22:26 UTC; **verified-pass** (all 8 test_sdpa_tail SKIPPED; other failures pre-existing) |
+| Last touched by automation | 2026-06-03T23:09Z |
+| Readiness | **Ready to merge** — verified-pass |
 
 ### Disables (with main evidence)
 
@@ -125,10 +128,10 @@ Summary (all 8 tests fail on `bh_p150b_civ2` in run 26901984996, completed 2026-
 | Branch | `ci-disable/blackhole-demo-tests-mistral-2026-06-03` |
 | Workflow file | `blackhole-demo-tests.yaml` |
 | Lifecycle stage | `verified-pass` |
-| Last rebase | 2026-06-03T21:05 UTC (rebased to f0d2341794d, force-pushed) |
+| Last rebase | 2026-06-03T23:12Z (cherry-pick to `5e2561dcd54`) |
 | Last revalidation | 2026-06-03T21:05 UTC (all 3 tests confirmed still failing on main run 26865834917) |
 | Verification run | [26908439442](https://github.com/tenstorrent/tt-metal/actions/runs/26908439442) — completed SUCCESS 2026-06-03T20:24 UTC; mistral-small-3.1-24b e2e tests [bh_loudbox] PASSED |
-| Last touched by automation | 2026-06-03T21:30Z |
+| Last touched by automation | 2026-06-03T23:12Z |
 | Readiness | **Ready to merge** — verified-pass |
 
 ### Disables (with main evidence)
@@ -155,10 +158,10 @@ Summary (all 3 tests fail on `bh_loudbox` [job 79230013581] in run 26865834917, 
 | Branch | `ci-disable/runtime-integration-tests-indexed-fill-2026-06-03` |
 | Workflow file | `runtime-integration-tests.yaml` |
 | Lifecycle stage | `verified-pass` |
-| Last rebase | 2026-06-03T21:05 UTC (rebased to f0d2341794d, force-pushed) |
+| Last rebase | 2026-06-03T23:12Z (cherry-pick to `5e2561dcd54`) |
 | Last revalidation | 2026-06-03T21:05 UTC (test_indexed_slice D=4 confirmed still failing on main run 26868028159) |
 | Verification run | [26907813785](https://github.com/tenstorrent/tt-metal/actions/runs/26907813785) — completed failure 2026-06-03T20:19 UTC; verified-pass (job was already failing on main; no regression) |
-| Last touched by automation | 2026-06-03T21:30Z |
+| Last touched by automation | 2026-06-03T23:12Z |
 | Readiness | **Ready to merge** — verified-pass |
 
 ### Disables (with main evidence)
@@ -183,10 +186,10 @@ Summary (`test_indexed_slice[DataType.BFLOAT16-4-32-6-0]` fails on `wh_n150_civ2
 | Branch | `ci-disable/blackhole-post-commit-chunked-trace-2026-06-03` |
 | Workflow file | `blackhole-post-commit.yaml` |
 | Lifecycle stage | `verified-pass` |
-| Last rebase | 2026-06-03T22:30 UTC (rebased to 65a9acd34c9, force-pushed) |
+| Last rebase | 2026-06-03T23:12Z (cherry-pick to `5e2561dcd54`) |
 | Last revalidation | 2026-06-03T21:05 UTC (all 3 chunked trace tests confirmed still failing on main run 26901984996) |
 | Verification run | [26907794205](https://github.com/tenstorrent/tt-metal/actions/runs/26907794205) — completed failure 2026-06-03T20:39 UTC; verified-pass (deepseek blitz op jobs were already failing on main; no regression from our change) |
-| Last touched by automation | 2026-06-03T22:30Z |
+| Last touched by automation | 2026-06-03T23:12Z |
 | Readiness | **Ready to merge** — verified-pass |
 
 ### Disables (with main evidence)
@@ -213,10 +216,10 @@ Summary (all 3 tests fail on `bh_p150b_civ2` [jobs 79361708858 (slow) and 793617
 | Branch | `ci-disable/t3000-unit-tests-attention1d-qwen25-2026-06-03` |
 | Workflow file | `t3000-unit-tests.yaml` |
 | Lifecycle stage | `verified-pass` |
-| Last rebase | 2026-06-03T21:05 UTC (rebased to f0d2341794d, force-pushed) |
+| Last rebase | 2026-06-03T23:12Z (cherry-pick to `5e2561dcd54`) |
 | Last revalidation | 2026-06-03T21:05 UTC (both tests confirmed still failing on main run 26902490775 job 79365805746) |
 | Verification run | [26904737723](https://github.com/tenstorrent/tt-metal/actions/runs/26904737723) — completed failure 2026-06-03T20:21 UTC; verified-pass (t3k_tttv2_fast_unit_tests PASSED; t3k_tt_metal_multiprocess_tests was pre-existing failure on main) |
-| Last touched by automation | 2026-06-03T21:30Z |
+| Last touched by automation | 2026-06-03T23:12Z |
 | Readiness | **Ready to merge** — verified-pass |
 
 ### Disables (with main evidence)
@@ -242,10 +245,10 @@ Summary (both tests fail on `wh_llmbox` [job 79365805746] in run 26902490775, co
 | Branch | `ci-disable/runtime-unit-tests-descriptor-merger-2026-06-03` |
 | Workflow file | `runtime-unit-tests.yaml` |
 | Lifecycle stage | `verified-pass` |
-| Last rebase | 2026-06-03T22:30 UTC (rebased to 65a9acd34c9, force-pushed) |
+| Last rebase | 2026-06-03T23:12Z (cherry-pick to `5e2561dcd54`) |
 | Last revalidation | 2026-06-03T21:00 UTC (all 10 DescriptorMergerTest cases confirmed still failing on main run 26866206838) |
 | Verification run | [26910857102](https://github.com/tenstorrent/tt-metal/actions/runs/26910857102) — completed failure 2026-06-03T20:59 UTC; verified-pass (runtime_debug_tools was already failing on main; disabled tests SKIPPED; remaining failure is device hang in other tests) |
-| Last touched by automation | 2026-06-03T22:30Z |
+| Last touched by automation | 2026-06-03T23:12Z |
 | Readiness | **Ready to merge** — verified-pass |
 
 ### Disables (with main evidence)
@@ -279,10 +282,10 @@ Summary (all 10 tests fail on `wh_n150_civ2` [job 79231037025] and `bh_p150b_civ
 | Branch | `ci-disable/runtime-unit-tests-data-movement-2026-06-03` |
 | Workflow file | `runtime-unit-tests.yaml` |
 | Lifecycle stage | `verified-pass` |
-| Last rebase | 2026-06-03T22:30 UTC (rebased to 65a9acd34c9, force-pushed) |
+| Last rebase | 2026-06-03T23:12Z (cherry-pick to `5e2561dcd54`) |
 | Last revalidation | 2026-06-03T20:10 UTC (5 GTest cases confirmed still failing on main run 26866206838) |
 | Verification run | [26904326397](https://github.com/tenstorrent/tt-metal/actions/runs/26904326397) — completed SUCCESS 2026-06-03T19:15 UTC; both runtime_data_movement jobs passed |
-| Last touched by automation | 2026-06-03T22:30Z |
+| Last touched by automation | 2026-06-03T23:12Z |
 | Readiness | **Ready to merge** — verified-pass |
 
 ### Disables (with main evidence)
@@ -310,12 +313,12 @@ Summary (all 5 tests fail on `wh_n150_civ2` [job 79231037011] and `bh_p150b_civ2
 | Timeout issue | — |
 | Branch | `ci-disable/models-t2-e2e-tests-vision-batch1-2026-06-03` |
 | Workflow file | `models-t2-e2e-tests.yaml` |
-| Lifecycle stage | `verifying` |
-| Last rebase | 2026-06-03T22:31 UTC (created off `origin/main` at `65a9acd34c9`) |
-| Last revalidation | 2026-06-03T22:31 UTC (evidence checked against runs 26863952291, 26798628102, 26735449307) |
-| Verification run | [26917123038](https://github.com/tenstorrent/tt-metal/actions/runs/26917123038) — dispatched 2026-06-03T22:31 UTC (fresh build; no SHA-matching successful source run — all recent models-t2-e2e-tests main runs have conclusion failure; model=llama3.2-90b-vision, sku=wh_llmbox_perf) |
-| Last touched by automation | 2026-06-03T22:35Z |
-| Readiness | Not yet verified |
+| Lifecycle stage | `verified-pass` |
+| Last rebase | 2026-06-03T23:09Z (rebased to `5e2561dcd54`) |
+| Last revalidation | 2026-06-03T23:09Z (test_multimodal_demo_text batch1-trace confirmed still failing on main run 26863952291; no new models-t2-e2e-tests run since previous session) |
+| Verification run | [26917123038](https://github.com/tenstorrent/tt-metal/actions/runs/26917123038) — completed SUCCESS 2026-06-03T23:03 UTC; **verified-pass** (test SKIPPED "Disabled: see #46016"; run green) |
+| Last touched by automation | 2026-06-03T23:09Z |
+| Readiness | **Ready to merge** — verified-pass |
 
 ### Disables (with main evidence)
 
@@ -326,3 +329,31 @@ Summary (`test_multimodal_demo_text[wormhole_b0-device_params0-1-batch1-trace-no
 | Disabled test | SKUs failing | Job link |
 |---|---|---|
 | `models/tt_transformers/demo/simple_vision_demo.py::test_multimodal_demo_text[wormhole_b0-device_params0-1-batch1-trace-normal-mesh_device0]` | `wh_llmbox_perf` | [79224197492](https://github.com/tenstorrent/tt-metal/actions/runs/26863952291/job/79224197492) |
+
+---
+
+## PR #46023 — runtime-unit-tests.yaml (DispatchTelemetryHostL1WaitTest.WorkerWaitReportsUpstreamBlockedState disable)
+
+| Field | Value |
+|-------|-------|
+| PR | [#46023](https://github.com/tenstorrent/tt-metal/pull/46023) |
+| Disable issue | [#46022](https://github.com/tenstorrent/tt-metal/issues/46022) |
+| Timeout issue | — |
+| Branch | `ci-disable/runtime-unit-tests-dispatch-telemetry-2026-06-03` |
+| Workflow file | `runtime-unit-tests.yaml` |
+| Lifecycle stage | `verifying` |
+| Last rebase | 2026-06-03T23:34Z (created off `origin/main` at `5e2561dcd54`) |
+| Last revalidation | 2026-06-03T23:34Z (confirmed still failing on main run 26866206838 job 79231037073; all 4 SKUs failing) |
+| Verification run | [26919824610](https://github.com/tenstorrent/tt-metal/actions/runs/26919824610) — dispatched 2026-06-03T23:34 UTC (fresh build; no SHA-matching successful source run; wh+bh; runtime_sd_debug_tools_device_dispatch only) |
+| Last touched by automation | 2026-06-03T23:34Z |
+| Readiness | Not yet verified |
+
+### Disables (with main evidence)
+
+Main-run evidence: see PR description.
+
+Summary (`DispatchTelemetryHostL1WaitTest.WorkerWaitReportsUpstreamBlockedState` fails on all 4 SKUs in run 26866206838, completed 2026-06-03T05:45 UTC, head SHA `15806d0d564eff581a6eb21bea8c56f0b35867d5`):
+
+| Disabled test | SKUs failing | Job link |
+|---|---|---|
+| `DispatchTelemetryHostL1WaitTest.WorkerWaitReportsUpstreamBlockedState` | `wh_n150_civ2`, `wh_n300_civ2`, `bh_p150b_civ2`, `bh_p100a_civ2_viommu` | [79231037111](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037111) / [79231037124](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037124) / [79231037073](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037073) / [79231037125](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037125) |
