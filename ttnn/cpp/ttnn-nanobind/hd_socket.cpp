@@ -296,8 +296,7 @@ void py_module_types(nb::module_& mod) {
                 int32_t remaining_bytes_to_read = num_pages * page_size;
                 uint32_t bytes_read = 0;
                 while (remaining_bytes_to_read > 0) {
-                    uint32_t num_pages_to_read =
-                        std::min<int32_t>(remaining_bytes_to_read, self.get_fifo_curr_size()) / page_size;
+                    uint32_t num_pages_to_read = 1;
                     self.read(
                         reinterpret_cast<void*>(((uintptr_t)data_span.data()) + bytes_read),
                         num_pages_to_read,
@@ -339,8 +338,7 @@ void py_module_types(nb::module_& mod) {
                 int32_t remaining_bytes_to_read = num_pages * page_size;
                 uint32_t bytes_read = 0;
                 while (remaining_bytes_to_read > 0) {
-                    uint32_t num_pages_to_read =
-                        std::min<int32_t>(remaining_bytes_to_read, self.get_fifo_curr_size()) / page_size;
+                    uint32_t num_pages_to_read = 1;
                     self.read(reinterpret_cast<void*>(base + bytes_read), num_pages_to_read, notify_sender);
                     bytes_read += num_pages_to_read * page_size;
                     remaining_bytes_to_read -= num_pages_to_read * page_size;
