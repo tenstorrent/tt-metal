@@ -24,6 +24,7 @@ def mesh_device_config_to_string(val) -> str:
     return f"{rows}x{cols}"
 
 
+# TODO: consider using these fixtures instead of copy-pasting the full dict.
 line_params = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 ring_params = {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}
 line_params_8k = {**line_params, "fabric_router_config": create_fabric_router_config()}
