@@ -65,10 +65,11 @@ consumers (sampling, repetition-penalty, CFG combine) keep working unchanged.
 **Memory (P1)**
 
 - ``ACE_STEP_LM_PREFILL_L1=1``: prefill activations in L1 (default **off**; Tracy sets ``1`` — can L1-clash on P150).
-- ``ACE_STEP_LM_UNIFIED_DECODE_SHARD=1`` (default): decode matmul outputs share
-  ``get_residual_mem_config(DECODE)`` (see :mod:`qwen_decode_shard`).
+- ``ACE_STEP_LM_UNIFIED_DECODE_SHARD=1`` (default): reserved hook for decode shard unification
+  (see :mod:`qwen_decode_shard`; currently no-op — matmul output grids differ from residual).
 - ``ACE_STEP_LM_DECODE_QK_NORM_SHARDED=1`` (default): sharded Q/K head norms (see :mod:`qwen_decode_qk_norm`).
-- ``ACE_STEP_LM_SDPA_GATHER_UNIFIED=1`` (default): post-SDPA gather WIDTH = residual grid (see :mod:`qwen_decode_sdpa_layout`).
+- ``ACE_STEP_LM_SDPA_GATHER_UNIFIED=1`` (default): reserved hook for post-SDPA gather layout
+  (see :mod:`qwen_decode_sdpa_layout`; currently no-op — stock ``[32, 32]`` users grid).
 - ``ACE_STEP_LM_NARROW_AUDIO_VOCAB=1`` (default): narrow ``LMHead`` column band in codes phase (see :mod:`ace_step_lm_head_narrow`).
 - ``ACE_STEP_LM_LM_HEAD_SHARDED_NORM=1`` (default): sharded prefill final RMSNorm before ``LMHead`` (see :mod:`qwen_lm_head_sharded_norm`).
 
