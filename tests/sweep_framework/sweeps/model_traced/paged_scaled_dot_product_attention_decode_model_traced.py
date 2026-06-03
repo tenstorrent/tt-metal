@@ -15,11 +15,49 @@ from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
+    dispatch_axis_for_grid,
     get_mesh_shape,
     get_model_traced_mesh_shape,
     mesh_tensor_to_torch,
+    program_config_grid_bounds,
     reconcile_golden_to_actual,
 )
+
+# The device is opened per-vector (not by the fixture) so each vector can use the
+# dispatch axis its traced SDPAProgramConfig grid needs: some grids touch x=7
+# (need ROW), others touch y=9 / use sub_core_grids up to y=9 (need COL), and no
+# single per-suite axis serves both. The device is cached and only reopened when
+# the required axis changes between consecutive vectors, so agnostic runs reuse it.
+_CUR_DEVICE = None
+_CUR_AXIS = "__uninit__"
+
+
+def _ensure_vector_device(axis):
+    global _CUR_DEVICE, _CUR_AXIS
+    if _CUR_DEVICE is None or axis != _CUR_AXIS:
+        _close_vector_device()
+        _CUR_DEVICE = create_mesh_device(get_model_traced_mesh_shape(), dispatch_core_axis=axis)
+        _CUR_AXIS = axis
+    return _CUR_DEVICE
+
+
+def _close_vector_device():
+    global _CUR_DEVICE, _CUR_AXIS
+    if _CUR_DEVICE is not None:
+        try:
+            ttnn.close_mesh_device(_CUR_DEVICE)
+        except Exception:
+            pass
+    _CUR_DEVICE = None
+    _CUR_AXIS = "__uninit__"
+
+
+def _vector_dispatch_axis(kwargs):
+    pc = kwargs.get("program_config")
+    pc_val = pc.get("value", "") if isinstance(pc, dict) else str(pc or "")
+    return dispatch_axis_for_grid(*program_config_grid_bounds(pc_val))
+
+
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
@@ -69,12 +107,10 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    mesh_shape = get_model_traced_mesh_shape()
-    device = create_mesh_device(mesh_shape)
-    device_name = ttnn.get_arch_name()
-    yield (device, device_name)
-    ttnn.close_mesh_device(device)
-    del device
+    # Device is opened per-vector in run() (see _ensure_vector_device) so each
+    # vector can pick the dispatch axis its program_config grid needs.
+    yield (None, "wormhole_b0")
+    _close_vector_device()
 
 
 def _paged_sdpa_input_shard_axis_and_factor(placement_dict):
@@ -237,6 +273,10 @@ def run(
     **kwargs,
 ) -> list:
     torch.manual_seed(0)
+
+    # Open (or reuse) a mesh device whose dispatch axis matches this vector's
+    # traced program_config grid. fixture yielded None; we own the device here.
+    device = _ensure_vector_device(_vector_dispatch_axis(kwargs))
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
@@ -545,17 +585,40 @@ def run(
             import re
 
             val = traced_pc.get("value", "")
-            gm = re.search(r"compute_with_storage_grid_size=(\d+)-(\d+)", val)
+            # Grid is recorded either as "(x=8,y=8)" or "8-9" (a grid SIZE).
+            gm = re.search(r"compute_with_storage_grid_size=\(x=(\d+),y=(\d+)\)", val) or re.search(
+                r"compute_with_storage_grid_size=(\d+)-(\d+)", val
+            )
             qm = re.search(r"q_chunk_size=(\d+)", val)
             km = re.search(r"k_chunk_size=(\d+)", val)
             em = re.search(r"exp_approx_mode=(\w+)", val)
-            if gm and qm and km:
-                op_kwargs["program_config"] = ttnn.SDPAProgramConfig(
-                    compute_with_storage_grid_size=(int(gm.group(1)), int(gm.group(2))),
-                    q_chunk_size=int(qm.group(1)),
-                    k_chunk_size=int(km.group(1)),
-                    exp_approx_mode=em.group(1).lower() == "true" if em else False,
+            mcm = re.search(r"max_cores_per_head_batch=(\d+)", val)
+            # sub_core_grids: {[x1-y1 - x2-y2], ...} — the explicit kernel
+            # placement that keeps the op off dispatch cores. Must be preserved;
+            # dropping it caused "not on_dispatch_core". std::nullopt when absent.
+            sub_core_grids = None
+            if "sub_core_grids=std::nullopt" not in val:
+                ranges = re.findall(r"\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\]", val)
+                if ranges:
+                    sub_core_grids = ttnn.CoreRangeSet(
+                        {
+                            ttnn.CoreRange(ttnn.CoreCoord(int(a), int(b)), ttnn.CoreCoord(int(c), int(d)))
+                            for a, b, c, d in ranges
+                        }
+                    )
+            if gm:
+                pc_kwargs = dict(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(int(gm.group(1)), int(gm.group(2))),
+                    q_chunk_size=int(qm.group(1)) if qm else 0,
+                    k_chunk_size=int(km.group(1)) if km else 0,
                 )
+                if em:
+                    pc_kwargs["exp_approx_mode"] = em.group(1).lower() == "true"
+                if mcm:
+                    pc_kwargs["max_cores_per_head_batch"] = int(mcm.group(1))
+                if sub_core_grids is not None:
+                    pc_kwargs["sub_core_grids"] = sub_core_grids
+                op_kwargs["program_config"] = ttnn.SDPAProgramConfig(**pc_kwargs)
         elif traced_pc is not None and traced_pc != "__ABSENT__" and not isinstance(traced_pc, dict):
             op_kwargs["program_config"] = traced_pc
 

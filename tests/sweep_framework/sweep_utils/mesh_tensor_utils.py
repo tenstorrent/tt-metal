@@ -96,10 +96,72 @@ def get_mesh_shape_from_machine_info(machine_info: Optional[Dict]) -> Optional[T
     return None
 
 
+def program_config_grid_bounds(pc):
+    """Max core (x, y) a traced program_config will actually use.
+
+    Accepts either a structured dict (matmul configs: ``compute_with_storage_grid_size
+    = {"x":7,"y":10}`` plus ``hop_cores``/``sub_core_grids`` range lists) or a repr
+    string (SDPA: ``compute_with_storage_grid_size=(x=8,y=8)`` or ``=8-9`` — a grid
+    SIZE, so the max core index is size-1 — plus ``sub_core_grids={[x1-y1 - x2-y2],
+    ...}``). compute_with_storage_grid_size is a SIZE; explicit core ranges
+    (sub_core_grids/hop_cores) are exact and extend the bounds. Returns
+    (max_x, max_y), each possibly None.
+    """
+    import re
+
+    # Structured dict form (matmul program configs).
+    if isinstance(pc, dict):
+        max_x = max_y = None
+        csg = pc.get("compute_with_storage_grid_size")
+        if isinstance(csg, dict) and csg.get("x") is not None and csg.get("y") is not None:
+            max_x, max_y = int(csg["x"]) - 1, int(csg["y"]) - 1
+        for key in ("hop_cores", "sub_core_grids"):
+            ranges = pc.get(key)
+            if isinstance(ranges, list):
+                for r in ranges:
+                    end = r.get("end") if isinstance(r, dict) else None
+                    if isinstance(end, dict):
+                        max_x = max(max_x if max_x is not None else -1, int(end.get("x", -1)))
+                        max_y = max(max_y if max_y is not None else -1, int(end.get("y", -1)))
+        if max_x is None and max_y is None and pc.get("value"):
+            return program_config_grid_bounds(pc.get("value"))  # SDPA-style repr in "value"
+        return max_x, max_y
+
+    s = str(pc or "")
+    sub = list(re.finditer(r"\[(\d+)-(\d+)\s*-\s*(\d+)-(\d+)\]", s))
+    if sub:
+        return max(int(m.group(3)) for m in sub), max(int(m.group(4)) for m in sub)
+    gm = re.search(r"compute_with_storage_grid_size=\(x=(\d+),y=(\d+)\)", s) or re.search(
+        r"compute_with_storage_grid_size=(\d+)-(\d+)", s
+    )
+    if gm:
+        return int(gm.group(1)) - 1, int(gm.group(2)) - 1
+    return None, None
+
+
+def dispatch_axis_for_grid(max_x, max_y):
+    """Pick the Wormhole WORKER dispatch axis a core grid needs, or None.
+
+    ROW dispatch -> compute grid (8,9): x in [0,7], y in [0,8].
+    COL dispatch -> compute grid (7,10): x in [0,6], y in [0,9].
+    A grid touching x=7 needs ROW; one touching y=9 (but not x=7) needs COL;
+    otherwise either axis works (None). x is checked first because the matmul
+    compute grid width is a hard placement constraint; if a config genuinely
+    needs both x=7 and y=9 it fits neither (a genuinely inconsistent traced
+    config), and ROW at least satisfies the compute-grid width.
+    """
+    if (max_x or -1) >= 7:
+        return ttnn.DispatchCoreAxis.ROW
+    if (max_y or -1) >= 9:
+        return ttnn.DispatchCoreAxis.COL
+    return None
+
+
 def create_mesh_device(
     mesh_shape: Tuple[int, int],
     device_ids: Optional[list] = None,
     l1_small_size: int = 79104,
+    dispatch_core_axis=None,
 ) -> ttnn.MeshDevice:
     """
     Create a mesh device with the specified shape.
@@ -108,11 +170,16 @@ def create_mesh_device(
         mesh_shape: Tuple of (rows, cols) for mesh shape
         device_ids: Optional list of device IDs (deprecated, not used by API)
         l1_small_size: L1 small buffer size (default 79104 to prevent OOM in model-traced sweeps)
+        dispatch_core_axis: explicit ttnn.DispatchCoreAxis (ROW/COL). When given,
+            opens WORKER dispatch on that axis directly and skips auto-detection.
+            Used for per-vector axis selection when an op's traced program_config
+            grid needs a specific axis (some need x=7/ROW, others y=9/COL).
 
     Returns:
         ttnn.MeshDevice instance
 
     Dispatch axis selection (in priority order):
+      0. Explicit ``dispatch_core_axis`` argument (per-vector selection).
       1. `TTNN_DISPATCH_AXIS=col|row` env var — explicit override. Used by
          the two-pass workflow when a single op has master configs that
          straddle both axes (e.g. linear has both y=9 and x=7 masters).
@@ -120,6 +187,14 @@ def create_mesh_device(
          op's masters all need the same axis.
       3. Default to COL.
     """
+    # 0. Explicit per-vector axis override.
+    if dispatch_core_axis is not None:
+        return ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(*mesh_shape),
+            l1_small_size=l1_small_size,
+            dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER, dispatch_core_axis),
+        )
+
     # 1. Env-var override — but ETH dispatch overrides when 8x8 grid is needed.
     _env_axis = os.environ.get("TTNN_DISPATCH_AXIS", "").strip().lower()
 

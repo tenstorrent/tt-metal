@@ -2,8 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
 import torch
 
 import ttnn
@@ -16,10 +14,42 @@ from tests.sweep_framework.master_config_loader_v2 import (
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     create_mesh_device,
     create_tensor_on_mesh,
+    dispatch_axis_for_grid,
     get_model_traced_mesh_shape,
     mesh_tensor_to_torch,
+    program_config_grid_bounds,
     reconcile_golden_to_actual,
 )
+
+
+# Device opened per-vector (see _ensure_vector_device) so each vector can use the
+# dispatch axis its traced matmul program_config grid needs: some grids touch x=7
+# (need ROW/8x9), others use y=9/10 (need COL/7x10), and no single per-suite axis
+# serves both. Cached; only reopened when the required axis changes between vectors.
+_CUR_DEVICE = None
+_CUR_AXIS = "__uninit__"
+
+
+def _ensure_vector_device(axis):
+    global _CUR_DEVICE, _CUR_AXIS
+    if _CUR_DEVICE is None or axis != _CUR_AXIS:
+        _close_vector_device()
+        _CUR_DEVICE = create_mesh_device(get_model_traced_mesh_shape(), dispatch_core_axis=axis)
+        _CUR_AXIS = axis
+    return _CUR_DEVICE
+
+
+def _close_vector_device():
+    global _CUR_DEVICE, _CUR_AXIS
+    if _CUR_DEVICE is not None:
+        try:
+            ttnn.close_mesh_device(_CUR_DEVICE)
+        except Exception:
+            pass
+    _CUR_DEVICE = None
+    _CUR_AXIS = "__uninit__"
+
+
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
@@ -59,18 +89,11 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
-    # linear's matmul configs use the 7-wide core pattern and need the COL
-    # compute grid (7x10). The master-JSON auto-probe otherwise picks ROW (8x9)
-    # because some shard specs touch x=7, which then fails the matmul grid check
-    # (grid (7,10) doesn't fit (8,9)) and yields wrong-grid low-PCC results.
-    # Forcing COL passes all configs (validated 35/35 at 4x8). setdefault so an
-    # explicit TTNN_DISPATCH_AXIS (e.g. a two-pass run) still wins.
-    os.environ.setdefault("TTNN_DISPATCH_AXIS", "col")
-    mesh_shape = get_model_traced_mesh_shape()
-    device = create_mesh_device(mesh_shape)
-    device_name = ttnn.get_arch_name()
-    yield (device, device_name)
-    ttnn.close_mesh_device(device)
+    # Device is opened per-vector in run() (see _ensure_vector_device) so each
+    # vector gets the dispatch axis its matmul program_config grid needs. A blunt
+    # per-suite axis can't serve both the x=7/ROW and y=9/COL configs linear has.
+    yield (None, "wormhole_b0")
+    _close_vector_device()
 
 
 def _parse_placement_list(plac_val):
@@ -219,6 +242,11 @@ def run(
     **kwargs,  # Accept placements, traced_source, traced_machine_info, etc.
 ) -> list:
     torch.manual_seed(0)
+
+    # Open (or reuse) a mesh device whose dispatch axis matches this vector's
+    # matmul program_config grid + the real shard-grid placement (read raw,
+    # before parsing below). The fixture yielded None; we own the device here.
+    device = _ensure_vector_device(dispatch_axis_for_grid(*program_config_grid_bounds(program_config)))
 
     # V2 vectors provide weight as input_tensor_b_* instead of input_b_*. Each
     # field can be present in either convention (or None when absent in master),
