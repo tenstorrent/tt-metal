@@ -24,7 +24,7 @@ For each stage, read the relevant skill, understand its final objectives, and it
 
 ## Mission
 
-Take a HuggingFace model from reference implementation to a TTNN implementation that can run, be checked, be optimized, use the target mesh, generate end-to-end on real weights, and serve through the shared vLLM path.
+Bring up a HuggingFace model as an optimized multi-device TTNN implementation that can run, be checked, is optimized, makes good use of the target mesh, generates end-to-end on real weights, and serves through the shared vLLM path. Always remember our purpose: to bring up an optimized multi-device TTNN implementation that runs the target model with acceptable accuracy.
 
 These skills are onboarding context for capable, reasoning agents, not scripts to execute mechanically. Read widely: HuggingFace source, TTNN op implementations, nearby tt-metal models, readiness runners, profiler output, and previous stage reports. Debug from evidence and keep improving until the result is genuinely complete or blocked by a proved limitation.
 
@@ -47,7 +47,7 @@ Use `tt-smi -r` before starting device work when you have exclusive access. Do n
 
 ## Stage Order
 
-Use these skills in order and finish each stage before moving on:
+The recommended stage order is:
 
 1. `$functional-decoder`
 2. `$optimize`
@@ -55,7 +55,9 @@ Use these skills in order and finish each stage before moving on:
 4. `$full-model`
 5. `$vllm-integration`
 
-When entering a stage, read that skill for the stage-specific engineering guidance. The contracts below are the autoport outputs this pipeline expects from each stage.
+Instead of running the skills directly, run each one with a forked subagent. Not to parallelize them - do them one at a time - but because this allows you to focus on the bigger picture. Your role is assessing the subagent's work and implementation and deciding: does this fit the intent of our mission? In making the big impactful choices about architecture and parallelization strategy, perhaps. Is there work left deferred or undone? Your role is then to either provide feedback to the subagent or fork a fresh one with new instructions to continue the work. You are accountable for our mission and the quality of the work produced.
+
+When entering a stage, read that skill for the stage-specific engineering guidance. The contracts below are the autoport outputs this pipeline expects from each stage. At every step along the way always remember our purpose: to bring up an optimized multi-device TTNN implementation that runs the target model with acceptable accuracy. Do not defer optimizations that you could do now to some mythical "later stage". Apart from you, there *is* no later stage. You are it. And it's worth making things run fast now, so that the cycle time on later stages is shorter too.
 
 ## Stage Contracts
 
@@ -78,7 +80,7 @@ class FunctionalDecoder(LightweightModule):
     def decode_forward(self, ...): ...
 ```
 
-The exact forward signatures should fit the model and be documented in the final report. Validate real decoder semantics against HuggingFace for every meaningful layer kind, including paged KV-cache behavior.
+The exact forward signatures should fit the model and be documented in the final report. Validate real decoder semantics against HuggingFace for every meaningful layer kind, including paged KV-cache behavior. Do not leave this stage until the PCC tests are passing according to the skill.
 
 ### 2. Optimized Decoder
 
@@ -103,6 +105,8 @@ Preserve the functional decoder contract unless the report explains a deliberate
 
 Reuse or wrap `functional_decoder.py` when that is the clearest path, but the delivered code and evidence must exercise the optimized path. It is also acceptable to copy the functional implementation into `OptimizedDecoder` as a starting point and rewrite the forward path as much as performance requires.
 
+Your aim here is to make good use of the hardware. `tt-perf-report` gives you estimates of this. Do not leave this stage until its advice has been followed or has been tried and refuted with evidence.
+
 ### 3. Multichip Decoder
 
 Use `$multichip` to produce:
@@ -122,7 +126,7 @@ class MultichipDecoder(LightweightModule):
     def decode_forward(self, ...): ...
 ```
 
-Use the optimized decoder as baseline when it exists and passes, otherwise the functional decoder. Preserve a chainable decoder input/output contract. It is acceptable and often desirable for the multichip decoder to use mesh-sharded activations internally and at decoder boundaries, provided stacked layers can use that contract without per-layer gather/reshard overhead.
+Use the optimized decoder as baseline. If it's not optimized yet, go back and optimize it. This stage is essential for running larger models. Do not leave it until you have a well-optimized decoder that makes good use of the target mesh and has a parallelization strategy that will fit the weights and kv cache expectations of the full model. Always remember our purpose: to bring up an optimized multi-device TTNN implementation that runs the target model with acceptable accuracy.
 
 ### 4. Full Model
 
@@ -133,7 +137,7 @@ models/autoports/<model>/tt/model.py
 models/autoports/<model>/tt/generator.py
 ```
 
-Use the strongest passing decoder: multichip if available, otherwise optimized, otherwise functional. The model wrapper should implement the full HuggingFace autoregressive path in TTNN, including embeddings, all decoder layers, final norm, LM head, tied embeddings when applicable, paged KV-cache exposure, logits, and on-device sampling where supported.
+Use the multichip decoder as your starting point. If its mesh sharding scheme cannot fit the full model weights, go back and repeat that stage until it can. The model wrapper should implement the full HuggingFace autoregressive path in TTNN, including embeddings, all decoder layers, final norm, LM head, tied embeddings when applicable, paged KV-cache exposure, logits, and on-device sampling where supported. You will need to use the $optimize and $multichip skills to optimize these parts of the model for the target mesh. Always remember our purpose: to bring up an optimized multi-device TTNN implementation that runs the target model with acceptable accuracy.
 
 `tt/generator.py` should follow the standard Metal generator API described by `$full-model`, including a low-level prefill/decode boundary suitable for the later `generator_vllm.py` adapter.
 
@@ -219,9 +223,13 @@ Stages that produce perf-report evidence should also keep the final compact repo
 models/autoports/<model>/doc/<stage>/tracy/<layer_or_path>/
   prefill_perf_report.csv
   prefill_perf_report.txt
+  prefill_perf_report.console.log
   decode_perf_report.csv
   decode_perf_report.txt
+  decode_perf_report.console.log
 ```
+
+Here `*_perf_report.txt` means the human-readable rendered `tt-perf-report` table. If a `--csv` command is used to write `*_perf_report.csv`, redirect its stdout to `*_perf_report.console.log`, not to `*_perf_report.txt`.
 
 Raw pytest logs, watcher logs, bulky Tracy captures, and failed exploratory attempts may be linked from the work log, but generally do not belong in git.
 
@@ -252,6 +260,6 @@ Keep full model weights, binary tensors, program-cache directories, giant profil
 
 ## Completion Bar
 
-The goal is complete only when all five stages have achieved their final objectives, including code, work logs, final reports, full-model readiness, generator-level performance, vLLM serving evidence, and any required perf reports.
+The goal is complete only when all five stages have achieved their final objectives, including code, work logs, final reports, full-model readiness, generator-level performance, vLLM serving evidence, and any required perf reports. Always remember our purpose: to bring up an optimized multi-device TTNN implementation that runs the target model with acceptable accuracy.
 
 Do not treat a partial implementation, diagnostic-only path, skipped validation, reduced-scope run, or unexplained blocker as completion. If blocked, preserve the evidence that proves the blocker and the strongest useful implementation state reached.
