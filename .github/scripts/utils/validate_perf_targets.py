@@ -470,9 +470,7 @@ def main() -> int:
             try:
                 measured_value = _extract_metric_value(metric_name, measured)
             except ValueError as exc:
-                hard_failures.append(
-                    f"{hard_failures_prefix}: ambiguous metric '{metric_name}': {exc}"
-                )
+                hard_failures.append(f"{hard_failures_prefix}: ambiguous metric '{metric_name}': {exc}")
                 continue
             if measured_value is None or math.isnan(measured_value):
                 hard_failures.append(
