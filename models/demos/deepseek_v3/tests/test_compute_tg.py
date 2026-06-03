@@ -14,7 +14,7 @@ Configuration:
 - cluster_axis: 0 (dispatch along axis-0)
 
 Run with:
-'MESH_DEVICE=TG USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/tg_moe_tests/individual_ops/test_compute_tg.py -v'
+'MESH_DEVICE=TG USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/test_compute_tg.py -v'
 """
 
 import os
