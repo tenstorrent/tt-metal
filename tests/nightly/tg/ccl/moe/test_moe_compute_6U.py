@@ -39,9 +39,6 @@ MESH_GRAPH_DESC_1x16 = (
 MESH_GRAPH_DESC_1x8 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
 )
-# MESH_GRAPH_DESC_BH_LB_1x8 = (
-#    "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_lb_1x8_torus_graph_descriptor.textproto"
-# )
 MESH_GRAPH_DESC_1x16_LINEAR = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x16_linear_graph_descriptor.textproto"
 )
@@ -261,7 +258,6 @@ _MODELS_BH_LB_1x8 = [
 _MOE_MESH_CONFIGS = [
     MoEMeshConfig("1x8-torus",        8, MESH_GRAPH_DESC_1x8,              _MODELS_1x8,       MOE_DEVICE_PARAMS),
     MoEMeshConfig("1x16-torus",      16, MESH_GRAPH_DESC_1x16,             _MODELS_1x16,      MOE_DEVICE_PARAMS),
-    #MoEMeshConfig("1x8-torus-bh_lb",  8, MESH_GRAPH_DESC_BH_LB_1x8,        _MODELS_BH_LB_1x8, MOE_DEVICE_PARAMS, num_links=2),
     MoEMeshConfig("1x8-linear",       8, MESH_GRAPH_DESC_1x8_LINEAR,       _MODELS_1x8,       MOE_DEVICE_PARAMS_LINEAR, use_linear_topology=True),
     MoEMeshConfig("1x16-linear",     16, MESH_GRAPH_DESC_1x16_LINEAR,      _MODELS_1x16,      MOE_DEVICE_PARAMS_LINEAR, use_linear_topology=True,),
     MoEMeshConfig("1x8-linear-bh_lb", 8, MESH_GRAPH_DESC_BH_LB_1x8_LINEAR, _MODELS_BH_LB_1x8, MOE_DEVICE_PARAMS_LINEAR, use_linear_topology=True, num_links=2),
