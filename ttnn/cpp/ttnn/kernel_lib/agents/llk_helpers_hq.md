@@ -168,7 +168,7 @@ Run via:
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/kernel_lib/*.py
 ```
 
-Do NOT prefix with the shell `timeout` command — `run_safe_pytest.sh` and `tt-probe.sh` have built-in dispatch-timeout detection that runs `tt-triage` and emits the JSON triage report. An outer `timeout` kills the wrapper before triage runs and the hang artifact is lost.
+Do NOT prefix with the shell `timeout` command — `run_safe_pytest.sh` and `tt-probe.sh` have built-in dispatch-timeout detection that runs `tt-triage` and emits the triage report. An outer `timeout` kills the wrapper before triage runs and the hang artifact is lost.
 
 Phase 2 (Validate) of the pipeline is responsible for adding these tests —
 see [llk_validation_agent.md](llk_validation_agent.md) for the concrete
