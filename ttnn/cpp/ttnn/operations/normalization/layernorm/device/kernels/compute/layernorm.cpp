@@ -252,7 +252,11 @@ void kernel_main() {
                 block.size(),
                 block.full_block_size());
             WAYPOINT("S0A");
-            ACQ();
+            // NOTE: do NOT use ACQ() here. This block uses a split (manual) dest handshake:
+            // tile_regs_acquire/commit on MATH and an explicit tile_regs_wait/release on PACK
+            // (see tile_regs_commit/tile_regs_wait below). ACQ() already issues tile_regs_wait(),
+            // which would give the PACK thread two waits against a single MATH commit and deadlock.
+            tile_regs_acquire();
             WAYPOINT("S0B");
             WAYPOINT("S02");
             for (uint32_t i = 0; i < block.full_block_size(); ++i) {
