@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Wrapper script to run SDXL accuracy test n times with specific configuration, which represents a stress test.
 # Number of runs is picked such that the test runs for 24 hours.

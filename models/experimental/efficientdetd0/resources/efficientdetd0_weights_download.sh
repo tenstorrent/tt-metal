@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Download your pretrained model:
 # First try to download to resources folder, fallback to default location

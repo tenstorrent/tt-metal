@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Check and install gdown
 if ! command -v gdown &> /dev/null; then
