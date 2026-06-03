@@ -346,7 +346,6 @@ def test_five_hz_lm_hifi2_optimizations_default():
             OpGroup.LI_FF1_FF3,
             OpGroup.LI_FF2,
             OpGroup.LI_QKV_DECODE,
-            OpGroup.LI_QKV_PREFILL,
             OpGroup.SDPA_DECODE,
             OpGroup.SDPA_PREFILL,
             OpGroup.LI_O_DECODE,
@@ -354,3 +353,6 @@ def test_five_hz_lm_hifi2_optimizations_default():
         ):
             fid = dec.decoder_optimizations[layer].op_fidelity_settings[op]
             assert fid == MathFidelitySetting.HIFI2, f"layer={layer} op={op} got {fid}"
+        assert (
+            dec.decoder_optimizations[layer].op_fidelity_settings[OpGroup.LI_QKV_PREFILL] == MathFidelitySetting.HIFI4
+        )
