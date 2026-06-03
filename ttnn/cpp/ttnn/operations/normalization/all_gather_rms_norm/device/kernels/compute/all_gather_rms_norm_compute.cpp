@@ -32,6 +32,11 @@
 #include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
+#define AGRMS_TRACE_LOCAL 1  // TEMP: dump cb_local_stats at the compute's output (root-cause trace)
+#ifdef AGRMS_TRACE_LOCAL
+#include "api/debug/dprint_pages.h"
+#endif
+
 ALWI void ACQ() {
     tile_regs_acquire();
     tile_regs_wait();
@@ -44,7 +49,16 @@ ALWI void REL() {
 // x^2 over the resident Wt-tile input row, then AVG-reduce (scaler = 1/reduce_factor) over the row into a
 // single tile in cb_dst. For ring_size == 1, reduce_factor == Wt so cb_dst is the global mean E[x^2]; for
 // ring_size > 1, reduce_factor == total_W so cb_dst is the per-device partial sum(x^2_local)/total_W.
-ALWI void reduce_x2(uint32_t cb_inp, uint32_t cb_x2, uint32_t cb_reduce, uint32_t cb_dst, uint32_t Wt, uint32_t blk) {
+// `base` is the tile offset of this row within cb_inp (0 unless the caller keeps a whole chunk resident and
+// indexes rows at base = r*Wt without popping between rows).
+ALWI void reduce_x2(
+    uint32_t cb_inp,
+    uint32_t cb_x2,
+    uint32_t cb_reduce,
+    uint32_t cb_dst,
+    uint32_t Wt,
+    uint32_t blk,
+    uint32_t base = 0) {
     reconfig_data_format(cb_inp, cb_inp);
     pack_reconfig_data_format(cb_x2);
     mul_tiles_init(cb_inp, cb_inp);
@@ -52,7 +66,7 @@ ALWI void reduce_x2(uint32_t cb_inp, uint32_t cb_x2, uint32_t cb_reduce, uint32_
         cb_reserve_back(cb_x2, blk);
         ACQ();
         for (uint32_t wtr = 0; wtr < blk; wtr++) {
-            mul_tiles(cb_inp, cb_inp, wt + wtr, wt + wtr, wtr);
+            mul_tiles(cb_inp, cb_inp, base + wt + wtr, base + wt + wtr, wtr);
             pack_tile(wtr, cb_x2, wt + wtr);
         }
         REL();
@@ -217,29 +231,58 @@ void kernel_main() {
         }
     } else {
         // ---- multi device: chunked two-pass so the cross-device stats all-gather is batched ----
+        // The whole chunk's input (rows * Wt tiles) is read ONCE by the reader and kept RESIDENT in cb_inp
+        // across the gather, so pass 2 normalizes it without a DRAM re-stream (halves the activation reads).
         // pass 1: x^2 -> per-device partial (AVG over local width, 1/total_W scaler) into cb_local_stats.
         // [writer batches the fabric all-gather of the chunk's partials -> cb_gathered_stats]
-        // pass 2: SUM the ring_size gathered partials -> global E[x^2] -> rsqrt -> normalize. The reader
-        // re-streams the chunk's input rows for pass 2 (input is not kept resident across the gather).
+        // pass 2: SUM the ring_size gathered partials -> global E[x^2] -> rsqrt -> normalize.
         for (uint32_t chunk_start = 0; chunk_start < NCHt; chunk_start += gather_chunk) {
             const uint32_t rows = (NCHt - chunk_start) < gather_chunk ? (NCHt - chunk_start) : gather_chunk;
 
-            // pass 1
+            // Wait for the whole chunk once; pass 1 reads each row by offset (base = r*Wt) WITHOUT popping,
+            // so the rows stay resident for pass 2.
+            cb_wait_front(cb_inp, rows * Wt);
             for (uint32_t r = 0; r < rows; r++) {
-                cb_wait_front(cb_inp, Wt);
-                reduce_x2(cb_inp, cb_x2, cb_reduce, cb_local_stats, Wt, blk);
-                cb_pop_front(cb_inp, Wt);
+                reduce_x2(cb_inp, cb_x2, cb_reduce, cb_local_stats, Wt, blk, /*base=*/r * Wt);
             }
+#ifdef AGRMS_TRACE_LOCAL
+            // Print this device's just-computed local partial (cb_local_stats) at the compute's OUTPUT,
+            // before the writer copies/mcasts it. Sane here + garbage at the writer => compute->writer
+            // handshake race; garbage here => the compute (or its cb_inp input) is already bad.
+            if (chunk_start == 0) {
+                UNPACK(DPRINT << "AGRMS_LOCAL\n");
+                UNPACK(tt::compute::common::print_full_tile(cb_local_stats, 0));
+            }
+#endif
 
-            // pass 2
+            // pass 2: normalize the resident rows from the front, popping Wt per row (so finalize_row, which
+            // indexes from offset 0, always sees the current row). After the chunk, rows*Wt tiles are popped,
+            // matching the single reader push.
             for (uint32_t r = 0; r < rows; r++) {
+#ifdef AGRMS_TRACE_LOCAL
+                // Format-aware (bf16 tiled) print of the gathered partials the compute is about to SUM:
+                // slot[s] is ring peer s's E[x^2] contribution. cb_local_stats was sane at the compute's
+                // output; if these gathered slots are garbage IN-MODEL, the fabric gather corrupted them.
+                if (chunk_start == 0 && r == 0) {
+                    cb_wait_front(cb_gathered_stats, ring_size);
+                    for (uint32_t sl = 0; sl < ring_size; sl++) {
+                        UNPACK(DPRINT << "AGRMS_GATH slot=" << sl << "\n");
+                        UNPACK(tt::compute::common::print_full_tile(cb_gathered_stats, sl));
+                    }
+                }
+#endif
                 // SUM the ring_size gathered partials for this row -> global mean E[x^2] in cb_var.
                 compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
                     cb_gathered_stats,
                     cb_reduce_one,
                     cb_var,
                     compute_kernel_lib::ReduceInputBlockShape::row(ring_size));
-                cb_wait_front(cb_inp, Wt);  // pass-2 re-stream of this row
+#ifdef AGRMS_TRACE_LOCAL
+                if (chunk_start == 0 && r == 0) {
+                    UNPACK(DPRINT << "AGRMS_VAR (global E[x^2] = sum of gathered slots)\n");
+                    UNPACK(tt::compute::common::print_full_tile(cb_var, 0));
+                }
+#endif
                 finalize_row<do_gamma, do_beta>(
                     cb_var,
                     cb_eps,
@@ -252,6 +295,12 @@ void kernel_main() {
                     cb_out,
                     Wt,
                     blk);
+#ifdef AGRMS_TRACE_LOCAL
+                if (chunk_start == 0 && r == 0) {
+                    UNPACK(DPRINT << "AGRMS_OUT (normalized output row, first tile)\n");
+                    UNPACK(tt::compute::common::print_full_tile(cb_out, 0));
+                }
+#endif
                 cb_pop_front(cb_inp, Wt);
             }
         }

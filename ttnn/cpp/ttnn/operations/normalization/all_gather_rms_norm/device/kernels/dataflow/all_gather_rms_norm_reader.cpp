@@ -145,14 +145,13 @@ void kernel_main() {
         // and the normalize step.
         stream_tiles(src_a, cb_inp_buf, noc, src_tile_bytes, tile_offset, NCHt * Wt, Wt);
     } else {
-        // Multi device: the compute kernel runs a chunked two-pass scheme (x^2 -> gather -> normalize) and
-        // does NOT keep the input resident across the gather, so we re-stream each chunk's rows a second
-        // time for pass 2.
+        // Multi device: the compute kernel keeps each chunk's input RESIDENT in cb_inp across the gather
+        // (cb_inp depth = gather_chunk * Wt), so we stream each chunk's rows exactly ONCE -- pass 2
+        // normalizes the resident rows without a DRAM re-stream.
         for (uint32_t chunk_start = 0; chunk_start < NCHt; chunk_start += gather_chunk) {
             const uint32_t rows = (NCHt - chunk_start) < gather_chunk ? (NCHt - chunk_start) : gather_chunk;
             const uint32_t chunk_first_tile = tile_offset + chunk_start * Wt;
-            stream_tiles(src_a, cb_inp_buf, noc, src_tile_bytes, chunk_first_tile, rows * Wt, Wt);  // pass 1
-            stream_tiles(src_a, cb_inp_buf, noc, src_tile_bytes, chunk_first_tile, rows * Wt, Wt);  // pass 2
+            stream_tiles(src_a, cb_inp_buf, noc, src_tile_bytes, chunk_first_tile, rows * Wt, Wt);
         }
     }
 }

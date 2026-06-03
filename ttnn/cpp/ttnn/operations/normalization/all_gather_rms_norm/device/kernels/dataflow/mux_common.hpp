@@ -22,6 +22,8 @@
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
 
 template <uint32_t NumBuffersPerChannel, uint32_t ChannelBufferSizeBytes>
 struct MuxConnection {
@@ -103,6 +105,70 @@ FORCE_INLINE MuxConnection<NumBuffersPerChannel, ChannelBufferSizeBytes> parse_m
     mux.termination_master_noc_y = get_arg_val<uint32_t>(argidx++);
 
     return mux;
+}
+
+// All the per-direction mux state the writer needs after startup: the connection objects (kept for
+// teardown), the connected sender handles, and the pre-configured write / atomic-inc packet headers.
+// The sender pointers point into this struct's own MuxConnection members, so an instance must outlive
+// its use -- declare it in kernel_main, not as a temporary.
+template <uint32_t NumBuffersPerChannel, uint32_t ChannelBufferSizeBytes>
+struct MuxWriter {
+    MuxConnection<NumBuffersPerChannel, ChannelBufferSizeBytes> mux_fwd;
+    MuxConnection<NumBuffersPerChannel, ChannelBufferSizeBytes> mux_bwd;
+    tt::tt_fabric::WorkerToFabricMuxSender<NumBuffersPerChannel>* sender_fwd;
+    tt::tt_fabric::WorkerToFabricMuxSender<NumBuffersPerChannel>* sender_bwd;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr_w_fwd;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr_w_bwd;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr_s_fwd;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr_s_bwd;
+};
+
+// Mux startup: parse both directions' connection runtime args (advancing argidx), connect to the mux,
+// allocate the write + atomic-inc packet headers, and configure their line-multicast routes via set_state
+// -- so the gather loop only issues the per-send with_state calls. Fills `w` in place (its sender pointers
+// refer to its own MuxConnection members). One write header + one atomic-inc header per direction; each
+// carries a line-multicast route so a single send reaches every ring peer in that direction (the mux just
+// forwards the packet to the EDM). Mirrors the connect+set_state preamble of the reduce_scatter mux writer.
+template <uint32_t NumBuffersPerChannel, uint32_t ChannelBufferSizeBytes>
+FORCE_INLINE void mux_startup(
+    MuxWriter<NumBuffersPerChannel, ChannelBufferSizeBytes>& w,
+    uint32_t& argidx,
+    size_t fabric_mux_status_address,
+    uint32_t stat_tile_bytes,
+    uint8_t start_hops_forward,
+    uint8_t range_hops_forward,
+    uint8_t start_hops_backward,
+    uint8_t range_hops_backward) {
+    using namespace tt::tt_fabric::linear::experimental;
+    using namespace tt::tt_fabric::common::experimental;
+
+    // Connect to the fabric mux (forward then backward). build_and_connect blocks until the mux is ready.
+    w.mux_fwd = parse_mux_connection_args<NumBuffersPerChannel, ChannelBufferSizeBytes>(argidx);
+    w.mux_bwd = parse_mux_connection_args<NumBuffersPerChannel, ChannelBufferSizeBytes>(argidx);
+    w.sender_fwd = w.mux_fwd.build_and_connect(fabric_mux_status_address);
+    w.sender_bwd = w.mux_bwd.build_and_connect(fabric_mux_status_address);
+
+    w.hdr_w_fwd = PacketHeaderPool::allocate_header();
+    w.hdr_w_bwd = PacketHeaderPool::allocate_header();
+    w.hdr_s_fwd = PacketHeaderPool::allocate_header();
+    w.hdr_s_bwd = PacketHeaderPool::allocate_header();
+    if (w.sender_fwd != nullptr) {
+        fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+            w.hdr_w_fwd, start_hops_forward, range_hops_forward, nullptr, stat_tile_bytes);
+        fabric_multicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            w.hdr_s_fwd, start_hops_forward, range_hops_forward, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, 1});
+    }
+    if (w.sender_bwd != nullptr) {
+        fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+            w.hdr_w_bwd, start_hops_backward, range_hops_backward, nullptr, stat_tile_bytes);
+        fabric_multicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            w.hdr_s_bwd,
+            start_hops_backward,
+            range_hops_backward,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0, 1});
+    }
 }
 
 // Disconnect from the mux; the elected termination master waits for all other clients then signals

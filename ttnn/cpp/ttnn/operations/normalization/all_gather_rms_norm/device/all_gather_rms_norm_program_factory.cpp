@@ -139,10 +139,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     const uint32_t num_tile_rows = a.physical_volume() / shape[-1] / TILE_HEIGHT;
     const uint32_t block_size = std::min<uint32_t>(Wt, 4);  // streaming block; tuned later
 
-    // Rows per batched fabric all-gather (ring>1). The compute/writer kernels gather a whole chunk of rows
-    // with a SINGLE fabric barrier instead of one barrier per row (the dominant multi-device cost). The cap
-    // bounds the gathered-stats L1 footprint: ring_size * gather_chunk tiles, double-buffered.
-    const uint32_t gather_chunk = single_device ? 1u : std::min<uint32_t>(num_tile_rows, 8u);
+    // Per-row pipeline (Option A): gather_chunk == 1 -> the chunk loop degenerates to a per-row loop
+    // (read row -> reduce -> send one partial -> one fabric barrier -> normalize -> write -> next row).
+    // This removes the multi-row resident-chunk / batched-barrier machinery (one fabric barrier per row).
+    const uint32_t gather_chunk = 1u;
 
     const auto grid = mesh_device->compute_with_storage_grid_size();
     const uint32_t num_links = args.num_links;
@@ -178,7 +178,9 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
     // The reduce keeps all Wt local-width tiles resident per row (cumulative wait + indexed pack), so
     // input/x_squared/gamma/beta are sized to Wt; the per-row scalar CBs are 1 tile. input is single-buffered
     // (the fused kernel reuses the resident row for both x^2 and normalize) to keep the L1 footprint down.
-    desc.cbs.push_back(make_cb(cb::input, Wt, in_df, worker_core_range));
+    // Multi-device keeps a whole gather_chunk of rows resident across the gather (so pass 2 doesn't re-read
+    // input); single-device streams one row at a time (gather_chunk == 1 -> Wt, unchanged).
+    desc.cbs.push_back(make_cb(cb::input, gather_chunk * Wt, in_df, worker_core_range));
     desc.cbs.push_back(make_cb(cb::reduce_scalar, 1, tt::DataFormat::Float16_b, worker_core_range));
     if (ring_size > 1) {
         desc.cbs.push_back(make_cb(cb::reduce_one, 1, tt::DataFormat::Float16_b, worker_core_range));
@@ -455,7 +457,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_at(
         mux_desc.compile_time_args = mux_cfg->get_fabric_mux_compile_time_args();
         mux_desc.config = DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_1_default,
+            // The fabric mux MUST run on NOC 0 to match its RISCV_0 processor (and the EDM's NoC
+            // convention) -- the same config the proven imperative mux ops (all_gather_async,
+            // reduce_scatter_minimal_async) use. Pairing RISCV_0 with RISCV_1_default (NOC 1) works on a
+            // quiet fabric but races/corrupts against the model's fabric traffic in-context.
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
         };
         desc.kernels.push_back(std::move(mux_desc));
         const tt::tt_metal::KernelHandle mux_kernel_id = desc.kernels.size() - 1;
