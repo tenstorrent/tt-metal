@@ -190,7 +190,7 @@ models:
     wh_galaxy: 45
     wh_galaxy_perf: 45
     bh_p150: 60
-    bh_p300: 30
+    bh_p300: 90
     bh_quietbox_2: 85
     bh_galaxy: 70
   integration:
