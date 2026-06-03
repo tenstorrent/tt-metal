@@ -675,6 +675,7 @@ class ttMLA:
             compute_kernel_config=self.default_compute_kernel_config,
             **self._get_mm_kwargs("wkv_b2", seq_len_local),
         )
+        ttnn.synchronize_device(self.mesh_device)
 
         attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
             tt_q,
