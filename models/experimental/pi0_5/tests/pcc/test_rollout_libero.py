@@ -66,7 +66,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]  # .../pcc/.../models/../tt-met
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME", str(_REPO_ROOT))
 WEIGHTS_DIR = os.path.join(TT_METAL_HOME, "models/experimental/pi0_5/weights")
 IMAGE_SIZE = 224
-DEFAULT_CHUNK = 10  # matches pi05_libero config.n_action_steps
+DEFAULT_CHUNK = 10  # responsive replanning; reproduces v044's 4/5 (chunk 50 drifts open-loop -> 1/5)
 DEFAULT_MAX_STEPS = 400
 DEFAULT_N_INITS = 5
 TOKENIZER_MAX_LEN = 224  # Pi0.5 trained with L=200, pad to 224 for tile alignment (2*256 + 224 = 736 = 23*32)
@@ -411,9 +411,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--backend", choices=["torch", "ttnn"], required=True)
     parser.add_argument(
-        "--weights", default="pi05_libero", help="weights dir name under models/experimental/pi0_5/weights/"
+        "--weights",
+        default="v044",
+        help="weights dir under models/experimental/pi0_5/weights/. The LIBERO 4/5 benchmark uses 'v044' "
+        "(lerobot/pi05_libero_finetuned_quantiles_v044, model.-prefix stripped); base 'pi05_libero' is weaker (~2/5).",
     )
-    parser.add_argument("--suite", default="libero_10")
+    parser.add_argument("--suite", default="libero_spatial")
     parser.add_argument("--tasks", type=int, nargs="+", default=None, help="task indices (default: all)")
     parser.add_argument("--n-inits", type=int, default=DEFAULT_N_INITS)
     parser.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS)

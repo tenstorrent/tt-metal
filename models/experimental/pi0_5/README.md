@@ -46,10 +46,17 @@ python models/experimental/pi0_5/tests/perf/test_perf_pi05.py
 
 ## LIBERO Closed-Loop Benchmark
 
-Closed-loop evaluation on the LIBERO simulator (`libero_spatial` suite, 5 tasks,
-1 init per task) using the `lerobot/pi05_libero` fine-tune on a single
-Tenstorrent Blackhole p150a. The MuJoCo environment runs at 256×256 with the
-policy replanning every 10 steps (chunk=10).
+Closed-loop evaluation on the LIBERO simulator (`libero_spatial` suite, 5 tasks)
+using the **`lerobot/pi05_libero_finetuned_quantiles_v044`** ("v044") fine-tune on
+a single Tenstorrent Blackhole p150a. The MuJoCo environment runs at 256×256 with
+the policy replanning every 10 steps (chunk=10).
+
+> **Checkpoint matters.** v044 (the further-LIBERO-finetuned model) reaches 4/5 —
+> tasks 0–3 succeed on every init (5/5 each at n-inits=5); task 4 fails. The base
+> `lerobot/pi05_libero` is markedly weaker on this suite (~2/5: only tasks 0,1 are
+> reliable), for **both** the TTNN and PyTorch backends — the TTNN port is faithful
+> (ttnn == fp32 on closed-loop outcomes), so a low score means the wrong checkpoint
+> (`pi05_libero`) or chunk (50), **not** a TTNN/precision regression. Use **v044 + chunk 10**.
 
 ### TTNN (Blackhole) vs PyTorch (CPU)
 
@@ -88,14 +95,29 @@ to ~65 W while the host runs MuJoCo env steps.
 Reproduce:
 
 ```bash
-# FPS benchmark with MuJoCo GUI (TTNN)
-export DISPLAY=:0 MUJOCO_GL=glfw
-python benchmark_fps_libero.py \
-    --backend ttnn --suite libero_spatial --tasks 0 1 2 3 4 --n-inits 1
+# 1. One-time: set up the v044 checkpoint. Its safetensors keys are `model.`-prefixed
+#    and must be stripped to match PI0WeightLoader (key set then matches pi05_libero).
+python - <<'PY'
+import os, shutil
+from huggingface_hub import snapshot_download
+from safetensors.torch import load_file, save_file
+src = snapshot_download("lerobot/pi05_libero_finetuned_quantiles_v044")
+out = os.path.join(os.environ["TT_METAL_HOME"], "models/experimental/pi0_5/weights/v044")
+os.makedirs(out, exist_ok=True)
+sd = load_file(os.path.join(src, "model.safetensors"))
+save_file({(k[6:] if k.startswith("model.") else k): v for k, v in sd.items()},
+          os.path.join(out, "model.safetensors"))
+shutil.copy(os.path.join(src, "config.json"), os.path.join(out, "config.json"))
+print("v044 ready at", out)
+PY
 
-# Headless (for CI)
-python benchmark_fps_libero.py \
-    --backend ttnn --suite libero_spatial --tasks 0 1 2 3 4 --n-inits 1 --no-render
+# 2. Closed-loop success-rate benchmark (headless). Defaults already select
+#    --weights v044 --suite libero_spatial --chunk 10 --n-inits 5 --max-steps 400.
+MUJOCO_GL=egl python models/experimental/pi0_5/tests/pcc/test_rollout_libero.py \
+    --backend ttnn --tasks 0 1 2 3 4
+# PyTorch-reference comparison (CPU):
+MUJOCO_GL=egl python models/experimental/pi0_5/tests/pcc/test_rollout_libero.py \
+    --backend torch --tasks 0 1 2 3 4
 ```
 
 ## Directory Structure
