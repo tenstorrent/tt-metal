@@ -219,15 +219,17 @@ def _shard_grid_max_xy(mem_config):
         return None
 
 
-def _dispatch_axis_for_shard_specs(*mem_configs):
+def _dispatch_axis_for_shard_specs_wh(*mem_configs):
     """Choose a dispatch-core axis so sharded grids don't land on dispatch cores.
 
-    The default ROW dispatch yields an 8x9 compute grid (valid y in [0, 8]); a
-    traced shard grid that uses y=9 then overlaps a dispatch core and the
-    sharded reshard fails with "Kernels cannot be placed on dispatch cores".
-    COL dispatch yields a 7x10 grid (valid y in [0, 9], x in [0, 6]). So a shard
-    grid needing y=9 must use COL; one needing x=7 must use ROW. Returns None
-    (use the system default) when no sharded grid needs the wide axis.
+    Wormhole-specific: the 8x9 / 7x10 compute-grid dimensions below are the
+    Wormhole (galaxy) tensix grid. The default ROW dispatch yields an 8x9
+    compute grid (valid y in [0, 8]); a traced shard grid that uses y=9 then
+    overlaps a dispatch core and the sharded reshard fails with "Kernels cannot
+    be placed on dispatch cores". COL dispatch yields a 7x10 grid (valid y in
+    [0, 9], x in [0, 6]). So a shard grid needing y=9 must use COL; one needing
+    x=7 must use ROW. Returns None (use the system default) when no sharded grid
+    needs the wide axis.
     """
     max_x = max_y = -1
     for mc in mem_configs:
@@ -684,14 +686,14 @@ def run(
 
     # Open the mesh with a dispatch-core axis that keeps sharded grids off the
     # dispatch cores. device_context otherwise uses the system default (ROW),
-    # whose 8x9 compute grid makes y=9 a dispatch core and breaks sharded
-    # reshards whose traced shard grid uses y=9.
+    # whose 8x9 compute grid (Wormhole/galaxy tensix grid) makes y=9 a dispatch
+    # core and breaks sharded reshards whose traced shard grid uses y=9.
     _device_params = None
     if is_model_traced:
         _pob_mem_cfg = kwargs.get("persistent_output_buffer_memory_config")
         if _pob_mem_cfg in (None, _ABSENT):
             _pob_mem_cfg = None
-        _dispatch_axis = _dispatch_axis_for_shard_specs(target_sharded_config, output_memory_config, _pob_mem_cfg)
+        _dispatch_axis = _dispatch_axis_for_shard_specs_wh(target_sharded_config, output_memory_config, _pob_mem_cfg)
         if _dispatch_axis is not None:
             _device_params = {"dispatch_core_axis": _dispatch_axis}
 
