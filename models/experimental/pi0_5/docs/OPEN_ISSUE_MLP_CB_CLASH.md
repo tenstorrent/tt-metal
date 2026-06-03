@@ -93,6 +93,54 @@ chase it.
 at the GELU MLP CB clash. Same crash at 1 MB / bank, just with much
 less L1 cap.)
 
+## Attempted fix: DRAM-bounce matmul outputs (didn't help, 2026-06-03)
+
+Mirroring `option_b/tp_block.py:215-224`'s all_reduce DRAM-bounce
+pattern — wired `_output_memory_config` on `SigLIPMLPTTNN` and
+`SigLIPAttentionTTNN` to route fc1/fc2/wqkv/wo OUTPUTS to DRAM when
+weights are L1-resident; toggled by the vision_slice migration
+helper. **Same crash, same addresses.** The L1 buffer at 537 KB is
+NOT the matmul output (that's now in DRAM) — it's one of the
+L1-resident weights or a small intermediate the allocator placed in
+the conflict range.
+
+Per-bank arithmetic explains why:
+
+| Component | per-bank size |
+|---|---|
+| L1 bank capacity | 1.43 MB |
+| Static CB region for the offending matmul | 0.73 MB (lower addresses) |
+| Available L1 above CB region | 0.70 MB |
+| Migrated SigLIP weights / bank | 1.16 MB (138.9 MB / 120 banks) |
+
+**The weights physically can't fit above the CB region.** The
+allocator has to place some weight buffers inside the CB region's
+address range, which triggers `validate_circular_buffer_region`.
+Moving the output to DRAM is necessary but not sufficient — the
+collision happens with the weights themselves.
+
+The `_output_memory_config` plumbing is preserved (it's inert when
+weights are in DRAM, and is the correct fix for the all_reduce-style
+case where only the OUTPUT collides). It just doesn't unblock the
+matmul-weight-in-L1 case.
+
+## Real paths forward (none in scope for the model code)
+
+1. **Kernel engineering** — modify the matmul kernel to shrink its
+   static CB region or relocate it (e.g., to upper L1 with a known
+   reserved-low-L1 region). Touches `tt_metal/impl/...`, not pi0_5.
+2. **More chips per stage** — drop per-bank weight load below 0.70 MB
+   by spreading weights across more chips. Vision would need 8 chips
+   instead of 4 (eats into prefill submesh or the spare).
+3. **Sharded matmul (TP within stage)** — split weight across chips so
+   per-chip weight footprint shrinks. Option B's TP=8 path is the
+   target eventually; same CB caveat applies until the kernel is
+   fixed.
+4. **Accept DRAM-resident matmul weights, L1 for everything else** —
+   the migration helper is useful for layer norms / small tensors but
+   leave fc1/fc2/wqkv/wo in DRAM. No e2e perf gain from L1 placement
+   but at least the forward completes and PCC can be checked.
+
 ## Where to add the fix
 
 Inside whichever VLM block code path runs the MLP matmul on the
