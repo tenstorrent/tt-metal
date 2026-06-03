@@ -130,12 +130,14 @@ void MetalEnvImpl::initialize_base_objects() {
         this->rtoptions_->set_mock_cluster_desc(std::string(descriptor_.mock_cluster_desc_path()));
     }
 
-    const bool is_base_routing_fw_enabled =
-        Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(*this->rtoptions_));
     const auto platform_arch = get_platform_architecture(*this->rtoptions_);
 
     cluster_ = std::make_unique<Cluster>(*this->rtoptions_);
     this->verify_fw_capabilities();
+
+    // Get is_base_routing_fw_enabled from the already-constructed Cluster instead of running
+    // a throwaway TopologyDiscovery via get_cluster_type_from_cluster_desc().
+    const bool is_base_routing_fw_enabled = cluster_->is_base_routing_fw_enabled();
     this->hal_ = std::make_unique<Hal>(
         platform_arch,
         is_base_routing_fw_enabled,

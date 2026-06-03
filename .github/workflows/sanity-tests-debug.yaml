@@ -114,6 +114,7 @@ jobs:
       enable-llk-asserts: ${{ needs.determine-debug-flags.outputs.enable-llk-asserts == 'true' }}
       run-profiler-tests: ${{ needs.determine-debug-flags.outputs.enable-watcher != 'true' }}
       run-ops-unit-tests: ${{ needs.determine-debug-flags.outputs.enable-watcher != 'true' }}
+      run-ttsim-integration-tests: false
       dev-docker-image: ${{ needs.build-artifacts-ubuntu-22.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifacts-ubuntu-22.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifacts-ubuntu-22.outputs.wheel-artifact-name }}

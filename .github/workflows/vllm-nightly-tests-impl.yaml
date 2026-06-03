@@ -117,7 +117,7 @@ jobs:
             {
               "name": "[WH-N150] Gemma4-E2B",
               "model": "google/gemma-4-E2B-it",
-              "server-timeout": 15,
+              "server-timeout": 10,
               "benchmark-timeout": 5,
               "runner-label": "N150",
               "arch": "arch-wormhole_b0",
@@ -129,7 +129,7 @@ jobs:
             {
               "name": "[WH-T3K] Gemma4-26B-A4B",
               "model": "google/gemma-4-26B-A4B-it",
-              "server-timeout": 30,
+              "server-timeout": 10,
               "benchmark-timeout": 5,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",

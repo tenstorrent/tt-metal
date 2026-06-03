@@ -1649,10 +1649,11 @@ void detail::ProgramImpl::set_cb_data_fmt_and_tile(
         const auto& cbs_on_core = this->circular_buffers_on_corerange(logical_cr);
         for (const auto& circular_buffer : cbs_on_core) {
             for (auto buffer_index : circular_buffer->buffer_indices()) {
-                build_options.set_cb_data_fmt_and_tile(
-                    static_cast<CBIndex>(buffer_index),
-                    circular_buffer->data_format(buffer_index),
-                    circular_buffer->tile(buffer_index));
+                const CBIndex cb_index = static_cast<CBIndex>(buffer_index);
+                const DataFormat data_format = circular_buffer->data_format(buffer_index);
+                const auto& tile_opt = circular_buffer->tile(buffer_index);
+                const auto& unpack_geom = circular_buffer->unpack_face_geometry(buffer_index);
+                build_options.set_cb_data_fmt_tile_and_face_geometry(cb_index, data_format, tile_opt, unpack_geom);
             }
         }
     }

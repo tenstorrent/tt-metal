@@ -114,7 +114,6 @@ void device_setup() {
     // wzeromem
     // invalidate_l1_cache
     // clear_destination_registers
-    // enable_cc_stack
     // set_default_sfpu_constant_register_state
 }
 

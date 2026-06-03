@@ -97,12 +97,10 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
 
 
 class Gemma4Model:
-    # Generator-interface flags. Decode inputs are recomputed on host every
-    # token (host embedding + PLI), so the captured trace's input buffers
-    # have to be refreshed on every replay rather than just on the first
-    # call after a token-shape change. On-device sampling stays off until
-    # the host-sampling path is solid; flip this once the on-device path
-    # is verified end-to-end.
+    # Generator-interface flags. Decode refreshes host-staged token IDs (+ PLI
+    # when enabled) every step, so trace input buffers are updated on every
+    # replay rather than only after a shape change. On-device sampling stays
+    # off until the host-sampling path is solid; flip once verified end-to-end.
     _tt_vllm_always_refresh_decode_trace_inputs = True
     _supports_on_device_sampling = False
 
@@ -514,7 +512,7 @@ class Gemma4Model:
             )
 
         # Compute per-layer inputs (E2B/E4B)
-        # Decode: pre-computed on host via compute_host_embeddings (pli_combined)
+        # Decode: PLI pre-computed on host (pli_combined); main embed on device
         # Prefill: computed on CPU from input_ids_torch / embeds_torch
         pli_combined_tt = None
         per_layer_inputs = None
@@ -667,11 +665,32 @@ class Gemma4Model:
             embeds = ccl_allgather(embeds, self.mesh_config, self.ccl_manager)
         return embeds
 
-    def compute_host_embeddings(self, token_id):
-        """Compute token embedding + PLI entirely on CPU for a single decode token.
+    def compute_host_pli(self, token_id):
+        """Compute per-layer input (PLI) on CPU for a single decode token.
 
-        Embedding and PLI are computed on host to keep them off the device trace,
-        reducing traced op count and improving decode throughput on 1x1 mesh.
+        Main token embeddings are looked up on device via ``embed_tokens``;
+        this path only builds the E2B/E4B PLI tensor still computed on host.
+
+        Returns:
+            pli_combined: torch.Tensor [1, 1, n_layers, pli_size] bfloat16, or None
+        """
+        import torch.nn.functional as F
+
+        if not self.hidden_size_per_layer_input or not self.per_layer_input_weights:
+            return None
+
+        token_tensor = torch.tensor([[token_id]], dtype=torch.long)
+        embeds = F.embedding(token_tensor, self._embed_weight_cpu).float() * self.embed_scale
+        pli_list = self._compute_per_layer_inputs(token_tensor.int(), embeds)
+        if pli_list is None:
+            return None
+        return torch.stack(pli_list, dim=2)  # [1, 1, n_layers, pli_size]
+
+    def compute_host_embeddings(self, token_id):
+        """Host token embedding + PLI (legacy fallback).
+
+        Decode should use ``embed_tokens`` on device plus ``compute_host_pli``.
+        Kept for callers/tests that still compare against the old host path.
 
         Returns:
             (embeds, pli_combined) where:
@@ -681,17 +700,8 @@ class Gemma4Model:
         import torch.nn.functional as F
 
         token_tensor = torch.tensor([[token_id]], dtype=torch.long)
-
-        # Token embedding (mirrors embed_tokens but on CPU)
         embeds = F.embedding(token_tensor, self._embed_weight_cpu).float() * self.embed_scale
-
-        # Per-layer input (E2B/E4B)
-        pli_combined = None
-        if self.hidden_size_per_layer_input and self.per_layer_input_weights:
-            pli_list = self._compute_per_layer_inputs(token_tensor.int(), embeds)
-            if pli_list is not None:
-                pli_combined = torch.stack(pli_list, dim=2)  # [1, 1, n_layers, pli_size]
-
+        pli_combined = self.compute_host_pli(token_id)
         embeds = embeds.reshape(1, 1, 1, self.hidden_size).to(torch.bfloat16)
         return embeds, pli_combined
 
@@ -961,10 +971,13 @@ class Gemma4Model:
         """Generator compatibility — no prefetcher to reinitialize."""
 
     def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
-        """Create host tensors for one decode step, including pre-computed embedding + PLI.
+        """Create host tensors for one decode step (token IDs + optional PLI).
 
         Called by Generator._capture_decode_trace_text and _decode_forward_trace_text.
         Returns tuple of host ttnn tensors that copy_host_to_device will transfer.
+
+        Index 0 is a uint32 token tensor (not precomputed embeddings). Embedding
+        lookup runs on device inside ``ttnn_decode_forward`` via ``embed_tokens``.
 
         Args:
             tokens: torch.Tensor [batch] of token IDs
@@ -978,11 +991,15 @@ class Gemma4Model:
             ttnn.ReplicateTensorToMesh(self.mesh_device) if is_mesh and self.mesh_device.get_num_devices() > 1 else None
         )
 
-        # Host embedding + PLI (keeps these off the device trace)
         token_id = tokens[0].item()
-        embeds, pli = self.compute_host_embeddings(token_id)
+        pli = self.compute_host_pli(token_id)
 
-        embeds_tt = ttnn.from_torch(embeds, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate)
+        tokens_tt = ttnn.from_torch(
+            torch.tensor([[token_id]], dtype=torch.int32),
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint32,
+            mesh_mapper=replicate,
+        )
 
         # Position: [1, 32] uint32 padded (for RoPE embedding lookup)
         pos = current_pos[0].item() if hasattr(current_pos, "item") else int(current_pos[0])
@@ -1014,7 +1031,7 @@ class Gemma4Model:
                 pli.to(torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_mapper=replicate
             )
 
-        return (embeds_tt, pos_tt, pos_int32_tt, page_table_tt, pli_tt)
+        return (tokens_tt, pos_tt, pos_int32_tt, page_table_tt, pli_tt)
 
     def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
         """Wrapper: prepare_decode_inputs_host + copy to device."""
@@ -1056,11 +1073,11 @@ class Gemma4Model:
     ):
         """Decode forward — matches tt_transformers Generator interface.
 
-        x is pre-computed embeddings from prepare_decode_inputs_host (ROW_MAJOR).
+        x is a uint32 token tensor from prepare_decode_inputs_host (ROW_MAJOR).
         Generator calls: prepare_decode_inputs_host → copy_host_to_device → ttnn_decode_forward.
 
         Args:
-            x: [1,1,1,hidden_size] ROW_MAJOR device tensor (pre-computed embedding).
+            x: [1,1,1,1] or [1,1] uint32 ROW_MAJOR device tensor (decode token id).
             current_pos: [1,32] uint32 position tensor for RoPE embedding lookup.
             rot_mat_idxs: Unused (RoPE computed internally from current_pos).
             page_table: Optional paged attention table.
@@ -1073,8 +1090,10 @@ class Gemma4Model:
                 ``self._active_page_tables_per_layer`` (set by the vLLM hybrid bridge,
                 since ``Generator``'s decode path doesn't thread the kwarg).
         """
-        # Convert ROW_MAJOR host data to TILE on device
-        input_embeds = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        input_embeds = self.embed_tokens(x)
+        if len(input_embeds.shape) == 3:
+            input_embeds = ttnn.unsqueeze_to_4D(input_embeds)
+        input_embeds = ttnn.to_layout(input_embeds, ttnn.TILE_LAYOUT)
 
         # RoPE: always use internal 2D caches with on-device embedding lookup
         token_index = None if self.rope_caches_2d else 0

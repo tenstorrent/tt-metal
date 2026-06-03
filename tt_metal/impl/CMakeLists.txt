@@ -17,6 +17,10 @@ option(
     OFF
 )
 
+if(TT_UMD_BUILD_SIMULATION)
+    list(APPEND IMPL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/buffers/simulator_direct_write.cpp)
+endif()
+
 # Include helper functions and generate headers from flatbuffer schemas
 include(flatbuffers)
 
@@ -159,6 +163,10 @@ if(TT_BFP_HOST_TILIZER_OPENMP)
         STATUS
         "Host BFP tilizer: OpenMP dispatch path enabled (runtime toggle: TT_BFP_HOST_TILIZER_USE_OPENMP=1)"
     )
+endif()
+
+if(TT_UMD_BUILD_SIMULATION)
+    target_compile_definitions(impl PRIVATE TT_UMD_BUILD_SIMULATION)
 endif()
 
 if(TT_METAL_USE_EMULE)
