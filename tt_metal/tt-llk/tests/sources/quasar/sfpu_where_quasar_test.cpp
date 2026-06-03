@@ -121,10 +121,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
 
-    // Primes the CC stack
-    // to a known-empty lane mask before the first select op.
-    init_where();
-
     // Runs calculate_where over the faces selected by VECTOR_MODE: cond=tile 0,
     // true_val=tile 1, false_val=tile 2, result written to tile 0. Faces outside
     // the selected set keep whatever the producer wrote into Dest before SFPU ran
