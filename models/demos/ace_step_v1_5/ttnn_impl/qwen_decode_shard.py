@@ -9,8 +9,13 @@ Tracy on eager decode shows thousands of L1→L1 reshards with mismatched shard 
 often return generic ``L1_WIDTH_SHARDED_MEMORY_CONFIG`` while ``get_residual_mem_config(DECODE)``
 uses a fixed core grid — TTNN inserts reshards between ops.
 
-Patch decode memory getters (non-Galaxy, no prefetcher) to return the same config as
-``get_residual_mem_config(Mode.DECODE)``.
+Decode matmul output shard specs are derived from each op's DRAM-sharded program config
+(core grid + per-core ``N``). Forcing ``get_residual_mem_config(DECODE)`` (``[32, 64]`` on
+32 cores) onto attention gather / wo / all-gather getters makes matmul log config mismatches
+and ignore the provided layout (computed shapes include ``[32, 128]`` and ``[32, 32]``).
+
+This module keeps the patch hook for future getters that truly match the residual grid; the
+getter list is intentionally empty until such a case is validated on silicon.
 """
 
 from __future__ import annotations
@@ -21,16 +26,7 @@ from typing import Any, Callable
 from models.tt_transformers.tt.common import Mode
 
 # ``(getter_name, index of prefetcher in positional args, or None if kw-only/default trailing)``
-_DECODE_RESIDUAL_SHARD_GETTERS: tuple[tuple[str, int | None], ...] = (
-    ("get_mlp_input_mem_config", 1),
-    ("get_mlp_ff1_3_mem_config", 1),
-    ("get_mlp_ff2_mem_config", 1),
-    ("get_attn_qkv_mm_mem_config", 1),
-    ("get_attn_qkv_all_reduce_output_mem_config", 2),
-    ("get_attn_wo_output_mem_config", 1),
-    ("get_attn_concat_heads_output_mem_config", 1),
-    ("get_attn_all_gather_output_mem_config", 1),
-)
+_DECODE_RESIDUAL_SHARD_GETTERS: tuple[tuple[str, int | None], ...] = ()
 
 
 def _prefetcher_from_call(
@@ -70,7 +66,7 @@ def _patch_decode_residual_shard_getter(model_args: Any, name: str, *, prefetche
 
 
 def ace_step_patch_model_args_decode_unified_shard(model_args: Any) -> None:
-    """Route decode WIDTH_SHARDED matmul outputs through one residual shard spec."""
+    """Apply decode residual-shard overrides for vetted matmul output getters (none by default)."""
     if getattr(model_args, "is_galaxy", False):
         return
     for name, pf_index in _DECODE_RESIDUAL_SHARD_GETTERS:

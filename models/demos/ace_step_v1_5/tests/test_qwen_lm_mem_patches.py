@@ -141,19 +141,44 @@ def test_sharded_prestep_skips_dram_on_sharded_input():
         shard.assert_called_once_with(sharded, target)
 
 
-def test_decode_unified_shard_routes_decode_getters_to_residual():
+def test_decode_unified_shard_leaves_all_getters_stock():
     residual = object()
-    orig_mock = mock.Mock(return_value="orig")
+    orig_mlp = mock.Mock(return_value="stock_mlp")
+    orig_wo = mock.Mock(return_value="stock_wo")
+    model_args = SimpleNamespace(
+        is_galaxy=False,
+        get_residual_mem_config=mock.Mock(return_value=residual),
+        get_mlp_ff2_mem_config=orig_mlp,
+        get_attn_wo_output_mem_config=orig_wo,
+        get_attn_all_gather_output_mem_config=orig_wo,
+    )
+    ace_step_patch_model_args_decode_unified_shard(model_args)
+
+    assert model_args.get_mlp_ff2_mem_config(Mode.DECODE, None) == "stock_mlp"
+    assert model_args.get_attn_wo_output_mem_config(Mode.DECODE, None) == "stock_wo"
+    assert model_args.get_attn_all_gather_output_mem_config(Mode.DECODE, None) == "stock_wo"
+    model_args.get_residual_mem_config.assert_not_called()
+
+
+def test_decode_unified_shard_leaves_wide_matmul_getters_stock():
+    residual = object()
+    orig_mock = mock.Mock(return_value="stock")
     model_args = SimpleNamespace(
         is_galaxy=False,
         get_residual_mem_config=mock.Mock(return_value=residual),
         get_mlp_ff1_3_mem_config=orig_mock,
+        get_attn_qkv_mm_mem_config=orig_mock,
     )
     ace_step_patch_model_args_decode_unified_shard(model_args)
 
-    assert model_args.get_mlp_ff1_3_mem_config(Mode.DECODE, None) is residual
-    assert model_args.get_mlp_ff1_3_mem_config(Mode.PREFILL, None) == "orig"
-    orig_mock.assert_called_once_with(Mode.PREFILL, None)
+    assert model_args.get_mlp_ff1_3_mem_config(Mode.DECODE, None) == "stock"
+    assert model_args.get_attn_qkv_mm_mem_config(Mode.DECODE, None) == "stock"
+    orig_mock.assert_has_calls(
+        [
+            mock.call(Mode.DECODE, None),
+            mock.call(Mode.DECODE, None),
+        ]
+    )
 
 
 def test_decode_unified_shard_skips_when_prefetcher_set():
@@ -163,15 +188,15 @@ def test_decode_unified_shard_skips_when_prefetcher_set():
     model_args = SimpleNamespace(
         is_galaxy=False,
         get_residual_mem_config=mock.Mock(return_value=residual),
-        get_attn_qkv_mm_mem_config=orig_mock,
+        get_mlp_ff2_mem_config=orig_mock,
     )
     ace_step_patch_model_args_decode_unified_shard(model_args)
 
-    assert model_args.get_attn_qkv_mm_mem_config(Mode.DECODE, prefetcher) == "ring"
+    assert model_args.get_mlp_ff2_mem_config(Mode.DECODE, prefetcher) == "ring"
     orig_mock.assert_called_once_with(Mode.DECODE, prefetcher)
 
 
-def test_sdpa_gather_unified_routes_decode_to_residual():
+def test_sdpa_gather_unified_leaves_gather_getter_stock():
     residual = object()
     orig = mock.Mock(return_value="gather")
     model_args = SimpleNamespace(
@@ -181,8 +206,9 @@ def test_sdpa_gather_unified_routes_decode_to_residual():
     )
     ace_step_patch_model_args_sdpa_gather_unified(model_args)
 
-    assert model_args.get_attn_gather_users_mem_config(Mode.DECODE, 1, None) is residual
-    assert model_args.get_attn_gather_users_mem_config(Mode.PREFILL, 1, None) == "gather"
+    assert model_args.get_attn_gather_users_mem_config(Mode.DECODE, 1, None) == "gather"
+    orig.assert_called_once_with(Mode.DECODE, 1, None)
+    model_args.get_residual_mem_config.assert_not_called()
 
 
 def test_narrow_column_band_and_split_hits():
