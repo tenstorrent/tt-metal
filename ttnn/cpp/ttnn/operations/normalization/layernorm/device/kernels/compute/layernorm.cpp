@@ -234,9 +234,11 @@ void kernel_main() {
 #ifndef RMSNORM
         // E[x]
         WAYPOINT("EX0");  // before E[x] reduce
+        DPRINT("[probe] BUILD_TAG_v2 before Ex reduce ncht={}\n", ncht);
         numeric::row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithoutPopPolicy>(
             cb_x, cb_scaler, cb_ex, W, Wt, block_size, tile_width);
         WAYPOINT("EX1");  // E[x] reduce returned
+        DPRINT("[probe] after Ex reduce\n");
 
         // x - E[x]
         WAYPOINT("XR0");  // before reconfig_data_format(cb_x, cb_ex)
@@ -246,7 +248,9 @@ void kernel_main() {
         WAYPOINT("XR2");  // before cb_xmm.reserve_back
         cb_xmm_obj.reserve_back(total_buffer_size);
         WAYPOINT("XR3");  // before sub_bcast_cols_init_short
+        DPRINT("[probe] before sub_bcast_cols_init_short\n");
         sub_bcast_cols_init_short(cb_x, cb_ex);
+        DPRINT("[probe] after sub_bcast_cols_init_short\n");
         WAYPOINT("XR4");  // sub_bcast_cols_init_short returned
         for (auto block : generic::blocks(Wt, block_size)) {
             WAYPOINT("S00");
