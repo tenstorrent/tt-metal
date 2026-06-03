@@ -13,7 +13,9 @@ case ":${PYTHONPATH:-}:" in
 esac
 
 LOG_NAME="${1:-deepseek_v3_d_p_log}"
-LOOP="${2:-20}"
+# Loop count: prefer an explicit LOOP env var (used by watch_multiple_dirs.sh,
+# whose positional args are all log names), else the positional [loop_count].
+LOOP="${LOOP:-${2:-20}}"
 
 # Per-run logs: one log_NN under here per outer iteration.
 LOG_DIR="/data/$USER/$LOG_NAME"

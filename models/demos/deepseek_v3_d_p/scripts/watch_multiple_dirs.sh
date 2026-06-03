@@ -3,7 +3,9 @@
 #
 # Usage: watch_multiple_dirs.sh [log_name ...]    (REFRESH / LOOP / STALE_SECS via env)
 
-source "$(dirname "$0")/common.sh" "$@"
+# Don't forward positional args: here every arg is a log_name (handled below as
+# DIRS), not common.sh's <log_name> [loop_count]. LOOP comes from the env.
+source "$(dirname "$0")/common.sh"
 REFRESH="${REFRESH:-15}"
 
 # Each positional arg is a log_name; default to the single common LOG_NAME.

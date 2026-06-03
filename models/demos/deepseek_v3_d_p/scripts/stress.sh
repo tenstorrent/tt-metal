@@ -25,7 +25,7 @@ for i in $(seq 1 "$LOOP"); do
   tt-smi -glx_reset 2>&1 | tail -3
 
   cd "$TT_METAL_HOME"
-  bash -c "$ENV_VARS pytest -vs $TEST_FILE -k \"$KFILTER\" |& tee $LOG; echo TEST_DONE_EXIT=\$?"
+  bash -c "$ENV_VARS pytest -vs \"$TEST_FILE\" -k \"$KFILTER\" |& tee \"$LOG\"; echo TEST_DONE_EXIT=\${PIPESTATUS[0]}"
 
   pkill -9 -f pytest 2>/dev/null || true
   pkill -9 -f test_prefill 2>/dev/null || true

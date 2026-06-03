@@ -22,7 +22,7 @@ def filter_outliers(values, threshold=2.0):
 
 def main():
     parser = argparse.ArgumentParser(description="Parse iteration timing from log files")
-    parser.add_argument("-f", "--file", default="./260421-log5", help="Log file path")
+    parser.add_argument("-f", "--file", required=True, help="Log file path")
     args = parser.parse_args()
 
     iter_pattern = re.compile(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}).*Starting iteration: (\d+)")

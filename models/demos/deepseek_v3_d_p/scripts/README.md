@@ -5,11 +5,12 @@
 | `common.sh` | Shared config + helpers (`TT_METAL_HOME`, `LOG_DIR`, `KFILTER`, derived `INNER_ITERS`, `ENV_VARS`, `log_for`, `scan_log_dir`). Sourced by the others — not run directly. |
 | `stress.sh` | Outer loop (`$LOOP`×): `tt-smi -glx_reset` then pytest. Each run's stdout is `tee`'d to `<log dir>/log_NN`. No timeout — pytest stays alive on hang for manual debug. |
 | `watch.sh` | Refreshing status table (PASS / HANG? / FAIL / RUN / STALE / PENDING) over the run logs. Refresh 15s (override via `REFRESH`). |
-| `watch_multiple_dirs.sh` | Same status table across several log dirs at once — one block per dir name passed as an arg. |
+| `watch_multiple_dirs.sh` | Same status table across several log dirs at once — one block per `<log_name>` arg. Args are all log names (no positional `loop_count`); set scan depth via `LOOP=` env. |
 | `tail.sh` | `tail -10` of the newest `log_NN`, refresh 30s (override via `REFRESH`). |
 | `parse_iteration_times.py` | Per-iteration timing extractor (min / avg / max). Reads any pytest log with `Starting iteration:` markers. |
 
-All scripts take the same args: `<log_name> [loop_count]`. Logs go to `/data/$USER/<log_name>/log_NN`.
+Most scripts take the same args: `<log_name> [loop_count]`. Logs go to `/data/$USER/<log_name>/log_NN`.
+(Exception: `watch_multiple_dirs.sh` takes one or more `<log_name>` args and reads the scan depth from the `LOOP` env var — see below.)
 
 ---
 
@@ -22,7 +23,7 @@ cd "$TT_METAL_HOME"
 LOOP_CNT=20
 COMMIT_HASH=$(git rev-parse --short HEAD)
 DATE=$(date +%Y_%m_%d_%H_%M)
-LOG_NAME="LOG_${DATE}_${HOSTNAME}_${COMMIT_HASH}_balanced_A_loop_${LOOP_CNT}"
+LOG_NAME="LOG_${DATE}_${HOSTNAME}_${COMMIT_HASH}_loop_${LOOP_CNT}"
 SCRIPTS="$TT_METAL_HOME/models/demos/deepseek_v3_d_p/scripts"
 
 # 1) stress loop
