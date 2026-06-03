@@ -317,13 +317,13 @@ class TransformerBlock(Module):
         is_ring = self.ccl_manager.topology == ttnn.Topology.Ring
 
         # Attention now expects pre-gathered input on TP (no internal AGMM in to_qkv).
-        if self.parallel_config.tensor_parallel.factor > 1:
-            spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
-                spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
-            )
-            prompt_normed = self.ccl_manager.all_gather_persistent_buffer(
-                prompt_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
-            )
+        # if self.parallel_config.tensor_parallel.factor > 1:
+        #     spatial_normed = self.ccl_manager.all_gather_persistent_buffer(
+        #         spatial_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+        #     )
+        #     prompt_normed = self.ccl_manager.all_gather_persistent_buffer(
+        #         prompt_normed, dim=2, mesh_axis=tp_axis, use_hyperparams=True
+        #     )
 
         # NOTE: workaround - addcmul is less accurate with fp32 gate input
         spatial_gate_attn = ttnn.typecast(spatial_gate_attn, dtype=ttnn.bfloat16)
