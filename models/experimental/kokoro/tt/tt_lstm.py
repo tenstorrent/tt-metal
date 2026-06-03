@@ -11,9 +11,9 @@ Host-driven timestep loop using ``ttnn.linear`` and activations (no high-level L
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Optional, Sequence, Tuple
 
-import numpy as np
 import torch
 
 import ttnn
@@ -107,7 +107,7 @@ def _lstm_step(
 
     gs = tuple(int(s) for s in gates.shape)
     if len(gs) > 2:
-        batch_leading = int(np.prod(gs[:-1], dtype=np.int64))
+        batch_leading = math.prod(gs[:-1])
         gates = ttnn.reshape(gates, [batch_leading, gs[-1]], memory_config=memory_config)
 
     H4 = gates.shape[-1]
@@ -142,12 +142,12 @@ def _length_valid_mask_b1(
     memory_config: ttnn.MemoryConfig,
     dtype=ttnn.bfloat16,
 ) -> ttnn.Tensor:
-    vm = np.zeros((batch, seq_len, 1), dtype=np.float32)
+    vm = torch.zeros(batch, seq_len, 1, dtype=torch.float32)
     for bi, le in enumerate(sequence_lengths):
         le = max(0, min(int(le), seq_len))
         vm[bi, :le, 0] = 1.0
     return ttnn.from_torch(
-        torch.from_numpy(vm),
+        vm,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
