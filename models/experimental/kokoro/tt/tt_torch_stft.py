@@ -38,6 +38,21 @@ full matrix is not materialised.  Instead iSTFT uses ``conv_transpose2d``:
 ``conv_transpose2d`` is the adjoint of the forward STFT strided conv2d, so it computes the
 windowed overlap-add (OLA) exactly in a single on-device pass.  There is no CPU involvement
 in the forward path.
+
+Long sequences (device-only chunking)
+-------------------------------------
+For input lengths / frame counts that overflow BH L1 in a single pass, both directions are
+processed in device-resident chunks instead of falling back to CPU ``torch.stft`` /
+``torch.istft``:
+
+* Forward STFT chunks along output frames — each chunk slices the (already reflect-padded)
+  signal window it needs and runs the same strided conv2d; frame outputs concatenate.
+* iSTFT chunks along output samples — each output segment gathers only the frames whose
+  windows overlap it (``n_fft / hop`` frames), runs conv_transpose2d OLA on that frame slice
+  and trims to the segment, so the segments concatenate with no cross-chunk overlap-add.
+
+Both keep every op on device; the ``torch.stft`` / ``torch.istft`` paths now run only when
+explicitly requested via the ``use_torch_*`` flags.
 """
 
 from __future__ import annotations
@@ -72,14 +87,21 @@ def _istft_conv_transpose_ola_fits(F: int) -> bool:
     return rows_per_slice <= target
 
 
-# Empirical BH limit: ``ttnn.reshape`` to ``[B, 1, L, 1]`` plus strided conv2d L1 circular
-# buffers overflow above ~247k samples (Kokoro hop=5, n_fft=20).  Unrelated to the 1 GiB
-# iSTFT matrix precompute cap — that skips at much shorter L (~10k samples).
-_FORWARD_STFT_DEVICE_MAX_INPUT_LENGTH = 200_000
+# Single-pass forward STFT reshapes the whole signal to ``[B, 1, L, 1]``.  The 2D ROW_MAJOR
+# reshape allocates an L1 circular buffer scaled to the full width, overflowing BH L1
+# (1.5 MiB/bank) above ~95k samples; chunk the forward conv below that to stay on device.
+_FORWARD_STFT_DEVICE_MAX_INPUT_LENGTH = 90_000
+
+# Frames per chunk for device-only long-sequence STFT / iSTFT.  Chosen so a single chunk's
+# conv2d / conv_transpose2d stays well within the empirically safe single-pass size on BH:
+#   forward: chunk input height = (frames-1)*hop + n_fft ≈ 82k samples < 200k overflow ceiling.
+#   iSTFT:   chunk frame count ≤ 32k keeps DRAM-sliced rows/slice ≤ 128 (see _istft_*_ola_fits).
+_FORWARD_STFT_CHUNK_FRAMES = 16_384
+_ISTFT_CHUNK_FRAMES = 8_192
 
 
 def _forward_stft_device_fits(input_length: int) -> bool:
-    """Return whether the device strided-conv STFT forward path fits BH L1."""
+    """Return whether the device strided-conv STFT forward path fits BH L1 in a single pass."""
     return input_length <= _FORWARD_STFT_DEVICE_MAX_INPUT_LENGTH
 
 
@@ -304,7 +326,8 @@ def preprocess_tt_torch_stft(
             "TTTorchSTFT skipping iSTFT matrix precompute "
             f"({matrix_bytes} bytes > {_ISTFT_MATRIX_BYTES_LIMIT}); "
             f"F={F}, output_length={output_length} — "
-            f"{'CPU torch.istft at runtime' if not _istft_conv_transpose_ola_fits(F) else 'conv_transpose2d OLA iSTFT at runtime'}"
+            f"{'sample-chunked' if not _istft_conv_transpose_ola_fits(F) else 'single-pass'} "
+            "conv_transpose2d OLA iSTFT at runtime (device-only)"
         )
         istft_real_t: Optional[ttnn.Tensor] = None
         istft_imag_t: Optional[ttnn.Tensor] = None
@@ -607,6 +630,15 @@ class TTTorchSTFT:
         B = int(x_bL.shape[0])
 
         x_bL_rm = ttnn.to_layout(x_bL, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        if not _forward_stft_device_fits(L_in):
+            # Long signal: chunk before any full-length reshape (reshaping [B, 1, L, 1] for very
+            # large L overflows BH L1 circular buffers).  _forward_stft_conv_chunked slices the
+            # [B, L] signal per frame-chunk and reshapes only the small slice.
+            X_real, X_imag = self._forward_stft_conv_chunked(x_bL_rm, B)
+            ttnn.deallocate(x_bL_rm)
+            return X_real, X_imag
+
         x_n1lc = ttnn.reshape(x_bL_rm, [B, 1, L_in, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x_bL_rm)
 
@@ -617,6 +649,80 @@ class TTTorchSTFT:
         X_real = self._conv_real(x_padded, B, L_padded)
         X_imag = self._conv_imag(x_padded, B, L_padded)
         ttnn.deallocate(x_padded)
+        return X_real, X_imag
+
+    def _padded_col(self, x_bL_rm: ttnn.Tensor, xi: int, B: int) -> ttnn.Tensor:
+        """Single sample column ``x[:, xi]`` as ``[B, 1]`` ROW_MAJOR (for reflect-pad edges)."""
+        return ttnn.slice(x_bL_rm, [0, xi], [B, xi + 1], [1, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def _padded_slice_bL(self, x_bL_rm: ttnn.Tensor, ps: int, pe: int, B: int) -> ttnn.Tensor:
+        """Reflect-padded signal restricted to padded positions ``[ps, pe)`` → ``[B, pe-ps]`` ROW_MAJOR.
+
+        ``center=True`` reflect padding maps padded index ``i`` to source ``x`` as:
+        ``i < pad`` → ``x[pad - i]`` (left mirror); ``pad <= i < pad+L`` → ``x[i - pad]``;
+        ``i >= pad+L`` → ``x[2L + pad - 2 - i]`` (right mirror).  The two reflect regions span only
+        ``pad`` (= n_fft//2) samples each, so they are built from per-column slices; the (usually
+        dominant) middle region is one contiguous slice — no full-length reshape, so no L1 overflow.
+        """
+        p = self.params
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        L = p.input_length
+        pad = p.conv_pad_len
+        parts: list[ttnn.Tensor] = []
+        # Left mirror region [0, pad) ∩ [ps, pe)
+        for i in range(max(ps, 0), min(pe, pad)):
+            parts.append(self._padded_col(x_bL_rm, pad - i, B))
+        # Middle region [pad, pad+L) ∩ [ps, pe)
+        b0, b1 = max(ps, pad), min(pe, pad + L)
+        if b1 > b0:
+            parts.append(ttnn.slice(x_bL_rm, [0, b0 - pad], [B, b1 - pad], [1, 1], memory_config=mc))
+        # Right mirror region [pad+L, L+2*pad) ∩ [ps, pe)
+        for i in range(max(ps, pad + L), min(pe, L + 2 * pad)):
+            parts.append(self._padded_col(x_bL_rm, 2 * L + pad - 2 - i, B))
+        if len(parts) == 1:
+            return parts[0]
+        out = ttnn.concat(parts, dim=1, memory_config=mc)
+        for t in parts:
+            ttnn.deallocate(t)
+        return out
+
+    def _forward_stft_conv_chunked(self, x_bL_rm: ttnn.Tensor, B: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Device-only forward STFT for long sequences: chunk along output frames.
+
+        Output frame ``f`` reads (reflect-padded) signal positions ``[f*hop, f*hop + n_fft)``.  A
+        chunk of frames ``[f0, f1)`` needs padded positions ``[f0*hop, (f1-1)*hop + n_fft)`` — built
+        directly from the ``[B, L]`` signal by :meth:`_padded_slice_bL`, reshaped to ``[B, 1, h, 1]``
+        (small ``h``) and fed to the same strided conv2d.  Frame outputs ``[B, K, n_chunk]``
+        concatenate along ``F`` to reproduce the full single-pass result.
+        """
+        p = self.params
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        hop = p.hop_length
+        n_fft = p.filter_length
+        logger.info(
+            "TTTorchSTFT forward STFT using device frame-chunked conv2d "
+            f"(input_length={p.input_length} > {_FORWARD_STFT_DEVICE_MAX_INPUT_LENGTH}; "
+            f"F={p.F}, frames/chunk={_FORWARD_STFT_CHUNK_FRAMES})"
+        )
+        real_chunks: list[ttnn.Tensor] = []
+        imag_chunks: list[ttnn.Tensor] = []
+        f0 = 0
+        while f0 < p.F:
+            f1 = min(f0 + _FORWARD_STFT_CHUNK_FRAMES, p.F)
+            ps = f0 * hop
+            pe = (f1 - 1) * hop + n_fft  # exclusive; == L_padded for the last chunk
+            h_chunk = pe - ps
+            x_slice_bL = self._padded_slice_bL(x_bL_rm, ps, pe, B)  # [B, h_chunk] RM
+            x_slice = ttnn.reshape(x_slice_bL, [B, 1, h_chunk, 1], memory_config=mc)
+            ttnn.deallocate(x_slice_bL)
+            real_chunks.append(self._conv_real(x_slice, B, h_chunk))
+            imag_chunks.append(self._conv_imag(x_slice, B, h_chunk))
+            ttnn.deallocate(x_slice)
+            f0 = f1
+        X_real = ttnn.concat(real_chunks, dim=2, memory_config=mc)
+        X_imag = ttnn.concat(imag_chunks, dim=2, memory_config=mc)
+        for t in (*real_chunks, *imag_chunks):
+            ttnn.deallocate(t)
         return X_real, X_imag
 
     def _magnitude_phase_from_xy(self, X_real: ttnn.Tensor, X_imag: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -712,10 +818,11 @@ class TTTorchSTFT:
         Returns:
             ``(magnitude, phase)`` each ``[B, K, F]`` (TILE layout).
 
+        Long ``input_length`` (above ``_FORWARD_STFT_DEVICE_MAX_INPUT_LENGTH``) stays on device:
+        :meth:`_forward_stft_conv` chunks the strided conv2d along output frames.
+
         Fallback dispatch (evaluated in priority order):
         - ``use_torch_stft_fallback=True``: entire transform on CPU via ``torch.stft`` (highest PCC).
-        - ``input_length`` above ``_FORWARD_STFT_DEVICE_MAX_INPUT_LENGTH``: CPU ``torch.stft`` —
-          device reshape/strided-conv overflows BH L1 (independent of iSTFT matrix precompute).
         - ``use_torch_atan2_fallback=True``: conv on TT/CPU (per ``use_torch_stft_conv_fallback``),
           atan2+sqrt on CPU.  Pair with ``use_torch_stft_conv_fallback=True`` to achieve the same
           cos(phase) PCC as ``use_torch_stft_fallback`` without using ``torch.stft``.
@@ -724,68 +831,34 @@ class TTTorchSTFT:
         if self._use_torch_stft_fallback:
             return self._transform_torch_fallback(x_bL)
 
-        p = self.params
-        if not _forward_stft_device_fits(p.input_length):
-            logger.info(
-                "TTTorchSTFT transform using CPU torch.stft "
-                f"(input_length={p.input_length} > {_FORWARD_STFT_DEVICE_MAX_INPUT_LENGTH}; "
-                "device strided-conv STFT overflows BH L1 at this length)"
-            )
-            return self._transform_torch_fallback(x_bL)
-
         X_real, X_imag = self._forward_stft_conv(x_bL)
         if self._use_torch_atan2_fallback:
             return self._atan2_torch_fallback(X_real, X_imag)
         return self._magnitude_phase_from_xy(X_real, X_imag)
 
-    def _inverse_torch_istft(self, magnitude: ttnn.Tensor, phase: ttnn.Tensor) -> ttnn.Tensor:
-        """CPU ``torch.istft`` for large-F iSTFT where the full matrix is not precomputed.
+    def _to_nhwc_rm(self, x_bkf: ttnn.Tensor) -> ttnn.Tensor:
+        """``[B, K, F]`` (TILE) → ``[B, 1, F, K]`` ROW_MAJOR for conv_transpose2d NHWC input.
 
-        Used when ``istft_real is None`` (matrix too large for ``_ISTFT_MATRIX_BYTES_LIMIT``)
-        or when ``_inverse_conv_transpose`` would overflow BH L1 even with DRAM slicing.
-        """
-        p = self.params
-        logger.info(
-            "TTTorchSTFT iSTFT using CPU torch.istft "
-            f"(F={p.F}, output_length={p.output_length}, input_length={p.input_length}; "
-            "iSTFT matrix skipped and conv_transpose2d OLA exceeds BH L1 slice budget)"
-        )
-        B = int(magnitude.shape[0])
-        mag = ttnn.to_torch(magnitude).float().reshape(B, p.K, p.F)
-        pha = ttnn.to_torch(phase).float().reshape(B, p.K, p.F)
-        window = torch.hann_window(p.win_length, periodic=True, dtype=torch.float32)
-        with torch.no_grad():
-            z = mag * torch.exp(pha * 1j)
-            y = torch.istft(z, p.filter_length, p.hop_length, p.win_length, window=window)
-        if y.shape[-1] != p.output_length:
-            y = y[..., : p.output_length]
-        mc = ttnn.DRAM_MEMORY_CONFIG
-        y_tt = ttnn.from_torch(
-            y.contiguous(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=self.device, memory_config=mc
-        )
-        return ttnn.reshape(y_tt, [B, 1, p.output_length], memory_config=mc)
-
-    def _inverse_conv_transpose(self, X_real: ttnn.Tensor, X_imag: ttnn.Tensor) -> ttnn.Tensor:
-        """Conv-transpose OLA iSTFT — fully on device, no CPU in forward path.
-
-        conv_transpose2d with synthesis kernels w[n]*iFFT[k,n] and stride=hop is the
-        adjoint of the forward STFT strided conv2d: it computes the windowed OLA sum
-        in a single on-device pass.  After trimming the reflect-pad margins the COLA
-        normalisation (precomputed on device) is applied pointwise.
+        ROW_MAJOR so the frame axis (dim=2) can be sliced at arbitrary (non-tile-aligned)
+        boundaries by the chunked iSTFT path.
         """
         p = self.params
         mc = ttnn.DRAM_MEMORY_CONFIG
-        B = int(X_real.shape[0])
+        B = int(x_bkf.shape[0])
+        x_bfk = ttnn.permute(x_bkf, (0, 2, 1), memory_config=mc)
+        x_rm = ttnn.to_layout(x_bfk, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
+        ttnn.deallocate(x_bfk)
+        return ttnn.reshape(x_rm, [B, 1, p.F, p.K], memory_config=mc)
 
-        def _to_nhwc(x_bkf: ttnn.Tensor) -> ttnn.Tensor:
-            # [B, K, F] → [B, F, K] ROW_MAJOR → [B, 1, F, K] for conv_transpose2d NHWC
-            x_bfk = ttnn.permute(x_bkf, (0, 2, 1), memory_config=mc)
-            x_rm = ttnn.to_layout(x_bfk, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
-            ttnn.deallocate(x_bfk)
-            return ttnn.reshape(x_rm, [B, 1, p.F, p.K], memory_config=mc)
+    def _ct_ola_run(self, xr_nhwc: ttnn.Tensor, xi_nhwc: ttnn.Tensor, n_frames: int) -> ttnn.Tensor:
+        """conv_transpose2d OLA on ``n_frames`` frames → raw windowed-sum ``[B, L_local, 1]`` ROW_MAJOR.
 
-        x_real_nhwc = _to_nhwc(X_real)
-        x_imag_nhwc = _to_nhwc(X_imag)
+        ``L_local = (n_frames - 1) * hop + n_fft``.  No reflect-pad trim, no COLA — the caller
+        slices/trims and applies COLA.  Consumes (deallocates) ``xr_nhwc`` / ``xi_nhwc``.
+        """
+        p = self.params
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        B = int(xr_nhwc.shape[0])
 
         # Match tt_conv_transpose1d_nlc dram-sliced path: no output_layout=TILE (avoids L1 OOM on BH).
         conv_cfg = ttnn.Conv2dConfig(weights_dtype=ttnn.float32)
@@ -801,9 +874,8 @@ class TTTorchSTFT:
             math_approx_mode=False,
             fp32_dest_acc_en=True,
         )
-
-        # Scale DRAM height slices with F using the same row budget as generic conv_transpose.
-        _istft_slice_cfg = dram_height_slice_config(p.F)
+        # Scale DRAM height slices with the chunk frame count using the generic conv_transpose budget.
+        slice_cfg = dram_height_slice_config(n_frames)
 
         def _run_ct(x_nhwc: ttnn.Tensor, synth_w: ttnn.Tensor) -> ttnn.Tensor:
             y, out_hw = ttnn.conv_transpose2d(
@@ -813,7 +885,7 @@ class TTTorchSTFT:
                 in_channels=p.K,
                 out_channels=1,
                 batch_size=B,
-                input_height=p.F,
+                input_height=n_frames,
                 input_width=1,
                 kernel_size=(p.filter_length, 1),
                 stride=(p.hop_length, 1),
@@ -824,18 +896,18 @@ class TTTorchSTFT:
                 bias_tensor=None,
                 conv_config=conv_cfg,
                 compute_config=compute_cfg,
-                dram_slice_config=_istft_slice_cfg,
+                dram_slice_config=slice_cfg,
                 mirror_kernel=True,
                 return_output_dim=True,
             )
             oh, ow = int(out_hw[0]), int(out_hw[1])
-            # y is in the conv_transpose2d internal layout; reshape to [B, L_padded, C_out]
+            # y is in the conv_transpose2d internal layout; reshape to [B, L_local, C_out]
             return ttnn.reshape(y, (y.shape[0], oh * ow, y.shape[-1]), memory_config=mc)
 
-        y_real = _run_ct(x_real_nhwc, p.synth_real)
-        ttnn.deallocate(x_real_nhwc)
-        y_imag = _run_ct(x_imag_nhwc, p.synth_imag)
-        ttnn.deallocate(x_imag_nhwc)
+        y_real = _run_ct(xr_nhwc, p.synth_real)
+        ttnn.deallocate(xr_nhwc)
+        y_imag = _run_ct(xi_nhwc, p.synth_imag)
+        ttnn.deallocate(xi_nhwc)
 
         # Ensure TILE_LAYOUT for add (TTNN binary ops require TILE).
         if y_real.layout != ttnn.TILE_LAYOUT:
@@ -846,20 +918,90 @@ class TTTorchSTFT:
         ttnn.deallocate(y_real)
         ttnn.deallocate(y_imag)
 
-        # Convert to ROW_MAJOR for slice, trim reflect-pad margins.
+        # ROW_MAJOR so the caller can slice/concat along the sample axis at arbitrary boundaries.
         y_rm = ttnn.to_layout(y_sum, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
         ttnn.deallocate(y_sum)
-        pad = p.filter_length // 2
-        y_trim = ttnn.slice(y_rm, [0, pad, 0], [B, pad + p.output_length, 1], [1, 1, 1], memory_config=mc)
-        ttnn.deallocate(y_rm)
+        return y_rm
 
-        # [B, output_length, 1] → [B, output_length] → TILE for COLA multiply.
-        y_flat = ttnn.reshape(y_trim, [B, p.output_length], memory_config=mc)
+    def _ct_ola_chunked(self, X_real: ttnn.Tensor, X_imag: ttnn.Tensor) -> ttnn.Tensor:
+        """Device-only OLA iSTFT for large F: chunk along output samples → trimmed ``[B, output_length, 1]``.
+
+        Output sample ``m`` (in reflect-padded coords) receives contributions only from frames
+        ``f`` with ``f*hop <= m < f*hop + n_fft``.  For a trimmed output segment ``[t0, t1)``
+        (padded coords ``[t0+pad, t1+pad)``) only frames ``[f_lo, f_hi]`` overlap it, so running
+        conv_transpose2d on that frame slice and trimming to the segment gives a contribution-
+        complete, non-overlapping piece — the pieces concatenate with no cross-chunk add.
+        """
+        p = self.params
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        B = int(X_real.shape[0])
+        hop = p.hop_length
+        n_fft = p.filter_length
+        pad = n_fft // 2
+        K = p.K
+        chunk_out = _ISTFT_CHUNK_FRAMES * hop
+        logger.info(
+            "TTTorchSTFT iSTFT using device sample-chunked conv_transpose2d OLA "
+            f"(F={p.F}, output_length={p.output_length}, samples/chunk={chunk_out})"
+        )
+
+        xr_full = self._to_nhwc_rm(X_real)
+        xi_full = self._to_nhwc_rm(X_imag)
+
+        segments: list[ttnn.Tensor] = []
+        t0 = 0
+        while t0 < p.output_length:
+            t1 = min(t0 + chunk_out, p.output_length)
+            m0, m1 = t0 + pad, t1 + pad
+            # Frames whose [f*hop, f*hop+n_fft) window overlaps padded samples [m0, m1).
+            f_lo = max(0, (m0 - n_fft) // hop + 1)
+            f_hi = min(p.F - 1, (m1 - 1) // hop)
+            n_chunk = f_hi - f_lo + 1
+            xr_c = ttnn.slice(xr_full, [0, 0, f_lo, 0], [B, 1, f_hi + 1, K], [1, 1, 1, 1], memory_config=mc)
+            xi_c = ttnn.slice(xi_full, [0, 0, f_lo, 0], [B, 1, f_hi + 1, K], [1, 1, 1, 1], memory_config=mc)
+            y_raw = self._ct_ola_run(xr_c, xi_c, n_chunk)  # [B, (n_chunk-1)*hop + n_fft, 1]
+            local0, local1 = m0 - f_lo * hop, m1 - f_lo * hop
+            segments.append(ttnn.slice(y_raw, [0, local0, 0], [B, local1, 1], [1, 1, 1], memory_config=mc))
+            ttnn.deallocate(y_raw)
+            t0 = t1
+        ttnn.deallocate(xr_full)
+        ttnn.deallocate(xi_full)
+
+        y_cat = ttnn.concat(segments, dim=1, memory_config=mc)  # [B, output_length, 1]
+        for s in segments:
+            ttnn.deallocate(s)
+        return y_cat
+
+    def _inverse_conv_transpose(self, X_real: ttnn.Tensor, X_imag: ttnn.Tensor) -> ttnn.Tensor:
+        """Conv-transpose OLA iSTFT — fully on device, no CPU involvement.
+
+        conv_transpose2d with synthesis kernels w[n]*iFFT[k,n] and stride=hop is the adjoint of
+        the forward STFT strided conv2d: it computes the windowed OLA sum on device.  When ``F``
+        fits the BH conv_transpose slice budget the whole thing runs in one pass; otherwise it is
+        processed in output-sample chunks (:meth:`_ct_ola_chunked`).  After the OLA the reflect-pad
+        margins are trimmed and the COLA normalisation (precomputed on device) is applied pointwise.
+        """
+        p = self.params
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        B = int(X_real.shape[0])
+        pad = p.filter_length // 2
+
+        if _istft_conv_transpose_ola_fits(p.F):
+            y_raw = self._ct_ola_run(self._to_nhwc_rm(X_real), self._to_nhwc_rm(X_imag), p.F)
+            y_trim = ttnn.slice(y_raw, [0, pad, 0], [B, pad + p.output_length, 1], [1, 1, 1], memory_config=mc)
+            ttnn.deallocate(y_raw)
+        else:
+            y_trim = self._ct_ola_chunked(X_real, X_imag)
+
+        # [B, output_length, 1] → [B, output_length] → COLA multiply.  Tilize BEFORE the squeeze:
+        # the 2D ROW_MAJOR reshape path allocates an L1 circular buffer scaled to the full output
+        # width and overflows BH L1 above ~131072 samples, whereas the TILE reshape is tile-local.
+        y_trim_tile = ttnn.to_layout(y_trim, ttnn.TILE_LAYOUT, memory_config=mc)
         ttnn.deallocate(y_trim)
-        y_tile = ttnn.to_layout(y_flat, ttnn.TILE_LAYOUT, memory_config=mc)
+        y_flat = ttnn.reshape(y_trim_tile, [B, p.output_length], memory_config=mc)
+        ttnn.deallocate(y_trim_tile)
+        y_norm = ttnn.multiply(y_flat, p.inv_denom_tt, memory_config=mc)
         ttnn.deallocate(y_flat)
-        y_norm = ttnn.multiply(y_tile, p.inv_denom_tt, memory_config=mc)
-        ttnn.deallocate(y_tile)
         return ttnn.reshape(y_norm, [B, 1, p.output_length], memory_config=mc)
 
     def inverse(self, magnitude: ttnn.Tensor, phase: ttnn.Tensor) -> ttnn.Tensor:
@@ -873,8 +1015,9 @@ class TTTorchSTFT:
 
         Routing when the dense iSTFT matrix was not precomputed (``istft_real is None``):
 
-        - ``F`` within BH conv_transpose slice budget → conv_transpose2d OLA on device.
-        - ``F`` too large for BH L1 even with DRAM slicing → CPU ``torch.istft``.
+        - ``F`` within BH conv_transpose slice budget → conv_transpose2d OLA on device (one pass).
+        - ``F`` too large for BH L1 even with DRAM slicing → device sample-chunked OLA
+          (:meth:`_ct_ola_chunked`).  No CPU fallback.
         """
         p = self.params
 
@@ -882,9 +1025,6 @@ class TTTorchSTFT:
             magnitude = ttnn.typecast(magnitude, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         if phase.dtype != ttnn.float32:
             phase = ttnn.typecast(phase, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        if (p.istft_real is None or p.istft_imag is None) and not _istft_conv_transpose_ola_fits(p.F):
-            return self._inverse_torch_istft(magnitude, phase)
 
         cos_phase = ttnn.cos(phase, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         sin_phase = ttnn.sin(phase, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -974,12 +1114,6 @@ class TTTorchSTFT:
     def forward(self, x_bL: ttnn.Tensor) -> ttnn.Tensor:
         """STFT → iSTFT round trip (matches ``TorchSTFT.forward``)."""
         if self._use_torch_stft_fallback:
-            mag, phase = self._transform_torch_fallback(x_bL)
-            y = self.inverse(mag, phase)
-            ttnn.deallocate(mag)
-            ttnn.deallocate(phase)
-            return y
-        if not _forward_stft_device_fits(self.params.input_length):
             mag, phase = self._transform_torch_fallback(x_bL)
             y = self.inverse(mag, phase)
             ttnn.deallocate(mag)
