@@ -520,12 +520,89 @@ def test_rms_norm_ulp_sharded_non_tile_aligned_width(device, w, distribution, dt
     assert passed, f"[sharded rms non-aligned dtype={dtype} w={w} dist={distribution}] {msg}"
 
 
-def test_layer_norm_ulp_sharded_welford_non_tile_aligned_multi_width_shard_rejected(device):
-    """A non-tile-aligned width split across multiple width shards is rejected, not silently wrong.
+# Non-tile-aligned widths split across two width shards. RMSNorm masks the compute-produced squares
+# with the per-shard host mask, which carries each shard's own validity, so the logical width can end
+# mid-shard (the last shard then holds full, partial, and all-padding tiles, e.g. w=200 -> 2x128).
+@pytest.mark.parametrize("w", [40, 72, 200])
+@pytest.mark.parametrize("distribution", ["normal", "centered_uniform"])
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+def test_rms_norm_ulp_sharded_non_tile_aligned_multi_width_shard(device, w, distribution, dtype):
+    """Sharded rms_norm over a non-tile-aligned width split across two width shards vs torch golden.
 
-    The Welford partial-tile handling uses one last-tile width for both the per-core reduction and
-    the cross-core combine; those agree only for a single width shard or a tile-aligned width. The
-    op must throw rather than normalize the full shards over their padding columns.
+    Each width shard owns block_w columns of the tile-padded width; the cross-core reduce combines
+    them. The per-shard host mask zeroes the padding columns of whichever shard they fall in, and the
+    reduction scaler lands the divide on the logical width. Poisoning the padding makes any read of the
+    padded columns observable.
+    """
+    torch.manual_seed(0)
+    h = 32
+    num_cores_w = 2
+    shard_w = math.ceil(w / num_cores_w / 32) * 32
+    padded_w = shard_w * num_cores_w
+    eps = 1e-12
+
+    torch_input_tensor = _make_ln_input(h, w, dtype, distribution)
+    ms = torch_input_tensor.to(torch.float32).pow(2).mean(dim=-1, keepdim=True)
+    golden = (torch_input_tensor.to(torch.float32) * torch.rsqrt(ms + eps)).to(dtype)
+
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, 0))}),
+        [h, shard_w],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sharded_mem_config,
+    )
+    tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, PAD_VALUE)
+
+    actual = ttnn_rms_norm_sharded(
+        device,
+        tt_input_tensor,
+        block_ht=h // 32,
+        block_wt=shard_w // 32,
+        subblock_w=1,
+    )
+    actual = actual[..., :w]
+
+    if dtype == torch.float32:
+        ulp_threshold, atol_fraction = _FP32_ULP_THRESHOLD, _FP32_NEAR_ZERO_ATOL_FRACTION
+    else:
+        ulp_threshold, atol_fraction = (
+            _SHARDED_NONALIGNED_BF16_ULP_THRESHOLD,
+            _SHARDED_NONALIGNED_BF16_NEAR_ZERO_ATOL_FRACTION,
+        )
+    passed, max_ulp, max_atol_err, atol_tol, msg, ulp_stats = measure_ulp_with_near_zero_atol(
+        golden, actual, ulp_threshold, atol_fraction
+    )
+    spec = f"sharded rms multi-shard shape_hw=({h},{w}) shard_w={shard_w} dist={distribution} dtype={dtype}"
+    logger.info(
+        f"ttnn.rms_norm ULP (sharded multi-shard) | {spec} | ulp mean={ulp_stats['mean']:.3g} p95={ulp_stats['p95']:.3g} p99={ulp_stats['p99']:.3g} max={max_ulp:.4g}/{ulp_threshold} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
+    )
+    if ulp_stats["worst"]:
+        logger.info(f"  worst: {ulp_stats['worst']}")
+    if not passed:
+        logger.info(f"  {msg}")
+    assert passed, f"[sharded rms multi-shard dtype={dtype} w={w} dist={distribution}] {msg}"
+
+
+@pytest.mark.parametrize("use_welford", [True, False])
+def test_layer_norm_ulp_sharded_non_tile_aligned_multi_width_shard_rejected(device, use_welford):
+    """LayerNorm (non-RMS) over a non-tile-aligned width split across multiple width shards is
+    rejected, not silently wrong.
+
+    LayerNorm masks the host-tilized input at the E[x] site with one partial tile at the end, which is
+    only correct when a single width shard owns the whole row; the Welford partial-tile handling has
+    the same single-shard assumption in its cross-core combine. The op must throw rather than normalize
+    the full shards over their padding columns. (RMSNorm, by contrast, masks the per-shard squares and
+    does support this split.)
     """
     torch.manual_seed(0)
     h, w = 32, 200  # 200 -> padded 256; split across 2 width shards of 128 (4 tiles) each
@@ -554,7 +631,7 @@ def test_layer_norm_ulp_sharded_welford_non_tile_aligned_multi_width_shard_rejec
         ttnn_layer_norm_sharded(
             device,
             tt_input_tensor,
-            use_welford=True,
+            use_welford=use_welford,
             block_ht=h // 32,
             block_wt=shard_w // 32,
             subblock_w=1,
