@@ -157,6 +157,38 @@ def dispatch_axis_for_grid(max_x, max_y):
     return None
 
 
+def shard_grid_bounds(mc):
+    """Max core (x, y) used by a (serialized) memory_config's shard_spec grid.
+
+    Accepts the V2 dict form ({"data": {"shard_spec": {"grid": [{"start":..,
+    "end":..}, ...]}}}) or a ttnn.MemoryConfig. Returns (max_x, max_y), each
+    possibly None when there is no shard spec.
+    """
+    max_x = max_y = None
+    grid = None
+    if isinstance(mc, dict):
+        ss = (mc.get("data") or {}).get("shard_spec") or mc.get("shard_spec")
+        if isinstance(ss, dict):
+            grid = ss.get("grid")
+    else:
+        ss = getattr(mc, "shard_spec", None)
+        if ss is not None:
+            try:
+                for cr in ss.grid.ranges():
+                    max_x = max(max_x if max_x is not None else -1, cr.end.x)
+                    max_y = max(max_y if max_y is not None else -1, cr.end.y)
+            except Exception:
+                pass
+            return max_x, max_y
+    if isinstance(grid, list):
+        for r in grid:
+            end = r.get("end") if isinstance(r, dict) else None
+            if isinstance(end, dict):
+                max_x = max(max_x if max_x is not None else -1, int(end.get("x", -1)))
+                max_y = max(max_y if max_y is not None else -1, int(end.get("y", -1)))
+    return max_x, max_y
+
+
 def create_mesh_device(
     mesh_shape: Tuple[int, int],
     device_ids: Optional[list] = None,

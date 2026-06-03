@@ -19,7 +19,30 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     mesh_tensor_to_torch,
     program_config_grid_bounds,
     reconcile_golden_to_actual,
+    shard_grid_bounds,
 )
+
+
+def _linear_dispatch_axis(program_config, output_memory_config):
+    """Dispatch axis the matmul's program_config needs.
+
+    For 1D ``gather_in0`` matmuls the nominal ``compute_with_storage_grid_size``
+    width over-estimates the real core usage (the op validates the output shard
+    grid against the device / its sparse core set, not that rectangle). So the
+    real placement is the (possibly sparse) output shard grid + hop_cores — e.g.
+    a (8,3) grid whose output shard grid actually uses x<=6, y=9 needs COL, not
+    the ROW its nominal width=8 implies. For ordinary 2D matmuls the compute grid
+    is authoritative, so only override for gather_in0 (overriding everywhere
+    wrongly forces COL on configs that genuinely need ROW).
+    """
+    if isinstance(program_config, dict) and program_config.get("gather_in0"):
+        sx, sy = shard_grid_bounds(output_memory_config)
+        hx, hy = program_config_grid_bounds({"hop_cores": program_config.get("hop_cores")})
+        mx = max([v for v in (sx, hx) if v is not None], default=None)
+        my = max([v for v in (sy, hy) if v is not None], default=None)
+        if mx is not None or my is not None:
+            return dispatch_axis_for_grid(mx, my)
+    return dispatch_axis_for_grid(*program_config_grid_bounds(program_config))
 
 
 # Device opened per-vector (see _ensure_vector_device) so each vector can use the
@@ -246,7 +269,7 @@ def run(
     # Open (or reuse) a mesh device whose dispatch axis matches this vector's
     # matmul program_config grid + the real shard-grid placement (read raw,
     # before parsing below). The fixture yielded None; we own the device here.
-    device = _ensure_vector_device(dispatch_axis_for_grid(*program_config_grid_bounds(program_config)))
+    device = _ensure_vector_device(_linear_dispatch_axis(program_config, kwargs.get("output_memory_config")))
 
     # V2 vectors provide weight as input_tensor_b_* instead of input_b_*. Each
     # field can be present in either convention (or None when absent in master),
