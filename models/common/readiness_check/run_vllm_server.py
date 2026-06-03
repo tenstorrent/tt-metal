@@ -139,6 +139,16 @@ _SMOKE_SAMPLING_TESTS: tuple[str, ...] = (
     "test_host_only_params.py::TestHostOnlyParameters::test_min_p",
 )
 
+SAMPLING_PROFILE_FULL = "full"
+SAMPLING_PROFILE_SMOKE = "smoke"
+DEFAULT_SAMPLING_PROFILE = SAMPLING_PROFILE_FULL
+_SMOKE_SAMPLING_TESTS: tuple[str, ...] = (
+    "test_request_isolation.py::TestBatchIsolation::test_mixed_params_batch",
+    "test_seeding_and_variety.py::TestSeedingAndVariety::test_top1_is_greedy",
+    "test_logprobs.py::TestLogprobs::test_chat_logprobs_all_vocab",
+    "test_host_only_params.py::TestHostOnlyParameters::test_min_p",
+)
+
 # Always enforce on-device sampling. A ported model that cannot serve sampling
 # from the device is not production-ready; the readiness check fails fast here
 # rather than papering over it with host-side sampling. Users override by
