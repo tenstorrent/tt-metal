@@ -132,14 +132,18 @@ def preprocess_tt_custom_albert(
     device: ttnn.Device,
     *,
     weights_dtype=ttnn.bfloat16,
+    embedding_dtype=ttnn.bfloat16,
 ) -> TTCustomAlbertParams:
-    """Upload a ``transformers.AlbertModel`` (or ``CustomAlbert``) to device."""
+    """Upload a ``transformers.AlbertModel`` (or ``CustomAlbert``) to device.
+
+    ``embedding_dtype`` must stay ``bfloat16``: ``ttnn.embedding`` requires BF16 weights on device.
+    """
     cfg = albert_model.config
     emb = albert_model.embeddings
 
-    word_emb = _t(emb.word_embeddings.weight, device=device, dtype=weights_dtype)
-    pos_emb = _t(emb.position_embeddings.weight, device=device, dtype=weights_dtype)
-    token_type_emb = _t(emb.token_type_embeddings.weight, device=device, dtype=weights_dtype)
+    word_emb = _t(emb.word_embeddings.weight, device=device, dtype=embedding_dtype)
+    pos_emb = _t(emb.position_embeddings.weight, device=device, dtype=embedding_dtype)
+    token_type_emb = _t(emb.token_type_embeddings.weight, device=device, dtype=embedding_dtype)
     emb_ln_w, emb_ln_b = _upload_layernorm(emb.LayerNorm, device, weights_dtype)
 
     emb_map_w, emb_map_b = _upload_linear(albert_model.encoder.embedding_hidden_mapping_in, device, weights_dtype)

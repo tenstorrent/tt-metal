@@ -53,20 +53,34 @@ from loguru import logger
 import ttnn
 
 from models.experimental.kokoro.stft_xy_dump import dump_stft_xy_if_enabled, stft_xy_dump_dir, stft_xy_dump_enabled
-from models.experimental.kokoro.tt.tt_conv import dram_height_slice_config, dram_height_slice_num_slices
+from models.experimental.kokoro.tt.tt_conv import (
+    dram_height_slice_config,
+    dram_height_slice_num_slices,
+    dram_height_slice_target_rows,
+)
 
 # iSTFT matrix bytes limit: if [K*F, output_length] float32 would exceed this, skip
 # precomputing the matrices and use conv_transpose2d OLA instead.
 _ISTFT_MATRIX_BYTES_LIMIT = 1_073_741_824  # 1 GiB
-# BH L1 limit for conv_transpose2d OLA: dram_height_slice caps at 256 slices × ~512 rows.
-_ISTFT_CONV_TRANSPOSE_TARGET_ROWS_PER_SLICE = 512
 
 
 def _istft_conv_transpose_ola_fits(F: int) -> bool:
     """Return whether on-device conv_transpose2d OLA iSTFT fits BH L1 with DRAM height slicing."""
-    num_slices = dram_height_slice_num_slices(F)
+    target = dram_height_slice_target_rows(F)
+    num_slices = dram_height_slice_num_slices(F, target_rows_per_slice=target)
     rows_per_slice = (F + num_slices - 1) // num_slices
-    return rows_per_slice <= _ISTFT_CONV_TRANSPOSE_TARGET_ROWS_PER_SLICE
+    return rows_per_slice <= target
+
+
+# Empirical BH limit: ``ttnn.reshape`` to ``[B, 1, L, 1]`` plus strided conv2d L1 circular
+# buffers overflow above ~247k samples (Kokoro hop=5, n_fft=20).  Unrelated to the 1 GiB
+# iSTFT matrix precompute cap — that skips at much shorter L (~10k samples).
+_FORWARD_STFT_DEVICE_MAX_INPUT_LENGTH = 200_000
+
+
+def _forward_stft_device_fits(input_length: int) -> bool:
+    """Return whether the device strided-conv STFT forward path fits BH L1."""
+    return input_length <= _FORWARD_STFT_DEVICE_MAX_INPUT_LENGTH
 
 
 def _to_fp32_if_needed(x: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> tuple[ttnn.Tensor, bool]:
@@ -290,7 +304,7 @@ def preprocess_tt_torch_stft(
             "TTTorchSTFT skipping iSTFT matrix precompute "
             f"({matrix_bytes} bytes > {_ISTFT_MATRIX_BYTES_LIMIT}); "
             f"F={F}, output_length={output_length} — "
-            f"{'torch.istft at runtime' if not _istft_conv_transpose_ola_fits(F) else 'conv_transpose2d OLA at runtime'}"
+            f"{'CPU torch.istft at runtime' if not _istft_conv_transpose_ola_fits(F) else 'conv_transpose2d OLA iSTFT at runtime'}"
         )
         istft_real_t: Optional[ttnn.Tensor] = None
         istft_imag_t: Optional[ttnn.Tensor] = None
@@ -700,12 +714,23 @@ class TTTorchSTFT:
 
         Fallback dispatch (evaluated in priority order):
         - ``use_torch_stft_fallback=True``: entire transform on CPU via ``torch.stft`` (highest PCC).
+        - ``input_length`` above ``_FORWARD_STFT_DEVICE_MAX_INPUT_LENGTH``: CPU ``torch.stft`` —
+          device reshape/strided-conv overflows BH L1 (independent of iSTFT matrix precompute).
         - ``use_torch_atan2_fallback=True``: conv on TT/CPU (per ``use_torch_stft_conv_fallback``),
           atan2+sqrt on CPU.  Pair with ``use_torch_stft_conv_fallback=True`` to achieve the same
           cos(phase) PCC as ``use_torch_stft_fallback`` without using ``torch.stft``.
         - No fallbacks: BH BF16 throughout; cos(phase) PCC ~0.64 for Kokoro harmonic input.
         """
         if self._use_torch_stft_fallback:
+            return self._transform_torch_fallback(x_bL)
+
+        p = self.params
+        if not _forward_stft_device_fits(p.input_length):
+            logger.info(
+                "TTTorchSTFT transform using CPU torch.stft "
+                f"(input_length={p.input_length} > {_FORWARD_STFT_DEVICE_MAX_INPUT_LENGTH}; "
+                "device strided-conv STFT overflows BH L1 at this length)"
+            )
             return self._transform_torch_fallback(x_bL)
 
         X_real, X_imag = self._forward_stft_conv(x_bL)
@@ -718,7 +743,6 @@ class TTTorchSTFT:
 
         Used when ``istft_real is None`` (matrix too large for ``_ISTFT_MATRIX_BYTES_LIMIT``)
         or when ``_inverse_conv_transpose`` would overflow BH L1 even with DRAM slicing.
-        Consistent with ``use_torch_stft_fallback`` semantics (user already opted into CPU STFT).
         """
         p = self.params
         logger.info(
@@ -778,7 +802,7 @@ class TTTorchSTFT:
             fp32_dest_acc_en=True,
         )
 
-        # Scale DRAM height slices with F (~512 rows/slice; max Kokoro needs ~256 slices on BH).
+        # Scale DRAM height slices with F using the same row budget as generic conv_transpose.
         _istft_slice_cfg = dram_height_slice_config(p.F)
 
         def _run_ct(x_nhwc: ttnn.Tensor, synth_w: ttnn.Tensor) -> ttnn.Tensor:
@@ -950,6 +974,12 @@ class TTTorchSTFT:
     def forward(self, x_bL: ttnn.Tensor) -> ttnn.Tensor:
         """STFT → iSTFT round trip (matches ``TorchSTFT.forward``)."""
         if self._use_torch_stft_fallback:
+            mag, phase = self._transform_torch_fallback(x_bL)
+            y = self.inverse(mag, phase)
+            ttnn.deallocate(mag)
+            ttnn.deallocate(phase)
+            return y
+        if not _forward_stft_device_fits(self.params.input_length):
             mag, phase = self._transform_torch_fallback(x_bL)
             y = self.inverse(mag, phase)
             ttnn.deallocate(mag)
