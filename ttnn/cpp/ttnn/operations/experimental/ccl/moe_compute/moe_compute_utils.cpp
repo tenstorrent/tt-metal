@@ -711,7 +711,7 @@ ttnn::Tensor quantize_weights_via_host(
         return cast_tensor;
     }
 
-    auto result = ttnn::to_device(cast_tensor, device_tensor.device(), *memory_config);
+    auto result = ttnn::to_device(cast_tensor, device_tensor.device(), memory_config);
     cast_tensor.deallocate(/*force=*/true);
     return result;
 }
