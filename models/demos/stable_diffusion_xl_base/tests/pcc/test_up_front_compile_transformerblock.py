@@ -24,6 +24,7 @@ does real work:
         models/demos/stable_diffusion_xl_base/tests/pcc/test_up_front_compile_transformerblock.py
 """
 
+import os
 import time
 
 import torch
@@ -98,8 +99,9 @@ def test_sdxl_transformerblock_up_front_compile(device):
     print(f"\nSDXL block collect: {n_collected} ops -> {n_unique} unique programs")
     assert n_collected >= 8, "expected a rich program set (2 attentions + ff + 3 layernorms)"
 
-    # --- Phase 2: parallel compile — warm the on-disk kernel cache ---
-    num_programs, num_errors, workers, wall = ttnn.graph.up_front_compile(device, 4)
+    # --- Phase 2: parallel compile — warm the kernel cache (local executor or remote farm) ---
+    req_workers = int(os.environ.get("UP_FRONT_WORKERS", "4"))
+    num_programs, num_errors, workers, wall = ttnn.graph.up_front_compile(device, req_workers)
     print(
         f"SDXL block parallel compile: {num_programs} programs in {wall:.2f}s (workers={workers}, errors={num_errors})"
     )
