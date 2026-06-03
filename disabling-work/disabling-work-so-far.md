@@ -1,6 +1,6 @@
 # CI Disable Work — Status Log
 
-**Last updated:** 2026-06-03T18:25 UTC
+**Last updated:** 2026-06-03T18:32 UTC
 
 > **Source of truth.** This file is the canonical record of automation-tracked PRs. Wiping it resets the automation to fresh-state view; stale GitHub PRs not listed here are intentionally invisible.
 
@@ -27,6 +27,7 @@
 | PR | Workflow | Lifecycle stage | Verification result | Ready to merge? | Notes |
 |----|----------|-----------------|---------------------|-----------------|-------|
 | [#45979](https://github.com/tenstorrent/tt-metal/pull/45979) | `runtime-unit-tests.yaml` | `verifying` | pending | No | Verification dispatched 2026-06-03T18:19 UTC (run 26904326397) |
+| [#45981](https://github.com/tenstorrent/tt-metal/pull/45981) | `t3000-unit-tests.yaml` | `verifying` | pending | No | Verification dispatched 2026-06-03T18:27 UTC (run 26904737723) |
 
 ---
 
@@ -35,6 +36,7 @@
 | Run | Pipeline | Branch | Started | Status | Notes |
 |-----|----------|--------|---------|--------|-------|
 | [26904326397](https://github.com/tenstorrent/tt-metal/actions/runs/26904326397) | `runtime-unit-tests.yaml` | `ci-disable/runtime-unit-tests-data-movement-2026-06-03-verify` | 2026-06-03T18:19 UTC | queued | Fresh build; targeted verification for PR #45979; pruned to runtime_data_movement only |
+| [26904737723](https://github.com/tenstorrent/tt-metal/actions/runs/26904737723) | `t3000-unit-tests.yaml` | `ci-disable/t3000-unit-tests-attention1d-qwen25-2026-06-03-verify` | 2026-06-03T18:27 UTC | in_progress | Fresh build; targeted verification for PR #45981; model filter `tttv2 modules` |
 
 **Policy:** Concurrent runs across PRs are allowed; each automation session may dispatch at most three new runs.
 
@@ -58,7 +60,37 @@
 
 ## Recent Activity
 
-- **2026-06-03T18:25 UTC** — Session start. PR #45979 created for `runtime-unit-tests.yaml` `runtime_data_movement` job: disabled 5 deterministically-failing GTest cases (`TensixDirectWriteMulticast`, `TensixDataMovementOneToAllMulticastSemaphore2x2_2_0`, `TensixDataMovementOneToAllMulticastLinkedSemaphoreLoopback2x2_2_0`, `TensixDataMovementOneToAllMulticastLinkedSemaphore5x5_2_0`, `TensixDataMovementOneToAllUnicastSemaphore2x2_2_0`). All 5 fail on both `wh_n150_civ2` and `bh_p150b_civ2`. Tracking issue #45978. Verification dispatched as run 26904326397 (fresh build; no SHA-matching successful source run for this workflow on main — workflow has been failing on every recent main run).
+- **2026-06-03T18:32 UTC** — PR #45981 created for `t3000-unit-tests.yaml` `t3k_tttv2_fast_unit_tests` job: disabled 2 deterministically-failing pytest parametrizations (`test_attention_1d_vs_reference[10-standard-1x2-decode-32-Qwen2.5-7B-1x2]` and `[10-paged-...]`). Fails on `wh_llmbox` only. Error: `TT_FATAL dims must be unique` in `concat_ndim`. Tracking issue #45980. Verification dispatched as run 26904737723 (fresh build; `model=tttv2 modules` filter to target only `t3k_tttv2_fast_unit_tests`). Note: `t3k_ttnn_tests [wh_llmbox]` SIGABRT failure is a device timeout/hang — **out of scope** per policy.
+- **2026-06-03T18:25 UTC** — Session start. PR #45979 created for `runtime-unit-tests.yaml` `runtime_data_movement` job: disabled 5 deterministically-failing GTest cases (`TensixDirectWriteMulticast`, `TensixDataMovementOneToAllMulticastSemaphore2x2_2_0`, `TensixDataMovementOneToAllMulticastLinkedSemaphoreLoopback2x2_2_0`, `TensixDataMovementOneToAllMulticastLinkedSemaphore5x5_2_0`, `TensixDataMovementOneToAllUnicastSemaphore2x2_2_0`). All 5 fail on both `wh_n150_civ2` and `bh_p150b_civ2`. Tracking issue #45978. Verification dispatched as run 26904326397.
+
+---
+
+## PR #45981 — t3000-unit-tests.yaml (2 test_attention_1d_vs_reference Qwen2.5-7B disables)
+
+| Field | Value |
+|-------|-------|
+| PR | [#45981](https://github.com/tenstorrent/tt-metal/pull/45981) |
+| Disable issue | [#45980](https://github.com/tenstorrent/tt-metal/issues/45980) |
+| Timeout issue | — |
+| Branch | `ci-disable/t3000-unit-tests-attention1d-qwen25-2026-06-03` |
+| Workflow file | `t3000-unit-tests.yaml` |
+| Lifecycle stage | `verifying` |
+| Last rebase | 2026-06-03 (created off `origin/main` at `0485c74b235`) |
+| Last revalidation | 2026-06-03 (evidence checked against run 26895624808) |
+| Verification run | [26904737723](https://github.com/tenstorrent/tt-metal/actions/runs/26904737723) — started 2026-06-03T18:27 UTC (fresh build; `model=tttv2 modules` targeted filter) |
+| Last touched by automation | 2026-06-03T18:32Z |
+| Readiness | Not yet verified |
+
+### Disables (with main evidence)
+
+Main-run evidence: see PR description.
+
+Summary (both tests fail on `wh_llmbox` [job 79337583451] in run 26895624808, completed 2026-06-03T16:33 UTC, head SHA `c7ab438343c0913107e7a518e2cf2d115b07d34e`):
+
+| Disabled test | SKUs failing | Job link |
+|---|---|---|
+| `test_attention_1d_vs_reference[10-standard-1x2-decode-32-Qwen2.5-7B-1x2]` | `wh_llmbox` | [79337583451](https://github.com/tenstorrent/tt-metal/actions/runs/26895624808/job/79337583451) |
+| `test_attention_1d_vs_reference[10-paged-1x2-decode-32-Qwen2.5-7B-1x2]` | `wh_llmbox` | [79337583451](https://github.com/tenstorrent/tt-metal/actions/runs/26895624808/job/79337583451) |
 
 ---
 
