@@ -3,13 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include <map>
 #include <set>
+#include <utility>
+#include <vector>
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "zero_cache_range_program_factory.hpp"
+#include <tt-metalium/program_descriptors.hpp>
+#include "zero_cache_range_device_operation.hpp"
 
 using namespace tt::tt_metal;
 
@@ -41,15 +43,13 @@ static std::vector<std::pair<uint32_t, uint32_t>> compute_bank_page_ranges(
     return bank_ranges;
 }
 
-ZeroCacheRangeProgramFactory::cached_program_t ZeroCacheRangeProgramFactory::create(
-    const ZeroCacheRangeParams& operation_attributes,
-    const ZeroCacheRangeInputs& tensor_args,
-    Tensor& /*tensor_return_value*/) {
+ProgramDescriptor ZeroCacheRangeOperation::create_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& /*tensor_return_value*/) {
     const auto& cache_tensor = tensor_args.cache;
     const auto start_page = operation_attributes.start_page;
     const auto end_page = operation_attributes.end_page;
-
-    Program program{};
 
     auto* device = cache_tensor.device();
     auto* dst_buffer = cache_tensor.buffer();
@@ -95,12 +95,21 @@ ZeroCacheRangeProgramFactory::cached_program_t ZeroCacheRangeProgramFactory::cre
 
     CoreRangeSet all_cores(core_ranges);
 
+    // ---- Build the ProgramDescriptor ----
+
+    ProgramDescriptor desc;
+
     // Create CB for zero buffer
     uint32_t cb_zero_id = 0;
-    tt::tt_metal::CircularBufferConfig cb_config =
-        tt::tt_metal::CircularBufferConfig(noc_max_burst_size, {{cb_zero_id, tt::DataFormat::UInt8}})
-            .set_page_size(cb_zero_id, noc_max_burst_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = noc_max_burst_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_zero_id),
+            .data_format = tt::DataFormat::UInt8,
+            .page_size = noc_max_burst_size,
+        }}},
+    });
 
     // Build compile-time args
     std::vector<uint32_t> compile_time_args = {
@@ -109,19 +118,25 @@ ZeroCacheRangeProgramFactory::cached_program_t ZeroCacheRangeProgramFactory::cre
     };
     tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
 
-    // Create kernel on all bank cores
-    auto writer_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/dataflow/zero_cache_writer.cpp",
-        all_cores,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = noc, .compile_args = compile_time_args});
+    // Writer kernel descriptor: one kernel on all bank cores
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = "ttnn/cpp/ttnn/operations/kv_cache/device/kernels/dataflow/zero_cache_writer.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = compile_time_args;
+    writer_desc.config = DataMovementConfigDescriptor{
+        .processor = DataMovementProcessor::RISCV_0,
+        .noc = noc,
+    };
 
-    // Set runtime args per core
+    // Set runtime args per core. page_starts/page_ends derive from operation_attributes
+    // (start_page, end_page) which are excluded from compute_program_hash, so the slow
+    // path will rebuild and reapply runtime args correctly on every cache hit. Pushing
+    // dst_buffer->address() as a uint32_t (rather than Buffer*) keeps buffer_bindings
+    // empty so the framework uses the descriptor-rebuild slow path -- needed because
+    // page_starts / page_ends also vary across dispatches.
     for (uint32_t i = 0; i < cores.size(); i++) {
-        tt::tt_metal::SetRuntimeArgs(
-            program,
-            writer_kernel_id,
+        writer_desc.emplace_runtime_args(
             cores[i],
             {
                 dst_buffer->address(),
@@ -130,43 +145,9 @@ ZeroCacheRangeProgramFactory::cached_program_t ZeroCacheRangeProgramFactory::cre
             });
     }
 
-    return cached_program_t{
-        std::move(program),
-        shared_variables_t{
-            .writer_kernel_id = writer_kernel_id,
-            .cores = cores,
-            .page_starts = page_starts,
-            .page_ends = page_ends,
-        }};
-}
+    desc.kernels.push_back(std::move(writer_desc));
 
-void ZeroCacheRangeProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ZeroCacheRangeParams& operation_attributes,
-    const ZeroCacheRangeInputs& tensor_args,
-    Tensor& /*tensor_return_value*/) {
-    auto& program = cached_program.program;
-    const auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    const auto& cores = cached_program.shared_variables.cores;
-    auto& page_starts = cached_program.shared_variables.page_starts;
-    auto& page_ends = cached_program.shared_variables.page_ends;
-
-    auto* dst_buffer = tensor_args.cache.buffer();
-    const uint32_t pages_per_shard = tensor_args.cache.padded_shape()[-1] / tt::constants::TILE_WIDTH;
-    const auto num_dram_banks = static_cast<uint32_t>(cores.size());
-
-    auto bank_ranges = compute_bank_page_ranges(
-        operation_attributes.start_page, operation_attributes.end_page, pages_per_shard, num_dram_banks);
-
-    for (uint32_t i = 0; i < cores.size(); i++) {
-        page_starts[i] = bank_ranges[i].first;
-        page_ends[i] = bank_ranges[i].second;
-
-        auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, cores[i]);
-        runtime_args[0] = dst_buffer->address();
-        runtime_args[1] = page_starts[i];
-        runtime_args[2] = page_ends[i];
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim
