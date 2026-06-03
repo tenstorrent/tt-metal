@@ -2683,28 +2683,25 @@ TEST_F(ProgramSpecTestGen1, TwoReaderRolesOnSameNodeConflict) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("both claim the same DM processor")));
 }
 
-TEST_F(ProgramSpecTestGen1, ExplicitGen1ConfigOverridesRoleHint) {
-    // When both are set, the explicit Gen1Config wins and the role hint is informational. Here a
-    // READER (which would resolve to RISCV_1) carries an explicit RISCV_0 config; pairing it with
-    // another RISCV_0 kernel on the same node must conflict — proving the config, not the role,
-    // determined the processor.
+TEST_F(ProgramSpecTestGen1, RoleHintWithExplicitGen1ConfigFails) {
+    // A role hint and an explicit Gen1Config are mutually exclusive: the hint already fills
+    // in the config, so supplying both is contradictory and must be rejected.
     NodeCoord node{0, 0};
 
     ProgramSpec spec;
     spec.name = "test_program";
 
-    auto overridden = MakeMinimalRoleDMKernel("overridden", DataMovementRoleHint::READER);
-    auto& dm_config = std::get<DataMovementHardwareConfig>(overridden.hw_config);
-    dm_config.gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_0};
+    auto kernel = MakeMinimalRoleDMKernel("dm_kernel", DataMovementRoleHint::READER);
+    auto& dm_config = std::get<DataMovementHardwareConfig>(kernel.hw_config);
+    dm_config.gen1_config = DataMovementHardwareConfig::Gen1Config{.processor = DataMovementProcessor::RISCV_1};
 
-    auto other = MakeMinimalGen1DMKernel("other", DataMovementProcessor::RISCV_0);
-
-    spec.kernels = {overridden, other};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"overridden", "other"})};
+    spec.kernels = {kernel};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("both claim the same DM processor")));
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("sets both a READER/WRITER role hint and an explicit Gen1 config")));
 }
 
 // WH N150 mock grid reference (wormhole_N150.yaml, harvest_mask=0x40 = 1 row harvested):
