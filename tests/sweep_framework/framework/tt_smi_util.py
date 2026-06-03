@@ -101,6 +101,7 @@ class ResetUtil:
             try:
                 os.kill(pid, signal.SIGKILL)
             except OSError:
+                # pid already gone or not ours (race / permission) — reset proceeds regardless
                 pass
         # Give the kernel a moment to tear down the killed processes' handles.
         time.sleep(2)

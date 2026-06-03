@@ -785,6 +785,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         try:
             next(main_proc_context)
         except StopIteration:
+            # generator already exhausted (device already closed) — nothing left to clean up
             pass
         logger.info("Device closed in main process mode")
 

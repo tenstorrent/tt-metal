@@ -68,6 +68,7 @@ def _close_vector_device():
         try:
             ttnn.close_mesh_device(_CUR_DEVICE)
         except Exception:
+            # best-effort teardown — a failed device close must not mask the real test result
             pass
     _CUR_DEVICE = None
     _CUR_AXIS = "__uninit__"
@@ -354,6 +355,7 @@ def _run_gather_in0_ring_matmul(
         try:
             ttnn.close_mesh_device(dev)
         except Exception:
+            # best-effort teardown of the gather_in0 ring-matmul device
             pass
 
 

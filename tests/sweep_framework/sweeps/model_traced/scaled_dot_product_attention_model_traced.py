@@ -46,6 +46,7 @@ def _close_vector_device():
         try:
             ttnn.close_mesh_device(_CUR_DEVICE)
         except Exception:
+            # best-effort teardown — a failed device close must not mask the real test result
             pass
     _CUR_DEVICE = None
     _CUR_AXIS = "__uninit__"
@@ -498,6 +499,7 @@ def run(
         try:
             is_lofi = ckc.math_fidelity == ttnn.MathFidelity.LoFi
         except Exception:
+            # compute_kernel_config without a math_fidelity attr — treat as not-LoFi
             pass
     # BFLOAT8_B K/V has lower precision — relax PCC threshold
     is_low_precision_kv = str(input_b_dtype) in ("DataType.BFLOAT8_B", "DataType.BFLOAT4_B")

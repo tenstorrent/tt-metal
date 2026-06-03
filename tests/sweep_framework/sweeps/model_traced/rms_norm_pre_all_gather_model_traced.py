@@ -20,7 +20,6 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     reconcile_golden_to_actual,
 )
 
-
 TIMEOUT = 300
 
 loader = MasterConfigLoader()

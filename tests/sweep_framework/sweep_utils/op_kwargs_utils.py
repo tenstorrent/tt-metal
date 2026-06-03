@@ -319,6 +319,7 @@ def parse_dict_value(key: str, value: Any) -> Any:
             if m:
                 return [int(x.strip()) for x in m.group(1).split(",") if x.strip()]
     except (ValueError, TypeError, KeyError):
+        # malformed structured Shape data — fall through to regex repr parsing below
         pass
 
     # Dicts with a "type" key that we couldn't parse into a ttnn object

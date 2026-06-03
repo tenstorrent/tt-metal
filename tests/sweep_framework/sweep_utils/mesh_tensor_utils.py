@@ -178,6 +178,7 @@ def shard_grid_bounds(mc):
                     max_x = max(max_x if max_x is not None else -1, cr.end.x)
                     max_y = max(max_y if max_y is not None else -1, cr.end.y)
             except Exception:
+                # malformed / partial shard_spec — return whatever bounds were gathered (best-effort)
                 pass
             return max_x, max_y
     if isinstance(grid, list):
@@ -326,6 +327,7 @@ def create_mesh_device(
                 dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER, _override_axis),
             )
         except Exception:
+            # this dispatch axis/config isn't available on this cluster — fall through to the next open option
             pass
 
     # Default: COL (gives compute grid 7x10) since most lead_models traces use
@@ -353,6 +355,7 @@ def create_mesh_device(
                 dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER, ttnn.DispatchCoreAxis.ROW),
             )
         except Exception:
+            # WORKER ROW dispatch unavailable here — fall through to the next open option
             pass
         try:
             return ttnn.open_mesh_device(
@@ -361,18 +364,23 @@ def create_mesh_device(
                 dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH),
             )
         except Exception:
+            # ETH dispatch unavailable on this cluster — fall through to the default open below
             pass
 
     # 4. Default to COL.
     use_axis = ttnn.DispatchCoreAxis.COL
 
     try:
+        # Specify WORKER explicitly: DispatchCoreConfig(axis=...) alone leaves the
+        # core *type* at the system default (which can be ETH on multi-chip
+        # clusters), which we want to avoid here (see the ROW path above).
         return ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(*mesh_shape),
             l1_small_size=l1_small_size,
-            dispatch_core_config=ttnn.DispatchCoreConfig(axis=use_axis),
+            dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER, use_axis),
         )
     except Exception:
+        # requested dispatch axis was rejected — caller falls back to a plain device open
         pass
 
     return ttnn.open_mesh_device(
@@ -1112,6 +1120,7 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None, forc
             if dt == ttnn.uint32:
                 return torch.int64
         except Exception:
+            # tensor has no resolvable dtype — signal 'unknown' to the caller via None
             pass
         return None
 
@@ -1247,6 +1256,7 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None, forc
             torch_dtype = _get_torch_dtype(ttnn_tensor)
             return result.to(torch_dtype) if torch_dtype is not None else result
         except Exception:
+            # 2D mesh-composer path failed — fall through to the per-placement logic below
             pass
 
     if len(placements) == 2 and len(dist_dims) == 2:
@@ -1289,6 +1299,7 @@ def mesh_tensor_to_torch(ttnn_tensor, mesh_device=None, mesh_composer=None, forc
             torch_dtype = _get_torch_dtype(ttnn_tensor)
             return result.to(torch_dtype) if torch_dtype is not None else result
         except Exception:
+            # 1D mesh-composer path failed — fall through to the safe single-device conversion
             pass
 
     if device_tensors:
