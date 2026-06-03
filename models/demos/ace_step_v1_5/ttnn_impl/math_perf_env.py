@@ -2133,7 +2133,8 @@ def _ace_step_cond_256x1024_1d_width_program_config(
 #   down 3072×1024  2D 8×4 ibw=12 l1/dram/l1                        ~24μs (vs ~36μs MinimalMatmul)
 # gate_up (6144 N) is tuned in ``qwen_prefill_l1`` (1D 11×10, ibw=8, ws out) — not in this table.
 _ACE_STEP_ENCODER_MM_PINNED = {
-    (1024, 4096): ("1D", 8, 8, 16, "l1"),  # qkv prefill: L1 interleaved out (downstream nlp_create_qkv_heads)
+    # QKV: 1D mcast, L1 interleaved in0 (block norm → s2i(l1)); L1 interleaved out for create-heads.
+    (1024, 4096): ("1D", 8, 8, 16, "l1"),
     (2048, 1024): ("2D", 8, 8, 8, "bs"),  # o_proj: block-sharded in0+out
     (3072, 1024): ("2D", 8, 4, 12, "l1"),  # down_proj / FF2: half grid, same speed as 8×8
 }
@@ -2155,6 +2156,16 @@ def ace_step_prefill_width_sharded_l1_memory_config(ttnn: Any):
     return ttnn.MemoryConfig(memory_layout=layout.WIDTH_SHARDED, buffer_type=buf.L1)
 
 
+def ace_step_memory_configs_equivalent(mc_a: Any, mc_b: Any) -> bool:
+    """True when two ``MemoryConfig`` values describe the same buffer layout (incl. shard spec)."""
+    if mc_a is mc_b:
+        return True
+    try:
+        return mc_a == mc_b
+    except Exception:
+        return False
+
+
 def ace_step_encoder_2d_block_sharded_memory_config(
     ttnn: Any,
     device: Any,
@@ -2165,10 +2176,10 @@ def ace_step_encoder_2d_block_sharded_memory_config(
     batch_size: int = 1,
     for_output: bool = False,
 ):
-    """Block-sharded L1 memory for pinned encoder 2D matmuls (o_proj sweep: bs in0+out ~15.6 us).
+    """Block-sharded L1 memory for pinned encoder 2D matmuls.
 
-    Returns ``None`` when shape/device does not match a pinned 2D entry (e.g. down_proj keeps L1
-    interleaved out per its sweep winner).
+    - QKV ``(1024, 4096)``: uses 1D pin (L1 interleaved in0); not block-sharded in0.
+    - o_proj ``(2048, 1024)``: block-sharded in0+out on 8×8.
     """
     create_sharded = getattr(ttnn, "create_sharded_memory_config", None)
     shard_strategy = getattr(ttnn, "ShardStrategy", None)
@@ -2183,18 +2194,17 @@ def ace_step_encoder_2d_block_sharded_memory_config(
     pin = ace_step_encoder_matmul_pinned(m_dim, int(in_dim), int(out_dim))
     if pin is None or pin[0] != "2D":
         return None
-    # o_proj sweep winner uses block-sharded in0+out; down_proj sweep winner stays L1 interleaved.
-    if int(in_dim) != 2048:
-        return None
 
     _, gx, gy, _, out_layout = pin
-    if out_layout != "bs":
-        return None
+    if for_output:
+        if out_layout != "bs":
+            return None
+        w_dim = int(out_dim)
+    else:
+        w_dim = int(in_dim)
     dev_grid = device.compute_with_storage_grid_size()
     if gx > int(dev_grid.x) or gy > int(dev_grid.y):
         return None
-
-    w_dim = int(out_dim) if for_output else int(in_dim)
     try:
         return create_sharded(
             (1, 1, m_dim, w_dim),
@@ -2818,8 +2828,13 @@ def ace_step_rms_norm_block_sharded(
     l1_mc: Any | None = None,
     compute_kernel_config: Any | None = None,
     activation_dtype: Any | None = None,
+    return_sharded: bool = False,
 ) -> Any:
-    """BLOCK_SHARDED ``ttnn.rms_norm`` on ``[B,1,S,K]`` (8×4 L1 grid); falls back to interleaved."""
+    """BLOCK_SHARDED ``ttnn.rms_norm`` on ``[B,1,S,K]`` (8×4 L1 grid); falls back to interleaved.
+
+    Default ``return_sharded=False``: ``sharded_to_interleaved`` into ``l1_mc`` for 1D matmul in0.
+    When ``return_sharded=True``, returns sharded L1 directly (2D-mcast on the same grid only).
+    """
     i2s = getattr(ttnn, "interleaved_to_sharded", None)
     s2i = getattr(ttnn, "sharded_to_interleaved", None)
 
@@ -2864,6 +2879,9 @@ def ace_step_rms_norm_block_sharded(
     except Exception:
         ace_step_safe_deallocate(ttnn, x_sharded)
         return _fallback(x)
+
+    if return_sharded:
+        return out_sharded
 
     out_kw = {"memory_config": l1_mc} if l1_mc is not None else {}
     try:

@@ -23,8 +23,10 @@ from models.tt_transformers.tt.common import Mode
 from .math_perf_env import (
     ace_step_build_prefill_block_sharded_norm_config,
     ace_step_encoder_matmul_program_config,
+    ace_step_init_cond_rmsnorm_compute_kernel_config,
     ace_step_linear_l1_memory_config,
     ace_step_prefill_block_sharded_norm_enabled,
+    ace_step_rms_norm_block_sharded,
 )
 
 # ModelArgs getters that return ``DRAM_MEMORY_CONFIG`` for ``Mode.PREFILL``.
@@ -92,6 +94,18 @@ def _ensure_l1_first_arg(args: tuple, *, l1_mc: Any) -> tuple:
     return (_ensure_l1_arg(args[0], l1_mc=l1_mc),) + args[1:]
 
 
+def _ensure_matmul_in0(ttnn_module: Any, tensor: Any, *, l1_mc: Any) -> Any:
+    """L1 interleaved for DRAM ``in0``; leave L1-sharded activations unchanged for 2D mcast matmul."""
+    if tensor is None or l1_mc is None or not hasattr(ttnn_module, "to_memory_config"):
+        return tensor
+    try:
+        if hasattr(tensor, "memory_config") and tensor.memory_config().is_sharded():
+            return tensor
+    except Exception:
+        pass
+    return _ensure_l1(ttnn_module, tensor, l1_mc=l1_mc)
+
+
 def _patch_lru_cached_getter(model_args: Any, name: str, *, dram_mc: Any, l1_mc: Any) -> None:
     original: Callable = getattr(model_args, name)
 
@@ -141,10 +155,13 @@ def ace_step_patch_model_args_prefill_l1(model_args: Any) -> None:
         _patch_mlp_ff2_all_reduce_getter(model_args, dram_mc=dram_mc, l1_mc=l1_mc)
 
 
-def _patch_distributed_norm_prefill_l1(norm_mod: Any, *, l1_mc: Any) -> None:
+def _patch_distributed_norm_prefill_l1(
+    norm_mod: Any,
+    *,
+    l1_mc: Any,
+) -> None:
     """Prefill ``DistributedNorm``: L1 activations + BLOCK-sharded ``LayerNormDeviceOperation``."""
     orig_forward = norm_mod.forward
-    i2s = getattr(ttnn, "interleaved_to_sharded", None)
 
     def forward(x, mode: Mode, norm_config=None):
         if getattr(norm_mod, "TG", False) or mode != Mode.PREFILL:
@@ -154,7 +171,6 @@ def _patch_distributed_norm_prefill_l1(norm_mod: Any, *, l1_mc: Any) -> None:
         inner = norm_mod.norm
         use_block = (
             ace_step_prefill_block_sharded_norm_enabled()
-            and i2s is not None
             and not norm_mod.args.is_distributed_norm(mode)
             and not (getattr(inner, "is_distributed", None) and inner.is_distributed(mode))
         )
@@ -181,8 +197,21 @@ def _patch_distributed_norm_prefill_l1(norm_mod: Any, *, l1_mc: Any) -> None:
             x = ttnn.to_memory_config(x, input_mem_cfg)
 
         if blk_cfg is not None:
-            x = i2s(x, blk_cfg["sharded_output_config"])
-            x = norm_mod.norm(x, mode=mode, in_sharded=True, out_sharded=False, norm_config=blk_cfg)
+            gamma = inner.weight
+            if getattr(inner, "is_distributed", None) and inner.is_distributed(mode):
+                gamma = inner.weight_distributed
+            ck = ace_step_init_cond_rmsnorm_compute_kernel_config(norm_mod.args.mesh_device)
+            # Block-sharded norm input (I2S inside helper); S2I to L1 interleaved for 1D matmul in0.
+            x = ace_step_rms_norm_block_sharded(
+                ttnn,
+                x,
+                gamma,
+                inner.eps,
+                device=norm_mod.args.mesh_device,
+                l1_mc=l1_mc,
+                compute_kernel_config=ck,
+                return_sharded=False,
+            )
         else:
             x = norm_mod.norm(x, mode=mode, in_sharded=False, out_sharded=False, norm_config=norm_config)
 
@@ -546,7 +575,10 @@ def ace_step_apply_qwen_prefill_l1(tt_model: Any, model_args: Any) -> None:
     _patch_embd_l1_output(tt_model.embd, l1_mc=l1_mc)
     for layer in tt_model.layers:
         _patch_decoder_l1_residual(layer, l1_mc=l1_mc)
-        for norm_attr in ("attention_norm", "ff_norm", "pre_ff_norm", "post_ff_norm"):
+        attn_norm = getattr(layer, "attention_norm", None)
+        if attn_norm is not None:
+            _patch_distributed_norm_prefill_l1(attn_norm, l1_mc=l1_mc)
+        for norm_attr in ("ff_norm", "pre_ff_norm", "post_ff_norm"):
             norm_mod = getattr(layer, norm_attr, None)
             if norm_mod is not None:
                 _patch_distributed_norm_prefill_l1(norm_mod, l1_mc=l1_mc)
@@ -583,7 +615,14 @@ def ace_step_qwen_prefill_l1_op_context() -> Iterator[None]:
 
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            args = _ensure_l1_first_arg(args, l1_mc=l1_mc)
+            if args:
+                if isinstance(args[0], list):
+                    # e.g. ttnn.concat([t0, t1, ...], dim=1)
+                    args = _ensure_l1_first_arg(args, l1_mc=l1_mc)
+                else:
+                    in0 = _ensure_matmul_in0(ttnn, args[0], l1_mc=l1_mc)
+                    if in0 is not args[0]:
+                        args = (in0,) + args[1:]
             _swap_dram_kwarg(kwargs, dram_mc=dram_mc, l1_mc=l1_mc)
             if kwargs.get("memory_config") is None:
                 kwargs["memory_config"] = l1_mc
@@ -658,7 +697,7 @@ def ace_step_qwen_prefill_l1_op_context() -> Iterator[None]:
                 config = kwargs.get("config")
                 if _ace_step_is_mcast_matmul_program_config(config) and len(args) >= 2:
                     in0_orig = args[0]
-                    in0 = _ensure_l1(ttnn, in0_orig, l1_mc=l1_mc)
+                    in0 = _ensure_matmul_in0(ttnn, in0_orig, l1_mc=l1_mc)
                     weight_orig = args[1]
                     weight = _ensure_dram_interleaved(ttnn, weight_orig, dram_mc=dram_mc)
                     if in0 is not in0_orig or weight is not weight_orig:
@@ -677,7 +716,7 @@ def ace_step_qwen_prefill_l1_op_context() -> Iterator[None]:
                     kwargs["memory_config"] = l1_mc
                 if args:
                     in0_orig = args[0]
-                    in0 = _ensure_l1(ttnn, in0_orig, l1_mc=l1_mc)
+                    in0 = _ensure_matmul_in0(ttnn, in0_orig, l1_mc=l1_mc)
                     if in0 is not in0_orig:
                         args = (in0,) + args[1:]
                 return _orig_mm(*args, **kwargs)
