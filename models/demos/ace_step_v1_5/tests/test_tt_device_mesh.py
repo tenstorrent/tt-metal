@@ -224,7 +224,7 @@ def test_mesh_perf_log_opt_out(monkeypatch):
 
 
 def test_cached_preprocess_reuse():
-    from models.demos.ace_step_v1_5.demo_session import AceStepDemoSession
+    from models.demos.ace_step_v1_5.demo.demo_session import AceStepDemoSession
 
     session = AceStepDemoSession()
     session.store_preprocess(

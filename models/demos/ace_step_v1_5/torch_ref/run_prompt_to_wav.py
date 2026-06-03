@@ -305,7 +305,7 @@ def run_prompt_to_wav(
         try:
             ref_root = _resolve_ace_step_repo_root(ckpt_dir=ckpt_dir, ace_step_repo_root=ace_step_repo_root)
             if ref_root is not None:
-                from models.demos.ace_step_v1_5.ref_decoder_compare import ensure_acestep_repo_on_path
+                from models.demos.ace_step_v1_5.demo.ref_decoder_compare import ensure_acestep_repo_on_path
 
                 ensure_acestep_repo_on_path(ref_root)
             else:
@@ -385,7 +385,7 @@ def run_prompt_to_wav(
             try:
                 ref_root = _resolve_ace_step_repo_root(ckpt_dir=ckpt_dir, ace_step_repo_root=ace_step_repo_root)
                 if ref_root is not None:
-                    from models.demos.ace_step_v1_5.ref_decoder_compare import ensure_acestep_repo_on_path
+                    from models.demos.ace_step_v1_5.demo.ref_decoder_compare import ensure_acestep_repo_on_path
 
                     ensure_acestep_repo_on_path(ref_root)
                 else:
@@ -619,7 +619,7 @@ def main() -> None:
         args.infer_steps = 8 if "turbo" in str(args.variant).lower() else 50
 
     if args.use_official_acestep:
-        from models.demos.ace_step_v1_5.run_prompt_to_wav import _DEFAULT_CKPT_DIR, _ensure_variant
+        from models.demos.ace_step_v1_5.demo.run_prompt_to_wav import _DEFAULT_CKPT_DIR, _ensure_variant
         from models.demos.ace_step_v1_5.torch_ref.transformers_cache_compat import apply_transformers_cache_compat
 
         apply_transformers_cache_compat()
@@ -633,7 +633,7 @@ def main() -> None:
                 "Could not find ACE-Step-1.5 repo root (folder containing `acestep/`). "
                 "Pass --ace-step-repo-root or set ACE_STEP_REPO_ROOT."
             )
-        from models.demos.ace_step_v1_5.ref_decoder_compare import ensure_acestep_repo_on_path
+        from models.demos.ace_step_v1_5.demo.ref_decoder_compare import ensure_acestep_repo_on_path
 
         ensure_acestep_repo_on_path(ref_root)
         from acestep.handler import AceStepHandler

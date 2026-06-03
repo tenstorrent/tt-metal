@@ -39,7 +39,7 @@ This folder provides:
 - `torch_ref/`: PyTorch reference implementation
 - `ttnn_impl/`: TTNN implementation with one-to-one module mapping
 - `tests/`: per-module PCC validation (Torch vs TTNN)
-- `run_prompt_to_wav.py`: end-to-end text-to-music demo (preprocessing + TTNN DiT + VAE decode)
+- `demo/`: end-to-end demo entry points (`run_prompt_to_wav.py`, `serve_prompt_to_wav.py`, `ref_decoder_compare.py`, `demo_session.py`, `demo.md`)
 
 ## Prerequisites
 
@@ -59,7 +59,7 @@ pip install -r models/demos/ace_step_v1_5/requirements.txt
 Generate a WAV audio file from a text prompt using TTNN-accelerated inference.
 
 ```bash
-python models/demos/ace_step_v1_5/run_prompt_to_wav.py \
+python models/demos/ace_step_v1_5/demo/run_prompt_to_wav.py \
   --variant acestep-v15-turbo \
   --duration_sec 15 \
   --prompt "epic orchestral cinematic music for a movie trailer" \
@@ -77,7 +77,7 @@ into `~/.cache/huggingface/hub/ACE-Step-1.5-checkpoints/`.
 TTNN trace + 2CQ is **enabled by default**. To run in fully-eager single-CQ mode (e.g. for debugging or Tracy profiling):
 
 ```bash
-python models/demos/ace_step_v1_5/run_prompt_to_wav.py ... --no-use-trace
+python models/demos/ace_step_v1_5/demo/run_prompt_to_wav.py ... --no-use-trace
 ```
 
 ### More examples
@@ -85,7 +85,7 @@ python models/demos/ace_step_v1_5/run_prompt_to_wav.py ... --no-use-trace
 **Turbo model — fast generation (8 steps, CFG=7):**
 
 ```bash
-python models/demos/ace_step_v1_5/run_prompt_to_wav.py \
+python models/demos/ace_step_v1_5/demo/run_prompt_to_wav.py \
   --variant acestep-v15-turbo \
   --lm_variant acestep-5Hz-lm-1.7B \
   --duration_sec 15 \
@@ -98,7 +98,7 @@ python models/demos/ace_step_v1_5/run_prompt_to_wav.py \
 **Base model with 1.7B LM (balanced quality/speed):**
 
 ```bash
-python models/demos/ace_step_v1_5/run_prompt_to_wav.py \
+python models/demos/ace_step_v1_5/demo/run_prompt_to_wav.py \
   --prompt "Acoustic guitar ballad with soft vocals and ambient strings" \
   --variant acestep-v15-base \
   --lm_variant acestep-5Hz-lm-1.7B \
@@ -111,7 +111,7 @@ python models/demos/ace_step_v1_5/run_prompt_to_wav.py \
 **Base model with 4B LM (highest quality, slower):**
 
 ```bash
-python models/demos/ace_step_v1_5/run_prompt_to_wav.py \
+python models/demos/ace_step_v1_5/demo/run_prompt_to_wav.py \
   --prompt "Orchestral film score with dramatic brass and timpani" \
   --variant acestep-v15-base \
   --lm_variant acestep-5Hz-lm-4B \
@@ -141,7 +141,7 @@ Look for log lines:
 **HTTP service (weights load once at startup, multiple HTTP requests):**
 
 ```bash
-python3 models/demos/ace_step_v1_5/serve_prompt_to_wav.py --port 8765
+python3 models/demos/ace_step_v1_5/demo/serve_prompt_to_wav.py --port 8765
 ```
 
 Disable in-memory weight caching with `ACE_STEP_DISABLE_WEIGHT_CACHE=1`.
@@ -236,10 +236,15 @@ TTNN SDPA in `dit_decoder_core` uses **tile-aligned `head_dim`** (often 32). Sel
 
 ```
 ace_step_v1_5/
+  demo/
+    run_prompt_to_wav.py
+    serve_prompt_to_wav.py
+    ref_decoder_compare.py
+    demo_session.py
+    demo.md
   torch_ref/
   ttnn_impl/
   tests/
-  run_prompt_to_wav.py
 ```
 
 ## Running tests
@@ -262,7 +267,7 @@ export MESH_DEVICE=N150   # or N300 / T3K / BH_QB
 Same algorithm as P150 (batch=2 CFG, trace, TTNN VAE). Preprocess (5 Hz LM + handler) runs on **host CPU**; DiT and VAE use the full **2×2** mesh.
 
 ```bash
-python models/demos/ace_step_v1_5/run_prompt_to_wav.py \
+python models/demos/ace_step_v1_5/demo/run_prompt_to_wav.py \
   --mesh-device BH_QB \
   --variant acestep-v15-turbo \
   --lm_variant acestep-5Hz-lm-1.7B \

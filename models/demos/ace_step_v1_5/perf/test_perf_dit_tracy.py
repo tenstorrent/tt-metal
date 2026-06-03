@@ -69,7 +69,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import Profiler
-from models.demos.ace_step_v1_5.run_prompt_to_wav import _DEFAULT_CKPT_DIR, _ensure_variant
+from models.demos.ace_step_v1_5.demo.run_prompt_to_wav import _DEFAULT_CKPT_DIR, _ensure_variant
 from models.demos.ace_step_v1_5.ttnn_impl.dit_sampling_ttnn import (
     bf16_tile_l1_from_numpy_bc,
     concat_duplicate_batch,
