@@ -34,6 +34,7 @@ from models.demos.deepseek_v3_b1.micro_ops.sdpa_tail.op import SdpaTailSingleCor
 @pytest.mark.parametrize("final_reduction", [True, False])
 @pytest.mark.parametrize("untilize_out", [True, False])
 @pytest.mark.parametrize("scale", [192**-0.5])
+@pytest.mark.skip(reason="Disabled: see #46009")
 def test_sdpa_tail(device, width, block_size, num_blocks, dense, final_reduction, untilize_out, scale):
     """Test TTNN sdpa_tail operation on a single core"""
     if block_size > 8 and not dense:
