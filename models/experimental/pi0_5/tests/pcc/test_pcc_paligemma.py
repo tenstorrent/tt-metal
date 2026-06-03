@@ -29,9 +29,7 @@ from models.experimental.pi0_5.common.configs import SigLIPConfig, GemmaConfig, 
 from models.experimental.pi0_5.common.weight_loader import PI0WeightLoader
 
 
-TT_METAL_HOME = os.environ.get("TT_METAL_HOME")
-if not TT_METAL_HOME:
-    raise EnvironmentError("TT_METAL_HOME environment variable is not set")
+TT_METAL_HOME = os.environ.get("TT_METAL_HOME", str(Path(__file__).resolve().parents[5]))
 CHECKPOINT_PATH = "lerobot/pi0_base"
 SEED = 42
 PCC_THRESHOLD = 0.90
@@ -101,7 +99,11 @@ def create_small_config() -> PaliGemmaConfig:
         siglip_config=siglip,
         vlm_config=vlm,
         expert_config=expert,
-        max_seq_len=256,
+        # Must exceed the prefix length (2 * num_image_tokens + lang). With
+        # image_size=224 / patch_size=14 that is 2*256 + 32 = 544, so the RoPE
+        # table (sized to max_seq_len) must be at least that long or block
+        # construction fails slicing cos/sin. 256 was too small.
+        max_seq_len=1024,
     )
 
 

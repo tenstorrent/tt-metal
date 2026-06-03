@@ -183,6 +183,19 @@ $TT_METAL_HOME/models/experimental/pi0_5/weights/
 
 ## Running Tests
 
+### Unit / Smoke Tests (no device required)
+
+CPU-only tests over the PyTorch reference (random weights, no Tenstorrent
+device and no pretrained checkpoint) — the cheapest tier; run these first in CI.
+
+```bash
+pytest models/experimental/pi0_5/tests/unit/ -v
+```
+
+Covers adaRMS (`adarms_norm` + the zero-modulation expert-block identity), the
+suffix embedding (shapes / adaRMS time-conditioning), and the flow-matching time
+embedding.
+
 ### PCC Tests (Accuracy Validation)
 
 **Full π0.5 Model PCC Test:**
@@ -205,6 +218,9 @@ pytest models/experimental/pi0_5/tests/pcc/test_pcc_prefix.py -v
 pytest models/experimental/pi0_5/tests/pcc/test_pcc_gemma.py -v
 pytest models/experimental/pi0_5/tests/pcc/test_pcc_siglip.py -v
 pytest models/experimental/pi0_5/tests/pcc/test_pcc_paligemma.py -v
+
+# Block-level drilldown (localizes a regression to the action-expert stack)
+pytest models/experimental/pi0_5/tests/pcc/test_pcc_expert_block_drilldown.py -v
 ```
 
 ### Performance Tests (Benchmarking)

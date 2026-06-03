@@ -20,6 +20,7 @@ import os
 import time
 from pathlib import Path
 
+import pytest
 import torch
 import ttnn
 
@@ -92,6 +93,80 @@ def compute_pcc(tensor1: torch.Tensor, tensor2: torch.Tensor) -> float:
         return 1.0 if torch.allclose(t1, t2) else 0.0
     covariance = torch.mean((t1 - mean1) * (t2 - mean2))
     return (covariance / (std1 * std2)).item()
+
+
+def _resolve_checkpoint() -> Path:
+    """Return the checkpoint path, skipping the pytest run if a local path is absent.
+
+    A bare HF repo id (e.g. ``lerobot/pi05_base``) is not absolute, so it is
+    returned as-is and resolved by ``PI0WeightLoader`` (downloads on demand).
+    """
+    checkpoint_path = Path(CHECKPOINT_PATH)
+    if checkpoint_path.is_absolute() and not checkpoint_path.exists():
+        pytest.skip(f"Checkpoint not found: {checkpoint_path}")
+    return checkpoint_path
+
+
+def run_pi05_model_pcc(device, checkpoint_path: Path) -> float:
+    """Build the torch + TTNN Pi0.5 models, sample actions from both, return PCC."""
+    config = create_pi05_config()
+    weight_loader = PI0WeightLoader(str(checkpoint_path))
+
+    model_torch = PI0ModelTorch(config, weight_loader)
+    torch.manual_seed(SEED)
+    model_ttnn = PI0ModelTTNN(config, weight_loader, device)
+
+    inputs = create_test_inputs(config, batch_size=BATCH_SIZE)
+
+    torch.manual_seed(SEED)
+    with torch.no_grad():
+        torch_actions = model_torch.sample_actions(
+            images=inputs["images"],
+            img_masks=inputs["img_masks"],
+            lang_tokens=inputs["lang_tokens"],
+            lang_masks=inputs["lang_masks"],
+            state=inputs["state"],
+        )
+
+    with torch.no_grad():
+        images_ttnn = [
+            ttnn.from_torch(
+                img,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for img in inputs["images"]
+        ]
+        lang_tokens_ttnn = ttnn.from_torch(
+            inputs["lang_tokens"], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+        lang_masks_ttnn = ttnn.from_torch(
+            inputs["lang_masks"].float(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        state_ttnn = ttnn.from_torch(inputs["state"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+        ttnn_actions = model_ttnn.sample_actions(
+            images=images_ttnn,
+            img_masks=inputs["img_masks"],
+            lang_tokens=lang_tokens_ttnn,
+            lang_masks=lang_masks_ttnn,
+            state=state_ttnn,
+        )
+    if isinstance(ttnn_actions, ttnn.Tensor):
+        ttnn_actions = ttnn.to_torch(ttnn_actions)
+
+    return compute_pcc(torch_actions, ttnn_actions)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_pcc_pi05_model(device):
+    """Pi0.5 full-model action sampling: TTNN (tt/) vs PyTorch reference (PCC)."""
+    torch.manual_seed(SEED)
+    pcc = run_pi05_model_pcc(device, _resolve_checkpoint())
+    print(f"\n✅ Pi0.5 model PCC: {pcc:.6f} (threshold {PCC_THRESHOLD})")
+    assert pcc >= PCC_THRESHOLD, f"PCC {pcc:.6f} < threshold {PCC_THRESHOLD}"
 
 
 def main():

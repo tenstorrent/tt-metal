@@ -29,9 +29,7 @@ from models.experimental.pi0_5.common.configs import PrefixConfig
 from models.experimental.pi0_5.common.weight_loader import PI0WeightLoader
 
 
-TT_METAL_HOME = os.environ.get("TT_METAL_HOME")
-if not TT_METAL_HOME:
-    raise EnvironmentError("TT_METAL_HOME environment variable is not set")
+TT_METAL_HOME = os.environ.get("TT_METAL_HOME", str(Path(__file__).resolve().parents[5]))
 CHECKPOINT_PATH = "lerobot/pi0_base"
 SEED = 42
 PCC_THRESHOLD = 0.95
@@ -89,7 +87,9 @@ def test_pcc_prefix_language_embedding(device, use_pretrained):
     def embed_fn_ttnn(tokens):
         if isinstance(tokens, ttnn.Tensor):
             tokens = ttnn.to_torch(tokens)
-        emb = torch.nn.functional.embedding(tokens, embed_weights)
+        # ttnn round-trips integer tokens as uint32, which torch.embedding
+        # rejects (it requires Long/Int); cast back before the lookup.
+        emb = torch.nn.functional.embedding(tokens.long(), embed_weights)
         return ttnn.from_torch(emb, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     config = PrefixConfig(vlm_hidden_size=actual_hidden_dim)

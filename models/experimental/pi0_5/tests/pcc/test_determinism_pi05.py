@@ -21,6 +21,7 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
 import torch
 import ttnn
 
@@ -116,6 +117,65 @@ def reset_initial_noise(model_ttnn, x0_torch):
         device=model_ttnn.device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
+
+
+def _resolve_checkpoint() -> Path:
+    """Return the checkpoint path, skipping the pytest run if a local path is absent."""
+    ckpt = Path(CHECKPOINT_PATH)
+    if ckpt.is_absolute() and not ckpt.exists():
+        pytest.skip(f"Checkpoint not found: {ckpt}")
+    return ckpt
+
+
+def run_determinism(device, runs: int = DEFAULT_RUNS):
+    """Run sample_actions `runs`× with fixed inputs + fixed initial noise.
+
+    Returns (all_bit_equal, worst_max_abs_diff, worst_pairwise_pcc) vs. run 0.
+    """
+    config = create_pi05_config()
+    weight_loader = PI0WeightLoader(str(_resolve_checkpoint()))
+
+    torch.manual_seed(SEED)
+    model_ttnn = PI0ModelTTNN(config, weight_loader, device)
+
+    torch.manual_seed(SEED + 1)
+    inputs = create_test_inputs(config, BATCH_SIZE)
+    images_ttnn, lang_tokens_ttnn, lang_masks_ttnn, state_ttnn = build_ttnn_inputs(inputs, device)
+
+    torch.manual_seed(SEED + 2)
+    x0 = torch.randn(BATCH_SIZE, config.action_horizon, config.action_dim, dtype=torch.float32)
+
+    outputs = []
+    for _ in range(runs):
+        reset_initial_noise(model_ttnn, x0)
+        with torch.no_grad():
+            out = model_ttnn.sample_actions(
+                images=images_ttnn,
+                img_masks=inputs["img_masks"],
+                lang_tokens=lang_tokens_ttnn,
+                lang_masks=lang_masks_ttnn,
+                state=state_ttnn,
+            )
+        if isinstance(out, ttnn.Tensor):
+            out = ttnn.to_torch(out)
+        outputs.append(out.clone())
+
+    ref = outputs[0]
+    all_bit_equal, max_abs, min_pcc = True, 0.0, 1.0
+    for cur in outputs[1:]:
+        all_bit_equal = all_bit_equal and torch.equal(ref, cur)
+        max_abs = max(max_abs, (ref.float() - cur.float()).abs().max().item())
+        min_pcc = min(min_pcc, compute_pcc(ref, cur))
+    return all_bit_equal, max_abs, min_pcc
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_determinism_pi05(device):
+    """TTNN Pi0.5 sampler is deterministic across repeated runs with fixed noise."""
+    all_bit_equal, max_abs, min_pcc = run_determinism(device, DEFAULT_RUNS)
+    print(f"\n✅ determinism: bit_equal={all_bit_equal}  max|Δ|={max_abs:.3e}  min_pcc={min_pcc:.8f}")
+    # Pass if bit-identical OR within the bfloat16 noise floor.
+    assert all_bit_equal or min_pcc >= 0.999999, f"non-deterministic: max|Δ|={max_abs:.3e}, min PCC={min_pcc:.8f}"
 
 
 def main():

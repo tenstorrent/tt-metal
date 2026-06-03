@@ -31,6 +31,7 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
 import torch
 import ttnn
 
@@ -48,6 +49,9 @@ CHECKPOINT_PATH = os.environ.get("PI0_CHECKPOINT", "lerobot/pi05_base")
 BATCH_SIZE = 1
 SEED = 42
 PER_STEP_PCC_THRESHOLD = 0.99
+# Informational secondary gate: compound bf16 drift over the 10-step Euler solver
+# makes the 0.99 per-step bar unreachable on the aggregate output.
+E2E_PCC_THRESHOLD = 0.93
 
 
 def create_pi05_config() -> PI0ModelConfig:
@@ -133,6 +137,123 @@ def ttnn_velocity(model_ttnn, x_t_torch, step_idx, prefix_kv_cache, state_ttnn):
         action_out = expert_out
     velocity = model_ttnn.suffix_embedding.project_output(action_out)
     return ttnn.to_torch(velocity)
+
+
+def _resolve_checkpoint() -> Path:
+    """Return the checkpoint path, skipping the pytest run if a local path is absent."""
+    ckpt = Path(CHECKPOINT_PATH)
+    if ckpt.is_absolute() and not ckpt.exists():
+        pytest.skip(f"Checkpoint not found: {ckpt}")
+    return ckpt
+
+
+def run_per_step_pcc(device):
+    """Return (worst per-step velocity PCC, end-to-end aggregate PCC) for TTNN vs torch.
+
+    Feeds the SAME x_t (PyTorch's) into both models at each denoise step so the
+    per-step velocity comparison is free of cross-step error accumulation, then
+    runs each model's real sample_actions() path with matched initial noise for
+    the aggregate metric.
+    """
+    config = create_pi05_config()
+    num_steps = config.num_denoising_steps
+    weight_loader = PI0WeightLoader(str(_resolve_checkpoint()))
+
+    model_torch = PI0ModelTorch(config, weight_loader)
+    torch.manual_seed(SEED)
+    model_ttnn = PI0ModelTTNN(config, weight_loader, device)
+
+    inputs = create_test_inputs(config, batch_size=BATCH_SIZE)
+    torch.manual_seed(SEED)
+    x_t_shared = torch.randn(BATCH_SIZE, config.action_horizon, config.action_dim, dtype=torch.float32)
+
+    # Prefix / VLM forward on both backends.
+    with torch.no_grad():
+        prefix_embs_t, _, _ = model_torch.embed_prefix(
+            inputs["images"], inputs["img_masks"], inputs["lang_tokens"], inputs["lang_masks"]
+        )
+        _, vlm_cache_torch = model_torch.backbone.forward_vlm(prefix_embs_t, use_cache=True)
+
+    images_ttnn = [
+        ttnn.from_torch(
+            img,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for img in inputs["images"]
+    ]
+    lang_tokens_ttnn = ttnn.from_torch(
+        inputs["lang_tokens"], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    lang_masks_ttnn = ttnn.from_torch(
+        inputs["lang_masks"].float(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    state_ttnn = ttnn.from_torch(inputs["state"], dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    prefix_embs_tt, _, _ = model_ttnn.embed_prefix(images_ttnn, inputs["img_masks"], lang_tokens_ttnn, lang_masks_ttnn)
+    _, prefix_kv_cache_ttnn = model_ttnn.backbone.forward_vlm(prefix_embs_tt, use_cache=True)
+
+    # Per-step velocity PCC with a shared x_t fed to both models.
+    timesteps = [1.0 - i / num_steps for i in range(num_steps + 1)]
+    x_t_torch = x_t_shared.clone()
+    worst_v_pcc = 1.0
+    with torch.no_grad():
+        for i in range(num_steps):
+            t = timesteps[i]
+            dt = timesteps[i + 1] - timesteps[i]
+            v_torch = torch_velocity(model_torch, x_t_torch, t, vlm_cache_torch, inputs["state"])
+            v_ttnn = ttnn_velocity(model_ttnn, x_t_torch, i, prefix_kv_cache_ttnn, state_ttnn)
+            worst_v_pcc = min(worst_v_pcc, compute_pcc(v_torch, v_ttnn))
+            x_t_torch = x_t_torch + dt * v_torch
+
+        # End-to-end aggregate with matched initial noise.
+        model_ttnn.x_t_ttnn = ttnn.from_torch(
+            x_t_shared,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=model_ttnn.device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        saved_sample_noise = model_torch.denoising.sample_noise
+        model_torch.denoising.sample_noise = lambda bs, device=None, dtype=torch.float32: x_t_shared.clone()
+        try:
+            torch_actions = model_torch.forward_inference(
+                images=inputs["images"],
+                img_masks=inputs["img_masks"],
+                lang_tokens=inputs["lang_tokens"],
+                lang_masks=inputs["lang_masks"],
+                state=inputs["state"],
+            )
+        finally:
+            model_torch.denoising.sample_noise = saved_sample_noise
+
+        ttnn_actions = model_ttnn.sample_actions(
+            images=images_ttnn,
+            img_masks=inputs["img_masks"],
+            lang_tokens=lang_tokens_ttnn,
+            lang_masks=lang_masks_ttnn,
+            state=state_ttnn,
+        )
+        if isinstance(ttnn_actions, ttnn.Tensor):
+            ttnn_actions = ttnn.to_torch(ttnn_actions)
+
+    return worst_v_pcc, compute_pcc(torch_actions, ttnn_actions)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_pcc_pi05_per_step(device):
+    """Per-step velocity PCC (primary gate) + end-to-end aggregate PCC for Pi0.5."""
+    worst_v_pcc, e2e_pcc = run_per_step_pcc(device)
+    print(
+        f"\n✅ per-step worst v_pcc={worst_v_pcc:.6f} (≥{PER_STEP_PCC_THRESHOLD}), "
+        f"e2e_pcc={e2e_pcc:.6f} (≥{E2E_PCC_THRESHOLD})"
+    )
+    assert (
+        worst_v_pcc >= PER_STEP_PCC_THRESHOLD
+    ), f"worst per-step velocity PCC {worst_v_pcc:.6f} < {PER_STEP_PCC_THRESHOLD}"
+    assert e2e_pcc >= E2E_PCC_THRESHOLD, f"end-to-end PCC {e2e_pcc:.6f} < {E2E_PCC_THRESHOLD}"
 
 
 def main():

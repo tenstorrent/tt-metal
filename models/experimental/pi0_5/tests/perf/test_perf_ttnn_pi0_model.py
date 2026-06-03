@@ -41,9 +41,7 @@ from models.experimental.pi0_5.common.weight_loader import PI0WeightLoader
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-TT_METAL_HOME = os.environ.get("TT_METAL_HOME")
-if not TT_METAL_HOME:
-    raise EnvironmentError("TT_METAL_HOME environment variable is not set")
+TT_METAL_HOME = os.environ.get("TT_METAL_HOME", str(Path(__file__).resolve().parents[5]))
 CHECKPOINT_PATH = "lerobot/pi0_base"
 BATCH_SIZE = 1
 SEED = 42
