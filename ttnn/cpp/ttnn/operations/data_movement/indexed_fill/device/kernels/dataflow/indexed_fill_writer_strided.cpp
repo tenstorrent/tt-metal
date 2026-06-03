@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 // Writer for indexed_fill generic path (interleaved output, arbitrary dim).
 //
@@ -33,8 +33,8 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<1>();
     const auto dst = TensorAccessor(dst_args, output_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb(cb_id);
+    Noc noc;
+    CircularBuffer cb(cb_id);
 
     for (uint32_t s = 0; s < num_slices; ++s) {
         const uint32_t my_slice = slice_start + s;

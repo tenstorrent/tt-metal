@@ -4,7 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -19,17 +21,18 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(dst_args, dst_addr + input_width_offset_bytes);
 
-    experimental::CircularBuffer cb_out(cb_id_out0);
+    Noc noc;
+    CircularBuffer cb_out(cb_id_out0);
 
     uint32_t stick_id = start_id;
     cb_out.wait_front(block_height);
-    uint32_t l1_read_addr = cb_out.get_read_ptr();
+    uint32_t cb_read_offset = 0;
     for (uint32_t h = 0; h < block_height; ++h) {
-        uint64_t dst_noc_addr = s0.get_noc_addr(stick_id);
-        noc_async_write(l1_read_addr, dst_noc_addr, block_width_bytes);
+        noc.async_write(
+            cb_out, s0, block_width_bytes, {.offset_bytes = cb_read_offset}, {.page_id = stick_id, .offset_bytes = 0});
         stick_id++;
-        l1_read_addr += padded_block_width_bytes;
+        cb_read_offset += padded_block_width_bytes;
     }
-    noc_async_write_barrier();
+    noc.async_write_barrier();
     cb_out.pop_front(block_height);
 }

@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     uint32_t src_addr           = get_arg_val<uint32_t>(0);
@@ -21,12 +21,12 @@ void kernel_main() {
     uint32_t num_dests          = get_arg_val<uint32_t>(9);
 
     // Read src buffer into local L1 buffer
-    constexpr auto bank_type = experimental::AllocatorBankType::DRAM;
-    experimental::CoreLocalMem<std::uint32_t> local_buffer(local_addr);
+    constexpr auto bank_type = AllocatorBankType::DRAM;
+    CoreLocalMem<std::uint32_t> local_buffer(local_addr);
 
-    experimental::Noc noc;
+    Noc noc;
     noc.async_read(
-        experimental::AllocatorBank<bank_type>(),
+        AllocatorBank<bank_type>(),
         local_buffer,
         src_buffer_size,
         {.bank_id = bank_id, .addr = src_addr},
@@ -34,8 +34,8 @@ void kernel_main() {
     noc.async_read_barrier();
 
     // multicast local L1 buffer to all destination cores
-    experimental::MulticastEndpoint dst_mcast_endpoint;
-    noc.async_write_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
+    MulticastEndpoint dst_mcast_endpoint;
+    noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
         local_buffer,
         dst_mcast_endpoint,
         src_buffer_size,

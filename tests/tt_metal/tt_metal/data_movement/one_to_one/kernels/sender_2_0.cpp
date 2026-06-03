@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/endpoints.h"
 #include "api/debug/dprint.h"
 
 // L1 to L1 send
@@ -20,15 +20,15 @@ void kernel_main() {
     uint32_t receiver_x_coord = packed_subordinate_core_coordinates >> 16;
     uint32_t receiver_y_coord = packed_subordinate_core_coordinates & 0xFFFF;
 
-    experimental::Noc noc(noc_index);
-    experimental::UnicastEndpoint unicast_endpoint;
+    Noc noc(noc_index);
+    UnicastEndpoint unicast_endpoint;
 
     {
         DeviceZoneScopedN("RISCV0");
         for (uint32_t i = 0; i < num_of_transactions; i++) {
             // Cycle through virtual channels 0 to (num_virtual_channels - 1)
             uint32_t current_virtual_channel = i % num_virtual_channels;
-            noc.async_write(
+            noc.async_write<NocOptions::CUSTOM_VC>(
                 unicast_endpoint,
                 unicast_endpoint,
                 bytes_per_transaction,
@@ -40,7 +40,7 @@ void kernel_main() {
                     .noc_y = receiver_y_coord,
                     .addr = l1_local_addr,
                 },
-                current_virtual_channel);
+                NocOptVals{.vc = current_virtual_channel});
         }
         noc.async_write_barrier();
     }

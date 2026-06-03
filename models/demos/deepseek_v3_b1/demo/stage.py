@@ -348,7 +348,7 @@ class SpecLMHeadStage(StageKind):
         *,
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
-        spec_weights: DeepSeekV3SpecWeights | None = None,
+        spec_weights: DeepSeekV3SpecWeights | DeepSeekV3LMHeadWeights | None = None,
     ) -> None:
         self._fp32_dest_acc_en = fp32_dest_acc_en
         self._persistent_mode = persistent_mode
@@ -1180,7 +1180,7 @@ class SpecLMHeadWithEmbeddingStage(SpecLMHeadStage):
         *,
         fp32_dest_acc_en: bool = True,
         persistent_mode: bool = True,
-        spec_weights: DeepSeekV3SpecWeights | None = None,
+        spec_weights: DeepSeekV3SpecWeights | DeepSeekV3LMHeadWeights | None = None,
         loopback_input_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
     ) -> None:
         super().__init__(

@@ -20,10 +20,6 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
-  # Likely OOM killer related failures -- probably need to run these tests serially
-  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_extract.py
-  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_insert.py
-
   # Numeric mismatches, likely caused by issue #41163
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py
   - tests/ttnn/unit_tests/operations/eltwise/test_eltwise_typecast.py
@@ -44,6 +40,11 @@ wormhole_b0:
   # https://github.com/tenstorrent/tt-metal/pull/42112
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_ng_typecast.py
 
+  # MOVD2B failures (worker crash on 4D INT32/UINT32 concat). Passes on real
+  # wormhole silicon; already deselected for blackhole below for the same reason.
+  # https://github.com/tenstorrent/tt-metal/issues/41286
+  - tests/ttnn/unit_tests/operations/data_movement/test_concat.py::test_tiled_concat
+
 blackhole:
   # Job-level timeouts
   - tests/ttnn/unit_tests/operations/conv/test_conv2d.py
@@ -62,8 +63,6 @@ blackhole:
 
   # Likely OOM killer related failures -- probably need to run these tests serially
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
-  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_extract.py
-  - tests/ttnn/unit_tests/operations/deepseek/test_deepseek_prefill_insert.py
 
   # MOVD2B failures
   # https://github.com/tenstorrent/tt-metal/issues/41286
@@ -77,9 +76,54 @@ blackhole:
   - tests/ttnn/unit_tests/operations/fused/test_softmax_program_cache.py
   - tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py
 
+  # ERROR: UndefinedBehavior: tensix_execute_unpacr: src_a row=64
+  # https://github.com/tenstorrent/tt-metal/issues/44308
+  - tests/ttnn/unit_tests/base_functionality/test_async.py
+  - tests/ttnn/unit_tests/base_functionality/test_cpp_logging.py
+  - tests/ttnn/unit_tests/base_functionality/test_graph_capture.py
+  - tests/ttnn/unit_tests/base_functionality/test_multi_device.py
+  - tests/ttnn/unit_tests/base_functionality/test_tilize_pad_cb.py
+  - tests/ttnn/unit_tests/base_functionality/test_tilize_untilize_2D.py
+  - tests/ttnn/unit_tests/base_functionality/test_to_and_from_device.py
+  - tests/ttnn/unit_tests/base_functionality/test_to_layout.py
+  - tests/ttnn/unit_tests/base_functionality/test_torch_conversion.py
+  - tests/ttnn/unit_tests/operations/conv/test_conv1d.py
+  - tests/ttnn/unit_tests/operations/conv/test_conv_transpose2d.py
+  - tests/ttnn/unit_tests/operations/conv/test_prepare_conv_weights.py
+  - tests/ttnn/unit_tests/operations/conv/data_movement/test_fold_op.py
+  - tests/ttnn/unit_tests/operations/data_movement/test_convert_to_hwc.py
+  - tests/ttnn/unit_tests/operations/data_movement/test_embedding.py
+  - tests/ttnn/unit_tests/operations/data_movement/test_repeat.py
+  - tests/ttnn/unit_tests/operations/data_movement/test_slice.py
+  - tests/ttnn/unit_tests/operations/data_movement/test_stack.py
+  - tests/ttnn/unit_tests/operations/data_movement/test_tilize.py
+  - tests/ttnn/unit_tests/operations/data_movement/test_tilize_with_val_padding.py
+  - tests/ttnn/unit_tests/operations/data_movement/test_tilize_with_zero_padding.py
+  - tests/ttnn/unit_tests/operations/data_movement/test_tilizer.py
+  - tests/ttnn/unit_tests/operations/eltwise/test_binary_bcast.py
+  - tests/ttnn/unit_tests/operations/fused/test_group_norm.py
+  - tests/ttnn/unit_tests/operations/fused/test_group_norm_DRAM.py
+  - tests/ttnn/unit_tests/operations/matmul/test_matmul.py
+  - tests/ttnn/unit_tests/operations/pool/test_adaptive_pool2d.py
+  - tests/ttnn/unit_tests/operations/pool/test_avgpool2d.py
+  - tests/ttnn/unit_tests/operations/pool/test_global_avg_pool2d.py
+  - tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py
+  - tests/ttnn/unit_tests/operations/sdpa/test_sdpa_prefill.py
+  - tests/ttnn/unit_tests/operations/sdpa/test_bounded_sliding_kv_cache.py
+  - tests/ttnn/unit_tests/operations/transformers/test_paged_cache_flexible_geometry.py
+  - tests/ttnn/unit_tests/operations/transformers/test_paged_fused_update_cache.py
+
   # ZEROACC failures
   # https://github.com/tenstorrent/ttsim-private/issues/326
   - tests/ttnn/unit_tests/operations/eltwise/test_broadcast_to.py
+
+  # BH fast-untilize strided rows program packer channel-1 output-address
+  # registers (cfg14/cfg17). Mainline ttsim does not support that BH packer
+  # behavior yet, so these tests fail with:
+  #   UnimplementedFunctionality: tensix_cfg_wr32: reg=14
+  # Tracking: https://github.com/tenstorrent/ttsim-private/pull/379
+  - tests/ttnn/unit_tests/base_functionality/test_untilize_bfloat8_b.py
+  - tests/ttnn/unit_tests/operations/data_movement/test_untilize.py::test_untilize_single_core_interleaved_to_interleaved
 
   # Numeric mismatches, likely caused by issue #41163
   - tests/ttnn/unit_tests/operations/eltwise/test_binary_uint16.py

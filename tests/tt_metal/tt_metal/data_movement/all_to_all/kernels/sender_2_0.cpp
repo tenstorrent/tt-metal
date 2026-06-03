@@ -4,7 +4,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/endpoints.h"
 
 void kernel_main() {
     // Compile-time arguments
@@ -20,8 +20,8 @@ void kernel_main() {
     uint32_t master_l1_local_address = mst_l1_base_address;
     uint32_t subordinate_l1_local_address = sub_l1_base_address;
 
-    experimental::Noc noc(noc_index);
-    experimental::UnicastEndpoint unicast_endpoint;
+    Noc noc(noc_index);
+    UnicastEndpoint unicast_endpoint;
 
     uint32_t subordinate_x_coord;
     uint32_t subordinate_y_coord;
@@ -40,7 +40,7 @@ void kernel_main() {
                 // Cycle through virtual channels 0 to (num_virtual_channels - 1)
                 uint32_t current_virtual_channel = i % num_virtual_channels;
 
-                noc.async_write(
+                noc.async_write<NocOptions::CUSTOM_VC>(
                     unicast_endpoint,
                     unicast_endpoint,
                     bytes_per_transaction_per_master,
@@ -52,7 +52,7 @@ void kernel_main() {
                         .noc_y = subordinate_y_coord,
                         .addr = subordinate_l1_local_address,
                     },
-                    current_virtual_channel);
+                    NocOptVals{.vc = current_virtual_channel});
             }
         }
         noc.async_write_barrier();

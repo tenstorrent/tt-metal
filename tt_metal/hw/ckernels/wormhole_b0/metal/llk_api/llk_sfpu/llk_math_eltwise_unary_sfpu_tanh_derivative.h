@@ -16,7 +16,7 @@ inline void llk_math_eltwise_unary_sfpu_tanh_derivative_init() {
 }
 
 template <bool APPROXIMATE>
-inline void llk_math_eltwise_unary_sfpu_tanh_derivative(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+inline void llk_math_eltwise_unary_sfpu_tanh_derivative(uint dst_index, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::calculate_tanh_derivative<APPROXIMATE>, dst_index, vector_mode);
 }
 

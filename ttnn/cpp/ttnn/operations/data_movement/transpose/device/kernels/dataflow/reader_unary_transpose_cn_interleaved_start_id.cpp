@@ -5,9 +5,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -31,15 +31,20 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_args, src_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb(cb_id_in0);
+    Noc noc;
+    CircularBuffer cb(cb_id_in0);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t page_idx = start_id;
     for (uint32_t i = 0; i < num_pages; ++i) {
         cb.reserve_back(onepage);
 #ifdef CN_RM
-        noc.async_read(s, cb, read_size, {.page_id = page_idx, .offset_bytes = 0}, {.offset_bytes = 0});
+        // Restored native sharded multi-page split (see common.hpp helper).
+        // RM-only: the helper splits a logical "row page" across multiple shards laterally
+        // when the buffer is BLOCK/WIDTH-sharded. TILE-layout path below must keep the
+        // original single-page transfer since each tile is one indivisible NOC unit.
+        const uint32_t cb_write_ptr = cb.get_write_ptr();
+        tt::data_movement::common::noc_async_read_sharded(cb_write_ptr, s, page_idx, 0, read_size);
 #else
         noc.async_read(s, cb, page_size, {.page_id = page_idx}, {.offset_bytes = 0});
 #endif

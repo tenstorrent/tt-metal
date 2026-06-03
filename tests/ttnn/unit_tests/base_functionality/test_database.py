@@ -275,3 +275,61 @@ def test_error_details_saved(device):
     assert "Out of Memory: Not enough space to allocate" in error_record.error_message
     assert error_record.stack_trace.startswith("Traceback (most recent call last):")
     assert error_record.timestamp is not None
+
+
+def test_insert_stack_trace_persists_source_file_contents(tmp_path):
+    source_file = tmp_path / "runtime_source.py"
+    source_file.write_text("def runtime_fn():\n    return 7\n", encoding="utf-8")
+
+    report_path = tmp_path / "report"
+    ttnn.database.SQLITE_CONNECTION = None
+    ttnn.database.insert_stack_trace(
+        report_path,
+        operation_id=1,
+        stack_trace=[
+            "Traceback (most recent call last):",
+            f'  File "{source_file}", line 2, in runtime_fn',
+            "    return 7",
+            "operation trailer",
+            "runtime trailer",
+        ],
+    )
+
+    sqlite_connection = sqlite3.connect(report_path / ttnn.database.SQLITE_DB_PATH)
+    cursor = sqlite_connection.cursor()
+    cursor.execute("SELECT id, path, contents FROM source_files")
+    rows_sf = cursor.fetchall()
+    assert len(rows_sf) == 1
+    source_id, path, contents = rows_sf[0]
+    assert path == str(source_file.resolve())
+    assert contents == "def runtime_fn():\n    return 7\n"
+    cursor.execute("SELECT operation_id, source_file_id FROM stack_traces")
+    assert cursor.fetchall() == [(1, source_id)]
+    sqlite_connection.close()
+    ttnn.database.SQLITE_CONNECTION = None
+
+
+def test_insert_stack_trace_skips_missing_source_file(tmp_path):
+    missing_file = tmp_path / "missing_runtime_source.py"
+    report_path = tmp_path / "report"
+    ttnn.database.SQLITE_CONNECTION = None
+    ttnn.database.insert_stack_trace(
+        report_path,
+        operation_id=2,
+        stack_trace=[
+            "Traceback (most recent call last):",
+            f'  File "{missing_file}", line 99, in runtime_fn',
+            "    return 8",
+            "operation trailer",
+            "runtime trailer",
+        ],
+    )
+
+    sqlite_connection = sqlite3.connect(report_path / ttnn.database.SQLITE_DB_PATH)
+    cursor = sqlite_connection.cursor()
+    cursor.execute("SELECT COUNT(*) FROM source_files")
+    assert cursor.fetchone()[0] == 0
+    cursor.execute("SELECT source_file_id FROM stack_traces")
+    assert cursor.fetchone()[0] is None
+    sqlite_connection.close()
+    ttnn.database.SQLITE_CONNECTION = None

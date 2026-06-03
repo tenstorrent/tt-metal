@@ -23,7 +23,7 @@ import math
 import os
 import random
 from dataclasses import dataclass, field
-from typing import Optional, Tuple, Literal, Union, Callable
+from typing import Optional, Tuple, List, Literal, Union, Callable
 import time
 import pickle
 
@@ -59,6 +59,7 @@ from ttml.common.utils import (
     round_up_to_tile,
     get_tt_metal_runtime_root,
     create_optimizer,
+    get_available_device_memory_in_bytes,
     get_loss_over_devices,
     summary,
 )
@@ -280,27 +281,36 @@ def read_file_to_str(file_path: str) -> str:
 def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
     """Build a named device mesh from DeviceConfig.
 
-    Mirrors the C++ axis-assignment rule in autograd/auto_context.cpp:140-195
-    so that ttml.sync_gradients and mesh.axis_mapper("dp"|"tp", ...) bind to
-    the same physical axes the C++ trainer would.
+    Axis assignment order is ``(dp -> fsdp -> tp)`` — first enabled name claims
+    axis 0, next enabled claims axis 1, etc. This matches PyTorch FSDP2's
+    ``Mesh((replicate, shard), ("replicate", "shard"))`` HSDP convention
+    where the DDP (replicate) axis is outermost and the FSDP (shard) axis
+    is innermost.
 
-    Line topology (at most one mesh dim > 1): exactly one of enable_ddp /
-    enable_tp must be true; that name is assigned to the active (non-trivial)
-    axis.
+    Line topology (at most one mesh dim > 1): exactly one of
+    enable_ddp/enable_fsdp/enable_tp must be true; that name is assigned to
+    the active (non-trivial) axis.
 
-    2D mesh (both dims > 1): the number of enabled parallelisms must equal
-    the number of mesh dims, and assignment order is DP -> TP. CP/PP are
-    out of scope here.
+    Hybrid sharded data parallel (HSDP, ``enable_ddp + enable_fsdp``)
+    requires a 2D mesh ``[D, F]`` — axis 0 = "dp" (size D, the replicate
+    axis), axis 1 = "fsdp" (size F, the shard axis). HSDP+TP (3D mesh
+    ``[D, F, T]``) is not yet supported.
     """
     shape = tuple(int(s) for s in device_config.mesh_shape)
     n = len(shape)
     nontrivial = [i for i, s in enumerate(shape) if s > 1]
     is_line = len(nontrivial) <= 1
-    enabled = (
-        ("dp" if device_config.enable_ddp else None),
-        ("tp" if device_config.enable_tp else None),
-    )
-    enabled_names = tuple(name for name in enabled if name is not None)
+
+    # Ordered list of enabled parallelism axis names. Order is ``(dp -> fsdp -> tp)``;
+    # this is the mapping from "which mesh axis" to "which parallelism", e.g.
+    # ``enable_ddp + enable_fsdp`` -> axis 0 = "dp", axis 1 = "fsdp".
+    enabled_names: List[str] = []
+    if device_config.enable_ddp:
+        enabled_names.append("dp")
+    if device_config.enable_fsdp:
+        enabled_names.append("fsdp")
+    if device_config.enable_tp:
+        enabled_names.append("tp")
 
     axis_names = [f"_{i}" for i in range(n)]
     if not enabled_names:
@@ -309,15 +319,17 @@ def build_mesh(device_config: DeviceConfig) -> ttml.Mesh:
     if is_line:
         if len(enabled_names) != 1:
             raise ValueError(
-                f"Line mesh {shape} requires exactly one of enable_ddp / enable_tp; got enabled={enabled_names}"
+                f"Line mesh {shape} requires exactly one of enable_ddp / enable_fsdp / enable_tp; "
+                f"got enabled={enabled_names}"
             )
         active = nontrivial[0] if nontrivial else 0
         axis_names[active] = enabled_names[0]
     else:
         if len(enabled_names) != n:
-            raise ValueError(f"2D mesh {shape} requires both axes assigned (DP and TP). Got enabled={enabled_names}")
-        # enabled_names is ordered ("dp", "tp") by construction above, matching
-        # the C++ assignment order in auto_context.cpp.
+            raise ValueError(
+                f"Mesh {shape} requires {n} parallelisms enabled "
+                f"(any subset of enable_ddp / enable_fsdp / enable_tp); got enabled={enabled_names}"
+            )
         for i, name in enumerate(enabled_names):
             axis_names[i] = name
 
@@ -391,10 +403,16 @@ def create_dataset_from_text(
 def collate_fn(samples: list, sequence_length: int) -> Tuple[ttml.autograd.Tensor, ttml.autograd.Tensor]:
     """Collate function.
 
-    When the active mesh has a "dp" axis with size > 1, inputs and targets
-    are sharded along the batch dim across that axis (matches main.cpp:551-609
-    Shard{BATCH_DIM}). Otherwise the tensors replicate across whatever mesh
-    is open, which is the right behavior for TP-only and 1x1 cases.
+    Distribution rules (driven by the active mesh's axis names):
+
+    * Pure DDP or pure FSDP (only one of "dp" / "fsdp" has size > 1):
+      shard the batch along that single axis, replicate on every other
+      axis.
+    * HSDP (both "dp" and "fsdp" have size > 1, no "tp" axis): each
+      device gets a unique batch slice ``B / (D * F)``.
+    * TP-only / single-device / no-mesh: replicate the tensors.
+
+    HSDP + TP (3D mesh ``[D, F, T]``) is not supported.
 
     Args:
         samples: List of (sequence, target) tuples.
@@ -411,9 +429,27 @@ def collate_fn(samples: list, sequence_length: int) -> Tuple[ttml.autograd.Tenso
     targets_np = np.array(targets, dtype=np.uint32).reshape(actual_batch_size, sequence_length)
 
     mesh = ttml.mesh()
+    data_axes = [
+        axis_name for axis_name in ("dp", "fsdp") if mesh.has_axis(axis_name) and mesh.axis_size(axis_name) > 1
+    ]
+
     mapper = None
-    if mesh.has_axis("dp") and mesh.axis_size("dp") > 1:
-        mapper = mesh.axis_mapper("dp", tdim=0)
+    if len(data_axes) == 1:
+        # Pure DDP or pure FSDP: shard along the single batch-parallel axis.
+        mapper = mesh.axis_mapper(data_axes[0], tdim=0)
+    elif len(data_axes) >= 2:
+        if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
+            raise NotImplementedError("HSDP + TP batch sharding is not supported.")
+        flat_size = int(np.prod([mesh.axis_size(a) for a in data_axes]))
+        if actual_batch_size % flat_size != 0:
+            raise ValueError(
+                f"HSDP batch sharding requires the batch ({actual_batch_size}) to be "
+                f"divisible by D*F ({flat_size}); got data_axes={data_axes}."
+            )
+        # HSDP batch sharding: each device gets a unique batch slice ``B / (D * F)``.
+        # That's what ``cluster_axis=None`` does.
+        device = ttml.autograd.AutoContext.get_instance().get_device()
+        mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0, None)
 
     data_tensor = ttml.autograd.Tensor.from_numpy(data_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
     targets_tensor = ttml.autograd.Tensor.from_numpy(targets_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, mapper)
@@ -473,19 +509,29 @@ def train_step(
     # When mask is None, SDPA kernel uses native causal masking (AttentionMaskType::Causal)
     logits = model(input_tokens, mask)
 
-    # Compute loss
-    loss = ttml.ops.loss.cross_entropy_loss(logits, target_tokens, reduce=ttml.ops.ReduceType.MEAN)
+    # Compute loss.  When TP is enabled the LM head returns vocab-sharded
+    # logits ([B,1,S,V/tp_size] per device), so route through
+    # vocab_parallel_cross_entropy_loss.
+    mesh = ttml.mesh()
+    if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
+        loss = ttml.ops.distributed.vocab_parallel_cross_entropy_loss(
+            logits, target_tokens, cluster_axis=mesh.axis_index("tp")
+        )
+    else:
+        loss = ttml.ops.loss.cross_entropy_loss(logits, target_tokens, reduce=ttml.ops.ReduceType.MEAN)
 
     # Scale loss for gradient accumulation
     loss = gradient_accumulator.scale(loss)
 
-    # Under DDP each rank produced loss on its own microbatch, so the
-    # printed/accumulated value must be the mean across the "dp" axis.
-    # get_loss_over_devices internally builds a concat_mesh_to_tensor
-    # composer and takes the mean, mirroring how the C++ trainer logs
-    # per-rank loss when DDP is on.
-    mesh = ttml.mesh()
-    if mesh.has_axis("dp") and mesh.axis_size("dp") > 1:
+    # Any multi-device mesh — DDP, TP, or DP+TP — produces a loss tensor
+    # with one host buffer per device (per-rank values under DDP; TP-reduced
+    # replicas under TP). Tensor.item() asserts buffers.size()==1, so we
+    # must compose across the mesh before reading to host.
+    # get_loss_over_devices builds a concat_mesh_to_tensor composer and
+    # takes the mean, mirroring the C++ trainer's IdentityComposer-then-
+    # average path in main.cpp::get_loss_value (works for replicas too,
+    # since mean of N identical values equals any one).
+    if mesh.num_devices() > 1:
         loss_float = float(get_loss_over_devices(loss))
     else:
         loss_float = get_loss_value(loss)
@@ -520,16 +566,20 @@ def train_step(
 
     if should_step:
         # All-reduce gradients across the "dp" axis (no-op when there is no
-        # mesh, no "dp" axis, or dp size == 1). Mirrors main.cpp:817-823.
+        # mesh, no "dp" axis, or dp size == 1).
+        # Ignore FSDP axis (FSDP reduce-scatter the grads in backward-post)
         ttml.sync_gradients(model.parameters())
 
-        # Gradient clipping. clip_grad_norm is incorrect under TP because
-        # parameters are sharded across the "tp" axis and the per-rank norm
-        # is not the global norm; mirror main.cpp:826-828 with a hard error.
+        # Gradient clipping. clip_grad_norm is incorrect under TP/FSDP because
+        # parameters are sharded across the "tp"/"fsdp" axis and the per-rank
+        # norm is not the global norm;
+        # TODO: Implement this (44021)
         if use_clip_grad_norm:
             mesh = ttml.mesh()
             if mesh.has_axis("tp") and mesh.axis_size("tp") > 1:
                 raise ValueError("Clip grad norm is not supported with TP")
+            if mesh.has_axis("fsdp") and mesh.axis_size("fsdp") > 1:
+                raise ValueError("Clip grad norm is not supported with FSDP")
             # Use ttml.core.clip_grad_norm which works with model parameters directly
             ttml.core.clip_grad_norm(
                 model.parameters(),
@@ -1369,25 +1419,28 @@ def main():
     # Check if we're in inference-only mode (prompt + explicit model_path).
     inference_only = args.prompt and args.model_path
 
-    # Parse device config from YAML (mesh_shape, enable_ddp, enable_tp).
+    # Parse device config from YAML (mesh_shape, enable_ddp, enable_fsdp, enable_tp).
     device_config = DeviceConfig(yaml_config)
 
-    # Mirrors main.cpp:447-451 and lora_llama: TP-sharded parameters cannot be
-    # round-tripped through the script's pickle checkpoint format, so refuse
+    # TP-sharded parameters cannot be round-tripped through the script's pickle checkpoint format, so refuse
     # any save/resume request up front rather than failing partway through.
-    if device_config.enable_tp:
+    # FSDP-sharded weights have the same problem (the saved pickle would contain a per-rank slice of each weight, not the full tensor).
+    # TODO: add support for checkpointing TP and FSDP-sharded weights. (44387)
+    if device_config.enable_tp or device_config.enable_fsdp:
+        guard_name = "tensor parallelism" if device_config.enable_tp else "FSDP"
+        guard_flag = "device_config.enable_tp=true" if device_config.enable_tp else "device_config.enable_fsdp=true"
         if args.model_save_path:
-            raise ValueError(
-                "--model_save_path is not supported with tensor parallelism (device_config.enable_tp=true)."
-            )
+            raise ValueError(f"--model_save_path is not supported with {guard_name} ({guard_flag}).")
         if args.resume:
-            raise ValueError("--resume is not supported with tensor parallelism (device_config.enable_tp=true).")
+            raise ValueError(f"--resume is not supported with {guard_name} ({guard_flag}).")
 
     # Build a named mesh whose axis names match the C++ assignment order
     # (auto_context.cpp:140-195) so ttml.sync_gradients and axis_mapper("dp"|"tp", ...)
-    # bind to the same physical axes the C++ trainer would.
+    # bind to the same physical axes the C++ trainer would. enable_fsdp uses
+    # the axis name "fsdp" instead of "dp" so that grad-sync's per-axis filter
+    # naturally distinguishes replicated from sharded reductions.
     mesh = build_mesh(device_config)
-    if device_config.enable_ddp or device_config.enable_tp:
+    if device_config.enable_ddp or device_config.enable_fsdp or device_config.enable_tp:
         print(f"Mesh: shape={mesh.shape}, axis_names={mesh.axis_names}")
     ttml.open_device_mesh(mesh, tuple(device_config.device_ids) if device_config.device_ids else None)
     ttml.autograd.AutoContext.get_instance().get_device()
@@ -1582,6 +1635,18 @@ def main():
         if args.track_memory:
             MemoryUsageTracker.snapshot("MODEL_CREATION")
 
+    # Wrap model with FSDP BEFORE optimizer creation so optimizer state is
+    # allocated against the (already sharded) parameter shapes. Driven by
+    # device_config.enable_fsdp (YAML), matching how enable_ddp/enable_tp work.
+    if device_config.enable_fsdp and not inference_only:
+        print("\n   Applying FSDP sharding on 'fsdp' mesh axis...")
+        for block in model.blocks:
+            ttml.fsdp.fully_shard(block)
+        ttml.fsdp.fully_shard(model)
+        print(f"   - FSDP applied: {len(list(model.blocks))} blocks + root module")
+        if args.track_memory:
+            MemoryUsageTracker.snapshot("MODEL_SHARDING")
+
     # Check if we're in inference mode
     if args.prompt:
         # Inference mode: skip optimizer setup
@@ -1651,6 +1716,10 @@ def main():
             num_devices = ttml.mesh().num_devices()
             peak_tflops = get_device_peak_tflops_bf16() * num_devices
             print(f"  - Mesh peak: {peak_tflops:.1f} TFLOPS (bf16, {num_devices} devices)")
+
+        # Get the available device DRAM
+        available_dram = get_available_device_memory_in_bytes()
+        print(f"  - Available Device Memory: {available_dram/(1024*1024):,.2f} MB")
 
         # Training loop
         start_time = time.time()

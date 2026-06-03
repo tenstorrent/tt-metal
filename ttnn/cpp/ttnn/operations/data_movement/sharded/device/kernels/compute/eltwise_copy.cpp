@@ -7,13 +7,13 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t per_core_tile_cnt = get_arg_val<uint32_t>(0);
 
-    experimental::CircularBuffer cb_in(tt::CBIndex::c_0);
-    experimental::CircularBuffer cb_out(tt::CBIndex::c_16);
+    CircularBuffer cb_in(tt::CBIndex::c_0);
+    CircularBuffer cb_out(tt::CBIndex::c_16);
 
     unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
     copy_tile_init(tt::CBIndex::c_0);

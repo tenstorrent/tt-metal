@@ -17,7 +17,7 @@ inline void tilize_activation(
         for (uint32_t i = 0U; i < in0_subblock_h; i++) {
             for (uint32_t j = 0U; j < in0_block_w; j++) {
                 llk_packer_wait_for_math_done();
-                llk_pack<DST_ACCUM_MODE, false, false>(0, matmul_act_cb_id);
+                llk_pack<DST_ACCUM_MODE, false, PackMode::Default>(0, matmul_act_cb_id);
                 llk_pack_dest_section_done<DST_ACCUM_MODE>();
                 llk_push_tiles<false, false>(matmul_act_cb_id, 1);
             }
@@ -32,7 +32,7 @@ inline void pack_row(uint32_t num_tiles_to_pack, uint32_t cb_id) {
     llk_wait_for_free_tiles<false, false, false>(cb_id, num_tiles_to_pack);
     for (uint32_t i = 0; i < num_tiles_to_pack; i++) {
         llk_packer_wait_for_math_done();
-        llk_pack<DST_ACCUM_MODE, false, false>(0, cb_id);
+        llk_pack<DST_ACCUM_MODE, false, PackMode::Default>(0, cb_id);
         llk_pack_dest_section_done<DST_ACCUM_MODE>();
     }
     llk_push_tiles<false, false>(cb_id, num_tiles_to_pack);
@@ -62,7 +62,7 @@ inline void pack_block_and_untilize(
 
             llk_wait_for_free_tiles<false, false, false>(interm_cb_id, out_subblock_num_tiles);
             for (uint32_t i = 0U; i < out_subblock_num_tiles; i++) {
-                llk_pack<DST_ACCUM_MODE, false, false>(i, interm_cb_id);
+                llk_pack<DST_ACCUM_MODE, false, PackMode::Default>(i, interm_cb_id);
             }
             llk_push_tiles<false, false>(interm_cb_id, out_subblock_num_tiles);
             llk_pack_dest_section_done<DST_ACCUM_MODE>();
@@ -79,7 +79,7 @@ inline void pack_block(
 
             llk_wait_for_free_tiles<false, false, false>(cb_id, out_subblock_num_tiles);
             for (uint32_t i = 0U; i < out_subblock_num_tiles; i++) {
-                llk_pack<DST_ACCUM_MODE, false, false>(i, cb_id);
+                llk_pack<DST_ACCUM_MODE, false, PackMode::Default>(i, cb_id);
             }
             llk_push_tiles<false, false>(cb_id, out_subblock_num_tiles);
             llk_pack_dest_section_done<DST_ACCUM_MODE>();
@@ -90,8 +90,8 @@ inline void pack_block(
 void kernel_main() {
     uint32_t in0_block_w = get_compile_time_arg_val(0);
     llk_pack_init();
-    llk_pack_dest_init<DST_ACCUM_MODE, false>();
-    llk_init_packer_dest_offset_registers<false>();
+    llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>();
+    llk_init_packer_dest_offset_registers<PackMode::Default>();
     llk_pack_hw_configure<DST_ACCUM_MODE>(16);
     // inner block size in tiles
     uint32_t in0_num_subblocks = get_compile_time_arg_val(1);

@@ -64,6 +64,7 @@ def create_decoder_block_tensors(
     is_moe: bool = True,
     validate_debug_tensors: bool = False,
     torch_input=None,
+    sram_expert_ids: list[int] = (),
 ):
     """Create all tensors required by DecoderBlock.op().
 
@@ -223,7 +224,16 @@ def create_decoder_block_tensors(
         input_core = ttnn.CoreCoord(device_grid_size.x - 1, RoutedExpert.INPUT_CORE_Y)
         input_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(input_core, input_core)])
 
-        ttnn_gate_indices = create_gate_indices_tensor(submesh, input_core_grid, mesh_mapper=mesh_mapper)
+        # sram_expert_ids must match the slot ordering of weights.sram_{gate,up,down}_proj
+        # so the encoded bit-15 indices the kernel reads point at the correct SRAM slabs.
+        # Without this the gate indices stay as (eid, no bit-15) → DRAM kernel processes
+        # everything → SRAM chain runs n_sram_active=0 → SRAM path effectively skipped.
+        ttnn_gate_indices = create_gate_indices_tensor(
+            submesh,
+            input_core_grid,
+            sram_expert_ids=list(sram_expert_ids),
+            mesh_mapper=mesh_mapper,
+        )
 
         tile_1x16 = ttnn.Tile((1, 16))
         gate_output_shard_spec = ttnn.ShardSpec(input_core_grid, (1, 16), ttnn.ShardOrientation.ROW_MAJOR)
@@ -607,10 +617,11 @@ def create_decoder_block_tensors(
     sender_core_from_residual = attn_output.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core_from_residual)])
 
-    # Routed weight tensors differ between MoE (list) and dense (single tensor)
-    routed_gate = weights.routed_gate_proj[0] if is_moe else weights.routed_gate_proj
-    routed_up = weights.routed_up_proj[0] if is_moe else weights.routed_up_proj
-    routed_down = weights.routed_down_proj[0] if is_moe else weights.routed_down_proj
+    # Dense and MoE routed weights are TP8 CompressedTensor lists feeding
+    # MoeRoutedExpertOp's setup_matmul_expert_dram path.
+    routed_gate = weights.routed_gate_proj
+    routed_up = weights.routed_up_proj
+    routed_down = weights.routed_down_proj
 
     result = {
         # Attention weights (from prepare_*_layer_weights)
@@ -651,6 +662,12 @@ def create_decoder_block_tensors(
         "gate_proj_weights": routed_gate,
         "up_proj_weights": routed_up,
         "down_proj_weights": routed_down,
+        # Optional SRAM-resident routed weights — populated by the weight loader when
+        # SRAM placement is configured. Empty list when not configured; the kernel's
+        # SRAM chain skips uniformly via sram_*_active=0.
+        "sram_gate_proj_weights": weights.sram_gate_proj,
+        "sram_up_proj_weights": weights.sram_up_proj,
+        "sram_down_proj_weights": weights.sram_down_proj,
         "final_output_mem_config": final_output_mem_config,
         "final_output_total_width": final_output_total_width,
         # Shared expert weights
@@ -713,6 +730,7 @@ class DecoderStage(StageKind):
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         host_loopback: bool = False,
+        enable_sram_bspm: bool = False,
     ) -> None:
         if not isinstance(weights, (DeepSeekV3MoELayerWeights, DeepSeekV3DenseLayerWeights)):
             raise ValueError(
@@ -737,6 +755,7 @@ class DecoderStage(StageKind):
         self._upstream_fifo_pages = upstream_fifo_pages
         self._downstream_fifo_pages = downstream_fifo_pages
         self._host_loopback = host_loopback
+        self._enable_sram_bspm = enable_sram_bspm
         self._num_links_bcast = 1
         self._num_links_allreduce = 2
         self._state: dict[str, Any] = {}
@@ -843,6 +862,9 @@ class DecoderStage(StageKind):
             gate_proj_weights_tensor=d["gate_proj_weights"],
             up_proj_weights_tensor=d["up_proj_weights"],
             down_proj_weights_tensor=d["down_proj_weights"],
+            sram_gate_proj_weights_tensor=d.get("sram_gate_proj_weights"),
+            sram_up_proj_weights_tensor=d.get("sram_up_proj_weights"),
+            sram_down_proj_weights_tensor=d.get("sram_down_proj_weights"),
             moe_final_output_tensor=None,
             rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
             shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
@@ -868,6 +890,7 @@ class DecoderStage(StageKind):
             persistent_mode=self._persistent_mode,
             termination_semaphore=self._state.get("termination_semaphore"),
             is_torus=self._is_torus,
+            enable_sram_bspm=self._enable_sram_bspm,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -890,7 +913,30 @@ class DecoderStage(StageKind):
         reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(4)]
         self._persistent_loop = PersistentLoop(mesh_device, available_cores, self._persistent_mode)
 
+        # Derive sram_expert_ids from the prepared weights so the bit-15 encoding
+        # in create_gate_indices_tensor flags exactly the experts whose SRAM
+        # weights were allocated. Without this, sram_*_proj is in L1 but no
+        # gate index has bit-15 set, so the SRAM kernel filter sees zero
+        # SRAM-flagged experts every iter and the SRAM path never fires.
+        #
+        # TODO (BSPM-SRAM): under enable_sram_bspm, SRAM CT sizes diverge per
+        # device and must be allocated AFTER SDPA buffer (allocated below in
+        # create_decoder_block_tensors) so SDPA addresses stay uniform across
+        # the mesh.  The unit test test_decoder_block.py shows the deferred
+        # pattern: prepare_moe_layer_weights(sram_expert_ids=[]) →
+        # create_decoder_block_tensors → build_sram_routed_proj_cts →
+        # _dataclass_replace + d.update.  Wiring this through the weight
+        # provider (so the stage receives a "deferred SRAM build" descriptor
+        # instead of pre-allocated SRAM CTs) is a follow-up.
         if self._is_moe:
+            # MoE: prepare_moe_layer_weights populates sram_slots.slot_experts with
+            # the L1-fit-truncated subset of sram_hot_experts. None when SRAM
+            # disabled (no --enable_sram_hot_experts).
+            sram_expert_ids = (
+                list(self._weights.sram_slots.slot_experts)
+                if getattr(self._weights, "sram_slots", None) is not None
+                else []
+            )
             d = create_decoder_block_tensors(
                 mesh_device,
                 mesh_device.shape[0],
@@ -903,8 +949,14 @@ class DecoderStage(StageKind):
                 weights=self._weights,
                 metadata=self._metadata,
                 num_slots=self._num_slots,
+                sram_expert_ids=sram_expert_ids,
             )
         else:
+            # Dense: every chunk is hot; resolve_sram_expert_ids(is_moe=False)
+            # defaulted to range(8). Use the allocated count as ground truth in
+            # case a future path returns fewer (e.g., L1-fit truncation inside
+            # _build_dense_sram_routed_weights).
+            sram_expert_ids = list(range(len(self._weights.sram_gate_proj)))
             d = create_decoder_block_tensors(
                 mesh_device,
                 mesh_device.shape[0],
@@ -918,6 +970,7 @@ class DecoderStage(StageKind):
                 metadata=self._metadata,
                 num_slots=self._num_slots,
                 is_moe=False,
+                sram_expert_ids=sram_expert_ids,
             )
         ttnn.synchronize_device(mesh_device)
 
@@ -965,8 +1018,10 @@ class DecoderStage(StageKind):
 
         Returns:
             The composed host KV-cache tensor of shape
-            ``(num_slots, 1, max_seq_len, kvpe_dim)`` dtype bfloat16, or ``None``
-            if invoked before ``setup`` (no KV cache to compose).
+            ``(num_slots, 1, max_seq_len, kvpe_dim)``, or ``None`` if invoked
+            before ``setup`` (no KV cache to compose). Dtype is whatever
+            ``ttnn.to_torch`` produces for the underlying ``ttnn.bfloat8_b`` device tensor;
+            in practice the host tensor lands as ``torch.float32``.
         """
         if not self._state or "d" not in self._state:
             logger.warning("get_kv_cache_host called before setup; returning None")
@@ -1167,6 +1222,7 @@ class MoEDecoderStage(DecoderStage):
         upstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         downstream_fifo_pages: int = DEFAULT_ACTIVATION_FIFO_PAGES,
         host_loopback: bool = False,
+        enable_sram_bspm: bool = False,
     ) -> None:
         super().__init__(
             weights=weights,
@@ -1183,6 +1239,7 @@ class MoEDecoderStage(DecoderStage):
             upstream_fifo_pages=upstream_fifo_pages,
             downstream_fifo_pages=downstream_fifo_pages,
             host_loopback=host_loopback,
+            enable_sram_bspm=enable_sram_bspm,
         )
 
 

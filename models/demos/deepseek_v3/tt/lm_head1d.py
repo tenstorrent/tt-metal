@@ -118,8 +118,6 @@ class LMHead1D(AbstractModule):
                 f"one tile in N); got N_tiles=0 from n_per_device={n_per_device}, tile_size={tile_size}."
             )
 
-        # 1D multicast: broadcast small decode activation to all cores,
-        # each core computes a slice of the output columns (N dimension).
         grid_size = mesh_device.compute_with_storage_grid_size()
         num_cores = grid_size.x * grid_size.y
         per_core_N = math.ceil(N_tiles / num_cores)
@@ -149,6 +147,7 @@ class LMHead1D(AbstractModule):
             mcast_in0=True,
         )
 
+        # Construct the config
         return {
             "linear": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
@@ -202,7 +201,9 @@ class LMHead1D(AbstractModule):
         return ttnn.linear(x, **cfg["linear"])
 
     @staticmethod
-    def _fwd_prefill(x: ttnn.Tensor, cfg: dict, deallocate_inputs: bool = True) -> ttnn.Tensor:
+    def _fwd_prefill(
+        x: ttnn.Tensor, cfg: dict, deallocate_inputs: bool = True, local_idx: int | None = None
+    ) -> ttnn.Tensor:
         """Prefill compute: chunk, linear, de-chunk.
 
         Args:
@@ -210,7 +211,21 @@ class LMHead1D(AbstractModule):
                 tensors to avoid holding the original and padded/chunked
                 copies simultaneously.  Set to False in perf-measurement
                 loops that reuse the input across iterations.
+            local_idx: When set, only compute logits for this single row index
+                (chunk-relative).  The output will be shape [1, 1, 1, vocab_size]
+                instead of [1, 1, seq_len, vocab_size], saving significant
+                memory and compute for long-sequence prefill.
         """
+        if local_idx is not None:
+            # Fast path: slice to the single token of interest before the linear.
+            x_sliced = ttnn.slice(x, [0, 0, local_idx, 0], [1, 1, local_idx + 1, x.shape[-1]])
+            if deallocate_inputs:
+                ttnn.deallocate(x)
+            output = ttnn.linear(x_sliced, **cfg["linear"])
+            if deallocate_inputs:
+                ttnn.deallocate(x_sliced)
+            return output
+
         _, _, seq_len, _ = x.shape
         original_seq_len = seq_len
 
@@ -251,10 +266,10 @@ class LMHead1D(AbstractModule):
         return output
 
     @classmethod
-    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig, local_idx: int | None = None) -> ttnn.Tensor:
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
-        output = cls._fwd_prefill(x, cfg)
+        output = cls._fwd_prefill(x, cfg, local_idx=local_idx)
 
         assert output.memory_config() == cfg["output_memory_config"]
 

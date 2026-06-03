@@ -4,9 +4,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -29,20 +29,23 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<10>();
     const auto s = TensorAccessor(dst_args, dst_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb(cb_out0);
+    Noc noc;
+    CircularBuffer cb(cb_out0);
 
     uint32_t i_stick = start_id;
 
+    // Uses tt::data_movement::common::noc_async_write_sharded for BLOCK/WIDTH-sharded
+    // RM outputs (see reader kernel comment). PR #42130 dropped this on the writer side
+    // too, silently regressing the same 24+ test cases for output sharding.
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
         for (uint32_t w = 0; w < Wt; ++w) {
             cb.wait_front(Ht);
+            const uint32_t cb_read_ptr = cb.get_read_ptr();
             uint32_t l1_read_offset = 0;
             uint32_t W_curr = w == Wt - 1 ? W_per_tile_last : W_per_tile;
             for (uint32_t w_datum = 0; w_datum < W_curr; ++w_datum) {
-                noc.async_write(
-                    cb, s, stick_size_bytes, {.offset_bytes = l1_read_offset}, {.page_id = i_stick, .offset_bytes = 0});
-
+                tt::data_movement::common::noc_async_write_sharded(
+                    cb_read_ptr + l1_read_offset, s, i_stick, 0, stick_size_bytes);
                 l1_read_offset += l1_read_offset_bytes;
                 i_stick += 1;
             }

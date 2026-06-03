@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/numeric/bfloat16.h"
 #include "../scatter_bf16_reduction_common.hpp"
 
 #include <array>
@@ -16,17 +17,6 @@ FORCE_INLINE static float bfloat16_to_float(uint16_t bfloat_val) {
     float f;
     std::memcpy(&f, &uint32_data, sizeof(f));
     return f;
-}
-
-FORCE_INLINE std::uint16_t fp32_to_bf16(float x) {
-    std::uint32_t bits;
-    std::memcpy(&bits, &x, sizeof(bits));
-
-    std::uint32_t lsb = (bits >> 16) & 1u;
-    std::uint32_t rounding_bias = 0x7FFFu + lsb;
-    bits += rounding_bias;
-
-    return static_cast<std::uint16_t>(bits >> 16);
 }
 
 FORCE_INLINE float perform_reduction(float input, uint16_t source_value, ScatterReductionType scatter_reduction_type) {
@@ -158,11 +148,11 @@ void kernel_main() {
 
     std::array<uint32_t, N> coord{from_id<N>(start_stick_id, input_dims)};
 
-    experimental::CircularBuffer input_cb(ctas.input_cb);
-    experimental::CircularBuffer fp32_temp_cb(ctas.fp32_temp_cb);
-    experimental::CircularBuffer output_cb(ctas.output_cb);
-    experimental::CircularBuffer index_cb(ctas.index_cb);
-    experimental::CircularBuffer source_cb(ctas.source_cb);
+    CircularBuffer input_cb(ctas.input_cb);
+    CircularBuffer fp32_temp_cb(ctas.fp32_temp_cb);
+    CircularBuffer output_cb(ctas.output_cb);
+    CircularBuffer index_cb(ctas.index_cb);
+    CircularBuffer source_cb(ctas.source_cb);
 
     for (uint32_t input_stick_id = start_stick_id; input_stick_id < start_stick_id + sticks_for_core;
          ++input_stick_id) {

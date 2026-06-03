@@ -6,14 +6,24 @@ add_library(TTNN::Ops::Eltwise::Complex::Unary::Backward ALIAS ttnn_op_eltwise_c
 tt_reuse_precompile_headers(ttnn_op_eltwise_complex_unary_backward TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_complex_unary_backward)
 
-target_sources(ttnn_op_eltwise_complex_unary_backward PRIVATE ${TTNN_OP_ELTWISE_COMPLEX_UNARY_BACKWARD_SRCS})
-
-target_include_directories(ttnn_op_eltwise_complex_unary_backward PRIVATE ${FixmeOpIncDirs})
-target_link_libraries(
+set_target_properties(
     ttnn_op_eltwise_complex_unary_backward
-    PRIVATE
-        TT::Metalium
-        TTNN::Core
+    PROPERTIES
+        INTERFACE_HEADER_SETS_TO_VERIFY
+            api
 )
 
-install(TARGETS ttnn_op_eltwise_complex_unary_backward LIBRARY COMPONENT tar)
+target_sources(
+    ttnn_op_eltwise_complex_unary_backward
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES ${TTNN_OP_ELTWISE_COMPLEX_UNARY_BACKWARD_API_HEADERS}
+    PRIVATE
+        ${TTNN_OP_ELTWISE_COMPLEX_UNARY_BACKWARD_SRCS}
+)
+
+target_link_libraries(ttnn_op_eltwise_complex_unary_backward PRIVATE TT::Metalium PUBLIC TTNN::Core)
+
+install(TARGETS ttnn_op_eltwise_complex_unary_backward FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

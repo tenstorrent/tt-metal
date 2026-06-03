@@ -11,6 +11,11 @@ on:
         options:
           - all
           - module
+          - moe_gate
+          - mla
+          - kv_cache_table
+          - prefill_block
+          - prefill_transformer
         default: 'all'
       platform:
         required: false

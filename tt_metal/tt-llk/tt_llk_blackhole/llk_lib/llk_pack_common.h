@@ -10,9 +10,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_ops.h"
 #include "cpack_common.h"
-#include "llk_assert.h"
 #include "llk_defs.h"
-#include "llk_memory_checks.h"
 
 using namespace ckernel;
 using namespace ckernel::packer;
@@ -86,16 +84,6 @@ inline void set_dst_write_addr(const std::uint32_t tile_index)
     TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_index);
 }
 
-inline void _llk_pack_debug_dump_(std::uint8_t *data, std::uint32_t byte_size)
-{
-    debug_dump(data, byte_size);
-}
-
-inline void _llk_pack_debug_dump_seek_(std::uint8_t offset)
-{
-    debug_dump_seek(offset);
-}
-
 TT_ALWAYS_INLINE void _llk_pack_relu_config_(const std::uint32_t config)
 {
     ReluType mode     = (config & 0xf) == 0 ? ReluType::NO_RELU : ((config & 0xf) == 3 ? ReluType::MAX_THRESHOLD_RELU : ReluType::MIN_THRESHOLD_RELU);
@@ -113,7 +101,7 @@ inline void _llk_pack_reconfig_l1_acc_(const std::uint32_t enable)
     reconfigure_packer_l1_acc(enable);
 }
 
-template <bool untilize = false, ReduceDim dim>
+template <ReduceDim dim, PackMode pack_mode = PackMode::Default>
 inline void _llk_pack_reduce_mask_config_()
 {
     ckernel::packer::pck_edge_offset_u pack_edge_offset = {.val = 0};
@@ -134,7 +122,7 @@ inline void _llk_pack_reduce_mask_config_()
 
         // PCK_EDGE_OFFSET_SEC1 mask will clear out all the datums in the row except the first one
         edge_offset_sec1_mask = 0x0001;
-        if constexpr (untilize)
+        if constexpr (pack_mode == PackMode::Untilize)
         {
             row_set_mapping_1 = 0x11111111; // each packer packs 1x32 row
         }
@@ -154,7 +142,7 @@ inline void _llk_pack_reduce_mask_config_()
         pack_edge_offset.f.tile_row_set_select_pack0 = 1;
         pack_edge_offset.f.tile_row_set_select_pack1 = 1;
 
-        if constexpr (untilize)
+        if constexpr (pack_mode == PackMode::Untilize)
         {
             row_set_mapping_1 = 0x00000005; // each packer packs 1x32 row
         }

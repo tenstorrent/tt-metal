@@ -11,7 +11,7 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
 #include "api/compute/bcast.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 ALWI void process_tile(
     tt::CBIndex cb_in0,
@@ -23,7 +23,7 @@ ALWI void process_tile(
     uint32_t tile_start,
     uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
-    experimental::CircularBuffer exp_cb_out(cb_out);
+    CircularBuffer exp_cb_out(cb_out);
 
 #if BCAST_INPUT  // ROW_A_COL_B
                  // BCAST_INPUT == 1 : input B ( true or false tensor) is broadcasted
@@ -41,9 +41,9 @@ ALWI void process_tile(
     constexpr auto cb_right = tt::CBIndex::c_6;
 #endif
 
-    experimental::CircularBuffer exp_cb_bcast(CB_BCAST);
-    experimental::CircularBuffer exp_cb_other(CB_OTHER);
-    experimental::CircularBuffer exp_cb_llk_post(cb_llk_post);
+    CircularBuffer exp_cb_bcast(CB_BCAST);
+    CircularBuffer exp_cb_other(CB_OTHER);
+    CircularBuffer exp_cb_llk_post(cb_llk_post);
 
     unary_op_init_common(cb_left, cb_out);
     BINARY_SFPU_INIT
@@ -53,6 +53,7 @@ ALWI void process_tile(
     for (uint32_t j = tile_start; j < freq; ++j) {
         exp_cb_other.wait_front(num_tiles_per_cycle);
         exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
+        pack_reconfig_data_format(cb_out, cb_llk_post);
         unary_bcast_init<BroadcastType::ROW>(CB_OTHER, cb_llk_post);
 
         tile_regs_acquire();

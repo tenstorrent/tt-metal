@@ -23,7 +23,7 @@ template <
     typename TensorAccessor,
     typename GridPtrType>
 ALWI void process_grid_point_nearest(
-    experimental::Noc noc,
+    Noc noc,
     GridPtrType grid_ptr,
     uint32_t grid_idx,
     const TensorAccessor& input_tensor_accessor,
@@ -101,7 +101,7 @@ ALWI void process_grid_point_nearest(
             {.page_id = input_stick_index},
             {.offset_bytes = output_write_offset});
     } else {
-        experimental::UnicastEndpoint self_ep;
+        UnicastEndpoint self_ep;
         noc.async_read(
             self_ep,
             output_cb,
@@ -161,7 +161,6 @@ void kernel_main() {
     uint32_t input_addr = 0;
     uint32_t global_grid_stick_start = 0;
     uint32_t grid_addr = 0;
-    uint32_t num_pages = 0;
     uint32_t start_page_id = 0;
     if constexpr (is_sharded) {
         // Runtime arguments - same as sharded reader
@@ -170,7 +169,6 @@ void kernel_main() {
     } else {
         input_addr = get_arg_val<uint32_t>(0);
         grid_addr = get_arg_val<uint32_t>(1);
-        num_pages = get_arg_val<uint32_t>(2);
         start_page_id = get_arg_val<uint32_t>(3);
         global_grid_stick_start = start_page_id;
     }
@@ -189,7 +187,7 @@ void kernel_main() {
     experimental::CB grid_cb(grid_cb_index);
     experimental::CB output_cb(output_cb_index);
     experimental::CB fill_cb(fill_cb_index);
-    experimental::Noc noc;
+    Noc noc;
 
     const uint32_t l1_grid_base_addr = grid_cb.get_write_ptr();
 
@@ -254,7 +252,7 @@ void kernel_main() {
                 fill_stick_addr);
         } else {
             // Padding stick beyond valid batches - write zeros
-            experimental::UnicastEndpoint self_ep;
+            UnicastEndpoint self_ep;
             noc.async_read(
                 self_ep,
                 output_cb,

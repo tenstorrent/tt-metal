@@ -25,7 +25,7 @@
 #include "api/compute/pack.h"
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     // Runtime arg: total number of NC slices this core must process.
@@ -42,6 +42,10 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
+    // cb_in: For FP32 input + do_scale=false it is flagged UnpackToDestFp32 (program factory),
+    // preserving FP32 mantissa for the copy_tile -> welford SFPU consumer path. On do_scale=true
+    // it stays Default for the FPU mul SrcA read. (Like H-reduce, HW Phase 1 does not need
+    // the FP32-input compile-time flag the W kernel uses for cb_scaled hw_configure pairing.)
     constexpr auto cb_in = tt::CBIndex::c_0;
     constexpr auto cb_scalar = tt::CBIndex::c_2;
     // Final output CB (output data format), consumed by the writer for NOC write.
@@ -51,11 +55,11 @@ void kernel_main() {
     // Combined scalar result from the writer kernel (Float32).
     constexpr auto cb_combined = tt::CBIndex::c_22;
 
-    experimental::CircularBuffer cb_in_obj(cb_in);
-    experimental::CircularBuffer cb_scalar_obj(cb_scalar);
-    experimental::CircularBuffer cb_out_obj(cb_out);
-    experimental::CircularBuffer cb_partial_obj(cb_partial);
-    experimental::CircularBuffer cb_combined_obj(cb_combined);
+    CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_scalar_obj(cb_scalar);
+    CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_partial_obj(cb_partial);
+    CircularBuffer cb_combined_obj(cb_combined);
 
     constexpr uint32_t input_dst = 0;
     constexpr uint32_t mean_dst = 1;
@@ -143,21 +147,21 @@ void kernel_main() {
                 // persists across DST cycles because LREGs are separate from
                 // the DST register file managed by tile_regs_acquire/release.
                 for (uint32_t ht = 0; ht < Ht; ++ht) {
+                    cb_in_obj.wait_front(onetile);
                     if constexpr (do_scale) {
-                        cb_in_obj.wait_front(onetile);
                         tile_regs_acquire();
+                        // FPU mul reads cb_in (Default mode).
                         mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
                         mul_tiles_bcast_scalar(cb_in, cb_scalar, 0, 0, input_dst);
-                        cb_in_obj.pop_front(1);
-
-                        // Reconfigure the compute setup from scalar-multiply mode back to the
-                        // SFPU state that Welford expects.
+                        // welford_reinit bookkeeping (welford reads input_dst from DEST; the CB
+                        // arg is just init metadata, so cb_in is fine regardless of FP32/BF16).
                         welford_reinit(cb_in);
                     } else {
-                        cb_in_obj.wait_front(onetile);
+                        // copy_tile reads cb_in. For FP32 input, c_0 carries UnpackToDestFp32
+                        // so the FP32 mantissa is preserved into DEST.
                         copy_tile(cb_in, 0, input_dst);
-                        cb_in_obj.pop_front(onetile);
                     }
+                    cb_in_obj.pop_front(onetile);
 
                     if (ht < (Ht - 1)) {
                         welford_update<0>(input_dst, start_N, {});

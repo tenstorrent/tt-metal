@@ -261,8 +261,8 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     experimental::CB out_idx_cb(out_idx_cb_id);
     experimental::CB pack_tmp_cb(pack_tmp_cb_id);
     experimental::CB pack_idx_tmp_cb(pack_idx_tmp_cb_id);
-    experimental::Noc noc;
-    experimental::UnicastEndpoint self_ep;
+    Noc noc;
+    UnicastEndpoint self_ep;
 
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
         uint32_t read_bytes = in_nbytes_c;
@@ -439,7 +439,7 @@ void kernel_main() {
         experimental::CB clear_value_cb(clear_value_cb_id);
         fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
         clear_value_cb.push_back(1);
-        clear_out_tiles<in_cb_id, clear_value_cb_id>(experimental::Noc(), experimental::CB(in_cb_id), clear_value_cb);
+        clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), experimental::CB(in_cb_id), clear_value_cb);
     }
 
     if constexpr (reader_id == 0) {
@@ -488,7 +488,7 @@ void kernel_main() {
                 reader_dram_addr,
                 reader_page_size,
                 reader_tensor_args_index,
-                in_reader_indices_cb_id>(experimental::Noc(), in_reader_indices_cb, core_nhw_index);
+                in_reader_indices_cb_id>(Noc(), in_reader_indices_cb, core_nhw_index);
 
         } else {
             in_reader_indices_cb.wait_front(1);

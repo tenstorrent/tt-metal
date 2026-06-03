@@ -10,7 +10,7 @@
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     // Runtime args:
@@ -36,7 +36,17 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     // Circular buffer that the reader kernel fills with input tiles.
+    // For FP32 input + do_scale=false: c_0 is flagged UnpackToDestFp32 by the program factory
+    // so the welford SFPU intake (transpose_wh_tile) reads with full FP32 precision.
+    // For FP32 input + do_scale=true: c_0 stays Default for the FPU mul SrcA read; precision
+    // preservation lives on cb_scaled (c_20) below.
+    // For BF16 input: c_0 is Default regardless.
     constexpr auto cb_in = tt::CBIndex::c_0;
+    // True when input is FP32; gates full hw_configure pairs in the do_scale Wt-inner loop
+    // to flip UNPACK between cb_in (Default, for FPU mul) and cb_scaled (UnpackToDestFp32,
+    // for welford-intake transpose). On BF16 input neither CB carries UnpackToDestFp32, so
+    // _init_short calls suffice.
+    constexpr bool welford_fp32_input = get_named_compile_time_arg_val("welford_fp32_input") != 0;
     // Scalar tile produced by the reader via generate_reduce_scaler.
     // Used to scale every input tile before Welford processing.
     constexpr auto cb_scalar = tt::CBIndex::c_2;
@@ -56,11 +66,11 @@ void kernel_main() {
     // it expects data in a CB. Thus, this CB is used to hold the scaled input tile.
     constexpr auto cb_scaled = tt::CBIndex::c_20;
 
-    experimental::CircularBuffer cb_in_obj(cb_in);
-    experimental::CircularBuffer cb_scalar_obj(cb_scalar);
-    experimental::CircularBuffer cb_out_obj(cb_out);
-    experimental::CircularBuffer cb_var_obj(cb_var);
-    experimental::CircularBuffer cb_scaled_obj(cb_scaled);
+    CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_scalar_obj(cb_scalar);
+    CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_var_obj(cb_var);
+    CircularBuffer cb_scaled_obj(cb_scaled);
 
     // Destination register indices inside the Tensix DST register file.
     // Welford's LLK uses three adjacent dst registers:
@@ -108,17 +118,22 @@ void kernel_main() {
         // Without scaling, transpose and welford (both SFPU-compatible)
         // can share a single DST window for the entire loop.
         // On the do_scale path, transpose_wh_init_short(cb_scaled) runs before each
-        // welford_update; it re-inits UNPACK and MATH via llk_math_eltwise_unary_datacopy_init
-        // (same MATH-side effect as welford_reinit), so a separate welford_reinit after the mul
-        // is not required here.
+        // welford_update; it re-inits UNPACK and MATH via llk_math_eltwise_unary_datacopy_init,
+        // so a separate UNPACK/MATH reinit after the FPU mul is not required here.
         if constexpr (!do_scale) {
-            // Explicit srca reconfig is required because the output packing
-            // phase (below) calls reconfig_data_format_srca(cb_var) which
-            // changes the format on the 2nd+ NCHt iterations.
             reconfig_data_format_srca(cb_in);
+            // cb_in's UnpackToDestFp32 mode (FP32 input only) was already programmed by
+            // compute_kernel_hw_startup(cb_in, cb_out) at kernel entry, so _init_short is
+            // enough here. For BF16 input cb_in is Default mode and the same call works.
             transpose_wh_init_short(cb_in);
             tile_regs_acquire();
         }
+        // In contrast, on do_scale path, full init_bcast and full transpose_wh_init happen inside
+        // the Wt loop (each iteration) to pair UNPACK mode flips for cb_in (Default, FPU mul SrcA)
+        // and cb_scaled (UnpackToDestFp32, unpack-to-DEST consumer for the welford-intake transpose).
+        // The first iteration's init_bcast also resets the leaked UnpackToDest mode from the
+        // previous NCHt iteration's final transpose_wh_init(cb_var, cb_out), so no separate
+        // outer-loop reset is needed.
 
         // Welford SFPU state (running mean in LREG4, M2 in LREG5)
         // persists across DST cycles because LREGs are separate from
@@ -128,14 +143,6 @@ void kernel_main() {
                 // --- Scale step: multiply input tile by scalar ---
                 cb_in_obj.wait_front(onetile);
                 tile_regs_acquire();
-                // Explicit srca reconfig is required because the output packing
-                // phase (below) calls reconfig_data_format_srca(cb_var) which
-                // sets the unpacker to cb_var's format (Float32 when fp32 dest
-                // accumulation is enabled).  mul_tiles_bcast_scalar_init_short
-                // does not fully reconfigure the data format, so without this
-                // call the unpacker would read cb_in (Float16_b) data using the
-                // stale Float32 format, producing garbage on the 2nd+ NCHt
-                // iterations.
                 reconfig_data_format_srca(cb_in);
                 mul_tiles_bcast_scalar_init_short(cb_in, cb_scalar);
                 mul_tiles_bcast_scalar(cb_in, cb_scalar, 0, 0, input_dst);
@@ -157,8 +164,25 @@ void kernel_main() {
                 cb_scaled_obj.pop_front(onetile);
             } else {
                 cb_in_obj.wait_front(onetile);
+                if constexpr (welford_fp32_input) {
+                    // Re-records the transpose-dest setup at math-thread replay slots [16, 32).
+                    transpose_wh_init_short(cb_in);
+                }
                 transpose_wh_tile(cb_in, 0, input_dst);
                 cb_in_obj.pop_front(onetile);
+            }
+
+            // For fp32 input, transpose_wh_tile takes the UnpackToDest path whose math-side init
+            // overwrites the upper half of the SFPU replay buffer (slots [16, 32)), clobbering
+            // welford's recurrence. welford_init<WelfordInitMode::PreserveStats>() re-records all 32 slots without
+            // clearing LREG4/5 (which would lose the running mean/M2 accumulator). UNPACK A is left in transpose=1 by
+            // transpose_wh_tile; welford_update is pure SFPU and does not consume that state, and the next iteration's
+            // transpose_wh_init[_short] reprograms it.
+            //
+            // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_wh_tile routes
+            // through SrcA without touching the SFPU replay buffer, so the recovery is gated out.
+            if constexpr (welford_fp32_input) {
+                welford_init<WelfordInitMode::PreserveStats>();
             }
 
             if (wt < (Wt - 1)) {

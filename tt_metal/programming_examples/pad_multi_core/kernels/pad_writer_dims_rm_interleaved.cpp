@@ -23,7 +23,7 @@ void kernel_main() {
         cb_wait_front(cb_out0, num_sticks_per_barrier);
         uint32_t l1_read_addr = get_read_ptr(cb_out0);
         for (uint32_t i = 0; i < num_sticks_per_barrier && iter < num_sticks_per_core; ++i, ++iter) {
-            uint64_t write_noc_addr = get_noc_addr(i_stick, s);
+            uint64_t write_noc_addr = s.get_noc_addr(i_stick);
             noc_async_write(l1_read_addr, write_noc_addr, stick_size_bytes);
             l1_read_addr += stick_size_padded_aligned;
             i_stick += 1;

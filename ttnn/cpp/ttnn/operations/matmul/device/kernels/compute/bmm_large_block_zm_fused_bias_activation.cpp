@@ -8,7 +8,7 @@
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "internal/mod_div_lib.h"
 
 #ifdef FUSE_BIAS
@@ -44,8 +44,8 @@
  */
 template <uint32_t in0_block_num_tiles, uint32_t block_size = 4>
 FORCE_INLINE void transpose_tile_block(uint32_t in0_transpose_cb_id, uint32_t in0_cb_id) {
-    experimental::CircularBuffer in0_transpose_cb(in0_transpose_cb_id);
-    experimental::CircularBuffer in0_cb(in0_cb_id);
+    CircularBuffer in0_transpose_cb(in0_transpose_cb_id);
+    CircularBuffer in0_cb(in0_cb_id);
     constexpr uint32_t num_blocks = in0_block_num_tiles / block_size;
     constexpr uint32_t last_block_size = in0_block_num_tiles % block_size;
     // Lets do 2 passes: One loop until last and one last for the left overs
@@ -95,7 +95,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t out_subblock_w,
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
-    experimental::CircularBuffer mm_partials_cb(mm_partials_cb_id);
+    CircularBuffer mm_partials_cb(mm_partials_cb_id);
     // Reconfigure input
     copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
     mm_partials_cb.wait_front(out_subblock_num_tiles);
@@ -117,8 +117,8 @@ inline void reblock_and_untilize(
     uint32_t out_subblock_h,
     uint32_t interm_cb_id,
     uint32_t out_cb_id) {
-    experimental::CircularBuffer interm_cb(interm_cb_id);
-    experimental::CircularBuffer out_cb(out_cb_id);
+    CircularBuffer interm_cb(interm_cb_id);
+    CircularBuffer out_cb(out_cb_id);
     uint32_t num_tiles_in_row_of_subblocks = mulsi3(out_subblock_num_tiles, num_out_subblocks_in_col);
     interm_cb.wait_front(num_tiles_in_row_of_subblocks);
 
@@ -192,11 +192,11 @@ void kernel_main() {
     // as input for the matmul call.
     constexpr uint32_t in0_transpose_cb_id = get_named_compile_time_arg_val("cb_in0");
 
-    experimental::CircularBuffer in0_cb(in0_cb_id);
-    experimental::CircularBuffer in1_cb(in1_cb_id);
-    experimental::CircularBuffer out_cb(out_cb_id);
-    experimental::CircularBuffer mm_partials_cb(mm_partials_cb_id);
-    experimental::CircularBuffer untilize_mode_out_cb(untilize_mode_out_cb_id);
+    CircularBuffer in0_cb(in0_cb_id);
+    CircularBuffer in1_cb(in1_cb_id);
+    CircularBuffer out_cb(out_cb_id);
+    CircularBuffer mm_partials_cb(mm_partials_cb_id);
+    CircularBuffer untilize_mode_out_cb(untilize_mode_out_cb_id);
 
 #ifdef FUSE_BIAS
     constexpr uint32_t bias_cb_id = get_named_compile_time_arg_val("cb_bias");
@@ -204,11 +204,24 @@ void kernel_main() {
     constexpr uint32_t mm_out_cb_id = mm_partials_cb_id;
     // true: row-0 broadcast ([N] / [...,1,N]); false: elementwise add_tiles (bias has multiple M rows).
     constexpr bool row_broadcast_bias = (bool)get_compile_time_arg_val(18);
-    experimental::CircularBuffer bias_cb(bias_cb_id);
+    CircularBuffer bias_cb(bias_cb_id);
 #else
     constexpr uint32_t mm_out_cb_id = untilize_mode_out_cb_id;
 #endif
-    experimental::CircularBuffer mm_out_cb(mm_out_cb_id);
+    CircularBuffer mm_out_cb(mm_out_cb_id);
+
+    // Number of valid in1 columns in the last in1 subblock. For the DRAM-sharded variant the
+    // planner may pad per_core_N_compute beyond per_core_N_in1_sender so that out_subblock_w can be
+    // larger; the reader only pushes per_core_N_in1_sender tiles per block into cb_in1. To avoid
+    // reading those non-existent (padded) cb_in1 tiles, the compute kernel narrows the matmul_block
+    // call on the last in1 subblock to last_subblock_w_valid lanes. When no padding occurs this
+    // equals out_subblock_w and the original full-width path is preserved.
+#ifdef MATMUL_DRAM_SHARDED
+    constexpr uint32_t last_subblock_w_valid = get_named_compile_time_arg_val("last_subblock_w_valid");
+#else
+    constexpr uint32_t last_subblock_w_valid = out_subblock_w;
+#endif
+    constexpr bool last_subblock_padded = last_subblock_w_valid < out_subblock_w;
 
 #ifdef SFPU_ACTIVATION
     constexpr KernelActivation activation_type =
@@ -297,6 +310,16 @@ void kernel_main() {
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                         int in1_index_subblock_offset = 0;
                         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                            // When last_subblock_padded is true the last in1 subblock has
+                            // (out_subblock_w - last_subblock_w_valid) padded lanes whose cb_in1 tiles were
+                            // never pushed by the reader. Narrow matmul_block so the unpacker only touches
+                            // tiles that exist; the padded dst lanes are left at whatever the previous
+                            // operation wrote there and the output writer (BRISC) drops those columns.
+                            const bool is_last_in1_subblock_padded =
+                                last_subblock_padded && (in1_subblock == in1_num_subblocks - 1);
+                            const uint32_t effective_subblock_w =
+                                is_last_in1_subblock_padded ? last_subblock_w_valid : out_subblock_w;
+
                             tile_regs_acquire();
                             if (enable_reload) {
                                 reload_from_cb_to_dst(
@@ -329,7 +352,7 @@ void kernel_main() {
                                     in1_index,
                                     dst_index,
                                     in1_transpose_tile,
-                                    out_subblock_w,
+                                    effective_subblock_w,
                                     out_subblock_h,
                                     in0_block_w);
                                 in0_index++;               // stride right by 1
@@ -464,16 +487,27 @@ void kernel_main() {
                 for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
                     int in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                        // See matmul stage: the last in1 subblock has padded lanes whose bias tile was
+                        // never pushed by the reader. Redirect those out-of-range bias_tile_idx reads to
+                        // tile 0 of cb_bias to keep them in-bounds; the resulting padded output columns
+                        // are dropped by the writer.
+                        const bool is_last_in1_subblock_padded =
+                            last_subblock_padded && (in1_subblock == in1_num_subblocks - 1);
                         // Redundant wait since we know data was just pushed
                         mm_partials_cb.wait_front(out_subblock_num_tiles);
                         tile_regs_acquire();
                         for (uint32_t i = 0, j = 0; j < out_subblock_h; j++) {
                             uint32_t bias_tile_idx = in1_index_subblock_offset;
                             for (uint32_t k = 0; k < out_subblock_w; k++, i++) {
+                                const uint32_t safe_bias_tile_idx =
+                                    (is_last_in1_subblock_padded && k >= last_subblock_w_valid)
+                                        ? 0u              // Padded output columns with tile 0 of cb_bias added are
+                                        : bias_tile_idx;  // dropped by the writer.
+
                                 if constexpr (row_broadcast_bias) {
-                                    add_tiles_bcast_rows(mm_partials_cb_id, bias_cb_id, i, bias_tile_idx, i);
+                                    add_tiles_bcast_rows(mm_partials_cb_id, bias_cb_id, i, safe_bias_tile_idx, i);
                                 } else {
-                                    add_tiles(mm_partials_cb_id, bias_cb_id, i, bias_tile_idx, i);
+                                    add_tiles(mm_partials_cb_id, bias_cb_id, i, safe_bias_tile_idx, i);
                                 }
                                 bias_tile_idx++;
                             }

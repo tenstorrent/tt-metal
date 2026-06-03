@@ -1,11 +1,18 @@
 # Source files for ttnn_op_pool.
 # Module owners should update this file when adding/removing/renaming source files.
 
+set(TTNN_OP_POOL_API_HEADERS
+    generic/generic_pools.hpp
+    grid_sample/grid_sample.hpp
+    grid_sample/grid_sample_prepare_grid.hpp
+    rotate/rotate.hpp
+    upsample/upsample.hpp
+)
+
 set(TTNN_OP_POOL_SRCS
     generic/device/pool_multi_core_program_factory.cpp
     generic/device/pool_op.cpp
     generic/generic_pools.cpp
-    global_avg_pool/global_avg_pool.cpp
     grid_sample/device/grid_sample_device_operation.cpp
     grid_sample/device/grid_sample_bilinear_program_factory.cpp
     grid_sample/device/grid_sample_nearest_program_factory.cpp

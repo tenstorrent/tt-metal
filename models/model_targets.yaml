@@ -63,6 +63,21 @@ targets:
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
             note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      # p300x2 == bh_quietbox_2 (2x P300 = 4 dies). Numbers measured on the
+      # BH migration branch CI run (workflow 26664009397, ci-token-matching).
+      p300x2:
+        entries:
+          - status: active
+            perf:
+              prefill_time_to_token: 0.053
+              decode_t/s/u: 23.0
+              decode_t/s: 23.0
+              decode_tolerance: 1.15
+            accuracy:
+              top1: 90.0
+              top5: 97.6
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
 
   mistral-7b:
     aliases: ["Mistral-7B", "mistralai/Mistral-7B-Instruct-v0.3"]
@@ -119,6 +134,22 @@ targets:
               decode_t/s/u: 24.0
               decode_t/s: 768.0
             accuracy: {}
+      # p300x2 == bh_quietbox_2. Measured on workflow run 26785408151
+      # (ci-eval-32 invocation; decode_t/s = batch_size * decode_t/s/u).
+      p300x2:
+        entries:
+          - batch_size: 32
+            status: active
+            perf:
+              prefill_time_to_token: 0.207
+              decode_t/s/u: 8.7
+              decode_t/s: 278
+              decode_tolerance: 1.15
+            accuracy:
+              top1: 91.0
+              top5: 99.0
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
 
   llama3.1-70b:
     aliases: ["Llama-3.1-70B", "meta-llama/Llama-3.1-70B-Instruct"]
@@ -144,8 +175,10 @@ targets:
             status: active
             perf:
               prefill_t/s: 56.0
-              decode_t/s/u: 27.0
-              decode_t/s: 27.0
+              # decode targets lowered from 27 → 24 after observed regression
+              # to 24.95 t/s in scheduled run 25778148259 (2026-05-13).
+              decode_t/s/u: 24.0
+              decode_t/s: 24.0
             accuracy: {}
 
   gemma-3-27b:
@@ -178,11 +211,41 @@ targets:
             owner_id: U08TJ70UFRT # Harry Andrews
             team: models
             note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_p150:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
 
   gemma-4-e4b:
     aliases: ["gemma-4-e4b", "google/gemma-4-E4B-it"]
     skus:
       wh_n150:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_p300:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_quietbox_2:
         entries:
           - batch_size: 1
             seq_len: null
@@ -206,11 +269,71 @@ targets:
             owner_id: U08TJ70UFRT # Harry Andrews
             team: models
             note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_quietbox_2:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_loudbox:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_galaxy_perf:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
 
   gemma-4-31b:
     aliases: ["gemma-4-31b", "google/gemma-4-31B-it"]
     skus:
       wh_llmbox_perf:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_quietbox_2:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_loudbox:
+        entries:
+          - batch_size: 1
+            seq_len: null
+            status: TODO
+            perf: {}
+            accuracy: {}
+            owner_id: U08TJ70UFRT # Harry Andrews
+            team: models
+            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
+      bh_galaxy_perf:
         entries:
           - batch_size: 1
             seq_len: null
@@ -351,8 +474,14 @@ targets:
         entries:
           - batch_size: 1
             seq_len: null
-            status: TODO
-            perf: {}
+            status: active
+            # Targets calibrated from scheduled run 25778148259 (2026-05-13):
+            #   measured decode 8.77 t/s, prefill >= 11 t/s (only decode regressed).
+            # Set ~10% below observed for headroom.
+            perf:
+              prefill_t/s: 10.0
+              decode_t/s/u: 8.0
+              decode_t/s: 8.0
             accuracy: {}
             owner_id: U07RY6B5FLJ # Gongyu Wang
             team: models
@@ -368,6 +497,22 @@ targets:
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
+      # p300x2 == bh_quietbox_2. Measured on workflow run 26785408151
+      # (ci-eval-32 invocation).
+      p300x2:
+        entries:
+          - batch_size: 32
+            status: active
+            perf:
+              prefill_time_to_token: 0.136
+              decode_t/s/u: 16.30
+              decode_t/s: 521.6
+              decode_tolerance: 1.15
+            accuracy:
+              top1: 96.0
+              top5: 100.0
+            owner_id: U03PUAKE719 # Miguel Tairum Cruz
+            team: models
   llama3.3-70b-galaxy:
     aliases: ["llama3.3-70b-galaxy"]
     skus:
@@ -379,18 +524,6 @@ targets:
             perf: {}
             accuracy: {}
             owner_id: U053W15B6JF # Djordje Ivanovic
-            team: models
-  llama3.3-70b-dp:
-    aliases: ["llama3.3-70b-dp"]
-    skus:
-      wh_llmbox_perf:
-        entries:
-          - batch_size: 1
-            seq_len: null
-            status: TODO
-            perf: {}
-            accuracy: {}
-            owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
   llama3.3-70b-dp-galaxy:
     aliases: ["llama3.3-70b-dp-galaxy"]

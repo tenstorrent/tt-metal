@@ -3,25 +3,26 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import torch
-import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
 from functools import partial
-from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_model_traced_mesh_shape,
-    create_mesh_device,
-    create_tensor_on_mesh,
-    mesh_tensor_to_torch,
-    get_mesh_composer,
-    reconcile_golden_to_actual,
-)
+
+import torch
+
+import ttnn
+from models.common.utility_functions import torch_random
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    create_mesh_device,
+    create_tensor_on_mesh,
+    get_mesh_composer,
+    get_model_traced_mesh_shape,
+    mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
+)
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_positional_args
-
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -85,6 +86,18 @@ def run(
 
     pos_args = extract_positional_args(kwargs)
     traced_output_mem_config = pos_args.get(1, None)
+    traced_output_dtype = pos_args.get(2, None)
+    _positional_dtype = None
+    if traced_output_dtype is not None:
+        from tests.sweep_framework.sweep_utils.op_kwargs_utils import parse_dict_value
+
+        parsed_dt = (
+            parse_dict_value("dtype", traced_output_dtype)
+            if isinstance(traced_output_dtype, dict)
+            else traced_output_dtype
+        )
+        if parsed_dt is not None:
+            _positional_dtype = parsed_dt
 
     # Determine the output memory config: prefer traced arg1 (positional), then explicit param
     if traced_output_mem_config is not None:
@@ -105,9 +118,10 @@ def run(
         if s2i_output_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
             s2i_output_config = None
 
-    # Remove output_memory_config / memory_config from op_kwargs since we pass it positionally
+    # Remove output_memory_config / memory_config / output_dtype from op_kwargs since we pass positionally
     op_kwargs.pop("output_memory_config", None)
     op_kwargs.pop("memory_config", None)
+    op_kwargs.pop("output_dtype", None)
 
     # Handle input_a_shape - ensure it's always a tuple
     if input_a_shape is None:
@@ -224,9 +238,15 @@ def run(
     # Run sharded_to_interleaved (pass output config as positional arg to match master trace)
     start_time = start_measuring_time()
     if s2i_output_config is not None:
-        output_tensor = ttnn.sharded_to_interleaved(input_tensor, s2i_output_config, **op_kwargs)
+        if _positional_dtype is not None:
+            output_tensor = ttnn.sharded_to_interleaved(input_tensor, s2i_output_config, _positional_dtype, **op_kwargs)
+        else:
+            output_tensor = ttnn.sharded_to_interleaved(input_tensor, s2i_output_config, **op_kwargs)
     else:
-        output_tensor = ttnn.sharded_to_interleaved(input_tensor, **op_kwargs)
+        if _positional_dtype is not None:
+            output_tensor = ttnn.sharded_to_interleaved(input_tensor, output_dtype=_positional_dtype, **op_kwargs)
+        else:
+            output_tensor = ttnn.sharded_to_interleaved(input_tensor, **op_kwargs)
     e2e_perf = stop_measuring_time(start_time)
 
     # Verify output is interleaved

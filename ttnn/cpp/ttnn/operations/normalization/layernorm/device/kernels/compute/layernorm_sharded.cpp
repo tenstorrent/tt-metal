@@ -11,7 +11,7 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 // SPLIT REDUCE across Cores
@@ -84,22 +84,22 @@ void kernel_main() {
     constexpr uint32_t cb_fusion = get_named_compile_time_arg_val("cb_xmm");   // stream gamma/beta (alias of cb_xmm)
     constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
 
-    experimental::CircularBuffer cb_scaler_obj(cb_scaler);
-    experimental::CircularBuffer cb_scaler_global_obj(cb_scaler_global);
-    experimental::CircularBuffer cb_gamma_obj(cb_gamma);
-    experimental::CircularBuffer cb_beta_obj(cb_beta);
-    experimental::CircularBuffer cb_xmm_obj(cb_xmm);
-    experimental::CircularBuffer cb_ex_partial_obj(cb_ex_partial);
-    experimental::CircularBuffer cb_ex_obj(cb_ex);
-    experimental::CircularBuffer cb_ex_external_obj(cb_ex_external);
-    experimental::CircularBuffer cb_ex_partial2_obj(cb_ex_partial2);
-    experimental::CircularBuffer cb_ex2_obj(cb_ex2);
-    experimental::CircularBuffer cb_ex_external2_obj(cb_ex_external2);
-    experimental::CircularBuffer cb_ex_global_obj(cb_ex_global);
-    experimental::CircularBuffer cb_xmm2_obj(cb_xmm2);
-    experimental::CircularBuffer cb_ex2pe_obj(cb_ex2pe);
-    experimental::CircularBuffer cb_fusion_obj(cb_fusion);
-    experimental::CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_scaler_obj(cb_scaler);
+    CircularBuffer cb_scaler_global_obj(cb_scaler_global);
+    CircularBuffer cb_gamma_obj(cb_gamma);
+    CircularBuffer cb_beta_obj(cb_beta);
+    CircularBuffer cb_xmm_obj(cb_xmm);
+    CircularBuffer cb_ex_partial_obj(cb_ex_partial);
+    CircularBuffer cb_ex_obj(cb_ex);
+    CircularBuffer cb_ex_external_obj(cb_ex_external);
+    CircularBuffer cb_ex_partial2_obj(cb_ex_partial2);
+    CircularBuffer cb_ex2_obj(cb_ex2);
+    CircularBuffer cb_ex_external2_obj(cb_ex_external2);
+    CircularBuffer cb_ex_global_obj(cb_ex_global);
+    CircularBuffer cb_xmm2_obj(cb_xmm2);
+    CircularBuffer cb_ex2pe_obj(cb_ex2pe);
+    CircularBuffer cb_fusion_obj(cb_fusion);
+    CircularBuffer cb_out_obj(cb_out);
 
     binary_op_init_common(cb_in0, cb_in0, cb_x);
 
@@ -120,11 +120,11 @@ void kernel_main() {
 #else
     constexpr uint32_t cb_in = cb_in0;
 #endif
-    experimental::CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_in_obj(cb_in);
     constexpr uint32_t cb_im = do_gamma ? cb_x : (do_beta ? cb_fusion : cb_out);
-    experimental::CircularBuffer cb_im_obj(cb_im);
+    CircularBuffer cb_im_obj(cb_im);
     constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
-    experimental::CircularBuffer cb_outgamma_obj(cb_outgamma);
+    CircularBuffer cb_outgamma_obj(cb_outgamma);
 
 // pre-add x + y
 #ifdef FUSE_PRE_ADD

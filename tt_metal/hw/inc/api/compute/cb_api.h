@@ -172,7 +172,7 @@ ALWI uint32_t get_tile_address(uint32_t cb_id, uint32_t tile_index) {
 #else
     ASSERT(false && "get_tile_address is not implemented for ARCH_QUASAR");
     return 0;
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 
 // clang-format off
@@ -212,7 +212,7 @@ ALWI uint32_t read_tile_value(uint32_t cb_id, uint32_t tile_index, uint32_t elem
 #else
     ASSERT(false && "read_tile_value is not implemented for ARCH_QUASAR");
     return 0;
-#endif  // TODO: AM; add Quasar implementation
+#endif
 }
 
 }  // namespace ckernel

@@ -414,16 +414,20 @@ def decode_forward(
     # 4. After combine, each device has partial results from experts in its column
     # 5. We need to sum these partials across columns to get complete expert outputs
     if config.use_experimental_all_reduce:
+        # ``apply_allreduce`` -> ``MeshConfig.allreduce`` consumes ``output``
+        # internally (frees it between reduce-scatter and all-gather to keep
+        # peak DRAM bounded for long-context prefill). Do not deallocate
+        # again on this branch.
         output_all_reduced = apply_allreduce(output, mesh_config, ccl_manager, config.hidden_size)
     else:
         output_all_reduced = ttnn.all_reduce(
             output,
-            num_links=4,
+            num_links=ccl_manager.num_links,
             topology=ttnn.Topology.Ring,
             cluster_axis=1,
             memory_config=memory_config,
         )
-    ttnn.deallocate(output)
+        ttnn.deallocate(output)
 
     # Final shape: [1, 1, tokens_per_device, H] (tokens on dim -2)
     return output_all_reduced

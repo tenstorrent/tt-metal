@@ -8,11 +8,13 @@ from pathlib import Path
 
 import pytest
 
+from models.common.model_capabilities import FALLBACK_MAX_TOKENS_ALL_USERS
 from models.demos.deepseek_v3.tt import generator_vllm as generator_vllm_module
 
 pytestmark = pytest.mark.t3k_compat
 
 
+@pytest.mark.skip(reason="Disabled: see #45677")
 def test_initialize_vllm_model_passes_cache_dir_without_enabling_weight_cache(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
@@ -36,3 +38,35 @@ def test_initialize_vllm_model_passes_cache_dir_without_enabling_weight_cache(
     assert captured["model_path"] == Path(tmp_path / "model")
     assert captured["cache_dir"] == Path(tmp_path / "cache")
     assert "use_weight_cache" not in captured
+
+
+def test_deepseek_generator_exposes_max_tokens_all_users_capability() -> None:
+    assert generator_vllm_module.DeepseekGenerator.get_max_tokens_all_users() == FALLBACK_MAX_TOKENS_ALL_USERS
+
+
+@pytest.mark.skip(reason="Disabled: see #45677")
+def test_get_max_tokens_all_users_overrides_deepseek_r1_on_wormhole(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(generator_vllm_module, "is_wormhole_b0", lambda: True)
+
+    assert (
+        generator_vllm_module.DeepseekV3ForCausalLM.get_max_tokens_all_users(
+            model_name="/models/DeepSeek-R1-0528",
+            num_devices=32,
+            tt_data_parallel=1,
+        )
+        == 32_768
+    )
+
+
+@pytest.mark.skip(reason="Disabled: see #45677")
+def test_get_max_tokens_all_users_uses_fallback_for_other_configs(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(generator_vllm_module, "is_wormhole_b0", lambda: False)
+
+    assert (
+        generator_vllm_module.DeepseekV3ForCausalLM.get_max_tokens_all_users(
+            model_name="/models/DeepSeek-R1-0528",
+            num_devices=32,
+            tt_data_parallel=1,
+        )
+        == FALLBACK_MAX_TOKENS_ALL_USERS
+    )

@@ -5,8 +5,8 @@
 // Test kernel: TensorAccessor loopback producer using a Metal 2.0 TensorBinding.
 // Reads pages from an input tensor via TensorAccessor(ta::input_tensor) and pushes them
 // entry by entry into a DFB bound via dfb::input_dfb. The base address comes from the binding's
-// slot in the kernel's TensorBinding address section, filled by SetProgramRunParameters from
-// TensorArg.
+// slot in the kernel's TensorBinding address section, filled by SetProgramRunArgs from
+// TensorArgument.
 //
 // Runtime args:
 //   arg 0: number of pages to transfer
@@ -17,7 +17,7 @@ void kernel_main() {
     uint32_t num_pages = get_arg_val<uint32_t>(0);
 
     TensorAccessor accessor(ta::input_tensor);
-    experimental::DataflowBuffer buf(dfb::input_dfb);
+    DataflowBuffer buf(dfb::input_dfb);
     uint32_t entry_size = buf.get_entry_size();
 
     for (uint32_t page_id = 0; page_id < num_pages; page_id++) {

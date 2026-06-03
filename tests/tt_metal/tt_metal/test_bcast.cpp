@@ -60,7 +60,8 @@ const char* get_compute_name(BcastDim::Enum bcast_dim) {
 
 const char* bdim_to_log_string[] = {"", "BCAST_H", "BCAST_W", "", "BCAST_HW"};
 const char* op_id_to_op_define[] = {"add_tiles_bcast", "sub_tiles_bcast", "mul_tiles_bcast"};
-const char* op_id_to_llkop_define[] = {"ELWADD", "ELWSUB", "ELWMUL"};
+const char* op_id_to_llkop_define[] = {
+    "EltwiseBinaryType::ELWADD", "EltwiseBinaryType::ELWSUB", "EltwiseBinaryType::ELWMUL"};
 const char* bdim_to_llkdim_define[] = {"", "BroadcastType::ROW", "BroadcastType::COL", "", "BroadcastType::SCALAR"};
 const char* op_id_to_op_name[] = {"ADD", "SUB", "MUL"};
 

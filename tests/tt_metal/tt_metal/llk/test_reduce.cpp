@@ -17,6 +17,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -40,8 +41,8 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/arch.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
-#include <tt-metalium/experimental/host_api.hpp>
-#include <tt-metalium/experimental/dataflow_buffer/dataflow_buffer.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 
 namespace tt::tt_metal {
 class IDevice;
@@ -100,6 +101,69 @@ float get_scaler(const ReduceConfig& test_config) {
     }
 }
 
+// Tiled dimensions and buffer sizes derived from a 4-D NCHW tensor shape, with shared validation.
+struct ReduceDims {
+    uint32_t tile_H;
+    uint32_t tile_W;
+    uint32_t W;
+    uint32_t H;
+    uint32_t NC;
+    uint32_t N;
+    uint32_t Wt;
+    uint32_t Ht;
+    uint32_t num_tensor_tiles;
+    uint32_t single_tile_bytes;
+    uint32_t dram_buffer_size;
+    uint32_t num_golden_elements;
+    uint32_t output_size_bytes;
+};
+
+static ReduceDims compute_and_validate_reduce_dims(const ReduceConfig& test_config) {
+    ReduceDims dims{};
+    dims.tile_H = test_config.tile_shape.get_tile_shape()[0];
+    dims.tile_W = test_config.tile_shape.get_tile_shape()[1];
+    dims.W = test_config.shape[3];
+    dims.H = test_config.shape[2];
+    dims.NC = test_config.shape[1] * test_config.shape[0];
+    dims.N = test_config.shape[0] * test_config.shape[1];
+
+    TT_FATAL(
+        (dims.tile_H == 16 && dims.tile_W == 32) || (dims.tile_H == 32 && dims.tile_W == 32),
+        "Error: Invalid tile shape");
+    TT_FATAL(
+        dims.W % dims.tile_W == 0 && dims.H % dims.tile_H == 0,
+        "Error: Tensor height/width must be multiple of tile height/width");
+    TT_FATAL(dims.H > 0 && dims.W > 0 && dims.NC > 0, "Error: All tensor dims must be greater than 0");
+
+    dims.Wt = dims.W / dims.tile_W;
+    dims.Ht = dims.H / dims.tile_H;
+    dims.num_tensor_tiles = dims.NC * dims.H * dims.W / (dims.tile_W * dims.tile_H);
+
+    const uint32_t divisor = test_config.reduce_dim == ReduceDim::W ? dims.Wt : dims.Ht;
+    TT_FATAL(dims.num_tensor_tiles % divisor == 0, "Error");
+
+    dims.single_tile_bytes = 2 * (dims.tile_W * dims.tile_H);
+    dims.dram_buffer_size = dims.single_tile_bytes * dims.num_tensor_tiles;
+
+    switch (test_config.reduce_dim) {
+        case ReduceDim::H:
+            dims.num_golden_elements = dims.NC * dims.W * 32 / 2;
+            dims.output_size_bytes = dims.dram_buffer_size / dims.Ht;
+            break;
+        case ReduceDim::W:
+            dims.num_golden_elements = dims.NC * dims.H * dims.tile_W / 2;
+            dims.output_size_bytes = dims.dram_buffer_size / dims.Wt;
+            break;
+        case ReduceDim::HW:
+            dims.num_golden_elements = dims.NC * 32 * 32 / 2;
+            dims.output_size_bytes = dims.dram_buffer_size / (dims.Ht * dims.Wt);
+            break;
+        default: TT_THROW("Unsupported reduce dim!");
+    }
+
+    return dims;
+}
+
 void set_math_fid_masks_binary(
     uint16_t& srca_fid_mask, uint16_t& srcb_fid_mask, MathFidelity math_fidelity = MathFidelity::HiFi4) {
     switch (math_fidelity) {
@@ -121,173 +185,6 @@ void set_math_fid_masks_binary(
             TT_THROW("Unsupported MathFidelity={}", math_fidelity);
             break;
         }
-    }
-}
-
-std::pair<KernelHandle, KernelHandle> add_reader_writer_kernels(
-    distributed::MeshWorkload& workload,
-    distributed::MeshCoordinateRange& device_range,
-    const CoreCoord& logical_core,
-    const ReduceConfig& test_config,
-    const std::shared_ptr<distributed::MeshBuffer>& src_dram_buffer,
-    const std::shared_ptr<distributed::MeshBuffer>& dst_dram_buffer,
-    uint32_t dst_buffer_id) {
-    uint32_t tile_H = test_config.tile_shape.get_tile_shape()[0], tile_W = test_config.tile_shape.get_tile_shape()[1];
-    uint32_t W = test_config.shape[3], H = test_config.shape[2], NC = test_config.shape[1] * test_config.shape[0];
-    uint32_t N = test_config.shape[0] * test_config.shape[1];
-    uint32_t Wt = W / tile_W;
-    uint32_t Ht = H / tile_H;
-    uint32_t num_tensor_tiles = NC * H * W / (tile_W * tile_H);
-    float scaler = get_scaler(test_config);
-
-    auto& program = workload.get_programs().at(device_range);
-
-    KernelHandle unary_reader_kernel;
-    KernelHandle unary_writer_kernel;
-
-    switch (test_config.reduce_dim) {
-        case ReduceDim::H: {
-            bfloat16 bfloat_scaler_value = bfloat16(scaler);
-            uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
-            std::vector<uint32_t> reader_compile_args = {};
-            tt_metal::TensorAccessorArgs(src_dram_buffer).append_to(reader_compile_args);
-            reader_compile_args.push_back(packed_scaler_value);
-            std::map<std::string, std::string> reader_defines = {{"REDUCE_SCALER", "1"}};
-
-            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-                unary_reader_kernel = tt_metal::experimental::quasar::CreateKernel(
-                    program,
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp",
-                    logical_core,
-                    tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                        .num_threads_per_cluster = 1, .compile_args = reader_compile_args, .defines = reader_defines});
-            } else {
-                unary_reader_kernel = tt_metal::CreateKernel(
-                    program,
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp",
-                    logical_core,
-                    tt_metal::DataMovementConfig{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                        .noc = tt_metal::NOC::RISCV_1_default,
-                        .compile_args = reader_compile_args,
-                        .defines = reader_defines});
-            }
-
-            std::vector<uint32_t> writer_compile_args = {dst_buffer_id};
-            tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
-
-            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-                unary_writer_kernel = tt_metal::experimental::quasar::CreateKernel(
-                    program,
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
-                    logical_core,
-                    tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                        .num_threads_per_cluster = 1, .compile_args = writer_compile_args});
-            } else {
-                unary_writer_kernel = tt_metal::CreateKernel(
-                    program,
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",  // no need to transpose the
-                                                                                            // output since output Ht=1
-                    logical_core,
-                    tt_metal::DataMovementConfig{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                        .noc = tt_metal::NOC::RISCV_0_default,
-                        .compile_args = writer_compile_args});
-            }
-
-            tt_metal::SetRuntimeArgs(
-                program, unary_reader_kernel, logical_core, {src_dram_buffer->address(), N, Ht, Wt, Ht * Wt});
-
-            tt_metal::SetRuntimeArgs(
-                program,
-                unary_writer_kernel,
-                logical_core,
-                {
-                    dst_dram_buffer->address(),
-                    (uint32_t)0,           // dram bank id
-                    num_tensor_tiles / Ht  // num tiles
-                });
-
-            return {unary_reader_kernel, unary_writer_kernel};
-            break;
-        }
-        case ReduceDim::HW: {
-            scaler = std::sqrt(scaler);
-        }  // Needed because AVG pool multiplies twice by the scaler
-        case ReduceDim::W: {
-            std::vector<uint32_t> reader_compile_args = {};
-            tt_metal::TensorAccessorArgs(src_dram_buffer).append_to(reader_compile_args);
-
-            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-                unary_reader_kernel = tt_metal::experimental::quasar::CreateKernel(
-                    program,
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_reduce.cpp",
-                    logical_core,
-                    tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                        .num_threads_per_cluster = 1, .compile_args = reader_compile_args});
-            } else {
-                unary_reader_kernel = tt_metal::CreateKernel(
-                    program,
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_reduce.cpp",
-                    logical_core,
-                    tt_metal::DataMovementConfig{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                        .noc = tt_metal::NOC::RISCV_1_default,
-                        .compile_args = reader_compile_args});
-            }
-
-            std::vector<uint32_t> writer_compile_args = {dst_buffer_id};
-            tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
-
-            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-                unary_writer_kernel = tt_metal::experimental::quasar::CreateKernel(
-                    program,
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
-                    logical_core,
-                    tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                        .num_threads_per_cluster = 1, .compile_args = writer_compile_args});
-            } else {
-                unary_writer_kernel = tt_metal::CreateKernel(
-                    program,
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
-                    logical_core,
-                    tt_metal::DataMovementConfig{
-                        .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                        .noc = tt_metal::NOC::RISCV_0_default,
-                        .compile_args = writer_compile_args});
-            }
-
-            tt_metal::SetRuntimeArgs(
-                program,
-                unary_reader_kernel,
-                logical_core,
-                {
-                    src_dram_buffer->address(),
-                    (uint32_t)0,  // dram bank id
-                    (uint32_t)0,  // unused
-                    num_tensor_tiles,
-                    NC,
-                    Ht,
-                    Wt,
-                    Ht * Wt,
-                    *reinterpret_cast<uint32_t*>(&scaler),
-                });
-
-            uint32_t num_tiles =
-                test_config.reduce_dim == ReduceDim::W ? (num_tensor_tiles / Wt) : (num_tensor_tiles / (Wt * Ht));
-            tt_metal::SetRuntimeArgs(
-                program,
-                unary_writer_kernel,
-                logical_core,
-                {dst_dram_buffer->address(),
-                 (uint32_t)0,  // dram bank id
-                 num_tiles});
-
-            return {unary_reader_kernel, unary_writer_kernel};
-            break;
-        }
-        default: TT_THROW("Unsupported reduce dim!");
-        return {0, 0};
     }
 }
 
@@ -313,225 +210,12 @@ std::string get_compute_kernel_name(const ReduceDim& reduce_dim) {
     return compute_kernel_name;
 }
 
-void run_single_core_reduce_program(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReduceConfig& test_config) {
-    auto& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    Program program = tt_metal::CreateProgram();
-    workload.add_program(device_range, std::move(program));
-    auto& program_ = workload.get_programs().at(device_range);
-
-    CoreCoord core = {0, 0};
-
-    uint32_t tile_H = test_config.tile_shape.get_tile_shape()[0], tile_W = test_config.tile_shape.get_tile_shape()[1];
-    uint32_t W = test_config.shape[3], H = test_config.shape[2], NC = test_config.shape[1] * test_config.shape[0];
-    TT_FATAL((tile_H == 16 && tile_W == 32) || (tile_H == 32 && tile_W == 32), "Error: Invalid tile shape");
-    TT_FATAL(W % tile_W == 0 && H % tile_H == 0, "Error: Tensor height/width must be multiple of tile height/width");
-    TT_FATAL(H > 0 && W > 0 && NC > 0, "Error: All tensor dims must be greater than 0");
-    uint32_t Wt = W / tile_W;
-    uint32_t Ht = H / tile_H;
-
-    uint32_t num_golden_elements;
-    switch (test_config.reduce_dim) {
-        case ReduceDim::H:
-            num_golden_elements = NC * W * 32 / 2;
-            break;  // expecting one tile in H, and half the elements since the vector packs 2 uint16_ts
-        case ReduceDim::W:
-            num_golden_elements = NC * H * tile_W / 2;
-            break;  // expecting one tile in H, and half the elements since the vector packs 2 uint16_ts
-        case ReduceDim::HW:
-            num_golden_elements = NC * 32 * 32 / 2;
-            break;  // expecting one tile in H, and half the elements since the vector packs 2 uint16_ts
-        default: TT_THROW("Unsupported reduce dim!");
-    }
-
-    float scaler = get_scaler(test_config);
-
-    uint32_t num_tensor_tiles = NC * H * W / (tile_W * tile_H);
-    uint32_t divisor = test_config.reduce_dim == ReduceDim::W ? Wt : Ht;
-    TT_FATAL(num_tensor_tiles % divisor == 0, "Error");
-
-    uint32_t single_tile_bytes = 2 * (tile_W * tile_H);
-    uint32_t dram_buffer_size = single_tile_bytes * num_tensor_tiles;
-
-    uint32_t src_page_size = single_tile_bytes;
-    uint32_t dst_page_size = single_tile_bytes;
-
-    distributed::DeviceLocalBufferConfig src_local_config{
-        .page_size = src_page_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
-    distributed::ReplicatedBufferConfig src_buffer_config{.size = dram_buffer_size};
-
-    uint32_t output_size_bytes;
-    switch (test_config.reduce_dim) {
-        case ReduceDim::H: output_size_bytes = dram_buffer_size / Ht; break;
-        case ReduceDim::W: output_size_bytes = dram_buffer_size / Wt; break;
-        case ReduceDim::HW: output_size_bytes = dram_buffer_size / (Ht * Wt); break;
-        default: TT_THROW("Unsupported reduce dim!");
-    }
-
-    distributed::DeviceLocalBufferConfig dst_local_config{
-        .page_size = dst_page_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
-    distributed::ReplicatedBufferConfig dst_buffer_config{.size = output_size_bytes};
-
-    std::shared_ptr<distributed::MeshBuffer> src_dram_buffer =
-        distributed::MeshBuffer::create(src_buffer_config, src_local_config, mesh_device.get());
-    std::shared_ptr<distributed::MeshBuffer> dst_dram_buffer =
-        distributed::MeshBuffer::create(dst_buffer_config, dst_local_config, mesh_device.get());
-
-    uint32_t num_buffer_tiles = 32;
-    uint32_t num_output_buffer_tiles = 32;
-    KernelHandle compute_kernel;
-
-    uint32_t src0_dfb = 0;
-    uint32_t src1_dfb = 0;
-    uint32_t dst_dfb = 0;
-    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-        tt_metal::experimental::dfb::DataflowBufferConfig dfb_src0_config = {
-            .entry_size = single_tile_bytes,
-            .num_entries = num_buffer_tiles,
-            .num_producers = 1,
-            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .num_consumers = 1,
-            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .enable_implicit_sync = false,
-            .data_format = tt::DataFormat::Float16_b,
-            .tile = test_config.tile_shape,
-        };
-
-        tt_metal::experimental::dfb::DataflowBufferConfig dfb_temp_reduce_tile_config = {
-            .entry_size = 2 * TILE_WIDTH * TILE_HEIGHT,
-            .num_entries = 2,
-            .num_producers = 1,
-            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .num_consumers = 1,
-            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .enable_implicit_sync = false,
-            .data_format = tt::DataFormat::Float16_b,
-            .tile = tt_metal::Tile({32, 32}),
-        };
-
-        tt_metal::experimental::dfb::DataflowBufferConfig dfb_output_config = {
-            .entry_size = single_tile_bytes,
-            .num_entries = num_output_buffer_tiles,
-            .num_producers = 1,
-            .pap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .num_consumers = 1,
-            .cap = tt_metal::experimental::dfb::AccessPattern::STRIDED,
-            .enable_implicit_sync = false,
-            .data_format = tt::DataFormat::Float16_b,
-            .tile = test_config.tile_shape,
-        };
-
-        src0_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_src0_config);
-        src1_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_temp_reduce_tile_config);
-        dst_dfb = tt_metal::experimental::dfb::CreateDataflowBuffer(program_, core, dfb_output_config);
-
-    } else {
-        uint32_t src0_cb_index = 0;
-        tt_metal::CircularBufferConfig cb_src0_config =
-            tt_metal::CircularBufferConfig(
-                num_buffer_tiles * single_tile_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(src0_cb_index, single_tile_bytes)
-                .set_tile_dims(src0_cb_index, test_config.tile_shape);
-        tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
-
-        uint32_t ouput_cb_index = tt::CBIndex::c_16;
-        tt_metal::CircularBufferConfig cb_output_config =
-            tt_metal::CircularBufferConfig(
-                num_output_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(ouput_cb_index, single_tile_bytes)
-                .set_tile_dims(ouput_cb_index, test_config.tile_shape);
-        tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
-
-        tt_metal::CircularBufferConfig cb_temp_reduce_tile_config =
-            tt_metal::CircularBufferConfig(2 * (2 * TILE_WIDTH * TILE_HEIGHT), {{CBIndex::c_2, tt::DataFormat::Float16_b}})
-                .set_page_size(CBIndex::c_2, single_tile_bytes)
-                .set_tile_dims(CBIndex::c_2, tt_metal::Tile({32, 32}));
-        tt_metal::CreateCircularBuffer(program_, core, cb_temp_reduce_tile_config);
-    }
-
-    const uint32_t dst_buffer_id = MetalContext::instance().get_cluster().arch() == ARCH::QUASAR
-                                       ? dst_dfb
-                                       : static_cast<uint32_t>(tt::CBIndex::c_16);
-
-    auto [reader_kernel, writer_kernel] = add_reader_writer_kernels(
-        workload, device_range, core, test_config, src_dram_buffer, dst_dram_buffer, dst_buffer_id);
-
-    vector<uint32_t> compute_kernel_args = {
-        uint(Ht),
-        uint(Wt),
-        uint(NC),
-    };
-
-    std::map<std::string, std::string> reduce_defines = {
-        {"REDUCE_DIM", get_reduce_dim_define_string(test_config.reduce_dim)}};
-    switch (test_config.reduce_type) {
-        case ReduceType::SUM: {
-            reduce_defines["REDUCE_OP"] = "PoolType::SUM";
-            break;
-        }
-        case ReduceType::AVG: {
-            reduce_defines["REDUCE_OP"] = "PoolType::AVG";
-            break;
-        }
-        case ReduceType::MAX: {
-            reduce_defines["REDUCE_OP"] = "PoolType::MAX";
-            break;
-        }
-    }
-    reduce_defines["MATH_ONLY"] = test_config.math_only_reduce ? "1" : "0";
-    reduce_defines["DST_ACCUM_MODE"] = test_config.fp32_dest_acc_en ? "1" : "0";
-
-    std::string compute_kernel_name = get_compute_kernel_name(test_config.reduce_dim);
-
-    if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-        compute_kernel = tt_metal::experimental::quasar::CreateKernel(
-            program_,
-            compute_kernel_name,
-            core,
-            tt_metal::experimental::quasar::QuasarComputeConfig{
-                .num_threads_per_cluster = 1,
-                .math_fidelity = test_config.math_fidelity,
-                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
-                .compile_args = compute_kernel_args,
-                .defines = reduce_defines});
-
-        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
-            program_, src0_dfb, reader_kernel, compute_kernel);
-        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
-            program_, src1_dfb, reader_kernel, compute_kernel);
-        tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
-            program_, dst_dfb, compute_kernel, writer_kernel);
-    } else {
-        compute_kernel = tt_metal::CreateKernel(
-            program_,
-            compute_kernel_name,
-            core,
-            tt_metal::ComputeConfig{
-                .math_fidelity = test_config.math_fidelity,
-                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
-                .compile_args = compute_kernel_args,
-                .defines = reduce_defines});
-    }
-
-    vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
-        dram_buffer_size, test_config.data_gen_rand_max, test_config.data_gen_seed, test_config.data_gen_offset);
-
-    distributed::WriteShard(cq, src_dram_buffer, src_vec, zero_coord);
-
-    auto* device = mesh_device->get_devices()[0];
-    auto blocking = device->arch() == ARCH::QUASAR;
-    distributed::EnqueueMeshWorkload(cq, workload, blocking);
-    distributed::Finish(cq);
-
-    // The kernel will view the input as TILED_NFACES
-    std::vector<uint32_t> result_vec;
-    distributed::ReadShard(cq, result_vec, dst_dram_buffer, zero_coord);
-
+void validate_reduce_result(
+    const std::vector<uint32_t>& result_vec,
+    uint32_t num_golden_elements,
+    const ReduceConfig& test_config,
+    const std::vector<uint32_t>& src_vec,
+    float scaler) {
     EXPECT_EQ(result_vec.size(), num_golden_elements);
 
     int argfail = -1;
@@ -554,17 +238,17 @@ void run_single_core_reduce_program(
             val &= srca_fid_mask;
         }
     }
-    // recover a linear view of input vector for consumption by gold_ function
+    uint32_t tile_H = test_config.tile_shape.get_tile_shape()[0];
+    uint32_t tile_W = test_config.tile_shape.get_tile_shape()[1];
     std::vector<uint16_t> src_linear = convert_layout<uint16_t>(
         u16_src0_vec,
         test_config.shape,
         TensorLayoutType::TILED_NFACES,
         TensorLayoutType::LIN_ROW_MAJOR,
         PhysicalSize{tile_H, tile_W});
-    std::vector<uint16_t> gold_reduced = test_config.golden_function(
-        src_linear, test_config.shape, scaler, uint8_t(test_config.reduce_type), true);  // result is uint16_t untilized
+    std::vector<uint16_t> gold_reduced =
+        test_config.golden_function(src_linear, test_config.shape, scaler, uint8_t(test_config.reduce_type), true);
 
-    // Tilize from row major and convert to pairs (uint32_t)
     auto gold_4f_u32 = u32_from_u16_vector(convert_layout<uint16_t>(
         gold_reduced,
         test_config.result_shape,
@@ -576,8 +260,257 @@ void run_single_core_reduce_program(
     if (!pass) {
         log_error(LogTest, "Failure position={}", argfail);
     }
-
     EXPECT_TRUE(pass);
+}
+
+static experimental::KernelSpec::CompilerOptions::Defines build_reduce_defines(const ReduceConfig& test_config) {
+    experimental::KernelSpec::CompilerOptions::Defines reduce_defines;
+    reduce_defines.emplace_back("REDUCE_DIM", get_reduce_dim_define_string(test_config.reduce_dim));
+    switch (test_config.reduce_type) {
+        case ReduceType::SUM: reduce_defines.emplace_back("REDUCE_OP", "PoolType::SUM"); break;
+        case ReduceType::AVG: reduce_defines.emplace_back("REDUCE_OP", "PoolType::AVG"); break;
+        case ReduceType::MAX: reduce_defines.emplace_back("REDUCE_OP", "PoolType::MAX"); break;
+    }
+    reduce_defines.emplace_back("MATH_ONLY", test_config.math_only_reduce ? "1" : "0");
+    reduce_defines.emplace_back("DST_ACCUM_MODE", test_config.fp32_dest_acc_en ? "1" : "0");
+    return reduce_defines;
+}
+
+// Build a TensorSpec describing a flat DRAM-interleaved buffer of `total_entries`
+// pages, each `entry_size` bytes. Used to bind src/dst tensors as TensorParameters
+// to the reader/writer kernels via the Metal 2.0 named TensorAccessor ctor.
+static inline tt::tt_metal::TensorSpec make_flat_dram_tensor_spec(uint32_t entry_size, uint32_t total_entries) {
+    const uint32_t entry_size_words = entry_size / sizeof(uint32_t);
+    auto page_config = tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR);
+    auto memory_config =
+        tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    auto tensor_layout = tt::tt_metal::TensorLayout(tt::tt_metal::DataType::UINT32, page_config, memory_config);
+    return tt::tt_metal::TensorSpec(tt::tt_metal::Shape{total_entries, entry_size_words}, tensor_layout);
+}
+
+void run_single_core_reduce_program(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReduceConfig& test_config) {
+    auto& cq = mesh_device->mesh_command_queue();
+    const experimental::NodeCoord node{0, 0};
+
+    const ReduceDims dims = compute_and_validate_reduce_dims(test_config);
+
+    float scaler = get_scaler(test_config);
+    if (test_config.reduce_dim == ReduceDim::HW) {
+        scaler = std::sqrt(scaler);
+    }
+
+    const uint32_t num_input_pages = dims.dram_buffer_size / dims.single_tile_bytes;
+    const uint32_t num_output_pages = dims.output_size_bytes / dims.single_tile_bytes;
+    auto in_tensor = MeshTensor::allocate_on_device(
+        *mesh_device, make_flat_dram_tensor_spec(dims.single_tile_bytes, num_input_pages), TensorTopology{});
+    auto out_tensor = MeshTensor::allocate_on_device(
+        *mesh_device, make_flat_dram_tensor_spec(dims.single_tile_bytes, num_output_pages), TensorTopology{});
+
+    constexpr uint32_t num_buffer_tiles = 32;
+    constexpr uint32_t num_output_buffer_tiles = 32;
+    constexpr const char* SRC0_DFB = "src0_dfb";
+    constexpr const char* SRC1_DFB = "src1_dfb";
+    constexpr const char* DST_DFB = "dst_dfb";
+    constexpr const char* READER = "reader";
+    constexpr const char* WRITER = "writer";
+    constexpr const char* COMPUTE = "compute";
+    constexpr const char* IN_TENSOR = "in_tensor";
+    constexpr const char* OUT_TENSOR = "out_tensor";
+
+    experimental::DataflowBufferSpec src0_dfb_spec{
+        .unique_id = SRC0_DFB,
+        .entry_size = dims.single_tile_bytes,
+        .num_entries = num_buffer_tiles,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+        .tile_format_metadata = test_config.tile_shape,
+    };
+    experimental::DataflowBufferSpec src1_dfb_spec{
+        .unique_id = SRC1_DFB,
+        .entry_size = 2 * TILE_WIDTH * TILE_HEIGHT,
+        .num_entries = 2,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+        .tile_format_metadata = tt_metal::Tile({32, 32}),
+    };
+    experimental::DataflowBufferSpec dst_dfb_spec{
+        .unique_id = DST_DFB,
+        .entry_size = dims.single_tile_bytes,
+        .num_entries = num_output_buffer_tiles,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+        .tile_format_metadata = test_config.tile_shape,
+    };
+
+    // Build reader spec depending on reduce dim
+    std::string reader_kernel_path;
+    experimental::KernelSpec::CompileTimeArgs reader_cta_bindings;
+    experimental::KernelSpec::CompilerOptions::Defines reader_defines;
+    std::vector<std::string> reader_runtime_arg_names;
+    if (test_config.reduce_dim == ReduceDim::H) {
+        reader_kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp";
+        bfloat16 bfloat_scaler_value = bfloat16(scaler);
+        uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
+        reader_cta_bindings = {{"scaler", packed_scaler_value}};
+        reader_defines.emplace_back("REDUCE_SCALER", "1");
+        reader_runtime_arg_names = {"N", "Ht", "Wt", "HtWt"};
+    } else {
+        reader_kernel_path = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_8bank_2_0.cpp";
+        reader_defines.emplace_back("GENERATE_BCAST_SCALER", "1");
+        reader_defines.emplace_back("BLOCK_SIZE", "1");
+        reader_runtime_arg_names = {"num_tiles", "scaler"};
+    }
+
+    experimental::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = reader_kernel_path,
+        .num_threads = 1,
+        .compiler_options = {.defines = reader_defines},
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = SRC0_DFB,
+                 .accessor_name = "out_data",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = SRC1_DFB,
+                 .accessor_name = "out_scaler",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             }},
+        .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
+        .compile_time_args = reader_cta_bindings,
+        .runtime_arg_schema = {.runtime_arg_names = reader_runtime_arg_names},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen1_config =
+                    experimental::DataMovementHardwareConfig::Gen1Config{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default},
+                .gen2_config =
+                    experimental::DataMovementHardwareConfig::Gen2Config{
+                        .disable_implicit_sync_for = {SRC0_DFB, SRC1_DFB}}},
+    };
+
+    experimental::KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source =
+
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {experimental::ConsumerOf(DST_DFB, "in")},
+        .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"num_tiles"}},
+        .hw_config =
+            experimental::DataMovementHardwareConfig{
+                .gen1_config =
+                    experimental::DataMovementHardwareConfig::Gen1Config{
+                        .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default},
+                .gen2_config =
+                    experimental::DataMovementHardwareConfig::Gen2Config{.disable_implicit_sync_for = {DST_DFB}}},
+    };
+
+    experimental::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = get_compute_kernel_name(test_config.reduce_dim),
+        .num_threads = 1,
+        .compiler_options = {.defines = build_reduce_defines(test_config)},
+        .dfb_bindings =
+            {{
+                 .dfb_spec_name = SRC0_DFB,
+                 .accessor_name = "in_data",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = SRC1_DFB,
+                 .accessor_name = "in_scaler",
+                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             },
+             {
+                 .dfb_spec_name = DST_DFB,
+                 .accessor_name = "out",
+                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
+                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+             }},
+        .compile_time_args = {{"Ht", dims.Ht}, {"Wt", dims.Wt}, {"NC", dims.NC}},
+        .hw_config =
+            experimental::ComputeHardwareConfig{
+                .math_fidelity = test_config.math_fidelity,
+                .fp32_dest_acc_en = test_config.fp32_dest_acc_en,
+                .dst_full_sync_en = test_config.dst_full_sync_en,
+            },
+    };
+
+    experimental::WorkUnitSpec wu{
+        .name = "main",
+        .kernels = {READER, WRITER, COMPUTE},
+        .target_nodes = node,
+    };
+
+    experimental::ProgramSpec spec{
+        .name = "single_core_reduce",
+        .kernels = {reader_spec, writer_spec, compute_spec},
+        .dataflow_buffers = {src0_dfb_spec, src1_dfb_spec, dst_dfb_spec},
+        .tensor_parameters =
+            {
+                {.unique_id = IN_TENSOR, .spec = in_tensor.tensor_spec()},
+                {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()},
+            },
+        .work_units = {wu},
+    };
+
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    workload.add_program(device_range, std::move(program));
+    auto& program_run = workload.get_programs().at(device_range);
+
+    // Reader/writer RTAs depend on reduce_dim
+    std::unordered_map<std::string, uint32_t> reader_named_rtas;
+    uint32_t writer_num_tiles;
+    if (test_config.reduce_dim == ReduceDim::H) {
+        reader_named_rtas = {{"N", dims.N}, {"Ht", dims.Ht}, {"Wt", dims.Wt}, {"HtWt", dims.Ht * dims.Wt}};
+        writer_num_tiles = dims.num_tensor_tiles / dims.Ht;
+    } else {
+        reader_named_rtas = {{"num_tiles", dims.num_tensor_tiles}, {"scaler", *reinterpret_cast<uint32_t*>(&scaler)}};
+        writer_num_tiles = test_config.reduce_dim == ReduceDim::W ? (dims.num_tensor_tiles / dims.Wt)
+                                                                  : (dims.num_tensor_tiles / (dims.Wt * dims.Ht));
+    }
+
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel_spec_name = READER,
+            .runtime_arg_values = {{.node = node, .args = reader_named_rtas}},
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel_spec_name = WRITER,
+            .runtime_arg_values = {{.node = node, .args = {{"num_tiles", writer_num_tiles}}}},
+        },
+        experimental::ProgramRunArgs::KernelRunArgs{
+            .kernel_spec_name = COMPUTE,
+        },
+    };
+    params.tensor_args = {
+        {.tensor_parameter_name = IN_TENSOR, .tensor = in_tensor},
+        {.tensor_parameter_name = OUT_TENSOR, .tensor = out_tensor},
+    };
+    experimental::SetProgramRunArgs(program_run, params);
+
+    vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
+        dims.dram_buffer_size, test_config.data_gen_rand_max, test_config.data_gen_seed, test_config.data_gen_offset);
+    tt_metal::detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), src_vec);
+
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
+
+    std::vector<uint32_t> result_vec;
+    tt_metal::detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), result_vec);
+
+    validate_reduce_result(result_vec, dims.num_golden_elements, test_config, src_vec, get_scaler(test_config));
+
     log_info(
         LogTest,
         "TileDimH = {}, TileDimW = {}, MathFid = {}, ReduceType = {}, FP32DestAcc = {}, DstSyncFull = {}",

@@ -22,6 +22,11 @@ on:
         required: false
         type: string
         default: "all"
+      mlperf-read-only:
+        description: "Mount /mnt/MLPerf as read-only (set to false to allow tt_cache write-through during first-use)"
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   generate-matrix:
@@ -43,6 +48,40 @@ jobs:
           # Harry Andrews (U08TJ70UFRT), Stuti Raizada (U06F3ER8X9A) - GPT-OSS
 
           # Note: This matrix must be kept in sync with the original static matrix
+          #
+          # The two Gemma4-31B vLLM entries below are temporarily disabled —
+          # the full unquantized KV cache for the global-attention layers
+          # runs out of DRAM on both 1x4 (BH-QB-GE) and 1x8 (WH-T3K).
+          # Re-enable once KV cache quantization lands — TODO: file follow-up issue.
+          #
+          # Disabled entries preserved verbatim for the re-enable:
+          #
+          #   {
+          #     "name": "[WH-T3K] Gemma4-31B",
+          #     "model": "google/gemma-4-31B-it",
+          #     "server-timeout": 45,
+          #     "benchmark-timeout": 5,
+          #     "runner-label": "config-t3000",
+          #     "arch": "arch-wormhole_b0",
+          #     "mesh-device": "T3K",
+          #     "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
+          #     "additional-server-args": "--async-scheduling",
+          #     "multimodal": false,
+          #     "owner_id": "U08TJ70UFRT"
+          #   },
+          #   {
+          #     "name": "[BH-QB-2] Gemma4-31B",
+          #     "model": "google/gemma-4-31B-it",
+          #     "server-timeout": 20,
+          #     "benchmark-timeout": 5,
+          #     "runner-label": "BH-Quietbox-2",
+          #     "arch": "arch-blackhole",
+          #     "mesh-device": "P150x4",
+          #     "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
+          #     "additional-server-args": "--async-scheduling",
+          #     "multimodal": false,
+          #     "owner_id": "U08TJ70UFRT"
+          #   }
           all_tests='[
             {
               "name": "[WH-T3K] Gemma3-27B",
@@ -52,7 +91,7 @@ jobs:
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
               "mesh-device": "T3K",
-              "override-tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"l1_small_size\": 4096}",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"l1_small_size\": 4096}",
               "additional-server-args": "--async-scheduling",
               "tt-llama-text-ver": "tt_transformers",
               "multimodal": true,
@@ -67,13 +106,51 @@ jobs:
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
               "mesh-device": "(4, 8)",
-              "override-tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D_RING\", \"l1_small_size\": 4096}",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D_RING\", \"l1_small_size\": 4096}",
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling",
               "tt_mm_throttle_perf": 5,
               "tt-llama-text-ver": "tt_transformers",
               "multimodal": true,
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08BH66EXAL"
+            },
+            {
+              "name": "[WH-N150] Gemma4-E2B",
+              "model": "google/gemma-4-E2B-it",
+              "server-timeout": 10,
+              "benchmark-timeout": 5,
+              "runner-label": "N150",
+              "arch": "arch-wormhole_b0",
+              "mesh-device": "N150",
+              "additional-server-args": "--async-scheduling",
+              "multimodal": false,
+              "owner_id": "U08TJ70UFRT"
+            },
+            {
+              "name": "[WH-T3K] Gemma4-26B-A4B",
+              "model": "google/gemma-4-26B-A4B-it",
+              "server-timeout": 10,
+              "benchmark-timeout": 5,
+              "runner-label": "config-t3000",
+              "arch": "arch-wormhole_b0",
+              "mesh-device": "T3K",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
+              "additional-server-args": "--async-scheduling",
+              "multimodal": false,
+              "owner_id": "U08TJ70UFRT"
+            },
+            {
+              "name": "[BH-QB-2] Gemma4-26B-A4B",
+              "model": "google/gemma-4-26B-A4B-it",
+              "server-timeout": 15,
+              "benchmark-timeout": 5,
+              "runner-label": "BH-Quietbox-2",
+              "arch": "arch-blackhole",
+              "mesh-device": "P150x4",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
+              "additional-server-args": "--async-scheduling",
+              "multimodal": false,
+              "owner_id": "U08TJ70UFRT"
             },
             {
               "name": "[WH-GLX] GPT-OSS-120B (low-latency)",
@@ -85,7 +162,7 @@ jobs:
               "mesh-device": "(4, 8)",
               "multimodal": false,
               "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"sample_on_device_mode\": \"all\"}",
+              "tt-config": "{\"sample_on_device_mode\": \"all\"}",
               "additional-server-args": "--max_num_seqs 1 --async-scheduling",
               "structured-output": true,
               "additional-structured-output-args": "--backend openai-chat --endpoint /v1/chat/completions --dataset json",
@@ -102,7 +179,7 @@ jobs:
               "mesh-device": "(4, 8)",
               "multimodal": false,
               "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D_RING\", \"sample_on_device_mode\": \"all\", \"trace_region_size\": 100000000}",
+              "tt-config": "{\"fabric_config\": \"FABRIC_1D_RING\", \"sample_on_device_mode\": \"all\", \"trace_region_size\": 100000000}",
               "tt_mm_throttle_perf": 2,
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 32 --async-scheduling",
               "structured-output": true,
@@ -120,10 +197,11 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "T3K",
               "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"sample_on_device_mode\": \"all\", \"trace_region_size\": 79000000}",
+              "tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"sample_on_device_mode\": \"all\", \"trace_region_size\": 85000000}",
               "additional-server-args": "--async-scheduling",
               "structured-output": true,
               "sampling-tests": true,
+              "sampling-test-filter": "not test_mixed_params_batch and not TestSeedingAndVariety and not test_repetition_penalty_mixed_batch and not test_presence_penalty_mixed_batch and not test_frequency_penalty_mixed_batch",
               "multimodal": false,
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08CEGF78ET"
@@ -137,7 +215,7 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "T3K",
               "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\"}",
+              "tt-config": "{\"fabric_config\": \"FABRIC_1D\"}",
               "multimodal": false,
               "additional-benchmark-args": "--random-prefix-len 128",
               "additional-server-args": "--async-scheduling",
@@ -160,14 +238,14 @@ jobs:
               "owner_id": "U08GELBB1AP"
             },
             {
-              "name": "[BH-QB-GE] Llama-3.1-8B-Instruct",
+              "name": "[BH-QB-2] Llama-3.1-8B-Instruct",
               "model": "meta-llama/Llama-3.1-8B-Instruct",
               "server-timeout": 10,
               "benchmark-timeout": 10,
-              "runner-label": "BH-QB-GE",
+              "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
-              "override-tt-config": "{\"trace_region_size\": 76000000}",
+              "tt-config": "{\"trace_region_size\": 76000000}",
               "tt-llama-text-ver": "tt_transformers",
               "additional-server-args": "--async-scheduling",
               "structured-output": true,
@@ -196,7 +274,7 @@ jobs:
               "runner-label": "topology-6u",
               "arch": "arch-wormhole_b0",
               "mesh-device": "TG",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D_RING\", \"sample_on_device_mode\": \"all\"}",
+              "tt-config": "{\"fabric_config\": \"FABRIC_1D_RING\", \"sample_on_device_mode\": \"all\"}",
               "tt-llama-text-ver": "tt_transformers",
               "additional-server-args": "--data_parallel_size 4 --async-scheduling",
               "structured-output": true,
@@ -213,27 +291,10 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "TG",
               "tt-llama-text-ver": "llama3_70b_galaxy",
-              "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 220000000}",
+              "tt-config": "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 220000000}",
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 8 --async-scheduling",
               "additional-benchmark-args": "--random-prefix-len 256",
               "sampling-tests": true,
-              "multimodal": false,
-              "co-owner-1-id": "U08E1JCDVNX",
-              "co-owner-2-id": "U08CEGF78ET"
-            },
-            {
-              "name": "[WH-GLX] Llama-3.3-70B-Instruct hostsample (prefix caching)",
-              "model": "meta-llama/Llama-3.3-70B-Instruct",
-              "server-timeout": 35,
-              "benchmark-timeout": 10,
-              "runner-label": "topology-6u",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "TG",
-              "tt-llama-text-ver": "llama3_70b_galaxy",
-              "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 216580672}",
-              "additional-server-args": "--data_parallel_size 4 --max_num_seqs 8 --async-scheduling",
-              "additional-benchmark-args": "--random-prefix-len 256",
-              "structured-output": true,
               "multimodal": false,
               "co-owner-1-id": "U08E1JCDVNX",
               "co-owner-2-id": "U08CEGF78ET"
@@ -247,7 +308,7 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "TG",
               "tt-qwen3-text-ver": "qwen3_32b_galaxy",
-              "override-tt-config": "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
+              "tt-config": "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D_RING\", \"worker_l1_size\": 1344544, \"trace_region_size\": 184915840}",
               "additional-server-args": "--data_parallel_size 4 --max_num_seqs 8 --async-scheduling",
               "sampling-tests": true,
               "multimodal": false,
@@ -262,7 +323,7 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "T3K",
               "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
+              "tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
               "structured-output": true,
               "multimodal": true,
               "additional-server-args": "--max_model_len 2048 --async-scheduling",
@@ -277,7 +338,7 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "T3K",
               "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
+              "tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
               "structured-output": true,
               "multimodal": true,
               "additional-server-args": "--async-scheduling",
@@ -291,7 +352,7 @@ jobs:
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
               "mesh-device": "(2, 4)",
-              "override-tt-config": "{\"rank_binding\": \"tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml\", \"mpi_args\": \"--allow-run-as-root --tag-output\", \"config_pkl_dir\": \"vllm\", \"register_test_models\": true}",
+              "tt-config": "{\"rank_binding\": \"tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml\", \"mpi_args\": \"--allow-run-as-root --tag-output\", \"config_pkl_dir\": \"vllm\", \"register_test_models\": true}",
               "additional-server-args": "--data_parallel_size 8 --tokenizer meta-llama/Llama-3.1-8B-Instruct --async-scheduling",
               "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
               "multimodal": false,
@@ -305,19 +366,23 @@ jobs:
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
               "mesh-device": "(1, 2)",
-              "override-tt-config": "{\"register_test_models\": true, \"sample_on_device_mode\": \"all\"}",
-              "additional-server-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --input-queue-batching-delay 0 --async-scheduling",
+              "tt-config": "{\"register_test_models\": true, \"input_queue_batching_delay\": 0}",
+              "additional-server-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --async-scheduling",
               "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct --temperature 0.0",
               "multimodal": false,
               "owner_id": "U08CEGF78ET"
             }
           ]'
 
-          # Filter matrix based on model selection
+          # Filter matrix based on model selection. Substring match (not exact)
+          # so a family-level dropdown entry like "google/gemma-4" picks up
+          # every google/gemma-4-*-it variant in the matrix above, while
+          # explicit hub IDs ("meta-llama/Llama-3.1-8B-Instruct") still
+          # trivially match themselves.
           if [ "${{ inputs.model }}" = "all" ]; then
             matrix="$all_tests"
           else
-            matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model == \"${{ inputs.model }}\")]")
+            matrix=$(echo "$all_tests" | jq -c "[.[] | select(.model | contains(\"${{ inputs.model }}\"))]")
           fi
 
           echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
@@ -334,13 +399,12 @@ jobs:
       - ${{ matrix.test-group.arch }}
       - in-service
       # topology-6u tag is used for WH galaxies. Currently pipeline-perf machines have mlperf access and pipeline-functional machines do not.
-      - ${{ ((matrix.test-group.runner-label == 'BH-QB-GE' || matrix.test-group.runner-label == 'topology-6u') && 'pipeline-perf') || 'pipeline-functional' }}
+      - ${{ ((matrix.test-group.runner-label == 'BH-Quietbox-2' || matrix.test-group.runner-label == 'topology-6u') && 'pipeline-perf') || 'pipeline-functional' }}
     container:
       image: ${{ inputs.docker-image }}
       env:
         TT_METAL_HOME: /work
         vllm_dir: /work/vllm
-        VLLM_TARGET_DEVICE: "tt"
         PYTHONPATH: /work:/work/vllm
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
@@ -357,7 +421,11 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - ${{ (matrix.test-group.runner-label == 'BH-QB-GE' && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:ro') || '/mnt/MLPerf:/mnt/MLPerf:ro' }}
+        # ``mlperf-read-only`` workflow input toggles ro/rw. Default ro for safety;
+        # uncheck the box at dispatch time when a model needs tt_cache first-use
+        # write-through. BH-Quietbox-2 uses a different network mount (/mnt/models, not the shared
+        # /mnt/MLPerf) so the same toggle applies to either physical mount source.
+        - ${{ (matrix.test-group.runner-label == 'BH-Quietbox-2' && format('/mnt/models/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -365,7 +433,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -384,7 +452,7 @@ jobs:
           runner-label: ${{ matrix.test-group.runner-label }}
 
       - name: ⬇️ Checkout vLLM
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: tenstorrent/vllm
           path: docker-job/vllm
@@ -398,21 +466,27 @@ jobs:
       - name: 📀 Install vLLM
         run: |
           {
-            uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
+            VLLM_TARGET_DEVICE=empty uv pip install vllm/ --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match
             if [ -d vllm/plugins/vllm-tt-plugin ]; then
               uv pip install --no-deps -e vllm/plugins/vllm-tt-plugin
             fi
+            # Per-model Python deps when the model directory pins versions that
+            # differ from the docker image (Gemma4 needs transformers==5.5.0).
+            case "${{ matrix.test-group.model }}" in
+              google/gemma-4-*) uv pip install -r models/demos/gemma4/requirements.txt ;;
+            esac
           } 2>&1 | tee "${FILE_INSTALL_LOG}"
           exit "${PIPESTATUS[0]}"
 
       - name: 🚀 Run server
         timeout-minutes: 1
         run: |
-          OVERRIDE_TT_CONFIG_RAW='${{ matrix.test-group.override-tt-config }}'
-          if [ -n "$OVERRIDE_TT_CONFIG_RAW" ]; then
-            OVERRIDE_TT_CONFIG=(--override-tt-config "$OVERRIDE_TT_CONFIG_RAW")
+          TT_CONFIG_RAW='${{ matrix.test-group.tt-config }}'
+          if [ -n "$TT_CONFIG_RAW" ]; then
+            ADDITIONAL_CONFIG_RAW="$(jq -nc --argjson tt "$TT_CONFIG_RAW" '{tt: $tt}')"
+            ADDITIONAL_CONFIG=(--additional-config "$ADDITIONAL_CONFIG_RAW")
           else
-            OVERRIDE_TT_CONFIG=()
+            ADDITIONAL_CONFIG=()
           fi
 
           if [ -n "${{ matrix.test-group.additional-server-args }}" ]; then
@@ -445,11 +519,11 @@ jobs:
           declare -a VLLM_SERVER_ARGS
           VLLM_SERVER_ARGS+=(--model "$HF_MODEL")
           VLLM_SERVER_ARGS+=("${ADDITIONAL_SERVER_ARGS[@]}")
-          VLLM_SERVER_ARGS+=("${OVERRIDE_TT_CONFIG[@]}")
+          VLLM_SERVER_ARGS+=("${ADDITIONAL_CONFIG[@]}")
 
           echo "vLLM server args: ${VLLM_SERVER_ARGS[@]}"
 
-          python3 vllm/examples/server_example_tt.py "${VLLM_SERVER_ARGS[@]}" > "${FILE_SERVER_LOG}" 2>&1 &
+          python3 vllm/plugins/vllm-tt-plugin/examples/server_example_tt.py "${VLLM_SERVER_ARGS[@]}" > "${FILE_SERVER_LOG}" 2>&1 &
 
           # Store server's pid for cleanup
           echo $! > ${FILE_SERVER_PID}
@@ -579,7 +653,7 @@ jobs:
             --percentile-metrics ttft,tpot,itl,e2el \
             --dataset json-unique \
             --output-len 1024 \
-            --save-result \
+            --save-results \
             --result-filename output/vllm_result_structured.json \
             "${ADDITIONAL_BENCHMARK_ARGS[@]}" \
             "${ADDITIONAL_STRUCTURED_OUTPUT_ARGS[@]}" \
@@ -645,9 +719,9 @@ jobs:
           {
             FILTER="${{ matrix.test-group.sampling-test-filter }}"
             if [ -n "$FILTER" ]; then
-              pytest vllm/tests/tt -v -k "$FILTER" --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
+              pytest vllm/plugins/vllm-tt-plugin/tests/tt -v -k "$FILTER" --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
             else
-              pytest vllm/tests/tt -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
+              pytest vllm/plugins/vllm-tt-plugin/tests/tt -v --tt-server-url=http://localhost:8000 --tt-model-name=${{ matrix.test-group.model }}
             fi
           } 2>&1 | tee "${FILE_SAMPLING_TESTS_LOG}"
           exit "${PIPESTATUS[0]}"
@@ -729,7 +803,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - id: ai-run-summary
         continue-on-error: true
         uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main

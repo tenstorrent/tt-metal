@@ -47,6 +47,11 @@ verify_llama_dir_() {
     if [ -z "${LLAMA_DIR:-}" ]; then
       echo "LLAMA_DIR environment variable not set. Checking for HF_MODEL and TT_CACHE_PATH..."
 
+      if [ -n "${HF_HOME:-}" ] && [ -d "$HF_HOME" ] && [ "$(ls -A "$HF_HOME")" ]; then
+        echo "[upstream-tests] HF_HOME is set to $HF_HOME and exists, continuing"
+        return 0
+      fi
+
       # Check if both HF_MODEL and TT_CACHE_PATH are set
       if [ -z "${HF_MODEL:-}" ] || [ -z "${TT_CACHE_PATH:-}" ]; then
         echo "Error: HF_MODEL and TT_CACHE_PATH environment variables not detected. Please set these environment variables to tell the tests where to find the downloaded Llama weights." >&2

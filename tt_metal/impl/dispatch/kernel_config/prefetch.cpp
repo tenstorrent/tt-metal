@@ -65,6 +65,8 @@ PrefetchKernel::PrefetchKernel(
     static_config_.is_d_variant = d_variant;
     uint16_t channel = descriptor.cluster().get_assigned_channel_for_device(device_id);
 
+    static_config_.dispatch_telemetry_disabled = descriptor.rtoptions().get_dispatch_telemetry_disabled();
+
     DispatchWorkerType type = PREFETCH;
     if (h_variant && d_variant) {
         this->logical_core_ = dispatch_core_manager.prefetcher_core(device_id, channel, cq_id);
@@ -94,6 +96,8 @@ void PrefetchKernel::GenerateStaticConfigs() {
     static_config_.fabric_header_rb_entries = tt::tt_metal::DispatchSettings::FABRIC_HEADER_RB_ENTRIES;
     static_config_.my_fabric_sync_status_addr =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_SYNC_STATUS);
+    static_config_.dispatch_telemetry_addr =
+        my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_TELEMETRY);
 
     if (static_config_.is_h_variant.value() && this->static_config_.is_d_variant.value()) {
         bool is_mock = descriptor_.cluster().is_mock_or_emulated();
@@ -502,6 +506,8 @@ void PrefetchKernel::CreateKernel() {
         {"FABRIC_HEADER_RB_BASE", std::to_string(static_config_.fabric_header_rb_base.value())},
         {"FABRIC_HEADER_RB_ENTRIES", std::to_string(static_config_.fabric_header_rb_entries.value())},
         {"MY_FABRIC_SYNC_STATUS_ADDR", std::to_string(static_config_.my_fabric_sync_status_addr.value())},
+        {"DISPATCH_TELEMETRY_ADDR", std::to_string(static_config_.dispatch_telemetry_addr.value())},
+        {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},
 
         {"FABRIC_MUX_X", std::to_string(dependent_config_.fabric_mux_client_config.virtual_x.value_or(0))},
         {"FABRIC_MUX_Y", std::to_string(dependent_config_.fabric_mux_client_config.virtual_y.value_or(0))},
@@ -537,6 +543,9 @@ void PrefetchKernel::CreateKernel() {
         {"IS_D_VARIANT", std::to_string(static_config_.is_d_variant.value())},
         {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},
     };
+
+    const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
+    defines["PREFETCH_Q_ENTRY_BITS"] = std::to_string(my_dispatch_constants.prefetch_q_entry_size_bytes() * 8);
 
     if (!is_hd()) {
         defines["FABRIC_RELAY"] = "1";
@@ -576,7 +585,9 @@ void PrefetchKernel::ConfigureCore() {
         const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();
-        std::vector<uint32_t> prefetch_q(my_dispatch_constants.prefetch_q_entries(), 0);
+        const uint32_t prefetch_q_bytes = my_dispatch_constants.prefetch_q_size();
+        TT_ASSERT(prefetch_q_bytes % sizeof(uint32_t) == 0);
+        std::vector<uint32_t> prefetch_q(prefetch_q_bytes / sizeof(uint32_t), 0);
         uint32_t prefetch_q_base =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
         std::vector<uint32_t> prefetch_q_rd_ptr_addr_data = {

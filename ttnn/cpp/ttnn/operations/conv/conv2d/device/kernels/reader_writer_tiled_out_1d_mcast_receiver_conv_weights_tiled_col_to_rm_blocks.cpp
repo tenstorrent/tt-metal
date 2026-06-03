@@ -56,7 +56,7 @@ void kernel_main() {
     }
 
     // Experimental API objects
-    experimental::Noc noc;
+    Noc noc;
 
     if constexpr (split_reader_enabled) {
         if constexpr (needs_act_block_zero_out) {
@@ -67,8 +67,8 @@ void kernel_main() {
     // mcast args
     const uint32_t weights_mcast_sender_noc_x = get_arg_val<uint32_t>(i++);
     const uint32_t weights_mcast_sender_noc_y = get_arg_val<uint32_t>(i++);
-    experimental::Semaphore<> weights_mcast_sender_sem(get_arg_val<uint32_t>(i++));
-    experimental::Semaphore<> weights_mcast_receiver_sem(get_arg_val<uint32_t>(i++));
+    Semaphore<> weights_mcast_sender_sem(get_arg_val<uint32_t>(i++));
+    Semaphore<> weights_mcast_receiver_sem(get_arg_val<uint32_t>(i++));
     experimental::CB cb_weight_obj(cb_id_weight);
     experimental::CB cb_bias_obj(bias_cb_id);
     experimental::CB cb_act_second_obj(cb_id_act_second_reader);

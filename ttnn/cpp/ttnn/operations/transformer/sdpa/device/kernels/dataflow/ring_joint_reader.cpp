@@ -5,8 +5,120 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "dataflow_common.hpp"
+#include "chunked_prefill_utils.hpp"
 #include "chain_link.hpp"
 #include "fused_op_receiver.hpp"
+
+template <bool has_joint_inputs, uint32_t joint_tensor_args_offset>
+constexpr uint32_t get_post_tensor_args_offset() {
+    if constexpr (has_joint_inputs) {
+        constexpr auto joint_q_args = TensorAccessorArgs<joint_tensor_args_offset>();
+        constexpr auto joint_k_args = TensorAccessorArgs<joint_q_args.next_compile_time_args_offset()>();
+        constexpr auto joint_v_args = TensorAccessorArgs<joint_k_args.next_compile_time_args_offset()>();
+        return joint_v_args.next_compile_time_args_offset();
+    } else {
+        return joint_tensor_args_offset;
+    }
+}
+
+template <
+    bool has_joint_k,
+    uint32_t joint_tensor_args_offset,
+    typename LocalKGenerator,
+    typename GatheredKGenerator,
+    typename JointInputTileLogical,
+    typename FetchK>
+inline void fetch_k_from_source(
+    bool kv_chunk_is_joint,
+    uint32_t ring_iter,
+    uint32_t joint_k_addr,
+    const LocalKGenerator& local_k_generator,
+    const GatheredKGenerator& gathered_k_generator,
+    const JointInputTileLogical& joint_input_tile_logical,
+    const FetchK& fetch_k) {
+    if constexpr (has_joint_k) {
+        if (kv_chunk_is_joint) {
+            constexpr auto joint_q_args = TensorAccessorArgs<joint_tensor_args_offset>();
+            constexpr auto joint_k_args = TensorAccessorArgs<joint_q_args.next_compile_time_args_offset()>();
+            const auto joint_k_reader = TensorAccessor(joint_k_args, joint_k_addr);
+            const auto joint_k_generator = PaddedAddrGenerator(joint_k_reader, joint_input_tile_logical);
+            fetch_k(joint_k_generator);
+        } else if (ring_iter == 0) {
+            fetch_k(local_k_generator);
+        } else {
+            fetch_k(gathered_k_generator);
+        }
+    } else {
+        if (ring_iter == 0) {
+            fetch_k(local_k_generator);
+        } else {
+            fetch_k(gathered_k_generator);
+        }
+    }
+}
+
+template <
+    bool has_joint_q,
+    uint32_t joint_tensor_args_offset,
+    typename QGenerator,
+    typename JointInputTileLogical,
+    typename ReadQ>
+inline void read_q_from_source(
+    bool is_joint_q,
+    uint32_t joint_q_addr,
+    const QGenerator& q_generator,
+    const JointInputTileLogical& joint_input_tile_logical,
+    const ReadQ& read_q) {
+    if constexpr (has_joint_q) {
+        if (is_joint_q) {
+            constexpr auto joint_q_args = TensorAccessorArgs<joint_tensor_args_offset>();
+            const auto joint_q_reader = TensorAccessor(joint_q_args, joint_q_addr);
+            const auto joint_q_generator = PaddedAddrGenerator(joint_q_reader, joint_input_tile_logical);
+            read_q(joint_q_generator);
+        } else {
+            read_q(q_generator);
+        }
+    } else {
+        read_q(q_generator);
+    }
+}
+
+template <
+    bool has_joint_k,
+    uint32_t joint_tensor_args_offset,
+    typename LocalVGenerator,
+    typename GatheredVGenerator,
+    typename JointInputTileLogical,
+    typename FetchV>
+inline void fetch_v_from_source(
+    bool kv_chunk_is_joint,
+    uint32_t ring_iter,
+    uint32_t joint_v_addr,
+    const LocalVGenerator& local_v_generator,
+    const GatheredVGenerator& gathered_v_generator,
+    const JointInputTileLogical& joint_input_tile_logical,
+    const FetchV& fetch_v) {
+    if constexpr (has_joint_k) {
+        if (kv_chunk_is_joint) {
+            constexpr auto joint_q_args = TensorAccessorArgs<joint_tensor_args_offset>();
+            constexpr auto joint_k_args = TensorAccessorArgs<joint_q_args.next_compile_time_args_offset()>();
+            constexpr auto joint_v_args = TensorAccessorArgs<joint_k_args.next_compile_time_args_offset()>();
+            const auto joint_v_reader = TensorAccessor(joint_v_args, joint_v_addr);
+            const auto joint_v_generator = PaddedAddrGenerator(joint_v_reader, joint_input_tile_logical);
+            fetch_v(joint_v_generator);
+        } else if (ring_iter == 0) {
+            fetch_v(local_v_generator);
+        } else {
+            fetch_v(gathered_v_generator);
+        }
+    } else {
+        if (ring_iter == 0) {
+            fetch_v(local_v_generator);
+        } else {
+            fetch_v(gathered_v_generator);
+        }
+    }
+}
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -19,10 +131,11 @@ void kernel_main() {
     constexpr uint32_t vDHt = get_compile_time_arg_val(4);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(6);
-    constexpr uint32_t local_padded_N = get_compile_time_arg_val(7);
-    constexpr uint32_t local_padded_Nt = get_compile_time_arg_val(8);
+    constexpr uint32_t q_local_padded_Nt = get_compile_time_arg_val(7);
+    constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(8);
     constexpr uint32_t padded_Nt = get_compile_time_arg_val(9);
-    constexpr uint32_t logical_n = get_compile_time_arg_val(10);
+    // Slot 10: reader-unused (writer/compute consume it for constexpr mask-CB sizing).
+    constexpr uint32_t logical_n [[maybe_unused]] = get_compile_time_arg_val(10);
     constexpr uint32_t logical_nt = get_compile_time_arg_val(11);
     constexpr uint32_t Lt = get_compile_time_arg_val(12);
     constexpr uint32_t L = get_compile_time_arg_val(13);
@@ -36,16 +149,28 @@ void kernel_main() {
     constexpr uint32_t is_causal = get_compile_time_arg_val(21);
     constexpr uint32_t is_balanced = get_compile_time_arg_val(22);
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(23) == 1;
+    // Reader's slot-24 carries chunked_enabled.
+    constexpr bool chunked_enabled = get_compile_time_arg_val(24) == 1;
     constexpr uint32_t num_q_readers = get_compile_time_arg_val(25);
+    constexpr uint32_t chunk_size_t = get_compile_time_arg_val(26);
+    constexpr bool indexed_kv_cache = get_compile_time_arg_val(27) == 1;
+    constexpr bool kv_pad_rotation_enabled = get_compile_time_arg_val(28) == 1;
+    constexpr uint32_t active_ring_iter_mask = get_compile_time_arg_val(29);
 
-    constexpr auto q_args = TensorAccessorArgs<26>();
+    // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
+    // and dropped by the compiler, eliminating runtime ternaries and joint generator uses.
+    constexpr bool has_joint_q = num_joint_q_chunks > 0;
+    constexpr bool has_joint_k = num_joint_k_chunks > 0;
+    constexpr bool has_joint_inputs = has_joint_q || has_joint_k;
+
+    constexpr auto q_args = TensorAccessorArgs<30>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
     constexpr auto gathered_v_args = TensorAccessorArgs<gathered_k_args.next_compile_time_args_offset()>();
-    constexpr auto joint_q_args = TensorAccessorArgs<gathered_v_args.next_compile_time_args_offset()>();
-    constexpr auto joint_k_args = TensorAccessorArgs<joint_q_args.next_compile_time_args_offset()>();
-    constexpr auto joint_v_args = TensorAccessorArgs<joint_k_args.next_compile_time_args_offset()>();
+    constexpr uint32_t joint_tensor_args_offset = gathered_v_args.next_compile_time_args_offset();
+    constexpr uint32_t post_tensor_args_offset =
+        get_post_tensor_args_offset<has_joint_inputs, joint_tensor_args_offset>();
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -53,11 +178,17 @@ void kernel_main() {
     const uint32_t v_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t gathered_k_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t gathered_v_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t joint_q_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t joint_k_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t joint_v_addr = get_arg_val<uint32_t>(argidx++);
+    uint32_t joint_q_addr = 0;
+    uint32_t joint_k_addr = 0;
+    uint32_t joint_v_addr = 0;
+    if constexpr (has_joint_inputs) {
+        joint_q_addr = get_arg_val<uint32_t>(argidx++);
+        joint_k_addr = get_arg_val<uint32_t>(argidx++);
+        joint_v_addr = get_arg_val<uint32_t>(argidx++);
+    }
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t cache_batch_idx = get_arg_val<uint32_t>(argidx++);
     const uint32_t q_per_core = global_q_end - global_q_start;
 
     // Head chain runtime args (always present)
@@ -79,13 +210,10 @@ void kernel_main() {
 
     // Compile-time semaphore ids and chain flags are appended after all TensorAccessorArgs()
     // Head chain semaphores (head-level chain, always built)
-    uint32_t head_sender_semaphore_addr =
-        get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset()));
-    uint32_t head_receiver_semaphore_addr =
-        get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 1));
-    uint32_t head_valid_semaphore_addr =
-        get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 2));
-    constexpr bool head_mcast_enabled = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 3) == 1;
+    uint32_t head_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(post_tensor_args_offset));
+    uint32_t head_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(post_tensor_args_offset + 1));
+    uint32_t head_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(post_tensor_args_offset + 2));
+    constexpr bool head_mcast_enabled = get_compile_time_arg_val(post_tensor_args_offset + 3) == 1;
 
     // Batch chain semaphores (only present when k_uses_batch_chain / NHK == 1)
     // Initialize to 0; will be overwritten if k_uses_batch_chain
@@ -96,25 +224,23 @@ void kernel_main() {
     // batch_mcast_enabled: read from compile-time args if present, else false (for template instantiation)
     constexpr bool batch_mcast_enabled = []() {
         if constexpr (k_uses_batch_chain) {
-            return get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 7) == 1;
+            return get_compile_time_arg_val(post_tensor_args_offset + 7) == 1;
         }
         return false;
     }();
 
     if constexpr (k_uses_batch_chain) {
-        batch_sender_semaphore_addr =
-            get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 4));
-        batch_receiver_semaphore_addr =
-            get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 5));
-        batch_valid_semaphore_addr =
-            get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 6));
+        batch_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(post_tensor_args_offset + 4));
+        batch_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(post_tensor_args_offset + 5));
+        batch_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(post_tensor_args_offset + 6));
     }
 
-    // TODO: CB indices below are hardcoded and duplicated from the program factory.
-    // They should be passed as compile-time args so the factory is the single source of truth.
-    constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
-    constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
-    constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
+    constexpr uint32_t head_chain_arg_count = 4;
+    constexpr uint32_t batch_chain_arg_count = k_uses_batch_chain ? 4 : 0;
+    constexpr uint32_t cb_arg_offset = post_tensor_args_offset + head_chain_arg_count + batch_chain_arg_count;
+    constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
+    constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
+    constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -195,15 +321,13 @@ void kernel_main() {
     const auto local_v_reader = TensorAccessor(v_args, v_addr);
     const auto gathered_k_reader = TensorAccessor(gathered_k_args, gathered_k_addr);
     const auto gathered_v_reader = TensorAccessor(gathered_v_args, gathered_v_addr);
-    const auto joint_q_reader = TensorAccessor(joint_q_args, joint_q_addr);
-    const auto joint_k_reader = TensorAccessor(joint_k_args, joint_k_addr);
-    const auto joint_v_reader = TensorAccessor(joint_v_args, joint_v_addr);
 
-    const auto input_q_tile_logical = TensorTileShape(B, NH, local_padded_Nt, DHt);
-    const auto input_k_tile_logical = TensorTileShape(B, NHK, local_padded_Nt, DHt);
-    const auto input_v_tile_logical = TensorTileShape(B, NH, local_padded_Nt, vDHt);
-    const auto gathered_k_input_tile_logical = TensorTileShape(B, NHK, padded_Nt, DHt);
-    const auto gathered_v_input_tile_logical = TensorTileShape(B, NH, padded_Nt, vDHt);
+    const uint32_t kv_batch_dim = indexed_kv_cache ? cache_batch_idx + 1 : B;
+    const auto input_q_tile_logical = TensorTileShape(B, NH, q_local_padded_Nt, DHt);
+    const auto input_k_tile_logical = TensorTileShape(kv_batch_dim, NHK, kv_local_padded_Nt, DHt);
+    const auto input_v_tile_logical = TensorTileShape(kv_batch_dim, NH, kv_local_padded_Nt, vDHt);
+    const auto gathered_k_input_tile_logical = TensorTileShape(kv_batch_dim, NHK, padded_Nt, DHt);
+    const auto gathered_v_input_tile_logical = TensorTileShape(kv_batch_dim, NH, padded_Nt, vDHt);
     const auto joint_input_tile_logical = TensorTileShape(B, NH, Lt, DHt);
 
     const auto q_generator = PaddedAddrGenerator(q_reader, input_q_tile_logical);
@@ -211,9 +335,6 @@ void kernel_main() {
     const auto local_v_generator = PaddedAddrGenerator(local_v_reader, input_v_tile_logical);
     const auto gathered_k_generator = PaddedAddrGenerator(gathered_k_reader, gathered_k_input_tile_logical);
     const auto gathered_v_generator = PaddedAddrGenerator(gathered_v_reader, gathered_v_input_tile_logical);
-    const auto joint_q_generator = PaddedAddrGenerator(joint_q_reader, joint_input_tile_logical);
-    const auto joint_k_generator = PaddedAddrGenerator(joint_k_reader, joint_input_tile_logical);
-    const auto joint_v_generator = PaddedAddrGenerator(joint_v_reader, joint_input_tile_logical);
 
     // Tracks whether Q has been pushed for q_per_core == 1 optimization.
     // When q_per_core == 1, Q is identical across ring iterations so we only push it once.
@@ -229,26 +350,33 @@ void kernel_main() {
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         // find out which is the latest ring_id that synchronized
         uint32_t ring_id = fused_op_receiver.get_next_ring_id_and_sync();
+        // Host precomputes which ring iterations have useful SDPA work; sync/ring-id sequencing
+        // still advances above so reader stays aligned with compute, writer, and all-gather.
+        if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
+            continue;
+        }
         // Iterate over KV blocks gathered on ring.
         // Only the last ring ID will append joint_K, joint_V to K, V.
         const bool do_joint_kv = ring_id == ring_size - 1;
-        const uint32_t num_kv_chunks = do_joint_kv ? num_local_k_chunks + num_joint_k_chunks : num_local_k_chunks;
-
-        const uint32_t global_n_tile_id = logical_n / tt::constants::TILE_HEIGHT;  // Floor division to get tile ID
-        const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
-        const bool ring_iter_processes_KV_chunks = ring_iter_kv_start_tile <= global_n_tile_id;
-
-        // In causal non balanced case when processing KV received from other devices:
-        // - skip over KV received from subsequent devices
-        // - do non-causal attention on the KV from preceding devices
-        const bool ring_iter_does_work = (ring_iter_processes_KV_chunks || (do_joint_kv && L != 0)) &&
-                                         !(is_causal && ring_index < ring_id && !is_balanced);
-
-        uint32_t KV_chunks_processed_in_iter = 0;
-        if (!ring_iter_does_work) {
-            continue;
+        uint32_t num_kv_chunks = num_local_k_chunks;
+        if constexpr (has_joint_k) {
+            if (do_joint_kv) {
+                num_kv_chunks += num_joint_k_chunks;
+            }
         }
 
+        uint32_t ring_iter_valid_kv_tiles = kv_local_padded_Nt;
+        if constexpr (!chunked_enabled) {
+            const uint32_t ring_iter_kv_start_tile = ring_id * kv_local_padded_Nt;
+            ring_iter_valid_kv_tiles = 0;
+            if (ring_iter_kv_start_tile < logical_nt) {
+                const uint32_t remaining_kv_tiles = logical_nt - ring_iter_kv_start_tile;
+                ring_iter_valid_kv_tiles =
+                    remaining_kv_tiles < kv_local_padded_Nt ? remaining_kv_tiles : kv_local_padded_Nt;
+            }
+        }
+
+        uint32_t KV_chunks_processed_in_iter = 0;
         uint32_t iter_num_kv_chunks = num_kv_chunks;
 
         // In causal balanced case processing KV received from other devices:
@@ -264,7 +392,7 @@ void kernel_main() {
             iter_num_kv_chunks /= 2;
             // Mirror compute's K-loop extension: include the straddle chunk so K/V tiles
             // for it get loaded. Compute -inf-masks its late-half columns via lw_mask.
-            using Straddle = KCausalStraddleInfo<local_padded_Nt, Sk_chunk_t>;
+            using Straddle = KCausalStraddleInfo<kv_local_padded_Nt, Sk_chunk_t>;
             if constexpr (Straddle::has_straddle) {
                 iter_num_kv_chunks = Straddle::straddle_chunk_id + 1;
             }
@@ -288,7 +416,7 @@ void kernel_main() {
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
             const auto q_row_start_tile = q_chunk * Sq_chunk_t;
-            const bool is_joint_q = q_chunk >= num_local_q_chunks;
+            const bool is_joint_q = has_joint_q ? (q_chunk >= num_local_q_chunks) : false;
 
             const bool balanced_skip_q = q_chunk < half_sequence && is_balanced && ring_index < ring_id;
 
@@ -301,17 +429,15 @@ void kernel_main() {
                 continue;
             }
 
-            Slice q_slice;
-            uint32_t q_end_seq_tile;
-            if (is_joint_q) {
-                // Get row index into the joint Q tensor
-                const uint32_t joint_q_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
-                q_slice = Slice(nb, nq, joint_q_row_start_tile, joint_q_row_start_tile + Sq_chunk_t, 0, DHt);
-                q_end_seq_tile = Lt;
-            } else {
-                // Index into the Q input tensor
-                q_slice = Slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
-                q_end_seq_tile = local_padded_Nt;
+            // Default to local Q tensor; override below for joint Q when applicable.
+            Slice q_slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
+            uint32_t q_end_seq_tile = q_local_padded_Nt;
+            if constexpr (has_joint_q) {
+                if (is_joint_q) {
+                    const uint32_t joint_q_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+                    q_slice = Slice(nb, nq, joint_q_row_start_tile, joint_q_row_start_tile + Sq_chunk_t, 0, DHt);
+                    q_end_seq_tile = Lt;
+                }
             }
 
             // Iteration counter for chain forwarding decisions
@@ -327,43 +453,48 @@ void kernel_main() {
                  * If this is the last ring ID, we will also read from joint KV.
                  * If this k chunk is in the spatial input and beyond the logical N, we will skip it.
                  */
-                const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
-                // Global index into the padded KV tensor
-                const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
-                const bool kv_chunk_is_beyond_logical_n = !kv_chunk_is_joint && (kv_global_start_tile >= logical_nt);
+                const bool kv_chunk_is_joint = has_joint_k ? (k_chunk >= num_local_k_chunks) : false;
+                const bool kv_chunk_is_beyond_logical_n =
+                    !kv_chunk_is_joint && !kv_chunk_starts_before_logical_end<
+                                              kv_pad_rotation_enabled,
+                                              chunked_enabled,
+                                              kv_local_padded_Nt,
+                                              chunk_size_t,
+                                              q_local_padded_Nt>(ring_id, k_chunk * Sk_chunk_t, logical_nt);
 
                 if (kv_chunk_is_beyond_logical_n) {
                     // This is a KV chunk on spatial input beyond the logical N, and not joint KV. Skip it.
                     continue;
                 }
 
+                // Default to local/gathered KV; override below for joint KV when applicable.
                 Slice k_slice;
                 Slice v_slice;
-                uint32_t
-                    end_seq_tile;  // further information to `read_block` to determine whether it should pad with zeros.
-
+                uint32_t k_end_seq_tile;
+                uint32_t v_end_seq_tile;
                 const uint32_t nk = nq / q_heads_per_k;
-                if (kv_chunk_is_joint) {
-                    const uint32_t joint_k_chunk = k_chunk - num_local_k_chunks;
-                    const uint32_t joint_k_row_start_tile = joint_k_chunk * Sk_chunk_t;
-
-                    k_slice = Slice(nb, nk, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
-                    v_slice = Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, vDHt);
-                    end_seq_tile = Lt;
+                const uint32_t kv_batch = indexed_kv_cache ? cache_batch_idx : nb;
+                if (ring_iter == 0) {
+                    const uint32_t local_k_start_tile = k_chunk * Sk_chunk_t;
+                    const uint32_t local_v_start_tile = k_chunk * Sk_chunk_t;
+                    k_slice = Slice(kv_batch, nk, local_k_start_tile, local_k_start_tile + Sk_chunk_t, 0, DHt);
+                    v_slice = Slice(kv_batch, nq, local_v_start_tile, local_v_start_tile + Sk_chunk_t, 0, vDHt);
+                    k_end_seq_tile = ring_iter_valid_kv_tiles;
+                    v_end_seq_tile = ring_iter_valid_kv_tiles;
                 } else {
-                    if (ring_iter == 0) {
-                        // Local KV
-                        const uint32_t local_k_row_start_tile = k_chunk * Sk_chunk_t;
-
-                        k_slice = Slice(nb, nk, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, DHt);
-                        v_slice = Slice(nb, nq, local_k_row_start_tile, local_k_row_start_tile + Sk_chunk_t, 0, vDHt);
-                        end_seq_tile = std::min(logical_nt, local_padded_Nt);
-                    } else {
-                        // Gathered KV
-                        const uint32_t gathered_kv_start_tile = ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
-                        k_slice = Slice(nb, nk, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
-                        v_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, vDHt);
-                        end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
+                    const uint32_t gathered_start_tile = ring_id * kv_local_padded_Nt + k_chunk * Sk_chunk_t;
+                    k_slice = Slice(kv_batch, nk, gathered_start_tile, gathered_start_tile + Sk_chunk_t, 0, DHt);
+                    v_slice = Slice(kv_batch, nq, gathered_start_tile, gathered_start_tile + Sk_chunk_t, 0, vDHt);
+                    k_end_seq_tile = ring_id * kv_local_padded_Nt + ring_iter_valid_kv_tiles;
+                    v_end_seq_tile = k_end_seq_tile;
+                }
+                if constexpr (has_joint_k) {
+                    if (kv_chunk_is_joint) {
+                        const uint32_t joint_k_row_start_tile = (k_chunk - num_local_k_chunks) * Sk_chunk_t;
+                        k_slice = Slice(nb, nk, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
+                        v_slice = Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, vDHt);
+                        k_end_seq_tile = Lt;
+                        v_end_seq_tile = Lt;
                     }
                 }
 
@@ -380,17 +511,20 @@ void kernel_main() {
                 if (k_chain.should_receive(nb, nq)) {
                     k_chain.receive();
                 } else {
-                    // Injector or non-participant: read K from DRAM
-                    // For padded iterations, injector still reads K to broadcast to receivers
-                    fetch_block(
-                        kv_chunk_is_joint ? joint_k_generator
-                                          : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
-                        k_slice,
-                        end_seq_tile,
-                        cb_k_start_address,
-                        k_tile_bytes,
-                        true /*transpose*/
-                    );
+                    // Injector or non-participant: read K from DRAM. Dispatch directly so
+                    // local and gathered tensors may use different accessor types.
+                    const auto fetch_k = [&](const auto& k_gen) {
+                        fetch_block(
+                            k_gen, k_slice, k_end_seq_tile, cb_k_start_address, k_tile_bytes, true /*transpose*/);
+                    };
+                    fetch_k_from_source<has_joint_k, joint_tensor_args_offset>(
+                        kv_chunk_is_joint,
+                        ring_iter,
+                        joint_k_addr,
+                        local_k_generator,
+                        gathered_k_generator,
+                        joint_input_tile_logical,
+                        fetch_k);
                 }
 
                 // Forward K chunk via chain (uses K's data size explicitly)
@@ -415,30 +549,34 @@ void kernel_main() {
                 // Placed after K forward so no outstanding NOC writes remain
                 // (noc_async_read_barrier inside subblock read would deadlock with in-flight writes).
                 if (k_chunk == 0 && need_q_read) {
-                    if constexpr (use_q_subblock_push) {
-                        for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
-                            const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
-                            const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
-                            Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
+                    const auto read_q = [&](const auto& q_gen) {
+                        if constexpr (use_q_subblock_push) {
+                            for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
+                                const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
+                                const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
+                                Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
+                                read_block(
+                                    q_gen,
+                                    q_sub_slice,
+                                    q_end_seq_tile,
+                                    cb_q_in,
+                                    q_tile_bytes,
+                                    false /*transpose*/,
+                                    q_barrier_threshold);
+                            }
+                        } else {
                             read_block(
-                                is_joint_q ? joint_q_generator : q_generator,
-                                q_sub_slice,
+                                q_gen,
+                                q_slice,
                                 q_end_seq_tile,
                                 cb_q_in,
                                 q_tile_bytes,
                                 false /*transpose*/,
                                 q_barrier_threshold);
                         }
-                    } else {
-                        read_block(
-                            is_joint_q ? joint_q_generator : q_generator,
-                            q_slice,
-                            q_end_seq_tile,
-                            cb_q_in,
-                            q_tile_bytes,
-                            false /*transpose*/,
-                            q_barrier_threshold);
-                    }
+                    };
+                    read_q_from_source<has_joint_q, joint_tensor_args_offset>(
+                        is_joint_q, joint_q_addr, q_generator, joint_input_tile_logical, read_q);
                     q_pushed = true;
                 }
 
@@ -448,15 +586,18 @@ void kernel_main() {
                 if (v_chain.should_receive(nb, nq)) {
                     v_chain.receive();
                 } else {
-                    fetch_block(
-                        kv_chunk_is_joint ? joint_v_generator
-                                          : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
-                        v_slice,
-                        end_seq_tile,
-                        cb_v_start_address,
-                        v_tile_bytes,
-                        false /*transpose*/
-                    );
+                    const auto fetch_v = [&](const auto& v_gen) {
+                        fetch_block(
+                            v_gen, v_slice, v_end_seq_tile, cb_v_start_address, v_tile_bytes, false /*transpose*/);
+                    };
+                    fetch_v_from_source<has_joint_k, joint_tensor_args_offset>(
+                        kv_chunk_is_joint,
+                        ring_iter,
+                        joint_v_addr,
+                        local_v_generator,
+                        gathered_v_generator,
+                        joint_input_tile_logical,
+                        fetch_v);
                 }
 
                 // Forward V to next core(s) before push_back — prevents compute from

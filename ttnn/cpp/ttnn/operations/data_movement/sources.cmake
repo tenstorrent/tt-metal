@@ -182,9 +182,6 @@ set(TTNN_OP_DATA_MOVEMENT_API_HEADERS
     concat/concat.hpp
     copy/copy.hpp
     copy/device/copy_device_operation.hpp
-    copy/device/copy_same_memory_config_program_factory.hpp
-    copy/device/copy_default_row_major_program_factory.hpp
-    copy/device/copy_default_tilized_program_factory.hpp
     copy/device/copy_device_operation_types.hpp
     fill_pad/fill_pad.hpp
     fill_pad/device/fill_pad_device_operation.hpp

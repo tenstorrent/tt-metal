@@ -14,11 +14,20 @@ from typing import Literal
 from loguru import logger
 from transformers import AutoTokenizer
 
-import ttnn
-from models.demos.deepseek_v3_b1.demo.mesh_device_context import open_mesh_device
-from models.demos.deepseek_v3_b1.demo.model_pipeline import ModelPipeline
-
 DEFAULT_TOKENIZER = "deepseek-ai/DeepSeek-R1-0528"
+SLOW_DISPATCH_ENV = "TT_METAL_SLOW_DISPATCH_MODE"
+HYBRID_ALLOCATOR_ENV = "TT_METAL_ALLOCATOR_MODE_HYBRID"
+
+
+def configure_runtime_env(*, enable_sram_hot_experts: bool) -> None:
+    """Set demo-required TT-Metal environment before TTNN/device initialization."""
+    if os.environ.get(SLOW_DISPATCH_ENV) != "1":
+        os.environ[SLOW_DISPATCH_ENV] = "1"
+        logger.info("Enabled {}=1 for the DeepSeek demo", SLOW_DISPATCH_ENV)
+
+    if enable_sram_hot_experts and os.environ.get(HYBRID_ALLOCATOR_ENV) != "1":
+        os.environ[HYBRID_ALLOCATOR_ENV] = "1"
+        logger.info("Enabled {}=1 for --enable-sram-hot-experts", HYBRID_ALLOCATOR_ENV)
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -29,6 +38,18 @@ def create_parser() -> argparse.ArgumentParser:
         type=int,
         default=128,
         help="Number of pipeline token iterations",
+    )
+    parser.add_argument(
+        "--repeat-generations",
+        type=int,
+        default=1,
+        help="Number of complete prompt+generation runs to execute sequentially on the same pipeline.",
+    )
+    parser.add_argument(
+        "--stop-at-eos",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Stop each generation at tokenizer EOS. Use --no-stop-at-eos for fixed-length stress runs.",
     )
     parser.add_argument(
         "--tokenizer",
@@ -82,6 +103,21 @@ def create_parser() -> argparse.ArgumentParser:
         help="Force all MoE stages to use this layer id (e.g. 3); default: use stage-dependent layer ids",
     )
     parser.add_argument(
+        "--bspm-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Model-specific BitSculpt BSPM directory, e.g. results/deepseek-r1-0528. "
+            "MoE layers look up layer_<id>/precision_eval/precision_map_<variant>_<budget>.bspm under this path."
+        ),
+    )
+    parser.add_argument(
+        "--bspm-budget",
+        type=float,
+        default=3.5,
+        help="BitSculpt bit budget per expert used in the BSPM filename (default: 3.5)",
+    )
+    parser.add_argument(
         "--num-slots",
         type=int,
         default=64,
@@ -98,7 +134,7 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help=(
             "Pin the highest-frequency routed experts to per-core L1 via "
-            "prepare_compressed_sram_slots. Requires TT_METAL_ALLOCATOR_MODE_HYBRID=1."
+            "prepare_compressed_sram_slots. Automatically enables TT_METAL_ALLOCATOR_MODE_HYBRID=1."
         ),
     )
     parser.add_argument(
@@ -106,6 +142,14 @@ def create_parser() -> argparse.ArgumentParser:
         type=int,
         default=64,
         help="Maximum number of SRAM-pinned hot experts per MoE layer (top-N by routing frequency).",
+    )
+    parser.add_argument(
+        "--enable-sram-bspm",
+        action="store_true",
+        help=(
+            "Use the BSPM precision map for SRAM hot expert weights too "
+            "(default: uniform BFP4). Requires --bspm-dir to be set."
+        ),
     )
     parser.add_argument(
         "--launch-only",
@@ -141,6 +185,13 @@ def create_parser() -> argparse.ArgumentParser:
             "this is omitted, defaults to deepseek."
         ),
     )
+    parser.add_argument(
+        "--enable-speculative-decode",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable speculative decode; use --no-enable-speculative-decode for base decode",
+    )
+
     return parser
 
 
@@ -152,6 +203,8 @@ def run_demo(
     *,
     prompt: str,
     max_new_tokens: int,
+    repeat_generations: int,
+    stop_at_eos: bool,
     tokenizer_name_or_path: str,
     weights_mode: Literal["synthetic", "real", "state_dict"] = "real",
     cache_path: Path | None = None,
@@ -167,14 +220,28 @@ def run_demo(
     top_k: int = 1,
     top_p: float = 1.0,
     temperature: float = 0.6,
+    enable_speculative_decode: bool = True,
     enable_sram_hot_experts: bool = False,
     sram_hot_experts_ceiling: int = 64,
+    bspm_dir: Path | None = None,
+    bspm_budget: float = 3.5,
+    enable_sram_bspm: bool = False,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
-    iterations = max_new_tokens
-    logger.info(f"Starting DeepSeek V3 B1 demo (iterations={iterations})")
+    configure_runtime_env(enable_sram_hot_experts=enable_sram_hot_experts)
 
-    with open_mesh_device() as mesh_device:
+    from models.demos.deepseek_v3_b1.demo.mesh_device_context import open_mesh_device
+    from models.demos.deepseek_v3_b1.demo.model_pipeline import ModelPipeline
+
+    iterations = max_new_tokens
+    logger.info(
+        "Starting DeepSeek V3 B1 demo (iterations={}, repeat_generations={}, stop_at_eos={})",
+        iterations,
+        repeat_generations,
+        stop_at_eos,
+    )
+
+    with open_mesh_device(enable_speculative_decode=enable_speculative_decode) as mesh_device:
         model_pipeline = ModelPipeline(
             mesh_device=mesh_device,
             weights_mode=weights_mode,
@@ -190,8 +257,12 @@ def run_demo(
             top_k=top_k,
             top_p=top_p,
             temperature=temperature,
+            enable_speculative_decode=enable_speculative_decode,
             enable_sram_hot_experts=enable_sram_hot_experts,
             sram_hot_experts_ceiling=sram_hot_experts_ceiling,
+            bspm_dir=bspm_dir,
+            bspm_budget=bspm_budget,
+            enable_sram_bspm=enable_sram_bspm,
         )
 
         my_mesh_id = mesh_device.get_system_mesh_id()
@@ -214,17 +285,30 @@ def run_demo(
                 raise RuntimeError("Chat template produced an empty prompt")
             logger.debug(f"Encoded prompt: {prompt_ids}")
 
-            logger.info("Running inference on prompt with {} tokens", len(prompt_ids))
-            generated_tokens = model_pipeline.run_inference(
-                prompt_token_ids=prompt_ids,
-                max_new_tokens=iterations,
-                eos_token_id=tokenizer.eos_token_id,
-                think_token_ids=[think_open_id[0], think_close_id[0]],
-                return_generated_tokens=True,
-            )
-            assert generated_tokens is not None
-            generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
-            logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
+            eos_token_id = tokenizer.eos_token_id if stop_at_eos else None
+            for repeat_idx in range(repeat_generations):
+                logger.info(
+                    "Running generation {}/{} on prompt with {} tokens",
+                    repeat_idx + 1,
+                    repeat_generations,
+                    len(prompt_ids),
+                )
+                generated_tokens = model_pipeline.run_inference(
+                    prompt_token_ids=prompt_ids,
+                    max_new_tokens=iterations,
+                    eos_token_id=eos_token_id,
+                    think_token_ids=[think_open_id[0], think_close_id[0]],
+                    return_generated_tokens=True,
+                )
+                assert generated_tokens is not None
+                generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
+                logger.info(
+                    "Generation {}/{} output ({} tokens): {}",
+                    repeat_idx + 1,
+                    repeat_generations,
+                    len(generated_tokens),
+                    generated_text,
+                )
 
         if launch_only and my_mesh_id == 0:
             # Keep process/pipeline alive until user interrupts
@@ -243,10 +327,11 @@ def run_demo(
 
 
 def main(argv: list[str] | None = None) -> int:
-    ttnn.init_distributed_context()
     parser = create_parser()
     args = parser.parse_args(argv)
 
+    if args.repeat_generations < 1:
+        parser.error("--repeat-generations must be >= 1")
     if args.weights == "real":
         if args.cache_path is None:
             parser.error("--cache-path is required when --weights real")
@@ -259,8 +344,11 @@ def main(argv: list[str] | None = None) -> int:
         if not index_path.is_file():
             parser.error(f"--model-path must contain model.safetensors.index.json (missing {index_path})")
 
-    if args.enable_sram_hot_experts and os.environ.get("TT_METAL_ALLOCATOR_MODE_HYBRID") != "1":
-        parser.error("--enable-sram-hot-experts requires TT_METAL_ALLOCATOR_MODE_HYBRID=1; export it before launching.")
+    configure_runtime_env(enable_sram_hot_experts=args.enable_sram_hot_experts)
+
+    import ttnn
+
+    ttnn.init_distributed_context()
 
     io_socket_descriptor_prefix = args.io_socket_descriptor_prefix
     if args.launch_only and io_socket_descriptor_prefix is None:
@@ -269,6 +357,8 @@ def main(argv: list[str] | None = None) -> int:
     run_demo(
         prompt=args.prompt,
         max_new_tokens=args.max_new_tokens,
+        repeat_generations=args.repeat_generations,
+        stop_at_eos=args.stop_at_eos,
         tokenizer_name_or_path=args.tokenizer,
         weights_mode=args.weights,
         cache_path=args.cache_path,
@@ -284,8 +374,12 @@ def main(argv: list[str] | None = None) -> int:
         top_k=args.top_k,
         top_p=args.top_p,
         temperature=args.temperature,
+        enable_speculative_decode=args.enable_speculative_decode,
         enable_sram_hot_experts=args.enable_sram_hot_experts,
         sram_hot_experts_ceiling=args.sram_hot_experts_ceiling,
+        bspm_dir=args.bspm_dir,
+        bspm_budget=args.bspm_budget,
+        enable_sram_bspm=args.enable_sram_bspm,
     )
     print(end="", file=sys.stdout, flush=True)
     return 0

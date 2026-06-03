@@ -22,6 +22,13 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+# Install clang-20 and ASan runtime (needed for ASan-instrumented package testing)
+RUN apt-get update && apt-get install -y wget gnupg && \
+    wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add - && \
+    echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-20 main" > /etc/apt/sources.list.d/llvm-20.list && \
+    apt-get update && apt-get install -y clang-20 libclang-rt-20-dev && \
+    rm -rf /var/lib/apt/lists/*
+
 # Install mpi-ulfm from the tenstorrent repository
 RUN set -eux; \
     apt-get update && \

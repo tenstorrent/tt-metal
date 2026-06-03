@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/tensor.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -21,11 +21,11 @@ void kernel_main() {
     const auto s = TensorAccessor(dst_args, dst_addr);
     uint32_t elements_per_page = page_size / sizeof(std::uint32_t);
 
-    experimental::Noc noc;
+    Noc noc;
 
     uint32_t page_idx = 0;
     for (uint32_t i = 0; i < num_loops; ++i) {
-        experimental::CoreLocalMem<std::uint32_t> src_l1(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
+        CoreLocalMem<std::uint32_t> src_l1(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
         eth_wait_for_bytes(max_buffer_size);
 
         for (uint32_t j = 0; j < pages_per_loop; ++j) {
@@ -38,7 +38,7 @@ void kernel_main() {
         eth_receiver_done();
     }
     if (remaining_bytes > 0) {
-        experimental::CoreLocalMem<std::uint32_t> src_l1(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
+        CoreLocalMem<std::uint32_t> src_l1(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
         eth_wait_for_bytes(remaining_bytes);
         for (uint32_t j = 0; j < remaining_pages; ++j) {
             noc.async_write(src_l1, s, page_size, {}, {.page_id = page_idx});

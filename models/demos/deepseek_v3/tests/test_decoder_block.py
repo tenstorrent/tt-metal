@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -28,6 +30,23 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_reference_with_attention,
     torch_cache_from_transformers_single_layer,
 )
+
+
+@contextmanager
+def _allow_quad_ring_repack_for_synthetic_weights(allow: bool):
+    if not allow:
+        yield
+        return
+
+    previous_value = os.environ.get("DEEPSEEK_V3_ALLOW_QUAD_RING_WEIGHT_REPACK")
+    os.environ["DEEPSEEK_V3_ALLOW_QUAD_RING_WEIGHT_REPACK"] = "1"
+    try:
+        yield
+    finally:
+        if previous_value is None:
+            os.environ.pop("DEEPSEEK_V3_ALLOW_QUAD_RING_WEIGHT_REPACK", None)
+        else:
+            os.environ["DEEPSEEK_V3_ALLOW_QUAD_RING_WEIGHT_REPACK"] = previous_value
 
 
 def generate_reference_io(
@@ -130,17 +149,19 @@ def run_test_forward_pass_decoder2d(
 
     is_real_weights = module_path is not None
     # Set up model config
-    weight_config = get_test_weight_config(
-        DecoderBlockClass,
-        hf_config_short,
-        (state_dict,),
-        cache_path,
-        mesh_device,
-        force_recalculate_weight_config,
-        test_name="test_decoder_block",
-        real_weights=is_real_weights,
-        layer_id=module_path,
-    )
+    allow_synthetic_quad_ring_repack = not is_real_weights and DecoderBlockClass is MoEDecoderBlock2D
+    with _allow_quad_ring_repack_for_synthetic_weights(allow_synthetic_quad_ring_repack):
+        weight_config = get_test_weight_config(
+            DecoderBlockClass,
+            hf_config_short,
+            (state_dict,),
+            cache_path,
+            mesh_device,
+            force_recalculate_weight_config,
+            test_name="test_decoder_block",
+            real_weights=is_real_weights,
+            layer_id=module_path,
+        )
     model_config = get_model_config(
         DecoderBlockClass,
         mode,
@@ -156,7 +177,7 @@ def run_test_forward_pass_decoder2d(
         ccl,
         mla_cache=paged_input_cache,
     )
-    model_shared_state = DecoderBlockClass.create_shared_state(hf_config_short, mesh_device)
+    model_shared_state = DecoderBlockClass.create_shared_state(hf_config_short, mesh_device, fabric_config)
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
     # Set up ttnn inputs
