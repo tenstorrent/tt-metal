@@ -32,13 +32,15 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
     abs_y = sfpi::abs(y);
     r = r * f + 1.0f;
 
+    // exclude special case: abs(-nan) == -nan
     v_if(abs_y >= 0.0f) {
         sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias);
         e += i;
+        // e < 255
         v_block {
-            // e < 255
             sfpi::vInt e_lt_255 = __builtin_rvtt_sfpiadd_i(e.get(), -255, sfpi::SFPIADD_MOD1_CC_LT0);
             y = sfpi::setexp(r, e);
+            // e < 1
             v_if(e_lt_255 < -254) { y = 0.0f; }
             v_endif;
         }
