@@ -58,12 +58,12 @@ struct CollectedSpecData {
     std::unordered_map<KernelSpecName, const KernelSpec*> kernel_by_name;
     std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_by_name;
     std::unordered_map<DFBSpecName, const RemoteDataflowBufferSpec*> remote_dfb_by_name;
-    std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
-    std::unordered_map<TensorParameterName, const TensorParameter*> tensor_parameter_by_name;
+    std::unordered_map<SemSpecName, const SemaphoreSpec*> semaphore_by_name;
+    std::unordered_map<TensorParamName, const TensorParameter*> tensor_parameter_by_name;
 
     // Tensor parameter usage (derived from kernel tensor bindings).
     // Tracks which kernels bind a given tensor parameter.
-    std::unordered_map<TensorParameterName, std::vector<const KernelSpec*>> tensor_parameter_users;
+    std::unordered_map<TensorParamName, std::vector<const KernelSpec*>> tensor_parameter_users;
 
     // DFB endpoint info (derived from kernel bindings).
     // Populated for both local and remote DFBs.
@@ -140,7 +140,7 @@ using KernelRiscMaskMap = std::unordered_map<const KernelSpec*, uint16_t>;
 
 // DFB name -> DFB ID map (for unpack_to_dest_mode indexing)
 using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
-using SemaphoreNameToIdMap = std::unordered_map<SemaphoreSpecName, uint32_t>;
+using SemaphoreNameToIdMap = std::unordered_map<SemSpecName, uint32_t>;
 
 // ============================================================================
 // Basic Utility Helpers
@@ -576,7 +576,7 @@ void ValidateNodeBounds(const ProgramSpec& spec) {
         check_target_nodes(work_unit.target_nodes, "WorkUnitSpec", work_unit.name);
     }
     for (const auto& sem : spec.semaphores) {
-        check_target_nodes(sem.target_nodes, "SemaphoreSpec", sem.unique_id);
+        check_target_nodes(sem.target_nodes, "SemaphoreSpec", sem.unique_id.get());
     }
 }
 
@@ -1194,7 +1194,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         if (!dfb.borrowed_from.has_value()) {
             continue;
         }
-        const TensorParameterName& tp_name = *dfb.borrowed_from;
+        const TensorParamName& tp_name = *dfb.borrowed_from;
         auto it = collected.tensor_parameter_by_name.find(tp_name);
         TT_FATAL(
             it != collected.tensor_parameter_by_name.end(),
@@ -1536,7 +1536,7 @@ std::pair<DMProcessorMask, DMProcessorMask> ReserveDMProcessors(
     const KernelSpec* kernel_spec,
     std::optional<DMProcessorMask> existing_mask,
     DMProcessorMask cumulative_mask,
-    const WorkUnitSpecName& work_unit_id) {
+    const std::string& work_unit_id) {
     // Was this kernel already assigned a mask from a previous WorkUnitSpec?
     if (existing_mask.has_value()) {
         DMProcessorMask existing = existing_mask.value();
@@ -1678,7 +1678,7 @@ int ConstraintScore(const KernelCouplingGroup* g) {
 
 // Deterministic tiebreaker: sort by the lexicographically-smallest member unique_id.
 // Group::members is canonicalized at construction time so members.front() is the sort key.
-const std::string& group_sort_key(const KernelCouplingGroup* g) { return g->members.front()->unique_id; }
+const std::string& group_sort_key(const KernelCouplingGroup* g) { return g->members.front()->unique_id.get(); }
 
 void SortByConstraint(std::vector<const KernelCouplingGroup*>& groups) {
     std::sort(groups.begin(), groups.end(), [](const KernelCouplingGroup* a, const KernelCouplingGroup* b) {
@@ -2078,7 +2078,7 @@ struct TensorBindingsForKernel {
 // time, extracting info from the TensorArgs.)
 TensorBindingsForKernel ResolveTensorBindingsForKernel(
     const KernelSpec& kernel,
-    const std::unordered_map<TensorParameterName, ResolvedTensorParameter>& resolved_tensor_parameters,
+    const std::unordered_map<TensorParamName, ResolvedTensorParameter>& resolved_tensor_parameters,
     size_t base_named_crta_count) {
     TensorBindingsForKernel out;
     out.handles.reserve(kernel.tensor_bindings.size());
@@ -2092,7 +2092,7 @@ TensorBindingsForKernel ResolveTensorBindingsForKernel(
 
         TensorBindingHandle handle;
         handle.accessor_name = binding.accessor_name;
-        handle.tensor_parameter_name = binding.tensor_parameter_name;
+        handle.tensor_parameter_name = binding.tensor_parameter_name.get();
         handle.cta_offset = cta_word_offset;
         handle.addr_crta_offset = static_cast<uint32_t>(crta_word_index * sizeof(uint32_t));
         handle.num_runtime_field_crta_words = resolved.extra_crta_words;
@@ -2552,7 +2552,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     //     corresponding TensorArgument entry. TensorParameters that opt into a dynamic accessor
     //     field (currently: dynamic_tensor_shape, sharded only) carry additional CRTA words
     //     immediately after the address slot, also filled at enqueue time.
-    std::unordered_map<TensorParameterName, ResolvedTensorParameter> resolved_tensor_parameters;
+    std::unordered_map<TensorParamName, ResolvedTensorParameter> resolved_tensor_parameters;
     resolved_tensor_parameters.reserve(spec.tensor_parameters.size());
     for (const auto& tensor_parameter : spec.tensor_parameters) {
         resolved_tensor_parameters.emplace(
@@ -2567,7 +2567,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         const bool dyn_shape = tensor_parameter.advanced_options.dynamic_tensor_shape;
         const bool match_padded_only = tensor_parameter.advanced_options.match_padded_shape_only;
         program_impl->register_tensor_parameter(
-            tensor_parameter.unique_id, tensor_parameter.spec, dyn_shape, match_padded_only);
+            tensor_parameter.unique_id.get(), tensor_parameter.spec, dyn_shape, match_padded_only);
     }
 
     // Create DataflowBuffers and build name -> ID map.
@@ -2585,14 +2585,14 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
         // (For borrowed-memory DFBs, config.borrows_memory was set in MakeDataflowBufferConfig;
         // the device-side runtime uses that to skip regular L1 allocation.)
         uint32_t dfb_id = program_impl->add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);
-        program_impl->register_dfb_spec_name(dfb_name, dfb_id);
+        program_impl->register_dfb_spec_name(dfb_name.get(), dfb_id);
         dfb_name_to_id[dfb_name] = dfb_id;
 
-        // Borrowed-memory DFB: record the dfb_id ↔ TensorParameterName binding so that
+        // Borrowed-memory DFB: record the dfb_id ↔ TensorParamName binding so that
         // SetProgramRunArgs / UpdateTensorArgs can resolve and attach the actual L1 Buffer
         // at runtime (analog of dynamic CB's UpdateDynamicCircularBufferAddress).
         if (dfb_spec.borrowed_from.has_value()) {
-            program_impl->register_dfb_borrowed_binding(dfb_id, *dfb_spec.borrowed_from);
+            program_impl->register_dfb_borrowed_binding(dfb_id, dfb_spec.borrowed_from->get());
         }
     }
 
@@ -2627,11 +2627,11 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     // NOTE: Iterate over spec.semaphores to preserve user-provided deterministic ordering.
     SemaphoreNameToIdMap semaphore_name_to_id;
     for (const auto& semaphore_spec : spec.semaphores) {
-        const SemaphoreSpecName& semaphore_name = semaphore_spec.unique_id;
+        const SemSpecName& semaphore_name = semaphore_spec.unique_id;
         const uint32_t init_value = semaphore_spec.advanced_options.initial_value;
         uint32_t sem_id = program_impl->create_semaphore(
             to_node_range_set(semaphore_spec.target_nodes), init_value, CoreType::WORKER);
-        program_impl->register_semaphore_spec_name(semaphore_name, sem_id);
+        program_impl->register_semaphore_spec_name(semaphore_name.get(), sem_id);
         semaphore_name_to_id[semaphore_name] = sem_id;
     }
 
@@ -2737,7 +2737,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
 
         // Add the kernel to the ProgramImpl and register the name -> handle mapping
         KernelHandle handle = program_impl->add_kernel(kernel, HalProgrammableCoreType::TENSIX);
-        program_impl->register_kernel_spec_name(kernel_spec.unique_id, handle);
+        program_impl->register_kernel_spec_name(kernel_spec.unique_id.get(), handle);
 
         // Register the RTA+CRTA schema (named lists + vararg counts) with the ProgramImpl.
         // Used by ValidateProgramRunArgs and SetProgramRunArgs to validate and serialize
@@ -2799,7 +2799,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
             }
         }
         runtime_schema.num_common_runtime_varargs = num_common_runtime_varargs;
-        program_impl->register_kernel_rta_schema(kernel_spec.unique_id, runtime_schema);
+        program_impl->register_kernel_rta_schema(kernel_spec.unique_id.get(), runtime_schema);
     }
 
     return Program(std::move(program_impl));

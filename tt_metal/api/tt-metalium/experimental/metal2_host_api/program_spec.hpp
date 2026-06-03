@@ -44,12 +44,6 @@ namespace tt::tt_metal::experimental {
 //
 // ============================================================================
 
-// A name identifying a ProgramSpec within a MeshWorkload.
-using ProgramSpecName = std::string;
-
-// A name identifying a WorkUnitSpec within a ProgramSpec.
-using WorkUnitSpecName = std::string;
-
 //------------------------------------------------
 // WorkUnitSpec
 //------------------------------------------------
@@ -62,7 +56,7 @@ using WorkUnitSpecName = std::string;
 //
 struct WorkUnitSpec {
     // Human-readable name (debug/messaging only; no uniqueness invariant).
-    WorkUnitSpecName name;
+    std::string name;
 
     // The kernels that run on this WorkUnitSpec's nodes.
     std::vector<KernelSpecName> kernels;
@@ -78,7 +72,7 @@ struct WorkUnitSpec {
 // A ProgramSpec describes a complete Program (its immutable properties).
 struct ProgramSpec {
     // Human-readable name (debug/messaging only; no uniqueness invariant).
-    ProgramSpecName name;
+    std::string name;
 
     // Kernels, DFBs (local + remote), and semaphores that make up the Program
     std::vector<KernelSpec> kernels;

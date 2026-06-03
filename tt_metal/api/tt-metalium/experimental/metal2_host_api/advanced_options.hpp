@@ -10,6 +10,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -34,9 +35,10 @@ namespace tt::tt_metal::experimental {
 //
 // ============================================================================
 
-// Forward-declare *Name typedefs that AdvancedOptions members reference.
-// (Each is also declared in its owning spec header.)
-using DFBSpecName = std::string;
+// Canonical definition of DFBSpecName. It lives in this lower-level header
+// (rather than dataflow_buffer_spec.hpp) because AdvancedOptions members here
+// reference it, and dataflow_buffer_spec.hpp includes this header.
+using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////

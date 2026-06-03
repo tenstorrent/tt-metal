@@ -78,7 +78,7 @@ struct ProgramRunArgs {
     };
     // A TensorArgument must be specified for EVERY TensorParameter declared in the ProgramSpec.
     // The argument's TensorSpec must match the TensorParameter's TensorSpec (shape, layout, data type).
-    Table<TensorParameterName, TensorArgument> tensor_args;
+    Table<TensorParamName, TensorArgument> tensor_args;
 
     ////////////////////////////////////////////////////////////////////////
     // DFB parameters (optional, advanced use cases)
