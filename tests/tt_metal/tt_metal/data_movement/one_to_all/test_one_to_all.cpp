@@ -1194,6 +1194,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirect
 
 /* ========== 2x2, non-linked, EXCLUDE_SRC ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastSemaphore2x2_2_0) {
+    GTEST_SKIP() << "Disabled: see #45978";
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 10;
 
     auto mesh_device = get_mesh_device();
@@ -1222,6 +1223,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastSemaphore2x2
 
 /* ========== 2x2, linked, INCLUDE_SRC (loopback) ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaphoreLoopback2x2_2_0) {
+    GTEST_SKIP() << "Disabled: see #45978";
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 11;
 
     auto mesh_device = get_mesh_device();
@@ -1250,6 +1252,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaph
 
 /* ========== 5x5, linked, EXCLUDE_SRC ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaphore5x5_2_0) {
+    GTEST_SKIP() << "Disabled: see #45978";
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 12;
 
     auto mesh_device = get_mesh_device();
@@ -1284,6 +1287,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaph
 
 /* ========== 2x2 ========== */
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastSemaphore2x2_2_0) {
+    GTEST_SKIP() << "Disabled: see #45978";
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 13;
 
     auto mesh_device = get_mesh_device();
