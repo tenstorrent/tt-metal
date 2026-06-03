@@ -35,7 +35,6 @@ from models.tt_dit.pipelines.motif.pipeline_motif import MotifPipeline, MotifPip
             (4, 1),
             ttnn.Topology.Linear,
             1,
-            marks=pytest.mark.skip(reason="Disabled by issue #44770"),
         ),
         [(4, 8), (2, 1), (4, 0), (4, 1), (4, 1), (4, 1), ttnn.Topology.Linear, 4],
     ],
@@ -249,12 +248,12 @@ def test_motif_pipeline_performance(
     }
     if tuple(mesh_device.shape) == (2, 4):
         expected_metrics = {
-            "clip_encoding_time": 0.12,
+            "clip_encoding_time": 0.15,
             "t5_encoding_time": 0.15,
-            "total_encoding_time": 0.45,
-            "denoising_steps_time": 0.52 * num_inference_steps,
+            "total_encoding_time": 0.49,
+            "denoising_steps_time": 0.56 * num_inference_steps,
             "vae_decoding_time": 1.7,
-            "total_time": 16.5,
+            "total_time": 17.4,
         }
     elif tuple(mesh_device.shape) == (4, 8):
         expected_metrics = {

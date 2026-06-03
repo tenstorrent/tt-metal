@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,20 +10,20 @@
 #include "ckernel_sfpu_softshrink.h"
 #include "ckernel_sfpu_hardshrink.h"
 #include "ckernel_sfpu_celu.h"
-#include "sfpu/ckernel_sfpu_activations.h"
+#include "ckernel_sfpu_activations.h"
 
 namespace ckernel {
 
 // Hardsigmoid
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_hardsigmoid_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::hardsigmoid>(ckernel::sfpu::_init_hardsigmoid_<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::hardsigmoid>(ckernel::sfpu::hardsigmoid_init<APPROXIMATE>);
 }
 
 template <bool APPROXIMATE, ckernel::ActivationType ACTIVATION, int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_hardsigmoid(uint dst_index, VectorMode vector_mode = VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_(
-        static_cast<void (*)()>(ckernel::sfpu::_calculate_activation_<APPROXIMATE, ACTIVATION, ITERATIONS>),
+        static_cast<void (*)()>(ckernel::sfpu::calculate_activation<APPROXIMATE, ACTIVATION, ITERATIONS>),
         dst_index,
         vector_mode);
 }

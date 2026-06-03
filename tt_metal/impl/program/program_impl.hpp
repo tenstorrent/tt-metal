@@ -373,10 +373,10 @@ public:
     // Metal 2.0: Runtime argument schema for validation.
     // Includes both the named args (declaration-order name lists) and the vararg counts.
     struct KernelRTASchema {
-        // Named arg names, in declaration order. Used to serialize ProgramRunParams values
+        // Named arg names, in declaration order. Used to serialize ProgramRunArgs values
         // into the dispatch buffer and to validate that every declared name is supplied.
-        std::vector<std::string> named_runtime_args;
-        std::vector<std::string> named_common_runtime_args;
+        std::vector<std::string> runtime_arg_names;
+        std::vector<std::string> common_runtime_arg_names;
 
         // Vararg counts. RTA vararg count is per-node (stored post-expansion from the
         // user-facing schema, which groups nodes that share a count); CRTA vararg is a single
@@ -473,7 +473,7 @@ private:
         std::unordered_map<SemaphoreSpecName, uint32_t> semaphore_handles;
         std::unordered_map<KernelSpecName, KernelRTASchema> kernel_rta_schemas;
         // TensorParameter name -> the parameter's declared layout + loosening opt-ins.
-        // Used by ValidateProgramRunParams to check that the supplied MeshTensor's spec matches
+        // Used by ValidateProgramRunArgs to check that the supplied MeshTensor's spec matches
         // the parameter's declared layout (with relaxations applied per the opt-in flags), and as
         // the per-parameter lookup for completeness checks.
         struct RegisteredTensorParameter {

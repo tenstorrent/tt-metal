@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -82,13 +84,17 @@ void kernel_main() {
         op_signaler_sender = OpSignaler(arg_idx);
     }
 
+    Noc noc_obj;
+    CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
+    CircularBuffer cb_output(cb_output_id);
+
     // packet header cb
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
+    cb_packet_header.reserve_back(1);
+    auto packet_header_buffer_addr = cb_packet_header.get_write_ptr();
+    cb_packet_header.push_back(1);
+    cb_packet_header.reserve_back(1);
+    auto packet_header_buffer_seminc = cb_packet_header.get_write_ptr();
+    cb_packet_header.push_back(1);
 
     // pre-populate packet headers
     constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info = {
@@ -134,8 +140,8 @@ void kernel_main() {
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
             while (tiles_read < tiles_to_read) {
                 uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-                cb_wait_front(cb_output_id, packet_size_in_pages);
-                const size_t l1_read_addr_base = get_read_ptr(cb_output_id);
+                cb_output.wait_front(packet_size_in_pages);
+                const size_t l1_read_addr_base = cb_output.get_read_ptr();
                 size_t l1_read_addr = l1_read_addr_base;
 
                 // for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
@@ -182,7 +188,7 @@ void kernel_main() {
                 }
 
                 tiles_read += num_pages_to_read;
-                cb_pop_front(cb_output_id, packet_size_in_pages);
+                cb_output.pop_front(packet_size_in_pages);
             }
             tile_id_start += output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
             tiles_read = input_tile_id_start[input_idx];
@@ -192,7 +198,7 @@ void kernel_main() {
         }
     }
 
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
     // increment locally
     if constexpr (fuse_op && direction == 1) {
         /**
@@ -274,8 +280,8 @@ void kernel_main() {
             for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {
                 while (tiles_read < tiles_to_read) {
                     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
-                    cb_wait_front(cb_output_id, packet_size_in_pages);
-                    size_t l1_read_addr = get_read_ptr(cb_output_id);
+                    cb_output.wait_front(packet_size_in_pages);
+                    size_t l1_read_addr = cb_output.get_read_ptr();
                     uint32_t first_tile_id = tile_id_start + row_offset + pages_read_in_row;
                     pages_read_in_row++;
                     if (pages_read_in_row >= slice_Wt) {
@@ -311,7 +317,7 @@ void kernel_main() {
                     }
 
                     tiles_read += num_pages_to_read;
-                    cb_pop_front(cb_output_id, packet_size_in_pages);
+                    cb_output.pop_front(packet_size_in_pages);
                 }
                 tile_id_start += output_tensor_Wt[input_idx] * output_tensor_Ht[input_idx];
                 tiles_read = input_tile_id_start[input_idx];
@@ -332,6 +338,6 @@ void kernel_main() {
     }
     fabric_connection.close();
 
-    noc_async_atomic_barrier();
-    noc_async_write_barrier();
+    noc_obj.async_atomic_barrier();
+    noc_obj.async_write_barrier();
 }

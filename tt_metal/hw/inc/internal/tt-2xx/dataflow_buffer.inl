@@ -293,7 +293,7 @@ inline void DataflowBuffer::write_barrier_impl(const Noc &noc) const {
         return;
     } else {
         for (uint8_t i = 0; i < local_dfb_interface_.num_txn_ids; i++) {
-            noc.async_write_barrier<Noc::BarrierMode::TXN_ID>(local_dfb_interface_.txn_ids[i]);
+            noc.async_write_barrier<NocOptions::TXN_ID>({.trid = local_dfb_interface_.txn_ids[i]});
         }
     }
 }
@@ -362,8 +362,8 @@ inline void DataflowBuffer::commit_implicit_write() {
 // These are member functions of Noc but must be defined here because they need the complete
 // DataflowBuffer type (circular dependency: dataflow_buffer.h includes noc.h, not vice versa).
 
-template <Noc::TxnIdMode txn_id_mode, typename Src>
-std::enable_if_t<txn_id_mode == Noc::TxnIdMode::ENABLED>
+template <NocOptions opts, typename Src>
+std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
 Noc::async_read(
     const Src& src,
     DataflowBuffer& dst,
@@ -372,7 +372,7 @@ Noc::async_read(
     uint32_t txn_id = dst.prepare_implicit_read();
     noc_async_read_set_trid(txn_id, noc_id_);
     while (noc_available_transactions(noc_id_, txn_id) < ((NOC_MAX_TRANSACTION_ID_COUNT + 1) / 2));
-    // DPRINT << "Issue the read" << ENDL();
+    // DPRINT("Issue the read\n");
     noc_async_read<NOC_MAX_BURST_SIZE + 1, true>(
         get_src_ptr<AddressType::NOC>(src, src_args),
         dst.get_write_ptr(),
@@ -382,8 +382,8 @@ Noc::async_read(
     dst.commit_implicit_read();
 }
 
-template <Noc::TxnIdMode txn_id_mode, typename Dst>
-std::enable_if_t<txn_id_mode == Noc::TxnIdMode::ENABLED>
+template <NocOptions opts, typename Dst>
+std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
 Noc::async_write(
     DataflowBuffer& src,
     const Dst& dst,
@@ -394,7 +394,7 @@ Noc::async_write(
     auto dst_noc_addr = get_dst_ptr<AddressType::NOC>(dst, dst_args);
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, src_addr, dst_noc_addr, size_bytes, -1, posted, noc_id_);
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc_id_, dst_noc_addr, src_addr, src.get_entry_size());
-    // DPRINT << "Issue the write" << ENDL();
+    // DPRINT("Issue the write\n");
     ncrisc_noc_fast_write_any_len<noc_mode, true, /*one_packet*/false>(
         noc_id_,
         write_cmd_buf,
@@ -406,7 +406,7 @@ Noc::async_write(
         false,   // linked
         1,       // num_dests
         true,    // multicast_path_reserve
-        false,   // posted == false (Noc::ResponseMode::NON_POSTED)
+        false,   // posted == false (NocOptions::POSTED not set)
         txn_id);
     src.commit_implicit_write();
 }

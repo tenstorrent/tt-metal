@@ -43,7 +43,6 @@ from loguru import logger
 import ttnn
 from conftest import requires_hybrid_allocator
 from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.compressed_tensor.assigner import CompressedTensorAssigner
 from models.demos.deepseek_v3_b1.demo.mesh_device_context import DEFAULT_WORKER_L1_SIZE, _worker_l1_size_for_rank
 from models.demos.deepseek_v3_b1.demo.weight_provider import CacheWeightProvider
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_prepare_weights import _deallocate_layer
@@ -172,7 +171,6 @@ def test_cache_weight_provider_load_moe_layer_sram_perf(bh_2d_mesh_device: Any, 
         hf_model_path,
         sram_hot_experts=sram_hot_experts,
         sram_core_grids=SramExpertCoreGrids.shared_expert_mirror(),
-        sram_assigner=CompressedTensorAssigner(formats=["bfp4"]),
         worker_l1_size=worker_l1_size,
         bspm_dir=bspm_dir,
         bspm_budget=bspm_budget,

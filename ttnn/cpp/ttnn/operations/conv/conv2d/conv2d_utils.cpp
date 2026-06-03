@@ -562,6 +562,13 @@ bool should_coalesce_1d_depthwise_conv_reads(
         return false;
     }
 
+    // Coalesced depthwise reads lay out all kernel-width channel sticks as one contiguous activation block. The
+    // coalesced compute kernel then indexes that block as kernel_width groups of channel tiles, so each stick must
+    // contain an integral number of tiles.
+    if (input_channels_padded % tt::constants::TILE_WIDTH != 0) {
+        return false;
+    }
+
     // Halo output consumed by conv is row-major FLOAT32 only for FLOAT32 input, BFLOAT16 otherwise.
     const uint32_t conv_input_datum_size = input_datatype == DataType::FLOAT32 ? 4 : 2;
     const uint64_t coalesced_read_bytes =

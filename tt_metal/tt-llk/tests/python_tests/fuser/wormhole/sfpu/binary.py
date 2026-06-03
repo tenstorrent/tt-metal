@@ -45,7 +45,6 @@ class BinarySfpu(Sfpu):
         return [
             "ckernel_defs.h",
             "ckernel_sfpu.h",
-            "ckernel_sfpu_binary.h",
             "llk_math_common.h",
             "llk_math_eltwise_binary_sfpu.h",
             "sfpu_operations.h",

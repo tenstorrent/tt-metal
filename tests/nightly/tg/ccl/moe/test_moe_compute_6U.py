@@ -11,19 +11,18 @@ import pytest
 import random
 import torch
 
+# Force torch CPU ops to use all cores. bf16 matmul on CPU is single-thread on
+# some torch builds even with OMP_NUM_THREADS set; this is the runtime knob.
+# Required to keep compute_matmul_golden's fp32-cast fast path actually
+# parallel — without it, the golden compute can take ~30 s/layer on BH-LB
+# shape instead of ~33 ms.
 torch.set_num_threads(os.cpu_count())
 
 import ttnn
 from ttnn.operations.ccl import MoEActivationFunction
 
 from ttnn.experimental.moe_compute_utils import (
-    prepare_w0_w1_tensor_for_moe_compute,
-    prepare_w0_w1_tensor_with_bias,
-    prepare_w2_tensor_for_moe_compute,
-    prepare_w2_tensor_with_bias,
     auto_output_width_shard_dim,
-    get_weight_core_shard_maps,
-    get_weight_mem_configs,
     _shard_tiles,
     _w2_shard_tiles,
 )
@@ -39,6 +38,10 @@ MESH_GRAPH_DESC_1x16 = (
 MESH_GRAPH_DESC_1x8 = (
     "tests/tt_metal/tt_fabric/custom_mesh_descriptors/single_galaxy_1x8_torus_graph_descriptor.textproto"
 )
+# BH single Loudbox exposed as a 1x8 LINE — every chip hosts experts (EP=8), the natural
+# BH analog of the WH single-galaxy `test_moe_compute_1x8`. Topology is LINE because
+# BH LB has no chassis-level wraparound.
+MESH_GRAPH_DESC_BH_LB_1x8 = "tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_lb_1x8_line_graph_descriptor.textproto"
 # FYI: These tests also work in a MESH_GRAPH_DESC_1x4 setting (~1 minute to set up), but not in a 1x2 setting.
 
 
@@ -125,10 +128,21 @@ _MODELS_1x8 = [
     MoEModelConfig("gemma_4_26b",  N=704,  hidden_size=2816, selected_experts_k=8, activation_types=(MoEActivationFunction.GELU,)),
     MoEModelConfig("gpt_oss",      N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), test_modes=("perf", "correctness"), activation_types=(MoEActivationFunction.SWIGLU,)),
 ]
+
+# BH single Loudbox 1x8 LINE — every chip hosts experts (EP=8). Same model shapes as the
+# WH _MODELS_1x8 / _MODELS_1x16 entries (gpt_oss matches _MODELS_1x8.gpt_oss; deepseek_v3
+# matches _MODELS_1x16.deepseek_v3). BH-specific overrides: tokens_per_device=8 to keep
+# host-side golden-compute fast on real hardware, num_layers=1 because num_layers>1 hits
+# a DRAM->L1 reshard hang on BH LB (deferred follow-up).
+_MODELS_BH_LB_1x8 = [
+    MoEModelConfig("gpt_oss",     N=2880, hidden_size=2880, selected_experts_k=4, experts_per_device_values=(4,), has_bias_values=(True,), tokens_per_device=8, num_layers=1, num_iterations=2, activation_types=(MoEActivationFunction.SWIGLU,)),
+    MoEModelConfig("deepseek_v3", N=2048, hidden_size=7168, selected_experts_k=8, has_bias_values=(False, True), tokens_per_device=8, num_layers=1, num_iterations=2),
+]
 # fmt: on
 
 MODELS_1x16 = _expand_model_configs(_MODELS_1x16)
 MODELS_1x8 = _expand_model_configs(_MODELS_1x8)
+MODELS_BH_LB_1x8 = _expand_model_configs(_MODELS_BH_LB_1x8)
 
 
 def _run_model_test(
@@ -164,7 +178,12 @@ def _run_model_test(
 
 
 def validate_per_expert_tokens(
-    mesh_device, experts_per_device, num_devices, per_expert_total_tokens_output_tensor, expert_token_counts
+    mesh_device,
+    experts_per_device,
+    num_devices,
+    per_expert_total_tokens_output_tensor,
+    expert_token_counts,
+    worker_mcast_bbox=None,
 ):
     logger.info(f"\n========== Per Expert Total Tokens Tensor Validation ==========")
     per_expert_tokens_all_passed = True
@@ -176,7 +195,6 @@ def validate_per_expert_tokens(
     # Row is experts_per_device uint32s, aligned to 16 bytes. Replicated on every core
     per_expert_row_bytes = ((experts_per_device * 4 + l1_alignment - 1) // l1_alignment) * l1_alignment
     per_expert_row_elements = per_expert_row_bytes // 4
-    # Note: the bounding box containing tilize, matmul, combine cores spans the whole grid.
     core_range = mesh_device.compute_with_storage_grid_size()
     num_cores = core_range.x * core_range.y
     expected_per_expert_shape = (num_devices * num_cores, per_expert_row_elements)
@@ -196,22 +214,99 @@ def validate_per_expert_tokens(
     per_expert_total_tokens_torch = per_expert_total_tokens_torch.reshape(
         (num_devices, num_cores, per_expert_row_elements)
     )
-    for device_idx in range(num_devices):
-        for c in range(num_cores):
-            device_counts = per_expert_total_tokens_torch[device_idx][c]
+    # The op allocates the per_expert_total_tokens output sharded across the FULL
+    # compute_with_storage_grid_size() (see `compute_output_specs` in
+    # moe_compute_device_operation.cpp), but
+    # the kernel only multicasts the counts to its `all_worker_cores_bounding_box`
+    # (= tilize + matmul + combine cores). On WH 6U the op uses the full grid, so every
+    # core is inside the bbox and every shard slot gets the count via mcast. On BH single
+    # LB the op uses ~110 of the grid's 130 cores, so shard slots outside the bbox hold
+    # the initial-allocation zero. When `worker_mcast_bbox` is provided, skip out-of-bbox
+    # slots explicitly (strict in-bbox check). When omitted (legacy callers), fall back
+    # to the heuristic: treat actual=0/expected>0 as off-bbox; flag any other mismatch.
+    all_core_range_set = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(core_range.x - 1, core_range.y - 1),
+            ),
+        }
+    )
+    grid_cores_row_major = ttnn.corerange_to_cores(all_core_range_set, row_wise=True)
+    assert len(grid_cores_row_major) == num_cores
 
-            for local_exp_idx in range(experts_per_device):
-                expected_count = expert_token_counts[device_idx, local_exp_idx].item()
-                actual_count = device_counts[local_exp_idx].item()
+    if worker_mcast_bbox is not None:
 
-                if actual_count != expected_count:
-                    logger.warning(
-                        f"  Device {device_idx}, Expert {local_exp_idx}: "
-                        f"count mismatch - expected {expected_count}, got {actual_count}"
-                    )
-                    per_expert_tokens_all_passed = False
-                else:
-                    logger.info(f"  Device {device_idx}, Expert {local_exp_idx}: count={actual_count} PASSED")
+        def core_in_mcast_bbox(core_coord):
+            return (
+                worker_mcast_bbox.start.x <= core_coord.x <= worker_mcast_bbox.end.x
+                and worker_mcast_bbox.start.y <= core_coord.y <= worker_mcast_bbox.end.y
+            )
+
+        cores_per_device_validated = 0
+        for device_idx in range(num_devices):
+            for c, core_coord in enumerate(grid_cores_row_major):
+                if not core_in_mcast_bbox(core_coord):
+                    continue
+
+                device_counts = per_expert_total_tokens_torch[device_idx][c]
+                for local_exp_idx in range(experts_per_device):
+                    expected_count = expert_token_counts[device_idx, local_exp_idx].item()
+                    actual_count = device_counts[local_exp_idx].item()
+
+                    if actual_count != expected_count:
+                        logger.warning(
+                            f"  Device {device_idx}, Core {c} ({core_coord.x},{core_coord.y}), "
+                            f"Expert {local_exp_idx}: count mismatch - expected {expected_count}, got {actual_count}"
+                        )
+                        per_expert_tokens_all_passed = False
+                    else:
+                        logger.info(
+                            f"  Device {device_idx}, Core {c} ({core_coord.x},{core_coord.y}), "
+                            f"Expert {local_exp_idx}: count={actual_count} PASSED"
+                        )
+                if device_idx == 0:
+                    cores_per_device_validated += 1
+    else:
+        # Legacy heuristic: treat actual=0 with expected>0 as "core not in mcast bbox"
+        # and skip; only flag truly inconsistent values.
+        cores_per_device_validated = 0
+        for device_idx in range(num_devices):
+            for c in range(num_cores):
+                device_counts = per_expert_total_tokens_torch[device_idx][c]
+
+                core_in_bbox = False
+                for local_exp_idx in range(experts_per_device):
+                    expected_count = expert_token_counts[device_idx, local_exp_idx].item()
+                    actual_count = device_counts[local_exp_idx].item()
+
+                    if actual_count == 0 and expected_count > 0:
+                        continue
+
+                    core_in_bbox = True
+                    if actual_count != expected_count:
+                        logger.warning(
+                            f"  Device {device_idx}, Core {c}, Expert {local_exp_idx}: "
+                            f"count mismatch - expected {expected_count}, got {actual_count}"
+                        )
+                        per_expert_tokens_all_passed = False
+                    else:
+                        logger.info(
+                            f"  Device {device_idx}, Core {c}, Expert {local_exp_idx}: count={actual_count} PASSED"
+                        )
+                if core_in_bbox and device_idx == 0:
+                    cores_per_device_validated += 1
+
+    # Sanity: ensure the mcast actually reached a meaningful number of cores per device.
+    # (Catches the regression where the mcast bbox shrinks to 0 by accident.)
+    if cores_per_device_validated == 0:
+        logger.warning("No cores received per-expert counts via mcast — bbox calculation broken?")
+        per_expert_tokens_all_passed = False
+    else:
+        logger.info(
+            f"Per-expert counts validated on {cores_per_device_validated} cores per device "
+            f"(of {num_cores} grid cores total)"
+        )
 
     return per_expert_tokens_all_passed
 
@@ -1115,7 +1210,7 @@ def compute_matmul_golden(
     # (L, E, T, N) @ (L, E, N, K) -> (L, E, T, K)
     torch_output_ref = torch_intermediate_ref @ torch_w2
     if torch_b2 is not None:
-        # Same reasoning as b0: true PyTorch bias addition.
+        # Same reasoning as b0: true PyTorch bias addition, replicated per device.
         b2 = torch_b2.repeat([1, devices, 1]).float()  # (L, E, K)
         torch_output_ref = torch_output_ref + b2.unsqueeze(2)
 
@@ -1123,7 +1218,7 @@ def compute_matmul_golden(
     torch_output_ref = torch_output_ref.to(_orig_dtype)
 
     # pull device dim back out for comparison
-    # (L, E, T, H) -> (L, D, E/D, T, H)
+    # (L, E, T, H) -> (L, devices, E/devices, T, H)
     return torch_output_ref.reshape(layers, devices, experts // devices, tokens, hidden)
 
 
@@ -1277,6 +1372,8 @@ def run_moe_compute_test(
     enable_trace,
     activation_type,
     has_bias,
+    topology=None,
+    num_links=None,
 ):
     """
     Core test execution helper function.
@@ -1315,8 +1412,15 @@ def run_moe_compute_test(
     # CREATE TILIZE INPUT TENSORS AND GOLDENS
     #########################################
 
-    # Drain tilize core is core (6,9) where indices and scores are sharded
-    tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9))})
+    # Drain tilize core: per-arch coordinate where indices/scores are L1-sharded so the
+    # op kernel can read them via NOC. Must match the op's drain tilize core (tilize_cores[0]
+    # in moe_compute_program_factory.cpp's get_layout()), or non-drain tilize cores will
+    # noc_async_read garbage L1 addresses on the drain core (CB overflow caught by watcher).
+    #   WH (max_tilize_cores[0]): (6, 9)
+    #   BH (max_tilize_cores[0]): (10, 9)  — DRAM cols shifted, tilize moved to x=9,10
+    is_blackhole_arch = mesh_device.arch() == ttnn.Arch.BLACKHOLE
+    drain_core_coord = ttnn.CoreCoord(10, 9) if is_blackhole_arch else ttnn.CoreCoord(6, 9)
+    tilize_drain_core = ttnn.CoreRangeSet({ttnn.CoreRange(drain_core_coord, drain_core_coord)})
 
     #### Expert mapping - per-device [num_devices, experts], replicated on every device ###
     # Each device gets its own row after sharding, but since it's replicated,
@@ -1450,12 +1554,6 @@ def run_moe_compute_test(
     #########################################
     logger.info(f"Creating matmul goldens and input tensors")
 
-    # --------------------------------------------------------------------------
-    # Shard grid
-    # --------------------------------------------------------------------------
-
-    w0_w1_shard_map, w2_shard_map, dram_core_range_set = get_weight_core_shard_maps(mesh_device, hidden_size, N)
-
     torch_w0 = create_torch_w0(num_layers, experts_per_device, hidden_size, N)
     torch_w1 = create_torch_w1(num_layers, experts_per_device, hidden_size, N)
     torch_w2 = create_torch_w2(num_layers, experts_per_device, N, hidden_size)
@@ -1516,80 +1614,96 @@ def run_moe_compute_test(
     )
 
     # Get memory configurations for weights (handles bias padding)
-    w0_w1_mem_config, w2_mem_config, K_for_shard, w2_N_total = get_weight_mem_configs(
-        num_layers,
-        experts_per_device,
-        hidden_size,
-        N,
-        w0_w1_shard_map,
-        w2_shard_map,
-        dram_core_range_set,
+    weight_mem_configs = ttnn.experimental.get_weight_mem_configs(
+        mesh_device,
+        num_layers=num_layers,
+        experts_per_device=experts_per_device,
+        hidden_size=hidden_size,
+        intermediate_size=N,
         has_bias=has_bias,
     )
+    w0_w1_mem_config = weight_mem_configs.w0_w1
+    w2_mem_config = weight_mem_configs.w2
 
     # ------------------------------------------------------------------------
-    # Prepare w0_w1 tensor (interleaved, padded, and reordered)
-    if has_bias:
-        torch_w0_w1_reordered = prepare_w0_w1_tensor_with_bias(
-            torch_w0, torch_w1, torch_b0, torch_b1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
-        )
-    else:
-        torch_w0_w1_reordered = prepare_w0_w1_tensor_for_moe_compute(
-            torch_w0, torch_w1, num_layers, experts_per_device, hidden_size, N, w0_w1_shard_map
+    # Upload raw weights/biases to mesh (replicated, bfloat16, ROW_MAJOR) so the
+    # C++ ttnn.experimental.prepare_* helpers can do the layout transformation on
+    # device, then convert to the DRAM-sharded bfloat4_b TILE layout the kernel
+    # consumes.
+    def _upload_raw(t):
+        return ttnn.from_torch(
+            t,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-    # Create tt_w0_w1 tensor with DRAM sharding
-    tt_w0_w1 = ttnn.from_torch(
-        torch_w0_w1_reordered,
-        dtype=ttnn.bfloat4_b,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=w0_w1_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    tt_w0_raw = _upload_raw(torch_w0)
+    tt_w1_raw = _upload_raw(torch_w1)
+    tt_w2_raw = _upload_raw(torch_w2)
+    if has_bias:
+        tt_b0_raw = _upload_raw(torch_b0)
+        tt_b1_raw = _upload_raw(torch_b1)
+        tt_b2_raw = _upload_raw(torch_b2)
 
     # ------------------------------------------------------------------------
-    # Prepare w2 tensor (padded and reordered)
+    # Prepare w0_w1 tensor (interleaved, padded, and reordered) on device.
     if has_bias:
-        torch_w2_reordered = prepare_w2_tensor_with_bias(
-            torch_w2, torch_b2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
+        tt_w0_w1_prepped = ttnn.experimental.prepare_w0_w1_tensor_with_bias(
+            tt_w0_raw,
+            tt_w1_raw,
+            tt_b0_raw,
+            tt_b1_raw,
+            L=num_layers,
+            E=experts_per_device,
+            K=hidden_size,
+            N=N,
         )
+        ttnn.deallocate(tt_b0_raw)
+        ttnn.deallocate(tt_b1_raw)
     else:
-        torch_w2_reordered = prepare_w2_tensor_for_moe_compute(
-            torch_w2, num_layers, experts_per_device, N, hidden_size, w2_shard_map, w0_w1_shard_map
+        tt_w0_w1_prepped = ttnn.experimental.prepare_w0_w1_tensor_for_moe_compute(
+            tt_w0_raw,
+            tt_w1_raw,
+            L=num_layers,
+            E=experts_per_device,
+            K=hidden_size,
+            N=N,
         )
+    ttnn.deallocate(tt_w0_raw)
+    ttnn.deallocate(tt_w1_raw)
 
-    if False:  # has_bias:
-        # Verify prepare_w2_tensor_with_bias correctness:
-        # The bias tile occupies element rows [N:N+TILE_SIZE] in the N dimension (tile Nt).
-        # It should be non-zero (bias was appended) and must NOT appear in the weight rows [0:N]
-        # (bias tile is at position Nt, after all ring-rotated weight tiles).
-        #
-        # Note: different cores receive different K-column slices, so bias row values
-        # differ per core. The invariant is positional: bias is at N, not ring-rotated
-        # into an earlier N position.
-        bias_rows = torch_w2_reordered[:, :, :, :, N : N + ttnn.TILE_SIZE, :]  # (12, L, E, 5, 32, 128)
-        assert bias_rows.abs().max() > 0.1, (
-            "W2 bias row (at N-dim position N:N+TILE_SIZE) appears to be all zeros — "
-            "bias may not have been appended at the correct position"
-        )
-        # Groups 0-3 (dim 3, indices 0:4) are fully populated from unpadded bias data for all
-        # 12 cores; group 4 may have trailing padding zeros for some cores, so exclude it.
-        first_four_groups = bias_rows[:, :, :, :4, :, :]  # (12, L, E, 4, 32, 128)
-        assert torch.isfinite(first_four_groups).all(), "W2 bias row groups 0-3 contain non-finite values"
-        assert (
-            first_four_groups.abs().max() > 1e-3
-        ), "W2 bias row groups 0-3 appear all-near-zero — bias may not be packed at N:N+TILE_SIZE"
-
-    # Create tt_w2 tensor with DRAM sharding
-    tt_w2 = ttnn.from_torch(
-        torch_w2_reordered,
-        dtype=ttnn.bfloat4_b,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=w2_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    tt_w0_w1 = ttnn.experimental.quantize_weights_via_host(
+        tt_w0_w1_prepped, dtype=ttnn.bfloat4_b, memory_config=w0_w1_mem_config
     )
+    ttnn.deallocate(tt_w0_w1_prepped)
+
+    # ------------------------------------------------------------------------
+    # Prepare w2 tensor (padded and reordered) on device.
+    if has_bias:
+        tt_w2_prepped = ttnn.experimental.prepare_w2_tensor_with_bias(
+            tt_w2_raw,
+            tt_b2_raw,
+            L=num_layers,
+            E=experts_per_device,
+            N=N,
+            K=hidden_size,
+        )
+        ttnn.deallocate(tt_b2_raw)
+    else:
+        tt_w2_prepped = ttnn.experimental.prepare_w2_tensor_for_moe_compute(
+            tt_w2_raw,
+            L=num_layers,
+            E=experts_per_device,
+            N=N,
+            K=hidden_size,
+        )
+    ttnn.deallocate(tt_w2_raw)
+
+    tt_w2 = ttnn.experimental.quantize_weights_via_host(
+        tt_w2_prepped, dtype=ttnn.bfloat4_b, memory_config=w2_mem_config
+    )
+    ttnn.deallocate(tt_w2_prepped)
 
     output_shard_cores = ttnn.experimental.get_moe_combine_cores(
         mesh_device, output_height_shard_dim, output_width_shard_dim
@@ -1656,6 +1770,11 @@ def run_moe_compute_test(
 
     def run_op_inner(tt_sparse_buffer, tt_expert_indices, tt_expert_scores, layer_id):
         """Core moe_compute operation"""
+        # Forward an explicit topology when supplied. The op normally derives this from the
+        # fabric config + tensor coverage via get_usable_topology(), but that heuristic
+        # marks any tensor that spans a full mesh row as WRAP/Ring — incorrect for
+        # physically-line meshes (e.g. BH single Loudbox p150_x8). When set, this lets the
+        # caller force Linear and avoid forwarding requests across non-existent wrap edges.
         return ttnn.experimental.moe_compute(
             tt_sparse_buffer,
             tt_expert_indices,
@@ -1668,6 +1787,8 @@ def run_moe_compute_test(
             intermediate_size=N,
             has_bias=has_bias,
             cluster_axis=cluster_axis,
+            topology=topology,
+            num_links=num_links,
             mux_core_range_set=mux_core_range_set,
             optional_output_tensor=tt_combine_output_tensors[layer_id],
             optional_cross_device_semaphore=combine_barrier_semaphore,
@@ -1745,6 +1866,9 @@ def run_moe_compute_test(
     output_shard_cores = ttnn.experimental.get_moe_combine_cores(
         mesh_device, output_height_shard_dim, output_width_shard_dim
     )
+    worker_mcast_bbox = ttnn.experimental.get_moe_worker_mcast_bounding_box(
+        mesh_device, output_height_shard_dim, output_width_shard_dim, hidden_size
+    )
     per_expert_tokens_all_passed = True
     activation_all_passed = True
     e_t_all_passed = True
@@ -1769,7 +1893,12 @@ def run_moe_compute_test(
             # ========== Per Expert Total Tokens Tensor Validation ==========
             expert_token_counts = per_expert_tokens_goldens[layer_id]
             if not validate_per_expert_tokens(
-                mesh_device, experts_per_device, num_devices, per_expert_total_tokens_output_tensor, expert_token_counts
+                mesh_device,
+                experts_per_device,
+                num_devices,
+                per_expert_total_tokens_output_tensor,
+                expert_token_counts,
+                worker_mcast_bbox,
             ):
                 per_expert_tokens_all_passed = False
 
@@ -1850,6 +1979,58 @@ def test_moe_compute_1x16(
 ):
     _run_model_test(
         mesh_device, mesh_shape, enable_trace, model_cfg, test_mode, has_bias, experts_per_device, activation_type
+    )
+
+
+# ---------------------------------------------------------------------------
+# BH single Loudbox 1x8 LINE bring-up (EP=8) - #43444
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    not is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_BH_LB_1x8),
+    reason=f"BH Loudbox 1x8 LINE test requires TT_MESH_GRAPH_DESC_PATH={MESH_GRAPH_DESC_BH_LB_1x8}",
+)
+@pytest.mark.parametrize("device_params", [MOE_DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 8), (1, 8))], indirect=["mesh_device"])
+@pytest.mark.parametrize("model_cfg, test_mode, has_bias, experts_per_device, activation_type", MODELS_BH_LB_1x8)
+def test_moe_compute_bh_lb_1x8(
+    mesh_device, mesh_shape, model_cfg, test_mode, has_bias, experts_per_device, activation_type
+):
+    """BH single Loudbox EP=8 every-chip-active end-to-end MoE test (#43444).
+
+    Activate with
+    `TT_MESH_GRAPH_DESC_PATH=tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_lb_1x8_line_graph_descriptor.textproto`.
+
+    BH LB (8x p150b) exposed as (1, 8) LINE so every chip hosts experts. Topology is LINE
+    because BH LB has no chassis-level wraparound — natural BH analog of WH's
+    `test_moe_compute_1x8` (which uses 1x8 RING). Models covered: gpt_oss (hidden=N=2880,
+    width_dim=3) and deepseek_v3 (hidden=7168, N=2048, width_dim=4); the latter is the
+    only BH coverage of width_dim=4. The hidden=7168 L1 budget is fixed by the
+    `num_buffers 15→14` BH trim in `launch_mux_workers`.
+
+    num_links=2 reflects the BH LB descriptor's `channels { count: 2 }` (vs WH 6U's 4).
+    The op's hardcoded default is 4 (matches WH 6U), so BH callers must override.
+    """
+    run_moe_compute_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        cluster_axis=1,
+        experts_per_device=experts_per_device,
+        tokens_per_device=model_cfg.tokens_per_device,
+        selected_experts_k=model_cfg.selected_experts_k,
+        num_layers=model_cfg.num_layers,
+        num_iterations=model_cfg.num_iterations,
+        N=model_cfg.N,
+        hidden_size=model_cfg.hidden_size,
+        output_height_shard_dim=model_cfg.output_height_shard_dim,
+        output_width_shard_dim=auto_output_width_shard_dim(model_cfg.hidden_size),
+        dtype=ttnn.bfloat16,
+        enable_trace=False,
+        activation_type=activation_type,
+        has_bias=has_bias,
+        topology=ttnn.Topology.Linear,  # BH LB has no chassis wraparound; 1x8 view is still LINE
+        num_links=2,  # BH LB has 2 eth channels per adjacent-chip link (vs 4 on WH 6U)
     )
 
 

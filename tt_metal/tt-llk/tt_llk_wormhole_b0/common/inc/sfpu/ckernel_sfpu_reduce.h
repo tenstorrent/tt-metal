@@ -937,7 +937,8 @@ inline void _init_reduce_(std::uint32_t block_ct_dim = 1)
     // Determine InstrModLoadStore from llk_defs; Int32 MAX/MIN use INT32_2S_COMP for SFPSWAP
     constexpr InstrModLoadStore INSTRUCTION_MODE = (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN))
                                                        ? InstrModLoadStore::INT32_2S_COMP
-                                                       : GetSfpLoadStoreInstrMod<format>();
+                                                   : (format == DataFormat::Float16_b) ? InstrModLoadStore::DEFAULT
+                                                                                       : GetSfpLoadStoreInstrMod<format>();
 
     // Dispatch to appropriate PoolType init
     if constexpr (pool_type == PoolType::MAX || pool_type == PoolType::MIN)
@@ -985,7 +986,8 @@ inline void _calculate_reduce_(std::uint32_t block_ct_dim = 1, std::uint32_t blo
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN) && reduce_dim == ReduceDim::REDUCE_COL)
             ? InstrModLoadStore::INT32_2S_COMP
-            : GetSfpLoadStoreInstrMod<format>();
+        : (format == DataFormat::Float16_b) ? InstrModLoadStore::DEFAULT
+                                            : GetSfpLoadStoreInstrMod<format>();
 
     // Dispatch to appropriate reduction kernel based on PoolType
     if constexpr (pool_type == PoolType::MAX || pool_type == PoolType::MIN)

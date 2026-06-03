@@ -271,7 +271,13 @@ enum class BinaryOp : std::uint8_t
     RSHFT         = 7,
     LSHFT         = 8,
     LOGICAL_RSHFT = 9,
-    ADD_TOP_ROW   = 10
+    ADD_TOP_ROW   = 10,
+    LT            = 11,
+    GT            = 12,
+    LE            = 13,
+    GE            = 14,
+    EQ            = 15,
+    NE            = 16,
 };
 
 enum class PackMode : std::uint8_t

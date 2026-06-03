@@ -107,7 +107,7 @@ def test_prefill_block(
     is_ci_env,
     is_ci_v2_env,
 ):
-    if is_ci_env or is_ci_v2_env and pcc_validation == False:
+    if (is_ci_env or is_ci_v2_env) and pcc_validation == False:
         pytest.skip("Skip non-PCC test in CI to save time")
     if (is_ci_env or is_ci_v2_env) and not is_balanced:
         pytest.skip("Skip non_balanced variant in CI — runnable locally for non_balanced-mode validation")
@@ -257,7 +257,6 @@ def test_prefill_block(
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         weight_cache_path=cache_dir,
-        capacity_factor=32,
         is_balanced=is_balanced,
     )
     if gate_fallback_mode is not None:
