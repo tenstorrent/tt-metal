@@ -354,7 +354,9 @@ jobs:
       ${{ needs.parse-platform.outputs.version }}
     needs: [parse-platform, build-docker-image]
     timeout-minutes: 100
-    runs-on: linux_8_core
+    runs-on:
+      group: github-hosted
+      labels: linux_8_core
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
@@ -664,3 +666,4 @@ jobs:
       tracy: ${{ inputs.tracy }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-type: ${{ inputs.build-type || 'Release' }}
+
