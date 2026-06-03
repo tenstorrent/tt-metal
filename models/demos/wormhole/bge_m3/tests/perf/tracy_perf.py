@@ -87,8 +87,8 @@ def to_device(inputs, mesh_device, mask_dtype):
 
 @pytest.mark.parametrize(
     "batch_size",
-    [1, 32],
-    ids=["batch1", "batch32"],
+    [1, 8, 16, 32],
+    ids=["batch1", "batch8", "batch16", "batch32"],
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -122,7 +122,7 @@ def test_bge_m3_tracy_perf(mesh_device, batch_size):
     )
 
     # ── Prepare inputs ───────────────────────────────────────────────
-    mask_dtype = dtype if batch_size in (1, 32) else ttnn.bfloat16
+    mask_dtype = dtype if batch_size in (1, 8, 16, 32) else ttnn.bfloat16
     host_inputs = prepare_inputs(model_args.tokenizer, batch_size, SEQ_LEN, model_args.pad_token_id)
     device_inputs = to_device(host_inputs, mesh_device, mask_dtype)
 
