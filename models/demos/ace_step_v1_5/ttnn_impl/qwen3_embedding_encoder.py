@@ -136,18 +136,18 @@ def causal_padding_attn_bias_np(attention_mask_01: np.ndarray, seq_len: int) -> 
     return np.where(keep > 0.5, np.float32(0.0), neg).astype(np.float32)[:, np.newaxis, :, :]
 
 
-def padding_attn_bias_np(attention_mask_01: np.ndarray) -> np.ndarray:
-    """1=keep, 0=pad → additive bias ``[B,1,S,S]``."""
-    m = np.asarray(attention_mask_01, dtype=np.float32)
-    if m.ndim == 1:
-        m = m.reshape(1, -1)
-    b, s = m.shape
-    neg = np.float32(-1.0e9)
-    bias = np.zeros((b, 1, s, s), dtype=np.float32)
-    for bi in range(b):
-        row = m[bi][:, None] * m[bi][None, :]
-        bias[bi, 0, :, :] = np.where(row > 0.5, 0.0, neg)
-    return bias
+# def padding_attn_bias_np(attention_mask_01: np.ndarray) -> np.ndarray:
+#     """1=keep, 0=pad → additive bias ``[B,1,S,S]``."""
+#     m = np.asarray(attention_mask_01, dtype=np.float32)
+#     if m.ndim == 1:
+#         m = m.reshape(1, -1)
+#     b, s = m.shape
+#     neg = np.float32(-1.0e9)
+#     bias = np.zeros((b, 1, s, s), dtype=np.float32)
+#     for bi in range(b):
+#         row = m[bi][:, None] * m[bi][None, :]
+#         bias[bi, 0, :, :] = np.where(row > 0.5, 0.0, neg)
+#     return bias
 
 
 def rotate_half_ttnn(x: ttnn.Tensor, *, eltwise_memory_config=None) -> ttnn.Tensor:
@@ -268,7 +268,6 @@ class TtQwen3EncoderMLP:
         self.mem = mem
         self.hidden_size = int(hidden_size)
         self.intermediate_size = int(intermediate_size)
-        # Activation dtype (BF16) used by this MLP.
         self.dtype = dtype
         self._linear_ck = linear_compute_kernel_config
         self._act_l1 = activation_l1_memory_config
@@ -653,7 +652,6 @@ class _TtQwen3EncoderLayer:
         q_dim_o = self._q_dim_o
         kv_dim_o = self._kv_dim_o
         qkv_dim_o = q_dim_o + 2 * kv_dim_o
-        # Single fused QKV matmul: one [B,1,S,q+2kv] output instead of separate q / kv.
         lin_qkv = self._attn_linear_kwargs(
             batch_size=b,
             seq_len=s,
@@ -986,7 +984,7 @@ __all__ = [
     "build_hf_rope_cos_sin_np",
     "causal_padding_attn_bias_np",
     "load_qwen3_weights_np",
-    "padding_attn_bias_np",
+    # "padding_attn_bias_np",
     "repeat_kv_gqa_ttnn",
     "rotate_half_ttnn",
 ]
