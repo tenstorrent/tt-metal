@@ -695,12 +695,18 @@ ttnn::Tensor prepare_w2_tensor_with_bias(
     return result;
 }
 
+// Optionally returns a host tensor to facilitate test quantity caching
 ttnn::Tensor quantize_weights_via_host(
-    const ttnn::Tensor& device_tensor, ttnn::DataType dtype, const ttnn::MemoryConfig& memory_config) {
+    const ttnn::Tensor& device_tensor, ttnn::DataType dtype, const std::optional<ttnn::MemoryConfig>& memory_config) {
     auto host_tensor = ttnn::from_device(device_tensor);
     auto cast_tensor = ttnn::to_dtype(host_tensor, dtype);
     host_tensor.deallocate(/*force=*/true);
-    auto result = ttnn::to_device(cast_tensor, device_tensor.device(), memory_config);
+
+    if (!memory_config.has_value()) {
+        return cast_tensor;
+    }
+
+    auto result = ttnn::to_device(cast_tensor, device_tensor.device(), *memory_config);
     cast_tensor.deallocate(/*force=*/true);
     return result;
 }
