@@ -53,7 +53,7 @@ void kernel_main() {
     Semaphore<> sender_valid_sem(sender_valid_sem_id);
     Semaphore<> receiver_sem(receiver_sem_id);
 
-    constexpr Noc::McastMode mcast_mode = loopback ? Noc::McastMode::INCLUDE_SRC : Noc::McastMode::EXCLUDE_SRC;
+    constexpr NocOptions mcast_mode = loopback ? NocOptions::MCAST_INCL_SRC : NocOptions::DEFAULT;
 
     {
         DeviceZoneScopedN("RISCV0");
