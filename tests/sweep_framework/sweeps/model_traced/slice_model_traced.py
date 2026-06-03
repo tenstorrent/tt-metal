@@ -119,7 +119,21 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
+    # Some V2 traced vectors deliver the input as input_tensor_* instead of
+    # input_a_* (the positional then arrives absent/None). Fall back per-field so
+    # shape isn't None -> torch.zeros(None) crash.
+    if input_a_shape is None:
+        input_a_shape = kwargs.get("input_tensor_shape")
+    if input_a_dtype is None:
+        input_a_dtype = kwargs.get("input_tensor_dtype", ttnn.bfloat16)
+    if input_a_layout is None:
+        input_a_layout = kwargs.get("input_tensor_layout", ttnn.TILE_LAYOUT)
+    if input_a_memory_config is None:
+        input_a_memory_config = kwargs.get("input_tensor_memory_config", ttnn.DRAM_MEMORY_CONFIG)
+
+    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None) or kwargs.get(
+        "input_tensor_tensor_placement", None
+    )
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(
         kwargs,
