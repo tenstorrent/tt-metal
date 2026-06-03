@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
+#include <internal/service/service_core_manager.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/named_shm.hpp"
 #include "tt_metal/distributed/hd_socket_connector_state.hpp"
@@ -145,7 +146,16 @@ void D2HSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
         .size = config_buffer_size,
     };
 
-    config_buffer_ = MeshBuffer::create(config_mesh_buffer_specs, config_buffer_specs, mesh_device.get());
+    std::optional<DeviceAddr> preallocated_addr;
+    auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
+    auto* sender_device = mesh_device->get_device(sender_core_.device_coord);
+    if (svc.claimed_cores(sender_device->id()).count(sender_core_.core_coord) > 0) {
+        svc_config_l1_addr_ = svc.allocate_l1(sender_device, sender_core_.core_coord, config_buffer_size);
+        preallocated_addr = svc_config_l1_addr_;
+    }
+
+    config_buffer_ =
+        MeshBuffer::create(config_mesh_buffer_specs, config_buffer_specs, mesh_device.get(), preallocated_addr);
     config_buffer_address_ = config_buffer_->address();
 }
 
@@ -321,6 +331,18 @@ D2HSocket::~D2HSocket() noexcept {
     } catch (...) {
         log_warning(LogMetal, "D2HSocket destructor: barrier failed with unknown exception");
     }
+    if (svc_config_l1_addr_.has_value()) {
+        try {
+            config_buffer_.reset();
+            auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
+            auto* sender_device = mesh_device_->get_device(sender_core_.device_coord);
+            svc.deallocate_l1(sender_device, sender_core_.core_coord, svc_config_l1_addr_.value());
+        } catch (const std::exception& e) {
+            log_warning(LogMetal, "D2HSocket destructor: service-core L1 release failed: {}", e.what());
+        } catch (...) {
+            log_warning(LogMetal, "D2HSocket destructor: service-core L1 release failed with unknown exception");
+        }
+    }
     // Mark a clean shutdown so the next connector sees clean_shutdown=1. A process
     // that exits without running this destructor (crash, _exit, kill) leaves the
     // 0 written by connect()/owner-construct in place, signalling unclean exit.
@@ -463,6 +485,12 @@ void D2HSocket::notify_sender() {
 }
 
 void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
+    auto refresh_connector_read_state = [this]() {
+        if (connector_state_) {
+            bytes_acked_ = connector_state_->bytes_acked;
+            read_ptr_ = connector_state_->read_ptr;
+        }
+    };
     auto read_bytes_sent = [this]() -> uint32_t {
         if (using_hugepage_) {
             _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
@@ -473,9 +501,11 @@ void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
         return bytes_sent_ptr_[0];
     };
 
+    refresh_connector_read_state();
     volatile uint32_t bytes_sent_value = read_bytes_sent();
     auto start_time = std::chrono::high_resolution_clock::now();
     while (bytes_acked_ - bytes_sent_value != 0) {
+        refresh_connector_read_state();
         bytes_sent_value = read_bytes_sent();
         if (timeout_ms.has_value()) {
             auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -535,15 +565,7 @@ std::vector<MeshCoreCoord> D2HSocket::get_active_cores() const { return {sender_
 MeshDevice* D2HSocket::get_mesh_device() const { return mesh_device_; }
 
 std::string D2HSocket::export_descriptor(const std::string& socket_id) {
-    TT_FATAL(is_owner_, "Only the owner process can export a socket descriptor.");
-    TT_FATAL(shm_ && shm_->is_open(), "Cannot export descriptor: shared memory is not initialized.");
-
-    HDSocketDescriptor desc;
-    desc.populate_from_owner("d2h", *shm_, fifo_size_, config_buffer_address_, mesh_device_, sender_core_);
-    desc.bytes_sent_offset = fifo_size_;
-    desc.bytes_acked_device_offset = bytes_acked_device_offset_;
-    desc.connector_state_offset = connector_state_offset_;
-
+    auto desc = populate_descriptor();
     descriptor_path_ = descriptor_path_for_socket("d2h", socket_id);
     desc.write_to_file(descriptor_path_);
     ShmResourceTracker::instance().track_file(descriptor_path_);
@@ -551,16 +573,35 @@ std::string D2HSocket::export_descriptor(const std::string& socket_id) {
     return descriptor_path_;
 }
 
+HDSocketDescriptor D2HSocket::populate_descriptor() const {
+    TT_FATAL(is_owner_, "Only the owner process can populate a socket descriptor.");
+    TT_FATAL(shm_ && shm_->is_open(), "Cannot populate descriptor: shared memory is not initialized.");
+
+    HDSocketDescriptor desc;
+    desc.populate_from_owner("d2h", *shm_, fifo_size_, config_buffer_address_, mesh_device_, sender_core_);
+    desc.bytes_sent_offset = fifo_size_;
+    desc.bytes_acked_device_offset = bytes_acked_device_offset_;
+    desc.connector_state_offset = connector_state_offset_;
+    return desc;
+}
+
 std::unique_ptr<D2HSocket> D2HSocket::connect(const std::string& socket_id, std::optional<uint32_t> timeout_ms) {
     auto desc = HDSocketDescriptor::wait_and_read(
         descriptor_path_for_socket("d2h", socket_id), "d2h", timeout_ms.value_or(10000));
+    return connect_from_descriptor(desc);
+}
 
+std::unique_ptr<D2HSocket> D2HSocket::connect_from_descriptor(const HDSocketDescriptor& desc) {
     auto socket = std::unique_ptr<D2HSocket>(new D2HSocket());
     socket->is_owner_ = false;
     socket->fifo_size_ = desc.fifo_size;
     socket->config_buffer_address_ = desc.config_buffer_address;
     socket->pcie_alignment_ = desc.pcie_alignment;
-    socket->sender_core_ = MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(desc.core_x, desc.core_y));
+    MeshCoordinate device_coord =
+        desc.mesh_coord.empty()
+            ? MeshCoordinate(0, 0)
+            : MeshCoordinate(ttsl::SmallVector<uint32_t>(desc.mesh_coord.begin(), desc.mesh_coord.end()));
+    socket->sender_core_ = MeshCoreCoord(device_coord, CoreCoord(desc.core_x, desc.core_y));
     socket->bytes_acked_device_offset_ = desc.bytes_acked_device_offset;
 
     socket->shm_ = std::make_unique<NamedShm>(NamedShm::open(desc.shm_name, desc.shm_size));
@@ -571,9 +612,6 @@ std::unique_ptr<D2HSocket> D2HSocket::connect(const std::string& socket_id, std:
         std::make_unique<PCIeCoreWriter>(desc.device_id, desc.virtual_core_x, desc.virtual_core_y);
     socket->pcie_writer_ = socket->pcie_writer_instance_->get_pcie_writer();
 
-    // Restore connector-mutable state left behind by any prior driver process.
-    // First connector after owner-init sees an all-zero struct (version stamped
-    // by the owner), which matches a fresh socket.
     TT_FATAL(
         desc.connector_state_offset + sizeof(HDSocketConnectorState) <= desc.shm_size,
         "Descriptor connector_state_offset out of range for SHM size {}.",
@@ -586,10 +624,6 @@ std::unique_ptr<D2HSocket> D2HSocket::connect(const std::string& socket_id, std:
         "HDSocketConnectorState version mismatch: got {}, expected {}.",
         socket->connector_state_->version,
         kHDSocketConnectorStateVersion);
-    // Capture the prior process's clean_shutdown before overwriting it. A 0 here
-    // means the previous connector exited without running its destructor (crash,
-    // _exit, kill); callers can query had_clean_prior_shutdown() to react (e.g.
-    // call discard_pending_pages() to drop stale data).
     socket->prior_clean_shutdown_ = (socket->connector_state_->clean_shutdown != 0);
     if (!socket->prior_clean_shutdown_) {
         log_warning(
@@ -602,16 +636,8 @@ std::unique_ptr<D2HSocket> D2HSocket::connect(const std::string& socket_id, std:
     socket->fifo_curr_size_ = socket->connector_state_->fifo_curr_size;
     socket->bytes_acked_ = socket->connector_state_->bytes_acked;
     socket->read_ptr_ = socket->connector_state_->read_ptr;
-    // bytes_sent_ is the cached copy of the device-written counter that already
-    // lives in SHM. Read it live so wait_for_bytes() sees fresh data immediately.
     socket->bytes_sent_ = socket->bytes_sent_ptr_[0];
 
-    // Reconcile the device-side bytes_acked with the restored SHM value. The
-    // previous driver process may have died between pop_bytes (SHM flushed)
-    // and notify_sender (PCIe write to the device's config buffer), leaving
-    // the device's bytes_acked behind. Without this, the device kernel may
-    // stall thinking the FIFO is full while the new connector waits for fresh
-    // data. For a fresh socket this writes 0 over 0 — a no-op.
     socket->notify_sender();
 
     return socket;

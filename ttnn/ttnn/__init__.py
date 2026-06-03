@@ -209,6 +209,10 @@ from ttnn._ttnn.h2d_stream_service import (
     H2DStreamService,
 )
 
+from ttnn._ttnn.d2h_stream_service import (
+    D2HStreamService,
+)
+
 from ttnn.types import (
     TILE_SIZE,
     DataType,

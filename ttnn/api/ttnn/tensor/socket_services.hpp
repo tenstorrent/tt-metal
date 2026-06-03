@@ -19,6 +19,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
+#include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -226,6 +227,144 @@ private:
 
     // Chunk plan baked into the kernels' CT args, so it must stay constant for
     // the service's lifetime.
+    uint32_t socket_page_size_ = 0;
+    uint32_t num_socket_pages_ = 0;
+};
+
+// Persistent device-to-host streaming service backed by a fixed device tensor.
+//
+// Worker cores write a fixed backing device tensor; a persistent sender kernel
+// on each service core reads DRAM pages and PCIe-writes them into host FIFOs via
+// D2HSocket; the host calls read_from_tensor() to drain the FIFOs.
+//
+// Optional worker sync (Config::worker_cores):
+//   1. Service core multicasts transfer_done_sem → workers may write backing.
+//   2. Workers write slices; when metadata is enabled the compile-time master
+//      forwarder reads its own replicated metadata copy from worker L1 and
+//      writes it to the service-core staging region after all writes (fan-in),
+//      then each worker acks the service-core write_ack counter.
+//   3. Service core waits for num_workers acks, streams backing (+ metadata) to
+//      host; host calls read_from_tensor().
+// Config::master_forwarder_core is required only when metadata_size_bytes > 0.
+class D2HStreamService {
+public:
+    struct Config {
+        TensorSpec global_spec;
+        std::unique_ptr<ttnn::distributed::TensorToMesh> mapper;
+        std::optional<distributed::MeshComposerConfig> composer_config;
+        uint32_t fifo_size_bytes = 0;
+        uint32_t scratch_cb_size_bytes = 0;
+        // Worker grid that writes the backing tensor before each D2H transfer.
+        std::optional<CoreRange> worker_cores;
+        // Fixed metadata-forwarder core within worker_cores. Required only when
+        // metadata_size_bytes > 0; omitted when metadata is disabled (no master
+        // kernel — every worker writes + acks directly).
+        std::optional<CoreCoord> master_forwarder_core;
+        // Opt-in inline metadata shipped host-ward with each transfer (0 disables;
+        // single-arg read_from_tensor is used). When > 0: requires worker_cores +
+        // master_forwarder_core, >= 2 workers, and metadata_size_bytes <= the derived
+        // socket_page_size (single trailing page; multi-page is a future extension).
+        // The master forwarder fans the replicated per-worker metadata in to the
+        // service core and the sender ships it as the trailing socket page.
+        uint32_t metadata_size_bytes = 0;
+    };
+
+    D2HStreamService(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Config cfg);
+    ~D2HStreamService();
+
+    D2HStreamService(const D2HStreamService&) = delete;
+    D2HStreamService& operator=(const D2HStreamService&) = delete;
+    D2HStreamService(D2HStreamService&&) = delete;
+    D2HStreamService& operator=(D2HStreamService&&) = delete;
+
+    void read_from_tensor(ttsl::Span<std::byte> bytes, ttsl::Span<std::byte> metadata = {});
+    void read_from_tensor(Tensor& host_tensor, ttsl::Span<std::byte> metadata = {});
+    // Owner-only: bump the per-device write_ack counter so the persistent sender
+    // reads freshly-written backing tensor pages. Used when Config::worker_cores
+    // is unset; workers ack directly (and via master metadata path) when worker
+    // sync is configured.
+    void notify_backing_ready();
+    void barrier();
+
+    const Tensor& get_backing_tensor() const;
+    const TensorSpec& get_per_shard_spec() const;
+    std::size_t payload_size_bytes() const;
+    std::size_t metadata_size_bytes() const;
+
+    std::vector<distributed::D2HSocket*> get_sockets() const;
+
+    // Owner-only getters for wiring up the device workload (worker/master-forwarder
+    // kernels) that produces the backing tensor and, when enabled, the metadata.
+    // The metadata fan-in uses:
+    //   * get_worker_metadata_addr()       — per-worker L1 holding the replicated
+    //     metadata; the master reads its own copy from here (the source).
+    //   * get_metadata_input_addr(coord)   — per-coord service-core L1 the master
+    //     writes the metadata to and the sender ships from (the destination).
+    //   * get_worker_done_counter_addr() / get_metadata_ready_sem_addr() — the
+    //     master/peer handshake (peers report done, wait for metadata_ready, ack).
+    CoreRange get_worker_cores() const;
+    CoreCoord get_master_forwarder_core() const;
+    DeviceAddr get_write_ack_counter_addr(const distributed::MeshCoordinate& coord) const;
+    DeviceAddr get_transfer_done_sem_addr() const;
+    DeviceAddr get_worker_done_counter_addr() const;
+    DeviceAddr get_metadata_ready_sem_addr() const;
+    DeviceAddr get_worker_metadata_addr() const;
+    CoreCoord get_service_core(const distributed::MeshCoordinate& coord) const;
+    DeviceAddr get_metadata_input_addr(const distributed::MeshCoordinate& coord) const;
+    DeviceAddr get_metadata_addr(const distributed::MeshCoordinate& coord) const;
+
+    std::string export_descriptor(const std::string& service_id);
+    static std::unique_ptr<D2HStreamService> connect(
+        const std::string& service_id, std::optional<uint32_t> timeout_ms = std::nullopt);
+
+private:
+    D2HStreamService(
+        Config cfg,
+        std::vector<std::unique_ptr<distributed::D2HSocket>> sockets,
+        uint32_t socket_page_size,
+        uint32_t num_socket_pages);
+
+    void signal_termination();
+
+    bool is_owner_ = true;
+
+    std::shared_ptr<distributed::MeshDevice> mesh_device_;
+    Config cfg_;
+
+    std::unique_ptr<ttnn::distributed::TensorToMesh> mapper_;
+    std::unique_ptr<ttnn::distributed::MeshToTensor> composer_;
+    Tensor device_tensor_;
+    std::optional<TensorSpec> per_shard_spec_;
+
+    std::vector<std::unique_ptr<distributed::D2HSocket>> sockets_;
+    std::map<distributed::MeshCoordinate, CoreCoord> service_cores_;
+    std::map<distributed::MeshCoordinate, DeviceAddr> termination_addrs_;
+
+    // Service cores also claimed under the MeshDevice id for CB validation across
+    // repeated mesh opens (see ctor). Released in the destructor.
+    std::vector<CoreCoord> mesh_id_claimed_cores_;
+
+    // Worker-sync state (populated when Config::worker_cores is set).
+    std::optional<GlobalSemaphore> transfer_done_sem_;                   // service core -> workers: backing unlocked
+    std::map<distributed::MeshCoordinate, DeviceAddr> write_ack_addrs_;  // workers -> service core: write done
+    // Metadata fan-in state (additionally populated when metadata_size_bytes > 0).
+    std::shared_ptr<distributed::MeshBuffer> worker_done_counter_buffer_;
+    DeviceAddr worker_done_counter_addr_ = 0;            // peers -> master: slice written, roll call
+    std::optional<GlobalSemaphore> metadata_ready_sem_;  // master -> peers: you may ack now
+    // Per-worker L1 holding the replicated metadata (the master reads its own copy).
+    std::shared_ptr<distributed::MeshBuffer> metadata_worker_buffer_;
+    DeviceAddr metadata_worker_l1_addr_ = 0;
+    // Per-coord service-core L1 the master fans metadata into and the sender ships from.
+    std::map<distributed::MeshCoordinate, DeviceAddr> metadata_input_addrs_;
+    uint32_t num_workers_ = 0;
+    CoreCoord master_forwarder_core_{0, 0};
+
+    std::string descriptor_path_;
+    // Host-side scratch page: read each socket's trailing metadata page into here
+    // for the cross-socket consistency check in read_from_tensor().
+    std::vector<std::byte> metadata_scratch_;
+    std::unique_ptr<distributed::MeshWorkload> workload_;
+
     uint32_t socket_page_size_ = 0;
     uint32_t num_socket_pages_ = 0;
 };
