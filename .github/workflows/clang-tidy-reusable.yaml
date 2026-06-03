@@ -233,36 +233,6 @@ jobs:
             cmake --build --preset clang-tidy --target "$target"
           done
 
-      - name: Snapshot ctcache S3 count (before analysis)
-        # Count existing objects in the ctcache S3 folder before analysis starts.
-        # Stored as CTCACHE_S3_COUNT_BEFORE so the summary step can compute a write delta.
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
-        run: |
-          python3 - << 'PYEOF'
-          import boto3, botocore, os, sys
-
-          if os.environ.get("CTCACHE_S3_OK") != "1":
-              sys.exit(0)
-
-          s3 = boto3.client("s3",
-              endpoint_url=os.environ["AWS_ENDPOINT_URL"],
-              aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
-              aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
-              region_name=os.environ["AWS_DEFAULT_REGION"],
-              config=botocore.config.Config(s3={"addressing_style": "path"}),
-          )
-
-          folder = os.environ.get("CTCACHE_S3_FOLDER", "ct20")
-          paginator = s3.get_paginator("list_objects_v2")
-          count = sum(
-              page.get("KeyCount", 0)
-              for page in paginator.paginate(Bucket="ctcache", Prefix=f"{folder}/")
-          )
-          print(f"ctcache S3 entries before analysis: {count}")
-          with open(os.environ["GITHUB_ENV"], "a") as f:
-              f.write(f"CTCACHE_S3_COUNT_BEFORE={count}\n")
-          PYEOF
-
       - name: Activate analysis shim
         run: |
           # Overwrite the no-op shim with the real analysis wrapper.
@@ -313,59 +283,14 @@ jobs:
       - name: Publish ctcache summary
         if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         run: |
+          # clang-tidy-cache stats are per-container (fresh Docker env each run), so
+          # "Cache misses" = entries this job computed and wrote to S3 — no cross-job pollution.
           {
             echo '## ctcache Summary'
+            echo '> Cache misses = new entries written to S3 by this job'
             if command -v clang-tidy-cache &>/dev/null; then
               echo '```'
               clang-tidy-cache --show-stats 2>/dev/null || echo "stats unavailable"
               echo '```'
             fi
           } >> $GITHUB_STEP_SUMMARY
-
-          # Report how many new entries were actually written to S3 this run.
-          # CTCACHE_S3_COUNT_BEFORE was captured before analysis; we count again now and diff.
-          python3 - << 'PYEOF'
-          import boto3, botocore, os, sys
-
-          if os.environ.get("CTCACHE_S3_OK") != "1":
-              sys.exit(0)
-
-          s3 = boto3.client("s3",
-              endpoint_url=os.environ["AWS_ENDPOINT_URL"],
-              aws_access_key_id=os.environ["AWS_ACCESS_KEY_ID"],
-              aws_secret_access_key=os.environ["AWS_SECRET_ACCESS_KEY"],
-              region_name=os.environ["AWS_DEFAULT_REGION"],
-              config=botocore.config.Config(s3={"addressing_style": "path"}),
-          )
-
-          folder = os.environ.get("CTCACHE_S3_FOLDER", "ct20")
-          paginator = s3.get_paginator("list_objects_v2")
-          count_after = sum(
-              page.get("KeyCount", 0)
-              for page in paginator.paginate(Bucket="ctcache", Prefix=f"{folder}/")
-          )
-
-          count_before_str = os.environ.get("CTCACHE_S3_COUNT_BEFORE", "")
-          summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "/dev/stdout")
-
-          with open(summary_path, "a") as f:
-              f.write("\n## ctcache S3 Write Stats\n")
-              f.write("```\n")
-              if count_before_str:
-                  count_before = int(count_before_str)
-                  delta = count_after - count_before
-                  f.write(f"S3 folder       : {folder}/\n")
-                  f.write(f"Entries before  : {count_before}\n")
-                  f.write(f"Entries after   : {count_after}\n")
-                  f.write(f"New writes      : {delta}\n")
-                  if delta == 0:
-                      f.write("NOTE: 0 new writes — either full cache hit or writes are broken\n")
-              else:
-                  f.write(f"S3 folder       : {folder}/\n")
-                  f.write(f"Entries total   : {count_after}\n")
-                  f.write("(before-count not available — delta could not be computed)\n")
-              f.write("```\n")
-
-          if count_before_str:
-              print(f"ctcache S3 writes this run: {count_after - int(count_before_str)}")
-          PYEOF
