@@ -327,7 +327,6 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
                     timestep=timestep,
                     N=latents_sequence_length,
                     traced=traced,
-                    tracer_synchronize_after_execute=False,
                 )
 
                 # latents can be overwritten by trace execution, use the captured input instead,

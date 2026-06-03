@@ -118,7 +118,6 @@ class Tracer:
         tracer_cq_id: int = 0,
         tracer_blocking_execution: bool = True,
         tracer_execute_on_capture: bool = True,
-        tracer_synchronize_after_execute: bool = True,
         **kwargs: Any,
     ) -> Any:
         """Capture or execute trace.
@@ -138,8 +137,6 @@ class Tracer:
             tracer_execute_on_capture: Whether to execute the trace immediately after capturing it
                 on the first call. If ``False``, only the trace is captured and outputs are not
                 computed.
-            tracer_synchronize_after_execute: Whether to synchronize devices after executing the
-                trace.
             *args: Positional inputs to pass to the wrapped function.
             **kwargs: Named inputs to pass to the wrapped function.
 
@@ -174,16 +171,9 @@ class Tracer:
                 cq_id=tracer_cq_id,
                 blocking_execution=tracer_blocking_execution,
                 execute=tracer_execute_on_capture,
-                synchronize_after_execute=tracer_synchronize_after_execute,
             )
         else:
-            self._execute(
-                args,
-                kwargs,
-                cq_id=tracer_cq_id,
-                blocking=tracer_blocking_execution,
-                synchronize_after_execute=tracer_synchronize_after_execute,
-            )
+            self._execute(args, kwargs, cq_id=tracer_cq_id, blocking=tracer_blocking_execution)
 
         return self._outputs
 
@@ -195,7 +185,6 @@ class Tracer:
         cq_id: int,
         blocking_execution: bool,
         execute: bool,
-        synchronize_after_execute: bool,
     ) -> None:
         if self._function is None:
             msg = "tracer cannot be reused after the trace was released"
@@ -243,11 +232,9 @@ class Tracer:
             # actually compute outputs.
             for d, trace_id in zip(self._devices, trace_ids, strict=True):
                 ttnn.execute_trace(d, trace_id, cq_id=cq_id, blocking=blocking_execution)
-
-            if synchronize_after_execute:
-                for d in self._devices:
-                    ttnn.synchronize_device(d)
-                ttnn.distributed_context_barrier()
+            for d in self._devices:
+                ttnn.synchronize_device(d)
+            ttnn.distributed_context_barrier()
 
     def _execute(
         self,
@@ -256,7 +243,6 @@ class Tracer:
         *,
         cq_id: int,
         blocking: bool,
-        synchronize_after_execute: bool,
     ) -> None:
         trace_ids = self._trace_ids
         assert trace_ids is not None
@@ -275,11 +261,9 @@ class Tracer:
 
         for d, trace_id in zip(self._devices, trace_ids, strict=True):
             ttnn.execute_trace(d, trace_id, cq_id=cq_id, blocking=blocking)
-
-        if synchronize_after_execute:
-            for d in self._devices:
-                ttnn.synchronize_device(d)
-            ttnn.distributed_context_barrier()
+        for d in self._devices:
+            ttnn.synchronize_device(d)
+        ttnn.distributed_context_barrier()
 
     @property
     def trace_captured(self) -> bool:
