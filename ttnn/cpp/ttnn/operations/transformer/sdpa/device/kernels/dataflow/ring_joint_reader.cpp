@@ -679,4 +679,8 @@ void kernel_main() {
             cb_push_back(cb_v_in, v_cb_entry_tiles);
         }
     }
+
+    // Without this, the kernel could return with chain_link write-ACKs and atomic
+    // responses still in flight, leaving stale state for the next dispatch.
+    noc_async_full_barrier();
 }
