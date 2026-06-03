@@ -50,6 +50,7 @@ def _worker(
     barrier,
     result_dict,
     cores_per_worker: int,
+    pooling=None,
 ) -> None:
     """Single-chip: build model, warmup, barrier-sync, measure, report."""
     # Isolate this worker to one physical chip BEFORE importing ttnn.
@@ -66,8 +67,8 @@ def _worker(
     try:
         import ttnn
         from models.demos.wormhole.bge_m3.tests.perf.perf import (
-            _allocate_d2h_stack,
-            _d2h_step_optimized,
+            _allocate_pooled_d2h_stack,
+            _d2h_step_pooled,
             allocate_device_tensors,
             copy_inputs_to_device,
             prepare_inputs,
@@ -96,6 +97,7 @@ def _worker(
             max_batch_size=batch_size,
             max_seq_len=seq_len,
             dtype=dtype,
+            pooling=pooling,
         )
         build_sec = time.perf_counter() - t_build0
 
@@ -113,14 +115,18 @@ def _worker(
         compile_sec = time.perf_counter() - t_compile0
 
         # ── Optimized D2H staging (untilize -> dram -> copy_device_to_torch) ─
-        dram_staging, dest_torch = _allocate_d2h_stack(trace_out, device, batch_size, HIDDEN)
+        # Sized from the actual trace_out shape so it works for raw encoder
+        # output [B,1,S,H] AND any pooling head (cls/mean -> [B,1,1,H],
+        # colbert -> [B,1,S,H]).
+        pooled_s = int(trace_out.shape[2])
+        dram_staging, dest_torch = _allocate_pooled_d2h_stack(trace_out, batch_size, pooled_s, HIDDEN)
 
         # ── Warmup the full pipeline ────────────────────────────────────────
         for _ in range(warmup):
             copy_inputs_to_device(host_tensors, device_tensors)
             ttnn.synchronize_device(device)
             model.execute_trace(blocking=True)
-            _d2h_step_optimized(trace_out, device, dram_staging, dest_torch)
+            _d2h_step_pooled(trace_out, dram_staging, dest_torch)
 
         # ── All workers rendezvous before measurement ───────────────────────
         barrier.wait()
@@ -138,7 +144,7 @@ def _worker(
             model.execute_trace(blocking=True)
             t2 = time.perf_counter()
             # D2H: untilize -> DRAM staging -> copy_device_to_torch.
-            _d2h_step_optimized(trace_out, device, dram_staging, dest_torch)
+            _d2h_step_pooled(trace_out, dram_staging, dest_torch)
             t3 = time.perf_counter()
             h2d_secs.append(t1 - t0)
             fwd_secs.append(t2 - t1)
@@ -189,12 +195,13 @@ def _orchestrate(args: argparse.Namespace) -> None:
     seq_len = args.seq_len
     iterations = args.iterations
     warmup = args.warmup
+    pooling = None if args.pooling == "none" else args.pooling
 
     total_cores = os.cpu_count() or 64
     cores_per_worker = max(1, total_cores // n)
 
     print(
-        f"Multi-process DP={n} BGE-M3 (bs={batch_size}, ISL={seq_len})\n"
+        f"Multi-process DP={n} BGE-M3 (bs={batch_size}, ISL={seq_len}, pooling={args.pooling})\n"
         f"  warmup={warmup}  measured_iters={iterations}\n"
         f"  CPU cores: {total_cores} total, {cores_per_worker}/worker\n"
         f"  Barrier sync: all workers rendezvous after warmup\n"
@@ -212,7 +219,7 @@ def _orchestrate(args: argparse.Namespace) -> None:
     for i in range(n):
         p = ctx.Process(
             target=_worker,
-            args=(i, batch_size, seq_len, iterations, warmup, barrier, result_dict, cores_per_worker),
+            args=(i, batch_size, seq_len, iterations, warmup, barrier, result_dict, cores_per_worker, pooling),
             name=f"chip-{i}",
         )
         p.start()
@@ -309,6 +316,13 @@ def _parse_args():
     p.add_argument("--batch-size", type=int, default=1, help="per-chip batch size")
     p.add_argument("--seq-len", type=int, default=SEQ_LEN)
     p.add_argument("--num-devices", type=int, default=32)
+    p.add_argument(
+        "--pooling",
+        type=str,
+        default="none",
+        choices=["none", "cls", "mean", "colbert"],
+        help="pooling head: none (raw encoder, default), cls, mean, or colbert",
+    )
     # Defaults match perf.py: NUM_ITERATIONS=10 measured, 3 trace warmups.
     p.add_argument("--iterations", type=int, default=10)
     p.add_argument("--warmup", type=int, default=3)
