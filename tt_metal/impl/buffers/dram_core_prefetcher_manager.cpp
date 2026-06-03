@@ -386,8 +386,7 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
     };
 
     begin_page();
-    for (uint32_t t = 0; t < data_tensors.size(); ++t) {
-        const experimental::DramCorePrefetcherInput& input = data_tensors[t];
+    for (const auto& input : data_tensors) {
         // block_count is per-tensor: it sets how many K-blocks the kernel pushes
         // (and how K is divided in compute_tensor_layout), replacing the GCB ring size.
         const DramCorePrefetcherTensorLayout layout =
