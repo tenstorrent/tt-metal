@@ -35,8 +35,8 @@ from loguru import logger
 from transformers import AutoTokenizer
 
 import ttnn
-from models.demos.qwen35_27b.tt.model import create_qwen35_model
-from models.tt_transformers.tt.common import Mode, copy_host_to_device
+from models.demos.qwen35_27b.tt.model import allocate_paged_kv_caches, create_qwen35_model
+from models.tt_transformers.tt.common import Mode, PagedAttentionConfig, copy_host_to_device
 
 HF_MODEL_DEFAULT = (
     "/home/ttuser/.cache/huggingface/hub/models--Qwen--Qwen3.5-27B/snapshots/fc05daec18b0a78c049392ed2e771dde82bdf654"
@@ -104,9 +104,13 @@ if _MESH_SHAPE is None:
     "input_seq_len, max_gen_tokens",
     [
         pytest.param(128, 20, id="isl128"),
-        pytest.param(1024, 20, id="isl1k"),
         pytest.param(4096, 20, id="isl4k"),
-        pytest.param(4096, 100, id="isl4k_long"),
+        pytest.param(8192, 20, id="isl8k"),
+        pytest.param(16384, 20, id="isl16k"),
+        pytest.param(32768, 20, id="isl32k"),
+        pytest.param(65536, 20, id="isl64k"),
+        pytest.param(131072, 20, id="isl128k"),
+        pytest.param(262144, 20, id="isl256k"),
     ],
 )
 def test_demo_text(mesh_device, reset_seeds, ensure_gc, input_seq_len, max_gen_tokens):
@@ -116,10 +120,12 @@ def test_demo_text(mesh_device, reset_seeds, ensure_gc, input_seq_len, max_gen_t
     """
     use_ttnn_ops = bool(os.environ.get("GDN_USE_TTNN_OPS"))
     gdn_path = "ttnn_ops" if use_ttnn_ops else "parallel_scan"
-    # Prefill trace: chunk_gated_delta_rule now uses _solve_lower_triangular_blocked_ttnn
-    # (fully device-side), so GDN prefill is trace-compatible.
-    # Default True; set GDN_PREFILL_TRACE=0 to disable.
-    use_prefill_trace = os.environ.get("GDN_PREFILL_TRACE", "1") != "0"
+    # Always use paged KV + chunked-SDPA prefill: a single code path scales from
+    # ISL=128 up to ISL=128k without per-layer static [B, 1, max_seq_len, HD]
+    # KV allocations. Prefill is not traced under this path (chunked layers do
+    # ttnn.copy writes between Python calls, forbidden during trace capture).
+    use_paged = True
+    use_prefill_trace = False
     model_path = _get_model_path()
     batch_size = 32
     max_seq_len = max(1024, input_seq_len + max_gen_tokens + 128)
@@ -131,9 +137,17 @@ def test_demo_text(mesh_device, reset_seeds, ensure_gc, input_seq_len, max_gen_t
     if not os.environ.get("HF_MODEL"):
         os.environ["HF_MODEL"] = model_path
 
-    logger.info(f"=== Qwen3.5-27B Demo | ISL={input_seq_len} | GDN={gdn_path} ===")
+    logger.info(f"=== Qwen3.5-27B Demo | ISL={input_seq_len} | GDN={gdn_path} | paged={use_paged} ===")
 
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+
+    # Paged capacity must cover max_seq_len: block_size * max_num_blocks >= max_seq_len.
+    # block_size=64 → max_num_blocks = ceil(max_seq_len / 64). At 128k → 2048, 256k → 4096.
+    _page_block_size = 64
+    _page_num_blocks = (max_seq_len + _page_block_size - 1) // _page_block_size
+    paged_attention_config = (
+        PagedAttentionConfig(block_size=_page_block_size, max_num_blocks=_page_num_blocks) if use_paged else None
+    )
 
     logger.info("Loading model...")
     t0 = time.time()
@@ -144,14 +158,42 @@ def test_demo_text(mesh_device, reset_seeds, ensure_gc, input_seq_len, max_gen_t
         max_seq_len=max_seq_len,
         dtype=ttnn.bfloat8_b,
         use_ttnn_ops=use_ttnn_ops,
+        paged_attention_config=paged_attention_config,
+        use_paged_kv_cache=use_paged,
     )
     logger.info(f"Model loaded in {time.time()-t0:.1f}s")
+
+    # Paged KV caches and page tables for prefill (B=1) and decode (B=batch_size).
+    kv_caches = None
+    page_table_tt = None
+    page_table_torch = None
+    page_table_decode_torch = None
+    page_table_decode_tt = None
+    if use_paged:
+        kv_caches = allocate_paged_kv_caches(model.args, paged_attention_config, mesh_device)
+        page_table_row = torch.arange(paged_attention_config.max_num_blocks, dtype=torch.int32)
+        page_table_torch = page_table_row.unsqueeze(0)
+        page_table_tt = ttnn.from_torch(
+            page_table_torch,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+        page_table_decode_torch = page_table_row.unsqueeze(0).repeat(batch_size, 1)
+        page_table_decode_tt = ttnn.from_torch(
+            page_table_decode_torch,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
 
     args = model.args
     prompt_tokens = _build_prompt_tokens(tokenizer, input_seq_len)
     logger.info(f"Prompt: {len(prompt_tokens)} tokens (target ISL={input_seq_len})")
 
-    # --- PREFILL via traced _prefill_forward_device ---
+    # --- PREFILL ---
     seq_len = len(prompt_tokens)
     tok_tensor = torch.tensor(prompt_tokens, dtype=torch.int32).reshape(1, 1, 1, seq_len)
     tt_token_ids = ttnn.from_torch(
@@ -162,14 +204,67 @@ def test_demo_text(mesh_device, reset_seeds, ensure_gc, input_seq_len, max_gen_t
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    # Warmup / compile run — compiles all kernels before the timed run.
-    logger.info("Prefill warmup (compile)...")
-    model._reset_all_prefill_states(seq_len)
-    x_normed_warmup = model._prefill_forward_device(tt_token_ids)
-    ttnn.synchronize_device(mesh_device)
-    ttnn.deallocate(x_normed_warmup)
+    if use_paged:
+        # Paged path: layer-at-a-time chunked prefill with chunked SDPA + paged KV.
+        # No prefill trace (chunking writes ttnn.copy between layers, forbidden in trace).
+        # Skip reset_state() for full_attention layers — their KV lives in external paged
+        # caches, not in static [B, 1, max_seq_len, HD] tensors.
+        def _reset_paged_prefill_states():
+            for layer_idx, layer in enumerate(model.layers):
+                attn = layer.attention
+                layer_type = model.args.layer_types[layer_idx]
+                is_paged_attn = layer_type == "full_attention"
+                if hasattr(attn, "reset_state") and not is_paged_attn:
+                    attn.reset_state()
+                if hasattr(attn, "_init_prefill_states"):
+                    attn._init_prefill_states()
 
-    if use_prefill_trace:
+        tokens_for_chunked = torch.tensor([prompt_tokens], dtype=torch.long)
+
+        logger.info("Prefill warmup (compile, chunked + paged)...")
+        _reset_paged_prefill_states()
+        x_normed_warmup = model.prefill_layer_chunked(
+            tokens_for_chunked,
+            use_paged=True,
+            page_table=page_table_tt,
+            page_table_torch=page_table_torch,
+            kv_caches=kv_caches,
+            paged_attention_config=paged_attention_config,
+            user_id=0,
+        )
+        ttnn.synchronize_device(mesh_device)
+        ttnn.deallocate(x_normed_warmup)
+
+        logger.info("Prefill timed run (chunked + paged)...")
+        _reset_paged_prefill_states()
+        ttnn.synchronize_device(mesh_device)
+        t_prefill = time.time()
+        x_normed_trace = model.prefill_layer_chunked(
+            tokens_for_chunked,
+            use_paged=True,
+            page_table=page_table_tt,
+            page_table_torch=page_table_torch,
+            kv_caches=kv_caches,
+            paged_attention_config=paged_attention_config,
+            user_id=0,
+        )
+        ttnn.synchronize_device(mesh_device)
+        prefill_time = time.time() - t_prefill
+
+    else:
+        # Warmup / compile run — compiles all kernels before the timed run.
+        logger.info("Prefill warmup (compile)...")
+        model._reset_all_prefill_states(seq_len)
+        x_normed_warmup = model._prefill_forward_device(tt_token_ids)
+        ttnn.synchronize_device(mesh_device)
+        ttnn.deallocate(x_normed_warmup)
+
+    if use_paged:
+        # Paged path: prefill_time and x_normed_trace are already set above.
+        # No trace and no _apply_all_trace_prefill_states (KV writes happen
+        # directly into paged caches via prefill_layer_chunked).
+        pass
+    elif use_prefill_trace:
         # Trace path: capture then execute.
         # forward_prefill stores conv/rec states in Python attributes (_trace_qkv_states,
         # _trace_rec_state) as trace-internal tensors instead of ttnn.copy to pre-existing
@@ -209,6 +304,8 @@ def test_demo_text(mesh_device, reset_seeds, ensure_gc, input_seq_len, max_gen_t
     ttft_ms = prefill_time * 1000
 
     # Replicate prefill states to all batch slots NOW (after timed run).
+    # For paged: KV already in paged caches (shared across decode slots via page_table);
+    # only GDN states (conv + recurrence) need replicating.
     model._replicate_all_prefill_states()
 
     # Apply LM head to get first generated token
@@ -233,9 +330,15 @@ def test_demo_text(mesh_device, reset_seeds, ensure_gc, input_seq_len, max_gen_t
     logger.info("Decode compile step...")
     tok_batch = torch.full((batch_size,), current_token, dtype=torch.long)
     cur_pos = torch.full((batch_size,), start_pos, dtype=torch.long)
-    host_inputs = model.prepare_decode_inputs_host(tok_batch, cur_pos)
+    host_inputs = model.prepare_decode_inputs_host(
+        tok_batch, cur_pos, page_table=page_table_decode_torch if use_paged else None
+    )
     device_inputs = copy_host_to_device(host_inputs, mesh_device=mesh_device)
-    compile_out = model.ttnn_decode_forward(*device_inputs, sampling_on_device=True)
+    compile_out = model.ttnn_decode_forward(
+        *device_inputs,
+        kv_cache=kv_caches if use_paged else None,
+        sampling_on_device=True,
+    )
     tt_compile_tok = compile_out[0] if isinstance(compile_out, tuple) else compile_out
     toks_cpu = ttnn.to_torch(tt_compile_tok, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     current_token = toks_cpu[0].flatten()[0].int().item()
@@ -247,11 +350,17 @@ def test_demo_text(mesh_device, reset_seeds, ensure_gc, input_seq_len, max_gen_t
     pos = start_pos + 1
     tok_batch = torch.full((batch_size,), current_token, dtype=torch.long)
     cur_pos = torch.full((batch_size,), pos, dtype=torch.long)
-    host_inputs = model.prepare_decode_inputs_host(tok_batch, cur_pos)
+    host_inputs = model.prepare_decode_inputs_host(
+        tok_batch, cur_pos, page_table=page_table_decode_torch if use_paged else None
+    )
     copy_host_to_device(host_tensors=host_inputs, device_tensors=device_inputs)
 
     trace_id_decode = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    trace_out = model.ttnn_decode_forward(*device_inputs, sampling_on_device=True)
+    trace_out = model.ttnn_decode_forward(
+        *device_inputs,
+        kv_cache=kv_caches if use_paged else None,
+        sampling_on_device=True,
+    )
     ttnn.end_trace_capture(mesh_device, trace_id_decode, cq_id=0)
 
     tt_toks_out = trace_out[0] if isinstance(trace_out, tuple) else trace_out
@@ -268,7 +377,9 @@ def test_demo_text(mesh_device, reset_seeds, ensure_gc, input_seq_len, max_gen_t
         tok_batch = torch.full((batch_size,), current_token, dtype=torch.long)
         cur_pos = torch.full((batch_size,), pos, dtype=torch.long)
 
-        host_inputs = model.prepare_decode_inputs_host(tok_batch, cur_pos)
+        host_inputs = model.prepare_decode_inputs_host(
+            tok_batch, cur_pos, page_table=page_table_decode_torch if use_paged else None
+        )
         copy_host_to_device(host_tensors=host_inputs, device_tensors=device_inputs)
 
         ttnn.execute_trace(mesh_device, trace_id_decode, cq_id=0, blocking=False)
@@ -280,7 +391,7 @@ def test_demo_text(mesh_device, reset_seeds, ensure_gc, input_seq_len, max_gen_t
         decode_times.append(time.time() - t_step)
 
     # Cleanup traces and persistent buffers
-    if use_prefill_trace:
+    if use_prefill_trace and not use_paged:
         ttnn.release_trace(mesh_device, trace_id_prefill)
     ttnn.release_trace(mesh_device, trace_id_decode)
     ttnn.deallocate(tt_token_ids)
