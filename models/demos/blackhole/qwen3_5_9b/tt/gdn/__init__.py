@@ -71,8 +71,8 @@ class Qwen35GatedDeltaNet:
         # Eager prefill keeps the reassign path. See Qwen35Model.capture_prefill_trace_chunked.
         self._chunk_inplace_state = False
 
-    def forward(self, x, mode="recurrent", chunk_size=None):
-        return recurrent_forward(self, x, mode=mode, chunk_size=chunk_size)
+    def forward(self, x, mode="recurrent", chunk_size=None, valid_len=None):
+        return recurrent_forward(self, x, mode=mode, chunk_size=chunk_size, valid_len=valid_len)
 
     def set_external_state(self, recurrent_state, conv_state):
         """Point layer at externally-allocated state buffers.
