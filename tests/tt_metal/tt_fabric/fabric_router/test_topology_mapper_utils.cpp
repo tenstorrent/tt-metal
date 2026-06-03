@@ -578,6 +578,43 @@ protected:
         }
     }
 
+    // Verify the rank-binding split is correct: every mesh host rank's fabric nodes map to ASICs on a
+    // single physical host (a rank never straddles hosts), and each host carries exactly the expected
+    // number of distinct ranks. Used when one physical host is split into multiple host-ranks (e.g. a
+    // galaxy carved into many ranks, or a multi-galaxy system split into the MGD's finer host grid).
+    static void verify_rank_split_within_host(
+        const TopologyMappingResult& result,
+        const std::map<FabricNodeId, MeshHostRankId>& fabric_node_id_to_mesh_rank,
+        const std::map<std::string, std::set<tt::tt_metal::AsicID>>& hostname_to_asics,
+        size_t expected_ranks_per_host) {
+        std::map<tt::tt_metal::AsicID, std::string> asic_to_host;
+        for (const auto& [hostname, asics] : hostname_to_asics) {
+            for (const auto& a : asics) {
+                asic_to_host[a] = hostname;
+            }
+        }
+        std::map<MeshHostRankId, std::set<std::string>> hosts_per_rank;
+        std::map<std::string, std::set<MeshHostRankId>> ranks_per_host;
+        for (const auto& [node, rank] : fabric_node_id_to_mesh_rank) {
+            auto node_it = result.fabric_node_to_asic.find(node);
+            ASSERT_NE(node_it, result.fabric_node_to_asic.end())
+                << "Fabric node (mesh=" << node.mesh_id.get() << ", chip=" << node.chip_id << ") was not mapped";
+            auto host_it = asic_to_host.find(node_it->second);
+            ASSERT_NE(host_it, asic_to_host.end())
+                << "Mapped ASIC " << node_it->second.get() << " does not belong to any known host";
+            hosts_per_rank[rank].insert(host_it->second);
+            ranks_per_host[host_it->second].insert(rank);
+        }
+        for (const auto& [rank, hosts] : hosts_per_rank) {
+            EXPECT_EQ(hosts.size(), 1u) << "Mesh host rank " << rank.get() << " straddles " << hosts.size()
+                                        << " physical hosts; every rank's fabric nodes must land on a single host";
+        }
+        for (const auto& [hostname, ranks] : ranks_per_host) {
+            EXPECT_EQ(ranks.size(), expected_ranks_per_host)
+                << "Host " << hostname << " carries " << ranks.size() << " ranks, expected " << expected_ranks_per_host;
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Multi-mesh test helpers
     // -------------------------------------------------------------------------
@@ -3966,6 +4003,187 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_PartialRankBinding_OneHos
                 << "Fabric nodes at rank 0 must map to host_0 ASICs (100-101)";
         }
     }
+}
+
+// -----------------------------------------------------------------------------
+// Rank-binding split correctness: a multi-galaxy (or single-galaxy) physical system whose MGD declares
+// MORE mesh_host_ranks than there are physical hosts must be split so each rank is carved out of a single
+// host. These exercise the generalized same-rank-groups host-partition replication and verify the
+// resulting fabric_node <-> ASIC assignment is consistent and host-aligned.
+// -----------------------------------------------------------------------------
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoHostsSplitAcrossFourRanks_EachRankWithinOneHost) {
+    // 2 UNSET physical hosts of 2 ASICs each (4 ASICs in a 1x4 ring). The MGD declares 4 mesh host ranks
+    // (more ranks than hosts), so each host is split across 2 ranks. With the old single-host-only special
+    // case this is infeasible ("more same-rank target groups than global host partitions"); the generalized
+    // replication carves 2 ranks out of each host.
+    using namespace ::tt::tt_fabric;
+    const MeshId mesh0{0};
+
+    std::vector<FabricNodeId> logical_nodes = make_nodes(4);
+    auto logical_adj = build_ring_adjacency(logical_nodes);
+    LogicalMultiMeshGraph logical_multi_mesh_graph;
+    logical_multi_mesh_graph.mesh_adjacency_graphs_[mesh0] = AdjacencyGraph<FabricNodeId>(logical_adj);
+    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level_adj;
+    logical_mesh_level_adj[mesh0] = {};
+    logical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level_adj);
+    logical_multi_mesh_graph.mesh_exit_node_graphs_[mesh0] = AdjacencyGraph<LogicalExitNode>();
+
+    std::vector<tt::tt_metal::AsicID> physical_asics = make_asics(4, 100);
+    auto physical_adj = build_ring_adjacency(physical_asics);
+    PhysicalMultiMeshGraph physical_multi_mesh_graph;
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[mesh0] = AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj);
+    AdjacencyGraph<MeshId>::AdjacencyMap physical_mesh_level_adj;
+    physical_mesh_level_adj[mesh0] = {};
+    physical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_level_adj);
+    physical_multi_mesh_graph.mesh_exit_node_graphs_[mesh0] = AdjacencyGraph<PhysicalExitNode>();
+
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
+    for (uint32_t i = 0; i < 4; ++i) {
+        fabric_node_id_to_mesh_rank[mesh0][logical_nodes[i]] = MeshHostRankId{i};
+    }
+
+    std::map<std::string, std::set<tt::tt_metal::AsicID>> hostname_to_asics;
+    hostname_to_asics["host0"] = {physical_asics[0], physical_asics[1]};
+    hostname_to_asics["host1"] = {physical_asics[2], physical_asics[3]};
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (size_t i = 0; i < 4; ++i) {
+        asic_id_to_mesh_rank[mesh0][physical_asics[i]] = ::tt::tt_fabric::MESH_HOST_RANK_UNSET;
+    }
+
+    TopologyMappingConfig config;
+    set_strict_intra_mesh(config, {mesh0});
+    config.disable_rank_bindings = false;
+    config.hostname_to_asics = hostname_to_asics;
+
+    const auto result = map_multi_mesh_to_physical(
+        logical_multi_mesh_graph, physical_multi_mesh_graph, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
+
+    ASSERT_TRUE(result.success) << "Splitting 2 hosts across 4 ranks should succeed: " << result.error_message;
+    verify_bidirectional_consistency(result);
+    EXPECT_EQ(result.fabric_node_to_asic.size(), 4u);
+    verify_connectivity_preserved(result, logical_adj, physical_adj);
+    verify_rank_split_within_host(
+        result, fabric_node_id_to_mesh_rank[mesh0], hostname_to_asics, /*expected_ranks_per_host=*/2);
+}
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_TwoHostsTwoRanksPerHost_MultiAsicRanks) {
+    // Closer to a real dual-galaxy slice: 2 UNSET physical hosts of 4 ASICs each (8-ASIC ring), MGD declares
+    // 4 mesh host ranks of 2 fabric nodes each, so each host is split into 2 ranks owning 2 ASICs apiece.
+    using namespace ::tt::tt_fabric;
+    const MeshId mesh0{0};
+
+    std::vector<FabricNodeId> logical_nodes = make_nodes(8);
+    auto logical_adj = build_ring_adjacency(logical_nodes);
+    LogicalMultiMeshGraph logical_multi_mesh_graph;
+    logical_multi_mesh_graph.mesh_adjacency_graphs_[mesh0] = AdjacencyGraph<FabricNodeId>(logical_adj);
+    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level_adj;
+    logical_mesh_level_adj[mesh0] = {};
+    logical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level_adj);
+    logical_multi_mesh_graph.mesh_exit_node_graphs_[mesh0] = AdjacencyGraph<LogicalExitNode>();
+
+    std::vector<tt::tt_metal::AsicID> physical_asics = make_asics(8, 100);
+    auto physical_adj = build_ring_adjacency(physical_asics);
+    PhysicalMultiMeshGraph physical_multi_mesh_graph;
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[mesh0] = AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj);
+    AdjacencyGraph<MeshId>::AdjacencyMap physical_mesh_level_adj;
+    physical_mesh_level_adj[mesh0] = {};
+    physical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_level_adj);
+    physical_multi_mesh_graph.mesh_exit_node_graphs_[mesh0] = AdjacencyGraph<PhysicalExitNode>();
+
+    // chip i -> rank i/2  => ranks {0,0,1,1,2,2,3,3}
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
+    for (uint32_t i = 0; i < 8; ++i) {
+        fabric_node_id_to_mesh_rank[mesh0][logical_nodes[i]] = MeshHostRankId{i / 2};
+    }
+
+    std::map<std::string, std::set<tt::tt_metal::AsicID>> hostname_to_asics;
+    hostname_to_asics["host0"] = {physical_asics[0], physical_asics[1], physical_asics[2], physical_asics[3]};
+    hostname_to_asics["host1"] = {physical_asics[4], physical_asics[5], physical_asics[6], physical_asics[7]};
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (size_t i = 0; i < 8; ++i) {
+        asic_id_to_mesh_rank[mesh0][physical_asics[i]] = ::tt::tt_fabric::MESH_HOST_RANK_UNSET;
+    }
+
+    TopologyMappingConfig config;
+    set_strict_intra_mesh(config, {mesh0});
+    config.disable_rank_bindings = false;
+    config.hostname_to_asics = hostname_to_asics;
+
+    const auto result = map_multi_mesh_to_physical(
+        logical_multi_mesh_graph, physical_multi_mesh_graph, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
+
+    ASSERT_TRUE(result.success) << "Splitting 2 hosts into 4 multi-ASIC ranks should succeed: " << result.error_message;
+    verify_bidirectional_consistency(result);
+    EXPECT_EQ(result.fabric_node_to_asic.size(), 8u);
+    verify_connectivity_preserved(result, logical_adj, physical_adj);
+    verify_rank_split_within_host(
+        result, fabric_node_id_to_mesh_rank[mesh0], hostname_to_asics, /*expected_ranks_per_host=*/2);
+}
+
+TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_PinOutsideRankSlice_DroppedNotFatal) {
+    // A pinned fabric node whose pinned ASIC position lies in a different host rank's slice than the node's
+    // own rank binding. Reconciling pinnings with rank bindings drops the unsatisfiable pin (rather than
+    // throwing) and lets the rank binding place the node within its own host.
+    using namespace ::tt::tt_fabric;
+    const MeshId mesh0{0};
+
+    std::vector<FabricNodeId> logical_nodes = make_nodes(4);
+    auto logical_adj = build_ring_adjacency(logical_nodes);
+    LogicalMultiMeshGraph logical_multi_mesh_graph;
+    logical_multi_mesh_graph.mesh_adjacency_graphs_[mesh0] = AdjacencyGraph<FabricNodeId>(logical_adj);
+    AdjacencyGraph<MeshId>::AdjacencyMap logical_mesh_level_adj;
+    logical_mesh_level_adj[mesh0] = {};
+    logical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(logical_mesh_level_adj);
+    logical_multi_mesh_graph.mesh_exit_node_graphs_[mesh0] = AdjacencyGraph<LogicalExitNode>();
+
+    std::vector<tt::tt_metal::AsicID> physical_asics = make_asics(4, 100);
+    auto physical_adj = build_ring_adjacency(physical_asics);
+    PhysicalMultiMeshGraph physical_multi_mesh_graph;
+    physical_multi_mesh_graph.mesh_adjacency_graphs_[mesh0] = AdjacencyGraph<tt::tt_metal::AsicID>(physical_adj);
+    AdjacencyGraph<MeshId>::AdjacencyMap physical_mesh_level_adj;
+    physical_mesh_level_adj[mesh0] = {};
+    physical_multi_mesh_graph.mesh_level_graph_ = AdjacencyGraph<MeshId>(physical_mesh_level_adj);
+    physical_multi_mesh_graph.mesh_exit_node_graphs_[mesh0] = AdjacencyGraph<PhysicalExitNode>();
+
+    // node0,1 -> rank0 (host A) ; node2,3 -> rank1 (host B)
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
+    fabric_node_id_to_mesh_rank[mesh0][logical_nodes[0]] = MeshHostRankId{0};
+    fabric_node_id_to_mesh_rank[mesh0][logical_nodes[1]] = MeshHostRankId{0};
+    fabric_node_id_to_mesh_rank[mesh0][logical_nodes[2]] = MeshHostRankId{1};
+    fabric_node_id_to_mesh_rank[mesh0][logical_nodes[3]] = MeshHostRankId{1};
+
+    // Host A (asics 100,101) bound to rank0 ; host B (102,103) bound to rank1.
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    asic_id_to_mesh_rank[mesh0][physical_asics[0]] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[mesh0][physical_asics[1]] = MeshHostRankId{0};
+    asic_id_to_mesh_rank[mesh0][physical_asics[2]] = MeshHostRankId{1};
+    asic_id_to_mesh_rank[mesh0][physical_asics[3]] = MeshHostRankId{1};
+
+    TopologyMappingConfig config;
+    set_strict_intra_mesh(config, {mesh0});
+    config.disable_rank_bindings = false;
+    config.hostname_to_asics["hostA"] = {physical_asics[0], physical_asics[1]};
+    config.hostname_to_asics["hostB"] = {physical_asics[2], physical_asics[3]};
+    config.asic_positions[physical_asics[0]] = {tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{0}};
+    config.asic_positions[physical_asics[1]] = {tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{1}};
+    config.asic_positions[physical_asics[2]] = {tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{2}};
+    config.asic_positions[physical_asics[3]] = {tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{3}};
+    // Pin node0 (rank0/hostA) to asic[2]'s position, which lives in hostB/rank1 -> incompatible.
+    config.pinnings.emplace_back(
+        AsicPosition{tt::tt_metal::TrayID{1}, tt::tt_metal::ASICLocation{2}}, logical_nodes[0]);
+
+    const auto result = map_multi_mesh_to_physical(
+        logical_multi_mesh_graph, physical_multi_mesh_graph, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
+
+    ASSERT_TRUE(result.success) << "Pin incompatible with rank binding should be dropped, not fatal: "
+                                << result.error_message;
+    verify_bidirectional_consistency(result);
+    EXPECT_EQ(result.fabric_node_to_asic.size(), 4u);
+    const auto node0_asic = result.fabric_node_to_asic.at(logical_nodes[0]);
+    EXPECT_TRUE(node0_asic.get() == 100 || node0_asic.get() == 101)
+        << "node0 must stay within its rank-0 host (100/101); the cross-rank pin must be dropped";
+    EXPECT_NE(node0_asic.get(), 102u) << "the incompatible pin (asic 102, hostB) must not be honored";
 }
 
 // =============================================================================
