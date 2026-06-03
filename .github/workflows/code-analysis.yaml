@@ -111,11 +111,10 @@ jobs:
             do_full_scan="false"
           fi
 
-          # Skip scan entirely if no code/cmake changes.
-          # NOTE: force-scan only governs full vs incremental — not whether to scan at all.
-          if [[ "${{ steps.find-changes.outputs.any-code-changed }}" == "true" ]] || \
-             [[ "${{ steps.find-changes.outputs.cmake-changed }}" == "true" ]] || \
-             [[ "${{ github.ref_name }}" == "main" ]]; then
+          # Skip scan entirely if no code/cmake changes and not a full scan
+          if [[ "$do_full_scan" == "true" ]] || \
+             [[ "${{ steps.find-changes.outputs.any-code-changed }}" == "true" ]] || \
+             [[ "${{ steps.find-changes.outputs.cmake-changed }}" == "true" ]]; then
             do_scan="true"
           else
             do_scan="false"
