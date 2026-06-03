@@ -10,6 +10,11 @@ on:
         required: false
         type: string
         default: "Release"
+      runs-on:
+        required: false
+        type: string
+        default: "tt-ubuntu-2204-large-stable"
+        description: "Runner label for the build-artifact job"
       tracy:
         required: false
         type: boolean
@@ -216,6 +221,11 @@ on:
         required: false
         type: string
         default: "Release"
+      runs-on:
+        required: false
+        type: string
+        default: "tt-ubuntu-2204-large-stable"
+        description: "Runner label for the build-artifact job"
       enable-lto:
         required: false
         type: boolean
@@ -354,7 +364,7 @@ jobs:
       ${{ needs.parse-platform.outputs.version }}
     needs: [parse-platform, build-docker-image]
     timeout-minutes: 100
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: ${{ inputs['runs-on'] }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
