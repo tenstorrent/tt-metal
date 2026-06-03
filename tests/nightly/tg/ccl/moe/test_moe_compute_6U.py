@@ -1725,6 +1725,7 @@ def _run_moe_compute_impl(
         hidden_size=hidden_size,
         intermediate_size=N,
         has_bias=has_bias,
+        bh_ring_size=bh_ring_size,
     )
     w0_w1_mem_config = weight_mem_configs.w0_w1
     w2_mem_config = weight_mem_configs.w2
@@ -1762,6 +1763,7 @@ def _run_moe_compute_impl(
             E=experts_per_device,
             K=hidden_size,
             N=N,
+            bh_ring_size=bh_ring_size,
         )
         ttnn.deallocate(tt_b0_raw)
         ttnn.deallocate(tt_b1_raw)
@@ -1773,6 +1775,7 @@ def _run_moe_compute_impl(
             E=experts_per_device,
             K=hidden_size,
             N=N,
+            bh_ring_size=bh_ring_size,
         )
     ttnn.deallocate(tt_w0_raw)
     ttnn.deallocate(tt_w1_raw)
@@ -1792,6 +1795,7 @@ def _run_moe_compute_impl(
             E=experts_per_device,
             N=N,
             K=hidden_size,
+            bh_ring_size=bh_ring_size,
         )
         ttnn.deallocate(tt_b2_raw)
     else:
@@ -1801,6 +1805,7 @@ def _run_moe_compute_impl(
             E=experts_per_device,
             N=N,
             K=hidden_size,
+            bh_ring_size=bh_ring_size,
         )
     ttnn.deallocate(tt_w2_raw)
 
