@@ -44,12 +44,12 @@ from transformers import AutoConfig
 
 import ttnn
 from models.common.utility_functions import Profiler
+from models.demos.ace_step_v1_5.demo.run_prompt_to_wav import _DEFAULT_CKPT_DIR
 from models.demos.ace_step_v1_5.perf.test_perf_llm_tracy import (
     _ensure_lm_checkpoint,
     _random_token_ids,
     _tracy_signpost,
 )
-from models.demos.ace_step_v1_5.run_prompt_to_wav import _DEFAULT_CKPT_DIR
 from models.demos.ace_step_v1_5.ttnn_impl.five_hz_causal_lm_experimental import AceStepFiveHzExperimentalTtnnCausalLM
 from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
     ace_step_enable_tracy_profiler_env,
