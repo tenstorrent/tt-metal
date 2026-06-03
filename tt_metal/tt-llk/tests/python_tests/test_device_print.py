@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import re
+
 import pytest
 import torch
 from conftest import skip_for_coverage
@@ -8,6 +10,7 @@ from helpers.bfp_format_utils import bfp4b_to_float16b, bfp8b_to_float16b
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import DestAccumulation, Tilize
+from helpers.logger import strip_ansi
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -22,22 +25,36 @@ from helpers.test_variant_parameters import (
 pytestmark = skip_for_coverage
 
 
+# Float values are always rendered with at least one fractional digit (the
+# formatter uses {:7.2f}), so requiring \d+ after the dot rejects row
+# prefixes like "01." as floats. The int branch handles {:7d} cells.
+_NUMBER_RE = re.compile(r"-?\d+\.\d+(?:[eE][+-]?\d+)?|-?\.\d+(?:[eE][+-]?\d+)?|-?\d+")
+_ANGLED_MARKER_RE = re.compile(r"<[^>]*>")
+# A tile slice arrives as a single multi-line string (one DEVICE_PRINT call,
+# embedded \n between rows), so MULTILINE is required to anchor at every row.
+_ROW_PREFIX_RE = re.compile(r"^\d+\.\s+", re.MULTILINE)
+
+
 def _extract_floats(lines: list[str]) -> list[float]:
-    """Pull every float out of the given lines into a list."""
+    """Pull every number out of the given lines into a list of floats.
+    Strips the dprint '[RISC|...]' prefix, tile truncation notices,
+    ANSI color codes, and the tensor row prefix."""
+
     out: list[float] = []
     for line in lines:
-        for tok in line.split("] ", 1)[-1].split():
-            try:
-                out.append(float(tok))
-            except ValueError:
-                continue
+        body = line.split("] ", 1)[-1]
+        body = _ANGLED_MARKER_RE.sub("", body)
+        body = strip_ansi(body)
+        body = _ROW_PREFIX_RE.sub("", body)
+        out.extend(float(m) for m in _NUMBER_RE.findall(body))
     return out
 
 
 def _records(lines: list[str]) -> list[list[str]]:
-    """Group device_print_lines into per-DEVICE_PRINT chunks. A new chunk starts
-    at every '[RISC|file:line]' marker; continuation lines (multi-row tile slices)
-    attach to the preceding chunk."""
+    """Group device_print_lines into per-DEVICE_PRINT chunks.
+    A new chunk starts at every '[RISC|file:line]' header.
+    Multi-line records attach to the preceding chunk."""
+
     chunks: list[list[str]] = []
     for line in lines:
         if line.startswith("["):
@@ -80,8 +97,11 @@ def test_device_print():
     # Rev is declared { Z=4, Y=2, X=1 }, so 7 -> "Z | Y | X", not "X | Y | Z".
     assert "unpack: flag_rev=Z | Y | X" in full
 
-    # dp_typed_array_t wire-format smoke.
-    assert "unpack: array=1.0 2.0 3.0 4.0" in full
+    array_lines = [line for line in lines if "unpack: array=" in line]
+    assert array_lines, "unpack: array= line missing"
+    assert _extract_floats(array_lines) == pytest.approx(
+        [1.0, 2.0, 3.0, 4.0]
+    )  # Rounding
 
     # Math: one print per type category
     assert "math: i32=-1 u32=65536" in full
@@ -176,7 +196,10 @@ def test_dprint_tile(formats):
         for h in _TILE_SLICE_INDICES
         for w in _TILE_SLICE_INDICES
     ]
-    assert _extract_floats(records[0]) == expected_full
+
+    assert _extract_floats(records[0]) == pytest.approx(
+        expected_full, abs=0.01
+    )  # Rounding
 
     # records[1]: hw0_32_4 has 64 cells. Truncates at MAX_BYTES / bytes_per_elt;
     # for 1-byte formats the 64 cells exactly fit and no marker is emitted.
@@ -186,7 +209,7 @@ def test_dprint_tile(formats):
         for h in _TRUNC_SLICE_INDICES
         for w in _TRUNC_SLICE_INDICES
     ]
-    assert _extract_floats(records[1]) == all_64[:fit_cells]
+    assert _extract_floats(records[1]) == pytest.approx(all_64[:fit_cells], abs=0.01)
     truncated = "TileSlice truncated" in "".join(records[1])
     assert truncated == (
         fit_cells < 64
@@ -232,9 +255,9 @@ def test_dprint_tensix(dest_acc):
 
     # bf16 round-trips through DEST exactly: DestAcc.Yes widens to fp32 with
     # zero low bits; DestAcc.No keeps it as Float16_b. Skip the "Tile ID = 0"
-    # header, its trailing "0" parses as a float.
+    # header, as its trailing "0" parses as a float.
     expected = src_A.to(torch.float32).flatten().tolist()
     decoded = _extract_floats(
         [line for line in outcome.device_print_lines if "Tile ID" not in line]
     )
-    assert decoded == expected, f"Decoded DEST {decoded} != stimulus {expected}"
+    assert decoded == pytest.approx(expected, abs=0.01)
