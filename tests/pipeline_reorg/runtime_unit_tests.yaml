@@ -368,3 +368,18 @@
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+
+# Service Core Manager Tests (BH only, SD + FD)
+- name: service_core_manager
+  cmd: |
+    TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='ServiceCoreSdFixture.*'
+    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter='ServiceCoreFdFixture.*'
+  skus:
+    bh_p150b_civ2:
+      timeout: 10
+    bh_p100a_civ2_viommu:
+      timeout: 10
+    bh_quietbox:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime

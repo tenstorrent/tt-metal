@@ -70,7 +70,7 @@
 #ifdef TT_METAL_USE_EMULE
 #include "impl/emulation/emulated_program_runner.hpp"
 #endif
-#include <tt-metalium/internal/service/service_core_manager.hpp>
+#include <internal/service/service_core_manager.hpp>
 
 namespace tt::tt_metal {
 struct RuntimeArgsData;

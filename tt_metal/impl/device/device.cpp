@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
-#include <tt-metalium/internal/service/service_core_manager.hpp>
+#include <internal/service/service_core_manager.hpp>
 #include "context/context_types.hpp"
 #include "context/metal_env_accessor.hpp"
 #include "device_impl.hpp"

@@ -17,7 +17,7 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include <tt-metalium/internal/service/service_core_manager.hpp>
+#include <internal/service/service_core_manager.hpp>
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>

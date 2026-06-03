@@ -89,7 +89,7 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "impl/allocator/allocator.hpp"
-#include <tt-metalium/internal/service/service_core_manager.hpp>
+#include <internal/service/service_core_manager.hpp>
 
 namespace tt {
 class tt_hlk_desc;
@@ -1469,6 +1469,9 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
                 max_l1_size);
         }
 
+        // Service cores allocate L1 independently per core (not lock-step like workers), growing down
+        // from L1_END. CBs grow up from DEFAULT_UNRESERVED. Min frontier across the CB range catches
+        // the most constrained core - collision if any frontier sits below the CB region end
         const bool on_service_core =
             !devices_for_svc_check.empty() && svc.is_service_core(cb_allocator.core_range.start_coord);
 

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/internal/service/service_core_manager.hpp>
+#include <internal/service/service_core_manager.hpp>
 
 #include <memory>
 #include <unordered_map>

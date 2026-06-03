@@ -13,7 +13,7 @@
 #include "mesh_workload_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "dispatch/system_memory_manager.hpp"
-#include <tt-metalium/internal/service/service_core_manager.hpp>
+#include <internal/service/service_core_manager.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 namespace tt::tt_metal::distributed {
