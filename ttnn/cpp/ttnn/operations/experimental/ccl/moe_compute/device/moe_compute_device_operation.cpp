@@ -7,6 +7,8 @@
 #include "moe_compute_device_operation.hpp"
 #include "moe_compute_program_factory.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
@@ -398,24 +400,6 @@ std::vector<ttnn::Tensor> moe_compute(
         }
     }
 
-    // In compute_only mode, the public-layer must not pass any CCL-related optionals.
-    if (compute_only) {
-        TT_FATAL(!cluster_axis.has_value(), "moe_compute(compute_only=true) requires cluster_axis to be std::nullopt");
-        TT_FATAL(!topology.has_value(), "moe_compute(compute_only=true) requires topology to be std::nullopt");
-        TT_FATAL(!num_links.has_value(), "moe_compute(compute_only=true) requires num_links to be std::nullopt");
-        TT_FATAL(
-            !mux_core_range_set.has_value(),
-            "moe_compute(compute_only=true) requires mux_core_range_set to be std::nullopt");
-        TT_FATAL(
-            !optional_cross_device_semaphore.has_value(),
-            "moe_compute(compute_only=true) requires optional_cross_device_semaphore to be std::nullopt");
-        TT_FATAL(
-            !optional_output_tensor.has_value(),
-            "moe_compute(compute_only=true) requires optional_output_tensor to be std::nullopt");
-    } else {
-        TT_FATAL(cluster_axis.has_value(), "moe_compute(compute_only=false) requires cluster_axis to be provided");
-    }
-
     const auto& combine_cores = get_moe_combine_cores(mesh_device, num_token_parallel_cores, num_data_parallel_cores);
 
     // BH ring size: default 12; supported {8, 12, 16}. WH always uses 12 (12 DRAM banks).
@@ -429,14 +413,9 @@ std::vector<ttnn::Tensor> moe_compute(
 
     std::optional<ttnn::experimental::prim::SelectiveReduceCombineParams> combine_params;
     if (!compute_only) {
-        // Full path: cluster_axis is required here; the validation block above ensures has_value().
-        // num_links default is 4 (matches WH 6U eth-channel count). On BH single Loudbox the actual
-        // eth-channel count is 2, so callers there must override (the default=4 trips a fabric
-        // "Requested link index N is out of bounds" error on BH). The CCL pattern of falling back
-        // to `get_num_links()` is not used here: that helper subtracts 1 on non-mmio-capable meshes
-        // (#27196 territory) and returns 1 on BH single LB, which is wrong (should be 2). Until that
-        // helper is BH-aware, keep the hardcoded 4 default and require explicit override on BH.
-        const uint32_t resolved_num_links = num_links.value_or(4);
+        // see #27196 for potential limitations
+        const uint32_t resolved_num_links =
+            num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, *cluster_axis));
         // Resolve `topology` via the shared CCL helper. This (a) substitutes the fabric
         // default when `topology` is nullopt, (b) maps Torus → Mesh when the tensor doesn't
         // span a wrap edge so the TT_FATAL below can reject it, and (c) downgrades Ring → Linear
