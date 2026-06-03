@@ -457,6 +457,8 @@ def main() -> int:
             sku=sku,
         )
 
+        hard_failures_prefix = f"{benchmark_file.name}, model={model_name}, sku={sku}, batch_size={batch_size}, seq_len={seq_len}"
+
         for metric_name, expected in thresholds.items():
             if model_targets.is_tolerance_key(metric_name):
                 continue
@@ -466,13 +468,12 @@ def main() -> int:
                 measured_value = _extract_metric_value(metric_name, measured)
             except ValueError as exc:
                 hard_failures.append(
-                    f"{benchmark_file.name}: ambiguous metric '{metric_name}' for model={model_name}, sku={sku}: {exc}"
+                    f"{hard_failures_prefix}: ambiguous metric '{metric_name}': {exc}"
                 )
                 continue
             if measured_value is None or math.isnan(measured_value):
                 hard_failures.append(
-                    f"{benchmark_file.name}: metric '{metric_name}' missing in benchmark payload for "
-                    f"model={model_name}, sku={sku}"
+                    f"{hard_failures_prefix}: metric '{metric_name}' missing in benchmark payload for measured={measured}"
                 )
                 continue
             tolerance = model_targets.resolve_metric_tolerance(
@@ -487,7 +488,7 @@ def main() -> int:
                 tolerance=tolerance,
             )
             if metric_failure:
-                hard_failures.append(f"{benchmark_file.name}: {metric_failure}")
+                hard_failures.append(f"{hard_failures_prefix}: {metric_failure}")
 
     for failure in hard_failures:
         print(f"::error::{failure}")

@@ -74,19 +74,19 @@ class TokenAccuracy:
         return accuracy_top1, accuracy_top5
 
 
-def get_accuracy_thresholds(model_args, seq_len: int):
+def get_accuracy_thresholds(model_args, seq_len: int, batch_size: int = 1):
     """Resolve accuracy thresholds from centralized model targets."""
     centralized_targets = resolve_accuracy_targets(
         model_name=model_args.base_model_name,
         sku=model_args.device_name,
-        batch_size=1,
+        batch_size=batch_size,
         seq_len=seq_len,
     )
     if not centralized_targets or "top1" not in centralized_targets or "top5" not in centralized_targets:
         raise ValueError(
             "Could not find centralized accuracy targets for "
             f"{model_args.base_model_name} on {model_args.device_name} "
-            f"(batch_size=1, seq_len={seq_len})"
+            f"(batch_size={batch_size}, seq_len={seq_len})"
         )
 
     # Preserve previous behavior for integer-rounded CI checks.
