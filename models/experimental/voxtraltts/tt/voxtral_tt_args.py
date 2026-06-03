@@ -150,6 +150,39 @@ def voxtral_text_fast_optimizations(model_args):
     return DecodersPrecision(model_args.n_layers, model_args.model_name, opt)
 
 
+def voxtral_text_hf_aligned_optimizations(model_args):
+    """Max accuracy + HF-aligned attention: BF16 weights, HiFi4 matmuls, fp32 SDPA softmax.
+
+    Identical to ``voxtral_text_high_accuracy_optimizations`` except SDPA runs at
+    ``HIFI4_FP32`` (``dst_full_sync_en=False``) so the attention softmax is promoted to
+    fp32, matching the HF reference's fp32 softmax. This minimises last-hidden divergence
+    across the autoregressive decode loop (which feeds the acoustic head), reducing the
+    free-run acoustic-code flips that come from text-hidden drift rather than FSQ rounding.
+    """
+    opt = ModelOptimizations(
+        {
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BF16,
+                TensorGroup.FF2: PrecisionSetting.BF16,
+                TensorGroup.WQKV: PrecisionSetting.BF16,
+                TensorGroup.KV_CACHE: PrecisionSetting.BF16,
+                TensorGroup.WO: PrecisionSetting.BF16,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI4,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI4,
+                OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
+                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4_FP32,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4_FP32,
+                OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
+                OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
+            },
+        }
+    )
+    return DecodersPrecision(model_args.n_layers, model_args.model_name, opt)
+
+
 # Backward-compatible alias used by text-model PCC tests.
 voxtral_text_logits_pcc_optimizations = voxtral_text_high_accuracy_optimizations
 
