@@ -208,6 +208,44 @@ init in paired mode — `GetMemoryView(parent_submesh, L1)` doesn't see
 allocations made on a parent's carved children, so reading the parent
 submesh returned 0 MB even though weights were resident on each chip.
 
+### device_siglip=True probe (2026-06-03)
+
+Probe with `PI0_OC_L1_PROBE_DEVICE_SIGLIP=1`, paired-mode OFF:
+
+```
+Stage     Chips queried  L1 post-fwd       DRAM post-fwd
+─────────────────────────────────────────────────────────
+vision    1 (chip 0)         0.0 MB           181.9 MB    (SigLIP-27 on chip)
+prefill   18 (parent)        9.4 MB          2113.4 MB    (replicated, paired off)
+denoise   6 (parent)         9.4 MB           576.6 MB    (replicated, paired off)
+```
+
+End-to-end forward completes. Vision-on-device path is functional —
+SigLIP-27 lives on the 3 vision chips + projector chip instead of host
+CPU, ~182 MB of vision weights on chip 0 (was 0 / 0 in host mode).
+
+A `Pi0_5OptionCVisionSliceSplit.embed_images()` fix was required to
+make this work: the slice was passing the host `torch.Tensor`
+`pixel_values` directly to `siglip_chunks[0].forward()` which expects
+a ttnn.Tensor (the first op it runs is `ttnn.permute(x, (0, 2, 3, 1))`
+NCHW→NHWC on device). The upload is now performed inside the slice,
+matching the trace test convention (`bf16, TILE, DRAM_MEMORY_CONFIG`).
+Smoke test #11 didn't catch this because it's a dry-run construction
+test — it builds the slice but doesn't call `embed_images`.
+
+**Open follow-up** — SigLIP weights are in **DRAM**, not L1, because
+`SigLIPVisionTowerTTNN` uploads its own weights with ttnn's default
+memory config (DRAM). To get the deployment plan's "~157 MB L1 / vision
+chip" placement, either:
+- Modify `SigLIPVisionTowerTTNN` to accept a memory_config parameter
+  and have `Pi0_5OptionCVisionSliceSplit` pass `L1_MEMORY_CONFIG`, or
+- Have the wrapper post-process the constructed slice to move each
+  weight tensor to L1.
+
+That's the same class of work as the prefill/denoise L1-residency
+follow-up; they can be done together once the MLP CB clash is fixed
+(see OPEN_ISSUE_MLP_CB_CLASH.md).
+
 ### Status — open
 
 2. ⚠️  **`run_inference` crashes in paired mode at the MLP GELU CB clash.**

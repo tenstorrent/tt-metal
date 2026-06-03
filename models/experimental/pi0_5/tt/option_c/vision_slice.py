@@ -295,8 +295,25 @@ class Pi0_5OptionCVisionSliceSplit:
         if pixel_values.dtype != torch.float32:
             pixel_values = pixel_values.to(torch.float32)
 
+        # Upload pixel_values to chip 0. SigLIPVisionTowerTTNN.forward expects
+        # a ttnn.Tensor on the device that owns patch_embed (chip 0 here) —
+        # the first op it runs is `ttnn.permute(x, (0, 2, 3, 1))` (NCHW → NHWC)
+        # which can't accept a torch tensor. Match the single-device convention
+        # from test_perf_ttnn_full_e2e_trace.py:_build_inputs (bf16, TILE,
+        # DRAM_MEMORY_CONFIG).
+        chip0 = self.micro_submeshes[0]
+        pixel_values_ttnn = ttnn.from_torch(
+            pixel_values.contiguous(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=chip0,
+            mesh_mapper=ttnn.replicate_tensor_to_mesh_mapper(chip0),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
         # Chip 0: patch_embed + pos_embed + SigLIP layers 0–8.
-        h = self.siglip_chunks[0].forward(pixel_values)
+        h = self.siglip_chunks[0].forward(pixel_values_ttnn)
+        ttnn.deallocate(pixel_values_ttnn)
 
         # Chip 1: SigLIP layers 9–17 (no patch / pos_emb add — already done).
         h_next = send_activation_via_host(h, self.micro_submeshes[1])
