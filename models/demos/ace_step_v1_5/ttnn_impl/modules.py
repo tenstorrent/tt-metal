@@ -152,7 +152,6 @@ class GEGLUMLPTTNN:
         a = ttnn.slice(up, (0, 0, 0, 0), (int(up.shape[0]), 1, int(up.shape[2]), d))
         b = ttnn.slice(up, (0, 0, 0, d), (int(up.shape[0]), 1, int(up.shape[2]), d2))
         ttnn.deallocate(up)
-        # GEGLU = GELU(a) * b
         a = ttnn.gelu(a)
         y = ttnn.multiply(a, b)
         ttnn.deallocate(a)
@@ -229,7 +228,6 @@ class MultiHeadSelfAttentionTTNN:
         ttnn = self.ttnn
         _sr = ace_step_reshape_kwargs(ttnn)
         _pk = ace_step_permute_kwargs(ttnn)
-        # x: [B,1,S,D]
         q = ttnn.linear(x, self.wq, bias=self.bq, transpose_b=True)
         k = ttnn.linear(x, self.wk, bias=self.bk, transpose_b=True)
         v = ttnn.linear(x, self.wv, bias=self.bv, transpose_b=True)
