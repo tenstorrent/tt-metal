@@ -283,7 +283,6 @@ jobs:
       - name: Publish ctcache summary
         if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
         run: |
-          # clang-tidy-cache stats are per-container (fresh Docker env each run) — no cross-job pollution.
           {
             echo '## ctcache Summary'
             if command -v clang-tidy-cache &>/dev/null; then
