@@ -234,7 +234,9 @@ class TtMistralImageAttention(LightweightModule):
         ttnn.deallocate(xqkv_fused)
         return q, k, v
 
-    def _nlp_concat_heads(self, attn_output_1QSD: ttnn.Tensor, seq_len: int) -> ttnn.Tensor:
+    def _nlp_concat_heads(
+        self, attn_output_1QSD: ttnn.Tensor, seq_len: int, block_shard_out: bool = False
+    ) -> ttnn.Tensor:
         sdpa_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
         if vision_use_sharded_nlp_concat(seq_len, self.n_local_heads, self._padded_head_dim, self.configuration):
             concat_in_mem = vision_nlp_concat_input_memcfg(
@@ -244,9 +246,19 @@ class TtMistralImageAttention(LightweightModule):
             ttnn.deallocate(attn_output_1QSD)
             out = ttnn.experimental.nlp_concat_heads(attn_sharded, memory_config=sdpa_mem_cfg)
             ttnn.deallocate(attn_sharded)
-            return out
-        out = ttnn.experimental.nlp_concat_heads(attn_output_1QSD, memory_config=sdpa_mem_cfg)
-        ttnn.deallocate(attn_output_1QSD)
+        else:
+            out = ttnn.experimental.nlp_concat_heads(attn_output_1QSD, memory_config=sdpa_mem_cfg)
+            ttnn.deallocate(attn_output_1QSD)
+        if block_shard_out:
+            # nlp_concat_heads can only emit a heads-grouped shard (its output shard is derived from the
+            # input shard), not the 2D [seq/8, width/8] block layout the wo bs/dram/bs matmul wants, so
+            # reshard the interleaved concat output to that block layout here. This feeds the wo a
+            # block-sharded in0 and lets the wo output stay block-sharded into the reduce-scatter,
+            # removing the post-wo L1->DRAM CopyDeviceOp.
+            bs_mem = vision_rms_norm_block_shard_memcfg(seq_len, self.n_local_heads * self._padded_head_dim, 8, 8)
+            sharded = ttnn.interleaved_to_sharded(out, bs_mem)
+            ttnn.deallocate(out)
+            return sharded
         return out
 
     @staticmethod
@@ -344,6 +356,50 @@ class TtMistralImageAttention(LightweightModule):
             fuse_batch=True,
         )
 
+    def _wo_block_shard_eligible(self, seq_len: int, max_mm_seq_len: int) -> bool:
+        """True when the wo runs as the bs/dram/bs sweep winner (8x8 block-sharded, single chunk).
+
+        Needs num_devices>1 (so the reduce-scatter — and thus the L1->DRAM copy — exists), a single
+        matmul chunk, and Mt/Nt divisible by the 8-row grid with Kt divisible by the 8-col grid
+        (Kt=8 -> Kt/gx=1 -> in0_block_w=1).
+        """
+        if self.num_devices <= 1 or seq_len > max_mm_seq_len or seq_len % 32 != 0:
+            return False
+        gx, gy = 8, 8
+        mt = seq_len // 32
+        nt = self.hidden_size // 32
+        kt = (self.n_local_heads * self._padded_head_dim) // 32
+        return (
+            mt % gy == 0
+            and nt % gx == 0
+            and kt % gx == 0
+            and int(self.grid_size.x) >= gx
+            and int(self.grid_size.y) >= gy
+        )
+
+    def _wo_block_shard_progcfg(
+        self, seq_len: int, grid_x: int = 8, grid_y: int = 8
+    ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+        """Block-sharded wo (sweep winner ``2D bs/dram/bs 8x8 w1``): in0 block-sharded (K=256 split
+        across gx -> Kt/gx=1 -> in0_block_w=1), out block-sharded. out_subblock_w is the largest
+        divisor of per_core_N (<=4, within the DST budget)."""
+        per_core_m = (seq_len // 32) // grid_y
+        per_core_n = (self.hidden_size // 32) // grid_x
+        out_subblock_w = max(w for w in range(1, per_core_n + 1) if per_core_n % w == 0 and w <= 4)
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid_x, grid_y),
+            in0_block_w=1,
+            out_subblock_h=1,
+            out_subblock_w=out_subblock_w,
+            out_block_h=per_core_m,
+            out_block_w=per_core_n,
+            per_core_M=per_core_m,
+            per_core_N=per_core_n,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=True,
+        )
+
     def _linear_qkv_seq_chunked(self, x_11SH, seq_len: int, max_mm_seq_len: int) -> ttnn.Tensor:
         """Fused QKV ``ttnn.linear`` over the sequence axis; chunk so matmul ``m`` fits L1 CB budget."""
         x_11SH, seq_len, original_seq_len = pad_seq_to_chunk_multiple(x_11SH, seq_len, max_mm_seq_len)
@@ -411,13 +467,20 @@ class TtMistralImageAttention(LightweightModule):
             output_memory_config if output_memory_config is not None else vision_seq_memcfg(seq_len, self.hidden_size)
         )
         if seq_len <= max_mm_seq_len:
+            # Block-sharded in0 (from concat_heads) -> bs/dram/bs sweep winner; output stays
+            # block-sharded for the reduce-scatter (no post-wo L1->DRAM copy).
+            program_config = (
+                self._wo_block_shard_progcfg(seq_len)
+                if attn_output_11SH.is_sharded()
+                else self._wo_program_config(seq_len, seq_len)
+            )
             out = ttnn.linear(
                 attn_output_11SH,
                 self.wo,
                 compute_kernel_config=self.wo_compute_kernel_config,
                 dtype=ttnn.bfloat16,
                 memory_config=wo_mem_cfg,
-                program_config=self._wo_program_config(seq_len, seq_len),
+                program_config=program_config,
             )
             return trim_seq_dim2(out, original_seq_len)
 
@@ -440,7 +503,13 @@ class TtMistralImageAttention(LightweightModule):
             x_11SH = ttnn.to_memory_config(x_11SH, act_mem_cfg)
 
         max_mm_seq_len = pixtral_effective_mm_seq_len(self.configuration, seq_len)
-        wo_out_mem_cfg = act_mem_cfg
+        # Block-shard the wo (bs/dram/bs sweep winner) so its output feeds the reduce-scatter directly,
+        # removing the L1->DRAM copy. wo_out_mem_cfg becomes block-sharded and concat_heads emits the
+        # matching block-sharded in0.
+        wo_block_shard = self._wo_block_shard_eligible(seq_len, max_mm_seq_len)
+        wo_out_mem_cfg = (
+            vision_rms_norm_block_shard_memcfg(seq_len, self.hidden_size, 8, 8) if wo_block_shard else act_mem_cfg
+        )
 
         xqkv_fused = self._linear_qkv_seq_chunked(x_11SH, seq_len, max_mm_seq_len)
         if seq_len > max_mm_seq_len and seq_len % max_mm_seq_len == 0:
@@ -467,7 +536,7 @@ class TtMistralImageAttention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD)
         ttnn.deallocate(v_heads_1VSD)
 
-        attn_output_11SH = self._nlp_concat_heads(attn_output_1QSD, seq_len)
+        attn_output_11SH = self._nlp_concat_heads(attn_output_1QSD, seq_len, block_shard_out=wo_block_shard)
 
         output_11SH = self._linear_wo_seq_chunked(
             attn_output_11SH,
