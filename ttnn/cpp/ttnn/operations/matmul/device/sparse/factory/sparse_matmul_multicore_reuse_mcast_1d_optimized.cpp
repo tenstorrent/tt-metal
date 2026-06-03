@@ -252,7 +252,18 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     auto top_left_core_physical = device->worker_core_from_logical_core(top_left_core);
     auto bottom_right_core_physical = device->worker_core_from_logical_core(bottom_right_core);
 
-    uint32_t num_batch_compute = nnz.value_or(sparsity.logical_volume());
+    // Option C (op-level robustness): a caller-supplied static `nnz` is only safe when the
+    // sparsity tensor is guaranteed to have exactly `nnz` non-zeros. For single-token decode
+    // (Mt == 1) the sparsity comes from per-token routing whose non-zero count is
+    // data-dependent (e.g. softmax weights flushing to 0), so a static nnz can mismatch the
+    // actual count and deadlock the in0 mcast (receivers wait on a block the sender skips).
+    // In that case ignore nnz and drive the handshake from the actual sparsity at runtime
+    // (get_batch_from_reader). Prefill (Mt > 1) uses structured sparsity with a known count,
+    // so it keeps the nnz fast-path.
+    const bool infer_nnz_from_sparsity = (Mt == 1);
+    const bool use_get_batch_from_reader = !nnz.has_value() || infer_nnz_from_sparsity;
+    uint32_t num_batch_compute =
+        (nnz.has_value() && !infer_nnz_from_sparsity) ? nnz.value() : sparsity.logical_volume();
 
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -308,7 +319,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)batchB,                                  // batchB
         (std::uint32_t)sparsity.buffer()->aligned_page_size(),  // sparsity_pagesize
         (std::uint32_t)!is_input_a_sparse,                      // bcast_A
-        (std::uint32_t)!nnz.has_value(),                        // get_batch_from_reader
+        (std::uint32_t)use_get_batch_from_reader,                        // get_batch_from_reader
         // fuse op args
         (std::uint32_t)false,  // fuse_op
     };
@@ -382,7 +393,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)in0_mcast_receiver_semaphore_id,
         // batch args
         (std::uint32_t)num_batch_compute,  // batch
-        (std::uint32_t)!nnz.has_value(),   // get_batch_from_reader
+        (std::uint32_t)use_get_batch_from_reader,   // get_batch_from_reader
     };
 
     std::map<std::string, std::string> mm_kernel_defines;
@@ -525,7 +536,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         out_block_tiles,         // out_block_num_tiles
 
         false,             // untilize_out
-        !nnz.has_value(),  // get_batch_from_reader
+        use_get_batch_from_reader,  // get_batch_from_reader
         false,             // in0_transpose_tile
     };
 
