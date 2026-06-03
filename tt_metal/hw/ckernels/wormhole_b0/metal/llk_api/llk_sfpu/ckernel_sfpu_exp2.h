@@ -17,11 +17,7 @@ namespace ckernel::sfpu {
 // Decompose x = n + f, where n = round(x) and f = x - n ∈ [-0.5, 0.5].
 // Then 2^x = 2^n * 2^f, where:
 //   - 2^n is realised by adding n to the IEEE-754 exponent of 2^f via setexp.
-//   - 2^f is approximated by a degree-5 truncated Taylor expansion of
-//     exp(f·ln2) in f. (A true Remez minimax polynomial would shave ~1 bit
-//     of worst-case error vs. Taylor, but Taylor is well within the ≤ 1 ulp
-//     fp32 / ≤ 0.5 ulp bf16 spec on [-0.5, 0.5] and keeps the coefficients
-//     auditable against the closed-form expressions ln(2)^k / k!.)
+//   - 2^f is approximated by a degree-6 minimax polynomial on [-0.5, 0.5].
 //
 // This bypasses the redundant `* ln(2)` / `* 1/ln(2)` round-trip that the
 // previous implementation paid for by routing through `exp(x * ln(2))`.
@@ -36,23 +32,34 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_core_unsafe_(sfpi::vFloat x) {
     sfpi::vInt n_int;
     sfpi::vFloat n_float = _sfpu_round_to_nearest_int32_(x, n_int);
     sfpi::vFloat f = x - n_float;
+    /*
+    sfpi::vInt i = sfpi::float_to_int16(x);
+    sfpi::vFloat j = sfpi::int32_to_float(i);
+    sfpi::vFloat f = x - j;
+    i = sfpi::abs(i);
+    i = sfpi::reinterpret<sfpi::vInt>(sfpi::copysgn(sfpi::reinterpret<sfpi::vFloat>(i), x));
+    */
 
-    // Step 2: 2^f via degree-5 truncated Taylor polynomial on [-0.5, 0.5].
-    // Coefficients are the closed-form Taylor expansion of exp(f·ln2);
-    // single-precision representable and within ≤ 1 ulp on the interval.
-    //   2^f ≈ 1 + c1·f + c2·f² + c3·f³ + c4·f⁴ + c5·f⁵
+    // Step 2: 2^f via degree-6 relative minimax polynomial on [-0.5, 0.5].
+    // Degree-5 Taylor reaches ~39 FP32 ULP near the interval endpoints.
+    //   2^f ≈ c0 + c1·f + c2·f² + c3·f³ + c4·f⁴ + c5·f⁵ + c6·f⁶
     sfpi::vFloat p = PolynomialEvaluator::eval(
         f,
-        sfpi::vConst1,   // c0 = 1
-        0x1.62e430p-1f,  // c1 = ln(2)               ≈ 0.6931472
-        0x1.ebfbe0p-3f,  // c2 = ln(2)²/2            ≈ 0.2402266
-        0x1.c6b08ep-5f,  // c3 = ln(2)³/6            ≈ 0.0555041
-        0x1.3b2ab6p-7f,  // c4 = ln(2)⁴/24           ≈ 0.0096181
-        0x1.5d87fep-10f  // c5 = ln(2)⁵/120          ≈ 0.0013336
+        sfpi::vConst1,    // c0
+        0x1.62e430p-1f,   // c1
+        0x1.ebfbdap-3f,   // c2
+        0x1.c6aed4p-5f,   // c3
+        0x1.3b2dbcp-7f,   // c4
+        0x1.5f456ap-10f,  // c5
+        0x1.41d334p-13f   // c6
     );
+    // default inf
+    // v_if () {
+    //} v_endif;
 
     // Step 3: scale by 2^n via direct exponent injection: setexp(p, exexp(p) + n).
     sfpi::vInt p_exp = sfpi::exexp(p, sfpi::ExponentMode::NoDebias);
+    // float_to_uint8(int32_to_float(p_exp) + j)
     sfpi::vInt new_exp = p_exp + n_int;
     return sfpi::setexp(p, new_exp);
 }
