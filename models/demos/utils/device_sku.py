@@ -11,10 +11,7 @@ def cluster_type_to_sku_name(cluster_type: ttnn.cluster.ClusterType) -> str:
     Convert ttnn cluster enum to canonical centralized-target SKU key.
     """
     if not isinstance(cluster_type, ttnn.cluster.ClusterType):
-        raise TypeError(
-            "cluster_type must be ttnn.cluster.ClusterType, "
-            "for example ttnn.cluster.ClusterType.N150"
-        )
+        raise TypeError("cluster_type must be ttnn.cluster.ClusterType, " "for example ttnn.cluster.ClusterType.N150")
 
     mapping: dict[ttnn.cluster.ClusterType, str] = {
         # Wormhole
