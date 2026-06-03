@@ -111,8 +111,6 @@ void kernel_main() {
             if (s < rows_this) {
                 noc_async_read(
                     scale.get_noc_addr(row_base + s), scratch + s * scale_aligned_page_bytes, scale_aligned_page_bytes);
-            } else {
-                fill_zeros_async(scratch + s * scale_aligned_page_bytes, scale_aligned_page_bytes);
             }
         }
         noc_async_read_barrier();
@@ -132,8 +130,6 @@ void kernel_main() {
                     if (real_col_bytes < e4m3_col_block_bytes) {
                         fill_zeros_async(e4m3_l1 + real_col_bytes, e4m3_col_block_bytes - real_col_bytes);
                     }
-                } else {
-                    fill_zeros_async(e4m3_l1, e4m3_col_block_bytes);
                 }
                 e4m3_l1 += e4m3_col_block_bytes;
             }

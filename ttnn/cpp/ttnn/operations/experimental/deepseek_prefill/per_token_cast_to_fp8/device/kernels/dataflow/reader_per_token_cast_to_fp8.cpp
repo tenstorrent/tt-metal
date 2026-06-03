@@ -67,8 +67,6 @@ void kernel_main() {
                     if (real_col_bytes < col_block_bytes) {
                         fill_zeros_async(l1 + real_col_bytes, col_block_bytes - real_col_bytes);
                     }
-                } else {
-                    fill_zeros_async(l1, col_block_bytes);
                 }
                 l1 += col_block_bytes;
             }
