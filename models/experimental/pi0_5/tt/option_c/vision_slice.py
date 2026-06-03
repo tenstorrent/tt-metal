@@ -151,10 +151,6 @@ def _migrate_tower_weights_to_l1(
         if attn.bqkv is not None:
             attn.bqkv = _to_l1(attn.bqkv)
         attn.wo = _to_l1(attn.wo)
-        # Route attention matmul outputs to DRAM: L1 weight + L1 output would
-        # collide with the matmul kernel's static CB region. See
-        # SigLIPAttentionTTNN.__init__ docstring on `_output_memory_config`.
-        attn._output_memory_config = ttnn.DRAM_MEMORY_CONFIG
         # MLP fc1 / fc2 — bf8_b workhorses.
         mlp = block.mlp
         mlp.fc1_weight = _to_l1(mlp.fc1_weight)
@@ -163,10 +159,6 @@ def _migrate_tower_weights_to_l1(
         mlp.fc2_weight = _to_l1(mlp.fc2_weight)
         if getattr(mlp, "fc2_bias", None) is not None:
             mlp.fc2_bias = _to_l1(mlp.fc2_bias)
-        # Same DRAM-output routing for the MLP matmuls — this is the path
-        # that originally exposed the CB clash (program 282 in the probe
-        # trace; see OPEN_ISSUE_MLP_CB_CLASH.md).
-        mlp._output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
 
 def _migrate_projector_weights_to_l1(projector: MultiModalProjectorTTNN) -> None:

@@ -367,12 +367,6 @@ class SigLIPAttentionTTNN:
         self.hidden_size = config.hidden_size
         self.scale = 1.0 / math.sqrt(self.head_dim)
 
-        # Output memory config for wqkv / wo matmul. Set to ttnn.DRAM_MEMORY_CONFIG
-        # by callers that migrate attention weights to L1 (see SigLIPMLPTTNN
-        # docstring for the same flag — identical rationale: L1 weight + L1
-        # output collides with the matmul kernel's static CB region).
-        self._output_memory_config = ttnn.L1_MEMORY_CONFIG
-
         # Query device grid to use all available cores (P150: up to 13x10)
         device_grid = device.compute_with_storage_grid_size()
         self.grid_size = (device_grid.x, device_grid.y)
@@ -632,18 +626,13 @@ class SigLIPAttentionTTNN:
             dst_budget=4,
         )
 
-        # Matmul output memory_config — see __init__ for the rationale on
-        # `_output_memory_config`. DRAM when weights are L1-resident, L1
-        # otherwise (today's single-device default).
-        out_mc = self._output_memory_config
-
         if qkv_pcfg is not None:
             xqkv_fused = ttnn.linear(
                 hidden_states,
                 self.wqkv,
                 bias=self.bqkv,
                 dtype=ttnn.bfloat8_b,
-                memory_config=out_mc,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
                 program_config=qkv_pcfg,
             )
@@ -653,7 +642,7 @@ class SigLIPAttentionTTNN:
                 self.wqkv,
                 bias=self.bqkv,
                 dtype=ttnn.bfloat8_b,
-                memory_config=out_mc,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
                 core_grid=self.core_grid,
             )
@@ -723,7 +712,7 @@ class SigLIPAttentionTTNN:
                 self.wo,
                 bias=self.bo,
                 dtype=ttnn.bfloat8_b,
-                memory_config=out_mc,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
                 program_config=wo_pcfg,
             )
@@ -733,7 +722,7 @@ class SigLIPAttentionTTNN:
                 self.wo,
                 bias=self.bo,
                 dtype=ttnn.bfloat8_b,
-                memory_config=out_mc,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
                 core_grid=self.core_grid,
             )
@@ -766,19 +755,6 @@ class SigLIPMLPTTNN:
         """
         self.config = config
         self.device = device
-
-        # Output memory config for fc1/fc2. Set to ttnn.DRAM_MEMORY_CONFIG by the
-        # vision-on-device path AFTER it migrates fc1_weight / fc2_weight to L1 —
-        # an L1-resident matmul weight plus an L1 output buffer puts both inside
-        # the matmul kernel's static CB region (the interleaver doesn't know to
-        # keep that low-L1 range clear), and ttnn aborts with
-        # `validate_circular_buffer_region` "Statically allocated circular
-        # buffers in program N clash with L1 buffers...". Routing the output to
-        # DRAM removes the L1 collision; the next op pulls from DRAM via its
-        # own default. Same trick option_b/tp_block.py uses for all_reduce.
-        # Default L1 keeps single-device numerics + perf intact when weights
-        # are DRAM-resident (today's only path).
-        self._output_memory_config = ttnn.L1_MEMORY_CONFIG
 
         # Tier 2 BS path: pad intermediate (4304) → 4608 (144 tiles) so FC1/FC2
         # align on grid_x=12. Padding columns become zeros (GELU(0)=0 → safe).
@@ -947,13 +923,6 @@ class SigLIPMLPTTNN:
             dst_budget=4,
         )
 
-        # Matmul output memory_config — see __init__ for the rationale on
-        # `_output_memory_config`. Single-device path: L1 (today's default).
-        # Option C device_siglip + L1-resident weights: DRAM (avoids the
-        # static-CB clash from L1 weight + L1 output landing in the same
-        # low-L1 region the kernel's CBs need).
-        out_mc = self._output_memory_config
-
         # FC1 with GELU
         if fc1_pcfg is not None:
             x = ttnn.linear(
@@ -961,7 +930,7 @@ class SigLIPMLPTTNN:
                 self.fc1_weight,
                 bias=self.fc1_bias,
                 dtype=ttnn.bfloat8_b,
-                memory_config=out_mc,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config,
                 program_config=fc1_pcfg,
             )
@@ -971,7 +940,7 @@ class SigLIPMLPTTNN:
                 self.fc1_weight,
                 bias=self.fc1_bias,
                 dtype=ttnn.bfloat8_b,
-                memory_config=out_mc,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config,
                 core_grid=self.core_grid,
                 activation="gelu",
@@ -984,7 +953,7 @@ class SigLIPMLPTTNN:
                 self.fc2_weight,
                 bias=self.fc2_bias,
                 dtype=ttnn.bfloat8_b,
-                memory_config=out_mc,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config,
                 program_config=fc2_pcfg,
             )
@@ -994,7 +963,7 @@ class SigLIPMLPTTNN:
                 self.fc2_weight,
                 bias=self.fc2_bias,
                 dtype=ttnn.bfloat8_b,
-                memory_config=out_mc,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config,
                 core_grid=self.core_grid,
             )
