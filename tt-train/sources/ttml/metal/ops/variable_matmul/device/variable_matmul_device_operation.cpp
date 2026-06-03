@@ -274,12 +274,12 @@ ttnn::Tensor ttml_variable_matmul(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const ttml::metal::ops::variable_matmul::device::VariableMatmulConfig& config,
+    const ttnn::Tensor& offsets_tensor,
+    ttml::metal::ops::variable_matmul::device::OffsetsRole offsets_role,
     bool transpose_a,
     bool transpose_b,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<ttnn::Tensor> output_tensor,
-    std::optional<ttnn::Tensor> offsets_tensor,
-    ttml::metal::ops::variable_matmul::device::OffsetsRole offsets_role,
     uint32_t offsets_start_index,
     uint32_t effective_M_tiles) {
     using OperationType = ttml::metal::ops::variable_matmul::device::VariableMatmulDeviceOperation;

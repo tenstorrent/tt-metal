@@ -112,27 +112,27 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         const auto& w_gate_e = w_gate[e]->get_value();
         const auto& w_up_e = w_up[e]->get_value();
         ttml::metal::variable_matmul(
-            grouped_value,
-            w_gate_e,
-            kVarMmConfig,
+            /*input_tensor=*/grouped_value,
+            /*weight_tensor=*/w_gate_e,
+            /*config=*/kVarMmConfig,
+            /*offsets_tensor=*/offsets,
+            /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
             /*transpose_a=*/false,
             /*transpose_b=*/true,
             /*compute_kernel_config=*/std::nullopt,
             /*output_tensor=*/gate_proj,
-            /*offsets_tensor=*/offsets,
-            /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
             /*offsets_start_index=*/e,
             /*effective_M_tiles=*/per_expert_M_tiles);
         ttml::metal::variable_matmul(
-            grouped_value,
-            w_up_e,
-            kVarMmConfig,
+            /*input_tensor=*/grouped_value,
+            /*weight_tensor=*/w_up_e,
+            /*config=*/kVarMmConfig,
+            /*offsets_tensor=*/offsets,
+            /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
             /*transpose_a=*/false,
             /*transpose_b=*/true,
             /*compute_kernel_config=*/std::nullopt,
             /*output_tensor=*/up_proj,
-            /*offsets_tensor=*/offsets,
-            /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
             /*offsets_start_index=*/e,
             /*effective_M_tiles=*/per_expert_M_tiles);
     }
@@ -151,15 +151,15 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
     for (uint32_t e = 0; e < num_experts; ++e) {
         const auto& w_down_e = w_down[e]->get_value();
         ttml::metal::variable_matmul(
-            activated,
-            w_down_e,
-            kVarMmConfig,
+            /*input_tensor=*/activated,
+            /*weight_tensor=*/w_down_e,
+            /*config=*/kVarMmConfig,
+            /*offsets_tensor=*/offsets,
+            /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
             /*transpose_a=*/false,
             /*transpose_b=*/true,
             /*compute_kernel_config=*/std::nullopt,
             /*output_tensor=*/y,
-            /*offsets_tensor=*/offsets,
-            /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
             /*offsets_start_index=*/e,
             /*effective_M_tiles=*/per_expert_M_tiles);
     }
@@ -212,15 +212,15 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         for (uint32_t e = 0; e < num_experts; ++e) {
             const auto& w_down_e = w_down[e]->get_value();
             ttml::metal::variable_matmul(
-                dY,
-                w_down_e,
-                kVarMmConfig,
+                /*input_tensor=*/dY,
+                /*weight_tensor=*/w_down_e,
+                /*config=*/kVarMmConfig,
+                /*offsets_tensor=*/offsets,
+                /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
                 /*transpose_a=*/false,
                 /*transpose_b=*/false,
                 /*compute_kernel_config=*/std::nullopt,
                 /*output_tensor=*/d_activated,
-                /*offsets_tensor=*/offsets,
-                /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
                 /*offsets_start_index=*/e,
                 /*effective_M_tiles=*/per_expert_M_tiles);
         }
@@ -233,15 +233,15 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
             // both operands). InputAndWeightK overrides in0_k_offset + in1_k_offset + K_tiles
             // from offsets[e..e+1].
             auto dW_down_e = ttml::metal::variable_matmul(
-                dY,
-                activated,
-                kVarMmConfig,
+                /*input_tensor=*/dY,
+                /*weight_tensor=*/activated,
+                /*config=*/kVarMmConfig,
+                /*offsets_tensor=*/offsets,
+                /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
                 /*transpose_a=*/true,
                 /*transpose_b=*/false,
                 /*compute_kernel_config=*/std::nullopt,
                 /*output_tensor=*/std::nullopt,
-                /*offsets_tensor=*/offsets,
-                /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
                 /*offsets_start_index=*/e);
             w_down[e]->add_grad(dW_down_e);
         }
@@ -259,54 +259,54 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
 
             // dW_gate_e / dW_up_e = d_*_proj^T @ grouped — K-slice BOTH.
             auto dW_gate_e = ttml::metal::variable_matmul(
-                d_gate_proj,
-                grouped_value,
-                kVarMmConfig,
+                /*input_tensor=*/d_gate_proj,
+                /*weight_tensor=*/grouped_value,
+                /*config=*/kVarMmConfig,
+                /*offsets_tensor=*/offsets,
+                /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
                 /*transpose_a=*/true,
                 /*transpose_b=*/false,
                 /*compute_kernel_config=*/std::nullopt,
                 /*output_tensor=*/std::nullopt,
-                /*offsets_tensor=*/offsets,
-                /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
                 /*offsets_start_index=*/e);
             w_gate[e]->add_grad(dW_gate_e);
             auto dW_up_e = ttml::metal::variable_matmul(
-                d_up_proj,
-                grouped_value,
-                kVarMmConfig,
+                /*input_tensor=*/d_up_proj,
+                /*weight_tensor=*/grouped_value,
+                /*config=*/kVarMmConfig,
+                /*offsets_tensor=*/offsets,
+                /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
                 /*transpose_a=*/true,
                 /*transpose_b=*/false,
                 /*compute_kernel_config=*/std::nullopt,
                 /*output_tensor=*/std::nullopt,
-                /*offsets_tensor=*/offsets,
-                /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
                 /*offsets_start_index=*/e);
             w_up[e]->add_grad(dW_up_e);
 
             // dX_via_gate / dX_via_up: read d_*_proj[offsets[e]:offsets[e+1]], write
             // dX[offsets[e]:offsets[e+1]] (InputAndOutputRow).
             ttml::metal::variable_matmul(
-                d_gate_proj,
-                w_gate_e,
-                kVarMmConfig,
+                /*input_tensor=*/d_gate_proj,
+                /*weight_tensor=*/w_gate_e,
+                /*config=*/kVarMmConfig,
+                /*offsets_tensor=*/offsets,
+                /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
                 /*transpose_a=*/false,
                 /*transpose_b=*/false,
                 /*compute_kernel_config=*/std::nullopt,
                 /*output_tensor=*/dX_via_gate,
-                /*offsets_tensor=*/offsets,
-                /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
                 /*offsets_start_index=*/e,
                 /*effective_M_tiles=*/per_expert_M_tiles);
             ttml::metal::variable_matmul(
-                d_up_proj,
-                w_up_e,
-                kVarMmConfig,
+                /*input_tensor=*/d_up_proj,
+                /*weight_tensor=*/w_up_e,
+                /*config=*/kVarMmConfig,
+                /*offsets_tensor=*/offsets,
+                /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
                 /*transpose_a=*/false,
                 /*transpose_b=*/false,
                 /*compute_kernel_config=*/std::nullopt,
                 /*output_tensor=*/dX_via_up,
-                /*offsets_tensor=*/offsets,
-                /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
                 /*offsets_start_index=*/e,
                 /*effective_M_tiles=*/per_expert_M_tiles);
         }

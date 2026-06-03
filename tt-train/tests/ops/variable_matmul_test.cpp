@@ -146,15 +146,15 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA) {
 
     auto cfg = kConfig;
     auto result = ttml::metal::variable_matmul(
-        in0_km,
-        in1,
-        cfg,
+        /*input_tensor=*/in0_km,
+        /*weight_tensor=*/in1,
+        /*config=*/cfg,
+        /*offsets_tensor=*/offsets,
+        /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
         /*transpose_a=*/true,
         /*transpose_b=*/false,
         /*compute_kernel_config=*/std::nullopt,
         /*output_tensor=*/std::nullopt,
-        /*offsets_tensor=*/offsets,
-        /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
         /*offsets_start_index=*/kStart);
 
     auto in0_sliced_km = ttnn::slice(
@@ -196,15 +196,15 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA_NonT
 
     auto cfg = kConfig;
     auto result = ttml::metal::variable_matmul(
-        in0_km,
-        in1,
-        cfg,
+        /*input_tensor=*/in0_km,
+        /*weight_tensor=*/in1,
+        /*config=*/cfg,
+        /*offsets_tensor=*/offsets,
+        /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
         /*transpose_a=*/true,
         /*transpose_b=*/false,
         /*compute_kernel_config=*/std::nullopt,
         /*output_tensor=*/std::nullopt,
-        /*offsets_tensor=*/offsets,
-        /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
         /*offsets_start_index=*/kStart);
 
     auto in0_sliced_km = ttnn::slice(
@@ -274,15 +274,15 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow) {
     constexpr uint32_t actual_M = m_hi - m_lo;
 
     ttml::metal::variable_matmul(
-        input,
-        weight,
-        kConfig,
+        /*input_tensor=*/input,
+        /*weight_tensor=*/weight,
+        /*config=*/kConfig,
+        /*offsets_tensor=*/offsets,
+        /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
         /*transpose_a=*/false,
         /*transpose_b=*/false,
         /*compute_kernel_config=*/std::nullopt,
         /*output_tensor=*/parent_out,
-        /*offsets_tensor=*/offsets,
-        /*offsets_role=*/ttml::metal::OffsetsRole::InputAndOutputRow,
         /*offsets_start_index=*/kStart,
         /*effective_M_tiles=*/M_parent / 32U);  // upper bound = parent_M
 
@@ -340,15 +340,15 @@ TEST_F(VariableMatmulTest, EmptyExpertProbe_InputAndWeightK_TransposeA) {
         offsets_host, ttnn::Shape({static_cast<uint32_t>(offsets_host.size())}), device, ttnn::Layout::ROW_MAJOR);
 
     auto result = ttml::metal::variable_matmul(
-        dY,
-        act,
-        cfg,
+        /*input_tensor=*/dY,
+        /*weight_tensor=*/act,
+        /*config=*/cfg,
+        /*offsets_tensor=*/offsets,
+        /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
         /*transpose_a=*/true,
         /*transpose_b=*/false,
         /*compute_kernel_config=*/std::nullopt,
         /*output_tensor=*/std::nullopt,
-        /*offsets_tensor=*/offsets,
-        /*offsets_role=*/ttml::metal::OffsetsRole::InputAndWeightK,
         /*offsets_start_index=*/1U);
 
     const auto vec = ttml::core::to_vector<float>(result);
