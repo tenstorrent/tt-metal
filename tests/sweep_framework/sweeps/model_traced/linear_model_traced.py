@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 
 import ttnn
@@ -57,6 +59,13 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
+    # linear's matmul configs use the 7-wide core pattern and need the COL
+    # compute grid (7x10). The master-JSON auto-probe otherwise picks ROW (8x9)
+    # because some shard specs touch x=7, which then fails the matmul grid check
+    # (grid (7,10) doesn't fit (8,9)) and yields wrong-grid low-PCC results.
+    # Forcing COL passes all configs (validated 35/35 at 4x8). setdefault so an
+    # explicit TTNN_DISPATCH_AXIS (e.g. a two-pass run) still wins.
+    os.environ.setdefault("TTNN_DISPATCH_AXIS", "col")
     mesh_shape = get_model_traced_mesh_shape()
     device = create_mesh_device(mesh_shape)
     device_name = ttnn.get_arch_name()

@@ -205,12 +205,27 @@ def create_mesh_device(
         needs_col = False
         needs_row_only = False
 
+    # Explicit TTNN_DISPATCH_AXIS override takes priority over auto-detection.
+    # This enables the two-pass workflow (run a sweep once with row, once with
+    # col) for ops whose master configs straddle both axes — e.g. linear, which
+    # has some configs needing x=7 (ROW/8x9) and others needing y=9 (COL/7x10);
+    # no single axis fits all, so each pass covers the configs it can host.
+    if _env_axis in ("col", "row"):
+        _override_axis = ttnn.DispatchCoreAxis.COL if _env_axis == "col" else ttnn.DispatchCoreAxis.ROW
+        try:
+            return ttnn.open_mesh_device(
+                mesh_shape=ttnn.MeshShape(*mesh_shape),
+                l1_small_size=l1_small_size,
+                dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER, _override_axis),
+            )
+        except Exception:
+            pass
+
     # Default: COL (gives compute grid 7x10) since most lead_models traces use
     # cores in the 7-wide pattern with y up to 9. Switch to ROW only if any of
     # the op's master shard_specs uses x=7 (which COL excludes).
     # When x=7 or 8-8 grid is needed, use ETH dispatch so all 8x8
-    # compute cores are available. ETH takes priority over the env-var
-    # because the op cannot run at all without the full grid.
+    # compute cores are available.
     if needs_row_only:
         # Prefer WORKER ROW dispatch (compute grid 8x9 -> x in [0,7]) which
         # provides the x=7 cores these configs need, and is a superset of ETH's
@@ -237,18 +252,6 @@ def create_mesh_device(
                 mesh_shape=ttnn.MeshShape(*mesh_shape),
                 l1_small_size=l1_small_size,
                 dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH),
-            )
-        except Exception:
-            pass
-
-    # 3. Env-var override (when ETH not needed).
-    if _env_axis in ("col", "row"):
-        _override_axis = ttnn.DispatchCoreAxis.COL if _env_axis == "col" else ttnn.DispatchCoreAxis.ROW
-        try:
-            return ttnn.open_mesh_device(
-                mesh_shape=ttnn.MeshShape(*mesh_shape),
-                l1_small_size=l1_small_size,
-                dispatch_core_config=ttnn.DispatchCoreConfig(axis=_override_axis),
             )
         except Exception:
             pass
