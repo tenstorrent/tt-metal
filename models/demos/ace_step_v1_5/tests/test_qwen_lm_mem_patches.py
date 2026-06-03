@@ -29,6 +29,7 @@ from models.demos.ace_step_v1_5.ttnn_impl.qwen_decode_sdpa_layout import ace_ste
 from models.demos.ace_step_v1_5.ttnn_impl.qwen_decode_shard import ace_step_patch_model_args_decode_unified_shard
 from models.demos.ace_step_v1_5.ttnn_impl.qwen_lm_head_sharded_norm import ace_step_apply_lm_head_sharded_norm
 from models.demos.ace_step_v1_5.ttnn_impl.qwen_prefill_l1 import (
+    ace_step_apply_qwen_prefill_l1,
     ace_step_patch_model_args_lm_prefill_qkv_matmul,
     ace_step_patch_model_args_lm_prefill_wo_matmul,
     ace_step_patch_model_args_prefill_l1,
@@ -365,6 +366,54 @@ def test_lm_prefill_wo_sweep_patches_program_config(monkeypatch):
     assert got.out_subblock_h == 1
     assert got.out_subblock_w == 2
     assert model_args.get_attn_wo_program_config(Mode.DECODE, 1, None) == "stock"
+
+
+def test_apply_prefill_l1_keeps_decode_wqkv_sharded(monkeypatch):
+    import ttnn
+
+    monkeypatch.setenv("ACE_STEP_LM_PREFILL_L1", "1")
+    sharded_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+            (2048, 512),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    wqkv = SimpleNamespace(memory_config=lambda: sharded_mc)
+    attn = SimpleNamespace(
+        wqkv=wqkv,
+        wo=wqkv,
+        forward_prefill=lambda *a, **k: None,
+        attention_norm=None,
+    )
+    layer = SimpleNamespace(
+        attention=attn,
+        feed_forward=SimpleNamespace(w1=wqkv, w2=wqkv, w3=wqkv, forward=lambda *a, **k: None),
+        forward=lambda *a, **k: None,
+    )
+    tt_model = SimpleNamespace(
+        layers=[layer],
+        embd=SimpleNamespace(forward=lambda *a, **k: None),
+        norm=None,
+    )
+    model_args = SimpleNamespace(prefetcher=None)
+
+    with mock.patch(
+        "models.demos.ace_step_v1_5.ttnn_impl.qwen_prefill_l1.ace_step_linear_l1_memory_config",
+        return_value=ttnn.L1_MEMORY_CONFIG,
+    ), mock.patch(
+        "models.demos.ace_step_v1_5.ttnn_impl.qwen_prefill_l1.ace_step_patch_model_args_prefill_l1",
+    ), mock.patch(
+        "models.demos.ace_step_v1_5.ttnn_impl.qwen_prefill_l1.ace_step_apply_qwen_prefill_matmul_configs",
+    ), mock.patch(
+        "models.demos.ace_step_v1_5.ttnn_impl.qwen_prefill_l1.ace_step_apply_qwen_prefill_gate_up_fusion",
+    ):
+        ace_step_apply_qwen_prefill_l1(tt_model, model_args)
+
+    assert attn.wqkv is wqkv
+    assert attn.wqkv.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
 
 
 def test_lm_prefill_qkv_sweep_promotes_sharded_wqkv(monkeypatch):

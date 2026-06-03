@@ -301,9 +301,11 @@ def ace_step_promote_attention_wqkv_to_dram_interleaved(tt_model: Any) -> None:
         if attn is None:
             continue
         if hasattr(attn, "wqkv") and getattr(attn, "wqkv_prefill_interleaved", None) is None:
+            attn.wqkv_decode_sharded = attn.wqkv
             attn.wqkv_prefill_interleaved = _promote_attention_weight_to_dram_interleaved(attn.wqkv)
         if ace_step_lm_prefill_wo_sweep_enabled() and hasattr(attn, "wo"):
             if getattr(attn, "wo_prefill_interleaved", None) is None:
+                attn.wo_decode_sharded = attn.wo
                 attn.wo_prefill_interleaved = _promote_attention_weight_to_dram_interleaved(attn.wo)
         _patch_attention_prefill_sweep_weights(attn)
 
@@ -313,9 +315,9 @@ def _patch_attention_prefill_sweep_weights(attn: Any) -> None:
     if getattr(attn, "_ace_step_prefill_sweep_patched", False):
         return
     wqkv_prefill = getattr(attn, "wqkv_prefill_interleaved", None)
-    wqkv_decode = getattr(attn, "wqkv", None)
+    wqkv_decode = getattr(attn, "wqkv_decode_sharded", None) or getattr(attn, "wqkv", None)
     wo_prefill = getattr(attn, "wo_prefill_interleaved", None)
-    wo_decode = getattr(attn, "wo", None)
+    wo_decode = getattr(attn, "wo_decode_sharded", None) or getattr(attn, "wo", None)
     orig_forward_prefill = attn.forward_prefill
 
     def forward_prefill(x_11SH, *args, **kwargs):
@@ -342,11 +344,11 @@ def _patch_mlp_prefill_sweep_weights(mlp: Any) -> None:
     if getattr(mlp, "_ace_step_prefill_sweep_patched", False):
         return
     w1_p = getattr(mlp, "w1_prefill_interleaved", None)
-    w1_d = getattr(mlp, "w1", None)
+    w1_d = getattr(mlp, "w1_decode_sharded", None) or getattr(mlp, "w1", None)
     w2_p = getattr(mlp, "w2_prefill_interleaved", None)
-    w2_d = getattr(mlp, "w2", None)
+    w2_d = getattr(mlp, "w2_decode_sharded", None) or getattr(mlp, "w2", None)
     w3_p = getattr(mlp, "w3_prefill_interleaved", None)
-    w3_d = getattr(mlp, "w3", None)
+    w3_d = getattr(mlp, "w3_decode_sharded", None) or getattr(mlp, "w3", None)
     orig_forward = mlp.forward
 
     def forward(x, mode):
@@ -383,7 +385,9 @@ def ace_step_promote_mlp_prefill_dram_interleaved(tt_model: Any) -> None:
         for name in ("w1", "w2", "w3"):
             weight = getattr(mlp, name, None)
             key = f"{name}_prefill_interleaved"
+            decode_key = f"{name}_decode_sharded"
             if weight is not None and getattr(mlp, key, None) is None:
+                setattr(mlp, decode_key, weight)
                 setattr(mlp, key, _promote_attention_weight_to_dram_interleaved(weight))
         _patch_mlp_prefill_sweep_weights(mlp)
 
@@ -617,21 +621,14 @@ def _patch_prefill_matmul_program_getter(
 
 
 def _rehome_mcast_matmul_weights_to_dram_interleaved(tt_model: Any) -> None:
-    """One-time: ``MatmulMultiCoreReuseMultiCast*`` expects DRAM-interleaved weights (sweep ``l1/dram/*``)."""
-    dram_mc = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
-    if dram_mc is None:
-        return
-    for layer in getattr(tt_model, "layers", []):
-        attn = getattr(layer, "attention", None)
-        if attn is not None and getattr(attn, "wqkv", None) is not None:
-            wqkv = _ensure_dram_interleaved(ttnn, attn.wqkv, dram_mc=dram_mc)
-            if wqkv is not attn.wqkv:
-                attn.wqkv = wqkv
-        mlp = getattr(layer, "feed_forward", None)
-        if mlp is not None and getattr(mlp, "w2", None) is not None:
-            w2 = _ensure_dram_interleaved(ttnn, mlp.w2, dram_mc=dram_mc)
-            if w2 is not mlp.w2:
-                mlp.w2 = w2
+    """No-op: do not permanently replace sharded decode weights.
+
+    Decode ``ttnn.linear`` requires ``wqkv`` / ``w2`` in WIDTH_SHARDED DRAM.  Swept prefill
+    (seq_len <= 128) uses DRAM-interleaved copies via
+    :func:`ace_step_promote_attention_wqkv_to_dram_interleaved` and
+    :func:`ace_step_promote_mlp_prefill_dram_interleaved` with prefill-only forward swaps.
+    """
+    del tt_model  # reserved for future prefill-only rehome if needed
 
 
 def ace_step_apply_qwen_prefill_matmul_configs(model_args: Any) -> None:
