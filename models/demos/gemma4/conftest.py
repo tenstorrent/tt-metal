@@ -25,6 +25,41 @@ def pytest_addoption(parser):
             "long-context kernels."
         ),
     )
+    parser.addoption(
+        "--page-block-size",
+        action="store",
+        type=int,
+        default=None,
+        help=(
+            "Paged-attention block size for the demo's KV cache (issue #44946 "
+            "page_block_size sweep). Sets GEMMA4_PAGE_BLOCK_SIZE so the demo "
+            "helpers pick it up. One of {32, 64, 128, 256}; default 64."
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _apply_page_block_size(request):
+    """Propagate --page-block-size into GEMMA4_PAGE_BLOCK_SIZE for the run.
+
+    The demo's page-block helpers read the env var (so a plain shell sweep works
+    too); this fixture lets pytest -p/-k invocations set it via CLI. Restores the
+    prior value afterwards so a single pytest process sweeping multiple values
+    via parametrization doesn't leak state across tests.
+    """
+    value = request.config.getoption("--page-block-size")
+    if value is None:
+        yield
+        return
+    prev = os.environ.get("GEMMA4_PAGE_BLOCK_SIZE")
+    os.environ["GEMMA4_PAGE_BLOCK_SIZE"] = str(value)
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("GEMMA4_PAGE_BLOCK_SIZE", None)
+        else:
+            os.environ["GEMMA4_PAGE_BLOCK_SIZE"] = prev
 
 
 @pytest.fixture(scope="session")

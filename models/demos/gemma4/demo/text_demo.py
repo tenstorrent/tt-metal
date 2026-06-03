@@ -160,6 +160,27 @@ def _batch_demo_size():
     return size
 
 
+# Default paged-attention block size; override via GEMMA4_PAGE_BLOCK_SIZE for the
+# page_block_size sweep (issue #44946). Restricted to powers of two the swept set
+# {32, 64, 128, 256} plus larger powers, since paged-cache ops tile on block_size.
+_DEFAULT_PAGE_BLOCK_SIZE = 64
+_SUPPORTED_PAGE_BLOCK_SIZES = (32, 64, 128, 256)
+
+
+def _page_block_size():
+    """Paged-attention block size; defaults to 64, overridable via GEMMA4_PAGE_BLOCK_SIZE.
+
+    Used by the page_block_size audit sweep so a single demo command can be run
+    across block sizes without code edits. Validates against the swept set so a
+    typo doesn't silently allocate a mis-sized KV pool.
+    """
+    size = int(os.getenv("GEMMA4_PAGE_BLOCK_SIZE", str(_DEFAULT_PAGE_BLOCK_SIZE)))
+    if size not in _SUPPORTED_PAGE_BLOCK_SIZES:
+        supported = ", ".join(str(b) for b in _SUPPORTED_PAGE_BLOCK_SIZES)
+        raise ValueError(f"GEMMA4_PAGE_BLOCK_SIZE={size} must be one of: {supported}")
+    return size
+
+
 def _mesh_shape_str(mesh_device):
     return "x".join(str(d) for d in mesh_device.shape)
 
@@ -194,8 +215,10 @@ def _batch_prefill_hits_ceiling(batch_size, prompt_len):
     return batch_size * kernel_len >= GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN
 
 
-def _batch_page_params(batch_size, prefill_len, max_new_tokens, page_block_size=64):
+def _batch_page_params(batch_size, prefill_len, max_new_tokens, page_block_size=None):
     """Size the paged-attention pool for ``batch_size`` concurrent users."""
+    if page_block_size is None:
+        page_block_size = _page_block_size()
     blocks_per_user = (prefill_len + max_new_tokens + page_block_size - 1) // page_block_size
     return {
         "page_block_size": page_block_size,
@@ -493,7 +516,8 @@ def run_generation(
 
     # Paged attention config
     if page_params is None:
-        page_params = {"page_block_size": 64, "page_max_num_blocks": max_seq_len // 64}
+        page_block_size = _page_block_size()
+        page_params = {"page_block_size": page_block_size, "page_max_num_blocks": max_seq_len // page_block_size}
     paged_attention_config = PagedAttentionConfig(
         block_size=page_params["page_block_size"],
         max_num_blocks=page_params["page_max_num_blocks"],
@@ -1048,7 +1072,7 @@ def test_demo(mesh_device, model_path, prefill_len, request):
     # floor so short-bucket runs still allocate a usable cache.
     max_new_tokens = 200
     max_seq_len = max(prefill_len + max_new_tokens, 4096)
-    page_block_size = 64
+    page_block_size = _page_block_size()
     page_params = {
         "page_block_size": page_block_size,
         "page_max_num_blocks": max_seq_len // page_block_size,
