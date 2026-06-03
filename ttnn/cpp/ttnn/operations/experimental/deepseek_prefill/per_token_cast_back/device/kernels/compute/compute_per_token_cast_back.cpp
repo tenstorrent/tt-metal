@@ -33,7 +33,7 @@ void kernel_main() {
     constexpr uint32_t cb_scale_bcast = get_compile_time_arg_val(3);
     constexpr uint32_t cb_out_tile = get_compile_time_arg_val(4);
     constexpr uint32_t cb_out_fp32 = get_compile_time_arg_val(5);
-    // Tile dims from the tensor's tile spec (32x32 by default; tiny tiles supported).
+    // Tile dims from the tensor's tile spec.
     constexpr uint32_t tile_h = get_compile_time_arg_val(6);
     constexpr uint32_t tile_w = get_compile_time_arg_val(7);
     constexpr uint32_t COL_BLOCK_ELEMS = 1024;  // LLK column-block width in elements

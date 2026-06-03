@@ -22,7 +22,7 @@ void kernel_main() {
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t col_block_bytes = get_compile_time_arg_val(1);  // 1024 * elem_size
     constexpr uint32_t cb_scaler = get_compile_time_arg_val(2);
-    // Tile / face dims from the tensor's tile spec (32x32 / 16x16 by default; tiny tiles supported).
+    // Tile / face dims from the tensor's tile spec.
     constexpr uint32_t tile_h = get_compile_time_arg_val(3);
     constexpr uint32_t tile_w = get_compile_time_arg_val(4);
     constexpr uint32_t face_h = get_compile_time_arg_val(5);
@@ -40,6 +40,7 @@ void kernel_main() {
     cb_reserve_back(cb_scaler, 1);
     volatile tt_l1_ptr uint32_t* sc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_scaler));
     fill_zeros_async(get_write_ptr(cb_scaler), get_tile_size(cb_scaler));
+    noc_async_read_barrier();
 
     for (uint32_t f = 0; f < num_faces; ++f) {
         for (uint32_t j = 0; j < face_w; ++j) {  // row 0 of the face

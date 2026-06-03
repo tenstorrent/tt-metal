@@ -13,21 +13,59 @@ namespace ttnn::experimental::prim::per_token_cast_to_fp8 {
 
 namespace common = ttnn::operations::experimental::deepseek_prefill::fp8_quant_common;
 
+namespace {
+
+bool is_dram_interleaved(const tt::tt_metal::MemoryConfig& mem_config) {
+    return mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM &&
+           mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
+}
+
+void validate_device_tensor(const Tensor& tensor, const std::string& name) {
+    TT_FATAL(tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
+    TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
+    TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);
+    TT_FATAL(tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "{} must be ROW_MAJOR layout", name);
+}
+
+}  // namespace
+
 PerTokenCastToFp8DeviceOperation::program_factory_t PerTokenCastToFp8DeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return PerTokenCastToFp8ProgramFactory{};
 }
 
 void PerTokenCastToFp8DeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
 
+    validate_device_tensor(input, "per_token_cast_to_fp8: input_tensor");
+    TT_FATAL(
+        is_dram_interleaved(attrs.output_memory_config),
+        "per_token_cast_to_fp8: output memory config must be DRAM interleaved");
+    TT_FATAL(
+        input.device()->arch() == tt::ARCH::BLACKHOLE,
+        "per_token_cast_to_fp8: FP8_E4M3 path requires Blackhole hardware, got arch {}",
+        input.device()->arch());
     TT_FATAL(
         input.dtype() == tt::tt_metal::DataType::BFLOAT16 || input.dtype() == tt::tt_metal::DataType::FLOAT32,
         "per_token_cast_to_fp8: input dtype must be BFLOAT16 or FLOAT32, got {}",
         static_cast<int>(input.dtype()));
+
+    const auto tile_shape = input.tensor_spec().tile().get_tile_shape();
+    const uint32_t tile_h = tile_shape[0];
+    const uint32_t tile_w = tile_shape[1];
     TT_FATAL(
-        input.layout() == tt::tt_metal::Layout::ROW_MAJOR, "per_token_cast_to_fp8: input must be ROW_MAJOR layout");
+        tile_h * tile_w == common::COL_BLOCK_ELEMS,
+        "per_token_cast_to_fp8: tile_h * tile_w must equal COL_BLOCK_ELEMS={} for row-major block tilization, got "
+        "{}x{}",
+        common::COL_BLOCK_ELEMS,
+        tile_h,
+        tile_w);
+    TT_FATAL(
+        common::SCALE_GROUP_SIZE % tile_w == 0,
+        "per_token_cast_to_fp8: tile width {} must divide SCALE_GROUP_SIZE={}",
+        tile_w,
+        common::SCALE_GROUP_SIZE);
 
     const auto& shape = input.logical_shape();
     TT_FATAL(shape.size() >= 2, "per_token_cast_to_fp8: input rank must be >= 2, got {}", shape.size());
@@ -80,8 +118,17 @@ PerTokenCastToFp8DeviceOperation::tensor_return_value_t PerTokenCastToFp8DeviceO
 tt::stl::hash::hash_t PerTokenCastToFp8DeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
+    const auto tile_shape = input.tensor_spec().tile().get_tile_shape();
+    const auto face_shape = input.tensor_spec().tile().get_face_shape();
     return tt::tt_metal::operation::hash_operation<PerTokenCastToFp8DeviceOperation>(
-        attrs, input.dtype(), input.memory_config(), input.logical_shape());
+        attrs,
+        input.dtype(),
+        input.memory_config(),
+        input.logical_shape(),
+        tile_shape[0],
+        tile_shape[1],
+        face_shape[0],
+        face_shape[1]);
 }
 
 }  // namespace ttnn::experimental::prim::per_token_cast_to_fp8

@@ -23,7 +23,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_out_fp32 = get_compile_time_arg_val(0);
     constexpr uint32_t col_block_bytes = get_compile_time_arg_val(1);  // COL_BLOCK_ELEMS * out_elem_size
-    // Tile height from the tensor's tile spec (32 by default; tiny tiles supported).
+    // Tile height from the tensor's tile spec.
     constexpr uint32_t tile_h = get_compile_time_arg_val(2);
     constexpr uint32_t COL_BLOCK_ELEMS = 1024;                              // LLK column-block width
     constexpr uint32_t out_elem_bytes = col_block_bytes / COL_BLOCK_ELEMS;  // output element size
@@ -32,7 +32,7 @@ void kernel_main() {
     const auto dst = TensorAccessor(dst_args, dst_addr);
 
     for (uint32_t tr = 0; tr < num_tile_rows; ++tr) {
-        uint32_t row_base = (start_tile_row + tr) * tile_h;
+        const uint32_t row_base = (start_tile_row + tr) * tile_h;
         uint32_t rows_this = std::min(tile_h, m_total - row_base);  // real rows in this tile-row
         for (uint32_t c = 0; c < num_col_blocks; ++c) {
             uint32_t real_col_elems = std::min(COL_BLOCK_ELEMS, h_total - c * COL_BLOCK_ELEMS);

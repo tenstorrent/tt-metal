@@ -50,7 +50,7 @@ void kernel_main() {
     constexpr uint32_t cb_scale_scratch = get_compile_time_arg_val(3);
     constexpr uint32_t scale_groups = get_compile_time_arg_val(4);              // W / 128
     constexpr uint32_t scale_aligned_page_bytes = get_compile_time_arg_val(5);  // per-row scratch stride
-    // Tile / face dims from the tensor's tile spec (32x32 / 16x16 by default; tiny tiles supported).
+    // Tile / face dims from the tensor's tile spec.
     constexpr uint32_t tile_h = get_compile_time_arg_val(6);
     constexpr uint32_t tile_w = get_compile_time_arg_val(7);
     constexpr uint32_t face_h = get_compile_time_arg_val(8);

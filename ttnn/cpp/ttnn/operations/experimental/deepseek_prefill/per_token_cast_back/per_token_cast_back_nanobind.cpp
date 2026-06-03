@@ -21,10 +21,11 @@ void bind_experimental_per_token_cast_back_operation(nb::module_& mod) {
 
             Args:
                 * :attr:`input_e4m3`: FP8_E4M3 ROW_MAJOR tensor of shape [..., M, H]. Requires
-                  M % 32 == 0 and H % 1024 == 0. Blackhole only.
-                * :attr:`input_scale`: FLOAT32 ROW_MAJOR tensor of shape [..., M, H/128].
+                  H % 128 == 0, DRAM interleaved memory, and Blackhole hardware.
+                * :attr:`input_scale`: FLOAT32 ROW_MAJOR DRAM interleaved tensor of shape [..., M, H/128].
                 * :attr:`output_dtype`: BFLOAT16 (default) or FLOAT32.
-                * :attr:`memory_config`: optional output memory config (default: same as input_e4m3).
+                * :attr:`memory_config`: optional DRAM interleaved output memory config
+                  (default: same as input_e4m3).
 
             Returns:
                 A ROW_MAJOR tensor of the same logical shape as input_e4m3, dtype = output_dtype.

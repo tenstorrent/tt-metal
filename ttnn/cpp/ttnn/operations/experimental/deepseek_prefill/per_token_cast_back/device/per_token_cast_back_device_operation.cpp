@@ -13,6 +13,22 @@ namespace ttnn::experimental::prim::per_token_cast_back {
 
 namespace common = ttnn::operations::experimental::deepseek_prefill::fp8_quant_common;
 
+namespace {
+
+bool is_dram_interleaved(const tt::tt_metal::MemoryConfig& mem_config) {
+    return mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM &&
+           mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
+}
+
+void validate_tensor_specs(const Tensor& tensor, const std::string& name) {
+    TT_FATAL(tensor.storage_type() == tt::tt_metal::StorageType::DEVICE, "{} must be on device", name);
+    TT_FATAL(tensor.buffer() != nullptr, "{} must have a buffer", name);
+    TT_FATAL(tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "per_token_cast_back: input_e4m3 must be ROW_MAJOR");
+    TT_FATAL(is_dram_interleaved(tensor.memory_config()), "{} must be DRAM interleaved", name);
+}
+
+}  // namespace
+
 PerTokenCastBackDeviceOperation::program_factory_t PerTokenCastBackDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return PerTokenCastBackProgramFactory{};
@@ -20,21 +36,47 @@ PerTokenCastBackDeviceOperation::program_factory_t PerTokenCastBackDeviceOperati
 
 void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    const auto& e4m3 = tensor_args.input_e4m3;
-    const auto& scale = tensor_args.input_scale;
+    const auto& input_e4m3 = tensor_args.input_e4m3;
+    const auto& input_scale = tensor_args.input_scale;
 
+    validate_tensor_specs(input_e4m3, "per_token_cast_back: input_e4m3");
+    validate_tensor_specs(input_scale, "per_token_cast_back: input_scale");
     TT_FATAL(
-        e4m3.dtype() == tt::tt_metal::DataType::FP8_E4M3, "per_token_cast_back: input_e4m3 dtype must be FP8_E4M3");
+        is_dram_interleaved(attrs.output_memory_config),
+        "per_token_cast_back: output memory config must be DRAM interleaved");
     TT_FATAL(
-        scale.dtype() == tt::tt_metal::DataType::FLOAT32, "per_token_cast_back: input_scale dtype must be FLOAT32");
-    TT_FATAL(e4m3.layout() == tt::tt_metal::Layout::ROW_MAJOR, "per_token_cast_back: input_e4m3 must be ROW_MAJOR");
-    TT_FATAL(scale.layout() == tt::tt_metal::Layout::ROW_MAJOR, "per_token_cast_back: input_scale must be ROW_MAJOR");
+        input_e4m3.device() == input_scale.device(),
+        "per_token_cast_back: input_e4m3 and input_scale must be on the same device");
+    TT_FATAL(
+        input_e4m3.device()->arch() == tt::ARCH::BLACKHOLE,
+        "per_token_cast_back: FP8_E4M3 path requires Blackhole hardware, got arch {}",
+        input_e4m3.device()->arch());
+    TT_FATAL(
+        input_e4m3.dtype() == tt::tt_metal::DataType::FP8_E4M3,
+        "per_token_cast_back: input_e4m3 dtype must be FP8_E4M3");
+    TT_FATAL(
+        input_scale.dtype() == tt::tt_metal::DataType::FLOAT32,
+        "per_token_cast_back: input_scale dtype must be FLOAT32");
+    const auto tile_shape = input_e4m3.tensor_spec().tile().get_tile_shape();
+    const uint32_t tile_h = tile_shape[0];
+    const uint32_t tile_w = tile_shape[1];
+    TT_FATAL(
+        tile_h * tile_w == common::COL_BLOCK_ELEMS,
+        "per_token_cast_back: tile_h * tile_w must equal COL_BLOCK_ELEMS={} for row-major block tilization, got {}x{}",
+        common::COL_BLOCK_ELEMS,
+        tile_h,
+        tile_w);
+    TT_FATAL(
+        common::SCALE_GROUP_SIZE % tile_w == 0,
+        "per_token_cast_back: tile width {} must divide SCALE_GROUP_SIZE={}",
+        tile_w,
+        common::SCALE_GROUP_SIZE);
     TT_FATAL(
         attrs.output_dtype == tt::tt_metal::DataType::BFLOAT16 || attrs.output_dtype == tt::tt_metal::DataType::FLOAT32,
         "per_token_cast_back: output_dtype must be BFLOAT16 or FLOAT32");
 
-    const auto& e4m3_shape = e4m3.logical_shape();
-    const auto& scale_shape = scale.logical_shape();
+    const auto& e4m3_shape = input_e4m3.logical_shape();
+    const auto& scale_shape = input_scale.logical_shape();
     TT_FATAL(e4m3_shape.size() >= 2, "per_token_cast_back: input_e4m3 rank must be >= 2");
     TT_FATAL(
         e4m3_shape.size() == scale_shape.size(),
@@ -62,7 +104,7 @@ void PerTokenCastBackDeviceOperation::validate_on_program_cache_miss(
         H_scale,
         common::SCALE_GROUP_SIZE);
 
-    auto [M, _H] = common::infer_M_H(e4m3_shape);
+    auto [M, _] = common::infer_M_H(e4m3_shape);
     TT_FATAL(M > 0, "per_token_cast_back: row count M must be > 0");
 }
 
@@ -86,12 +128,19 @@ PerTokenCastBackDeviceOperation::tensor_return_value_t PerTokenCastBackDeviceOpe
 
 tt::stl::hash::hash_t PerTokenCastBackDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    const auto tile_shape = tensor_args.input_e4m3.tensor_spec().tile().get_tile_shape();
+    const auto face_shape = tensor_args.input_e4m3.tensor_spec().tile().get_face_shape();
     return tt::tt_metal::operation::hash_operation<PerTokenCastBackDeviceOperation>(
         attrs,
         tensor_args.input_e4m3.dtype(),
         tensor_args.input_e4m3.memory_config(),
+        tensor_args.input_scale.memory_config(),
         tensor_args.input_e4m3.logical_shape(),
-        tensor_args.input_scale.logical_shape());
+        tensor_args.input_scale.logical_shape(),
+        tile_shape[0],
+        tile_shape[1],
+        face_shape[0],
+        face_shape[1]);
 }
 
 }  // namespace ttnn::experimental::prim::per_token_cast_back

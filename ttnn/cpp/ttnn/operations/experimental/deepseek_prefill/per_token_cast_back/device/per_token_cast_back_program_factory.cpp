@@ -17,7 +17,7 @@
 // 1024-col column-block): convert e4m3 -> fp32 (copy_tile), tilize, multiply each tile by its
 // group's per-row scale broadcast from column 0 (mul_tiles_bcast_cols), and untilize to the output
 // dtype (bf16 or fp32). The reader builds the per-group column-0 broadcast operands from the scale
-// tensor. Requires H % 1024 == 0; work is split across cores over tile-rows.
+// tensor. Requires H % 128 == 0; work is split across cores over tile-rows.
 
 namespace ttnn::experimental::prim::per_token_cast_back {
 
@@ -30,17 +30,16 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     using namespace tt;
     using namespace tt::tt_metal;
 
-    const auto& e4m3 = tensor_args.input_e4m3;
-    const auto& scale_in = tensor_args.input_scale;
+    const auto& input_e4m3 = tensor_args.input_e4m3;
+    const auto& input_scale = tensor_args.input_scale;
     auto& output = tensor_return_value;
 
-    const auto& shape = e4m3.logical_shape();
+    const auto& shape = input_e4m3.logical_shape();
     auto [M, H] = common::infer_M_H(shape);  // M = rows, H = width (last dim)
 
-    // Tile / face dims come from the tensor's tile spec (32x32 / 16x16 by default; tiny tiles such as
-    // 16x32, 32x16, 16x16 are also supported). The kernels receive these as compile-time args.
-    const auto tile_shape = e4m3.tensor_spec().tile().get_tile_shape();
-    const auto face_shape = e4m3.tensor_spec().tile().get_face_shape();
+    // Tile / face dims come from the tensor's tile spec.
+    const auto tile_shape = input_e4m3.tensor_spec().tile().get_tile_shape();
+    const auto face_shape = input_e4m3.tensor_spec().tile().get_face_shape();
     const uint32_t tile_h = tile_shape[0];
     const uint32_t tile_w = tile_shape[1];
     const uint32_t face_h = face_shape[0];
@@ -55,24 +54,26 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         H,
         common::SCALE_GROUP_SIZE);
 
-    const uint32_t TILE_BYTES_FP32 = tile_h * tile_w * 4;
+    const uint32_t TILE_BYTES = tile_h * tile_w * sizeof(float);
     const uint32_t COL_BLOCK_TILES = common::COL_BLOCK_ELEMS / tile_w;                         // 32 for 32-wide tiles
-    constexpr uint32_t GROUPS_PER_BLOCK = common::COL_BLOCK_ELEMS / common::SCALE_GROUP_SIZE;  // 8
+    constexpr uint32_t GROUPS_PER_BLOCK =
+        common::COL_BLOCK_ELEMS /
+        common::SCALE_GROUP_SIZE;  // 8 groups of 128 elements per column block of 1024 elements
 
     const uint32_t tile_rows = tt::div_up(M, tile_h);                        // last tile-row may be partial
     const uint32_t num_col_blocks = tt::div_up(H, common::COL_BLOCK_ELEMS);  // last col-block may be partial
     const uint32_t e4m3_col_block_bytes = common::COL_BLOCK_ELEMS;  // 1 byte/elem
     const uint32_t out_elem_bytes = output.element_size();
     const uint32_t out_col_block_bytes = common::COL_BLOCK_ELEMS * out_elem_bytes;  // bf16: 2048, fp32: 4096
-    const uint32_t scale_aligned_page_bytes = scale_in.buffer()->aligned_page_size();
+    const uint32_t scale_aligned_page_bytes = input_scale.buffer()->aligned_page_size();
 
-    auto* src_e4m3_buffer = e4m3.buffer();
-    auto* src_scale_buffer = scale_in.buffer();
+    auto* src_e4m3_buffer = input_e4m3.buffer();
+    auto* src_scale_buffer = input_scale.buffer();
     auto* dst_buffer = output.buffer();
 
     Program program{};
 
-    auto* device = e4m3.device();
+    auto* device = input_e4m3.device();
     auto compute_grid = device->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, rows_per_core_g1, rows_per_core_g2] =
         split_work_to_cores(compute_grid, tile_rows);
@@ -90,8 +91,8 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     constexpr uint32_t cb_out_idx = CBIndex::c_16;
 
     auto make_fp32_tile_cb = [&](uint32_t cb_idx, uint32_t num_tiles) {
-        CircularBufferConfig cfg = CircularBufferConfig(num_tiles * TILE_BYTES_FP32, {{cb_idx, fp32_df}})
-                                       .set_page_size(cb_idx, TILE_BYTES_FP32);
+        CircularBufferConfig cfg =
+            CircularBufferConfig(num_tiles * TILE_BYTES, {{cb_idx, fp32_df}}).set_page_size(cb_idx, TILE_BYTES);
         CreateCircularBuffer(program, all_cores, cfg);
     };
 

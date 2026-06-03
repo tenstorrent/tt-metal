@@ -18,7 +18,7 @@
 // Per (tile-row, 1024-col column-block) the compute kernel tilizes the input, computes a per-128
 // group amax = max(|x|), forms scale = clamp(amax, 1e-4) / 448 and 1/scale, divides, and untilizes
 // to e4m3. The writer extracts column 0 of the per-group scale tiles into the [.., H/128] scale
-// output. Requires H % 1024 == 0; work is split across cores over tile-rows.
+// output. Requires H % 128 == 0; work is split across cores over tile-rows.
 
 namespace ttnn::experimental::prim::per_token_cast_to_fp8 {
 
@@ -37,8 +37,7 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
     const auto& input_shape = input.logical_shape();
     auto [M, H] = common::infer_M_H(input_shape);  // M = rows, H = width (last dim)
 
-    // Tile / face dims come from the tensor's tile spec (32x32 / 16x16 by default; tiny tiles such as
-    // 16x32, 32x16, 16x16 are also supported). The kernels receive these as compile-time args.
+    // Tile / face dims come from the tensor's tile spec.
     const auto tile_shape = input.tensor_spec().tile().get_tile_shape();
     const auto face_shape = input.tensor_spec().tile().get_face_shape();
     const uint32_t tile_h = tile_shape[0];
