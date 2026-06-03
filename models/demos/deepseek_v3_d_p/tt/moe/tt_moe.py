@@ -88,7 +88,7 @@ class TtMoe(LightweightModule):
         if gate_weights:
             from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import TtMoEGateConfig, TtMoEGatePrefill
 
-            # Minimal config for caching (gate cache only needs dim + n_routed_experts).
+            # Minimal config for caching
             gate_config = TtMoEGateConfig(
                 dim=emb_dim,
                 n_routed_experts=gate_weights["weight"].shape[0],
@@ -226,7 +226,6 @@ class TtMoe(LightweightModule):
             dim=emb_dim,
             sp_dim=seq_len_per_chip,
             n_routed_experts=num_routed_experts,
-            n_shared_experts=0,  # gate ignores shared experts; safe to leave unset
             n_activated_experts=num_experts_per_tok,
             n_expert_groups=n_expert_groups,
             n_limited_groups=n_limited_groups,

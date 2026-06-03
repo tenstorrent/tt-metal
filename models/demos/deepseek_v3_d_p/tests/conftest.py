@@ -86,10 +86,6 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture
 def variant(request) -> TestVariant:
-    """The active test variant. Driven by indirect parametrize:
-        @pytest.mark.parametrize("variant", ["deepseek_v3"], indirect=True)
-    Tests that don't parametrize fall back to DSv3.
-    """
     param = getattr(request, "param", None)
     if param is None:
         return DSV3
@@ -97,50 +93,77 @@ def variant(request) -> TestVariant:
 
 
 def download_model_config_only(variant: TestVariant, cache_dir: Path) -> Path:
-    """Download only config files (no weight shards) for the variant's HF repo."""
+    """
+    Download only config files (no weight shards) for the variant's HF repo.
+    This is fast and only downloads ~few MB for config files.
+
+    Args:
+        variant: The TestVariant whose HF repo to download from.
+        cache_dir: Directory to cache downloaded config.
+
+    Returns:
+        Path to the downloaded model directory with config.
+    """
     try:
         from huggingface_hub import snapshot_download
     except ImportError:
         logger.error("huggingface_hub is not installed. Install it with: pip install huggingface_hub")
         raise
 
-    logger.info(f"Downloading {variant.hf_repo_id} config-only from HuggingFace")
+    logger.info(f"Downloading {variant.hf_repo_id} config only (no weights) from HuggingFace")
     logger.info(f"Cache directory: {cache_dir}")
 
+    # Create cache directory
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    allow_patterns = [
-        "config.json",
-        "*.safetensors.index.json",
-        "generation_config.json",
-        "tokenizer*",
-        "vocab*",
-        "merges*",
-        "special_tokens_map.json",
-        "*.model",
-        "*.tiktoken",
-        "*.py",
-    ]
-
     try:
+        # Download only config files, no weight shards
+        allow_patterns = [
+            "config.json",
+            "*.safetensors.index.json",
+            "generation_config.json",
+            "tokenizer*",
+            "tiktoken*",  # Kimi K2.6 ships its BBPE tokenizer as tiktoken.model
+        ]
+
+        # Add custom model code files (needed for trust_remote_code=True)
+        allow_patterns.extend(
+            [
+                "configuration_deepseek.py",
+                "modeling_deepseek.py",
+                "*.py",  # Include all Python files for custom model code
+            ]
+        )
+
         model_dir = snapshot_download(
             repo_id=variant.hf_repo_id,
             cache_dir=str(cache_dir),
             allow_patterns=allow_patterns,
-            ignore_patterns=["*.safetensors"],
+            ignore_patterns=["*.safetensors"],  # Don't download weight files
         )
+
         logger.success(f"✓ Config files downloaded to: {model_dir}")
         return Path(model_dir)
+
     except Exception as e:
         logger.error(f"Failed to download {variant.hf_repo_id} config: {e}")
         raise
 
 
 def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int = 0, num_layers: int = 1) -> Path:
-    """Download model weights for the variant's HF repo.
+    """
+    Download model weights from HuggingFace for the variant's HF repo.
 
-    Pulls shards covering layers [layer_idx, layer_idx+num_layers) plus embeddings
-    and `model.norm.weight`. Other shards are skipped to bound download size.
+    Args:
+        variant: The TestVariant whose HF repo to download from.
+        cache_dir: Directory to cache downloaded weights.
+        layer_idx: Which layer to start at (default: 0).
+        num_layers: Number of layers to download (default: 1).
+            Pulls shards covering layers [layer_idx, layer_idx+num_layers) plus
+            embeddings and `model.norm.weight`. Other shards are skipped.
+
+    Returns:
+        Path to the downloaded model directory.
     """
     try:
         from huggingface_hub import snapshot_download
@@ -163,13 +186,17 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
             "*.safetensors.index.json",
             "generation_config.json",
             "tokenizer*",
-            "vocab*",
-            "merges*",
-            "special_tokens_map.json",
-            "*.model",
-            "*.tiktoken",
-            "*.py",  # custom model code for trust_remote_code=True
+            "tiktoken*",  # Kimi K2.6 ships its BBPE tokenizer as tiktoken.model
         ]
+
+        # Add custom model code files (needed for trust_remote_code=True)
+        allow_patterns.extend(
+            [
+                "configuration_deepseek.py",
+                "modeling_deepseek.py",
+                "*.py",  # Include all Python files for custom model code
+            ]
+        )
 
         # First download just the index to figure out which shards we need
         index_dir = snapshot_download(
@@ -243,47 +270,62 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
     Get model path, downloading from HuggingFace if necessary.
 
     Args:
-        layer_idx: Which layer weights to ensure are available
+        variant: The TestVariant to resolve weights for.
+        layer_idx: Which layer weights to ensure are available.
         num_layers: Number of layers to download (default: 6).
                     When >1, downloads additional shards including shard 160 for model.norm.
 
     Returns:
-        Path to model directory with weights
+        Path to model directory with weights.
     """
+    # Check environment variable first
     env_path = os.getenv(variant.env_var)
     if env_path:
-        candidate = Path(env_path)
-        if (candidate / "model.safetensors.index.json").exists():
-            logger.info(f"Using existing model from {variant.env_var}: {candidate}")
-            return candidate.resolve()
-        logger.warning(f"{variant.env_var} set but missing index file in {candidate}")
+        model_path = Path(env_path)
+        if model_path.exists():
+            index_file = model_path / "model.safetensors.index.json"
+            if index_file.exists():
+                logger.info(f"Using existing model from {variant.env_var}: {model_path}")
+                return model_path.resolve()
+            else:
+                logger.warning(f"{variant.env_var} set but missing index file: {index_file}")
 
-    for label, p in (("default", variant.default_local_path), ("shared", variant.shared_path)):
-        if p is not None and (p / "model.safetensors.index.json").exists():
-            logger.info(f"Using model from {label} location: {p}")
-            return p.resolve()
+    # Check default location
+    if variant.default_local_path is not None and variant.default_local_path.exists():
+        index_file = variant.default_local_path / "model.safetensors.index.json"
+        if index_file.exists():
+            logger.info(f"Using model from default location: {variant.default_local_path}")
+            return variant.default_local_path.resolve()
 
+    # Check shared weights location
+    if variant.shared_path is not None and variant.shared_path.exists():
+        index_file = variant.shared_path / "model.safetensors.index.json"
+        if index_file.exists():
+            logger.info(f"Using model from shared location: {variant.shared_path}")
+            return variant.shared_path.resolve()
+
+    # Download from HuggingFace
     logger.info(f"Model not found locally. Downloading {variant.hf_repo_id} from HuggingFace...")
+
+    # Determine cache directory
     cache_dir = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
+    logger.info(f"Will cache to: {cache_dir}")
+    # Note: Detailed download size is logged by download_model_weights() after analyzing the index
+
     return download_model_weights(variant, cache_dir, layer_idx, num_layers)
 
 
-@lru_cache(maxsize=None)
-def _resolve_model_path(variant_name: str) -> Path:
-    v = TEST_VARIANTS[variant_name]
-    return get_or_download_model(v, layer_idx=0, num_layers=v.num_layers_to_download)
-
-
 def _unwrap_multimodal_config(cfg):
-    # Kimi K2.5/K2.6 ship a multimodal wrapper config; the LM fields the rest of the
-    # code reads (hidden_size, n_routed_experts, etc.) live under `text_config`.
+    """Unwrap Kimi K2.5/K2.6's multimodal wrapper config to the inner text_config.
+
+    The LM fields the rest of the code reads (hidden_size, n_routed_experts, etc.) live
+    under `text_config`. Also stubs `quantization_config.weight_block_size` when missing
+    so that DSv3's dequant helper's eager read doesn't fail on pre-dequantized Kimi
+    checkpoints (which carry only plain `.weight` keys, no `_scale_inv`).
+    """
     if hasattr(cfg, "text_config") and hasattr(cfg.text_config, "hidden_size"):
         logger.info(f"Unwrapping multimodal wrapper config (inner model_type={cfg.text_config.model_type})")
         cfg = cfg.text_config
-    # DSv3's dequant helper eagerly reads `quantization_config.weight_block_size`. When pointing
-    # at an already-dequantized Kimi checkpoint the safetensors carry only plain `.weight` keys
-    # (no `_scale_inv`), so the block path is unused — but the up-front read still fires. Stub
-    # a placeholder so the plain-weight branch runs unimpeded.
     qc = getattr(cfg, "quantization_config", None)
     if isinstance(qc, dict) and not qc.get("weight_block_size"):
         qc["weight_block_size"] = [128, 128]
@@ -291,25 +333,15 @@ def _unwrap_multimodal_config(cfg):
     return cfg
 
 
+# --- Cached resolvers ---
+# Session-scoped fixtures don't compose with the function-scoped `variant` fixture, so the
+# expensive resolution work is cached at the function level keyed on variant.name instead.
+
+
 @lru_cache(maxsize=None)
-def _resolve_config_only(variant_name: str):
+def _resolve_model_path(variant_name: str) -> Path:
     v = TEST_VARIANTS[variant_name]
-    env_path = os.getenv(v.env_var)
-    candidates = []
-    if env_path:
-        candidates.append(Path(env_path))
-    if v.default_local_path is not None:
-        candidates.append(v.default_local_path)
-    if v.shared_path is not None:
-        candidates.append(v.shared_path)
-    for p in candidates:
-        if (p / "config.json").exists():
-            logger.info(f"Using config from {p}")
-            return _unwrap_multimodal_config(AutoConfig.from_pretrained(str(p), trust_remote_code=True))
-    logger.info(f"Config not found locally. Downloading {v.hf_repo_id} config-only from HuggingFace...")
-    cache_dir = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
-    config_path = download_model_config_only(v, cache_dir)
-    return _unwrap_multimodal_config(AutoConfig.from_pretrained(str(config_path), trust_remote_code=True))
+    return get_or_download_model(v, layer_idx=0, num_layers=v.num_layers_to_download)
 
 
 @lru_cache(maxsize=None)
@@ -320,10 +352,38 @@ def _resolve_hf_config(model_path_str: str):
     try:
         cfg = AutoConfig.from_pretrained(str(p), trust_remote_code=True)
         logger.info(f"Loaded HF config from {p}")
-        return cfg
+        return _unwrap_multimodal_config(cfg)
     except Exception as e:
         logger.warning(f"Failed to load HF config from {p}: {e}")
         return None
+
+
+@lru_cache(maxsize=None)
+def _resolve_config_only(variant_name: str):
+    v = TEST_VARIANTS[variant_name]
+    # Check environment variable first
+    env_path = os.getenv(v.env_var)
+    if env_path:
+        model_path = Path(env_path)
+        if (model_path / "config.json").exists():
+            logger.info(f"Using existing config from {v.env_var}: {model_path}")
+            return _unwrap_multimodal_config(AutoConfig.from_pretrained(str(model_path), trust_remote_code=True))
+
+    # Check default location
+    if v.default_local_path is not None and (v.default_local_path / "config.json").exists():
+        logger.info(f"Using config from default location: {v.default_local_path}")
+        return _unwrap_multimodal_config(AutoConfig.from_pretrained(str(v.default_local_path), trust_remote_code=True))
+
+    # Check shared weights location
+    if v.shared_path is not None and (v.shared_path / "config.json").exists():
+        logger.info(f"Using config from shared location: {v.shared_path}")
+        return _unwrap_multimodal_config(AutoConfig.from_pretrained(str(v.shared_path), trust_remote_code=True))
+
+    # Download only config files from HuggingFace (not weight shards)
+    logger.info(f"Config not found locally. Downloading {v.hf_repo_id} config only from HuggingFace...")
+    cache_dir = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
+    config_path = download_model_config_only(v, cache_dir)
+    return _unwrap_multimodal_config(AutoConfig.from_pretrained(str(config_path), trust_remote_code=True))
 
 
 @lru_cache(maxsize=None)
@@ -343,20 +403,22 @@ def _resolve_state_dict(model_path_str: str):
 @lru_cache(maxsize=None)
 def _resolve_tokenizer(variant_name: str, padding_side: str):
     v = TEST_VARIANTS[variant_name]
-    env_path = os.getenv(v.env_var)
-    candidates = []
-    if env_path:
-        candidates.append(Path(env_path))
-    if v.default_local_path is not None:
-        candidates.append(v.default_local_path)
-    if v.shared_path is not None:
-        candidates.append(v.shared_path)
-    for p in candidates:
+    candidates = [
+        os.getenv(v.env_var),
+        str(v.default_local_path) if v.default_local_path is not None else None,
+        str(v.shared_path) if v.shared_path is not None else None,
+    ]
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        p = Path(candidate)
         if p.exists() and any(p.glob("tokenizer*")):
             logger.info(f"Loading tokenizer from: {p}")
             tok = AutoTokenizer.from_pretrained(str(p), use_fast=True, trust_remote_code=True)
             tok.padding_side = padding_side
             return tok
+
+    # Fall back to downloading config-only (includes tokenizer files)
     cache_dir = Path(os.getenv("HF_HOME", Path.home() / ".cache" / "huggingface"))
     config_path = download_model_config_only(v, cache_dir)
     logger.info(f"Loading tokenizer from downloaded config: {config_path}")
@@ -367,31 +429,64 @@ def _resolve_tokenizer(variant_name: str, padding_side: str):
 
 @pytest.fixture
 def model_path(variant) -> Path:
+    """
+    Get model path and resolve symlinks to ensure all operations can find files.
+    Automatically downloads weights from HuggingFace if not available locally.
+    Downloads weights for layers 0-23 (24 layers total) by default to support test cases.
+
+    Checks in order:
+    1. variant.env_var environment variable
+    2. variant.default_local_path (in-repo fallback)
+    3. variant.shared_path (NFS mirror)
+    4. Downloads from HuggingFace to HF cache if not found
+    """
     return _resolve_model_path(variant.name)
 
 
 @pytest.fixture
-def hf_config(variant, model_path):
+def hf_config(model_path):
+    """
+    Load HF config for testing.
+    Returns None if model path doesn't exist (weights not available).
+    """
     return _resolve_hf_config(str(model_path))
 
 
 @pytest.fixture
 def config_only(variant):
+    """
+    Load HF config for random weight tests (downloads only config, not weights).
+    This is fast and only downloads ~few MB.
+    """
     return _resolve_config_only(variant.name)
 
 
 @pytest.fixture(params=["right"])
 def tokenizer(request, variant):
-    """Padding side via indirect parametrize. Defaults to right-padding."""
+    """Load the variant's tokenizer, searching known model locations.
+
+    Default padding_side is "right" (back-padding). To test with left padding,
+    override in your test: @pytest.mark.parametrize("tokenizer", ["left"], indirect=True)
+    """
     return _resolve_tokenizer(variant.name, request.param)
 
 
 @pytest.fixture
-def state_dict(variant, model_path):
+def state_dict(model_path):
+    """
+    Load state dict for testing.
+    Returns None if model path doesn't exist (weights not available).
+    """
     return _resolve_state_dict(str(model_path))
 
 
 def _check_pretrained_available(model_path: Path) -> bool:
+    """
+    Check if pretrained weights are available at the given path.
+
+    Returns:
+        True if pretrained weights are available, False otherwise.
+    """
     index_file = model_path / "model.safetensors.index.json"
     config_file = model_path / "config.json"
 
@@ -407,14 +502,22 @@ def _check_pretrained_available(model_path: Path) -> bool:
 
 @pytest.fixture
 def weight_cache_path(variant, model_path):
-    """Directory for caching TTNN weight tensors. None if pretrained weights aren't on disk."""
+    """
+    Return a directory for caching TTNN weight tensors (.tensorbin files).
+
+    First run: ttnn.as_tensor() dumps converted weights here.
+    Subsequent runs: weights are loaded directly, bypassing torch conversion.
+
+    The path encodes variant + architecture + device count to prevent cross-config clashes.
+    Returns None if pretrained weights are unavailable (random-weight tests skip caching).
+    """
     if not _check_pretrained_available(model_path):
         return None
     arch = "bh" if is_blackhole() else "wh"
     num_devices = ttnn.get_num_devices()
     env_cache = os.getenv("TT_DS_PREFILL_TTNN_CACHE")
     if env_cache:
-        cache_dir = Path(env_cache) / f"{variant.weight_cache_prefix}_{arch}_{num_devices}dev"
+        cache_dir = Path(env_cache) / f"{variant.name}_{arch}_{num_devices}dev"
     else:
         cache_dir = model_path / f"tensor_cache_{arch}_{num_devices}dev"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -422,10 +525,19 @@ def weight_cache_path(variant, model_path):
 
 
 @pytest.fixture
-def random_weights(variant, config_only):
-    """Random MLA weights sized from the variant's config."""
+def random_weights(config_only):
+    """
+    Generate random weights for testing using the config.
+
+    Args:
+        config_only: HuggingFace config (only downloads config files, not weight shards)
+
+    Returns:
+        Tuple of (config, weights_dict) in bfloat16
+    """
     config = config_only
-    torch.manual_seed(42)  # tied to cached reference results; keep stable
+
+    torch.manual_seed(42)  # this is tied to already cached reference results, so keep it consistent for now
 
     # Use proper initialization scale from config (typically 0.02)
     std = config.initializer_range
@@ -472,19 +584,27 @@ def random_weights(variant, config_only):
 
 @pytest.fixture
 def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, request):
-    """Dequantized pretrained weights for N-layer transformer in TT state_dict format.
+    """
+    Dequantized pretrained weights for N-layer transformer in TT state_dict format.
 
-    Skips if the variant doesn't support pretrained weights, or if config/state_dict
-    couldn't be loaded.
+    Extracts embed, norm, and per-layer weights (attention, FFN/MoE) using
+    sub_state_dict() + dequantize_state_dict(), matching the format produced
+    by extract_tt_state_dict() in transformer_helpers.py.
+
+    Parametrize with num_layers (default 6) via indirect fixture or marker:
+        @pytest.mark.parametrize("pretrained_transformer_weights", [4], indirect=True)
+
+    Returns:
+        Tuple of (hf_config, tt_state_dict) or skips if not available
     """
     if not variant.supports_pretrained:
         pytest.skip(f"{variant.name}: pretrained weights not wired")
     if not _check_pretrained_available(model_path):
-        pytest.skip(f"{variant.name}: pretrained weights not available. Set {variant.env_var} or download.")
+        pytest.skip(f"{variant.name}: pretrained weights not available. Set {variant.env_var} or download model.")
     if hf_config is None:
-        pytest.skip(f"{variant.name}: failed to load HF config")
+        pytest.skip(f"{variant.name}: failed to load HF config. Check model path.")
     if state_dict is None:
-        pytest.skip(f"{variant.name}: failed to load state dict")
+        pytest.skip(f"{variant.name}: failed to load state dict. Check model path and weights.")
 
     num_layers = request.node.callspec.params.get("num_layers", 1)
     first_k_dense = hf_config.first_k_dense_replace  # 3

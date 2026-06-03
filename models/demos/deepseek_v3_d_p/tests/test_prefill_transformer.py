@@ -31,6 +31,7 @@ import ttnn
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
     reorder_tensor_chunks,
@@ -56,6 +57,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_25K_PATH,
     ReferenceCacheKey,
     check_first_token_match,
+    check_first_token_match_host_ref,
     check_reference_cache_exists,
     create_hf_model,
     download_infinitebench_subset,
@@ -150,8 +152,6 @@ def run_model(
     tokenizer,
     request,
 ):
-    """Prefill-transformer body — shared between `test_ds_prefill_transformer` /
-    `test_kimi_prefill_transformer`."""
     torch.manual_seed(42)
 
     if use_pretrained and not variant.supports_pretrained:
@@ -637,28 +637,22 @@ def run_model(
             f"First Token: ID={first_token_id} [{repr(token_text)}] prob={first_token_prob*100:.1f}% temp={first_temp}"
         )
 
-        # Behavioral cross-check: TT's predicted next-token vs HF reference argmax at the
-        # same position. Independent of PCC noise — argmax over the vocab gives a single
-        # binary "TT matches HF" answer. Only meaningful when host reference is in scope
-        # (list of snapshots), not when a debug trace is loaded (different structure).
-        if isinstance(ref_snapshots, list) and len(ref_snapshots) >= 1:
-            hf_logits_full = ref_snapshots[-1]  # [1, seq_len, vocab]
-            last_real_idx = number_of_non_padded_tokens - 1 if padding_side == "right" else hf_logits_full.shape[-2] - 1
-            hf_token_id = int(hf_logits_full[0, last_real_idx, :].argmax().item())
-            hf_token_text = tok.decode([hf_token_id]) if tok else "N/A"
-            match = hf_token_id == first_token_id
-            logger.info(
-                f"HF reference token at position {last_real_idx}: "
-                f"ID={hf_token_id} [{repr(hf_token_text)}] | TT==HF match: {match}"
-            )
-            if not match:
-                failures.append(("first_token_hf_match", -1.0))
-
-        # First-token match against trace metadata (full-layer trace only)
-        if trace_full_model:
-            token_match = check_first_token_match(trace, trace_dir, first_token_id, first_token_prob)
-            if token_match is False:
-                failures.append(("first_token_match", -1.0))
+        # First-token cross-check against the reference
+        if num_layers == trace.metadata.get("n_layers"):
+            if trace is None:
+                # CPU reference path
+                hf_match = check_first_token_match_host_ref(
+                    ref_snapshots, number_of_non_padded_tokens, padding_side, first_token_id, tok
+                )
+                if hf_match is False:
+                    failures.append(("first_token_match", -1.0))
+            else:
+                # GPU trace path
+                token_match = check_first_token_match(trace, trace_dir, first_token_id, first_token_prob)
+                if token_match is False:
+                    failures.append(("first_token_match", -1.0))
+        else:
+            logger.debug("Skipping first token check")
 
         # Log all temperature results from intermediates
         if tt_intermediates and "first_token" in tt_intermediates:
@@ -741,53 +735,6 @@ def run_model(
         pytest.fail(f"PCC below {threshold} at: {pcc_failure_msg}")
 
 
-_DS_PT_MESH_PARAMS = [
-    pytest.param(
-        (2, 4),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "fabric_router_config": create_fabric_router_config(
-                max_payload_size=DeepSeekV3Config.EMB_SIZE
-            ),  # = 7168 (DSv3 / Kimi share hidden_size),
-        },
-        1,
-        ttnn.Topology.Linear,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-        id="mesh-2x4",
-    ),
-    pytest.param(
-        (8, 4),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "fabric_router_config": create_fabric_router_config(
-                max_payload_size=DeepSeekV3Config.EMB_SIZE
-            ),  # = 7168 (DSv3 / Kimi share hidden_size),
-        },
-        2,
-        ttnn.Topology.Linear,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="mesh-8x4",
-    ),
-]
-
-
-_KIMI_PT_MESH_PARAMS = [
-    pytest.param(
-        (8, 4),
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "fabric_router_config": create_fabric_router_config(
-                max_payload_size=DeepSeekV3Config.EMB_SIZE
-            ),  # = 7168 (DSv3 / Kimi share hidden_size),
-        },
-        2,
-        ttnn.Topology.Linear,
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="mesh-8x4",
-    ),
-]
-
-
 @pytest.mark.skipif(not is_blackhole(), reason="Requires Blackhole.")
 @pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
 @pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
@@ -837,9 +784,38 @@ _KIMI_PT_MESH_PARAMS = [
 )
 @pytest.mark.parametrize("num_iterations", [1, 25, 2000], ids=["iter1", "iter25", "iter2000"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology", _DS_PT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (2, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="mesh-2x4",
+        ),
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["deepseek_v3"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.timeout(0)
 def test_ds_prefill_transformer(
     variant,
@@ -938,9 +914,23 @@ def test_ds_prefill_transformer(
 )
 @pytest.mark.parametrize("num_iterations", [1, 25, 2000], ids=["iter1", "iter25", "iter2000"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology", _KIMI_PT_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
 @pytest.mark.timeout(0)
 def test_kimi_prefill_transformer(
     variant,

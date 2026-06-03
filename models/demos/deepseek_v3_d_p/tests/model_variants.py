@@ -17,13 +17,14 @@ to `TEST_VARIANTS`.
 from pathlib import Path
 from typing import Optional
 
+from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention as DSv3RefAttention
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Model as DSv3RefModel
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE as DSv3RefMoE
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.reference.kimi_k26.kimi_k26_config import KimiK26Config
-from models.demos.deepseek_v3_d_p.reference.kimi_k26.modeling_deepseek import DeepseekV3Attention as KimiRefAttention
-from models.demos.deepseek_v3_d_p.reference.kimi_k26.modeling_deepseek import DeepseekV3Model as KimiRefModel
-from models.demos.deepseek_v3_d_p.reference.kimi_k26.modeling_deepseek import DeepseekV3MoE as KimiRefMoE
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6.modeling_deepseek import DeepseekV3Attention as KimiRefAttention
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6.modeling_deepseek import DeepseekV3Model as KimiRefModel
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6.modeling_deepseek import DeepseekV3MoE as KimiRefMoE
 
 
 class TestVariant:
@@ -43,7 +44,6 @@ class TestVariant:
         reference_model_cls: type,
         reference_attention_cls: Optional[type] = None,
         reference_moe_cls: Optional[type] = None,
-        weight_cache_prefix: Optional[str] = None,
         ref_cache_env: Optional[str] = None,
         mla_ref_cache_env: Optional[str] = None,
         moe_pcc_threshold: float = 0.999,
@@ -60,7 +60,6 @@ class TestVariant:
         self.reference_model_cls = reference_model_cls
         self.reference_attention_cls = reference_attention_cls
         self.reference_moe_cls = reference_moe_cls
-        self.weight_cache_prefix = weight_cache_prefix or name
         self.ref_cache_env = ref_cache_env
         self.mla_ref_cache_env = mla_ref_cache_env
         self.moe_pcc_threshold = moe_pcc_threshold
@@ -69,7 +68,7 @@ class TestVariant:
 
 
 DSV3 = TestVariant(
-    name="deepseek_v3",
+    name="deepseek_v3_d_p",
     env_var="DEEPSEEK_V3_HF_MODEL",
     hf_repo_id="deepseek-ai/DeepSeek-R1-0528",
     model_config=DeepSeekV3Config,
@@ -77,29 +76,23 @@ DSV3 = TestVariant(
     shared_path=Path("/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528"),
     num_layers_to_download=24,
     reference_model_cls=DSv3RefModel,
-    # MLA upstream cross-check disabled — `create_mla_reference` already runs the same
-    # DeepseekV3Attention class for DSv3, so populating this would duplicate the forward
-    # pass. To re-enable, use DeepseekV3Attention from
-    # models.demos.deepseek_v3.reference.modeling_deepseek.
-    reference_attention_cls=None,
+    reference_attention_cls=DSv3RefAttention,
     reference_moe_cls=DSv3RefMoE,
-    weight_cache_prefix="deepseek_v3_d_p",
     ref_cache_env="TT_DS_PREFILL_HOST_REF_CACHE",
     mla_ref_cache_env="DEEPSEEK_V3_MLA_REF_CACHE",
 )
 
 KIMI = TestVariant(
-    name="kimi",
-    env_var="KIMI_K26_HF_MODEL",
+    name="kimi_k2_6",
+    env_var="KIMI_K2_6_HF_MODEL",
     hf_repo_id="moonshotai/Kimi-K2.6",
     model_config=KimiK26Config,
-    default_local_path=Path("models/demos/deepseek_v3_d_p/reference/kimi_k26"),
+    default_local_path=Path("models/demos/deepseek_v3_d_p/reference/kimi_k2_6"),
     shared_path=None,
     num_layers_to_download=24,
     reference_model_cls=KimiRefModel,
     reference_attention_cls=KimiRefAttention,
     reference_moe_cls=KimiRefMoE,
-    weight_cache_prefix="kimi_k26",
     ref_cache_env="TT_KIMI_PREFILL_HOST_REF_CACHE",
     mla_ref_cache_env="KIMI_MLA_REF_CACHE",
     mla_pcc_threshold=0.995,

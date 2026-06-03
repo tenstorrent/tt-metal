@@ -23,7 +23,7 @@ import ttnn
 from conftest import is_galaxy
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
-from models.demos.deepseek_v3_d_p.reference.kimi_k26.kimi_k26_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_6.kimi_k2_6_config import KimiK26Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_moe
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -526,55 +526,6 @@ def run_model(
         logger.debug(f"{key}: {profiler.get(key) * 1000:.2f} ms")
 
 
-def _moe_mesh_params():
-    return [
-        pytest.param(
-            (8, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-            id="linear-8",
-        ),
-        pytest.param(
-            (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
-        ),
-        pytest.param(
-            (2, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="mesh-2x4",
-        ),
-        pytest.param(
-            (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=DeepSeekV3Config.EMB_SIZE),
-            },
-            2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="mesh-8x4",
-        ),
-    ]
-
-
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
@@ -590,9 +541,64 @@ def _moe_mesh_params():
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology", _moe_mesh_params(), indirect=["mesh_device", "device_params"]
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            2 if is_blackhole() else 1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+            id="linear-8",
+        ),
+        pytest.param(
+            (4, 2),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            2 if is_blackhole() else 1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="mesh-4x2",
+        ),
+        pytest.param(
+            (2, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            2 if is_blackhole() else 1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="mesh-2x4",
+        ),
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            2 if is_blackhole() else 1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["deepseek_v3"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 def test_ds_moe(
     variant,
     config_only,
@@ -636,15 +642,29 @@ def test_ds_moe(
     ),
     [
         # fmt: off
-        pytest.param( 640, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.HOST_ALL, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-5k"),
-        pytest.param(3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.HOST_ALL, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-25k"),
+        pytest.param( 640, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.HOST_ALL, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-5k"),
+        pytest.param(3200, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.HOST_ALL, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-25k"),
         # fmt: on
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links, topology", _moe_mesh_params(), indirect=["mesh_device", "device_params"]
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
+            },
+            2 if is_blackhole() else 1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
 def test_kimi_moe(
     variant,
     config_only,

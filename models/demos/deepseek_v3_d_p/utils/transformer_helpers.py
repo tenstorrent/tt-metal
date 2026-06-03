@@ -54,6 +54,7 @@ ABC_SHORT_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_ABC_short.j
 P64TOK_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_64tok.json")
 P960TOK_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_960tok.json")
 PIE960_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_pie_960tok.json")
+PROMPT_5K_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_5k.json")
 PROMPT_25K_PATH = Path("models/demos/deepseek_v3_d_p/demo/test_prompt_25k.json")
 
 TRACE_DIR_BASE = Path(os.getenv("DEEPSEEK_V3_TRACE_DIR", "/mnt/MLPerf/deepseek-prefill-cache")).resolve()
@@ -97,6 +98,36 @@ def find_trace_dir(
     if path is not None and path.exists() and (path / "metadata.json").exists():
         return path
     return None
+
+
+def check_first_token_match_host_ref(
+    ref_snapshots: list | None,
+    number_of_non_padded_tokens: int,
+    padding_side: str,
+    first_token_id: int,
+    tokenizer,
+) -> bool | None:
+    """Check TT's first token vs HF reference argmax at the last real position.
+
+    Binary cross-check independent of PCC noise. Returns None when ref_snapshots is
+    empty/None (trace path leaves it that way; host-ref path populates it as a list
+    of per-stage snapshots whose last element is the LM-head logits).
+
+    Returns:
+        True if match, False if mismatch, None if no reference available.
+    """
+    if not ref_snapshots:
+        return None
+    hf_logits_full = ref_snapshots[-1]  # [1, seq_len, vocab]
+    last_real_idx = number_of_non_padded_tokens - 1 if padding_side == "right" else hf_logits_full.shape[-2] - 1
+    hf_token_id = int(hf_logits_full[0, last_real_idx, :].argmax().item())
+    hf_token_text = tokenizer.decode([hf_token_id]) if tokenizer else "N/A"
+    match = hf_token_id == first_token_id
+    logger.info(
+        f"HF reference token at position {last_real_idx}: "
+        f"ID={hf_token_id} [{repr(hf_token_text)}] | TT==HF match: {match}"
+    )
+    return match
 
 
 def check_first_token_match(trace, trace_dir: Path, first_token_id: int, first_token_prob: float) -> bool | None:
@@ -147,7 +178,7 @@ INFINITEBENCH_CACHE_DIR = Path(
 
 
 def create_hf_model(variant, config, num_layers, n_routed_experts=None):
-    """Create the variant's reference Model with num_layers and random weights."""
+    """Create the variant's reference model with num_layers and random weights."""
     test_config = deepcopy(config)
     test_config.num_hidden_layers = num_layers
     test_config._attn_implementation = "eager"
@@ -213,8 +244,12 @@ def extract_tt_state_dict(variant, hf_model):
     result = {
         "embed_weight": sd["embed_tokens.weight"].float(),
         "norm_weight": sd["norm.weight"],
-        "layers": [extract_layer_state_dict(variant, sd, i, hf_model.layers[i]) for i in range(num_layers)],
+        "layers": [],
     }
+
+    for i in range(num_layers):
+        layer_sd = extract_layer_state_dict(variant, sd, i, hf_model.layers[i])
+        result["layers"].append(layer_sd)
 
     return result
 
@@ -257,7 +292,7 @@ def tt_state_dict_to_hf_state_dict(tt_sd):
 
 
 def create_hf_model_with_weights(variant, config, num_layers, hf_sd):
-    """Create the variant's reference Model with pretrained weights (no random init)."""
+    """Create the variant's reference model with pretrained weights (no random init)."""
     test_config = deepcopy(config)
     test_config.num_hidden_layers = num_layers
     test_config._attn_implementation = "eager"
@@ -459,8 +494,6 @@ def load_and_compute_layer_by_layer(
 
         logger.info(f"Creating empty {variant.reference_model_cls.__name__} for reference computation...")
         with no_init_weights():
-            # `.eval()` is required: Kimi's vendored MoE gate asserts `not self.training` in
-            # `noaux_tc` mode (modeling_deepseek.py:395). nn.Module defaults to training=True.
             hf_model = variant.reference_model_cls(test_config).eval()
         _log_memory("After creating HF model structure")
 
@@ -733,11 +766,15 @@ def save_reference_cache(variant, cache_key: ReferenceCacheKey, ref_snapshots, r
 
 def load_reference_cache(variant, cache_key: ReferenceCacheKey) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
     cache_path = _ref_cache_dir(variant) / f"{cache_key}.pt"
+
     if not cache_path.exists():
         raise FileNotFoundError(f"Reference cache not found: {cache_path}")
+
     cached = torch.load(cache_path, weights_only=True)
+
     if "ref_snapshots" not in cached or "ref_kvpe_list" not in cached:
         raise ValueError(f"Invalid cache format in {cache_path}")
+
     logger.info(f"Loaded reference from {cache_path}")
     return cached["ref_snapshots"], cached["ref_kvpe_list"]
 

@@ -43,8 +43,7 @@ class TtMoEGateConfig:
         default_factory=lambda: {
             # Keyed by (sp_dim, per_device_emb_dim); forward() looks up the tuple.
             # Missing key → TTNN auto-picks program config.
-            # 7168 // 4 = 1792 (per-device shard width). New entry needed if a variant's hidden_size differs.
-            (4096, 1792): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            (4096, DeepSeekV3Config.EMB_SIZE // 4): ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                 compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
                 in0_block_w=56,
                 out_subblock_h=2,
@@ -65,7 +64,6 @@ class TtMoEGateConfig:
         }
     )
 
-    # DSv3 defaults. For other variants use `TtMoEGateConfig.from_model_cfg(variant.model_config)`.
     dim: int = DeepSeekV3Config.EMB_SIZE
     sp_dim: int = 4096  # ISL per chip
     n_routed_experts: int = DeepSeekV3Config.NUM_ROUTED_EXPERTS

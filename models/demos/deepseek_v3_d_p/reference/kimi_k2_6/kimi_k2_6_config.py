@@ -13,6 +13,9 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3
 
 
 class KimiK26Config(DeepSeekV3Config):
+    # Fabric
+    FABRIC_PAYLOAD_SIZE = 7168
+
     # MoE: routing
     NUM_ROUTED_EXPERTS = 384
     NUM_EXPERT_GROUPS = 1

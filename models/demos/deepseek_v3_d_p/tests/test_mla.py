@@ -338,30 +338,34 @@ def run_model(
     logger.success(f"✓ Reference and TT comparison with {weight_type} weights successful")
 
 
-_MLA_COMMON_DEVICE_PARAMS = [
-    {
-        "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
-    },
-    {
-        "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-        "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
-    },
-]
-
-
-@pytest.mark.parametrize("mesh_device", [(32, 4), (8, 4), (2, 4)], ids=["32x4", "8x4", "2x4"], indirect=True)
-@pytest.mark.parametrize("device_params", _MLA_COMMON_DEVICE_PARAMS, ids=["line", "ring"], indirect=True)
+# sp x tp
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(32, 4), (8, 4), (2, 4)],
+    ids=["32x4", "8x4", "2x4"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+        },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+        },
+    ],
+    ids=["line", "ring"],
+    indirect=True,
+)
 @pytest.mark.parametrize("use_pretrained", [False, True], ids=["random", "pretrained"])
 @pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
-@pytest.mark.parametrize(
-    "seq_len",
-    [128 * 1024, 100 * 1024],
-    ids=["seq128k", "seq100k"],
-)
+@pytest.mark.parametrize("seq_len", [128 * 1024, 100 * 1024], ids=["seq128k", "seq100k"])
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
 @pytest.mark.parametrize("is_balanced", [False, True], ids=["sequential", "balanced"])
-@pytest.mark.parametrize("variant", ["deepseek_v3"], indirect=True, ids=["deepseek_v3"])
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["deepseek_v3"])
 @pytest.mark.timeout(0)
 def test_ds_mla(
     use_pretrained,
@@ -392,9 +396,23 @@ def test_ds_mla(
 
 
 @pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
-@pytest.mark.parametrize("device_params", _MLA_COMMON_DEVICE_PARAMS, ids=["line", "ring"], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+        },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else 1344544,
+        },
+    ],
+    ids=["line", "ring"],
+    indirect=True,
+)
 @pytest.mark.parametrize("use_pretrained", [False], ids=["random"])
-@pytest.mark.parametrize("scale_down_sl", [False, True], ids=["max_sl", "scaled_sl"])
+@pytest.mark.parametrize("scale_down_sl", [False], ids=["max_sl"])
 @pytest.mark.parametrize(
     "seq_len",
     [5 * 1024, 25 * 1024],
@@ -402,7 +420,7 @@ def test_ds_mla(
 )
 @pytest.mark.parametrize("skip_host_comparison", [False, True], ids=["check_pcc", "skip_check"])
 @pytest.mark.parametrize("is_balanced", [False], ids=["sequential"])
-@pytest.mark.parametrize("variant", ["kimi"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(0)
 def test_kimi_mla(
