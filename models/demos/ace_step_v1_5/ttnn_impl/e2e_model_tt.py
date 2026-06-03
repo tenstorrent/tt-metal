@@ -1970,7 +1970,6 @@ class AceStepE2EModel:
             # ``null_condition_emb`` is a persistent attribute of the condition encoder built once
             # at construction, so we can fetch it without re-running ``forward``.
             null_emb_tt = self._condition_encoder.null_condition_emb
-            # Move this entry to the most-recently-used end so it's the last to be evicted.
             self._prompt_cache.move_to_end(cache_key)
             _ace_step_prof_signpost("ACE-Step E2E", "Start text encoding (cache hit)")
             _ace_step_prof_signpost("ACE-Step E2E", "Start condition encoding (cache hit)")

@@ -290,7 +290,6 @@ class TtTimestepEmbedding:
 
         _l1 = self._linear_out_l1 or getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
 
-        # Slice out [1,1,1,in_channels]
         t_freq = ttnn.slice(self.t_freq_table, (timestep_index, 0, 0, 0), (timestep_index + 1, 1, 1, self.in_channels))
         temb = ttnn.linear(t_freq, self.w1, bias=self.b1, transpose_b=True, memory_config=_l1)
         temb = ttnn.silu(temb, memory_config=_l1) if hasattr(ttnn, "silu") else ttnn.gelu(temb, memory_config=_l1)
@@ -1110,7 +1109,6 @@ class TtAceStepAttentionSDPA:
             _ace_step_log_ttnn_tensor(f"{debug_prefix}k_pre_rmsnorm", k, ttnn=ttnn)
             _ace_step_log_ttnn_tensor(f"{debug_prefix}v_pre_rmsnorm", v, ttnn=ttnn)
 
-        # Optional debug: export ACE_STEP_DEBUG_SDPA=1 to print padded seq lens
         if os.environ.get("ACE_STEP_DEBUG_SDPA"):
             try:
                 print(
@@ -1653,7 +1651,6 @@ class TtAceStepDiTLayer:
         if debug is not None and debug.get("enabled", False):
             debug[f"{core_pfx}after_self"] = hidden_states
 
-        # Cross-attn
         x2 = ttnn.rms_norm(
             _l1_act(hidden_states),
             weight=self.cross_norm_w,
@@ -1677,7 +1674,6 @@ class TtAceStepDiTLayer:
             debug[f"{core_pfx}cross.attn_out"] = ca
             debug[f"{core_pfx}after_cross"] = hidden_states
 
-        # MLP AdaLN + gated residual
         x3 = ttnn.rms_norm(
             hidden_states,
             weight=self.mlp_norm_w,

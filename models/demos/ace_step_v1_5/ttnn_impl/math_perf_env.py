@@ -123,9 +123,9 @@ def ace_step_lofi_bfloat8_enabled() -> bool:
     return True
 
 
-def ace_step_dit_lofi_bfloat8_enabled() -> bool:
-    """Alias for :func:`ace_step_lofi_bfloat8_enabled` (DiT call sites)."""
-    return ace_step_lofi_bfloat8_enabled()
+# def ace_step_dit_lofi_bfloat8_enabled() -> bool:
+#     """Alias for :func:`ace_step_lofi_bfloat8_enabled` (DiT call sites)."""
+#     return ace_step_lofi_bfloat8_enabled()
 
 
 def ace_step_use_manual_concat_heads() -> bool:
@@ -185,9 +185,9 @@ def ace_step_dit_weight_dtype(ttnn: Any, default_dtype: Any) -> Any:
     return ace_step_linear_weight_dtype(ttnn, default_dtype)
 
 
-def ace_step_dit_conv_weight_dtype(ttnn: Any, default_dtype: Any) -> Any:
-    """Legacy conv weight dtype helper (``proj_in`` is linear TILE now; kept for callers)."""
-    return ace_step_dit_weight_dtype(ttnn, default_dtype)
+# def ace_step_dit_conv_weight_dtype(ttnn: Any, default_dtype: Any) -> Any:
+#     """Legacy conv weight dtype helper (``proj_in`` is linear TILE now; kept for callers)."""
+#     return ace_step_dit_weight_dtype(ttnn, default_dtype)
 
 
 def ace_step_dit_weight_layout(ttnn: Any, weight_dtype: Any, *, default_layout: Any) -> Any:
@@ -279,19 +279,19 @@ def ace_step_ensure_row_major_layout(ttnn: Any, tensor: Any) -> Any:
     return ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
 
 
-def ace_step_dit_linear_perf_enabled() -> bool:
-    """Deprecated: perf kwargs are always enabled. Kept for call-site compatibility."""
-    return True
+# def ace_step_dit_linear_perf_enabled() -> bool:
+#     """Deprecated: perf kwargs are always enabled. Kept for call-site compatibility."""
+#     return True
 
 
-def ace_step_cond_linear_perf_enabled() -> bool:
-    """Deprecated: perf kwargs are always enabled. Kept for call-site compatibility."""
-    return True
+# def ace_step_cond_linear_perf_enabled() -> bool:
+#     """Deprecated: perf kwargs are always enabled. Kept for call-site compatibility."""
+#     return True
 
 
-def ace_step_vae_conv_perf_enabled() -> bool:
-    """Deprecated: VAE conv perf path is always enabled. Kept for call-site compatibility."""
-    return True
+# def ace_step_vae_conv_perf_enabled() -> bool:
+#     """Deprecated: VAE conv perf path is always enabled. Kept for call-site compatibility."""
+#     return True
 
 
 def ace_step_init_vae_conv_compute_kernel_config(device: Any):
@@ -390,9 +390,9 @@ def ace_step_vae_activation_compute_dtype(ttnn: Any) -> Any:
     return ace_step_vae_activation_storage_dtype(ttnn)
 
 
-def ace_step_vae_activation_dtype(ttnn: Any) -> Any:
-    """Alias for :func:`ace_step_vae_activation_compute_dtype` (Tracy / demo-facing dtype)."""
-    return ace_step_vae_activation_compute_dtype(ttnn)
+# def ace_step_vae_activation_dtype(ttnn: Any) -> Any:
+#     """Alias for :func:`ace_step_vae_activation_compute_dtype` (Tracy / demo-facing dtype)."""
+#     return ace_step_vae_activation_compute_dtype(ttnn)
 
 
 def ace_step_vae_host_weight_staging_dtype(ttnn: Any) -> Any:
@@ -450,15 +450,15 @@ def ace_step_vae_conv1d_memory_config(ttnn: Any, *, kernel_size: int):
 _VAE_TRACE_CAPTURE_DEPTH = 0
 
 
-def ace_step_vae_trace_capture_enter() -> None:
-    """Mark VAE trace capture active (``begin_trace_capture`` … ``end_trace_capture``)."""
-    global _VAE_TRACE_CAPTURE_DEPTH
-    _VAE_TRACE_CAPTURE_DEPTH += 1
+# def ace_step_vae_trace_capture_enter() -> None:
+#     """Mark VAE trace capture active (``begin_trace_capture`` … ``end_trace_capture``)."""
+#     global _VAE_TRACE_CAPTURE_DEPTH
+#     _VAE_TRACE_CAPTURE_DEPTH += 1
 
 
-def ace_step_vae_trace_capture_exit() -> None:
-    global _VAE_TRACE_CAPTURE_DEPTH
-    _VAE_TRACE_CAPTURE_DEPTH = max(0, _VAE_TRACE_CAPTURE_DEPTH - 1)
+# def ace_step_vae_trace_capture_exit() -> None:
+#     global _VAE_TRACE_CAPTURE_DEPTH
+#     _VAE_TRACE_CAPTURE_DEPTH = max(0, _VAE_TRACE_CAPTURE_DEPTH - 1)
 
 
 def ace_step_vae_trace_capture_active() -> bool:
@@ -1068,23 +1068,23 @@ def ace_step_ensure_l1_activation(ttnn: Any, tensor: Any, l1_mc: Any | None = No
     return ttnn.to_memory_config(tensor, mc)
 
 
-def ace_step_ensure_l1_if_dram(ttnn: Any, tensor: Any, l1_mc: Any | None = None) -> Any:
-    """Move a DRAM tensor to L1 interleaved; leave any L1-resident tensor (sharded or not) unchanged.
+# def ace_step_ensure_l1_if_dram(ttnn: Any, tensor: Any, l1_mc: Any | None = None) -> Any:
+#     """Move a DRAM tensor to L1 interleaved; leave any L1-resident tensor (sharded or not) unchanged.
 
-    Unlike ``ace_step_ensure_l1_activation``, this does not convert L1-sharded tensors to
-    L1-interleaved, so ops that accept sharded input (e.g. ``nlp_create_qkv_heads``) receive
-    the shard layout intact and avoid a spurious ShardedToInterleaved.
-    """
-    if tensor is None or not hasattr(tensor, "memory_config"):
-        return tensor
-    try:
-        buf_type = getattr(tensor.memory_config(), "buffer_type", None)
-        dram_buf = getattr(getattr(ttnn, "BufferType", None), "DRAM", None)
-        if dram_buf is not None and buf_type != dram_buf:
-            return tensor  # already in L1 (sharded or interleaved) — leave it
-    except Exception:
-        pass
-    return ace_step_ensure_l1_activation(ttnn, tensor, l1_mc)
+#     Unlike ``ace_step_ensure_l1_activation``, this does not convert L1-sharded tensors to
+#     L1-interleaved, so ops that accept sharded input (e.g. ``nlp_create_qkv_heads``) receive
+#     the shard layout intact and avoid a spurious ShardedToInterleaved.
+#     """
+#     if tensor is None or not hasattr(tensor, "memory_config"):
+#         return tensor
+#     try:
+#         buf_type = getattr(tensor.memory_config(), "buffer_type", None)
+#         dram_buf = getattr(getattr(ttnn, "BufferType", None), "DRAM", None)
+#         if dram_buf is not None and buf_type != dram_buf:
+#             return tensor  # already in L1 (sharded or interleaved) — leave it
+#     except Exception:
+#         pass
+#     return ace_step_ensure_l1_activation(ttnn, tensor, l1_mc)
 
 
 def ace_step_ensure_dram_activation(ttnn: Any, tensor: Any, dram_mc: Any | None = None) -> Any:
@@ -1281,20 +1281,20 @@ def ace_step_configure_dit_long_clip_quality(
     return True
 
 
-def ace_step_init_hifi4_linear_compute_kernel_config(device: Any):
-    """HiFi4 linear config for FLOP-bound projections (condition encoder small-seq linears)."""
-    import ttnn
+# def ace_step_init_hifi4_linear_compute_kernel_config(device: Any):
+#     """HiFi4 linear config for FLOP-bound projections (condition encoder small-seq linears)."""
+#     import ttnn
 
-    init_ck = getattr(ttnn, "init_device_compute_kernel_config", None)
-    if not callable(init_ck):
-        return None
-    return init_ck(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
-    )
+#     init_ck = getattr(ttnn, "init_device_compute_kernel_config", None)
+#     if not callable(init_ck):
+#         return None
+#     return init_ck(
+#         device.arch(),
+#         math_fidelity=ttnn.MathFidelity.HiFi4,
+#         math_approx_mode=False,
+#         fp32_dest_acc_en=False,
+#         packer_l1_acc=True,
+#     )
 
 
 def ace_step_init_lofi_linear_compute_kernel_config(device: Any):
@@ -1807,35 +1807,35 @@ def ace_step_ensure_cond_activation(ttnn: Any, tensor: Any, l1_mc: Any | None = 
     return ace_step_ensure_l1_activation(ttnn, t, l1_mc)
 
 
-def ace_step_dit_activation_from_torch(
-    ttnn: Any,
-    host_tensor: Any,
-    *,
-    device: Any,
-    dtype: Any | None = None,
-) -> Any:
-    """Upload a host tensor as TILE BF16 in L1 — same contract as perf/E2E (no env toggle)."""
-    import numpy as np
+# def ace_step_dit_activation_from_torch(
+#     ttnn: Any,
+#     host_tensor: Any,
+#     *,
+#     device: Any,
+#     dtype: Any | None = None,
+# ) -> Any:
+#     """Upload a host tensor as TILE BF16 in L1 — same contract as perf/E2E (no env toggle)."""
+#     import numpy as np
 
-    try:
-        import torch
-    except ImportError:
-        torch = None  # type: ignore
+#     try:
+#         import torch
+#     except ImportError:
+#         torch = None  # type: ignore
 
-    use_dtype = dtype if dtype is not None else getattr(ttnn, "bfloat16", None)
-    if use_dtype is None:
-        raise RuntimeError("bfloat16 required for activations")
-    if torch is not None and isinstance(host_tensor, torch.Tensor):
-        arr = host_tensor.detach().to(dtype=torch.float32, device="cpu").numpy()
-    else:
-        arr = np.asarray(host_tensor, dtype=np.float32)
-    return ace_step_from_torch_activation(
-        ttnn,
-        arr,
-        device=device,
-        dtype=use_dtype,
-        l1_mc=ace_step_linear_l1_memory_config(ttnn),
-    )
+#     use_dtype = dtype if dtype is not None else getattr(ttnn, "bfloat16", None)
+#     if use_dtype is None:
+#         raise RuntimeError("bfloat16 required for activations")
+#     if torch is not None and isinstance(host_tensor, torch.Tensor):
+#         arr = host_tensor.detach().to(dtype=torch.float32, device="cpu").numpy()
+#     else:
+#         arr = np.asarray(host_tensor, dtype=np.float32)
+#     return ace_step_from_torch_activation(
+#         ttnn,
+#         arr,
+#         device=device,
+#         dtype=use_dtype,
+#         l1_mc=ace_step_linear_l1_memory_config(ttnn),
+#     )
 
 
 def _mcast_2d_linear_program_config(
@@ -2160,51 +2160,51 @@ def _ace_step_cond_256x1024_2d_program_config(
     )
 
 
-def ace_step_cond_256x1024_block_sharded_memory_config(
-    ttnn: Any,
-    device: Any,
-    *,
-    seq_len: int,
-    in_dim: int,
-    out_dim: int,
-    batch_size: int = 1,
-    for_output: bool = False,
-):
-    """Block-sharded L1 memory config for pinned ``256×1024×N`` 2D-mcast winner.
+# def ace_step_cond_256x1024_block_sharded_memory_config(
+#     ttnn: Any,
+#     device: Any,
+#     *,
+#     seq_len: int,
+#     in_dim: int,
+#     out_dim: int,
+#     batch_size: int = 1,
+#     for_output: bool = False,
+# ):
+#     """Block-sharded L1 memory config for pinned ``256×1024×N`` 2D-mcast winner.
 
-    Returns ``None`` when shape/device/capability does not match the promoted path.
-    """
-    create_sharded = getattr(ttnn, "create_sharded_memory_config", None)
-    shard_strategy = getattr(ttnn, "ShardStrategy", None)
-    shard_orientation = getattr(ttnn, "ShardOrientation", None)
-    core_grid_cls = getattr(ttnn, "CoreGrid", None)
-    if not callable(create_sharded) or shard_strategy is None or shard_orientation is None or core_grid_cls is None:
-        return None
-    if not hasattr(device, "compute_with_storage_grid_size"):
-        return None
+#     Returns ``None`` when shape/device/capability does not match the promoted path.
+#     """
+#     create_sharded = getattr(ttnn, "create_sharded_memory_config", None)
+#     shard_strategy = getattr(ttnn, "ShardStrategy", None)
+#     shard_orientation = getattr(ttnn, "ShardOrientation", None)
+#     core_grid_cls = getattr(ttnn, "CoreGrid", None)
+#     if not callable(create_sharded) or shard_strategy is None or shard_orientation is None or core_grid_cls is None:
+#         return None
+#     if not hasattr(device, "compute_with_storage_grid_size"):
+#         return None
 
-    m_dim = max(1, int(batch_size)) * max(1, int(seq_len))
-    k_dim = int(in_dim)
-    n_dim = int(out_dim)
-    if m_dim != 256 or k_dim != 1024:
-        return None
+#     m_dim = max(1, int(batch_size)) * max(1, int(seq_len))
+#     k_dim = int(in_dim)
+#     n_dim = int(out_dim)
+#     if m_dim != 256 or k_dim != 1024:
+#         return None
 
-    dev_grid = device.compute_with_storage_grid_size()
-    gx, gy = 8, 4
-    if gx > int(dev_grid.x) or gy > int(dev_grid.y):
-        return None
+#     dev_grid = device.compute_with_storage_grid_size()
+#     gx, gy = 8, 4
+#     if gx > int(dev_grid.x) or gy > int(dev_grid.y):
+#         return None
 
-    # in0 shape = [B,1,M,K], out shape = [B,1,M,N]
-    w_dim = n_dim if for_output else k_dim
-    try:
-        return create_sharded(
-            (1, 1, m_dim, w_dim),
-            core_grid=core_grid_cls(y=gy, x=gx),
-            strategy=shard_strategy.BLOCK,
-            orientation=shard_orientation.ROW_MAJOR,
-        )
-    except Exception:
-        return None
+#     # in0 shape = [B,1,M,K], out shape = [B,1,M,N]
+#     w_dim = n_dim if for_output else k_dim
+#     try:
+#         return create_sharded(
+#             (1, 1, m_dim, w_dim),
+#             core_grid=core_grid_cls(y=gy, x=gx),
+#             strategy=shard_strategy.BLOCK,
+#             orientation=shard_orientation.ROW_MAJOR,
+#         )
+#     except Exception:
+#         return None
 
 
 def ace_step_cond_256x1024_width_sharded_memory_config(
@@ -2326,13 +2326,13 @@ def ace_step_encoder_matmul_pinned(m: int, k: int, n: int):
     return _ACE_STEP_ENCODER_MM_PINNED.get((int(k), int(n)))
 
 
-def ace_step_prefill_width_sharded_l1_memory_config(ttnn: Any):
-    """Generic WIDTH_SHARDED L1 output (matches ``test_matmul_256x*_sweep`` ``_mem_out`` for ``ws``)."""
-    layout = getattr(ttnn, "TensorMemoryLayout", None)
-    buf = getattr(ttnn, "BufferType", None)
-    if layout is None or buf is None:
-        return None
-    return ttnn.MemoryConfig(memory_layout=layout.WIDTH_SHARDED, buffer_type=buf.L1)
+# def ace_step_prefill_width_sharded_l1_memory_config(ttnn: Any):
+#     """Generic WIDTH_SHARDED L1 output (matches ``test_matmul_256x*_sweep`` ``_mem_out`` for ``ws``)."""
+#     layout = getattr(ttnn, "TensorMemoryLayout", None)
+#     buf = getattr(ttnn, "BufferType", None)
+#     if layout is None or buf is None:
+#         return None
+#     return ttnn.MemoryConfig(memory_layout=layout.WIDTH_SHARDED, buffer_type=buf.L1)
 
 
 def ace_step_memory_configs_equivalent(mc_a: Any, mc_b: Any) -> bool:
@@ -2762,157 +2762,157 @@ def _ace_step_pick_width_shard_cores(*, k_tiles: int, device: Any) -> "tuple[int
     return None
 
 
-def ace_step_rms_norm_width_sharded(
-    ttnn: Any,
-    x: Any,
-    weight: Any,
-    epsilon: float,
-    *,
-    device: Any,
-    l1_mc: Any | None = None,
-    compute_kernel_config: Any | None = None,
-    activation_dtype: Any | None = None,
-) -> Any:
-    """WIDTH_SHARDED ``ttnn.rms_norm`` using ``LayerNormShardedMultiCoreProgramConfig``.
+# def ace_step_rms_norm_width_sharded(
+#     ttnn: Any,
+#     x: Any,
+#     weight: Any,
+#     epsilon: float,
+#     *,
+#     device: Any,
+#     l1_mc: Any | None = None,
+#     compute_kernel_config: Any | None = None,
+#     activation_dtype: Any | None = None,
+# ) -> Any:
+#     """WIDTH_SHARDED ``ttnn.rms_norm`` using ``LayerNormShardedMultiCoreProgramConfig``.
 
-    For block norms ``[B, 1, S, K]`` (e.g. ``[1, 1, 256, 1024]``): shards K across cores,
-    runs sharded RMSNorm, then converts back to L1 interleaved. Falls back to interleaved
-    ``rms_norm`` on shape or capability mismatch.
+#     For block norms ``[B, 1, S, K]`` (e.g. ``[1, 1, 256, 1024]``): shards K across cores,
+#     runs sharded RMSNorm, then converts back to L1 interleaved. Falls back to interleaved
+#     ``rms_norm`` on shape or capability mismatch.
 
-    When ``activation_dtype`` is set (e.g. ``bfloat8_b`` for LoFi Q/K linears), activations are
-    typecast before RMSNorm so the norm output matches that dtype (``ttnn.rms_norm`` output dtype
-    equals input). Gamma (``weight``) stays BF16 per TTNN API.
-    """
-    tile = 32
-    lnpc_cls = getattr(ttnn, "LayerNormShardedMultiCoreProgramConfig", None)
-    create_shard = getattr(ttnn, "create_sharded_memory_config", None)
-    i2s = getattr(ttnn, "interleaved_to_sharded", None)
-    s2i = getattr(ttnn, "sharded_to_interleaved", None)
-    shard_strat = getattr(ttnn, "ShardStrategy", None)
-    shard_ori = getattr(ttnn, "ShardOrientation", None)
+#     When ``activation_dtype`` is set (e.g. ``bfloat8_b`` for LoFi Q/K linears), activations are
+#     typecast before RMSNorm so the norm output matches that dtype (``ttnn.rms_norm`` output dtype
+#     equals input). Gamma (``weight``) stays BF16 per TTNN API.
+#     """
+#     tile = 32
+#     lnpc_cls = getattr(ttnn, "LayerNormShardedMultiCoreProgramConfig", None)
+#     create_shard = getattr(ttnn, "create_sharded_memory_config", None)
+#     i2s = getattr(ttnn, "interleaved_to_sharded", None)
+#     s2i = getattr(ttnn, "sharded_to_interleaved", None)
+#     shard_strat = getattr(ttnn, "ShardStrategy", None)
+#     shard_ori = getattr(ttnn, "ShardOrientation", None)
 
-    _fb_kw: dict = {}
-    if l1_mc is not None:
-        _fb_kw["memory_config"] = l1_mc
-    if compute_kernel_config is not None:
-        _fb_kw["compute_kernel_config"] = compute_kernel_config
+#     _fb_kw: dict = {}
+#     if l1_mc is not None:
+#         _fb_kw["memory_config"] = l1_mc
+#     if compute_kernel_config is not None:
+#         _fb_kw["compute_kernel_config"] = compute_kernel_config
 
-    def _maybe_typecast_act(t: Any) -> Any:
-        if activation_dtype is None or t.dtype == activation_dtype:
-            return t
-        tc_kw = {"memory_config": l1_mc} if l1_mc is not None else {}
-        return ttnn.typecast(t, dtype=activation_dtype, **tc_kw)
+#     def _maybe_typecast_act(t: Any) -> Any:
+#         if activation_dtype is None or t.dtype == activation_dtype:
+#             return t
+#         tc_kw = {"memory_config": l1_mc} if l1_mc is not None else {}
+#         return ttnn.typecast(t, dtype=activation_dtype, **tc_kw)
 
-    def _fallback(t: Any) -> Any:
-        return ttnn.rms_norm(_maybe_typecast_act(t), weight=weight, epsilon=epsilon, **_fb_kw)
+#     def _fallback(t: Any) -> Any:
+#         return ttnn.rms_norm(_maybe_typecast_act(t), weight=weight, epsilon=epsilon, **_fb_kw)
 
-    if any(v is None for v in (lnpc_cls, create_shard, i2s, s2i, shard_strat, shard_ori)):
-        return _fallback(x)
+#     if any(v is None for v in (lnpc_cls, create_shard, i2s, s2i, shard_strat, shard_ori)):
+#         return _fallback(x)
 
-    shape = x.shape
-    if len(shape) != 4:
-        return _fallback(x)
+#     shape = x.shape
+#     if len(shape) != 4:
+#         return _fallback(x)
 
-    b_dim = int(shape[0])
-    one_dim = int(shape[1])
-    s_dim = int(shape[2])
-    k_dim = int(shape[3])
+#     b_dim = int(shape[0])
+#     one_dim = int(shape[1])
+#     s_dim = int(shape[2])
+#     k_dim = int(shape[3])
 
-    k_pad = (k_dim + tile - 1) // tile * tile
-    did_k_pad = k_pad != k_dim
-    x_work = x
-    if did_k_pad:
-        pad4 = ((0, 0), (0, 0), (0, 0), (0, k_pad - k_dim))
-        kw_pad = {"memory_config": l1_mc} if l1_mc is not None else {}
-        x_work = ttnn.pad(x_work, padding=pad4, value=0.0, **kw_pad)
+#     k_pad = (k_dim + tile - 1) // tile * tile
+#     did_k_pad = k_pad != k_dim
+#     x_work = x
+#     if did_k_pad:
+#         pad4 = ((0, 0), (0, 0), (0, 0), (0, k_pad - k_dim))
+#         kw_pad = {"memory_config": l1_mc} if l1_mc is not None else {}
+#         x_work = ttnn.pad(x_work, padding=pad4, value=0.0, **kw_pad)
 
-    m_physical = ace_step_tile_physical_m_dim(batch=b_dim, one=one_dim, seq=s_dim, tile=tile)
-    k_tiles = k_pad // tile
-    grid_pair = _ace_step_pick_width_shard_cores(k_tiles=k_tiles, device=device)
-    if grid_pair is None:
-        if did_k_pad:
-            ace_step_safe_deallocate(ttnn, x_work)
-        return _fallback(x)
+#     m_physical = ace_step_tile_physical_m_dim(batch=b_dim, one=one_dim, seq=s_dim, tile=tile)
+#     k_tiles = k_pad // tile
+#     grid_pair = _ace_step_pick_width_shard_cores(k_tiles=k_tiles, device=device)
+#     if grid_pair is None:
+#         if did_k_pad:
+#             ace_step_safe_deallocate(ttnn, x_work)
+#         return _fallback(x)
 
-    cx, cy = grid_pair
-    shard_width = k_pad // (cx * cy)
-    if shard_width % tile != 0 or shard_width == 0:
-        if did_k_pad:
-            ace_step_safe_deallocate(ttnn, x_work)
-        return _fallback(x)
+#     cx, cy = grid_pair
+#     shard_width = k_pad // (cx * cy)
+#     if shard_width % tile != 0 or shard_width == 0:
+#         if did_k_pad:
+#             ace_step_safe_deallocate(ttnn, x_work)
+#         return _fallback(x)
 
-    try:
-        sharded_mc = create_shard(
-            shape=(m_physical, shard_width),
-            core_grid=ttnn.CoreGrid(y=cy, x=cx),
-            strategy=shard_strat.WIDTH,
-            orientation=shard_ori.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
-    except Exception:
-        if did_k_pad:
-            ace_step_safe_deallocate(ttnn, x_work)
-        return _fallback(x)
+#     try:
+#         sharded_mc = create_shard(
+#             shape=(m_physical, shard_width),
+#             core_grid=ttnn.CoreGrid(y=cy, x=cx),
+#             strategy=shard_strat.WIDTH,
+#             orientation=shard_ori.ROW_MAJOR,
+#             use_height_and_width_as_shard_shape=True,
+#         )
+#     except Exception:
+#         if did_k_pad:
+#             ace_step_safe_deallocate(ttnn, x_work)
+#         return _fallback(x)
 
-    x_l1 = ace_step_ensure_l1_activation(ttnn, x_work, l1_mc)
-    x_l1 = _maybe_typecast_act(x_l1)
-    try:
-        x_sharded = i2s(x_l1, sharded_mc)
-    except Exception:
-        return _fallback(x)
+#     x_l1 = ace_step_ensure_l1_activation(ttnn, x_work, l1_mc)
+#     x_l1 = _maybe_typecast_act(x_l1)
+#     try:
+#         x_sharded = i2s(x_l1, sharded_mc)
+#     except Exception:
+#         return _fallback(x)
 
-    block_h = m_physical // tile
-    block_w = shard_width // tile
+#     block_h = m_physical // tile
+#     block_w = shard_width // tile
 
-    if block_h > _ACE_STEP_WIDTH_SHARDED_RMSNORM_MAX_BLOCK_H:
-        ace_step_safe_deallocate(ttnn, x_sharded)
-        if did_k_pad:
-            ace_step_safe_deallocate(ttnn, x_work)
-        return _fallback(x)
+#     if block_h > _ACE_STEP_WIDTH_SHARDED_RMSNORM_MAX_BLOCK_H:
+#         ace_step_safe_deallocate(ttnn, x_sharded)
+#         if did_k_pad:
+#             ace_step_safe_deallocate(ttnn, x_work)
+#         return _fallback(x)
 
-    subblock_w = 1
-    for sw in range(min(block_w, 4), 0, -1):
-        if block_w % sw == 0:
-            subblock_w = sw
-            break
+#     subblock_w = 1
+#     for sw in range(min(block_w, 4), 0, -1):
+#         if block_w % sw == 0:
+#             subblock_w = sw
+#             break
 
-    try:
-        prog_cfg = lnpc_cls(
-            compute_with_storage_grid_size=(cx, cy),
-            subblock_w=subblock_w,
-            block_h=block_h,
-            block_w=block_w,
-            inplace=False,
-        )
-    except Exception:
-        ace_step_safe_deallocate(ttnn, x_sharded)
-        return _fallback(x)
+#     try:
+#         prog_cfg = lnpc_cls(
+#             compute_with_storage_grid_size=(cx, cy),
+#             subblock_w=subblock_w,
+#             block_h=block_h,
+#             block_w=block_w,
+#             inplace=False,
+#         )
+#     except Exception:
+#         ace_step_safe_deallocate(ttnn, x_sharded)
+#         return _fallback(x)
 
-    rn_kw: dict = {"memory_config": sharded_mc, "program_config": prog_cfg}
-    if compute_kernel_config is not None:
-        rn_kw["compute_kernel_config"] = compute_kernel_config
-    try:
-        out_sharded = ttnn.rms_norm(x_sharded, weight=weight, epsilon=epsilon, **rn_kw)
-        ace_step_safe_deallocate(ttnn, x_sharded)
-    except Exception:
-        ace_step_safe_deallocate(ttnn, x_sharded)
-        return _fallback(x)
+#     rn_kw: dict = {"memory_config": sharded_mc, "program_config": prog_cfg}
+#     if compute_kernel_config is not None:
+#         rn_kw["compute_kernel_config"] = compute_kernel_config
+#     try:
+#         out_sharded = ttnn.rms_norm(x_sharded, weight=weight, epsilon=epsilon, **rn_kw)
+#         ace_step_safe_deallocate(ttnn, x_sharded)
+#     except Exception:
+#         ace_step_safe_deallocate(ttnn, x_sharded)
+#         return _fallback(x)
 
-    out_kw = {"memory_config": l1_mc} if l1_mc is not None else {}
-    try:
-        out = s2i(out_sharded, **out_kw)
-        ace_step_safe_deallocate(ttnn, out_sharded)
-    except Exception:
-        ace_step_safe_deallocate(ttnn, out_sharded)
-        return _fallback(x)
+#     out_kw = {"memory_config": l1_mc} if l1_mc is not None else {}
+#     try:
+#         out = s2i(out_sharded, **out_kw)
+#         ace_step_safe_deallocate(ttnn, out_sharded)
+#     except Exception:
+#         ace_step_safe_deallocate(ttnn, out_sharded)
+#         return _fallback(x)
 
-    if did_k_pad:
-        try:
-            out = ttnn.slice(out, (0, 0, 0, 0), (b_dim, one_dim, s_dim, k_dim), **out_kw)
-        except Exception:
-            pass
+#     if did_k_pad:
+#         try:
+#             out = ttnn.slice(out, (0, 0, 0, 0), (b_dim, one_dim, s_dim, k_dim), **out_kw)
+#         except Exception:
+#             pass
 
-    return out
+#     return out
 
 
 # ---------------------------------------------------------------------------

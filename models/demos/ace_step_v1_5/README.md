@@ -1,5 +1,9 @@
 # ACE-Step v1.5
 
+## Platforms
+
+Blackhole (BH_QB — 2×2 mesh)
+
 ## About ACE-Step
 
 [ACE-Step](https://github.com/ace-step/ACE-Step-1.5) is an open-source music foundation model that generates stereo audio from text (and optional lyrics). Version 1.5 targets commercial-grade quality with fast inference: variable-length output at 48 kHz, multilingual prompts, and optional editing workflows (cover, repaint, vocal-to-BGM). Checkpoints are published on Hugging Face as [ACE-Step/Ace-Step1.5](https://huggingface.co/ACE-Step/Ace-Step1.5).
@@ -16,10 +20,8 @@ This TT-Metal demo accelerates the DiT sampler and much of the preprocessing sta
 
 | Component | Supported today | Notes |
 |-----------|-----------------|-------|
-| DiT (`--variant`) | **`acestep-v15-base` only** | `acestep-v15-sft` and `acestep-v15-turbo` exist upstream but are not validated on the TTNN e2e path yet. |
+| DiT (`--variant`) | **`acestep-v15-base`**, **`acestep-v15-turbo`** | `acestep-v15-sft` is not validated on the TTNN e2e path yet. |
 | 5 Hz LM (`--lm_variant`) | **`acestep-5Hz-lm-1.7B`** (default) | Used for official-style preprocessing and conditioning. |
-
-Use `--variant acestep-v15-base` (the default) for `run_prompt_to_wav.py`.
 
 ### Qwen3 embedding (TTNN)
 
@@ -39,34 +41,86 @@ This folder provides:
 - `tests/`: per-module PCC validation (Torch vs TTNN)
 - `run_prompt_to_wav.py`: end-to-end text-to-music demo (preprocessing + TTNN DiT + VAE decode)
 
-## Dependencies
+## Prerequisites
 
-From the `tt-metal` repo root, install demo-specific Python packages (CPU `torchaudio` and `vector-quantize-pytorch` for the 5 Hz LM / ACE-Step preprocessing path):
+- Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal)
+- Installed [TT-Metalium / TT-NN](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
+- HuggingFace token: `huggingface-cli login` or `export HF_TOKEN=<token>` (checkpoints auto-download on first run to `~/.cache/huggingface/hub/ACE-Step-1.5-checkpoints/`)
+
+Install demo-specific Python packages from the `tt-metal` repo root:
 
 ```bash
-cd tt-metal
 pip install -r models/demos/ace_step_v1_5/requirements.txt
 ```
 
 
 ## Quick start — prompt-to-WAV demo
 
-Generate a WAV audio file from a text prompt using TTNN-accelerated inference. **Only the base DiT checkpoint is supported today** (`--variant acestep-v15-base`).
+Generate a WAV audio file from a text prompt using TTNN-accelerated inference.
 
 ```bash
-cd tt-metal
-
-python3 models/demos/ace_step_v1_5/run_prompt_to_wav.py \
-  --prompt "Electronic dance track with deep bass, punchy kick drum, bright synth lead, energetic rhythm" \
-  --variant acestep-v15-base \
-  --lm_variant acestep-5Hz-lm-1.7B \
+python models/demos/ace_step_v1_5/run_prompt_to_wav.py \
+  --variant acestep-v15-turbo \
   --duration_sec 15 \
-  --infer_steps 4 \
-  --out /tmp/ttnn_LLMHandler.wav
+  --prompt "epic orchestral cinematic music for a movie trailer" \
+  --infer_steps 8 \
+  --guidance_scale 7 \
+  --mesh-device BH_QB \
+  --out /tmp/15_turbo_1.7B.wav
 ```
 
 On first run, any missing model checkpoints are automatically downloaded from HuggingFace
 into `~/.cache/huggingface/hub/ACE-Step-1.5-checkpoints/`.
+
+### Trace (default: on)
+
+TTNN trace + 2CQ is **enabled by default**. To run in fully-eager single-CQ mode (e.g. for debugging or Tracy profiling):
+
+```bash
+python models/demos/ace_step_v1_5/run_prompt_to_wav.py ... --no-use-trace
+```
+
+### More examples
+
+**Turbo model — fast generation (8 steps, CFG=7):**
+
+```bash
+python models/demos/ace_step_v1_5/run_prompt_to_wav.py \
+  --variant acestep-v15-turbo \
+  --lm_variant acestep-5Hz-lm-1.7B \
+  --duration_sec 15 \
+  --infer_steps 8 \
+  --guidance_scale 7 \
+  --mesh-device BH_QB \
+  --out /tmp/lofi.wav
+```
+
+**Base model with 1.7B LM (balanced quality/speed):**
+
+```bash
+python models/demos/ace_step_v1_5/run_prompt_to_wav.py \
+  --prompt "Acoustic guitar ballad with soft vocals and ambient strings" \
+  --variant acestep-v15-base \
+  --lm_variant acestep-5Hz-lm-1.7B \
+  --duration_sec 30 \
+  --seed 42 \
+  --mesh-device BH_QB \
+  --out /tmp/ballad.wav
+```
+
+**Base model with 4B LM (highest quality, slower):**
+
+```bash
+python models/demos/ace_step_v1_5/run_prompt_to_wav.py \
+  --prompt "Orchestral film score with dramatic brass and timpani" \
+  --variant acestep-v15-base \
+  --lm_variant acestep-5Hz-lm-4B \
+  --duration_sec 20 \
+  --guidance_scale 10.0 \
+  --infer_steps 50 \
+  --mesh-device BH_QB \
+  --out /tmp/orchestral.wav
+```
 
 ### Weight caching (avoid reloading from disk)
 
@@ -154,44 +208,6 @@ With trace on, the device opens with **`num_command_queues=2`** and a **128 MiB*
 | **Cover hint selection** | Host branch |
 | **VAE multi-tile overlap-add** | Trace replay PCC / audible noise |
 
-**Base model with 1.7B LM (balanced quality/speed):**
-
-```bash
-python3 models/demos/ace_step_v1_5/run_prompt_to_wav.py \
-  --prompt "Acoustic guitar ballad with soft vocals and ambient strings" \
-  --variant acestep-v15-base \
-  --lm_variant acestep-5Hz-lm-1.7B \
-  --duration_sec 30 \
-  --seed 42 \
-  --out /tmp/ballad.wav
-```
-
-**Turbo model for fast generation (fewer steps, no CFG):**
-
-```bash
-python3 models/demos/ace_step_v1_5/run_prompt_to_wav.py \
-  --prompt "Lo-fi hip hop beat with vinyl crackle and mellow piano" \
-  --variant acestep-v15-turbo \
-  --lm_variant acestep-5Hz-lm-0.6B \
-  --duration_sec 15 \
-  --out /tmp/lofi.wav
-```
-
-**Base model with 4B LM (highest quality, slower):**
-
-```bash
-python3 models/demos/ace_step_v1_5/run_prompt_to_wav.py \
-  --prompt "Orchestral film score with dramatic brass and timpani" \
-  --variant acestep-v15-base \
-  --lm_variant acestep-5Hz-lm-4B \
-  --duration_sec 20 \
-  --guidance_scale 10.0 \
-  --infer_steps 50 \
-  --out /tmp/orchestral.wav
-```
-
-Checkpoints are always loaded from `~/.cache/huggingface/hub/ACE-Step-1.5-checkpoints/` (auto-download on first run). For a custom root, use `serve_prompt_to_wav.py --ckpt_dir …` or symlink that directory to the default cache path.
-
 ---
 
 ## Mandatory constraints (enforced by design)
@@ -246,13 +262,13 @@ export MESH_DEVICE=N150   # or N300 / T3K / BH_QB
 Same algorithm as P150 (batch=2 CFG, trace, TTNN VAE). Preprocess (5 Hz LM + handler) runs on **host CPU**; DiT and VAE use the full **2×2** mesh.
 
 ```bash
-export MESH_DEVICE=BH_QB
-python3 models/demos/ace_step_v1_5/run_prompt_to_wav.py \
+python models/demos/ace_step_v1_5/run_prompt_to_wav.py \
   --mesh-device BH_QB \
-  --no-experimental-5hz-ttnn-causal-lm \
-  --variant acestep-v15-base \
+  --variant acestep-v15-turbo \
   --lm_variant acestep-5Hz-lm-1.7B \
-  --duration_sec 15 --infer_steps 4 \
+  --duration_sec 15 \
+  --infer_steps 8 \
+  --guidance_scale 7 \
   --out /tmp/ttnn_wav.wav
 ```
 
@@ -268,15 +284,14 @@ DiT init on 2×2 can take several minutes on first run (24 decoder layers). Prog
 The TTNN entrypoint defaults to Hugging Face **`ACE-Step/acestep-v15-base`** when you omit a local checkpoint:
 
 ```bash
-cd /home/ubuntu/proj_sdk/tt-metal
-python3 models/demos/ace_step_v1_5/ttnn_impl/full_pipeline.py \
+python models/demos/ace_step_v1_5/ttnn_impl/full_pipeline.py \
   --out-npy /tmp/ace_features.npy
 ```
 
 Override weights explicitly:
 
 ```bash
-python3 models/demos/ace_step_v1_5/ttnn_impl/full_pipeline.py \
+python models/demos/ace_step_v1_5/ttnn_impl/full_pipeline.py \
   --checkpoint-safetensors /path/to/model.safetensors \
   --out-npy /tmp/ace_features.npy
 ```
@@ -284,7 +299,7 @@ python3 models/demos/ace_step_v1_5/ttnn_impl/full_pipeline.py \
 Turbo lives under the umbrella repo ``ACE-Step/Ace-Step1.5``; pick it with ``--hf-subfolder``:
 
 ```bash
-python3 models/demos/ace_step_v1_5/ttnn_impl/full_pipeline.py \
+python models/demos/ace_step_v1_5/ttnn_impl/full_pipeline.py \
   --hf-repo-id ACE-Step/Ace-Step1.5 \
   --hf-subfolder acestep-v15-turbo \
   --out-npy /tmp/out_turbo.npy
@@ -304,8 +319,7 @@ weights (`norm_out`, `scale_shift_table`, `proj_out`), runs a small forward pass
 - output **shape** and a small numeric signature (`mean/std/first8`)
 
 ```bash
-cd /home/ubuntu/proj_sdk/tt-metal
-python3 -m models.demos.ace_step_v1_5.torch_ref.hf_output_head_demo \
+python -m models.demos.ace_step_v1_5.torch_ref.hf_output_head_demo \
   --repo-id "ACE-Step/Ace-Step1.5" \
   --subfolder "acestep-v15-turbo" \
   --seed 0 --batch 1 --original-seq-len 257 --noise-std 1.0
