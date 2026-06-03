@@ -198,32 +198,32 @@ targets:
             owner_id: U07RY6B5FLJ # Gongyu Wang
             team: models
   gemma-3-27b:
-    aliases: ["gemma-3-27b", "google/gemma-3-27b-it"]
+    aliases: ["gemma-3-27b", "google/gemma-3-27b-it", "gemma-3-27b-vision"]
     skus:
       wh_llmbox_perf:
         entries:
           - batch_size: 1
-            seq_len: null
+            seq_len: 2089
             status: active
             perf:
               # prefill_t/s deliberately omitted: observed values vary 49 → 76
               # across runs, well beyond the validator's 15% upper-tolerance
               # band. The metric needs to be anchored to a fixed seq_len
               # (see PR #43982 description) before it can gate CI usefully.
-              decode_t/s/u: 16.0
-              decode_t/s: 16.0
+              decode_t/s/u: 14.2
+              decode_t/s: 14.3
               decode_t_s_tolerance: 0.25
               decode_t_s_u_tolerance: 0.25
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
   gemma-3-4b:
-    aliases: ["gemma-3-4b", "google/gemma-3-4b-it"]
+    aliases: ["gemma-3-4b", "google/gemma-3-4b-it", "gemma-3-4b-vision"]
     skus:
       wh_n150:
         entries:
           - batch_size: 1
-            seq_len: null
+            seq_len: 2089
             status: active
             perf:
               prefill_t/s: 84.0
@@ -430,6 +430,15 @@ targets:
             seq_len: 512
             status: active
             perf:
+              'decode_t/s/u': 6.3
+              prefill_time_to_first_token: 319
+            accuracy:
+              top1: 90
+              top5: 97
+          - batch_size: 32
+            seq_len: 712
+            status: active
+            perf:
               'decode_t/s/u': 28.3
               prefill_time_to_first_token: 104
             accuracy:
@@ -463,15 +472,33 @@ targets:
             seq_len: 512
             status: active
             perf:
-              'decode_t/s/u': 33.6
-              prefill_time_to_first_token: 76
+              'decode_t/s/u': 10.2
+              prefill_time_to_first_token: 135
             accuracy:
               top1: 90
               top5: 98
+          - batch_size: 32
+            seq_len: 712
+            status: active
+            perf:
+              'decode_t/s/u': 28.3
+              prefill_time_to_first_token: 104
+            accuracy:
+              top1: 90
+              top5: 97
       wh_llmbox_perf:
         entries:
           - batch_size: 1
             seq_len: 512
+            status: active
+            perf:
+              'decode_t/s/u': 5.7
+              prefill_time_to_first_token: 115
+            accuracy:
+              top1: 90
+              top5: 98
+          - batch_size: 32
+            seq_len: 712
             status: active
             perf:
               'decode_t/s/u': 64.3
@@ -583,8 +610,8 @@ targets:
             seq_len: 512
             status: active
             perf:
-              'decode_t/s/u': 87.8
-              prefill_time_to_first_token: 26
+              'decode_t/s/u': 8.4
+              prefill_time_to_first_token: 123
             accuracy:
               top1: 79
               top5: 97
@@ -629,8 +656,8 @@ targets:
             seq_len: 512
             status: active
             perf:
-              'decode_t/s/u': 54.0
-              prefill_time_to_first_token: 55
+              'decode_t/s/u': 7.1
+              prefill_time_to_first_token: 188
             accuracy:
               top1: 89
               top5: 98
@@ -675,8 +702,8 @@ targets:
             seq_len: 512
             status: active
             perf:
-              'decode_t/s/u': 16.6
-              prefill_time_to_first_token: 164
+              'decode_t/s/u': 2.22
+              prefill_time_to_first_token: 540
             accuracy:
               top1: 96
               top5: 100
@@ -789,6 +816,15 @@ targets:
             seq_len: 512
             status: active
             perf:
+              'decode_t/s/u': 10.45
+              prefill_time_to_first_token: 278
+            accuracy:
+              top1: 95
+              top5: 99
+          - batch_size: 32
+            seq_len: 744
+            status: active
+            perf:
               'decode_t/s/u': 29.75
               prefill_time_to_first_token: 100.24
             accuracy:
@@ -861,8 +897,8 @@ targets:
             seq_len: 512
             status: active
             perf:
-              'decode_t/s/u': 45.0
-              prefill_time_to_first_token: 73.32
+              'decode_t/s/u': 10.3
+              prefill_time_to_first_token: 181
             accuracy:
               top1: 89
               top5: 99
@@ -900,6 +936,15 @@ targets:
             seq_len: 512
             status: active
             perf:
+              'decode_t/s/u': 3.04
+              prefill_time_to_first_token: 306
+            accuracy:
+              top1: 99
+              top5: 100
+          - batch_size: 32
+            seq_len: 707
+            status: active
+            perf:
               'decode_t/s/u': 15.2
               prefill_time_to_first_token: 225
             accuracy:
@@ -926,8 +971,8 @@ targets:
             seq_len: 512
             status: active
             perf:
-              'decode_t/s/u': 24.6
-              prefill_time_to_first_token: 92
+              'decode_t/s/u': 7.0
+              prefill_time_to_first_token: 308
             accuracy:
               top1: 84
               top5: 96
@@ -938,6 +983,15 @@ targets:
         entries:
           - batch_size: 1
             seq_len: 512
+            status: active
+            perf:
+              'decode_t/s/u': 2.9
+              prefill_time_to_first_token: 290
+            accuracy:
+              top1: 96
+              top5: 99
+          - batch_size: 32
+            seq_len: 707
             status: active
             perf:
               'decode_t/s/u': 22.4
@@ -966,6 +1020,15 @@ targets:
             seq_len: 512
             status: active
             perf:
+              'decode_t/s/u': 2.5
+              prefill_time_to_first_token: 315
+            accuracy:
+              top1: 89
+              top5: 97
+          - batch_size: 32
+            seq_len: 686
+            status: active
+            perf:
               'decode_t/s/u': 22.9
               prefill_time_to_first_token: 123
             accuracy:
@@ -973,7 +1036,7 @@ targets:
               top5: 97
       # p300x2 == bh_quietbox_2. Measured on workflow run 26785408151
       # (ci-eval-32 invocation; decode_t/s = batch_size * decode_t/s/u).
-      p300x2:
+      bh_quietbox_2:
         entries:
           - batch_size: 32
             status: active
