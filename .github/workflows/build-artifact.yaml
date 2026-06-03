@@ -355,7 +355,7 @@ jobs:
     needs: [parse-platform, build-docker-image]
     timeout-minutes: 100
     runs-on:
-      group: github-hosted
+      group: tt-github-hosted
       labels: linux_8_core
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
