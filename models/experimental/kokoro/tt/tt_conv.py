@@ -118,10 +118,30 @@ def dram_height_slice_num_slices(
     return min(p2, max_slices)
 
 
-def dram_height_slice_config(sliced_dim: int) -> ttnn.Conv2dSliceConfig:
+# BH L1: height-style conv_transpose2d circular buffers scale with rows/slice. 512 is fine for
+# moderate lengths; long generator upsample (seq ~8k+) and iSTFT OLA need tighter slicing.
+_DRAM_SLICE_TARGET_ROWS_DEFAULT = 512
+_DRAM_SLICE_TARGET_ROWS_LONG = 128
+_DRAM_SLICE_LONG_SEQ_THRESHOLD = 4096
+
+
+def dram_height_slice_target_rows(sliced_dim: int) -> int:
+    """Pick per-slice row budget for ``Conv2dDRAMSliceHeight`` on Blackhole."""
+    if sliced_dim >= _DRAM_SLICE_LONG_SEQ_THRESHOLD:
+        return _DRAM_SLICE_TARGET_ROWS_LONG
+    return _DRAM_SLICE_TARGET_ROWS_DEFAULT
+
+
+def dram_height_slice_config(
+    sliced_dim: int,
+    *,
+    target_rows_per_slice: int | None = None,
+) -> ttnn.Conv2dSliceConfig:
+    if target_rows_per_slice is None:
+        target_rows_per_slice = dram_height_slice_target_rows(sliced_dim)
     return ttnn.Conv2dSliceConfig(
         slice_type=ttnn.Conv2dDRAMSliceHeight,
-        num_slices=dram_height_slice_num_slices(sliced_dim),
+        num_slices=dram_height_slice_num_slices(sliced_dim, target_rows_per_slice=target_rows_per_slice),
     )
 
 
