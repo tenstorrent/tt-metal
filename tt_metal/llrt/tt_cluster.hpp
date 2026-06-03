@@ -92,6 +92,9 @@ public:
 
     const std::unique_ptr<tt::umd::Cluster>& get_driver() const;
 
+    // WH B0 unconditionally, BH with ETH FW >= 1.9.0.
+    bool supports_ethernet_link_retraining() const;
+
     // Sets the HAL to be used for this Cluster
     void set_hal(const tt_metal::Hal* hal);
 

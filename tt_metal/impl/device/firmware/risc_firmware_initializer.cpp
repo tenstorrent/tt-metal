@@ -167,10 +167,23 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
             // Register the build env unconditionally so JIT compilation (CompileProgram) works on mock
             // and emulated devices too. The build env is HAL/arch-derived and does not probe hardware.
             BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
-            if (!cluster_.is_mock_or_emulated()) {
-                // build_firmware ensures that the FW is built only once for a given build key
-                // (which captures the fw_compile_hash).
+            // build_firmware() is a pure compile/link step that doesn't touch hardware, and the
+            // resulting ELFs export symbols (e.g. __fw_export_text_end) that kernel linker scripts
+            // depend on -- without them, JIT-compiling kernels on a mock device fails with
+            // "non constant or forward reference address expression". So we run it for mock as
+            // well as real devices, with two exceptions:
+            //   1. Mock devices whose arch has no firmware sources packaged (currently Quasar).
+            //      cc1plus would fatal on missing source files; mock kernel JIT on Quasar is not
+            //      yet supported and would require a separate sources fix.
+            //   2. Emule devices on any arch. Emule's kernel JIT uses an x86 toolchain, so the
+            //      riscv firmware ELFs are never linked or consumed.
+            const bool skip_fw_build = cluster_.get_target_device_type() == tt::TargetDevice::Emule ||
+                                       (cluster_.get_target_device_type() == tt::TargetDevice::Mock &&
+                                        !mock_firmware_sources_available_for(cluster_.arch()));
+            if (!skip_fw_build) {
                 BuildEnvManager::get_instance().build_firmware(device_id);
+            }
+            if (!cluster_.is_mock_or_emulated()) {
                 // Clear the entire launch message ring buffer on ethernet cores before application firmware is
                 // activated. This is required since ethernet cores context switch between application and routing
                 // firmware. If ERISC application firmware is activated before the launch messages are cleared, it
