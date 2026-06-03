@@ -368,7 +368,7 @@ jobs:
       TOOLCHAIN: ${{ inputs.toolchain || needs.parse-platform.outputs.toolchain }}
     container:
       image: >-
-        harbor.ci.tenstorrent.net/${{
+        ${{
           inputs.ci-build-docker-image ||
           needs.build-docker-image.outputs.ci-build-tag ||
           'docker-image-unresolved!' }}
@@ -666,4 +666,5 @@ jobs:
       tracy: ${{ inputs.tracy }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-type: ${{ inputs.build-type || 'Release' }}
+
 
