@@ -542,13 +542,15 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
         std::move(pack_dst_formats_all_cbs)};
 }
 
-// Decomposes tile dimensions into (num_faces_r_dim, num_faces_c_dim) per CB.
-// Derived directly from tile_r_dim / face_r_dim and tile_c_dim / face_c_dim.
+// Decomposes logical faces into (num_faces_r_dim, num_faces_c_dim) per CB.
+// Some kernels use a compact row geometry that does not evenly divide the
+// default tile height, so derive the row-face count from total logical faces.
 // Runs on host at JIT time so division is fine.
 std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_num_faces_rc_dims(
     const std::vector<uint32_t>& tile_r_dim_arr,
     const std::vector<uint32_t>& tile_c_dim_arr,
-    const std::vector<uint32_t>& face_r_dim_arr) {
+    const std::vector<uint32_t>& face_r_dim_arr,
+    const std::vector<uint32_t>& num_faces_arr) {
     TT_FATAL(
         tile_r_dim_arr.size() == tile_c_dim_arr.size(),
         "tile_r_dim_arr size ({}) must match tile_c_dim_arr size ({})",
@@ -559,23 +561,46 @@ std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_num_faces_rc_dim
         "tile_r_dim_arr size ({}) must match face_r_dim_arr size ({})",
         tile_r_dim_arr.size(),
         face_r_dim_arr.size());
+    TT_FATAL(
+        tile_r_dim_arr.size() == num_faces_arr.size(),
+        "tile_r_dim_arr size ({}) must match num_faces_arr size ({})",
+        tile_r_dim_arr.size(),
+        num_faces_arr.size());
     const size_t n = tile_r_dim_arr.size();
     std::vector<uint32_t> r_dims(n);
     std::vector<uint32_t> c_dims(n);
     for (size_t i = 0; i < n; ++i) {
         TT_FATAL(face_r_dim_arr[i] > 0, "face_r_dim must be > 0 at index {}", i);
-        TT_FATAL(
-            tile_r_dim_arr[i] % face_r_dim_arr[i] == 0,
-            "tile_r_dim ({}) must be a multiple of face_r_dim ({})",
-            tile_r_dim_arr[i],
-            face_r_dim_arr[i]);
+        TT_FATAL(num_faces_arr[i] > 0, "num_faces must be > 0 at index {}", i);
         TT_FATAL(
             tile_c_dim_arr[i] % constants::FACE_WIDTH == 0,
             "tile_c_dim ({}) must be a multiple of FACE_WIDTH ({})",
             tile_c_dim_arr[i],
             constants::FACE_WIDTH);
-        r_dims[i] = tile_r_dim_arr[i] / face_r_dim_arr[i];
-        c_dims[i] = tile_c_dim_arr[i] / constants::FACE_WIDTH;
+        const uint32_t tile_c_faces = tile_c_dim_arr[i] / constants::FACE_WIDTH;
+        TT_FATAL(tile_c_faces > 0, "tile_c_dim ({}) must include at least one face", tile_c_dim_arr[i]);
+        c_dims[i] = std::min(tile_c_faces, num_faces_arr[i]);
+        TT_FATAL(
+            num_faces_arr[i] % c_dims[i] == 0,
+            "num_faces ({}) must be divisible by num_faces_c_dim ({})",
+            num_faces_arr[i],
+            c_dims[i]);
+        r_dims[i] = num_faces_arr[i] / c_dims[i];
+        // Guard against bogus (face_r_dim, num_faces) combos: the logical face grid must fit
+        // within the tile rows. e.g. (face_r_dim=9, num_faces=8) on a 32x32 tile would produce
+        // r_dims=4 -> 36 rows, overflowing the tile and corrupting downstream face addressing.
+        TT_FATAL(
+            r_dims[i] * face_r_dim_arr[i] <= tile_r_dim_arr[i],
+            "face grid (num_faces_r_dim={} * face_r_dim={} = {} rows) exceeds tile_r_dim ({}) at "
+            "index {} (num_faces={}, num_faces_c_dim={}, tile_c_dim={})",
+            r_dims[i],
+            face_r_dim_arr[i],
+            r_dims[i] * face_r_dim_arr[i],
+            tile_r_dim_arr[i],
+            i,
+            num_faces_arr[i],
+            c_dims[i],
+            tile_c_dim_arr[i]);
     }
     return {r_dims, c_dims};
 }
@@ -590,7 +615,7 @@ void emit_unpack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t 
     emit_formats_array(out, "constexpr uint16_t", "unpack_tile_size", max_cbs, desc.buf_tile_size_arr);
 
     auto [r_dims, c_dims] = compute_num_faces_rc_dims(
-        desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr);
+        desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr, desc.buf_num_faces_arr);
     emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_r_dim", max_cbs, r_dims);
     emit_formats_array(out, "constexpr uint8_t", "unpack_num_faces_c_dim", max_cbs, c_dims);
 }
@@ -605,7 +630,7 @@ void emit_pack_tile_dims(std::ostream& out, const tt_hlk_desc& desc, uint32_t ma
     emit_formats_array(out, "constexpr uint16_t", "pack_tile_size", max_cbs, desc.buf_tile_size_arr);
 
     auto [r_dims, c_dims] = compute_num_faces_rc_dims(
-        desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr);
+        desc.buf_tile_r_dim_arr, desc.buf_tile_c_dim_arr, desc.buf_face_r_dim_arr, desc.buf_num_faces_arr);
     emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_r_dim", max_cbs, r_dims);
     emit_formats_array(out, "constexpr uint8_t", "pack_num_faces_c_dim", max_cbs, c_dims);
 }
