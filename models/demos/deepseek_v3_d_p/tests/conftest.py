@@ -94,7 +94,7 @@ def variant(request) -> TestVariant:
 
 def download_model_config_only(variant: TestVariant, cache_dir: Path) -> Path:
     """
-    Download only config files (no weight shards) for the variant's HF repo.
+    Download only config files (without weight shards) for the variant's HF repo.
     This is fast and only downloads ~few MB for config files.
 
     Args:
@@ -150,20 +150,18 @@ def download_model_config_only(variant: TestVariant, cache_dir: Path) -> Path:
         raise
 
 
-def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int = 0, num_layers: int = 1) -> Path:
+def download_model_weights(variant: TestVariant, cache_dir: Path, num_layers: int = 1) -> Path:
     """
     Download model weights from HuggingFace for the variant's HF repo.
 
     Args:
         variant: The TestVariant whose HF repo to download from.
-        cache_dir: Directory to cache downloaded weights.
-        layer_idx: Which layer to start at (default: 0).
-        num_layers: Number of layers to download (default: 1).
-            Pulls shards covering layers [layer_idx, layer_idx+num_layers) plus
-            embeddings and `model.norm.weight`. Other shards are skipped.
+        cache_dir: Directory to cache downloaded weights
+        num_layers: Number of layers to download weights for (default: 1).
+            When >1, downloads additional shards for layers 0..num_layers-1.
 
     Returns:
-        Path to the downloaded model directory.
+        Path to the downloaded model directory
     """
     try:
         from huggingface_hub import snapshot_download
@@ -173,7 +171,7 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
 
     logger.info(f"Downloading {variant.hf_repo_id} weights from HuggingFace")
     logger.info(f"Cache directory: {cache_dir}")
-    logger.info(f"Pulling shards for layers {layer_idx}..{layer_idx + num_layers - 1} + embed + norm")
+    logger.info(f"Pulling shards for layers 0..{num_layers - 1} + embed + norm")
 
     # Create cache directory
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -222,7 +220,7 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
                 required_shards.add(shard_file)
 
         # Find shards for the requested layers
-        for layer_id in range(layer_idx, layer_idx + num_layers):
+        for layer_id in range(num_layers):
             for key, shard_file in weight_map.items():
                 if f"model.layers.{layer_id}." in key:
                     required_shards.add(shard_file)
@@ -240,9 +238,7 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
             shard_num = shard_file.split("-")[1]
             shard_patterns.append(f"*-{shard_num}-of-*.safetensors")
 
-        logger.info(
-            f"Step 2/2: Downloading weight shards for layers {layer_idx}..{layer_idx + num_layers - 1} + embeddings + norm..."
-        )
+        logger.info(f"Step 2/2: Downloading weight shards for layers 0..{num_layers - 1} + embeddings + norm...")
         logger.info(
             f"Required shards: {len(required_shards)} files ({', '.join(sorted(required_shards)[:5])}{'...' if len(required_shards) > 5 else ''})"
         )
@@ -265,13 +261,12 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
         raise
 
 
-def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: int = 6) -> Path:
+def get_or_download_model(variant: TestVariant, num_layers: int = 6) -> Path:
     """
     Get model path, downloading from HuggingFace if necessary.
 
     Args:
         variant: The TestVariant to resolve weights for.
-        layer_idx: Which layer weights to ensure are available.
         num_layers: Number of layers to download (default: 6).
                     When >1, downloads additional shards including shard 160 for model.norm.
 
@@ -312,7 +307,7 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
     logger.info(f"Will cache to: {cache_dir}")
     # Note: Detailed download size is logged by download_model_weights() after analyzing the index
 
-    return download_model_weights(variant, cache_dir, layer_idx, num_layers)
+    return download_model_weights(variant, cache_dir, num_layers)
 
 
 def _unwrap_multimodal_config(cfg):
@@ -341,7 +336,7 @@ def _unwrap_multimodal_config(cfg):
 @lru_cache(maxsize=None)
 def _resolve_model_path(variant_name: str) -> Path:
     v = TEST_VARIANTS[variant_name]
-    return get_or_download_model(v, layer_idx=0, num_layers=v.num_layers_to_download)
+    return get_or_download_model(v, num_layers=v.num_layers_to_download)
 
 
 @lru_cache(maxsize=None)
@@ -436,8 +431,8 @@ def model_path(variant) -> Path:
 
     Checks in order:
     1. variant.env_var environment variable
-    2. variant.default_local_path (in-repo fallback)
-    3. variant.shared_path (NFS mirror)
+    2. variant.default_local_path (default location)
+    3. variant.shared_path
     4. Downloads from HuggingFace to HF cache if not found
     """
     return _resolve_model_path(variant.name)
