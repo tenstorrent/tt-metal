@@ -1699,11 +1699,60 @@ def _enforce_backend_match_quality_or_abort(
 
     if getattr(backend, "routing_mode", "") == "generic":
         if probe.category != "Unknown":
+            # 2026-06-03: generic catch-all backends (hf_eager) produce
+            # torch-wrapper stubs and auto-generated PCC tests that
+            # frequently SKIP on novel architectures (e.g. seamless-m4t).
+            # When pytest SKIPs are silently treated as graduated, the
+            # OUTCOME banner reports "all graduated rc=0" while no real
+            # TT-native code was produced. Refuse this path in auto mode
+            # unless the user explicitly opts in via
+            # --accept-closest-backend, OR auto-onboard succeeds at
+            # drafting a real backend below.
+            if not accept_closest:
+                # Try auto-onboard first — it may produce a real backend.
+                _auto_picked_generic = _try_auto_onboard_inline(
+                    model_id=model_id,
+                    category=probe.category,
+                    model_type=model_type,
+                    pipeline_tag=pipeline_tag,
+                    closest_backend=backend,
+                )
+                if _auto_picked_generic is not None:
+                    _new_be, _new_q = _auto_picked_generic
+                    print(
+                        f"  Backend match: {_new_q.upper()}  ({_new_be.name})  "
+                        f"(via auto-onboard from generic catch-all)"
+                    )
+                    return None
+                # Auto-onboard couldn't draft a real backend. The generic
+                # catch-all would silently produce torch-wrapper stubs and
+                # false-success OUTCOME. Refuse with actionable next steps.
+                print()
+                print(sep)
+                print(
+                    f"  GENERIC-CATCH-ALL FALLBACK refused for {model_id!r}\n"
+                    f"\n"
+                    f"  No registered backend handles model_type={model_type!r} "
+                    f"(category={probe.category!r}); the only candidate is the "
+                    f"generic catch-all `{backend.name}`. That backend produces "
+                    f"torch-wrapper stubs and auto-PCC tests that commonly SKIP\n"
+                    f"  on novel architectures — running it in --auto mode tends to\n"
+                    f"  produce a fake 'all graduated rc=0' outcome with no real\n"
+                    f"  TT-native code. Refusing silently.\n"
+                    f"\n"
+                    f"  Options:\n"
+                    f"    1. Add a `FamilyBackend(model_type_keys=[{model_type!r}], ...)` "
+                    f"entry to family_backends.py pointing at the right demo path.\n"
+                    f"    2. Re-run `auto-onboard {model_id}` with a longer timeout.\n"
+                    f"    3. Pass --accept-closest-backend to proceed against the "
+                    f"generic catch-all anyway (CPU-only, not a real TT bring-up).\n"
+                )
+                print(sep)
+                return 2
             print(
                 f"  Backend match: GENERIC  ({backend.name})  "
                 f"(category={probe.category!r}, model_type={model_type!r}; "
-                f"this backend is intentionally catch-all for its category, "
-                f"not a silent wrong-template fallback)"
+                f"--accept-closest-backend set — proceeding against catch-all)"
             )
             return None
         print(
