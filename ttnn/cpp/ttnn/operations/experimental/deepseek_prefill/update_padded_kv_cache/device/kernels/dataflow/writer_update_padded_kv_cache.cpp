@@ -45,14 +45,11 @@ void kernel_main() {
     const uint32_t boundary_chip = (kv_actual_global_t / chunk_local_t) % sp_factor;
     const uint32_t boundary_offset_t = kv_actual_global_t % chunk_local_t;
 
-    uint32_t update_idxt;
-    if (my_sp_coord < boundary_chip) {
-        update_idxt = (boundary_slab_idx + 1) * chunk_local_t;
-    } else if (my_sp_coord == boundary_chip) {
-        update_idxt = boundary_slab_idx * chunk_local_t + boundary_offset_t;
-    } else {
-        update_idxt = boundary_slab_idx * chunk_local_t;
-    }
+    // From the current slab base, chips before the boundary advance a full slab, the boundary chip
+    // advances by its pad offset, and chips after it stay at the base.
+    const uint32_t update_idxt =
+        boundary_slab_idx * chunk_local_t +
+        (my_sp_coord < boundary_chip ? chunk_local_t : (my_sp_coord == boundary_chip ? boundary_offset_t : 0));
 
     const uint32_t input_Ht = chunk_local_t;
     const uint32_t start_idx = batch_idx * cache_CHtWt + update_idxt * Wt;
