@@ -41,6 +41,14 @@ def topk_router(g, experts_per_token, use_throughput_experts, softmax_compute_co
     if use_throughput_experts:
         return expert_indices, expert_weights
     else:
+        # Option B (root-cause-at-source): on Blackhole the softmax over the top-k logits
+        # flushes the smaller weights to exact 0.0, so the scattered sparsity ends up with
+        # <k non-zeros. The decode sparse_matmul is called with a static nnz=k and deadlocks
+        # when count_nonzero(sparsity) != k. Floor the top-k weights to a tiny positive value
+        # so all k scattered entries are non-zero (count == k == nnz). The floor (1e-6) is
+        # negligible vs real weights and gets multiplied into ~0-weight experts, so the MoE
+        # output is unchanged to bf16 precision.
+        expert_weights = ttnn.add(expert_weights, 1e-6)
         return expert_indices, ttnn.scatter(ttnn.zeros_like(g), dim=1, index=expert_indices, src=expert_weights)
 
 
