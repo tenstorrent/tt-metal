@@ -1,4 +1,8 @@
-# BGE-M3 User Guide
+# BGE-M3
+
+Tenstorrent implementation of [BAAI/bge-m3](https://huggingface.co/BAAI/bge-m3),
+a multilingual embedding model supporting dense, sparse (lexical), and ColBERT
+(multi-vector) retrieval.
 
 ## Low-level model creation
 
@@ -17,10 +21,49 @@ model_args, tt_model, state_dict = create_tt_model(
     max_seq_len=128,
     dtype=ttnn.bfloat16,
     hf_model_name="BAAI/bge-m3",
+    pooling=None,  # see "Pooling methods" below
 )
 ```
 
 You can then tokenize with `model_args.encode_prompts(...)` and pass `input_ids`, `attention_mask`, and `token_type_ids` to `tt_model`.
+
+### Pooling methods
+
+The `pooling=` argument selects which head the model applies to the encoder's
+last hidden state. The model returns the **raw head output**; all downstream
+post-processing (CLS crop, attention masking, L2 normalization, vocabulary
+scatter, scoring) is the caller's responsibility — this mirrors how the
+`BgeM3ForEmbedding` vLLM wrapper consumes the `colbert_linear` / `sparse_linear`
+heads.
+
+In the output shapes below, `B` = batch size, `S` = sequence length (number of
+tokens), and `D` = hidden dimension (1024 for BGE-M3).
+
+| `pooling`   | Output shape   | Description |
+|-------------|----------------|-------------|
+| `None`      | `[B, 1, S, D]` | Full last hidden state — no pooling. Use when you want the raw token embeddings. |
+| `"cls"`     | `[B, 1, 1, D]` | Dense sentence embedding taken from the first (CLS) token. Normalize for cosine similarity / dense retrieval. |
+| `"mean"`    | `[B, 1, 1, D]` | Dense sentence embedding from a mask-weighted mean over valid tokens. |
+| `"colbert"` | `[B, 1, S, D]` | Per-token ColBERT projection (`colbert_linear`) for multi-vector / late-interaction retrieval. Caller crops the CLS token, masks padding, and L2-normalizes. |
+| `"sparse"`  | `[B, 1, S, 1]` | Per-token sparse (lexical) weights (`sparse_linear`, ReLU applied inside the head). Caller scatters the weights into a `[B, vocab_size]` vector (max over repeated tokens) and zeroes special tokens. |
+
+```python
+# Dense (CLS) sentence embeddings
+model_args, tt_model, _ = create_tt_model(
+    mesh_device=device, max_batch_size=2, max_seq_len=512,
+    dtype=ttnn.bfloat8_b, hf_model_name="BAAI/bge-m3", pooling="cls",
+)
+```
+
+> **Note:** `"colbert"` and `"sparse"` require the M3 head weights
+> (`colbert_linear.pt` / `sparse_linear.pt`). These are loaded automatically by
+> `ModelArgs.load_state_dict()` when you let `create_tt_model` build the
+> state_dict (i.e. pass `state_dict=None`); a state_dict built only from
+> `AutoModelForCausalLM` will not contain them.
+>
+> For an end-to-end worked example of each pooling mode (dense / sparse /
+> ColBERT) driven through `create_tt_model(pooling=...)`, see
+> `tests/pcc/test_model_pooling.py`.
 
 ## Trace capture for repeated inference
 
