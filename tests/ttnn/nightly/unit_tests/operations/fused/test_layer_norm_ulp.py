@@ -366,20 +366,21 @@ def test_layer_norm_ulp_fp32_with_weight_bias(device, h, w, desc, use_welford, d
 # Both reduction paths must normalize over the logical width: the Welford path (reciprocal LUT)
 # and the legacy reduce path (1/N reduction scaler).
 @pytest.mark.parametrize("use_welford", [True, False])
-def test_layer_norm_ulp_bf16_sharded_non_tile_aligned_width(device, w, distribution, use_welford):
-    """Sharded BF16 layer_norm over a non-tile-aligned width vs torch golden.
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32], ids=["bf16", "fp32"])
+def test_layer_norm_ulp_sharded_non_tile_aligned_width(device, w, distribution, use_welford, dtype):
+    """Sharded layer_norm over a non-tile-aligned width vs torch golden, for BF16 and FP32 inputs.
 
     For the Welford path the reciprocal LUT is created exactly as production callers do (sized to
     the per-core shard width via ttnn_layer_norm_sharded); the legacy path uses the 1/N reduction
-    scaler. The implicit tile padding is poisoned with PAD_VALUE so that normalizing over the
-    padded width corrupts the output. Mirrors the interleaved "odd" shape coverage for the sharded
-    path.
+    scaler with a column mask that zeroes the final tile's padding columns. The implicit tile
+    padding is poisoned with PAD_VALUE so that normalizing over the padded width corrupts the
+    output. Mirrors the interleaved "odd" shape coverage for the sharded path.
     """
     torch.manual_seed(0)
     h = 32
     padded_w = math.ceil(w / 32) * 32
 
-    torch_input_tensor = _make_ln_input(h, w, torch.bfloat16, distribution)
+    torch_input_tensor = _make_ln_input(h, w, dtype, distribution)
     golden = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
 
     # Single-core block-sharded config; the shard width is the tile-padded width.
@@ -411,19 +412,25 @@ def test_layer_norm_ulp_bf16_sharded_non_tile_aligned_width(device, w, distribut
     )
     actual = actual[..., :w]
 
-    # BF16 accumulation thresholds (compute kernel config defaults), as elsewhere in this file.
+    # Accumulation-mode thresholds, matching the non-sharded tests in this file. FP32 uses the loose
+    # FP32 cap (the mask multiply truncates the final tile's valid columns to TF32 on the FPU); BF16
+    # uses the BF16-accumulation cap (the sharded compute config does not enable fp32 dest acc).
+    if dtype == torch.float32:
+        ulp_threshold, atol_fraction = _FP32_ULP_THRESHOLD, _FP32_NEAR_ZERO_ATOL_FRACTION
+    else:
+        ulp_threshold, atol_fraction = _BF16_ULP_THRESHOLD_BF16_DEST, _BF16_NEAR_ZERO_ATOL_FRACTION_BF16_DEST
     passed, max_ulp, max_atol_err, atol_tol, msg, ulp_stats = measure_ulp_with_near_zero_atol(
-        golden, actual, _BF16_ULP_THRESHOLD_BF16_DEST, _BF16_NEAR_ZERO_ATOL_FRACTION_BF16_DEST
+        golden, actual, ulp_threshold, atol_fraction
     )
-    spec = f"sharded shape_hw=({h},{w}) padded_w={padded_w} welford={use_welford} dist={distribution}"
+    spec = f"sharded shape_hw=({h},{w}) padded_w={padded_w} welford={use_welford} dist={distribution} dtype={dtype}"
     logger.info(
-        f"ttnn.layer_norm ULP (BF16, sharded) | {spec} | ulp mean={ulp_stats['mean']:.3g} p95={ulp_stats['p95']:.3g} p99={ulp_stats['p99']:.3g} max={max_ulp:.4g}/{_BF16_ULP_THRESHOLD_BF16_DEST} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
+        f"ttnn.layer_norm ULP (sharded) | {spec} | ulp mean={ulp_stats['mean']:.3g} p95={ulp_stats['p95']:.3g} p99={ulp_stats['p99']:.3g} max={max_ulp:.4g}/{ulp_threshold} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
     )
     if ulp_stats["worst"]:
         logger.info(f"  worst: {ulp_stats['worst']}")
     if not passed:
         logger.info(f"  {msg}")
-    assert passed, f"[BF16 sharded non-aligned w={w} welford={use_welford} dist={distribution}] {msg}"
+    assert passed, f"[sharded non-aligned dtype={dtype} w={w} welford={use_welford} dist={distribution}] {msg}"
 
 
 def test_layer_norm_ulp_sharded_welford_non_tile_aligned_multi_width_shard_rejected(device):

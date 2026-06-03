@@ -84,6 +84,19 @@ void kernel_main() {
     constexpr uint32_t cb_fusion_id =
         get_named_compile_time_arg_val("cb_xmm");  // stream gamma/beta (alias of cb_xmm_id)
     constexpr uint32_t cb_out_id = get_named_compile_time_arg_val("cb_out");
+#ifdef DO_COL_MASK
+    // Column mask (2 tiles: all-ones, partial) and a scratch buffer holding masked tiles. Used to
+    // zero the padding columns of the final width tile before the E[x] and variance reductions so a
+    // non-tile-aligned width normalizes over the logical element count, not the padded one.
+    constexpr uint32_t cb_col_mask = get_named_compile_time_arg_val("cb_col_mask");
+    constexpr uint32_t cb_mask_scratch = get_named_compile_time_arg_val("cb_mask_scratch");
+    // Host-built full-width column mask (tilized by the framework into the compute data format),
+    // bound directly to a CB. Used for the variance multiply, where compute-produced (x - E[x])
+    // tiles need a mask in the matching faced/FP32 layout — the writer's bf16 mask only aligns with
+    // the host-tilized input at the E[x] site.
+    constexpr uint32_t cb_col_mask_packed = get_named_compile_time_arg_val("cb_col_mask_packed");
+    CircularBuffer cb_mask_scratch_obj(cb_mask_scratch);
+#endif
 
     CircularBuffer cb_scaler(cb_scaler_id);
     CircularBuffer cb_scaler_global(cb_scaler_global_id);
@@ -164,17 +177,48 @@ void kernel_main() {
 #endif  // FUSE_PRE_ADD
 
 #ifndef RMSNORM
+#ifdef DO_COL_MASK
+    // Zero the padding columns of the final width tile of the input into cb_mask_scratch so they do
+    // not contribute to E[x]; the reduce below consumes the masked copy instead of cb_in. cb_in
+    // itself is left intact for the (x - E[x]) pass that follows. cb_col_mask is the writer-built
+    // mask matching the host-tilized input layout at this site.
+    cb_wait_front(cb_col_mask, 2);
+    mul_tiles_init(cb_in_id, cb_col_mask);
+    cb_mask_scratch_obj.reserve_back(num_tiles_per_block);
+    index_h_offset = 0;
+    for (uint32_t i = 0; i < block_h; i++) {
+        for (uint32_t wt = 0; wt < block_w; wt++) {
+            const uint32_t mask_idx = (wt == block_w - 1) ? 1 : 0;
+            tile_regs_acquire();
+            mul_tiles(cb_in_id, cb_col_mask, wt + index_h_offset, mask_idx, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_mask_scratch);
+            tile_regs_release();
+        }
+        index_h_offset += block_w;
+    }
+    cb_mask_scratch_obj.push_back(num_tiles_per_block);
+    cb_mask_scratch_obj.wait_front(num_tiles_per_block);
+    reconfig_data_format_srcb(cb_col_mask, cb_scaler_id);
+    constexpr uint32_t cb_ex_reduce_input = cb_mask_scratch;
+#else
+    constexpr uint32_t cb_ex_reduce_input = cb_in_id;
+#endif
     // E[x],
     compute_kernel_lib::reduce<
         PoolType::AVG,
         ReduceDim::REDUCE_ROW,
-        cb_in_id,
+        cb_ex_reduce_input,
         cb_scaler_id,
         cb_ex_partial_id,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h, 1),
         compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
+#ifdef DO_COL_MASK
+    cb_mask_scratch_obj.pop_front(num_tiles_per_block);
+#endif
     reconfig_data_format(cb_ex_external_id, cb_scaler_id);
 
     // global reduce, cb_ex_id <-- cb_ex_external_id, cb_ex_partial_id
@@ -242,8 +286,35 @@ void kernel_main() {
     cb_xmm.wait_front(num_tiles_per_block);
 #endif
 
-    // (x - E[x])^2, cb_mm2 <-- cb_xmm_id
-    mul_tiles_init(cb_xmm_id, cb_xmm_id);
+#ifdef DO_COL_MASK
+    // Zero the padding columns of (x - E[x]) so the variance excludes them, using the host-built
+    // mask (cb_col_mask_packed): a full-width column mask (1.0 in valid columns, 0.0 in padding)
+    // tilized by the framework into the compute data format, so it aligns with compute-produced
+    // (x - E[x]) tiles in the FPU multiply. Applied in place by re-circulating cb_xmm (which also
+    // zeroes the padding for the final (x - E[x]) * 1/sqrt(var+eps); that padding output is
+    // discarded). Mask tile index tracks the width-tile position.
+    // cb_col_mask_packed is a buffer-backed (sharded) CB: its data is resident, so it is read by
+    // tile index without a producer push / wait_front.
+    mul_tiles_init(cb_xmm_id, cb_col_mask_packed);
+    for (uint32_t t = 0; t < num_tiles_per_block; t++) {
+        const uint32_t wt = t % block_w;
+        cb_xmm.wait_front(1);
+        tile_regs_acquire();
+        mul_tiles(cb_xmm_id, cb_col_mask_packed, 0, wt, 0);
+        tile_regs_commit();
+        cb_xmm.pop_front(1);
+        cb_xmm.reserve_back(1);
+        tile_regs_wait();
+        pack_tile(0, cb_xmm_id);
+        cb_xmm.push_back(1);
+        tile_regs_release();
+    }
+    cb_xmm.wait_front(num_tiles_per_block);
+#endif
+    constexpr uint32_t cb_sq_input = cb_xmm_id;
+
+    // (x - E[x])^2, cb_mm2 <-- cb_sq_input
+    mul_tiles_init(cb_sq_input, cb_sq_input);
     index_h_offset = 0;
     cb_xmm2.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -252,7 +323,7 @@ void kernel_main() {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset + index_h_offset;
-                mul_tiles(cb_xmm_id, cb_xmm_id, index, index, w);
+                mul_tiles(cb_sq_input, cb_sq_input, index, index, w);
             }
             tile_regs_commit();
             tile_regs_wait();

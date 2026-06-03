@@ -307,6 +307,12 @@ struct KernelConfig {
     // Controls the Welford-fp32 alias that allows UnpackToDestFp32 to be set on the
     // alias, while keeping the original CB descriptor with default value.
     bool welford_fp32_alias = false;
+
+    // Legacy (non-Welford) column masking for non-tile-aligned widths: zero the padding columns of
+    // the final width tile so they do not enter E[x] or the variance. last_tile_valid_w is the
+    // number of valid (logical) columns in that final tile.
+    bool do_col_mask = false;
+    uint32_t last_tile_valid_w = 0;
 };
 
 // Struct to hold CB configuration for building CB descriptors
@@ -330,6 +336,7 @@ struct CBConfig {
     uint32_t stats_cb_size = 0;
     uint32_t stats_reduced_cb_size = 0;
     uint32_t reciprocal_CB_size_bytes = 0;
+    uint32_t col_mask_CB_size_bytes = 0;
 
     // Data formats
     tt::DataFormat in_data_format = tt::DataFormat::Float16_b;
@@ -356,6 +363,7 @@ struct CBConfig {
     Buffer* beta_buffer = nullptr;
     Buffer* stats_buffer = nullptr;
     Buffer* recip_buffer = nullptr;
+    Buffer* col_mask_buffer = nullptr;        // legacy non-tile-aligned column mask
     Buffer* output_buffer = nullptr;          // CB 16 output buffer
     Buffer* output_reshard_buffer = nullptr;  // CB 17 resharded output buffer
 
@@ -368,6 +376,8 @@ struct CBConfig {
     bool is_pre_all_gather = false;
     bool is_post_all_gather = false;
     bool skip_write_back = false;
+    // Legacy column masking for non-tile-aligned widths (zero the final width tile's padding cols).
+    bool do_col_mask = false;
     // Controls the Welford-fp32 alias that allows UnpackToDestFp32 to be set on the
     // alias, while keeping the original CB descriptor with default value.
     bool welford_fp32_alias = false;
