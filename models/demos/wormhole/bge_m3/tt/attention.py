@@ -18,7 +18,7 @@ _SDPA_Q_CHUNKS_FLEX = (256, 128, 64, 32)
 _SDPA_K_CHUNKS_FLEX = (256, 128, 64, 32)
 # B1/S512 sweep (k_chunk x grid) showed q=32, k=512, grid=8x8 is the winner:
 # 38.7 us/call vs prod (q=128, k=128, grid=11x10) ~43 us/call -- 10% faster.
-_SDPA_B1S512_Q_CHUNK = 32
+_SDPA_B1S512_Q_CHUNK = 64
 _SDPA_B1S512_K_CHUNK = 512
 _MAX_QKV_MM_CHUNK_SEQ_LEN = 8192
 _MAX_WO_MM_CHUNK_SEQ_LEN = 8192
@@ -153,12 +153,14 @@ class BgeM3Attention(LightweightModule):
         # Stage 2: split Q/K/V heads.
         # B1/S512 + B32/S512: head-split kernels for higher core utilization.
         # Other shapes: stock ttnn ops.
-        if self.config.max_batch_size in (1, 32) and self.config.max_seq_len == 512:
+        if self.config.max_batch_size in (1, 8, 16, 32) and self.config.max_seq_len == 512:
             from models.demos.wormhole.bge_m3.tt.custom_ops.fused_qkv_heads.op import bge_qkv_heads_headsplit
 
             # Batch 32 already has 32×16 = 512 (batch × seq_tile) work units, so we
             # don't need to further split heads to get good core utilization.
-            head_groups = 4 if self.config.max_batch_size == 32 else self.config.num_heads
+            # B8 has 8×16 = 128 units -> also plenty, use groups=4 like B32 (swept
+            # head_groups {1,2,4,8,16}: 4 is the min, tied with 8).
+            head_groups = 4 if self.config.max_batch_size in (8, 16, 32) else self.config.num_heads
             q, k, v = bge_qkv_heads_headsplit(
                 qkv_fused,
                 num_heads=self.config.num_heads,
@@ -225,11 +227,15 @@ class BgeM3Attention(LightweightModule):
         ttnn.deallocate(k)
         ttnn.deallocate(v)
 
-        # Stage 5: concat heads. B1/S512 + B32/S512: head-split with groups=4.
-        if self.config.max_batch_size in (1, 32) and self.config.max_seq_len == 512:
+        # Stage 5: concat heads. B1/B8/B32 S512: fused head-split with groups=4.
+        if self.config.max_batch_size in (1, 8, 16, 32) and self.config.max_seq_len == 512:
             from models.demos.wormhole.bge_m3.tt.custom_ops.fused_concat_heads.op import bge_concat_heads_headsplit
 
-            context = bge_concat_heads_headsplit(context, head_groups=4, out_memcfg=self.config.output_memcfg)
+            # B8 swept concat head_groups {1,2,4,8,16}: 16 is marginally best.
+            concat_head_groups = 16 if self.config.max_batch_size in (8, 16) else 4
+            context = bge_concat_heads_headsplit(
+                context, head_groups=concat_head_groups, out_memcfg=self.config.output_memcfg
+            )
         else:
             context = ttnn.experimental.nlp_concat_heads(context, memory_config=self.config.output_memcfg)
 
@@ -267,6 +273,11 @@ class BgeM3Attention(LightweightModule):
 
 def _sdpa_chunks_for_seq_len(seq_len, batch_size=None):
     if seq_len % 128 == 0:
+        # B8: q=256 k=256 (swept q{64..512} x k{128,256,512}; 256x256 is the min,
+        # ~0.27ms under the B32-inherited 256x512). B32 keeps 256x512.
+        # B16: q=256 k=256 (swept; 256x256 ~0.25ms under 256x512, same as B8).
+        if seq_len == 512 and batch_size in (8, 16):
+            return 256, 256
         if seq_len == 512 and batch_size == 32:
             return 256, 512
         if seq_len == 512 and batch_size == 1:
@@ -313,8 +324,14 @@ def _sdpa_program_config(seq_len, mesh_device, batch_size=None):
         "k_chunk_size": k_chunk,
         "exp_approx_mode": _sdpa_exp_approx(seq_len, mesh_device),
     }
-    if seq_len == 512 and batch_size == 32 and mesh_device is not None and ttnn_is_blackhole(mesh_device):
+    if seq_len == 512 and batch_size in (8, 16, 32) and mesh_device is not None and ttnn_is_blackhole(mesh_device):
         kwargs["max_cores_per_head_batch"] = 8
+        # NOTE: B16 max_cores_per_head_batch swept {2,4,8,16,none} — all within
+        # 0.06ms noise; kept 8 (B8/B32 value).
+    # NOTE: swept B8 SDPA grid {8x8, 10x10, 11x10} x max_cores {none,4,8} at the
+    # 256x256 chunk: 11x10 + max_cores=8 is optimal (24.28ms). 8x8=64 cores
+    # regresses to ~24.89ms (B8's 128 head-batch pairs want more cores, unlike
+    # B1 where 8x8 wins). Exhausted.
     return ttnn.SDPAProgramConfig(**kwargs)
 
 

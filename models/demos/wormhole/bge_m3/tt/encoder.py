@@ -136,7 +136,26 @@ def _attention_score_dtype(
         return dtype
     if max_seq_len == 512 and max_batch == 32:
         return dtype
+    if max_seq_len == 512 and max_batch == 16:
+        # B16: bf8 score (= qkv_dtype bf8) like B32 — halves SDPA Q/K/V bandwidth,
+        # no typecasts. PCC 0.9469 (passes). NOTE: B8 full-bf8 SDPA drops PCC to
+        # 0.9249 (< 0.94 gate) — B8 has less headroom, so B8 keeps bf16 score.
+        return dtype
     return ttnn.bfloat16
+
+
+def _attention_qkv_dtype(dtype, max_seq_len, max_batch_size):
+    # B8/S512: produce Q/K/V directly in bf16 (= score_dtype) so the 3 bf8->bf16
+    # typecasts per layer (72 ops, ~2.7ms) are eliminated, while SDPA still runs
+    # at accurate bf16. B1/B32 keep dtype (their score_dtype = dtype = bf8, no
+    # cast). Other shapes: model dtype.
+    max_batch = 1 if max_batch_size is None else max(1, int(max_batch_size))
+    if max_seq_len == 512 and max_batch == 8:
+        # B8: qkv bf16 (score_dtype bf16) — full bf8 SDPA drops PCC below 0.94.
+        return ttnn.bfloat16
+    # B16: qkv stays bf8 (= score_dtype bf8) so SDPA reads half the bytes
+    # with no typecasts (like B32).
+    return dtype
 
 
 def _build_attention_config(args, attention_weights, mesh_device, dtype, max_seq_len, max_batch_size, optimizations):
@@ -150,7 +169,7 @@ def _build_attention_config(args, attention_weights, mesh_device, dtype, max_seq
         num_heads=args.n_heads,
         head_dim=args.head_dim,
         mesh_device=mesh_device,
-        qkv_dtype=dtype,
+        qkv_dtype=_attention_qkv_dtype(dtype, max_seq_len, max_batch_size),
         score_dtype=_attention_score_dtype(dtype, max_seq_len, max_batch_size),
         output_dtype=dtype,
         max_seq_len=max_seq_len,
