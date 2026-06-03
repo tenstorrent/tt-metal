@@ -20,6 +20,8 @@ def _is_subconfig(annotation: Any) -> bool:
         return False
 
 
+from ttnn.experimental.moe_compute_utils import get_tilize_drain_core
+
 import ttnn
 from models.common.modules.moe.tt_moe_decode_config_schemas import (
     ActivationFunction,
@@ -365,10 +367,6 @@ class ExpertStateConfig(_TTOpKwargs):
         return {"mesh_shape", "cluster_axis", "has_bias", "num_routed_experts", "num_shared_experts"}
 
 
-# default drain tilize core from moe_compute
-_DEFAULT_DRAIN_COORD = ttnn.CoreCoord(6, 9)
-
-
 class BuffersConfig(_TTOpKwargs):
     """Sizing and placement params for `_TTMoEDecodeBuffers` allocation."""
 
@@ -378,7 +376,11 @@ class BuffersConfig(_TTOpKwargs):
     hidden_size: int
     effective_experts_k: int
     shard_dim: int = 0
-    compute_tilize_drain_core: CoreCoord = Field(default_factory=lambda: _DEFAULT_DRAIN_COORD)
+    # Per-arch tilize drain/sync core for the MoE compute op (WH (6,9) / BH (10,9)).
+    # Resolved from the current arch via the commonized moe_compute helper so the
+    # default tracks the hardware rather than hardcoding the WH coordinate; callers
+    # can still pin an explicit core.
+    compute_tilize_drain_core: CoreCoord = Field(default_factory=get_tilize_drain_core)
 
     @classmethod
     def adopt_fields(cls) -> set[str]:
