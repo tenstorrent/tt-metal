@@ -578,6 +578,40 @@ class VoxtralTTSPipeline:
         ttnn.deallocate(codes_tt)
         return codes
 
+    def acoustic_pre_round_scaled_forward(
+        self,
+        llm_hidden_bf16: torch.Tensor,
+        cfg_alpha: torch.Tensor | None = None,
+        *,
+        noise_seed: int = 0,
+    ) -> torch.Tensor:
+        """Continuous pre-``round`` FSQ values ``[bsz, n_acoustic]`` from the acoustic FM.
+
+        Numerical-accuracy probe: ``round`` of this tensor is the acoustic code, so its PCC vs the
+        reference (same hidden + same host-drawn noise) measures op accuracy independently of FSQ
+        code flips at the rounding boundaries.
+        """
+        if cfg_alpha is None:
+            cfg_alpha = torch.tensor(
+                ACOUSTIC_CFG_ALPHA_DEFAULT, dtype=llm_hidden_bf16.dtype, device=llm_hidden_bf16.device
+            )
+        bsz = llm_hidden_bf16.shape[0]
+        cfg_scalar = float(cfg_alpha.flatten()[0].item())
+        llm_tt = ttnn.from_torch(
+            llm_hidden_bf16.unsqueeze(1).to(torch.bfloat16),
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        noise_tt = self.acoustic.fm_noise_tt(bsz, noise_seed)
+        scaled_tt = self.acoustic.fm_pre_round_scaled_codes_tt(llm_tt, noise_tt, cfg_scalar)
+        ttnn.deallocate(llm_tt)
+        ttnn.deallocate(noise_tt)
+        scaled = ttnn.to_torch(scaled_tt).float().reshape(bsz, -1)
+        ttnn.deallocate(scaled_tt)
+        return scaled
+
     def cleanup_all(self) -> None:
         """Drop TT_CCL semaphores so profiler-enabled ``close_device`` does not segfault."""
         try:
