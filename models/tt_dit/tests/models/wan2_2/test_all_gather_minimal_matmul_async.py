@@ -1037,8 +1037,8 @@ def run_test_linear_fsdp(
             2,
             0,
             1,
-            8,
             7,
+            8,
         ],
     ],
     ids=["wh_sweep_4x4"],
@@ -1047,7 +1047,7 @@ def run_test_linear_fsdp(
 @pytest.mark.parametrize(
     "M, K, N, use_bias, activation, chunks, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [
-        (12288, 5120, 15360, True, None, 1, 8, 8, 8, 2, 2),
+        (12288, 5120, 15360, True, None, 1, 14, 5, 9, 2, 1),
     ],
     ids=["1xqkv"],
 )
@@ -1092,9 +1092,11 @@ def test_linear_fsdp(
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
 
-    # Fused path uses an 8x7 grid; the separate path runs the plain (non-fsdp) AGMM, which uses the
-    # full 8x8 grid (matching test_linear).
+    # Fused path uses a 7x8 grid: the matmul is 7 wide so the freed last column holds the fsdp muxes
+    # (packed along the in1/Y axis) for a short horizontal sender->mux hop. The separate path runs the
+    # plain (non-fsdp) AGMM, which uses the full 8x8 grid (matching test_linear).
     if not fuse_fsdp:
+        core_grid_x = 8
         core_grid_y = 8
 
     check_result = run_test_linear_fsdp(
