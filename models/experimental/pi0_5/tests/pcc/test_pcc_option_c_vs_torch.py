@@ -50,6 +50,22 @@ EXPERT_DEPTH = int(os.environ.get("PI0_OC_PCC_EXPERT_DEPTH", "1"))
 PCC_THRESHOLD = float(os.environ.get("PI0_OC_PCC_THRESHOLD", "0.90"))
 SEED = int(os.environ.get("PI0_OC_PCC_SEED", "42"))
 
+# Full-L1 flags — mirror PI0_OC_L1_PROBE_* knobs so the same set drives the
+# PCC + probe. PCC is sensitive to numerics — when the full-L1 path lands
+# (paired denoise, TP=2 prefill, device SigLIP, bf8_b weights+biases),
+# re-running this test with the matching env vars validates that none of
+# the placement changes drifted the output past the threshold.
+LAYER_PAIRED_L1 = os.environ.get("PI0_OC_PCC_LAYER_PAIRED") == "1"
+DEVICE_SIGLIP = os.environ.get("PI0_OC_PCC_DEVICE_SIGLIP") == "1"
+VISION_WEIGHTS_L1 = os.environ.get("PI0_OC_PCC_VISION_WEIGHTS_L1") == "1"
+PREFILL_TP_SIZE = int(os.environ.get("PI0_OC_PCC_PREFILL_TP", "1"))
+PREFILL_WEIGHTS_L1 = os.environ.get("PI0_OC_PCC_WEIGHTS_L1") == "1"
+PREFILL_WEIGHTS_L1_MLP_ONLY = os.environ.get("PI0_OC_PCC_WEIGHTS_L1_MLP_ONLY") == "1"
+PREFILL_WEIGHTS_L1_SKIP_KV = os.environ.get("PI0_OC_PCC_WEIGHTS_L1_SKIP_KV") == "1"
+_dlp = os.environ.get("PI0_OC_PCC_DENOISE_LAYER_PAIRED")
+DENOISE_LAYER_PAIRED_L1 = None if _dlp is None else (_dlp == "1")
+DENOISE_WEIGHTS_L1 = os.environ.get("PI0_OC_PCC_DENOISE_WEIGHTS_L1") == "1"
+
 _REAL_CKPT = os.environ.get("PI0_OC_PCC_CHECKPOINT", "/home/tt-admin/pi05_cache/pi05_libero_upstream")
 
 
@@ -162,7 +178,21 @@ def test_option_c_e2e_pcc_vs_torch():
     # language_token_ids for Option C: int32 [B, S_lang].
     lang_token_ids_int32 = lang_tokens.to(torch.int32)
 
-    with open_galaxy_mesh(shrunk_layout) as (_parent, submeshes):
+    # Fabric required when prefill TP > 1 (inner all_reduce).
+    enable_fabric = PREFILL_TP_SIZE > 1
+    # 24 KB / bank static-CB reservation when any L1-resident weight path is
+    # active (matches the L1 probe).
+    l1_small_size = (
+        24576
+        if (
+            PREFILL_TP_SIZE > 1 or DENOISE_WEIGHTS_L1 or VISION_WEIGHTS_L1 or DENOISE_LAYER_PAIRED_L1 or LAYER_PAIRED_L1
+        )
+        else None
+    )
+    with open_galaxy_mesh(shrunk_layout, l1_small_size=l1_small_size, enable_fabric=enable_fabric) as (
+        _parent,
+        submeshes,
+    ):
         pipe = Pi0_5PipelineC(
             layout=shrunk_layout,
             submeshes=submeshes,
@@ -171,6 +201,15 @@ def test_option_c_e2e_pcc_vs_torch():
             denoise_steps=NUM_DENOISE_STEPS,
             action_horizon=ACTION_HORIZON,
             action_dim=32,
+            layer_paired_l1=LAYER_PAIRED_L1,
+            device_siglip=DEVICE_SIGLIP,
+            vision_weights_l1=VISION_WEIGHTS_L1,
+            prefill_tp_size=PREFILL_TP_SIZE,
+            prefill_weights_l1=PREFILL_WEIGHTS_L1,
+            prefill_weights_l1_mlp_only=PREFILL_WEIGHTS_L1_MLP_ONLY,
+            prefill_weights_l1_skip_kv=PREFILL_WEIGHTS_L1_SKIP_KV,
+            denoise_layer_paired_l1=DENOISE_LAYER_PAIRED_L1,
+            denoise_weights_l1=DENOISE_WEIGHTS_L1,
         )
         pipe.initialize()
         actions_tt, timings = pipe.run_inference(

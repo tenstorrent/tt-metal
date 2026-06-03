@@ -446,8 +446,27 @@ def test_oc_l1_footprint_probe_full_depth():
         if RUN_FORWARD:
             try:
                 with _phase("after warmup forward", submeshes, results, l1_targets):
-                    actions, _t = pipe.run_inference(pixel_values, lang_tokens, noisy_actions)
+                    actions, stage_timings = pipe.run_inference(pixel_values, lang_tokens, noisy_actions)
                     ttnn.deallocate(actions)
+                # Echo per-stage timings — useful when comparing flag combos
+                # (e.g. mlp_only baseline vs full Q+O+MLP migration). The
+                # warmup forward is one-shot (no trace, no warmups), so these
+                # numbers are not steady-state — they're upper-bound rough
+                # estimates including first-iteration kernel JIT.
+                print("\n[stage timings (warmup, ms)]")
+                print(f"  stage_0_vision       = {stage_timings.stage_0_vision_ms:8.1f}")
+                print(f"  transport_0_to_1     = {stage_timings.transport_0_to_1_ms:8.1f}")
+                print(f"  stage_1_prefill      = {stage_timings.stage_1_prefill_ms:8.1f}")
+                print(f"  kv_migration        = {stage_timings.kv_migration_ms:8.1f}")
+                print(f"  stage_2_denoise      = {stage_timings.stage_2_denoise_ms:8.1f}")
+                print(f"  total                = {stage_timings.total_ms:8.1f}")
+                if stage_timings.denoise_step_ms:
+                    step0 = stage_timings.denoise_step_ms[0]
+                    rest = stage_timings.denoise_step_ms[1:]
+                    avg = sum(rest) / len(rest) if rest else step0
+                    print(
+                        f"  denoise step 0 (cold) = {step0:7.1f} ms; " f"steps 1..N avg = {avg:7.1f} ms (× {len(rest)})"
+                    )
             except Exception as e:
                 print(f"\n[FAIL] run_inference() raised: {type(e).__name__}: {e}")
                 print("[FAIL] L1 snapshot above shows state at fault.")
