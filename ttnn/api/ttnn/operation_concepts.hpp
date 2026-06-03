@@ -73,7 +73,7 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
                                           !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T>;
 
 // Metal 2.0 factory concept: factories that return ProgramArtifacts (a ProgramSpec +
-// ProgramRunArgs) from create_program_spec. The framework adapter stamps a Program
+// ProgramRunArgs) from create_program_artifacts. The framework adapter stamps a Program
 // from the spec onto each mesh coordinate range on cache miss, and patches TensorArgs
 // via experimental::UpdateTensorArgs on cache hit.
 //
@@ -87,7 +87,7 @@ concept ProgramDescriptorFactoryConcept = (requires { &T::create_descriptor; } |
 // Alternatively, we could have only a single, common MeshWorkloadSpecFactoryConcept.
 // (Should follow whatever style ProgramDescriptor port ends up using.)
 template <typename T>
-concept ProgramSpecFactoryConcept = requires { &T::create_program_spec; } && !ProgramFactoryConcept<T> &&
+concept ProgramSpecFactoryConcept = requires { &T::create_program_artifacts; } && !ProgramFactoryConcept<T> &&
                                     !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
 
 // Detect operations that put create_descriptor directly on the operation struct

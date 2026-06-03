@@ -562,12 +562,12 @@ public:
     //
     // Adapts a ProgramSpecFactoryConcept factory (Metal 2.0, single-program /
     // SPMD-flavored) for mesh dispatch. The op author writes ONLY
-    // create_program_spec, returning a single ProgramArtifacts (one ProgramSpec
+    // create_program_artifacts, returning a single ProgramArtifacts (one ProgramSpec
     // + ProgramRunArgs). The adapter stamps a Program from that spec onto
     // each mesh coordinate range covered by the workload — mirroring the
     // descriptor adapter's per-range build pattern.
     //
-    // On cache miss: the adapter calls create_program_spec, builds one Program
+    // On cache miss: the adapter calls create_program_artifacts, builds one Program
     // per coordinate range via experimental::MakeProgramFromSpec, applies
     // the initial ProgramRunArgs via SetProgramRunArgs, then resolves
     // each TensorArgument against the io_tensors enumerated from tensor_args /
@@ -704,7 +704,7 @@ public:
             // across all coordinate ranges. Bindings derive from the (single) set of
             // factory tensor_args and are identical for every stamped program; copy
             // per range into the cached shared state.
-            auto artifacts = ProgramSpecFactory::create_program_spec(attrs, tensor_args, tensor_return_value);
+            auto artifacts = ProgramSpecFactory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
             assert_no_runtime_args(artifacts.spec);
             auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
             auto bindings = resolve_bindings(artifacts.run_params.tensor_args, io_mesh_tensors);
