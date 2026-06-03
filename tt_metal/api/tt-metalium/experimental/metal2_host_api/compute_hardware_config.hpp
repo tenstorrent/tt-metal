@@ -65,7 +65,6 @@ struct ComputeHardwareConfig {
     // failing to do so will trigger an error. Otherwise, supplying an entry is optional
     // and only Default is accepted.
     using UnpackToDestModes = Table<DFBSpecName, tt::tt_metal::UnpackToDestMode>;
-    using UnpackToDestModeEntry = UnpackToDestModes::value_type;
     UnpackToDestModes unpack_to_dest_mode;
 };
 

@@ -119,18 +119,19 @@ struct KernelAdvancedOptions {
     enum class DFBSelfLoopScope { INTRA, INTER };
 
     struct DFBSelfLoopConnectivity {
-        DFBSpecName dfb_spec_name;
         DFBSelfLoopScope scope = DFBSelfLoopScope::INTRA;
         // If the INTER case were enabled, we would need an additional field to describe
         // the inter-thread communication pattern here.
     };
-    // Self-loop DFBs on compute kernels — see DFBSelfLoopConnectivity above.
-    std::vector<DFBSelfLoopConnectivity> dfb_self_loop_connectivities;
+    // Self-loop DFBs on compute kernels: maps each self-looped DFB to its connectivity.
+    using DFBSelfLoopConnectivities = Table<DFBSpecName, DFBSelfLoopConnectivity>;
+    DFBSelfLoopConnectivities dfb_self_loop_connectivities;
 };
 
 // (Convenience aliases for nested types)
 using DFBSelfLoopScope = KernelAdvancedOptions::DFBSelfLoopScope;
 using DFBSelfLoopConnectivity = KernelAdvancedOptions::DFBSelfLoopConnectivity;
+using DFBSelfLoopConnectivities = KernelAdvancedOptions::DFBSelfLoopConnectivities;
 
 struct DFBAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
@@ -158,14 +159,14 @@ struct AdvancedKernelRunArgs {
     // Varargs
     ////////////////////////////////////////////////////////////////////////////////
 
-    // Unnamed runtime argument "varargs"
+    // Unnamed runtime argument "varargs", mapping each node to its vararg values.
     // (Companion to the vararg schema declared on KernelAdvancedOptions).
     // Specified per-node; length can vary per-node (as declared in schema).
     struct NodeVarargs {
-        NodeCoord node;
         std::vector<uint32_t> args;
     };
-    std::vector<NodeVarargs> runtime_varargs;
+    using RuntimeVarargs = Table<NodeCoord, NodeVarargs>;
+    RuntimeVarargs runtime_varargs;
 
     // Unnamed common runtime argument "varargs"
     // (Companion to num_common_runtime_varargs in the schema.)

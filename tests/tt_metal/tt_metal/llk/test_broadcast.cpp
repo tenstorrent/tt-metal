@@ -414,22 +414,20 @@ void run_single_core_broadcast(
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
             .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"src0_addr", static_cast<uint32_t>(dram_buffer_src_a_addr)},
-                       {"src0_bank_id", 0u},
-                       {"src1_addr", static_cast<uint32_t>(dram_buffer_src_b_addr)},
-                       {"src1_bank_id", 0u},
-                       {"num_tiles", static_cast<uint32_t>(k_num_tiles_broadcast_test)}}}},
+                {{node,
+                  {{"src0_addr", static_cast<uint32_t>(dram_buffer_src_a_addr)},
+                   {"src0_bank_id", 0u},
+                   {"src1_addr", static_cast<uint32_t>(dram_buffer_src_b_addr)},
+                   {"src1_bank_id", 0u},
+                   {"num_tiles", static_cast<uint32_t>(k_num_tiles_broadcast_test)}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
             .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"dst_addr", static_cast<uint32_t>(dram_buffer_dst_addr)},
-                       {"bank_id", 0u},
-                       {"num_tiles", static_cast<uint32_t>(k_num_tiles_broadcast_test)}}}},
+                {{node,
+                  {{"dst_addr", static_cast<uint32_t>(dram_buffer_dst_addr)},
+                   {"bank_id", 0u},
+                   {"num_tiles", static_cast<uint32_t>(k_num_tiles_broadcast_test)}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = COMPUTE,

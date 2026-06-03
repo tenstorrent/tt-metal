@@ -1003,7 +1003,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTASharedL1Address) {
         .kernel_spec_name = kernel_names[0],
         .advanced_options =
             experimental::AdvancedKernelRunArgs{
-                .runtime_varargs = {{core, std::vector<uint32_t>(common_rtas.size(), 0)}},
+                .runtime_varargs = {{core, {std::vector<uint32_t>(common_rtas.size(), 0)}}},
                 .common_runtime_varargs = common_rtas,
             },
     }};
@@ -1045,7 +1045,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarCRTAUniqueL1Addresses) {
             .kernel_spec_name = kernel_names[i],
             .advanced_options =
                 experimental::AdvancedKernelRunArgs{
-                    .runtime_varargs = {{core, std::vector<uint32_t>(base_crtas.size(), 0)}},
+                    .runtime_varargs = {{core, {std::vector<uint32_t>(base_crtas.size(), 0)}}},
                     .common_runtime_varargs = kernel_crtas,
                 },
         });

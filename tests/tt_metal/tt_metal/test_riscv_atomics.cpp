@@ -83,8 +83,7 @@ protected:
             return experimental::ProgramRunArgs::KernelRunArgs{
                 .kernel_spec_name = name,
                 .runtime_arg_values =
-                    {{.node = core,
-                      .args = {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}}},
+                    {{core, {{"l1_counter_addr", l1_unreserved_base}, {"increment_times", iterations}}}},
             };
         };
 

@@ -1274,23 +1274,10 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestFp32WithoutFp32DestAccEnFails) {
             ::testing::HasSubstr("specifies UnpackToDestFp32, but fp32_dest_acc_en is false")));
 }
 
-TEST_F(ProgramSpecTestQuasar, DuplicateUnpackToDestModeEntriesFail) {
-    // Two entries for the same DFB is a user error; we reject rather than silently picking one.
-    ProgramSpec spec = MakeMinimalValidProgramSpec();
-    for (auto& kernel : spec.kernels) {
-        if (kernel.is_compute_kernel()) {
-            auto& config = std::get<ComputeHardwareConfig>(kernel.hw_config);
-            config.unpack_to_dest_mode = {
-                {"dfb_0", UnpackToDestMode::Default},
-                {"dfb_0", UnpackToDestMode::Default},
-            };
-        }
-    }
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("has duplicate unpack_to_dest_mode entries for DFB 'dfb_0'")));
-}
+// NOTE: Duplicate unpack_to_dest_mode entries for the same DFB are no longer
+// expressible — unpack_to_dest_mode is a Table<DFBSpecName, UnpackToDestMode>, which
+// rejects duplicate keys at construction. That contract is covered by the Table unit
+// tests (test_table.cpp), so there is no program-spec-level duplicate-rejection test.
 
 TEST_F(ProgramSpecTestQuasar, FP32DFBWithDefaultUnpackToDestModeSucceeds) {
     // Default is always a valid value, even outside the (CONSUMER + FP32 + fp32_dest_acc_en) triple.
@@ -1563,8 +1550,8 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelInterScopeFails) {
     spec.name = "self_loop_inter";
 
     auto compute = MakeMinimalComputeKernel("compute");
-    compute.advanced_options = KernelAdvancedOptions{
-        .dfb_self_loop_connectivities = {{.dfb_spec_name = "dfb", .scope = DFBSelfLoopScope::INTER}}};
+    compute.advanced_options =
+        KernelAdvancedOptions{.dfb_self_loop_connectivities = {{"dfb", {DFBSelfLoopScope::INTER}}}};
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -1590,8 +1577,8 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeOnDMKernelFails) {
 
     auto producer = MakeMinimalDMKernel("producer");
     // Misapplied: self-loop scope entries are valid only on compute kernels.
-    producer.advanced_options = KernelAdvancedOptions{
-        .dfb_self_loop_connectivities = {{.dfb_spec_name = "dfb", .scope = DFBSelfLoopScope::INTRA}}};
+    producer.advanced_options =
+        KernelAdvancedOptions{.dfb_self_loop_connectivities = {{"dfb", {DFBSelfLoopScope::INTRA}}}};
     auto consumer = MakeMinimalDMKernel("consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
@@ -1615,8 +1602,8 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeReferencingUnknownDFBFails) {
 
     auto compute = MakeMinimalComputeKernel("compute");
     // Misapplied: there is no DFB named "ghost" in the spec.
-    compute.advanced_options = KernelAdvancedOptions{
-        .dfb_self_loop_connectivities = {{.dfb_spec_name = "ghost", .scope = DFBSelfLoopScope::INTRA}}};
+    compute.advanced_options =
+        KernelAdvancedOptions{.dfb_self_loop_connectivities = {{"ghost", {DFBSelfLoopScope::INTRA}}}};
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
@@ -1641,8 +1628,8 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeOnNonSelfLoopedDFBFails) {
 
     auto compute = MakeMinimalComputeKernel("compute");
     // Misapplied: the kernel only produces; it does not self-loop the DFB.
-    compute.advanced_options = KernelAdvancedOptions{
-        .dfb_self_loop_connectivities = {{.dfb_spec_name = "dfb", .scope = DFBSelfLoopScope::INTRA}}};
+    compute.advanced_options =
+        KernelAdvancedOptions{.dfb_self_loop_connectivities = {{"dfb", {DFBSelfLoopScope::INTRA}}}};
     auto dm_consumer = MakeMinimalDMKernel("dm_consumer");
 
     auto dfb = MakeMinimalDFB("dfb");
@@ -1661,35 +1648,16 @@ TEST_F(ProgramSpecTestQuasar, SelfLoopScopeOnNonSelfLoopedDFBFails) {
 }
 
 TEST_F(ProgramSpecTestQuasar, DuplicateSelfLoopScopeEntriesFails) {
-    NodeCoord node{0, 0};
-
-    ProgramSpec spec;
-    spec.name = "self_loop_duplicate";
-
-    auto compute = MakeMinimalComputeKernel("compute");
-    // Two entries for the same DFB on the same kernel.
-    compute.advanced_options = KernelAdvancedOptions{
-        .dfb_self_loop_connectivities =
-            {
-                {.dfb_spec_name = "dfb", .scope = DFBSelfLoopScope::INTRA},
-                {.dfb_spec_name = "dfb", .scope = DFBSelfLoopScope::INTRA},
-            },
-    };
-
-    auto dfb = MakeMinimalDFB("dfb");
-    dfb.data_format_metadata = tt::DataFormat::Float16_b;
-
-    compute.dfb_bindings.push_back(ProducerOf("dfb", "out"));
-    compute.dfb_bindings.push_back(ConsumerOf("dfb", "in"));
-
-    spec.kernels = {compute};
-    spec.dataflow_buffers = {dfb};
-    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"compute"})};
-
+    // Two entries for the same DFB are rejected by DFBSelfLoopConnectivities (a Table)
+    // at construction, before any spec validation runs.
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("duplicate dfb_self_loop_connectivities entries")));
+        ([] {
+            DFBSelfLoopConnectivities{
+                {"dfb", {DFBSelfLoopScope::INTRA}},
+                {"dfb", {DFBSelfLoopScope::INTRA}},
+            };
+        }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("duplicate key")));
 }
 
 // ============================================================================
@@ -1744,8 +1712,8 @@ TEST_F(ProgramSpecTestQuasar, DFBSelfLoopOnComputeKernelExplicitIntraSucceeds) {
     spec.name = "self_loop_explicit_intra";
 
     auto compute = MakeMinimalComputeKernel("compute");
-    compute.advanced_options = KernelAdvancedOptions{
-        .dfb_self_loop_connectivities = {{.dfb_spec_name = "dfb", .scope = DFBSelfLoopScope::INTRA}}};
+    compute.advanced_options =
+        KernelAdvancedOptions{.dfb_self_loop_connectivities = {{"dfb", {DFBSelfLoopScope::INTRA}}}};
 
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;

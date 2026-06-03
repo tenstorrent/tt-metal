@@ -214,26 +214,26 @@ void run_borrowed_memory_dfb_program(
     // Build and apply run params
     // -----------------------------------------------------------------------
     using NodeRuntimeArgs = ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs;
-    const NodeRuntimeArgs dm_rtas{node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}};
+    const NodeRuntimeArgs dm_rtas{{node, {{"chunk_offset", 0u}, {"entries_per_core", entries_per_core}}}};
 
     ProgramRunArgs params;
     params.kernel_run_args.push_back({
-        .kernel_spec_name  = "producer",
-        .runtime_arg_values = {dm_rtas},
+        .kernel_spec_name = "producer",
+        .runtime_arg_values = dm_rtas,
     });
     if (cfg.tensix_consumer) {
         params.kernel_run_args.push_back({.kernel_spec_name = "consumer"});
     } else {
         params.kernel_run_args.push_back({
-            .kernel_spec_name   = "consumer",
-            .runtime_arg_values = {dm_rtas},
+            .kernel_spec_name = "consumer",
+            .runtime_arg_values = dm_rtas,
         });
     }
-    params.tensor_args.push_back({.tensor_parameter_name = "src_tensor", .tensor = std::cref(src_tensor)});
+    params.tensor_args.insert({"src_tensor", {std::cref(src_tensor)}});
     if (!cfg.tensix_consumer) {
-        params.tensor_args.push_back({.tensor_parameter_name = "dst_tensor", .tensor = std::cref(*dst_tensor)});
+        params.tensor_args.insert({"dst_tensor", {std::cref(*dst_tensor)}});
     }
-    params.tensor_args.push_back({.tensor_parameter_name = "dfb_ring_tensor", .tensor = std::cref(ring_tensor)});
+    params.tensor_args.insert({"dfb_ring_tensor", {std::cref(ring_tensor)}});
     SetProgramRunArgs(program, params);
 
     // -----------------------------------------------------------------------
@@ -351,7 +351,7 @@ void run_update_address_test(
         << "Test pre-condition: two separate L1 allocations must have distinct addresses";
 
     using NodeRuntimeArgs = ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs;
-    const NodeRuntimeArgs dm_rtas{node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}};
+    const NodeRuntimeArgs dm_rtas{{node, {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}};
 
     // --- Run 1: ring at ring_tensor_a ---
     std::vector<uint32_t> input_a(total_words);
@@ -360,13 +360,13 @@ void run_update_address_test(
 
     ProgramRunArgs params1;
     params1.kernel_run_args = {
-        {.kernel_spec_name = "producer", .runtime_arg_values = {dm_rtas}},
-        {.kernel_spec_name = "consumer", .runtime_arg_values = {dm_rtas}},
+        {.kernel_spec_name = "producer", .runtime_arg_values = dm_rtas},
+        {.kernel_spec_name = "consumer", .runtime_arg_values = dm_rtas},
     };
     params1.tensor_args = {
-        {.tensor_parameter_name = "src_tensor",      .tensor = std::cref(src_tensor)},
-        {.tensor_parameter_name = "dst_tensor",      .tensor = std::cref(dst_tensor)},
-        {.tensor_parameter_name = "dfb_ring_tensor", .tensor = std::cref(ring_tensor_a)},
+        {"src_tensor", {std::cref(src_tensor)}},
+        {"dst_tensor", {std::cref(dst_tensor)}},
+        {"dfb_ring_tensor", {std::cref(ring_tensor_a)}},
     };
     SetProgramRunArgs(program, params1);
     detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
@@ -385,11 +385,13 @@ void run_update_address_test(
     std::iota(input_b.begin(), input_b.end(), total_words);  // distinct from run 1
     detail::WriteToBuffer(*src_tensor.mesh_buffer().get_reference_buffer(), input_b);
 
-    UpdateTensorArgs(program, std::vector<ProgramRunArgs::TensorArgument>{
-        {.tensor_parameter_name = "src_tensor",      .tensor = std::cref(src_tensor)},
-        {.tensor_parameter_name = "dst_tensor",      .tensor = std::cref(dst_tensor)},
-        {.tensor_parameter_name = "dfb_ring_tensor", .tensor = std::cref(ring_tensor_b)},
-    });
+    UpdateTensorArgs(
+        program,
+        ProgramRunArgs::TensorArgs{
+            {"src_tensor", {std::cref(src_tensor)}},
+            {"dst_tensor", {std::cref(dst_tensor)}},
+            {"dfb_ring_tensor", {std::cref(ring_tensor_b)}},
+        });
     detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
 
     EXPECT_EQ(

@@ -186,14 +186,14 @@ void run_strided_dfb_copy_test(
             .kernel_spec_name = "reader",
             .advanced_options =
                 AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {input_buffer->address(), total_pages}}},
+                    .runtime_varargs = {{node, {{input_buffer->address(), total_pages}}}},
                 },
         },
         ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = "writer",
             .advanced_options =
                 AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {output_buffer->address(), total_pages}}},
+                    .runtime_varargs = {{node, {{output_buffer->address(), total_pages}}}},
                 },
         },
     };

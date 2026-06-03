@@ -46,7 +46,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params);
 //
 // USE CASE: Program re-enqueue loops where the only per-enqueue ProgramRunArgs variation
 // is in the tensor args (i.e. which specific MeshTensors are operated on by the Program).
-void UpdateTensorArgs(Program& program, std::span<const ProgramRunArgs::TensorArgument> tensor_args);
+void UpdateTensorArgs(Program& program, const ProgramRunArgs::TensorArgs& tensor_args);
 
 // Power-user API for updating the mutable parameters of a Program in-place.
 // ProgramRunArgsView is a non-owning view into the Program's command buffers,

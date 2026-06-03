@@ -135,11 +135,11 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
                 AdvancedKernelRunArgs{
                     .runtime_varargs =
                         {{node,
-                          {
+                          {{
                               input_buffer->address(),
                               0u,  // bank_id (single-page buffer → bank 0)
                               num_transfers,
-                          }}},
+                          }}}},
                 },
         },
         ProgramRunArgs::KernelRunArgs{
@@ -148,11 +148,11 @@ TEST_F(ProgramSpecHWTest, DFBAccessorNameLoopback) {
                 AdvancedKernelRunArgs{
                     .runtime_varargs =
                         {{node,
-                          {
+                          {{
                               output_buffer->address(),
                               0u,  // bank_id
                               num_transfers,
-                          }}},
+                          }}}},
                 },
         },
     };
@@ -281,21 +281,21 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopback) {
     params.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = "producer",
-            .runtime_arg_values = {{.node = node, .args = {{"src_addr", input_buffer->address()}}}},
+            .runtime_arg_values = {{node, {{"src_addr", input_buffer->address()}}}},
             .common_runtime_arg_values = {{"num_entries", num_transfers}},
             .advanced_options =
                 AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {kProducerRta0, kProducerRta1, kProducerRta2}}},
+                    .runtime_varargs = {{node, {{kProducerRta0, kProducerRta1, kProducerRta2}}}},
                     .common_runtime_varargs = {kProducerCrta0},
                 },
         },
         ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = "consumer",
-            .runtime_arg_values = {{.node = node, .args = {{"dst_addr", output_buffer->address()}}}},
+            .runtime_arg_values = {{node, {{"dst_addr", output_buffer->address()}}}},
             .common_runtime_arg_values = {{"num_entries", num_transfers}},
             .advanced_options =
                 AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {kConsumerRta0, kConsumerRta1}}},
+                    .runtime_varargs = {{node, {{kConsumerRta0, kConsumerRta1}}}},
                     .common_runtime_varargs = {kConsumerCrta0},
                 },
         },
@@ -402,11 +402,11 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
     params.kernel_run_args = {
         ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = "compute",
-            .runtime_arg_values = {{.node = node, .args = {{"input_offset", kInputOffset}}}},
+            .runtime_arg_values = {{node, {{"input_offset", kInputOffset}}}},
             .common_runtime_arg_values = {{"num_tiles", num_transfers}},
             .advanced_options =
                 AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {kVararg0, kVararg1}}},
+                    .runtime_varargs = {{node, {{kVararg0, kVararg1}}}},
                     .common_runtime_varargs = {kCommonVararg0},
                 },
         },
@@ -414,7 +414,7 @@ TEST_F(ProgramSpecHWTest, NamedArgsLoopbackCompute) {
             .kernel_spec_name = "consumer",
             .advanced_options =
                 AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {output_buffer->address(), 0u, num_transfers}}},
+                    .runtime_varargs = {{node, {{output_buffer->address(), 0u, num_transfers}}}},
                 },
         },
     };
@@ -610,20 +610,20 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
             .kernel_spec_name = "producer",
             .advanced_options =
                 AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {num_pages}}},
+                    .runtime_varargs = {{node, {{num_pages}}}},
                 },
         },
         ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = "consumer",
             .advanced_options =
                 AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {num_pages}}},
+                    .runtime_varargs = {{node, {{num_pages}}}},
                 },
         },
     };
     params.tensor_args = {
-        ProgramRunArgs::TensorArgument{.tensor_parameter_name = "input_tensor", .tensor = std::cref(input_tensor)},
-        ProgramRunArgs::TensorArgument{.tensor_parameter_name = "output_tensor", .tensor = std::cref(output_tensor)},
+        {"input_tensor", {std::cref(input_tensor)}},
+        {"output_tensor", {std::cref(output_tensor)}},
     };
     SetProgramRunArgs(program, params);
 

@@ -400,24 +400,21 @@ static void matmul_tile_block(
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
             .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"src0_addr", ctx.src0_dram_buffer->address()},
-                       {"src0_dram_bank_id", 0u},
-                       {"src1_addr", ctx.src1_dram_buffer->address()},
-                       {"src1_dram_bank_id", 0u},
-                       {"num_blocks", num_blocks},
-                       {"in0_block_tile_cnt", in0_block_tile_cnt},
-                       {"in1_block_tile_cnt", in1_block_tile_cnt},
-                       {"in0_block_size_bytes", in0_block_size_bytes},
-                       {"in1_block_size_bytes", in1_block_size_bytes}}}},
+                {{node,
+                  {{"src0_addr", ctx.src0_dram_buffer->address()},
+                   {"src0_dram_bank_id", 0u},
+                   {"src1_addr", ctx.src1_dram_buffer->address()},
+                   {"src1_dram_bank_id", 0u},
+                   {"num_blocks", num_blocks},
+                   {"in0_block_tile_cnt", in0_block_tile_cnt},
+                   {"in1_block_tile_cnt", in1_block_tile_cnt},
+                   {"in0_block_size_bytes", in0_block_size_bytes},
+                   {"in1_block_size_bytes", in1_block_size_bytes}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
             .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"dst_addr", ctx.dst_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", ctx.num_tiles}}}},
+                {{node, {{"dst_addr", ctx.dst_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", ctx.num_tiles}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = COMPUTE,

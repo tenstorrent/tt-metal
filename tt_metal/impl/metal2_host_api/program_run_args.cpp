@@ -25,8 +25,7 @@ namespace tt::tt_metal::experimental {
 using KernelRTASchema = detail::ProgramImpl::KernelRTASchema;
 
 // Helpers for vararg-value access (now living on AdvancedKernelRunArgs).
-const std::vector<AdvancedKernelRunArgs::NodeVarargs>& kernel_runtime_varargs(
-    const ProgramRunArgs::KernelRunArgs& kp) {
+const AdvancedKernelRunArgs::RuntimeVarargs& kernel_runtime_varargs(const ProgramRunArgs::KernelRunArgs& kp) {
     return kp.advanced_options.runtime_varargs;
 }
 
@@ -50,42 +49,35 @@ const AdvancedKernelRunArgs::CommonVarargs& kernel_common_runtime_varargs(
 //         rank must match. Both logical_shape and padded_shape per-dim values may differ.
 //     See the field doc comments in tensor_parameter.hpp for the full contracts.
 //   - Every declared TensorParameter must be set
-void ValidateTensorArgs(const Program& program, std::span<const ProgramRunArgs::TensorArgument> tensor_args) {
+void ValidateTensorArgs(const Program& program, const ProgramRunArgs::TensorArgs& tensor_args) {
     const detail::ProgramImpl& program_impl = program.impl();
 
+    // (Duplicate tensor_parameter_name keys are rejected by TensorArgs at construction.)
     std::unordered_set<std::string> tensor_parameters_with_params;
-    for (const auto& tensor_params : tensor_args) {
-        auto [it, inserted] = tensor_parameters_with_params.insert(tensor_params.tensor_parameter_name);
-        TT_FATAL(
-            inserted,
-            "Duplicate tensor_parameter_name '{}' in tensor_args. Each TensorParameter must appear at most once.",
-            tensor_params.tensor_parameter_name);
-        const TensorSpec* expected_spec = program_impl.get_tensor_parameter_layout(tensor_params.tensor_parameter_name);
-        TT_FATAL(
-            expected_spec != nullptr,
-            "TensorArgument references unknown TensorParameter '{}'.",
-            tensor_params.tensor_parameter_name);
-        const TensorSpec& runtime_spec = tensor_params.tensor.get().tensor_spec();
-        const bool dyn_shape =
-            program_impl.get_tensor_parameter_dynamic_tensor_shape(tensor_params.tensor_parameter_name);
-        const bool padded_only =
-            program_impl.get_tensor_parameter_match_padded_shape_only(tensor_params.tensor_parameter_name);
+    for (const auto& [param_name, tensor_arg] : tensor_args) {
+        tensor_parameters_with_params.insert(param_name);
+        const TensorSpec* expected_spec = program_impl.get_tensor_parameter_layout(param_name);
+        TT_FATAL(expected_spec != nullptr, "TensorArgument references unknown TensorParameter '{}'.", param_name);
+        const TensorSpec& runtime_spec = tensor_arg.tensor.get().tensor_spec();
+        const bool dyn_shape = program_impl.get_tensor_parameter_dynamic_tensor_shape(param_name);
+        const bool padded_only = program_impl.get_tensor_parameter_match_padded_shape_only(param_name);
         if (dyn_shape) {
             // dynamic_tensor_shape: tensor_layout must match exactly; logical_shape may differ in
             // per-dim values, but rank must still match. (Wins over match_padded_shape_only if both
             // are set: dynamic is strictly more permissive.)
             TT_FATAL(
                 runtime_spec.tensor_layout() == expected_spec->tensor_layout(),
-                "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the binding's "
+                "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
+                "binding's "
                 "declared layout. dynamic_tensor_shape loosens the match only along logical_shape; dtype, "
                 "page_config, memory_config, and alignment must still match exactly.",
-                tensor_params.tensor_parameter_name);
+                param_name);
             TT_FATAL(
                 runtime_spec.logical_shape().rank() == expected_spec->logical_shape().rank(),
                 "TensorArgument for binding '{}' supplied a MeshTensor whose logical_shape rank ({}) differs from the "
                 "declared rank ({}). dynamic_tensor_shape lets the per-dim shape values vary, but the rank must "
                 "remain constant.",
-                tensor_params.tensor_parameter_name,
+                param_name,
                 runtime_spec.logical_shape().rank(),
                 expected_spec->logical_shape().rank());
         } else if (padded_only) {
@@ -95,24 +87,25 @@ void ValidateTensorArgs(const Program& program, std::span<const ProgramRunArgs::
             // (tensor_shape_in_pages is derived from padded_shape, which is fixed across binds).
             TT_FATAL(
                 runtime_spec.tensor_layout() == expected_spec->tensor_layout(),
-                "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the binding's "
+                "TensorArgument for binding '{}' supplied a MeshTensor whose tensor_layout does not match the "
+                "binding's "
                 "declared layout. match_padded_shape_only loosens the match only along logical_shape (within the "
                 "constraint that padded_shape is preserved); dtype, page_config, memory_config, and alignment must "
                 "still match exactly.",
-                tensor_params.tensor_parameter_name);
+                param_name);
             TT_FATAL(
                 runtime_spec.padded_shape() == expected_spec->padded_shape(),
                 "TensorArgument for binding '{}' supplied a MeshTensor whose padded_shape does not match the binding's "
                 "declared padded_shape. match_padded_shape_only requires padded_shape to be preserved across binds; "
                 "use dynamic_tensor_shape if you need padded_shape to vary as well.",
-                tensor_params.tensor_parameter_name);
+                param_name);
         } else {
             TT_FATAL(
                 runtime_spec == *expected_spec,
                 "TensorArgument for binding '{}' supplied a MeshTensor whose TensorSpec does not match the binding's "
                 "declared spec. The binding declaration in ProgramSpec is the single source of truth for layout; "
                 "the supplied tensor must conform to it.",
-                tensor_params.tensor_parameter_name);
+                param_name);
         }
     }
     for (const std::string& declared : program_impl.get_registered_tensor_parameter_names()) {
@@ -158,14 +151,10 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
         const std::set<CoreCoord>& kernel_nodes = kernel->logical_cores();
 
         // Validate vararg RTA counts per node
+        // (Duplicate node keys are rejected by RuntimeVarargs at construction.)
         std::unordered_set<NodeCoord> nodes_with_vararg_params;
-        for (const auto& [node_coord, args] : kernel_runtime_varargs(kernel_params)) {
-            auto [it_node, node_inserted] = nodes_with_vararg_params.insert(node_coord);
-            TT_FATAL(
-                node_inserted,
-                "Duplicate node_coord {} in runtime_varargs for kernel '{}'.",
-                node_coord.str(),
-                kernel_name);
+        for (const auto& [node_coord, varargs] : kernel_runtime_varargs(kernel_params)) {
+            nodes_with_vararg_params.insert(node_coord);
 
             TT_FATAL(
                 kernel_nodes.contains(node_coord),
@@ -177,12 +166,12 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
             const size_t expected_varargs =
                 (it_schema != schema->num_runtime_varargs_per_node.end()) ? it_schema->second : 0;
             TT_FATAL(
-                args.size() == expected_varargs,
+                varargs.args.size() == expected_varargs,
                 "Kernel '{}' node {} expects {} vararg runtime args, but {} were provided",
                 kernel_name,
                 node_coord.str(),
                 expected_varargs,
-                args.size());
+                varargs.args.size());
         }
         // Every node with a non-zero schema vararg entry must have values provided.
         // Zero-count entries should already be filtered out during schema expansion
@@ -211,32 +200,28 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
         const std::unordered_set<std::string> named_rta_name_set(named_rta_names.begin(), named_rta_names.end());
 
         std::unordered_set<NodeCoord> nodes_with_named_params;
-        for (const auto& node_params : kernel_params.runtime_arg_values) {
-            auto [it_node, inserted_node] = nodes_with_named_params.insert(node_params.node);
+        // (Duplicate node keys are rejected by NodeRuntimeArgs at construction.)
+        for (const auto& [node, args] : kernel_params.runtime_arg_values) {
+            nodes_with_named_params.insert(node);
             TT_FATAL(
-                inserted_node,
-                "Duplicate node_coord {} in runtime_arg_values for kernel '{}'.",
-                node_params.node.str(),
-                kernel_name);
-            TT_FATAL(
-                kernel_nodes.contains(node_params.node),
+                kernel_nodes.contains(node),
                 "Kernel '{}' is setting runtime_arg_values for node {}, but the kernel does not run on that node.",
                 kernel_name,
-                node_params.node.str());
+                node.str());
             TT_FATAL(
-                node_params.args.size() == named_rta_names.size(),
+                args.size() == named_rta_names.size(),
                 "Kernel '{}' node {} expects {} named RTAs, but {} were provided",
                 kernel_name,
-                node_params.node.str(),
+                node.str(),
                 named_rta_names.size(),
-                node_params.args.size());
-            for (const auto& [name, _value] : node_params.args) {
+                args.size());
+            for (const auto& [name, _value] : args) {
                 (void)_value;
                 TT_FATAL(
                     named_rta_name_set.contains(name),
                     "Kernel '{}' node {} sets named RTA '{}' which is not declared in the schema.",
                     kernel_name,
-                    node_params.node.str(),
+                    node.str(),
                     name);
             }
         }
@@ -391,8 +376,7 @@ std::vector<uint32_t> ComputeBindingCrtaValues(const TensorBindingHandle& handle
 //
 // Pre-condition: ValidateTensorArgs has enforced that every declared TensorParameter
 // has a corresponding TensorArgument, so the lookup below cannot miss for any registered binding.
-void AttachBorrowedDFBBuffers(
-    detail::ProgramImpl& program_impl, std::span<const ProgramRunArgs::TensorArgument> tensor_args) {
+void AttachBorrowedDFBBuffers(detail::ProgramImpl& program_impl, const ProgramRunArgs::TensorArgs& tensor_args) {
     const auto& borrowed_bindings = program_impl.get_dfb_borrowed_bindings();
     if (borrowed_bindings.empty()) {
         return;
@@ -400,8 +384,8 @@ void AttachBorrowedDFBBuffers(
 
     std::unordered_map<std::string, const MeshTensor*> tensor_by_param;
     tensor_by_param.reserve(tensor_args.size());
-    for (const auto& tensor_params : tensor_args) {
-        tensor_by_param.emplace(tensor_params.tensor_parameter_name, &tensor_params.tensor.get());
+    for (const auto& [param_name, tensor_arg] : tensor_args) {
+        tensor_by_param.emplace(param_name, &tensor_arg.tensor.get());
     }
 
     for (const auto& [dfb_id, tp_name] : borrowed_bindings) {
@@ -470,8 +454,8 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params) {
     // NOTE: We assume lockstep mesh allocation, so a device-independent set of values per binding.
     std::unordered_map<std::string, const MeshTensor*> tensor_by_param;
     tensor_by_param.reserve(params.tensor_args.size());
-    for (const auto& tensor_params : params.tensor_args) {
-        tensor_by_param.emplace(tensor_params.tensor_parameter_name, &tensor_params.tensor.get());
+    for (const auto& [param_name, tensor_arg] : params.tensor_args) {
+        tensor_by_param.emplace(param_name, &tensor_arg.tensor.get());
     }
 
     // Process kernel runtime arguments.
@@ -493,15 +477,15 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params) {
         TT_FATAL(schema != nullptr, "Kernel '{}' has no RTA schema registered.", kernel_params.kernel_spec_name);
 
         // Build a node -> named-RTA-values-map lookup for serialization.
-        std::unordered_map<NodeCoord, const std::unordered_map<std::string, uint32_t>*> named_rtas_by_node;
-        for (const auto& node_params : kernel_params.runtime_arg_values) {
-            named_rtas_by_node[node_params.node] = &node_params.args;
+        std::unordered_map<NodeCoord, const Table<std::string, uint32_t>*> named_rtas_by_node;
+        for (const auto& [node, args] : kernel_params.runtime_arg_values) {
+            named_rtas_by_node[node] = &args;
         }
 
         // Build a node -> vararg-values-span lookup.
         std::unordered_map<NodeCoord, const std::vector<uint32_t>*> varargs_by_node;
-        for (const auto& [node, args] : kernel_runtime_varargs(kernel_params)) {
-            varargs_by_node[node] = &args;
+        for (const auto& [node, varargs] : kernel_runtime_varargs(kernel_params)) {
+            varargs_by_node[node] = &varargs.args;
         }
 
         // Iterate over every node the kernel runs on. We need to set RTAs on any node that
@@ -609,7 +593,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params) {
     AttachBorrowedDFBBuffers(program_impl, params.tensor_args);
 }
 
-void UpdateTensorArgs(Program& program, std::span<const ProgramRunArgs::TensorArgument> tensor_args) {
+void UpdateTensorArgs(Program& program, const ProgramRunArgs::TensorArgs& tensor_args) {
     log_debug(tt::LogMetal, "Updating tensor args (partial fast-path)");
 
     // Validate the TensorArgument list (shared with the full-path validator).
@@ -622,8 +606,8 @@ void UpdateTensorArgs(Program& program, std::span<const ProgramRunArgs::TensorAr
     // a single device-independent value set per binding.
     std::unordered_map<std::string, const MeshTensor*> tensor_by_param;
     tensor_by_param.reserve(tensor_args.size());
-    for (const auto& tensor_params : tensor_args) {
-        tensor_by_param.emplace(tensor_params.tensor_parameter_name, &tensor_params.tensor.get());
+    for (const auto& [param_name, tensor_arg] : tensor_args) {
+        tensor_by_param.emplace(param_name, &tensor_arg.tensor.get());
     }
 
     // For every kernel with tensor bindings, patch the binding slots in its CRTA buffer in

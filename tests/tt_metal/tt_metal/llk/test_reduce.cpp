@@ -468,7 +468,7 @@ void run_single_core_reduce_program(
     auto& program_run = workload.get_programs().at(device_range);
 
     // Reader/writer RTAs depend on reduce_dim
-    std::unordered_map<std::string, uint32_t> reader_named_rtas;
+    experimental::Table<std::string, uint32_t> reader_named_rtas;
     uint32_t writer_num_tiles;
     if (test_config.reduce_dim == ReduceDim::H) {
         reader_named_rtas = {{"N", dims.N}, {"Ht", dims.Ht}, {"Wt", dims.Wt}, {"HtWt", dims.Ht * dims.Wt}};
@@ -483,19 +483,19 @@ void run_single_core_reduce_program(
     params.kernel_run_args = {
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = READER,
-            .runtime_arg_values = {{.node = node, .args = reader_named_rtas}},
+            .runtime_arg_values = {{node, reader_named_rtas}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = WRITER,
-            .runtime_arg_values = {{.node = node, .args = {{"num_tiles", writer_num_tiles}}}},
+            .runtime_arg_values = {{node, {{"num_tiles", writer_num_tiles}}}},
         },
         experimental::ProgramRunArgs::KernelRunArgs{
             .kernel_spec_name = COMPUTE,
         },
     };
     params.tensor_args = {
-        {.tensor_parameter_name = IN_TENSOR, .tensor = in_tensor},
-        {.tensor_parameter_name = OUT_TENSOR, .tensor = out_tensor},
+        {IN_TENSOR, {in_tensor}},
+        {OUT_TENSOR, {out_tensor}},
     };
     experimental::SetProgramRunArgs(program_run, params);
 

@@ -16,6 +16,7 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/table.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 
 namespace tt::tt_metal::experimental {
@@ -48,18 +49,15 @@ struct ProgramRunArgs {
         // Kernel identifier
         KernelSpecName kernel_spec_name;
 
-        // Runtime argument values (per-node).
+        // Runtime argument values: maps each node to its named-RTA values (a name -> value table).
         // Every argument in this kernel's RuntimeArgSchema::runtime_arg_names must be set,
         // for every node the kernel runs on.
         // Missing arguments or superfluous arguments will trigger validation errors.
         //
         // NOTE: If a kernel runtime argument always has the same value for all nodes, passing
         // a common runtime argument would provide better dispatch efficiency.
-        struct NodeRuntimeArgs {
-            NodeCoord node;
-            std::unordered_map<std::string, uint32_t> args;
-        };
-        std::vector<NodeRuntimeArgs> runtime_arg_values;
+        using NodeRuntimeArgs = Table<NodeCoord, Table<std::string, uint32_t>>;
+        NodeRuntimeArgs runtime_arg_values;
 
         // Common runtime argument values (broadcast to every node).
         // Every argument in this kernel's RuntimeArgSchema::common_runtime_arg_names must be set.
@@ -77,16 +75,16 @@ struct ProgramRunArgs {
     // Tensor arguments
     ////////////////////////////////////////////////////////////////////////
     struct TensorArgument {
-        // Tensor identifier (matches a TensorParameter::unique_id in the ProgramSpec)
-        TensorParameterName tensor_parameter_name;
-
         // The actual MeshTensor argument
         // (Non-owning reference. Will become MeshTensorView when available; existing callsites won't change.)
         std::reference_wrapper<const MeshTensor> tensor;
     };
+    // Tensor arguments: maps each TensorParameter name (matching a TensorParameter::unique_id in
+    // the ProgramSpec) to its MeshTensor argument.
     // A TensorArgument must be specified for EVERY TensorParameter declared in the ProgramSpec.
     // The argument's TensorSpec must match the TensorParameter's TensorSpec (shape, layout, data type).
-    std::vector<TensorArgument> tensor_args;
+    using TensorArgs = Table<TensorParameterName, TensorArgument>;
+    TensorArgs tensor_args;
 
     ////////////////////////////////////////////////////////////////////////
     // DFB parameters (optional, advanced use cases)
@@ -129,7 +127,7 @@ struct ProgramRunArgs {
 struct ProgramRunArgsView {
     struct KernelRunArgsView {
         // Direct views into per-node vararg runtime args
-        std::vector<std::pair<NodeCoord, std::span<uint32_t>>> runtime_varargs;
+        Table<NodeCoord, std::span<uint32_t>> runtime_varargs;
 
         // Direct view into common vararg runtime args
         std::span<uint32_t> common_runtime_varargs;
