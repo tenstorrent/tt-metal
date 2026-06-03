@@ -68,7 +68,9 @@ def save_intermediate_output(
     # Get output directory
     if output_dir is None:
         env_var = f"{name.upper()}_OUTPUT_DIR"
-        default_dir = f"/tmp/{name}_outputs"
+        # Namespace by user to avoid cross-user permission collisions on the shared /tmp dir.
+        user = os.getenv("USER", "shared")
+        default_dir = f"/tmp/{user}_{name}_outputs"
         output_dir = Path(os.getenv(env_var, default_dir))
     else:
         output_dir = Path(output_dir)
