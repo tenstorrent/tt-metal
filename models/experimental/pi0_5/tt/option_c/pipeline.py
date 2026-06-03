@@ -148,6 +148,12 @@ class Pi0_5PipelineC:
     # load otherwise overflows the L1 headroom above the matmul kernel's
     # static CB region (e.g. vlm_depth=18 with 2 layers per (2,1) at TP=2).
     prefill_weights_l1_mlp_only: bool = False
+    # When True (and `prefill_weights_l1=True` and NOT mlp_only), migrate Q+O+MLP
+    # but leave kv_proj in DRAM. kv_proj is REPLICATED across the (2,1) sub-mesh
+    # (num_kv_heads=1 doesn't shard at TP=2) so it occupies ~2 MB / chip at
+    # depth=18 × 2 layers/sub-mesh. Skipping it frees high-address L1 the
+    # allocator otherwise spills into the matmul kernel's static CB region.
+    prefill_weights_l1_skip_kv: bool = False
     # When True, post-initialize walk the denoise stage's expert + suffix
     # slices and migrate every matmul weight + LN/mod weight from DRAM to L1.
     # Default False = today's behavior (uploads land in DRAM via the default
@@ -245,7 +251,11 @@ class Pi0_5PipelineC:
         if self.prefill_weights_l1 and self.prefill_tp_size > 1:
             from ._l1_migration import migrate_prefill_weights_to_l1
 
-            migrate_prefill_weights_to_l1(self, mlp_only=self.prefill_weights_l1_mlp_only)
+            migrate_prefill_weights_to_l1(
+                self,
+                mlp_only=self.prefill_weights_l1_mlp_only,
+                skip_kv=self.prefill_weights_l1_skip_kv,
+            )
 
         # Opt-in L1 migration for the denoise (expert + suffix) path.
         # Mirrors the Option B `weights_l1` migration step scoped to stage 2.

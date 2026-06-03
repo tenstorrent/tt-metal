@@ -52,7 +52,7 @@ def _to_l1(t: Optional["ttnn.Tensor"]) -> Optional["ttnn.Tensor"]:
     return new_t
 
 
-def _migrate_tp_gemma_block_to_l1(block, mlp_only: bool = False) -> None:
+def _migrate_tp_gemma_block_to_l1(block, mlp_only: bool = False, skip_kv: bool = False) -> None:
     """Pi0_5OptionCSubmeshTPGemmaBlock: VLM transformer block attrs.
 
     Attribute names match those in `tp_block.py`. Keep norms in DRAM (small
@@ -66,24 +66,31 @@ def _migrate_tp_gemma_block_to_l1(block, mlp_only: bool = False) -> None:
     the dominant contributor (~92% of per-layer bytes) so the L1 hit ratio
     barely changes; the small Q/K/V/O matmuls still read from DRAM but
     are 3x smaller so the DRAM bandwidth cost is negligible.
+
+    When `skip_kv=True` (and mlp_only=False), migrate Q + O + MLP but leave
+    kv_proj in DRAM. KV is REPLICATED across the (2,1) sub-mesh (num_kv_heads=1
+    doesn't shard) — that replication is the only thing on the bf16-defaulting
+    `_replicate` path that lands in DRAM by default; skipping its migration
+    keeps it there. ~2 MB / chip saved.
     """
     if not mlp_only:
         block.q_proj = _to_l1(block.q_proj)
-        block.kv_proj = _to_l1(block.kv_proj)
+        if not skip_kv:
+            block.kv_proj = _to_l1(block.kv_proj)
         block.o_proj = _to_l1(block.o_proj)
     block.gate_proj = _to_l1(block.gate_proj)
     block.up_proj = _to_l1(block.up_proj)
     block.down_proj = _to_l1(block.down_proj)
 
 
-def _migrate_vlm_tp_slice_to_l1(slice_obj, mlp_only: bool = False) -> None:
+def _migrate_vlm_tp_slice_to_l1(slice_obj, mlp_only: bool = False, skip_kv: bool = False) -> None:
     """Pi0_5OptionCVLMSliceTP: walk vlm_blocks. Final norm stays in DRAM
     (already DRAM-bounced on entry/exit of the rms_norm call site)."""
     for block in slice_obj.vlm_blocks:
-        _migrate_tp_gemma_block_to_l1(block, mlp_only=mlp_only)
+        _migrate_tp_gemma_block_to_l1(block, mlp_only=mlp_only, skip_kv=skip_kv)
 
 
-def migrate_prefill_weights_to_l1(pipe: "Pi0_5PipelineC", mlp_only: bool = False) -> None:
+def migrate_prefill_weights_to_l1(pipe: "Pi0_5PipelineC", mlp_only: bool = False, skip_kv: bool = False) -> None:
     """Walk the prefill stage's TP slice and migrate matmul weights to L1.
 
     No-op when prefill_tp_size == 1 or when the slice isn't TP type. Safe
@@ -102,7 +109,7 @@ def migrate_prefill_weights_to_l1(pipe: "Pi0_5PipelineC", mlp_only: bool = False
 
     if not isinstance(pipe.stage_1.slice, Pi0_5OptionCVLMSliceTP):
         return
-    _migrate_vlm_tp_slice_to_l1(pipe.stage_1.slice, mlp_only=mlp_only)
+    _migrate_vlm_tp_slice_to_l1(pipe.stage_1.slice, mlp_only=mlp_only, skip_kv=skip_kv)
 
 
 # ---------------------------------------------------------------------------- #

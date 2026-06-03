@@ -142,6 +142,12 @@ PREFILL_WEIGHTS_L1 = os.environ.get("PI0_OC_L1_PROBE_WEIGHTS_L1") == "1"
 # in DRAM. Needed at vlm_depth=18 where 2 layers per (2,1) sub-mesh + full
 # migration exceeds the L1 headroom above the matmul CB region.
 PREFILL_WEIGHTS_L1_MLP_ONLY = os.environ.get("PI0_OC_L1_PROBE_WEIGHTS_L1_MLP_ONLY") == "1"
+# When set (and mlp_only=0), migrate Q+O+MLP to L1 but leave kv_proj in DRAM.
+# kv_proj is REPLICATED across the (2,1) sub-mesh (num_kv_heads=1 doesn't shard
+# at TP=2), so it occupies ~2 MB / chip at depth=18 × 2 layers/sub-mesh. Skipping
+# its migration frees high-address L1 the allocator otherwise spills into the
+# matmul kernel's static CB region.
+PREFILL_WEIGHTS_L1_SKIP_KV = os.environ.get("PI0_OC_L1_PROBE_WEIGHTS_L1_SKIP_KV") == "1"
 # Denoise full-L1 walk: post-init migrate every expert + suffix matmul / mod /
 # LN weight from DRAM to L1 via `migrate_pipeline_denoise_to_l1`. Mirrors the
 # prefill_weights_l1 knob but scoped to stage 2. NO DRAM fallback once on.
@@ -298,6 +304,7 @@ def _echo_env() -> None:
     print(f"  PI0_OC_L1_PROBE_PREFILL_TP             = {PREFILL_TP_SIZE}")
     print(f"  PI0_OC_L1_PROBE_WEIGHTS_L1             = {PREFILL_WEIGHTS_L1}")
     print(f"  PI0_OC_L1_PROBE_WEIGHTS_L1_MLP_ONLY    = {PREFILL_WEIGHTS_L1_MLP_ONLY}")
+    print(f"  PI0_OC_L1_PROBE_WEIGHTS_L1_SKIP_KV     = {PREFILL_WEIGHTS_L1_SKIP_KV}")
     print(f"  PI0_OC_L1_PROBE_DENOISE_WEIGHTS_L1     = {DENOISE_WEIGHTS_L1}")
     print(f"  PI0_OC_L1_PROBE_DENOISE_MOD_SHARDED    = {DENOISE_MOD_SHARDED}")
 
@@ -403,6 +410,7 @@ def test_oc_l1_footprint_probe_full_depth():
             prefill_tp_size=PREFILL_TP_SIZE,
             prefill_weights_l1=PREFILL_WEIGHTS_L1,
             prefill_weights_l1_mlp_only=PREFILL_WEIGHTS_L1_MLP_ONLY,
+            prefill_weights_l1_skip_kv=PREFILL_WEIGHTS_L1_SKIP_KV,
             denoise_weights_l1=DENOISE_WEIGHTS_L1,
             denoise_mod_sharded=DENOISE_MOD_SHARDED,
         )

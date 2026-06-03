@@ -685,7 +685,12 @@ class Pi0_5OptionCVLMSliceTP:
 
         lang = weights["vlm_language"]
 
-        # RoPE tables — one set per sub-mesh.
+        # RoPE tables — one set per sub-mesh. Pin to DRAM: rotary_embedding
+        # only READS these (no in-place mutation); DRAM placement frees
+        # ~2 MB / chip of L1 (1 MB per of cos/sin at [1,1,max_seq_len,head_dim]
+        # bf16) which we need to fit Q/K/V/O matmul weights alongside MLP.
+        # rotary_embedding's validate_on_program_cache_miss only requires the
+        # tensor be on-device + TILE layout — no memory_config constraint.
         self.cos_metas: List = []
         self.sin_metas: List = []
         for sm in tp_submeshes:
@@ -694,6 +699,18 @@ class Pi0_5OptionCVLMSliceTP:
                 config.max_seq_len,
                 sm,
             )
+            # Idempotent move to DRAM. ttnn.to_memory_config on an already-DRAM
+            # tensor returns the SAME buffer; deallocate(source) would then free
+            # the underlying buffer of the returned tensor (same trap fixed in
+            # _l1_migration._to_l1). Check buffer_type and skip the move.
+            if cos.memory_config().buffer_type != ttnn.BufferType.DRAM:
+                cos_new = ttnn.to_memory_config(cos, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(cos)
+                cos = cos_new
+            if sin.memory_config().buffer_type != ttnn.BufferType.DRAM:
+                sin_new = ttnn.to_memory_config(sin, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(sin)
+                sin = sin_new
             self.cos_metas.append(cos)
             self.sin_metas.append(sin)
 

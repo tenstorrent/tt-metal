@@ -289,6 +289,10 @@ class Pi0_5OptionCSubmeshTPGemmaBlock:
 
         # `in0_block_w` retained from Option B TP=8 (8/4). At TP=2 per-chip
         # widths are larger so this may need retuning — flagged as TBD.
+        # 2026-06-03: experimentally verified that dropping attn block_w 8→4 does
+        # NOT shrink the CB region (some other kernel — probably rms_norm or
+        # all_reduce — reserves the same ~473 KB / bank). Tuning matmul block_w
+        # alone won't unlock the Q+O+MLP full-L1 path; mlp_only stays the limit.
         q_pcfg = self._matmul_pcfg(m_tiles, k_tiles_attn, (nq * D) // 32, in0_block_w=8)
         kv_pcfg = self._matmul_pcfg(m_tiles, k_tiles_attn, (2 * nkv * D) // 32, in0_block_w=8)
         q = ttnn.linear(
