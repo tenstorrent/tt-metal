@@ -563,7 +563,7 @@
   model: dit-common
   skus:
     wh_n150:
-      timeout: 30
+      timeout: 60
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
