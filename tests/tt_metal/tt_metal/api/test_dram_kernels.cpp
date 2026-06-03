@@ -27,20 +27,6 @@ static double compute_bw_gbs(uint64_t total_bytes, uint64_t cycles, uint32_t clk
     return static_cast<double>(total_bytes) * clk_hz / cycles / 1e9;
 }
 
-// Logical DRAM endpoint that bank dram_view's reads traverse on noc.
-// The NOC-aware lookup only gives a physical coord, so invert dram_bank_endpoint_coords to get its index.
-static CoreCoord logical_dram_endpoint_for_noc(const metal_SocDescriptor& soc_desc, uint32_t dram_view, NOC noc) {
-    CoreCoord pref = soc_desc.get_preferred_worker_core_for_dram_view(dram_view, static_cast<uint8_t>(noc));
-    const auto& endpoints = soc_desc.dram_bank_endpoint_coords.at(dram_view);
-    for (uint32_t i = 0; i < endpoints.size(); i++) {
-        if (endpoints[i] == pref) {
-            return CoreCoord{dram_view, i};
-        }
-    }
-    TT_FATAL(false, "Preferred DRAM endpoint ({}, {}) for bank {} not found", pref.x, pref.y, dram_view);
-    return {};
-}
-
 // Fixture for DRISC/DRAM-kernel tests
 class DramKernelFixture : public BlackholeSingleCardFixture {
 protected:
@@ -716,7 +702,8 @@ TEST_P(DramKernelDRISCNocModeFixture, DramKernelDRISCNocModeStress) {
 
     // Place the DRISC kernel on the endpoint that tensix_noc reads route to, so one DRISC owns both NIUs
     // (stream on drisc_noc, NOC2AXI on tensix_noc).
-    CoreCoord drisc_logical = logical_dram_endpoint_for_noc(soc_desc, bank, tensix_noc);
+    CoreCoord pref = soc_desc.get_preferred_worker_core_for_dram_view(bank, static_cast<uint8_t>(tensix_noc));
+    CoreCoord drisc_logical = soc_desc.translate_coord_to(pref, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
     const uint32_t dram_channel = device_->dram_channel_from_logical_core(drisc_logical);
 
     // Fill GDDR with iters random distinct chunks. DRISC and the Tensix reader both walk the same region
