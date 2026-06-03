@@ -51,8 +51,8 @@ struct p_gpr_unpack
     constexpr static std::uint32_t PERF_UNPACK_NUM_TILES_3 = 48; // num tiles for input operands 6-7
     // Slot 52 was the legacy UNPACK_STRIDE GPR used to snapshot/restore the channel-1 Z-stride
     // around unpack-to-dest. Removed in favor of canonical_unpA_z_stride() in the bracket pair
-    // (set_dst_write_addr / unpack_to_dest_tile_done). See tt-llk#1015. Slot is reserved as
-    // free until the next unpacker GPR consolidation.
+    // (set_dst_write_addr / unpack_to_dest_tile_done), which recomputes the baseline instead of
+    // preserving caller-side state. Slot is reserved as free until the next unpacker GPR consolidation.
     constexpr static std::uint32_t SR_UNPACK_TILIZER_STATE_0   = 54; // Save unpack state before tilizer is enabled for quick restore
     constexpr static std::uint32_t SR_UNPACK_TILIZER_STATE_1   = 55;
     constexpr static std::uint32_t SR_UNPACK_UNTILIZER_STATE_0 = 56; // Save unpack state before tilizer is enabled for quick restore
