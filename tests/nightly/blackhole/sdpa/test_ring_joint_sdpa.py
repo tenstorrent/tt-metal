@@ -2112,14 +2112,17 @@ CHUNKED_PREFILL_MODEL_CONFIGS = {
         nhv=CHUNKED_PREFILL_HEADS_PER_RING,
         d_q=576,
         d_k=576,
-        d_v=128,
+        # TEMP sweep override: d_v env-driven. 128 = standard MLA value head; 512 = wide value-latent
+        # (V = first 512 cols of the 576-wide latent K). Must be tile-aligned and <= d_k (576).
+        d_v=int(os.environ.get("CHUNKED_D_V", "128")),
         is_causal=True,
         is_balanced=True,
         q_dtype=ttnn.bfloat16,
         kv_dtype=ttnn.bfloat8_b,
         # TEMP sweep override: q_chunk env-driven (32 / 64 / 96 / 128) for the perf sweep.
         q_chunk_sizes=[int(os.environ.get("CHUNKED_Q_CHUNK", "64"))],
-        k_chunk_sizes=[256, 384, 512, 640, 768],
+        # TEMP sweep override: extended k pool (all multiples of 32) so every sweep id is collectable.
+        k_chunk_sizes=[224, 256, 384, 448, 480, 512, 640, 672, 768, 800],
         seq_len=CHUNKED_PREFILL_CHUNK_SIZE,  # unused by chunked path
     ),
 }

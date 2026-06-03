@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ring Joint SDPA — Chunked Prefill Sweep</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#141a24; --panel2:#1b2330; --line:#26303f;
+    --txt:#e6edf3; --muted:#8a97a8; --accent:#5ec8ff; --accent2:#a78bfa;
+    --good:#4ade80; --warn:#fbbf24; --bad:#f87171; --best:#22d3ee;
+    --grad1:#5ec8ff; --grad2:#a78bfa;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:radial-gradient(1200px 600px at 80% -10%, #16202e 0%, var(--bg) 55%) fixed;
+    color:var(--txt); font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    padding:28px 32px 60px;
+  }
+  h1{font-size:22px;margin:0 0 2px;font-weight:650;letter-spacing:.2px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:22px}
+  .sub code{background:var(--panel2);padding:2px 7px;border-radius:5px;color:var(--accent)}
+
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:26px}
+  .kpi{background:linear-gradient(160deg,var(--panel) 0%,var(--panel2) 100%);border:1px solid var(--line);
+       border-radius:14px;padding:16px 18px;position:relative;overflow:hidden}
+  .kpi .lbl{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.7px}
+  .kpi .val{font-size:26px;font-weight:700;margin-top:6px}
+  .kpi .val small{font-size:13px;color:var(--muted);font-weight:500}
+  .kpi .tag{font-size:11px;color:var(--accent);margin-top:3px}
+  .kpi::after{content:"";position:absolute;right:-30px;top:-30px;width:90px;height:90px;
+    background:radial-gradient(circle,var(--accent) 0%,transparent 70%);opacity:.10}
+
+  .tabs{display:flex;gap:8px;margin-bottom:18px;border-bottom:1px solid var(--line)}
+  .tab{padding:11px 22px;cursor:pointer;border:none;background:none;color:var(--muted);font-size:14px;
+       font-weight:600;border-bottom:2px solid transparent;transition:.15s;position:relative;top:1px}
+  .tab:hover{color:var(--txt)}
+  .tab.active{color:var(--txt);border-bottom-color:var(--accent)}
+  .tab.special.active{border-bottom-color:var(--accent2)}
+  .tab .pill{display:inline-block;margin-left:8px;font-size:10px;background:var(--panel2);color:var(--muted);
+       padding:1px 7px;border-radius:9px;vertical-align:middle}
+  .tab.active .pill{background:var(--accent);color:#04121b}
+  .tab.special.active .pill{background:var(--accent2);color:#0c0518}
+
+  .controls{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:20px}
+  .seg{display:inline-flex;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:4px}
+  .seg button{border:none;background:none;color:var(--muted);padding:7px 16px;border-radius:7px;cursor:pointer;
+       font-weight:600;font-size:13px;transition:.15s}
+  .seg button.active{background:var(--accent);color:#04121b}
+  .hint{color:var(--muted);font-size:12px}
+  .toggle{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none;font-size:13px;color:var(--muted)}
+  .toggle input{display:none}
+  .switch{width:38px;height:21px;border-radius:11px;background:var(--panel2);border:1px solid var(--line);
+          position:relative;transition:.18s}
+  .switch::after{content:"";position:absolute;width:15px;height:15px;border-radius:50%;background:var(--muted);
+          top:2px;left:2px;transition:.18s}
+  .toggle input:checked + .switch{background:var(--accent)}
+  .toggle input:checked + .switch::after{left:19px;background:#04121b}
+  .toggle input:checked ~ .lab{color:var(--txt)}
+
+  .grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:22px;align-items:start}
+  @media(max-width:1080px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 20px}
+  .card h3{margin:0 0 14px;font-size:14px;font-weight:650;display:flex;align-items:center;gap:8px}
+  .card h3 .dot{width:8px;height:8px;border-radius:50%;background:var(--accent)}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:right;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px;
+     cursor:pointer;user-select:none;position:sticky;top:0;background:var(--panel);z-index:1}
+  th:hover{color:var(--txt)}
+  th .arr{opacity:.5;font-size:9px}
+  tbody tr:hover{background:var(--panel2)}
+  tr.best td{background:rgba(34,211,238,.10)}
+  tr.best td:first-child{box-shadow:inset 3px 0 0 var(--best)}
+  tr.oom{opacity:.5}
+  .badge{display:inline-block;padding:2px 8px;border-radius:7px;font-size:11px;font-weight:600}
+  .b-ok{background:rgba(74,222,128,.14);color:var(--good)}
+  .b-oom{background:rgba(248,113,113,.14);color:var(--bad)}
+  .cfg{font-weight:600;color:var(--accent)}
+  .num{font-variant-numeric:tabular-nums}
+  .mini{color:var(--muted);font-size:11px}
+  .bestStar{color:var(--best);margin-left:6px}
+  td.mincell{background:rgba(34,211,238,.14)!important;font-weight:700;color:#bff4ff}
+  td.nacell{color:var(--bad);opacity:.55}
+  .absms{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+  #cmpTbl td{padding:7px 10px;line-height:1.35}
+  #cmpTbl .heat{font-size:13px;display:inline-block;min-width:48px;text-align:center}
+  /* latent group frames */
+  .gon{background:rgba(94,200,255,.06)}
+  .goff{background:rgba(167,139,250,.06)}
+  .gon-l{border-left:2px solid rgba(94,200,255,.5)!important}
+  .gon-r{border-right:2px solid rgba(94,200,255,.5)!important}
+  .goff-l{border-left:2px solid rgba(167,139,250,.5)!important}
+  .goff-r{border-right:2px solid rgba(167,139,250,.5)!important}
+  .gon-t{border-top:2px solid rgba(94,200,255,.5)!important}
+  .goff-t{border-top:2px solid rgba(167,139,250,.5)!important}
+  #cmpTbl tbody tr:last-child .gon{border-bottom:2px solid rgba(94,200,255,.5)}
+  #cmpTbl tbody tr:last-child .goff{border-bottom:2px solid rgba(167,139,250,.5)}
+  #cmpTbl tbody tr:hover .gon{background:rgba(94,200,255,.12)}
+  #cmpTbl tbody tr:hover .goff{background:rgba(167,139,250,.12)}
+  .grp{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px}
+
+  .chart{display:flex;flex-direction:column;gap:14px;margin-top:4px}
+  .barrow{display:grid;grid-template-columns:120px 1fr 70px;align-items:center;gap:10px}
+  .barrow .nm{font-size:12px;color:var(--muted)}
+  .barrow .nm b{color:var(--txt)}
+  .bartrack{background:var(--panel2);border-radius:6px;height:22px;position:relative;overflow:hidden}
+  .barfill{height:100%;border-radius:6px;background:linear-gradient(90deg,var(--grad1),var(--grad2));transition:width .4s ease}
+  .barval{font-variant-numeric:tabular-nums;font-size:12px;text-align:right;font-weight:600}
+  .legend{color:var(--muted);font-size:11px;margin-top:10px}
+  .heat{font-variant-numeric:tabular-nums;padding:2px 8px;border-radius:6px;font-weight:600;font-size:12px}
+
+  .cmpgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+  .cmp{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .cmp .cfgname{font-weight:650;color:var(--accent);font-size:13px}
+  .cmp .big{font-size:22px;font-weight:700;margin:6px 0 2px}
+  .cmp .big.up{color:var(--good)} .cmp .big.down{color:var(--bad)}
+  .cmp .det{color:var(--muted);font-size:11px}
+  .foot{color:var(--muted);font-size:11px;margin-top:30px;text-align:center}
+  .hidden{display:none!important}
+</style>
+</head>
+<body>
+  <h1>Ring Joint SDPA &mdash; Chunked Prefill Sweep</h1>
+  <div class="sub">Source: <code>sweep_runs/results.tsv</code> &nbsp;·&nbsp; duration lower = better, util higher = better &nbsp;·&nbsp; configs swept across <code>k chunk</code> ∈ {256…768} (q chunk &amp; seq len fixed per config)</div>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="tabs" id="latentTabs"></div>
+
+  <!-- ============ PER-LATENT VIEW ============ -->
+  <div id="perView">
+    <div class="controls">
+      <div class="seg" id="dmSeg"></div>
+      <label class="toggle"><input type="checkbox" id="tBest"><span class="switch"></span><span class="lab">Best chunk per config</span></label>
+      <label class="toggle"><input type="checkbox" id="tOOM" checked><span class="switch"></span><span class="lab">Hide OOM</span></label>
+      <span class="hint" id="ctxHint"></span>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h3><span class="dot"></span>Runs — click any header to sort</h3>
+        <div style="overflow:auto;max-height:560px">
+          <table id="tbl"><thead></thead><tbody></tbody></table>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:22px">
+        <div class="card">
+          <h3><span class="dot" style="background:var(--accent2)"></span>Best duration per config (OK runs)</h3>
+          <div class="chart" id="chart"></div>
+          <div class="legend">Bar length ∝ best (lowest) duration_ms achieved by each config in this view.</div>
+        </div>
+        <div class="card">
+          <h3><span class="dot" style="background:var(--good)"></span>Data-Movement impact (DM on vs off)</h3>
+          <div class="cmpgrid" id="dmcmp"></div>
+          <div class="legend">Per-config best-duration speedup from toggling DM, holding latent-V fixed at the active tab. ▲ green = DM off faster.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ ALL-CONFIGS COMPARE VIEW ============ -->
+  <div id="cmpView" class="hidden">
+    <div class="controls">
+      <span class="hint">One row per config · each cell = <b>best chunk</b> duration_ms (OOM-only combos shown as NA) · click any header to sort · <span style="color:#bff4ff">cyan = fastest variant in that row</span></span>
+    </div>
+    <div class="card">
+      <h3><span class="dot" style="background:var(--accent2)"></span>All configs — 4 perf variants side by side</h3>
+      <div style="overflow:auto">
+        <table id="cmpTbl"><thead></thead><tbody></tbody></table>
+      </div>
+      <div class="legend" id="cmpLegend"></div>
+    </div>
+  </div>
+
+  <div class="foot">Generated for branch <code>skrstic/ring_joint_sdpa_optional_latent_v_fix</code> · single self-contained file</div>
+
+<script>
+/* ---------- embedded data ---------- */
+const RAW = `dm	latent	label	sp	per_dev	q	k	chunk_size	duration_ms	util	cores	status
+on	1	C1	8	640	32	256	5120	6.156	41.4	110	OK
+on	1	C1	8	640	32	384	5120	6.151	41.4	110	OK
+on	1	C1	8	640	32	512	5120	6.029	42.3	110	OK
+on	1	C1	8	640	32	640	5120	5.829	43.7	110	OK
+on	1	C1	8	640	32	768	5120	6.448	39.5	110	OK
+on	1	C2	4	1280	64	256	5120	8.588	59.4	110	OK
+on	1	C2	4	1280	64	384	5120	8.316	61.3	110	OK
+on	1	C2	4	1280	64	512	5120	8.219	62.0	110	OK
+on	1	C2	4	1280	64	640	5120	8.002	63.7	110	OK
+on	1	C2	4	1280	64	768	5120	NA	NA	NA	OOM
+on	1	C3	4	1248	96	256	4992	7.450	65.0	110	OK
+on	1	C3	4	1248	96	384	4992	8.177	59.3	110	OK
+on	1	C3	4	1248	96	512	4992	6.751	71.8	110	OK
+on	1	C3	4	1248	96	640	4992	NA	NA	NA	OOM
+on	1	C3	4	1248	96	768	4992	NA	NA	NA	OOM
+on	1	C4	8	640	128	256	5120	4.977	51.2	110	OK
+on	1	C4	8	640	128	384	5120	4.889	52.1	110	OK
+on	1	C4	8	640	128	512	5120	4.910	51.9	110	OK
+on	1	C4	8	640	128	640	5120	NA	NA	NA	OOM
+on	1	C4	8	640	128	768	5120	NA	NA	NA	OOM
+on	0	C1	8	640	32	256	5120	8.821	28.9	110	OK
+on	0	C1	8	640	32	384	5120	8.657	29.4	110	OK
+on	0	C1	8	640	32	512	5120	8.358	30.5	110	OK
+on	0	C1	8	640	32	640	5120	8.156	31.2	110	OK
+on	0	C1	8	640	32	768	5120	8.831	28.9	110	OK
+on	0	C2	4	1280	64	256	5120	8.749	58.3	110	OK
+on	0	C2	4	1280	64	384	5120	8.554	59.6	110	OK
+on	0	C2	4	1280	64	512	5120	8.479	60.1	110	OK
+on	0	C2	4	1280	64	640	5120	8.324	61.2	110	OK
+on	0	C2	4	1280	64	768	5120	NA	NA	NA	OOM
+on	0	C3	4	1248	96	256	4992	7.752	62.5	110	OK
+on	0	C3	4	1248	96	384	4992	8.270	58.6	110	OK
+on	0	C3	4	1248	96	512	4992	7.245	66.9	110	OK
+on	0	C3	4	1248	96	640	4992	NA	NA	NA	OOM
+on	0	C3	4	1248	96	768	4992	NA	NA	NA	OOM
+on	0	C4	8	640	128	256	5120	5.457	46.7	110	OK
+on	0	C4	8	640	128	384	5120	5.381	47.4	110	OK
+on	0	C4	8	640	128	512	5120	5.440	46.8	110	OK
+on	0	C4	8	640	128	640	5120	NA	NA	NA	OOM
+on	0	C4	8	640	128	768	5120	NA	NA	NA	OOM
+off	1	C1	8	640	32	256	5120	4.564	55.8	110	OK
+off	1	C1	8	640	32	384	5120	4.248	60.0	110	OK
+off	1	C1	8	640	32	512	5120	4.074	62.6	110	OK
+off	1	C1	8	640	32	640	5120	4.028	63.3	110	OK
+off	1	C1	8	640	32	768	5120	3.984	64.0	110	OK
+off	1	C2	4	1280	64	256	5120	8.467	60.2	110	OK
+off	1	C2	4	1280	64	384	5120	8.162	62.4	110	OK
+off	1	C2	4	1280	64	512	5120	7.979	63.9	110	OK
+off	1	C2	4	1280	64	640	5120	7.826	65.1	110	OK
+off	1	C2	4	1280	64	768	5120	NA	NA	NA	OOM
+off	1	C3	4	1248	96	256	4992	7.273	66.6	110	OK
+off	1	C3	4	1248	96	384	4992	7.964	60.8	110	OK
+off	1	C3	4	1248	96	512	4992	6.620	73.2	110	OK
+off	1	C3	4	1248	96	640	4992	NA	NA	NA	OOM
+off	1	C3	4	1248	96	768	4992	NA	NA	NA	OOM
+off	1	C4	8	640	128	256	5120	4.763	53.5	110	OK
+off	1	C4	8	640	128	384	5120	4.600	55.4	110	OK
+off	1	C4	8	640	128	512	5120	4.512	56.5	110	OK
+off	1	C4	8	640	128	640	5120	NA	NA	NA	OOM
+off	1	C4	8	640	128	768	5120	NA	NA	NA	OOM
+off	0	C1	8	640	32	256	5120	5.056	50.4	110	OK
+off	0	C1	8	640	32	384	5120	4.785	53.3	110	OK
+off	0	C1	8	640	32	512	5120	4.739	53.8	110	OK
+off	0	C1	8	640	32	640	5120	4.732	53.9	110	OK
+off	0	C1	8	640	32	768	5120	4.731	53.9	110	OK
+off	0	C2	4	1280	64	256	5120	8.471	60.2	110	OK
+off	0	C2	4	1280	64	384	5120	8.229	61.9	110	OK
+off	0	C2	4	1280	64	512	5120	8.087	63.0	110	OK
+off	0	C2	4	1280	64	640	5120	7.984	63.8	110	OK
+off	0	C2	4	1280	64	768	5120	NA	NA	NA	OOM
+off	0	C3	4	1248	96	256	4992	7.511	64.5	110	OK
+off	0	C3	4	1248	96	384	4992	8.037	60.3	110	OK
+off	0	C3	4	1248	96	512	4992	7.021	69.0	110	OK
+off	0	C3	4	1248	96	640	4992	NA	NA	NA	OOM
+off	0	C3	4	1248	96	768	4992	NA	NA	NA	OOM
+off	0	C4	8	640	128	256	5120	5.210	48.9	110	OK
+off	0	C4	8	640	128	384	5120	5.076	50.2	110	OK
+off	0	C4	8	640	128	512	5120	4.995	51.0	110	OK
+off	0	C4	8	640	128	640	5120	NA	NA	NA	OOM
+off	0	C4	8	640	128	768	5120	NA	NA	NA	OOM
+on	1	C5	8	640	64	256	5120	5.934	42.9	110	OK
+on	1	C5	8	640	64	384	5120	5.761	44.2	110	OK
+on	1	C5	8	640	64	512	5120	5.564	45.8	110	OK
+on	1	C5	8	640	64	640	5120	5.440	46.8	110	OK
+on	1	C5	8	640	64	768	5120	NA	NA	NA	OOM
+on	1	C6	8	640	96	256	5120	7.615	33.5	110	OK
+on	1	C6	8	640	96	384	5120	8.460	30.1	110	OK
+on	1	C6	8	640	96	512	5120	6.944	36.7	110	OK
+on	1	C6	8	640	96	640	5120	NA	NA	NA	OOM
+on	1	C6	8	640	96	768	5120	NA	NA	NA	OOM
+on	1	C7	8	640	160	256	5120	6.324	40.3	110	OK
+on	1	C7	8	640	160	384	5120	5.998	42.5	110	OK
+on	1	C7	8	640	160	512	5120	5.937	42.9	110	OK
+on	1	C7	8	640	160	640	5120	NA	NA	NA	OOM
+on	1	C7	8	640	160	768	5120	NA	NA	NA	OOM
+on	1	C8	8	640	192	256	5120	7.258	35.1	110	OK
+on	1	C8	8	640	192	384	5120	7.082	36.0	110	OK
+on	1	C8	8	640	192	512	5120	NA	NA	NA	OOM
+on	1	C8	8	640	192	640	5120	NA	NA	NA	OOM
+on	1	C8	8	640	192	768	5120	NA	NA	NA	OOM
+on	0	C5	8	640	64	256	5120	6.291	40.5	110	OK
+on	0	C5	8	640	64	384	5120	6.114	41.7	110	OK
+on	0	C5	8	640	64	512	5120	5.984	42.6	110	OK
+on	0	C5	8	640	64	640	5120	5.869	43.4	110	OK
+on	0	C5	8	640	64	768	5120	NA	NA	NA	OOM
+on	0	C6	8	640	96	256	5120	7.714	33.0	110	OK
+on	0	C6	8	640	96	384	5120	8.459	30.1	110	OK
+on	0	C6	8	640	96	512	5120	7.154	35.6	110	OK
+on	0	C6	8	640	96	640	5120	NA	NA	NA	OOM
+on	0	C6	8	640	96	768	5120	NA	NA	NA	OOM
+on	0	C7	8	640	160	256	5120	6.626	38.5	110	OK
+on	0	C7	8	640	160	384	5120	6.347	40.2	110	OK
+on	0	C7	8	640	160	512	5120	6.302	40.4	110	OK
+on	0	C7	8	640	160	640	5120	NA	NA	NA	OOM
+on	0	C7	8	640	160	768	5120	NA	NA	NA	OOM
+on	0	C8	8	640	192	256	5120	7.427	34.3	110	OK
+on	0	C8	8	640	192	384	5120	7.285	35.0	110	OK
+on	0	C8	8	640	192	512	5120	NA	NA	NA	OOM
+on	0	C8	8	640	192	640	5120	NA	NA	NA	OOM
+on	0	C8	8	640	192	768	5120	NA	NA	NA	OOM
+off	1	C5	8	640	64	256	5120	5.711	44.6	110	OK
+off	1	C5	8	640	64	384	5120	5.479	46.5	110	OK
+off	1	C5	8	640	64	512	5120	5.341	47.7	110	OK
+off	1	C5	8	640	64	640	5120	5.220	48.8	110	OK
+off	1	C5	8	640	64	768	5120	NA	NA	NA	OOM
+off	1	C6	8	640	96	256	5120	7.468	34.1	110	OK
+off	1	C6	8	640	96	384	5120	8.192	31.1	110	OK
+off	1	C6	8	640	96	512	5120	6.785	37.6	110	OK
+off	1	C6	8	640	96	640	5120	NA	NA	NA	OOM
+off	1	C6	8	640	96	768	5120	NA	NA	NA	OOM
+off	1	C7	8	640	160	256	5120	6.138	41.5	110	OK
+off	1	C7	8	640	160	384	5120	5.773	44.1	110	OK
+off	1	C7	8	640	160	512	5120	5.617	45.4	110	OK
+off	1	C7	8	640	160	640	5120	NA	NA	NA	OOM
+off	1	C7	8	640	160	768	5120	NA	NA	NA	OOM
+off	1	C8	8	640	192	256	5120	7.070	36.0	110	OK
+off	1	C8	8	640	192	384	5120	6.854	37.2	110	OK
+off	1	C8	8	640	192	512	5120	NA	NA	NA	OOM
+off	1	C8	8	640	192	640	5120	NA	NA	NA	OOM
+off	1	C8	8	640	192	768	5120	NA	NA	NA	OOM
+off	0	C5	8	640	64	256	5120	6.046	42.2	110	OK
+off	0	C5	8	640	64	384	5120	5.851	43.6	110	OK
+off	0	C5	8	640	64	512	5120	5.730	44.5	110	OK
+off	0	C5	8	640	64	640	5120	5.619	45.4	110	OK
+off	0	C5	8	640	64	768	5120	NA	NA	NA	OOM
+off	0	C6	8	640	96	256	5120	7.576	33.6	110	OK
+off	0	C6	8	640	96	384	5120	8.217	31.0	110	OK
+off	0	C6	8	640	96	512	5120	6.979	36.5	110	OK
+off	0	C6	8	640	96	640	5120	NA	NA	NA	OOM
+off	0	C6	8	640	96	768	5120	NA	NA	NA	OOM
+off	0	C7	8	640	160	256	5120	6.423	39.7	110	OK
+off	0	C7	8	640	160	384	5120	6.101	41.8	110	OK
+off	0	C7	8	640	160	512	5120	5.968	42.7	110	OK
+off	0	C7	8	640	160	640	5120	NA	NA	NA	OOM
+off	0	C7	8	640	160	768	5120	NA	NA	NA	OOM
+off	0	C8	8	640	192	256	5120	7.232	35.2	110	OK
+off	0	C8	8	640	192	384	5120	7.044	36.2	110	OK
+off	0	C8	8	640	192	512	5120	NA	NA	NA	OOM
+off	0	C8	8	640	192	640	5120	NA	NA	NA	OOM
+off	0	C8	8	640	192	768	5120	NA	NA	NA	OOM`;
+
+/* ---------- parse ---------- */
+const lines = RAW.trim().split("\n");
+const cols = lines[0].split("\t");
+const data = lines.slice(1).map(l=>{
+  const c=l.split("\t"), o={};
+  cols.forEach((k,i)=>o[k]=c[i]);
+  o.latent=+o.latent;
+  ["sp","per_dev","q","k","chunk_size","cores"].forEach(k=>o[k]=+o[k]);
+  o.duration_ms=o.duration_ms==="NA"?null:+o.duration_ms;
+  o.util=o.util==="NA"?null:+o.util;
+  o.ok=o.status==="OK";
+  return o;
+});
+const LABELS=[...new Set(data.map(d=>d.label))].sort((a,b)=>(+a.slice(1))-(+b.slice(1)));
+
+/* ---------- state ---------- */
+let state={ tab:1, dm:"on", sortKey:"duration_ms", sortDir:1, bestOnly:false, hideOOM:true,
+            cmpSort:"label", cmpDir:1 };
+const fmt=(v,d=3)=> v==null?"—":v.toFixed(d);
+
+/* ---------- helpers ---------- */
+function bestRow(latent,dm,label){
+  const r=data.filter(d=>d.latent===latent&&d.dm===dm&&d.label===label&&d.ok);
+  return r.length?r.reduce((a,b)=>b.duration_ms<a.duration_ms?b:a):null;
+}
+function bestDur(latent,dm,label){ const r=bestRow(latent,dm,label); return r?r.duration_ms:null; }
+
+/* ---------- KPIs ---------- */
+function renderKPIs(){
+  const ok=data.filter(d=>d.ok), oom=data.filter(d=>!d.ok);
+  const best=ok.reduce((a,b)=>b.duration_ms<a.duration_ms?b:a);
+  const bestUtil=ok.reduce((a,b)=>b.util>a.util?b:a);
+  document.getElementById("kpis").innerHTML=`
+    <div class="kpi"><div class="lbl">Total runs</div><div class="val">${data.length}</div>
+      <div class="tag">${cols.length} columns · 4 configs</div></div>
+    <div class="kpi"><div class="lbl">Completed</div><div class="val">${ok.length} <small>/ ${data.length}</small></div>
+      <div class="tag" style="color:var(--bad)">${oom.length} OOM</div></div>
+    <div class="kpi"><div class="lbl">Fastest run</div><div class="val">${best.duration_ms.toFixed(3)}<small> ms</small></div>
+      <div class="tag">${best.label} · DM ${best.dm} · latent ${best.latent} · chunk ${best.chunk_size}</div></div>
+    <div class="kpi"><div class="lbl">Peak util</div><div class="val">${bestUtil.util.toFixed(1)}<small>%</small></div>
+      <div class="tag">${bestUtil.label} · DM ${bestUtil.dm} · latent ${bestUtil.latent} · k=${bestUtil.k}</div></div>`;
+}
+
+/* ---------- tabs ---------- */
+function renderTabs(){
+  const t=document.getElementById("latentTabs");
+  const defs=[{v:1,n:"With Latent-V"},{v:0,n:"Without Latent-V"}];
+  let html=defs.map(d=>{
+    const n=data.filter(x=>x.latent===d.v&&x.ok).length;
+    return `<button class="tab ${state.tab===d.v?'active':''}" data-t="${d.v}">${d.n}<span class="pill">${n} ok</span></button>`;
+  }).join("");
+  html+=`<button class="tab special ${state.tab==='cmp'?'active':''}" data-t="cmp">All Configs ⊕<span class="pill">matrix</span></button>`;
+  t.innerHTML=html;
+  t.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{
+    state.tab = b.dataset.t==='cmp'?'cmp':+b.dataset.t; renderAll();
+  });
+
+  const s=document.getElementById("dmSeg");
+  s.innerHTML=["on","off"].map(d=>`<button class="${state.dm===d?'active':''}" data-d="${d}">DM ${d}</button>`).join("");
+  s.querySelectorAll("button").forEach(b=>b.onclick=()=>{state.dm=b.dataset.d;renderAll();});
+}
+
+/* ---------- per-latent view ---------- */
+function view(){ return data.filter(d=>d.latent===state.tab && d.dm===state.dm); }
+const COLS=[
+  {k:"label",t:"cfg"},{k:"sp",t:"sp"},{k:"per_dev",t:"per_dev"},
+  {k:"chunk_size",t:"seq len"},{k:"q",t:"q chunk"},{k:"k",t:"k chunk"},
+  {k:"duration_ms",t:"dur ms"},{k:"util",t:"util %"},{k:"status",t:"status"}
+];
+function utilColor(u){
+  if(u==null) return "transparent";
+  const t=Math.max(0,Math.min(1,(u-28)/(74-28)));
+  const r=Math.round(248+(74-248)*t),g=Math.round(113+(222-113)*t),b=Math.round(113+(128-113)*t);
+  return `rgba(${r},${g},${b},.18)`;
+}
+function renderTable(){
+  let rows=view();
+  if(state.hideOOM||state.bestOnly) rows=rows.filter(r=>r.ok);
+  if(state.bestOnly){
+    const keep={};
+    rows.forEach(r=>{ if(!keep[r.label]||r.duration_ms<keep[r.label].duration_ms) keep[r.label]=r; });
+    rows=Object.values(keep);
+  }
+  const okRows=rows.filter(r=>r.ok);
+  const bestDurV=okRows.length?Math.min(...okRows.map(r=>r.duration_ms)):null;
+
+  rows.sort((a,b)=>{
+    let x=a[state.sortKey],y=b[state.sortKey];
+    if(x==null)x=Infinity; if(y==null)y=Infinity;
+    if(typeof x==="string")return state.sortDir*x.localeCompare(y);
+    return state.sortDir*(x-y);
+  });
+
+  const thead=document.querySelector("#tbl thead");
+  thead.innerHTML="<tr>"+COLS.map(c=>{
+    const arr=state.sortKey===c.k?(state.sortDir>0?"▲":"▼"):"";
+    return `<th data-k="${c.k}">${c.t} <span class="arr">${arr}</span></th>`;
+  }).join("")+"</tr>";
+  thead.querySelectorAll("th").forEach(th=>th.onclick=()=>{
+    const k=th.dataset.k;
+    if(state.sortKey===k)state.sortDir*=-1; else{state.sortKey=k;state.sortDir=(k==="util")?-1:1;}
+    renderTable();
+  });
+
+  const tb=document.querySelector("#tbl tbody");
+  tb.innerHTML=rows.map(r=>{
+    const isBest=r.ok&&r.duration_ms===bestDurV;
+    return `<tr class="${r.ok?'':'oom'} ${isBest?'best':''}">
+      <td><span class="cfg">${r.label}</span>${isBest?'<span class="bestStar">★</span>':''}</td>
+      <td class="num">${r.sp}</td><td class="num">${r.per_dev}</td>
+      <td class="num">${r.chunk_size}</td><td class="num">${r.q}</td><td class="num">${r.k}</td>
+      <td class="num">${fmt(r.duration_ms)}</td>
+      <td><span class="heat" style="background:${utilColor(r.util)}">${r.util==null?'—':r.util.toFixed(1)}</span></td>
+      <td><span class="badge ${r.ok?'b-ok':'b-oom'}">${r.status}</span></td>
+    </tr>`;
+  }).join("");
+
+  document.getElementById("ctxHint").textContent=
+    `latent ${state.tab} · DM ${state.dm} — ${rows.length} rows${state.bestOnly?' (best chunk each)':''}`;
+}
+function renderChart(){
+  const rows=view().filter(r=>r.ok), byCfg={};
+  rows.forEach(r=>{ if(!byCfg[r.label]||r.duration_ms<byCfg[r.label].duration_ms) byCfg[r.label]=r; });
+  const arr=Object.values(byCfg).sort((a,b)=>a.duration_ms-b.duration_ms);
+  const max=arr.length?Math.max(...arr.map(r=>r.duration_ms)):1;
+  const el=document.getElementById("chart");
+  if(!arr.length){el.innerHTML='<div class="mini">No completed runs in this view.</div>';return;}
+  el.innerHTML=arr.map((r,i)=>`
+    <div class="barrow">
+      <div class="nm"><b>${r.label}</b> · qch ${r.q}/kch ${r.k}<br><span class="mini">seq ${r.chunk_size} · sp${r.sp}</span></div>
+      <div class="bartrack"><div class="barfill" style="width:${(r.duration_ms/max*100).toFixed(1)}%;${i===0?'box-shadow:0 0 0 1px var(--best) inset':''}"></div></div>
+      <div class="barval">${r.duration_ms.toFixed(3)}<br><span class="mini">${r.util.toFixed(1)}%</span></div>
+    </div>`).join("");
+}
+function renderCompare(){
+  const el=document.getElementById("dmcmp");
+  el.innerHTML=LABELS.map(L=>{
+    const on=bestDur(state.tab,"on",L), off=bestDur(state.tab,"off",L);
+    if(on==null||off==null) return `<div class="cmp"><div class="cfgname">${L}</div><div class="big">—</div><div class="det">incomplete</div></div>`;
+    const pct=(on-off)/on*100, fasterOff=off<on;
+    return `<div class="cmp">
+      <div class="cfgname">${L}</div>
+      <div class="big ${fasterOff?'up':'down'}">${fasterOff?'▲':'▼'} ${Math.abs(pct).toFixed(1)}%</div>
+      <div class="det">DM off ${off.toFixed(3)} vs on ${on.toFixed(3)} ms<br>${fasterOff?'DM off faster':'DM on faster'}</div>
+    </div>`;
+  }).join("");
+}
+
+/* ---------- all-configs matrix ---------- */
+const VARIANTS=[
+  {key:"l1on",  latent:1, dm:"on",  grp:"Latent-V ON",  sub:"DM on",  fr:"gon gon-l"},
+  {key:"l1off", latent:1, dm:"off", grp:"Latent-V ON",  sub:"DM off", fr:"gon gon-r"},
+  {key:"l0on",  latent:0, dm:"on",  grp:"Latent-V OFF", sub:"DM on",  fr:"goff goff-l"},
+  {key:"l0off", latent:0, dm:"off", grp:"Latent-V OFF", sub:"DM off", fr:"goff goff-r"},
+];
+const frOf=k=>{const v=VARIANTS.find(x=>x.key===k);return v?v.fr:"";};
+function buildMatrix(){
+  return LABELS.map(L=>{
+    const base=data.find(d=>d.label===L);
+    const row={label:L, q:base.q, chunk_size:base.chunk_size, sp:base.sp};
+    VARIANTS.forEach(v=>{
+      const r=bestRow(v.latent,v.dm,L);
+      row[v.key]=r?r.duration_ms:null;
+      row[v.key+"_k"]=r?r.k:null;
+      row[v.key+"_util"]=r?r.util:null;
+    });
+    const vals=VARIANTS.map(v=>row[v.key]).filter(x=>x!=null);
+    row.best=vals.length?Math.min(...vals):null;
+    return row;
+  });
+}
+function renderMatrix(){
+  const rows=buildMatrix();
+  const isVariant=k=>VARIANTS.some(v=>v.key===k);
+  // variant columns sort by math util (higher better); other columns by their own value
+  const cmpVal=(r,k)=> isVariant(k) ? r[k+"_util"] : r[k];
+  rows.sort((a,b)=>{
+    let x=cmpVal(a,state.cmpSort), y=cmpVal(b,state.cmpSort);
+    const xn=(x==null), yn=(y==null);
+    if(xn&&yn) return 0;
+    if(xn) return 1;   // NA always sinks to bottom
+    if(yn) return -1;
+    if(typeof x==="string") return state.cmpDir*x.localeCompare(y);
+    return state.cmpDir*(x-y);
+  });
+
+  const headCols=[
+    {k:"label",t:"cfg"},{k:"chunk_size",t:"seq len / sp"},{k:"q",t:"q chunk"},
+    ...VARIANTS.map(v=>({k:v.key,t:v.sub})),
+    {k:"best",t:"best"}
+  ];
+  const thead=document.querySelector("#cmpTbl thead");
+  let g1="<tr>";
+  g1+=`<th colspan="3"></th>`;
+  g1+=`<th colspan="2" class="grp gon gon-l gon-r gon-t" style="text-align:center;color:var(--accent)">Latent-V ON</th>`;
+  g1+=`<th colspan="2" class="grp goff goff-l goff-r goff-t" style="text-align:center;color:var(--accent2)">Latent-V OFF</th>`;
+  g1+=`<th></th></tr>`;
+  let g2="<tr>"+headCols.map(c=>{
+    const arr=state.cmpSort===c.k?(state.cmpDir>0?"▲":"▼"):"";
+    const tip=isVariant(c.k)?' title="sorts by math util %"':'';
+    return `<th data-k="${c.k}" class="${frOf(c.k)}"${tip}>${c.t}${isVariant(c.k)?' <span class="mini" style="text-transform:none">↕util</span>':''} <span class="arr">${arr}</span></th>`;
+  }).join("")+"</tr>";
+  thead.innerHTML=g1+g2;
+  thead.querySelectorAll("th[data-k]").forEach(th=>th.onclick=()=>{
+    const k=th.dataset.k;
+    // variant cols default to descending (highest util first); others ascending
+    if(state.cmpSort===k)state.cmpDir*=-1; else{state.cmpSort=k;state.cmpDir=isVariant(k)?-1:1;}
+    renderMatrix();
+  });
+
+  const tb=document.querySelector("#cmpTbl tbody");
+  tb.innerHTML=rows.map(r=>{
+    const cells=VARIANTS.map(v=>{
+      const val=r[v.key];
+      if(val==null) return `<td class="num nacell ${v.fr}">NA</td>`;
+      const isMin=val===r.best;
+      const u=r[v.key+"_util"];
+      return `<td class="num ${v.fr} ${isMin?'mincell':''}">
+        <span class="heat" style="background:${utilColor(u)}">${u.toFixed(1)}%</span><br>
+        <span class="absms">${val.toFixed(3)} ms</span><br>
+        <span class="mini">kch ${r[v.key+"_k"]}</span></td>`;
+    }).join("");
+    return `<tr>
+      <td><span class="cfg">${r.label}</span></td>
+      <td class="num">${r.chunk_size} <span class="mini">· sp${r.sp}</span></td>
+      <td class="num">${r.q}</td>
+      ${cells}
+      <td class="num"><span class="absms" style="color:var(--best);font-weight:700">${r.best==null?'—':r.best.toFixed(3)+' ms'}</span></td>
+    </tr>`;
+  }).join("");
+
+  let win=null, winU=null;
+  rows.forEach(r=>VARIANTS.forEach(v=>{
+    if(r[v.key]!=null&&(!win||r[v.key]<win.val)) win={cfg:r.label,...v,val:r[v.key],k:r[v.key+"_k"]};
+    if(r[v.key+"_util"]!=null&&(!winU||r[v.key+"_util"]>winU.u)) winU={cfg:r.label,...v,u:r[v.key+"_util"],k:r[v.key+"_k"]};
+  }));
+  document.getElementById("cmpLegend").innerHTML= win?
+    `Each cell shows the best <b>k chunk</b> for that variant: <b>math util %</b> (heat-highlighted, big), absolute time (small), and the winning k chunk. <b>NA</b> = every k chunk OOM'd. `+
+    `Fastest: <b style="color:var(--best)">${win.cfg} · ${win.grp} · ${win.sub} · kch ${win.k} → ${win.val.toFixed(3)} ms</b> · `+
+    `Peak util: <b style="color:var(--good)">${winU.cfg} · ${winU.grp} · ${winU.sub} · ${winU.u.toFixed(1)}%</b>.`:'';
+}
+
+/* ---------- orchestrate ---------- */
+function renderAll(){
+  renderTabs();
+  const cmp = state.tab==='cmp';
+  document.getElementById("perView").classList.toggle("hidden",cmp);
+  document.getElementById("cmpView").classList.toggle("hidden",!cmp);
+  if(cmp){ renderMatrix(); }
+  else { renderTable(); renderChart(); renderCompare(); }
+}
+
+document.getElementById("tBest").addEventListener("change",e=>{state.bestOnly=e.target.checked;renderTable();});
+document.getElementById("tOOM").addEventListener("change",e=>{state.hideOOM=e.target.checked;renderTable();});
+
+renderKPIs();
+renderAll();
+</script>
+</body>
+</html>

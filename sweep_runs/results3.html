@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ring Joint SDPA — Full Chunked Prefill Sweep (results3)</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#141a24; --panel2:#1b2330; --line:#26303f;
+    --txt:#e6edf3; --muted:#8a97a8; --accent:#5ec8ff; --accent2:#a78bfa;
+    --good:#4ade80; --warn:#fbbf24; --bad:#f87171; --best:#22d3ee;
+    --grad1:#5ec8ff; --grad2:#a78bfa;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:radial-gradient(1200px 600px at 80% -10%, #16202e 0%, var(--bg) 55%) fixed;
+    color:var(--txt); font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    padding:28px 32px 60px;
+  }
+  h1{font-size:22px;margin:0 0 2px;font-weight:650;letter-spacing:.2px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:22px}
+  .sub code{background:var(--panel2);padding:2px 7px;border-radius:5px;color:var(--accent)}
+
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:26px}
+  .kpi{background:linear-gradient(160deg,var(--panel) 0%,var(--panel2) 100%);border:1px solid var(--line);
+       border-radius:14px;padding:16px 18px;position:relative;overflow:hidden}
+  .kpi .lbl{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.7px}
+  .kpi .val{font-size:26px;font-weight:700;margin-top:6px}
+  .kpi .val small{font-size:13px;color:var(--muted);font-weight:500}
+  .kpi .tag{font-size:11px;color:var(--accent);margin-top:3px}
+  .kpi::after{content:"";position:absolute;right:-30px;top:-30px;width:90px;height:90px;
+    background:radial-gradient(circle,var(--accent) 0%,transparent 70%);opacity:.10}
+
+  .tabs{display:flex;gap:8px;margin-bottom:18px;border-bottom:1px solid var(--line)}
+  .tab{padding:11px 22px;cursor:pointer;border:none;background:none;color:var(--muted);font-size:14px;
+       font-weight:600;border-bottom:2px solid transparent;transition:.15s;position:relative;top:1px}
+  .tab:hover{color:var(--txt)}
+  .tab.active{color:var(--txt);border-bottom-color:var(--accent)}
+  .tab.special.active{border-bottom-color:var(--accent2)}
+  .tab .pill{display:inline-block;margin-left:8px;font-size:10px;background:var(--panel2);color:var(--muted);
+       padding:1px 7px;border-radius:9px;vertical-align:middle}
+  .tab.active .pill{background:var(--accent);color:#04121b}
+  .tab.special.active .pill{background:var(--accent2);color:#0c0518}
+
+  .controls{display:flex;align-items:center;gap:18px;flex-wrap:wrap;margin-bottom:20px}
+  .seg{display:inline-flex;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:4px}
+  .seg button{border:none;background:none;color:var(--muted);padding:7px 16px;border-radius:7px;cursor:pointer;
+       font-weight:600;font-size:13px;transition:.15s}
+  .seg button.active{background:var(--accent);color:#04121b}
+  .hint{color:var(--muted);font-size:12px}
+  .toggle{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none;font-size:13px;color:var(--muted)}
+  .toggle input{display:none}
+  .switch{width:38px;height:21px;border-radius:11px;background:var(--panel2);border:1px solid var(--line);
+          position:relative;transition:.18s}
+  .switch::after{content:"";position:absolute;width:15px;height:15px;border-radius:50%;background:var(--muted);
+          top:2px;left:2px;transition:.18s}
+  .toggle input:checked + .switch{background:var(--accent)}
+  .toggle input:checked + .switch::after{left:19px;background:#04121b}
+  .toggle input:checked ~ .lab{color:var(--txt)}
+
+  .grid{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:22px;align-items:start}
+  @media(max-width:1080px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 20px}
+  .card h3{margin:0 0 14px;font-size:14px;font-weight:650;display:flex;align-items:center;gap:8px}
+  .card h3 .dot{width:8px;height:8px;border-radius:50%;background:var(--accent)}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:right;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+  th:first-child,td:first-child{text-align:left}
+  th{color:var(--muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.5px;
+     cursor:pointer;user-select:none;position:sticky;top:0;background:var(--panel);z-index:1}
+  th:hover{color:var(--txt)}
+  th .arr{opacity:.5;font-size:9px}
+  tbody tr:hover{background:var(--panel2)}
+  tr.best td{background:rgba(34,211,238,.10)}
+  tr.best td:first-child{box-shadow:inset 3px 0 0 var(--best)}
+  tr.oom{opacity:.5}
+  .badge{display:inline-block;padding:2px 8px;border-radius:7px;font-size:11px;font-weight:600}
+  .b-ok{background:rgba(74,222,128,.14);color:var(--good)}
+  .b-oom{background:rgba(248,113,113,.14);color:var(--bad)}
+  .b-skip{background:rgba(138,151,168,.14);color:var(--muted)}
+  .cfg{font-weight:600;color:var(--accent)}
+  .num{font-variant-numeric:tabular-nums}
+  .mini{color:var(--muted);font-size:11px}
+  .bestStar{color:var(--best);margin-left:6px}
+  td.mincell{background:rgba(34,211,238,.14)!important;font-weight:700;color:#bff4ff}
+  td.nacell{color:var(--bad);opacity:.55}
+  .absms{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+  #cmpTbl td{padding:7px 10px;line-height:1.35}
+  #cmpTbl .heat{font-size:13px;display:inline-block;min-width:48px;text-align:center}
+  /* latent group frames */
+  .gon{background:rgba(94,200,255,.06)}
+  .goff{background:rgba(167,139,250,.06)}
+  .gon-l{border-left:2px solid rgba(94,200,255,.5)!important}
+  .gon-r{border-right:2px solid rgba(94,200,255,.5)!important}
+  .goff-l{border-left:2px solid rgba(167,139,250,.5)!important}
+  .goff-r{border-right:2px solid rgba(167,139,250,.5)!important}
+  .gon-t{border-top:2px solid rgba(94,200,255,.5)!important}
+  .goff-t{border-top:2px solid rgba(167,139,250,.5)!important}
+  #cmpTbl tbody tr:last-child .gon{border-bottom:2px solid rgba(94,200,255,.5)}
+  #cmpTbl tbody tr:last-child .goff{border-bottom:2px solid rgba(167,139,250,.5)}
+  #cmpTbl tbody tr:hover .gon{background:rgba(94,200,255,.12)}
+  #cmpTbl tbody tr:hover .goff{background:rgba(167,139,250,.12)}
+  .grp{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.5px}
+
+  .chart{display:flex;flex-direction:column;gap:14px;margin-top:4px}
+  .barrow{display:grid;grid-template-columns:120px 1fr 70px;align-items:center;gap:10px}
+  .barrow .nm{font-size:12px;color:var(--muted)}
+  .barrow .nm b{color:var(--txt)}
+  .bartrack{background:var(--panel2);border-radius:6px;height:22px;position:relative;overflow:hidden}
+  .barfill{height:100%;border-radius:6px;background:linear-gradient(90deg,var(--grad1),var(--grad2));transition:width .4s ease}
+  .barval{font-variant-numeric:tabular-nums;font-size:12px;text-align:right;font-weight:600}
+  .legend{color:var(--muted);font-size:11px;margin-top:10px}
+  .heat{font-variant-numeric:tabular-nums;padding:2px 8px;border-radius:6px;font-weight:600;font-size:12px}
+
+  .cmpgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+  .cmp{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .cmp .cfgname{font-weight:650;color:var(--accent);font-size:13px}
+  .cmp .big{font-size:22px;font-weight:700;margin:6px 0 2px}
+  .cmp .big.up{color:var(--good)} .cmp .big.down{color:var(--bad)}
+  .cmp .det{color:var(--muted);font-size:11px}
+  .foot{color:var(--muted);font-size:11px;margin-top:30px;text-align:center}
+  .hidden{display:none!important}
+</style>
+</head>
+<body>
+  <h1>Ring Joint SDPA &mdash; Full Chunked Prefill Sweep <span style="color:var(--accent2);font-size:15px;font-weight:600">· latent d_v=512 vs non-latent d_v=128 · 10 k-chunks</span></h1>
+  <div class="sub">Full extended sweep from <code>results_full.tsv</code> &nbsp;·&nbsp; <b>latent → d_v=512</b>, <b>non-latent → d_v=128</b> · 8 configs · 10 k-chunks {224,256,384,448,480,512,640,672,768,800} &nbsp;·&nbsp; duration lower = better, util higher = better &nbsp;·&nbsp; <code>OOMskip</code> = skipped after a smaller k chunk already OOM'd</div>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="tabs" id="latentTabs"></div>
+
+  <!-- ============ PER-LATENT VIEW ============ -->
+  <div id="perView">
+    <div class="controls">
+      <div class="seg" id="dmSeg"></div>
+      <label class="toggle"><input type="checkbox" id="tBest"><span class="switch"></span><span class="lab">Best chunk per config</span></label>
+      <label class="toggle"><input type="checkbox" id="tOOM" checked><span class="switch"></span><span class="lab">Hide OOM</span></label>
+      <span class="hint" id="ctxHint"></span>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h3><span class="dot"></span>Runs — click any header to sort</h3>
+        <div style="overflow:auto;max-height:560px">
+          <table id="tbl"><thead></thead><tbody></tbody></table>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:22px">
+        <div class="card">
+          <h3><span class="dot" style="background:var(--accent2)"></span>Best duration per config (OK runs)</h3>
+          <div class="chart" id="chart"></div>
+          <div class="legend">Bar length ∝ best (lowest) duration_ms achieved by each config in this view.</div>
+        </div>
+        <div class="card">
+          <h3><span class="dot" style="background:var(--good)"></span>Data-Movement impact (DM on vs off)</h3>
+          <div class="cmpgrid" id="dmcmp"></div>
+          <div class="legend">Per-config best-duration speedup from toggling DM, holding latent-V fixed at the active tab. ▲ green = DM off faster.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ ALL-CONFIGS COMPARE VIEW ============ -->
+  <div id="cmpView" class="hidden">
+    <div class="controls">
+      <span class="hint">One row per config · each cell = <b>best chunk</b> duration_ms (OOM-only combos shown as NA) · click any header to sort · <span style="color:#bff4ff">cyan = fastest variant in that row</span></span>
+    </div>
+    <div class="card">
+      <h3><span class="dot" style="background:var(--accent2)"></span>All configs — 4 perf variants side by side</h3>
+      <div style="overflow:auto">
+        <table id="cmpTbl"><thead></thead><tbody></tbody></table>
+      </div>
+      <div class="legend" id="cmpLegend"></div>
+    </div>
+  </div>
+
+  <div class="foot">Generated for branch <code>skrstic/ring_joint_sdpa_optional_latent_v_fix</code> · single self-contained file</div>
+
+<script>
+/* ---------- embedded data ---------- */
+const RAW = `dm	latent	label	sp	per_dev	q	k	chunk_size	d_v	duration_ms	util	cores	status
+on	1	C1	8	640	32	224	5120	512	7.041	55.9	110	OK
+on	1	C1	8	640	32	256	5120	512	6.953	56.7	110	OK
+on	1	C1	8	640	32	384	5120	512	7.029	56.0	110	OK
+on	1	C1	8	640	32	448	5120	512	6.799	57.9	110	OK
+on	1	C1	8	640	32	480	5120	512	6.837	57.6	110	OK
+on	1	C1	8	640	32	512	5120	512	6.762	58.2	110	OK
+on	1	C1	8	640	32	640	5120	512	6.532	60.3	110	OK
+on	1	C1	8	640	32	672	5120	512	NA	NA	NA	OOM
+on	1	C1	8	640	32	768	5120	512	NA	NA	NA	OOMskip
+on	1	C1	8	640	32	800	5120	512	NA	NA	NA	OOMskip
+on	1	C2	4	1280	64	224	5120	512	11.898	66.2	110	OK
+on	1	C2	4	1280	64	256	5120	512	12.405	63.5	110	OK
+on	1	C2	4	1280	64	384	5120	512	11.940	66.0	110	OK
+on	1	C2	4	1280	64	448	5120	512	10.724	73.5	110	OK
+on	1	C2	4	1280	64	480	5120	512	12.120	65.0	110	OK
+on	1	C2	4	1280	64	512	5120	512	NA	NA	NA	OOM
+on	1	C2	4	1280	64	640	5120	512	NA	NA	NA	OOMskip
+on	1	C2	4	1280	64	672	5120	512	NA	NA	NA	OOMskip
+on	1	C2	4	1280	64	768	5120	512	NA	NA	NA	OOMskip
+on	1	C2	4	1280	64	800	5120	512	NA	NA	NA	OOMskip
+on	1	C3	4	1248	96	224	4992	512	11.439	65.5	110	OK
+on	1	C3	4	1248	96	256	4992	512	11.119	67.4	110	OK
+on	1	C3	4	1248	96	384	4992	512	11.599	64.6	110	OK
+on	1	C3	4	1248	96	448	4992	512	NA	NA	NA	OOM
+on	1	C3	4	1248	96	480	4992	512	NA	NA	NA	OOMskip
+on	1	C3	4	1248	96	512	4992	512	NA	NA	NA	OOMskip
+on	1	C3	4	1248	96	640	4992	512	NA	NA	NA	OOMskip
+on	1	C3	4	1248	96	672	4992	512	NA	NA	NA	OOMskip
+on	1	C3	4	1248	96	768	4992	512	NA	NA	NA	OOMskip
+on	1	C3	4	1248	96	800	4992	512	NA	NA	NA	OOMskip
+on	1	C4	8	640	128	224	5120	512	7.857	50.1	110	OK
+on	1	C4	8	640	128	256	5120	512	7.514	52.4	110	OK
+on	1	C4	8	640	128	384	5120	512	NA	NA	NA	OOM
+on	1	C4	8	640	128	448	5120	512	NA	NA	NA	OOMskip
+on	1	C4	8	640	128	480	5120	512	NA	NA	NA	OOMskip
+on	1	C4	8	640	128	512	5120	512	NA	NA	NA	OOMskip
+on	1	C4	8	640	128	640	5120	512	NA	NA	NA	OOMskip
+on	1	C4	8	640	128	672	5120	512	NA	NA	NA	OOMskip
+on	1	C4	8	640	128	768	5120	512	NA	NA	NA	OOMskip
+on	1	C4	8	640	128	800	5120	512	NA	NA	NA	OOMskip
+on	1	C5	8	640	64	224	5120	512	8.065	48.8	110	OK
+on	1	C5	8	640	64	256	5120	512	8.433	46.7	110	OK
+on	1	C5	8	640	64	384	5120	512	8.164	48.2	110	OK
+on	1	C5	8	640	64	448	5120	512	7.129	55.2	110	OK
+on	1	C5	8	640	64	480	5120	512	8.037	49.0	110	OK
+on	1	C5	8	640	64	512	5120	512	NA	NA	NA	OOM
+on	1	C5	8	640	64	640	5120	512	NA	NA	NA	OOMskip
+on	1	C5	8	640	64	672	5120	512	NA	NA	NA	OOMskip
+on	1	C5	8	640	64	768	5120	512	NA	NA	NA	OOMskip
+on	1	C5	8	640	64	800	5120	512	NA	NA	NA	OOMskip
+on	1	C6	8	640	96	224	5120	512	11.631	33.9	110	OK
+on	1	C6	8	640	96	256	5120	512	11.358	34.7	110	OK
+on	1	C6	8	640	96	384	5120	512	11.976	32.9	110	OK
+on	1	C6	8	640	96	448	5120	512	NA	NA	NA	OOM
+on	1	C6	8	640	96	480	5120	512	NA	NA	NA	OOMskip
+on	1	C6	8	640	96	512	5120	512	NA	NA	NA	OOMskip
+on	1	C6	8	640	96	640	5120	512	NA	NA	NA	OOMskip
+on	1	C6	8	640	96	672	5120	512	NA	NA	NA	OOMskip
+on	1	C6	8	640	96	768	5120	512	NA	NA	NA	OOMskip
+on	1	C6	8	640	96	800	5120	512	NA	NA	NA	OOMskip
+on	1	C7	8	640	160	224	5120	512	9.722	40.5	110	OK
+on	1	C7	8	640	160	256	5120	512	9.525	41.4	110	OK
+on	1	C7	8	640	160	384	5120	512	NA	NA	NA	OOM
+on	1	C7	8	640	160	448	5120	512	NA	NA	NA	OOMskip
+on	1	C7	8	640	160	480	5120	512	NA	NA	NA	OOMskip
+on	1	C7	8	640	160	512	5120	512	NA	NA	NA	OOMskip
+on	1	C7	8	640	160	640	5120	512	NA	NA	NA	OOMskip
+on	1	C7	8	640	160	672	5120	512	NA	NA	NA	OOMskip
+on	1	C7	8	640	160	768	5120	512	NA	NA	NA	OOMskip
+on	1	C7	8	640	160	800	5120	512	NA	NA	NA	OOMskip
+on	1	C8	8	640	192	224	5120	512	NA	NA	NA	OOM
+on	1	C8	8	640	192	256	5120	512	NA	NA	NA	OOMskip
+on	1	C8	8	640	192	384	5120	512	NA	NA	NA	OOMskip
+on	1	C8	8	640	192	448	5120	512	NA	NA	NA	OOMskip
+on	1	C8	8	640	192	480	5120	512	NA	NA	NA	OOMskip
+on	1	C8	8	640	192	512	5120	512	NA	NA	NA	OOMskip
+on	1	C8	8	640	192	640	5120	512	NA	NA	NA	OOMskip
+on	1	C8	8	640	192	672	5120	512	NA	NA	NA	OOMskip
+on	1	C8	8	640	192	768	5120	512	NA	NA	NA	OOMskip
+on	1	C8	8	640	192	800	5120	512	NA	NA	NA	OOMskip
+on	0	C1	8	640	32	224	5120	128	8.968	28.4	110	OK
+on	0	C1	8	640	32	256	5120	128	8.823	28.9	110	OK
+on	0	C1	8	640	32	384	5120	128	8.667	29.4	110	OK
+on	0	C1	8	640	32	448	5120	128	8.417	30.3	110	OK
+on	0	C1	8	640	32	480	5120	128	8.428	30.2	110	OK
+on	0	C1	8	640	32	512	5120	128	8.379	30.4	110	OK
+on	0	C1	8	640	32	640	5120	128	8.156	31.2	110	OK
+on	0	C1	8	640	32	672	5120	128	8.531	29.9	110	OK
+on	0	C1	8	640	32	768	5120	128	8.831	28.9	110	OK
+on	0	C1	8	640	32	800	5120	128	8.282	30.8	110	OK
+on	0	C2	4	1280	64	224	5120	128	8.874	57.4	110	OK
+on	0	C2	4	1280	64	256	5120	128	8.749	58.3	110	OK
+on	0	C2	4	1280	64	384	5120	128	8.557	59.6	110	OK
+on	0	C2	4	1280	64	448	5120	128	8.498	60.0	110	OK
+on	0	C2	4	1280	64	480	5120	128	8.676	58.7	110	OK
+on	0	C2	4	1280	64	512	5120	128	8.487	60.1	110	OK
+on	0	C2	4	1280	64	640	5120	128	8.334	61.2	110	OK
+on	0	C2	4	1280	64	672	5120	128	8.278	61.6	110	OK
+on	0	C2	4	1280	64	768	5120	128	NA	NA	NA	OOM
+on	0	C2	4	1280	64	800	5120	128	NA	NA	NA	OOMskip
+on	0	C3	4	1248	96	224	4992	128	7.902	61.3	110	OK
+on	0	C3	4	1248	96	256	4992	128	7.752	62.5	110	OK
+on	0	C3	4	1248	96	384	4992	128	8.283	58.5	110	OK
+on	0	C3	4	1248	96	448	4992	128	7.313	66.3	110	OK
+on	0	C3	4	1248	96	480	4992	128	7.408	65.4	110	OK
+on	0	C3	4	1248	96	512	4992	128	7.235	67.0	110	OK
+on	0	C3	4	1248	96	640	4992	128	NA	NA	NA	OOM
+on	0	C3	4	1248	96	672	4992	128	NA	NA	NA	OOMskip
+on	0	C3	4	1248	96	768	4992	128	NA	NA	NA	OOMskip
+on	0	C3	4	1248	96	800	4992	128	NA	NA	NA	OOMskip
+on	0	C4	8	640	128	224	5120	128	5.704	44.7	110	OK
+on	0	C4	8	640	128	256	5120	128	5.451	46.8	110	OK
+on	0	C4	8	640	128	384	5120	128	5.390	47.3	110	OK
+on	0	C4	8	640	128	448	5120	128	6.094	41.8	110	OK
+on	0	C4	8	640	128	480	5120	128	5.510	46.3	110	OK
+on	0	C4	8	640	128	512	5120	128	5.427	47.0	110	OK
+on	0	C4	8	640	128	640	5120	128	NA	NA	NA	OOM
+on	0	C4	8	640	128	672	5120	128	NA	NA	NA	OOMskip
+on	0	C4	8	640	128	768	5120	128	NA	NA	NA	OOMskip
+on	0	C4	8	640	128	800	5120	128	NA	NA	NA	OOMskip
+on	0	C5	8	640	64	224	5120	128	6.238	40.9	110	OK
+on	0	C5	8	640	64	256	5120	128	6.299	40.5	110	OK
+on	0	C5	8	640	64	384	5120	128	6.122	41.6	110	OK
+on	0	C5	8	640	64	448	5120	128	5.716	44.6	110	OK
+on	0	C5	8	640	64	480	5120	128	6.183	41.2	110	OK
+on	0	C5	8	640	64	512	5120	128	5.982	42.6	110	OK
+on	0	C5	8	640	64	640	5120	128	5.882	43.3	110	OK
+on	0	C5	8	640	64	672	5120	128	5.790	44.0	110	OK
+on	0	C5	8	640	64	768	5120	128	NA	NA	NA	OOM
+on	0	C5	8	640	64	800	5120	128	NA	NA	NA	OOMskip
+on	0	C6	8	640	96	224	5120	128	7.902	32.3	110	OK
+on	0	C6	8	640	96	256	5120	128	7.717	33.0	110	OK
+on	0	C6	8	640	96	384	5120	128	8.458	30.1	110	OK
+on	0	C6	8	640	96	448	5120	128	7.208	35.4	110	OK
+on	0	C6	8	640	96	480	5120	128	7.344	34.7	110	OK
+on	0	C6	8	640	96	512	5120	128	7.147	35.7	110	OK
+on	0	C6	8	640	96	640	5120	128	NA	NA	NA	OOM
+on	0	C6	8	640	96	672	5120	128	NA	NA	NA	OOMskip
+on	0	C6	8	640	96	768	5120	128	NA	NA	NA	OOMskip
+on	0	C6	8	640	96	800	5120	128	NA	NA	NA	OOMskip
+on	0	C7	8	640	160	224	5120	128	6.737	37.8	110	OK
+on	0	C7	8	640	160	256	5120	128	6.618	38.5	110	OK
+on	0	C7	8	640	160	384	5120	128	6.345	40.2	110	OK
+on	0	C7	8	640	160	448	5120	128	6.327	40.3	110	OK
+on	0	C7	8	640	160	480	5120	128	6.414	39.7	110	OK
+on	0	C7	8	640	160	512	5120	128	6.311	40.4	110	OK
+on	0	C7	8	640	160	640	5120	128	NA	NA	NA	OOM
+on	0	C7	8	640	160	672	5120	128	NA	NA	NA	OOMskip
+on	0	C7	8	640	160	768	5120	128	NA	NA	NA	OOMskip
+on	0	C7	8	640	160	800	5120	128	NA	NA	NA	OOMskip
+on	0	C8	8	640	192	224	5120	128	7.795	32.7	110	OK
+on	0	C8	8	640	192	256	5120	128	7.427	34.3	110	OK
+on	0	C8	8	640	192	384	5120	128	7.285	35.0	110	OK
+on	0	C8	8	640	192	448	5120	128	7.310	34.9	110	OK
+on	0	C8	8	640	192	480	5120	128	7.381	34.5	110	OK
+on	0	C8	8	640	192	512	5120	128	NA	NA	NA	OOM
+on	0	C8	8	640	192	640	5120	128	NA	NA	NA	OOMskip
+on	0	C8	8	640	192	672	5120	128	NA	NA	NA	OOMskip
+on	0	C8	8	640	192	768	5120	128	NA	NA	NA	OOMskip
+on	0	C8	8	640	192	800	5120	128	NA	NA	NA	OOMskip
+off	1	C1	8	640	32	224	5120	512	6.578	59.9	110	OK
+off	1	C1	8	640	32	256	5120	512	6.396	61.6	110	OK
+off	1	C1	8	640	32	384	5120	512	6.037	65.2	110	OK
+off	1	C1	8	640	32	448	5120	512	5.884	66.9	110	OK
+off	1	C1	8	640	32	480	5120	512	5.988	65.8	110	OK
+off	1	C1	8	640	32	512	5120	512	5.794	68.0	110	OK
+off	1	C1	8	640	32	640	5120	512	5.760	68.4	110	OK
+off	1	C1	8	640	32	672	5120	512	NA	NA	NA	OOM
+off	1	C1	8	640	32	768	5120	512	NA	NA	NA	OOMskip
+off	1	C1	8	640	32	800	5120	512	NA	NA	NA	OOMskip
+off	1	C2	4	1280	64	224	5120	512	11.793	66.8	110	OK
+off	1	C2	4	1280	64	256	5120	512	12.260	64.3	110	OK
+off	1	C2	4	1280	64	384	5120	512	11.790	66.8	110	OK
+off	1	C2	4	1280	64	448	5120	512	10.579	74.5	110	OK
+off	1	C2	4	1280	64	480	5120	512	11.886	66.3	110	OK
+off	1	C2	4	1280	64	512	5120	512	NA	NA	NA	OOM
+off	1	C2	4	1280	64	640	5120	512	NA	NA	NA	OOMskip
+off	1	C2	4	1280	64	672	5120	512	NA	NA	NA	OOMskip
+off	1	C2	4	1280	64	768	5120	512	NA	NA	NA	OOMskip
+off	1	C2	4	1280	64	800	5120	512	NA	NA	NA	OOMskip
+off	1	C3	4	1248	96	224	4992	512	11.265	66.5	110	OK
+off	1	C3	4	1248	96	256	4992	512	10.999	68.1	110	OK
+off	1	C3	4	1248	96	384	4992	512	11.496	65.1	110	OK
+off	1	C3	4	1248	96	448	4992	512	NA	NA	NA	OOM
+off	1	C3	4	1248	96	480	4992	512	NA	NA	NA	OOMskip
+off	1	C3	4	1248	96	512	4992	512	NA	NA	NA	OOMskip
+off	1	C3	4	1248	96	640	4992	512	NA	NA	NA	OOMskip
+off	1	C3	4	1248	96	672	4992	512	NA	NA	NA	OOMskip
+off	1	C3	4	1248	96	768	4992	512	NA	NA	NA	OOMskip
+off	1	C3	4	1248	96	800	4992	512	NA	NA	NA	OOMskip
+off	1	C4	8	640	128	224	5120	512	7.681	51.3	110	OK
+off	1	C4	8	640	128	256	5120	512	7.332	53.7	110	OK
+off	1	C4	8	640	128	384	5120	512	NA	NA	NA	OOM
+off	1	C4	8	640	128	448	5120	512	NA	NA	NA	OOMskip
+off	1	C4	8	640	128	480	5120	512	NA	NA	NA	OOMskip
+off	1	C4	8	640	128	512	5120	512	NA	NA	NA	OOMskip
+off	1	C4	8	640	128	640	5120	512	NA	NA	NA	OOMskip
+off	1	C4	8	640	128	672	5120	512	NA	NA	NA	OOMskip
+off	1	C4	8	640	128	768	5120	512	NA	NA	NA	OOMskip
+off	1	C4	8	640	128	800	5120	512	NA	NA	NA	OOMskip
+off	1	C5	8	640	64	224	5120	512	7.934	49.6	110	OK
+off	1	C5	8	640	64	256	5120	512	8.253	47.7	110	OK
+off	1	C5	8	640	64	384	5120	512	7.906	49.8	110	OK
+off	1	C5	8	640	64	448	5120	512	7.073	55.7	110	OK
+off	1	C5	8	640	64	480	5120	512	7.961	49.5	110	OK
+off	1	C5	8	640	64	512	5120	512	NA	NA	NA	OOM
+off	1	C5	8	640	64	640	5120	512	NA	NA	NA	OOMskip
+off	1	C5	8	640	64	672	5120	512	NA	NA	NA	OOMskip
+off	1	C5	8	640	64	768	5120	512	NA	NA	NA	OOMskip
+off	1	C5	8	640	64	800	5120	512	NA	NA	NA	OOMskip
+off	1	C6	8	640	96	224	5120	512	11.590	34.0	110	OK
+off	1	C6	8	640	96	256	5120	512	11.312	34.8	110	OK
+off	1	C6	8	640	96	384	5120	512	11.837	33.3	110	OK
+off	1	C6	8	640	96	448	5120	512	NA	NA	NA	OOM
+off	1	C6	8	640	96	480	5120	512	NA	NA	NA	OOMskip
+off	1	C6	8	640	96	512	5120	512	NA	NA	NA	OOMskip
+off	1	C6	8	640	96	640	5120	512	NA	NA	NA	OOMskip
+off	1	C6	8	640	96	672	5120	512	NA	NA	NA	OOMskip
+off	1	C6	8	640	96	768	5120	512	NA	NA	NA	OOMskip
+off	1	C6	8	640	96	800	5120	512	NA	NA	NA	OOMskip
+off	1	C7	8	640	160	224	5120	512	9.577	41.1	110	OK
+off	1	C7	8	640	160	256	5120	512	9.355	42.1	110	OK
+off	1	C7	8	640	160	384	5120	512	NA	NA	NA	OOM
+off	1	C7	8	640	160	448	5120	512	NA	NA	NA	OOMskip
+off	1	C7	8	640	160	480	5120	512	NA	NA	NA	OOMskip
+off	1	C7	8	640	160	512	5120	512	NA	NA	NA	OOMskip
+off	1	C7	8	640	160	640	5120	512	NA	NA	NA	OOMskip
+off	1	C7	8	640	160	672	5120	512	NA	NA	NA	OOMskip
+off	1	C7	8	640	160	768	5120	512	NA	NA	NA	OOMskip
+off	1	C7	8	640	160	800	5120	512	NA	NA	NA	OOMskip
+off	1	C8	8	640	192	224	5120	512	NA	NA	NA	OOM
+off	1	C8	8	640	192	256	5120	512	NA	NA	NA	OOMskip
+off	1	C8	8	640	192	384	5120	512	NA	NA	NA	OOMskip
+off	1	C8	8	640	192	448	5120	512	NA	NA	NA	OOMskip
+off	1	C8	8	640	192	480	5120	512	NA	NA	NA	OOMskip
+off	1	C8	8	640	192	512	5120	512	NA	NA	NA	OOMskip
+off	1	C8	8	640	192	640	5120	512	NA	NA	NA	OOMskip
+off	1	C8	8	640	192	672	5120	512	NA	NA	NA	OOMskip
+off	1	C8	8	640	192	768	5120	512	NA	NA	NA	OOMskip
+off	1	C8	8	640	192	800	5120	512	NA	NA	NA	OOMskip
+off	0	C1	8	640	32	224	5120	128	5.171	49.3	110	OK
+off	0	C1	8	640	32	256	5120	128	5.060	50.4	110	OK
+off	0	C1	8	640	32	384	5120	128	4.786	53.3	110	OK
+off	0	C1	8	640	32	448	5120	128	4.754	53.6	110	OK
+off	0	C1	8	640	32	480	5120	128	4.776	53.4	110	OK
+off	0	C1	8	640	32	512	5120	128	4.742	53.7	110	OK
+off	0	C1	8	640	32	640	5120	128	4.741	53.8	110	OK
+off	0	C1	8	640	32	672	5120	128	4.746	53.7	110	OK
+off	0	C1	8	640	32	768	5120	128	4.734	53.8	110	OK
+off	0	C1	8	640	32	800	5120	128	4.740	53.8	110	OK
+off	0	C2	4	1280	64	224	5120	128	8.069	63.2	110	OK
+off	0	C2	4	1280	64	256	5120	128	8.468	60.2	110	OK
+off	0	C2	4	1280	64	384	5120	128	8.224	62.0	110	OK
+off	0	C2	4	1280	64	448	5120	128	7.376	69.1	110	OK
+off	0	C2	4	1280	64	480	5120	128	8.344	61.1	110	OK
+off	0	C2	4	1280	64	512	5120	128	8.085	63.0	110	OK
+off	0	C2	4	1280	64	640	5120	128	7.978	63.9	110	OK
+off	0	C2	4	1280	64	672	5120	128	7.275	70.1	110	OK
+off	0	C2	4	1280	64	768	5120	128	NA	NA	NA	OOM
+off	0	C2	4	1280	64	800	5120	128	NA	NA	NA	OOMskip
+off	0	C3	4	1248	96	224	4992	128	7.641	63.4	110	OK
+off	0	C3	4	1248	96	256	4992	128	7.513	64.5	110	OK
+off	0	C3	4	1248	96	384	4992	128	8.037	60.3	110	OK
+off	0	C3	4	1248	96	448	4992	128	7.062	68.6	110	OK
+off	0	C3	4	1248	96	480	4992	128	7.169	67.6	110	OK
+off	0	C3	4	1248	96	512	4992	128	7.026	69.0	110	OK
+off	0	C3	4	1248	96	640	4992	128	NA	NA	NA	OOM
+off	0	C3	4	1248	96	672	4992	128	NA	NA	NA	OOMskip
+off	0	C3	4	1248	96	768	4992	128	NA	NA	NA	OOMskip
+off	0	C3	4	1248	96	800	4992	128	NA	NA	NA	OOMskip
+off	0	C4	8	640	128	224	5120	128	5.486	46.5	110	OK
+off	0	C4	8	640	128	256	5120	128	5.217	48.9	110	OK
+off	0	C4	8	640	128	384	5120	128	5.075	50.2	110	OK
+off	0	C4	8	640	128	448	5120	128	5.704	44.7	110	OK
+off	0	C4	8	640	128	480	5120	128	5.142	49.6	110	OK
+off	0	C4	8	640	128	512	5120	128	4.998	51.0	110	OK
+off	0	C4	8	640	128	640	5120	128	NA	NA	NA	OOM
+off	0	C4	8	640	128	672	5120	128	NA	NA	NA	OOMskip
+off	0	C4	8	640	128	768	5120	128	NA	NA	NA	OOMskip
+off	0	C4	8	640	128	800	5120	128	NA	NA	NA	OOMskip
+off	0	C5	8	640	64	224	5120	128	5.730	44.5	110	OK
+off	0	C5	8	640	64	256	5120	128	6.048	42.1	110	OK
+off	0	C5	8	640	64	384	5120	128	5.842	43.6	110	OK
+off	0	C5	8	640	64	448	5120	128	5.171	49.3	110	OK
+off	0	C5	8	640	64	480	5120	128	5.946	42.9	110	OK
+off	0	C5	8	640	64	512	5120	128	5.736	44.4	110	OK
+off	0	C5	8	640	64	640	5120	128	5.623	45.3	110	OK
+off	0	C5	8	640	64	672	5120	128	5.139	49.6	110	OK
+off	0	C5	8	640	64	768	5120	128	NA	NA	NA	OOM
+off	0	C5	8	640	64	800	5120	128	NA	NA	NA	OOMskip
+off	0	C6	8	640	96	224	5120	128	7.754	32.9	110	OK
+off	0	C6	8	640	96	256	5120	128	7.581	33.6	110	OK
+off	0	C6	8	640	96	384	5120	128	8.216	31.0	110	OK
+off	0	C6	8	640	96	448	5120	128	7.055	36.1	110	OK
+off	0	C6	8	640	96	480	5120	128	7.177	35.5	110	OK
+off	0	C6	8	640	96	512	5120	128	6.973	36.5	110	OK
+off	0	C6	8	640	96	640	5120	128	NA	NA	NA	OOM
+off	0	C6	8	640	96	672	5120	128	NA	NA	NA	OOMskip
+off	0	C6	8	640	96	768	5120	128	NA	NA	NA	OOMskip
+off	0	C6	8	640	96	800	5120	128	NA	NA	NA	OOMskip
+off	0	C7	8	640	160	224	5120	128	6.555	38.9	110	OK
+off	0	C7	8	640	160	256	5120	128	6.422	39.7	110	OK
+off	0	C7	8	640	160	384	5120	128	6.105	41.7	110	OK
+off	0	C7	8	640	160	448	5120	128	6.033	42.2	110	OK
+off	0	C7	8	640	160	480	5120	128	6.120	41.6	110	OK
+off	0	C7	8	640	160	512	5120	128	5.959	42.8	110	OK
+off	0	C7	8	640	160	640	5120	128	NA	NA	NA	OOM
+off	0	C7	8	640	160	672	5120	128	NA	NA	NA	OOMskip
+off	0	C7	8	640	160	768	5120	128	NA	NA	NA	OOMskip
+off	0	C7	8	640	160	800	5120	128	NA	NA	NA	OOMskip
+off	0	C8	8	640	192	224	5120	128	7.606	33.5	110	OK
+off	0	C8	8	640	192	256	5120	128	7.232	35.2	110	OK
+off	0	C8	8	640	192	384	5120	128	7.045	36.2	110	OK
+off	0	C8	8	640	192	448	5120	128	6.992	36.5	110	OK
+off	0	C8	8	640	192	480	5120	128	7.096	35.9	110	OK
+off	0	C8	8	640	192	512	5120	128	NA	NA	NA	OOM
+off	0	C8	8	640	192	640	5120	128	NA	NA	NA	OOMskip
+off	0	C8	8	640	192	672	5120	128	NA	NA	NA	OOMskip
+off	0	C8	8	640	192	768	5120	128	NA	NA	NA	OOMskip
+off	0	C8	8	640	192	800	5120	128	NA	NA	NA	OOMskip
+`;
+
+/* ---------- parse ---------- */
+const lines = RAW.trim().split("\n");
+const cols = lines[0].split("\t");
+const data = lines.slice(1).map(l=>{
+  const c=l.split("\t"), o={};
+  cols.forEach((k,i)=>o[k]=c[i]);
+  o.latent=+o.latent;
+  ["sp","per_dev","q","k","chunk_size","cores"].forEach(k=>o[k]=+o[k]);
+  o.d_v=o.d_v==="NA"?null:+o.d_v;
+  o.duration_ms=o.duration_ms==="NA"?null:+o.duration_ms;
+  o.util=o.util==="NA"?null:+o.util;
+  o.ok=o.status==="OK";
+  return o;
+});
+const LABELS=[...new Set(data.map(d=>d.label))].sort((a,b)=>(+a.slice(1))-(+b.slice(1)));
+
+/* ---------- state ---------- */
+let state={ tab:1, dm:"on", sortKey:"duration_ms", sortDir:1, bestOnly:false, hideOOM:true,
+            cmpSort:"label", cmpDir:1 };
+const fmt=(v,d=3)=> v==null?"—":v.toFixed(d);
+
+/* ---------- helpers ---------- */
+function bestRow(latent,dm,label){
+  const r=data.filter(d=>d.latent===latent&&d.dm===dm&&d.label===label&&d.ok);
+  return r.length?r.reduce((a,b)=>b.duration_ms<a.duration_ms?b:a):null;
+}
+function bestDur(latent,dm,label){ const r=bestRow(latent,dm,label); return r?r.duration_ms:null; }
+
+/* ---------- KPIs ---------- */
+function renderKPIs(){
+  const ok=data.filter(d=>d.ok), oom=data.filter(d=>!d.ok);
+  const best=ok.reduce((a,b)=>b.duration_ms<a.duration_ms?b:a);
+  const bestUtil=ok.reduce((a,b)=>b.util>a.util?b:a);
+  document.getElementById("kpis").innerHTML=`
+    <div class="kpi"><div class="lbl">Total runs</div><div class="val">${data.length}</div>
+      <div class="tag">${cols.length} columns · ${LABELS.length} configs</div></div>
+    <div class="kpi"><div class="lbl">Completed</div><div class="val">${ok.length} <small>/ ${data.length}</small></div>
+      <div class="tag" style="color:var(--bad)">${oom.length} OOM</div></div>
+    <div class="kpi"><div class="lbl">Fastest run</div><div class="val">${best.duration_ms.toFixed(3)}<small> ms</small></div>
+      <div class="tag">${best.label} · DM ${best.dm} · latent ${best.latent} · chunk ${best.chunk_size}</div></div>
+    <div class="kpi"><div class="lbl">Peak util</div><div class="val">${bestUtil.util.toFixed(1)}<small>%</small></div>
+      <div class="tag">${bestUtil.label} · DM ${bestUtil.dm} · latent ${bestUtil.latent} · k=${bestUtil.k}</div></div>`;
+}
+
+/* ---------- tabs ---------- */
+function renderTabs(){
+  const t=document.getElementById("latentTabs");
+  const defs=[{v:1,n:"With Latent-V"},{v:0,n:"Without Latent-V"}];
+  let html=defs.map(d=>{
+    const n=data.filter(x=>x.latent===d.v&&x.ok).length;
+    return `<button class="tab ${state.tab===d.v?'active':''}" data-t="${d.v}">${d.n}<span class="pill">${n} ok</span></button>`;
+  }).join("");
+  html+=`<button class="tab special ${state.tab==='cmp'?'active':''}" data-t="cmp">All Configs ⊕<span class="pill">matrix</span></button>`;
+  t.innerHTML=html;
+  t.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{
+    state.tab = b.dataset.t==='cmp'?'cmp':+b.dataset.t; renderAll();
+  });
+
+  const s=document.getElementById("dmSeg");
+  s.innerHTML=["on","off"].map(d=>`<button class="${state.dm===d?'active':''}" data-d="${d}">DM ${d}</button>`).join("");
+  s.querySelectorAll("button").forEach(b=>b.onclick=()=>{state.dm=b.dataset.d;renderAll();});
+}
+
+/* ---------- per-latent view ---------- */
+function view(){ return data.filter(d=>d.latent===state.tab && d.dm===state.dm); }
+const COLS=[
+  {k:"label",t:"cfg"},{k:"sp",t:"sp"},{k:"per_dev",t:"per_dev"},
+  {k:"chunk_size",t:"seq len"},{k:"d_v",t:"d_v"},{k:"q",t:"q chunk"},{k:"k",t:"k chunk"},
+  {k:"duration_ms",t:"dur ms"},{k:"util",t:"util %"},{k:"status",t:"status"}
+];
+function utilColor(u){
+  if(u==null) return "transparent";
+  const t=Math.max(0,Math.min(1,(u-28)/(74-28)));
+  const r=Math.round(248+(74-248)*t),g=Math.round(113+(222-113)*t),b=Math.round(113+(128-113)*t);
+  return `rgba(${r},${g},${b},.18)`;
+}
+function renderTable(){
+  let rows=view();
+  if(state.hideOOM||state.bestOnly) rows=rows.filter(r=>r.ok);
+  if(state.bestOnly){
+    const keep={};
+    rows.forEach(r=>{ if(!keep[r.label]||r.duration_ms<keep[r.label].duration_ms) keep[r.label]=r; });
+    rows=Object.values(keep);
+  }
+  const okRows=rows.filter(r=>r.ok);
+  const bestDurV=okRows.length?Math.min(...okRows.map(r=>r.duration_ms)):null;
+
+  rows.sort((a,b)=>{
+    let x=a[state.sortKey],y=b[state.sortKey];
+    if(x==null)x=Infinity; if(y==null)y=Infinity;
+    if(typeof x==="string")return state.sortDir*x.localeCompare(y);
+    return state.sortDir*(x-y);
+  });
+
+  const thead=document.querySelector("#tbl thead");
+  thead.innerHTML="<tr>"+COLS.map(c=>{
+    const arr=state.sortKey===c.k?(state.sortDir>0?"▲":"▼"):"";
+    return `<th data-k="${c.k}">${c.t} <span class="arr">${arr}</span></th>`;
+  }).join("")+"</tr>";
+  thead.querySelectorAll("th").forEach(th=>th.onclick=()=>{
+    const k=th.dataset.k;
+    if(state.sortKey===k)state.sortDir*=-1; else{state.sortKey=k;state.sortDir=(k==="util")?-1:1;}
+    renderTable();
+  });
+
+  const tb=document.querySelector("#tbl tbody");
+  tb.innerHTML=rows.map(r=>{
+    const isBest=r.ok&&r.duration_ms===bestDurV;
+    return `<tr class="${r.ok?'':'oom'} ${isBest?'best':''}">
+      <td><span class="cfg">${r.label}</span>${isBest?'<span class="bestStar">★</span>':''}</td>
+      <td class="num">${r.sp}</td><td class="num">${r.per_dev}</td>
+      <td class="num">${r.chunk_size}</td><td class="num">${r.d_v==null?'—':r.d_v}</td><td class="num">${r.q}</td><td class="num">${r.k}</td>
+      <td class="num">${fmt(r.duration_ms)}</td>
+      <td><span class="heat" style="background:${utilColor(r.util)}">${r.util==null?'—':r.util.toFixed(1)}</span></td>
+      <td><span class="badge ${r.ok?'b-ok':(r.status==='OOMskip'?'b-skip':'b-oom')}">${r.status}</span></td>
+    </tr>`;
+  }).join("");
+
+  document.getElementById("ctxHint").textContent=
+    `latent ${state.tab} · DM ${state.dm} — ${rows.length} rows${state.bestOnly?' (best chunk each)':''}`;
+}
+function renderChart(){
+  const rows=view().filter(r=>r.ok), byCfg={};
+  rows.forEach(r=>{ if(!byCfg[r.label]||r.duration_ms<byCfg[r.label].duration_ms) byCfg[r.label]=r; });
+  const arr=Object.values(byCfg).sort((a,b)=>a.duration_ms-b.duration_ms);
+  const max=arr.length?Math.max(...arr.map(r=>r.duration_ms)):1;
+  const el=document.getElementById("chart");
+  if(!arr.length){el.innerHTML='<div class="mini">No completed runs in this view.</div>';return;}
+  el.innerHTML=arr.map((r,i)=>`
+    <div class="barrow">
+      <div class="nm"><b>${r.label}</b> · qch ${r.q}/kch ${r.k}<br><span class="mini">seq ${r.chunk_size} · sp${r.sp}</span></div>
+      <div class="bartrack"><div class="barfill" style="width:${(r.duration_ms/max*100).toFixed(1)}%;${i===0?'box-shadow:0 0 0 1px var(--best) inset':''}"></div></div>
+      <div class="barval">${r.duration_ms.toFixed(3)}<br><span class="mini">${r.util.toFixed(1)}%</span></div>
+    </div>`).join("");
+}
+function renderCompare(){
+  const el=document.getElementById("dmcmp");
+  el.innerHTML=LABELS.map(L=>{
+    const on=bestDur(state.tab,"on",L), off=bestDur(state.tab,"off",L);
+    if(on==null||off==null) return `<div class="cmp"><div class="cfgname">${L}</div><div class="big">—</div><div class="det">incomplete</div></div>`;
+    const pct=(on-off)/on*100, fasterOff=off<on;
+    return `<div class="cmp">
+      <div class="cfgname">${L}</div>
+      <div class="big ${fasterOff?'up':'down'}">${fasterOff?'▲':'▼'} ${Math.abs(pct).toFixed(1)}%</div>
+      <div class="det">DM off ${off.toFixed(3)} vs on ${on.toFixed(3)} ms<br>${fasterOff?'DM off faster':'DM on faster'}</div>
+    </div>`;
+  }).join("");
+}
+
+/* ---------- all-configs matrix ---------- */
+const VARIANTS=[
+  {key:"l1on",  latent:1, dm:"on",  grp:"Latent-V ON",  sub:"DM on",  fr:"gon gon-l"},
+  {key:"l1off", latent:1, dm:"off", grp:"Latent-V ON",  sub:"DM off", fr:"gon gon-r"},
+  {key:"l0on",  latent:0, dm:"on",  grp:"Latent-V OFF", sub:"DM on",  fr:"goff goff-l"},
+  {key:"l0off", latent:0, dm:"off", grp:"Latent-V OFF", sub:"DM off", fr:"goff goff-r"},
+];
+const frOf=k=>{const v=VARIANTS.find(x=>x.key===k);return v?v.fr:"";};
+function buildMatrix(){
+  return LABELS.map(L=>{
+    const base=data.find(d=>d.label===L);
+    const row={label:L, q:base.q, chunk_size:base.chunk_size, sp:base.sp};
+    VARIANTS.forEach(v=>{
+      const r=bestRow(v.latent,v.dm,L);
+      row[v.key]=r?r.duration_ms:null;
+      row[v.key+"_k"]=r?r.k:null;
+      row[v.key+"_util"]=r?r.util:null;
+    });
+    const vals=VARIANTS.map(v=>row[v.key]).filter(x=>x!=null);
+    row.best=vals.length?Math.min(...vals):null;
+    return row;
+  });
+}
+function renderMatrix(){
+  const rows=buildMatrix();
+  const isVariant=k=>VARIANTS.some(v=>v.key===k);
+  // variant columns sort by math util (higher better); other columns by their own value
+  const cmpVal=(r,k)=> isVariant(k) ? r[k+"_util"] : r[k];
+  rows.sort((a,b)=>{
+    let x=cmpVal(a,state.cmpSort), y=cmpVal(b,state.cmpSort);
+    const xn=(x==null), yn=(y==null);
+    if(xn&&yn) return 0;
+    if(xn) return 1;   // NA always sinks to bottom
+    if(yn) return -1;
+    if(typeof x==="string") return state.cmpDir*x.localeCompare(y);
+    return state.cmpDir*(x-y);
+  });
+
+  const headCols=[
+    {k:"label",t:"cfg"},{k:"chunk_size",t:"seq len / sp"},{k:"q",t:"q chunk"},
+    ...VARIANTS.map(v=>({k:v.key,t:v.sub})),
+    {k:"best",t:"best"}
+  ];
+  const thead=document.querySelector("#cmpTbl thead");
+  let g1="<tr>";
+  g1+=`<th colspan="3"></th>`;
+  g1+=`<th colspan="2" class="grp gon gon-l gon-r gon-t" style="text-align:center;color:var(--accent)">Latent-V ON · d_v 512</th>`;
+  g1+=`<th colspan="2" class="grp goff goff-l goff-r goff-t" style="text-align:center;color:var(--accent2)">Latent-V OFF · baseline</th>`;
+  g1+=`<th></th></tr>`;
+  let g2="<tr>"+headCols.map(c=>{
+    const arr=state.cmpSort===c.k?(state.cmpDir>0?"▲":"▼"):"";
+    const tip=isVariant(c.k)?' title="sorts by math util %"':'';
+    return `<th data-k="${c.k}" class="${frOf(c.k)}"${tip}>${c.t}${isVariant(c.k)?' <span class="mini" style="text-transform:none">↕util</span>':''} <span class="arr">${arr}</span></th>`;
+  }).join("")+"</tr>";
+  thead.innerHTML=g1+g2;
+  thead.querySelectorAll("th[data-k]").forEach(th=>th.onclick=()=>{
+    const k=th.dataset.k;
+    // variant cols default to descending (highest util first); others ascending
+    if(state.cmpSort===k)state.cmpDir*=-1; else{state.cmpSort=k;state.cmpDir=isVariant(k)?-1:1;}
+    renderMatrix();
+  });
+
+  const tb=document.querySelector("#cmpTbl tbody");
+  tb.innerHTML=rows.map(r=>{
+    const cells=VARIANTS.map(v=>{
+      const val=r[v.key];
+      if(val==null) return `<td class="num nacell ${v.fr}">NA</td>`;
+      const isMin=val===r.best;
+      const u=r[v.key+"_util"];
+      return `<td class="num ${v.fr} ${isMin?'mincell':''}">
+        <span class="heat" style="background:${utilColor(u)}">${u.toFixed(1)}%</span><br>
+        <span class="absms">${val.toFixed(3)} ms</span><br>
+        <span class="mini">kch ${r[v.key+"_k"]}</span></td>`;
+    }).join("");
+    return `<tr>
+      <td><span class="cfg">${r.label}</span></td>
+      <td class="num">${r.chunk_size} <span class="mini">· sp${r.sp}</span></td>
+      <td class="num">${r.q}</td>
+      ${cells}
+      <td class="num"><span class="absms" style="color:var(--best);font-weight:700">${r.best==null?'—':r.best.toFixed(3)+' ms'}</span></td>
+    </tr>`;
+  }).join("");
+
+  let win=null, winU=null;
+  rows.forEach(r=>VARIANTS.forEach(v=>{
+    if(r[v.key]!=null&&(!win||r[v.key]<win.val)) win={cfg:r.label,...v,val:r[v.key],k:r[v.key+"_k"]};
+    if(r[v.key+"_util"]!=null&&(!winU||r[v.key+"_util"]>winU.u)) winU={cfg:r.label,...v,u:r[v.key+"_util"],k:r[v.key+"_k"]};
+  }));
+  document.getElementById("cmpLegend").innerHTML= win?
+    `Each cell shows the best <b>k chunk</b> for that variant: <b>math util %</b> (heat-highlighted, big), absolute time (small), and the winning k chunk. <b>NA</b> = every k chunk OOM'd. `+
+    `Fastest: <b style="color:var(--best)">${win.cfg} · ${win.grp} · ${win.sub} · kch ${win.k} → ${win.val.toFixed(3)} ms</b> · `+
+    `Peak util: <b style="color:var(--good)">${winU.cfg} · ${winU.grp} · ${winU.sub} · ${winU.u.toFixed(1)}%</b>.`:'';
+}
+
+/* ---------- orchestrate ---------- */
+function renderAll(){
+  renderTabs();
+  const cmp = state.tab==='cmp';
+  document.getElementById("perView").classList.toggle("hidden",cmp);
+  document.getElementById("cmpView").classList.toggle("hidden",!cmp);
+  if(cmp){ renderMatrix(); }
+  else { renderTable(); renderChart(); renderCompare(); }
+}
+
+document.getElementById("tBest").addEventListener("change",e=>{state.bestOnly=e.target.checked;renderTable();});
+document.getElementById("tOOM").addEventListener("change",e=>{state.hideOOM=e.target.checked;renderTable();});
+
+renderKPIs();
+renderAll();
+</script>
+</body>
+</html>

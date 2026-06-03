@@ -83,6 +83,73 @@ efficiency — it's the compute ceiling).
 
 ---
 
+## Results — sp8 q_chunk scan (q64 / 96 / 160 / 192)
+
+Follow-up: hold sp8 · seq640 fixed and scan q_chunk to map the sweet spot (combine with C1 q32 and
+C4 q128 above for the full q ∈ {32,64,96,128,160,192} picture). Same 2×2 matrix, same 50K+5K chunk.
+
+### C5 — sp8 · seq640 · q64  (chunk_size=5120, 50K+5K = chunk 10)
+
+| k_chunk | Latent DM-on | Latent DM-off | NonLatent DM-on | NonLatent DM-off | DM overhead (lat) | Latent speedup (DM-on) |
+|--------:|:------------:|:-------------:|:---------------:|:----------------:|:-----------------:|:----------------------:|
+| 256 | 5.934 (42.9%) | 5.711 (44.6%) | 6.291 (40.5%) | 6.046 (42.2%) | 3.8% | 5.7% |
+| 384 | 5.761 (44.2%) | 5.479 (46.5%) | 6.114 (41.7%) | 5.851 (43.6%) | 4.9% | 5.8% |
+| 512 | 5.564 (45.8%) | 5.341 (47.7%) | 5.984 (42.6%) | 5.730 (44.5%) | 4.0% | 7.0% |
+| 640 | 5.440 (46.8%) | 5.220 (48.8%) | 5.869 (43.4%) | 5.619 (45.4%) | 4.0% | 7.3% |
+| 768 | OOM | OOM | OOM | OOM | — | — |
+
+### C6 — sp8 · seq640 · q96  (chunk_size=5120, 50K+5K = chunk 10)
+
+| k_chunk | Latent DM-on | Latent DM-off | NonLatent DM-on | NonLatent DM-off | DM overhead (lat) | Latent speedup (DM-on) |
+|--------:|:------------:|:-------------:|:---------------:|:----------------:|:-----------------:|:----------------------:|
+| 256 | 7.615 (33.5%) | 7.468 (34.1%) | 7.714 (33.0%) | 7.576 (33.6%) | 1.9% | 1.3% |
+| 384 | 8.460 (30.1%) | 8.192 (31.1%) | 8.459 (30.1%) | 8.217 (31.0%) | 3.2% | -0.0% |
+| 512 | 6.944 (36.7%) | 6.785 (37.6%) | 7.154 (35.6%) | 6.979 (36.5%) | 2.3% | 2.9% |
+| 640 | OOM | OOM | OOM | OOM | — | — |
+| 768 | OOM | OOM | OOM | OOM | — | — |
+
+### C7 — sp8 · seq640 · q160  (chunk_size=5120, 50K+5K = chunk 10)
+
+| k_chunk | Latent DM-on | Latent DM-off | NonLatent DM-on | NonLatent DM-off | DM overhead (lat) | Latent speedup (DM-on) |
+|--------:|:------------:|:-------------:|:---------------:|:----------------:|:-----------------:|:----------------------:|
+| 256 | 6.324 (40.3%) | 6.138 (41.5%) | 6.626 (38.5%) | 6.423 (39.7%) | 2.9% | 4.6% |
+| 384 | 5.998 (42.5%) | 5.773 (44.1%) | 6.347 (40.2%) | 6.101 (41.8%) | 3.8% | 5.5% |
+| 512 | 5.937 (42.9%) | 5.617 (45.4%) | 6.302 (40.4%) | 5.968 (42.7%) | 5.4% | 5.8% |
+| 640 | OOM | OOM | OOM | OOM | — | — |
+| 768 | OOM | OOM | OOM | OOM | — | — |
+
+### C8 — sp8 · seq640 · q192  (chunk_size=5120, 50K+5K = chunk 10)
+
+| k_chunk | Latent DM-on | Latent DM-off | NonLatent DM-on | NonLatent DM-off | DM overhead (lat) | Latent speedup (DM-on) |
+|--------:|:------------:|:-------------:|:---------------:|:----------------:|:-----------------:|:----------------------:|
+| 256 | 7.258 (35.1%) | 7.070 (36.0%) | 7.427 (34.3%) | 7.232 (35.2%) | 2.6% | 2.3% |
+| 384 | 7.082 (36.0%) | 6.854 (37.2%) | 7.285 (35.0%) | 7.044 (36.2%) | 3.2% | 2.8% |
+| 512 | OOM | OOM | OOM | OOM | — | — |
+| 640 | OOM | OOM | OOM | OOM | — | — |
+| 768 | OOM | OOM | OOM | OOM | — | — |
+
+### sp8 q_chunk sweet-spot summary (best latent DM-on per q, seq640)
+
+| q_chunk | shape | best k | Duration | util | per-dev q-chunks (640/q) | pad waste | DM overhead |
+|--------:|:-----:|-------:|---------:|-----:|:------------------------:|:---------:|:-----------:|
+| 32  | C1 | 640 | 5.829 | 43.7% | 20 (exact) | 0% | ~31% |
+| 64  | C5 | 640 | 5.440 | 46.8% | 10 (exact) | 0% | ~4% |
+| 96  | C6 | 512 | 6.944 | 36.7% | 6.67 → 7   | ~5% | ~2% |
+| **128** | **C4** | **384** | **4.889** | **52.1%** | **5 (exact)** | **0%** | ~8% |
+| 160 | C7 | 512 | 5.937 | 42.9% | 4 (exact) | 0% | ~5% |
+| 192 | C8 | 384 | 7.082 | 36.0% | 3.33 → 4   | ~20% | ~3% |
+
+**q_chunk = 128 is the clear sp8 winner (4.889 ms, 52.1% util)** — non-monotonic around it. Two
+mechanisms drive the shape of this curve:
+- **Padding waste** when 640 (per-device Q rows/chunk) isn't divisible by q_chunk: q96 → 7 chunks
+  (672 padded, ~5% waste) and q192 → 4 chunks (768 padded, **~20% waste**) are the two slowest points,
+  and q192's 768-row Q CBs OOM the earliest (already at k512).
+- **Work-item packing across 110 cores** (work items = 16 heads × ⌈640/q⌉): q128 yields 80 items →
+  ~1/core with the fewest idle cores *and* one q-chunk of real size per core; q160 (64 items) leaves
+  more cores idle, q64 (160 items) forces 2 serial chunks/core. q128 is the packing optimum.
+
+---
+
 ## Conclusions
 
 ### 1. Best 50K+5K latency (real, DM-on latent V)
