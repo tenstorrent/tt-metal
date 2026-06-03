@@ -36,7 +36,7 @@ on:
       platform:
         required: false
         type: choice
-        default: "Ubuntu 22.04"
+        default: "Ubuntu 24.04"
         options:
           - "Ubuntu 22.04"
           - "Ubuntu 24.04"
@@ -87,7 +87,7 @@ jobs:
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
-      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: amd64
       # Use the merge commit (github.sha) rather than pr.head.sha.
       # GHA always resolves workflow *files* from the merge commit; using head.sha for the
@@ -106,7 +106,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
-      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
       build-type: 'ASan'
       build-wheel: true
@@ -414,7 +414,7 @@ jobs:
     uses: ./.github/workflows/code-analysis.yaml
     secrets: inherit
     with:
-      platform: "Ubuntu 22.04"
+      platform: "Ubuntu 24.04"
       ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
       dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
       force-scan: true
