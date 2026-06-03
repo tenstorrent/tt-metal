@@ -18,6 +18,7 @@ Per-iteration PCC is buffered and printed as a summary; the assertion is deferre
 after all iterations and the timing report.
 """
 
+import os
 import time
 from pathlib import Path
 
@@ -84,7 +85,7 @@ def _threshold_for(label, determinism_check, output_threshold):
     ],
     ids=["dense", "moe-gate_device"],
 )
-@pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "non_balanced"])
+@pytest.mark.parametrize("is_balanced", [True, False], ids=["is_balanced", "non_balanced"])
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 5, 25, 2000], ids=["iter1", "iter5", "iter25", "iter2000"])
 @pytest.mark.parametrize(
@@ -433,6 +434,20 @@ def test_prefill_block(
 
     profiler.end("tt_forward")
     logger.info("Forward pass completed successfully")
+
+    # ===== TEMP DEBUG: env-gated pause to keep the device open for tt-exalens L1 reads. =====
+    # Set DS_BREADCRUMB_PAUSE=1; the test creates a flag file and blocks until it is removed,
+    # so breadcrumbs at L1 0x1220 can be read from a second process. REMOVE after debugging.
+    if os.environ.get("DS_BREADCRUMB_PAUSE"):
+        import time as _time
+
+        _flag = "/workspace/tt-metal/.ds_pause_flag"
+        with open(_flag, "w") as _f:
+            _f.write("paused")
+        logger.warning(f"BREADCRUMB PAUSE: device held open. `rm {_flag}` (host: remove .ds_pause_flag) to continue.")
+        while os.path.exists(_flag):
+            _time.sleep(2)
+        logger.warning("BREADCRUMB PAUSE released; continuing.")
 
     # --- PCC summary (print buffered per-iteration results, then defer assertion) ---
     if need_validation:
