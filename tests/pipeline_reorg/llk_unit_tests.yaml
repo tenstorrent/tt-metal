@@ -19,7 +19,7 @@
   gtest_filter: "*"
   skus:
     wh_n150_civ2:
-      timeout: 30
+      timeout: 25
   team: llk
   arch: wormhole_b0
   runner_label: N150
@@ -32,7 +32,7 @@
   gtest_filter: "*"
   skus:
     wh_n150_civ2:
-      timeout: 30
+      timeout: 25
   team: llk
   arch: wormhole_b0
   runner_label: N150
@@ -45,7 +45,7 @@
   gtest_filter: "*"
   skus:
     wh_n150_civ2:
-      timeout: 30
+      timeout: 25
   team: llk
   arch: wormhole_b0
   runner_label: N150
@@ -58,7 +58,7 @@
   gtest_filter: "*"
   skus:
     wh_n150_civ2:
-      timeout: 30
+      timeout: 25
   team: llk
   arch: wormhole_b0
   runner_label: N150
@@ -71,7 +71,7 @@
   gtest_filter: "-LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*"
   skus:
     bh_p150b_civ2:
-      timeout: 30
+      timeout: 15
   team: llk
   arch: blackhole
   runner_label: p150b
@@ -84,7 +84,7 @@
   gtest_filter: "-LLKBlackholeSingleCardFixture.*:*MulReduceScalarTest*"
   skus:
     bh_p150b_civ2:
-      timeout: 30
+      timeout: 15
   team: llk
   arch: blackhole
   runner_label: p150b
