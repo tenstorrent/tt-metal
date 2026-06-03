@@ -388,12 +388,11 @@ std::vector<std::vector<uint8_t>> DramCorePrefetcherManager::serialize_request_p
     begin_page();
     for (uint32_t t = 0; t < data_tensors.size(); ++t) {
         const experimental::DramCorePrefetcherInput& input = data_tensors[t];
-        TT_FATAL(input.tensor != nullptr, "QueueDramCorePrefetcherRequest: input tensor {} is null", t);
         // block_count is per-tensor: it sets how many K-blocks the kernel pushes
         // (and how K is divided in compute_tensor_layout), replacing the GCB ring size.
         const DramCorePrefetcherTensorLayout layout =
-            compute_tensor_layout(*input.tensor, input.block_count, gcb_num_receivers, ring_half_, context_id);
-        const uint32_t bank_local_base = static_cast<uint32_t>(input.tensor->mesh_buffer().address());
+            compute_tensor_layout(input.tensor.get(), input.block_count, gcb_num_receivers, ring_half_, context_id);
+        const uint32_t bank_local_base = static_cast<uint32_t>(input.tensor.get().mesh_buffer().address());
 
         // Find this layout in the current page (dedup), or decide it needs adding.
         auto find_layout = [&]() -> int32_t {

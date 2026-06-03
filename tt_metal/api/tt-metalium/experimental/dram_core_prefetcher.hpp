@@ -16,6 +16,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <vector>
 
@@ -59,7 +60,7 @@ bool IsDramCorePrefetcherSupported(const distributed::MeshDevice& mesh_device);
 // `[b*N_per_bank + r*N_per_recv, b*N_per_bank + (r+1)*N_per_recv)`, where
 // N_per_recv = N_per_bank / num_receivers_per_sender.
 struct DramCorePrefetcherInput {
-    const MeshTensor* tensor = nullptr;
+    std::reference_wrapper<const MeshTensor> tensor;
     uint32_t block_count = 0;
 };
 

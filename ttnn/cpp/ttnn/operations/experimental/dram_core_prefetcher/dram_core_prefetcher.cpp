@@ -25,7 +25,7 @@ void queue_dram_core_prefetcher_request(
     std::vector<tt::tt_metal::experimental::DramCorePrefetcherInput> inputs;
     inputs.reserve(tensors.size());
     for (const auto& [tensor, block_count] : tensors) {
-        inputs.push_back({&tensor.mesh_tensor(), block_count});
+        inputs.push_back({tensor.mesh_tensor(), block_count});
     }
     tt::tt_metal::experimental::QueueDramCorePrefetcherRequest(*mesh_device, global_cb, device_subset, inputs);
 }
