@@ -87,7 +87,7 @@ MemoryConfig recompute_shard_spec_for_output(
     // layout and buffer_type are preserved; the full ShardSpec (grid, orientation, and
     // per-core shape) comes from the input and will be re-derived for the output shape.
     if (!memory_config.shard_spec().has_value() && input_shard_spec.has_value()) {
-        MemoryConfig seeded{memory_config.memory_layout(), memory_config.buffer_type(), input_shard_spec.value()};
+        MemoryConfig seeded{memory_config.memory_layout(), memory_config.buffer_type(), input_shard_spec};
         // Layout-only request: re-derive shard_spec for output_shape; skip BLOCK explicit override.
         return recompute_shard_spec_for_output(seeded, output_shape, /*explicit_memory_config=*/false, std::nullopt);
     }
