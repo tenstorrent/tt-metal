@@ -422,10 +422,19 @@ def discover_components(
     for class_name in qualifying_class_names:
         info = cluster_by_class[class_name]
         hint = rescued_hint_override.get(class_name, _classify_status_hint(class_name))
+        # 2026-06-03 fix: emit the FIRST INDEXED SAMPLE PATH as the primary
+        # submodule_path, not the parent ModuleList path. The parent path
+        # for repeated-instance components resolves to a ModuleList (no
+        # forward() method), which makes auto-generated PCC tests SKIP
+        # with NotImplementedError. Indexed sample paths (e.g.
+        # "vocoder.hifi_gan.resblocks.0") resolve to one concrete
+        # HifiGanResidualBlock that has a real forward(). Fall back to
+        # parent_path when sample_paths is unexpectedly empty (defensive).
+        primary_path = str(info["sample_paths"][0] if info.get("sample_paths") else info["parent_path"])
         discovered.append(
             DiscoveredComponent(
                 name=_canonical_component_name(class_name, prefix_segments),
-                submodule_path=str(info["parent_path"]),
+                submodule_path=primary_path,
                 class_name=class_name,
                 occurrences=int(info["occurrences"]),
                 leaf_op_count=int(info["leaf_count_total"]),
