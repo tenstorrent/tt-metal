@@ -1993,9 +1993,9 @@ void CablingGenerator::rebuild_deployment_hosts_in_dfs_order(
         return;
     }
     // DFS matching keys hosts by node name, which only lines up when node names equal hostnames
-    // (real deployments). Save the current (host_id-ordered) list so we can fall back when the
-    // names don't match (e.g. test fixtures where nodes are "node1" but hosts are "host0"),
-    // otherwise hosts would be silently dropped and deployment_hosts_ left incomplete.
+    // (real deployments). Save the current list so we can fall back when the names don't match
+    // (e.g. test fixtures where nodes are "node1" but hosts are "host0"), otherwise hosts would be
+    // silently dropped and deployment_hosts_ left incomplete.
     std::vector<Host> previous = std::move(deployment_hosts_);
     deployment_hosts_.clear();
     auto collect = [&](auto& self, const ResolvedGraphInstance& graph) -> void {
