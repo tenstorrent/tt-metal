@@ -301,6 +301,7 @@ class MotifPipeline(PipelineAPIMixin):
                     pooled=pooled[idx],
                     timestep=timestep,
                     traced=traced,
+                    tracer_synchronize_after_execute=False,
                 )
 
                 # latents can be overwritten by trace execution, use the captured input instead,
