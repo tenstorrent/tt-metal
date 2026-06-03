@@ -316,6 +316,11 @@ SKIP_LIST = [
             id="8x4",
             marks=pytest.mark.skipif(is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_16x1), reason=f"16x1 MGD is set"),
         ),
+        pytest.param(
+            (8, 1),
+            id="8x1",
+            marks=pytest.mark.skipif(is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_16x1), reason=f"16x1 MGD is set"),
+        ),
     ],
     indirect=True,
 )
