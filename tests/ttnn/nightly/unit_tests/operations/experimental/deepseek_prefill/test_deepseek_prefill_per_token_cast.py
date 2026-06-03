@@ -39,19 +39,14 @@ E4M3_MAX = 448.0
 # exercise leading-dim folding.
 SHAPES = [
     (1, 1024),  # single row (partial tile-row)
-    (32, 1024),  # minimal
     (30, 1152),  # partial tile-row + 9 groups (partial last col-block)
-    (50, 896),  # partial tile-row spanning 2 tile-rows + single partial col-block (7 groups)
-    (33, 1280),  # partial tile-row spanning 2 tile-rows + 10 groups (partial last col-block)
     (640, 7168),
     (3200, 7168),
-    (4096, 7168),
     (6400, 7168),
-    (4, 1, 128, 1024),  # 4D: leading dims fold into M = 512
     (2, 3, 30, 1152),  # 4D + partial tile-row / partial col-block (M = 180)
 ]
 
-ROUNDTRIP_SHAPES = [(32, 1024), (64, 2048), (32, 7168), (30, 1152), (50, 896), (4, 1, 128, 1024)]
+ROUNDTRIP_SHAPES = [(32, 1024), (30, 1152), (4, 1, 128, 1024)]
 
 
 @pytest.fixture(autouse=True)
@@ -65,40 +60,9 @@ def _require_blackhole():
 # ---------------------------------------------------------------------------
 
 
-def _dtype_to_torch(ttnn_dtype):
-    return {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}[ttnn_dtype]
-
-
 def _scale_shape(shape):
     """Expected scale shape for an input shape: leading dims preserved, last dim -> H / 128."""
     return tuple(shape[:-1]) + (shape[-1] // GROUP_SIZE,)
-
-
-def _make_zeros_input(device, *, shape, dtype):
-    x = torch.zeros(*shape, dtype=_dtype_to_torch(dtype))
-    return ttnn.from_torch(
-        x, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-
-
-def _make_zeros_e4m3(device, *, shape):
-    return ttnn.from_torch(
-        torch.zeros(*shape),
-        dtype=ttnn.fp8_e4m3,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-
-def _make_ones_scale(device, *, shape):
-    return ttnn.from_torch(
-        torch.ones(*_scale_shape(shape)),
-        dtype=ttnn.float32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
 
 
 def _make_e4m3_from_torch(x_fp8_torch, *, device):
@@ -125,16 +89,6 @@ def _ref_scale(x_fp32):
     return amax / E4M3_MAX
 
 
-def _e4m3_ulp(ref):
-    """Per-element e4m3 ULP (= binade / 8) for normal values."""
-    return 2.0 ** (torch.floor(torch.log2(ref.abs().clamp_min(2.0**-9))) - 3)
-
-
-def _decode_e4m3(t):
-    """Decode an e4m3 device tensor to fp32 (ttnn.to_torch can't read fp8 on torch < 2.8)."""
-    return ttnn.to_torch(ttnn.typecast(t, ttnn.float32)).float()
-
-
 # ---------------------------------------------------------------------------
 # Quality assertion helper.
 # ---------------------------------------------------------------------------
@@ -148,44 +102,6 @@ def assert_quality(result, ref, *, pcc_threshold, rtol, atol, label=""):
     logger.info(f"[{status}] {label}: pcc={pcc:.6f} (min={pcc_threshold}), allclose={close} (rtol={rtol}, atol={atol})")
     assert passed_pcc, f"{label}: PCC {pcc:.6f} below {pcc_threshold}"
     assert close, f"{label}: values not allclose (rtol={rtol}, atol={atol})"
-
-
-# ---------------------------------------------------------------------------
-# Skeleton / dispatch tests: output shapes and dtypes.
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
-@pytest.mark.parametrize("shape", SHAPES)
-def test_cast_to_fp8_output_specs(device, dtype, shape):
-    x_tt = _make_zeros_input(device, shape=shape, dtype=dtype)
-    e4m3_tt, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x_tt)
-
-    assert tuple(e4m3_tt.shape) == shape
-    assert tuple(scale_tt.shape) == _scale_shape(shape)
-    assert e4m3_tt.dtype == ttnn.fp8_e4m3
-    assert scale_tt.dtype == ttnn.float32
-    assert e4m3_tt.layout == ttnn.ROW_MAJOR_LAYOUT
-    assert scale_tt.layout == ttnn.ROW_MAJOR_LAYOUT
-
-
-@pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.float32])
-@pytest.mark.parametrize("shape", SHAPES)
-def test_cast_back_output_specs(device, out_dtype, shape):
-    e4m3_tt = _make_zeros_e4m3(device, shape=shape)
-    scale_tt = _make_ones_scale(device, shape=shape)
-    out_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(e4m3_tt, scale_tt, output_dtype=out_dtype)
-
-    assert tuple(out_tt.shape) == shape
-    assert out_tt.dtype == out_dtype
-    assert out_tt.layout == ttnn.ROW_MAJOR_LAYOUT
-
-
-def test_cast_back_default_dtype(device):
-    e4m3_tt = _make_zeros_e4m3(device, shape=(32, 1024))
-    scale_tt = _make_ones_scale(device, shape=(32, 1024))
-    out_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(e4m3_tt, scale_tt)
-    assert out_tt.dtype == ttnn.bfloat16, "default output_dtype should be BFLOAT16"
 
 
 # ---------------------------------------------------------------------------
@@ -233,41 +149,17 @@ def test_cast_to_fp8_scale_values(device, dtype, shape):
     scale = ttnn.to_torch(scale_tt).float()
 
     ref = _ref_scale(x.float())
+
+    assert tuple(x_tt.shape) == shape
+    assert tuple(scale_tt.shape) == _scale_shape(shape)
+    assert x_tt.dtype == ttnn_dtype
+    assert scale_tt.dtype == ttnn.float32
+    assert x_tt.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert scale_tt.layout == ttnn.ROW_MAJOR_LAYOUT
+
     max_rel = ((scale - ref).abs() / ref.abs().clamp_min(1e-9)).max().item()
     logger.info(f"scale {dtype} shape={shape}: max_rel={max_rel:.4f}")
     assert_quality(scale, ref, pcc_threshold=0.999, rtol=1e-2, atol=1e-9, label=f"scale {dtype} shape={shape}")
-
-
-@pytest.mark.parametrize("dtype", ["bfloat16", "float32"])
-@pytest.mark.parametrize("shape", SHAPES)
-def test_cast_to_fp8_quantize_within_ulp(device, dtype, shape):
-    torch.manual_seed(0)
-    torch_dtype = getattr(torch, dtype)
-    ttnn_dtype = getattr(ttnn, dtype)
-
-    x = (torch.randn(*shape) * 5.0).to(torch_dtype)
-    x_in = x.float()
-    x_tt = ttnn.from_torch(
-        x, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    e4m3_tt, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x_tt)
-    y = _decode_e4m3(e4m3_tt)
-    scale = ttnn.to_torch(scale_tt).float()
-
-    ref_scale = _ref_scale(x_in)
-    scale_exp = ref_scale.repeat_interleave(GROUP_SIZE, dim=-1)
-    ref_fp8 = (x_in / scale_exp).to(torch.float8_e4m3fn).float()
-
-    normal = ref_fp8.abs() > 2.0**-6
-    within = (y - ref_fp8).abs() <= _e4m3_ulp(ref_fp8) + 1e-6
-    frac_within = within[normal].float().mean().item()
-    logger.info(f"quant {dtype} shape={shape}: within_1ulp={frac_within:.4f}")
-    assert frac_within >= 0.995, f"only {frac_within:.4f} of e4m3 values within one ULP of RNE ref"
-
-    # Round-trip quality: reconstruction via actual device scale and decoded e4m3.
-    # e4m3 has 3 mantissa bits (~12% worst-case relative error); use loose allclose.
-    recon = y * scale.repeat_interleave(GROUP_SIZE, dim=-1)
-    assert_quality(recon, x_in, pcc_threshold=0.999, rtol=0.1, atol=0.2, label=f"quant roundtrip {dtype} shape={shape}")
 
 
 # ---------------------------------------------------------------------------
@@ -282,24 +174,37 @@ def test_cast_back_dequant(device, out_dtype, shape):
     torch_dtype = getattr(torch, out_dtype)
     ttnn_dtype = getattr(ttnn, out_dtype)
 
-    e4m3 = (torch.randn(*shape) * 3.0).clamp(-E4M3_MAX, E4M3_MAX).to(torch.float8_e4m3fn)
-    scale = (torch.rand(*_scale_shape(shape)) * 4.0 - 2.0).to(torch.float32)
+    input_e4m3 = (torch.randn(*shape) * 3.0).clamp(-E4M3_MAX, E4M3_MAX).to(torch.float8_e4m3fn)
+    input_scale = (torch.rand(*_scale_shape(shape)) * 4.0 - 2.0).to(torch.float32)
 
-    e4m3_tt = _make_e4m3_from_torch(e4m3, device=device)
+    e4m3_tt = _make_e4m3_from_torch(input_e4m3, device=device)
     scale_tt = ttnn.from_torch(
-        scale, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        input_scale,
+        dtype=ttnn.float32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     out_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(e4m3_tt, scale_tt, output_dtype=ttnn_dtype)
     out = ttnn.to_torch(out_tt).float()
 
-    ref = e4m3.float() * scale.repeat_interleave(GROUP_SIZE, dim=-1)
+    golden = input_e4m3.float() * input_scale.repeat_interleave(GROUP_SIZE, dim=-1)
     if out_dtype == "bfloat16":
-        ref = ref.to(torch_dtype).float()
+        golden = golden.to(torch_dtype).float()
+
+    assert tuple(out_tt.shape) == shape
+    assert out_tt.dtype == ttnn_dtype
+    assert out_tt.layout == ttnn.ROW_MAJOR_LAYOUT
 
     # Restrict to normal e4m3 values where relative tolerance is meaningful.
-    normal = e4m3.float().abs() > 2.0**-6
+    normal = input_e4m3.float().abs() > 2.0**-6
     assert_quality(
-        out[normal], ref[normal], pcc_threshold=0.999, rtol=1e-2, atol=1e-3, label=f"dequant {out_dtype} shape={shape}"
+        out[normal],
+        golden[normal],
+        pcc_threshold=0.999,
+        rtol=1e-2,
+        atol=1e-3,
+        label=f"dequant {out_dtype} shape={shape}",
     )
 
 

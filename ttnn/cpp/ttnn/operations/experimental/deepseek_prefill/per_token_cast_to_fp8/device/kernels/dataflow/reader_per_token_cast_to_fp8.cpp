@@ -64,9 +64,6 @@ void kernel_main() {
                 if (s < rows_this) {
                     uint32_t page_id = row_base + s;
                     noc_async_read(src.get_noc_addr(page_id) + col_offset_bytes, l1, real_col_bytes);
-                    if (real_col_bytes < col_block_bytes) {
-                        fill_zeros_async(l1 + real_col_bytes, col_block_bytes - real_col_bytes);
-                    }
                 }
                 l1 += col_block_bytes;
             }

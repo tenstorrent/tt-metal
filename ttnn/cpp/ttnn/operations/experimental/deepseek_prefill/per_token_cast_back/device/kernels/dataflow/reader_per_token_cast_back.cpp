@@ -19,7 +19,6 @@
 #include <algorithm>
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/operations/experimental/minimal_matmul/device/kernels/matmul_dataflow_common.hpp"  // fill_zeros_async
 
 /**
  *
@@ -43,21 +42,6 @@ static inline void append_first_column_to_tile(uint32_t scratch, uint32_t page, 
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page + col0_off) = val;
             col0_off += FACE_W_BYTES;
             ++s;
-        }
-        face_base_off += FACE_ROW_STRIDE_BYTES;
-    }
-}
-
-// Zero column 0 of a bcast operand tile (same face-aware walk as append_first_column_to_tile).
-// Used for padding groups beyond H so the broadcast multiply yields 0 instead of stale NaN.
-template <uint32_t face_h, uint32_t face_w, uint32_t FACE_W_BYTES, uint32_t FACE_ROWS, uint32_t FACE_ROW_STRIDE_BYTES>
-static inline void zero_first_column_to_tile(uint32_t page) {
-    uint32_t face_base_off = 0;
-    for (uint32_t fr = 0; fr < FACE_ROWS; ++fr) {
-        uint32_t col0_off = face_base_off;
-        for (uint32_t r = 0; r < face_h; ++r) {
-            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page + col0_off) = 0u;
-            col0_off += FACE_W_BYTES;
         }
         face_base_off += FACE_ROW_STRIDE_BYTES;
     }
@@ -127,9 +111,6 @@ void kernel_main() {
             for (uint32_t s = 0; s < tile_h; ++s) {
                 if (s < rows_this) {
                     noc_async_read(e4m3.get_noc_addr(row_base + s) + e4m3_off, e4m3_l1, real_col_bytes);
-                    if (real_col_bytes < e4m3_col_block_bytes) {
-                        fill_zeros_async(e4m3_l1 + real_col_bytes, e4m3_col_block_bytes - real_col_bytes);
-                    }
                 }
                 e4m3_l1 += e4m3_col_block_bytes;
             }
@@ -137,7 +118,8 @@ void kernel_main() {
             cb_push_back(cb_e4m3, tile_h);
 
             // --- build per-group bcast operands: tile g, column 0 = scale[:, c*groups + g] ---
-            // Padding groups (beyond H) get column 0 = 0 so the broadcast multiply yields 0.
+            // Groups beyond H are left uninitialized. They will be processed not
+            // written back to output.
             cb_reserve_back(cb_scale_bcast, groups_per_block);
             uint32_t bcast_base = get_write_ptr(cb_scale_bcast);
             for (uint32_t g = 0; g < groups_per_block; ++g) {
@@ -151,8 +133,6 @@ void kernel_main() {
                         FACE_ROWS,
                         FACE_ROW_STRIDE_BYTES,
                         scale_aligned_page_bytes>(scratch, page, global_group);
-                } else {
-                    zero_first_column_to_tile<face_h, face_w, FACE_W_BYTES, FACE_ROWS, FACE_ROW_STRIDE_BYTES>(page);
                 }
             }
             cb_push_back(cb_scale_bcast, groups_per_block);
