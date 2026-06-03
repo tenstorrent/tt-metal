@@ -86,6 +86,7 @@ on:
       - "(Galaxy) Health"
       - "(Galaxy) DeepSeek tests"
       - "DeepSeek V3 Multi-Host Tests"
+      - "(Release) Model Status for Console Deployment"
       - "(TM-DM) Data Movement Test Suite"
       - "(TM-Fabric) Fabric Tests"
       - "Profiler CI"

@@ -21,7 +21,7 @@ on:
       ttsim-version:
         required: false
         type: string
-        default: "v1.7.0"
+        default: "v1.7.1"
       job-timeout:
         required: false
         type: number

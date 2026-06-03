@@ -35,7 +35,7 @@ void kernel_main() {
             for (uint32_t nt_C = 0; nt_C < Nt; ++nt_C)  // output tile index of C
             {
                 for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_one_tile; tile_row_id++) {
-                    acquire_dst();
+                    tile_regs_acquire();
                     for (uint32_t kt = 0; kt < Kt; kt++) {
                         if (tile_row_id == 0) {
                             cb_wait_front(tt::CBIndex::c_0, kt + 1);
@@ -47,9 +47,12 @@ void kernel_main() {
                         cb_pop_front(tt::CBIndex::c_1, onetile);
                     }
 
+                    tile_regs_commit();
+                    tile_regs_wait();
+
                     cb_reserve_back(cb_intermed0, onetile);
                     pack_tile(0, cb_intermed0);
-                    release_dst();
+                    tile_regs_release();
                     cb_push_back(cb_intermed0, onetile);
 
                     // untilize tile and write to CBIndex::c_25

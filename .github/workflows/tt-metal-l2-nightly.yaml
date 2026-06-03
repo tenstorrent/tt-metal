@@ -310,24 +310,6 @@ jobs:
       run_misc_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',misc,') }}
       run_compute_fused_tests: ${{ github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',compute_fused,') }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  ttnn-ops-docs-check:
-    needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
-    if: |
-      (github.event_name == 'schedule' || contains(format(',{0},', inputs.additional_test_categories), ',ops_docs_check,')) &&
-      needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]'
-    secrets: inherit
-    uses: ./.github/workflows/ttnn-ops-docs-check.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-wormhole-only) }}
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      timeout: ${{ (github.event_name == 'schedule' && 150) || fromJSON(inputs.timeout) }}
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   didt-tests:
     needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
     if: |

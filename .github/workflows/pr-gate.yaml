@@ -420,11 +420,9 @@ jobs:
         repo_path_prefix: /__w
 
   # Full clang-tidy scan (same checks enforced at merge gate).
-  # Temporarily disabled — re-enable when code-analysis is stable again.
-  # TODO: Remove this `if: false` once the underlying issue is resolved.
   code-analysis:
     needs: [build-docker-images]
-    if: false
+    if: (github.event_name == 'pull_request' && !github.event.pull_request.draft) || github.event_name == 'merge_group'
     uses: ./.github/workflows/code-analysis.yaml
     secrets: inherit
     with:

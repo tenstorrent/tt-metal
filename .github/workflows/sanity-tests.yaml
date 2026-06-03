@@ -58,6 +58,11 @@ on:
         type: boolean
         default: true
         description: "Run TTSim tests (unit + integration)"
+      run-ttsim-integration-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run TTSim integration tests"
       enable-watcher:
         required: false
         type: boolean
@@ -163,6 +168,11 @@ on:
         default: true
         type: boolean
         description: "Run TTSim tests (unit + integration)"
+      run-ttsim-integration-tests:
+        required: false
+        default: true
+        type: boolean
+        description: "Run TTSim integration tests"
       enable-watcher:
         required: false
         default: false
@@ -429,5 +439,5 @@ jobs:
       package-artifact-name: ${{ needs.resolve-artifacts.outputs.packages-artifact-name }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
-      run-ttsim-integration-tests: true
+      run-ttsim-integration-tests: ${{ github.event_name == 'push' || inputs.run-ttsim-integration-tests }}
       run-metal-cpp-unit-tests: true
