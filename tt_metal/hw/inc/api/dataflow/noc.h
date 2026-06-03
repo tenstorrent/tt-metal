@@ -694,22 +694,30 @@ public:
     /**
      * @brief Zeroes pages of a DRAM tensor using a caller-pre-zeroed scratch buffer (overload 2).
      *
-     * Reads up to NOC_MAX_BURST_SIZE bytes per chunk from the start of @p scratch, so
-     * the caller's pre-zeroed prefix must cover at least min(@p size_bytes, NOC_MAX_BURST_SIZE)
-     * bytes. If the scratch is shorter, the impl will read garbage past the zero region and
-     * write it to DRAM. Caller MUST zero the scratch first via overload (1) +
-     * write_zeros_l1_barrier() before the first call.
+     * The source bytes are read starting at @p scratch's current READ pointer.
+     * Reads up to NOC_MAX_BURST_SIZE bytes per chunk, so the zeroed prefix at that read pointer
+     * must cover at least min(@p size_bytes, NOC_MAX_BURST_SIZE) bytes; otherwise the impl reads
+     * garbage past the zero region and streams it to DRAM.
+     *
+     * Contract: the zeroed bytes must sit at @p scratch's read pointer. Two valid patterns:
+     *   - Same-kernel scratch: a fresh/empty CB or DFB has read_ptr == write_ptr, so zeroing it
+     *     via overload (1) (which writes the write pointer) lands where overload (2) reads.
+     *   - Producer/consumer handoff: the producer zeroes via overload (1) then push_back()s the
+     *     entry; the consumer wait_front()s it before passing it here.
+     *
+     * Caller MUST zero the scratch via overload (1) + write_zeros_l1_barrier() before the first call.
      *
      * @see write_zeros_dram_barrier.
      *
      * @param accessor Destination DRAM tensor accessor
      * @param size_bytes Number of bytes to zero per page
      * @param args Destination page args (page_id, offset_bytes)
-     * @param scratch Pre-zeroed L1 scratch buffer (CircularBuffer or DataflowBuffer)
+     * @param scratch Pre-zeroed L1 scratch buffer (CircularBuffer or DataflowBuffer); read at its read pointer
      * @tparam DSpecT TensorAccessor type spec; must satisfy DSpecT::is_dram
      * @tparam Scratch Must be CircularBuffer or DataflowBuffer
      *
      * @code
+     *   // Same-kernel scratch: fresh CB, so read_ptr == write_ptr.
      *   noc.async_write_zeros(scratch, scratch_bytes);
      *   noc.write_zeros_l1_barrier();
      *   for (p) noc.async_write_zeros(addr_gen, page_size, {.page_id = p}, scratch);
