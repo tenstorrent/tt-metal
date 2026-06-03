@@ -112,16 +112,16 @@ def test_flux1_pipeline_performance(
         """An epic, high-definition cinematic shot of a rustic snowy cabin glowing warmly at dusk, nestled in a serene winter landscape. Surrounded by gentle snow-covered pines and delicate falling snowflakes — captured in a rich, atmospheric, wide-angle scene with deep cinematic depth and warmth.""",
     ]
 
-    # Warmup run
-    logger.info("Running warmup iteration...")
-    with benchmark_profiler("run", iteration=0):
-        images = pipeline.run_single_prompt(
-            prompt=prompts[0],
-            num_inference_steps=num_inference_steps,
-        )
-    images[0].save(f"flux1_dev_{image_w}_{image_h}_warmup.png")
-
-    logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
+    # Warmup runs
+    for i in range(2):
+        logger.info("Running warmup iteration...")
+        with benchmark_profiler("run", iteration=0):
+            images = pipeline.run_single_prompt(
+                prompt=prompts[0],
+                num_inference_steps=num_inference_steps,
+            )
+        images[0].save(f"flux1_dev_{image_w}_{image_h}_warmup_{i}.png")
+        logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
 
     # Performance measurement runs
     logger.info("Running performance measurement iterations...")
