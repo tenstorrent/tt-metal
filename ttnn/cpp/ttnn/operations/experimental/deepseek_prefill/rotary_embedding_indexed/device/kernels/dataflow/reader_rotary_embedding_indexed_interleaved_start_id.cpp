@@ -58,14 +58,11 @@ void kernel_main() {
     const uint32_t boundary_slab_idx = chunk_global_t == 0 ? 0 : kv_actual_global_t / chunk_global_t;
     const uint32_t boundary_chip = Ht == 0 ? 0 : (kv_actual_global_t / Ht) % sp_factor;
     const uint32_t boundary_offset_t = Ht == 0 ? 0 : kv_actual_global_t % Ht;
-    uint32_t update_idxt;
-    if (my_sp_coord < boundary_chip) {
-        update_idxt = (boundary_slab_idx + 1) * Ht;
-    } else if (my_sp_coord == boundary_chip) {
-        update_idxt = boundary_slab_idx * Ht + boundary_offset_t;
-    } else {
-        update_idxt = boundary_slab_idx * Ht;
-    }
+    // From the current slab base, chips before the boundary advance a full slab, the boundary chip
+    // advances by its pad offset, and chips after it stay at the base.
+    const uint32_t update_idxt =
+        boundary_slab_idx * Ht +
+        (my_sp_coord < boundary_chip ? Ht : (my_sp_coord == boundary_chip ? boundary_offset_t : 0));
 
     const uint32_t rotary_seq_t_end = seq_t_end < rotary_Ht ? seq_t_end : rotary_Ht;
     const uint32_t my_rotary_seq_tiles = seq_t_start < rotary_seq_t_end ? rotary_seq_t_end - seq_t_start : 0;
