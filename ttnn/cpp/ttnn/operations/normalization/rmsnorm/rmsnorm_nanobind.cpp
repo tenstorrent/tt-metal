@@ -102,8 +102,6 @@ void bind_normalization_rms_norm(nb::module_& mod) {
             - If the `weight`/`bias` tensors are ROW_MAJOR layout: last padded dim must be TILE_WIDTH.
             - If the :attr:`input_tensor` is sharded, the :attr:`output` must also be sharded. In that case, the
               :attr:`output` memory layout and buffer type must match the :attr:`input_tensor`'s memory configuration.
-            - If sharded and the logical width is not a multiple of TILE_WIDTH (i.e. 32), a `residual_input_tensor`
-              (fused pre-add) is not supported (the width may otherwise be split across multiple width shards).
         )doc";
 
     ttnn::bind_function<"rms_norm">(

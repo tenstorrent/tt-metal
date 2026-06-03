@@ -470,16 +470,14 @@ Tensor LayerNormDeviceOperation::create_output_tensors(
 // never supply it): an all-ones logical tensor tilized with the input's sharding has its tile
 // padding filled with 0, which is exactly the mask (1.0 valid / 0.0 padding). The mask data format
 // matches the compute intermediates (fp32 when fp32 dest accumulation is enabled) so it aligns in
-// the variance multiply. Both layernorm and RMSNorm use it; only the non-residual, non-distributed
-// sharded case on a non-tile-aligned width needs it (a fused residual add uses the Welford path).
+// the variance multiply. Both layernorm and RMSNorm use it, with or without a fused residual add;
+// only the non-distributed sharded case on a non-tile-aligned width needs it.
 static std::optional<Tensor> build_legacy_col_mask(
     const Tensor& input,
     const LayerNormProgramConfig& program_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    DistributedLayerNormStage distributed_norm_stage,
-    const std::optional<const Tensor>& residual) {
-    if (!input.is_sharded() || distributed_norm_stage != DistributedLayerNormStage::NOT_DISTRIBUTED ||
-        residual.has_value()) {
+    DistributedLayerNormStage distributed_norm_stage) {
+    if (!input.is_sharded() || distributed_norm_stage != DistributedLayerNormStage::NOT_DISTRIBUTED) {
         return std::nullopt;
     }
     bool use_welford = false;
@@ -538,8 +536,7 @@ Tensor layer_norm(
         .bias = bias,
         .stats = stats,
         .recip_tensor = recip_tensor,
-        .col_mask = build_legacy_col_mask(
-            input_tensor, program_config, compute_kernel_config, distributed_norm_stage, residual_input_tensor),
+        .col_mask = build_legacy_col_mask(input_tensor, program_config, compute_kernel_config, distributed_norm_stage),
     };
 
     return ttnn::device_operation::launch<LayerNormDeviceOperation>(operation_attributes, tensor_args);
