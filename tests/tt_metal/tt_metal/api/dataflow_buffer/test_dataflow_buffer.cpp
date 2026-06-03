@@ -2229,139 +2229,74 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseTwo) {
     constexpr const char* COMPUTE = "compute";
     constexpr const char* WRITER  = "writer_dm";
 
-    // Configs used only to carry data_format; num_producers/consumers/patterns
-    // are inferred by the framework from the kernel DFB bindings below.
-    experimental::dfb::DataflowBufferConfig ss_cfg{
-        .entry_size = ENTRY_SIZE, .num_entries = NUM_ENTRIES,
-        .num_producers = NUM_IN_THREADS, .pap = dfb::AccessPattern::STRIDED,
-        .num_consumers = NUM_IN_THREADS, .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = true};
-    experimental::dfb::DataflowBufferConfig sa_cfg{
-        .entry_size = ENTRY_SIZE, .num_entries = NUM_ENTRIES,
-        .num_producers = NUM_IN_THREADS, .pap = dfb::AccessPattern::STRIDED,
-        .num_consumers = NUM_IN_THREADS, .cap = dfb::AccessPattern::ALL,
-        .enable_implicit_sync = true};
-    experimental::dfb::DataflowBufferConfig t6_cfg{
-        .entry_size = ENTRY_SIZE, .num_entries = NUM_ENTRIES,
-        .num_producers = NUM_IN_THREADS, .pap = dfb::AccessPattern::STRIDED,
-        .num_consumers = NUM_OUT_THREADS, .cap = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = true};
-
-    experimental::metal2_host_api::DataflowBufferSpec dfb_ss_spec{
-        .unique_id            = DFB_SS,
-        .entry_size           = ENTRY_SIZE,
-        .num_entries          = NUM_ENTRIES,
-        .data_format_metadata = ss_cfg.data_format,
-        .disable_implicit_sync = !ss_cfg.enable_implicit_sync,
-    };
-    experimental::metal2_host_api::DataflowBufferSpec dfb_sa_spec{
-        .unique_id            = DFB_SA,
-        .entry_size           = ENTRY_SIZE,
-        .num_entries          = NUM_ENTRIES,
-        .data_format_metadata = sa_cfg.data_format,
-        .disable_implicit_sync = !sa_cfg.enable_implicit_sync,
-    };
-    experimental::metal2_host_api::DataflowBufferSpec dfb_t6_spec{
-        .unique_id            = DFB_T6,
-        .entry_size           = ENTRY_SIZE,
-        .num_entries          = NUM_ENTRIES,
-        .data_format_metadata = t6_cfg.data_format,
-        .disable_implicit_sync = !t6_cfg.enable_implicit_sync,
+    const experimental::DataMovementHardwareConfig gen2_dm_hw{
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
     };
 
-    const experimental::metal2_host_api::DataMovementConfiguration gen2_dm_cfg{
-        .gen2_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}};
+    experimental::DataflowBufferSpec dfb_ss_spec{
+        .unique_id = DFB_SS, .entry_size = ENTRY_SIZE, .num_entries = NUM_ENTRIES};
+    experimental::DataflowBufferSpec dfb_sa_spec{
+        .unique_id = DFB_SA, .entry_size = ENTRY_SIZE, .num_entries = NUM_ENTRIES};
+    experimental::DataflowBufferSpec dfb_t6_spec{
+        .unique_id = DFB_T6, .entry_size = ENTRY_SIZE, .num_entries = NUM_ENTRIES};
 
     // Reader DM: producer on DFB_SS (STRIDED) and DFB_SA (STRIDED)
-    experimental::metal2_host_api::KernelSpec reader_spec{
-        .unique_id   = READER,
-        .source      = experimental::metal2_host_api::KernelSpec::SourceFilePath{
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_avg_reader_dm.cpp"},
+    experimental::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source =
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_avg_reader_dm.cpp",
         .num_threads = NUM_IN_THREADS,
         .dfb_bindings = {
-            {
-                .dfb_spec_name       = DFB_SS,
-                .local_accessor_name = "ss_out",
-                .endpoint_type       = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                .access_pattern      = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-            },
-            {
-                .dfb_spec_name       = DFB_SA,
-                .local_accessor_name = "sa_out",
-                .endpoint_type       = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                .access_pattern      = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-            },
+            experimental::ProducerOf(DFB_SS, "ss_out"),
+            experimental::ProducerOf(DFB_SA, "sa_out"),
         },
-        .config_spec = gen2_dm_cfg,
+        .hw_config = gen2_dm_hw,
     };
 
     // Compute: STRIDED consumer on DFB_SS, ALL consumer on DFB_SA, STRIDED producer on DFB_T6
-    experimental::metal2_host_api::KernelSpec compute_spec{
-        .unique_id   = COMPUTE,
-        .source      = experimental::metal2_host_api::KernelSpec::SourceFilePath{
-            "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_avg_compute.cpp"},
+    experimental::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_avg_compute.cpp",
         .num_threads = NUM_IN_THREADS,
         .dfb_bindings = {
-            {
-                .dfb_spec_name       = DFB_SS,
-                .local_accessor_name = "ss_in",
-                .endpoint_type       = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                .access_pattern      = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-            },
-            {
-                .dfb_spec_name       = DFB_SA,
-                .local_accessor_name = "sa_in",
-                .endpoint_type       = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                .access_pattern      = experimental::metal2_host_api::DFBAccessPattern::ALL,
-            },
-            {
-                .dfb_spec_name       = DFB_T6,
-                .local_accessor_name = "t6_out",
-                .endpoint_type       = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                .access_pattern      = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-            },
+            experimental::StridedConsumerOf(DFB_SS, "ss_in"),
+            experimental::AllConsumerOf(DFB_SA, "sa_in"),
+            experimental::ProducerOf(DFB_T6, "t6_out"),
         },
-        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     // Writer DM: STRIDED consumer on DFB_T6
-    experimental::metal2_host_api::KernelSpec writer_spec{
-        .unique_id   = WRITER,
-        .source      = experimental::metal2_host_api::KernelSpec::SourceFilePath{
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_avg_writer_dm.cpp"},
+    experimental::KernelSpec writer_spec{
+        .unique_id = WRITER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_avg_writer_dm.cpp",
         .num_threads = NUM_OUT_THREADS,
-        .dfb_bindings = {{
-            .dfb_spec_name       = DFB_T6,
-            .local_accessor_name = "t6_in",
-            .endpoint_type       = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-            .access_pattern      = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-        }},
-        .config_spec = gen2_dm_cfg,
+        .dfb_bindings = {experimental::StridedConsumerOf(DFB_T6, "t6_in")},
+        .hw_config = gen2_dm_hw,
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id    = "bench_avg_wu",
-        .kernels      = {READER, COMPUTE, WRITER},
+    experimental::WorkUnitSpec wu{
+        .name = "bench_avg_wu",
+        .kernels = {READER, COMPUTE, WRITER},
         .target_nodes = core_range_set,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id       = "bench_avg",
-        .kernels          = {reader_spec, compute_spec, writer_spec},
+    experimental::ProgramSpec spec{
+        .name = "bench_avg",
+        .kernels = {reader_spec, compute_spec, writer_spec},
         .dataflow_buffers = {dfb_ss_spec, dfb_sa_spec, dfb_t6_spec},
-        .work_units       = {wu},
+        .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*this->devices_.at(0), spec);
+    Program program = experimental::MakeProgramFromSpec(*this->devices_.at(0), spec);
 
-    experimental::metal2_host_api::ProgramRunParams run_params;
-    run_params.kernel_run_params = {
+    experimental::ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
         {.kernel_spec_name = READER},
         {.kernel_spec_name = COMPUTE},
         {.kernel_spec_name = WRITER},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, run_params);
+    experimental::SetProgramRunArgs(program, run_args);
 
     detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
 }
@@ -2402,87 +2337,62 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseFour) {
     constexpr const char* READER  = "reader_dm";
     constexpr const char* COMPUTE = "compute";
 
-    experimental::dfb::DataflowBufferConfig sa_cfg{
-        .entry_size    = ENTRY_SIZE,    .num_entries = NUM_ENTRIES,
-        .num_producers = NUM_PRODUCERS, .pap         = dfb::AccessPattern::STRIDED,
-        .num_consumers = NUM_CONSUMERS, .cap         = dfb::AccessPattern::ALL,
-        .enable_implicit_sync = true};
-
-    auto make_dfb_spec = [&](const char* id) {
-        return experimental::metal2_host_api::DataflowBufferSpec{
-            .unique_id            = id,
-            .entry_size           = ENTRY_SIZE,
-            .num_entries          = NUM_ENTRIES,
-            .data_format_metadata = sa_cfg.data_format,
-            .disable_implicit_sync = !sa_cfg.enable_implicit_sync,
-        };
+    const experimental::DataMovementHardwareConfig gen2_dm_hw{
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
     };
 
-    const experimental::metal2_host_api::DataMovementConfiguration gen2_dm_cfg{
-        .gen2_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}};
+    auto make_dfb_spec = [&](const char* id) {
+        return experimental::DataflowBufferSpec{
+            .unique_id = id, .entry_size = ENTRY_SIZE, .num_entries = NUM_ENTRIES};
+    };
 
     // Reader DM: 4 STRIDED producers on all three DFBs
-    experimental::metal2_host_api::KernelSpec reader_spec{
-        .unique_id   = READER,
-        .source      = experimental::metal2_host_api::KernelSpec::SourceFilePath{
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst_reader_dm.cpp"},
+    experimental::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst_reader_dm.cpp",
         .num_threads = NUM_PRODUCERS,
         .dfb_bindings = {
-            {.dfb_spec_name = DFB0, .local_accessor_name = "out0",
-             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
-            {.dfb_spec_name = DFB1, .local_accessor_name = "out1",
-             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
-            {.dfb_spec_name = DFB2, .local_accessor_name = "out2",
-             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
+            experimental::ProducerOf(DFB0, "out0"),
+            experimental::ProducerOf(DFB1, "out1"),
+            experimental::ProducerOf(DFB2, "out2"),
         },
-        .config_spec = gen2_dm_cfg,
+        .hw_config = gen2_dm_hw,
     };
 
     // Compute: 4 ALL consumers on all three DFBs (each Neo gets a full copy via remapper)
-    experimental::metal2_host_api::KernelSpec compute_spec{
-        .unique_id   = COMPUTE,
-        .source      = experimental::metal2_host_api::KernelSpec::SourceFilePath{
-            "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst_compute.cpp"},
+    experimental::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst_compute.cpp",
         .num_threads = NUM_CONSUMERS,
         .dfb_bindings = {
-            {.dfb_spec_name = DFB0, .local_accessor_name = "in0",
-             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::ALL},
-            {.dfb_spec_name = DFB1, .local_accessor_name = "in1",
-             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::ALL},
-            {.dfb_spec_name = DFB2, .local_accessor_name = "in2",
-             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::ALL},
+            experimental::AllConsumerOf(DFB0, "in0"),
+            experimental::AllConsumerOf(DFB1, "in1"),
+            experimental::AllConsumerOf(DFB2, "in2"),
         },
-        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id    = "bench_worst_wu",
-        .kernels      = {READER, COMPUTE},
+    experimental::WorkUnitSpec wu{
+        .name = "bench_worst_wu",
+        .kernels = {READER, COMPUTE},
         .target_nodes = core_range_set,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id       = "bench_worst",
-        .kernels          = {reader_spec, compute_spec},
+    experimental::ProgramSpec spec{
+        .name = "bench_worst",
+        .kernels = {reader_spec, compute_spec},
         .dataflow_buffers = {make_dfb_spec(DFB0), make_dfb_spec(DFB1), make_dfb_spec(DFB2)},
-        .work_units       = {wu},
+        .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*this->devices_.at(0), spec);
+    Program program = experimental::MakeProgramFromSpec(*this->devices_.at(0), spec);
 
-    experimental::metal2_host_api::ProgramRunParams run_params;
-    run_params.kernel_run_params = {
+    experimental::ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
         {.kernel_spec_name = READER},
         {.kernel_spec_name = COMPUTE},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, run_params);
+    experimental::SetProgramRunArgs(program, run_args);
 
     detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
 }
@@ -2524,89 +2434,64 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseThree) {
     constexpr const char* READER  = "reader_dm";
     constexpr const char* COMPUTE = "compute";
 
-    experimental::dfb::DataflowBufferConfig ss_cfg{
-        .entry_size    = ENTRY_SIZE,    .num_entries = NUM_ENTRIES,
-        .num_producers = NUM_PRODUCERS, .pap         = dfb::AccessPattern::STRIDED,
-        .num_consumers = NUM_CONSUMERS, .cap         = dfb::AccessPattern::STRIDED,
-        .enable_implicit_sync = true};
-
-    auto make_dfb_spec = [&](const char* id) {
-        return experimental::metal2_host_api::DataflowBufferSpec{
-            .unique_id             = id,
-            .entry_size            = ENTRY_SIZE,
-            .num_entries           = NUM_ENTRIES,
-            .data_format_metadata  = ss_cfg.data_format,
-            .disable_implicit_sync = !ss_cfg.enable_implicit_sync,
-        };
+    const experimental::DataMovementHardwareConfig gen2_dm_hw{
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
     };
 
-    const experimental::metal2_host_api::DataMovementConfiguration gen2_dm_cfg{
-        .gen2_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}};
+    auto make_dfb_spec = [&](const char* id) {
+        return experimental::DataflowBufferSpec{
+            .unique_id = id, .entry_size = ENTRY_SIZE, .num_entries = NUM_ENTRIES};
+    };
 
     // Reader DM: 4 STRIDED producers on all three DFBs.
     // Reuses dfb_bench_worst_reader_dm.cpp: same kernel structure, per_txn=2.
-    experimental::metal2_host_api::KernelSpec reader_spec{
-        .unique_id   = READER,
-        .source      = experimental::metal2_host_api::KernelSpec::SourceFilePath{
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst_reader_dm.cpp"},
+    experimental::KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst_reader_dm.cpp",
         .num_threads = NUM_PRODUCERS,
         .dfb_bindings = {
-            {.dfb_spec_name = DFB0, .local_accessor_name = "out0",
-             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
-            {.dfb_spec_name = DFB1, .local_accessor_name = "out1",
-             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
-            {.dfb_spec_name = DFB2, .local_accessor_name = "out2",
-             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
+            experimental::ProducerOf(DFB0, "out0"),
+            experimental::ProducerOf(DFB1, "out1"),
+            experimental::ProducerOf(DFB2, "out2"),
         },
-        .config_spec = gen2_dm_cfg,
+        .hw_config = gen2_dm_hw,
     };
 
     // Compute: 4 STRIDED consumers on all three DFBs.
     // Reuses dfb_bench_worst_compute.cpp: tiles_to_post=2 for 4Sx4S matches 4Sx4A.
-    experimental::metal2_host_api::KernelSpec compute_spec{
-        .unique_id   = COMPUTE,
-        .source      = experimental::metal2_host_api::KernelSpec::SourceFilePath{
-            "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst_compute.cpp"},
+    experimental::KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst_compute.cpp",
         .num_threads = NUM_CONSUMERS,
         .dfb_bindings = {
-            {.dfb_spec_name = DFB0, .local_accessor_name = "in0",
-             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
-            {.dfb_spec_name = DFB1, .local_accessor_name = "in1",
-             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
-            {.dfb_spec_name = DFB2, .local_accessor_name = "in2",
-             .endpoint_type = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-             .access_pattern = experimental::metal2_host_api::DFBAccessPattern::STRIDED},
+            experimental::StridedConsumerOf(DFB0, "in0"),
+            experimental::StridedConsumerOf(DFB1, "in1"),
+            experimental::StridedConsumerOf(DFB2, "in2"),
         },
-        .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id    = "bench_avg2_wu",
-        .kernels      = {READER, COMPUTE},
+    experimental::WorkUnitSpec wu{
+        .name = "bench_avg2_wu",
+        .kernels = {READER, COMPUTE},
         .target_nodes = core_range_set,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id       = "bench_avg2",
-        .kernels          = {reader_spec, compute_spec},
+    experimental::ProgramSpec spec{
+        .name = "bench_avg2",
+        .kernels = {reader_spec, compute_spec},
         .dataflow_buffers = {make_dfb_spec(DFB0), make_dfb_spec(DFB1), make_dfb_spec(DFB2)},
-        .work_units       = {wu},
+        .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*this->devices_.at(0), spec);
+    Program program = experimental::MakeProgramFromSpec(*this->devices_.at(0), spec);
 
-    experimental::metal2_host_api::ProgramRunParams run_params;
-    run_params.kernel_run_params = {
+    experimental::ProgramRunArgs run_args;
+    run_args.kernel_run_args = {
         {.kernel_spec_name = READER},
         {.kernel_spec_name = COMPUTE},
     };
-    experimental::metal2_host_api::SetProgramRunParameters(program, run_params);
+    experimental::SetProgramRunArgs(program, run_args);
 
     detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
 }
@@ -2650,85 +2535,63 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseFive) {
         return std::string("dfb_") + group + std::to_string(i);
     };
 
-    // 1Sx4A: 1 DM STRIDED producer, 4 Neo ALL consumers (1-to-4 remapper entry).
-    experimental::dfb::DataflowBufferConfig cfg_1s4a{
-        .entry_size    = ENTRY_SIZE, .num_entries = NUM_ENTRIES,
-        .num_producers = 1,          .pap         = dfb::AccessPattern::STRIDED,
-        .num_consumers = 4,          .cap         = dfb::AccessPattern::ALL,
-        .enable_implicit_sync = true};
-
-    auto make_dfb_spec = [&](const std::string& id) {
-        return experimental::metal2_host_api::DataflowBufferSpec{
-            .unique_id             = id,
-            .entry_size            = ENTRY_SIZE,
-            .num_entries           = NUM_ENTRIES,
-            .data_format_metadata  = cfg_1s4a.data_format,
-            .disable_implicit_sync = !cfg_1s4a.enable_implicit_sync,
-        };
+    const experimental::DataMovementHardwareConfig gen2_dm_hw{
+        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
     };
 
-    const experimental::metal2_host_api::DataMovementConfiguration gen2_dm_cfg{
-        .gen2_data_movement_config =
-            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}};
+    auto make_dfb_spec = [&](const std::string& id) {
+        return experimental::DataflowBufferSpec{
+            .unique_id = id, .entry_size = ENTRY_SIZE, .num_entries = NUM_ENTRIES};
+    };
 
     // Each reader: single DM, 1Sx4A, needs per_txn=8 reads (not 2 like WC1).
     // Uses dfb_bench_worst2_reader_dm.cpp which issues 8 reads per DFB.
-    const char* READER_SRC  =
+    const char* READER_SRC =
         "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_bench_worst2_reader_dm.cpp";
     const char* COMPUTE_SRC =
         "tests/tt_metal/tt_metal/test_kernels/compute/dfb_bench_worst2_compute.cpp";
 
     // Each reader: 1 DM thread, STRIDED producer on 3 DFBs.
-    auto make_reader_bindings = [&](char group)
-        -> std::vector<experimental::metal2_host_api::KernelSpec::DFBBinding> {
-        std::vector<experimental::metal2_host_api::KernelSpec::DFBBinding> b;
+    auto make_reader_bindings = [&](char group) -> std::vector<experimental::DFBBinding> {
+        std::vector<experimental::DFBBinding> bindings;
         for (int i = 0; i < 3; i++) {
-            b.push_back({
-                .dfb_spec_name       = dfb_id(group, i),
-                .local_accessor_name = "out" + std::to_string(i),
-                .endpoint_type       = experimental::metal2_host_api::KernelSpec::DFBEndpointType::PRODUCER,
-                .access_pattern      = experimental::metal2_host_api::DFBAccessPattern::STRIDED,
-            });
+            bindings.push_back(experimental::ProducerOf(dfb_id(group, i), "out" + std::to_string(i)));
         }
-        return b;
+        return bindings;
     };
 
     // Single compute kernel: 4 Neo threads, ALL consumer on all 12 DFBs.
-    std::vector<experimental::metal2_host_api::KernelSpec::DFBBinding> compute_bindings;
+    std::vector<experimental::DFBBinding> compute_bindings;
     {
         int in_idx = 0;
         for (char g : {'a', 'b', 'c', 'd'}) {
             for (int i = 0; i < 3; i++) {
-                compute_bindings.push_back({
-                    .dfb_spec_name       = dfb_id(g, i),
-                    .local_accessor_name = "in" + std::to_string(in_idx++),
-                    .endpoint_type       = experimental::metal2_host_api::KernelSpec::DFBEndpointType::CONSUMER,
-                    .access_pattern      = experimental::metal2_host_api::DFBAccessPattern::ALL,
-                });
+                compute_bindings.push_back(
+                    experimental::AllConsumerOf(dfb_id(g, i), "in" + std::to_string(in_idx++)));
             }
         }
     }
 
-    std::vector<experimental::metal2_host_api::KernelSpec> kernels;
+    std::vector<experimental::KernelSpec> kernels;
     for (char g : {'a', 'b', 'c', 'd'}) {
         kernels.push_back({
-            .unique_id    = std::string("reader_") + g,
-            .source       = experimental::metal2_host_api::KernelSpec::SourceFilePath{READER_SRC},
-            .num_threads  = 1,
+            .unique_id = std::string("reader_") + g,
+            .source = READER_SRC,
+            .num_threads = 1,
             .dfb_bindings = make_reader_bindings(g),
-            .config_spec  = gen2_dm_cfg,
+            .hw_config = gen2_dm_hw,
         });
     }
     kernels.push_back({
-        .unique_id    = "compute_all",
-        .source       = experimental::metal2_host_api::KernelSpec::SourceFilePath{COMPUTE_SRC},
-        .num_threads  = 4,
+        .unique_id = "compute_all",
+        .source = COMPUTE_SRC,
+        .num_threads = 4,
         .dfb_bindings = compute_bindings,
-        .config_spec  = experimental::metal2_host_api::ComputeConfiguration{},
+        .hw_config = experimental::ComputeHardwareConfig{},
     });
 
     // 12 DFB specs: 3 per group × 4 groups.
-    std::vector<experimental::metal2_host_api::DataflowBufferSpec> dfb_specs;
+    std::vector<experimental::DataflowBufferSpec> dfb_specs;
     for (char g : {'a', 'b', 'c', 'd'}) {
         for (int i = 0; i < 3; i++) {
             dfb_specs.push_back(make_dfb_spec(dfb_id(g, i)));
@@ -2738,26 +2601,26 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseFive) {
     std::vector<std::string> all_kernel_ids = {
         "reader_a", "reader_b", "reader_c", "reader_d", "compute_all"};
 
-    experimental::metal2_host_api::WorkUnitSpec wu{
-        .unique_id    = "bench_worst2_wu",
-        .kernels      = all_kernel_ids,
+    experimental::WorkUnitSpec wu{
+        .name = "bench_worst2_wu",
+        .kernels = all_kernel_ids,
         .target_nodes = core_range_set,
     };
 
-    experimental::metal2_host_api::ProgramSpec spec{
-        .program_id       = "bench_worst2",
-        .kernels          = kernels,
+    experimental::ProgramSpec spec{
+        .name = "bench_worst2",
+        .kernels = kernels,
         .dataflow_buffers = dfb_specs,
-        .work_units       = {wu},
+        .work_units = {wu},
     };
 
-    Program program = experimental::metal2_host_api::MakeProgramFromSpec(*this->devices_.at(0), spec);
+    Program program = experimental::MakeProgramFromSpec(*this->devices_.at(0), spec);
 
-    experimental::metal2_host_api::ProgramRunParams run_params;
+    experimental::ProgramRunArgs run_args;
     for (const auto& kid : all_kernel_ids) {
-        run_params.kernel_run_params.push_back({.kernel_spec_name = kid});
+        run_args.kernel_run_args.push_back({.kernel_spec_name = kid});
     }
-    experimental::metal2_host_api::SetProgramRunParameters(program, run_params);
+    experimental::SetProgramRunArgs(program, run_args);
 
     detail::LaunchProgram(device, program, true /*wait_until_cores_done*/);
 }
@@ -2840,7 +2703,8 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseSeven) {
             .consumer_risc_mask  = consumer_neo,
             .num_consumers       = 1,
             .cap                 = dfb::AccessPattern::STRIDED,
-            .enable_implicit_sync = true,
+            .enable_producer_implicit_sync = true,
+            .enable_consumer_implicit_sync = true,
         };
     };
 
@@ -2875,7 +2739,8 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseSeven) {
             .consumer_risc_mask  = consumer_neos,
             .num_consumers       = 2,
             .cap                 = dfb::AccessPattern::ALL,
-            .enable_implicit_sync = true,
+            .enable_producer_implicit_sync = true,
+            .enable_consumer_implicit_sync = true,
         };
     };
 
@@ -2967,7 +2832,7 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseSix) {
 
     constexpr uint32_t ENTRY_SIZE  = 1024;
     // num_entries=1: ensures each DFB consumes exactly 1 TxnId (24 DFBs × 1 = 24 ≤ 32 budget)
-    // while keeping enable_implicit_sync=true to exercise ISR setup.
+    // while keeping implicit sync enabled to exercise ISR setup.
     constexpr uint32_t NUM_ENTRIES = 1;
 
     // risc_mask bit positions: DM k → bit k (bits 0–7), Neo k → bit (8+k) (bits 8–11)
@@ -2997,7 +2862,8 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseSix) {
             .consumer_risc_mask  = consumer_neos,
             .num_consumers       = 2,
             .cap                 = dfb::AccessPattern::ALL,
-            .enable_implicit_sync = true,
+            .enable_producer_implicit_sync = true,
+            .enable_consumer_implicit_sync = true,
         };
     };
 
@@ -3033,7 +2899,8 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseSix) {
             .consumer_risc_mask  = consumer_neo,
             .num_consumers       = 1,
             .cap                 = dfb::AccessPattern::ALL,
-            .enable_implicit_sync = true,
+            .enable_producer_implicit_sync = true,
+            .enable_consumer_implicit_sync = true,
         };
     };
 

@@ -487,7 +487,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
     uint32_t end_time = rdcycle();
 
     // All DPRINTs deferred to here so zero DPRINT overhead falls inside the timed region.
-    DPRINT << "start_time: " << start_time << ENDL();
+    DPRINT("start_time: {}\n", start_time);
 #ifndef COMPILE_FOR_TRISC
     if (hartid == 0) {
         // DM0 per-DFB breakdown:
@@ -501,18 +501,18 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             uint32_t elapsed_b1 = t_subpassB[i] - t_subpassA[i];
             total_subpassA  += elapsed_a;
             total_subpassB1 += elapsed_b1;
-            DPRINT << "DFB" << i
-                   << " subpassA=" << elapsed_a
-                   << " subpassB_1=" << elapsed_b1
-                   << ENDL();
+            DPRINT("DFB{} subpassA={} subpassB_1={}\n", i, elapsed_a, elapsed_b1);
         }
-        DPRINT << "total_subpassA=" << total_subpassA
-               << " total_subpassB1=" << total_subpassB1 << ENDL();
+        DPRINT("total_subpassA={} total_subpassB1={}\n", total_subpassA, total_subpassB1);
 
         // DM0 post-loop milestones.
         // [t_after_isr_ie_writes → end_isr_enable_time] = enable_dfb_tile_isr() cost
-        if (t_after_isr_ie_writes) DPRINT << "t_after_isr_ie_writes: " << t_after_isr_ie_writes << ENDL();
-        if (end_isr_enable_time)   DPRINT << "end_isr_enable_time: "   << end_isr_enable_time   << ENDL();
+        if (t_after_isr_ie_writes) {
+            DPRINT("t_after_isr_ie_writes: {}\n", t_after_isr_ie_writes);
+        }
+        if (end_isr_enable_time) {
+            DPRINT("end_isr_enable_time: {}\n", end_isr_enable_time);
+        }
     }
     if (hartid == 1) {
         // DM1 per-DFB breakdown: time to process remapper slots for each DFB.
@@ -521,27 +521,37 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             uint32_t prev_end  = (i == 0) ? start_time : t_rmp_pass[i - 1];
             uint32_t elapsed   = t_rmp_pass[i] - prev_end;
             total_rmp += elapsed;
-            DPRINT << "DFB" << i << " rmp_pass=" << elapsed << ENDL();
+            DPRINT("DFB{} rmp_pass={}\n", i, elapsed);
         }
-        DPRINT << "total_rmp=" << total_rmp << ENDL();
+        DPRINT("total_rmp={}\n", total_rmp);
 
         // DM1 post-loop milestones.
         // [t_after_merged_loop → t_after_write_pairs_up_to] = write_pairs_up_to() HW burst
         // [t_after_write_pairs_up_to → end_remapper_config_time] = enable_remapper() cost
-        if (t_after_write_pairs_up_to) DPRINT << "t_after_write_pairs_up_to: " << t_after_write_pairs_up_to << ENDL();
-        if (end_remapper_config_time)  DPRINT << "end_remapper_config_time: "  << end_remapper_config_time  << ENDL();
+        if (t_after_write_pairs_up_to) {
+            DPRINT("t_after_write_pairs_up_to: {}\n", t_after_write_pairs_up_to);
+        }
+        if (end_remapper_config_time) {
+            DPRINT("end_remapper_config_time: {}\n", end_remapper_config_time);
+        }
     }
     // All DMs: spinwait vs TC HW write split, then TC init loop end.
     if (t_before_tc_writes) {
-        DPRINT << "spinwait="   << (t_before_tc_writes - t_after_merged_loop)
-               << " tc_writes=" << (t_after_tc_init_loop - t_before_tc_writes) << ENDL();
+        DPRINT(
+            "spinwait={} tc_writes={}\n",
+            t_before_tc_writes - t_after_merged_loop,
+            t_after_tc_init_loop - t_before_tc_writes);
     }
-    if (t_after_tc_init_loop) DPRINT << "t_after_tc_init_loop: " << t_after_tc_init_loop << ENDL();
+    if (t_after_tc_init_loop) {
+        DPRINT("t_after_tc_init_loop: {}\n", t_after_tc_init_loop);
+    }
 #endif
     // All RISCs (DMs + TRISCs): merged loop end and final end time.
     // SW cost  = t_after_merged_loop - start_time
     // wait cost= end_time - t_after_tc_init_loop  (DMs)
     //          = end_time - t_after_merged_loop    (TRISCs, which have t_after_tc_init_loop=0)
-    if (t_after_merged_loop) DPRINT << "t_after_merged_loop: " << t_after_merged_loop << ENDL();
-    DPRINT << "end_time: " << end_time << ENDL();
+    if (t_after_merged_loop) {
+        DPRINT("t_after_merged_loop: {}\n", t_after_merged_loop);
+    }
+    DPRINT("end_time: {}\n", end_time);
 }
