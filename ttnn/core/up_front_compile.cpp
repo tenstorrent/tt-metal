@@ -9,7 +9,7 @@
 #include <chrono>
 #include <thread>
 
-#include <tt-metalium/assert.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/mesh_device.hpp>

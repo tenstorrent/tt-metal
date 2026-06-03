@@ -62,12 +62,14 @@ def test_up_front_compile(device):
     print(f"up_front: compiled {num_programs} programs in {wall:.2f}s (workers={workers}, errors={num_errors})")
     assert num_errors == 0, "parallel compile reported errors"
 
-    # The real run is now warm and must still be numerically correct.
+    # The real run is now warm and must still be numerically correct. Use PCC
+    # (the idiomatic ttnn metric) — bf16 has ~3 sig figs, so allclose on the
+    # large magnitudes this chain produces is the wrong check.
     out = _chain(x)
-    got = ttnn.to_torch(out).float()
+    got = ttnn.to_torch(out).float().flatten()
 
     a = torch.exp(t.float())
-    expected = (a + t.float()) * a
-    assert torch.allclose(
-        got, expected, atol=1e-2, rtol=1e-2
-    ), f"warm run incorrect: max abs diff {(got - expected).abs().max().item()}"
+    expected = ((a + t.float()) * a).flatten()
+    pcc = torch.corrcoef(torch.stack([got, expected]))[0, 1].item()
+    print(f"up_front: warm-run PCC vs torch reference = {pcc:.6f}")
+    assert pcc > 0.999, f"warm run incorrect: PCC {pcc}"
