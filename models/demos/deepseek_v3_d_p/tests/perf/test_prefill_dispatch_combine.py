@@ -6,21 +6,11 @@
 End-to-end dispatch+combine perf worker for one Galaxy column replayed on LB 8x1.
 
 Runs TtDispatchModule → production layout transform (squeeze → TILE+bfp8 →
-unsqueeze) → TtCombineModule in a single forward pass on device. The Tracy
-profiler captures DispatchDeviceOperation, the layout op(s), and
-CombineDeviceOperation in one CSV — the perf wrapper sums them via the
-existing merge_device_rows logic.
+unsqueeze) → TtCombineModule(init_zeros=True) in a single forward pass on
+device. Tracy captures DispatchDeviceOperation and CombineDeviceOperation in
+one CSV; the perf wrapper asserts each independently.
 
-This test exists separately from `test_prefill_dispatch.py` /
-`test_prefill_combine.py` because those workers each run only one op against
-host-computed reference inputs and don't apply the production layout
-transform between them. With the Galaxy real-indices kernel config
-(num_routed_experts=256, top-k=8, experts_per_chip=8 explicit), the
-host-source dispatched_buffer + missing layout transform combination hangs
-combine — running both ops on device with the production layout in between
-is the validated replay flow from the nmilicevic/ds-glx-lb-measure branch.
-
-Required env vars (set by the parent perf test via `_perf_param`):
+Required env vars (set by the parent perf test via extra_env):
     TT_DS_CAPTURED_LAYER          int, MoE layer index
     TT_DS_CAPTURED_COL            int, Galaxy column [0, 4)
     TT_DS_USE_CAPTURED_INDICES    optional path override (defaults to LONGBOOK_QA_ENG_25600)
@@ -91,7 +81,7 @@ def test_ttnn_dispatch_combine(
         experts_per_chip,
         metadata_len,
         max_dispatch_buffer_token_size,
-        max_dispatched_tokens_per_expert,
+        _,
     ) = compute_constants(
         seq_len_per_chip,
         num_routed_experts,
@@ -116,9 +106,7 @@ def test_ttnn_dispatch_combine(
         num_experts_per_tok=num_experts_per_tok,
     )
 
-    # Compute offsets/counts/region_offsets from indices + table. Slice to [0:1] because
-    # get_gate_outputs derives num_dispatch_groups=4 from the formula (Galaxy-global);
-    # LB 8x1 only has 1 dispatch group, and the col-0 table makes all 4 rows identical.
+    # get_gate_outputs produces 4-row outputs (Galaxy-global); slice to [0:1] for LB's single dispatch group.
     expert_offsets, expert_token_counts, expert_region_offsets, _ = get_gate_outputs(
         indices,
         dispatch_group_size,
@@ -145,7 +133,11 @@ def test_ttnn_dispatch_combine(
         weights, mesh_mapper=input_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
     )
     tt_indices = ttnn.from_torch(
-        indices, mesh_mapper=input_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.int32
+        indices.to(torch.int16),
+        mesh_mapper=input_mapper,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.uint16,
     )
 
     tt_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
@@ -191,13 +183,10 @@ def test_ttnn_dispatch_combine(
         cluster_axis=sp_axis,
         num_links=num_links,
         topology=topology,
-        init_zeros=True,  # production setting; matches measure-branch replay
+        init_zeros=True,
     )
 
-    # Production layout (mirrors tt_moe.py:468-489): squeeze → TILE+bfp8 → unsqueeze.
-    # The kernel-level dispatch buffer is row-major bf16 (~32MB on device); production
-    # tilizes to bfp8 (~8MB) before feeding combine. Without this step combine sees a
-    # row-major bf16 buffer and hangs at num_routed_experts=256 / experts_per_chip=8.
+    # Dispatch → production layout transform → combine (mirrors tt_moe.py).
     dispatched_buffer, metadata = dispatch_module(tt_x, tt_weights, tt_indices, tt_offsets, tt_table)
     buf_2d = ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0)
     buf_tiled = ttnn.to_layout(buf_2d, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)

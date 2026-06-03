@@ -180,6 +180,8 @@ def run_model_device_perf_test_with_merge(
     batch_size: int = 1,
     margin: float = 0.015,
     comments: str = "",
+    op_filter: str = "",
+    extra_env: dict | None = None,
 ):
     """
     Run device performance test with multi-device row merging.
@@ -198,13 +200,30 @@ def run_model_device_perf_test_with_merge(
         batch_size: Batch size for the model (default: 1)
         margin: Acceptable performance margin as percentage (default: 0.015 = 1.5%)
         comments: Additional settings description for the report
+        op_filter: If set, restricts the measurement to rows whose OP CODE
+            contains the given substring — useful when the worker emits multiple
+            ops and only one is under test.
+        extra_env: If set, applied to os.environ for the duration of the subprocess
+            invocation. Use for vars the worker reads directly (e.g. TT_DS_CAPTURED_LAYER)
+            — prefixing them into the command doesn't work because tracy's -m flag
+            mis-parses leading KEY=VAL tokens as module names.
     """
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     inference_time_key = "AVG DEVICE KERNEL DURATION [ns]"
 
-    post_processed_results = run_device_perf(
-        command, subdir=subdir, num_iterations=num_iterations, cols=cols, batch_size=batch_size
-    )
+    saved_env = {k: os.environ.get(k) for k in (extra_env or {})}
+    try:
+        if extra_env:
+            os.environ.update(extra_env)
+        post_processed_results = run_device_perf(
+            command, subdir=subdir, num_iterations=num_iterations, cols=cols, batch_size=batch_size
+        )
+    finally:
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
     # Apply multi-device row merging
     filename = get_latest_ops_log_filename(subdir)
@@ -217,6 +236,12 @@ def run_model_device_perf_test_with_merge(
     logger.debug(f"CSV total rows: {total_rows}, signposts: {signpost_rows}, device ops: {device_rows}")
 
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
+
+    if op_filter:
+        df = df[df["OP CODE"].str.contains(op_filter, na=False)]
+        if df.empty:
+            pytest.fail(f"op_filter={op_filter!r} matched no rows in {filename}")
+        logger.debug(f"Rows after op_filter={op_filter!r}: {len(df)}")
 
     logger.debug(f"Device rows before merge: {len(df)}")
     df_merged = merge_device_rows(df)
