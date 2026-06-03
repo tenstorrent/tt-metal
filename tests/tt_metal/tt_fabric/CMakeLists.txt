@@ -121,7 +121,6 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
 
-# ---- Routing benchmarks: test_tt_fabric ----
 set(TEST_TT_FABRIC_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/test_tt_fabric.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/tt_fabric_test_common_types.cpp
