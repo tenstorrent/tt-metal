@@ -288,9 +288,9 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow) {
 
     auto input_slice = ttnn::slice(
         input,
-        ttnn::SmallVector<uint32_t>{0U, 0U, m_lo, 0U},
-        ttnn::SmallVector<uint32_t>{1U, 1U, m_hi, K},
-        ttnn::SmallVector<uint32_t>{1U, 1U, 1U, 1U});
+        ttsl::SmallVector<uint32_t>{0U, 0U, m_lo, 0U},
+        ttsl::SmallVector<uint32_t>{1U, 1U, m_hi, K},
+        ttsl::SmallVector<uint32_t>{1U, 1U, 1U, 1U});
     auto ref = minimal_matmul_hifi4(input_slice, weight, kConfig);
     const auto ref_vec = ttml::core::to_vector<float>(ref);
     const auto written_vec = ttml::core::to_vector<float>(parent_out);
