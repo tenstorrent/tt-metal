@@ -18,6 +18,7 @@ import multiprocessing as mp
 
 from tracy.common import (
     TT_METAL_HOME,
+    PROFILER_DEVICE_SIDE_LOG,
     PROFILER_HOST_DEVICE_SYNC_INFO,
     PROFILER_SCRIPTS_ROOT,
     PROFILER_ARTIFACTS_DIR,
@@ -25,6 +26,10 @@ from tracy.common import (
     PROFILER_CPP_DEVICE_PERF_REPORT,
     PROFILER_DEFAULT_OP_SUPPORT_COUNT,
     clear_profiler_runtime_artifacts,
+)
+from tracy.device_log_schema import (
+    validate_profile_log_device_arch_and_headers,
+    validate_profile_log_device_csv,
 )
 
 from models.common.utility_functions import skip_for_blackhole
@@ -277,6 +282,10 @@ def test_custom_cycle_count():
         assert statName in stats.keys(), "Wrong device analysis format"
         assert stats[statName]["stats"]["Average"] < REF_CYCLE_COUNT_MAX, "Wrong cycle count, too high"
         assert stats[statName]["stats"]["Average"] > REF_CYCLE_COUNT_MIN, "Wrong cycle count, too low"
+
+    device_log = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
+    validate_profile_log_device_arch_and_headers(device_log)
+    validate_profile_log_device_csv(device_log)
 
 
 @pytest.mark.skip_post_commit

@@ -15,7 +15,16 @@ from tracy.process_model_log import (
 )
 from models.common.utility_functions import skip_for_blackhole
 from tracy.compare_ops_logs import compare_ops_logs
-from tracy.common import generate_logs_folder, PROFILER_CPP_DEVICE_PERF_REPORT, PROFILER_DEFAULT_OP_SUPPORT_COUNT
+from tracy.common import (
+    PROFILER_DEVICE_SIDE_LOG,
+    PROFILER_CPP_DEVICE_PERF_REPORT,
+    PROFILER_DEFAULT_OP_SUPPORT_COUNT,
+    generate_logs_folder,
+)
+from tracy.device_log_schema import (
+    validate_profile_log_device_arch_and_headers,
+    validate_profile_log_device_csv,
+)
 import numpy
 
 
@@ -135,6 +144,12 @@ class TestSingleOp:
             "PM REQ O BW": "[292.5714416503906]",
         }
         verify_columns(received_columns, expected_columns, verify_equal)
+
+    def test_profile_log_device_schema(self, run_test):
+        """Validate Tracy-generated profile_log_device.csv (Visualizer report path)."""
+        device_log = generate_logs_folder(get_profiler_folder(run_test["name"])) / PROFILER_DEVICE_SIDE_LOG
+        validate_profile_log_device_arch_and_headers(device_log)
+        validate_profile_log_device_csv(device_log)
 
 
 matmul_test_tensor_io = {
