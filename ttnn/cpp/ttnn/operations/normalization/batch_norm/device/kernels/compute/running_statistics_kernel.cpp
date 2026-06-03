@@ -3,10 +3,82 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-#include "api/compute/eltwise_binary.h"
-#include "api/compute/tile_move_copy.h"
-#include "ttnn/kernel/compute/moreh_common.hpp"
+#include "api/compute/eltwise_binary.h"                      // binary_op_init_common (BIG init)
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"        // BinaryFpu, DestReuseBinary, PackTile
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // AddBinary (DEST + DEST)
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
 #include "api/dataflow/circular_buffer.h"
+
+// running_statistics (FPU path): updated_stat = (1 - momentum) * old_stat + momentum * batch_stat
+// for mean and/or var (compile-time gated).
+//
+// One chain per stat, no intermediate CBs (the original staged through cb_tmp1/2/3). The two
+// products live in separate DEST slots and are summed in DEST by an SFPU add:
+//
+//   D0 = (1 - momentum) ;  D0 *= old_stat        BinaryFpu Sub(one, momentum) -> DestReuse Mul(.old)
+//   D1 = momentum * batch_stat                    BinaryFpu Mul(momentum, batch) -> D1
+//   D0 = D0 + D1                                  AddBinary (DEST + DEST)
+//
+// cb_out0 receives a copy of the last computed stat (var if present, else mean), reproducing the
+// original's trailing pack_tile(0, cb_out0).
+namespace ckl = compute_kernel_lib;
+
+template <
+    uint32_t cb_batch,
+    uint32_t cb_old,
+    uint32_t cb_updated,
+    bool AlsoOut0,
+    uint32_t cb_one,
+    uint32_t cb_momentum,
+    uint32_t cb_out0>
+ALWI void update_running_stat() {
+    using D = ckl::Dst;
+    using ckl::BinaryFpuOp;
+
+    // one/momentum held (CallerManaged); old_stat and batch_stat streamed (wait 1 / pop 1, as the
+    // original popped them). cb_updated is caller-reserved/pushed (CallerManaged output); cb_out0 is
+    // reserved/pushed once per loop iteration by kernel_main.
+    cb_reserve_back(cb_updated, 1);
+    ckl::eltwise_chain(
+        1,
+        ckl::BinaryFpu<
+            cb_one,
+            cb_momentum,
+            BinaryFpuOp::Sub,
+            ckl::BroadcastDim::None,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::InputLifecycle::CallerManaged,
+            ckl::InputLifecycle::CallerManaged,
+            ckl::OperandKind::Scalar,
+            D::D0,
+            ckl::OperandKind::Scalar>{},  // D0 = 1 - momentum
+        ckl::DestReuseBinary<
+            cb_old,
+            BinaryFpuOp::Mul,
+            ckl::DestReuseType::DEST_TO_SRCA,
+            D::D0,
+            D::D0,
+            ckl::DestReuseReconfig::Input,
+            ckl::InputLifecycle::Streaming,
+            ckl::OperandKind::Scalar>{},  // D0 = (1 - momentum) * old_stat
+        ckl::BinaryFpu<
+            cb_momentum,
+            cb_batch,
+            BinaryFpuOp::Mul,
+            ckl::BroadcastDim::None,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::InputLifecycle::CallerManaged,
+            ckl::InputLifecycle::Streaming,
+            ckl::OperandKind::Scalar,
+            D::D1,
+            ckl::OperandKind::Scalar>{},        // D1 = momentum * batch_stat
+        ckl::AddBinary<D::D0, D::D1, D::D0>{},  // D0 = D0 + D1
+        ckl::PackTile<cb_updated, D::D0, ckl::OutputLifecycle::CallerManaged, ckl::PackTileReconfig::Output>{},
+        ckl::OptionalChainElement<
+            AlsoOut0,
+            ckl::PackTile<cb_out0, D::D0, ckl::OutputLifecycle::CallerManaged, ckl::PackTileReconfig::Output>>{});
+    cb_push_back(cb_updated, 1);
+}
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -22,43 +94,41 @@ void kernel_main() {
     constexpr auto cb_updated_running_var = get_compile_time_arg_val(8);   // updated running var tensor
     constexpr auto cb_momentum = get_compile_time_arg_val(9);              // momentum
     constexpr auto cb_one = get_compile_time_arg_val(10);                  // stores 1
-    constexpr auto cb_tmp1 = get_compile_time_arg_val(11);                 // tmp 1
-    constexpr auto cb_tmp2 = get_compile_time_arg_val(12);                 // tmp 2
-    constexpr auto cb_tmp3 = get_compile_time_arg_val(13);                 // tmp 3
-
-    CircularBuffer cb_out0_obj(cb_out0);
-    CircularBuffer cb_momentum_obj(cb_momentum);
-    CircularBuffer cb_one_obj(cb_one);
 
     binary_op_init_common(cb_batch_mean, cb_batch_var, cb_out0);
     constexpr uint32_t onetile = 1;
 
-    cb_one_obj.wait_front(1);
-    cb_momentum_obj.wait_front(1);
+    cb_wait_front(cb_one, 1);  // held for the whole kernel
+    cb_wait_front(cb_momentum, 1);
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        tile_regs_acquire();
-        // updated_running_stat = (1 − momentum) × running_stat + momentum × batch_stat
+        cb_reserve_back(cb_out0, onetile);
 
         if constexpr (old_running_mean_has_value) {
-            sub_tiles_to_cb(cb_one, cb_momentum, cb_tmp1, 0, 0, 0, 0);               // 1 - momentum
-            mul_tiles_to_cb(cb_momentum, cb_batch_mean, cb_tmp2, 0, 0, 0, 1);        // momentum * batch stat
-            mul_tiles_to_cb(cb_tmp1, cb_old_running_mean, cb_tmp3, 0, 0, 1, 1);      // cb_tmp1 * running stats
-            add_tiles_to_cb(cb_tmp2, cb_tmp3, cb_updated_running_mean, 0, 0, 1, 1);  // cb_tmp2 + cb_tmp3
+            update_running_stat<
+                cb_batch_mean,
+                cb_old_running_mean,
+                cb_updated_running_mean,
+                /*AlsoOut0=*/!old_running_var_has_value,
+                cb_one,
+                cb_momentum,
+                cb_out0>();
         }
+
         if constexpr (old_running_var_has_value) {
-            sub_tiles_to_cb(cb_one, cb_momentum, cb_tmp1, 0, 0, 0, 0);              // 1 - momentum
-            mul_tiles_to_cb(cb_momentum, cb_batch_var, cb_tmp2, 0, 0, 0, 1);        // momentum * batch stat
-            mul_tiles_to_cb(cb_tmp1, cb_old_running_var, cb_tmp3, 0, 0, 1, 1);      // cb_tmp1 * running stats
-            add_tiles_to_cb(cb_tmp2, cb_tmp3, cb_updated_running_var, 0, 0, 1, 1);  // cb_tmp2 + cb_tmp3
+            update_running_stat<
+                cb_batch_var,
+                cb_old_running_var,
+                cb_updated_running_var,
+                /*AlsoOut0=*/true,
+                cb_one,
+                cb_momentum,
+                cb_out0>();
         }
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(0, cb_out0);
-        tile_regs_release();
-        cb_out0_obj.push_back(1);
+
+        cb_push_back(cb_out0, onetile);
     }
 
-    cb_one_obj.pop_front(1);
-    cb_momentum_obj.pop_front(1);
+    cb_pop_front(cb_one, 1);
+    cb_pop_front(cb_momentum, 1);
 }

@@ -84,6 +84,10 @@ struct OptionalChainElement<false, Inner>
     static constexpr uint32_t cb_a_id() { return 0; }
     static constexpr uint32_t cb_b_id() { return 0; }
     static constexpr uint32_t pack_cb_id() { return 0; }
+    // Writer-collision detection (`writer_pair_collide`) reads `pack_dst_slot` on every
+    // PackTile-tagged element. The disabled stub emits nothing, so the value is inert —
+    // but it must exist for the trait to compile when Inner is a PackTile.
+    static constexpr Dst pack_dst_slot = Dst::D0;
     static constexpr InputLifecycle a_policy() { return InputLifecycle::CallerManaged; }
     static constexpr InputLifecycle b_policy() { return InputLifecycle::CallerManaged; }
 
