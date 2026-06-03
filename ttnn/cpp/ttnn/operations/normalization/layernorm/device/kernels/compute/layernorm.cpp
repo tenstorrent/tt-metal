@@ -233,14 +233,21 @@ void kernel_main() {
 
 #ifndef RMSNORM
         // E[x]
+        WAYPOINT("EX0");  // before E[x] reduce
         numeric::row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithoutPopPolicy>(
             cb_x, cb_scaler, cb_ex, W, Wt, block_size, tile_width);
+        WAYPOINT("EX1");  // E[x] reduce returned
 
         // x - E[x]
+        WAYPOINT("XR0");  // before reconfig_data_format(cb_x, cb_ex)
         reconfig_data_format(cb_x, cb_ex);
+        WAYPOINT("XR1");  // before cb_ex.wait_front(1)
         cb_ex_obj.wait_front(1);
+        WAYPOINT("XR2");  // before cb_xmm.reserve_back
         cb_xmm_obj.reserve_back(total_buffer_size);
+        WAYPOINT("XR3");  // before sub_bcast_cols_init_short
         sub_bcast_cols_init_short(cb_x, cb_ex);
+        WAYPOINT("XR4");  // sub_bcast_cols_init_short returned
         for (auto block : generic::blocks(Wt, block_size)) {
             WAYPOINT("S00");
             cb_x_obj.wait_front(block.start() + block.full_block_size());
