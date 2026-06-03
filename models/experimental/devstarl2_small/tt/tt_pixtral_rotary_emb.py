@@ -70,22 +70,21 @@ class TtPixtralRotaryEmbedding(LightweightModule):
                 sin_sel = sin_sel.to(torch_dtype)
             cos_sel = cos_sel.contiguous()
             sin_sel = sin_sel.contiguous()
-            self._cached_cos = ttnn.from_torch(
-                cos_sel,
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=self.datatype,
-                memory_config=rope_mem_cfg,
-                mesh_mapper=self._mesh_mapper,
-            )
-            self._cached_sin = ttnn.from_torch(
-                sin_sel,
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=self.datatype,
-                memory_config=rope_mem_cfg,
-                mesh_mapper=self._mesh_mapper,
-            )
+
+            # Tilize on HOST (from_torch without device=), then upload. Passing device= tilizes the
+            # row-major upload ON DEVICE (two TilizeDeviceOperation ops on the trace). The tables are
+            # one-time/cached, so the host tilize is paid once and never hits the device timeline.
+            def _upload(host_torch: torch.Tensor) -> ttnn.Tensor:
+                host_tile = ttnn.from_torch(
+                    host_torch,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=self.datatype,
+                    mesh_mapper=self._mesh_mapper,
+                )
+                return ttnn.to_device(host_tile, self.mesh_device, memory_config=rope_mem_cfg)
+
+            self._cached_cos = _upload(cos_sel)
+            self._cached_sin = _upload(sin_sel)
             self._cached_key = cache_key
 
         cos, sin = self._cached_cos, self._cached_sin
