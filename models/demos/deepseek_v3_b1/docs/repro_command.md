@@ -250,7 +250,28 @@ Net: fastwrite is **necessary but not sufficient**. The alternating MLP PCC need
 decoder kernel to *run to completion* on the 8-chip sim, which currently hangs. The
 single-chip root-cause repro (above) remains the hardware-free signal that works today.
 
-Env to enable fastwrite (already in `/tmp/run_alt_pcc.sh`):
+#### Update 2026-06-03 — re-tested on tt-metal main (PR #45419, craq-sim multichip mainlined)
+
+Craq-sim multichip merged to tt-metal **main** (`3ebc4499`, PR #45419): brings
+`simulator_direct_write.cpp` (fastwrite **native**, no cherry-pick) + `global_semaphore.cpp`
+/ `fabric_builder` / `fabric_firmware_initializer` / dispatch changes — the exact hang paths.
+Branch `ncvetkovic/multichip_half_dest_main` ports the half-DEST deltas onto main (umd
+`369ef5e4`; craq-sim `multichip` `7f69177a`). main also turned old-style `DPRINT << ...`
+into a hard `static_assert`, so the hash LLK + decoder markers were converted to fmt-style
+`DEVICE_PRINT(...)`.
+
+Result on main:
+- **Wall 1 still solved** (fastwrite native): weight prep 30 s, reaches the kernel.
+- **Wall 2 still NOT fixed**: `test_decoder_mlp` reaches `Running dense decoder operation
+  pos=127` then hangs identically — sim clock frozen (0 heartbeats over 90 s+), host in
+  post-`execute` `Synchronize → finish → finish_nolock`, dispatch RISCs idle-spin. Same
+  signature as the old base.
+- Single-chip `test_flash_mla_decode[...-127-1]` still passes on main (23 s).
+
+So PR #45419 mainlined multichip *integration* + fastwrite, but the 8-chip decoder *kernel
+execution* hang is unchanged — a still-open craq-sim limitation, independent of tt-metal base.
+
+Env to enable fastwrite (already in `/tmp/run_alt_pcc.sh`; native on main):
 
 ```bash
 export TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES=1
