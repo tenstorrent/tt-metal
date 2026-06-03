@@ -2,12 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <cstring>
+#include <ctime>
+#include <random>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "randn_device_operation.hpp"
-#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::randn {
 
@@ -18,10 +22,12 @@ std::uniform_int_distribution distribution(1, std::numeric_limits<int32_t>::max(
 
 auto get_random_seed(std::mt19937& rng) -> uint32_t { return distribution(rng); }
 
-RandnDeviceOperation::ProgramFactory::cached_program_t RandnDeviceOperation::ProgramFactory::create(
+tt::tt_metal::ProgramDescriptor RandnDeviceOperation::ProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
     [[maybe_unused]] const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
+    ProgramDescriptor desc;
+
     IDevice* device = output.device();
     auto grid = device->compute_with_storage_grid_size();
 
@@ -33,8 +39,6 @@ RandnDeviceOperation::ProgramFactory::cached_program_t RandnDeviceOperation::Pro
     uint32_t num_cores_y = grid.y;
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y);
 
-    Program program = Program();
-
     DataType output_dtype = output.dtype();
     auto out_data_format = datatype_to_dataformat_converter(output_dtype);
     const uint32_t dtype_tile_size = tile_size(out_data_format);
@@ -42,46 +46,61 @@ RandnDeviceOperation::ProgramFactory::cached_program_t RandnDeviceOperation::Pro
     constexpr uint32_t in_out_num_tiles = 2;
 
     constexpr uint32_t dst_cb_id = CBIndex::c_0;
-    CircularBufferConfig cb_output_config =
-        CircularBufferConfig(in_out_num_tiles * dtype_tile_size, {{dst_cb_id, out_data_format}})
-            .set_page_size(dst_cb_id, dtype_tile_size);
-    tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in_out_num_tiles * dtype_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(dst_cb_id),
+            .data_format = out_data_format,
+            .page_size = dtype_tile_size,
+        }}},
+    });
 
     const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/randn/device/kernels/";
     std::vector<uint32_t> writer_compile_time_args{dst_cb_id};
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
     const std::string writer_file_path = kernels_dir_path + "writer_standard_normal.cpp";
-    const std::vector<uint32_t> compute_compile_time_args{dst_cb_id};
+    std::vector<uint32_t> compute_compile_time_args{dst_cb_id};
     const std::string compute_file_path = kernels_dir_path + "compute_standard_normal.cpp";
 
-    KernelHandle writer_kernel_id = tt_metal::CreateKernel(
-        program, writer_file_path, all_cores, WriterDataMovementConfig(writer_compile_time_args));
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source = writer_file_path;
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
-    std::map<std::string, std::string> compute_defines;
+    KernelDescriptor::Defines compute_defines;
     switch (output_dtype) {
-        case DataType::BFLOAT16: compute_defines["OUTPUT_DTYPE_BFLOAT16"] = "1"; break;
+        case DataType::BFLOAT16: compute_defines.emplace_back("OUTPUT_DTYPE_BFLOAT16", "1"); break;
         default: break;
     }
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
-    KernelHandle compute_kernel_id = CreateKernel(
-        program,
-        compute_file_path,
-        all_cores,
-        ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = true,  // if fp32_dest_acc_en set to false a precision error may occur which makes
-                                       // generated number out of range [from, to)
-            .dst_full_sync_en = dst_full_sync_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args,
-            .defines = compute_defines,
-        });
+
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source = compute_file_path;
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = all_cores;
+    compute_desc.compile_time_args = std::move(compute_compile_time_args);
+    compute_desc.defines = std::move(compute_defines);
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        // if fp32_dest_acc_en set to false a precision error may occur which makes generated number out of range
+        // [from, to)
+        .fp32_dest_acc_en = true,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode,
+    };
 
     std::mt19937 rng = operation_attributes.seed.has_value() ? std::mt19937(*operation_attributes.seed)
                                                              : std::mt19937(std::time(nullptr));
 
+    writer_desc.runtime_args.reserve(cores.size());
+    compute_desc.runtime_args.reserve(cores.size());
+
+    auto* output_buffer = output.buffer();
     uint32_t tile_offset = 0;
     for (auto core : cores) {
         uint32_t units_per_core;
@@ -95,45 +114,16 @@ RandnDeviceOperation::ProgramFactory::cached_program_t RandnDeviceOperation::Pro
 
         uint32_t seed = get_random_seed(rng);
 
-        std::vector<uint32_t> compute_runtime_args = {seed, units_per_core};
-        SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
-
-        std::vector<uint32_t> writer_runtime_args = {output.buffer()->address(), tile_offset, units_per_core};
-        SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
+        compute_desc.emplace_runtime_args(core, {seed, units_per_core});
+        writer_desc.emplace_runtime_args(core, {output_buffer, tile_offset, units_per_core});
 
         tile_offset += units_per_core;
     }
 
-    return {
-        std::move(program),
-        {.compute_kernel_id = compute_kernel_id, .writer_kernel_id = writer_kernel_id, .cores = cores}};
-}
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
 
-void RandnDeviceOperation::ProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
-    [[maybe_unused]] const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    auto& program = cached_program.program;
-    auto& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
-    auto& compute_kernel_id = cached_program.shared_variables.compute_kernel_id;
-    auto& cores = cached_program.shared_variables.cores;
-
-    const uint32_t output_addr = output.buffer()->address();
-
-    std::mt19937 rng = operation_attributes.seed.has_value() ? std::mt19937(*operation_attributes.seed)
-                                                             : std::mt19937(std::time(nullptr));
-
-    for (auto core : cores) {
-        {
-            auto& runtime_args = GetRuntimeArgs(program, compute_kernel_id, core);
-            runtime_args[0] = get_random_seed(rng);
-        }
-        {
-            auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = output_addr;
-        }
-    }
+    return desc;
 }
 
 }  // namespace ttnn::operations::randn
