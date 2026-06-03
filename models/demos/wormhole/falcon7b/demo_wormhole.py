@@ -8,6 +8,7 @@ from models.common.utility_functions import is_wormhole_b0
 from models.demos.falcon7b_common.demo.demo import run_falcon_demo_kv
 from models.demos.utils.device_sku import get_current_device_sku_name
 
+
 @pytest.mark.parametrize(
     "perf_mode, max_seq_len, has_expected_perf_metrics, greedy_sampling, expected_greedy_output_path",
     (
