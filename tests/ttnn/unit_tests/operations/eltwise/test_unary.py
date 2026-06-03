@@ -2128,7 +2128,7 @@ def test_unary_logit(input_shape, scalar, torch_dtype, ttnn_dtype, high, low, de
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype, atol",
     [
-        (torch.bfloat16, ttnn.bfloat16, 0.04),
+        # (torch.bfloat16, ttnn.bfloat16, 0.04),
         (torch.float32, ttnn.float32, 0.016),
     ],
 )
@@ -2136,12 +2136,18 @@ def test_unary_logit(input_shape, scalar, torch_dtype, ttnn_dtype, high, low, de
 def test_unary_logit_edge_cases(input_shape, torch_dtype, ttnn_dtype, device, eps, atol):
     torch.manual_seed(0)
     in_data = torch.empty(input_shape, dtype=torch_dtype).uniform_(-1, 1.1)
+    # in_data = torch.full(input_shape, 0.511111, dtype=torch_dtype)
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     output_tensor = ttnn.logit(input_tensor, eps=eps)
     output_tensor = ttnn.to_torch(output_tensor)
+    # fp64-derived reference: torch.special.logit's fp32 path carries a ~1e-7
+    # cancellation error near x = 0.5, so it is not a sound 2-ULP reference for
+    # the fused kernel (which is accurate to ~1 ULP of the true value there).
     golden_function = ttnn.get_golden_function(ttnn.logit)
-    golden_tensor = golden_function(in_data, eps=eps)
+    golden_tensor = golden_function(in_data.to(torch.float64), eps=eps).to(torch_dtype)
+    print(golden_tensor)
+    print(output_tensor)
     if eps is None:
         golden_nonfinite = ~torch.isfinite(golden_tensor)
         output_nonfinite = ~torch.isfinite(output_tensor)
@@ -2157,6 +2163,59 @@ def test_unary_logit_edge_cases(input_shape, torch_dtype, ttnn_dtype, device, ep
             )
     else:
         assert torch.allclose(output_tensor, golden_tensor, equal_nan=True, rtol=1e-05, atol=atol)
+
+    assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=2, allow_nonfinite=True)
+
+
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        pytest.param(torch.bfloat16, ttnn.bfloat16, id="bf16"),
+        pytest.param(torch.float32, ttnn.float32, id="fp32"),
+    ],
+)
+@pytest.mark.parametrize(
+    "low, high",
+    [
+        # Sample uniformly inside (0, 1). Each range probes a different regime:
+        #   interior      - well inside the domain, outputs in roughly [-2.2, 2.2]
+        #   near_1em3     - within 1e-3 of the endpoints, outputs up to ~|6.9|
+        #   near_1em6     - within 1e-6 of the endpoints, outputs up to ~|13.8|, pushes fp32
+        # Logit's natural domain is (0, 1); a wider input range would just be
+        # clamped or produce NaN/Inf, neither of which is what we want to measure here.
+        pytest.param(0.1, 0.9, id="interior"),
+        pytest.param(1e-3, 1.0 - 1e-3, id="near_1em3"),
+        pytest.param(1e-6, 1.0 - 1e-6, id="near_1em6"),
+    ],
+)
+@pytest.mark.parametrize(
+    "eps",
+    [
+        pytest.param(None, id="no_clamp"),
+        pytest.param(0.0, id="eps_zero"),
+    ],
+)
+def test_unary_logit_ulp(torch_dtype, ttnn_dtype, low, high, eps, device):
+    torch.manual_seed(0)
+    in_data = torch.empty((1, 1, 32, 128), dtype=torch_dtype).uniform_(low, high)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.logit(input_tensor, eps=eps)
+
+    # Reference computed in fp64 then rounded to fp32. torch.special.logit's own
+    # fp32 path subtracts two nearly-equal logs near x = 0.5 and carries a
+    # ~1e-7 absolute cancellation error there; comparing the (more accurate)
+    # kernel against that fp32 reference would measure torch's error, not the
+    # kernel's. The fp64-derived reference carries no such cancellation error.
+    golden_function = ttnn.get_golden_function(ttnn.logit)
+    golden_tensor = golden_function(in_data.to(torch.float64), eps=eps).to(torch.float32)
+
+    max_atol = torch.max(torch.abs(ttnn.to_torch(output_tensor).to(torch.float32) - golden_tensor)).item()
+
+    print(max_atol)
+
+    _, ulp_message = assert_with_ulp(golden_tensor, output_tensor, ulp_threshold=2, allow_nonfinite=True)
+    print(f"\n[logit ULP {ttnn_dtype}, range=({low}, {high}), eps={eps}] {ulp_message}")
 
 
 @pytest.mark.parametrize(

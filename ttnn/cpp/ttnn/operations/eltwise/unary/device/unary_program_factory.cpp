@@ -64,7 +64,9 @@ void pack_first_op_scalars(
     }
 }
 
-bool needs_tmp0_cb(UnaryOpType t) { return t == UnaryOpType::LOGIT; }
+// No unary op currently needs a scratch CB: logit's clamp + logit now run in a
+// single DEST pass (see logit_kernel.cpp), so x never round-trips through L1.
+bool needs_tmp0_cb(UnaryOpType /*t*/) { return false; }
 
 uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout memory_layout) {
     auto num_cores = shard_spec.grid.num_cores();
