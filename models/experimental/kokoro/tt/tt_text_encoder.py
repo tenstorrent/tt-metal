@@ -50,7 +50,7 @@ def preprocess_tt_text_encoder(
     """Upload PyTorch ``TextEncoder`` weights to device for :class:`TTTextEncoder`."""
     emb_w = ttnn.from_torch(
         text_encoder.embedding.weight.detach().cpu(),
-        dtype=weights_dtype,
+        dtype=ttnn.bfloat16,  # ttnn.embedding requires BF16 weights on device
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
