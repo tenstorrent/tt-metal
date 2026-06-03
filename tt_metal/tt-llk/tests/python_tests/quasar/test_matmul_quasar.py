@@ -229,10 +229,17 @@ def test_matmul(
 
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    test_passed = passed_test(
+    # For MX outputs, model the packer: quantize the golden onto the MX lattice (from the
+    # math/pack_src format the result was produced in) so the comparison validates the
+    # device's MX output quantization, not just matmul-math-to-MX-precision. The lattice-
+    # aware compare in passed_test then supplies the small HW-vs-reference rounding slack.
+    if format.output_format.is_mx_format():
+        golden_tensor = quantize_mx_tensor_chunked(
+            golden_tensor.to(format_dict[pack_src_format]), format.output_format
+        ).to(torch_format)
+
+    assert passed_test(
         golden_tensor,
         res_tensor,
         format.output_format,
-    )
-
-    assert test_passed, "Assert against golden failed"
+    ), "Assert against golden failed"

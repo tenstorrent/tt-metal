@@ -319,7 +319,12 @@ def _mxfp_block_aware_compare(
     )
 
     diff = (g - r).abs()
-    is_valid = torch.where(safe, diff <= max_steps * local_ulp + 1e-6, g == r)
+    # Relative float32-rounding guard (~1 ULP at the comparison magnitude) instead of a
+    # fixed absolute slack. A constant would dominate `max_steps * local_ulp` for small
+    # magnitudes (tiny block scales) and let sign flips / multi-step jumps pass.
+    is_valid = torch.where(
+        safe, diff <= max_steps * local_ulp + torch.finfo(torch.float32).eps * a, g == r
+    )
     return is_valid | both_nan
 
 
