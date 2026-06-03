@@ -38,6 +38,14 @@ class Config:
             "drift_first_divergence_min_frac": 0.9,
             "min_perf_gain_pct": 2.0,
             "max_iterations": 3,
+            "placement_min_gain_pct": 2.0,
+        }
+    )
+    l1_budgets: dict = field(
+        default_factory=lambda: {
+            # per-core usable L1 (conservative starting values; tuned against the perf gate)
+            "wormhole_b0": {"per_core_bytes": 1024 * 1024, "num_cores": 64},
+            "blackhole": {"per_core_bytes": 1400 * 1024, "num_cores": 130},
         }
     )
 

@@ -33,16 +33,21 @@ class KBEntry:
     pattern_source: str = "unit_test"  # golden | unit_test | llm — provenance of torch_pattern
     confidence: str = "high"  # high (tier1 golden / tier2 unit-test) | low (tier3 llm)
     unit_test_refs: list = field(default_factory=list)  # op unit test(s) to reuse/parameterize at bring-up
+    placement_observations: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d = asdict(self)
         d["pattern_kind"] = self.pattern_kind.value
+        d["placement_observations"] = [
+            o.to_dict() if isinstance(o, PlacementObservation) else o for o in self.placement_observations
+        ]
         return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "KBEntry":
         d = dict(d)
         d["pattern_kind"] = PatternKind(d["pattern_kind"])
+        d["placement_observations"] = [PlacementObservation.from_dict(o) for o in d.get("placement_observations", [])]
         return cls(**d)
 
 
@@ -94,3 +99,28 @@ class BringupState(TypedDict, total=False):
     max_iterations: int
     status: str  # "running" | "pass" | "handoff"
     run_dir: str
+
+
+@dataclass(eq=True)
+class PlacementObservation:
+    op: str
+    tensor_role: str
+    size_descriptor: dict  # {"dims","dtype","bytes_expr"}
+    memory_config: dict  # {"buffer":"L1"|"DRAM","layout":..., "shard_spec_template":...}
+    program_config: Optional[str]
+    condition: Optional[dict]  # {"var","op","value"} or None
+    source: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "PlacementObservation":
+        return cls(**d)
+
+
+@dataclass(eq=True)
+class MemoryPlacement:
+    buffer: str  # "L1" | "DRAM"
+    layout: str = "interleaved"  # interleaved | width_sharded | block_sharded
+    shard_spec: Optional[dict] = None
