@@ -21,9 +21,9 @@ When `Config::worker_cores` is set:
 2. **Workers write** their page slices.
 3. **If metadata is enabled** — compile-time **master forwarder** (fixed `master_forwarder_core`):
    - waits for peer writes (`worker_done` roll call),
-   - reads shared metadata from service-core L1,
-   - multicasts identical metadata to every worker,
-   - multicasts `metadata_ready_sem`.
+   - reads its **local replicated** metadata copy from worker L1,
+   - writes it **in** to the service-core staging region the sender ships from (fan-in, host-ward),
+   - multicasts `metadata_ready_sem` purely to release peers — no metadata payload is sent to workers.
    - Peers wait `metadata_ready` after reporting `worker_done`.
 4. **Every worker acks** — atomic-inc `write_ack_counter` on the service core (one inc per worker).
 5. **Service core streams** backing (+ metadata page) to host FIFO; host calls `read_from_tensor()` + `barrier()`.

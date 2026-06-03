@@ -1485,6 +1485,9 @@ std::unique_ptr<D2HStreamService> D2HStreamService::connect(
     std::vector<std::unique_ptr<distributed::D2HSocket>> sockets;
     sockets.reserve(desc.per_coord_entries.size());
     for (const auto& [coord, socket_desc] : desc.per_coord_entries) {
+        // The socket descriptor carries its owner-side mesh coord; the outer
+        // per-coord-entry `coord` is kept as a map key but isn't needed for
+        // wire-up.
         (void)coord;
         sockets.push_back(distributed::D2HSocket::connect_from_descriptor(socket_desc));
     }
@@ -1540,7 +1543,20 @@ void D2HStreamService::read_from_tensor(ttsl::Span<std::byte> bytes, ttsl::Span<
 
     TT_FATAL(composer_ != nullptr, "D2HStreamService::read_from_tensor: composer unavailable");
     Tensor composed = composer_->compose(host_tensor);
-    const auto composed_bytes = composed.to_vector<uint8_t>();
+
+    // The span contract is raw packed bytes regardless of dtype, so view the
+    // composed buffer's bytes directly; `to_vector<uint8_t>()` would copy and
+    // fatal on any non-UINT8 dtype.
+    const auto& composed_host = composed.host_storage().host_tensor();
+    const auto& composed_dhb = composed_host.buffer();
+    const auto& composed_coords = composed_dhb.shard_coords();
+    TT_FATAL(
+        composed_coords.size() == 1,
+        "D2HStreamService::read_from_tensor: composed tensor has {} shards, expected a single aggregated shard",
+        composed_coords.size());
+    auto composed_shard = composed_dhb.get_shard(*composed_coords.begin());
+    TT_FATAL(composed_shard.has_value(), "D2HStreamService::read_from_tensor: composed shard not populated");
+    const auto composed_bytes = composed_shard->view_bytes();
     TT_FATAL(
         composed_bytes.size() == bytes.size(),
         "D2HStreamService::read_from_tensor: composed size {} != expected {}",
@@ -1597,6 +1613,9 @@ void D2HStreamService::read_from_tensor(Tensor& host_tensor, ttsl::Span<std::byt
     for (size_t s = 0; s < sockets_.size(); ++s) {
         read_threads.emplace_back([&, s] {
             try {
+                // One page per read: D2HSocket::read fatals when
+                // num_pages*page_size exceeds the FIFO, which is intentionally
+                // smaller than the payload. Mirrors the H2D page-major loop.
                 for (uint32_t i = 0; i < num_socket_pages_; ++i) {
                     const size_t offset = static_cast<size_t>(i) * socket_page_size_;
                     sockets_[s]->read(bases[s] + offset, /*num_pages=*/1);

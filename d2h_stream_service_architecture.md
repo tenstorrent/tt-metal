@@ -56,7 +56,7 @@ Setup once; hot path is **signal → produce → ack → stream → read → bar
 | **Service core**      | Off-grid core for persistent I/O (sender + socket config + sync words)                                                    |
 | **D2HSocket**         | Ring buffer in pinned host memory; device DMA in, host copies out                                                         |
 | **Chunk plan**        | Derives `socket_page_size` × `num_socket_pages` from tensor pages + scratch CB budget                                     |
-| **Master forwarder**  | Fixed worker core; **only when metadata enabled**; writes its slice, multicasts shared metadata to all workers, then acks |
+| **Master forwarder**  | Fixed worker core; **only when metadata enabled**; writes its slice, fans its local replicated metadata **in** to the service-core staging region, releases peers via `metadata_ready`, then acks |
 | **Owner / connector** | Same API surface; owner holds device + kernel; connector attaches via `/dev/shm` descriptor                               |
 
 
@@ -82,10 +82,10 @@ sender: wait num_workers acks         →  stream backing → FIFO  →  host re
 ### C. Worker-sync + metadata
 
 - **2 worker kernel roles:** peer worker + master forwarder (compile-time fixed core)
-- After all backing writes, master multicasts identical metadata to every worker; peers wait `metadata_ready` before acking
+- After all backing writes, the master reads its **local replicated** metadata copy and writes it **into the service-core staging region** (fan-in, host-ward); `metadata_ready` is a pure "master done, you may ack" barrier — no metadata is multicast to peers. Peers wait `metadata_ready` before acking.
 
 ```
-sender: transfer_done++  →  workers write  →  master mcasts metadata  →  all workers write_ack++
+sender: transfer_done++  →  workers write  →  master fans metadata in to service core  →  master mcasts metadata_ready  →  all workers write_ack++
 sender: stream backing + metadata page  →  host read + barrier
 ```
 
@@ -100,7 +100,7 @@ Worker programs are **launched by the model/test**, not by `D2HStreamService`.
 | ---------------------------- | --------------------------- | ------------------------------------------------------------- |
 | `transfer_done_sem`          | Worker L1 (GlobalSemaphore) | Sender unlocks workers after prior host read                  |
 | `worker_done`                | Master forwarder L1         | Peers report backing slice complete (metadata path only)      |
-| `metadata_ready_sem`         | Worker L1 (GlobalSemaphore) | Master signals metadata multicast landed (metadata path only) |
+| `metadata_ready_sem`         | Worker L1 (GlobalSemaphore) | Master releases peers to ack once its metadata fan-in is done (metadata path only) |
 | `write_ack_counter`          | Service core L1             | Each worker acks once after writes (+ metadata, if enabled)   |
 | `termination`                | Service core L1             | Clean shutdown of persistent loop                             |
 | `bytes_sent` / `bytes_acked` | Socket FIFO                 | Transport-level backpressure                                  |
@@ -111,8 +111,8 @@ Worker programs are **launched by the model/test**, not by `D2HStreamService`.
 ## Data path (one iteration)
 
 ```
-Produce backing  →  (metadata mcast)  →  worker acks  →  Sender streams  →  Host read  →  barrier
-     (workers/host)      (master only)      (write_ack++)     (FIFO)           (API)
+Produce backing  →  (metadata fan-in)  →  worker acks  →  Sender streams  →  Host read  →  barrier
+     (workers/host)      (master → svc core)   (write_ack++)     (FIFO)           (API)
 ```
 
 ---
@@ -131,8 +131,8 @@ Produce backing  →  (metadata mcast)  →  worker acks  →  Sender streams  �
 | ---------------------------------------- | ------------------------------------------------------------------------------------- |
 | **Persistent sender kernel**             | Amortize program build/dispatch; steady streaming                                     |
 | **write_ack counter (H2D mirror)**       | Sender waits for exactly `num_workers` producer acks before streaming                 |
-| **Master only for metadata**             | One core forwards identical metadata to all workers; no master when metadata disabled |
-| **Metadata after writes, before ack**    | Backing slices complete first; workers observe metadata before acking                 |
+| **Master only for metadata**             | Metadata is replicated identically across cores, so one core fans it in to the service core (host-ward); no master when metadata disabled |
+| **Metadata after writes, before ack**    | Backing slices complete first; the master fans metadata in before releasing peers to ack |
 | **Compile-time master + metadata flags** | Hot path branches eliminated via `if constexpr`                                       |
 | **Socket as transport layer**            | Reuse H2D socket infra (FIFO, pinned memory, cross-process descriptors)               |
 
@@ -149,11 +149,11 @@ Produce backing  →  (metadata mcast)  →  worker acks  →  Sender streams  �
 | Persistent **receiver**                           | Persistent **sender**                                   |
 | Host → device                                     | Device → host                                           |
 | Workers **consume** after ready                   | Workers **produce** before ack                          |
-| Service multicasts metadata **before** data_ready | Master multicasts metadata **after** writes, before ack |
+| Service multicasts metadata **out** to workers before data_ready | Master fans metadata **in** to the service core after writes; `metadata_ready` only releases peers to ack |
 
 
 ---
 
 ## One-line architecture
 
-**A long-lived service-core sender waits for per-worker write acks, then streams a fixed backing DRAM tensor through per-coord D2H socket FIFOs; optional compile-time master forwarder multicasts shared metadata after parallel worker writes.**
+**A long-lived service-core sender waits for per-worker write acks, then streams a fixed backing DRAM tensor through per-coord D2H socket FIFOs; an optional compile-time master forwarder fans replicated metadata in to the service core (host-ward) after parallel worker writes, then releases peers to ack via a `metadata_ready` barrier.**
