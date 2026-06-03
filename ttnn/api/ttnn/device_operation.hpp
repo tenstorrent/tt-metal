@@ -182,6 +182,30 @@ inline void log_operation(
 
 #endif
 
+// Collects all MeshBuffer pointers that need a completion event recorded.
+// A single pass over all reachable Tensors in `object` — avoids the two-pass
+// (check-then-iterate) pattern that previously walked device tensors twice per op.
+// Buffers are appended to `out`; callers should reserve() if they know the typical size.
+template <typename T>
+inline void collect_trackable_mesh_buffers(
+    const T& object, std::vector<tt::tt_metal::distributed::MeshBuffer*>& out) {
+    ttsl::reflection::visit_object_of_type<Tensor>(
+        [&](const Tensor& tensor) {
+            if (!tensor.is_allocated() || tensor.storage_type() != StorageType::DEVICE) {
+                return;
+            }
+            for (const auto& device_tensor : ttnn::distributed::get_device_tensors(tensor)) {
+                if (device_tensor.storage_type() != StorageType::DEVICE) {
+                    continue;
+                }
+                if (auto buf = device_tensor.device_storage().get_mesh_buffer_leak_ownership()) {
+                    out.push_back(buf.get());
+                }
+            }
+        },
+        object);
+}
+
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void enqueue_mesh_workload(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -218,7 +242,36 @@ void enqueue_mesh_workload(
         return;
     }
 
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    auto& mesh_cq = mesh_device->mesh_command_queue();
+    log_trace(tt::LogMetal, "[device_operation] EnqueueMeshWorkload start");
+    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_cq, workload, false);
+    log_trace(tt::LogMetal, "[device_operation] EnqueueMeshWorkload done");
+
+    // Record a host-visible completion event after the workload so buffers referenced by
+    // this op cannot be deallocated and immediately reused while the device is still using
+    // their addresses on this CQ.
+    //
+    // Skip during trace capture: enqueue_record_event_to_host() TT_FATALs when trace_id is
+    // set ("Event Synchronization is not supported during trace capture"). Buffer lifetime
+    // during trace execution is managed by the trace infrastructure, which keeps all captured
+    // buffer addresses alive for the lifetime of the trace — the eager-mode reuse race cannot
+    // occur during capture.
+    //
+    // Collect all trackable MeshBuffer pointers in a single pass over tensor_args and
+    // tensor_return_value.  If the list is non-empty we record the event and stamp each
+    // buffer; if empty we skip the enqueue_record_event_to_host round-trip entirely — that
+    // call dominates per-op cost on tight inference/prefill loops (PR review H-5/T-4).
+    if (!mesh_cq.trace_id().has_value()) {
+        std::vector<tt::tt_metal::distributed::MeshBuffer*> trackable_buffers;
+        detail::collect_trackable_mesh_buffers(tensor_args, trackable_buffers);
+        detail::collect_trackable_mesh_buffers(tensor_return_value, trackable_buffers);
+        if (!trackable_buffers.empty()) {
+            auto completion_event = mesh_cq.enqueue_record_event_to_host();
+            for (auto* buf : trackable_buffers) {
+                buf->add_pending_event(completion_event);
+            }
+        }
+    }
 
     TracyOpMeshWorkload(
         mesh_device,

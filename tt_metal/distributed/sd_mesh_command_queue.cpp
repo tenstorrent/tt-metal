@@ -70,7 +70,9 @@ SDMeshCommandQueue::SDMeshCommandQueue(
 }
 
 std::optional<MeshTraceId> SDMeshCommandQueue::trace_id() const {
-    TT_THROW("Trace not supported for slow dispatch");
+    // Slow dispatch does not support tracing; return nullopt to indicate no active trace.
+    // This allows callers that guard on trace_id().has_value() to take the non-trace path
+    // (e.g. enqueue_mesh_workload's completion-event recording block).
     return std::nullopt;
 }
 

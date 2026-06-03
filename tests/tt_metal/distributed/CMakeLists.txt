@@ -17,6 +17,7 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_mesh_allocator.cpp
     test_mesh_events.cpp
     test_mesh_trace.cpp
+    test_multicq_dealloc_race.cpp
     test_thread_pool.cpp
     test_dispatch_context.cpp
     utils.cpp
