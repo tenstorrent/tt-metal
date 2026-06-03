@@ -42,6 +42,10 @@ MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
 
 # Power-of-2 batch sizes supported by trace caching for batched prefill.
 SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
+
+# Position of the page table within the decode input tuple produced by
+# Transformer.prepare_decode_inputs_host: (tokens, current_pos, rope_idxs, page_table).
+# Used to refresh only the page-table trace input when KV blocks are reallocated.
 DECODE_PAGE_TABLE_INPUT_IDX = 3
 
 
@@ -1270,7 +1274,12 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         }
 
         if enable_trace:
-            tt_decode_output = self._decode_forward_trace_text(**decode_kwargs, reset_batch=mode_switched)
+            # A real batch reset / slot remap (reset_batch) also makes the device
+            # token/current_pos trace buffers stale, not just a prefill->decode
+            # mode switch, so both must force a full traced-input reset.
+            tt_decode_output = self._decode_forward_trace_text(
+                **decode_kwargs, reset_batch=reset_batch or mode_switched
+            )
         else:
             tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 

@@ -28,6 +28,9 @@ from models.common.warmup import WarmupForwardMixin
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
 
 
+# Position of the page table within the decode input tuple produced by
+# LlamaModel.prepare_decode_inputs_host: (tokens, current_pos, rope_idxs, page_table).
+# Used to refresh only the page-table trace input when KV blocks are reallocated.
 DECODE_PAGE_TABLE_INPUT_IDX = 3
 
 
@@ -1114,6 +1117,12 @@ class Generator(WarmupForwardMixin):
         if self.model.is_decode_setup is False:
             self.model.switch_mode("decode")
             reset_inputs = True  # Last step wasn't decode, so we definitely need to load inputs.
+
+        if reset_batch:
+            # A new batch layout (real reset or slot remap) leaves the device
+            # token/current_pos buffers holding the previous batch's values, so
+            # host inputs are authoritative again and must be fully reloaded.
+            reset_inputs = True
 
         kv_cache = kv_cache[0]
         decode_kwargs = {
