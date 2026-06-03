@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
@@ -23,10 +24,14 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* out_ready_sema =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr);
 
+    CircularBuffer cb(cb_id);
+
     // 1. Wait for signal from All-Gather worker
+    // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is an absolute L1 address from the
+    // program factory, which is a target of a remote atomic increment over fabric. Semaphore<> binds to ids only.
     noc_semaphore_wait(out_ready_sema, out_ready_sem_wait_value);
 
     // 2. Signal compute kernel to start processing
-    cb_push_back(cb_id, total_num_reduction_tiles);
+    cb.push_back(total_num_reduction_tiles);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
 }
