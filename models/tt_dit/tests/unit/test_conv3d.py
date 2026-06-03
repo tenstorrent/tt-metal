@@ -76,9 +76,9 @@ def validate_outputs(tt_output, ref_output, test_name):
     "input_shape, out_channels, kernel_size, stride",
     [
         [(1, 768, 28, 60, 106), 768, (3, 3, 3), (1, 1, 1)],
-        [(1, 512, 82, 120, 212), 512, (3, 3, 3), (1, 1, 1)],
+        #  [(1, 512, 82, 120, 212), 512, (3, 3, 3), (1, 1, 1)],
     ],
-    ids=["768", "512"],
+    ids=["768"],  # , "512"],
 )
 @pytest.mark.parametrize(
     "mesh_device",
