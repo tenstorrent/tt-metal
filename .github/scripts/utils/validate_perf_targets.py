@@ -21,6 +21,7 @@ except ModuleNotFoundError:
     from models.demos.utils import model_targets
 
 LOWER_IS_BETTER_METRICS = {
+    "prefill_time_to_first_token",
     "prefill_time_to_token",
     "compile_prefill",
     "compile_decode",
