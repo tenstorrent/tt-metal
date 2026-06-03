@@ -182,7 +182,7 @@ def build_vision_matmul_preset(mesh_device: ttnn.MeshDevice, m: int, k: int, n: 
     grid = (gx, gy)
     cfg = {**cfg, "grid": grid}
     if cfg["layout"].startswith("ws"):
-        cfg["in0_block_w"] = _pick_in0_block_w(k, grid, width_sharded_in0=True)
+        cfg["in0_block_w"] = _pick_in0_block_w(k, grid, is_ws_in0=True)
     in0_mem, in1_mem, out_mem = create_memory_configs(shape, cfg)
     return VisionMatmulPreset(
         shape=shape,
