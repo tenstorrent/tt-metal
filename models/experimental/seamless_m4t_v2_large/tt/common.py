@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import Any, Optional, Tuple
 
 import ttnn
@@ -814,6 +815,22 @@ def build_ln_sharded_config(
     return cached
 
 
+def _all_gather_num_links() -> int:
+    """Ethernet links for the TP ``all_gather`` (env ``SEAMLESS_ALL_GATHER_NUM_LINKS``, default 2).
+
+    The gather of ``[1, ..., H]`` across TP devices is latency-bound at decode shapes (tiny
+    payload); driving it over both ethernet links of the BH QB 1x4 line cut AllGather kernel
+    time 17% (6167->5111us, -3.5% end-to-end) in the 2026_06_03 t2tt profile vs a single link.
+    Default 2 = the BH QB per-hop link count (3+ errors: only 2 links exist). Override per
+    topology; falls back to 1 on a bad/zero value.
+    """
+    try:
+        n = int(os.environ.get("SEAMLESS_ALL_GATHER_NUM_LINKS", "2"))
+    except ValueError:
+        return 1
+    return n if n >= 1 else 1
+
+
 def all_reduce_sum_replicate(
     x: ttnn.Tensor,
     mesh_device: ttnn.Device,
@@ -824,18 +841,24 @@ def all_reduce_sum_replicate(
     """Sum-reduce TP partial results across devices on ``cluster_axis``; result replicated.
 
     For TP=1 (single device) returns ``x`` unchanged.  For TP>1, ``all_gather``
-    concatenates partial sums along the last tensor dimension, then the tp chunks
-    are summed to produce the full all-reduce result.
+    stacks the per-device partial sums along the (unit) leading dim, then ``sum``
+    over that dim produces the full all-reduce result.
 
-    Each device starts with ``[..., H]`` (a partial sum for the full output
-    dimension), and after the all_reduce every device holds the full ``[..., H]``.
+    Each device starts with ``[1, ..., H]`` (a partial sum for the full output
+    dimension), and after the all_reduce every device holds the full ``[1, ..., H]``.
 
-    For short sequences (decode, B*S ≤ 32) the tp-chunk sum is ``reshape [..., tp, H] →
-    sum(dim=-2)`` — one reduction instead of ``tp`` slices + ``tp-1`` adds (~2.7× faster on
-    the decode shape, and this runs 3×/layer × 24 layers each decode step). At prefill/encoder
-    lengths that reshape would re-tilize the whole tensor and OOM L1, so those fall back to the
-    ``slice``+``add`` loop. Native ``ttnn.all_reduce`` was measured slower than ``all_gather`` +
-    this local reduction on BH QB at H=1024.
+    Why gather on dim 0 rather than the last dim: gathering on the last dim gives
+    ``[..., tp*H]``, and separating the ``tp`` chunks then needs ``reshape [..., tp, H]``,
+    which splits the tile-packed last dim → a physical re-tilize (a full copy ~27 µs/call,
+    72×/decode step ≈ 25% of device time), plus a second reshape to restore ``[B, S, H]``
+    and a ``fill_pad`` for the non-tile-aligned ``tp`` dim. Gathering on the leading
+    (non-tiled) dim instead lets ``sum(dim=0)`` reduce across devices with no reshape,
+    no fill_pad, and no re-tilize — and it is memory-safe at prefill/encoder lengths
+    (``sum`` reads the gathered tensor and writes ``[1, ..., H]`` without a full extra copy),
+    so the same path serves decode and prefill. Native ``ttnn.all_reduce`` was measured
+    slower than ``all_gather`` + this local reduction on BH QB at H=1024.
+
+    Assumes a unit leading dim (batch=1 decode/prefill here); see the assert below.
     """
     num_devices = 1
     if hasattr(mesh_device, "get_num_devices"):
@@ -846,14 +869,15 @@ def all_reduce_sum_replicate(
     if num_devices <= 1:
         return x
 
-    # all_gather concatenates along last dim: [B, S, H] → [B, S, tp*H]
-    H = int(x.shape[-1])
-    rank = len(x.shape)
+    # Stack the per-device partials on the leading (non-tiled) dim: [1, ..., H] → [tp, ..., H].
+    # Requires a unit leading dim so dim 0 sums purely across devices, not batch.
+    assert int(x.shape[0]) == 1, f"all_reduce_sum_replicate expects a unit leading dim, got shape {x.shape}"
+    num_links = _all_gather_num_links()
     try:
         gathered = ttnn.all_gather(
             x,
-            dim=rank - 1,
-            num_links=1,
+            dim=0,
+            num_links=num_links,
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
             memory_config=memory_config,
@@ -862,47 +886,16 @@ def all_reduce_sum_replicate(
         # Newer TTNN all_gather API infers mesh from ``x`` and no longer accepts ``mesh_device``.
         gathered = ttnn.all_gather(
             x,
-            dim=rank - 1,
-            num_links=1,
+            dim=0,
+            num_links=num_links,
             cluster_axis=cluster_axis,
             memory_config=memory_config,
         )
 
-    # Sum the tp partial-sum chunks. all_gather lays device i's chunk at columns [i*H, (i+1)*H).
-    tp = num_devices
-    gathered_shape = list(gathered.shape)
-    leading = 1
-    for d in gathered_shape[:-1]:
-        leading *= int(d)
-
-    # Decode (small leading dim, e.g. B*S ≤ one tile row): reshape [..., tp, H] → sum(dim=-2) is a single
-    # reduction (~2.7× faster than the tp-way slice+add loop), and this runs 72×/decode step. But the
-    # reshape splits the tile-packed last dim → a physical re-tilize that allocates a full copy, which
-    # OOMs L1 at prefill/encoder sequence lengths (S~1500 → ~60 MB). So gate it to short sequences; the
-    # slice+add loop (extracts already-tile-aligned [.., H] chunks) stays the safe path for long S.
-    if leading <= 32:
-        reshaped = ttnn.reshape(gathered, [*gathered_shape[:-1], tp, H])
-        acc = ttnn.sum(reshaped, dim=-2, memory_config=memory_config)
-        ttnn.deallocate(reshaped)
-        ttnn.deallocate(gathered)
-        return acc
-
-    acc: Optional[ttnn.Tensor] = None
-    for i in range(tp):
-        begins = [0] * rank
-        ends = list(gathered_shape)
-        begins[-1] = i * H
-        ends[-1] = (i + 1) * H
-        chunk = ttnn.slice(gathered, begins, ends, [1] * rank, memory_config=memory_config)
-        if acc is None:
-            acc = chunk
-        else:
-            new_acc = ttnn.add(acc, chunk, memory_config=memory_config)
-            ttnn.deallocate(acc)
-            ttnn.deallocate(chunk)
-            acc = new_acc
+    # Sum across devices: [tp, ..., H] → [1, ..., H]. keepdim preserves rank for downstream ops.
+    acc = ttnn.sum(gathered, dim=0, keepdim=True, memory_config=memory_config)
     ttnn.deallocate(gathered)
-    return acc  # type: ignore[return-value]
+    return acc
 
 
 # TP encoder: large prefill activations in DRAM avoid L1 clashes with block-sharded matmul CBs.
