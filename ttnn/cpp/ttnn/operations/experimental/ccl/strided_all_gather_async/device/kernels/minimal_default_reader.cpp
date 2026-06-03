@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
@@ -141,6 +143,7 @@ void kernel_main() {
                 input_chunk_start_tile = global_tile_index;
                 for (uint32_t chunk_idx = 0; chunk_idx < device_k_block_counts[actual_sender_chip_id]; chunk_idx++) {
                     // Receive the next chunk of data
+                    // Device 2.0: legacy primitive retained: out_ready_sem is the address of a GlobalSemaphore.
                     noc_semaphore_wait_min(
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
                     sem_target++;
@@ -183,5 +186,6 @@ void kernel_main() {
         }
         batch_input_tile_offset += tiles_per_batch;
     }
+    // Device 2.0 migration: legacy primitive retained, out_ready_sem is a GlobalSemaphore address.
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }

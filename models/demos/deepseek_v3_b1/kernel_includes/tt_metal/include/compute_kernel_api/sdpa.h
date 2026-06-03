@@ -187,7 +187,6 @@ inline void non_approx_exp_mul_prev(uint32_t curr_sum_index, uint32_t corr_exp_i
     sfpi::vFloat curr_max_bottom_4 = sfpi::l_reg[sfpi::LRegs::LReg2];
     sfpi::vFloat sub_top_4 = prev_max_top_4 - curr_max_top_4;
     sfpi::vFloat sub_bottom_4 = prev_max_bottom_4 - curr_max_bottom_4;
-    ckernel::sfpu::_init_sfpu_reciprocal_<false>();
     sfpi::vFloat exp_top_4 =
         sfpu::_ckernel_sfpu_exp_accurate_<true /*SCALE_EN*/, DST_ACCUM_MODE /*is_fp32_dest_acc_en*/>(
             sub_top_4, scale_bf16);
@@ -301,7 +300,6 @@ void compute_sdpa_chunk(
         MATH((t6_semaphore_get<p_stall::NONE>(SFPU_FPU)));
     }
     // Exp Mul Scale (SFPU)
-    PACK((init_fast_approx_exp_constants<scale_fp32>()));
     for (uint32_t i = 0; i < chunk_size; i++) {
         // Wait for FPU that tile is ready (sem is non-zero)
         PACK((t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU)));
@@ -419,6 +417,7 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
             sfpi::dst_reg[worker_max_base_idx] = exp_worker;
         } else {
             sfpi::vFloat curr_sum = exp_worker * worker_sum_vec + exp_prev * prev_sum_vec;
+            ckernel::sfpu::_init_sfpu_reciprocal_<false>();
             sfpi::vFloat recip_sum = ckernel::sfpu::sfpu_reciprocal<SDPA_EXP_APPROX_MODE>(curr_sum);
             sfpi::dst_reg[prev_max_base_idx] = exp_prev * recip_sum;
             sfpi::dst_reg[worker_max_base_idx] = exp_worker * recip_sum;

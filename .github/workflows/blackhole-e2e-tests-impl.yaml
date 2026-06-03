@@ -173,7 +173,7 @@ jobs:
         if: ${{ !startsWith(matrix.test-group.sku, 'bh_p100') && !startsWith(matrix.test-group.sku, 'bh_p150') }}
         timeout-minutes: 10
         with:
-          runner-label: ${{ (matrix.test-group.sku == 'bh_deskbox' && 'BH-DeskBox') || (matrix.test-group.sku == 'bh_loudbox' && 'BH-LoudBox') || (matrix.test-group.sku == 'bh_llmbox' && 'BH-LLMBox') || (matrix.test-group.sku == 'bh_quietbox_2' && 'BH-QB-GE') || (matrix.test-group.sku == 'bh_p300' && 'P300-viommu') || '' }}
+          runner-label: ${{ matrix.test-group.sku == 'bh_deskbox' && 'BH-DeskBox' || '' }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |

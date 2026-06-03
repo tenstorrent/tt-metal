@@ -406,6 +406,7 @@ class CustomNamespace(SimpleNamespace):
 class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
     model_capabilities = {
         "supports_prefix_caching": False,
+        "supports_sample_on_device": True,
     }
 
     def __init__(self, *args, **kwargs):
@@ -496,9 +497,13 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
 class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
     # Class-level capabilities
     # Note: Mllama doesn't support prefix caching (it's V0 only)
+    # decode_forward calls decode_forward_llama_vision and discards anything
+    # but logits, so sampling_params never reach a sampler — explicitly
+    # declare on-device sampling unsupported.
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": True,
+        "supports_sample_on_device": False,
     }
 
     @classmethod
@@ -618,6 +623,7 @@ class LlamaForCausalLM(Generator):
     model_capabilities = {
         "supports_prefix_caching": True,
         "supports_async_decode": True,
+        "supports_sample_on_device": True,
     }
 
     @classmethod
@@ -702,6 +708,7 @@ class QwenForCausalLM(Generator):
     model_capabilities = {
         "supports_prefix_caching": True,
         "supports_async_decode": True,
+        "supports_sample_on_device": True,
     }
 
     @classmethod
@@ -780,6 +787,7 @@ class MistralForCausalLM(Generator):
     model_capabilities = {
         "supports_prefix_caching": True,
         "supports_async_decode": True,
+        "supports_sample_on_device": True,
     }
 
     @classmethod
@@ -877,6 +885,7 @@ class Gemma3ForConditionalGeneration(HybridAttentionForCausalLM, SupportsMultiMo
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": True,
+        "supports_sample_on_device": True,
     }
 
     @classmethod
@@ -1015,6 +1024,7 @@ class GptOssForCausalLM(HybridAttentionForCausalLM):
     model_capabilities = {
         "supports_prefix_caching": False,  # Sliding window => no prefix caching
         "supports_async_decode": True,
+        "supports_sample_on_device": True,
     }
 
     def __init__(self, *args, **kwargs):
