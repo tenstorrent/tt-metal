@@ -44,7 +44,7 @@ from models.demos.rvc.torch_impl.vc.synthesizer import TextEncoder, SourceModule
 from models.demos.rvc.tt.runtime import TTNNFlowDecoder, TTNNGeneratorNSF
 from models.demos.rvc.utils.audio import load_audio
 from models.demos.rvc.utils.config import (
-    Config, HubertPretrainingConfig, HubertPretrainingTask,
+    HubertPretrainingConfig, HubertPretrainingTask,
     get_hubert_paths, get_model_and_config_paths,
 )
 

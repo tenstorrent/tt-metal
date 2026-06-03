@@ -12,7 +12,6 @@ import torch
 _RVC_BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BASE_DIRECTORY = os.path.join(_RVC_BASE_DIR, "data")
 SPEECH_DIRECTORY = os.path.join(BASE_DIRECTORY, "speech")
-BATCH_AUDIO_SIZE = 8
 
 
 def transcode_audio(input_stream, output_stream, output_format, sample_rate):
@@ -43,27 +42,8 @@ def _decode_audio(f, sr):
         return torch.from_numpy(audio)
 
 
-def _load_fixed_audio_batch(sr):
-    audio_list = []
-    for i in range(BATCH_AUDIO_SIZE):
-        path = os.path.abspath(os.path.join(SPEECH_DIRECTORY, f"sample-speech-{i}.wav"))
-        with open(path, "rb") as f:
-            audio = _decode_audio(f, sr)
-            audio_list.append(audio)
-    return audio_list
-
-
 def load_audio(sr):
     path = os.path.abspath(os.path.join(SPEECH_DIRECTORY, "sample-speech-0.wav"))
     with open(path, "rb") as f:
         audio = _decode_audio(f, sr)
     return audio
-
-
-def load_audio_batch(sr):
-    audio_list = _load_fixed_audio_batch(sr)
-    max_length = max(audio.shape[0] for audio in audio_list)
-    batch = torch.zeros((len(audio_list), max_length), dtype=torch.float32)
-    for idx, audio in enumerate(audio_list):
-        batch[idx, : audio.shape[0]] = audio.to(torch.float32)
-    return batch

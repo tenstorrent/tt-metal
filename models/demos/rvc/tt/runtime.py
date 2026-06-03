@@ -74,11 +74,6 @@ NUM_KERNELS = 3
 NUM_UPSAMPLES = 4
 LRELU_SLOPE = 0.1
 
-# Fused activation config: eliminates separate leaky_relu dispatch per conv
-_FUSED_LRELU_CONFIG = ttnn.Conv2dConfig(
-    activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, LRELU_SLOPE)
-)
-
 def _linear_channel_first(x, weight, bias):
     """Matrix multiply for channels-first: weight @ x + bias."""
     y = torch.matmul(weight, x)
@@ -530,69 +525,6 @@ class TTNNGeneratorNSF:
         if b_torch is not None:
             out = out + b_torch.unsqueeze(0).unsqueeze(0)
         return out, out_len
-
-    def _conv1d_fused(self, x_tt_host, w_tt, b_tt, in_ch, out_ch, k, seq_len,
-                      dilation=1, fuse_relu=True):
-        """Conv1d with fused LeakyReLU and native bias — minimal host roundtrips.
-
-        Takes a ttnn host tensor, returns a ttnn host tensor.
-        LeakyReLU is fused into the conv kernel (zero extra dispatch).
-        Bias is handled by conv1d natively (zero extra dispatch).
-        """
-        padding = dilation * (k - 1) // 2
-        config = _FUSED_LRELU_CONFIG if fuse_relu else None
-        result = ttnn.conv1d(
-            input_tensor=x_tt_host, weight_tensor=w_tt, device=self._device,
-            in_channels=in_ch, out_channels=out_ch, batch_size=1,
-            input_length=seq_len, kernel_size=k, stride=1,
-            padding=padding, dilation=dilation, groups=1,
-            dtype=DEFAULT_DTYPE, return_output_dim=True,
-            bias_tensor=b_tt,
-            conv_config=config,
-        )
-        out_tt = result[0]
-        try:
-            out_tt = ttnn.sharded_to_interleaved(out_tt)
-        except RuntimeError:
-            pass
-        return ttnn.from_device(out_tt), result[1]
-
-    def _resblock1(self, x_cf, block_idx, dilations, seq_len):
-        """ResBlock1 — optimized with native conv1d bias.
-
-        Keeps leaky_relu on host (torch) since device relu + roundtrip
-        costs more than it saves. Uses conv1d native bias parameter
-        to eliminate separate host bias add.
-        """
-        block = self._resblocks[block_idx]
-        ch = block["channels"]
-
-        for idx in range(3):
-            d = dilations[idx]
-            c1 = block["convs1"][idx]
-            c2 = block["convs2"][idx]
-
-            xt = F.leaky_relu(x_cf, LRELU_SLOPE)
-            xt_cl = xt.permute(0, 2, 1).unsqueeze(1)  # [1, 1, T, C]
-            xt_tt = ttnn.from_torch(xt_cl, dtype=DEFAULT_DTYPE)
-            # conv1 fuses LeakyReLU on its output, replacing the host LRELU
-            # that would otherwise sit between conv1 and conv2.
-            xt_tt, _ = self._conv1d_fused(
-                xt_tt, c1["w"], c1["b_tt"], ch, ch, c1["kernel"], seq_len,
-                dilation=d, fuse_relu=True)
-            xt = ttnn.to_torch(xt_tt).float().squeeze(1).permute(0, 2, 1)
-
-            xt_cl = xt.permute(0, 2, 1).unsqueeze(1)
-            xt_tt = ttnn.from_torch(xt_cl, dtype=DEFAULT_DTYPE)
-            # conv2 keeps raw output — the following op is a residual add,
-            # not another activation, so no fusion here.
-            xt_tt, _ = self._conv1d_fused(
-                xt_tt, c2["w"], c2["b_tt"], ch, ch, c2["kernel"], seq_len,
-                fuse_relu=False)
-            xt = ttnn.to_torch(xt_tt).float().squeeze(1).permute(0, 2, 1)
-
-            x_cf = xt + x_cf
-        return x_cf
 
     def _ensure_prepared_conv(self, w_host, b_host, in_ch, out_ch, k, seq_len, dilation, batch=1):
         """Lazy prepared-weight cache for Generator conv1d shapes.

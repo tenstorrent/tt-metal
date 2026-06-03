@@ -28,10 +28,6 @@ def set_rng_state(state):
         torch.cuda.set_rng_state(state["cuda_rng_state"])
 
 
-def relu_squared(x: torch.Tensor):
-    return F.relu(x).pow(2)
-
-
 def gelu_approximate(x):
     return 0.5 * x * (1 + torch.tanh(math.sqrt(2 / math.pi) * (x + 0.044715 * torch.pow(x, 3))))
 
@@ -44,8 +40,6 @@ def get_activation_fn(activation: str) -> Callable:
     """Returns the activation function corresponding to `activation`"""
     if activation == "relu":
         return F.relu
-    elif activation == "relu_squared":
-        return relu_squared
     elif activation == "gelu":
         return gelu
     elif activation == "gelu_approximate":
