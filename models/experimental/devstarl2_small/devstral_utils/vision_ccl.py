@@ -112,9 +112,12 @@ def vision_sum_all_reduce(
         return partial
 
     num_devices = int(mesh_shape[cluster_axis])
-    grid_x, grid_y = _vision_ccl_core_grid(configuration)
     rs_width_mem = vision_ccl_rs_width_sharded_memcfg(seq_len, feature_dim, num_devices, configuration)
-    rs_block_mem = vision_ccl_rs_block_shard_memcfg(seq_len, feature_dim, num_devices, configuration, grid_x, grid_y)
+    # Block-sharded producers (MLP w2 / QKV) live on a fixed 8x8 grid, not configuration.max_grid_size.
+    # The RS output memcfg must use that same 8x8 grid (the function's defaults) — otherwise eligibility
+    # fails (nt does not divide max_grid_x) and the block-sharded partial is resharded to DRAM interleaved
+    # (ShardedToInterleaved) before reduce-scatter. reduce_scatter_minimal_async consumes block-sharded input.
+    rs_block_mem = vision_ccl_rs_block_shard_memcfg(seq_len, feature_dim, num_devices, configuration)
     in_sharded_mem = vision_ccl_width_sharded_memcfg(seq_len, feature_dim, configuration)
     gathered_mem = ag_out_mem if ag_out_mem is not None else ttnn.DRAM_MEMORY_CONFIG
 
