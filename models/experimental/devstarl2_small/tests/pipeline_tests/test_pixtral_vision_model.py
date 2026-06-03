@@ -93,7 +93,7 @@ def _hf_vision_forward_truncated(hf_vm: PixtralVisionModel, pixel_values, image_
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("n_layers", (2,))
+@pytest.mark.parametrize("n_layers", (24,))
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
