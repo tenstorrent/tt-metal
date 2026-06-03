@@ -556,12 +556,14 @@ def mesh_device(request, silicon_arch_name, device_params):
         num_devices_requested = grid_dims[0] * grid_dims[1]
         if not ttnn.using_distributed_env() and num_devices_requested > ttnn.get_num_devices():
             pytest.skip(
-                f"Requested more devices {num_devices_requested} than available {ttnn.get_num_devices()}. Test not applicable for machine"
+                f"Requested more devices ({num_devices_requested}) than available ({ttnn.get_num_devices()}). Test not applicable for machine"
             )
         mesh_shape = ttnn.MeshShape(*grid_dims)
     else:
         if not ttnn.using_distributed_env() and param > ttnn.get_num_devices():
-            pytest.skip("Requested more devices than available. Test not applicable for machine")
+            pytest.skip(
+                f"Requested more devices ({num_devices_requested}) than available ({ttnn.get_num_devices()}). Test not applicable for machine"
+            )
         mesh_shape = ttnn.MeshShape(1, param)
 
     override_trace_region_size = get_supported_trace_region_size(request, param)
