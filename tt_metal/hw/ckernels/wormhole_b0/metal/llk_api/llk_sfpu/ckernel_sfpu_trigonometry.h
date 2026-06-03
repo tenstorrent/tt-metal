@@ -582,7 +582,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
 
         r = 8.361816406e-03f;
         r = r * f + 4.177856445e-02f;
-        s = f * f;
+        s = f * f; // hide SFPMAD latency
         r = r * f + sfpi::vConstFloatPrgm2;
         c0 = 0.5f;
         r = __builtin_rvtt_sfpmad(r.get(), f.get(), c0.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
@@ -595,7 +595,7 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
         r = r * f + 1.393107930e-3f;
         r = r * f + 8.333439939e-3f;
         r = r * f + 4.166680202e-2f;
-        s = f * f;
+        s = f * f; // hide SFPMAD latency
         r = r * f + sfpi::vConstFloatPrgm2;
         r = r * f + 4.999999702e-1f;
     }
