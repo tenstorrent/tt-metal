@@ -57,12 +57,21 @@ void validate_runtime_args(
     const uint32_t kv_actual_global_t = args.kv_actual_global / TILE_HEIGHT;
     const uint32_t cos_shard_Ht = cos.padded_shape()[-2] / TILE_HEIGHT;
 
-    // The boundary chip's contiguous read starts at update_idxt = boundary_slab*chunk_local_t +
-    // boundary_offset and spans chunk_local_t tiles; bound it by the per-device cos/sin shard
-    // height so the offset never indexes past the shard.
+    // Bound the largest update_idxt any chip reads from by the per-device cos/sin shard height.
+    // Mirror the reader kernel's per-chip update_idxt exactly: each chip reads chunk_local_t tiles
+    // starting at update_idxt, where
+    //   chips before the boundary chip jump to the next slab -> (boundary_slab+1)*chunk_local_t,
+    //   the boundary chip (== chip boundary_chip) starts at  boundary_slab*chunk_local_t + offset,
+    //   chips after it stay on this slab at                  boundary_slab*chunk_local_t.
+    // The max is the pre-boundary value WHEN a pre-boundary chip exists (boundary_chip > 0). When
+    // kv_actual_global is exactly slab-aligned (boundary_chip == 0, offset == 0) no chip jumps
+    // ahead, so the old (+1 slab) bound was off by a slab and wrongly rejected a read that fits.
     const uint32_t chunk_global_t = sp_factor * chunk_local_t;
+    const uint32_t boundary_slab_t = (kv_actual_global_t / chunk_global_t) * chunk_local_t;
+    const uint32_t boundary_chip = (kv_actual_global_t / chunk_local_t) % sp_factor;
+    const uint32_t boundary_offset_t = kv_actual_global_t % chunk_local_t;
     const uint32_t max_update_idxt =
-        (kv_actual_global_t / chunk_global_t + 1) * chunk_local_t;  // upper bound across all chips
+        (boundary_chip > 0) ? boundary_slab_t + chunk_local_t : boundary_slab_t + boundary_offset_t;
     TT_FATAL(
         max_update_idxt + chunk_local_t <= cos_shard_Ht,
         "kv_actual_global ({} tok) + chunk would index past the per-device cos/sin shard ({} tiles)",
