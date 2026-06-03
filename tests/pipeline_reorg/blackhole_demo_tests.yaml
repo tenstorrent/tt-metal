@@ -9,12 +9,11 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-# Entries are grouped per-model into three buckets:
-#   - e2e tests:       batch-1 / batch-32 single-DP performance
-#   - data-parallel:   --data_parallel >= 2 performance
-#   - device-perf:     test_device_perf.py prefill + decode
-# Stress tests are intentionally absent — see the commented-out block at
-# the bottom of this file. Stress is moving to a separate pipeline.
+# This pipeline holds Blackhole demo / performance tests that have not yet been
+# migrated to the tier 1/2/3 pipelines
+# (tests/pipeline_reorg/models_{e2e,unit,device_perf}_tests.yaml) — currently a
+# mix of diffusion / vision demos plus a few model e2e tests. The Llama / Qwen
+# LLM e2e, data-parallel, and device-perf entries have been migrated out.
 
 # All entries that read HF model checkpoints / tt_cache use the canonical HF_HOME convention
 # (matches tests/pipeline_reorg/models_e2e_tests.yaml on the Wormhole side):
