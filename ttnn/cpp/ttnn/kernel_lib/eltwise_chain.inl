@@ -138,6 +138,11 @@ template <class E> constexpr uint32_t cb_a_of();
 template <class E> constexpr uint32_t cb_b_of();
 template <class E> constexpr uint32_t pack_cb_of();
 
+// ChainTraits<Es...> — the one value-reflection aggregate for the whole chain (defined
+// once below, after the per-element accessors it reads). Forward-declared here so the
+// trait wrappers (chain_lane_width etc.) can name it.
+template <class... Es> struct ChainTraits;
+
 // =============================================================================
 // Per-Side prev-CB SFINAE probe (D2)
 //
@@ -1046,17 +1051,6 @@ struct elem_lane_width<E, std::void_t<decltype(E::lane_width)>>
 
 template <class E>
 constexpr uint32_t elem_lane_width_v = elem_lane_width<E>::value;
-
-template <class... Es>
-constexpr uint32_t chain_lane_width_impl_v = []() {
-    if constexpr (sizeof...(Es) == 0) {
-        return uint32_t{1};
-    } else {
-        uint32_t w = 1;
-        ((w = (elem_lane_width_v<Es> > w ? elem_lane_width_v<Es> : w)), ...);
-        return w;
-    }
-}();
 }  // namespace detail
 
 template <class Chain>
@@ -1064,7 +1058,7 @@ struct chain_lane_width;
 
 template <class... Es>
 struct chain_lane_width<EltwiseChain<Es...>>
-    : std::integral_constant<uint32_t, detail::chain_lane_width_impl_v<Es...>> {};
+    : std::integral_constant<uint32_t, detail::ChainTraits<Es...>::lane_width> {};
 
 template <class Chain>
 inline constexpr uint32_t chain_lane_width_v = chain_lane_width<Chain>::value;
@@ -1100,9 +1094,6 @@ constexpr bool element_supports_block() {
     }
 }
 
-template <class... Es>
-constexpr bool chain_supports_block_impl_v = (element_supports_block<Es>() && ...);
-
 // 1D-only chain entry points cannot resolve Row/Col indexing — there is no
 // Ht/Wt context to drive `idx<Row>(...) = wt` or `idx<Col>(...) = ht`.
 // In 1D, exec collapses Row/Col to `base` (silently degenerate). Banning these
@@ -1121,12 +1112,124 @@ struct elem_has_b_index_mode<E, std::void_t<decltype(E::b_index_mode)>> : std::t
 
 }  // namespace detail
 
+// =============================================================================
+// ChainTraits — reflect each element once into an ElemDesc record, then derive every
+// value-based chain property as a field. Replaces the scattered fold / array-scan /
+// head-tail-recursion passes (proposal kind ①). Type-uniformity (chain_*_uniform) stays
+// separate — it reads element types, not values (kind ②). Emission stays separate (kind ③).
+// All compile-time: the whole struct folds to constants (verified — zero runtime cost).
+// =============================================================================
+namespace detail {
+
+// SFINAE accessors for the two members the collision derivations read but not every
+// element declares (CB readers carry is_upfront; PackTile carries pack_dst_slot).
+template <class E, class = void> struct has_is_upfront_m : std::false_type {};
+template <class E> struct has_is_upfront_m<E, std::void_t<decltype(E::is_upfront)>> : std::true_type {};
+template <class E> constexpr bool is_upfront_of() {
+    if constexpr (has_is_upfront_m<E>::value) return E::is_upfront; else return false;
+}
+template <class E, class = void> struct has_pack_dst_slot_m : std::false_type {};
+template <class E> struct has_pack_dst_slot_m<E, std::void_t<decltype(E::pack_dst_slot)>> : std::true_type {};
+template <class E> constexpr Dst pack_dst_slot_of() {
+    if constexpr (has_pack_dst_slot_m<E>::value) return E::pack_dst_slot; else return Dst::D0;
+}
+
+// One plain-data descriptor per element — reflected once via the existing accessors.
+struct ElemDesc {
+    bool is_cb_reader;
+    bool is_pack;
+    uint32_t srca_cb;   // cb_for_side<SrcA> (NO_PREV_CB when not programmed)  — G1 input
+    uint32_t srcb_cb;   // cb_for_side<SrcB>
+    uint32_t cb_a;      // cb_a_of (kNoCb when n/a)  — reader-collision input
+    uint32_t cb_b;      // cb_b_of (kNoCb when n/a)
+    uint32_t pack_cb;   // pack_cb_of (kNoCb when n/a) — writer-collision input
+    Dst pack_dst_slot;
+    bool is_upfront;
+    uint32_t lane_width;
+    bool supports_block;
+};
+
+template <class E>
+constexpr ElemDesc describe() {
+    return ElemDesc{
+        is_cb_reader_op_v<E>,
+        is_pack_tile_op_v<E>,
+        cb_for_side<Side::SrcA, E>(),
+        cb_for_side<Side::SrcB, E>(),
+        cb_a_of<E>(),
+        cb_b_of<E>(),
+        pack_cb_of<E>(),
+        pack_dst_slot_of<E>(),
+        is_upfront_of<E>(),
+        elem_lane_width_v<E>,
+        element_supports_block<E>(),
+    };
+}
+
+// Derivations over the descriptor array — flat loops bounded by the real element count
+// `n` (the array is sized [N?N:1], so an empty chain must NOT read the lone default slot).
+constexpr uint32_t ct_lane_width(const ElemDesc* d, int n) {
+    uint32_t w = 1;
+    for (int i = 0; i < n; ++i)
+        if (d[i].lane_width > w) w = d[i].lane_width;
+    return w;
+}
+constexpr bool ct_supports_block(const ElemDesc* d, int n) {
+    bool r = true;
+    for (int i = 0; i < n; ++i) r = r && d[i].supports_block;
+    return r;
+}
+constexpr bool ct_side_consistent(const ElemDesc* d, int n, uint32_t ElemDesc::*side) {
+    uint32_t seen = NO_PREV_CB;
+    for (int i = 0; i < n; ++i) {
+        uint32_t cb = d[i].*side;
+        if (cb == NO_PREV_CB) continue;
+        if (seen == NO_PREV_CB) seen = cb;
+        else if (seen != cb) return false;
+    }
+    return true;
+}
+constexpr bool ct_reader_collide(const ElemDesc* d, int n) {
+    for (int i = 0; i < n; ++i)
+        for (int j = i + 1; j < n; ++j) {
+            if (!(d[i].is_cb_reader && d[j].is_cb_reader)) continue;
+            if (!(d[i].is_upfront && d[j].is_upfront)) continue;
+            uint32_t a0 = d[i].cb_a, a1 = d[i].cb_b, b0 = d[j].cb_a, b1 = d[j].cb_b;
+            if ((a0 != kNoCb && (a0 == b0 || a0 == b1)) || (a1 != kNoCb && (a1 == b0 || a1 == b1)))
+                return true;
+        }
+    return false;
+}
+constexpr bool ct_writer_collide(const ElemDesc* d, int n) {
+    for (int i = 0; i < n; ++i)
+        for (int j = i + 1; j < n; ++j)
+            if (d[i].is_pack && d[j].is_pack && d[i].pack_cb == d[j].pack_cb &&
+                d[i].pack_dst_slot == d[j].pack_dst_slot)
+                return true;
+    return false;
+}
+
+template <class... Es>
+struct ChainTraits {
+    static constexpr int N = int(sizeof...(Es));
+    static constexpr ElemDesc d[N ? N : 1] = {describe<Es>()...};  // the one walk
+
+    static constexpr uint32_t lane_width = ct_lane_width(d, N);
+    static constexpr bool supports_block = ct_supports_block(d, N);
+    static constexpr bool srca_consistent = ct_side_consistent(d, N, &ElemDesc::srca_cb);
+    static constexpr bool srcb_consistent = ct_side_consistent(d, N, &ElemDesc::srcb_cb);
+    static constexpr bool reader_collide = ct_reader_collide(d, N);
+    static constexpr bool writer_collide = ct_writer_collide(d, N);
+};
+
+}  // namespace detail
+
 template <class Chain>
 struct chain_supports_block;
 
 template <class... Es>
 struct chain_supports_block<EltwiseChain<Es...>>
-    : std::bool_constant<detail::chain_supports_block_impl_v<Es...>> {};
+    : std::bool_constant<detail::ChainTraits<Es...>::supports_block> {};
 
 template <class Chain>
 inline constexpr bool chain_supports_block_v = chain_supports_block<Chain>::value;
@@ -1172,63 +1275,13 @@ inline constexpr bool elem_needs_per_side_idx_v = elem_needs_per_side_idx<E>::va
 
 }  // namespace detail
 
-// chain_has_duplicate_upfront_cbs / chain_pack_writes_collide:
-// defined as a runtime fold for now — every CB-reader / CB-writer pair is checked.
-// Static assertions in the chain pipeline use these as constexpr-evaluated booleans.
-
-namespace detail {
-
-template <class A, class B>
-constexpr bool reader_pair_collide() {
-    if constexpr (!is_cb_reader_op_v<A> || !is_cb_reader_op_v<B>) return false;
-    else if constexpr (!A::is_upfront || !B::is_upfront)          return false;
-    else {
-        constexpr uint32_t a0 = cb_a_of<A>();
-        constexpr uint32_t a1 = cb_b_of<A>();
-        constexpr uint32_t b0 = cb_a_of<B>();
-        constexpr uint32_t b1 = cb_b_of<B>();
-        // a0 / b0 are always real (both A and B are CB readers above), so the
-        // kNoCb guard there is defensive. a1 / b1 can be kNoCb when the reader
-        // is unary — the guard prevents kNoCb == kNoCb registering as a collision.
-        return (a0 != kNoCb && (a0 == b0 || a0 == b1)) ||
-               (a1 != kNoCb && (a1 == b0 || a1 == b1));
-    }
-}
-
-template <class A, class B>
-constexpr bool writer_pair_collide() {
-    if constexpr (!is_pack_tile_op_v<A> || !is_pack_tile_op_v<B>) return false;
-    else                                                          return (pack_cb_of<A>() == pack_cb_of<B>()) &&
-                                                                         (A::pack_dst_slot == B::pack_dst_slot);
-}
-
-template <class... Es>
-struct any_reader_dup;
-
-template <>
-struct any_reader_dup<> : std::false_type {};
-
-template <class E0, class... Rest>
-struct any_reader_dup<E0, Rest...>
-    : std::bool_constant<((reader_pair_collide<E0, Rest>() || ...) || any_reader_dup<Rest...>::value)> {};
-
-template <class... Es>
-struct any_writer_dup;
-
-template <>
-struct any_writer_dup<> : std::false_type {};
-
-template <class E0, class... Rest>
-struct any_writer_dup<E0, Rest...>
-    : std::bool_constant<((writer_pair_collide<E0, Rest>() || ...) || any_writer_dup<Rest...>::value)> {};
-
-}  // namespace detail
-
+// chain_has_duplicate_upfront_cbs / chain_pack_writes_collide — pairwise collision
+// checks, now flat nested loops in ChainTraits (reader_collide / writer_collide).
 template <class... Es> struct chain_has_duplicate_upfront_cbs<EltwiseChain<Es...>>
-    : detail::any_reader_dup<Es...> {};
+    : std::bool_constant<detail::ChainTraits<Es...>::reader_collide> {};
 
 template <class... Es> struct chain_pack_writes_collide<EltwiseChain<Es...>>
-    : detail::any_writer_dup<Es...> {};
+    : std::bool_constant<detail::ChainTraits<Es...>::writer_collide> {};
 
 // `chain_hoist_math_mop` / `chain_hoist_sfpu` — per-cohort hoist decisions.
 // Together they encode the FPU-init hoisting decision tree from
@@ -1279,23 +1332,7 @@ template <class... Es> struct chain_pack_writes_collide<EltwiseChain<Es...>>
 
 namespace detail {
 
-// G1 helper: per-side fold. Collect every element's `cb_for_side<S, E>()`;
-// require all non-NO_PREV_CB values are equal.
-template <Side S, class... Es>
-constexpr bool per_side_cbs_consistent_v = []() {
-    if constexpr (sizeof...(Es) == 0) {
-        return true;
-    } else {
-        const uint32_t cbs[] = {cb_for_side<S, Es>()...};
-        uint32_t seen = NO_PREV_CB;
-        for (auto cb : cbs) {
-            if (cb == NO_PREV_CB) continue;
-            if (seen == NO_PREV_CB) seen = cb;
-            else if (seen != cb) return false;
-        }
-        return true;
-    }
-}();
+// G1 (per-side CB consistency) is now ChainTraits::srca_consistent / srcb_consistent.
 
 // Trait wrappers (Pred<E>::value form) — `is_sfpu_op_v` / `is_math_mop_op_v`
 // are `inline constexpr bool` variable templates; wrap them so they fit the
@@ -1344,8 +1381,8 @@ struct chain_per_side_cbs_consistent : std::true_type {};
 
 template <class... Es>
 struct chain_per_side_cbs_consistent<EltwiseChain<Es...>>
-    : std::bool_constant<detail::per_side_cbs_consistent_v<Side::SrcA, Es...> &&
-                         detail::per_side_cbs_consistent_v<Side::SrcB, Es...>> {};
+    : std::bool_constant<detail::ChainTraits<Es...>::srca_consistent &&
+                         detail::ChainTraits<Es...>::srcb_consistent> {};
 
 template <class Chain>
 struct chain_math_mop_uniform : std::true_type {};
