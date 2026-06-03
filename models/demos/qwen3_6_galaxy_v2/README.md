@@ -55,3 +55,46 @@ section 8.
         --prompt "The capital of France is" --num-tokens 10
 
 Test invocations are listed in `BRINGUP_LOG.md`.
+
+## Server (tt-inference-server, text-only, BH Galaxy)
+
+Qwen3.6-27B is wired into `tt-inference-server`'s vLLM OpenAI API for
+`BLACKHOLE_GALAXY` (32× P150), text-only. The serving class is
+`models/demos/qwen3_6_galaxy_v2/tt/generator_vllm.py:Qwen3_5ForConditionalGeneration`,
+registered in the tt-vllm-plugin as `TTQwen3_5ForConditionalGeneration`.
+
+Start the server (on the BH Galaxy host):
+
+    cd tt-inference-server
+    export TT_METAL_HOME=/home/tt-admin/ssinghal/qwen36/new/tt-metal
+    MODEL_SPECS_ENV=dev python run.py --model Qwen/Qwen3.6-27B --workflow server \
+        --local-server --tt-device tt-galaxy-bh --skip-system-sw-validation
+
+Smoke test:
+
+    curl -s http://localhost:8000/v1/chat/completions \
+      -H "Content-Type: application/json" \
+      -d '{"model":"Qwen/Qwen3.6-27B","messages":[{"role":"user","content":"The capital of France is"}],"max_tokens":16}'
+
+Off-device integration tests:
+
+    pytest models/demos/qwen3_6_galaxy_v2/tests/test_generator_vllm_import.py -v
+    # in tt-inference-server/tt-vllm-plugin:
+    python -m pytest tests/test_qwen3_5_config.py -v
+    # in tt-inference-server:
+    MODEL_SPECS_ENV=dev python -m pytest tests/test_qwen36_model_spec.py -v
+
+### Known limitations / notes
+
+- **Text-only.** The vision / multimodal path (`qwen36_mm_*`, `vision_*`) and
+  MTP speculative decoding are not served.
+- **`transformers` stays at 4.53.0.** The checkpoint's `qwen3_5` arch is in no
+  public transformers release; the tt-vllm-plugin registers a thin `qwen3_5`
+  `AutoConfig` and the generator loads weights from raw safetensors. Do not
+  bump transformers or use `AutoModelForCausalLM` for this checkpoint.
+- **TP-only:** the generator asserts `tt_data_parallel == 1`; do not set
+  `data_parallel_size > 1` in the catalog entry.
+- **Device validation pending.** `status=EXPERIMENTAL`. See the
+  `2026-06-03` device hand-off checklist in `BRINGUP_LOG.md` for the
+  `override_tt_config` / firmware / arch-yaml values to fill in on hardware
+  before promoting to FUNCTIONAL.

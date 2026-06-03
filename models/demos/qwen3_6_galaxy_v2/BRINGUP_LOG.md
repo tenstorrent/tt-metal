@@ -3,6 +3,67 @@
 Live tracker. Append-only. Mirrors the format in
 `models/demos/olmo_galaxy/BRINGUP_LOG.md`.
 
+## 2026-06-03 — tt-inference-server integration (text-only, BH Galaxy) — code landed, device validation pending
+
+Wired Qwen3.6-27B (text-only LM tower) into `tt-inference-server`'s vLLM
+OpenAI API for `BLACKHOLE_GALAXY` (32× P150). Spec/plan:
+`docs/superpowers/specs/2026-06-03-qwen36-27b-tt-inference-server-design.md`,
+`docs/superpowers/plans/2026-06-03-qwen36-27b-tt-inference-server.md`.
+
+**Key discovery — transformers / `qwen3_5`:** the checkpoint's arch is
+`Qwen3_5ForConditionalGeneration` / `model_type: qwen3_5`, which exists in NO
+public transformers release (verified 4.53.0 / 4.57.1 / 4.57.6 / 5.10.1; no
+`auto_map` remote code). Consequences, baked into the integration:
+- **No transformers bump** (tt-metal pins `transformers==4.53.0`; no version
+  fixes it anyway).
+- Generator loads weights from **raw safetensors**, never
+  `AutoModelForCausalLM` (which raises "Unrecognized configuration class").
+- vLLM's only blocker was `AutoConfig` — solved by registering a thin
+  `qwen3_5` config in the tt-vllm-plugin at import time.
+
+| stage | status | commit (repo) |
+|---|---|---|
+| V2-server-1 generator_vllm → local v2 model + raw-safetensors load | DONE | `e97cd06201b` (tt-metal) |
+| V2-server-2 tt-vllm-plugin: qwen3_5 AutoConfig + TT model registration | DONE | `47b554b1` (tt-inference-server) |
+| V2-server-3 model_spec ImplSpec + BLACKHOLE_GALAXY YAML catalog entry | DONE | `45e551c2` (tt-inference-server) |
+| V2-server-4 launcher wiring verified + `DEVICE_TO_MESH_STR` BH fix | DONE | `c916a6d0` (tt-inference-server) |
+| V2-server-5 server start / accuracy / 256k stress on hardware | **HAND-OFF (device)** | pending |
+
+Registered arch name: `TTQwen3_5ForConditionalGeneration` →
+`models.demos.qwen3_6_galaxy_v2.tt.generator_vllm:Qwen3_5ForConditionalGeneration`.
+Catalog: `Qwen/Qwen3.6-27B`, impl `qwen3_6_galaxy`, `max_context=262144`,
+`status=EXPERIMENTAL`, text-only.
+
+**Off-device tests passing:** generator structural import test (3),
+`qwen3_5` config registration + checkpoint-parse test (2), catalog-load test (1).
+
+### Device hand-off checklist (required before EXPERIMENTAL → FUNCTIONAL)
+
+Start command (run on the BH Galaxy host):
+
+    cd tt-inference-server
+    export TT_METAL_HOME=/home/tt-admin/ssinghal/qwen36/new/tt-metal
+    MODEL_SPECS_ENV=dev python run.py --model Qwen/Qwen3.6-27B --workflow server \
+        --local-server --tt-device tt-galaxy-bh --skip-system-sw-validation
+
+Then validate: smoke `curl` → coherent "Paris"; accuracy ≥ demo within 2–3 pp;
+one ~200k-token request for the 256k bar; 5 sequential requests with no
+`tt-smi -r` between them.
+
+Config still to fill in on hardware (sibling WH-galaxy values are a *starting
+reference only* — measure on BH):
+
+- `override_tt_config`: `dispatch_core_axis` (col?), `fabric_config`
+  (FABRIC_1D_RING?), `worker_l1_size`, `trace_region_size` (profile),
+  `sample_on_device_mode` (all?).
+- `system_requirements`: BH `firmware` / `kmd` minimums (from HW team).
+- `vllm_commit` for the BH vLLM image; final `tt_metal_commit` SHA.
+- Container env: `ARCH_NAME=blackhole` + the BH dispatch arch yaml (the dev
+  Dockerfile defaults to `wormhole_b0` — must be overridden at runtime).
+- **DO NOT set `data_parallel_size`/`tt_data_parallel` > 1.** The generator
+  asserts `tt_data_parallel == 1` (qwen3.6 v2 galaxy is TP-only); the sibling
+  entries' `data_parallel_size: 4` must NOT be copied here.
+
 ## 2026-06-02 — BH grid widening: sub_core_grids 60 → 110 (dynamic) ✅
 
 **Step 1 of BH_GRID_MIGRATION.** `sub_core_grids` master compute grid was
