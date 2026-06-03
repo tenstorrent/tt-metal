@@ -25,14 +25,6 @@ from helpers.utils import passed_test
 
 
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16,
-            DataFormat.Float16_b,
-            DataFormat.Float32,
-        ],  # Unpack Tilize & Pack Untilize does not work on Bfp8_b format
-        same=True,
-    ),
     mathop=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     math_fidelity=[
@@ -41,6 +33,14 @@ from helpers.utils import passed_test
         MathFidelity.HiFi3,
         MathFidelity.HiFi4,
     ],
+    formats=input_output_formats(
+        [
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+            DataFormat.Float32,
+        ],  # Unpack Tilize & Pack Untilize does not work on Bfp8_b format
+        same=True,
+    ),
 )
 def test_tilize_calculate_untilize_L1(
     formats,

@@ -78,8 +78,8 @@ def get_valid_num_faces_datacopy(tilize):
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     l1_acc=[L1Accumulation.No, L1Accumulation.Yes],
-    num_faces=4,
     tilize=[Tilize.No],
+    num_faces=4,
     dest_index=0,
     input_dimensions=[[32, 32], [32, 64], [128, 32], [128, 64], [128, 256]],
 )
@@ -188,8 +188,8 @@ def test_pack_dest_bank(
     formats=input_output_formats([DataFormat.Float16_b]),
     dest_acc=[DestAccumulation.No],
     l1_acc=[L1Accumulation.No, L1Accumulation.Yes],
-    num_faces=4,
     tilize=[Tilize.No],
+    num_faces=4,
     dest_index=0,
 )
 def test_pack_dest_bank_two_blocked_packs_of_4(

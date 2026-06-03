@@ -192,6 +192,10 @@ def _run_unary_datacopy_test(
 
 
 @parametrize(
+    dest_acc=get_valid_dest_accumulation_modes,
+    num_faces=get_valid_num_faces_datacopy,
+    tilize=get_valid_tilize_datacopy,
+    input_dimensions=[[64, 64], [32, 256], [128, 256]],
     formats=input_output_formats(
         [
             DataFormat.Float32,
@@ -201,10 +205,6 @@ def _run_unary_datacopy_test(
             DataFormat.Fp8_e4m3,
         ]
     ),
-    dest_acc=get_valid_dest_accumulation_modes,
-    num_faces=get_valid_num_faces_datacopy,
-    tilize=get_valid_tilize_datacopy,
-    input_dimensions=[[64, 64], [32, 256], [128, 256]],
 )
 def test_unary_datacopy(
     formats,

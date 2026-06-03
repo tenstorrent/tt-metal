@@ -41,10 +41,10 @@ from ttexalens.tt_exalens_lib import read_from_device, write_to_device
 @skip_for_coverage
 @skip_for_wormhole
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
     dest_acc=[DestAccumulation.No],
     math_fidelity=[MathFidelity.LoFi],
     input_dimensions=[[32, 32]],
+    formats=input_output_formats([DataFormat.Float16_b]),
 )
 def test_sdpa_reinits(
     formats,

@@ -171,13 +171,13 @@ def test_pack_tiny_tile_block(
 
 @skip_for_wormhole
 @parametrize(
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     formats=input_output_formats(
         [
             DataFormat.Float16,
             DataFormat.Float16_b,
         ]
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     tile_dims=[
         (1, 32),  # face_r_dim=1,  num_faces=2
         (2, 32),  # face_r_dim=2,  num_faces=2

@@ -41,15 +41,6 @@ from helpers.utils import passed_test
 @skip_for_wormhole
 @parametrize(
     test_name="sources/matmul_and_unary_sfpu_test.cpp",
-    formats=input_output_formats(
-        [
-            DataFormat.Float16,
-            DataFormat.Float16_b,
-            DataFormat.Float32,
-            DataFormat.Bfp8_b,
-        ],
-        same=True,
-    ),
     mathop=[
         MathOperation.Abs,
         MathOperation.Celu,
@@ -71,6 +62,15 @@ from helpers.utils import passed_test
         MathFidelity.HiFi3,
         MathFidelity.HiFi4,
     ],
+    formats=input_output_formats(
+        [
+            DataFormat.Float16,
+            DataFormat.Float16_b,
+            DataFormat.Float32,
+            DataFormat.Bfp8_b,
+        ],
+        same=True,
+    ),
 )
 def test_matmul_and_unary_sfpu(
     test_name,

@@ -18,6 +18,13 @@ from helpers.utils import passed_test
 
 
 @parametrize(
+    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
+    math_fidelity=[
+        MathFidelity.LoFi,
+        MathFidelity.HiFi2,
+        MathFidelity.HiFi3,
+        MathFidelity.HiFi4,
+    ],
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
@@ -26,13 +33,6 @@ from helpers.utils import passed_test
         ],  #  Add DataFormat.Bfp8_b only as input when Data format Inference Model 2.0 supports format conversions for > 1 pipeline run with different inputs and outputs.
         same=True,
     ),
-    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
 )
 def test_matmul_unpack_tilize(
     formats,

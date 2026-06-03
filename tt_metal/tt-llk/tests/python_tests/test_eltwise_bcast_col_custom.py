@@ -49,11 +49,6 @@ class CT_DIM(TemplateParameter):
     cpp_source=[
         "sources/multiple_tiles_eltwise_custom_test.cpp",
     ],
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-        ]
-    ),
     mathop=[MathOperation.Elwsub],
     dest_acc=[DestAccumulation.No],
     math_fidelity=[
@@ -64,6 +59,11 @@ class CT_DIM(TemplateParameter):
     ],
     broadcast_type=[BroadcastType.Column],
     input_dimensions_A=[[32, w] for w in range(32, 257, 32)],
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+        ]
+    ),
     input_dimensions_B=[[32, 32]],
 )
 def test_eltwise_bcast_col_custom(

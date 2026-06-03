@@ -19,6 +19,13 @@ from helpers.utils import passed_test
 
 
 @parametrize(
+    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
+    math_fidelity=[
+        MathFidelity.LoFi,
+        MathFidelity.HiFi2,
+        MathFidelity.HiFi3,
+        MathFidelity.HiFi4,
+    ],
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
@@ -27,13 +34,6 @@ from helpers.utils import passed_test
             DataFormat.Float32,
         ]
     ),
-    dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
 )
 def test_matmul_pack_untilize(
     formats,

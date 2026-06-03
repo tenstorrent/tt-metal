@@ -48,7 +48,6 @@ mathop_mapping = {
 
 
 @parametrize(
-    tile_dimensions=[[1, 32], [2, 32], [4, 32], [8, 32], [16, 32], [32, 32], [32, 16]],
     formats=input_output_formats(
         [
             DataFormat.Float32,
@@ -56,7 +55,6 @@ mathop_mapping = {
             DataFormat.Bfp8_b,
         ]
     ),
-    is_reduce_to_one=[False, True],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=[ReducePool.Max, ReducePool.Average, ReducePool.Sum],
     math_fidelity=[
@@ -65,6 +63,8 @@ mathop_mapping = {
         MathFidelity.HiFi3,
         MathFidelity.HiFi4,
     ],
+    tile_dimensions=[[1, 32], [2, 32], [4, 32], [8, 32], [16, 32], [32, 32], [32, 16]],
+    is_reduce_to_one=[False, True],
 )
 def test_reduce(
     formats,
@@ -235,7 +235,6 @@ def test_reduce(
 
 
 @parametrize(
-    tile_dimensions=[[32, 32]],
     formats=[
         fmt
         for fmt in input_output_formats(
@@ -249,7 +248,6 @@ def test_reduce(
         if fmt.input_format == DataFormat.Bfp4_b
         or fmt.output_format == DataFormat.Bfp4_b
     ],
-    is_reduce_to_one=[False, True],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=[ReducePool.Max, ReducePool.Average, ReducePool.Sum],
     math_fidelity=[
@@ -258,6 +256,8 @@ def test_reduce(
         MathFidelity.HiFi3,
         MathFidelity.HiFi4,
     ],
+    tile_dimensions=[[32, 32]],
+    is_reduce_to_one=[False, True],
 )
 def test_reduce_bfp4_b(
     formats,

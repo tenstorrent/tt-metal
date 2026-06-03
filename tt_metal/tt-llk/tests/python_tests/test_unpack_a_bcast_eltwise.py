@@ -27,16 +27,16 @@ from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test
 
 
+# Parameter order minimizes ELF-load thrashing: the custom parametrize() resolves
+# keys in declaration order (first = outermost/slowest loop, last = innermost/
+# fastest). ELF-defining params (dest_acc, mathop, math_fidelity, input_dimensions)
+# are kept outer; runtime-only params (formats is runtime-configured here, plus
+# srca_reuse_count) are innermost so each ELF is loaded once while its runtime
+# variants are exhausted.
 @skip_for_blackhole
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-        ]
-    ),
-    mathop=[MathOperation.Elwsub, MathOperation.Elwadd, MathOperation.Elwmul],
     dest_acc=[DestAccumulation.No],
-    srca_reuse_count=[2, 4, 8],
+    mathop=[MathOperation.Elwsub, MathOperation.Elwadd, MathOperation.Elwmul],
     math_fidelity=[
         MathFidelity.LoFi,
     ],
@@ -45,6 +45,12 @@ from helpers.utils import passed_test
         [32, 128],
         [64, 128],
     ],
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+        ]
+    ),
+    srca_reuse_count=[2, 4, 8],
 )
 def test_unp_bcast_sub_sdpa(
     formats,
@@ -127,8 +133,6 @@ def test_unp_bcast_sub_sdpa(
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),
             DEST_SYNC(),
-            TILE_COUNT(tile_cnt_A),
-            SRCA_REUSE_COUNT(srca_reuse_count),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),

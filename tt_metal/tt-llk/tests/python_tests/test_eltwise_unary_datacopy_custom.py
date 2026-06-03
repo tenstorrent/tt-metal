@@ -20,8 +20,8 @@ from helpers.utils import passed_test
 
 @skip_for_wormhole
 @parametrize(
-    formats=input_output_formats([DataFormat.Float16_b]),
     dest_acc=[DestAccumulation.No],
+    formats=input_output_formats([DataFormat.Float16_b]),
 )
 def test_unary_datacopy_custom(
     formats,

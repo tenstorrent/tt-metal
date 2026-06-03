@@ -44,9 +44,9 @@ from helpers.utils import passed_test
         StochasticRounding.Pack,
         StochasticRounding.All,
     ],
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     transpose=[Transpose.No],
     narrow_tile=[NarrowTile.No],
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     num_faces=[4, 2, 1],
     input_dimensions=[[32, 32], [64, 64], [32, 64], [32, 128], [128, 32]],
 )
