@@ -197,6 +197,18 @@ ALWI void reduce(
         "Accumulate with PoolType::MAX + REDUCE_SCALAR is not supported: the pack edge mask "
         "keeps only DST(0,0), but GMPOOL needs that running max broadcast across face-0 row 4 "
         "on the reload pass, which the current copy_tile reload cannot reproduce.");
+#ifdef ARCH_QUASAR
+    // The MAX + REDUCE_ROW accumulator reload relies on a within-16x16-face transpose during
+    // copy_tile_to_dst_init_short (see reload_accumulator_if_needed). That transpose is rejected
+    // by copy_tile_to_dst_init_short on Quasar ("Transpose within face not supported on Quasar"),
+    // and there is no Quasar-compatible reload that restores the layout GMPOOL expects.
+    static_assert(
+        !is_accumulate_v<AccumulateT> ||
+            !(reduce_type == PoolType::MAX && reduce_dim == ReduceDim::REDUCE_ROW),
+        "Accumulate with PoolType::MAX + REDUCE_ROW is not supported on Quasar: the accumulator "
+        "reload requires a within-16x16-face transpose, which copy_tile_to_dst_init_short asserts "
+        "against on Quasar.");
+#endif
 
     // =============================================================================
     // Runtime Assertions (parameter validation)
