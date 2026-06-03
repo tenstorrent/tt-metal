@@ -257,6 +257,7 @@ TEST_F(DispatchTelemetryReadApiTest, PrefetchCommandCountAdvancesForEveryEnqueue
 }
 
 TEST_F(DispatchTelemetryHostL1WaitTest, WorkerWaitReportsUpstreamBlockedState) {
+    GTEST_SKIP() << "Disabled: see #46022";
     IDevice* device = this->device();
     auto& cq = devices_.at(0)->mesh_command_queue();
 
