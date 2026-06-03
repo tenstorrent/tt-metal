@@ -15,8 +15,13 @@ Mirrors ``models/experimental/devstral2_small/demo/tt_demo_agent.py``:
   * decode trace **2CQ** (default, ``DEVSTRAL2_DECODE_TRACE_2CQ=1``): CQ1 for input H2D,
     CQ0 for forward/trace replay. Use ``--no-decode-trace-2cq`` or ``DEVSTRAL2_DECODE_TRACE_2CQ=0``.
 
-Sampling is CPU-side (argmax for greedy, multinomial otherwise) on the column-parallel
-``lm_head`` output, because :class:`TtMinistral3ForCausalLM` already returns logits.
+Sampling: decode uses **on-device argmax** by default (force-argmax over the column-parallel
+``lm_head`` logits via ``SamplingGenerator``), run **after** the decode trace replay — never
+folded into the trace, so its CCL/argmax buffers do not share L1 with the 123B decode graph.
+Only one ``int32`` token is read back per step instead of the full sharded vocab row. Set
+``DEVSTRAL2_ONDEVICE_SAMPLING=0`` to fall back to CPU sampling (argmax/multinomial), which also
+honours ``--temperature`` / ``--top-p``. With on-device sampling, the prefill first token uses
+the same device argmax path as decode (last prompt row sliced from the final prefill chunk).
 
 Run::
 
@@ -49,6 +54,14 @@ from models.experimental.devstral2_123B_instruct.demo.decode_trace_2cq import (
     decode_trace_2cq_enabled,
     signal_decode_step_done,
     stage_decode_inputs,
+)
+from models.experimental.devstral2_123B_instruct.demo.on_device_sampling import (
+    OnDeviceSampler,
+    build_sampler,
+    on_device_sampling_enabled,
+    quiet_per_token_sampling_logs,
+    sample_first_token_from_prefill_logits,
+    supports_on_device_sampling,
 )
 from models.experimental.devstral2_123B_instruct.demo.text_demo import (
     _current_pos_to_tt,
@@ -630,6 +643,8 @@ class TtAgentRuntime:
     cached_token_ids: Optional[torch.Tensor] = None
     system_prefix_warmed: bool = False
     decode_2cq: Optional[DecodeTrace2CQ] = None
+    # On-device argmax sampler (decode only, run post-trace). None = host sampling.
+    sampler: Optional[OnDeviceSampler] = None
 
 
 def _set_fabric_1d_or_warn(enabled: bool) -> bool:
@@ -736,6 +751,7 @@ def _resolve_agent_max_seq_len(tokenizer: Any, config: TTAgentConfig, mesh_devic
 
 def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
     """Open mesh, build TT model + tokenizer, allocate persistent decode buffers."""
+    quiet_per_token_sampling_logs()
     if config.trace_decode_2cq and not config.trace_decode:
         raise ValueError("2CQ decode requires traced decode (do not pass --no-decode-trace).")
 
@@ -803,6 +819,18 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
             mesh_device,
         )
 
+        # On-device argmax sampling for decode (default on; post-trace, not folded in the trace).
+        sampler: Optional[OnDeviceSampler] = None
+        if on_device_sampling_enabled():
+            if supports_on_device_sampling(args, mesh_device):
+                sampler = build_sampler(args, mesh_device, tt_ccl, temperature=0.0)  # greedy → force-argmax
+                logger.info("On-device argmax sampling for decode (post-trace; not folded into the decode trace).")
+            else:
+                logger.warning(
+                    f"On-device sampling unsupported on mesh {tuple(mesh_device.shape)} "
+                    f"(vocab {args.vocab_size} / {args.num_devices} devices); using host sampling."
+                )
+
         runtime = TtAgentRuntime(
             mesh_device=mesh_device,
             tokenizer=tokenizer,
@@ -816,6 +844,7 @@ def load_tt_runtime(config: TTAgentConfig) -> TtAgentRuntime:
             decode_pos_dev=decode_pos_dev,
             prefill_chunk_dev=prefill_chunk_dev,
             decode_2cq=decode_2cq,
+            sampler=sampler,
         )
         # Prefill and decode compile on demand; TTNN caches programs after first use.
         return runtime
@@ -1007,14 +1036,17 @@ def _chunked_prefill(
         tt_out = rt.model(rt.prefill_chunk_dev, mode="prefill", start_pos=chunk_start)
         if chunk_idx == num_chunks - 1:
             ttnn.synchronize_device(rt.mesh_device)
-            logits_torch = _logits_to_torch(tt_out, rt.mesh_device, rt.args.vocab_size)
             local_pos = (prompt_len - 1) - chunk_start
-            next_token = _sample_next(
-                logits_torch[local_pos],
-                do_sample=bool(config.do_sample),
-                temperature=float(config.temperature),
-                top_p=float(config.top_p),
-            )
+            if rt.sampler is not None:
+                next_token = sample_first_token_from_prefill_logits(rt.sampler, tt_out, local_pos=local_pos)
+            else:
+                logits_torch = _logits_to_torch(tt_out, rt.mesh_device, rt.args.vocab_size)
+                next_token = _sample_next(
+                    logits_torch[local_pos],
+                    do_sample=bool(config.do_sample),
+                    temperature=float(config.temperature),
+                    top_p=float(config.top_p),
+                )
         tt_out.deallocate(True)
     assert next_token is not None, "chunked prefill produced no logits"
     return next_token
@@ -1037,6 +1069,24 @@ def _sample_next(logits_row: torch.Tensor, do_sample: bool, temperature: float, 
     return int(torch.multinomial(probs, num_samples=1).item())
 
 
+def _sample_decode_token(rt: TtAgentRuntime, logits_tt: ttnn.Tensor, config: TTAgentConfig) -> int:
+    """Next decode token: on-device argmax (one int32 D2H, post-trace) when enabled, else host sample.
+
+    ``logits_tt`` is the raw decode logits (logical 1 row); the on-device path pads to the sampling
+    batch and runs ``SamplingGenerator`` as its own program — it is never folded into the decode trace.
+    """
+    if rt.sampler is not None:
+        rt.sampler.sample_into_buffer(logits_tt)
+        return rt.sampler.tt_read_token(0)
+    logits_torch = _logits_to_torch(logits_tt, rt.mesh_device, rt.args.vocab_size)
+    return _sample_next(
+        logits_torch[0],
+        do_sample=bool(config.do_sample),
+        temperature=float(config.temperature),
+        top_p=float(config.top_p),
+    )
+
+
 def _write_decode_inputs(rt: TtAgentRuntime, token_id: int, pos: int) -> None:
     """Refresh the persistent ``(token, current_pos)`` device buffers for one decode step."""
     stage_decode_inputs(
@@ -1055,13 +1105,7 @@ def _decode_one_token(rt: TtAgentRuntime, token_id: int, pos: int, config: TTAge
     tt_out = rt.model(rt.decode_tok_dev, mode="decode", current_pos=rt.decode_pos_dev)
     signal_decode_step_done(rt.decode_2cq)
     ttnn.synchronize_device(rt.mesh_device)
-    logits_torch = _logits_to_torch(tt_out, rt.mesh_device, rt.args.vocab_size)
-    next_token = _sample_next(
-        logits_torch[0],
-        do_sample=bool(config.do_sample),
-        temperature=float(config.temperature),
-        top_p=float(config.top_p),
-    )
+    next_token = _sample_decode_token(rt, tt_out, config)
     tt_out.deallocate(True)
     return next_token
 
@@ -1117,13 +1161,8 @@ def _run_traced_decode_loop(
             ttnn.execute_trace(rt.mesh_device, rt.decode_trace_id, cq_id=0, blocking=False)
             ttnn.synchronize_device(rt.mesh_device)
 
-        logits_torch = _logits_to_torch(rt.decode_trace_logits, rt.mesh_device, rt.args.vocab_size)
-        tok = _sample_next(
-            logits_torch[0],
-            do_sample=bool(config.do_sample),
-            temperature=float(config.temperature),
-            top_p=float(config.top_p),
-        )
+        # Sampling runs here, after the trace replay — never folded into the captured trace.
+        tok = _sample_decode_token(rt, rt.decode_trace_logits, config)
         extra.append(tok)
         pos += 1
 
@@ -1175,13 +1214,8 @@ def _run_traced_decode_loop_2cq(
             ttnn.synchronize_device(rt.mesh_device)
             signal_decode_step_done(pipe)
 
-        logits_torch = _logits_to_torch(rt.decode_trace_logits, rt.mesh_device, rt.args.vocab_size)
-        tok = _sample_next(
-            logits_torch[0],
-            do_sample=bool(config.do_sample),
-            temperature=float(config.temperature),
-            top_p=float(config.top_p),
-        )
+        # Sampling runs here, after the trace replay — never folded into the captured trace.
+        tok = _sample_decode_token(rt, rt.decode_trace_logits, config)
         extra.append(tok)
         pos += 1
 
@@ -1523,6 +1557,11 @@ def main() -> None:
         try:
             if rt.prefill_chunk_dev is not None:
                 rt.prefill_chunk_dev.deallocate(True)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if rt.sampler is not None:
+                rt.sampler.deallocate()
         except Exception:  # noqa: BLE001
             pass
         _release_decode_trace(rt)

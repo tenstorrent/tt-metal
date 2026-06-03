@@ -22,7 +22,6 @@ DEVSTRAL2_MODEL_ID = "mistralai/Devstral-2-123B-Instruct-2512"
 DEFAULT_OFFLOAD_FOLDER = "./hf_offload_devstral2_123b"
 
 _ORIGINAL_DEQUANTIZE_ONE = Fp8Dequantize._dequantize_one
-_FP8_PATCH_APPLIED = False
 
 
 def hf_local_files_only() -> bool:
@@ -32,8 +31,7 @@ def hf_local_files_only() -> bool:
 
 def apply_fp8_dequantize_compat_patch() -> None:
     """Patch HF FP8 dequant for scalar ``weight_scale_inv`` (same as inference script)."""
-    global _FP8_PATCH_APPLIED
-    if _FP8_PATCH_APPLIED:
+    if Fp8Dequantize._dequantize_one is not _ORIGINAL_DEQUANTIZE_ONE:
         return
 
     def _dequantize_one_compat(self, quantized: torch.Tensor, scales: torch.Tensor) -> torch.Tensor:
@@ -51,7 +49,6 @@ def apply_fp8_dequantize_compat_patch() -> None:
         return _ORIGINAL_DEQUANTIZE_ONE(self, quantized, scales)
 
     Fp8Dequantize._dequantize_one = _dequantize_one_compat
-    _FP8_PATCH_APPLIED = True
 
 
 def load_devstral2_text_config() -> Ministral3Config:
