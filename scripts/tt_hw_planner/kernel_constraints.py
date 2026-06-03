@@ -53,6 +53,63 @@ class KernelFinding:
             return "[info]"
         return "[FAIL]"
 
+    def to_dict(self) -> dict:
+        return {
+            "op": self.op,
+            "field": self.field,
+            "value": self.value,
+            "constraint": self.constraint,
+            "passes": bool(self.passes),
+            "severity": self.severity.value if isinstance(self.severity, Severity) else str(self.severity),
+            "fix": self.fix or "",
+            "source": self.source or "",
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "KernelFinding":
+        sev = d.get("severity")
+        if isinstance(sev, str):
+            try:
+                sev = Severity(sev)
+            except ValueError:
+                sev = Severity.WARN
+        return cls(
+            op=str(d.get("op") or ""),
+            field=str(d.get("field") or ""),
+            value=d.get("value"),
+            constraint=str(d.get("constraint") or ""),
+            passes=bool(d.get("passes", False)),
+            severity=sev or Severity.WARN,
+            fix=str(d.get("fix") or ""),
+            source=str(d.get("source") or ""),
+        )
+
+
+def collect_actionable_findings(report: "KernelReport") -> List[KernelFinding]:
+    """Dedup-collect every non-passing WARN/BLOCKER finding across all TPs in
+    the report. Most kernel constraints (rotary, RMSNorm, MLP shapes) are
+    TP-invariant; a few attention shape rules vary by TP. Dedup by
+    (op, field, value, constraint) so the same warning across TPs collapses
+    to one entry.
+
+    INFO-level findings are intentionally excluded — they're for the
+    planner's own routing decisions, not the LLM's iter context.
+    """
+    seen = set()
+    out: List[KernelFinding] = []
+    for findings in report.findings_by_tp.values():
+        for f in findings:
+            if f.passes:
+                continue
+            if f.severity not in (Severity.WARN, Severity.BLOCKER):
+                continue
+            key = (f.op, f.field, repr(f.value), f.constraint)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(f)
+    return out
+
 
 def _text_cfg(cfg: dict) -> dict:
     """Backwards-compat alias for :func:`compatibility._text_config`."""

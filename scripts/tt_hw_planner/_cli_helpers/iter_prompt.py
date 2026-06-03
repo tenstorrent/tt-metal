@@ -267,9 +267,28 @@ def build_constraint_block(
             manifest_path=manifest_path,
             opplan_path=opplan_path,
         )
-        return format_constraint_hints(violations)
+        component_block = format_constraint_hints(violations)
     except Exception:
-        return ""
+        component_block = ""
+
+    # Bridge: kernel_constraints.py findings (e.g. rotary_embedding_hf
+    # head_dim%64 with the explicit "unset use_hf_rope=True" fix) live
+    # in a separate static-analysis layer that is computed once at
+    # scaffold time. Surface them in every iter prompt so the LLM
+    # doesn't reinvent forbidden patches (Phi-3.5 case: iter-5 opus
+    # wrote use_hf_rope=True because this block was never appended).
+    kernel_block = ""
+    try:
+        from .kernel_findings import format_kernel_findings_for_prompt, load_kernel_findings
+
+        kernel_findings = load_kernel_findings(Path(demo_dir))
+        kernel_block = format_kernel_findings_for_prompt(kernel_findings)
+    except Exception:
+        kernel_block = ""
+
+    if component_block and kernel_block:
+        return component_block + "\n" + kernel_block
+    return component_block or kernel_block
 
 
 def _safe_id_local(name: str) -> str:

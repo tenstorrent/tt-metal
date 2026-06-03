@@ -3015,6 +3015,7 @@ def _final_outcome_banner(
     path_label: str,
     extra: Optional[List[str]] = None,
     outcome: Optional[str] = None,
+    demo_dir: Optional[Path] = None,
 ) -> None:
     """2026-05-23 (bugfix B3): always emit a single, machine-grep-able
     final-outcome banner before cmd_up returns. The previous
@@ -3056,6 +3057,36 @@ def _final_outcome_banner(
         print(f"  Suggested next steps:")
         for line in extra:
             print(f"    - {line}")
+
+    # Surface static-analysis kernel findings (computed once at scaffold
+    # time, persisted to <demo_dir>/kernel_findings.json). When a run
+    # fails on something the planner had already flagged hours earlier
+    # (Phi-3.5 case: head_dim=96 → TT_FATAL at rotary_embedding_hf), the
+    # operator needs to see the connection in the final banner instead
+    # of scrolling through multi-hour logs to find Step 1 output.
+    # If callers don't pass demo_dir explicitly, auto-discover it from
+    # the model_id so every existing _final_outcome_banner call benefits
+    # without per-site patches.
+    _dd = demo_dir
+    if _dd is None:
+        try:
+            from .bringup_loop import find_demo_dir as _find_demo_dir_for_banner
+
+            _dd = _find_demo_dir_for_banner(model_id)
+        except Exception:
+            _dd = None
+    if _dd is not None:
+        try:
+            from ._cli_helpers.kernel_findings import format_kernel_findings_for_banner, load_kernel_findings
+
+            findings = load_kernel_findings(Path(_dd))
+            findings_lines = format_kernel_findings_for_banner(findings)
+            if findings_lines:
+                print()
+                for line in findings_lines:
+                    print(f"  {line}")
+        except Exception:
+            pass
     print(sep)
 
 

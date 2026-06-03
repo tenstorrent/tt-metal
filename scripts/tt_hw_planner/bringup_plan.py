@@ -51,6 +51,11 @@ class BringUpPlan:
     components: List[Component] = field(default_factory=list)
     common_reuse: List[Tuple[str, str]] = field(default_factory=list)
     notes: List[str] = field(default_factory=list)
+    # Serialised KernelFinding entries (WARN+BLOCKER) deduped across TPs.
+    # Populated by build_bringup_plan via kernel_constraints.evaluate_kernels.
+    # Empty list means kernel_constraints raised or the config was unusable
+    # — consumers must tolerate that.
+    kernel_findings: List[Dict[str, Any]] = field(default_factory=list)
 
     @property
     def counts(self) -> Dict[str, int]:
@@ -555,6 +560,15 @@ def build_bringup_plan(
             except Exception:
                 print(f"  [bringup_plan] force_adapt_all promoted " f"{promoted} REUSE -> ADAPT component(s)")
 
+    kernel_findings_serialized: List[Dict[str, Any]] = []
+    try:
+        from .kernel_constraints import collect_actionable_findings, evaluate_kernels
+
+        _report = evaluate_kernels(new_cfg or {})
+        kernel_findings_serialized = [f.to_dict() for f in collect_actionable_findings(_report)]
+    except Exception:
+        kernel_findings_serialized = []
+
     plan = BringUpPlan(
         new_model_id=new_model_id,
         new_model_type=new_model_type,
@@ -564,6 +578,7 @@ def build_bringup_plan(
         backend_demo_path=backend.demo_path,
         components=comps,
         common_reuse=[(label, path) for label, path, _ in _COMMON_REUSE_TABLE],
+        kernel_findings=kernel_findings_serialized,
     )
 
     if not sibling_cfg:
@@ -739,6 +754,14 @@ def collect_bringup_plan_files(
             "bring-up plan (machine)",
         )
     )
+    if plan.kernel_findings:
+        out.append(
+            (
+                new_demo_dir_rel / "kernel_findings.json",
+                json.dumps({"findings": plan.kernel_findings}, indent=2).encode("utf-8"),
+                "kernel-constraint findings (WARN+BLOCKER)",
+            )
+        )
     for c in plan.components:
         if c.status != NEW:
             continue
