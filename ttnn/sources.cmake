@@ -319,6 +319,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/events.cpp
     cpp/ttnn-nanobind/fabric.cpp
     cpp/ttnn-nanobind/disaggregation.cpp
+    cpp/ttnn/experimental/disaggregation/tensor_helpers.cpp
     cpp/ttnn-nanobind/global_circular_buffer.cpp
     cpp/ttnn-nanobind/global_semaphore.cpp
     cpp/ttnn-nanobind/hd_socket.cpp
