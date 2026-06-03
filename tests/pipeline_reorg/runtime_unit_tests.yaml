@@ -59,8 +59,7 @@
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
 
-# --- Context, Device, Misc, JIT Build ---
-# NOTE: unit_tests_noc dropped.
+# --- Context, Device, Misc, JIT Build, NOC ---
 - name: runtime_core
   # MetalContextIntegrationTest.Legacy disabled by #44767.
   cmd: |
@@ -68,6 +67,7 @@
     ./build/test/tt_metal/unit_tests_device
     ./build/test/tt_metal/unit_tests_misc
     ./build/test/tt_metal/unit_tests_jit_build
+    ./build/test/tt_metal/unit_tests_noc
   skus:
     wh_n150_civ2:
       timeout: 12

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdlib>
+#include <string>
 #include <gtest/gtest.h>
 #include "profiler_state_manager.hpp"
 #include "tt_metal/tt_metal/common/mesh_dispatch_fixture.hpp"
@@ -23,14 +24,20 @@ public:
         // is true at that time.  Setting the env var before create_shared_devices()
         // ensures profiler_state_manager_ is allocated and firmware is configured
         // for NOC event collection.
-        suite_owned_env_ = (getenv("TT_METAL_NOC_DEBUG_DUMP") == nullptr);
-        setenv("TT_METAL_NOC_DEBUG_DUMP", "1", /*overwrite=*/0);
+        const char* prev = getenv("TT_METAL_NOC_DEBUG_DUMP");
+        had_prev_env_ = (prev != nullptr);
+        if (had_prev_env_) {
+            prev_env_value_ = prev;
+        }
+        setenv("TT_METAL_NOC_DEBUG_DUMP", "1", /*overwrite=*/1);
         MeshDispatchFixture::create_shared_devices();
     }
 
     static void TearDownTestSuite() {
         MeshDispatchFixture::destroy_shared_devices();
-        if (suite_owned_env_) {
+        if (had_prev_env_) {
+            setenv("TT_METAL_NOC_DEBUG_DUMP", prev_env_value_.c_str(), 1);
+        } else {
             unsetenv("TT_METAL_NOC_DEBUG_DUMP");
         }
     }
@@ -118,7 +125,8 @@ public:
     }
 
 protected:
-    static inline bool suite_owned_env_{false};
+    static inline bool had_prev_env_{false};
+    static inline std::string prev_env_value_{};
 
     void SetUp() override {
         MeshDispatchFixture::SetUp();
