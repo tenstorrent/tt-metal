@@ -778,12 +778,17 @@ class VoxtralTTAudioTokenizer:
         if len(tensors) == 1:
             return tensors[0]
 
-        out = tensors[0]
-        for part in tensors[1:]:
-            merged = ttnn.concat([out, part], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            if out.is_allocated():
-                ttnn.deallocate(out)
-            if part.is_allocated():
-                ttnn.deallocate(part)
-            out = merged
-        return out
+        # Remaining segments each exceed max_concat_flat — device concat would exceed L1 CB page
+        # limit (page size = last-dim bytes > per-core L1).  Download all, cat on CPU, re-upload.
+        host_parts = [ttnn.to_torch(t).bfloat16() for t in tensors]
+        for t in tensors:
+            if t.is_allocated():
+                ttnn.deallocate(t)
+        host_cat = torch.cat(host_parts, dim=2)
+        return ttnn.from_torch(
+            host_cat,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
