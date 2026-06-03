@@ -164,21 +164,69 @@ already accept these flags — they default to `False`.
 
 ## Concrete next steps
 
-1. **Wire `layer_paired_l1=True` and `device_siglip=True` through `Pi0_5PipelineC`.**
-   Adds 2 dataclass fields and forwards them at `initialize()`-time. Stage
-   constructors already accept them. The `run_inference` transport path
-   probably needs to route via the stages' `first_chip_submesh` /
-   `last_chip_submesh` properties (it currently uses `self.submeshes[i]`,
-   which is the full submesh and is wrong in paired mode). This is the
-   real surgical work.
+### Status — done
 
-2. **Re-run this probe.** Expected:
-   - prefill   L1 ~110–125 MB / chip   DRAM ~0
-   - denoise   L1 ~95–100 MB / chip    DRAM ~0
-   - vision    L1 ~150–160 MB / chip   DRAM ~0  (was 0 / 0 before)
+1. ✅ **Wire `layer_paired_l1` and `device_siglip` through `Pi0_5PipelineC`** (commit
+   following this update). Added 3 dataclass fields (`layer_paired_l1`,
+   `device_siglip`, `expert_layers_per_chip`); propagated to
+   `StageVision` / `StagePrefill` / `StageDenoise` at `initialize()` time;
+   refactored `run_inference` to route transports through each stage's
+   `first_chip_submesh` accessor (preserves replicated-mode behavior
+   bit-for-bit while making paired-mode routing correct). The denoise
+   loop in `_denoise_with_per_step_timing` also got the same paired-mode
+   host-bounce of `velocity_hidden` last-chip → first-chip that
+   `StageDenoise.denoise()` already had.
 
-3. **Re-run Option C e2e bench at full depth.** Today the bench is
-   shrunk (`vlm_depth=2, expert_depth=1`); after sharding lands we can
+### Probe result with `PI0_OC_L1_PROBE_LAYER_PAIRED=1` (2026-06-03)
+
+```
+Stage     Chips queried  L1 post-fwd       DRAM post-fwd
+─────────────────────────────────────────────────────────
+vision    4 (parent)         0.0 MB             0.1 MB    (host-resident)
+prefill   1 (chip 0)       119.0 MB             9.1 MB    (1 VLM layer L1-resident)
+denoise   1 (chip 0)        86.5 MB            14.4 MB    (3 expert layers + suffix)
+
+L1 cap per chip: 172.5 MB (l1_small_size=24576 reserved for L1 small allocator)
+```
+
+Compared to the analytical plan (122 MB prefill, 98 MB denoise) the
+measured values are within 3 MB. Compared to the replicated baseline
+(2113 / 576 MB DRAM), paired mode is **12× smaller** on prefill DRAM
+and **41× smaller** on denoise DRAM, with the weights now living in L1
+where the deployment plan put them.
+
+The probe also gained two new env knobs to support this measurement:
+
+- `PI0_OC_L1_PROBE_LAYER_PAIRED=1` — turns on paired-mode placement.
+- `PI0_OC_L1_PROBE_DEVICE_SIGLIP=1` — turns on the 3-chip SigLIP split.
+- `PI0_OC_L1_PROBE_L1_SMALL_SIZE` — bytes per bank reserved for the
+  L1-small allocator. Defaults to 24576 when paired-mode is on (the
+  standard pi0.5 single-device value); unset otherwise.
+
+The probe also now queries the per-chip `micro_submeshes[0]` after
+init in paired mode — `GetMemoryView(parent_submesh, L1)` doesn't see
+allocations made on a parent's carved children, so reading the parent
+submesh returned 0 MB even though weights were resident on each chip.
+
+### Status — open
+
+2. ⚠️  **`run_inference` crashes in paired mode at the MLP GELU CB clash.**
+   `tt_metal/impl/program/program.cpp:1452` →
+   `Statically allocated circular buffers in program N clash with L1
+   buffers on core range [0-0 - 11-7]. L1 buffer allocated at 397568 and
+   static circular buffer region ends at 694272`. This is the **same
+   class of L1+CB issue** that `vlm_slice.py:298` and `vlm_slice.py:578`
+   already document and fix for `rms_norm` (bounce input/output
+   through DRAM around the op so the kernel's static CB region doesn't
+   collide with our L1-resident buffers). The MLP matmul with fused
+   GELU (`fused_activation=UnaryWithParam(GELU)`) needs the same
+   treatment. This is op/block-level surgery — separate increment from
+   pipeline plumbing — and it's the next blocker for end-to-end
+   paired-mode inference.
+
+3. **Re-run Option C e2e bench at full depth** once the MLP-block
+   DRAM bounce lands. Today the bench is shrunk
+   (`vlm_depth=2, expert_depth=1`); after the CB clash is fixed we can
    benchmark the real-config workload directly comparable to the
    analytical 8.90 ms total in `PI0_5_GALAXY_DEPLOYMENT_PLAN.md` §3.1.
 

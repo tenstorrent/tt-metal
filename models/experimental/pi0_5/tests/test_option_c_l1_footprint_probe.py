@@ -70,7 +70,7 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import pytest
 import torch
@@ -116,6 +116,22 @@ VLM_DEPTH_PROBE = int(os.environ.get("PI0_OC_L1_PROBE_VLM_DEPTH", "18"))
 EXPERT_DEPTH_PROBE = int(os.environ.get("PI0_OC_L1_PROBE_EXPERT_DEPTH", "18"))
 RUN_FORWARD = os.environ.get("PI0_OC_L1_PROBE_RUN_FORWARD", "1") == "1"
 DEPTH_SWEEP = os.environ.get("PI0_OC_L1_PROBE_DEPTH_SWEEP") == "1"
+# Pi0_5PipelineC placement flags — toggle to compare DRAM-replicated vs
+# L1-paired footprints. Defaults match the bench / smoke path so a fresh
+# probe run reproduces the baseline numbers in OPTION_C_L1_FOOTPRINT_PROBE.md.
+LAYER_PAIRED_L1 = os.environ.get("PI0_OC_L1_PROBE_LAYER_PAIRED") == "1"
+DEVICE_SIGLIP = os.environ.get("PI0_OC_L1_PROBE_DEVICE_SIGLIP") == "1"
+EXPERT_LAYERS_PER_CHIP = int(os.environ.get("PI0_OC_L1_PROBE_EXPERT_LAYERS_PER_CHIP", "3"))
+# L1 small / static-CB reservation, per-bank. 24576 bytes = 24 KB is the
+# value every working pi0.5 single-device test uses (see README.md:172,
+# test_perf_ttnn_full_e2e_trace.py:95, libero_rollout.py:979, all of
+# tests/pcc). The mesh path needs the same reservation when L1-resident
+# weights are live or the matmul kernel's static CB region collides with
+# L1-allocated buffers. 1 MB / bank (~120 MB / chip) is way too much and
+# OOMs the layer-paired weights — DON'T do that. None = ttnn default (0).
+_default_l1_small = "24576" if LAYER_PAIRED_L1 else ""
+L1_SMALL_SIZE_RAW = os.environ.get("PI0_OC_L1_PROBE_L1_SMALL_SIZE", _default_l1_small)
+L1_SMALL_SIZE: Optional[int] = int(L1_SMALL_SIZE_RAW) if L1_SMALL_SIZE_RAW else None
 
 STAGE_NAMES = ("vision", "prefill", "denoise")
 
@@ -230,11 +246,14 @@ def _echo_env() -> None:
         v = os.environ.get(k, "<unset>")
         print(f"  {k} = {v}")
     print(f"[probe knobs]")
-    print(f"  PI0_OC_L1_PROBE_CHECKPOINT   = {CHECKPOINT_DIR}")
-    print(f"  PI0_OC_L1_PROBE_VLM_DEPTH    = {VLM_DEPTH_PROBE}")
-    print(f"  PI0_OC_L1_PROBE_EXPERT_DEPTH = {EXPERT_DEPTH_PROBE}")
-    print(f"  PI0_OC_L1_PROBE_RUN_FORWARD  = {RUN_FORWARD}")
-    print(f"  PI0_OC_L1_PROBE_DEPTH_SWEEP  = {DEPTH_SWEEP}")
+    print(f"  PI0_OC_L1_PROBE_CHECKPOINT             = {CHECKPOINT_DIR}")
+    print(f"  PI0_OC_L1_PROBE_VLM_DEPTH              = {VLM_DEPTH_PROBE}")
+    print(f"  PI0_OC_L1_PROBE_EXPERT_DEPTH           = {EXPERT_DEPTH_PROBE}")
+    print(f"  PI0_OC_L1_PROBE_RUN_FORWARD            = {RUN_FORWARD}")
+    print(f"  PI0_OC_L1_PROBE_DEPTH_SWEEP            = {DEPTH_SWEEP}")
+    print(f"  PI0_OC_L1_PROBE_LAYER_PAIRED           = {LAYER_PAIRED_L1}")
+    print(f"  PI0_OC_L1_PROBE_DEVICE_SIGLIP          = {DEVICE_SIGLIP}")
+    print(f"  PI0_OC_L1_PROBE_EXPERT_LAYERS_PER_CHIP = {EXPERT_LAYERS_PER_CHIP}")
 
 
 # ----------------------------------------------------------------------------#
@@ -243,14 +262,21 @@ def _echo_env() -> None:
 
 
 @contextmanager
-def _phase(phase_name: str, submeshes: List, results: Dict[str, List[Dict]]):
-    """Run a block, then snapshot L1+DRAM on every submesh and stash under phase_name."""
+def _phase(phase_name: str, submeshes: List, results: Dict[str, List[Dict]], l1_targets: Optional[List] = None):
+    """Run a block, then snapshot L1+DRAM on every submesh and stash under phase_name.
+
+    `l1_targets` is a parallel list of submeshes to read L1 from — defaults
+    to `submeshes` (full stage submeshes). When paired-mode stages have
+    carved single-chip micro-submeshes, the caller swaps those in so the
+    reads see the per-chip allocations the parent submesh can't.
+    """
+    targets = list(l1_targets) if l1_targets is not None else list(submeshes)
     try:
         yield
     finally:
         snaps: List[Dict[str, float]] = []
-        for sm, sname in zip(submeshes, STAGE_NAMES):
-            snaps.append(_summarise_submesh(sm, sname))
+        for target, sname in zip(targets, STAGE_NAMES):
+            snaps.append(_summarise_submesh(target, sname))
         results[phase_name] = snaps
         _print_phase(phase_name, snaps)
 
@@ -289,10 +315,17 @@ def test_oc_l1_footprint_probe_full_depth():
 
     results: Dict[str, List[Dict]] = {}
 
-    with open_galaxy_mesh(layout) as (_parent, submeshes):
+    with open_galaxy_mesh(layout, l1_small_size=L1_SMALL_SIZE) as (_parent, submeshes):
         assert len(submeshes) == 3, f"expected 3 submeshes, got {len(submeshes)}"
 
-        with _phase("baseline (pre-init)", submeshes, results):
+        # Stage submeshes we read for each phase. After Pi0_5PipelineC.initialize()
+        # the paired-mode stages carve single-chip micro-submeshes inside the
+        # parent prefill / denoise submeshes — query those instead of the
+        # parents, because GetMemoryView on a parent submesh doesn't see
+        # allocations made on its carved children. Filled in below.
+        l1_targets: List = list(submeshes)
+
+        with _phase("baseline (pre-init)", submeshes, results, l1_targets):
             pass
 
         pipe = Pi0_5PipelineC(
@@ -303,13 +336,16 @@ def test_oc_l1_footprint_probe_full_depth():
             denoise_steps=NUM_DENOISE_STEPS,
             action_dim=ACTION_DIM,
             action_horizon=ACTION_HORIZON,
+            layer_paired_l1=LAYER_PAIRED_L1,
+            device_siglip=DEVICE_SIGLIP,
+            expert_layers_per_chip=EXPERT_LAYERS_PER_CHIP,
         )
 
         # initialize is one call today; if it OOMs we capture state at the
         # failure point. The pipeline initializes stage_0 → stage_1 → stage_2
         # internally (see Pi0_5PipelineC.initialize).
         try:
-            with _phase("after Pi0_5PipelineC.initialize", submeshes, results):
+            with _phase("after Pi0_5PipelineC.initialize", submeshes, results, l1_targets):
                 pipe.initialize()
         except Exception as e:
             print(f"\n[FAIL] initialize() raised: {type(e).__name__}: {e}")
@@ -317,9 +353,20 @@ def test_oc_l1_footprint_probe_full_depth():
             print("[hint] re-run with PI0_OC_L1_PROBE_DEPTH_SWEEP=1 to bisect.")
             raise
 
+        # Re-target L1 reads to per-chip micro-submeshes when paired-mode
+        # stages have carved them. Each stage's first micro-submesh is
+        # representative of the per-chip footprint (in paired mode every
+        # chip in the stage holds a different layer's weights, so any one
+        # is a reasonable proxy for "is the per-chip placement happening").
+        for i, stage in enumerate((pipe.stage_0, pipe.stage_1, pipe.stage_2)):
+            micro = getattr(stage, "micro_submeshes", None)
+            if micro:
+                l1_targets[i] = micro[0]
+                print(f"[probe] stage={STAGE_NAMES[i]} → reading L1 from " f"micro_submeshes[0] (1 of {len(micro)})")
+
         if RUN_FORWARD:
             try:
-                with _phase("after warmup forward", submeshes, results):
+                with _phase("after warmup forward", submeshes, results, l1_targets):
                     actions, _t = pipe.run_inference(pixel_values, lang_tokens, noisy_actions)
                     ttnn.deallocate(actions)
             except Exception as e:

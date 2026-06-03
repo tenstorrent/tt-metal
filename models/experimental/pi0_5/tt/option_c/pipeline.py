@@ -94,6 +94,24 @@ class Pi0_5PipelineC:
     action_dim: int = 32
     action_horizon: int = 50
     embed_on_host: bool = True
+    # Layer-paired L1 placement: 1 VLM layer / prefill chip, `expert_layers_per_chip`
+    # expert layers / denoise chip. Each layer's weights live in L1 on exactly its
+    # owning chip — the target Option C placement (deployment plan §3.1). When False
+    # (default), all layers are replicated across the full submesh in DRAM, which
+    # is the smoke / bench path. Stages already accept this flag; the pipeline
+    # just plumbs it through and routes transports via each stage's
+    # first_chip_submesh / last_chip_submesh accessor.
+    layer_paired_l1: bool = False
+    # Number of expert layers per denoise chip when `layer_paired_l1=True`.
+    # Default 3 matches stage_denoise.EXPERT_LAYERS_PER_DENOISE_CHIP — 18 layers
+    # over 6 chips. Ignored when layer_paired_l1 is False.
+    expert_layers_per_chip: int = 3
+    # Device-side SigLIP: SigLIP-27 runs across 3 vision chips + 1 projector chip
+    # (`Pi0_5OptionCVisionSliceSplit`) instead of on the host CPU. When False
+    # (default), `embed_on_host` controls the host path. The two flags are
+    # mutually exclusive at the slice level — passing device_siglip=True
+    # overrides embed_on_host.
+    device_siglip: bool = False
 
     stage_0: Optional[StageVision] = None
     stage_1: Optional[StagePrefill] = None
@@ -122,8 +140,15 @@ class Pi0_5PipelineC:
             self.config,
             self.weights,
             embed_on_host=self.embed_on_host,
+            device_siglip=self.device_siglip,
         )
-        self.stage_1 = StagePrefill(s[1], self.submeshes[1], self.config, self.weights)
+        self.stage_1 = StagePrefill(
+            s[1],
+            self.submeshes[1],
+            self.config,
+            self.weights,
+            layer_paired_l1=self.layer_paired_l1,
+        )
         self.stage_2 = StageDenoise(
             s[2],
             self.submeshes[2],
@@ -132,6 +157,8 @@ class Pi0_5PipelineC:
             denoise_steps=self.denoise_steps,
             action_dim=self.action_dim,
             action_horizon=self.action_horizon,
+            layer_paired_l1=self.layer_paired_l1,
+            layers_per_chip=self.expert_layers_per_chip,
         )
         self.kv_migrator = KVMigration(denoise_submesh=self.submeshes[2])
 
@@ -184,15 +211,22 @@ class Pi0_5PipelineC:
         t.stage_0_vision_ms = (time.perf_counter() - t0) * 1000
 
         # ---------- Transport 0 → 1 -----------------------------------------
+        # In paired mode, prefill expects the input on chip 0 of the prefill
+        # submesh (the chip owning VLM layer 0), NOT on the full 18-chip
+        # submesh. The stage's first_chip_submesh accessor returns the right
+        # target in both modes (full submesh in replicated mode, chip 0 in
+        # paired mode), so this single line covers both paths.
         t0 = time.perf_counter()
-        prefix_hidden_s1 = send_activation_via_host(prefix_hidden_s0, self.submeshes[1])
+        prefill_in_submesh = self.stage_1.first_chip_submesh
+        prefix_hidden_s1 = send_activation_via_host(prefix_hidden_s0, prefill_in_submesh)
         ttnn.deallocate(prefix_hidden_s0)
         t.transport_0_to_1_ms = (time.perf_counter() - t0) * 1000
 
         # ---------- Stage 1: VLM prefill ------------------------------------
-        # Build prefill mask on the prefill submesh.
+        # Mask must live on the same submesh as the prefill input — chip 0 in
+        # paired mode; full prefill submesh in replicated mode.
         S_prefix = prefix_hidden_s1.shape[1]
-        mask_prefix_s1 = self._build_or_upload_prefix_mask(attention_mask_prefix, S_prefix, self.submeshes[1])
+        mask_prefix_s1 = self._build_or_upload_prefix_mask(attention_mask_prefix, S_prefix, prefill_in_submesh)
         t0 = time.perf_counter()
         h_after_1 = self.stage_1.forward(
             prefix_hidden_s1,
@@ -214,12 +248,16 @@ class Pi0_5PipelineC:
         t.kv_migration_ms = (time.perf_counter() - t0) * 1000
 
         # ---------- Stage 2: denoise (full Euler loop) ----------------------
-        noisy_on_denoise = self._upload_replicated(noisy_actions, self.submeshes[2], dtype=ttnn.bfloat16)
+        # Suffix MLP and the first expert layer live on chip 0 of the denoise
+        # submesh in paired mode, so x_t and the joint mask both need to land
+        # there. In replicated mode this is the full denoise submesh.
+        denoise_in_submesh = self.stage_2.first_chip_submesh
+        noisy_on_denoise = self._upload_replicated(noisy_actions, denoise_in_submesh, dtype=ttnn.bfloat16)
         joint_mask_on_denoise = self._build_or_upload_joint_mask(
             attention_mask_joint,
             S_prefix=S_prefix,
             S_suffix_padded=noisy_on_denoise.shape[1],
-            submesh=self.submeshes[2],
+            submesh=denoise_in_submesh,
         )
 
         t0 = time.perf_counter()
@@ -270,6 +308,18 @@ class Pi0_5PipelineC:
             )
             ttnn.deallocate(suffix_h)
             ttnn.deallocate(adarms_cond)
+
+            # In layer-paired mode the expert chain emits its output on the LAST
+            # micro-submesh; the suffix MLP lives on chip 0, so we host-bounce
+            # the hidden back before project_output. Mirrors StageDenoise.denoise().
+            if (
+                self.stage_2.layer_paired_l1
+                and self.stage_2.micro_submeshes is not None
+                and len(self.stage_2.micro_submeshes) > 1
+            ):
+                velocity_hidden_first = send_activation_via_host(velocity_hidden, self.stage_2.micro_submeshes[0])
+                ttnn.deallocate(velocity_hidden)
+                velocity_hidden = velocity_hidden_first
 
             v_t = self.stage_2.suffix.project_output(velocity_hidden)
             ttnn.deallocate(velocity_hidden)
