@@ -203,7 +203,7 @@ std::pair<distributed::MeshWorkload, std::vector<std::string>> initialize_progra
 
     std::vector<std::string> kernel_names(num_kernels);
     std::vector<experimental::KernelSpec> kernel_specs;
-    std::vector<std::string> wu_kernel_names;
+    std::vector<experimental::KernelSpecName> wu_kernel_names;
     kernel_specs.reserve(num_kernels);
     wu_kernel_names.reserve(num_kernels);
 

@@ -1082,7 +1082,7 @@ inline ProgramRunArgs MakeBorrowedDFBRunArgs() {
 // All cores of a single DFB share the same address (lockstep allocation invariant), so
 // returning the first entry is representative.
 inline uint32_t PeekBorrowedDFBAddress(Program& program, const DFBSpecName& dfb_name) {
-    const uint32_t dfb_id = program.impl().get_dfb_handle(dfb_name);
+    const uint32_t dfb_id = program.impl().get_dfb_handle(dfb_name.get());
     const auto dfb = program.impl().get_dataflow_buffer(dfb_id);
     TT_FATAL(!dfb->groups.empty(), "DFB '{}' has no groups; finalize_dataflow_buffer_configs() not called?", dfb_name);
     TT_FATAL(!dfb->groups[0].l1_by_core.empty(), "DFB '{}' group 0 is empty", dfb_name);
@@ -1340,7 +1340,7 @@ inline MeshTensor AllocateTensorForBinding(distributed::MeshDevice& mesh_device,
 // site shows up as a test failure.
 inline uint32_t ReadBindingAddressFromCRTA(
     const Program& program, const KernelSpecName& kernel_name, const std::string& tensor_parameter_name) {
-    auto kernel = program.impl().get_kernel_by_spec_name(kernel_name);
+    auto kernel = program.impl().get_kernel_by_spec_name(kernel_name.get());
     for (const auto& handle : kernel->tensor_binding_handles()) {
         if (handle.tensor_parameter_name == tensor_parameter_name) {
             const uint32_t word_index = handle.addr_crta_offset / sizeof(uint32_t);
@@ -1679,7 +1679,7 @@ TEST_F(ProgramRunArgsTestGen1, DynamicTensorShape_RankMismatchFails) {
 // Returns the [rank] shape words in declaration order.
 inline std::vector<uint32_t> ReadBindingShapeFromCRTA(
     const Program& program, const KernelSpecName& kernel_name, const std::string& tensor_parameter_name) {
-    auto kernel = program.impl().get_kernel_by_spec_name(kernel_name);
+    auto kernel = program.impl().get_kernel_by_spec_name(kernel_name.get());
     for (const auto& handle : kernel->tensor_binding_handles()) {
         if (handle.tensor_parameter_name == tensor_parameter_name) {
             const uint32_t base_word = handle.addr_crta_offset / sizeof(uint32_t);

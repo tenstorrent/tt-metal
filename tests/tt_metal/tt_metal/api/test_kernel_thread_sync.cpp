@@ -91,7 +91,7 @@ TEST_F(KernelThreadSyncTest, BarrierSynchronizesThreads) {
     uint32_t l1_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
 
     std::vector<KernelConfig> kernel_configs;
-    std::vector<std::string> work_unit_kernel_names;
+    std::vector<KernelSpecName> work_unit_kernel_names;
 
     if (is_quasar) {
         auto spec = MakeMinimalDMKernel("dm_barrier_kernel", expected_num_threads);

@@ -18,6 +18,7 @@
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/experimental/metal2_host_api/util/semi_strong_type.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -60,7 +61,7 @@ namespace tt::tt_metal::experimental {
 // ============================================================================
 
 // A name identifying a KernelSpec within a ProgramSpec.
-using KernelSpecName = std::string;
+using KernelSpecName = SemiStrongType<std::string, struct KernelSpecNameTag>;
 
 //------------------------------------------------
 // KernelSpec

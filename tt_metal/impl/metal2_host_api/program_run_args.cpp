@@ -55,21 +55,22 @@ void ValidateTensorArgs(const Program& program, std::span<const ProgramRunArgs::
 
     std::unordered_set<std::string> tensor_parameters_with_params;
     for (const auto& tensor_params : tensor_args) {
-        auto [it, inserted] = tensor_parameters_with_params.insert(tensor_params.tensor_parameter_name);
+        auto [it, inserted] = tensor_parameters_with_params.insert(tensor_params.tensor_parameter_name.get());
         TT_FATAL(
             inserted,
             "Duplicate tensor_parameter_name '{}' in tensor_args. Each TensorParameter must appear at most once.",
             tensor_params.tensor_parameter_name);
-        const TensorSpec* expected_spec = program_impl.get_tensor_parameter_layout(tensor_params.tensor_parameter_name);
+        const TensorSpec* expected_spec =
+            program_impl.get_tensor_parameter_layout(tensor_params.tensor_parameter_name.get());
         TT_FATAL(
             expected_spec != nullptr,
             "TensorArgument references unknown TensorParameter '{}'.",
             tensor_params.tensor_parameter_name);
         const TensorSpec& runtime_spec = tensor_params.tensor.get().tensor_spec();
         const bool dyn_shape =
-            program_impl.get_tensor_parameter_dynamic_tensor_shape(tensor_params.tensor_parameter_name);
+            program_impl.get_tensor_parameter_dynamic_tensor_shape(tensor_params.tensor_parameter_name.get());
         const bool padded_only =
-            program_impl.get_tensor_parameter_match_padded_shape_only(tensor_params.tensor_parameter_name);
+            program_impl.get_tensor_parameter_match_padded_shape_only(tensor_params.tensor_parameter_name.get());
         if (dyn_shape) {
             // dynamic_tensor_shape: tensor_layout must match exactly; logical_shape may differ in
             // per-dim values, but rank must still match. (Wins over match_padded_shape_only if both
@@ -147,14 +148,14 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
             kernel_name);
 
         // Check that the kernel exists
-        const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_name);
+        const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_name.get());
         TT_FATAL(
             schema != nullptr,
             "Kernel '{}' has no RTA schema registered. Was the Program created from a ProgramSpec?",
             kernel_name);
 
         // Nodes the kernel runs on — the required domain for named-RTA coverage.
-        const std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
+        const std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name.get());
         const std::set<CoreCoord>& kernel_nodes = kernel->logical_cores();
 
         // Validate vararg RTA counts per node
@@ -278,8 +279,8 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
     // by SetProgramRunArgs from the corresponding TensorArgument — and SetProgramRunArgs
     // only walks kernels present in params.kernel_run_args, so a kernel with tensor bindings
     // omitted from kernel_run_args would have its binding CRTAs left uninitialized.
-    std::vector<KernelSpecName> registered_names = program_impl.get_registered_kernel_names();
-    for (const KernelSpecName& name : registered_names) {
+    auto registered_names = program_impl.get_registered_kernel_names();
+    for (const auto& name : registered_names) {
         if (kernels_with_params.contains(name)) {
             continue;
         }
@@ -401,7 +402,7 @@ void AttachBorrowedDFBBuffers(
     std::unordered_map<std::string, const MeshTensor*> tensor_by_param;
     tensor_by_param.reserve(tensor_args.size());
     for (const auto& tensor_params : tensor_args) {
-        tensor_by_param.emplace(tensor_params.tensor_parameter_name, &tensor_params.tensor.get());
+        tensor_by_param.emplace(tensor_params.tensor_parameter_name.get(), &tensor_params.tensor.get());
     }
 
     for (const auto& [dfb_id, tp_name] : borrowed_bindings) {
@@ -471,7 +472,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params) {
     std::unordered_map<std::string, const MeshTensor*> tensor_by_param;
     tensor_by_param.reserve(params.tensor_args.size());
     for (const auto& tensor_params : params.tensor_args) {
-        tensor_by_param.emplace(tensor_params.tensor_parameter_name, &tensor_params.tensor.get());
+        tensor_by_param.emplace(tensor_params.tensor_parameter_name.get(), &tensor_params.tensor.get());
     }
 
     // Process kernel runtime arguments.
@@ -488,8 +489,8 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params) {
     // The device-side get_vararg / get_common_vararg helpers invisibly add the combined named-arg + binding
     // offset, so kernel code indexes varargs from 0.
     for (const auto& kernel_params : params.kernel_run_args) {
-        std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_params.kernel_spec_name);
-        const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_params.kernel_spec_name);
+        std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_params.kernel_spec_name.get());
+        const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_params.kernel_spec_name.get());
         TT_FATAL(schema != nullptr, "Kernel '{}' has no RTA schema registered.", kernel_params.kernel_spec_name);
 
         // Build a node -> named-RTA-values-map lookup for serialization.
@@ -623,7 +624,7 @@ void UpdateTensorArgs(Program& program, std::span<const ProgramRunArgs::TensorAr
     std::unordered_map<std::string, const MeshTensor*> tensor_by_param;
     tensor_by_param.reserve(tensor_args.size());
     for (const auto& tensor_params : tensor_args) {
-        tensor_by_param.emplace(tensor_params.tensor_parameter_name, &tensor_params.tensor.get());
+        tensor_by_param.emplace(tensor_params.tensor_parameter_name.get(), &tensor_params.tensor.get());
     }
 
     // For every kernel with tensor bindings, patch the binding slots in its CRTA buffer in
@@ -633,7 +634,7 @@ void UpdateTensorArgs(Program& program, std::span<const ProgramRunArgs::TensorAr
     // CRTAs, vararg CRTAs) is left untouched and retains the values installed by the most
     // recent SetProgramRunArgs call. The kernel's RTA buffer is also left untouched
     // (tensor binding state lives in CRTAs only).
-    for (const KernelSpecName& kernel_name : program_impl.get_registered_kernel_names()) {
+    for (const auto& kernel_name : program_impl.get_registered_kernel_names()) {
         std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
         const auto& binding_handles = kernel->tensor_binding_handles();
         if (binding_handles.empty()) {

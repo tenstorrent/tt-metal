@@ -7,9 +7,10 @@
 #include <concepts>
 #include <functional>
 #include <ostream>
-#include <tuple>
 #include <type_traits>
 #include <utility>
+
+#include <fmt/format.h>
 
 namespace tt::tt_metal::experimental {
 
@@ -18,7 +19,7 @@ namespace tt::tt_metal::experimental {
 // ============================================================================
 //
 // SemiStrongType is a near-verbatim copy of ttsl::StrongType
-// (tt_stl/tt_stl/strong_type.hpp) that differs in exactly ONE respect: it is
+// (tt_stl/tt_stl/strong_type.hpp) that differs in one essential respect: it is
 // IMPLICITLY constructible from its wrapped value, whereas ttsl::StrongType is
 // explicit-only.
 //
@@ -46,7 +47,7 @@ namespace tt::tt_metal::experimental {
 //   sites are untouched (they only ever reference the `using` aliases).
 //
 //   Keep this type a faithful mirror of ttsl::StrongType so that the upstream
-//   merge stays a minimal, mechanical diff. There are two deliberate deltas:
+//   merge stays a minimal, mechanical diff. There are four deliberate deltas:
 //     1. The constructor is implicit (the whole point of this type).
 //     2. operator<< lives INSIDE this namespace, not at global scope as in
 //        ttsl::StrongType. StrongType's global placement is found only by
@@ -55,6 +56,17 @@ namespace tt::tt_metal::experimental {
 //        operator<< hiding it at the call site. Placing it in the type's own
 //        namespace makes ADL find it unconditionally. This is a robustness fix
 //        that should be carried back into ttsl::StrongType at merge time.
+//     3. A fmt::formatter is provided inline below (dereferencing to the inner
+//        value, so identifiers format as bare strings in TT_FATAL/log messages).
+//        ttsl::StrongType's formatter instead lives in tt_stl/fmt.hpp. This delta
+//        disappears at merge: that existing formatter already covers the type.
+//     4. It deliberately OMITS StrongType's attribute protocol
+//        (attribute_names/attribute_values). That protocol is unused here — no
+//        Metal 2.0 spec struct is a reflection type — and keeping it would make
+//        SemiStrongType match reflection.hpp's attribute-based catch-all fmt
+//        formatter, forcing a carve-out in tt_stl/reflection.hpp and defeating
+//        the purpose of keeping this type self-contained. Re-added trivially at
+//        merge, since ttsl::StrongType already provides it.
 // ============================================================================
 
 template <typename T>
@@ -75,7 +87,7 @@ public:
         requires std::default_initializable<T>
         : value_(T{}) {}
 
-    // IMPLICIT construction — this is the sole intentional difference from
+    // IMPLICIT construction — this is the primary intentional difference from
     // ttsl::StrongType. A constrained forwarding constructor, rather than a plain
     // `SemiStrongType(T)`, so that anything T is constructible from converts in a
     // SINGLE user-defined conversion — notably `const char*` for T = std::string,
@@ -109,9 +121,6 @@ public:
         requires(!HasConstexprThreeWayCompare<T>)
     = default;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("value");
-    constexpr auto attribute_values() const { return std::forward_as_tuple(value_); }
-
 private:
     T value_;
 };
@@ -137,5 +146,19 @@ template <typename T, typename Tag>
 struct std::hash<tt::tt_metal::experimental::SemiStrongType<T, Tag>> {
     std::size_t operator()(const tt::tt_metal::experimental::SemiStrongType<T, Tag>& h) const noexcept {
         return std::hash<T>{}(*h);
+    }
+};
+
+// Format as the bare wrapped value (mirrors ttsl::StrongType's formatter in
+// tt_stl/fmt.hpp), so identifiers render cleanly in TT_FATAL / log messages.
+// Because SemiStrongType has no attribute protocol (see delta 4 above), it does
+// not match reflection.hpp's attribute-based catch-all formatter, so this is the
+// sole matching formatter — no reflection.hpp carve-out required.
+template <typename T, typename Tag>
+struct fmt::formatter<tt::tt_metal::experimental::SemiStrongType<T, Tag>> {
+    constexpr auto parse(fmt::format_parse_context& ctx) -> fmt::format_parse_context::iterator { return ctx.end(); }
+    auto format(const tt::tt_metal::experimental::SemiStrongType<T, Tag>& val, fmt::format_context& ctx) const
+        -> fmt::format_context::iterator {
+        return fmt::format_to(ctx.out(), "{}", *val);
     }
 };

@@ -7,6 +7,7 @@
 #include <string>
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
+#include <tt-metalium/experimental/metal2_host_api/util/semi_strong_type.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 
 namespace tt::tt_metal::experimental {
@@ -29,7 +30,7 @@ namespace tt::tt_metal::experimental {
 // ============================================================================
 
 // A name identifying a TensorParameter within a ProgramSpec.
-using TensorParameterName = std::string;
+using TensorParameterName = SemiStrongType<std::string, struct TensorParameterNameTag>;
 
 struct TensorParameter {
     // Tensor identifier: used to reference this Tensor within the ProgramSpec

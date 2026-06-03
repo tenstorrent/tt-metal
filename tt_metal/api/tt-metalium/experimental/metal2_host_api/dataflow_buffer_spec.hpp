@@ -63,8 +63,8 @@
 
 namespace tt::tt_metal::experimental {
 
-// A name identifying a DataflowBufferSpec within a ProgramSpec.
-using DFBSpecName = std::string;
+// DFBSpecName is defined in advanced_options.hpp (included above) — the lowest
+// header that references it.
 
 //------------------------------------------------
 // DataflowBufferSpec

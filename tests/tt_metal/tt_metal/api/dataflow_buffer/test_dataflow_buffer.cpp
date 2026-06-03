@@ -624,7 +624,7 @@ void run_concurrent_dfbs_program(
     // erroneously register all N threads as producers for every DFB.
     std::vector<experimental::DataflowBufferSpec> dfb_specs;
     std::vector<experimental::KernelSpec> kernel_specs;
-    std::vector<std::string> kernel_names;
+    std::vector<experimental::KernelSpecName> kernel_names;
     dfb_specs.reserve(num_dfbs);
     kernel_specs.reserve(2 * num_dfbs);
     kernel_names.reserve(2 * num_dfbs);
@@ -810,7 +810,7 @@ void run_concurrent_tensix_dm_dfbs_program(
     // DM concurrent consumers: one 1-thread kernel instance per DFB, each binding
     // its own per-DFB OUT_TENSOR_<i>.
     std::vector<experimental::KernelSpec> kernel_specs;
-    std::vector<std::string> kernel_names;
+    std::vector<experimental::KernelSpecName> kernel_names;
     std::vector<experimental::DataflowBufferSpec> dfb_specs;
     std::vector<experimental::TensorParameter> tensor_parameters;
     kernel_specs.reserve(1 + num_dfbs);
