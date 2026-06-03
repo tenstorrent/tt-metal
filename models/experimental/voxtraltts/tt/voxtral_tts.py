@@ -262,7 +262,7 @@ class VoxtralTTSPipeline:
         self,
         text: str,
         voice: str = "casual_male",
-        max_tokens: int = 2500,
+        max_tokens: int = 65000,
         seed: int = 0,
         *,
         fixed_step_count: bool = False,
@@ -300,27 +300,25 @@ class VoxtralTTSPipeline:
         generated_codes: list[torch.Tensor] = []
         current_pos = S_prompt
 
+        cfg_scalar = float(cfg_alpha.item())
         for step_idx in range(max_tokens):
-            last_hidden = self.text.hidden_tt_to_torch(last_hidden_tt)
             if debug is not None:
+                last_hidden = self.text.hidden_tt_to_torch(last_hidden_tt)
                 debug.set(f"step.{step_idx}.text.hidden_in", last_hidden)
-            ac_out = self.acoustic_codes_forward(
-                last_hidden.unsqueeze(0),
-                cfg_alpha,
-                noise_seed=acoustic_fm_noise_seed(seed, step_idx),
-            )
+            # TT-native acoustic forward — no CPU round-trip per step
+            llm_tile = self._acoustic_hidden_tile_copy(last_hidden_tt)
+            noise_tt = self.acoustic.fm_noise_tt(1, acoustic_fm_noise_seed(seed, step_idx))
+            codes_tt = self.acoustic.forward(llm_tile, noise_tt, cfg_scalar)
+            ttnn.deallocate(llm_tile)
+            ttnn.deallocate(noise_tt)
+            ac_out = ttnn.to_torch(codes_tt).long().reshape(1, -1)
+            ttnn.deallocate(codes_tt)
             audio_codes = ac_out.to(torch.long)
             if debug is not None:
                 debug.set(f"step.{step_idx}.acoustic.codes", audio_codes.squeeze(0))
-                llm_tt = ttnn.from_torch(
-                    last_hidden.unsqueeze(0).unsqueeze(1).to(torch.bfloat16),
-                    device=self.mesh_device,
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                sem_tt = self.acoustic.semantic_logits_tt(llm_tt)
-                ttnn.deallocate(llm_tt)
+                sem_tile = self._acoustic_hidden_tile_copy(last_hidden_tt)
+                sem_tt = self.acoustic.semantic_logits_tt(sem_tile)
+                ttnn.deallocate(sem_tile)
                 sem_host = ttnn.to_torch(sem_tt).float()
                 ttnn.deallocate(sem_tt)
                 while sem_host.dim() > 2:
@@ -487,23 +485,42 @@ class VoxtralTTSPipeline:
         return wav
 
     def _acoustic_hidden_tile_copy(self, llm_hidden_tt: ttnn.Tensor) -> ttnn.Tensor:
-        """Clone + TILE layout for acoustic/trace; does not free trace inputs."""
-        work = ttnn.clone(llm_hidden_tt)
-        if len(work.shape) == 4:
-            bsz, dim = int(work.shape[0]), int(work.shape[-1])
-            reshaped = ttnn.reshape(work, (bsz, 1, dim))
-            if work.is_allocated():
-                ttnn.deallocate(work)
-            work = reshaped
-        if work.layout != ttnn.TILE_LAYOUT:
-            tile_hidden = ttnn.to_layout(
-                work,
-                ttnn.TILE_LAYOUT,
+        """Prepare llm hidden → [bsz, 1, dim] TILE DRAM for acoustic.forward.
+
+        Two paths depending on the input rank:
+
+        * 3D input (trace path, tensor already [bsz,1,dim] DRAM TILE):
+          ``ttnn.clone`` — always works because source and dest are same layout type.
+
+        * 4D input (AR loop, [1,1,1,dim] L1-sharded TILE from decode):
+          TTNN has no 4D→3D reshape op, and ``ttnn.clone`` across sharded/interleaved
+          boundaries is unsupported.  Use a minimal ``to_torch → reshape → from_torch``
+          (8 KB round-trip) to produce the correct 3D shape.
+        """
+        if len(llm_hidden_tt.shape) == 4:
+            # AR loop decode path — must go via CPU for the 4D→3D shape change.
+            # TILE_LAYOUT pads H to 32, so to_torch returns [bsz, 1, 32, dim] not [bsz, 1, 1, dim].
+            # Slice host[: , 0, 0, :] to extract the single real token row → [bsz, dim].
+            work = ttnn.to_memory_config(llm_hidden_tt, ttnn.DRAM_MEMORY_CONFIG)
+            host = ttnn.to_torch(work).to(torch.bfloat16)
+            ttnn.deallocate(work)
+            bsz = int(host.shape[0])
+            dim = int(host.shape[-1])
+            token_vec = host[:, 0, 0, :dim]  # [bsz, dim] — first tile row is the real data
+            return ttnn.from_torch(
+                token_vec.unsqueeze(1),  # [bsz, 1, dim]
+                device=self.mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            if work.is_allocated():
-                ttnn.deallocate(work)
-            work = tile_hidden
+
+        # Trace path — tensor is already [bsz, 1, dim]; clone in-place and ensure TILE.
+        work = ttnn.clone(llm_hidden_tt)
+        if work.layout != ttnn.TILE_LAYOUT:
+            tile_hidden = ttnn.to_layout(work, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(work)
+            return tile_hidden
         return work
 
     def forward_tts_generation_trace(
