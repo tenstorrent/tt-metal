@@ -85,7 +85,18 @@ namespace ckl = compute_kernel_lib;
 // specific tile from a multi-tile CB into a single-slot active CB so the
 // binary_op helper (which addresses B at tile 0 for SCALAR broadcast) can
 // consume it.
+//
+// The srcA-unpack + pack reconfigs are required: the prior compute op
+// (e.g. `sfpu_pipeline` ending phase R/post, or the next phase A binary
+// op) leaves the unpacker srcA / packer in a state tuned for a different
+// CB. With fp32_dest_acc_en=True and fp32 stats CBs the dst register is
+// in 32-bit-cell mode; calling bare `copy_tile_to_dst_init_short` +
+// `pack_tile` without re-asserting the data format produces silent dst
+// corruption (catastrophic NaN/Inf in the apply phase when Cg % 32 != 0).
 FORCE_INLINE void snapshot_tile_to_active_cb(uint32_t src_cb, uint32_t src_idx, uint32_t dst_cb) {
+    reconfig_data_format_srca(src_cb);
+    pack_reconfig_data_format(dst_cb);
+
     tile_regs_acquire();
     copy_tile_to_dst_init_short(src_cb);
     copy_tile(src_cb, src_idx, /*dst_idx=*/0);
