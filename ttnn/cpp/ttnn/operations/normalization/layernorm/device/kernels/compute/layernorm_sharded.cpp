@@ -286,7 +286,7 @@ void kernel_main() {
     cb_xmm.wait_front(num_tiles_per_block);
 #endif
 
-#ifdef DO_COL_MASK
+#if defined(DO_COL_MASK) && !defined(RMSNORM)
     // Zero the padding columns of (x - E[x]) so the variance excludes them, using the host-built
     // mask (cb_col_mask_packed): a full-width column mask (1.0 in valid columns, 0.0 in padding)
     // tilized by the framework into the compute data format, so it aligns with compute-produced
@@ -311,7 +311,37 @@ void kernel_main() {
     }
     cb_xmm.wait_front(num_tiles_per_block);
 #endif
+#if defined(RMSNORM) && defined(DO_COL_MASK) && !defined(FUSE_PRE_ADD)
+    // RMSNorm has no mean-subtraction stage, so its statistic is the mean of squares of the raw
+    // input. Zero the padding columns of the final width tile of the input into cb_mask_scratch using
+    // the writer-built mask, which matches the host-tilized input layout, then square the masked copy
+    // so the padding does not enter the mean of squares. cb_in0 itself is left intact for the
+    // x * 1/sqrt(mean_sq + eps) pass that follows. The srcb reconfig around the multiply matches the
+    // E[x] masking site so the FP32 unpacker reads the input and mask faces in the same alignment.
+    reconfig_data_format_srcb(cb_in0, cb_scaler_id);
+    cb_wait_front(cb_col_mask, 2);
+    mul_tiles_init(cb_xmm_id, cb_col_mask);
+    cb_mask_scratch_obj.reserve_back(num_tiles_per_block);
+    index_h_offset = 0;
+    for (uint32_t i = 0; i < block_h; i++) {
+        for (uint32_t wt = 0; wt < block_w; wt++) {
+            const uint32_t mask_idx = (wt == block_w - 1) ? 1 : 0;
+            tile_regs_acquire();
+            mul_tiles(cb_xmm_id, cb_col_mask, wt + index_h_offset, mask_idx, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_mask_scratch);
+            tile_regs_release();
+        }
+        index_h_offset += block_w;
+    }
+    cb_mask_scratch_obj.push_back(num_tiles_per_block);
+    cb_mask_scratch_obj.wait_front(num_tiles_per_block);
+    reconfig_data_format(cb_mask_scratch, cb_mask_scratch);
+    constexpr uint32_t cb_sq_input = cb_mask_scratch;
+#else
     constexpr uint32_t cb_sq_input = cb_xmm_id;
+#endif
 
     // (x - E[x])^2, cb_mm2 <-- cb_sq_input
     mul_tiles_init(cb_sq_input, cb_sq_input);
