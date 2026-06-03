@@ -16,6 +16,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
@@ -46,8 +47,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 @pytest.mark.parametrize(
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     [
-        pytest.param(128, 7 * 1024, 16, 4, 4, True, id="pcc"),
-        pytest.param(3200, 7168, 64, 2, 8, False, id="perf_no_pcc"),
+        pytest.param(128, GLM51Config.EMB_SIZE, 16, 4, 4, True, id="pcc"),
+        pytest.param(3200, GLM51Config.EMB_SIZE, 64, 2, 8, False, id="perf_no_pcc"),
     ],
 )
 @pytest.mark.parametrize(

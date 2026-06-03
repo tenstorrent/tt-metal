@@ -740,7 +740,16 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             (uint32_t)hidden_size,
             read_batch_size,
         };
-        idle_compute_kd.config = tt::tt_metal::ComputeConfigDescriptor{.math_fidelity = MathFidelity::HiFi4};
+        // Blackhole requires the DEST register in 32-bit mode whenever any CB on the core uses an
+        // 8-bit float format (Fp8_e4m3). The FP8 dispatch path makes the untilized output CB
+        // Fp8_e4m3, so fp32_dest_acc_en must be enabled. 32-bit DEST halves the pack_untilize block
+        // budget (8->4 tiles) under half-sync, but untilize_dispatch packs block_ct_dim=8, so
+        // dst_full_sync_en restores the 8-tile budget. Mirrors untilize_combine; only on the FP8 path.
+        idle_compute_kd.config = tt::tt_metal::ComputeConfigDescriptor{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = operation_attributes.use_fp8_dispatch,
+            .dst_full_sync_en = operation_attributes.use_fp8_dispatch,
+        };
         desc.kernels.push_back(std::move(idle_compute_kd));
     }
 
@@ -759,7 +768,13 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             (uint32_t)hidden_size,
             read_batch_size,
         };
-        sender_compute_kd.config = tt::tt_metal::ComputeConfigDescriptor{.math_fidelity = MathFidelity::HiFi4};
+        // Same FP8 DEST requirement as the idle compute kernel above: Fp8_e4m3 output CB needs
+        // 32-bit DEST (fp32_dest_acc_en) + full-sync for the block_ct_dim=8 pack_untilize. FP8 path only.
+        sender_compute_kd.config = tt::tt_metal::ComputeConfigDescriptor{
+            .math_fidelity = MathFidelity::HiFi4,
+            .fp32_dest_acc_en = operation_attributes.use_fp8_dispatch,
+            .dst_full_sync_en = operation_attributes.use_fp8_dispatch,
+        };
         desc.kernels.push_back(std::move(sender_compute_kd));
     }
 

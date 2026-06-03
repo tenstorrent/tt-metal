@@ -17,7 +17,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import profiler
-from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     ExpertMapping,
@@ -103,10 +103,10 @@ def run_torch_routed_experts(
     [
         # fmt: off
         (320, 1024, 512, 64, 2, 9, True),
-        (3200, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 64, 2, 3, False),
+        (3200, GLM51Config.EMB_SIZE, GLM51Config.MOE_INTERMEDIATE_SIZE, 64, 2, 3, False),
         # fmt: on
     ],
-    ids=["small-dims-validate-pcc", "deepseek-v3-dims-skip-pcc"],
+    ids=["small-dims-validate-pcc", "glm-5-1-dims-skip-pcc"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
@@ -157,7 +157,7 @@ def test_ttnn_routed_expert(
     use_predictable_data,
 ):
     """
-    Test TtRoutedExpert with DeepSeek V3 dimensions on various mesh configurations.
+    Test TtRoutedExpert with GLM 5.1 dimensions on various mesh configurations.
 
     Validates that the TTNN routed expert FFN computation matches torch reference.
     Each device processes its local experts independently (no CCL needed).

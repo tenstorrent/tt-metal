@@ -14,6 +14,7 @@ import pytest
 import torch
 import ttnn
 
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -487,7 +488,7 @@ def test_insert_2d_indices_matches_torch_slice(device):
 # ---------------------------------------------------------------------------
 # Stress test: DRAM utilization with a large global tensor.
 #
-# Global tensor is shaped (2 * 25k, 7k) with 1k = 1024. Local tensor holds 25k
+# Global tensor is shaped (2 * 25k, 6k) with 1k = 1024. Local tensor holds 25k
 # rows. Scenarios cover uniform insertion (every expert gets the same slice)
 # and non-uniform insertion (one expert dominates, tail-heavy, irregular
 # tile-unaligned counts).
@@ -496,7 +497,7 @@ def test_insert_2d_indices_matches_torch_slice(device):
 
 K = 1024
 STRESS_GLOBAL_ROWS = 2 * 25 * K  # 51200
-STRESS_HIDDEN_DIM = 7 * K  # 7168
+STRESS_HIDDEN_DIM = GLM51Config.EMB_SIZE  # 6144
 STRESS_LOCAL_ROWS = 25 * K  # 25600
 
 

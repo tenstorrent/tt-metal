@@ -14,6 +14,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -22,13 +23,13 @@ from tests.ttnn.utils_for_testing import comp_pcc
 @pytest.mark.parametrize(
     "num_tokens, emb_dim, hidden_dim",
     [
-        (1024, 7168, 2048),  # DeepSeek V3 dims, 1K tokens
-        (1600, 7168, 2048),  # DeepSeek V3 dims, 1.6K tokens
-        (2048, 7168, 2048),  # DeepSeek V3 dims, 2K tokens
-        (3200, 7168, 2048),  # DeepSeek V3 dims, 3.2K tokens
-        (4096, 7168, 2048),  # DeepSeek V3 dims, 4K tokens
+        (1024, GLM51Config.EMB_SIZE, GLM51Config.MOE_INTERMEDIATE_SIZE),  # GLM 5.1 dims, 1K tokens
+        (1600, GLM51Config.EMB_SIZE, GLM51Config.MOE_INTERMEDIATE_SIZE),  # GLM 5.1 dims, 1.6K tokens
+        (2048, GLM51Config.EMB_SIZE, GLM51Config.MOE_INTERMEDIATE_SIZE),  # GLM 5.1 dims, 2K tokens
+        (3200, GLM51Config.EMB_SIZE, GLM51Config.MOE_INTERMEDIATE_SIZE),  # GLM 5.1 dims, 3.2K tokens
+        (4096, GLM51Config.EMB_SIZE, GLM51Config.MOE_INTERMEDIATE_SIZE),  # GLM 5.1 dims, 4K tokens
     ],
-    ids=["ds-v3-1k", "ds-v3-1.6k", "ds-v3-2k", "ds-v3-3.2k", "ds-v3-4k"],
+    ids=["glm-5.1-1k", "glm-5.1-1.6k", "glm-5.1-2k", "glm-5.1-3.2k", "glm-5.1-4k"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
