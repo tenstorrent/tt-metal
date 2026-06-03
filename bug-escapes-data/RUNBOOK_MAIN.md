@@ -53,6 +53,25 @@
 
 ---
 
+## Modes
+
+### Normal Campaign Mode (default)
+Run the full campaign loop. After each verify agent completes, immediately spawn a new find agent. Never idle.
+
+### Just Find One Mode
+Activated when the user says "use the just find one protocol" or similar.
+
+**Behavior:**
+1. Spawn the find agent with `target: 1`.
+2. Take the first qualifying finding returned — ignore the rest.
+3. Spawn one verify agent for that finding. Wait for its verdict.
+4. Complete Confluence update and DM if applicable.
+5. **Stop. Do not spawn another find agent.** The session ends after one escape is fully processed (confirmed, refuted, or inconclusive).
+
+The Continuous Campaign Rule does NOT apply in Just Find One mode.
+
+---
+
 ## The Campaign Loop
 
 Each session runs this loop:
@@ -168,6 +187,8 @@ Update confirmed table and chart only after `verdict: "confirmed"`.
 ## Continuous Campaign Rule
 
 When no verify agents are running and no candidates are pending: immediately spawn a new find agent. Do not wait for the next cron. A session that ends with nothing dispatched and no new candidates is a failure unless explicitly explained.
+
+**Exception:** This rule does not apply in Just Find One mode. In that mode, the session ends after one escape is fully processed.
 
 ---
 
