@@ -137,15 +137,15 @@ def is_relu_threshold_tolerance_issue(
             DataFormat.Bfp8_b,
         ]
     ),
-    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
     input_dimensions=[[32, 32], [64, 64], [32, 64], [64, 32]],
-    relu_type=[
+    dest_sync=[DestSync.Half, DestSync.Full],
+    dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
+    relu_type=lambda dest_acc: [
         PackerReluType.NoRelu,
         PackerReluType.ZeroRelu,
         PackerReluType.MinThresholdRelu,
         PackerReluType.MaxThresholdRelu,
     ],
-    dest_sync=[DestSync.Half, DestSync.Full],
     dest_index=lambda dest_acc, dest_sync, formats, input_dimensions: get_valid_dest_indices(
         dest_sync, dest_acc, formats, input_dimensions
     ),

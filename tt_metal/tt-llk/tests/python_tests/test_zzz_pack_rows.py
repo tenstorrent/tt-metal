@@ -39,6 +39,8 @@ dimension_combinations = [
 
 
 @parametrize(
+    dimensions=dimension_combinations,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     formats=input_output_formats(
         [
             DataFormat.Bfp8_b,
@@ -49,9 +51,7 @@ dimension_combinations = [
         ],
         same=True,
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     num_rows_to_pack=[1, 16, 50, 64],
-    dimensions=dimension_combinations,
 )
 def test_pack_rows(
     formats,

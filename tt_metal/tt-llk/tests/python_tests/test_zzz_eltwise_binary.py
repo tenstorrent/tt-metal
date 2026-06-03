@@ -114,7 +114,6 @@ def _get_valid_tile_dimensions(transpose_srca, broadcast_type):
 
 @parametrize(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    formats=lambda dest_acc: _get_valid_formats(dest_acc),
     broadcast_type=[
         BroadcastType.None_,
         BroadcastType.Row,
@@ -122,9 +121,19 @@ def _get_valid_tile_dimensions(transpose_srca, broadcast_type):
         BroadcastType.Scalar,
     ],
     math_op=[MathOperation.Elwmul, MathOperation.Elwadd, MathOperation.Elwsub],
-    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    math_fidelity=[
+        MathFidelity.LoFi,
+        MathFidelity.HiFi2,
+        MathFidelity.HiFi3,
+        MathFidelity.HiFi4,
+    ],
     transpose_srca=[Transpose.Yes, Transpose.No],
     input_dimensions=[[256, 32]],
+    formats=lambda dest_acc, math_fidelity, math_op: [
+        f
+        for f in _get_valid_formats(dest_acc)
+        if math_fidelity in _get_valid_math_fidelity(f, math_op)
+    ],
     tile_dimensions=lambda transpose_srca, broadcast_type: _get_valid_tile_dimensions(
         transpose_srca, broadcast_type
     ),
@@ -311,6 +320,13 @@ def test_eltwise_binary(
 
 @parametrize(
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    broadcast_type=[
+        BroadcastType.None_,
+        BroadcastType.Row,
+        BroadcastType.Column,
+        BroadcastType.Scalar,
+    ],
+    math_op=[MathOperation.Elwadd, MathOperation.Elwsub],
     formats=[
         fmt
         for fmt in input_output_formats(
@@ -324,16 +340,9 @@ def test_eltwise_binary(
         if fmt.input_format == DataFormat.Bfp4_b
         # or fmt.output_format == DataFormat.Bfp4_b
     ],
-    broadcast_type=[
-        BroadcastType.None_,
-        BroadcastType.Row,
-        BroadcastType.Column,
-        BroadcastType.Scalar,
-    ],
-    math_fidelity=lambda formats: _get_valid_math_fidelity(formats),
     transpose_srca=Transpose.No,
-    math_op=[MathOperation.Elwadd, MathOperation.Elwsub],
     input_dimensions=[[32, 32], [64, 32], [32, 64], [256, 32]],
+    math_fidelity=lambda formats: _get_valid_math_fidelity(formats),
     # tile_dimensions=[[32, 32], [16,32]],
     tile_dimensions=lambda transpose_srca, broadcast_type: _get_valid_tile_dimensions(
         transpose_srca, broadcast_type
@@ -512,12 +521,12 @@ def test_eltwise_binary_bfp4_b(
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
     ],
+    math_op=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
+    math_fidelity=[MathFidelity.LoFi],
     formats=lambda: input_output_formats(
         [DataFormat.Float16_b, DataFormat.Float32, DataFormat.Bfp8_b],
         same=True,
     ),
-    math_fidelity=[MathFidelity.LoFi],
-    math_op=[MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul],
     input_dimensions=[[512, 32]],
     output_dimensions=[[128, 32]],
     tile_dimensions=[[32, 32], [16, 32]],
