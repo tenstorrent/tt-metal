@@ -139,7 +139,7 @@ def test_mochi_diffusers_pipeline():
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 50000000,
+            "trace_region_size": 26000000,
         }
     ],
     indirect=True,

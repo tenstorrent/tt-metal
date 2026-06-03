@@ -41,7 +41,7 @@ from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 50000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
 def test_mochi_pipeline_performance(
