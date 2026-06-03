@@ -3165,6 +3165,42 @@ def _final_outcome_banner(
                     )
         except Exception:
             pass
+
+        # 2026-06-03: surface skip_diagnosis.json verdicts. When the
+        # iter loop ran the LLM skip_diagnoser on harness-skipped
+        # components at end-of-loop, each component got a verdict:
+        # fixed / decompose / manual / unknown. Show verdict counts +
+        # any "fixed" actions so the operator knows whether to re-run.
+        try:
+            import json as _json
+
+            diag_path = Path(_dd) / "skip_diagnosis.json"
+            if diag_path.is_file():
+                _diag_data = _json.loads(diag_path.read_text())
+                _diagnoses = _diag_data.get("diagnoses", []) if isinstance(_diag_data, dict) else []
+                if _diagnoses:
+                    print()
+                    print(f"  SKIP-DIAGNOSER ran on {len(_diagnoses)} harness-skipped component(s):")
+                    by_verdict: Dict[str, List[str]] = {}
+                    for d in _diagnoses:
+                        v = str(d.get("verdict") or "unknown")
+                        by_verdict.setdefault(v, []).append(str(d.get("component") or "?"))
+                    for v, comps in sorted(by_verdict.items()):
+                        glyph = {
+                            "fixed": "✓",
+                            "decompose": "⤴",
+                            "manual": "✋",
+                            "unknown": "?",
+                        }.get(v, "?")
+                        print(f"    {glyph} {v}: {len(comps)} component(s)")
+                        for c in comps[:5]:
+                            print(f"        - {c}")
+                        if len(comps) > 5:
+                            print(f"        ... and {len(comps) - 5} more")
+                    if by_verdict.get("fixed"):
+                        print(f"  → Re-run `up` to pick up the test-fixture fixes " f"and re-test these components.")
+        except Exception:
+            pass
     print(sep)
 
 

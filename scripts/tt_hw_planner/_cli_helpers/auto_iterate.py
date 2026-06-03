@@ -12,6 +12,57 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 
+def _run_skip_diagnoser_at_loop_end(
+    *,
+    demo_dir: Path,
+    harness_skipped: Set[str],
+    skip_reasons: Dict[str, str],
+    agent_bin: Optional[str],
+    agent_model: str = "sonnet",
+    enabled: bool = True,
+) -> None:
+    """Invoke the LLM skip_diagnoser on harness-skipped components and
+    persist the verdicts to ``<demo_dir>/skip_diagnosis.json`` for the
+    OUTCOME banner.
+
+    Best-effort: any failure (no agent_bin, import error, subprocess
+    failure) is silently swallowed — the diagnoser is an optional
+    enhancement, not a load-bearing path.
+
+    Gated by ``enabled`` (default True). Callers can disable via env
+    var or flag for runs where LLM cost is a concern.
+    """
+    if not enabled or not harness_skipped or not agent_bin:
+        return
+    try:
+        import json as _json
+
+        from .skip_diagnoser import diagnose_skips_in_demo
+
+        results = diagnose_skips_in_demo(
+            demo_dir=demo_dir,
+            skipped_components=sorted(harness_skipped),
+            skip_reasons=skip_reasons,
+            agent_bin=agent_bin,
+            agent_model=agent_model,
+            timeout_s_per_component=300,
+        )
+        path = demo_dir / "skip_diagnosis.json"
+        path.write_text(
+            _json.dumps({"diagnoses": results}, indent=2),
+            encoding="utf-8",
+        )
+        # Summarize verdicts on console for the user.
+        verdict_counts: Dict[str, int] = {}
+        for r in results:
+            v = str(r.get("verdict") or "unknown")
+            verdict_counts[v] = verdict_counts.get(v, 0) + 1
+        if verdict_counts:
+            print("  [skip-diagnoser] verdicts: " + ", ".join(f"{k}={v}" for k, v in sorted(verdict_counts.items())))
+    except Exception as exc:
+        print(f"  [skip-diagnoser] failed: {type(exc).__name__}: {exc}", file=__import__("sys").stderr)
+
+
 def _persist_harness_skipped_for_outcome(demo_dir: Path, harness_skipped: Set[str]) -> None:
     """Write ``<demo_dir>/harness_skipped.json`` so the OUTCOME banner
     can surface components that ended the run still harness-blocked
@@ -492,6 +543,9 @@ def _run_auto_iterate_loop(
     # dropped from the candidate pool via harness SKIP and the
     # orchestrator reported rc=0 success.
     harness_skipped_this_run: set = set()
+    # Skip reason text, keyed by component name — fed to the LLM
+    # skip_diagnoser at loop end.
+    skip_reasons_this_run: Dict[str, str] = {}
 
     _seed_harness_markers = (
         "HF reference forward",
@@ -515,6 +569,7 @@ def _run_auto_iterate_loop(
             if any(mark in reason for mark in _seed_harness_markers):
                 _seed_harness_components.setdefault(comp, []).append(reason)
                 harness_skipped_this_run.add(comp)
+                skip_reasons_this_run[comp] = reason
         for comp, reasons in _seed_harness_components.items():
             stub_path = demo_dir / "_stubs" / f"{_safe_id(comp)}.py"
             try:
@@ -3635,6 +3690,9 @@ def _run_auto_iterate_loop(
                 reason = str(entry.get("reason") or "").strip()
                 if comp and reason and any(mark in reason for mark in _iter_harness_markers):
                     harness_skipped_this_run.add(comp)
+                    # Record the SKIP reason for the LLM diagnoser.
+                    # Keep the most-recent reason if seen multiple times.
+                    skip_reasons_this_run[comp] = reason
         harness_skipped_this_run -= report_passed
         harness_skipped_this_run -= set(graduated_this_run)
 
@@ -4833,8 +4891,24 @@ def _run_auto_iterate_loop(
                 f"        --auto-max-iters 12 --auto-agent-timeout 1500\n"
             )
         if (skipped_set or ungraduated_now) and not allow_partial_cpu:
+            _run_skip_diagnoser_at_loop_end(
+                demo_dir=demo_dir,
+                harness_skipped=harness_skipped_this_run,
+                skip_reasons=skip_reasons_this_run,
+                agent_bin=agent_bin,
+                agent_model=(model_heavy or model or "sonnet"),
+                enabled=os.environ.get("TT_PLANNER_DISABLE_SKIP_DIAGNOSER", "") != "1",
+            )
             _persist_harness_skipped_for_outcome(demo_dir, harness_skipped_this_run)
             return 1
+        _run_skip_diagnoser_at_loop_end(
+            demo_dir=demo_dir,
+            harness_skipped=harness_skipped_this_run,
+            skip_reasons=skip_reasons_this_run,
+            agent_bin=agent_bin,
+            agent_model=(model_heavy or model or "sonnet"),
+            enabled=os.environ.get("TT_PLANNER_DISABLE_SKIP_DIAGNOSER", "") != "1",
+        )
         _persist_harness_skipped_for_outcome(demo_dir, harness_skipped_this_run)
         return 0
 
