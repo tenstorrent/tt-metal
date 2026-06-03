@@ -215,8 +215,18 @@ void Device::configure_command_queue_programs(DispatchTopology* dispatch_topolog
                     (cq_start + this->sysmem_manager_->get_issue_queue_size(cq_id) + cq_offset) >> 4;
 
                 if (this->sysmem_manager_->is_dram_backed()) {
+                    // With DRAM-backed CQs, each device stores its command queue in its own DRAM. The CQ
+                    // pointers for a serviced device must therefore be written into that device's DRAM, not
+                    // the MMIO device's DRAM. Writing to this->id() left non-MMIO devices with an uninitialized
+                    // (zero) completion write pointer, causing completion_queue_wait_front to return spuriously.
+                    const uint32_t dram_channel =
+                        this->allocator_impl()->get_dram_channel_from_bank_id(this->sysmem_manager_->get_dram_region_bank_id());
                     MetalEnvAccessor(*env_).impl().get_cluster().write_dram_vec(
-                        pointers.data(), pointers.size() * sizeof(uint32_t), this->id(), 0, cq_offset);
+                        pointers.data(),
+                        pointers.size() * sizeof(uint32_t),
+                        serviced_device_id,
+                        dram_channel,
+                        cq_offset);
                 } else {
                     MetalEnvAccessor(*env_).impl().get_cluster().write_sysmem(
                         pointers.data(),
