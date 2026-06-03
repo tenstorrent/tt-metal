@@ -538,6 +538,7 @@ class ModelArgs:
         self.rms_norm_add_unit_offset = False
         self.embed_scale = None
         self.use_hf_rope = use_hf_rope
+        self.post_attn_norm_after_residual = False
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -641,6 +642,8 @@ class ModelArgs:
         # Flag to indicate whether we use fused version of QK ops (rotary embedding + page cached update)
         # We currently disable this fusion of ops for vision-capable or multimodal models
         # we also disable fused qk when using HF-style rotary embedding
+        # NOTE: head_dim check is added later (after self.head_dim is set ~line 2688)
+        #       because the qk-fused kernels require head_dim divisible by 64.
         self.use_qk_fused = not self.is_multimodal and not self.use_hf_rope
         if self.prefetcher is not None:
             self.use_qk_fused = False
@@ -822,7 +825,7 @@ class ModelArgs:
                 per_core_N=math.ceil(n_w1_w3 / ttnn.TILE_SIZE / self.cluster_shape[0]),
             )
             self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                compute_with_storage_grid_size=self._dispatch_safe_grid(8, 8),
                 in0_block_w=1,  # how much inner dim you take each time
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -833,7 +836,7 @@ class ModelArgs:
                 fuse_batch=False,
             )
             self.model_config["PREFILL_MLP_W3_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                compute_with_storage_grid_size=self._dispatch_safe_grid(8, 8),
                 in0_block_w=1,  # how much inner dim you take each time
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -845,7 +848,7 @@ class ModelArgs:
             )
 
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                compute_with_storage_grid_size=self._dispatch_safe_grid(8, 8),
                 in0_block_w=1,  # how much inner dim you take each time
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -1506,7 +1509,7 @@ class ModelArgs:
             else min(64, chunk_start_idx & -chunk_start_idx)
         )
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=self._dispatch_safe_grid(8, 8),
             exp_approx_mode=False,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
@@ -1515,8 +1518,41 @@ class ModelArgs:
     @lru_cache(maxsize=None)
     def get_attn_sdpa_decode_program_config(self, prefetcher: Prefetcher = None):
         """Get the SDPA program config for decode mode."""
+        # When the model uses sliding-window attention, k_chunk_size MUST evenly
+        # divide sliding_window or paged_scaled_dot_product_attention_decode
+        # silently produces wrong scores at chunk boundaries. Auto-select
+        # (k_chunk_size=0) can pick a non-divisor.
+        #
+        # 2026-05-24: There is a second, distinct latent bug in
+        # paged_scaled_dot_product_attention_decode at the 1-chunk -> 2-chunk
+        # transition (cur_pos crosses k_chunk_size). With k_chunk=256 the
+        # MedGemma/Gemma3 demo (83-token prompt + 200 decode tokens) hit
+        # cur_pos=256 around iter 174 and the model deterministically
+        # collapsed into repeating filler tokens ("and and and...",
+        # "* * *...") across both performance and accuracy profiles, with
+        # or without decode trace, and with KV cache in BF16 or BFP8.
+        #
+        # Workaround: pick the largest k_chunk that
+        #   (a) divides sliding_window (kernel correctness constraint),
+        #   (b) fits in L1 (kernel CB sizing constraint -- k_chunk=1024 over-
+        #       flows L1 with the current grid/config on Blackhole and trips
+        #       a circular-buffer-vs-L1-buffer clash at program build),
+        #   (c) keeps the usable single-chunk regime large enough for typical
+        #       chat decode budgets (a few hundred tokens).
+        # k_chunk=512 satisfies all three: it divides 1024 cleanly, fits in
+        # L1, and verified end-to-end that 200 decoded tokens stay fully
+        # coherent ending mid-thought ("...I can appreciate its..."). For
+        # contexts beyond cur_pos>=512 the multi-chunk transition bug
+        # resurfaces and needs a kernel-side fix.
+        sliding_window = getattr(self, "sliding_window", None)
+        if sliding_window and sliding_window % 512 == 0:
+            k_chunk = 512
+        elif sliding_window and sliding_window % 256 == 0:
+            k_chunk = 256
+        else:
+            k_chunk = 0
         if prefetcher is not None:
-            sdpa_grid_size = (8, 8)
+            sdpa_grid_size = self._dispatch_safe_grid(8, 8)
             start_core = ttnn.CoreCoord(1, 0)
             num_sdpa_cores = sdpa_grid_size[0] * sdpa_grid_size[1]
             return ttnn.SDPAProgramConfig(
@@ -1526,14 +1562,14 @@ class ModelArgs:
                 ),
                 exp_approx_mode=False,
                 q_chunk_size=0,
-                k_chunk_size=0,
+                k_chunk_size=k_chunk,
             )
         else:
             return ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=(8, 8),
+                compute_with_storage_grid_size=self._dispatch_safe_grid(8, 8),
                 exp_approx_mode=False,
                 q_chunk_size=0,
-                k_chunk_size=0,
+                k_chunk_size=k_chunk,
             )
 
     @lru_cache(maxsize=None)
@@ -1613,15 +1649,18 @@ class ModelArgs:
         elif mode == Mode.PREFILL:
             self.MAX_QKV_MM_SEQ_LEN = 2048
             if self.use_minimal_qkv_prefill_matmul(seq_len):
+                _qkv_x, _qkv_y = self._dispatch_safe_grid(8, 10) if is_blackhole() else self._dispatch_safe_grid(8, 8)
                 return ttnn.MinimalMatmulConfig(
                     M_block_size=8,
                     K_block_size=8,
                     N_block_size=8,
-                    compute_with_storage_grid_size=ttnn.CoreCoord(8, 10) if is_blackhole() else ttnn.CoreCoord(8, 8),
+                    compute_with_storage_grid_size=ttnn.CoreCoord(_qkv_x, _qkv_y),
                 )
             else:
                 return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(8, 10) if is_blackhole() else (8, 8),
+                    compute_with_storage_grid_size=self._dispatch_safe_grid(8, 10)
+                    if is_blackhole()
+                    else self._dispatch_safe_grid(8, 8),
                     in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                     out_subblock_h=1,  # Must be divisible by per_core_M
                     out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
@@ -2296,10 +2335,18 @@ class ModelArgs:
         """Get the memory config for LM head output resharding."""
         if prefetcher is None:
             return ttnn.L1_MEMORY_CONFIG
+        # 2026-05-23 audit bug #21: previously hard-coded y=7 here.
+        # On meshes whose compute_with_storage_grid_size has fewer
+        # than 8 rows, that would place kernels on a dispatch core.
+        # Clamp to actual grid height when available.
+        _max_y = 7
+        gs = getattr(self, "max_grid_size", None)
+        if gs is not None:
+            _max_y = min(7, gs.y - 1)
         lm_head_output_core_range_set = ttnn.CoreRangeSet(
             [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(prefetcher.num_receiver_cores, 7)),
-                ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(8 + prefetcher.num_receiver_cores - 1, 7)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(prefetcher.num_receiver_cores, _max_y)),
+                ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(8 + prefetcher.num_receiver_cores - 1, _max_y)),
             ]
         )
 
@@ -2641,6 +2688,14 @@ class ModelArgs:
         else:
             self.padded_vocab_size = compute_padded_vocab_size(self.vocab_size, self.num_devices)
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
+        # qk-fused kernels (rotary_embedding_hf, SDPA fused) require head_dim
+        # divisible by 64 (HF RoPE kernel layout). For models with head_dim not
+        # divisible by 64 (e.g. Phi-3.5-mini head_dim=96), force-disable
+        # use_qk_fused — the runtime would otherwise raise NotImplementedError
+        # from rope.py:462. Earlier in __init__ we tentatively set use_qk_fused
+        # based only on multimodal/hf_rope; this is the head_dim-aware refinement.
+        if self.head_dim % 64 != 0:
+            self.use_qk_fused = False
         self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
         self.max_context_len = text_config.get("max_position_embeddings")
 
@@ -2722,9 +2777,39 @@ class ModelArgs:
         # Sliding window attention
         self.sliding_window = text_config.get("sliding_window", None)
 
-        # RoPE params
-        self.rope_theta = text_config.get("rope_theta")
-        self.rope_theta_local = text_config.get("rope_local_base_freq", None)
+        # RoPE params.
+        # 2026-05-23 transformers-5.x compatibility: in transformers 5.x
+        # the per-field `rope_theta` / `rope_scaling` keys are migrated
+        # into a unified `rope_parameters` dict. For Phi-3.5-mini-instruct
+        # under transformers==5.8.1 we observe `config.rope_theta=None`
+        # and `config.rope_scaling=None` while `config.rope_parameters`
+        # contains the actual values. Before this fix, the runtime would
+        # crash with `TypeError: unsupported operand type(s) for ** or
+        # pow(): 'NoneType' and 'Tensor'` at rope.py:28. The compat
+        # checker WARN'd about exactly this case.
+        rope_parameters = text_config.get("rope_parameters") or {}
+        self.rope_theta = text_config.get("rope_theta") or rope_parameters.get("rope_theta")
+        # Gemma3/MedGemma nested format under transformers-5.x: rope_parameters has
+        # full_attention/sliding_attention sub-dicts rather than flat keys.
+        if self.rope_theta is None and "full_attention" in rope_parameters:
+            self.rope_theta = rope_parameters["full_attention"].get("rope_theta")
+        self.rope_theta_local = text_config.get("rope_local_base_freq", None) or rope_parameters.get(
+            "rope_local_base_freq"
+        )
+        if self.rope_theta_local is None and "sliding_attention" in rope_parameters:
+            self.rope_theta_local = rope_parameters["sliding_attention"].get("rope_theta")
+        # Gemma3/MedGemma nested format under transformers-4.x: rope_scaling (not
+        # rope_parameters) carries the per-attention-type sub-dicts. Without this
+        # fallback rope_theta_local collapses to rope_theta (1e6) instead of 1e4,
+        # causing the sliding-window layers to use near-DC positional frequencies and
+        # degenerate into a stuck-token loop (the 72% repeat-ratio signature).
+        if self.rope_theta_local is None:
+            _rs = text_config.get("rope_scaling") or {}
+            if "rope_local_base_freq" in _rs:
+                # transformers-4.x flat format: rope_scaling.rope_local_base_freq (e.g. medgemma-4b-it)
+                self.rope_theta_local = _rs["rope_local_base_freq"]
+            elif "sliding_attention" in _rs:
+                self.rope_theta_local = _rs["sliding_attention"].get("rope_theta")
         self.use_sliding_window = text_config.get("use_sliding_window", None)
         if (
             self.sliding_window is not None
@@ -2734,7 +2819,26 @@ class ModelArgs:
             self.rope_theta_local = self.rope_theta
 
         rope_scaling_params = text_config.get("rope_scaling", None)
-        self.original_max_context_len = text_config.get("original_max_position_embeddings", None)
+        # Fall back to rope_parameters when rope_scaling is missing
+        # (transformers-5.x migration). Strip rope-theta keys (they're
+        # not part of the scaling spec) and original_max_position_-
+        # embeddings (rope_scaling_model_factory passes it explicitly,
+        # so leaving it in the kwargs causes a "multiple values for
+        # keyword argument" TypeError).
+        if not rope_scaling_params and rope_parameters:
+            rope_scaling_params = {
+                k: v
+                for k, v in rope_parameters.items()
+                if k
+                not in {
+                    "rope_theta",
+                    "rope_local_base_freq",
+                    "original_max_position_embeddings",
+                }
+            }
+        self.original_max_context_len = text_config.get(
+            "original_max_position_embeddings", None
+        ) or rope_parameters.get("original_max_position_embeddings")
         self.rope_scaling = (
             rope_scaling_model_factory(rope_scaling_params, original_max_context_len=self.original_max_context_len)
             if rope_scaling_params
@@ -2742,6 +2846,7 @@ class ModelArgs:
         )
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
+        self.final_logit_softcapping = text_config.get("final_logit_softcapping", None) or 0.0
 
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
@@ -2768,6 +2873,19 @@ class ModelArgs:
 
         self.state_dict_text_prefix = self._get_text_prefix()
         self.state_dict_vision_prefix = self._get_vision_prefix()
+
+        # Gemma3/MedGemma require (1+w) RMS norm and sqrt(dim) embedding scale.
+        # The Gemma3 demo's ModelArgs subclass sets these in _set_model_specific_params;
+        # the base class must also apply them when the model runs via simple_text_demo
+        # or any other path that instantiates the base ModelArgs directly.
+        if "gemma3" in (text_config.get("model_type") or "").lower():
+            self.rms_norm_add_unit_offset = True
+            if self.embed_scale is None:
+                self.embed_scale = self.dim**0.5
+            # Gemma3 applies post_attention_layernorm to attn_out BEFORE the residual
+            # add (same as Gemma2 / default path).  Setting this to True would compute
+            # ff_norm(x + attn_out) instead of x + ff_norm(attn_out), which is wrong.
+            self.post_attn_norm_after_residual = False
 
         self._set_model_specific_params()
 
@@ -2997,7 +3115,12 @@ class ModelArgs:
         return self.model_config
 
     def get_hf_model_cls(self):
-        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoModelForVision2Seq
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
+
+        try:
+            from transformers import AutoModelForVision2Seq
+        except ImportError:
+            AutoModelForVision2Seq = AutoModelForImageTextToText
 
         if not self.is_multimodal:
             return AutoModelForCausalLM
@@ -3163,6 +3286,26 @@ class ModelArgs:
         rows, cols = self.find_grid(k // ttnn.TILE_SIZE)
         return ttnn.CoreGrid(x=cols, y=rows)
 
+    def _dispatch_safe_grid(self, default_x: int, default_y: int) -> Tuple[int, int]:
+        """2026-05-23 audit bugs #7, #8: return (x, y) grid clamped to
+        the actual `compute_with_storage_grid_size` of this mesh
+        device, never the theoretical hardware maximum.
+
+        Many helper functions in this file return hard-coded grids
+        like ``(8, 8)`` or ``(8, 10)`` (BH theoretical). On BH meshes
+        where dispatch cores eat into the worker grid (e.g. QB2 with
+        1x4 mesh has compute grid 11x10, not 12x10), those hard-
+        coded grids can include a dispatch core and trigger
+        ``not on_dispatch_core`` at program-compile time.
+
+        This helper clamps the requested grid to the actual usable
+        grid, never exceeding it. When ``max_grid_size`` isn't set
+        (test/CPU paths), returns the request unchanged."""
+        gs = getattr(self, "max_grid_size", None)
+        if gs is None:
+            return default_x, default_y
+        return min(default_x, gs.x), min(default_y, gs.y)
+
     def find_grid(self, N):
         """
         Find the number of rows and columns for a grid of cores such that
@@ -3179,8 +3322,20 @@ class ModelArgs:
         Raises:
             AssertionError: If it's not possible to find such a grid configuration.
         """
-        max_rows = 8 if is_wormhole_b0() else 10
-        max_cols = 8 if is_wormhole_b0() else 12
+        # 2026-05-23: clamp to the actual compute-with-storage grid of
+        # this mesh device, not hard-coded BH/WH constants. On BH QB2
+        # with 1x4 mesh the compute grid is 11x10 (not the
+        # theoretical 12x10) because dispatch cores eat into the
+        # right column. Returning a grid that includes a dispatch
+        # core triggers `not on_dispatch_core` at kernel-compile
+        # time. Falling back to the old constants when max_grid_size
+        # isn't initialized (test paths without a real device).
+        if getattr(self, "max_grid_size", None) is not None:
+            max_rows = self.max_grid_size.y
+            max_cols = self.max_grid_size.x
+        else:
+            max_rows = 8 if is_wormhole_b0() else 10
+            max_cols = 8 if is_wormhole_b0() else 12
         max_cores = max_rows * max_cols
 
         # Find all possible numbers of cores that divide N and are less than or equal to max_cores
@@ -3205,9 +3360,14 @@ class ModelArgs:
         """Find a grid such that the number of row tiles evenly divides into the number
         of rows and the number of column tiles evenly divides into the number of columns
         """
-        max_rows = 8
-        max_cols = 8
-        # TODO Improve configuration for BH (higher core grid than WH)
+        # 2026-05-23: clamp to actual compute-with-storage grid so we
+        # never include a dispatch core (BH QB2 1x4 case).
+        if getattr(self, "max_grid_size", None) is not None:
+            max_rows = min(8, self.max_grid_size.y)
+            max_cols = min(8, self.max_grid_size.x)
+        else:
+            max_rows = 8
+            max_cols = 8
 
         # Find number of cols that evenly divides into the number of columns
         cols = None
@@ -3246,8 +3406,15 @@ class ModelArgs:
         Raises:
             AssertionError: If it's not possible to find such a grid configuration.
         """
-        max_rows = 8
-        max_cols = 8  # Maximum number of rows or columns
+        # 2026-05-23: clamp to actual compute-with-storage grid (BH
+        # QB2 1x4 has 11x10, not the theoretical 12x10) so we don't
+        # hand back a grid that includes a dispatch core.
+        if getattr(self, "max_grid_size", None) is not None:
+            max_rows = min(8, self.max_grid_size.y)
+            max_cols = min(8, self.max_grid_size.x)
+        else:
+            max_rows = 8
+            max_cols = 8  # Maximum number of rows or columns
         max_cores = max_rows * max_cols  # Maximum number of cores
 
         # Find all possible numbers of cores that divide N and are less than or equal to max_cores
@@ -3584,13 +3751,21 @@ class ModelArgs:
         return processor
 
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
+        # 2026-05-23 transformers-5.x compat (audit bug #20):
+        # `tokenizer.encode()` on the new TokenizersBackend can return
+        # a `tokenizers.Encoding` (with `.ids`) or a `BatchEncoding`
+        # (with `.input_ids`) instead of `List[int]` on some models.
+        # Downstream `torch.tensor(encoded[:])` then crashes. Use the
+        # same normalization helper as `encode_prompt_hf`.
+        from .common import _normalize_token_result_to_list
+
         if instruct:
             try:
                 return encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text)
             except ValueError as e:
                 logger.warning(f"Failed to encode chat prompt, are you sure this is an instruct model? Error: {e}")
                 logger.warning(f"Falling back to base model encoding with no chat template")
-        return self.tokenizer.encode(prompt_text, add_special_tokens=False)
+        return _normalize_token_result_to_list(self.tokenizer.encode(prompt_text, add_special_tokens=False))
 
     def reference_lm_head(self):
         model = self.reference_transformer(wrap=False)

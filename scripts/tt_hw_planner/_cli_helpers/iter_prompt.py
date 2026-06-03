@@ -1,7 +1,140 @@
 from __future__ import annotations
 
+import ast
+import re
 from pathlib import Path
 from typing import Dict, List, Optional
+
+
+def extract_canonical_api_cheat_sheet(
+    tt_reuse_target: str,
+    target_component: str,
+    *,
+    repo_root: Optional[Path] = None,
+    max_chars: int = 4000,
+) -> str:
+    """Build a STRUCTURED 'CANONICAL CLASS API CHEAT SHEET' prompt block by
+    AST-parsing the canonical TT class file and surfacing exactly the
+    information an ADAPT-iter LLM agent needs to refine the wrapper stub:
+
+      - All `class` definitions in the file (so the agent knows what's
+        importable)
+      - For each class, its `__init__` signature (arg names + defaults)
+      - Each `state_dict[...]` key access pattern (so the agent sees the
+        EXACT key format the canonical expects, e.g.
+        ``state_dict[f"{wq_str}.weight"]`` reveals the Llama-meta naming
+        convention before the agent has to guess)
+      - Module-level imports of helper functions (so the agent learns what
+        utilities are available, like ``convert_hf_to_meta``)
+
+    Generic across canonical files — works for any path passed as
+    ``tt_reuse_target``. NEW components have no ``tt_reuse_target`` and
+    bypass this block entirely (caller-gated).
+
+    Returns the empty string if the file can't be read or parsed; the
+    caller appends this block to the prompt unconditionally and silently
+    drops it when empty.
+    """
+    if not tt_reuse_target:
+        return ""
+    try:
+        from ..discovery import BRINGUP_ROOT as _BRINGUP_ROOT
+
+        root = repo_root or _BRINGUP_ROOT()
+    except Exception:
+        root = repo_root or Path.cwd()
+    path = (root / tt_reuse_target) if not Path(tt_reuse_target).is_absolute() else Path(tt_reuse_target)
+    if not path.is_file():
+        return ""
+    try:
+        src = path.read_text(errors="ignore")
+    except Exception:
+        return ""
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return ""
+
+    lines: List[str] = []
+    lines.append(f"CANONICAL CLASS API CHEAT SHEET ({tt_reuse_target})")
+    lines.append(
+        "(auto-extracted from the canonical file — use this in place of "
+        "reading the whole file, which is large and wastes agent budget)"
+    )
+    lines.append("")
+
+    helper_imports: List[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            mod = node.module or ""
+            if any(part in mod for part in ("load_checkpoints", "convert", "tt_ccl", "rope", "model_config", "common")):
+                for alias in node.names:
+                    helper_imports.append(f"  from {mod} import {alias.name}")
+    if helper_imports:
+        lines.append("Helper imports visible inside the canonical (you can reuse these):")
+        for imp in helper_imports[:12]:
+            lines.append(imp)
+        lines.append("")
+
+    classes_emitted = 0
+    for node in tree.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        bases = []
+        for b in node.bases:
+            try:
+                bases.append(ast.unparse(b))
+            except Exception:
+                bases.append("?")
+        lines.append(f"class {node.name}({', '.join(bases) or 'object'}):")
+        init_emitted = False
+        for sub in node.body:
+            if not isinstance(sub, ast.FunctionDef):
+                continue
+            if sub.name != "__init__":
+                continue
+            try:
+                sig = ast.unparse(sub.args)
+            except Exception:
+                continue
+            lines.append(f"    def __init__({sig}):")
+            body_keys: List[str] = []
+            for inner in ast.walk(sub):
+                if isinstance(inner, ast.Subscript):
+                    try:
+                        sub_src = ast.unparse(inner)
+                    except Exception:
+                        continue
+                    if "state_dict[" in sub_src and sub_src not in body_keys:
+                        body_keys.append(sub_src)
+            if body_keys:
+                lines.append("        # state_dict keys this __init__ reads (literal patterns):")
+                for k in body_keys[:8]:
+                    lines.append(f"        # - {k}")
+            init_emitted = True
+            break
+        if not init_emitted:
+            lines.append("    # (no __init__ defined; uses base class default)")
+        lines.append("")
+        classes_emitted += 1
+        if classes_emitted >= 5:
+            break
+
+    layer_name_hits = re.findall(r"layer_name\s*=\s*[^\n]+", src)
+    if layer_name_hits:
+        lines.append("Per-layer state_dict prefix construction inside the canonical:")
+        for hit in layer_name_hits[:3]:
+            lines.append(f"  {hit.strip()}")
+        lines.append(
+            "  -> this typically yields a Meta-style prefix like "
+            "`layers.{layer_num}.<module>.` (e.g. `layers.0.attention.`)."
+        )
+        lines.append("")
+
+    out = "\n".join(lines)
+    if len(out) > max_chars:
+        out = out[:max_chars] + "\n... (truncated to keep prompt budget)"
+    return "\n" + out + "\n"
 
 
 def assemble_iter_prompt(
@@ -20,6 +153,7 @@ def assemble_iter_prompt(
     components_block: str,
     target_header: str = "",
     constraint_block: str = "",
+    pcc_trend_block: str = "",
 ) -> str:
     return (
         target_header
@@ -31,11 +165,64 @@ def assemble_iter_prompt(
         + f"{budget_clause}"
         + f"{constraint_block}"
         + f"{failure_context}"
+        + f"{pcc_trend_block}"
         + f"STRATEGY DIRECTIVE FOR THIS ITERATION:\n{strategy_directive}\n"
         + f"{escalated_scope_block}"
         + f"{native_directive}\n"
         + f"{cross_component_block}"
         + f"COMPONENTS:\n{components_block}\n"
+    )
+
+
+def format_pcc_trend_block(
+    *,
+    target_component: str,
+    pcc_history: Optional[List[float]] = None,
+) -> str:
+    """Render a per-component PCC-history block for the iter prompt.
+
+    Reads the same ``pcc_history_per_component`` the convergence brain uses
+    — entries are **mismatch ratios** (``1.0 - pcc``), smaller is better.
+    Surfaces them to the LLM so it can see whether prior attempts moved
+    the needle (PCC trending up = make smaller changes; PCC stuck = try
+    a different approach).
+
+    Returns empty string when there's no history to show — keeps the
+    prompt tight when the component is fresh.
+
+    Notes:
+      * Last 5 iters at most. Older iters aren't actionable.
+      * Renders raw PCC (1 - mismatch), one decimal place.
+      * Tags trend: improving / stagnant / regressing.
+    """
+    if not pcc_history:
+        return ""
+    tail = list(pcc_history[-5:])
+    pcc_values = [1.0 - float(m) for m in tail]
+    if not pcc_values:
+        return ""
+    # Trend tag
+    trend = "first attempt"
+    if len(pcc_values) >= 2:
+        delta = pcc_values[-1] - pcc_values[0]
+        if delta > 0.01:
+            trend = f"improving (Δ +{delta:.3f} across last {len(pcc_values)} iters)"
+        elif delta < -0.01:
+            trend = f"REGRESSING (Δ {delta:.3f} across last {len(pcc_values)} iters — last patch made it worse)"
+        else:
+            trend = f"STAGNANT (Δ {delta:+.3f} across last {len(pcc_values)} iters — same approach not converging)"
+    series = " → ".join(f"{v:.4f}" for v in pcc_values)
+    sep = "─" * 78
+    return (
+        f"\nPCC TREND FOR `{target_component}` (last {len(pcc_values)} iters):\n"
+        f"{sep}\n"
+        f"  history: {series}\n"
+        f"  trend:   {trend}\n"
+        f"  target:  ≥ 0.99 to graduate.\n"
+        f"  If STAGNANT, your last few patches aren't moving PCC — try a different\n"
+        f"  approach (different config, different decomposition, escalated scope).\n"
+        f"  If REGRESSING, revert the last change and try a different direction.\n"
+        f"{sep}\n\n"
     )
 
 
@@ -134,6 +321,7 @@ def build_per_target_blocks(
     component_status: str = "NEW",
     tt_reuse_target: Optional[str] = None,
     last_pcc_value: Optional[float] = None,
+    pcc_history: Optional[List[float]] = None,
 ) -> Dict[str, str]:
     from ..cli import (
         _build_cross_component_context_block,
@@ -157,6 +345,12 @@ def build_per_target_blocks(
             tt_reuse_target=tt_reuse_target,
             pcc_value=last_pcc_value,
         )
+        cheat_sheet = extract_canonical_api_cheat_sheet(
+            tt_reuse_target=tt_reuse_target,
+            target_component=target_component,
+        )
+        if cheat_sheet:
+            directive = directive + cheat_sheet
     else:
         directive = _native_directive(
             forbidden_excerpt="\n\n".join(focused_stub_excerpts) if focused_stub_excerpts else "",
@@ -174,5 +368,9 @@ def build_per_target_blocks(
             current_target=target_component,
             attempts_per_component=attempts_per_component,
             last_failure_class_per_component=last_failure_class_per_component,
+        ),
+        "pcc_trend_block": format_pcc_trend_block(
+            target_component=target_component,
+            pcc_history=pcc_history,
         ),
     }

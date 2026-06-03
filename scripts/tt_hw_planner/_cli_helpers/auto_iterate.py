@@ -225,6 +225,7 @@ def _run_auto_iterate_loop(
         _list_component_pcc_tests,
         _load_attempt_history,
         _native_directive,
+        _refinement_directive,
         _format_captured_shape_contract_block,
         _numerical_constraints_block,
         _only_pcc_threshold_failures,
@@ -1030,6 +1031,56 @@ def _run_auto_iterate_loop(
                     f"  could not restore CPU fallback for `{comp}`: {exc}",
                     file=sys.stderr,
                 )
+
+        # 2026-06-01 Qwen2.5-14B audit Bug-3 fix: re-test the RESTORED
+        # stub. The cap-fallback may have just restored a functionally-
+        # correct native snapshot (.preiter_native captures the
+        # canonical-wrapper template that often works as-is for ADAPT
+        # components). Without this re-test, the component stays on
+        # `permanently_skipped` despite passing PCC if tested. Catches
+        # the Qwen2.5-14B r_m_s_norm case where iter 1's LLM broke the
+        # working template and all 10 iters chased the LLM's bugs.
+        #
+        # Gate: only re-test when the restored stub is AST-native
+        # (`not _stub_uses_torch_wrapper`). Torch-fallback restores
+        # don't deserve a graduation — they're not actually on TT.
+        if stub_path.is_file() and not _stub_uses_torch_wrapper(stub_path):
+            _test_path = demo_dir / "tests" / "pcc" / f"test_{_safe_id(comp)}.py"
+            if _test_path.is_file():
+                try:
+                    _retest_rc = _run_focused_pytest(
+                        model_id=MODEL,
+                        test_files=[str(safe_relative_to_root(_test_path))],
+                        allow_kill_stale=allow_kill_stale,
+                        allow_device_reset=allow_device_reset,
+                    )
+                except Exception as _retest_exc:
+                    print(
+                        f"  post-restore re-test for `{comp}` raised: "
+                        f"{type(_retest_exc).__name__}: {_retest_exc} — "
+                        f"leaving on permanently_skipped",
+                        file=sys.stderr,
+                    )
+                else:
+                    if _retest_rc == 0:
+                        _retest_report = _scope_report_to_demo(_parse_pytest_report(), demo_dir)
+                        if comp in (_retest_report.get("passed_components") or []):
+                            permanently_skipped[:] = [s for s in permanently_skipped if s != comp]
+                            if comp not in graduated_this_run:
+                                graduated_this_run.append(comp)
+                            verified_fail.discard(comp)
+                            try:
+                                _snapshot_native_stub(comp)
+                            except Exception:
+                                pass
+                            print(
+                                f"  post-restore: `{comp}` GRADUATED — the "
+                                f"restored native snapshot (from "
+                                f"{restored_from}) passes PCC. Removed from "
+                                f"permanently_skipped."
+                            )
+                            return
+
         print(
             f"  Component `{comp}` left on CPU fallback after "
             f"{attempts_per_component.get(comp, 0)}/{max_attempts_per_component} "
@@ -1230,13 +1281,45 @@ def _run_auto_iterate_loop(
             file=sys.stderr,
         )
 
+    # 2026-06-01 Qwen2.5-14B audit: capture .preiter_native snapshots for
+    # ALL scaffold-output components BEFORE iter 1's LLM runs. Previously
+    # _snapshot_preiter_native_stub was only called from inside the iter
+    # loop's `for comp in last_failed_components` block — which is empty
+    # at iter 1, so iter 1's LLM rewrite (often a torch-fallback wrapper)
+    # destroyed the original native template before any snapshot was
+    # taken. With no .preiter_native available, the regression guard
+    # below has no native fallback to restore from.
+    #
+    # _snapshot_preiter_native_stub is idempotent: skips torch-wrapper
+    # stubs (line 727) and won't overwrite an existing snapshot (line 730),
+    # so calling it for every preflight component captures the canonical-
+    # wrapper template for ADAPT components and harmlessly no-ops for
+    # NEW-component torch-fallback autofills.
+    for _preloop_comp in _preflight_new_components:
+        try:
+            _snapshot_preiter_native_stub(_preloop_comp)
+        except Exception:
+            pass
+
+    # 2026-06-01 Qwen2.5-14B audit Bug-1 fix: broaden the pre-flight
+    # gate from `_stub_has_graduated_from_autofill` (requires
+    # .last_good_native snapshot — chicken-and-egg on first run) to
+    # `not _stub_uses_torch_wrapper` (direct AST check). This lets
+    # scaffolded ADAPT components (canonical-wrapper templates that
+    # are functionally correct out-of-the-box for many models — e.g.
+    # Qwen2.5-14B's r_m_s_norm) get a pre-iter-1 PCC test. If they
+    # pass, the existing pre-flight graduation block at lines
+    # 1382-1413 below promotes them to `graduated_this_run` BEFORE
+    # the LLM ever iterates. Saves iter budget for genuinely-hard
+    # components and prevents the LLM from breaking
+    # already-working scaffolds.
     _preflight_native_components: List[str] = []
     for comp in _preflight_new_components:
         if comp in graduated_this_run or comp in unverified_native_this_run or comp in permanently_skipped:
             continue
         stub_path = demo_dir / "_stubs" / f"{_safe_id(comp)}.py"
         try:
-            if _stub_has_graduated_from_autofill(stub_path):
+            if stub_path.is_file() and not _stub_uses_torch_wrapper(stub_path):
                 _preflight_native_components.append(comp)
         except Exception:
             pass
@@ -1809,10 +1892,7 @@ def _run_auto_iterate_loop(
         def _pick_target() -> str:
             """Pick the next iteration's target component.
 
-            Target-rotation discipline (fixes 2026-05-22 22:00 UTC
-            sam2-hiera-tiny observation where the loop spent 4
-            attempts on `encoder_stack` while `vision_config` and
-            `self_attention` got ZERO attempts in 6 iters):
+            Target-rotation discipline:
 
             1. Of components that failed in the LAST iter AND are not
                at-cap, pick the one with the FEWEST total attempts so
@@ -1822,40 +1902,44 @@ def _run_auto_iterate_loop(
                always picks alphabetically-first which fixates.
             2. If that's a tie, prefer the one with the LOWER
                consecutive-same-class count (least-recently-stuck).
-            3. Final tiebreak is alphabetic for determinism.
+            3. **Final tiebreak: round-robin by iter index, not
+               alphabetic** (2026-06-01 Qwen2.5-14B Bug-8 fix). The
+               prior alphabetic tiebreak (key=c) caused attention to
+               monopolize the primary slot every iter because both
+               attention and decoder_layer tied on (attempts, consec)
+               and "attention" < "decoder_layer". Round-robin
+               (`(it + hash(c)) %` permutation) distributes primary
+               attention across stuck components instead of locking
+               onto one.
 
             If no last-iter-failed components are under-cap, fall
-            through to picking ANY under-cap candidate, with the same
-            three-tier key (lowest attempts, lowest consec, alpha).
+            through to picking ANY under-cap candidate.
             """
+
+            # Round-robin tiebreak: at each iter, shift which component
+            # "wins" so no single name monopolizes. `it` increments per
+            # iter; mod over the sorted candidate names gives a stable
+            # rotation that's still deterministic (replayable for the
+            # same it sequence).
+            def _rr_key(c: str, candidates: List[str]) -> Tuple[int, int, int]:
+                attempts = attempts_per_component.get(c, 0)
+                consec = consecutive_same_class_attempts.get(c, 0)
+                sorted_alpha = sorted(set(candidates))
+                try:
+                    alpha_idx = sorted_alpha.index(c)
+                except ValueError:
+                    alpha_idx = 0
+                n = max(1, len(sorted_alpha))
+                rr_offset = (alpha_idx - (it % n)) % n
+                return (attempts, consec, rr_offset)
+
             live_failed = [c for c in (last_failed_components or []) if c in candidate_pool and not _is_at_cap(c)]
             if live_failed:
-                return min(
-                    live_failed,
-                    key=lambda c: (
-                        attempts_per_component.get(c, 0),
-                        consecutive_same_class_attempts.get(c, 0),
-                        c,
-                    ),
-                )
+                return min(live_failed, key=lambda c: _rr_key(c, live_failed))
             under_cap = [c for c in candidate_pool if not _is_at_cap(c)]
             if not under_cap:
-                return min(
-                    candidate_pool,
-                    key=lambda c: (
-                        attempts_per_component.get(c, 0),
-                        consecutive_same_class_attempts.get(c, 0),
-                        c,
-                    ),
-                )
-            return min(
-                under_cap,
-                key=lambda c: (
-                    attempts_per_component.get(c, 0),
-                    consecutive_same_class_attempts.get(c, 0),
-                    c,
-                ),
-            )
+                return min(candidate_pool, key=lambda c: _rr_key(c, candidate_pool))
+            return min(under_cap, key=lambda c: _rr_key(c, under_cap))
 
         iter_target_component: Optional[str] = _pick_target()
 
@@ -2031,10 +2115,41 @@ def _run_auto_iterate_loop(
                 body = _stub_forward_body_excerpt(stub_path, max_lines=14)
                 focused_stub_excerpts.append(f"  # in {stub_path}\n{body}")
 
-        native_directive = _native_directive(
-            forbidden_excerpt="\n\n".join(focused_stub_excerpts) if any_wrapper_seen else "",
-            strict_native=strict_native,
-        )
+        try:
+            _bs_for_status = json.loads((demo_dir / "bringup_status.json").read_text())
+            _comp_status_map = {
+                str(c.get("name", "")): str(c.get("status", "NEW")) for c in _bs_for_status.get("components", []) or []
+            }
+            _comp_reuse_target_map = {
+                str(c.get("name", "")): str(c.get("tt_reuse_target") or c.get("tt_source") or "")
+                for c in _bs_for_status.get("components", []) or []
+            }
+        except Exception:
+            _comp_status_map = {}
+            _comp_reuse_target_map = {}
+
+        _primary_status = _comp_status_map.get(iter_target_component or "", "NEW")
+        _primary_reuse_target = _comp_reuse_target_map.get(iter_target_component or "", "") or None
+        if _primary_status == "ADAPT" and _primary_reuse_target:
+            _hist_primary = pcc_history_per_component.get(iter_target_component or "") or []
+            _last_pcc_primary = (1.0 - _hist_primary[-1]) if _hist_primary else None
+            native_directive = _refinement_directive(
+                tt_reuse_target=_primary_reuse_target,
+                pcc_value=_last_pcc_primary,
+            )
+            from .iter_prompt import extract_canonical_api_cheat_sheet as _extract_cheat
+
+            _primary_cheat = _extract_cheat(
+                tt_reuse_target=_primary_reuse_target,
+                target_component=iter_target_component or "",
+            )
+            if _primary_cheat:
+                native_directive = native_directive + _primary_cheat
+        else:
+            native_directive = _native_directive(
+                forbidden_excerpt="\n\n".join(focused_stub_excerpts) if any_wrapper_seen else "",
+                strict_native=strict_native,
+            )
 
         _clear_responses_dir(demo_dir)
         if last_failed_components:
@@ -2059,6 +2174,75 @@ def _run_auto_iterate_loop(
             block = _format_failure_block_for_component(per_component_failures_struct, comp)
             if block:
                 per_comp_failure[comp] = block
+
+        # G7 in-loop tier-2 lookup (2026-06-01 extension): if a prior iter
+        # (this run OR any prior run on a sibling model) registered a fix
+        # for this component's CURRENT failure shape — even when the
+        # arch_signature differs — apply it and skip the LLM dispatch.
+        # Tier-1 (arch_signature, qn) ran at preflight; this is the
+        # tier-2 (failure_class, error_extract, component_kind) fallback
+        # that fires after we know the specific failure shape this
+        # component is hitting. Pure reuse of the existing lookup_fix +
+        # apply_fix engine; reuse `error_patterns` extractors to derive
+        # the shape key from the latest traceback.
+        try:
+            _prior_fc_inloop = last_failure_class_per_component.get(iter_target_component, "")
+            _prior_tb_inloop = per_comp_failure.get(iter_target_component, "") or last_failure_details or ""
+            if _prior_fc_inloop and _prior_tb_inloop:
+                from ..agentic.executor import _load_hf_config as _load_hf_inloop
+                from ..agentic.learnings import (
+                    apply_fix as _apply_fix_inloop,
+                    compute_arch_signature as _arch_sig_inloop,
+                    lookup_fix as _lookup_fix_inloop,
+                )
+                from .error_patterns import (
+                    extract_missing_state_dict_key as _xkey,
+                    extract_unexpected_kwarg as _xkw,
+                    extract_missing_args_description as _xargs,
+                )
+
+                _comp_kind_inloop = iter_target_component
+                if _comp_status_map.get(iter_target_component, "") == "ADAPT":
+                    try:
+                        _bs_inloop = json.loads((demo_dir / "bringup_status.json").read_text())
+                        for _c in _bs_inloop.get("components", []) or []:
+                            if str(_c.get("name", "")) == iter_target_component:
+                                _comp_kind_inloop = str(_c.get("kind", "")) or iter_target_component
+                                break
+                    except Exception:
+                        pass
+                _err_inloop = _xkey(_prior_tb_inloop) or _xkw(_prior_tb_inloop) or _xargs(_prior_tb_inloop) or ""
+                _sig_inloop = _arch_sig_inloop(_load_hf_inloop(MODEL))
+                _fix_inloop = _lookup_fix_inloop(
+                    arch_signature=_sig_inloop,
+                    first_diverging_qn=iter_target_component,
+                    failure_class=_prior_fc_inloop,
+                    error_extract=_err_inloop,
+                    component_kind=_comp_kind_inloop,
+                )
+                if _fix_inloop is not None:
+                    _ok_il, _msg_il = _apply_fix_inloop(fix=_fix_inloop, workspace_root=BRINGUP_ROOT())
+                    if _ok_il:
+                        print(
+                            f"  [agentic:G7] in-loop tier-2 fix applied to "
+                            f"`{iter_target_component}` (source_model="
+                            f"{_fix_inloop.source_model_id!r}, "
+                            f"shape={_prior_fc_inloop}/{_comp_kind_inloop}); "
+                            f"PCC will be retested without LLM dispatch."
+                        )
+                    else:
+                        print(
+                            f"  [agentic:G7] in-loop tier-2 candidate found "
+                            f"for `{iter_target_component}` but did not apply "
+                            f"cleanly: {_msg_il[:200]}",
+                            file=sys.stderr,
+                        )
+        except Exception as _g7_inloop_exc:
+            print(
+                f"  [agentic:G7] non-fatal during in-loop tier-2 lookup: "
+                f"{type(_g7_inloop_exc).__name__}: {_g7_inloop_exc}",
+                file=sys.stderr,
+            )
 
         iter_choices: Dict[str, Dict[str, str]] = {}
 
@@ -2457,6 +2641,21 @@ def _run_auto_iterate_loop(
                     file=sys.stderr,
                 )
 
+        # PCC-trend block (Gap 5 fix): surface the last N iters' PCC
+        # values for the target component so the LLM can see whether
+        # prior attempts moved the needle, stagnated, or regressed.
+        # Empty string when there's no history (first iter on component).
+        from .iter_prompt import format_pcc_trend_block as _fmt_pcc_trend
+
+        _primary_pcc_trend_block = (
+            _fmt_pcc_trend(
+                target_component=iter_target_component,
+                pcc_history=pcc_history_per_component.get(iter_target_component) or [],
+            )
+            if iter_target_component
+            else ""
+        )
+
         prompt = (
             f"{investigative_preamble}"
             f"{hw_header}"
@@ -2467,6 +2666,7 @@ def _run_auto_iterate_loop(
             f"{budget_clause}"
             f"{constraint_block}"
             f"{failure_context}"
+            f"{_primary_pcc_trend_block}"
             f"STRATEGY DIRECTIVE FOR THIS ITERATION:\n{strategy_directive}\n"
             f"{escalated_scope_block}"
             f"{native_directive}\n"
@@ -2575,6 +2775,8 @@ def _run_auto_iterate_loop(
                     # for them.
                     attempts_per_component[_extra] = attempts_per_component.get(_extra, 0) + 1
                     _extra_attempts = attempts_per_component[_extra]
+                    _extra_status = _comp_status_map.get(_extra, "NEW")
+                    _extra_reuse_target = _comp_reuse_target_map.get(_extra, "") or None
                     _extra_blocks = build_per_target_blocks(
                         demo_dir=demo_dir,
                         target_component=_extra,
@@ -2583,6 +2785,9 @@ def _run_auto_iterate_loop(
                         attempts_per_component=attempts_per_component,
                         focused_stub_excerpts=focused_stub_excerpts if any_wrapper_seen else [],
                         strict_native=strict_native,
+                        component_status=_extra_status,
+                        tt_reuse_target=_extra_reuse_target,
+                        pcc_history=pcc_history_per_component.get(_extra) or [],
                     )
                     _extra_target_header = build_target_header(
                         target_component=_extra,
@@ -2611,6 +2816,7 @@ def _run_auto_iterate_loop(
                         components_block=_extra_components_block,
                         target_header=_extra_target_header,
                         constraint_block=_extra_constraint_block,
+                        pcc_trend_block=_extra_blocks.get("pcc_trend_block", ""),
                     )
                     _parallel_extra_jobs.append(
                         AgentJob(
@@ -2693,6 +2899,21 @@ def _run_auto_iterate_loop(
                 )
             if rc != 0:
                 print(f"  agent invocation returned non-zero ({rc}); continuing to apply step.", file=sys.stderr)
+            try:
+                from .agent import _extract_agent_result_text
+
+                _handoff_dir = _bcwd() / "_handoff"
+                for _comp_for_result in list(iter_choices.keys()):
+                    _tag = f"iter_{it}_{_safe_id(_comp_for_result)}"
+                    _agent_log = _handoff_dir / f"{provider}_{_tag}.log"
+                    _result_text = _extract_agent_result_text(_agent_log)
+                    if _result_text:
+                        iter_choices[_comp_for_result]["agent_result_text"] = _result_text
+            except Exception as _result_exc:
+                print(
+                    f"  (could not extract agent result text: " f"{type(_result_exc).__name__}: {_result_exc})",
+                    file=sys.stderr,
+                )
             try:
                 responses_dir = demo_dir / "_synth_responses"
                 response_files = (
@@ -2792,14 +3013,35 @@ def _run_auto_iterate_loop(
 
             regressed: List[str] = []
             if strict_native:
-                for comp, was_wrapper_before in pre_apply_state.items():
+                # 2026-06-01 audit: the guard was `is_wrapper_now and not
+                # was_wrapper_before` — fired ONLY when this iter regressed
+                # native→wrapper. Missed the Qwen2.5-14B attention case
+                # where iter 1 installed a torch-fallback (was_wrapper_before
+                # was False, but pre_apply_state was empty since iter 1
+                # had no last_failed_components), and iters 2-8 found
+                # `was_wrapper_before=True` so the guard NEVER fired.
+                # Result: 8 iters wasted on torch-fallback variations,
+                # never restored to canonical.
+                #
+                # Broadened condition: fire whenever the current stub is
+                # a wrapper AND any native snapshot is available to
+                # restore from. The candidates filter on
+                # `not _stub_uses_torch_wrapper(snap)` already ensures
+                # we only restore from genuinely-native snapshots, so
+                # NEW components whose only backup is a torch-fallback
+                # autofill won't trigger a false revert (candidates list
+                # stays empty for them).
+                _guard_comps = set(pre_apply_state.keys()) | set(last_failed_components or [])
+                for comp in _guard_comps:
                     safe = _safe_id(comp)
                     stub_path = demo_dir / "_stubs" / f"{safe}.py"
+                    if not stub_path.is_file():
+                        continue
                     bak_path = stub_path.with_suffix(".py.bak")
                     preiter_path = stub_path.with_suffix(".py.preiter_native")
                     last_good_path = stub_path.with_suffix(".py.last_good_native")
                     is_wrapper_now = _stub_uses_torch_wrapper(stub_path)
-                    if is_wrapper_now and not was_wrapper_before:
+                    if is_wrapper_now:
                         candidates = []
                         if last_good_path.is_file() and not _stub_uses_torch_wrapper(last_good_path):
                             candidates.append(("last_good_native", last_good_path))
@@ -2813,9 +3055,9 @@ def _run_auto_iterate_loop(
                                 stub_path.write_text(src_path.read_text())
                                 regressed.append(comp)
                                 print(
-                                    f"  REGRESSION GUARD: agent rewrote `{comp}` as a "
-                                    f"CPU-fallback wrapper, but the previous version was "
-                                    f"native ttnn. Restored from {src_path} ({label})."
+                                    f"  REGRESSION GUARD: stub for `{comp}` is a "
+                                    f"CPU-fallback wrapper but a native snapshot is "
+                                    f"available. Restored from {src_path} ({label})."
                                 )
                             except Exception as exc:
                                 print(f"  regression restore failed for {comp}: {exc}", file=sys.stderr)
@@ -3247,6 +3489,80 @@ def _run_auto_iterate_loop(
         skipped_components_this_run |= report_skipped
         skipped_components_this_run -= report_passed
         skipped_components_this_run -= report_failed
+
+        # 2026-06-01 Qwen2.5-14B audit Fix A+B: in-loop validation-sweep
+        # symmetry with pre-flight graduation (line 1359-1370).
+        #
+        # Fix A: PROMOTE any passing component to graduated_this_run —
+        # previously only the PRIMARY target's pass at line 3488 could
+        # graduate; sweep-passing extras (e.g. m_l_p iter 1) sat in
+        # candidate_pool indefinitely.
+        # Fix B: RECORD a conservative PCC=0.99 (pass-floor; the test
+        # asserts pcc >= 0.99 so we know the floor without parsing) in
+        # last_pcc_per_component + pcc_history_per_component so the
+        # brain has a trajectory to trust when cap-extend evaluates
+        # this component later. Without this, `last=none` would cause
+        # the brain's `should_extend_component_cap` to reject the
+        # extension on a component that's actually passing.
+        #
+        # Two observation sites need this logic:
+        #   (1) primary-report processing here at line ~3370 (this call)
+        #   (2) validation-sweep result processing later in the iter at
+        #       line ~3950 (second call, sweep_report's sw_passed set)
+        # Hoisted into _promote_passing_components to avoid duplication.
+        def _promote_passing_components(passed_set, source_label: str) -> None:
+            """Apply Fix A (graduate) + Fix B (record PCC) for components
+            that just passed PCC. Generic across primary-report and
+            sweep-report observation sites.
+
+            Gates:
+              - not the iter's primary (its graduation is handled at
+                line ~3488 by target_was_validated path)
+              - not already graduated; not in permanently_skipped
+              - stub is AST-native (passes from torch-fallback wrappers
+                are torch==torch trivial, NOT real graduations) — same
+                gate the pre-flight uses implicitly via
+                _preflight_native_components.
+            """
+            _PASS_FLOOR_PCC = 0.99
+            for _pass_comp in passed_set:
+                if not _pass_comp:
+                    continue
+                # Fix B: always record PCC for the passing component.
+                # Even if we don't graduate this round (primary, or still
+                # a torch wrapper), the brain needs a PCC value to make
+                # cap-extend trajectory decisions later.
+                last_pcc_per_component[_pass_comp] = _PASS_FLOOR_PCC
+                pcc_history_per_component.setdefault(_pass_comp, []).append(1.0 - _PASS_FLOOR_PCC)
+
+                if _pass_comp == iter_target_component:
+                    continue
+                if _pass_comp in graduated_this_run or _pass_comp in permanently_skipped:
+                    continue
+                _pass_stub = demo_dir / "_stubs" / f"{_safe_id(_pass_comp)}.py"
+                # Direct AST check (NOT _stub_has_graduated_from_autofill,
+                # which requires a .last_good_native snapshot that doesn't
+                # exist for first-time graduations — chicken-and-egg).
+                # Same gate the primary-graduation path uses at line 3466.
+                try:
+                    _is_native_pass = _pass_stub.is_file() and not _stub_uses_torch_wrapper(_pass_stub)
+                except Exception:
+                    _is_native_pass = False
+                if not _is_native_pass:
+                    continue
+                graduated_this_run.append(_pass_comp)
+                verified_fail.discard(_pass_comp)
+                try:
+                    _snapshot_native_stub(_pass_comp)
+                except Exception:
+                    pass
+                print(
+                    f"  {source_label}: `{_pass_comp}` GRADUATED — PCC PASSED in iter {it}, "
+                    f"stub is AST-native. No further LLM iteration needed."
+                )
+
+        _promote_passing_components(report_passed, source_label="report")
+
         target_was_validated = (
             iter_target_component is not None
             and iter_target_component in report_passed
@@ -3375,6 +3691,11 @@ def _run_auto_iterate_loop(
             try:
                 from ..agentic.executor import _load_hf_config as _load_hf
                 from ..agentic.learnings import compute_arch_signature, register_fix
+                from .error_patterns import (
+                    extract_missing_state_dict_key as _g7_extract_key,
+                    extract_unexpected_kwarg as _g7_extract_kwarg,
+                    extract_missing_args_description as _g7_extract_args,
+                )
 
                 _arch_sig = compute_arch_signature(_load_hf(MODEL))
                 if _arch_sig:
@@ -3389,6 +3710,34 @@ def _run_auto_iterate_loop(
                     )
                     _diff_text = _diff_proc.stdout or ""
                     if _diff_text.strip():
+                        # Tier-2 shape fields: pull the structured info
+                        # from the LAST failure this component saw before
+                        # graduating. The fix that flipped PCC is the
+                        # ANSWER to that failure shape, so storing both
+                        # together is what enables cross-model lookup.
+                        _last_fc_g7 = last_failure_class_per_component.get(iter_target_component, "")
+                        _last_tb_g7 = per_comp_failure.get(iter_target_component, "") or last_failure_details or ""
+                        _err_extract_g7 = (
+                            _g7_extract_key(_last_tb_g7)
+                            or _g7_extract_kwarg(_last_tb_g7)
+                            or _g7_extract_args(_last_tb_g7)
+                            or ""
+                        )
+                        # component_kind = canonical class name (e.g. Attention)
+                        # for ADAPT components; bare component name otherwise.
+                        _comp_kind_g7 = _comp_status_map.get(iter_target_component, "")
+                        if _comp_kind_g7 == "ADAPT":
+                            try:
+                                _bs_g7 = json.loads((demo_dir / "bringup_status.json").read_text())
+                                for _c in _bs_g7.get("components", []) or []:
+                                    if str(_c.get("name", "")) == iter_target_component:
+                                        _comp_kind_g7 = str(_c.get("kind", "")) or iter_target_component
+                                        break
+                            except Exception:
+                                _comp_kind_g7 = iter_target_component
+                        else:
+                            _comp_kind_g7 = iter_target_component
+
                         _ok = register_fix(
                             arch_signature=_arch_sig,
                             first_diverging_qn=iter_target_component,
@@ -3396,12 +3745,16 @@ def _run_auto_iterate_loop(
                             diff_files=[str(_stub_rel)],
                             source_model_id=MODEL,
                             notes=f"graduated via auto_iterate iter {it}",
+                            failure_class=_last_fc_g7,
+                            error_extract=_err_extract_g7,
+                            component_kind=_comp_kind_g7,
                         )
                         if _ok:
                             print(
                                 f"  [agentic:G7] registered learned fix for "
                                 f"`{iter_target_component}` "
-                                f"(arch_sig={_arch_sig[:12]}, diff={len(_diff_text)} bytes)"
+                                f"(arch_sig={_arch_sig[:12]}, diff={len(_diff_text)} bytes, "
+                                f"shape_key={_last_fc_g7}/{_comp_kind_g7})"
                             )
             except Exception as _g7_exc:
                 print(
@@ -3727,6 +4080,13 @@ def _run_auto_iterate_loop(
                     validated_this_run -= sw_skipped
                     skipped_components_this_run = (skipped_components_this_run | sw_skipped) - sw_passed - sw_failed
                     verified_fail |= sw_failed
+                    # Fix A+B for the sweep observation site: graduate
+                    # AST-native sweep-passes + record PCC for trajectory
+                    # tracking. Without this call, sweep-passing extras
+                    # (m_l_p / r_m_s_norm / rotary_embedding in iter 1
+                    # of the Qwen2.5-14B audit) sit in candidate_pool
+                    # waiting for a primary-target turn that never comes.
+                    _promote_passing_components(sw_passed, source_label="sweep")
                     print(
                         f"  validation sweep: "
                         f"{len(sw_passed)} passed, "
@@ -3976,6 +4336,7 @@ def _run_auto_iterate_loop(
                 failure_class=iter_failure_class,
                 failure_signature=iter_signature,
                 traceback_excerpt=comp_traceback,
+                agent_result_text=choice.get("agent_result_text"),
             )
         if last_failed_components:
             log_root = demo_dir / "_attempts"
@@ -4119,6 +4480,45 @@ def _run_auto_iterate_loop(
         final_passed = sorted(set(final_report.get("passed_components", []) or []))
         final_failed = sorted(set(final_report.get("failed_components", []) or []))
         final_skipped = sorted(set(final_report.get("skipped_components", []) or []))
+
+    # 2026-06-01 Qwen2.5-14B audit: promote final-pytest PASSES into
+    # graduated_this_run. Previously `final_passed` was only used for
+    # display ("PCC-validated on device: X/Y" at line 4444) — it never
+    # updated `graduated_this_run`, so a component that passed the
+    # final test but was earlier added to `permanently_skipped` (e.g.
+    # via cap-fallback that restored a working .preiter_native) would
+    # show as "PCC-validated" in the user report but "not graduated"
+    # in the brain's state — net misclassification by the demo emitter.
+    #
+    # Fix: any final-pytest PASS that isn't already in
+    # `graduated_this_run` and whose stub is AST-native gets promoted
+    # in-place. Removes from `permanently_skipped` so the demo
+    # categorization (build_final_categorization) sees it as ON_DEVICE.
+    # Reuses `_snapshot_native_stub` + `graduated_this_run` (no new
+    # infrastructure).
+    for _fp_comp in final_passed:
+        if not _fp_comp or _fp_comp in graduated_this_run:
+            continue
+        _fp_stub = demo_dir / "_stubs" / f"{_safe_id(_fp_comp)}.py"
+        try:
+            _fp_is_native = _fp_stub.is_file() and not _stub_uses_torch_wrapper(_fp_stub)
+        except Exception:
+            _fp_is_native = False
+        if not _fp_is_native:
+            continue
+        if _fp_comp in permanently_skipped:
+            permanently_skipped[:] = [s for s in permanently_skipped if s != _fp_comp]
+        graduated_this_run.append(_fp_comp)
+        verified_fail.discard(_fp_comp)
+        try:
+            _snapshot_native_stub(_fp_comp)
+        except Exception:
+            pass
+        print(
+            f"  final-pytest: `{_fp_comp}` GRADUATED — passed the final "
+            f"PCC verification, stub is AST-native. Restored from "
+            f"permanently_skipped (cap-fallback's restore was correct)."
+        )
 
     # Brain-owned worktree → main-tree sync. Bypasses the overlay-
     # capture/apply mechanism (which has been observed to leave the

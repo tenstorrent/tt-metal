@@ -4795,6 +4795,17 @@ def _classify_failure(summary: str, details: str) -> str:
     if ("ttnn.concat" in text or "concat(" in text) and "incompatible function arguments" in text:
         return "CONCAT_INCOMPATIBLE"
 
+    # CONFIG_PARAM: NotImplementedError raised from inside canonical
+    # tt_transformers code (e.g. rope.py raises NotImplementedError on a
+    # `use_qk_fused` config flag that doesn't match the model's head_dim).
+    # The fix lives in `models/tt_transformers/tt/model_config.py` or the
+    # raising canonical file — NOT in the per-component stub. Detected by
+    # the combination of NotImplementedError + tt_transformers in the
+    # traceback. The escalation table maps this class to additional
+    # editable paths in the canonical tree.
+    if "NotImplementedError" in text and ("models/tt_transformers/tt/" in text or "models/common/" in text):
+        return "CONFIG_PARAM"
+
     oom_explicit = ("Out of Memory" in text) or ("Not enough space to allocate" in text)
     oom_via_allocator = ("TT_FATAL" in text) and (
         "bank_manager.cpp" in text
@@ -4985,20 +4996,46 @@ _EDIT_SCOPE_FOR_FAILURE_CLASS: Dict[str, List[str]] = {
 }
 
 
+# Repo-relative escalation paths (resolved against BRINGUP_ROOT, not demo_dir).
+# Used when the failure originates outside the demo dir — e.g. a
+# NotImplementedError from `models/tt_transformers/tt/rope.py` whose real
+# fix lives in `models/tt_transformers/tt/model_config.py`. Without this,
+# the LLM is given no path to fix bugs in canonical code that it didn't
+# author. The Phi-3.5 attention failure (use_qk_fused for head_dim=96)
+# is the motivating case.
+_REPO_RELATIVE_EDIT_SCOPE_FOR_FAILURE_CLASS: Dict[str, List[str]] = {
+    "CONFIG_PARAM": [
+        "models/tt_transformers/tt/model_config.py",
+        "models/tt_transformers/tt/rope.py",
+        "models/common/rmsnorm.py",
+    ],
+}
+
+
 def _resolve_extra_edit_paths(
     demo_dir: Path,
     failure_class: str,
 ) -> List[Path]:
     """Expand the failure-class-keyed permission table into concrete
-    file paths under `demo_dir`. Returns an empty list when the class
-    is unknown or has no escalation.
+    file paths. Returns an empty list when the class is unknown or has
+    no escalation.
 
     Used by the prompt-assembly path to emit an ESCALATED EDIT SCOPE
     section instructing the LLM that, for this iteration only, it may
     additionally edit the listed files. The default `_stubs/<comp>.py`
-    write-scope is always implicitly allowed."""
-    patterns = _EDIT_SCOPE_FOR_FAILURE_CLASS.get(failure_class, [])
+    write-scope is always implicitly allowed.
+
+    Two tables are consulted:
+      * ``_EDIT_SCOPE_FOR_FAILURE_CLASS`` — paths globbed under demo_dir
+        (e.g. conftest.py inside the per-model test tree).
+      * ``_REPO_RELATIVE_EDIT_SCOPE_FOR_FAILURE_CLASS`` — paths resolved
+        against BRINGUP_ROOT (e.g. canonical tt_transformers source).
+        Used when the bug lives in shared code, not the demo-local tree.
+    """
     out: List[Path] = []
+
+    # demo_dir-relative patterns (existing behavior).
+    patterns = _EDIT_SCOPE_FOR_FAILURE_CLASS.get(failure_class, [])
     for pattern in patterns:
         try:
             for p in demo_dir.glob(pattern):
@@ -5006,6 +5043,22 @@ def _resolve_extra_edit_paths(
                     out.append(p)
         except Exception:
             continue
+
+    # repo-relative patterns (canonical source fixes).
+    repo_patterns = _REPO_RELATIVE_EDIT_SCOPE_FOR_FAILURE_CLASS.get(failure_class, [])
+    if repo_patterns:
+        try:
+            from .discovery import BRINGUP_ROOT as _BR
+
+            repo_root = _BR()
+        except Exception:
+            repo_root = None
+        if repo_root is not None:
+            for rel in repo_patterns:
+                p = repo_root / rel
+                if p.is_file():
+                    out.append(p)
+
     return sorted(set(out))
 
 
@@ -5069,6 +5122,23 @@ def _format_escalated_edit_scope_block(
                 "  in the test conftest and consider replacing it with a",
                 "  per-output type-dispatch (handle Tensor, tuple, list, dict)",
                 "  that calls `ttnn.synchronize_device(device)` before drain.",
+            ]
+        )
+    elif failure_class == "CONFIG_PARAM":
+        lines.extend(
+            [
+                "",
+                "  For CONFIG_PARAM: a NotImplementedError was raised from",
+                "  canonical tt_transformers code because a model_config flag",
+                "  (e.g. `use_qk_fused`, `use_hf_rope`) is set inconsistently",
+                "  with the model's architecture (e.g. head_dim not divisible",
+                "  by 64). The fix is usually a one-line addition to the",
+                "  derivation in `model_config.py` to also gate on the",
+                "  relevant architecture constraint. Trace the exception back",
+                "  from the `raise NotImplementedError` site to wherever the",
+                "  offending flag is set; add the missing condition there.",
+                "  DO NOT just override the flag in the wrapper — that won't",
+                "  stick if downstream code re-reads from configuration.",
             ]
         )
     lines.append("")
