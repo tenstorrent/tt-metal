@@ -48,6 +48,7 @@ from .math_perf_env import (
     ace_step_init_cond_sdpa_program_config,
     ace_step_linear_l1_memory_config,
     ace_step_linear_weight_dtype,
+    ace_step_memory_configs_equivalent,
     ace_step_nlp_concat_heads,
     ace_step_permute_kwargs,
     ace_step_reshape_kwargs,
@@ -533,7 +534,15 @@ class _TtQwen3EncoderLayer:
             return t
         return ttnn.to_memory_config(t, self._act_l1)
 
-    def _attn_linear_kwargs(self, *, batch_size: int, seq_len: int, in_dim: int, out_dim: int) -> dict:
+    def _attn_linear_kwargs(
+        self,
+        *,
+        batch_size: int,
+        seq_len: int,
+        in_dim: int,
+        out_dim: int,
+        in0_sharded: bool = False,
+    ) -> dict:
         kw: dict = {}
         if self._linear_ck is not None:
             kw["compute_kernel_config"] = self._linear_ck
@@ -568,6 +577,7 @@ class _TtQwen3EncoderLayer:
                     in_dim=int(in_dim),
                     out_dim=int(out_dim),
                     batch_size=int(batch_size),
+                    in0_sharded=in0_sharded,
                     out_sharded=use_out_bs,
                 )
                 if pc is not None:
@@ -607,6 +617,8 @@ class _TtQwen3EncoderLayer:
         if in0_mc is None:
             return x
         try:
+            if ace_step_memory_configs_equivalent(x.memory_config(), in0_mc):
+                return x
             return ttnn.to_memory_config(x, in0_mc)
         except Exception:
             return x
@@ -620,6 +632,7 @@ class _TtQwen3EncoderLayer:
         # input_layernorm: BLOCK_SHARDED on 8×4 L1 grid ([1,1,256,K], block_h=2, block_w=K/256tiles/8).
         _bf8 = self._proj_dtype
         _ln_act_dtype = _bf8 if _bf8 != self.dtype else None
+        # Block-sharded norm input (I2S unchanged); S2I to L1 interleaved for 1D QKV matmul.
         x = ace_step_rms_norm_block_sharded(
             ttnn,
             x,
@@ -629,22 +642,26 @@ class _TtQwen3EncoderLayer:
             l1_mc=_l1_mc,
             compute_kernel_config=self._rms_norm_ck,
             activation_dtype=_ln_act_dtype,
+            return_sharded=False,
         )
 
         b = int(x.shape[0])
         s = int(x.shape[2])
         H, kv_h, Dh = self.nh, self.nkv, self.dh
 
-        x = self._l1_activation(x)
         hsz = self.hidden_size
         q_dim_o = self._q_dim_o
         kv_dim_o = self._kv_dim_o
         qkv_dim_o = q_dim_o + 2 * kv_dim_o
         # Single fused QKV matmul: one [B,1,S,q+2kv] output instead of separate q / kv.
-        lin_qkv = self._attn_linear_kwargs(batch_size=b, seq_len=s, in_dim=hsz, out_dim=qkv_dim_o)
-        x_attn = self._maybe_shard_attn_in0(x, batch_size=b, seq_len=s, in_dim=hsz, out_dim=qkv_dim_o)
-        qkv = ttnn.linear(x_attn, self.wqkv, bias=None, transpose_b=True, dtype=_bf8, **lin_qkv)
-        ace_step_safe_deallocate(ttnn, x_attn if x_attn is not x else None)
+        lin_qkv = self._attn_linear_kwargs(
+            batch_size=b,
+            seq_len=s,
+            in_dim=hsz,
+            out_dim=qkv_dim_o,
+            in0_sharded=False,
+        )
+        qkv = ttnn.linear(x, self.wqkv, bias=None, transpose_b=True, dtype=_bf8, **lin_qkv)
         ace_step_safe_deallocate(ttnn, x)
 
         # BFP8 1D-mcast matmul can spill to DRAM despite memory_config=L1; force L1 interleaved
