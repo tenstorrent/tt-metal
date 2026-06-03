@@ -35,7 +35,7 @@ on:
         default: false
       gtest_filter:
         required: false
-        default: "*"
+        default: "-*NIGHTLY*"
         type: string
         description: "Filter for gtest"
       ref:
@@ -55,7 +55,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          {name: tt-train, cmd: ctest -E NIGHTLY --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml},
+          {name: tt-train, cmd: ./tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml},
         ]
         test-group-py: [
           {name: tt-train, cmd: python -m pytest tests/python},
@@ -119,6 +119,8 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         if: ${{ !inputs.wheel-artifact-name }}
+        env:
+          GTEST_FILTER: ${{ inputs.gtest_filter }}
         run: |
           cd /work/build/tt-train
           mkdir -p generated/test_reports
