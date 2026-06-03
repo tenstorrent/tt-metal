@@ -21,22 +21,73 @@ from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import (
     ace_step_lm_head_sharded_norm_enabled,
     ace_step_lm_narrow_audio_vocab_enabled,
     ace_step_lm_prefill_l1_enabled,
+    ace_step_lm_prefill_qkv_sweep_enabled,
     ace_step_lm_sdpa_concat_width_enabled,
     ace_step_lm_unified_decode_shard_enabled,
 )
 from models.demos.ace_step_v1_5.ttnn_impl.qwen_decode_sdpa_layout import ace_step_patch_model_args_sdpa_gather_unified
 from models.demos.ace_step_v1_5.ttnn_impl.qwen_decode_shard import ace_step_patch_model_args_decode_unified_shard
 from models.demos.ace_step_v1_5.ttnn_impl.qwen_lm_head_sharded_norm import ace_step_apply_lm_head_sharded_norm
+from models.demos.ace_step_v1_5.ttnn_impl.qwen_prefill_l1 import (
+    ace_step_patch_model_args_lm_prefill_qkv_matmul,
+    ace_step_patch_model_args_lm_prefill_wo_matmul,
+    ace_step_patch_model_args_prefill_l1,
+    ace_step_promote_attention_wqkv_to_dram_interleaved,
+)
 from models.tt_transformers.tt.common import Mode
 
 
 def test_lm_mem_env_defaults():
-    assert ace_step_lm_prefill_l1_enabled() is False
+    assert ace_step_lm_prefill_qkv_sweep_enabled() is True
+    assert ace_step_lm_prefill_l1_enabled() is True
     assert ace_step_lm_unified_decode_shard_enabled() is True
     assert ace_step_lm_decode_qk_norm_sharded_enabled() is True
     assert ace_step_lm_head_sharded_norm_enabled() is True
     assert ace_step_lm_sdpa_concat_width_enabled() is True
     assert ace_step_lm_narrow_audio_vocab_enabled() is True
+
+
+def test_prefill_l1_patches_attention_getters_not_mlp(monkeypatch):
+    import functools
+
+    import ttnn
+
+    monkeypatch.setenv("ACE_STEP_LM_PREFILL_MLP_SWEEP", "0")
+
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    l1 = ttnn.L1_MEMORY_CONFIG
+
+    @functools.lru_cache(maxsize=None)
+    def attn_qkv(mode, _prefetcher=None):
+        return dram if mode == Mode.PREFILL else l1
+
+    @functools.lru_cache(maxsize=None)
+    def mlp_ff1(mode, _prefetcher=None):
+        return dram if mode == Mode.PREFILL else l1
+
+    model_args = SimpleNamespace(
+        get_attn_qkv_mm_mem_config=attn_qkv,
+        get_mlp_ff1_3_mem_config=mlp_ff1,
+    )
+    ace_step_patch_model_args_prefill_l1(model_args)
+
+    assert model_args.get_attn_qkv_mm_mem_config(Mode.PREFILL, None) is l1
+    assert model_args.get_mlp_ff1_3_mem_config(Mode.PREFILL, None) is dram
+
+
+def test_prefill_l1_keeps_mlp_dram_memcfg_getters(monkeypatch):
+    import ttnn
+
+    monkeypatch.setenv("ACE_STEP_LM_PREFILL_MLP_SWEEP", "1")
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    model_args = SimpleNamespace(
+        get_mlp_ff1_3_mem_config=mock.Mock(return_value=dram),
+        get_mlp_ff2_mem_config=mock.Mock(return_value=dram),
+    )
+    ace_step_patch_model_args_prefill_l1(model_args)
+
+    assert model_args.get_mlp_ff1_3_mem_config(Mode.PREFILL, None) is dram
+    assert model_args.get_mlp_ff2_mem_config(Mode.PREFILL, None) is dram
 
 
 def test_lm_head_sharded_norm_patches_distributed_norm_and_apply():
@@ -209,6 +260,156 @@ def test_sdpa_gather_unified_leaves_gather_getter_stock():
     assert model_args.get_attn_gather_users_mem_config(Mode.DECODE, 1, None) == "gather"
     orig.assert_called_once_with(Mode.DECODE, 1, None)
     model_args.get_residual_mem_config.assert_not_called()
+
+
+def test_lm_prefill_qkv_sweep_patches_program_config(monkeypatch):
+    from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_lm_prefill_qkv_matmul_program_config
+
+    monkeypatch.setenv("ACE_STEP_LM_PREFILL_QKV_SWEEP", "1")
+    orig = mock.Mock(return_value="stock")
+    device = SimpleNamespace(compute_with_storage_grid_size=lambda: SimpleNamespace(x=8, y=4))
+    model_args = SimpleNamespace(
+        dim=2048,
+        qkv_size=4096,
+        get_attn_qkv_program_config=orig,
+    )
+    ace_step_patch_model_args_lm_prefill_qkv_matmul(model_args, device)
+
+    pinned = ace_step_lm_prefill_qkv_matmul_program_config(device, seq_len=128, hidden_dim=2048, qkv_dim=4096)
+    assert pinned is not None
+    got = model_args.get_attn_qkv_program_config(Mode.PREFILL, 128, None)
+    assert got is not pinned
+    assert type(got) is type(pinned)
+    assert got.in0_block_w == 8
+    assert got.per_core_M == 4
+    assert got.per_core_N == 4
+    assert model_args.get_attn_qkv_program_config(Mode.DECODE, 1, None) == "stock"
+    assert model_args.get_attn_qkv_program_config(Mode.PREFILL, 256, None) == "stock"
+
+
+def test_lm_prefill_mlp_ff1_sweep_patches_program_config(monkeypatch):
+    from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_lm_prefill_mlp_ff1_3_matmul_program_config
+
+    monkeypatch.setenv("ACE_STEP_LM_PREFILL_MLP_SWEEP", "1")
+    orig = mock.Mock(return_value="stock")
+    device = SimpleNamespace(compute_with_storage_grid_size=lambda: SimpleNamespace(x=8, y=4))
+    model_args = SimpleNamespace(
+        dim=2048,
+        hidden_dim=6144,
+        get_mlp_ff1_3_prg_config=orig,
+    )
+    from models.demos.ace_step_v1_5.ttnn_impl.qwen_prefill_l1 import (
+        ace_step_patch_model_args_lm_prefill_mlp_ff1_3_matmul,
+    )
+
+    ace_step_patch_model_args_lm_prefill_mlp_ff1_3_matmul(model_args, device)
+
+    pinned = ace_step_lm_prefill_mlp_ff1_3_matmul_program_config(device, seq_len=128, k_dim=2048, n_dim=6144)
+    assert pinned is not None
+    got = model_args.get_mlp_ff1_3_prg_config(Mode.PREFILL, 128, None)
+    assert type(got) is type(pinned)
+    assert got.in0_block_w == 8
+    assert got.per_core_M == 4
+    assert got.per_core_N == 6
+    assert got.out_subblock_h == 1
+    assert got.out_subblock_w == 2
+    assert model_args.get_mlp_ff1_3_prg_config(Mode.PREFILL, 512, None) == "stock"
+
+
+def test_lm_prefill_mlp_ff2_sweep_patches_program_config(monkeypatch):
+    from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_lm_prefill_mlp_ff2_matmul_program_config
+
+    monkeypatch.setenv("ACE_STEP_LM_PREFILL_MLP_SWEEP", "1")
+    orig = mock.Mock(return_value="stock")
+    device = SimpleNamespace(compute_with_storage_grid_size=lambda: SimpleNamespace(x=8, y=4))
+    model_args = SimpleNamespace(
+        dim=2048,
+        hidden_dim=6144,
+        get_mlp_ff2_prg_config=orig,
+    )
+    from models.demos.ace_step_v1_5.ttnn_impl.qwen_prefill_l1 import ace_step_patch_model_args_lm_prefill_mlp_ff2_matmul
+
+    ace_step_patch_model_args_lm_prefill_mlp_ff2_matmul(model_args, device)
+
+    pinned = ace_step_lm_prefill_mlp_ff2_matmul_program_config(device, seq_len=128, k_dim=6144, n_dim=2048)
+    assert pinned is not None
+    got = model_args.get_mlp_ff2_prg_config(Mode.PREFILL, 128, None)
+    assert type(got) is type(pinned)
+    assert got.per_core_N == 2
+    assert got.out_subblock_h == 1
+
+
+def test_lm_prefill_wo_sweep_patches_program_config(monkeypatch):
+    from models.demos.ace_step_v1_5.ttnn_impl.math_perf_env import ace_step_lm_prefill_wo_matmul_program_config
+
+    monkeypatch.setenv("ACE_STEP_LM_PREFILL_QKV_SWEEP", "1")
+    orig = mock.Mock(return_value="stock")
+    device = SimpleNamespace(compute_with_storage_grid_size=lambda: SimpleNamespace(x=8, y=4))
+    model_args = SimpleNamespace(
+        dim=2048,
+        n_heads=16,
+        head_dim=128,
+        num_devices=1,
+        get_attn_wo_program_config=orig,
+    )
+    ace_step_patch_model_args_lm_prefill_wo_matmul(model_args, device)
+
+    pinned = ace_step_lm_prefill_wo_matmul_program_config(device, seq_len=128, k_dim=2048, n_dim=2048)
+    assert pinned is not None
+    got = model_args.get_attn_wo_program_config(Mode.PREFILL, 128, None)
+    assert got is not pinned
+    assert type(got) is type(pinned)
+    assert got.in0_block_w == 8
+    assert got.per_core_M == 4
+    assert got.per_core_N == 2
+    assert got.out_subblock_h == 1
+    assert got.out_subblock_w == 2
+    assert model_args.get_attn_wo_program_config(Mode.DECODE, 1, None) == "stock"
+
+
+def test_lm_prefill_qkv_sweep_promotes_sharded_wqkv(monkeypatch):
+    import ttnn
+
+    monkeypatch.setenv("ACE_STEP_LM_PREFILL_QKV_SWEEP", "1")
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    sharded_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))}),
+            (2048, 512),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    interleaved_mc = dram
+    device = object()
+    wqkv_sharded = SimpleNamespace(
+        memory_config=lambda: sharded_mc,
+        device=lambda: device,
+        dtype=ttnn.bfloat8_b,
+    )
+    wqkv_interleaved = SimpleNamespace(memory_config=lambda: interleaved_mc)
+    promoted = object()
+    attn = SimpleNamespace(wqkv=wqkv_sharded, wo=wqkv_sharded, forward_prefill=lambda *a, **k: None)
+    tt_model = SimpleNamespace(layers=[SimpleNamespace(attention=attn)])
+    torch_w = mock.Mock()
+
+    with mock.patch.object(ttnn, "to_torch", return_value=torch_w) as to_torch:
+        with mock.patch.object(ttnn, "ReplicateTensorToMesh", return_value="mapper"):
+            with mock.patch.object(ttnn, "from_torch", return_value=promoted) as from_torch:
+                ace_step_promote_attention_wqkv_to_dram_interleaved(tt_model)
+
+    assert to_torch.call_count == 2
+    assert from_torch.call_count == 2
+    assert from_torch.call_args.kwargs["memory_config"] is dram
+    assert attn.wqkv is wqkv_sharded
+    assert attn.wqkv_prefill_interleaved is promoted
+    assert attn._ace_step_prefill_sweep_patched is True
+
+    attn.wqkv_prefill_interleaved = wqkv_interleaved
+    with mock.patch.object(ttnn, "to_torch") as to_torch:
+        ace_step_promote_attention_wqkv_to_dram_interleaved(tt_model)
+    to_torch.assert_not_called()
 
 
 def test_narrow_column_band_and_split_hits():
