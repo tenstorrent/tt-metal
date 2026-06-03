@@ -159,10 +159,7 @@ if(TT_BFP_HOST_TILIZER_OPENMP)
     find_package(OpenMP REQUIRED COMPONENTS CXX)
     target_link_libraries(impl PRIVATE OpenMP::OpenMP_CXX)
     target_compile_definitions(impl PRIVATE TT_BFP_HOST_TILIZER_OPENMP=1)
-    message(
-        STATUS
-        "Host BFP tilizer: OpenMP dispatch path enabled (runtime toggle: TT_BFP_HOST_TILIZER_USE_OPENMP=1)"
-    )
+    message(STATUS "Host BFP tilizer: OpenMP dispatch path enabled (runtime toggle: TT_BFP_HOST_TILIZER_USE_OPENMP=1)")
 endif()
 
 if(TT_UMD_BUILD_SIMULATION)
