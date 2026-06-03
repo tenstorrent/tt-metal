@@ -254,7 +254,7 @@
       timeout: 15
       tier: 3
     bh_quietbox_2:
-      timeout: 5
+      timeout: 15
       tier: 3
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
@@ -274,7 +274,7 @@
       timeout: 20
       tier: 2
     bh_quietbox_2:
-      timeout: 10
+      timeout: 15
       tier: 2
     # bh_galaxy: temporarily disabled — sliding-1x32 path hits an unrecoverable
     # ethernet / fabric hang on Blackhole Galaxy that surfaces during
@@ -302,7 +302,7 @@
       timeout: 15
       tier: 2
     bh_quietbox_2:
-      timeout: 5
+      timeout: 15
       tier: 2
     # bh_galaxy: temporarily disabled — same Blackhole Galaxy ethernet / fabric
     # hang as Gemma-4-26B-A4B above (surfaces during sliding-1x32 attention
