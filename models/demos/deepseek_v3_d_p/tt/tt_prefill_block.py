@@ -327,7 +327,7 @@ class TtPrefillBlock(LightweightModule):
             # block does not. If MoE determinism passes with this False, the non-determinism is in the
             # sub-device-overlap machinery; if it still fails, sub-devices are exonerated. Python-only,
             # no rebuild needed. See [[ring-sdpa-dispatch-nondeterminism]].
-            overlap_shared_expert_with_dispatch=False,
+            overlap_shared_expert_with_dispatch=True,
         )
 
     def forward(
