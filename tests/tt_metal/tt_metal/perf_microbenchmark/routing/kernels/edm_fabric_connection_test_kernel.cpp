@@ -55,11 +55,8 @@ void kernel_main() {
 
     const size_t source_l1_cb_index = get_arg_val<uint32_t>(arg_idx++);
     size_t packet_size_index = get_arg_val<uint32_t>(arg_idx++);
-    ;
     size_t num_messages_index = get_arg_val<uint32_t>(arg_idx++);
-    ;
     size_t stall_duration_index = get_arg_val<uint32_t>(arg_idx++);
-    ;
 
     auto fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);

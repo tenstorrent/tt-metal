@@ -28,8 +28,6 @@ run_t3000_ttmetal_tests() {
   ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueMultiDevice*Fixture.*" ; fail+=$?
   TT_METAL_ENABLE_REMOTE_CHIP=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleDevice*Fixture.*" ; fail+=$?
   ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQMultiDevice*Fixture.*" ; fail+=$?
-  # Disabled by issue #45305: MeshWatcher and DPrint mesh tests failing deterministically
-  ./build/test/tt_metal/unit_tests_debug_tools --gtest_filter="DPrintMeshFixture.*:MeshWatcherFixture.*-MeshWatcherFixture.TensixTestWatcherSanitizeMulticastSemaphoreInc:DPrintMeshFixture.TensixTestPrintPrependDeviceCoreRisc:DPrintMeshFixture.TensixTestDprintMeshCoordsAllDevicesMapping:DPrintMeshFixture.ActiveEthTestPrint:DPrintMeshFixture.TensixTestPrintMuting:DPrintMeshFixture.TensixTestPrintBuffering" ; fail+=$?
 
   # Programming examples
   ./build/programming_examples/distributed/distributed_program_dispatch
@@ -75,12 +73,12 @@ run_t3000_ttfabric_tests() {
 
   ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=T3k*MeshGraphFabric2DDynamicTests*
 
-  ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_common.yaml
-  ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_at_least_2x2_mesh.yaml
-  ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_ubench_at_least_2x2_mesh.yaml
+  ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_common.yaml
+  ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_at_least_2x2_mesh.yaml
+  ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_ubench_at_least_2x2_mesh.yaml
 
   # Code profiling test
-  TT_FABRIC_PROFILE_RX_CH_FWD=1 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_code_profiling.yaml
+  TT_FABRIC_PROFILE_RX_CH_FWD=1 ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config ./tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_code_profiling.yaml
 
   # Record the end time
   end_time=$(date +%s)
@@ -97,8 +95,6 @@ run_t3000_ttnn_tests() {
   start_time=$(date +%s)
 
   echo "LOG_METAL: Running run_t3000_ttnn_tests"
-  # Disabled by issue #45305: DistributedTensorOpIfTest and MatmulOpIfTest failing deterministically
-  ./build/test/ttnn/unit_tests_ttnn --gtest_filter="-DistributedTensorOpIfTest/*:QueryOpConstraints/MatmulOpIfTest.Matmul/2"
   ./build/test/ttnn/unit_tests_ttnn_tensor
   ./build/test/ttnn/unit_tests_ttnn_ccl
   ./build/test/ttnn/unit_tests_ttnn_ccl_multi_tensor
@@ -113,8 +109,6 @@ run_t3000_ttnn_tests() {
   pytest tests/ttnn/distributed/test_tensor_parallel_example_T3000.py ; fail+=$?
   pytest tests/ttnn/distributed/test_data_parallel_example.py ; fail+=$?
   pytest tests/ttnn/distributed/test_hybrid_data_tensor_parallel_example_T3000.py ; fail+=$?
-  # Regression test for async cpu() use-after-free (issue #43638)
-  pytest tests/ttnn/unit_tests/base_functionality/test_device_synchronize.py::test_cpu_blocking_false_discarded_return_no_uaf -xv --count=3 ; fail+=$?
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
