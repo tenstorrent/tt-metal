@@ -185,7 +185,7 @@ models:
   unit:
     wh_llmbox: 175
     wh_llmbox_perf: 230
-    wh_n150: 180
+    wh_n150: 240
     wh_n300: 15
     wh_galaxy: 45
     wh_galaxy_perf: 45
