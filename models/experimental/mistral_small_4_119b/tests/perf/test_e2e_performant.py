@@ -187,7 +187,7 @@ def _run_mistral_perf(
 
     # ── Prefill: cold compile, then program-cache-hot replays ────────────────────
     t = time.time()
-    next_id = model.prefill_multimodal(img_embeds_host, input_ids)
+    model.prefill_multimodal(img_embeds_host, input_ids)
     prefill_compile_time = time.time() - t
 
     # TTFT: time for one warm prefill replay (steady-state user-visible text-prefill cost).

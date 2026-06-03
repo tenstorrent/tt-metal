@@ -109,9 +109,9 @@ def _norm_sharded_configs(m_tiles: int):
     return cfg
 
 
-# Decode (M=1 tile) configs kept as module-level constants for the existing
-# decode call sites — same content as _norm_sharded_configs(1).
-_NORM_DECODE_INPUT_MEMCFG, _NORM_DECODE_PROGRAM_CFG = _norm_sharded_configs(1)
+# Decode (M=1 tile) config kept as a module-level constant for existing
+# decode call sites; same content as _norm_sharded_configs(1)[0].
+_NORM_DECODE_PROGRAM_CFG = _norm_sharded_configs(1)[1]
 
 
 def _rms_norm_sharded(
