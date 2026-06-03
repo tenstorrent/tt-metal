@@ -39,6 +39,11 @@ on:
         type: string
         default: "Release"
         description: "Build type configuration (Release, Debug, RelWithDebInfo, ASan, TSan)"
+      runs-on:
+        required: false
+        type: string
+        default: "tt-ubuntu-2204-large-stable"
+        description: "Runner label for build-artifact jobs"
       enable-lto:
         required: false
         type: boolean
@@ -75,6 +80,11 @@ on:
           - ASan
           - TSan
         description: "Build type configuration"
+      runs-on:
+        required: false
+        type: string
+        default: "tt-ubuntu-2204-large-stable"
+        description: "Runner label for build-artifact jobs"
       enable-lto:
         required: false
         type: boolean
@@ -108,6 +118,7 @@ jobs:
       publish-package: false
       skip-tt-train: false
       tracy: true
+      runs-on: ${{ inputs['runs-on'] }}
       ref: ${{ inputs.ref }}
       fetch-depth: ${{ inputs.fetch-depth }}
 
@@ -149,6 +160,7 @@ jobs:
       publish-package: false
       skip-tt-train: false
       tracy: true
+      runs-on: ${{ inputs['runs-on'] }}
       ref: ${{ inputs.ref }}
       fetch-depth: ${{ inputs.fetch-depth }}
       # Pass pre-built docker image tags based on platform
