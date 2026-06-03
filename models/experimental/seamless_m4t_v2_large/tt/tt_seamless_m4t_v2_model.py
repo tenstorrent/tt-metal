@@ -16,6 +16,7 @@ Out of scope: attentions/hidden-state outputs, label loss. Text-decoder KV cache
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Tuple, Union
 
@@ -47,7 +48,7 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
 from models.experimental.seamless_m4t_v2_large.tt.tt_text_to_unit import (
     TTSeamlessM4Tv2TextToUnitForConditionalGeneration,
 )
-from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import get_tp
+from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import get_tp, mesh_cluster_axis
 
 # Bucket the speech-encoder mel-sequence length to this multiple so run-to-run length jitter reuses
 # the shape-specialized (JIT-compiled) kernels instead of recompiling cold (~7-20 s). 256 keeps the
@@ -463,6 +464,13 @@ class TTSeamlessM4Tv2Model:
         # back to a global token id.
         self._lm_local_vocab = int(getattr(parameters.lm_head, "local_vocab_size", 0) or 0)
         self._lm_num_devices = max(1, self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1)
+        self._lm_cluster_axis = mesh_cluster_axis(self.device)
+        # Phase-1b host-out-of-loop decode: the trace itself runs the cross-shard greedy argmax combine
+        # and writes the next token into ``token_tt`` (self-feed), so the greedy loop replays the decode
+        # trace back-to-back with no per-step token readback→combine→upload roundtrip. Greedy + rep<=1.0
+        # only (rep>1.0 needs an on-device penalty — Phase 2); falls back to the host path otherwise.
+        self._ondevice_decode_feedback = os.environ.get("SEAMLESS_ONDEVICE_DECODE_FEEDBACK", "1") != "0"
+        self._argmax_off_sharded: Optional[ttnn.Tensor] = None  # cached [nd,1,nch] global-offset table
         self._kv_decode_rt: Optional[TextDecoderKvDecodeRuntime] = None
         self._decode_h2d_cache: dict = {}  # per-batch reusable host staging buffers for per-step uploads
         self._decode_trace_kernels_warmed = False
@@ -620,6 +628,67 @@ class TTSeamlessM4Tv2Model:
         cu = ttnn.untilize(cr, use_multicore=True)
         local_idx = ttnn.argmax(cu, dim=-1, keepdim=False, use_multicore=True)
         return local_idx, chunk_max
+
+    def _argmax_chunk_width(self, v_loc: int) -> int:
+        nch = self._ARGMAX_CHUNKS
+        return (((v_loc + nch - 1) // nch) + 31) // 32 * 32
+
+    def _argmax_off_table(self, v_loc: int) -> ttnn.Tensor:
+        """Cached ``[nd,1,nch]`` int32 table sharded along dim0: device ``d`` holds
+        ``off[c] = d*v_loc + c*chunk_w`` — the global-token base for each (device, chunk). Pre-adding it
+        to the per-device argmax index makes the gathered per-chunk values *global* token candidates, so
+        the cross-shard combine is a single ``argmax`` (winning chunk) + ``gather`` (its global token)."""
+        if self._argmax_off_sharded is not None:
+            return self._argmax_off_sharded
+        nch = self._ARGMAX_CHUNKS
+        nd = self._lm_num_devices
+        cw = self._argmax_chunk_width(v_loc)
+        d = torch.arange(nd, dtype=torch.int32).reshape(nd, 1)
+        c = torch.arange(nch, dtype=torch.int32).reshape(1, nch)
+        off = (d * v_loc + c * cw).reshape(nd, 1, nch)
+        self._argmax_off_sharded = ttnn.from_torch(
+            off,
+            dtype=ttnn.int32,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
+        )
+        return self._argmax_off_sharded
+
+    def _ondevice_global_argmax_token(self, logits: ttnn.Tensor) -> ttnn.Tensor:
+        """On-device greedy argmax over the width-sharded ``[1,1,V/tp]`` logits → ``[1,1]`` uint32 global
+        token id (replicated). Bit-exact mirror of the host combine in ``_greedy_next_token_id`` (validated
+        25/25 vs ``torch.argmax`` and token-exact end-to-end). Feeds the self-fed decode trace."""
+        nch = self._ARGMAX_CHUNKS
+        nd = self._lm_num_devices
+        off = self._argmax_off_table(int(logits.shape[-1]))
+        local_idx, chunk_max = self._decode_argmax_token(logits)  # [1,1,nch] uint32 RM, bf16 TILE
+        li = ttnn.to_layout(ttnn.typecast(local_idx, ttnn.int32), ttnn.TILE_LAYOUT)
+        ttnn.deallocate(local_idx)
+        cand = ttnn.add(li, off)  # [1,1,nch] int32 — global token candidate per (device, chunk)
+        ttnn.deallocate(li)
+        if nd > 1:
+            cm_g = ttnn.all_gather(chunk_max, dim=-1, cluster_axis=self._lm_cluster_axis, num_links=1)
+            cand_g = ttnn.all_gather(cand, dim=-1, cluster_axis=self._lm_cluster_axis, num_links=1)
+            ttnn.deallocate(chunk_max)
+            ttnn.deallocate(cand)
+        else:
+            cm_g, cand_g = chunk_max, cand
+        cm_u = ttnn.untilize(cm_g, use_multicore=True)
+        ttnn.deallocate(cm_g)
+        flat = ttnn.argmax(cm_u, dim=-1, keepdim=True, use_multicore=True)  # [1,1,1] uint32 RM
+        ttnn.deallocate(cm_u)
+        flat_t = ttnn.to_layout(flat, ttnn.TILE_LAYOUT)  # gather needs TILE (fill_pad)
+        ttnn.deallocate(flat)
+        token = ttnn.gather(cand_g, dim=-1, index=flat_t)  # [1,1,1] int32 TILE
+        ttnn.deallocate(cand_g)
+        ttnn.deallocate(flat_t)
+        token_u = ttnn.typecast(ttnn.reshape(token, [1, 1]), ttnn.uint32)  # [1,1] uint32 TILE
+        ttnn.deallocate(token)
+        token_rm = ttnn.to_layout(token_u, ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(token_u)
+        return token_rm
 
     def _encode_text(
         self,
@@ -962,6 +1031,20 @@ class TTSeamlessM4Tv2Model:
         """Upload decode token + position on CQ1 (for 2CQ pipelined decode)."""
         self._upload_kv_decode_step_inputs(token_id, position, batch_size, cq_id=1)
 
+    def _upload_pos_only(self, position: int, batch_size: int, *, cq_id: int = 0) -> None:
+        """Upload only ``pos_tt`` (self-feed decode: the token is written on-device by the trace, but the
+        position counter is token-independent and stays host-driven). ``cur_pos_tt`` via ``_reset_kv_decode_cur_pos``.
+        """
+        rt = self._ensure_kv_decode_runtime(batch_size)
+        st = self._decode_h2d_staging(batch_size)
+        pos_val = 1 + position + self.pad_token_id
+        st["pos_cpu"].fill_(pos_val)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(st["pos_cpu"], dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
+            rt.pos_tt,
+            cq_id=cq_id,
+        )
+
     def _cached_t2u_attention_mask(self, real_len: int, padded_dec_seq: int) -> ttnn.Tensor:
         key = (int(real_len), int(padded_dec_seq))
         cached = self._t2u_attn_mask_cache.get(key)
@@ -1084,6 +1167,12 @@ class TTSeamlessM4Tv2Model:
         ttnn.synchronize_device(self.device)
         for _t in compile_tok:
             ttnn.deallocate(_t)
+        if self._ondevice_decode_feedback:
+            # Phase-1b: pre-compile the on-device combine + token self-write so they don't JIT in capture.
+            compile_self = self._ondevice_global_argmax_token(compile_logits)
+            ttnn.copy(compile_self, rt.token_tt)
+            ttnn.deallocate(compile_self)
+            ttnn.synchronize_device(self.device)
         ttnn.deallocate(compile_logits)
 
         self._upload_kv_decode_step_inputs(token_id, position, batch_size)
@@ -1104,7 +1193,16 @@ class TTSeamlessM4Tv2Model:
                 cross_attn_cache,
                 cache_seq_len=config_cache_len,
             )
-            capture_tok = self._decode_argmax_token(capture_logits)
+            if self._ondevice_decode_feedback:
+                # Self-feed: combine to the global token and write it into the buffer the decoder reads
+                # at the top of the next replay. The read (embedding) precedes this write within the
+                # trace, so back-to-back replays consume their predecessor's token with no host roundtrip.
+                self_tok = self._ondevice_global_argmax_token(capture_logits)
+                ttnn.copy(self_tok, rt.token_tt)
+                ttnn.deallocate(self_tok)
+                capture_tok = self._decode_argmax_token(capture_logits)
+            else:
+                capture_tok = self._decode_argmax_token(capture_logits)
 
         trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
         traced_step_capture()
@@ -1172,6 +1270,106 @@ class TTSeamlessM4Tv2Model:
         self._upload_kv_decode_step_inputs(token_id, position, batch_size)
         self._reset_kv_decode_cur_pos(position, batch_size)
         return self.execute_text_decoder_decode_trace(cache_seq_len=cache_seq_len)
+
+    def _decode_step_selffed(
+        self,
+        token_id: int,
+        position: int,
+        encoder_hidden: ttnn.Tensor,
+        cross_4d: ttnn.Tensor,
+        kv_cache: list,
+        cross_attn_cache: list,
+        *,
+        batch_size: int = 1,
+    ) -> None:
+        """Phase-1b self-feed decode step. On capture, uploads the seed token; thereafter the token lives
+        in ``rt.token_tt`` (written on-device by the previous trace replay), so only the token-independent
+        position counter is uploaded. The next token id is read afterwards from ``rt.token_tt``."""
+        cache_seq_len = self._fixed_decode_trace_sdpa_len()
+        rt = self._ensure_kv_decode_runtime(batch_size)
+        if cache_seq_len not in rt.trace_ids_by_cache_seq_len:
+            ttnn.synchronize_device(self.device)
+            self.capture_text_decoder_decode_trace(
+                token_id,
+                position,
+                encoder_hidden,
+                cross_4d,
+                kv_cache,
+                cross_attn_cache,
+                batch_size=batch_size,
+                cache_seq_len=cache_seq_len,
+            )
+            return
+        self._upload_pos_only(position, batch_size)
+        self._reset_kv_decode_cur_pos(position, batch_size)
+        self.execute_text_decoder_decode_trace(cache_seq_len=cache_seq_len)
+
+    def _decode_loop_selffed(
+        self,
+        enc_tt: ttnn.Tensor,
+        cross_4d: ttnn.Tensor,
+        kv_cache: list,
+        cross_attn_cache: list,
+        seq_host: list,
+        cur_pos: int,
+        max_steps: int,
+        eos_ids: set,
+        batch_size: int,
+    ) -> list:
+        """Phase-1b 2CQ self-feed decode. Step 0 captures the trace and seeds ``token_tt`` from the host
+        combine; thereafter the trace runs back-to-back on CQ0 (token self-fed on-device, position
+        host-uploaded) while the next-token readback is issued on CQ1 (gated by the execute event) and
+        collected one step late, so the ~0.5 ms/step device→host transfer hides behind the next trace.
+        The trailing extra step (lag) is discarded at EOS."""
+        rt = self._ensure_kv_decode_runtime(batch_size)
+        dev = self.device
+
+        # --- Step 0: capture (compile + record trace), take this token from the host combine, prime token_tt.
+        cur_tok = int(seq_host[cur_pos])
+        self._decode_step_selffed(cur_tok, cur_pos, enc_tt, cross_4d, kv_cache, cross_attn_cache, batch_size=batch_size)
+        next_id = self._greedy_next_token_id(rt.logits_tt, 1, tok_tt=rt.tok_tt)
+        self._upload_single_token_to_decode_rt(next_id, batch_size)
+        seq_host.append(next_id)
+        cur_pos += 1
+        if eos_ids and next_id in eos_ids:
+            return seq_host
+
+        # --- Pipelined replay: execute back-to-back; read the self-fed token on CQ1 one step late.
+        # Host buffers must mirror ``token_tt``'s replicated mesh layout — allocate from the device tensor.
+        host_bufs = [ttnn.from_device(rt.token_tt) for _ in range(2)]
+        bi = 0
+        pending: Optional[Tuple[Any, Any]] = None  # (host_buf, read_event) from the previous step
+        stop = False
+
+        def _read(pbuf) -> int:
+            return int(to_torch_replicated_first_shard(pbuf).reshape(-1)[0].item())
+
+        for _ in range(max_steps - 1):
+            self._upload_pos_only(cur_pos, batch_size, cq_id=0)
+            self._reset_kv_decode_cur_pos(cur_pos, batch_size, cq_id=0)
+            ttnn.execute_trace(dev, rt.trace_id, cq_id=0, blocking=False)
+            exec_event = ttnn.record_event(dev, 0)
+            # CQ1 reads this step's self-fed token AFTER the execute wrote it; overlaps the next trace.
+            ttnn.wait_for_event(1, exec_event)
+            ttnn.copy_device_to_host_tensor(rt.token_tt, host_bufs[bi], blocking=False, cq_id=1)
+            read_event = ttnn.record_event(dev, 1)
+            if pending is not None:
+                pbuf, pev = pending
+                ttnn.event_synchronize(pev)
+                nid = _read(pbuf)
+                seq_host.append(nid)
+                if eos_ids and nid in eos_ids:
+                    stop = True
+            pending = (host_bufs[bi], read_event)
+            bi ^= 1
+            cur_pos += 1
+            if stop:
+                break
+        if pending is not None and not stop:
+            pbuf, pev = pending
+            ttnn.event_synchronize(pev)
+            seq_host.append(_read(pbuf))
+        return seq_host
 
     def _prefill_text_decoder_kv_cache(
         self,
@@ -1952,6 +2150,28 @@ class TTSeamlessM4Tv2Model:
             # Persistent prev-token set for the rep-penalty membership test (updated on append) so the
             # traced decode path doesn't rebuild ``set(seq_host)`` (O(n)) every step.
             seq_host_set = set(seq_host)
+
+            # Phase-1b: host-out-of-loop self-feed. The trace runs the cross-shard argmax combine and
+            # writes the next token into ``token_tt`` on-device, so replays chain back-to-back with no
+            # per-step token readback→combine→upload. Greedy + rep<=1.0 + TP only (rep>1.0 needs the
+            # on-device penalty of Phase 2; sampling/beam keep the host path).
+            selffeed = (
+                self._ondevice_decode_feedback and decode_trace_ready and self._tp > 1 and repetition_penalty <= 1.0
+            )
+
+            if selffeed:
+                seq_host = self._decode_loop_selffed(
+                    enc_tt,
+                    decode_cross_4d,
+                    kv_cache,
+                    cross_attn_cache,
+                    seq_host,
+                    cur_pos,
+                    decode_steps_remaining,
+                    eos_ids,
+                    batch_size,
+                )
+                decode_steps_remaining = 0  # consumed by the self-feed loop
 
             for _decode_step in range(decode_steps_remaining):
                 if _decode_step_profile:
