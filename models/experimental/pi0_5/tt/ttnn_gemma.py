@@ -407,9 +407,10 @@ class GemmaAttentionTTNN:
             past_k, past_v = past_key_value
             prefix_len = past_k.shape[2]
             suffix_len = k.shape[2]
-            if self._kv_concat_k is None:
-                # First call: pre-allocate with logical shape (prefix_len + suffix_len)
-                full_seq = prefix_len + suffix_len
+            full_seq = prefix_len + suffix_len
+            # (Re)allocate the concat KV buffer when missing or when the prefix length
+            # changes (e.g. a different language-token count between runs).
+            if self._kv_concat_k is None or self._kv_concat_k.shape[2] != full_seq:
                 cache_dtype = past_k.dtype
                 self._kv_concat_k = ttnn.zeros(
                     [1, self.num_kv_heads, full_seq, self.head_dim],
@@ -425,8 +426,13 @@ class GemmaAttentionTTNN:
                     device=self.device,
                     memory_config=ttnn.L1_MEMORY_CONFIG,
                 )
-                ttnn.fill_cache(self._kv_concat_k, past_k, 0, update_idx=0)
-                ttnn.fill_cache(self._kv_concat_v, past_v, 0, update_idx=0)
+            # Refill the prefix KV on EVERY call. The prefix (VLM) KV changes each replan
+            # because the observation changes, so this MUST NOT be cached across
+            # sample_actions() calls — doing so makes a multi-replan rollout attend to the
+            # FIRST frame's prefix forever. This is silently wrong and invisible to the
+            # single-call PCC / determinism / per-step tests, but breaks closed-loop control.
+            ttnn.fill_cache(self._kv_concat_k, past_k, 0, update_idx=0)
+            ttnn.fill_cache(self._kv_concat_v, past_v, 0, update_idx=0)
             # Ensure dtype match for cache write
             if k.dtype != self._kv_concat_k.dtype:
                 k = ttnn.typecast(k, self._kv_concat_k.dtype)
