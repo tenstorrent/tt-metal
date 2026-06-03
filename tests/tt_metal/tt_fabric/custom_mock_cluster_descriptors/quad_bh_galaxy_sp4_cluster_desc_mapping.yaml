@@ -1,0 +1,9 @@
+# Quad BH galaxy mock cluster: four physically-adjacent SP4 galaxy hosts forming a 2x2 block.
+# d03u02, d03u08, d04u02, d04u08 are mutually cabled in a 4-cycle with 4 inter-galaxy QSFP
+# links per edge (d03u02-d03u08, d03u08-d04u08, d04u08-d04u02, d04u02-d03u02), giving a
+# 128-chip quad-galaxy physical system for quad_bh_galaxy_* MGDs (LINE chains or RING).
+rank_to_cluster_mock_cluster_desc:
+  0: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc/sp4_glx_cluster_desc_bh-glx-d03u02_rank_0.yaml"
+  1: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc/sp4_glx_cluster_desc_bh-glx-d03u08_rank_1.yaml"
+  2: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc/sp4_glx_cluster_desc_bh-glx-d04u02_rank_2.yaml"
+  3: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc/sp4_glx_cluster_desc_bh-glx-d04u08_rank_3.yaml"

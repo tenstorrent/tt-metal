@@ -1,0 +1,6 @@
+# Dual BH galaxy mock cluster: two physically-adjacent SP4 galaxy hosts.
+# d03u02 (rank 0) and d03u08 (rank 1) are directly cabled (4 inter-galaxy QSFP links),
+# forming a 64-chip dual-galaxy physical system for dual_bh_galaxy_* MGDs.
+rank_to_cluster_mock_cluster_desc:
+  0: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc/sp4_glx_cluster_desc_bh-glx-d03u02_rank_0.yaml"
+  1: "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/sp4_glx_cluster_desc/sp4_glx_cluster_desc_bh-glx-d03u08_rank_1.yaml"
