@@ -1233,7 +1233,7 @@ class MatmulGolden(FidelityMasking):
     ):
         # Route MX outputs through the KT-chunked path that honors math_format
         # and dest_acc. The default path does a single fp32-internal torch.matmul
-        # which can disagree with HW's per-KT-tile rounding once results land
+        # which can disagree with HW's apparent per-KT-tile rounding once results land
         # near MxInt2/MxInt4 quantization bin boundaries.
         if data_format.is_mx_format():
             return self._matmul_mx(
