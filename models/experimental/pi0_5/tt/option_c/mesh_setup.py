@@ -10,8 +10,8 @@ carves the 8x4 parent into 3 different-shape submeshes by calling
 Physical placement (see stages.py):
 
     col→  0 1 2 3
- row↓  0  V V _ _    V = vision  shape (2,2) offset (0,0)  4 chips
-       1  V V _ _    _ = spare   shape (2,2) offset (0,2)  4 chips (not opened)
+ row↓  0  V V V V    V = vision  shape (2,4) offset (0,0)  8 chips
+       1  V V V V    (no spare submesh — vision owns all of rows 0–1)
        2  P P P D    P = prefill shape (6,3) offset (2,0) 18 chips
        3  P P P D    D = denoise shape (6,1) offset (2,3)  6 chips
        4  P P P D
@@ -50,13 +50,13 @@ def open_galaxy_mesh(
             With Option C's L1-resident weights, the matmul kernels still
             need a small static CB region; 1 MB is plenty since we don't
             run all_reduce. Pass None to use the device default.
-        open_spare: if True, also open the 2x2 spare submesh and yield it
-            as the 4th element. Default False — spares stay closed so they
-            don't consume L1.
+        open_spare: legacy flag — the spare 2x2 submesh has been folded
+            into the vision (2,4) submesh, so this flag is now a no-op
+            (kept for API compatibility; setting it True will not allocate
+            anything and will not append a 4th submesh to the list).
 
     Yields:
         (parent_mesh, [vision_submesh, prefill_submesh, denoise_submesh])
-        or, if open_spare, (parent_mesh, [vision, prefill, denoise, spare]).
 
     On exit, every submesh and the parent mesh are closed.
     """
@@ -86,14 +86,11 @@ def open_galaxy_mesh(
                 )
             submeshes.append(sm)
 
-        if open_spare:
-            from .stages import SPARE_SUBMESH_SHAPE, SPARE_SUBMESH_OFFSET
-
-            spare = parent.create_submesh(
-                ttnn.MeshShape(*SPARE_SUBMESH_SHAPE),
-                ttnn.MeshCoordinate(*SPARE_SUBMESH_OFFSET),
-            )
-            submeshes.append(spare)
+        # `open_spare` is now a no-op — the previous (2,2) spare submesh
+        # at offset (0,2) was folded into the (2,4) vision submesh. The
+        # parameter is retained for backward compat but never carves a
+        # 4th submesh.
+        _ = open_spare
 
         yield parent, submeshes
     finally:

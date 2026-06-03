@@ -6,8 +6,8 @@
 Physical placement on the 8x4 Galaxy:
 
        col→  0 1 2 3
-    row↓  0  V V _ _      V = vision  4 chips,  shape (2,2) offset (0,0)
-          1  V V _ _      _ = spare   4 chips,  shape (2,2) offset (0,2)
+    row↓  0  V V V V      V = vision  8 chips,  shape (2,4) offset (0,0)
+          1  V V V V      (spare submesh removed — vision now owns rows 0–1)
           2  P P P D      P = prefill 18 chips, shape (6,3) offset (2,0)
           3  P P P D      D = denoise 6 chips,  shape (6,1) offset (2,3)
           4  P P P D
@@ -16,10 +16,11 @@ Physical placement on the 8x4 Galaxy:
           7  P P P D
 
 Layer assignment:
-  - Vision (4 chips): 3 chips hold SigLIP transformer layers (9 layers each,
-    27 total), 1 chip holds patch_conv + pos_embed + final LN + mm_projector
-    (the "embed" chip, ~16 MB) + the VLM embed_tokens table (~527 MB) — UNLESS
-    we host-resolve text embeddings (recommended; see deployment plan §3.1).
+  - Vision (8 chips): SigLIP-27 split across 8 chips with the mm_projector
+    co-located on the last chip that owns SigLIP layers. The wider vision
+    submesh lets us migrate ALL vision weights (LN, patch_embed, pos_embed,
+    post_ln, attn, MLP, projector) to L1 with per-chip headroom for the
+    matmul kernel static CB regions.
   - Prefill (18 chips): 1 VLM transformer layer per chip; final RMS norm on
     chip 17.
   - Denoise (6 chips): 3 expert layers per chip (18 layers / 6 chips); the
@@ -48,24 +49,28 @@ from typing import List, Tuple
 GALAXY_PARENT_SHAPE: Tuple[int, int] = (8, 4)
 
 # (shape, offset) for each submesh.
-VISION_SUBMESH_SHAPE: Tuple[int, int] = (2, 2)
+VISION_SUBMESH_SHAPE: Tuple[int, int] = (2, 4)
 VISION_SUBMESH_OFFSET: Tuple[int, int] = (0, 0)
-SPARE_SUBMESH_SHAPE: Tuple[int, int] = (2, 2)
-SPARE_SUBMESH_OFFSET: Tuple[int, int] = (0, 2)
+# Spare submesh is no longer carved (vision now owns rows 0–1 in full).
+# Constants retained as degenerate (0,0) for backward-compat with any
+# external caller that still imports them; `open_spare=True` is now a no-op.
+SPARE_SUBMESH_SHAPE: Tuple[int, int] = (0, 0)
+SPARE_SUBMESH_OFFSET: Tuple[int, int] = (0, 0)
 PREFILL_SUBMESH_SHAPE: Tuple[int, int] = (6, 3)
 PREFILL_SUBMESH_OFFSET: Tuple[int, int] = (2, 0)
 DENOISE_SUBMESH_SHAPE: Tuple[int, int] = (6, 1)
 DENOISE_SUBMESH_OFFSET: Tuple[int, int] = (2, 3)
 
-NUM_VISION_CHIPS = VISION_SUBMESH_SHAPE[0] * VISION_SUBMESH_SHAPE[1]  # 4
+NUM_VISION_CHIPS = VISION_SUBMESH_SHAPE[0] * VISION_SUBMESH_SHAPE[1]  # 8
 NUM_PREFILL_CHIPS = PREFILL_SUBMESH_SHAPE[0] * PREFILL_SUBMESH_SHAPE[1]  # 18
 NUM_DENOISE_CHIPS = DENOISE_SUBMESH_SHAPE[0] * DENOISE_SUBMESH_SHAPE[1]  # 6
-NUM_SPARE_CHIPS = SPARE_SUBMESH_SHAPE[0] * SPARE_SUBMESH_SHAPE[1]  # 4
+NUM_SPARE_CHIPS = 0  # no spare submesh — 0×0 = 0
 
 # Per-stage layer distribution (default mapping; overridable via StageSpec).
-SIGLIP_LAYERS_PER_VISION_CHIP = 9  # 3 chips × 9 = 27 SigLIP layers
-NUM_VISION_TRANSFORMER_CHIPS = 3  # SigLIP chips
-NUM_VISION_EMBED_CHIPS = 1  # mm_projector + (optional) embed_tokens chip
+# Vision is 27 SigLIP layers spread across 8 chips; the per-chip layer count
+# is chosen in Pi0_5OptionCVisionSliceSplit (see its default `layers_per_chip`).
+NUM_VISION_TRANSFORMER_CHIPS = 8  # SigLIP runs across all vision chips
+NUM_VISION_EMBED_CHIPS = 1  # mm_projector co-locates with the last SigLIP chunk
 VLM_LAYERS_PER_PREFILL_CHIP = 1  # 1 layer per chip × 18 chips = 18 VLM layers
 EXPERT_LAYERS_PER_DENOISE_CHIP = 3  # 3 layers × 6 chips = 18 expert layers
 
@@ -112,13 +117,12 @@ class StageLayout:
     """Full 3-stage heterogeneous layout for Option C on a 32-chip Galaxy.
 
     Stages (in execution order):
-        0 — vision  (4 chips)   StageSpec(stage_idx=0)
+        0 — vision  (8 chips)   StageSpec(stage_idx=0)
         1 — prefill (18 chips)  StageSpec(stage_idx=1)
         2 — denoise (6 chips)   StageSpec(stage_idx=2)
 
-    Spares (4 chips) are not represented as a stage — they're available for a
-    future feature (denoise replica, speculative branch, batched serving) but
-    not opened by default.
+    No spare submesh — the previous (2,2) spare at offset (0,2) is now
+    part of the (2,4) vision submesh, giving 8 vision chips total.
     """
 
     stages: List[StageSpec] = field(default_factory=list)
@@ -177,7 +181,9 @@ def build_default_layout(vlm_depth: int = 18, expert_depth: int = 18) -> StageLa
             submesh_shape=VISION_SUBMESH_SHAPE,
             submesh_offset=VISION_SUBMESH_OFFSET,
             siglip_layer_range=(0, 27),
-            siglip_layers_per_chip=SIGLIP_LAYERS_PER_VISION_CHIP,
+            # 0 = non-uniform split; the actual per-chip mapping
+            # (4+4+4+4+3+3+3+2) lives on Pi0_5OptionCVisionSliceSplit.
+            siglip_layers_per_chip=0,
             holds_embed_tokens=True,
             holds_mm_projector=True,
         ),

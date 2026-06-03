@@ -191,8 +191,8 @@ def test_default_layout_shape_c():
 
     vision, prefill, denoise = layout.stages
     assert vision.name == "vision"
-    assert vision.submesh_shape == (2, 2)
-    assert vision.num_chips == 4
+    assert vision.submesh_shape == (2, 4)
+    assert vision.num_chips == 8
     assert vision.siglip_layer_range == (0, 27)
     assert vision.holds_mm_projector is True
     assert vision.holds_embed_tokens is True
@@ -226,7 +226,7 @@ def test_open_32_chip_mesh_partition_c(galaxy_mesh):
     assert parent.get_num_devices() == 32, f"Expected 32 chips, got {parent.get_num_devices()}"
     assert len(submeshes) == 3, f"Expected 3 submeshes, got {len(submeshes)}"
 
-    expected = [(2, 2, 4), (6, 3, 18), (6, 1, 6)]
+    expected = [(2, 4, 8), (6, 3, 18), (6, 1, 6)]
     for i, (sm, (er, ec, en)) in enumerate(zip(submeshes, expected)):
         assert sm.get_num_devices() == en, (
             f"Submesh {i} has {sm.get_num_devices()} devices, expected {en} " f"({describe_submesh(sm)})"
@@ -647,11 +647,11 @@ def test_prefill_tp_2x1_submesh_carving(galaxy_mesh):
 def test_vision_slice_device_siglip_split_dry_run(galaxy_mesh):
     """Pi0_5OptionCVisionSliceSplit constructs on real weights (no forward).
 
-    The on-device 3-chip SigLIP split is the third deferred item from the
-    README. This test confirms the carving + per-chip weight upload path
-    succeeds on the canonical 4-chip vision submesh. The forward path is
-    exercised separately by the benchmark file once it's wired into
-    Pi0_5PipelineC.
+    The on-device SigLIP split now spans the full 8-chip (2,4) vision
+    submesh (post full-L1 redesign). This test confirms the carving +
+    per-chip weight upload path succeeds for the wider layout. The
+    forward path is exercised separately by the benchmark file once
+    it's wired into Pi0_5PipelineC.
     """
     from pathlib import Path
 
@@ -663,42 +663,48 @@ def test_vision_slice_device_siglip_split_dry_run(galaxy_mesh):
 
     _layout, _parent, submeshes = galaxy_mesh
     vision_mesh = submeshes[0]
+    assert (
+        vision_mesh.get_num_devices() == 8
+    ), f"vision submesh should be 8 chips ((2,4)), got {vision_mesh.get_num_devices()}"
 
-    micro_submeshes = create_per_chip_submeshes(vision_mesh, count=4)
+    micro_submeshes = create_per_chip_submeshes(vision_mesh, count=8)
     try:
-        assert len(micro_submeshes) == 4
+        assert len(micro_submeshes) == 8
 
         loader = Pi0_5WeightLoader(_REAL_CKPT)
         weights = loader.categorized_weights
         cfg = PaliGemmaConfig()
 
-        # Default layout: 4 SigLIP chunks (7+7+7+6 layers) with mm_projector
-        # co-located on chip 3 — see Pi0_5OptionCVisionSliceSplit docstring
-        # for the L1 fit rationale that motivated the redistribution.
-        expected_layers_per_chip = [7, 7, 7, 6]
+        # Default layout: 8 SigLIP chunks (4+4+4+4+3+3+3+2 layers) with
+        # mm_projector co-located on the last chip. See
+        # Pi0_5OptionCVisionSliceSplit docstring for the L1 fit
+        # rationale behind the redistribution.
+        expected_layers_per_chip = [4, 4, 4, 4, 3, 3, 3, 2]
+        assert sum(expected_layers_per_chip) == 27
         split = Pi0_5OptionCVisionSliceSplit(
             config=cfg,
             weights=weights,
             micro_submeshes=micro_submeshes,
             siglip_depth=27,
         )
-        assert len(split.siglip_chunks) == 4
+        assert len(split.siglip_chunks) == 8
         assert split.layers_per_chip == expected_layers_per_chip
-        assert split.projector_chip_idx == 3
+        assert split.projector_chip_idx == 7
         expected_lo = 0
+        last_chunk_idx = len(expected_layers_per_chip) - 1
         for chunk_idx, chunk in enumerate(split.siglip_chunks):
             n = expected_layers_per_chip[chunk_idx]
             assert chunk.layer_lo == expected_lo
             assert chunk.layer_hi == expected_lo + n
             assert chunk.holds_patch_embed == (chunk_idx == 0)
             assert chunk.holds_pos_embed == (chunk_idx == 0)
-            assert chunk.holds_post_ln == (chunk_idx == 3)
+            assert chunk.holds_post_ln == (chunk_idx == last_chunk_idx)
             expected_lo += n
         assert split.mm_projector is not None
         print(
             f"option_c device-SigLIP split "
-            f"(4 chips × {'+'.join(map(str, expected_layers_per_chip))}, "
-            f"projector co-located on chip 3) OK"
+            f"(8 chips × {'+'.join(map(str, expected_layers_per_chip))}, "
+            f"projector co-located on chip {last_chunk_idx}) OK"
         )
     finally:
         _close_micro_submeshes(micro_submeshes)

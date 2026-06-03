@@ -32,15 +32,58 @@ from .transport import send_activation_via_host
 from .vlm_slice import _upload_l1_replicated, _upload_single_chip_l1
 
 
+def _upload_l1_sharded(
+    t: torch.Tensor,
+    submesh,
+    dim: int,
+    dtype,
+    layout=ttnn.TILE_LAYOUT,
+    memory_config=None,
+) -> "ttnn.Tensor":
+    """Shard `t` along axis `dim` across every chip in `submesh`, L1-resident.
+
+    Mirrors `option_b.tp_block._shard_along` but defaults to L1 instead of DRAM
+    (Option C's whole premise). Used to split the adaRMS modulation Dense's
+    6144 output axis across the 6 denoise chips so each chip only holds 1/6
+    of the modulation weight — cuts the dominant per-chip load by 6x.
+
+    The matmul output is sharded; an `all_gather` along `dim` materializes the
+    full modulation tensor on every chip before applying it per-token.
+    """
+    if memory_config is None:
+        memory_config = ttnn.L1_MEMORY_CONFIG
+    mapper = ttnn.shard_tensor_to_mesh_mapper(submesh, dim=dim)
+    return ttnn.from_torch(
+        t,
+        dtype=dtype,
+        layout=layout,
+        device=submesh,
+        mesh_mapper=mapper,
+        memory_config=memory_config,
+    )
+
+
 def _load_expert_block_weights_l1(
     full_weights: Dict[str, torch.Tensor],
     layer_idx: int,
     submesh,
+    mod_sharded: bool = False,
 ) -> Dict[str, "ttnn.Tensor"]:
     """Upload one expert layer's weights onto `submesh` (replicated, L1-resident).
 
     Identical key mapping to `option_b.expert_slice._load_expert_block_weights`
     but routes every upload through `_upload_l1_replicated`.
+
+    All weights and biases (norms, mod weight/bias, etc.) are uploaded at
+    bf8_b to halve the per-chip load. Matmul Q/K/V/O + gate/up/down were
+    already bf8_b. The only thing left at native precision is the host-side
+    embed_table, which doesn't live on chip at all.
+
+    When `mod_sharded=True`, the adaRMS mod weight is sharded along its 6144
+    output axis across `submesh` (each chip holds 1/6 of the mod output dim).
+    The block forward needs an all_gather to materialize the full mod output
+    before splitting into the 6 (scale/shift/gate per attn/ffw) tensors —
+    see `Pi0_5OptionCExpertSlice.forward` below.
     """
     prefix = f"model.layers.{layer_idx}."
     block_weights: Dict[str, "ttnn.Tensor"] = {}
@@ -84,15 +127,22 @@ def _load_expert_block_weights_l1(
             value = value.T
 
         if len(value.shape) == 1:
-            block_weights[new_key] = tensor_1d_to_2d_ttnn(value, submesh, dtype=ttnn.bfloat16)
+            # TODO(full-l1): LN bias/scale (norm 1D) now bf8_b — was bf16. Tiny
+            # numerics drift expected; the LN bias is added directly to the
+            # residual stream so check PCC against the bf16 baseline.
+            block_weights[new_key] = tensor_1d_to_2d_ttnn(value, submesh, dtype=ttnn.bfloat8_b)
         else:
+            # TODO(full-l1): norm 2D weights moved bf16 -> bf8_b. Same caveat
+            # as above; rms_norm tolerance has held in practice but verify.
             block_weights[new_key] = _upload_l1_replicated(
                 value.contiguous(),
                 submesh,
-                ttnn.bfloat16 if is_norm else ttnn.bfloat8_b,
+                ttnn.bfloat8_b if is_norm else ttnn.bfloat8_b,
             )
 
     # Fused adaRMS modulation weight = concat([pre_attn.dense, pre_ffw.dense], dim=0).
+    # Pre-transpose shape: [1024, 6144]. The 6144 axis is the output dim that's
+    # split into 6 W=1024 chunks (sa, ta, ga, sf, tf, gf) inside the block.
     w_keys = [
         f"{prefix}input_layernorm.dense.weight",
         f"{prefix}post_attention_layernorm.dense.weight",
@@ -101,11 +151,22 @@ def _load_expert_block_weights_l1(
         if wk not in full_weights:
             raise KeyError(f"expert layer {layer_idx} missing adaRMS weight '{wk}'")
     fused_w = torch.cat([full_weights[wk] for wk in w_keys], dim=0).contiguous()
-    block_weights["adarms_mod.weight"] = _upload_l1_replicated(
-        fused_w.T.contiguous(),
-        submesh,
-        ttnn.bfloat16,
-    )
+    if mod_sharded:
+        # Shard the 6144 output axis across `submesh.get_num_devices()` chips.
+        # Each chip holds [1024, 6144/N]; an all_gather at forward time
+        # reconstitutes the full mod output before the per-token modulation.
+        block_weights["adarms_mod.weight"] = _upload_l1_sharded(
+            fused_w.T.contiguous(),
+            submesh,
+            dim=-1,
+            dtype=ttnn.bfloat8_b,
+        )
+    else:
+        block_weights["adarms_mod.weight"] = _upload_l1_replicated(
+            fused_w.T.contiguous(),
+            submesh,
+            ttnn.bfloat8_b,
+        )
 
     b_keys = [
         f"{prefix}input_layernorm.dense.bias",
@@ -115,7 +176,21 @@ def _load_expert_block_weights_l1(
     if biases:
         assert len(biases) == 2, "expected both adaRMS biases or neither"
         fused_b = torch.cat(biases, dim=0).contiguous()
-        block_weights["adarms_mod.bias"] = tensor_1d_to_2d_ttnn(fused_b, submesh, dtype=ttnn.bfloat16)
+        if mod_sharded:
+            # Bias must match the sharded mod output: shape [1, 6144] sharded
+            # on its last axis. Use a separate path because `tensor_1d_to_2d_ttnn`
+            # is replicate-only.
+            # TODO(full-l1): shard 1D bias along last dim. Need to reshape to
+            # 2D first because shard_tensor_to_mesh_mapper expects rank>=2.
+            fused_b_2d = fused_b.reshape(1, -1).contiguous()
+            block_weights["adarms_mod.bias"] = _upload_l1_sharded(
+                fused_b_2d,
+                submesh,
+                dim=-1,
+                dtype=ttnn.bfloat8_b,
+            )
+        else:
+            block_weights["adarms_mod.bias"] = tensor_1d_to_2d_ttnn(fused_b, submesh, dtype=ttnn.bfloat8_b)
 
     return block_weights
 
@@ -139,6 +214,7 @@ class Pi0_5OptionCExpertSlice:
         weights: Dict[str, Dict[str, torch.Tensor]],
         submesh,
         expert_layer_range: Tuple[int, int] = (0, 18),
+        mod_sharded: bool = False,
     ) -> None:
         if not (0 <= expert_layer_range[0] < expert_layer_range[1] <= config.expert_config.depth):
             raise ValueError(
@@ -150,6 +226,17 @@ class Pi0_5OptionCExpertSlice:
         self.submesh = submesh
         self.layer_lo, self.layer_hi = expert_layer_range
         self.num_layers = self.layer_hi - self.layer_lo
+        # When True, the per-block adaRMS mod weight + bias are sharded across
+        # the denoise submesh along the 6144 output axis. The forward path
+        # gathers the sharded mod output via ttnn.all_gather before splitting
+        # into the 6 per-token modulation tensors (sa, ta, ga, sf, tf, gf).
+        # Requires the submesh's parent to have been opened with
+        # `open_galaxy_mesh(enable_fabric=True)` so the fabric is available
+        # for all_gather. See pipeline.py's `denoise_mod_sharded` flag.
+        self.mod_sharded = mod_sharded
+        # Number of chips the mod weight is sharded across — used to compute
+        # the gather output shape and the per-chip mod chunk size.
+        self.mod_shard_world = submesh.get_num_devices() if mod_sharded else 1
 
         ae = weights["action_expert"]
 
@@ -162,7 +249,7 @@ class Pi0_5OptionCExpertSlice:
 
         self.expert_blocks: List = []
         for i in range(self.layer_lo, self.layer_hi):
-            block_weights = _load_expert_block_weights_l1(ae, i, submesh)
+            block_weights = _load_expert_block_weights_l1(ae, i, submesh, mod_sharded=mod_sharded)
             self.expert_blocks.append(
                 AdaRMSGemmaBlockTTNN(
                     config.expert_config,
@@ -177,14 +264,19 @@ class Pi0_5OptionCExpertSlice:
         # Final adaRMS norm Dense.
         if "model.norm.dense.weight" not in ae:
             raise KeyError("expert checkpoint missing 'model.norm.dense.weight'")
+        # TODO(full-l1): final_norm_mod_weight + bias moved bf16 -> bf8_b.
+        # Shape [1024, 3072] (3 channels not 6 — final norm only emits scale,
+        # shift, gate-discarded). Not sharded today; tiny weight (~0.4 MB at
+        # bf8_b replicated 6 chips), keep it simple. Could shard later if the
+        # 6144 mod sharding works.
         self.final_norm_mod_weight = _upload_l1_replicated(
             ae["model.norm.dense.weight"].T.contiguous(),
             submesh,
-            ttnn.bfloat16,
+            ttnn.bfloat8_b,
         )
         self.final_norm_mod_bias = None
         if "model.norm.dense.bias" in ae:
-            self.final_norm_mod_bias = tensor_1d_to_2d_ttnn(ae["model.norm.dense.bias"], submesh, dtype=ttnn.bfloat16)
+            self.final_norm_mod_bias = tensor_1d_to_2d_ttnn(ae["model.norm.dense.bias"], submesh, dtype=ttnn.bfloat8_b)
 
         device_grid = submesh.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(y=device_grid.y, x=device_grid.x)
@@ -192,6 +284,68 @@ class Pi0_5OptionCExpertSlice:
     # ------------------------------------------------------------------ #
     # Forward                                                             #
     # ------------------------------------------------------------------ #
+
+    def _precompute_mod_sharded(self, block, adarms_cond: "ttnn.Tensor") -> Tuple["ttnn.Tensor", ...]:
+        """Compute the 6 per-block modulation tensors using a sharded mod weight.
+
+        Steps:
+          1. matmul(adarms_cond, block.mod_weight) — output is sharded along
+             the last (6144) axis: each chip holds shape [B, 1, 6144/N].
+          2. all_gather along the last axis — every chip ends up with the
+             full [B, 1, 6144] mod tensor.
+          3. split into 6 chunks of width W=1024.
+          4. Add 1.0 to the two scale tensors (sa, sf) so they match the
+             `precomputed_mod`/`pre_added=True` contract the block uses.
+
+        The block contract: when `precomputed_mod is not None`, the block sets
+        `mod_owned=False ⇒ pre_added=True` and calls `_modulated_rms_norm` with
+        scale already-baked (i.e. `sa = 1 + raw_scale_a`). We mirror that here
+        so the precomputed-path numerics match the in-block path bit-for-bit.
+
+        Requires fabric: `set_fabric_config(FABRIC_1D)` must have been called
+        before the parent mesh opened (see open_galaxy_mesh(enable_fabric=True)).
+        """
+        mod_partial = ttnn.linear(
+            adarms_cond,
+            block.mod_weight,
+            bias=block.mod_bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            core_grid=self.core_grid,
+            compute_kernel_config=block.mod_compute_kernel_config,
+        )
+        # Materialize the full mod output on every chip by gathering the
+        # sharded last axis. Fabric must be enabled at parent-open time.
+        mod_full = ttnn.all_gather(
+            mod_partial,
+            dim=-1,
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(mod_partial)
+        # Split into 6 W=1024 chunks. The block expects (B, 1, W) for each.
+        B = mod_full.shape[0]
+        total = mod_full.shape[-1]
+        W = total // 6
+        mod3 = ttnn.reshape(mod_full, (B, 1, total))
+        # NOTE: ttnn.deallocate(mod_full) is unsafe here — `mod3` is a reshape
+        # alias backed by the same buffer. Deallocating it would invalidate
+        # the chunk slices below. See `_split_modulation_6` in ttnn_gemma.py
+        # for the same pattern.
+        sa_raw = mod3[:, :, 0 * W : 1 * W]
+        ta = mod3[:, :, 1 * W : 2 * W]
+        ga = mod3[:, :, 2 * W : 3 * W]
+        sf_raw = mod3[:, :, 3 * W : 4 * W]
+        tf = mod3[:, :, 4 * W : 5 * W]
+        gf = mod3[:, :, 5 * W : 6 * W]
+        # Bake the +1 into the two scale tensors to match the precomputed_mod
+        # contract (block sees `pre_added=True`).
+        # TODO(full-l1): if validation agent sees PCC drift, the most likely
+        # culprit is here — verify the +1 baking matches the in-block path's
+        # `scale_plus_one = ttnn.add(scale, 1.0)`.
+        sa1 = ttnn.add(sa_raw, 1.0, memory_config=ttnn.L1_MEMORY_CONFIG)
+        sf1 = ttnn.add(sf_raw, 1.0, memory_config=ttnn.L1_MEMORY_CONFIG)
+        return (sa1, ta, ga, sf1, tf, gf)
 
     def forward(
         self,
@@ -210,11 +364,25 @@ class Pi0_5OptionCExpertSlice:
 
         prefix_kv_cache is indexed by GLOBAL expert layer index. The denoise
         stage passes the layer-paired migrated VLM KV here.
+
+        When `mod_sharded=True`, the per-block mod weight is sharded across
+        the submesh, so this method precomputes the modulation outputs (with
+        an internal all_gather) for each layer and passes them via
+        `precomputed_mod` to the block. The block then sees the already-gathered
+        modulation tensors and runs its non-fast-path matmul-free modulation.
+        Mod weights replicated (mod_sharded=False) keeps today's behavior:
+        the block internally does its own ttnn.linear with the replicated
+        weight, no all_gather needed.
         """
         for local_i, block in enumerate(self.expert_blocks):
             global_i = self.layer_lo + local_i
             past_kv = prefix_kv_cache[global_i] if prefix_kv_cache is not None else None
             block_mod = precomputed_block_mods[local_i] if precomputed_block_mods is not None else None
+            # Sharded mod path: we precompute + all_gather inside the slice
+            # and pass the 6 chunk tensors via `precomputed_mod`. Only
+            # applies when the caller didn't already provide one.
+            if block_mod is None and self.mod_sharded:
+                block_mod = self._precompute_mod_sharded(block, adarms_cond)
             hidden_states, _new_kv = block.forward(
                 hidden_states,
                 cos_override,
@@ -255,7 +423,12 @@ def _load_expert_block_weights_single_chip_l1(
     layer_idx: int,
     micro_submesh,
 ) -> Dict[str, "ttnn.Tensor"]:
-    """Single-chip + L1 mirror of `_load_expert_block_weights_l1`."""
+    """Single-chip + L1 mirror of `_load_expert_block_weights_l1`.
+
+    All weights and biases (norms, mod weight/bias) are bf8_b. Sharding does
+    not apply to 1-chip submeshes — the paired path already has each layer
+    on exactly one chip, and the mod weight at bf8_b is ~6 MB / layer.
+    """
     prefix = f"model.layers.{layer_idx}."
     block_weights: Dict[str, "ttnn.Tensor"] = {}
 
@@ -295,12 +468,14 @@ def _load_expert_block_weights_single_chip_l1(
             value = value.T
 
         if len(value.shape) == 1:
-            block_weights[new_key] = tensor_1d_to_2d_ttnn(value, micro_submesh, dtype=ttnn.bfloat16)
+            # TODO(full-l1): paired LN bias (norm 1D) bf16 -> bf8_b.
+            block_weights[new_key] = tensor_1d_to_2d_ttnn(value, micro_submesh, dtype=ttnn.bfloat8_b)
         else:
+            # TODO(full-l1): paired norm 2D weights bf16 -> bf8_b.
             block_weights[new_key] = _upload_single_chip_l1(
                 value.contiguous(),
                 micro_submesh,
-                ttnn.bfloat16 if is_norm else ttnn.bfloat8_b,
+                ttnn.bfloat8_b if is_norm else ttnn.bfloat8_b,
             )
 
     w_keys = [
@@ -311,7 +486,8 @@ def _load_expert_block_weights_single_chip_l1(
         if wk not in full_weights:
             raise KeyError(f"expert layer {layer_idx} missing adaRMS weight '{wk}'")
     fused_w = torch.cat([full_weights[wk] for wk in w_keys], dim=0).contiguous()
-    block_weights["adarms_mod.weight"] = _upload_single_chip_l1(fused_w.T.contiguous(), micro_submesh, ttnn.bfloat16)
+    # TODO(full-l1): paired adarms_mod.weight bf16 -> bf8_b.
+    block_weights["adarms_mod.weight"] = _upload_single_chip_l1(fused_w.T.contiguous(), micro_submesh, ttnn.bfloat8_b)
 
     b_keys = [
         f"{prefix}input_layernorm.dense.bias",
@@ -321,7 +497,8 @@ def _load_expert_block_weights_single_chip_l1(
     if biases:
         assert len(biases) == 2, "expected both adaRMS biases or neither"
         fused_b = torch.cat(biases, dim=0).contiguous()
-        block_weights["adarms_mod.bias"] = tensor_1d_to_2d_ttnn(fused_b, micro_submesh, dtype=ttnn.bfloat16)
+        # TODO(full-l1): paired adarms_mod.bias bf16 -> bf8_b.
+        block_weights["adarms_mod.bias"] = tensor_1d_to_2d_ttnn(fused_b, micro_submesh, dtype=ttnn.bfloat8_b)
 
     return block_weights
 
@@ -417,14 +594,15 @@ class Pi0_5OptionCExpertSlicePaired:
         last_sm = micro_submeshes[-1]
         if "model.norm.dense.weight" not in ae:
             raise KeyError("expert checkpoint missing 'model.norm.dense.weight'")
+        # TODO(full-l1): paired final_norm_mod_weight + bias bf16 -> bf8_b.
         self.final_norm_mod_weight = _upload_single_chip_l1(
             ae["model.norm.dense.weight"].T.contiguous(),
             last_sm,
-            ttnn.bfloat16,
+            ttnn.bfloat8_b,
         )
         self.final_norm_mod_bias = None
         if "model.norm.dense.bias" in ae:
-            self.final_norm_mod_bias = tensor_1d_to_2d_ttnn(ae["model.norm.dense.bias"], last_sm, dtype=ttnn.bfloat16)
+            self.final_norm_mod_bias = tensor_1d_to_2d_ttnn(ae["model.norm.dense.bias"], last_sm, dtype=ttnn.bfloat8_b)
         last_grid = last_sm.compute_with_storage_grid_size()
         self.last_core_grid = ttnn.CoreGrid(y=last_grid.y, x=last_grid.x)
 

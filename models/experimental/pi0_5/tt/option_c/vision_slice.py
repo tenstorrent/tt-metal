@@ -3,20 +3,20 @@
 
 """Stage-0 (vision) slice for Option C.
 
-Target placement (PI0_5_GALAXY_DEPLOYMENT_PLAN.md §3.1, file map in
-option_c/README.md):
+Target placement (post full-L1 redesign, PI0_5_GALAXY_DEPLOYMENT_PLAN.md
+§3.1, file map in option_c/README.md):
 
-    vision submesh (4 chips, shape (2, 2)) =
-        3 SigLIP chips × 9 SigLIP layers each
-      + 1 vision-embed chip (patch_conv + pos_embed + final LN + mm_projector)
+    vision submesh (8 chips, shape (2, 4)) =
+        SigLIP-27 split 4+4+4+4+3+3+3+2 across the 8 chips
+      + post_ln + mm_projector co-located on the last chip
 
-For the scaffolding pass (this file), SigLIP + mm_projector run on the
-HOST (torch) — same pragmatic choice Option B made (see
-`option_b/vision_slice.py`) — and we upload the projected vision features
-+ language-token embeddings onto the 4-chip vision submesh. The on-device
-3-chip split is a follow-up; the slice's external contract (`embed_images`,
-`embed_language_tokens`, `build_prefix_hidden`) is stable and the
-orchestrator (`stage_vision.py`) talks to it through that contract only.
+Two slice variants exist:
+  * `Pi0_5OptionCVisionSlice` runs SigLIP + mm_projector on HOST (torch)
+    and uploads projected features onto the vision submesh — kept for the
+    scaffolding / dry-run regression path.
+  * `Pi0_5OptionCVisionSliceSplit` runs SigLIP on-device across the 8
+    micro-submeshes; the on-device path is the one used when
+    `device_siglip=True` and is the target for the full-L1 deployment.
 
 Memory footprint (per chip, scaffolding mode, replicated):
   - Vision feature cache from host:        [B, 256, 1152] bf8 ≈ 0.6 MB
@@ -24,9 +24,13 @@ Memory footprint (per chip, scaffolding mode, replicated):
   - (Optional) host-lookup lang embedding:  [B, S_lang, 2048] bf8 ≈ 0.4 MB
   Total ≈ 2 MB / chip — trivially fits.
 
-When the device-side SigLIP lands, per-chip weight footprint per
-PI0_5_GALAXY_DEPLOYMENT_PLAN.md §3.1: 9 layers × 15.6 MB (bf8 attn) ≈
-140 MB / chip — sits inside the 180 MB L1 cap with ~40 MB headroom.
+Device-SigLIP, 8-chip layout (default split 4+4+4+4+3+3+3+2 = 27 layers):
+  Busiest chip carries 4 SigLIP layers (~4×18 MB bf8_b ≈ 72 MB) plus
+  patch_embed + pos_embed on chip 0 (~3 MB) → ~75 MB / chip peak.
+  Well inside the 175.4 MB L1 cap; full-L1 residence (LN, post_ln,
+  patch_embed, pos_embed, attn, MLP) leaves ~100 MB / chip headroom
+  for activations, BS-shard scratch, and matmul kernel static CB
+  regions.
 
 Language embed table (527 MB) lives on HOST. We do not put it on a chip;
 the recommendation in §3.1 option (a) is host-side text embedding lookup
@@ -66,9 +70,17 @@ def _to_l1(t: Optional["ttnn.Tensor"]) -> Optional["ttnn.Tensor"]:
     transient peak (DRAM + L1 simultaneously) trips the L1 allocator on
     the first big buffer. Explicit deallocate keeps the per-step peak
     bounded by one buffer.
+
+    Idempotent: when the source is already L1-resident, `to_memory_config`
+    is a no-op that returns the SAME buffer reference; `deallocate(t)`
+    would then free the underlying buffer that the returned tensor also
+    references — dangling reference, next op throws "Tensor is not
+    allocated". Return `t` unchanged in that case.
     """
     if t is None:
         return None
+    if t.memory_config().buffer_type == ttnn.BufferType.L1:
+        return t
     new_t = ttnn.to_memory_config(t, ttnn.L1_MEMORY_CONFIG)
     ttnn.deallocate(t)
     return new_t
@@ -76,11 +88,11 @@ def _to_l1(t: Optional["ttnn.Tensor"]) -> Optional["ttnn.Tensor"]:
 
 def _migrate_tower_weights_to_l1(
     tower: SigLIPVisionTowerTTNN,
-    migrate_patch_embed: bool = False,
-    migrate_pos_embed: bool = False,
-    migrate_post_ln: bool = False,
-    migrate_layer_norms: bool = False,
-    migrate_attention: bool = False,
+    migrate_patch_embed: bool = True,
+    migrate_pos_embed: bool = True,
+    migrate_post_ln: bool = True,
+    migrate_layer_norms: bool = True,
+    migrate_attention: bool = True,
     migrate_mlp: bool = True,
 ) -> None:
     """Move every weight tensor in a SigLIPVisionTowerTTNN to L1, in place.
@@ -91,25 +103,15 @@ def _migrate_tower_weights_to_l1(
     refactor that affects single-device callers too; a post-construction
     walk is contained, reversible, and easy to audit.
 
-    What migrates by default:
-        - Every block's attention.{wqkv, bqkv, wo} and mlp.{fc{1,2}{_weight, _bias}}.
-        These are all bf8_b at ~5–10 MB / weight, the workhorse matmul
-        weights — the prime L1 placement targets.
-
-    What stays in DRAM by default (override via the flags):
-        - patch_embed (~2 MB bf16, called once per inference)
-        - pos_embed (~0.6 MB bf16, added once after patch_embed)
-        - post_ln (~5 MB bf16, on the last chip only, called once at the
-          tail of the encoder)
-        - LayerNorm weights/biases inside each block (bf16, tiny but cross
-          the bf8/bf16 boundary; their kernels also reserve a low-L1 CB
-          region per `vlm_slice.py:298` — DRAM residence sidesteps that).
-
-    The default split lands ~145 MB / chip in L1 (9 layers × ~16 MB
-    bf8 weights), inside the 175.4 MB L1 cap with ~30 MB headroom for
-    activations / KV / masks during forward. Migrating LN / post_ln /
-    patch_embed / pos_embed pushes per-chip total to ~181 MB which
-    overshoots the cap.
+    Full-L1 default (8-chip (2,4) vision submesh):
+        With the wider vision submesh and the 4/4/4/4/3/3/3/2 SigLIP split
+        (at most 4 SigLIP layers per chip + the small projector on the
+        last chip), per-chip weight load drops well below the L1 cap
+        even when ALL weight categories migrate. Defaults therefore turn
+        ON every category — patch_embed / pos_embed / post_ln / LNs /
+        attention / MLP — so vision is fully L1-resident. The bf16 bias
+        and LN tensors are also converted to bf8_b on upload in
+        ttnn_siglip.py to keep per-chip footprint inside budget.
 
     Attribute names are verified against ttnn_siglip.py — break if a name
     changes there; the change should be caught by the next probe run.
@@ -146,19 +148,23 @@ def _migrate_tower_weights_to_l1(
             if getattr(block, "ln2_bias", None) is not None:
                 block.ln2_bias = _to_l1(block.ln2_bias)
         # Attention QKV (concatenated) + output projection — bf8_b workhorses.
-        attn = block.attention
-        attn.wqkv = _to_l1(attn.wqkv)
-        if attn.bqkv is not None:
-            attn.bqkv = _to_l1(attn.bqkv)
-        attn.wo = _to_l1(attn.wo)
+        if migrate_attention:
+            attn = block.attention
+            attn.wqkv = _to_l1(attn.wqkv)
+            if attn.bqkv is not None:
+                attn.bqkv = _to_l1(attn.bqkv)
+            attn.wo = _to_l1(attn.wo)
+            if getattr(attn, "bo", None) is not None:
+                attn.bo = _to_l1(attn.bo)
         # MLP fc1 / fc2 — bf8_b workhorses.
-        mlp = block.mlp
-        mlp.fc1_weight = _to_l1(mlp.fc1_weight)
-        if getattr(mlp, "fc1_bias", None) is not None:
-            mlp.fc1_bias = _to_l1(mlp.fc1_bias)
-        mlp.fc2_weight = _to_l1(mlp.fc2_weight)
-        if getattr(mlp, "fc2_bias", None) is not None:
-            mlp.fc2_bias = _to_l1(mlp.fc2_bias)
+        if migrate_mlp:
+            mlp = block.mlp
+            mlp.fc1_weight = _to_l1(mlp.fc1_weight)
+            if getattr(mlp, "fc1_bias", None) is not None:
+                mlp.fc1_bias = _to_l1(mlp.fc1_bias)
+            mlp.fc2_weight = _to_l1(mlp.fc2_weight)
+            if getattr(mlp, "fc2_bias", None) is not None:
+                mlp.fc2_bias = _to_l1(mlp.fc2_bias)
 
 
 def _migrate_projector_weights_to_l1(projector: MultiModalProjectorTTNN) -> None:
@@ -176,7 +182,7 @@ class Pi0_5OptionCVisionSlice:
         config:        full PaliGemma config (uses .siglip_config + .vlm_config).
         weights:       full categorized weights dict; needs vlm_vision +
                        vlm_projector + vlm_language.
-        submesh:       the 4-chip vision MeshDevice.
+        submesh:       the 8-chip (2,4) vision MeshDevice.
         embed_on_host: if True (default for the scaffolding pass), text
                        embeddings are looked up on HOST via
                        weights['vlm_language']['model.embed_tokens.weight'].
@@ -197,10 +203,10 @@ class Pi0_5OptionCVisionSlice:
         self.embed_on_host = embed_on_host
 
         # SigLIP-27 + multimodal projector run on host (torch) for the
-        # scaffolding pass. The 3-chip device split (9 SigLIP layers per
-        # chip, last chip holds mm_projector) is the follow-up — when it
-        # lands, swap these two refs for an on-device equivalent and the
-        # rest of the file (orchestrator, pipeline) is unchanged.
+        # scaffolding pass. The 8-chip device split (Pi0_5OptionCVisionSliceSplit
+        # — see the class below; default 4+4+4+4+3+3+3+2 layer layout with
+        # mm_projector co-located on the last chip) is the device path —
+        # selected via `device_siglip=True` on Pi0_5PipelineC.
         self._host_vision_tower = HFSigLIPVisionTower(config.siglip_config, weights["vlm_vision"])
         self._host_mm_projector = _TorchMMProjector(weights["vlm_projector"])
 
@@ -301,39 +307,46 @@ class Pi0_5OptionCVisionSlice:
 
 
 # ---------------------------------------------------------------------------- #
-# On-device 3-chip SigLIP split + 1 projector chip                              #
+# On-device 8-chip SigLIP split (projector co-located on last chip)             #
 # ---------------------------------------------------------------------------- #
 
 
 class Pi0_5OptionCVisionSliceSplit:
-    """On-device SigLIP-27 split across all 4 vision chips + co-located projector.
+    """On-device SigLIP-27 split across all 8 vision chips + co-located projector.
 
-    Placement (one micro-submesh = one chip on the 4-chip vision submesh):
-        chip 0: patch_embed + pos_embed + SigLIP layers  0– 6   (7 layers)
-        chip 1: SigLIP layers  7–13                             (7 layers)
-        chip 2: SigLIP layers 14–20                             (7 layers)
-        chip 3: SigLIP layers 21–26 + post_ln + mm_projector    (6 layers)
+    Placement (one micro-submesh = one chip on the 8-chip (2,4) vision submesh):
+        chip 0: patch_embed + pos_embed + SigLIP layers  0– 3   (4 layers)
+        chip 1: SigLIP layers  4– 7                             (4 layers)
+        chip 2: SigLIP layers  8–11                             (4 layers)
+        chip 3: SigLIP layers 12–15                             (4 layers)
+        chip 4: SigLIP layers 16–18                             (3 layers)
+        chip 5: SigLIP layers 19–21                             (3 layers)
+        chip 6: SigLIP layers 22–24                             (3 layers)
+        chip 7: SigLIP layers 25–26 + post_ln + mm_projector    (2 layers)
 
-    Why this split (instead of 9+9+9+projector):
-        At the kernel's padded shapes (head_dim 72 → 96; intermediate
-        4304 → 4320) every encoder layer is ~18 MB at bf8_b — about 16%
-        bigger than the deployment plan's analytical 15.6 MB. 9 layers /
-        chip = ~163 MB, plus per-bank bias overhead pushes per-chip total
-        over the 175 MB L1 cap. Redistributing to 7+7+7+6 across all 4
-        vision chips brings the worst chip down to ~129 MB (chip 0 with
-        patch_embed + pos_embed extras), well inside the cap with room
-        for activations / KV / scratch.
+    Why this split (4+4+4+4+3+3+3+2 = 27 total):
+        - Busiest chip carries 4 SigLIP layers (~4×18 MB ≈ 72 MB at bf8_b)
+          plus the patch_embed / pos_embed (~3 MB) on chip 0 — well below
+          the 175 MB L1 cap. Plenty of room for L1-resident LN / norm
+          weights, biases, and per-step activations + the matmul kernel's
+          static CB region.
+        - The projector chip (last chip) carries only 2 SigLIP layers
+          plus post_ln + mm_projector (~36 + 5 + 4 ≈ 45 MB) — the
+          smallest chip, intentionally, since it also has to hold the
+          language-token embedding output on the same chip.
 
-    Wall-clock impact is roughly nil: total compute = 27 layer-times in
-    either split, host-bounce hops are still 3 (0→1, 1→2, 2→3), and
-    chip 3's chunk → mm_projector hop is a free in-L1 handoff because
-    they share a chip.
+    Wall-clock impact vs the previous 7/7/7/6 split:
+        - Total compute unchanged (27 layer-times).
+        - Host bounces grow from 3 to 7 (chip 0→1→2→…→7), but each hop
+          carries the same [B, 256, 1152] BS-sharded hidden — small enough
+          that the additional bounces are dominated by the per-chip
+          matmul work that now runs without a DRAM-read penalty.
+        - Last chunk → mm_projector handoff stays in L1 (same chip).
 
-    Activation host-bounces between consecutive chips. Language token
-    embedding stays on HOST (the 527 MB embed_tokens table doesn't fit on
-    a single chip; vocab sharding is a later follow-up). The host-resolved
-    language embedding is uploaded to chip 3 to be concatenated with the
-    projected vision features there.
+    Language token embedding stays on HOST (the 527 MB embed_tokens table
+    doesn't fit on a single chip; vocab sharding is a later follow-up).
+    The host-resolved language embedding is uploaded to chip 7 to be
+    concatenated with the projected vision features there.
 
     Construction is dry-run-safe even on shrunk configs because the SigLIP
     config / weights are independent of `vlm_depth` / `expert_depth`.
@@ -341,17 +354,20 @@ class Pi0_5OptionCVisionSliceSplit:
     Args:
         config:           full PaliGemma config.
         weights:          full categorized weights dict.
-        micro_submeshes:  list of 4 single-chip MeshDevices (carved from
-                          the 4-chip vision submesh). Each holds one
-                          SigLIP chunk; chip 3 ALSO holds the mm_projector.
-        layers_per_chip:  per-chip layer counts. Default `(7, 7, 7, 6)`
-                          sums to 27. Length must equal len(micro_submeshes).
+        micro_submeshes:  list of 8 single-chip MeshDevices (carved from
+                          the 8-chip (2,4) vision submesh). Each holds one
+                          SigLIP chunk; the last chip ALSO holds the
+                          mm_projector.
+        layers_per_chip:  per-chip layer counts. Default
+                          `(4, 4, 4, 4, 3, 3, 3, 2)` sums to 27. Length
+                          must equal len(micro_submeshes).
         siglip_depth:     total SigLIP depth (default 27 = sum of
                           `layers_per_chip`).
-        weights_in_l1:    if True, post-construction migrate every block's
-                          attn + MLP weights to L1 (LN / patch_embed /
-                          pos_embed / post_ln stay in DRAM — see
-                          `_migrate_tower_weights_to_l1`). Off by default.
+        weights_in_l1:    if True, post-construction migrate every
+                          vision tower weight (patch_embed, pos_embed,
+                          LN, post_ln, attn, MLP) to L1 — full-L1
+                          residence per the project's NO-DRAM mandate.
+                          Off by default to keep regression mode safe.
     """
 
     def __init__(
@@ -363,18 +379,20 @@ class Pi0_5OptionCVisionSliceSplit:
         siglip_depth: int = 27,
         weights_in_l1: bool = False,
     ) -> None:
-        if len(micro_submeshes) != 4:
-            raise ValueError(f"Pi0_5OptionCVisionSliceSplit needs 4 micro-submeshes; got {len(micro_submeshes)}")
+        if len(micro_submeshes) != 8:
+            raise ValueError(f"Pi0_5OptionCVisionSliceSplit needs 8 micro-submeshes; got {len(micro_submeshes)}")
         for i, sm in enumerate(micro_submeshes):
             if sm.get_num_devices() != 1:
                 raise ValueError(f"micro_submeshes[{i}] must be a 1-chip submesh " f"({sm.get_num_devices()} devices)")
 
-        # Default split: 7+7+7+6 across all 4 chips (was 9+9+9 across 3
-        # chips with chip 3 reserved for projector only). The new split
-        # lets every chip carry SigLIP work + lets chip 3 also host the
-        # mm_projector — keeping every per-chip L1 budget inside the cap.
+        # Default split: 4+4+4+4+3+3+3+2 across all 8 chips of the (2,4)
+        # vision submesh. Busiest chip carries 4 SigLIP layers — keeps
+        # per-chip L1 well below the cap so ALL weight categories
+        # (LN/patch_embed/pos_embed/post_ln/attn/MLP) can migrate to L1.
+        # The mm_projector co-locates with the last SigLIP chunk (chip 7
+        # by default) so the SigLIP → projector handoff is in-L1.
         if layers_per_chip is None:
-            layers_per_chip = [7, 7, 7, 6]
+            layers_per_chip = [4, 4, 4, 4, 3, 3, 3, 2]
         if len(layers_per_chip) != len(micro_submeshes):
             raise ValueError(
                 f"layers_per_chip length ({len(layers_per_chip)}) must equal "
@@ -448,11 +466,15 @@ class Pi0_5OptionCVisionSliceSplit:
     def embed_images(self, pixel_values: torch.Tensor) -> "ttnn.Tensor":
         """Run SigLIP-27 across all SigLIP chunks, then mm_projector.
 
-        Layout (default `layers_per_chip=[7, 7, 7, 6]`):
-            chip 0: patch_embed + pos_embed + SigLIP 0..6
-            chip 1: SigLIP 7..13
-            chip 2: SigLIP 14..20
-            chip 3: SigLIP 21..26 + post_ln + mm_projector
+        Layout (default `layers_per_chip=[4, 4, 4, 4, 3, 3, 3, 2]` on 8 chips):
+            chip 0: patch_embed + pos_embed + SigLIP 0..3
+            chip 1: SigLIP 4..7
+            chip 2: SigLIP 8..11
+            chip 3: SigLIP 12..15
+            chip 4: SigLIP 16..18
+            chip 5: SigLIP 19..21
+            chip 6: SigLIP 22..24
+            chip 7: SigLIP 25..26 + post_ln + mm_projector
         Host-bounces between consecutive SigLIP chips; the last chunk →
         mm_projector handoff is in-L1 (same chip), so we skip the bounce
         after the final SigLIP chunk.
@@ -518,7 +540,7 @@ class Pi0_5OptionCVisionSliceSplit:
         pixel_values: torch.Tensor,
         language_token_ids: torch.Tensor,
     ) -> "ttnn.Tensor":
-        """[B, num_patches + S_lang, vlm_W] on micro_submeshes[3]."""
+        """[B, num_patches + S_lang, vlm_W] on micro_submeshes[projector_chip_idx]."""
         image_hidden = self.embed_images(pixel_values)
         lang_hidden = self.embed_language_tokens(language_token_ids)
         return ttnn.concat([image_hidden, lang_hidden], dim=1)
@@ -526,4 +548,4 @@ class Pi0_5OptionCVisionSliceSplit:
     @property
     def last_chip_submesh(self):
         """Where build_prefix_hidden's output lives — the projector chip."""
-        return self.micro_submeshes[3]
+        return self.micro_submeshes[self.projector_chip_idx]

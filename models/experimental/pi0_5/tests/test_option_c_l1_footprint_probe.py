@@ -120,6 +120,11 @@ DEPTH_SWEEP = os.environ.get("PI0_OC_L1_PROBE_DEPTH_SWEEP") == "1"
 # L1-paired footprints. Defaults match the bench / smoke path so a fresh
 # probe run reproduces the baseline numbers in OPTION_C_L1_FOOTPRINT_PROBE.md.
 LAYER_PAIRED_L1 = os.environ.get("PI0_OC_L1_PROBE_LAYER_PAIRED") == "1"
+# Per-stage override for paired placement on denoise only. Use when the master
+# flag is False (e.g. prefill is on TP=2) but denoise still needs paired
+# to fit L1 at depth=18. None = follow LAYER_PAIRED_L1; "1"/"0" = force.
+_dlp = os.environ.get("PI0_OC_L1_PROBE_DENOISE_LAYER_PAIRED")
+DENOISE_LAYER_PAIRED_L1: Optional[bool] = None if _dlp is None else (_dlp == "1")
 DEVICE_SIGLIP = os.environ.get("PI0_OC_L1_PROBE_DEVICE_SIGLIP") == "1"
 # When DEVICE_SIGLIP=1, migrate every SigLIP / mm_projector weight to L1.
 # Ignored when DEVICE_SIGLIP=0 (host path has no on-chip weights to move).
@@ -137,6 +142,14 @@ PREFILL_WEIGHTS_L1 = os.environ.get("PI0_OC_L1_PROBE_WEIGHTS_L1") == "1"
 # in DRAM. Needed at vlm_depth=18 where 2 layers per (2,1) sub-mesh + full
 # migration exceeds the L1 headroom above the matmul CB region.
 PREFILL_WEIGHTS_L1_MLP_ONLY = os.environ.get("PI0_OC_L1_PROBE_WEIGHTS_L1_MLP_ONLY") == "1"
+# Denoise full-L1 walk: post-init migrate every expert + suffix matmul / mod /
+# LN weight from DRAM to L1 via `migrate_pipeline_denoise_to_l1`. Mirrors the
+# prefill_weights_l1 knob but scoped to stage 2. NO DRAM fallback once on.
+DENOISE_WEIGHTS_L1 = os.environ.get("PI0_OC_L1_PROBE_DENOISE_WEIGHTS_L1") == "1"
+# Shard the per-block adaRMS mod Dense across the denoise submesh along
+# its 6144 output axis. Requires fabric (auto-enabled below). Only applies
+# to the non-paired/replicated expert slice; no-op on the paired path.
+DENOISE_MOD_SHARDED = os.environ.get("PI0_OC_L1_PROBE_DENOISE_MOD_SHARDED") == "1"
 # L1 small / static-CB reservation, per-bank. 24576 bytes = 24 KB is the
 # value every working pi0.5 single-device test uses (see README.md:172,
 # test_perf_ttnn_full_e2e_trace.py:95, libero_rollout.py:979, all of
@@ -144,7 +157,18 @@ PREFILL_WEIGHTS_L1_MLP_ONLY = os.environ.get("PI0_OC_L1_PROBE_WEIGHTS_L1_MLP_ONL
 # weights are live or the matmul kernel's static CB region collides with
 # L1-allocated buffers. 1 MB / bank (~120 MB / chip) is way too much and
 # OOMs the layer-paired weights — DON'T do that. None = ttnn default (0).
-_default_l1_small = "24576" if (LAYER_PAIRED_L1 or PREFILL_TP_SIZE > 1) else ""
+_default_l1_small = (
+    "24576"
+    if (
+        LAYER_PAIRED_L1
+        or DENOISE_LAYER_PAIRED_L1
+        or PREFILL_TP_SIZE > 1
+        or DENOISE_MOD_SHARDED
+        or DENOISE_WEIGHTS_L1
+        or VISION_WEIGHTS_L1
+    )
+    else ""
+)
 L1_SMALL_SIZE_RAW = os.environ.get("PI0_OC_L1_PROBE_L1_SMALL_SIZE", _default_l1_small)
 L1_SMALL_SIZE: Optional[int] = int(L1_SMALL_SIZE_RAW) if L1_SMALL_SIZE_RAW else None
 
@@ -267,12 +291,15 @@ def _echo_env() -> None:
     print(f"  PI0_OC_L1_PROBE_RUN_FORWARD            = {RUN_FORWARD}")
     print(f"  PI0_OC_L1_PROBE_DEPTH_SWEEP            = {DEPTH_SWEEP}")
     print(f"  PI0_OC_L1_PROBE_LAYER_PAIRED           = {LAYER_PAIRED_L1}")
+    print(f"  PI0_OC_L1_PROBE_DENOISE_LAYER_PAIRED   = {DENOISE_LAYER_PAIRED_L1}")
     print(f"  PI0_OC_L1_PROBE_DEVICE_SIGLIP          = {DEVICE_SIGLIP}")
     print(f"  PI0_OC_L1_PROBE_VISION_WEIGHTS_L1      = {VISION_WEIGHTS_L1}")
     print(f"  PI0_OC_L1_PROBE_EXPERT_LAYERS_PER_CHIP = {EXPERT_LAYERS_PER_CHIP}")
     print(f"  PI0_OC_L1_PROBE_PREFILL_TP             = {PREFILL_TP_SIZE}")
     print(f"  PI0_OC_L1_PROBE_WEIGHTS_L1             = {PREFILL_WEIGHTS_L1}")
     print(f"  PI0_OC_L1_PROBE_WEIGHTS_L1_MLP_ONLY    = {PREFILL_WEIGHTS_L1_MLP_ONLY}")
+    print(f"  PI0_OC_L1_PROBE_DENOISE_WEIGHTS_L1     = {DENOISE_WEIGHTS_L1}")
+    print(f"  PI0_OC_L1_PROBE_DENOISE_MOD_SHARDED    = {DENOISE_MOD_SHARDED}")
 
 
 # ----------------------------------------------------------------------------#
@@ -343,7 +370,10 @@ def test_oc_l1_footprint_probe_full_depth():
     results: Dict[str, List[Dict]] = {}
 
     # TP mode requires fabric so the inner all_reduces work.
-    enable_fabric = PREFILL_TP_SIZE > 1
+    # Denoise mod sharding also requires fabric (for the all_gather over
+    # the sharded modulation output). Enabling fabric is harmless when
+    # neither path is on — but no benefit either, so opt in only when needed.
+    enable_fabric = PREFILL_TP_SIZE > 1 or DENOISE_MOD_SHARDED
     with open_galaxy_mesh(layout, l1_small_size=L1_SMALL_SIZE, enable_fabric=enable_fabric) as (_parent, submeshes):
         assert len(submeshes) == 3, f"expected 3 submeshes, got {len(submeshes)}"
 
@@ -366,12 +396,15 @@ def test_oc_l1_footprint_probe_full_depth():
             action_dim=ACTION_DIM,
             action_horizon=ACTION_HORIZON,
             layer_paired_l1=LAYER_PAIRED_L1,
+            denoise_layer_paired_l1=DENOISE_LAYER_PAIRED_L1,
             device_siglip=DEVICE_SIGLIP,
             vision_weights_l1=VISION_WEIGHTS_L1,
             expert_layers_per_chip=EXPERT_LAYERS_PER_CHIP,
             prefill_tp_size=PREFILL_TP_SIZE,
             prefill_weights_l1=PREFILL_WEIGHTS_L1,
             prefill_weights_l1_mlp_only=PREFILL_WEIGHTS_L1_MLP_ONLY,
+            denoise_weights_l1=DENOISE_WEIGHTS_L1,
+            denoise_mod_sharded=DENOISE_MOD_SHARDED,
         )
 
         # initialize is one call today; if it OOMs we capture state at the
@@ -436,16 +469,22 @@ def test_oc_l1_footprint_probe_full_depth():
             )
 
     # Sanity: weights got uploaded somewhere — either L1 or DRAM.
-    # If both are zero post-init, the MemoryView call is silently empty.
-    init_snap = results.get("after Pi0_5PipelineC.initialize", [])
-    if init_snap:
-        total_post_init = sum(s["l1_used_mb"] + s["dram_used_mb"] for s in init_snap)
-        assert total_post_init > 0, "post-init L1 + DRAM usage is zero on every chip — MemoryView is silently empty"
+    # The "after init" snapshot reads the parent submeshes and reports 0 for
+    # paired / TP runs because the allocations live on carved children; the
+    # "after warmup forward" snapshot re-targets to those children, so use it
+    # for the sanity check when it's present. Falling back to the init snapshot
+    # keeps the assertion meaningful for replicated runs (no carving).
+    diag_snap = results.get("after warmup forward") or results.get("after Pi0_5PipelineC.initialize") or []
+    if diag_snap:
+        total_used = sum(s["l1_used_mb"] + s["dram_used_mb"] for s in diag_snap)
+        assert (
+            total_used > 0
+        ), "post-init/post-forward L1 + DRAM usage is zero on every chip — MemoryView is silently empty"
         # Diagnostic: print where the weights ended up so the user knows
         # what to do next.
         print()
         print("== Conclusion ==")
-        for s in init_snap:
+        for s in diag_snap:
             placement = (
                 "L1-resident"
                 if s["l1_used_mb"] > s["dram_used_mb"]

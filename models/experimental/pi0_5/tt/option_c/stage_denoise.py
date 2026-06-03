@@ -66,6 +66,7 @@ class StageDenoise:
         action_horizon: int = 50,
         layer_paired_l1: bool = False,
         layers_per_chip: int = EXPERT_LAYERS_PER_DENOISE_CHIP,
+        mod_sharded: bool = False,
     ) -> None:
         if spec.stage_idx != 2:
             raise AssertionError(f"StageDenoise must be stage 2, got {spec.stage_idx}")
@@ -83,6 +84,12 @@ class StageDenoise:
         self.action_horizon = action_horizon
         self.layer_paired_l1 = layer_paired_l1
         self.layers_per_chip = layers_per_chip
+        # When True, the non-paired expert slice shards the per-block adaRMS
+        # modulation Dense across the denoise submesh along its 6144 output
+        # axis. See `Pi0_5OptionCExpertSlice.__init__` for the per-chip
+        # arithmetic and `_precompute_mod_sharded` for the all_gather path.
+        # No-op in the paired path (each layer's mod is already chip-local).
+        self.mod_sharded = mod_sharded
         # Populated in initialize() when layer_paired_l1=True.
         self.micro_submeshes: Optional[List] = None
 
@@ -112,6 +119,14 @@ class StageDenoise:
             return
 
         if self.layer_paired_l1:
+            if self.mod_sharded:
+                # Paired path puts each layer's mod weight on a single-chip
+                # micro-submesh — sharding doesn't apply. Silent ignore so the
+                # caller can toggle one flag at a time, but log a hint via
+                # the constructor invariant comment.
+                # TODO(full-l1): consider making this a hard error if a
+                # validation run picks up both flags together.
+                pass
             lo, hi = self.spec.expert_layer_range
             num_layers = hi - lo
             num_chips = (num_layers + self.layers_per_chip - 1) // self.layers_per_chip
@@ -148,6 +163,7 @@ class StageDenoise:
                 weights=self.weights,
                 submesh=self.submesh,
                 expert_layer_range=self.spec.expert_layer_range,
+                mod_sharded=self.mod_sharded,
             )
             if "pi0_projections" in self.weights and self.weights["pi0_projections"]:
                 self.suffix = Pi0_5OptionCSuffixSlice(

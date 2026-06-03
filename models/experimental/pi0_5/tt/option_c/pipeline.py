@@ -101,7 +101,18 @@ class Pi0_5PipelineC:
     # is the smoke / bench path. Stages already accept this flag; the pipeline
     # just plumbs it through and routes transports via each stage's
     # first_chip_submesh / last_chip_submesh accessor.
+    #
+    # Master flag for "use paired on every stage that doesn't have an explicit
+    # override." Suppressed for prefill when `prefill_tp_size > 1` (TP and paired
+    # are mutually exclusive on prefill). Honored for denoise unless
+    # `denoise_layer_paired_l1` is set explicitly.
     layer_paired_l1: bool = False
+    # Explicit override for the denoise stage's paired placement. None = follow
+    # the master `layer_paired_l1` flag. True = force denoise to paired even
+    # when `layer_paired_l1=False` (e.g. when prefill runs TP=2 but denoise
+    # still needs paired to fit L1 at depth=18). False = force replicated even
+    # when the master flag is True.
+    denoise_layer_paired_l1: Optional[bool] = None
     # Number of expert layers per denoise chip when `layer_paired_l1=True`.
     # Default 3 matches stage_denoise.EXPERT_LAYERS_PER_DENOISE_CHIP — 18 layers
     # over 6 chips. Ignored when layer_paired_l1 is False.
@@ -137,6 +148,33 @@ class Pi0_5PipelineC:
     # load otherwise overflows the L1 headroom above the matmul kernel's
     # static CB region (e.g. vlm_depth=18 with 2 layers per (2,1) at TP=2).
     prefill_weights_l1_mlp_only: bool = False
+    # When True, post-initialize walk the denoise stage's expert + suffix
+    # slices and migrate every matmul weight + LN/mod weight from DRAM to L1.
+    # Default False = today's behavior (uploads land in DRAM via the default
+    # `_upload_l1_replicated` / `_upload_single_chip_l1` paths which still
+    # default to DRAM despite the helper names). Mirrors the Option B
+    # `weights_l1` flag scoped to the denoise stage. NO DRAM fallbacks once
+    # this is enabled — see `_l1_migration.migrate_pipeline_denoise_to_l1`.
+    # Validation agent: enable this in the probe alongside `denoise_mod_sharded`.
+    denoise_weights_l1: bool = False
+    # When True, the per-block adaRMS modulation Dense `[1024, 6144]` is
+    # SHARDED across the denoise submesh along its 6144 output axis instead
+    # of replicated. Cuts the dominant per-chip weight load by `submesh.size`
+    # (6x at the full 6-chip denoise submesh). The forward path issues a
+    # `ttnn.all_gather` to materialize the full mod output per layer before
+    # the modulation; requires fabric init at parent-open.
+    #
+    # IMPORTANT: when `denoise_mod_sharded=True`, the caller MUST open the
+    # parent mesh with `open_galaxy_mesh(enable_fabric=True)` so the fabric
+    # is up for ttnn.all_gather. The pipeline does not own the mesh and
+    # cannot enable fabric itself. Default False = today's behavior
+    # (replicated mod weight, no fabric needed).
+    #
+    # Note: today this flag is honored only by the non-paired (replicated)
+    # `Pi0_5OptionCExpertSlice` constructor — sharding doesn't apply to
+    # single-chip submeshes used in the paired path. The mod weight on the
+    # paired path is already chip-local (one layer's mod = one chip).
+    denoise_mod_sharded: bool = False
 
     stage_0: Optional[StageVision] = None
     stage_1: Optional[StagePrefill] = None
@@ -168,12 +206,19 @@ class Pi0_5PipelineC:
             device_siglip=self.device_siglip,
             vision_weights_l1=self.vision_weights_l1,
         )
+        # Prefill paired is suppressed by TP mode (mutually exclusive in StagePrefill).
+        # Denoise paired follows the explicit override when set, otherwise the master.
+        prefill_paired = self.layer_paired_l1 and self.prefill_tp_size == 1
+        denoise_paired = (
+            self.denoise_layer_paired_l1 if self.denoise_layer_paired_l1 is not None else self.layer_paired_l1
+        )
+
         self.stage_1 = StagePrefill(
             s[1],
             self.submeshes[1],
             self.config,
             self.weights,
-            layer_paired_l1=self.layer_paired_l1,
+            layer_paired_l1=prefill_paired,
             prefill_tp_size=self.prefill_tp_size,
         )
         self.stage_2 = StageDenoise(
@@ -184,8 +229,9 @@ class Pi0_5PipelineC:
             denoise_steps=self.denoise_steps,
             action_dim=self.action_dim,
             action_horizon=self.action_horizon,
-            layer_paired_l1=self.layer_paired_l1,
+            layer_paired_l1=denoise_paired,
             layers_per_chip=self.expert_layers_per_chip,
+            mod_sharded=self.denoise_mod_sharded,
         )
         self.kv_migrator = KVMigration(denoise_submesh=self.submeshes[2])
 
@@ -200,6 +246,13 @@ class Pi0_5PipelineC:
             from ._l1_migration import migrate_prefill_weights_to_l1
 
             migrate_prefill_weights_to_l1(self, mlp_only=self.prefill_weights_l1_mlp_only)
+
+        # Opt-in L1 migration for the denoise (expert + suffix) path.
+        # Mirrors the Option B `weights_l1` migration step scoped to stage 2.
+        if self.denoise_weights_l1:
+            from ._l1_migration import migrate_pipeline_denoise_to_l1
+
+            migrate_pipeline_denoise_to_l1(self)
 
     # ------------------------------------------------------------------ #
     # End-to-end forward                                                 #
@@ -274,11 +327,18 @@ class Pi0_5PipelineC:
         ttnn.deallocate(h_after_1)
 
         # ---------- KV migration (layer-paired, prefill → denoise) ----------
+        # When denoise runs on per-chip micro-submeshes, route each layer's KV
+        # to its owning denoise chip (else past_k on the full 6-chip submesh +
+        # k_rope on chip j inside the block forward triggers "Operands to
+        # concat need to be on the same device" in the KV-cache concat).
         t0 = time.perf_counter()
         per_layer_kv: List[Optional[Tuple["ttnn.Tensor", "ttnn.Tensor"]]] = [None] * self.config.vlm_config.depth
         for global_idx, kv in self.stage_1.get_kv_cache():
             per_layer_kv[global_idx] = kv
-        self.kv_migrator.migrate_layer_paired(per_layer_kv)
+        denoise_micro = (
+            self.stage_2.micro_submeshes if self.stage_2 is not None and self.stage_2.layer_paired_l1 else None
+        )
+        self.kv_migrator.migrate_layer_paired(per_layer_kv, denoise_micro_submeshes=denoise_micro)
         prefix_kv_on_denoise = self.kv_migrator.as_list(self.config.vlm_config.depth)
         t.kv_migration_ms = (time.perf_counter() - t0) * 1000
 

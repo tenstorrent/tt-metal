@@ -3,9 +3,11 @@
 
 """Stage 0 — vision orchestrator for Option C.
 
-Owns the 4-chip vision submesh (3 SigLIP chips + 1 mm_projector/embed chip
-in the eventual on-device layout; currently host-resident SigLIP per
-`vision_slice.py`'s scaffolding mode). Exposes `initialize()` and
+Owns the 8-chip (2,4) vision submesh. Under `device_siglip=True` SigLIP-27
+runs across 8 single-chip micro-submeshes (default split
+4/4/4/4/3/3/3/2 — see `Pi0_5OptionCVisionSliceSplit`); under the
+scaffolding host-SigLIP path the submesh just carries the projected
+features + language embedding. Exposes `initialize()` and
 `forward(pixel_values, language_token_ids)` returning prefix
 hidden_states on the vision submesh ready to be transported to stage 1.
 """
@@ -61,15 +63,21 @@ class StageVision:
     def initialize(self) -> None:
         """Build the vision slice.
 
-        With `device_siglip=True`, the SigLIP encoder runs on 3 vision chips
-        (9 layers each) and the mm_projector on the 4th chip — the target
-        Option C placement (deployment plan §3.1). Otherwise SigLIP runs on
-        the host (the scaffolding fallback used by the current smoke tests).
+        With `device_siglip=True`, the SigLIP encoder runs across all 8
+        vision chips (default 4+4+4+4+3+3+3+2 layer split) and the
+        mm_projector co-locates with the last SigLIP chunk — the target
+        Option C placement (deployment plan §3.1). Otherwise SigLIP runs
+        on the host (the scaffolding fallback used by the current smoke
+        tests).
         """
         if self.slice is not None:
             return
         if self.device_siglip:
-            self.micro_submeshes = create_per_chip_submeshes(self.submesh, count=4)
+            # Carve all chips of the (2,4) vision submesh — count is taken
+            # from the submesh itself so this stays correct if the layout
+            # ever changes again.
+            num_chips = self.submesh.get_num_devices()
+            self.micro_submeshes = create_per_chip_submeshes(self.submesh, count=num_chips)
             self.slice = Pi0_5OptionCVisionSliceSplit(
                 config=self.config,
                 weights=self.weights,
@@ -88,12 +96,13 @@ class StageVision:
     def last_chip_submesh(self):
         """Submesh where build_prefix_hidden's output lives.
 
-        Device-SigLIP mode: the projector chip. Host mode: the full submesh
+        Device-SigLIP mode: the projector chip (the last SigLIP chunk's
+        chip — `slice.projector_chip_idx`). Host mode: the full submesh
         (since the prefix hidden is replicated there).
         """
         if self.device_siglip:
-            assert self.micro_submeshes is not None
-            return self.micro_submeshes[3]
+            assert self.micro_submeshes is not None and self.slice is not None
+            return self.micro_submeshes[self.slice.projector_chip_idx]
         return self.submesh
 
     def forward(

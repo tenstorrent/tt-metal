@@ -217,10 +217,14 @@ class PatchEmbeddingTTNN:
         # Transpose for TTNN linear: (hidden_size, in_features) -> (in_features, hidden_size)
         linear_weight = linear_weight.T.contiguous()
 
-        # Transfer to device first, then pad on device
+        # Transfer to device first, then pad on device.
+        # Full-L1 mandate: weights upload at bf8_b. The patch-embed linear
+        # is called once per inference on a [B, 256, 588] input, so any
+        # tiny bf8 quant loss here is dominated by the rest of SigLIP's
+        # 27 attn+MLP layers (also bf8_b). See L1_PLACEMENT_FINDINGS.md.
         linear_weight_ttnn = ttnn.from_torch(
             linear_weight,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -238,7 +242,7 @@ class PatchEmbeddingTTNN:
 
         # Bias (if present)
         if conv_bias is not None:
-            self._linear_bias = tensor_1d_to_2d_ttnn(conv_bias, device, dtype=ttnn.bfloat16)
+            self._linear_bias = tensor_1d_to_2d_ttnn(conv_bias, device, dtype=ttnn.bfloat8_b)
         else:
             self._linear_bias = None
 
@@ -994,10 +998,16 @@ class SigLIPBlockTTNN:
         self.config = config
         self.device = device
 
-        # Layer norms
+        # Layer norms.
+        # TODO(full-l1): LayerNorm kernels traditionally consume bf16
+        # weight+bias tensors; switching to bf8_b per the full-L1 mandate
+        # is the change requested by the user. If the ln kernel rejects
+        # bf8_b weight tiles, the validation agent will catch it on
+        # first probe — revert to bf16 here or cast back to bf16 inside
+        # `_sharded_layer_norm` if so.
         self.ln1_weight = ttnn.from_torch(
             weights["layer_norm1.weight"].reshape(1, 1, -1),
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1006,7 +1016,7 @@ class SigLIPBlockTTNN:
         if "layer_norm1.bias" in weights:
             self.ln1_bias = ttnn.from_torch(
                 weights["layer_norm1.bias"].reshape(1, 1, -1),
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1016,7 +1026,7 @@ class SigLIPBlockTTNN:
 
         self.ln2_weight = ttnn.from_torch(
             weights["layer_norm2.weight"].reshape(1, 1, -1),
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1025,7 +1035,7 @@ class SigLIPBlockTTNN:
         if "layer_norm2.bias" in weights:
             self.ln2_bias = ttnn.from_torch(
                 weights["layer_norm2.bias"].reshape(1, 1, -1),
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1302,10 +1312,14 @@ class SigLIPVisionTowerTTNN:
             self.position_ids = ttnn.arange(0, num_patches, 1, dtype=ttnn.uint32, device=device)
             self.position_ids = ttnn.reshape(self.position_ids, (1, -1))
 
-            # Load position embedding weights
+            # Load position embedding weights at bf8_b per the full-L1
+            # mandate. TODO(full-l1): pos embeddings are added once per
+            # inference via `ttnn.embedding(..., pos_emb_weights)`; if
+            # the embedding kernel rejects bf8_b row tables on the
+            # current ttnn version, revert this site to bf16.
             self.pos_emb_weights = ttnn.as_tensor(
                 pos_emb,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1334,9 +1348,13 @@ class SigLIPVisionTowerTTNN:
             post_ln_bias = None
 
         if post_ln_weight is not None:
-            self.post_ln_weight = tensor_1d_to_2d_ttnn(post_ln_weight, device, dtype=ttnn.bfloat16)
+            # TODO(full-l1): post_ln is the final layer_norm before the
+            # mm_projector. Same kernel-compat caveat as the per-block
+            # LNs above — bf8_b may require a cast back to bf16 inside
+            # the kernel; revert if the validation probe trips.
+            self.post_ln_weight = tensor_1d_to_2d_ttnn(post_ln_weight, device, dtype=ttnn.bfloat8_b)
             self.post_ln_bias = (
-                tensor_1d_to_2d_ttnn(post_ln_bias, device, dtype=ttnn.bfloat16) if post_ln_bias is not None else None
+                tensor_1d_to_2d_ttnn(post_ln_bias, device, dtype=ttnn.bfloat8_b) if post_ln_bias is not None else None
             )
         else:
             self.post_ln_weight = None
@@ -1542,7 +1560,10 @@ class MultiModalProjectorTTNN:
         )
 
         if "linear.bias" in weights:
-            self.bias = tensor_1d_to_2d_ttnn(weights["linear.bias"], device, dtype=ttnn.bfloat16)
+            # bf8_b to match the bf8_b projector weight (mm_projector is a
+            # single linear; fused bias must share dtype with the matmul
+            # accumulator path).
+            self.bias = tensor_1d_to_2d_ttnn(weights["linear.bias"], device, dtype=ttnn.bfloat8_b)
         else:
             self.bias = None
 
