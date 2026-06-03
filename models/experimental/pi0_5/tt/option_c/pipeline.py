@@ -132,6 +132,11 @@ class Pi0_5PipelineC:
     # See OPTION_B_L1_ASSESSMENT.md for the validated arithmetic (Option B
     # TP=8 path; Option C TP=2 has even more headroom: 0.46 vs 1.03 MB/bank).
     prefill_weights_l1: bool = False
+    # When True (and `prefill_weights_l1=True`), only migrate the MLP weights
+    # (gate/up/down) to L1; Q/K/V/O stay in DRAM. Needed when per-chip weight
+    # load otherwise overflows the L1 headroom above the matmul kernel's
+    # static CB region (e.g. vlm_depth=18 with 2 layers per (2,1) at TP=2).
+    prefill_weights_l1_mlp_only: bool = False
 
     stage_0: Optional[StageVision] = None
     stage_1: Optional[StagePrefill] = None
@@ -194,7 +199,7 @@ class Pi0_5PipelineC:
         if self.prefill_weights_l1 and self.prefill_tp_size > 1:
             from ._l1_migration import migrate_prefill_weights_to_l1
 
-            migrate_prefill_weights_to_l1(self)
+            migrate_prefill_weights_to_l1(self, mlp_only=self.prefill_weights_l1_mlp_only)
 
     # ------------------------------------------------------------------ #
     # End-to-end forward                                                 #

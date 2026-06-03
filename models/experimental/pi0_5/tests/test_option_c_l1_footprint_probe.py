@@ -133,6 +133,10 @@ PREFILL_TP_SIZE = int(os.environ.get("PI0_OC_L1_PROBE_PREFILL_TP", "1"))
 # Aliased onto the existing PI0_OC_L1_PROBE_WEIGHTS_L1 knob so the same
 # flag drives Option B and Option C (track A spec).
 PREFILL_WEIGHTS_L1 = os.environ.get("PI0_OC_L1_PROBE_WEIGHTS_L1") == "1"
+# When set, only migrate the MLP (gate/up/down) weights to L1; Q/K/V/O stay
+# in DRAM. Needed at vlm_depth=18 where 2 layers per (2,1) sub-mesh + full
+# migration exceeds the L1 headroom above the matmul CB region.
+PREFILL_WEIGHTS_L1_MLP_ONLY = os.environ.get("PI0_OC_L1_PROBE_WEIGHTS_L1_MLP_ONLY") == "1"
 # L1 small / static-CB reservation, per-bank. 24576 bytes = 24 KB is the
 # value every working pi0.5 single-device test uses (see README.md:172,
 # test_perf_ttnn_full_e2e_trace.py:95, libero_rollout.py:979, all of
@@ -268,6 +272,7 @@ def _echo_env() -> None:
     print(f"  PI0_OC_L1_PROBE_EXPERT_LAYERS_PER_CHIP = {EXPERT_LAYERS_PER_CHIP}")
     print(f"  PI0_OC_L1_PROBE_PREFILL_TP             = {PREFILL_TP_SIZE}")
     print(f"  PI0_OC_L1_PROBE_WEIGHTS_L1             = {PREFILL_WEIGHTS_L1}")
+    print(f"  PI0_OC_L1_PROBE_WEIGHTS_L1_MLP_ONLY    = {PREFILL_WEIGHTS_L1_MLP_ONLY}")
 
 
 # ----------------------------------------------------------------------------#
@@ -366,6 +371,7 @@ def test_oc_l1_footprint_probe_full_depth():
             expert_layers_per_chip=EXPERT_LAYERS_PER_CHIP,
             prefill_tp_size=PREFILL_TP_SIZE,
             prefill_weights_l1=PREFILL_WEIGHTS_L1,
+            prefill_weights_l1_mlp_only=PREFILL_WEIGHTS_L1_MLP_ONLY,
         )
 
         # initialize is one call today; if it OOMs we capture state at the
