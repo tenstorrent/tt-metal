@@ -58,6 +58,15 @@ _LONG_SEQ_LINEAR_DRAM_ROWS = 256
 # buffers on Blackhole (failure mode: ``Statically allocated circular buffers ... clash with L1
 # buffers``). The demo's 22 s chain audio ≈ 1100 frames; pushing past needs the DRAM path.
 _LONG_AUDIO_RES_DRAM_THRESHOLD = 1024
+# Above this mel seq the conformer relative-position attention is computed in QUERY-BLOCKS. The full
+# path materializes [B,H,S,S] scores + softmax + the [S,S,D] rel-pos table, which CB-clashes L1 at
+# S≈3300 and OOMs at 3600 — the encoder's hard ceiling. The chunked path loops query-blocks of
+# ``_ATTN_QUERY_CHUNK`` rows: each does ``q_blk@k + per-block rel logits + softmax + @v`` on
+# ``[B,H,Qc,S]`` and builds only a ``[Qc,S,D]`` table slice, so peak memory is O(Qc·S) not O(S²) →
+# arbitrary-length speech (matches HF, which attends over a 20000-frame window). Gated ABOVE the
+# validated full-attention range (demo ≤2048, PCC test 3000) so that path stays bit-identical.
+_ATTN_QUERY_CHUNK_THRESHOLD = 3072
+_ATTN_QUERY_CHUNK = 512
 # A relative-position table at ``seq_len`` is ``seq * head_dim * seq * 2 B`` bf16. With 24
 # conformer layers each holding its own (distinct ``distance_weight`` per layer), caching every
 # table at long audio overflows DRAM (seq=2125 → ~578 MB each). Above this size cap the table
@@ -129,6 +138,9 @@ class TTSeamlessM4Tv2SpeechEncoder:
         # Device flat uint32 distance-index tensors ``[1, S*S]`` keyed by
         # ``(seq_len, left_max, right_max)`` — fed to on-device ``ttnn.embedding``.
         self._rel_pos_idx_cache: dict[Tuple[int, int, int], ttnn.Tensor] = {}
+        # Per-query-block uint32 distance index ``[Qc, S]`` keyed by ``(q0, Qc, S, left, right)`` for the
+        # long-seq query-block attention path (see ``_relative_table_block``).
+        self._rel_block_idx_cache: dict[Tuple[int, int, int, int, int], ttnn.Tensor] = {}
         # ``(batch, seq_len)`` already passed through ``pre_warm`` for this forward lifetime.
         self._runtime_warmed: set[Tuple[int, int]] = set()
         # Cache the full embedded position table ``[S, S, head_dim]`` per ``(seq_len, weight_id)``
@@ -1283,6 +1295,143 @@ class TTSeamlessM4Tv2SpeechEncoder:
         ttnn.deallocate(rel_sid)
         return ttnn.reshape(rel_bh, (batch, num_heads, seq_len, seq_len))
 
+    def _relative_table_block(
+        self, q0: int, q1: int, seq_len: int, *, distance_weight: ttnn.Tensor, left_max: int, right_max: int
+    ) -> ttnn.Tensor:
+        """``[Qc, S, head_dim]`` rel-pos table for query rows ``[q0:q1]`` (all keys) — never the full
+        ``[S, S, D]`` table, so peak memory is O(Qc·S). Index grid cached per ``(q0, Qc, S, l, r)``."""
+        qc = q1 - q0
+        idx_key = (q0, qc, seq_len, left_max, right_max)
+        idx_dev = self._rel_block_idx_cache.get(idx_key)
+        if idx_dev is None:
+            r = np.arange(seq_len, dtype=np.int64)
+            l = np.arange(q0, q1, dtype=np.int64)
+            dist = (np.clip(r[np.newaxis, :] - l[:, np.newaxis], -left_max, right_max) + left_max).astype(np.int32)
+            idx_dev = ttnn.from_torch(
+                torch.from_numpy(np.ascontiguousarray(dist)),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=mesh_mapper(self.device),
+            )
+            self._rel_block_idx_cache[idx_key] = idx_dev
+        return ttnn.embedding(
+            idx_dev, weight=distance_weight, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    @staticmethod
+    def _relative_logits_bmm_block(
+        q_blk: ttnn.Tensor,
+        table_blk: ttnn.Tensor,
+        *,
+        batch: int,
+        num_heads: int,
+        qc: int,
+        seq_len: int,
+        memory_config: ttnn.MemoryConfig,
+        compute_kernel_config: ttnn.DeviceComputeKernelConfig,
+    ) -> ttnn.Tensor:
+        """Per-query-block ``einsum('bhqd,qkd->bhqk', q_blk, table_blk)`` → ``[B, H, Qc, S]``."""
+        head_dim = int(q_blk.shape[-1])
+        q_bh = ttnn.reshape(q_blk, (batch * num_heads, qc, head_dim))
+        q_sid = ttnn.permute(q_bh, (1, 0, 2), memory_config=memory_config)  # [Qc, bh, D]
+        ttnn.deallocate(q_bh)
+        rel_sid = ttnn.matmul(
+            q_sid,
+            table_blk,
+            transpose_b=True,
+            memory_config=memory_config,
+            compute_kernel_config=compute_kernel_config,
+        )  # [Qc, bh, S]
+        ttnn.deallocate(q_sid)
+        rel_bh = ttnn.permute(rel_sid, (1, 0, 2), memory_config=memory_config)  # [bh, Qc, S]
+        ttnn.deallocate(rel_sid)
+        return ttnn.reshape(rel_bh, (batch, num_heads, qc, seq_len))
+
+    def _chunked_relative_attention(
+        self,
+        q: ttnn.Tensor,
+        k: ttnn.Tensor,
+        v: ttnn.Tensor,
+        attention_mask_4d: Optional[ttnn.Tensor],
+        *,
+        attn_module: Any,
+        batch: int,
+        num_heads: int,
+        seq_len: int,
+    ) -> ttnn.Tensor:
+        """Query-block conformer relative attention for long mel seq (> ``_ATTN_QUERY_CHUNK_THRESHOLD``).
+
+        Two-level chunking so peak memory is O(Qc·S) and the softmax CB is O(k_chunk), lifting the
+        full path's [B,H,S,S]/[S,S,D] L1-clash + OOM ceiling:
+          * QUERY blocks of ``_ATTN_QUERY_CHUNK`` rows — only a ``[Qc,S,D]`` rel-pos table slice and a
+            ``[B,H,Qc,S]`` rel-logit bias are built per block, never the full ``[S,S,D]``/``[S,S]``.
+          * the per-block attention is the FUSED SDPA (flash: chunks keys with an online softmax →
+            no S-wide softmax CB), with the rel logits (+ padding/chunk mask) passed as ``attn_mask``
+            and ``scale=1.0`` (``q`` is pre-scaled by 1/√head_dim). This is the PCC-exact
+            fused-SDPA-with-rel-bias form. Each query's attention is independent, so this matches the
+            full path's result.
+        ``k`` arrives ``[B,H,D,S]`` (transposed for the full path); SDPA wants ``[B,H,S,D]``.
+        """
+        head_dim = int(q.shape[-1])
+        dist_w = attn_module.distance_embedding.weight
+        left_max = int(attn_module.left_max_position_embeddings)
+        right_max = int(attn_module.right_max_position_embeddings)
+        mc = ttnn.DRAM_MEMORY_CONFIG
+        k_sdpa = ttnn.permute(k, (0, 1, 3, 2), memory_config=mc)  # [B,H,D,S] -> [B,H,S,D]
+        ttnn.deallocate(k)
+        out_blocks: list[ttnn.Tensor] = []
+        for q0 in range(0, seq_len, _ATTN_QUERY_CHUNK):
+            q1 = min(q0 + _ATTN_QUERY_CHUNK, seq_len)
+            qc = q1 - q0
+            q_blk = ttnn.slice(q, [0, 0, q0, 0], [batch, num_heads, q1, head_dim], [1, 1, 1, 1], memory_config=mc)
+            table_blk = self._relative_table_block(
+                q0, q1, seq_len, distance_weight=dist_w, left_max=left_max, right_max=right_max
+            )
+            rel_blk = self._relative_logits_bmm_block(
+                q_blk,
+                table_blk,
+                batch=batch,
+                num_heads=num_heads,
+                qc=qc,
+                seq_len=seq_len,
+                memory_config=mc,
+                compute_kernel_config=self._linear_compute_cfg,
+            )  # [B,H,Qc,S] — the additive rel-pos bias
+            ttnn.deallocate(table_blk)
+            if attention_mask_4d is not None:
+                mask_blk = ttnn.slice(
+                    attention_mask_4d,
+                    [0, 0, q0, 0],
+                    [int(attention_mask_4d.shape[0]), int(attention_mask_4d.shape[1]), q1, seq_len],
+                    [1, 1, 1, 1],
+                    memory_config=mc,
+                )
+                rel_blk = ttnn.add(rel_blk, mask_blk, memory_config=mc)  # broadcasts over heads
+                ttnn.deallocate(mask_blk)
+            out_blk = ttnn.transformer.scaled_dot_product_attention(
+                q_blk,
+                k_sdpa,
+                v,
+                attn_mask=rel_blk,
+                is_causal=False,
+                scale=1.0,
+                program_config=self._sdpa_program_config(qc, seq_len),
+                compute_kernel_config=self._sdpa_compute_cfg,
+                memory_config=mc,
+            )  # [B,H,Qc,D]
+            ttnn.deallocate(q_blk)
+            ttnn.deallocate(rel_blk)
+            out_blocks.append(out_blk)
+        ttnn.deallocate(q)
+        ttnn.deallocate(k_sdpa)
+        ttnn.deallocate(v)
+        attn_out = ttnn.concat(out_blocks, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        for o in out_blocks:
+            ttnn.deallocate(o)
+        return attn_out
+
     def _mh_attention(
         self,
         hidden_states: ttnn.Tensor,
@@ -1335,6 +1484,19 @@ class TTSeamlessM4Tv2SpeechEncoder:
             ttnn.deallocate(q)
             ttnn.deallocate(k)
             ttnn.deallocate(v)
+        elif seq_len > _ATTN_QUERY_CHUNK_THRESHOLD:
+            # Long mel seq: query-block attention (peak O(Qc·S), lifts the full-path L1/OOM ceiling).
+            # Gated above the validated full-attention range so seq ≤ threshold is bit-identical.
+            attn_out = self._chunked_relative_attention(
+                q,
+                k,
+                v,
+                attention_mask_4d,
+                attn_module=attn_module,
+                batch=batch,
+                num_heads=num_heads,
+                seq_len=seq_len,
+            )
         else:
             # scores [B, H, S, S] — L1 fits for short seq on single device.
             # TP at S>=128 and long audio use DRAM (L1 scores diverge on 1×4 at S=256).
