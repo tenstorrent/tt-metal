@@ -225,9 +225,14 @@ def test_demo_text(
         f"Prompt: {actual_len} tokens (block budget: {MAX_NUM_BLOCKS} blocks × {BLOCK_SIZE} = {max_seq_len} tokens)"
     )
 
-    # Warmup: compile programs (not counted in TTFT)
+    # Warmup: compile programs (not counted in TTFT). A short traced prompt takes the masked
+    # fixed-bucket path, whose programs are compiled inside capture_prefill_trace_chunked
+    # (warmup_prefill_masked_buckets), so the legacy model.prefill warmup is redundant there —
+    # and it would hit the pre-existing small-T L1 clash in the non-paged concat path. Skip it.
+    PREFILL_CHUNK = 2048
     t_compile = time.time()
-    _warmup_prefill(model, device, token_ids)
+    if not (use_trace and actual_len < PREFILL_CHUNK):
+        _warmup_prefill(model, device, token_ids)
     t_compile = time.time() - t_compile
 
     if use_trace:
@@ -302,7 +307,14 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     )
     t_cap = time.time()
     if use_chunked_trace:
-        model.capture_prefill_trace_chunked(device, page_table, chunk_size=chunk_size)
+        # Only warm the masked short-prompt buckets when this prompt will actually take the
+        # masked path (T < chunk_size). For long prompts the prefill uses the chunk-trace
+        # replay + eager tail, so warming buckets is wasted capture work (and can perturb the
+        # memory state the eager tail compiles into). vLLM keeps the default (warm all buckets
+        # once at startup, since request sizes are unknown there).
+        model.capture_prefill_trace_chunked(
+            device, page_table, chunk_size=chunk_size, warmup_masked_buckets=(T < chunk_size)
+        )
     else:
         model.capture_prefill_trace_paged(device, page_table, bucket_size=bucket_size, chunk_size=chunk_size)
     logger.info(f"Prefill trace captured in {time.time() - t_cap:.1f}s")
@@ -317,7 +329,13 @@ def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_to
     padded_token_ids = torch.cat([token_ids, last_token], dim=1)
 
     t0 = time.time()
-    if use_chunked_trace:
+    if use_chunked_trace and T < chunk_size:
+        # Short prompt (whole prompt fits under one chunk): masked fixed-bucket prefill —
+        # bounded program set, no request-time compile, decode-correct GDN state. Mirrors the
+        # vLLM prefill_dispatch routing. capture_prefill_trace_chunked above already warmed the
+        # bucket programs and put the GDN in in-place mode that the decode trace continues from.
+        logits = model.prefill_masked_bucket(token_ids, page_table, actual_len=T)
+    elif use_chunked_trace:
         logits = model.prefill_traced_chunked(padded_token_ids, page_table, actual_len=T)
     else:
         logits = model.prefill_traced_paged(padded_token_ids, page_table, actual_len=T)

@@ -74,8 +74,8 @@ class Qwen35GatedDeltaNet:
         # paged prefill trace path in model.py. Unused by the default chunk-outer path.
         self._trace_prefill_output = None
 
-    def forward(self, x, mode="recurrent", chunk_size=None):
-        return recurrent_forward(self, x, mode=mode, chunk_size=chunk_size)
+    def forward(self, x, mode="recurrent", chunk_size=None, valid_len=None):
+        return recurrent_forward(self, x, mode=mode, chunk_size=chunk_size, valid_len=valid_len)
 
     def set_external_state(self, recurrent_state, conv_state):
         """Point layer at externally-allocated state buffers.
