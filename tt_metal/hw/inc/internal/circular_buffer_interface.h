@@ -7,15 +7,23 @@
 #include <cstdint>
 
 #include "tt-metalium/circular_buffer_constants.h"
-#include "tt-metalium/remote_circular_buffer_packing.h"
+#include "hostdev/dev_msgs.h"
 #include "internal/risc_attribs.h"
 
 constexpr static std::uint32_t REMOTE_CIRCULAR_BUFFER_ALIGNED_PAGE_SIZE = L1_ALIGNMENT;
 
-// The remote_cb_pack / remote_cb_num_receivers / remote_cb_remote_pages_sent_ptr inline
-// helpers (and their REMOTE_CB_PACKED_* constants) are declared in
-// tt-metalium/remote_circular_buffer_packing.h (host+device shared) so host code that
-// composes a remote-CB config slot can use the same packing.
+// Pack/unpack helpers for RemoteSenderCBInterface::num_receivers_and_remote_pages_sent_ptr.
+// The REMOTE_CB_PACKED_* constants they use live in hostdev/dev_msgs.h. Host code composes the
+// same field with matching bit math in global_circular_buffer.cpp.
+inline constexpr std::uint32_t remote_cb_num_receivers(std::uint32_t packed) {
+    return packed >> REMOTE_CB_PACKED_COUNT_SHIFT;
+}
+inline constexpr std::uint32_t remote_cb_remote_pages_sent_ptr(std::uint32_t packed) {
+    return packed & REMOTE_CB_PACKED_ADDR_MASK;
+}
+inline constexpr std::uint32_t remote_cb_pack(std::uint32_t num_receivers, std::uint32_t remote_pages_sent_ptr) {
+    return (num_receivers << REMOTE_CB_PACKED_COUNT_SHIFT) | (remote_pages_sent_ptr & REMOTE_CB_PACKED_ADDR_MASK);
+}
 
 struct RemoteSenderCBInterface {
     uint32_t config_ptr;

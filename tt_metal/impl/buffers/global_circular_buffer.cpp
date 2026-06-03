@@ -6,7 +6,7 @@
 #include <buffer.hpp>
 #include <buffer_types.hpp>
 #include <circular_buffer_constants.h>
-#include <tt-metalium/remote_circular_buffer_packing.h>
+#include "llrt/hal/generated/dev_msgs.hpp"
 #include <core_coord.hpp>
 #include <device.hpp>
 #include <global_circular_buffer.hpp>
@@ -42,6 +42,15 @@
 namespace tt::tt_metal::experimental {
 
 namespace {
+
+// Host-side mirror of the device remote_cb_pack (circular_buffer_interface.h): packs
+// num_receivers into bits [31:24] and the remote pages_sent L1 address into bits [23:0]
+// of the single RemoteSenderCBInterface::num_receivers_and_remote_pages_sent_ptr field.
+// The REMOTE_CB_PACKED_* constants live in dev_msgs.h (host-visible via tt::tt_metal::dev_msgs).
+uint32_t remote_cb_pack(uint32_t num_receivers, uint32_t remote_pages_sent_ptr) {
+    return (num_receivers << dev_msgs::REMOTE_CB_PACKED_COUNT_SHIFT) |
+           (remote_pages_sent_ptr & dev_msgs::REMOTE_CB_PACKED_ADDR_MASK);
+}
 
 // Body shared by the public Worker ctor and the private DRAM-sender ctor (with tag).
 // Populates the core sets and reports the per-sender max receiver count.

@@ -112,6 +112,14 @@ constexpr uint64_t RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_INIT = 0x40404040404040;
 constexpr uint8_t SHARED_GLOBALS_READY_WAIT = 0;
 constexpr uint8_t SHARED_GLOBALS_READY_GO = 1;
 
+// Packing of RemoteSenderCBInterface::num_receivers_and_remote_pages_sent_ptr (part of the
+// host<->device remote-CB config contract): L1 addresses fit in 24 bits (< 2 MB) and
+// num_receivers fits in 8 bits, so the two share a single 32-bit slot. The device pack/unpack
+// helpers live in circular_buffer_interface.h; host code packs the same field in
+// global_circular_buffer.cpp.
+constexpr static std::uint32_t REMOTE_CB_PACKED_ADDR_MASK = 0x00FFFFFFu;
+constexpr static std::uint32_t REMOTE_CB_PACKED_COUNT_SHIFT = 24;
+
 struct ncrisc_halt_msg_t {
     volatile uint32_t resume_addr;
     volatile uint32_t stack_save;
