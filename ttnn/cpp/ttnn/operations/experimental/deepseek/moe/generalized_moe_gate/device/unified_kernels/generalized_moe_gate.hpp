@@ -140,7 +140,8 @@ struct GeneralizedMoeGate {
             tile_regs_wait();
 
 #if defined(GMG_DUMP_AFTER_SUM_TOP2) || defined(GMG_DUMP_AFTER_STEP1) || defined(GMG_DUMP_AFTER_STEP0) || \
-    defined(GMG_PROBE_LANEMAP) || defined(GMG_DUMP_AFTER_ROTATE) || defined(GMG_PROBE_OFFSETS)
+    defined(GMG_PROBE_LANEMAP) || defined(GMG_DUMP_AFTER_ROTATE) || defined(GMG_PROBE_OFFSETS) ||         \
+    defined(GMG_DUMP_SRC)
             // DEBUG PROBE: dump an intermediate layout instead of the final result.
             //   dst tile 2 = bias region (ranking keys) -> output_cb
             //   dst tile 1 = indices region (expert ids) -> output_indices_cb

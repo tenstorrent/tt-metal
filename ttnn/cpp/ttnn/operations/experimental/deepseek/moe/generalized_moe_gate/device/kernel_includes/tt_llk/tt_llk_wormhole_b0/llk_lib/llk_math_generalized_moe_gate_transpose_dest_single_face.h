@@ -99,10 +99,11 @@ inline void generalized_moe_gate_transpose_dest_single_face_step1_configure_mop(
     tmp.program();
 }
 
-// step1_hi: EXACT clone of step1 but with the MOVD2B source DEST row = d2b_dst (step1 uses 0).
-// Reliable model: post-step0, group g lives at DEST row g, and step1 reads rows 0-3 -> groups 0-3.
-// So feeding rows 4-7 (d2b_dst=4) should lay out groups 4-7 into the merge slot. Validate via the
-// REAL test's row0 (not the scratch-laden full dump). b2d_base unused.
+// step1_hi: clone of step1 with two knobs:
+//   d2b_dst  = MOVD2B source DEST row (which 4 groups to read; post-step0 group g is at row g).
+//   b2d_base = MOVB2D output DEST row base (where to write the resulting run; step1 uses 0).
+// The output base lets the LOW half write its run to rows 8-15 (b2d_base=8) so it does NOT clobber
+// the post-step0 groups 4-7 sitting at rows 4-7 — which the HIGH half (d2b_dst=4) then reads.
 template <std::uint32_t num_tiles, bool is_32bit, std::uint32_t d2b_dst, std::uint32_t b2d_base>
 inline void generalized_moe_gate_transpose_dest_single_face_step1_hi_configure_mop() {
     static_assert(!is_32bit, "32-bit is not supported for single face transpose");
@@ -112,16 +113,34 @@ inline void generalized_moe_gate_transpose_dest_single_face_step1_hi_configure_m
 
     TTI_TRNSPSRCB;
 
-    TTI_MOVB2D(0, 16, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 0);
-    TTI_MOVB2D(0, 18, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 1);
-    TTI_MOVB2D(0, 20, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 2);
-    TTI_MOVB2D(0, 22, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 3);
-    TTI_MOVB2D(0, 24, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 4);
-    TTI_MOVB2D(0, 26, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 5);
-    TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, 6);
-    TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, 7);
+    TTI_MOVB2D(0, 16, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 0);
+    TTI_MOVB2D(0, 18, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 1);
+    TTI_MOVB2D(0, 20, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 2);
+    TTI_MOVB2D(0, 22, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 3);
+    TTI_MOVB2D(0, 24, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 4);
+    TTI_MOVB2D(0, 26, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 5);
+    TTI_MOVB2D(0, 28, ADDR_MOD_3, p_movb2d::MOV_1_ROW, b2d_base + 6);
+    TTI_MOVB2D(0, 30, ADDR_MOD_2, p_movb2d::MOV_1_ROW, b2d_base + 7);
     std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 11);
 
+    ckernel_template tmp(num_tiles, 1, replay_instr);
+    tmp.program();
+}
+
+// Plain (non-transposed) FPU copy of 4 DEST rows [src..src+3] -> [dst..dst+3], across the 3 data
+// regions (scores/indices/bias, via num_tiles + the ADDR_MOD_2 base advance). Used to stash/restore
+// data in rows 8-15 — which the SFPU merge cannot address (SFPU offsets >=8 wrap) but the FPU can —
+// during the ungrouped two-half assembly. src/dst must be 4-row aligned (0,4,8,12).
+template <std::uint32_t num_tiles, bool is_32bit, std::uint32_t src, std::uint32_t dst>
+inline void generalized_moe_gate_copy4rows_configure_mop() {
+    static_assert(!is_32bit, "32-bit is not supported");
+    lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 5);
+    TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, src);     // DEST rows src..+3 -> SrcB 16-19
+    TTI_MOVB2D(0, 16, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 0);  // SrcB 16 -> DEST dst+0 (no transpose)
+    TTI_MOVB2D(0, 17, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 1);
+    TTI_MOVB2D(0, 18, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 2);
+    TTI_MOVB2D(0, 19, ADDR_MOD_2, p_movb2d::MOV_1_ROW, dst + 3);  // ADDR_MOD_2 advances base by 64
+    std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 5);
     ckernel_template tmp(num_tiles, 1, replay_instr);
     tmp.program();
 }
@@ -168,6 +187,20 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init
 template <bool is_32bit = false>
 inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init_() {
     generalized_moe_gate_transpose_dest_single_face_step2_configure_mop<2, is_32bit>();
+}
+
+// copy4rows init/runner.
+template <std::uint32_t src = 0, std::uint32_t dst = 0, bool is_32bit = false>
+inline void _llk_math_generalized_moe_gate_copy4rows_init_() {
+    generalized_moe_gate_copy4rows_configure_mop<3, is_32bit, src, dst>();
+}
+
+template <bool is_fp32_dest_acc_en, bool is_32bit = false>
+inline void _llk_math_generalized_moe_gate_copy4rows_() {
+    static_assert(!(is_32bit || is_fp32_dest_acc_en), "32-bit / fp32 dest accum not supported");
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
+    ckernel_template::run();
 }
 
 // step1_hi init/runner — tunable knobs (d2b_dst, b2d_base) for the high-group experiment.

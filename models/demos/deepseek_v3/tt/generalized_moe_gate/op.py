@@ -44,13 +44,11 @@ class GeneralizedMoeGateOp:
         scores = torch.sigmoid(input_tensor) if enable_sigmoid else input_tensor
         bias_scores = scores + bias_tensor
 
-        # TEMP (P4a verification): top-8 of the HIGH 4 groups (groups 4-7 = experts 128-255).
-        # Confirms the shift-hi-groups + skip-sort path yields the high-half batch. REVERT after.
-        bias_g = bias_scores[:, 4:, :].reshape(batch, -1)
-        scores_flat = scores[:, 4:, :].reshape(batch, -1)
-        _, top8_local = torch.topk(bias_g, 8, dim=-1, sorted=True)
-        top8_scores = torch.gather(scores_flat, dim=-1, index=top8_local)
-        top8_indices = top8_local + 128  # global expert ids for groups 4-7
+        # True global top-8 over all 256 experts, ranked by the bias-corrected score.
+        bias_flat = bias_scores.reshape(batch, -1)
+        scores_flat = scores.reshape(batch, -1)
+        _, top8_indices = torch.topk(bias_flat, 8, dim=-1, sorted=True)
+        top8_scores = torch.gather(scores_flat, dim=-1, index=top8_indices)
 
         denominator = torch.sum(top8_scores, dim=-1, keepdim=True) + eps
         normalized_scores = top8_scores / denominator * scaling_factor

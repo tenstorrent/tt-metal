@@ -33,6 +33,32 @@ inline void generalized_moe_gate_top8_ungrouped(uint32_t eps, uint32_t scale) {
     _generalized_moe_gate_top8_ungrouped<APPROXIMATION_MODE, is_fp32_dest_acc_en>(eps, scale);
 }
 
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, uint32_t read_base, uint32_t store_lo, uint32_t store_hi>
+inline void generalized_moe_gate_merge4_top8() {
+    _gmg_merge4_top8<is_fp32_dest_acc_en, read_base, store_lo, store_hi>();
+}
+
+template <
+    bool APPROXIMATION_MODE,
+    bool is_fp32_dest_acc_en,
+    uint32_t from_lo,
+    uint32_t from_hi,
+    uint32_t to_lo,
+    uint32_t to_hi>
+inline void generalized_moe_gate_copy_topk_run() {
+    _gmg_copy_topk_run<from_lo, from_hi, to_lo, to_hi>();
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void generalized_moe_gate_finalize_ungrouped(uint32_t eps, uint32_t scale) {
+    _generalized_moe_gate_finalize_ungrouped<APPROXIMATION_MODE, is_fp32_dest_acc_en>(eps, scale);
+}
+
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void generalized_moe_gate_normalize_run(uint32_t eps, uint32_t scale) {
+    _gmg_normalize_run<APPROXIMATION_MODE, is_fp32_dest_acc_en>(eps, scale);
+}
+
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void generalized_moe_gate_probe_lanemap() {
     _gmg_probe_lanemap();

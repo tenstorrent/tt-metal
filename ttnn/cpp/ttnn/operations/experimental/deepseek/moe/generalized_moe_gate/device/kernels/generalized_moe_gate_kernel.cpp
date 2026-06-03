@@ -25,15 +25,20 @@
 // #define GMG_PROBE_LANEMAP 1
 // #define GMG_PROBE_OFFSETS 1
 // #define GMG_DUMP_AFTER_STEP0 1
-// #define GMG_UNGROUPED_TOP8 1
 // #define GMG_DUMP_AFTER_SUM_TOP2 1
 // #define GMG_SKIP_SORT_TOP4 1
-// step1_hi variant test: collapse groups 4-7 (model: post-step0 group g at DEST row g; feed rows 4-7).
-// Validate via the REAL test row0 (NOT the full dump — rows 1-15 are reset-dependent scratch).
-#define GMG_TEST_HI_GROUPS 1
-#define GMG_HI_D2B_DST 4    // read DEST rows 4-7 = groups 4-7 (0 = groups 0-3 = normal step1)
-#define GMG_HI_B2D_BASE 24  // unused
-// #define GMG_DUMP_AFTER_STEP1 1
+// (diagnostic done: FPU MOVB2D offset-8 relocates; SFPU SFPLOAD/SFPSTORE offset>=8 wraps to rows 0-7.)
+// #define GMG_TEST_HI_GROUPS 1
+// #define GMG_HI_D2B_DST 4
+// #define GMG_HI_B2D_BASE 8
+//
+// ===== ACTIVE: true global top-8 (ungrouped), assembled in rows 0-7 with FPU copy4rows stashing
+// the 4-row source/topA into rows 8-15 between the two half-transposes. See generalized_moe_gate.h.
+#define GMG_UNGROUPED_TOP8 1
+// (diag: DIAG_TOPA showed topA clean via SFPU-tile parking.)
+// #define GMG_DIAG_TOPA 1
+// #define GMG_DIAG_TOPB 1
+// #define GMG_DUMP_SRC 1
 
 #include "../unified_kernels/kernel_op_api.hpp"
 #include "../unified_kernels/kernel_utils.hpp"
