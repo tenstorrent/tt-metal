@@ -1,6 +1,6 @@
 # CI Disable Work — Status Log
 
-**Last updated:** 2026-06-03T19:45 UTC
+**Last updated:** 2026-06-03T20:30 UTC
 
 > **Source of truth.** This file is the canonical record of automation-tracked PRs. Wiping it resets the automation to fresh-state view; stale GitHub PRs not listed here are intentionally invisible.
 
@@ -26,11 +26,12 @@
 
 | PR | Workflow | Lifecycle stage | Verification result | Ready to merge? | Notes |
 |----|----------|-----------------|---------------------|-----------------|-------|
+| [#45999](https://github.com/tenstorrent/tt-metal/pull/45999) | `runtime-unit-tests.yaml` | `verifying` | pending | No | Verification dispatched 2026-06-03T20:24 UTC (run 26910857102); 10 DescriptorMergerTest disables |
 | [#45993](https://github.com/tenstorrent/tt-metal/pull/45993) | `blackhole-demo-tests.yaml` | `verifying` | pending | No | Verification dispatched 2026-06-03T19:37 UTC (run 26908439442) |
 | [#45991](https://github.com/tenstorrent/tt-metal/pull/45991) | `runtime-integration-tests.yaml` | `verifying` | pending | No | Verification dispatched 2026-06-03T19:25 UTC (run 26907813785) |
 | [#45990](https://github.com/tenstorrent/tt-metal/pull/45990) | `blackhole-post-commit.yaml` | `verifying` | pending | No | Verification dispatched 2026-06-03T19:25 UTC (run 26907794205) |
 | [#45981](https://github.com/tenstorrent/tt-metal/pull/45981) | `t3000-unit-tests.yaml` | `verifying` | pending | No | Verification dispatched 2026-06-03T18:27 UTC (run 26904737723) |
-| [#45979](https://github.com/tenstorrent/tt-metal/pull/45979) | `runtime-unit-tests.yaml` | `verifying` | pending | No | Verification dispatched 2026-06-03T18:19 UTC (run 26904326397) |
+| [#45979](https://github.com/tenstorrent/tt-metal/pull/45979) | `runtime-unit-tests.yaml` | `verified-pass` | pass | Yes | Run 26904326397 completed SUCCESS 2026-06-03T19:15 UTC; rebased to ce03ba9ee12 |
 
 ---
 
@@ -38,10 +39,10 @@
 
 | Run | Pipeline | Branch | Started | Status | Notes |
 |-----|----------|--------|---------|--------|-------|
+| [26910857102](https://github.com/tenstorrent/tt-metal/actions/runs/26910857102) | `runtime-unit-tests.yaml` | `ci-disable/runtime-unit-tests-descriptor-merger-2026-06-03-verify` | 2026-06-03T20:24 UTC | in_progress | Fresh build; targeted verification for PR #45999; pruned to runtime_debug_tools [wh_n150_civ2, bh_p150b_civ2] only |
 | [26908439442](https://github.com/tenstorrent/tt-metal/actions/runs/26908439442) | `blackhole-demo-tests.yaml` | `ci-disable/blackhole-demo-tests-mistral-2026-06-03-verify` | 2026-06-03T19:37 UTC | queued | Fresh build; targeted verification for PR #45993; model=mistral-small-3.1-24b, system-type=LoudBox (8xP150) |
 | [26907813785](https://github.com/tenstorrent/tt-metal/actions/runs/26907813785) | `runtime-integration-tests.yaml` | `ci-disable/runtime-integration-tests-indexed-fill-2026-06-03-verify` | 2026-06-03T19:25 UTC | queued | Fresh build; targeted verification for PR #45991; pruned to runtime_fd_python_2 only |
 | [26907794205](https://github.com/tenstorrent/tt-metal/actions/runs/26907794205) | `blackhole-post-commit.yaml` | `ci-disable/blackhole-post-commit-chunked-trace-2026-06-03-verify` | 2026-06-03T19:25 UTC | queued | Fresh build; targeted verification for PR #45990; run-ops-unit-tests=true, P150 only |
-| [26904326397](https://github.com/tenstorrent/tt-metal/actions/runs/26904326397) | `runtime-unit-tests.yaml` | `ci-disable/runtime-unit-tests-data-movement-2026-06-03-verify` | 2026-06-03T18:19 UTC | in_progress | Fresh build; targeted verification for PR #45979; pruned to runtime_data_movement only |
 | [26904737723](https://github.com/tenstorrent/tt-metal/actions/runs/26904737723) | `t3000-unit-tests.yaml` | `ci-disable/t3000-unit-tests-attention1d-qwen25-2026-06-03-verify` | 2026-06-03T18:27 UTC | in_progress | Fresh build; targeted verification for PR #45981; model filter `tttv2 modules` |
 
 **Policy:** Concurrent runs across PRs are allowed; each automation session may dispatch at most three new runs.
@@ -52,7 +53,7 @@
 
 | Run | Pipeline | Branch | Started | Ended | Result | Notes |
 |-----|----------|--------|---------|-------|--------|-------|
-| _(none — fresh state log)_ | | | | | | |
+| [26904326397](https://github.com/tenstorrent/tt-metal/actions/runs/26904326397) | `runtime-unit-tests.yaml` | `ci-disable/runtime-unit-tests-data-movement-2026-06-03-verify` | 2026-06-03T18:19 UTC | 2026-06-03T19:15 UTC | **verified-pass** | Both runtime_data_movement jobs (wh_n150_civ2, bh_p150b_civ2) passed; 5 GTest cases now skipped |
 
 ---
 
@@ -66,6 +67,7 @@
 
 ## Recent Activity
 
+- **2026-06-03T20:30 UTC** — Session (20:02 UTC start). Examining lane: PR #45979 run 26904326397 completed SUCCESS → classified `verified-pass`. Branch rebased to ce03ba9ee12 and force-pushed. PR comment posted with verification result and revalidation log. Focus lane: 1 new PR created. PR #45999 for `runtime-unit-tests.yaml` `runtime_debug_tools` job: disabled 10 `DescriptorMergerTest` GTest cases failing with protobuf schema mismatch (`NodeDescriptor.Boards` has no field `tray_id`) deterministically on wh_n150_civ2 and bh_p150b_civ2 across 3 consecutive main runs. Tracking issue #45998. Verification dispatched as run 26910857102 (fresh build; no SHA-matching successful source run; pruned to runtime_debug_tools only). Note: extensive workflow survey conducted — all other failing pipelines (blackhole-e2e-tests, t3000-e2e-tests, blackhole-post-commit additional jobs, vllm-nightly T3K) are device timeouts/crashes (out of scope). Focus slots filled: 1/3 (only 1 workflow with uncovered deterministic pytest/GTest failures found after full survey).
 - **2026-06-03T19:45 UTC** — Session (19:00 UTC start). Examining lane: PR #45979 and PR #45981 both still in `verifying` state (runs 26904326397 and 26904737723 in_progress/queued, <4hr throttle applies). Focus lane: 3 new PRs created and dispatched. (1) PR #45990 for `blackhole-post-commit.yaml`: disabled 3 pytest tests (`test_run_host_io_decoder_sweep_chunked_trace_smoke/world_size_4/multi_slot_stress[ds-r1-0528-97854ebb-128k]`) failing with "chunked 128K trace not present" on `bh_p150b_civ2`. Tracking issue #45988. (2) PR #45991 for `runtime-integration-tests.yaml`: disabled `test_indexed_slice` D=4 parametrization causing device hang (TT_THROW @ system_memory_manager.cpp:738) on `wh_n150_civ2` and `bh_p150b_civ2`. Tracking issue #45989. (3) PR #45993 for `blackhole-demo-tests.yaml`: disabled 3 mistral-small-3.1-24b vision pipeline tests (`test_e2e_vision_text_pipeline`, `test_mistral_vision_model`, `test_mistral_vision_tower`) with IndexError/RuntimeError on `bh_loudbox`. Tracking issue #45992. Verification runs dispatched: 26907794205 (PR #45990), 26907813785 (PR #45991), 26908439442 (PR #45993).
 - **2026-06-03T18:32 UTC** — PR #45981 created for `t3000-unit-tests.yaml` `t3k_tttv2_fast_unit_tests` job: disabled 2 deterministically-failing pytest parametrizations (`test_attention_1d_vs_reference[10-standard-1x2-decode-32-Qwen2.5-7B-1x2]` and `[10-paged-...]`). Fails on `wh_llmbox` only. Error: `TT_FATAL dims must be unique` in `concat_ndim`. Tracking issue #45980. Verification dispatched as run 26904737723 (fresh build; `model=tttv2 modules` filter to target only `t3k_tttv2_fast_unit_tests`). Note: `t3k_ttnn_tests [wh_llmbox]` SIGABRT failure is a device timeout/hang — **out of scope** per policy.
 - **2026-06-03T18:25 UTC** — Session start. PR #45979 created for `runtime-unit-tests.yaml` `runtime_data_movement` job: disabled 5 deterministically-failing GTest cases (`TensixDirectWriteMulticast`, `TensixDataMovementOneToAllMulticastSemaphore2x2_2_0`, `TensixDataMovementOneToAllMulticastLinkedSemaphoreLoopback2x2_2_0`, `TensixDataMovementOneToAllMulticastLinkedSemaphore5x5_2_0`, `TensixDataMovementOneToAllUnicastSemaphore2x2_2_0`). All 5 fail on both `wh_n150_civ2` and `bh_p150b_civ2`. Tracking issue #45978. Verification dispatched as run 26904326397.
@@ -189,6 +191,43 @@ Summary (both tests fail on `wh_llmbox` [job 79337583451] in run 26895624808, co
 
 ---
 
+## PR #45999 — runtime-unit-tests.yaml (10 DescriptorMergerTest gtest disables)
+
+| Field | Value |
+|-------|-------|
+| PR | [#45999](https://github.com/tenstorrent/tt-metal/pull/45999) |
+| Disable issue | [#45998](https://github.com/tenstorrent/tt-metal/issues/45998) |
+| Timeout issue | — |
+| Branch | `ci-disable/runtime-unit-tests-descriptor-merger-2026-06-03` |
+| Workflow file | `runtime-unit-tests.yaml` |
+| Lifecycle stage | `verifying` |
+| Last rebase | 2026-06-03 (created off `origin/main` at `ce03ba9ee12`) |
+| Last revalidation | 2026-06-03 (evidence checked against runs 26866206838, 26834614992, 26805031959) |
+| Verification run | [26910857102](https://github.com/tenstorrent/tt-metal/actions/runs/26910857102) — dispatched 2026-06-03T20:24 UTC (fresh build; no SHA-matching successful source run; pruned to runtime_debug_tools [wh_n150_civ2, bh_p150b_civ2]) |
+| Last touched by automation | 2026-06-03T20:30Z |
+| Readiness | Not yet verified |
+
+### Disables (with main evidence)
+
+Main-run evidence: see PR description.
+
+Summary (all 10 tests fail on `wh_n150_civ2` [job 79231037025] and `bh_p150b_civ2` [job 79231037066] in run 26866206838, completed 2026-06-03T06:37 UTC, head SHA `15806d0d564eff581a6eb21bea8c56f0b35867d5`):
+
+| Disabled test | SKUs failing | Job link |
+|---|---|---|
+| `DescriptorMergerTest.MergeXTorusAndYTorusIntoXYTorus` | `wh_n150_civ2`, `bh_p150b_civ2` | [79231037025](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037025) / [79231037066](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037066) |
+| `DescriptorMergerTest.MergeBHXTorusAndBHYTorusIntoXYTorus` | `wh_n150_civ2`, `bh_p150b_civ2` | [79231037025](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037025) / [79231037066](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037066) |
+| `DescriptorMergerTest.MergeTwoIdenticalXTorusDescriptors` | `wh_n150_civ2`, `bh_p150b_civ2` | [79231037025](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037025) / [79231037066](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037066) |
+| `DescriptorMergerTest.MergeXYTorusWithXTorusDescriptors` | `wh_n150_civ2`, `bh_p150b_civ2` | [79231037025](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037025) / [79231037066](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037066) |
+| `DescriptorMergerTest.SplitAndMerge8x16WhGalaxyXyTorusSuperpod` | `wh_n150_civ2`, `bh_p150b_civ2` | [79231037025](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037025) / [79231037066](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037066) |
+| `DescriptorMergerTest.SplitAndMerge5WhGalaxyYTorusSuperpod` | `wh_n150_civ2`, `bh_p150b_civ2` | [79231037025](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037025) / [79231037066](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037066) |
+| `DescriptorMergerTest.SplitAndMerge16N300Cluster` | `wh_n150_civ2`, `bh_p150b_civ2` | [79231037025](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037025) / [79231037066](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037066) |
+| `DescriptorMergerTest.RejectGraphTemplatesWithDifferentChildren_ForwardPass` | `wh_n150_civ2`, `bh_p150b_civ2` | [79231037025](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037025) / [79231037066](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037066) |
+| `DescriptorMergerTest.AllowCrossDescriptorConnectionsOnDifferentPorts` | `wh_n150_civ2`, `bh_p150b_civ2` | [79231037025](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037025) / [79231037066](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037066) |
+| `DescriptorMergerTest.MergeExistingBHTorusDescriptors` | `wh_n150_civ2`, `bh_p150b_civ2` | [79231037025](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037025) / [79231037066](https://github.com/tenstorrent/tt-metal/actions/runs/26866206838/job/79231037066) |
+
+---
+
 ## PR #45979 — runtime-unit-tests.yaml (5 runtime_data_movement gtest disables)
 
 | Field | Value |
@@ -198,12 +237,12 @@ Summary (both tests fail on `wh_llmbox` [job 79337583451] in run 26895624808, co
 | Timeout issue | — |
 | Branch | `ci-disable/runtime-unit-tests-data-movement-2026-06-03` |
 | Workflow file | `runtime-unit-tests.yaml` |
-| Lifecycle stage | `verifying` |
-| Last rebase | 2026-06-03 (created off `origin/main` at `0485c74b235`) |
-| Last revalidation | 2026-06-03 (evidence checked against run 26866206838) |
-| Verification run | [26904326397](https://github.com/tenstorrent/tt-metal/actions/runs/26904326397) — queued 2026-06-03T18:19 UTC (fresh build; no SHA-matching successful source run) |
-| Last touched by automation | 2026-06-03T18:25Z |
-| Readiness | Not yet verified |
+| Lifecycle stage | `verified-pass` |
+| Last rebase | 2026-06-03T20:22 UTC (rebased to ce03ba9ee12, force-pushed) |
+| Last revalidation | 2026-06-03T20:10 UTC (5 GTest cases confirmed still failing on main run 26866206838) |
+| Verification run | [26904326397](https://github.com/tenstorrent/tt-metal/actions/runs/26904326397) — completed SUCCESS 2026-06-03T19:15 UTC; both runtime_data_movement jobs passed |
+| Last touched by automation | 2026-06-03T20:30Z |
+| Readiness | **Ready to merge** — verified-pass |
 
 ### Disables (with main evidence)
 
