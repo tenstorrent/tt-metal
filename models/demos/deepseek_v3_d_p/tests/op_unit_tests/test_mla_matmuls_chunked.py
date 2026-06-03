@@ -307,6 +307,82 @@ prog_config_mm5 = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
     fused_activation=None,
 )
 
+# --- mm3  kv_a_proj_with_mqa (2D, K-shard contraction) ---------------------------------------
+# per-chip: M_t=20, K_t=56 (1792/32 = 7168/4 K-shard), N_t=18 (576/32 = 512+64). need_tp_sum
+# (like mm0/mm5: in0 K-shard dim3 + in1 K-shard dim2 -> partial output all-reduced over TP).
+# Cores: per_core_M=2 -> 10 M-cores; per_core_N=2 -> ceil(18/2)=9 N-cores => 90 cores. N_t=18 has
+# no divisor giving 10-11 N-cores within grid_x=11, so 90 is this shape's core ceiling.
+# Subblock: per_core_M=2, per_core_N=2 -> sb2x1 (h|2, w|2; sb1x2 ties, 2x2 worse).
+# in0_block_w|K_t=56 -> 14 is the in0-L1 sweet spot (4 mcast rounds): bw14=11.38us beats bw8=12.55us
+# by ~9%. NOTE: the earlier in0-DRAM sweep picked bw8; the L1 regime shifts the optimum to bw14
+# (bigger payloads are cheap from L1, fewer rounds win). Always re-sweep in0_block_w after L1<->DRAM.
+# in0+out L1 -> 11.38us (38.2% util, comp_ns 4344 / measured) vs 16.0us in0-DRAM; in0-L1 also
+# stabilizes spread 578ns -> ~40ns (mm1 signature).
+# ABLATION VERDICT (baseline 11.37us): ORCHESTRATION-BOUND once in0 is in L1. all-off floor = 5.58us
+# (~49% of the op: mcast/semaphore/CB-sync/dispatch). Individual deltas all small/overlapped: act-read
+# 0.77us, weight-read 0.03us (fully hidden), out-write 0.50us, compute 1.13us (5.3us of math exposes
+# only 1.1us, rest hidden behind DM). The bound SHIFTED: in0-from-DRAM was DM-bound (act-read pole ->
+# why in0->L1 bought 21%); in0-in-L1 leaves the orch floor. Blocks/dtype/memory can't beat 5.6us of
+# pure mcast at 90c -- mm3 is at its practical ceiling.
+# 90c is the 2D ceiling (N_t=18 -> ceil(18/2)=9 N-cores; pcn=1 -> 18 > grid_x=11). N-padding to force
+# 100c/110c (test_mm3_sweep_pad) is flat-to-worse at every block-width: more compute cores can't move
+# a DM-bound op (the ~8% gain first seen at 100c was purely the bw14 effect, reproduced clean at 90c).
+prog_config_mm3 = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+    compute_with_storage_grid_size=GRID_11x10,
+    in0_block_w=14,
+    out_subblock_h=2,
+    out_subblock_w=1,
+    per_core_M=2,
+    per_core_N=2,
+    transpose_mcast=False,
+    fuse_batch=False,
+    fused_activation=None,
+)
+
+# --- mm4  wkv_b2 (RELOCATED, post-SDPA; batched head-shard, 1D) -------------------------------
+# TRUE batched matmul (NOT broadcast): post-SDPA in0 is the per-head SDPA output, so BOTH operands are
+# batch=64 heads -> TP-shard dim1 -> 16/chip. in0 [1,16,640,512] (10.5MB, the DM long pole),
+# in1 [1,16,512,128], out [1,16,640,128] bf8_b. (Pre-relocation it was in0 batch=1 shared latent;
+# the move to per-head SDPA output is exactly what makes in0 explode and mm4 DM-bound.)
+# per-chip tiles: M_t=20, K_t=16, N_t=4, batch=16.
+# WHY NOT MultiCast1D: that batched path sets cores = ceil(Mt/pcm)*ceil(Nt/pcn) with Mt=PER-BATCH=20
+# and LOOPS the 16 heads in-kernel (never on the grid); Nt=4 can't be split (pcn<4 -> wrong PCC). So it
+# caps at 20 cores -> 16 tiny per-head matmuls run serially -> 121us (in0+out L1 = no change, NOT
+# DM-bound, SERIALIZATION-bound). fuse_batch=True can't rescue it (FATALs 'get_batch_size(b)==1', only
+# valid for shared weights).
+# FIX = the older MatmulMultiCoreReuseProgramConfig (non-mcast): cores = (B*Mt/pcm)*(Nt/pcn) -- it FOLDS
+# B*Mt=320, so batch finally maps to cores. Constraints: pcm | 320 AND pcm | per-batch M=20 -> pcm in
+# {1,2,4,5,10,20}; pcn | Nt=4. pcm4/pcn4 = 80 cores (the max <=110). Works correctly on L1-interleaved
+# in0/in1 (PCC 0.999, no sharding needed). Cores drive perf (80->26us, 64->30, 32->56, 16->86); small
+# in0_block_w wins (bw2). Best: bw2/sb4x1/pcm4/pcn4 -> 26.2us = 4.6x faster than the 121us MultiCast1D.
+# Absolute: 26.2us vs compute floor 4.4us@110c (unreachable) / 6.1us@80c (real cap) -> 80c is the cap
+# because B*Mt=320, Nt=4 only reach 80 within the 110 grid; mm4 is now core-bound at its 80c ceiling.
+prog_config_mm4 = ttnn.MatmulMultiCoreReuseProgramConfig(
+    compute_with_storage_grid_size=GRID_11x10,
+    in0_block_w=2,
+    out_subblock_h=4,
+    out_subblock_w=1,
+    per_core_M=4,
+    per_core_N=4,
+)
+
+# --- mm2  wkv_b1 (q absorb; batched head-shard) ----------------------------------------------
+# Same shape family as mm4 (true batched, both operands batch=16 heads -> TP-shard dim1 -> 16/chip),
+# transposed dims: in0 q_nope [1,16,640,128] bf16, in1 wkv_b1 weight [1,16,128,512] bf8_b,
+# out [1,16,640,512] bf16 (out is the 10.5MB tensor here, the N=512 side). per-chip tiles: M_t=20,
+# K_t=4, N_t=16, batch=16. Use MatmulMultiCoreReuse (folds B*Mt=320 onto the grid; MultiCast1D caps
+# at Mt=20). CONSTRAINT: per_core_N must == Nt (N is never split), so cores = 320/pcm; pcm in
+# {1,2,4,5,10,20} -> pcm4 = 80 cores (max <=110). Swept: 80c -> 39us, subblock/bw ~noise (bw2/sb2x4).
+# out-L1 essential (+41%, the 10.5MB output write dominates); in0 placement free (2.62MB).
+prog_config_mm2 = ttnn.MatmulMultiCoreReuseProgramConfig(
+    compute_with_storage_grid_size=GRID_11x10,
+    in0_block_w=2,
+    out_subblock_h=2,
+    out_subblock_w=4,
+    per_core_M=4,
+    per_core_N=16,
+)
+
 # Global shapes (the 1x4 mesh shards them per the flags). SP=1 so in0 seq == CHUNK_M.
 DEVICE_MATMULS = [
     {
@@ -342,6 +418,22 @@ DEVICE_MATMULS = [
         "program_config": prog_config_mm1,
     },
     {
+        "name": "mm3_kv_a_proj_with_mqa",
+        "in0_shape": (1, 1, CHUNK_M, EMB),  # [1,1,640,7168]
+        "in1_shape": (1, 1, EMB, KV_LORA + QK_ROPE),  # [1,1,7168,576]
+        "in0_sp_sharded": True,
+        "in0_tp_sharded": True,
+        "in0_tp_shard_dim": 3,  # K-shard activation
+        "in1_tp_sharded": True,
+        "in1_tp_shard_dim": 2,  # K-shard weight -> partial output, all-reduced over TP
+        "in0_dtype": ttnn.bfloat16,
+        "in1_dtype": ttnn.bfloat8_b,
+        "out_dtype": ttnn.bfloat16,
+        "act_mem_config": ttnn.L1_MEMORY_CONFIG,  # DM-bound: in0+out L1 -> 11.38us vs 16.0us DRAM-in
+        "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+        "program_config": prog_config_mm3,
+    },
+    {
         "name": "mm5_o_proj",
         "in0_shape": (1, 1, CHUNK_M, NUM_HEADS * V_HEAD),  # [1,1,640,8192]
         "in1_shape": (1, 1, NUM_HEADS * V_HEAD, EMB),  # [1,1,8192,7168]
@@ -356,6 +448,47 @@ DEVICE_MATMULS = [
         "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,  # L1-in tried, zero change (compute-dominant)
         "out_mem_config": ttnn.L1_MEMORY_CONFIG,  # output L1 (DRAM write of 9.2MB would cost ~30us)
         "program_config": prog_config_mm5,
+    },
+    {
+        "name": "mm4_wkv_b2",  # batched head-shard, 1D; appended last so mm5 stays index 3
+        # RELOCATED post-SDPA: in0 is the PER-HEAD SDPA output (batch=heads), NOT the pre-SDPA shared
+        # latent (batch=1). That is the whole point of the move -> in0 grows to 16*640*512 = 10.5MB,
+        # making mm4 heavily DM-bound on the activation read (model read_ns 37.5us).
+        "in0_shape": (1, NUM_HEADS, CHUNK_M, KV_LORA),  # [1,64,640,512] SDPA out, batch=64 heads
+        "in1_shape": (1, NUM_HEADS, KV_LORA, V_HEAD),  # [1,64,512,128] per-head weight, batch=64
+        "in0_sp_sharded": True,  # seq dim2 (SP=1 -> no-op)
+        "in0_tp_sharded": True,
+        "in0_tp_shard_dim": 1,  # head/batch shard -> 16 heads/chip
+        "in1_tp_sharded": True,
+        "in1_tp_shard_dim": 1,  # head/batch shard -> output sharded on dim1 (concat heads, no sum)
+        "in0_dtype": ttnn.bfloat16,
+        "in1_dtype": ttnn.bfloat8_b,
+        "out_dtype": ttnn.bfloat8_b,
+        # MEM SWEEP on the 80c config: in0->L1 saves 39% (43.2us in0-DRAM -> 26.3us in0-L1), out->L1
+        # another ~8%. Opposite of the MultiCast1D case (in0-L1 was a no-op there) because that was
+        # serialization-bound; at 80c the 10.5MB in0 DRAM read IS the bottleneck. L1/L1 optimal.
+        "act_mem_config": ttnn.L1_MEMORY_CONFIG,  # in0 is 10.5MB SDPA out -> L1 (39% win at 80c)
+        "out_mem_config": ttnn.L1_MEMORY_CONFIG,
+        "program_config": prog_config_mm4,  # MultiCoreReuse, 80 cores
+    },
+    {
+        "name": "mm2_wkv_b1",  # batched head-shard, MultiCoreReuse; appended last (index 5)
+        "in0_shape": (1, NUM_HEADS, CHUNK_M, QK_NOPE),  # [1,64,640,128] q_nope, batch=64 heads
+        "in1_shape": (1, NUM_HEADS, QK_NOPE, KV_LORA),  # [1,64,128,512] per-head weight, batch=64
+        "in0_sp_sharded": True,  # seq dim2 (SP=1 -> no-op)
+        "in0_tp_sharded": True,
+        "in0_tp_shard_dim": 1,  # head/batch shard -> 16 heads/chip
+        "in1_tp_sharded": True,
+        "in1_tp_shard_dim": 1,  # head/batch shard -> output sharded on dim1 (concat heads, no sum)
+        "in0_dtype": ttnn.bfloat16,
+        "in1_dtype": ttnn.bfloat8_b,
+        "out_dtype": ttnn.bfloat16,
+        # MEM SWEEP (80c): out->L1 is the big lever (+41%: 39.5us vs 55.7us out-DRAM) -- the 10.5MB
+        # output WRITE is the bottleneck (mirror of mm4 where the big in0 READ was). in0 placement is
+        # free (2.62MB, within noise) -> keep in0 in DRAM to free L1 for the big output.
+        "act_mem_config": ttnn.DRAM_MEMORY_CONFIG,  # in0 only 2.62MB; DRAM is free here
+        "out_mem_config": ttnn.L1_MEMORY_CONFIG,  # out is 10.5MB -> L1 (41% win)
+        "program_config": prog_config_mm2,  # MultiCoreReuse, 80 cores
     },
 ]
 
@@ -374,6 +507,14 @@ def _run_device_matmul(mesh_device, cfg):
 
     hidden_states = torch.randn(in0_x, in0_y, in0_z, in0_w, dtype=torch.bfloat16)
     weight = torch.randn(in1_x, in1_y, in1_z, in1_w, dtype=torch.bfloat16) * 0.02
+    weight_ref = weight  # reference uses the UNPADDED weight
+
+    # Optional N-padding: pad weight's N (dim3) with zeros so N_t rounds up and more N-cores come
+    # online (the extra cores compute padded, sliced-off tiles). Used to test >ceil(N_t/pcn) splits.
+    n_pad_to = cfg.get("n_pad_to")
+    if n_pad_to and n_pad_to > in1_w:
+        weight = torch.nn.functional.pad(weight, (0, n_pad_to - in1_w))
+    eff_n = weight.shape[-1]
 
     sp_axis, tp_axis = 0, 1
 
@@ -435,7 +576,7 @@ def _run_device_matmul(mesh_device, cfg):
         return
 
     # Reference + concat back. K-shard contraction (in0 dim3 + in1 dim2) -> sum partials over TP.
-    reference_output = torch.matmul(hidden_states, weight)
+    reference_output = torch.matmul(hidden_states, weight_ref)
     concat_dims = [None, None]
     if cfg["in0_sp_sharded"]:
         concat_dims[sp_axis] = 2
@@ -449,6 +590,10 @@ def _run_device_matmul(mesh_device, cfg):
         concat_dims[tp_axis] = cfg["in0_tp_shard_dim"]
     elif cfg["in1_tp_sharded"] and cfg["in1_tp_shard_dim"] == 3:
         concat_dims[tp_axis] = 3
+    elif cfg["in1_tp_sharded"] and cfg["in1_tp_shard_dim"] == 1:
+        # Batched head-shard (mm2/mm4): in0 batch=1 broadcast, in1 batch=heads sharded on dim1 ->
+        # output inherits the head shard on dim1 (concat heads back over TP, no sum).
+        concat_dims[tp_axis] = 1
     elif need_tp_sum:
         concat_dims[tp_axis] = 3
 
@@ -458,9 +603,11 @@ def _run_device_matmul(mesh_device, cfg):
     )
     if need_tp_sum:
         tp = mesh_device.shape[tp_axis]
-        tt_torch = tt_full.reshape(in0_x, in0_y, in0_z, tp, in1_w).sum(dim=3)
+        tt_torch = tt_full.reshape(in0_x, in0_y, in0_z, tp, eff_n).sum(dim=3)
     else:
         tt_torch = tt_full
+    if n_pad_to:  # drop the padded N columns before comparing
+        tt_torch = tt_torch[..., :in1_w]
 
     passing, pcc = comp_pcc(reference_output, tt_torch, PCC_REQUIRED)
     logger.info(f"{cfg['name']} PCC={pcc} (required {PCC_REQUIRED})")
@@ -598,8 +745,274 @@ SWEEP_MM5 = [
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("label,program_config", SWEEP_MM5, ids=[s[0] for s in SWEEP_MM5])
 def test_mm5_sweep(mesh_device, label, program_config):
-    base = DEVICE_MATMULS[2]  # mm5 is index 2 in DEVICE_MATMULS
+    base = DEVICE_MATMULS[3]  # mm5 is index 3 in DEVICE_MATMULS (after mm0, mm1, mm3)
     cfg = {**base, "name": f"mm5_{label}", "program_config": program_config}
+    _run_device_matmul(mesh_device, cfg)
+
+
+# mm3 program_config sweep. mm3: M_t=20, K_t=56, N_t=18. Cores = ceil(20/pcm)*ceil(18/pcn).
+# pcm=2 -> 10 M-cores (max); pcn=2 -> 9 N-cores (90, ceiling); pcn=3 -> 6 N-cores (60). subblock
+# osh|pcm, osw|pcn, osh*osw<=8. in0_block_w|K_t=56 -> {7,8,14,28,56}.
+SWEEP_MM3 = [
+    ("bw8_90c_2x2", _mm0_2d(8, 2, 2, 2, 2)),  # current
+    ("bw7_90c_2x2", _mm0_2d(7, 2, 2, 2, 2)),
+    ("bw14_90c_2x2", _mm0_2d(14, 2, 2, 2, 2)),
+    ("bw28_90c_2x2", _mm0_2d(28, 2, 2, 2, 2)),
+    ("bw56_90c_2x2", _mm0_2d(56, 2, 2, 2, 2)),  # whole K in one block
+    ("bw8_90c_1x2", _mm0_2d(8, 1, 2, 2, 2)),
+    ("bw8_90c_2x1", _mm0_2d(8, 2, 1, 2, 2)),
+    ("bw8_90c_1x1", _mm0_2d(8, 1, 1, 2, 2)),
+    ("bw8_60c_2x3", _mm0_2d(8, 2, 3, 2, 3)),  # pcn=3 -> 6 N-cores, 60 cores
+]
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("label,program_config", SWEEP_MM3, ids=[s[0] for s in SWEEP_MM3])
+def test_mm3_sweep(mesh_device, label, program_config):
+    base = DEVICE_MATMULS[2]  # mm3 is index 2 in DEVICE_MATMULS
+    cfg = {**base, "name": f"mm3_{label}", "program_config": program_config}
+    _run_device_matmul(mesh_device, cfg)
+
+
+# mm3 memory-config sweep on the best compute config (bw8, 90c, sb2x1). DM-bound per model
+# (read 10.8us vs est 6.2us), so in0-L1 may help; output is small (0.74MB) -> keep L1.
+SWEEP_MM3_MEM = [
+    ("in0DRAM_outL1", DRAM, L1),  # baseline
+    ("in0L1_outL1", L1, L1),
+    ("in0L1_outDRAM", L1, DRAM),
+    ("in0DRAM_outDRAM", DRAM, DRAM),
+]
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("label,act_mc,out_mc", SWEEP_MM3_MEM, ids=[s[0] for s in SWEEP_MM3_MEM])
+def test_mm3_sweep_mem(mesh_device, label, act_mc, out_mc):
+    base = DEVICE_MATMULS[2]
+    cfg = {
+        **base,
+        "name": f"mm3_{label}",
+        "program_config": _mm0_2d(8, 2, 1, 2, 2),
+        "act_mem_config": act_mc,
+        "out_mem_config": out_mc,
+    }
+    _run_device_matmul(mesh_device, cfg)
+
+
+# mm3 N-padding sweep: pad N_t 18 -> 20/22 so per_core_N=2 yields 10/11 N-cores (100/110 cores),
+# the extra ragged cores computing padded (sliced-off) tiles. Tests whether more cores beats the
+# clean 90c despite mm3 being DM-bound. All on the best in0+out-L1 path (set in DEVICE_MATMULS[2]).
+# 100c: pad N->640 (N_t=20), pcn=2 -> 10 N-cores. 110c: pad N->704 (N_t=22), pcn=2 -> 11 N-cores.
+# Sweep in0_block_w {7,8,14,28} and subblock {2x1,2x2,1x2} at each, vs the clean 90c baseline.
+SWEEP_MM3_PAD = [
+    # --- 90 cores (N_t=18, no pad): block-width sweep at in0-L1 to separate bw-effect from cores ---
+    ("90c_bw8_2x1", _mm0_2d(8, 2, 1, 2, 2), None),
+    ("90c_bw14_2x1", _mm0_2d(14, 2, 1, 2, 2), None),
+    ("90c_bw28_2x1", _mm0_2d(28, 2, 1, 2, 2), None),
+    ("90c_bw56_2x1", _mm0_2d(56, 2, 1, 2, 2), None),
+    # --- 100 cores (N_t=20) ---
+    ("100c_bw8_2x1", _mm0_2d(8, 2, 1, 2, 2), 640),
+    ("100c_bw14_2x1", _mm0_2d(14, 2, 1, 2, 2), 640),
+    ("100c_bw14_2x2", _mm0_2d(14, 2, 2, 2, 2), 640),
+    ("100c_bw14_1x2", _mm0_2d(14, 1, 2, 2, 2), 640),
+    ("100c_bw28_2x1", _mm0_2d(28, 2, 1, 2, 2), 640),
+    ("100c_bw56_2x1", _mm0_2d(56, 2, 1, 2, 2), 640),
+    # --- 110 cores (N_t=22) ---
+    ("110c_bw8_2x1", _mm0_2d(8, 2, 1, 2, 2), 704),
+    ("110c_bw14_2x1", _mm0_2d(14, 2, 1, 2, 2), 704),
+    ("110c_bw28_2x1", _mm0_2d(28, 2, 1, 2, 2), 704),
+]
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("label,program_config,n_pad_to", SWEEP_MM3_PAD, ids=[s[0] for s in SWEEP_MM3_PAD])
+def test_mm3_sweep_pad(mesh_device, label, program_config, n_pad_to):
+    base = DEVICE_MATMULS[2]  # mm3, in0+out L1
+    cfg = {**base, "name": f"mm3_{label}", "program_config": program_config, "n_pad_to": n_pad_to}
+    _run_device_matmul(mesh_device, cfg)
+
+
+# mm4 MultiCast1D sweep (DEAD END, kept for the record): this batched path caps at Mt=20 cores because
+# batch is looped in-kernel. _mm4_1d(bw,osh,osw,pcm,pcn); osh|pcm, osw|pcn, osh*osw<=8, bw|K_t=16.
+def _mm4_1d(in0_block_w, osh, osw, per_core_M, per_core_N):
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=GRID_11x10,
+        in0_block_w=in0_block_w,
+        out_subblock_h=osh,
+        out_subblock_w=osw,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=False,
+    )
+
+
+SWEEP_MM4 = [
+    ("bw4_pcm1_pcn4", _mm4_1d(4, 1, 4, 1, 4)),  # baseline (119us)
+    ("bw4_pcm2_pcn4", _mm4_1d(4, 2, 4, 2, 4)),
+    ("bw4_pcm4_pcn4", _mm4_1d(4, 2, 4, 4, 4)),
+    ("bw4_pcm5_pcn4", _mm4_1d(4, 1, 4, 5, 4)),
+    ("bw4_pcm10_pcn4", _mm4_1d(4, 2, 4, 10, 4)),
+    ("bw4_pcm20_pcn4", _mm4_1d(4, 2, 4, 20, 4)),
+    ("bw8_pcm2_pcn4", _mm4_1d(8, 2, 4, 2, 4)),
+    ("bw16_pcm2_pcn4", _mm4_1d(16, 2, 4, 2, 4)),
+    ("bw16_pcm4_pcn4", _mm4_1d(16, 2, 4, 4, 4)),
+    ("bw4_pcm2_pcn2", _mm4_1d(4, 2, 2, 2, 2)),
+    ("bw4_pcm2_pcn1", _mm4_1d(4, 2, 1, 2, 1)),
+]
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("label,program_config", SWEEP_MM4, ids=[s[0] for s in SWEEP_MM4])
+def test_mm4_sweep(mesh_device, label, program_config):
+    base = DEVICE_MATMULS[4]  # mm4 is appended last (index 4)
+    cfg = {**base, "name": f"mm4_{label}", "program_config": program_config}
+    _run_device_matmul(mesh_device, cfg)
+
+
+# mm4 fuse_batch sweep. KEY: with fuse_batch=False, Mt=per-batch (20), batch=16 looped in-kernel ->
+# cores=ceil(Mt/pcm)*ceil(Nt/pcn) caps at 20. With fuse_batch=True, the matmul folds batch into M
+# (Mt -> B*Mt=320), so per_core_M sets cores ~= ceil(320/pcm). Tests whether that is also CORRECT
+# (fuse_batch may broadcast a single in1 weight across the fused batch -> wrong for per-head weights).
+def _mm4_1d_fb(in0_block_w, osh, osw, per_core_M, per_core_N, fuse_batch):
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=GRID_11x10,
+        in0_block_w=in0_block_w,
+        out_subblock_h=osh,
+        out_subblock_w=osw,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fuse_batch=fuse_batch,
+        fused_activation=None,
+        mcast_in0=False,
+    )
+
+
+SWEEP_MM4_FB = [
+    ("fbF_pcm96", _mm4_1d_fb(4, 1, 4, 96, 4, False)),  # literal suggestion, fuse off
+    ("fbT_pcm96", _mm4_1d_fb(4, 1, 4, 96, 4, True)),  # literal suggestion, fuse on
+    ("fbT_pcm3", _mm4_1d_fb(4, 1, 4, 3, 4, True)),  # ~107 cores if cores=ceil(320/pcm)
+    ("fbT_pcm4", _mm4_1d_fb(4, 1, 4, 4, 4, True)),  # 320/4=80 cores
+    ("fbT_pcm5", _mm4_1d_fb(4, 1, 4, 5, 4, True)),  # 320/5=64
+    ("fbT_pcm8", _mm4_1d_fb(4, 1, 4, 8, 4, True)),  # 320/8=40
+    ("fbT_pcm16", _mm4_1d_fb(4, 1, 4, 16, 4, True)),  # 320/16=20
+    ("fbT_pcm20", _mm4_1d_fb(4, 1, 4, 20, 4, True)),  # 320/20=16
+]
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("label,program_config", SWEEP_MM4_FB, ids=[s[0] for s in SWEEP_MM4_FB])
+def test_mm4_sweep_fb(mesh_device, label, program_config):
+    base = DEVICE_MATMULS[4]
+    cfg = {**base, "name": f"mm4_{label}", "program_config": program_config, "check_pcc": False}
+    _run_device_matmul(mesh_device, cfg)
+
+
+# mm4 via the OLDER non-mcast MatmulMultiCoreReuseProgramConfig. KEY DIFFERENCE: cores =
+# (B*Mt/per_core_M) * (Nt/per_core_N) -- it FOLDS B*Mt (=16*20=320), so batch finally counts toward
+# cores (mcast_1d caps at Mt=20). Constraints: 320 % per_core_M == 0, Nt(4) % per_core_N == 0. Max
+# core count <=110 is 80 (1280/(pcm*pcn), need pcm*pcn=16 -> pcm4/pcn4, pcm8/pcn2, pcm16/pcn1).
+def _mm4_reuse(in0_block_w, osh, osw, per_core_M, per_core_N):
+    return ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=GRID_11x10,
+        in0_block_w=in0_block_w,
+        out_subblock_h=osh,
+        out_subblock_w=osw,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+    )
+
+
+# EXTRA constraint (matmul_device_operation.cpp:1507): per_core_M must ALSO divide per-batch M=20,
+# so per_core_M in {1,2,4,5,10,20} (pcm8/16 FATAL). cores=(320/pcm)*(4/pcn); pcm4/pcn4=80 is the max
+# valid <=110. Block-width sweep on the 80c winner + a core-count ladder.
+# EXTRA constraint: per_core_M must ALSO divide per-batch M=20 -> pcm in {1,2,4,5,10,20} (pcm8/16
+# FATAL). 80c (pcm4/pcn4) is the max valid; cores drive perf monotonically (80->27us .. 16->86us);
+# smaller in0_block_w wins (bw16 49us, bw8 32us, bw4 28us, bw2 27us). Fine-tune bw1/bw2 + subblock.
+SWEEP_MM4_REUSE = [
+    ("reuse_bw1_sb2x4", _mm4_reuse(1, 2, 4, 4, 4)),  # 80c, smallest block
+    ("reuse_bw2_sb2x4", _mm4_reuse(2, 2, 4, 4, 4)),  # 80c (prev best 26.7us)
+    ("reuse_bw2_sb1x4", _mm4_reuse(2, 1, 4, 4, 4)),
+    ("reuse_bw2_sb4x2", _mm4_reuse(2, 4, 2, 4, 4)),
+    ("reuse_bw2_sb4x1", _mm4_reuse(2, 4, 1, 4, 4)),
+    ("reuse_bw4_sb2x4", _mm4_reuse(4, 2, 4, 4, 4)),
+]
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("label,program_config", SWEEP_MM4_REUSE, ids=[s[0] for s in SWEEP_MM4_REUSE])
+def test_mm4_reuse(mesh_device, label, program_config):
+    base = DEVICE_MATMULS[4]
+    cfg = {**base, "name": f"mm4_{label}", "program_config": program_config}
+    _run_device_matmul(mesh_device, cfg)
+
+
+# mm4 memory sweep on the FINAL MultiCoreReuse 80c config: confirm whether in0->L1 (10.5MB SDPA out)
+# and out->L1 actually help, now that the op is 80-core-bound (not serialization-bound like MultiCast1D).
+SWEEP_MM4_MEM = [
+    ("in0DRAM_outL1", DRAM, L1),
+    ("in0L1_outL1", L1, L1),  # current locked
+    ("in0L1_outDRAM", L1, DRAM),
+    ("in0DRAM_outDRAM", DRAM, DRAM),
+]
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("label,act_mc,out_mc", SWEEP_MM4_MEM, ids=[s[0] for s in SWEEP_MM4_MEM])
+def test_mm4_sweep_mem(mesh_device, label, act_mc, out_mc):
+    base = DEVICE_MATMULS[4]
+    cfg = {**base, "name": f"mm4_{label}", "act_mem_config": act_mc, "out_mem_config": out_mc}
+    _run_device_matmul(mesh_device, cfg)
+
+
+# mm2 MultiCoreReuse sweep (same family as mm4). M_t=20, K_t=4, N_t=16, B*Mt=320. cores=(320/pcm)*
+# (16/pcn); pcm in {1,2,4,5,10,20}, pcn|16. pcm4/pcn16=80c (max). bw|K_t=4 -> {1,2,4}. _mm4_reuse is
+# generic (builds MatmulMultiCoreReuseProgramConfig).
+SWEEP_MM2_REUSE = [
+    ("pcm4_pcn16_bw2_sb2x4", _mm4_reuse(2, 2, 4, 4, 16)),  # 80c base
+    ("pcm4_pcn16_bw1_sb2x4", _mm4_reuse(1, 2, 4, 4, 16)),  # 80c bw1
+    ("pcm4_pcn16_bw4_sb2x4", _mm4_reuse(4, 2, 4, 4, 16)),  # 80c bw4
+    ("pcm4_pcn16_bw2_sb1x8", _mm4_reuse(2, 1, 8, 4, 16)),  # 80c, fat 1x8
+    ("pcm4_pcn16_bw2_sb4x2", _mm4_reuse(2, 4, 2, 4, 16)),  # 80c
+    ("pcm4_pcn16_bw2_sb4x1", _mm4_reuse(2, 4, 1, 4, 16)),  # 80c
+    ("pcm5_pcn16_bw2_sb1x8", _mm4_reuse(2, 1, 8, 5, 16)),  # 64c
+    ("pcm10_pcn8_bw2_sb2x4", _mm4_reuse(2, 2, 4, 10, 8)),  # 64c
+    ("pcm10_pcn16_bw2_sb2x4", _mm4_reuse(2, 2, 4, 10, 16)),  # 32c
+]
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("label,program_config", SWEEP_MM2_REUSE, ids=[s[0] for s in SWEEP_MM2_REUSE])
+def test_mm2_reuse(mesh_device, label, program_config):
+    base = DEVICE_MATMULS[5]  # mm2 is appended last (index 5)
+    cfg = {**base, "name": f"mm2_{label}", "program_config": program_config}
+    _run_device_matmul(mesh_device, cfg)
+
+
+# mm2 memory sweep on the 80c config: out is the 10.5MB tensor here (N=512 bf16), so out-L1 vs DRAM is
+# the key lever (mirror of mm4 where in0 was big). in0 is only 2.62MB.
+SWEEP_MM2_MEM = [
+    ("in0L1_outL1", L1, L1),  # current locked
+    ("in0L1_outDRAM", L1, DRAM),
+    ("in0DRAM_outL1", DRAM, L1),
+    ("in0DRAM_outDRAM", DRAM, DRAM),
+]
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], ids=["1x4"], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("label,act_mc,out_mc", SWEEP_MM2_MEM, ids=[s[0] for s in SWEEP_MM2_MEM])
+def test_mm2_sweep_mem(mesh_device, label, act_mc, out_mc):
+    base = DEVICE_MATMULS[5]
+    cfg = {**base, "name": f"mm2_{label}", "act_mem_config": act_mc, "out_mem_config": out_mc}
     _run_device_matmul(mesh_device, cfg)
 
 
