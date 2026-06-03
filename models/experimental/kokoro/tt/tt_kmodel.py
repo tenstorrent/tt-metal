@@ -145,6 +145,18 @@ def _to_fp32_if_needed(x: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> tupl
     return out, True
 
 
+def _text_mask_from_input_lengths(input_lengths: torch.LongTensor, seq_len: int) -> torch.Tensor:
+    """``[B, T]`` bool mask; ``True`` marks padded positions (same as reference ``KModel``)."""
+    text_mask = torch.arange(seq_len).unsqueeze(0).expand(input_lengths.shape[0], -1)
+    return torch.gt(text_mask + 1, input_lengths.unsqueeze(1))
+
+
+# BH BF16 MACs accumulate rounding error over 512-token sequences; PLBERT PCC ~0.94 at T=512
+# causes DurationEncoder to drift pred_dur by ~9%, making audio PCCs collapse to ~0.
+# Below this token count PLBERT PCC is >0.998 and TTNN prosody is fully accurate.
+_LONG_SEQUENCE_CPU_PROSODY_THRESHOLD = 480
+
+
 # ---------------------------------------------------------------------------
 # TTKModel
 # ---------------------------------------------------------------------------
@@ -259,7 +271,7 @@ class TTKModel:
 
         ctx = _zero_noise() if deterministic else _noop()
         with ctx:
-            audio_tt = self._device_forward(
+            audio_tt, pred_dur = self._device_forward(
                 input_ids,
                 input_lengths,
                 lengths_list,
@@ -274,7 +286,7 @@ class TTKModel:
         audio = ttnn.to_torch(audio_tt).float().squeeze()
         ttnn.deallocate(audio_tt)
 
-        return self.Output(audio=audio)
+        return self.Output(audio=audio, pred_dur=pred_dur)
 
     __call__ = forward
 
@@ -282,27 +294,35 @@ class TTKModel:
     # Internal on-device forward
     # ------------------------------------------------------------------
 
-    def _device_forward(
+    def _device_forward_prosody_stages(
         self,
         input_ids: torch.LongTensor,
         input_lengths: torch.LongTensor,
         lengths_list: list,
         s_pred_cpu: torch.Tensor,
-        s_style_cpu: torch.Tensor,
         speed: float,
-        mc: ttnn.MemoryConfig,
+        mc: "ttnn.MemoryConfig",
         ck,
-        *,
-        deterministic: bool = False,
-    ) -> ttnn.Tensor:
+    ) -> "tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, int, torch.LongTensor]":
+        """Steps 1–9 of the forward pass: BERT → alignment → F0/N → TextEncoder → asr_nlc.
+
+        Returns ``(asr_nlc, F0, N, T_aligned, pred_dur_cpu)``.  All returned device
+        tensors are owned by the caller; the caller must deallocate them.
+
+        Used by :meth:`_device_forward` and by
+        :class:`~models.experimental.kokoro.runner.performant_runner.KokoroPerformantRunner`
+        to pre-compute stable decoder inputs for trace capture.
+        """
         p = self.params
         dev = self.device
-        B, T = input_ids.shape
+        _, T = input_ids.shape
+        prosody_dtype = ttnn.float32 if self._use_fp32_prosody_boundary else ttnn.bfloat16
+        text_mask = _text_mask_from_input_lengths(input_lengths, T)
 
-        # ------ 1. PL-BERT (attention_mask=None → all-attend, no torch mask ops) ------
-        bert_out = self._bert(input_ids, attention_mask=None)
+        # 1. PL-BERT
+        bert_out = self._bert(input_ids, attention_mask=(~text_mask).int())
 
-        # ------ 2. bert_encoder: Linear(hidden_size → hidden_dim) --------
+        # 2. bert_encoder
         bert_for_enc = bert_out
         owns_bert_cast = False
         if self._use_fp32_prosody_boundary and bert_out.dtype != ttnn.float32:
@@ -317,28 +337,29 @@ class TTKModel:
             compute_kernel_config=ck,
         )
         ttnn.deallocate(bert_for_enc if owns_bert_cast else bert_out)
-
-        # ttnn.linear may prepend a singleton batch dim
         while len(d_en.shape) > 3:
             d_en = ttnn.squeeze(d_en, 0)
-
         d_en_bct = ttnn.permute(d_en, (0, 2, 1), memory_config=mc)
         ttnn.deallocate(d_en)
 
-        prosody_dtype = ttnn.float32 if self._use_fp32_prosody_boundary else ttnn.bfloat16
         if self._use_fp32_prosody_boundary and d_en_bct.dtype != prosody_dtype:
             d_en_fp32 = ttnn.typecast(d_en_bct, prosody_dtype, memory_config=mc)
             ttnn.deallocate(d_en_bct)
             d_en_bct = d_en_fp32
 
-        # ------ 3. Style on device ----------------------------------------
+        # 3. Style
         s_pred_tt = ttnn.from_torch(
             s_pred_cpu, dtype=prosody_dtype, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc
         )
 
-        # ------ 4. DurationEncoder (P6: wire_dtype keeps concat dtypes unified in fp32) ------
-        # Full-length sequence (no padding): keep_mask is all-ones, created directly on device.
-        keep_mask = ttnn.ones([B, T, 1], dtype=prosody_dtype, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc)
+        # 4. DurationEncoder
+        keep_mask = ttnn.from_torch(
+            (~text_mask).to(torch.float32).unsqueeze(-1),
+            dtype=prosody_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=dev,
+            memory_config=mc,
+        )
         d_nlc = self._predictor._text_encoder.forward(
             d_en_bct=d_en_bct,
             style_bs=s_pred_tt,
@@ -351,7 +372,7 @@ class TTKModel:
         ttnn.deallocate(d_en_bct)
         ttnn.deallocate(keep_mask)
 
-        # ------ 5. BiLSTM + duration_proj ---------------------------------
+        # 5. BiLSTM + duration_proj
         x_lstm = tt_bilstm_nlc(
             x_nlc=d_nlc,
             fwd=p.predictor.lstm_fwd,
@@ -363,10 +384,7 @@ class TTKModel:
         duration = self._predictor._duration_proj.forward(x_lstm, compute_kernel_config=ck, memory_config=mc)
         ttnn.deallocate(x_lstm)
 
-        # ------ 6. Alignment (host step: read pred_dur, build matrix) -----
-        # sigmoid → sum → scale → round → clip all run on device.
-        # The single CPU readback is unavoidable: T_aligned = sum(pred_dur) determines
-        # the alignment matrix shape, which TTNN must know before allocating tensors.
+        # 6. Alignment host step (unavoidable: T_aligned = sum(pred_dur) sets tensor shapes)
         dur_sig = ttnn.sigmoid(duration, memory_config=mc)
         ttnn.deallocate(duration)
         dur_sum_tt = ttnn.sum(dur_sig, dim=-1, memory_config=mc)
@@ -381,14 +399,41 @@ class TTKModel:
         ttnn.deallocate(dur_rounded_tt)
         pred_dur = ttnn.to_torch(dur_clipped_tt).long().squeeze()
         ttnn.deallocate(dur_clipped_tt)
+        pred_dur_cpu = pred_dur.clone()
 
         aln_cpu = _build_alignment(pred_dur)
         T_aligned = int(aln_cpu.shape[2])
-
         aln_dtype = ttnn.float32 if self._use_fp32_prosody_boundary else ttnn.bfloat16
         aln_tt = ttnn.from_torch(aln_cpu, dtype=aln_dtype, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc)
 
-        # ------ 7. en_nlc = aln^T @ d_nlc --------------------------------
+        return self._device_forward_prosody_stages_from_aln(
+            input_ids,
+            input_lengths,
+            text_mask,
+            d_nlc,
+            s_pred_tt,
+            aln_tt,
+            T_aligned,
+            pred_dur_cpu,
+            mc,
+            ck,
+        )
+
+    def _device_forward_prosody_stages_from_aln(
+        self,
+        input_ids: torch.LongTensor,
+        input_lengths: torch.LongTensor,
+        text_mask: torch.Tensor,
+        d_nlc: ttnn.Tensor,
+        s_pred_tt: ttnn.Tensor,
+        aln_tt: ttnn.Tensor,
+        T_aligned: int,
+        pred_dur_cpu: torch.LongTensor,
+        mc: ttnn.MemoryConfig,
+        ck,
+    ) -> "tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, int, torch.LongTensor]":
+        """Steps 7–9 given ``d_nlc``, alignment, and style (shared by on-device and CPU prosody paths)."""
+        # 7. en_nlc = aln^T @ d_nlc
         aln_Ta_T = ttnn.permute(aln_tt, (0, 2, 1), memory_config=mc)
         if self._use_fp32_prosody_boundary:
             d_mat, owns_d = _to_fp32_if_needed(d_nlc, mc)
@@ -401,7 +446,7 @@ class TTKModel:
             ttnn.deallocate(d_nlc)
         ttnn.deallocate(aln_Ta_T)
 
-        # ------ 8. F0 / N from predictor ---------------------------------
+        # 8. F0 / N
         if self._use_fp32_prosody_boundary:
             en_fp32, owns_en = _to_fp32_if_needed(en_nlc, mc)
             if owns_en:
@@ -416,16 +461,14 @@ class TTKModel:
         ttnn.deallocate(en_nlc)
         ttnn.deallocate(s_pred_tt)
 
-        # ------ 9. TextEncoder + asr = t_en @ aln -------------------------
-        # No mask arguments: text encoder creates all-ones keep_mask on device (full-length sequence).
-        t_en_bct = self._text_encoder(input_ids, input_lengths=input_lengths)
-
+        # 9. TextEncoder + asr = t_en @ aln
+        t_en_bct = self._text_encoder(input_ids, input_lengths=input_lengths, text_mask=text_mask)
         asr_bct = ttnn.matmul(t_en_bct, aln_tt, memory_config=mc, compute_kernel_config=ck)
         ttnn.deallocate(t_en_bct)
         ttnn.deallocate(aln_tt)
-
         asr_nlc = ttnn.permute(asr_bct, (0, 2, 1), memory_config=mc)
         ttnn.deallocate(asr_bct)
+
         if self._use_fp32_prosody_boundary:
             if asr_nlc.dtype != ttnn.float32:
                 asr_fp32 = ttnn.typecast(asr_nlc, ttnn.float32, memory_config=mc)
@@ -440,7 +483,29 @@ class TTKModel:
                 ttnn.deallocate(N)
                 N = N_fp32
 
+        return asr_nlc, F0, N, T_aligned, pred_dur_cpu
+
+    def _device_forward(
+        self,
+        input_ids: torch.LongTensor,
+        input_lengths: torch.LongTensor,
+        lengths_list: list,
+        s_pred_cpu: torch.Tensor,
+        s_style_cpu: torch.Tensor,
+        speed: float,
+        mc: "ttnn.MemoryConfig",
+        ck,
+        *,
+        deterministic: bool = False,
+    ) -> "tuple[ttnn.Tensor, torch.LongTensor]":
+        """Full forward steps 1–10. Returns ``(audio_tt, pred_dur_cpu)``."""
+        # Steps 1-9
+        asr_nlc, F0, N, T_aligned, pred_dur_cpu = self._device_forward_prosody_stages(
+            input_ids, input_lengths, lengths_list, s_pred_cpu, speed, mc, ck
+        )
+
         # ------ 10. Decoder (vocoder) ------------------------------------
+        dev = self.device
         s_style_tt = ttnn.from_torch(
             s_style_cpu, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc
         )
@@ -474,6 +539,140 @@ class TTKModel:
         ttnn.deallocate(F0)
         ttnn.deallocate(N)
         ttnn.deallocate(s_style_tt)
+
+        return audio, pred_dur_cpu
+
+    def _device_forward_fixed_aln(
+        self,
+        input_ids: torch.LongTensor,
+        input_lengths: torch.LongTensor,
+        lengths_list: list,
+        s_pred_tt: "ttnn.Tensor",
+        s_style_tt: "ttnn.Tensor",
+        aln_tt: "ttnn.Tensor",
+        T_aligned: int,
+        mc: "ttnn.MemoryConfig",
+        ck,
+    ) -> "ttnn.Tensor":
+        """Traceable forward that uses pre-allocated alignment and style tensors.
+
+        Identical to ``_device_forward`` except:
+        - ``s_pred_tt``, ``s_style_tt``, ``aln_tt`` are **borrowed** (pre-allocated by the
+          caller and must not be deallocated here).
+        - Steps 5-6 (BiLSTM → pred_dur readback → aln_cpu build) are skipped; the caller
+          provides ``aln_tt`` directly so the entire path is traceable on a single CQ.
+        - Returns the raw ``audio`` device tensor (no ``to_torch``).
+
+        Used by :class:`~models.experimental.kokoro.runner.performant_runner.KokoroPerformantRunner`
+        for ``ttnn.begin_trace_capture`` / ``execute_trace`` perf runs.
+        """
+        p = self.params
+        dev = self.device
+        B, T = input_ids.shape
+
+        # 1. PL-BERT
+        bert_out = self._bert(input_ids, attention_mask=None)
+
+        # 2. bert_encoder: Linear(hidden_size → hidden_dim)
+        bert_for_enc = bert_out
+        owns_bert_cast = False
+        if self._use_fp32_prosody_boundary and bert_out.dtype != ttnn.float32:
+            bert_for_enc = ttnn.typecast(bert_out, ttnn.float32, memory_config=mc)
+            owns_bert_cast = True
+        d_en = ttnn.linear(
+            bert_for_enc,
+            p.bert_encoder_w,
+            bias=p.bert_encoder_b,
+            transpose_b=True,
+            memory_config=mc,
+            compute_kernel_config=ck,
+        )
+        ttnn.deallocate(bert_for_enc if owns_bert_cast else bert_out)
+        while len(d_en.shape) > 3:
+            d_en = ttnn.squeeze(d_en, 0)
+        d_en_bct = ttnn.permute(d_en, (0, 2, 1), memory_config=mc)
+        ttnn.deallocate(d_en)
+
+        prosody_dtype = ttnn.float32 if self._use_fp32_prosody_boundary else ttnn.bfloat16
+        if self._use_fp32_prosody_boundary and d_en_bct.dtype != prosody_dtype:
+            d_en_fp32 = ttnn.typecast(d_en_bct, prosody_dtype, memory_config=mc)
+            ttnn.deallocate(d_en_bct)
+            d_en_bct = d_en_fp32
+
+        # 3+4. DurationEncoder (s_pred_tt is borrowed — not deallocated here)
+        keep_mask = ttnn.ones([B, T, 1], dtype=prosody_dtype, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc)
+        d_nlc = self._predictor._text_encoder.forward(
+            d_en_bct=d_en_bct,
+            style_bs=s_pred_tt,
+            sequence_lengths=lengths_list,
+            keep_mask_btl=keep_mask,
+            compute_kernel_config=ck,
+            memory_config=mc,
+            wire_dtype=prosody_dtype,
+        )
+        ttnn.deallocate(d_en_bct)
+        ttnn.deallocate(keep_mask)
+
+        # Steps 5-6 skipped: BiLSTM, pred_dur readback, aln_cpu build omitted.
+        # aln_tt is provided pre-allocated by the caller.
+
+        # 7. en_nlc = aln^T @ d_nlc
+        aln_Ta_T = ttnn.permute(aln_tt, (0, 2, 1), memory_config=mc)
+        if self._use_fp32_prosody_boundary:
+            d_mat, owns_d = _to_fp32_if_needed(d_nlc, mc)
+            if owns_d:
+                ttnn.deallocate(d_nlc)
+            en_nlc = ttnn.matmul(aln_Ta_T, d_mat, memory_config=mc, compute_kernel_config=ck)
+            ttnn.deallocate(d_mat)
+        else:
+            en_nlc = ttnn.matmul(aln_Ta_T, d_nlc, memory_config=mc, compute_kernel_config=ck)
+            ttnn.deallocate(d_nlc)
+        ttnn.deallocate(aln_Ta_T)
+
+        # 8. F0/N
+        if self._use_fp32_prosody_boundary:
+            en_fp32, owns_en = _to_fp32_if_needed(en_nlc, mc)
+            if owns_en:
+                ttnn.deallocate(en_nlc)
+                en_nlc = en_fp32
+            s_pred_f0, owns_s = _to_fp32_if_needed(s_pred_tt, mc)
+            F0, N = self._predictor.F0Ntrain(en_nlc, s_pred_f0, memory_config=mc, use_fp32_boundary=True)
+            if owns_s:
+                ttnn.deallocate(s_pred_f0)
+        else:
+            F0, N = self._predictor.F0Ntrain(en_nlc, s_pred_tt, memory_config=mc, use_fp32_boundary=False)
+        ttnn.deallocate(en_nlc)
+        # s_pred_tt is borrowed — not deallocated here
+
+        # 9. TextEncoder + asr = t_en @ aln
+        t_en_bct = self._text_encoder(input_ids, input_lengths=input_lengths)
+        asr_bct = ttnn.matmul(t_en_bct, aln_tt, memory_config=mc, compute_kernel_config=ck)
+        # aln_tt is borrowed — not deallocated here
+        ttnn.deallocate(t_en_bct)
+        asr_nlc = ttnn.permute(asr_bct, (0, 2, 1), memory_config=mc)
+        ttnn.deallocate(asr_bct)
+
+        if self._use_fp32_prosody_boundary:
+            if asr_nlc.dtype != ttnn.float32:
+                asr_fp32 = ttnn.typecast(asr_nlc, ttnn.float32, memory_config=mc)
+                ttnn.deallocate(asr_nlc)
+                asr_nlc = asr_fp32
+            if F0.dtype != ttnn.float32:
+                F0_fp32 = ttnn.typecast(F0, ttnn.float32, memory_config=mc)
+                ttnn.deallocate(F0)
+                F0 = F0_fp32
+            if N.dtype != ttnn.float32:
+                N_fp32 = ttnn.typecast(N, ttnn.float32, memory_config=mc)
+                ttnn.deallocate(N)
+                N = N_fp32
+
+        # 10. Decoder (s_style_tt is borrowed — not deallocated here)
+        decoder = self._get_decoder(T_aligned)
+        audio = decoder(asr_nlc, F0, N, s_style_tt, memory_config=mc)
+        ttnn.deallocate(asr_nlc)
+        ttnn.deallocate(F0)
+        ttnn.deallocate(N)
+        # s_style_tt is borrowed — not deallocated here
 
         return audio
 
