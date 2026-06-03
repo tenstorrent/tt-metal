@@ -42,7 +42,7 @@
 #include "dispatch/dispatch_core_common.hpp"
 #include "profiler/profiler_state_manager.hpp"
 #include <experimental/fabric/control_plane.hpp>
-#include <experimental/mock_device.hpp>
+#include <experimental/mock_device/mock_device.hpp>
 #include "device/device_manager.hpp"
 #include <distributed_context.hpp>
 #include <experimental/fabric/fabric.hpp>
