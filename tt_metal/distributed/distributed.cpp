@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <utility>
@@ -31,6 +32,10 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         for (auto& [device_range, program] : service_programs) {
             for (const auto& coord : device_range) {
                 auto* device = mesh_cq.device()->impl().get_device(coord);
+                TT_FATAL(
+                    device != nullptr,
+                    "EnqueueMeshWorkload: service program targets mesh coordinate {} with no local device",
+                    coord);
                 tt::tt_metal::detail::LaunchProgram(device, program, false, true);
             }
         }
