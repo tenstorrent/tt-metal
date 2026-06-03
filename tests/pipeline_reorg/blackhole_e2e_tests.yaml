@@ -276,7 +276,7 @@
     exit $exit_code
   skus:
     bh_loudbox:
-      timeout: 60
+      timeout: 55
   owner_id: U094PKWHNJ0 # Petar Milojevic
   team: models
 
