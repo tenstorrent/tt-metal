@@ -1345,3 +1345,94 @@ def test_ttnn_topk_correctness(ttnn_mesh_device, input_width, dtype):
         test_label=f"ttnn.topk isolation (width={input_width}, dtype={dtype_tag}, B={B}, K={K})",
         quant_tolerance=quant_tolerance,
     )
+
+
+# ==============================================================================
+# Logprobs plumbing (enable_log_probs per-call arg)
+# ==============================================================================
+
+
+@pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 2), (1, 8)], ids=["1x1", "1x2", "1x8"], indirect=True)
+def test_sampling1d_logprobs_disabled_returns_none(ttnn_mesh_device):
+    """Default (enable_log_probs=False) → log_probs is None on every mesh, both paths."""
+    torch.manual_seed(42)
+    B = 32
+    vocab_size = 1024
+
+    sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device, allow_force_argmax=True)
+    logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
+    cluster_shape = tuple(ttnn_mesh_device.shape)
+
+    # Top-k path
+    logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device, shard_vocab=True)
+    k, p, temp = _make_sampling_params(
+        ttnn_mesh_device, B, k_val=1, p_val=0.0, temp_val=1.0, cluster_shape=cluster_shape
+    )
+    _, log_probs = sampler.decode_forward(logits_tt, k=k, p=p, temp=temp)
+    assert log_probs is None, "top-k path must return None when enable_log_probs=False"
+
+    # Argmax path
+    logits_tt2 = _make_logits_tt(logits_host, ttnn_mesh_device)
+    _, log_probs_argmax = sampler.decode_forward(logits_tt2)
+    assert log_probs_argmax is None, "argmax path must return None when enable_log_probs=False"
+
+
+@pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 2), (1, 8)], ids=["1x1", "1x2", "1x8"], indirect=True)
+def test_sampling1d_argmax_never_emits_logprobs(ttnn_mesh_device):
+    """Argmax contract (P0): argmax path returns None even when enable_log_probs=True."""
+    torch.manual_seed(42)
+    B = 32
+    vocab_size = 1024
+
+    sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device, allow_force_argmax=True)
+    logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
+    logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device)
+
+    _, log_probs = sampler.decode_forward(logits_tt, enable_log_probs=True)
+    assert log_probs is None, "argmax path must never compute logprobs (force-argmax ⇒ no logprobs)"
+
+
+@pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 2), (1, 8)], ids=["1x1", "1x2", "1x8"], indirect=True)
+def test_sampling1d_logprobs_topk(ttnn_mesh_device):
+    """enable_log_probs=True on the top-k path.
+
+    The old single-token logprob path only computes on multi-device shards with
+    num_devices ∈ {8, 32} (T3K 1×8). On 1×1/1×2 the calculator returns None even when enabled.
+    On 1×8, with k=1/p=0/temp=1 the sampled token is the argmax, so its logprob must match
+    torch.log_softmax(logits)[argmax].
+    """
+    from models.common.utility_functions import comp_pcc
+
+    torch.manual_seed(42)
+    B = 32
+    vocab_size = 32768  # divisible by 8
+
+    sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
+    logits_host = torch.randn(1, 1, B, vocab_size, dtype=torch.bfloat16)
+    logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device, shard_vocab=True)
+
+    cluster_shape = tuple(ttnn_mesh_device.shape)
+    k, p, temp = _make_sampling_params(
+        ttnn_mesh_device, B, k_val=1, p_val=0.0, temp_val=1.0, cluster_shape=cluster_shape
+    )
+
+    tokens_tt, log_probs = sampler.decode_forward(logits_tt, k=k, p=p, temp=temp, enable_log_probs=True)
+
+    num_devices = max(cluster_shape)
+    if num_devices not in (8, 32):
+        assert log_probs is None, f"logprobs unsupported on {num_devices} devices → expected None"
+        return
+
+    assert log_probs is not None, "logprobs must be computed on a 1×8 mesh when enabled"
+
+    # output_tensor is replicated across devices; read a single device copy → shape (1,1,1,B)
+    lp_host = ttnn.to_torch(ttnn.get_device_tensors(log_probs)[0]).reshape(-1)[:B].float()
+    tokens_host = to_torch_auto_compose(tokens_tt).flatten()[:B].long()
+
+    # Reference: log_softmax over the full vocab (fp32), indexed at the sampled token.
+    ref_log_softmax = torch.log_softmax(logits_host.float().squeeze(), dim=-1)  # [B, V]
+    ref_lp = ref_log_softmax[torch.arange(B), tokens_host]
+
+    passing, pcc_msg = comp_pcc(ref_lp, lp_host, pcc=0.99)
+    print(f"\n  logprobs PCC (V={vocab_size}, mesh={cluster_shape}): {pcc_msg}")
+    assert passing, f"logprobs PCC below threshold: {pcc_msg}"
