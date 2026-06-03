@@ -4,6 +4,7 @@
 #pragma once
 
 #include "api/compute/pack_untilize.h"
+#include "api/compute/experimental/fast_untilize.h"
 #include "api/compute/cb_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
