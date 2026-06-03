@@ -16,15 +16,82 @@ using namespace ckernel::math;
  *
  * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
  * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam EN_X2: When true, programs addr_mods for the MXFP4_2x non-DI MOP variant (8 MVMULs covering only A0/A1 and B0/B1; SrcA in MxFp4_2x_A/B drives the 2x
+ * sub-element expansion).
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  */
-template <ckernel::MathFidelity MATH_FIDELITY_TYPE>
+template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool EN_X2 = false>
 inline void _llk_math_matmul_addrmod_(std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
     constexpr bool high_fidelity      = MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi;
     constexpr int FIDELITY_INCREMENT  = high_fidelity ? 1 : 0;
     const std::uint16_t num_tile_incr = (ct_dim >= rt_dim) ? 64 : ct_dim * 64;
+
+    if constexpr (EN_X2)
+    {
+        // Non-DI MXFP4_2x traversal (mirrors the DI X2 (srca,srcb,dest) sequence):
+        //   #0 (0, 0, 0)     #1 (0, 8, 8)
+        //   #2 (16, 0,16)    #3 (16, 8,24)
+        //   #4 (0,16,32)     #5 (0,24,40)
+        //   #6 (16,16,48)    #7 (16,24,56)
+        // SrcB needs two distinct "wrap" targets (0 then 16). We exploit RWC_SrcB_Cr:
+        // at #1->#2 it is still 0 so srcb cr=1 wraps to 0; at #3->#4 we pump it up to
+        // 16 via {cr=1, incr=16}; at #5->#6 srcb cr=1 then wraps to 16.
+
+        // Common in-replay step (used between #0->#1, #2->#3, #4->#5, #6->#7).
+        addr_mod_t {
+            .srca = {.incr = 0, .clr = 0, .cr = 0},
+            .srcb = {.incr = 8, .clr = 0, .cr = 0},
+            .dest = {.incr = 8, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_0);
+
+        // #1 -> #2: srca steps to A1, srcb wraps back to 0 (RWC_SrcB_Cr is 0 here).
+        addr_mod_t {
+            .srca = {.incr = 16, .clr = 0, .cr = 0},
+            .srcb = {.incr = 0, .clr = 0, .cr = 1},
+            .dest = {.incr = 8, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_1);
+
+        // #3 -> #4: srca wraps back to 0, srcb advances RWC_SrcB_Cr from 0 to 16 in
+        // the same step ({cr=1, incr=16} -> srcb = 0+16 = 16, RWC_SrcB_Cr := 16).
+        addr_mod_t {
+            .srca = {.incr = 0, .clr = 0, .cr = 1},
+            .srcb = {.incr = 16, .clr = 0, .cr = 1},
+            .dest = {.incr = 8, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_2);
+
+        // #5 -> #6: srca steps to A1, srcb wraps to RWC_SrcB_Cr (= 16 now).
+        addr_mod_t {
+            .srca = {.incr = 16, .clr = 0, .cr = 0},
+            .srcb = {.incr = 0, .clr = 0, .cr = 1},
+            .dest = {.incr = 8, .clr = 0, .cr = 0},
+        }
+            .set(ADDR_MOD_3);
+
+        // matmul_op (intermediate fidelity phase): reset src registers, snap dest
+        // back to start of this tile, advance fidelity counter.
+        addr_mod_t {
+            .srca     = {.incr = 0, .clr = 1, .cr = 0},
+            .srcb     = {.incr = 0, .clr = 1, .cr = 0},
+            .dest     = {.incr = 0, .clr = 0, .cr = 1},
+            .fidelity = {.incr = FIDELITY_INCREMENT, .clr = 0},
+        }
+            .set(ADDR_MOD_4);
+
+        // matmul_op_last: end-of-tile, advance dest to next tile, clear fidelity.
+        addr_mod_t {
+            .srca     = {.incr = 0, .clr = 1, .cr = 0},
+            .srcb     = {.incr = 0, .clr = 1, .cr = 0},
+            .dest     = {.incr = num_tile_incr, .clr = 0, .cr = 1},
+            .fidelity = {.incr = 0, .clr = 1},
+        }
+            .set(ADDR_MOD_5);
+        return;
+    }
 
     // MVMUL does D = B*A
 
@@ -133,10 +200,12 @@ inline void _llk_math_matmul_di_addrmod_(std::uint8_t ct_dim, std::uint8_t rt_di
  *
  * @tparam MATH_FIDELITY_TYPE: Controls multiplication precision via the number of FPU fidelity phases; higher values use more of the input mantissa bits,
  * values = <LoFi/HiFi2/HiFi3/HiFi4>
+ * @tparam EN_X2: When true, emits the non-DI MXFP4_2x variant (7-MVMUL replay traversing only A0/A1 and B0/B1; relies on SrcA being unpacked as MxFp4_2x_A/B
+ * for the 2x sub-element expansion).
  * @param ct_dim: Number of tiles in the column dimension for a matrix multiply
  * @param rt_dim: Number of tiles in the row dimension for a matrix multiply
  */
-template <ckernel::MathFidelity MATH_FIDELITY_TYPE>
+template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool EN_X2 = false>
 inline void _llk_math_matmul_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
     // in0 - loaded to SrcB
@@ -147,6 +216,40 @@ inline void _llk_math_matmul_mop_config_(std::uint8_t ct_dim, std::uint8_t rt_di
     constexpr std::uint32_t FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 1 : to_underlying(MATH_FIDELITY_TYPE);
 
     const bool reuse_a = ct_dim >= rt_dim;
+
+    if constexpr (EN_X2)
+    {
+        // Non-DI MXFP4_2x: 7-MVMUL replay + matmul_op = 8 MVMULs per tile (vs 16 in plain non-DI).
+        // (srca,srcb,dest) sequence mirrors the DI X2 path:
+        //   #0 (0,  0,  0)  B0[0:7]*A0
+        //   #1 (0,  8,  8)  B0[8:15]*A0
+        //   #2 (16, 0, 16)  B0[0:7]*A1     <- ADDR_MOD_1 (srca+=16, srcb cr->0)
+        //   #3 (16, 8, 24)  B0[8:15]*A1
+        //   #4 (0, 16, 32)  B1[0:7]*A0     <- ADDR_MOD_2 (srca cr->0, srcb cr+=16 lifts RWC_SrcB_Cr to 16)
+        //   #5 (0, 24, 40)  B1[8:15]*A0
+        //   #6 (16,16, 48)  B1[0:7]*A1     <- ADDR_MOD_3 (srca+=16, srcb cr->16)
+        //   #7 (16,24, 56)  B1[8:15]*A1    <- matmul_op (ADDR_MOD_4) / matmul_op_last (ADDR_MOD_5)
+        constexpr std::uint32_t replay_buf_len = 8 - 1;
+        load_replay_buf<0, replay_buf_len>(
+            []
+            {
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #0 -> srcb+=8, dest+=8
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // #1 -> srca+=16, srcb cr->0, dest+=8
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #2 -> srcb+=8, dest+=8
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_2, 0); // #3 -> srca cr->0, srcb cr+=16 (=16), dest+=8
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #4 -> srcb+=8, dest+=8
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 0); // #5 -> srca+=16, srcb cr->16, dest+=8
+                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // #6 -> srcb+=8, dest+=8
+            });
+
+        constexpr static std::uint32_t matmul_op = TT_OP_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_4, 0);
+        const std::uint32_t matmul_op_last       = reuse_a ? TT_OP_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_5, 0) : TT_OP_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_5, 0);
+
+        ckernel_template temp(1 /* outer loop */, FIDELITY_PHASES, TT_OP_REPLAY(0, replay_buf_len, 0, 0, 0, 0), matmul_op);
+        temp.set_last_outer_loop_instr(matmul_op_last);
+        temp.program_bank0_sw_cntl(instrn_buffer);
+        return;
+    }
 
     constexpr std::uint32_t replay_buf_len = 16 - 1;
 
@@ -304,10 +407,21 @@ inline void _llk_math_matmul_di_mop_config_(std::uint8_t ct_dim, std::uint8_t rt
 template <ckernel::MathFidelity MATH_FIDELITY_TYPE, bool EN_DI = false, bool EN_X2 = false>
 inline void _llk_math_matmul_init_(std::uint8_t ct_dim, std::uint8_t rt_dim)
 {
-    if constexpr (EN_DI || EN_X2)
+    if constexpr (EN_DI)
     {
+        // Direct-indexing path. Supports plain DI and DI+X2 (DI+X2 is the original
+        // MXFP4_2x matmul implementation).
         _llk_math_matmul_di_addrmod_<MATH_FIDELITY_TYPE>(ct_dim, rt_dim);
         _llk_math_matmul_di_mop_config_<MATH_FIDELITY_TYPE, EN_X2>(ct_dim, rt_dim);
+    }
+    else if constexpr (EN_X2)
+    {
+        // Non-DI MXFP4_2x: regular MVMUL + auto-incrementing addr_mods, but a halved
+        // 8-MVMUL traversal that covers only A0/A1 and B0/B1 (the 2x sub-element
+        // expansion in the SrcA format-mux fires whenever the unpack-dst format is
+        // MxFp4_2x_A/B and the issued op is in the op_mmul set, which MVMUL is).
+        _llk_math_matmul_addrmod_<MATH_FIDELITY_TYPE, /*EN_X2=*/true>(ct_dim, rt_dim);
+        _llk_math_matmul_mop_config_<MATH_FIDELITY_TYPE, /*EN_X2=*/true>(ct_dim, rt_dim);
     }
     else
     {

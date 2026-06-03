@@ -90,7 +90,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
     // EN_MXFP_2X enables the 2x-packed FP4 matmul path: MVMULDI with sub-element indices and a halved
     // replay buffer. Set when SrcA/SrcB are configured as MxFp4_2x_A or MxFp4_2x_B.
-    _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, EN_MXFP_2X, EN_MXFP_2X>(CT_DIM, RT_DIM);
+    _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, false, EN_MXFP_2X>(CT_DIM, RT_DIM);
 
     for (std::uint32_t i = 0; i < KT_DIM; i++)
     {
