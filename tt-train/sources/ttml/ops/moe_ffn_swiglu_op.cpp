@@ -57,7 +57,7 @@ autograd::TensorPtr moe_ffn_swiglu_fw(
         throw std::runtime_error("moe_ffn_swiglu_fw: w_gate[0] inner dim must equal grouped's hidden_dim.");
     }
 
-    const uint32_t t_cap_tiles = std::max(1U, token_capacity / 32U);
+    const uint32_t t_cap_tiles = std::max(1U, (token_capacity + 31U) / 32U);
     // Per-call upper bound on matmul-M (in tiles): t_cap / num_experts, rounded up. The EP
     // path overrides the actual per-expert M at runtime from offsets; this value is only used
     // by the factory as a hint for the transpose_core_grid layout decision and to clamp the
