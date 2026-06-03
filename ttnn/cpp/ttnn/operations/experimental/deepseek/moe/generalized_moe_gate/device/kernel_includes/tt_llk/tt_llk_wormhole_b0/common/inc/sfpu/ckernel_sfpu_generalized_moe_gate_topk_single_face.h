@@ -567,6 +567,126 @@ inline void _generalized_moe_gate_top8_ungrouped(uint32_t eps, uint32_t scale) {
     _generalized_moe_gate_top8<APPROXIMATION_MODE, is_fp32_dest_acc_en>(eps, scale);
 }
 
+// Copy a stored top-8 run (bias + concat idx|score) from offset pair {from_lo,from_hi} to
+// {to_lo,to_hi}, matching _gmg_merge4_top8's store convention (bias mode 0; idx LO16, score HI16).
+// Used to relocate a saved run (e.g. topA parked at safe rows 8-15) into the final merge slot.
+template <uint32_t from_lo, uint32_t from_hi, uint32_t to_lo, uint32_t to_hi>
+inline void _gmg_copy_topk_run() {
+    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + from_lo);
+    TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + from_hi);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + from_lo);
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + from_hi);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + from_lo);
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + from_hi);
+    TTI_SFPNOP;
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + to_lo);
+    TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + to_hi);
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + to_lo);
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + to_hi);
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + to_lo);
+    TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + to_hi);
+}
+
+// DIAGNOSTIC: normalize a top-8 run already sitting at scores/indices {0,4} (the normalize tail of
+// _generalized_moe_gate_top8, factored out). Used by GMG_DIAG_TOPA to output a single half's run.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void _gmg_normalize_run(uint32_t eps, uint32_t scale) {
+    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);
+    TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+    TTI_SFPNOP;
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+    TTI_SFPNOP;
+    TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+    TTI_SFPNOP;
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+    TTI_SFPNOP;
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
+    sfpu_reciprocal_init<APPROXIMATION_MODE>();
+    TTI_SFPCONFIG(0, 0xF, 1);
+    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
+    sfpi::vFloat l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vFloat eps_value = Converter::as_float(eps);
+    l0 = l0 + eps_value;
+    l0 = sfpu_reciprocal<APPROXIMATION_MODE>(l0);
+    sfpi::vFloat scale_value = Converter::as_float(scale);
+    l0 = l0 * scale_value;
+    sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
+    TTI_SFPNOP;
+    TTI_SFPCONFIG(0, p_sfpu::LREG14, 0);
+    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);
+    TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
+    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+    TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);
+    TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
+}
+
+// Ungrouped finalize: merge TWO complete sorted-8 runs — topA at {0,2} (rows 0-3) and topB at
+// {4,6} (rows 4-7) — into the global top-8, then normalize. Unlike _gmg_merge4_runs_raw (which
+// treats {0,2,4,6} as 4 separate runs and would split topA/topB across the bitonic halves, causing
+// duplicates), this loads each run WHOLE: topA -> LREG0/1+LREG4/5, topB -> LREG2/3+LREG6/7 (reversed),
+// one bitonic_top8_ph3 stage merges the two sorted-8 runs, then the standard normalization tail runs.
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+inline void _generalized_moe_gate_finalize_ungrouped(uint32_t eps, uint32_t scale) {
+    constexpr bool idir = false;  // descending
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+    // reverse run = topB at {4,6}: load hi (offset 6) into LREG2/6, lo (offset 4) into LREG3/7, reverse.
+    TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_3, bias_offset + 6);
+    TTI_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_3, bias_offset + 4);
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + 6);
+    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + 4);
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + 6);
+    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + 4);
+    reverse_sort_order();
+
+    // forward run = topA at {0,2}.
+    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + 0);
+    TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + 2);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + 0);
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + 2);
+    TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + 0);
+    TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + 2);
+    bitonic_top8_ph3_st4_to_1<idir, true>();
+
+    // Store the merged top-8 (LREG0/1 bias, LREG4/5 concat idx|score) to scores/indices {0,4}.
+    bitonic_topk_store8_even_cols_split_indices_single_face<is_fp32_dest_acc_en>();
+
+    // ---- normalization tail (same as _generalized_moe_gate_top8) ----
+    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);
+    TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+    TTI_SFPNOP;
+    TTI_SFPTRANSP(0, 0, 0, 0);
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+    TTI_SFPNOP;
+    TTI_SFPADD(p_sfpu::LREG2, p_sfpu::LCONST_1, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+    TTI_SFPNOP;
+    TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+    TTI_SFPNOP;
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
+    sfpu_reciprocal_init<APPROXIMATION_MODE>();
+    TTI_SFPCONFIG(0, 0xF, 1);
+    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
+    sfpi::vFloat l0 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vFloat eps_value = Converter::as_float(eps);
+    l0 = l0 + eps_value;
+    l0 = sfpu_reciprocal<APPROXIMATION_MODE>(l0);
+    sfpi::vFloat scale_value = Converter::as_float(scale);
+    l0 = l0 * scale_value;
+    sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
+    TTI_SFPNOP;
+    TTI_SFPCONFIG(0, p_sfpu::LREG14, 0);
+    TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);
+    TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
+    TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+    TTI_SFPMUL(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);
+    TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
+}
+
 // ============================================================================
 // P1 STORE-FOOTPRINT PROBE (unambiguous) — run AFTER sum_top2.
 //

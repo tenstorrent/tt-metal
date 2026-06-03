@@ -49,6 +49,54 @@ inline void llk_math_sfpu_generalized_moe_gate_top8_ungrouped(
         scale);
 }
 
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en, uint32_t read_base, uint32_t store_lo, uint32_t store_hi>
+inline void llk_math_sfpu_generalized_moe_gate_merge4_top8(
+    uint dst_index, VectorMode vector_mode = VectorMode::RC_custom) {
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::
+            generalized_moe_gate_merge4_top8<APPROXIMATE, is_fp32_dest_acc_en, read_base, store_lo, store_hi>,
+        dst_index,
+        vector_mode);
+}
+
+template <
+    bool APPROXIMATE,
+    bool is_fp32_dest_acc_en,
+    uint32_t from_lo,
+    uint32_t from_hi,
+    uint32_t to_lo,
+    uint32_t to_hi>
+inline void llk_math_sfpu_generalized_moe_gate_copy_topk_run(
+    uint dst_index, VectorMode vector_mode = VectorMode::RC_custom) {
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::
+            generalized_moe_gate_copy_topk_run<APPROXIMATE, is_fp32_dest_acc_en, from_lo, from_hi, to_lo, to_hi>,
+        dst_index,
+        vector_mode);
+}
+
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
+inline void llk_math_sfpu_generalized_moe_gate_finalize_ungrouped(
+    uint dst_index, uint32_t eps, uint32_t scale, VectorMode vector_mode = VectorMode::RC_custom) {
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::generalized_moe_gate_finalize_ungrouped<APPROXIMATE, is_fp32_dest_acc_en>,
+        dst_index,
+        vector_mode,
+        eps,
+        scale);
+}
+
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
+inline void llk_math_sfpu_generalized_moe_gate_normalize_run(
+    uint dst_index, uint32_t eps, uint32_t scale, VectorMode vector_mode = VectorMode::RC_custom) {
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::generalized_moe_gate_normalize_run<APPROXIMATE, is_fp32_dest_acc_en>,
+        dst_index,
+        vector_mode,
+        eps,
+        scale);
+}
+
 template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
 inline void llk_math_sfpu_generalized_moe_gate_probe_lanemap(
     uint dst_index, VectorMode vector_mode = VectorMode::RC_custom) {

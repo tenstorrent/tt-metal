@@ -84,14 +84,7 @@ ALWI void generalized_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint3
     // packed out and inspected. See generalized_moe_gate_kernel.cpp.
     return;
 #endif
-#ifdef GMG_UNGROUPED_TOP8
-    // UNGROUPED (DRAFT): true global top-8 over all 8 groups. Skip group selection
-    // (step0 / sort_top4 / step1) entirely and merge all 8 per-group top-8 runs that
-    // sum_top2 left at cols {0,2,...,14}. Hypothesis: no transpose is needed before the
-    // merge (step0/step1 existed only for the group sort). VERIFY against the golden test.
-    MATH((llk_math_sfpu_generalized_moe_gate_top8_ungrouped<APPROX, DST_ACCUM_MODE>(0, eps, scale)));
-#else
-    // Transpose dest step 0 (FPU)
+    // Transpose dest step 0 (FPU) — always runs; puts each group g at DEST row g.
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step0_init<is_32bit>()));
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step0<DST_ACCUM_MODE, is_32bit>()));
 #ifdef GMG_DUMP_AFTER_STEP0
@@ -104,31 +97,71 @@ ALWI void generalized_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint3
     MATH((llk_math_sfpu_generalized_moe_gate_probe_offsets<APPROX, DST_ACCUM_MODE>(0)));
     return;
 #endif
-#ifdef GMG_TEST_HI_GROUPS
-    // P4 (step1_hi): instead of sort_top4 + collapsing the LOW half, run a tunable step1 variant
-    // that collapses the HIGH 4 groups (4-7) into runs. Tune GMG_HI_D2B_DST / GMG_HI_B2D_BASE via
-    // the GMG_DUMP_AFTER_STEP1 dump until the merge slot (cols 0,2,4,6) holds groups 4-7's runs.
+#ifdef GMG_UNGROUPED_TOP8
+    // TRUE GLOBAL TOP-8 over all 256 experts (ungrouped). post-step0: group g at DEST row g.
+    // SFPU merges stay in rows 0-7 (only rows 0-7 are SFPU-addressable here). FPU copy4rows (a plain
+    // MOVD2B->MOVB2D copy; reliable per the producer->consumer rule since nothing mutates SrcB/RWC
+    // between the two) stashes 4-row blocks in rows 8-15. topA -> {0,2} (rows 0-3), topB -> {4,6}
+    // (rows 4-7): row-disjoint for the final merge.
+    //
+    // save groups 4-7 source (rows 4-7) -> rows 8-11 (step1<0> below clobbers rows 0-7).
+    MATH((llk_math_generalized_moe_gate_copy4rows_init<4, 8, is_32bit>()));
+    MATH((llk_math_generalized_moe_gate_copy4rows<DST_ACCUM_MODE, is_32bit>()));
+    // topA = top8(groups 0-3): step1<d2b_dst=0> -> run at rows 0-7 -> merge -> topA at {0,2}.
+    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init<0, 0, is_32bit>()));
+    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi<DST_ACCUM_MODE, is_32bit>()));
+    MATH((llk_math_sfpu_generalized_moe_gate_merge4_top8<APPROX, DST_ACCUM_MODE, 0, 0, 2>(0)));
+    // park topA (rows 0-3) -> rows 12-15; restore groups 4-7 (rows 8-11) -> rows 4-7.
+    MATH((llk_math_generalized_moe_gate_copy4rows_init<0, 12, is_32bit>()));
+    MATH((llk_math_generalized_moe_gate_copy4rows<DST_ACCUM_MODE, is_32bit>()));
+    MATH((llk_math_generalized_moe_gate_copy4rows_init<8, 4, is_32bit>()));
+    MATH((llk_math_generalized_moe_gate_copy4rows<DST_ACCUM_MODE, is_32bit>()));
+    // topB = top8(groups 4-7): step1_hi<d2b_dst=4> -> run at rows 0-7 -> merge -> topB at {4,6}.
+    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init<4, 0, is_32bit>()));
+    MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi<DST_ACCUM_MODE, is_32bit>()));
+    MATH((llk_math_sfpu_generalized_moe_gate_merge4_top8<APPROX, DST_ACCUM_MODE, 0, 4, 6>(0)));
+    // restore topA (rows 12-15) -> rows 0-3; now topA@{0,2} (rows 0-3), topB@{4,6} (rows 4-7).
+    MATH((llk_math_generalized_moe_gate_copy4rows_init<12, 0, is_32bit>()));
+    MATH((llk_math_generalized_moe_gate_copy4rows<DST_ACCUM_MODE, is_32bit>()));
+#ifdef GMG_DIAG_TOPA
+    // ISOLATION DIAGNOSTIC: output topA ALONE (after park->clobber->restore). Compare vs top8(groups
+    // 0-3) golden. Move topA {0,2} -> {0,4} (normalize layout) + normalize.
+    MATH((llk_math_sfpu_generalized_moe_gate_copy_topk_run<APPROX, DST_ACCUM_MODE, 0, 2, 0, 4>(0)));
+    MATH((llk_math_sfpu_generalized_moe_gate_normalize_run<APPROX, DST_ACCUM_MODE>(0, eps, scale)));
+#elif defined(GMG_DIAG_TOPB)
+    // ISOLATION DIAGNOSTIC: output topB ALONE (it sits at {4,6} after the full flow). Compare vs
+    // top8(groups 4-7) golden. topB clean => bug is in finalize; topB garbage/1000 => the source
+    // save/restore (copy_topk_run<{4,6}->tile4->{4,6}>) or step1_hi<4> corrupted groups 4-7.
+    MATH((llk_math_sfpu_generalized_moe_gate_copy_topk_run<APPROX, DST_ACCUM_MODE, 4, 6, 0, 4>(0)));
+    MATH((llk_math_sfpu_generalized_moe_gate_normalize_run<APPROX, DST_ACCUM_MODE>(0, eps, scale)));
+#else
+    // finalize: merge the two WHOLE runs (topA{0,2} + topB{4,6}) into the global top-8 + normalize.
+    MATH((llk_math_sfpu_generalized_moe_gate_finalize_ungrouped<APPROX, DST_ACCUM_MODE>(0, eps, scale)));
+#endif
+#elif defined(GMG_TEST_HI_GROUPS)
+    // P4 single-half test: step1_hi collapses the HIGH 4 groups (4-7) into the merge slot.
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init<
           GMG_HI_D2B_DST,
           GMG_HI_B2D_BASE,
           is_32bit>()));
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi<DST_ACCUM_MODE, is_32bit>()));
+#ifdef GMG_DUMP_AFTER_STEP1
+    return;
+#endif
+    MATH((llk_math_sfpu_generalized_moe_gate_top8<APPROX, DST_ACCUM_MODE>(0, eps, scale)));
 #else
-    // Sort top4 groups (SFPU)
+    // Grouped DeepSeek gate: sort_top4 selects top-4 groups, step1 lays them out, top8 merges.
 #if !defined(GMG_SKIP_SORT_TOP4)
     MATH((llk_math_sfpu_generalized_moe_gate_sort_top4_groups<APPROX, DST_ACCUM_MODE>(0)));
 #endif
-    // Transpose dest step 1 (FPU)
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_init<is_32bit>()));
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1<DST_ACCUM_MODE, is_32bit>()));
-#endif  // GMG_TEST_HI_GROUPS
 #ifdef GMG_DUMP_AFTER_STEP1
     // DEBUG PROBE: stop here to inspect the orientation the (proven) top8 bitonic merge consumes.
     return;
 #endif
-    // Top8 (SFPU)
     MATH((llk_math_sfpu_generalized_moe_gate_top8<APPROX, DST_ACCUM_MODE>(0, eps, scale)));
-#endif  // GMG_UNGROUPED_TOP8
+#endif  // GMG_UNGROUPED_TOP8 / GMG_TEST_HI_GROUPS
     // Transpose dest step 2 (FPU)
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init<is_32bit>()));
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step2<DST_ACCUM_MODE, is_32bit>()));
