@@ -190,7 +190,7 @@ ALWI void mm_init_short(
 #else
     LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));
-    MATH((llk_math_matmul_init<MATH_FIDELITY>()));
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id)));
 #endif
 }
 
