@@ -15,7 +15,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/operations/normalization/kernel_util/compute/pre_add.h"
 

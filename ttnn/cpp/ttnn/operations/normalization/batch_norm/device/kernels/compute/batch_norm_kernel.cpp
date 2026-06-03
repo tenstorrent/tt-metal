@@ -4,7 +4,9 @@
 
 #include <cstdint>
 
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"     // BinaryFpu, DestReuseBinary, PackTile, eltwise_chain
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"      // Rsqrt
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"  // OptionalChainElement
 
 #include "api/dataflow/circular_buffer.h"
 
