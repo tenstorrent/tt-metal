@@ -1,6 +1,8 @@
 # Bug Escape Verification — Verify Agent Runbook
 
-**Role:** You are an Opus verification subagent. You receive a single finding from the find agent and your job is to prove or refute it by dispatching GitHub Actions probe runs, monitoring them, and returning a structured verdict. You write to state files and ARE allowed to dispatch workflow runs and create/delete branches via the GitHub API.
+**Role:** You are an Opus verification subagent. You receive a single finding from the find agent and your job is to dispatch GitHub Actions probe runs, confirm they are running correctly, and return the probe links immediately. A separate invocation (Mode 2) handles result reading. You write to state files and ARE allowed to dispatch workflow runs and create/delete branches via the GitHub API.
+
+> **⚠️ SUBAGENT RULE: You were spawned with `run_in_background: true`. If you ever spawn a subagent yourself, you MUST also use `run_in_background: true`. A synchronous Agent call will block the session and make the user unable to interrupt.**
 
 ---
 
@@ -63,7 +65,7 @@ Before doing anything:
    ```json
    {"verdict": "already_processed", "escape_id": "...", "reason": "found in seen-escapes.json"}
    ```
-2. Read `campaign-state.json`. If a candidate with this `escape_id` already has `status: "awaiting_probes"` with non-null `active_runs.before_run_id` or `active_runs.after_run_id`: those probes are already in flight. Skip to Step 5 (Poll) using those existing run IDs.
+2. Read `campaign-state.json`. If a candidate with this `escape_id` already has `status: "awaiting_probes"` with non-null `active_runs.before_run_id` or `active_runs.after_run_id`: those probes are already in flight. **Skip directly to Mode 2: Read Results** using those existing run IDs. Do not re-dispatch.
 3. Write to campaign-state.json: set candidate `status: "awaiting_probes"`.
 
 ---
@@ -136,11 +138,24 @@ For `needs_tracy: false`, you need ALL of these present and `expired: false`:
 
 For `needs_tracy: true`, look for artifacts with `tracy` or `profiler` in the name in addition to the above.
 
-If no compatible run with non-expired artifacts is found: **no artifact reuse** for that SHA — it will build from scratch.
+**Artifact reuse is MANDATORY.** If no compatible run with non-expired artifacts is found for EITHER SHA, do not proceed. Return immediately:
+
+```json
+{
+  "verdict": "no_artifact",
+  "escape_id": "...",
+  "reason": "no compatible Merge Gate artifact found for {before_sha|after_sha}",
+  "before_sha": "...",
+  "after_sha": "...",
+  "notes": "describe what was searched and why it failed"
+}
+```
+
+Main BrAIn will DM @ebanerjeeTT and decide whether to retry later or skip.
 
 Record:
-- `before_reuse_run_id`: compatible run ID for `before_sha` (or null)
-- `after_reuse_run_id`: compatible run ID for `after_sha` (or null)
+- `before_reuse_run_id`: compatible run ID for `before_sha`
+- `after_reuse_run_id`: compatible run ID for `after_sha`
 - `needs_tracy`: true/false (same for both probes — it's a property of the workflow)
 
 ---
@@ -355,10 +370,7 @@ grep -E "^\s{2}\w|if: false" /tmp/workflow_modified.yaml | head -40
 
 ## Step 7: Dispatch Probes
 
-### Hardware rules
-
-- **Single-card (N150, N300, P150, P100, P150b, P300):** BEFORE and AFTER can dispatch in parallel.
-- **Multi-card (T3K, Galaxy):** Dispatch BEFORE only. Wait for it to complete before dispatching AFTER.
+Dispatch BEFORE and AFTER **simultaneously** regardless of hardware type. Do not wait for BEFORE to complete before dispatching AFTER.
 
 ### Dispatch command
 
@@ -424,28 +436,71 @@ Look for a job whose name includes the test category (e.g. `data_movement`, `sd-
 - Correct the dispatch inputs and re-dispatch. Return to Step 7.
 - If after two attempts you cannot determine the correct flag: abort and return `"verdict": "aborted_wrong_test"`.
 
-**If both build succeeded and target job is running or queued:** write to campaign-state.json with confirmed run IDs and proceed to Step 9.
+**If both build succeeded and target job is running or queued:** write to campaign-state.json with confirmed run IDs and proceed to Step 9 (Return Verdict).
 
 ---
 
-## Step 9: Poll for Completion
+## Step 9: Return probes_dispatched Verdict
 
-Poll every 5 minutes until both BEFORE and AFTER runs are `completed` (or until 3 hours pass, whichever is first).
+Your job as the dispatch agent is done. Write to campaign-state.json:
+
+```json
+{
+  "status": "awaiting_probes",
+  "active_runs": {
+    "before_run_id": "...",
+    "before_run_url": "...",
+    "before_sha": "...",
+    "after_run_id": "...",
+    "after_run_url": "...",
+    "after_sha": "...",
+    "before_reuse_run_id": "...",
+    "after_reuse_run_id": "..."
+  }
+}
+```
+
+Then return immediately (no prose, no markdown):
+
+```json
+{
+  "verdict": "probes_dispatched",
+  "escape_id": "...",
+  "test_name": "...",
+  "before_run_id": "...",
+  "before_run_url": "https://github.com/tenstorrent/tt-metal/actions/runs/...",
+  "after_run_id": "...",
+  "after_run_url": "https://github.com/tenstorrent/tt-metal/actions/runs/...",
+  "before_sha": "...",
+  "after_sha": "...",
+  "artifact_reuse": true,
+  "before_reuse_run_id": "...",
+  "after_reuse_run_id": "...",
+  "notes": "any relevant context (e.g. workflow flags used, job names expected)"
+}
+```
+
+**Do not poll. Do not wait for results. Exit.**
+
+---
+
+## Mode 2: Read Results
+
+This mode is entered when Step 0 detects existing run IDs in campaign-state.json (`status: "awaiting_probes"` with non-null `before_run_id` and `after_run_id`). Main BrAIn re-spawns you with the same finding JSON when the user indicates the runs have finished.
+
+### M2-Step 1: Confirm both runs are completed
 
 ```bash
-gh api repos/tenstorrent/tt-metal/actions/runs/{run_id} --jq '{status, conclusion}'
+gh api repos/tenstorrent/tt-metal/actions/runs/{before_run_id} --jq '{status, conclusion}'
+gh api repos/tenstorrent/tt-metal/actions/runs/{after_run_id} --jq '{status, conclusion}'
 ```
 
-For multi-card hardware: dispatch AFTER after BEFORE completes.
-
-**Timeout:** If either run is still in_progress after 3 hours, write `status: "inconclusive_timeout"` to campaign-state.json and return:
+If either is still `in_progress` or `queued`: return:
 ```json
-{"verdict": "inconclusive_timeout", "escape_id": "...", "before_run_id": "...", "after_run_id": "..."}
+{"verdict": "inconclusive_timeout", "escape_id": "...", "before_run_id": "...", "after_run_id": "...", "notes": "runs not yet complete"}
 ```
 
----
-
-## Step 10: Read Test Results
+### M2-Step 2: Read Test Results
 
 For each completed run, find the job that ran the target test and read its conclusion:
 
@@ -467,119 +522,59 @@ Record:
 - `before_result`: `"FAIL"` | `"PASS"` | `"not_found"`
 - `after_result`: `"FAIL"` | `"PASS"` | `"not_found"`
 
-If `not_found` for either: the test did not run. This is a dispatch input error. Return `"verdict": "aborted_wrong_test"` with details.
+If `not_found` for either: the test did not run. Return `"verdict": "aborted_wrong_test"` with details.
 
----
-
-## Step 11: Apply Verdict Logic
+### M2-Step 3: Apply Verdict Logic
 
 | BEFORE result | AFTER result | Verdict |
 |---|---|---|
 | FAIL | PASS | `confirmed` ✅ (`confirmation_method: "bisect"`, `confidence: "proven"`) |
-| FAIL | FAIL | `refuted` (fix didn't address this test — exhausted all candidate commits) |
+| FAIL | FAIL | `refuted` |
 | PASS | anything | See BEFORE=PASS rule below |
 | not_found | anything | `aborted_wrong_test` |
 | anything | not_found | `aborted_wrong_test` |
 
-**BEFORE=PASS rule:** When the test passes at the parent of the assumed fix commit, the fix hypothesis is wrong. Before returning a verdict:
+**BEFORE=PASS rule:** Fix hypothesis is wrong.
+1. Check `candidate_fix_commits` — are there untried commits?
+2. If yes: update campaign-state.json, return `refuted_wrong_fix`. Main BrAIn re-spawns with next candidate.
+3. If all exhausted: return `refuted`.
 
-1. Check `candidate_fix_commits` in the finding — are there other commits that haven't been probed yet?
-2. If yes: update campaign-state.json with the new fix hypothesis (next candidate commit), return `refuted_wrong_fix`. Main BrAIn will re-spawn you with the next candidate.
-3. If all `candidate_fix_commits` have been tried and BEFORE=PASS for all of them: return `refuted`. The transition is real but the fix is not in any identified commit — likely an infra change or firmware update outside the visible range.
+### M2-Step 4: Write Results to State Files
 
-**`refuted` should only be returned after exhausting all candidate commits.** `refuted_wrong_fix` means "wrong hypothesis, more to try."
-
----
-
-
----
-
-## Step 11b: Sibling Detection (only when verdict == "confirmed")
-
-When BEFORE=FAIL and AFTER=PASS are confirmed for the primary test, scan both job logs to find other tests in the same job that also transitioned FAIL→PASS. These are free confirmed siblings — no new probes needed.
-
-### Process
-
-1. From the BEFORE job log, extract all test lines showing `FAILED` or `[ FAILED ]`.
-2. From the AFTER job log, extract all test lines showing `OK` or `[ OK ]` or `PASSED`.
-3. Build the sibling set: tests that FAILED in BEFORE **and** PASSED in AFTER — excluding the primary `test_name`.
-4. For each candidate sibling test name:
-   a. Search `campaign-state.json` candidates for an entry where `test_name` matches.
-   b. If found and status is not already `confirmed_escape`, `confirmed_horizontal`, `skipped_*`, or `refuted`: this is a confirmed sibling.
-   c. If not found in candidates at all: record the test name in the verdict's `unmatched_siblings` list — main BrAIn can handle these separately.
-   d. Check `seen-escapes.json` — skip if `escape_id` already present.
-5. For each matched sibling:
-   - Set `escape_type` = same as primary (siblings in the same job share the same escape type)
-   - Set `confirmation_method: "bisect"`, `confidence: "proven"`
-   - Write to `confirmed-escapes.json` using the same `before_run_id`, `after_run_id`, `before_job_id`, `after_job_id` as the primary
-   - Write to `seen-escapes.json` with `status: "confirmed"`
-   - Update `campaign-state.json` candidate to `status: "confirmed_escape"` (or `"confirmed_horizontal"`), `confluence_updated: false`, `dm_sent: false`
-6. Include all confirmed siblings in the verdict JSON as `confirmed_siblings` (see Step 13).
-
-**If there are no siblings:** set `confirmed_siblings: []` in the verdict. Do not skip this step.
-
-## Step 12: Write Results to State Files
-
-### If verdict == "confirmed":
-
-Append to `confirmed-escapes.json`:
+**If `confirmed`:** append to `confirmed-escapes.json`:
 ```json
 {
-  "escape_id": "...",
-  "escape_type": "vertical|horizontal",
-  "test_name": "...",
-  "test_filepath": "...",
-  "test_layer": ...,
-  "fix_commit_sha": "...",
-  "fix_commit_message": "...",
-  "fix_layer": ...,
-  "candidate_fix_commits": [...],
-  "fix_pr": "...",
-  "confirmation_method": "bisect",
-  "confidence": "proven",
-  "last_failure_run_id": "...",
-  "last_failure_job_id": "...",
-  "first_success_run_id": "...",
-  "first_success_job_id": "...",
-  "before_run_id": "...",
-  "after_run_id": "...",
-  "reasoning": "BEFORE={before_sha} FAIL, AFTER={after_sha} PASS, fix commit {fix_commit_sha}",
+  "escape_id": "...", "escape_type": "vertical|horizontal",
+  "test_name": "...", "test_filepath": "...",
+  "test_layer": ..., "fix_layer": ...,
+  "fix_commit_sha": "...", "fix_commit_message": "...",
+  "candidate_fix_commits": [...], "fix_pr": "...",
+  "confirmation_method": "bisect", "confidence": "proven",
+  "last_failure_run_id": "...", "last_failure_job_id": "...",
+  "first_success_run_id": "...", "first_success_job_id": "...",
+  "before_run_id": "...", "after_run_id": "...",
+  "reasoning": "BEFORE={before_sha} FAIL, AFTER={after_sha} PASS",
   "confirmed_at": "..."
 }
 ```
-
 Write escape_id to `seen-escapes.json` with `status: "confirmed"`.
-Update `campaign-state.json`: candidate status = `"confirmed"`, `confluence_updated: false`, `dm_sent: false`.
+Update campaign-state.json: `status: "confirmed"`, `confluence_updated: false`, `dm_sent: false`.
 
-### If verdict == "refuted_wrong_fix":
+**If `refuted_wrong_fix`:** write to seen-escapes.json with `tried_commits`. Update campaign-state.json `status: "refuted_wrong_fix"`, set `next_fix_candidate`.
 
-Write escape_id to `seen-escapes.json` with `status: "refuted_wrong_fix"`, including `tried_commits: [list of all fix_commit_shas attempted so far]`.
-Update candidate in `campaign-state.json` to `status: "refuted_wrong_fix"`, set `next_fix_candidate` to the next untried commit from `candidate_fix_commits`.
-Do NOT delete probe branches yet (main BrAIn may re-spawn you).
+**If `refuted`:** write to seen-escapes.json `status: "refuted"`. Update campaign-state.json. Delete probe branches.
 
-### If verdict == "refuted":
-
-Write escape_id to `seen-escapes.json` with `status: "refuted"`, `refute_reason: "all candidate commits exhausted"`.
-Update candidate in `campaign-state.json` to `status: "refuted"`.
-Delete probe branches.
-
-### Always:
-
-Delete both probe branches:
+**Always delete probe branches** (unless `refuted_wrong_fix` — main BrAIn may re-spawn):
 ```bash
 gh api repos/tenstorrent/tt-metal/git/refs/heads/brain/escape-before-{escape_id} -X DELETE
 gh api repos/tenstorrent/tt-metal/git/refs/heads/brain/escape-after-{escape_id} -X DELETE
 ```
 
----
-
-## Step 13: Return Verdict JSON
-
-Return a single JSON object (no prose, no markdown wrapping):
+### M2-Step 5: Return Verdict JSON
 
 ```json
 {
-  "verdict": "confirmed|refuted|refuted_wrong_fix|inconclusive_timeout|aborted_wrong_test|already_processed",
+  "verdict": "confirmed|refuted|refuted_wrong_fix|inconclusive_timeout|aborted_wrong_test",
   "escape_id": "...",
   "escape_type": "vertical|horizontal",
   "test_name": "...",
@@ -587,27 +582,11 @@ Return a single JSON object (no prose, no markdown wrapping):
   "fix_pr": "...",
   "confirmation_method": "bisect|pr_ci_proof|null",
   "confidence": "proven|assumed|null",
-  "before_run_id": "...",
-  "after_run_id": "...",
-  "before_job_id": "...",
-  "after_job_id": "...",
-  "before_job_url": "https://github.com/tenstorrent/tt-metal/actions/runs/{before_run_id}/job/{before_job_id}",
-  "after_job_url": "https://github.com/tenstorrent/tt-metal/actions/runs/{after_run_id}/job/{after_job_id}",
+  "before_run_id": "...", "after_run_id": "...",
+  "before_run_url": "...", "after_run_url": "...",
   "before_result": "FAIL|PASS|not_found",
   "after_result": "FAIL|PASS|not_found",
   "artifact_reuse": true,
-  "confirmed_siblings": [
-    {
-      "escape_id": "...",
-      "test_name": "...",
-      "escape_type": "vertical|horizontal"
-    }
-  ],
-  "unmatched_siblings": ["TestNameNotInCandidates", "..."],
-  "notes": "any important context for main BrAIn"
+  "notes": "..."
 }
 ```
-
-**Link format rule (MANDATORY):** Always use job-level URLs (`/runs/{run_id}/job/{job_id}`), never run-level URLs (`/runs/{run_id}`). Populate `before_job_id` and `after_job_id` from Step 10 (the job IDs you read logs from). This applies to the verdict JSON and to any DMs or Confluence updates.
-
-Main BrAIn uses this to update Confluence and DM @ebanerjeeTT.
