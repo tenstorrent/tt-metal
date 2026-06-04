@@ -9,50 +9,22 @@
 // BRISC: Waits for output CBs
 // TRISC: Computes gate logic (sigmoid, bias add, sorting, normalization)
 
-// DEBUG PROBE: uncomment to dump the per-group top-8 layout in DEST right after sum_top2.
-// When enabled, the pipeline stops after sum_top2 and packs:
-//   bias region (dst tile 2, ranking keys) -> output_tensor
-//   indices region (dst tile 1, expert ids) -> output_indices_tensor
-// Group selection (sort_top4) and top8 are skipped, so this is a layout probe, not a result.
+// MODE SELECT (enable AT MOST ONE; orchestration in compute_kernel_api/generalized_moe_gate.h):
+//   GMG_UNGROUPED_TOP8 (default ON): true global top-8 over all 256 experts (ungrouped). The proven
+//     4-group merge runs twice (topA=top8(groups 0-3) at cols {0,2}, topB=top8(groups 4-7) at {4,6},
+//     with FPU copy4rows stashing the idle half in rows 8-15), then finalize fully bitonic-sorts the
+//     16 candidates -> global top-8. (none enabled -> original grouped DeepSeek gate.)
 //
-// MODE SELECT — enable AT MOST ONE of the following:
-//   GMG_UNGROUPED_TOP8      : real change — true global top-8 over all 8 groups (no group select).
-//   GMG_DUMP_AFTER_SUM_TOP2 : debug probe — stop after sum_top2 (8 groups' top-8 at cols 0,2,...,14).
-//   GMG_DUMP_AFTER_STEP1    : debug probe — stop after step1.
-// (none enabled -> original grouped DeepSeek gate.)
-//   GMG_PROBE_LANEMAP : P1 geometry calibration — pure load/store probe after sum_top2.
-// NOTE: GMG_UNGROUPED_TOP8 v0 is INCORRECT (skips the cross-column rotation); off until fixed.
-// #define GMG_PROBE_LANEMAP 1
-// #define GMG_PROBE_OFFSETS 1
-// #define GMG_DUMP_AFTER_STEP0 1
-// #define GMG_DUMP_AFTER_SUM_TOP2 1
-// #define GMG_SKIP_SORT_TOP4 1
-// (diagnostic done: FPU MOVB2D offset-8 relocates; SFPU SFPLOAD/SFPSTORE offset>=8 wraps to rows 0-7.)
-// #define GMG_TEST_HI_GROUPS 1
-// #define GMG_HI_D2B_DST 4
-// #define GMG_HI_B2D_BASE 8
-//
-// ===== ACTIVE: true global top-8 (ungrouped), assembled in rows 0-7 with FPU copy4rows stashing
-// the 4-row source/topA into rows 8-15 between the two half-transposes. See generalized_moe_gate.h.
+// DEBUG/DIAGNOSTIC macros (all OFF by default; kept for re-debugging during generalization):
+//   GMG_DUMP_AFTER_SUM_TOP2 / GMG_DUMP_AFTER_STEP0 / GMG_DUMP_AFTER_STEP1 : stop after that stage and
+//     pack the bias/indices DEST regions as a 16x16 face (read via test_dump_sum_top2_layout).
+//   GMG_DIAG_TOPA / GMG_DIAG_TOPB : in the ungrouped path, output topA (or topB) ALONE — pair with a
+//     top8(groups 0-3) (or groups 4-7) golden in op.py to isolate a half from the finalize merge.
 #define GMG_UNGROUPED_TOP8 1
-// (diag: DIAG_TOPA confirmed topA@{0,2} correct in the full flow.)
+// #define GMG_DUMP_AFTER_SUM_TOP2 1
+// #define GMG_DUMP_AFTER_STEP0 1
 // #define GMG_DIAG_TOPA 1
-// ISOLATION: output topB alone (copy4rows park, clean device). Pair with groups-4-7 golden.
-// (diag: topB confirmed correct on all data incl batch=2; the residual miss was the finalize merge.)
 // #define GMG_DIAG_TOPB 1
-// BISECTION: skip ALL topA work (step1<0>/merge/park/restore-topA). Flow = save->restore->step1_hi<4>
-// ->topB. If topB now == groups 4-7 -> save/restore round-trip is fine, topA path was corrupting it.
-// #define GMG_DIAG_RT 1
-// BISECTION step2: KEEP step1<0>+merge topA, SKIP park+restore-topA. If topB breaks -> step1<0>/merge
-// corrupts the saved source (rows 8-11) or SrcB; if topB clean -> the park (copy4rows<0,12>) is it.
-// #define GMG_DIAG_RT2 1
-// BISECTION step3: KEEP a,b, AND park (c); SKIP ONLY restore-topA (d). If topB breaks -> park (c)
-// itself corrupts topB; if topB clean -> the restore-topA (d) corrupts the DIAG readout, not topB.
-// #define GMG_DIAG_RT3 1
-// ROOT CAUSE FOUND: copy_topk_run/normalize_run lacked the TTI_SETRWC(SET_D) that merge/finalize have,
-// so the Dst RWC left advanced by the preceding FPU copy4rows biased their SFPLOAD offsets. Fixed in
-// ckernel_sfpu_generalized_moe_gate_topk_single_face.h. restore-topA back to its real dst (rows 0-3).
-// #define GMG_DUMP_SRC 1
 
 #include "../unified_kernels/kernel_op_api.hpp"
 #include "../unified_kernels/kernel_utils.hpp"
