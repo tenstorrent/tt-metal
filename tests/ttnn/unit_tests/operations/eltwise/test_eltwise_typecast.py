@@ -126,8 +126,13 @@ class TestTypecast:
 
         torch_golden = eltwise_typecast(torch_input, tt_input_dtype=tt_input_dtype, tt_output_dtype=tt_output_dtype)
 
-        if tt_output_dtype == ttnn.float32 or tt_output_dtype == ttnn.bfloat16:
+        if tt_output_dtype in (ttnn.float32, ttnn.bfloat16):
             assert_equal(torch_golden, torch_output)
+        # Integer outputs (and uint16 from integer inputs): compare elementwise via assert_equal.
+        elif tt_output_dtype in (ttnn.int32, ttnn.uint32, ttnn.uint8) or (
+            tt_output_dtype == ttnn.uint16 and tt_input_dtype in (ttnn.int32, ttnn.uint16, ttnn.uint32, ttnn.uint8)
+        ):
+            assert_equal(torch_golden.to(torch.int64), torch_output.to(torch.int64))
         else:
             pcc = 0.98 if tt_input_dtype == ttnn.bfloat4_b or tt_output_dtype == ttnn.bfloat4_b else 0.99
             assert_with_pcc(torch_golden, torch_output, pcc=pcc)
