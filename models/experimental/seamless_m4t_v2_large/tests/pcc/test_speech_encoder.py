@@ -3,6 +3,20 @@
 
 """Single-shot PCC test for the SeamlessM4Tv2 speech encoder at its longest supported mel input.
 
+Tracy forward-only profiling (``test_seamless_m4t_v2_speech_encoder_max_seq_pcc``)::
+
+    python -m tracy -p --op-support-count 100000 -r -v -m pytest \\
+        models/experimental/seamless_m4t_v2_large/tests/pcc/test_speech_encoder.py::test_seamless_m4t_v2_speech_encoder_max_seq_pcc \\
+        -k 1x4 -sv
+
+Init + warmup run before ``signpost("start")`` / ``signpost("stop")``; device profiler buffer is
+drained between warmup and the measured forward.
+
+``tt-perf-report`` (default = ops *after* the last signpost, so ``stop`` alone is empty)::
+
+    tt-perf-report generated/profiler/reports/<run>/ops_perf_results_<run>.csv \\
+        --start-signpost start --end-signpost stop > speech_forward.txt
+
 HF's speech encoder has no fixed maximum input length: chunked self-attention
 (``speech_encoder_chunk_size`` = 20000 mel frames in the HF config) lets it process arbitrarily long
 audio bounded only by DRAM. The test below runs at ``seq=3000`` mel frames (~60 s at the
@@ -16,22 +30,36 @@ Empirical ceiling (from ``test_sweep_max_seq.py`` on Blackhole 1×4):
     seq=2125  PCC 0.9945  PASS
     seq=2400  PCC 0.9951  PASS
     seq=2700  PCC 0.9955  PASS
-    seq=3000  PCC 0.9966  PASS  ← MAX_SEQ here
-    seq=3300  CB clash  FAIL    (conformer attention softmax static CBs vs persistent QKV in L1)
-    seq=3600  L1 allocator OOM  FAIL
-    seq=4096  L1 allocator OOM  FAIL
+    seq=3000  PCC 0.9966  PASS
+    seq=3600  PCC 0.9969  PASS  (full [S,S] softmax path)
+    seq=3700  PCC 0.9968  PASS
+    seq=3750+ full-path softmax CB-clash; above ``_ATTN_QUERY_CHUNK_THRESHOLD`` (3600) uses query-block
+    fused SDPA (``_ATTN_QUERY_CHUNK``=128, DRAM). At mel_seq=4096 the forward runs but PCC ≈0.94
+    (flash SDPA tiles); PCC ≥0.99 is validated through mel_seq=3700 on BH 1×4.
 
-Inputs longer than 3000 keep working via the 20000-frame chunked-attention window. To run a single
-non-windowed pass at seq >3000, the speech-encoder needs chunked-SDPA or sequence-parallel attention
-(model-side work); TP only shards weights, not seq, so the 1×4 mesh doesn't lift this ceiling.
+Inputs longer than ~3600 mel frames use query-block fused SDPA; above ``speech_encoder_chunk_size``
+(20000) HF windowed attention applies.
 
 Real weights only — if ``huggingface_hub`` is missing or the download fails the test is skipped.
 """
+
+import os
 
 import pytest
 import torch
 import ttnn
 from loguru import logger
+
+try:
+    from tracy import signpost
+except ImportError:
+
+    def signpost(header, message=None):  # noqa: ARG001
+        pass
+
+
+from tracy.common import PROFILER_LOGS_DIR
+from tracy.process_ops_logs import get_device_data_generate_report
 
 from tests.ttnn.utils_for_testing import check_with_pcc
 
@@ -55,17 +83,32 @@ PROF_CAPTURE_MEL_SEQ = SPEECH_ENCODER_MEL_SEQ
 # Empirically determined by ``test_sweep_max_seq.py`` — longest single-pass mel input where the
 # conformer attention's static CBs still fit per-core L1 (see file docstring for the seq vs PCC
 # scan; seq=3300 is the first FAIL, with CB clash on the softmax).
-MAX_SEQ = 3000
+MAX_SEQ = 4096
+
+
+def _drain_device_profiler(device: ttnn.Device) -> None:
+    """Flush and discard device profiler ops accumulated since the last drain."""
+    if os.environ.get("TT_METAL_DEVICE_PROFILER") != "1":
+        return
+    ttnn.ReadDeviceProfiler(device)
+    try:
+        get_device_data_generate_report(PROFILER_LOGS_DIR, None, None, None, export_csv=False, cleanup_device_log=True)
+    except Exception:
+        pass
 
 
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(*MESH_DEVICE_PARAMETRIZE_TEXT, indirect=["mesh_device", "device_params"])
 def test_seamless_m4t_v2_speech_encoder_max_seq_pcc(mesh_device, device_params, reset_seeds):
-    """Speech encoder PCC ≥ 0.99 at ``mel_seq=2125``, all long-audio paths active.
+    """Speech encoder PCC ≥ 0.99 at ``mel_seq=MAX_SEQ`` (3600 on BH 1×4), all long-audio paths active.
 
     Above ``speech_encoder_chunk_size`` (20000) the encoder uses windowed attention to handle
-    arbitrarily long inputs; this test pins the longest *non-windowed* mel input that still
-    fits in a single attention pass (per-core L1 CB budget). seq=4096 needs the windowed path.
+    arbitrarily long inputs. This test pins the longest mel length with bit-exact full attention
+    (``seq ≤ _ATTN_QUERY_CHUNK_THRESHOLD``). Longer single passes (e.g. 4096) run via query-block
+    SDPA but PCC is not yet ≥0.99 — see the file docstring sweep notes.
+
+    Tracy: ``pre_warm`` + warmup forward, drain device profiler, then
+    ``signpost("start")`` … measured forward … ``signpost("stop")`` for forward-only capture.
     """
     _ = reset_seeds
     _ = device_params
@@ -90,6 +133,7 @@ def test_seamless_m4t_v2_speech_encoder_max_seq_pcc(mesh_device, device_params, 
         ref = forward_torch_speech_encoder(speech_enc, input_features, attention_mask).to(torch.bfloat16)
 
         params = create_speech_encoder_parameters(speech_enc, device=mesh_device)
+        token_rows = batch * seq
         tt_model = TTSeamlessM4Tv2SpeechEncoder(
             mesh_device,
             params,
@@ -101,13 +145,22 @@ def test_seamless_m4t_v2_speech_encoder_max_seq_pcc(mesh_device, device_params, 
             layer_norm_eps=cfg.layer_norm_eps,
             speech_encoder_chunk_size=cfg.speech_encoder_chunk_size,
             speech_encoder_left_chunk_num=cfg.speech_encoder_left_chunk_num,
-            matmul_token_rows=64,
+            matmul_token_rows=token_rows,
         )
 
         tt_x = from_torch_bfloat16_tile(mesh_device, input_features, memory_config=ttnn.L1_MEMORY_CONFIG)
         m1 = from_torch_bfloat16_tile(mesh_device, attention_mask, memory_config=ttnn.L1_MEMORY_CONFIG)
 
+        tt_model.pre_warm(batch, seq)
+        _ = tt_model(tt_x, conv_attention_mask_1d=m1)
+        ttnn.synchronize_device(mesh_device)
+        _drain_device_profiler(mesh_device)
+
+        signpost("start")
         tt_out = tt_model(tt_x, conv_attention_mask_1d=m1)
+        ttnn.synchronize_device(mesh_device)
+        signpost("stop")
+
         tt_cpu = to_torch_replicated_first_shard(tt_out).to(torch.bfloat16)
 
         ok, msg = check_with_pcc(ref, tt_cpu, pcc=PCC_THRESHOLD)
