@@ -32,22 +32,9 @@ def model_artifacts(model_location_generator):
     return backbone, state_dict, model_id_or_path
 
 
-# bfloat8_b weights/activations hold the 0.94 PCC gate through S4096, but the
-# SDPA reduction over S8192 tokens accumulates enough bf8 quantization error to
-# fall below it (PCC ~0.90 on Wormhole). At those long sequences the model is
-# meant to run in bf16 anyway, so the test mirrors that: bf8 up to 4096, bf16
-# beyond. Keeps an honest 0.94 gate at every length instead of weakening it.
-_BF8_MAX_SEQ_LEN = 4096
-
-
-def _dtype_for_seq_len(seq_len):
-    return ttnn.bfloat8_b if seq_len <= _BF8_MAX_SEQ_LEN else ttnn.bfloat16
-
-
 def _run_full_end_to_end(device, model_artifacts, batch_size, seq_len):
-    """Shared body: end-to-end HF-vs-TT PCC for one (batch_size, seq_len).
+    """Shared body: end-to-end HF-vs-TT PCC for one (batch_size, seq_len), bf8_b.
 
-    Uses bf8_b for seq_len <= 4096 and bf16 beyond (see _dtype_for_seq_len).
     Gated at PCC_THRESHOLD=0.94.
     """
     require_single_device(device)
@@ -57,7 +44,7 @@ def _run_full_end_to_end(device, model_artifacts, batch_size, seq_len):
         mesh_device=device,
         max_batch_size=batch_size,
         max_seq_len=seq_len,
-        dtype=_dtype_for_seq_len(seq_len),
+        dtype=ttnn.bfloat8_b,
         state_dict=state_dict,
         hf_model_name=model_id_or_path,
     )
@@ -93,11 +80,11 @@ def _run_full_end_to_end(device, model_artifacts, batch_size, seq_len):
 @pytest.mark.slow
 @pytest.mark.parametrize("seq_len", SEQUENCE_LENGTHS, ids=[f"S{s}" for s in SEQUENCE_LENGTHS])
 def test_model_full_end_to_end(device, model_artifacts, seq_len, reset_seeds):
-    """End-to-end HF-vs-TT PCC for batch 1 x all sequence lengths.
+    """End-to-end HF-vs-TT PCC for batch 1 x all sequence lengths (bf8_b).
 
     This is the CI-facing variant: batch 1 only (9 runs) to stay within the CI
-    time budget. bf8_b for seq_len <= 4096, bf16 beyond. The larger-batch sweep
-    lives in `test_model_full_end_to_end_multibatch`. Gated at PCC_THRESHOLD=0.94.
+    time budget. The larger-batch sweep lives in
+    `test_model_full_end_to_end_multibatch`. Gated at PCC_THRESHOLD=0.94.
     Filter combos with -k, e.g. `-k "S512"`.
     """
     _run_full_end_to_end(device, model_artifacts, batch_size=1, seq_len=seq_len)
