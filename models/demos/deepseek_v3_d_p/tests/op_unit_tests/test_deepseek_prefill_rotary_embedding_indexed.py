@@ -190,12 +190,24 @@ def test_rotary_embedding_indexed_multi_iteration_prefill(
             **from_torch_kwargs,
         )
 
+        # kv_actual_global is a single ROW_MAJOR uint32 device tensor, read on-device. A fresh tensor
+        # each iteration (different buffer address, same shape/dtype) exercises the buffer-binding
+        # cache-hit path while keeping the value out of the program hash.
+        kv_tt = ttnn.from_torch(
+            torch.tensor([kv_actual], dtype=torch.int32).reshape(1, 1, 1, 1),
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
         tt_out = ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
             tt_input,
             cos_tt,
             sin_tt,
             trans_tt,
-            kv_actual_global=kv_actual,
+            kv_actual_global=kv_tt,
             cluster_axis=sp_axis,
         )
         if entries_after_first is None:

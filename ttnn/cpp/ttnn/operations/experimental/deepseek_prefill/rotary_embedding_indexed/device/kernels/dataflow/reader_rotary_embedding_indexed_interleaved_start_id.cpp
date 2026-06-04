@@ -15,25 +15,26 @@
 // (older tokens finishing the current slab block, then newer tokens spilling into the next block)
 // is absorbed by the shard layout, so the read stays contiguous.
 //
-// `kv_actual_global_t` is a common runtime arg (NOT in the program hash), so successive chunks with
-// different prior KV lengths reuse one cached program.
+// `kv_actual_global` arrives as a single ROW_MAJOR uint32 device tensor (read on-device below) and
+// is NOT in the program hash, so successive chunks with different prior KV lengths reuse one cached
+// program. Because no per-call scalar lives in the runtime args, the buffer-binding fast cache-hit
+// path (which patches addresses but skips create_descriptor) stays correct.
 void kernel_main() {
     uint32_t argrt = 0;
     uint32_t src_addr = get_arg_val<uint32_t>(argrt++);
     uint32_t cos_addr = get_arg_val<uint32_t>(argrt++);
     uint32_t sin_addr = get_arg_val<uint32_t>(argrt++);
     uint32_t trans_mat_addr = get_arg_val<uint32_t>(argrt++);
+    uint32_t kv_addr = get_arg_val<uint32_t>(argrt++);
     uint32_t batch_start = get_arg_val<uint32_t>(argrt++);
     uint32_t batch_end = get_arg_val<uint32_t>(argrt++);
     uint32_t seq_t_start = get_arg_val<uint32_t>(argrt++);
     uint32_t seq_t_end = get_arg_val<uint32_t>(argrt++);
 
-    // Common runtime args (same for all cores on this chip): per-chip inputs for the on-device
-    // update_idxt derivation. kv_actual_global_t / my_sp_coord / sp_factor are kept out of the
-    // program hash so the program is reused across chunks.
-    const uint32_t kv_actual_global_t = get_common_arg_val<uint32_t>(0);
-    const uint32_t my_sp_coord = get_common_arg_val<uint32_t>(1);
-    const uint32_t sp_factor = get_common_arg_val<uint32_t>(2);
+    // Common runtime args (same for all cores on this chip): this chip's index along the SP axis and
+    // the SP extent. Both are structural (per cached program / mesh coord), not per-call values.
+    const uint32_t my_sp_coord = get_common_arg_val<uint32_t>(0);
+    const uint32_t sp_factor = get_common_arg_val<uint32_t>(1);
 
     constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t cos_cb_id = get_compile_time_arg_val(1);
@@ -46,10 +47,24 @@ void kernel_main() {
     constexpr uint32_t cos_Ht = get_compile_time_arg_val(8);
     constexpr uint32_t sin_Ht = get_compile_time_arg_val(9);
     constexpr uint32_t rotary_Ht = get_compile_time_arg_val(10);
-    constexpr auto input_args = TensorAccessorArgs<11>();
+    constexpr uint32_t kv_cb_id = get_compile_time_arg_val(11);
+    constexpr uint32_t tile_height = get_compile_time_arg_val(12);
+    constexpr auto input_args = TensorAccessorArgs<13>();
     constexpr auto cos_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
     constexpr auto trans_mat_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
+    constexpr auto kv_args = TensorAccessorArgs<trans_mat_args.next_compile_time_args_offset()>();
+
+    // Read the single on-device kv_actual_global datum (prior valid global KV length in tokens) into
+    // a CB and convert to tiles. Its buffer address is patched on cache hits; value is not hashed.
+    const auto s_kv = TensorAccessor(kv_args, kv_addr);
+    cb_reserve_back(kv_cb_id, 1);
+    uint32_t kv_l1_write_addr = get_write_ptr(kv_cb_id);
+    noc_async_read_page(0, s_kv, kv_l1_write_addr);
+    noc_async_read_barrier();
+    cb_push_back(kv_cb_id, 1);
+    volatile tt_l1_ptr uint32_t* kv_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kv_l1_write_addr);
+    const uint32_t kv_actual_global_t = kv_ptr[0] / tile_height;
 
     // Derive this chip's tile-row offset into its (block-cyclic) cos/sin shard from the global
     // valid KV length. Ht == chunk_local_t (per-device new chunk in tiles); chunk_global == sp*Ht.

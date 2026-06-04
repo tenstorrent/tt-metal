@@ -19,8 +19,7 @@ namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_ind
 
 struct RotaryEmbeddingIndexedDeviceOperation {
     struct operation_attributes_t {
-        uint32_t kv_actual_global;  // prior valid global KV length in tokens; tile-aligned. NOT hashed.
-        uint32_t cluster_axis;      // mesh axis the cos/sin caches are SP-sharded along.
+        uint32_t cluster_axis;  // mesh axis the cos/sin caches are SP-sharded along.
         MemoryConfig output_mem_config;
         ttnn::DeviceComputeKernelConfig compute_kernel_config;
     };
@@ -30,6 +29,11 @@ struct RotaryEmbeddingIndexedDeviceOperation {
         const Tensor& cos;
         const Tensor& sin;
         const Tensor& trans_mat;
+        // Single-element ROW_MAJOR uint32 device tensor holding the prior valid global KV length in
+        // tokens. A tensor (not a scalar attr) so its value stays out of the program hash and is read
+        // on-device, letting the buffer-binding fast path patch its address on cache hits (one cached
+        // program reused across chunks). NOT hashed by value.
+        const Tensor& kv_actual_global;
     };
 
     using spec_return_value_t = TensorSpec;
