@@ -185,6 +185,31 @@ def _save_wav(path: Path, waveform_np: np.ndarray, sample_rate: int) -> None:
         wf.writeframes(pcm16.tobytes())
 
 
+def _load_mono_wav(path: Path) -> np.ndarray:
+    """Load a mono fp32 waveform from a PCM WAV (inverse of :func:`_save_wav`)."""
+    with wave.open(str(path), "rb") as wf:
+        nch = wf.getnchannels()
+        sw = wf.getsampwidth()
+        raw = wf.readframes(wf.getnframes())
+    if sw == 2:
+        pcm = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    elif sw == 4:
+        pcm = np.frombuffer(raw, dtype=np.int32).astype(np.float32) / 2147483648.0
+    else:
+        raise ValueError(f"Unsupported WAV sample width {sw} in {path}")
+    if nch > 1:
+        pcm = pcm.reshape(-1, nch).mean(axis=1)
+    return pcm.astype(np.float32)
+
+
+_TT_ONLY_GEN_KEYS = frozenset({"use_kv_cache", "use_decode_trace", "use_2cq"})
+
+
+def _hf_gen_kwargs(gen_common: dict) -> dict:
+    """HF ``generate()`` kwargs — strip TT-only perf flags."""
+    return {k: v for k, v in gen_common.items() if k not in _TT_ONLY_GEN_KEYS}
+
+
 def _decode(tokenizer: Any, sequences_tt: ttnn.Tensor) -> str:
     """Read a TT decoder sequence back to host and decode to a single string (special tokens skipped)."""
     ids = _readback_first_shard(sequences_tt).to(torch.int64).cpu()
@@ -479,23 +504,27 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         tt_model.clear_runtime_program_cache()
         ttnn.synchronize_device(device)
 
-        # Tasks 3–5 reuse the full T2ST audio (matches HF demo). The speech encoder's long-audio
-        # path keeps residuals / LN in DRAM and uses an uncached relative-position table above
-        # _LONG_AUDIO_RES_DRAM_THRESHOLD, so >22 s mel inputs no longer L1-clash on BH.
-        hindi_wav_chain = hindi_wav_np
+        # Tasks 3–5 consume the saved T2ST WAV (same path as ``compare_speech_asr_hf_tt.py``).
+        # Reload from disk so the processor sees exactly what the printed path refers to, not a
+        # stale in-memory buffer from the TT vocoder readback.
+        hindi_wav_chain = _load_mono_wav(T2ST_WAV)
         if MAX_CHAIN_AUDIO_SEC is not None:
             max_chain_samples = int(sample_rate * MAX_CHAIN_AUDIO_SEC)
-            if hindi_wav_np.size > max_chain_samples:
-                hindi_wav_chain = hindi_wav_np[:max_chain_samples]
+            if hindi_wav_chain.size > max_chain_samples:
+                hindi_wav_chain = hindi_wav_chain[:max_chain_samples]
                 print(
                     f"  Note: S2TT/S2ST/ASR use first {MAX_CHAIN_AUDIO_SEC:.0f}s of T2ST audio "
                     f"({max_chain_samples} samples)."
                 )
 
-        # The Hindi speech from T2ST becomes the input for tasks 3-5.
         audio_inputs = processor(audios=hindi_wav_chain, sampling_rate=sample_rate, return_tensors="pt")
         input_features = audio_inputs["input_features"]
         input_speech_attn = audio_inputs["attention_mask"]
+        mel_frames = int(input_speech_attn.sum().item())
+        print(
+            f"  Chain audio: {hindi_wav_chain.size} samples "
+            f"({hindi_wav_chain.size / sample_rate:.2f}s), mel_frames={mel_frames}"
+        )
 
         # Warm the speech-encoder JIT/disk cache for a given audio's mel-length bucket *before* its
         # timed task. The encoder kernels are shape-specialized, so the first encode of a bucket
@@ -581,10 +610,27 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
         # =========================================================================
         # 5. ASR — Automatic Speech Recognition (Hindi speech → Hindi text)
         # =========================================================================
-        gen_common_asr = gen_common
+        # S2ST leaves speech-gen + decode-trace state that can skew the hin ASR decode if we
+        # reuse the eng-target trace from S2TT without a full reset (see compare_speech_asr_hf_tt.py).
+        tt_model.release_generation_runtime()
         _warm_speech_enc(input_features)
         _print_header(5, "Automatic Speech Recognition", "ASR", tgt_translate, tgt_asr)
         print(f"  Input audio ({tgt_translate}): {T2ST_WAV} ({sample_rate} Hz)")
+        print("  Note: ASR transcribes the WAV (speech→text), not the T2ST intermediate text string.")
+        with torch.no_grad():
+            hf_asr_out = model.generate(
+                input_features=input_features.float(),
+                attention_mask=input_speech_attn,
+                generate_speech=False,
+                tgt_lang=tgt_asr,
+                **_hf_gen_kwargs(gen_common),
+            )
+        hf_asr_ids = (
+            hf_asr_out.sequences[0].cpu().tolist() if hasattr(hf_asr_out, "sequences") else hf_asr_out[0].cpu().tolist()
+        )
+        print(
+            f"  HF reference ({tgt_asr}, {len(hf_asr_ids)} tokens): {tokenizer.batch_decode([hf_asr_ids], skip_special_tokens=True)[0]}"
+        )
         asr_feats_tt = torch_feats_to_ttnn(device, input_features)
         asr_attn_tt = torch_ids_to_ttnn(device, input_speech_attn)
         asr_out, asr_elapsed = _warmup_and_time(
@@ -594,12 +640,19 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
                 attention_mask=asr_attn_tt,
                 generate_speech=False,
                 tgt_lang=tgt_asr,
-                **gen_common_asr,
+                **gen_common,
             ),
             release_fn=lambda o: ttnn.deallocate(o.sequences),
         )
         if not isinstance(asr_out, TTSeamlessM4Tv2GreedySearchOutput):
             raise TypeError(f"ASR expected TTSeamlessM4Tv2GreedySearchOutput, got {type(asr_out)}")
+        tt_asr_ids = _readback_first_shard(asr_out.sequences).long().reshape(-1).tolist()
+        lcp = 0
+        for a, b in zip(hf_asr_ids, tt_asr_ids):
+            if a != b:
+                break
+            lcp += 1
+        print(f"  HF/TT token prefix match: {lcp} (seed + {max(0, lcp - 2)} content tokens)")
         _record_text_perf(
             perf_log,
             "ASR",
@@ -608,7 +661,7 @@ Inside the lighthouse, she found old maps, letters, and photographs belonging to
             eos_token_id=gen_common["eos_token_id"],
             max_new_tokens=gen_common["max_new_tokens"],
         )
-        print(f"  Output text ({tgt_asr}): {_decode(tokenizer, asr_out.sequences)}")
+        print(f"  TT output ({tgt_asr}): {_decode(tokenizer, asr_out.sequences)}")
 
         # Free trace + pinned host readback buffers before mesh teardown (avoids abort on exit).
         tt_model.release_generation_runtime()
