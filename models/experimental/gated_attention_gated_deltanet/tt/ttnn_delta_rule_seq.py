@@ -71,6 +71,7 @@ def chunk_gated_delta_rule_seq_adapter(
     initial_state=None,  # [B, H, K, V] (any dtype) or None
     device=None,
     cached_masks=None,
+    valid_len=None,
 ):
     """Drop-in replacement for chunk_gated_delta_rule_ttnn that runs the C++
     chunk-parallel `gated_delta_attn_seq` kernel.
@@ -134,6 +135,7 @@ def chunk_gated_delta_rule_seq_adapter(
         initial_state=s0,
         mesh_device=device,
         cached_masks=cached_masks,
+        valid_len=valid_len,
     )
 
     # o [BH,T,V] -> [B,T,H,V]
@@ -314,10 +316,18 @@ def chunk_gated_delta_rule_seq(
     initial_state=None,  # [BH, K, V] float32 or None
     mesh_device=None,
     cached_masks=None,
+    valid_len=None,
 ):
     """Chunked gated delta rule using the C++ sequential scan kernel (Path A).
 
     Returns (output [BH, T, V], final_state [BH, K, V]), both float32.
+
+    valid_len: when set (< T), positions [valid_len, T) are treated as right-padding
+    and zeroed in q/k/v/beta/g BEFORE the scan — exactly mirroring the function's own
+    internal zero-pad (pad_len). Those positions then produce identity state updates
+    (beta=0 -> no write, g=0 -> exp(0)=1 -> no decay), so final_state reflects only the
+    first valid_len tokens. This lets a fixed bucket length T serve any real length
+    valid_len<=T (one compiled program per bucket) without corrupting the recurrent state.
     """
     _hifi_cfg = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -333,6 +343,23 @@ def chunk_gated_delta_rule_seq(
 
     if scale is None:
         scale = K**-0.5
+
+    # Right-padding mask: zero every state-affecting input past valid_len. The mask
+    # SHAPE is fixed by the bucket length T (only its values depend on valid_len), so a
+    # single program serves all real lengths. Mirrors the zeros concatenated below for
+    # pad_len; here it covers the [valid_len, T) region the caller padded.
+    if valid_len is not None and valid_len < T:
+        _m = torch.zeros(BH, T, 1, dtype=torch.float32)
+        _m[:, :valid_len, :] = 1.0
+        _m = ttnn.from_torch(_m, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+        q = ttnn.multiply(q, _m, memory_config=None)
+        k = ttnn.multiply(k, _m, memory_config=None)
+        v = ttnn.multiply(v, _m, memory_config=None)
+        beta = ttnn.multiply(beta, _m, memory_config=None)
+        g = ttnn.reshape(g, [BH, T, 1], memory_config=None)
+        g = ttnn.multiply(g, _m, memory_config=None)
+        g = ttnn.reshape(g, [BH, T], memory_config=None)
+        ttnn.deallocate(_m)
 
     q = ttnn.multiply(q, scale, memory_config=None)
 

@@ -5,9 +5,9 @@
 """Tests for Qwen3.5-9B HF→internal weight remapping."""
 import pytest
 
+from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
 from models.demos.blackhole.qwen3_5_9b.tt.weight_mapping import remap_qwen35_state_dict
 
-CHECKPOINT_DIR = "/local/ttuser/atupe/Qwen9b"
 HIDDEN_SIZE = 4096
 NUM_LAYERS = 32
 LINEAR_KEY_DIM = 2048  # 16 heads × 128 head_dim
@@ -16,14 +16,14 @@ FULL_ATTN_Q_DIM = 8192  # 16 heads × 256 head_dim × 2 (query + gate)
 FULL_ATTN_KV_DIM = 1024  # 4 heads × 256 head_dim
 
 
-def _load_raw_state_dict():
+def _load_raw_state_dict(checkpoint_dir):
     """Load raw HF state dict using safetensors."""
     import glob
 
     from safetensors import safe_open
 
     state_dict = {}
-    for path in sorted(glob.glob(f"{CHECKPOINT_DIR}/model.safetensors-*.safetensors")):
+    for path in sorted(glob.glob(f"{checkpoint_dir}/model.safetensors-*.safetensors")):
         with safe_open(path, framework="pt", device="cpu") as f:
             for key in f.keys():
                 state_dict[key] = f.get_tensor(key)
@@ -32,7 +32,8 @@ def _load_raw_state_dict():
 
 @pytest.fixture(scope="module")
 def raw_state_dict():
-    return _load_raw_state_dict()
+    args = Qwen35ModelArgs(mesh_device=None)
+    return _load_raw_state_dict(args.CKPT_DIR)
 
 
 @pytest.fixture(scope="module")
