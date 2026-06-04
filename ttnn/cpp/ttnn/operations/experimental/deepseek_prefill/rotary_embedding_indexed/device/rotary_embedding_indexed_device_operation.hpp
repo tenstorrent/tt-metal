@@ -66,7 +66,7 @@ ttnn::Tensor rotary_embedding_indexed(
     const ttnn::Tensor& cos,
     const ttnn::Tensor& sin,
     const ttnn::Tensor& trans_mat,
-    uint32_t kv_actual_global,
+    const ttnn::Tensor& kv_actual_global,
     uint32_t cluster_axis,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config);
