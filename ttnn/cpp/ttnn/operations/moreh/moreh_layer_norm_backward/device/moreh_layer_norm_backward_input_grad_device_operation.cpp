@@ -6,6 +6,9 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
+#include <algorithm>
+#include <vector>
+
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -13,29 +16,40 @@ namespace ttnn::operations::moreh::moreh_layer_norm_backward_input_grad {
 
 namespace {
 
-ttnn::Shape get_promoted_logical_shape(const Tensor& tensor) {
-    auto logical_shape = tensor.logical_shape();
-    const auto padded_rank = tensor.padded_shape().rank();
-    if (logical_shape.rank() < padded_rank) {
-        logical_shape = logical_shape.to_rank(padded_rank);
+ttnn::Shape canonicalize_shape_for_validation(const ttnn::Shape& shape) {
+    if (shape.rank() == 0) {
+        return ttnn::Shape({1, 1});
     }
-    return logical_shape;
+    if (shape.rank() == 1) {
+        return ttnn::Shape({1, shape[0]});
+    }
+    return shape;
 }
 
-uint64_t compute_prefix_volume(const ttnn::Shape& shape, uint32_t normalized_dims) {
-    uint64_t volume = 1;
-    for (uint32_t i = 0; i < shape.rank() - normalized_dims; ++i) {
-        volume *= shape[i];
+ttnn::Shape compute_expected_stats_shape(const Tensor& input, uint32_t normalized_dims) {
+    const auto& input_shape = input.logical_shape();
+    const auto input_rank = input_shape.rank();
+    const auto effective_normalized_dims = std::min<uint32_t>(normalized_dims, input_rank);
+
+    std::vector<uint32_t> dims;
+    dims.reserve(input_rank - effective_normalized_dims);
+    for (uint32_t i = 0; i < input_rank - effective_normalized_dims; ++i) {
+        dims.push_back(input_shape[i]);
     }
-    return volume;
+    return canonicalize_shape_for_validation(ttnn::Shape(std::move(dims)));
 }
 
-uint64_t compute_suffix_volume(const ttnn::Shape& shape, uint32_t normalized_dims) {
-    uint64_t volume = 1;
-    for (uint32_t i = shape.rank() - normalized_dims; i < shape.rank(); ++i) {
-        volume *= shape[i];
+ttnn::Shape compute_expected_gamma_shape(const Tensor& input, uint32_t normalized_dims) {
+    const auto& input_shape = input.logical_shape();
+    const auto input_rank = input_shape.rank();
+    const auto effective_normalized_dims = std::min<uint32_t>(normalized_dims, input_rank);
+
+    std::vector<uint32_t> dims;
+    dims.reserve(effective_normalized_dims);
+    for (uint32_t i = input_rank - effective_normalized_dims; i < input_rank; ++i) {
+        dims.push_back(input_shape[i]);
     }
-    return volume;
+    return canonicalize_shape_for_validation(ttnn::Shape(std::move(dims)));
 }
 
 }  // namespace
@@ -73,20 +87,19 @@ void MorehLayerNormBackwardInputGradOperation::validate_inputs(
 
     TT_FATAL(is_same_shape(output_grad, input), "output_grad and input should have the same logical shape.");
 
-    const auto promoted_input_shape = get_promoted_logical_shape(input);
-    const auto expected_mean_rstd_volume = compute_prefix_volume(promoted_input_shape, normalized_dims);
-    const auto expected_gamma_volume = compute_suffix_volume(promoted_input_shape, normalized_dims);
+    const auto expected_mean_rstd_shape = compute_expected_stats_shape(input, normalized_dims);
+    const auto expected_gamma_shape = compute_expected_gamma_shape(input, normalized_dims);
 
     TT_FATAL(
-        mean.logical_volume() == expected_mean_rstd_volume,
-        "mean must have logical volume {}. Got {}.",
-        expected_mean_rstd_volume,
-        mean.logical_volume());
+        canonicalize_shape_for_validation(mean.logical_shape()) == expected_mean_rstd_shape,
+        "mean must have logical shape {}. Got {}.",
+        expected_mean_rstd_shape,
+        mean.logical_shape());
     TT_FATAL(
-        rstd.logical_volume() == expected_mean_rstd_volume,
-        "rstd must have logical volume {}. Got {}.",
-        expected_mean_rstd_volume,
-        rstd.logical_volume());
+        canonicalize_shape_for_validation(rstd.logical_shape()) == expected_mean_rstd_shape,
+        "rstd must have logical shape {}. Got {}.",
+        expected_mean_rstd_shape,
+        rstd.logical_shape());
 
     if (input_grad.has_value()) {
         TT_FATAL(input_grad->device() == input.device(), "input_grad and input should be on the same device.");
@@ -96,10 +109,10 @@ void MorehLayerNormBackwardInputGradOperation::validate_inputs(
     if (gamma.has_value()) {
         TT_FATAL(gamma->device() == input.device(), "gamma and input should be on the same device.");
         TT_FATAL(
-            gamma->logical_volume() == expected_gamma_volume,
-            "gamma must have logical volume {}. Got {}.",
-            expected_gamma_volume,
-            gamma->logical_volume());
+            canonicalize_shape_for_validation(gamma->logical_shape()) == expected_gamma_shape,
+            "gamma must have logical shape {}. Got {}.",
+            expected_gamma_shape,
+            gamma->logical_shape());
     }
 }
 void MorehLayerNormBackwardInputGradOperation::validate_on_program_cache_miss(
