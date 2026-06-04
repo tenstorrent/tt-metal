@@ -16,12 +16,33 @@ The pipeline has three main stages:
 
 This TT-Metal demo accelerates the DiT sampler and much of the preprocessing stack on Tenstorrent devices via TTNN, while keeping host-side orchestration aligned with the official ACE-Step inference path.
 
-### Currently supported
+### Validated on BH_QB (2×2 mesh)
 
-| Component | Supported today | Notes |
-|-----------|-----------------|-------|
-| DiT (`--variant`) | **`acestep-v15-base`**, **`acestep-v15-turbo`** | `acestep-v15-sft` is not validated on the TTNN e2e path yet. |
-| 5 Hz LM (`--lm_variant`) | **`acestep-5Hz-lm-1.7B`** (default) | Used for official-style preprocessing and conditioning. |
+End-to-end prompt-to-WAV (`demo/run_prompt_to_wav.py`) has been tested on **Blackhole QB** for the full matrix below. Module-level PCC tests (see [PCC and module tests](#pcc-and-module-tests)) cover DiT, VAE, condition encoder, and 5 Hz LM stacks independently.
+
+**DiT variants (`--variant`) — all tested:**
+
+| Variant | CLI value | Default steps | Default CFG | Status |
+|---------|-----------|---------------|-------------|--------|
+| Base | `acestep-v15-base` | 50 | 7.0 | Tested e2e |
+| SFT | `acestep-v15-sft` | 50 | 7.0 | Tested e2e |
+| Turbo | `acestep-v15-turbo` | 8 | 1.0 | Tested e2e |
+
+**5 Hz LM sizes (`--lm_variant`) — all tested:**
+
+| LM size | CLI value | Status |
+|---------|-----------|--------|
+| 0.6B | `acestep-5Hz-lm-0.6B` | Tested e2e |
+| 1.7B | `acestep-5Hz-lm-1.7B` | Tested e2e (default) |
+| 4B | `acestep-5Hz-lm-4B` | Tested e2e |
+
+Default demo pairing: **`acestep-v15-base`** + **`acestep-5Hz-lm-1.7B`**. Turbo runs use **`acestep-v15-turbo`** with any of the three LM sizes. SFT uses the same CFG/step defaults as base (`infer_steps=50`, `guidance_scale=7`).
+
+**BH_QB benchmark data** (prompt *Guitar*, branch `ign/ACE_demo_modified`): full timing + audio-quality notes for **15s / 30s / 60s** × **base / turbo / sft** × **LM 0.6B / 1.7B / 4B** are in [`perf/BENCHMARK_RESULTS.md`](perf/BENCHMARK_RESULTS.md) (exported from [`perf/Testing_ACE.xlsx`](perf/Testing_ACE.xlsx)). At **30s+**, base/sft subjective quality is often **Partially good** or **Noise** vs **GOOD** for turbo — see the note below.
+
+**Why base / SFT can sound noisier than turbo at 30s+**
+
+Turbo is **CFG-distilled** for **8 steps @ `guidance_scale=1`**: a short, stable TTNN path with no classifier-free guidance loop. Base and SFT use the **full sampler** (**50 steps**, **CFG=7**, ADG/APG on host between steps), so small TTNN numeric differences (LoFi matmul, `bfloat8_b` / `bfloat4_b` weights, host↔device Euler updates) **accumulate over many more denoise steps**. At **≥30s** on mesh, the stack also switches to **long-clip mode**: DiT trace off, DRAM activations, eager multi-tile VAE decode, and wider overlap-add — each adds boundary/rounding error that turbo’s shorter path mostly avoids. That does **not** mean base/sft are broken on hardware; it means **turbo is the recommended default for long clips on BH_QB today**. For cleaner base/sft output at 30–60s, try `--clarity`, `--lm_variant acestep-5Hz-lm-4B`, `ACE_STEP_MAX_AUDIO_CODES=350`, and `--torch-vae` if hiss persists; see [Quality presets](#quality-presets-examples) below.
 
 ### Qwen3 embedding (TTNN)
 
@@ -39,7 +60,8 @@ This folder provides:
 - `torch_ref/`: PyTorch reference implementation
 - `ttnn_impl/`: TTNN implementation with one-to-one module mapping
 - `tests/`: per-module PCC validation (Torch vs TTNN)
-- `demo/`: end-to-end demo entry points (`run_prompt_to_wav.py`, `serve_prompt_to_wav.py`, `ref_decoder_compare.py`, `demo_session.py`, `demo.md`)
+- `demo/`: end-to-end demo entry points (`run_prompt_to_wav.py`, `serve_prompt_to_wav.py`, `demo.md`)
+- `perf/`: benchmark Excel log + export to `BENCHMARK_RESULTS.md`
 
 ## Prerequisites
 
@@ -51,22 +73,35 @@ Install demo-specific Python packages from the `tt-metal` repo root:
 
 ```bash
 pip install -r models/experimental/ace_step_v1_5/requirements.txt
+pip install openpyxl   # benchmark log xlsx (perf/create_benchmark_log_xlsx.py)
 ```
 
+### Environment (every run)
 
-## Quick start — prompt-to-WAV demo
+```bash
+source python_env/bin/activate
+export TT_METAL_HOME=$(pwd)
+export PYTHONPATH=$(pwd)
+export MESH_DEVICE=BH_QB          # or P150 / BH_LB — DiT/VAE mesh SKU
+# optional: export ACE_STEP_MESH_DEVICE=BH_QB
+```
+
+---
 
 Generate a WAV audio file from a text prompt using TTNN-accelerated inference.
+
+Entry point: `demo/run_prompt_to_wav.py` (see `demo/demo.md` for session passes and perf tuning).
 
 ```bash
 python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
   --variant acestep-v15-turbo \
+  --lm_variant acestep-5Hz-lm-1.7B \
   --duration_sec 15 \
   --prompt "epic orchestral cinematic music for a movie trailer" \
   --infer_steps 8 \
-  --guidance_scale 7 \
+  --guidance_scale 1 \
   --mesh-device BH_QB \
-  --out /tmp/15_turbo_1.7B.wav
+  --out /tmp/turbo_15s.wav
 ```
 
 On first run, any missing model checkpoints are automatically downloaded from HuggingFace
@@ -82,7 +117,7 @@ python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py ... --no-use-
 
 ### More examples
 
-**Turbo model — fast generation (8 steps, CFG=7):**
+**Turbo model — fast generation (8 steps, CFG off):**
 
 ```bash
 python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
@@ -90,9 +125,10 @@ python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
   --lm_variant acestep-5Hz-lm-1.7B \
   --duration_sec 15 \
   --infer_steps 8 \
-  --guidance_scale 7 \
+  --guidance_scale 1 \
   --mesh-device BH_QB \
-  --out /tmp/lofi.wav
+  --prompt "EDM: deep bass, punchy kick, bright synth lead" \
+  --out /tmp/turbo_15s.wav
 ```
 
 **Base model with 1.7B LM (balanced quality/speed):**
@@ -106,6 +142,18 @@ python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
   --seed 42 \
   --mesh-device BH_QB \
   --out /tmp/ballad.wav
+```
+
+**SFT model (same defaults as base — 50 steps, CFG=7):**
+
+```bash
+python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
+  --variant acestep-v15-sft \
+  --lm_variant acestep-5Hz-lm-1.7B \
+  --duration_sec 30 \
+  --mesh-device BH_QB \
+  --prompt "Lo-fi hip hop beat with warm vinyl crackle and mellow Rhodes piano" \
+  --out /tmp/sft_30s.wav
 ```
 
 **Base model with 4B LM (highest quality, slower):**
@@ -148,22 +196,63 @@ Disable in-memory weight caching with `ACE_STEP_DISABLE_WEIGHT_CACHE=1`.
 
 Logging defaults to **INFO** (hides TTNN per-tensor flatbuffer cache DEBUG spam).
 
-### CLI options
+### Demo CLI reference (`demo/run_prompt_to_wav.py`)
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `--prompt` | `str` | **(required)** | Text description of the music to generate. |
-| `--variant` | `str` | `acestep-v15-base` | DiT model variant. Choices: `acestep-v15-base`, `acestep-v15-sft`, `acestep-v15-turbo`. |
-| `--lm_variant` | `str` | `acestep-5Hz-lm-1.7B` | 5 Hz Language Model variant. Choices: `acestep-5Hz-lm-0.6B`, `acestep-5Hz-lm-1.7B`, `acestep-5Hz-lm-4B`. |
-| `--device_id` | `int` | `0` | TT device index. |
+| `--variant` | `str` | `acestep-v15-base` | DiT checkpoint. Choices: `acestep-v15-base`, `acestep-v15-sft`, `acestep-v15-turbo`. |
+| `--lm_variant` | `str` | `acestep-5Hz-lm-1.7B` | 5 Hz LM size. Choices: `acestep-5Hz-lm-0.6B`, `acestep-5Hz-lm-1.7B`, `acestep-5Hz-lm-4B`. |
+| `--device_id` | `int` | `0` | TT device index (single-chip / preprocess device). |
 | `--mesh-device` | `str` | env | DiT/VAE mesh SKU (`P150`, `BH_QB`, `BH_LB`, …). Also `ACE_STEP_MESH_DEVICE` or `MESH_DEVICE`. |
-| `--duration_sec` | `float` | `10.0` | Duration of the generated audio in seconds. |
-| `--infer_steps` | `int` | auto | Number of diffusion inference steps. Defaults to 8 for turbo, 50 for base/sft. |
-| `--seed` | `int` | `0` | Random seed for reproducibility. |
-| `--guidance_scale` | `float` | auto | Classifier-free guidance (CFG) strength. Defaults to 7.0 for base/sft, 1.0 for turbo. Set to 1 to disable CFG. |
-| `--out` | `str` | `ttnn_out.wav` | Output WAV file path. |
-| `--use-official-lm` | flag | off | Run the full official `generate_music` path (LLM + handlers, CPU only). Does not use TTNN; useful for A/B comparison. |
-| `--use-trace` | flag | on | TTNN trace + 2CQ for preprocess + DiT (see table below). Use `--no-use-trace` for fully eager. |
+| `--duration_sec` | `float` | `10.0` | Target audio length in seconds. |
+| `--infer_steps` | `int` | auto | Diffusion steps. Default **8** turbo, **50** base/sft. |
+| `--seed` | `int` | `0` | RNG seed (latents + sampling). |
+| `--guidance_scale` | `float` | auto | DiT CFG strength. Default **7** base/sft, **1** turbo (turbo ignores CFG >1). |
+| `--out` | `str` | `ttnn_out.wav` | Output WAV path. |
+| `--use-official-lm` | flag | off | Full official `generate_music` on CPU (PyTorch DiT). A/B reference; no TTNN. |
+| `--pytorch-lm` / `--no-pytorch-lm` | bool | off | Host PyTorch 5 Hz LM instead of TTNN causal LM. |
+| `--torch-vae` | flag | off | PyTorch Oobleck decode instead of TTNN tiled VAE. |
+| `--use-trace` / `--no-use-trace` | bool | **on** | TTNN trace + 2 command queues for preprocess + DiT body. Auto-off for ≥30s mesh long clips. |
+| `--clarity` / `--no-clarity` | bool | off | Mesh quality preset: ADG guidance, wider VAE overlap, BF16 VAE at ≥30s. |
+| `--use-adg` / `--no-use-adg` | bool | auto | DiT CFG: **ADG** (default base/sft) vs **APG** (default mesh without clarity). |
+| `--llm-debug` | flag | off | Extra constrained-decoding debug logs. Tokens/sec always in KEY METRICS when LM runs. |
+
+**Variant defaults (when flags omitted):**
+
+| Variant | `infer_steps` | `guidance_scale` | Notes |
+|---------|---------------|------------------|-------|
+| `acestep-v15-turbo` | 8 | 1.0 | CFG-distilled; fastest path |
+| `acestep-v15-base` | 50 | 7.0 | Full CFG + ADG; use `--clarity` for ≥30s mesh |
+| `acestep-v15-sft` | 50 | 7.0 | Same defaults as base |
+
+**Common environment overrides:**
+
+| Variable | Purpose |
+|----------|---------|
+| `ACE_STEP_MESH_DEVICE` / `MESH_DEVICE` | Default mesh SKU if `--mesh-device` omitted |
+| `ACE_STEP_MAX_AUDIO_CODES` | Max LM audio codes for detokenizer (use **350** for 60s) |
+| `ACE_STEP_VAE_QUALITY=1` | Force BF16 VAE decode on mesh |
+| `ACE_STEP_DEMO_PERF_LOG=1` | Enable `[ace_step_v1_5][perf]` timing tables |
+| `ACE_STEP_DISABLE_WEIGHT_CACHE=1` | Disable in-memory weight reuse |
+| `HF_TOKEN` | HuggingFace download token |
+
+**Quality presets (examples):**
+
+```bash
+# Base 60s — long-clip quality (slower)
+export ACE_STEP_MAX_AUDIO_CODES=350
+python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
+  --mesh-device BH_QB --variant acestep-v15-base --lm_variant acestep-5Hz-lm-4B \
+  --duration_sec 60 --infer_steps 50 --guidance_scale 7 --clarity \
+  --prompt "..." --out /tmp/base_60s.wav
+
+# Isolate VAE hiss vs DiT noise
+  ... --torch-vae
+
+# Softer ambient mix (less ADG smear)
+  ... --no-use-adg --guidance_scale 5
+```
 
 ### Trace + 2 command queues (default `--use-trace`)
 
@@ -217,72 +306,121 @@ With trace on, the device opens with **`num_command_queues=2`** and a **128 MiB*
   - Device → host at the end (final outputs for PCC comparison)
 - **One-to-one mapping**: every Torch module has a TTNN equivalent.
 
-## DiT decoder PCC tests (demo path)
-
-Production DiT code lives in `ttnn_impl/dit_decoder_core.py` (`TtAceStepDiTLayer`, `TtAceStepAttentionSDPA`, …). Layer PCC tests target that stack:
-
-| Test file | Component |
-|-----------|-----------|
-| `test_pcc_adaln.py` | Scale-shift AdaLN modulation inside `TtAceStepDiTLayer` |
-| `test_pcc_attention.py` | `TtAceStepAttentionSDPA` (self + cross, GQA) |
-| `test_pcc_block.py` | `TtQwen3MLP` + full `TtAceStepDiTLayer` |
-| `test_pcc_dit_decoder_core.py` | Full `TtAceStepDiTCore` |
-
-`ttnn_impl/modules.py` is a legacy block library for small experiments; it is **not** used by `run_prompt_to_wav.py`.
-
-TTNN SDPA in `dit_decoder_core` uses **tile-aligned `head_dim`** (often 32). Self-attention pads sequence length to a tile multiple and masks padded keys so softmax matches the torch reference.
-
 ## Layout
 
 ```
 ace_step_v1_5/
-  demo/
-    run_prompt_to_wav.py
-    serve_prompt_to_wav.py
-    ref_decoder_compare.py
-    demo_session.py
-    demo.md
+  demo/           run_prompt_to_wav.py, serve_prompt_to_wav.py, demo.md
+  perf/           benchmark xlsx + export scripts
   torch_ref/
   ttnn_impl/
   tests/
 ```
 
-## Running tests
+## PCC and module tests
 
-From repo/workspace root:
+All tests live under `tests/`. PCC tests compare TTNN outputs to PyTorch references and assert **PCC ≥ 0.99** via `assert_pcc_print` in `tests/_dit_decoder_pcc_common.py`.
+
+### Prerequisites
 
 ```bash
-python -m pytest models/experimental/ace_step_v1_5/tests \
+source python_env/bin/activate
+export TT_METAL_HOME=$(pwd)
+export PYTHONPATH=$(pwd)
+export MESH_DEVICE=BH_QB    # or P150 — required for device/mesh tests
+```
+
+Run from repo root with `--confcutdir` so pytest loads `ace_step_v1_5/conftest.py`:
+
+```bash
+pytest models/experimental/ace_step_v1_5/tests \
   --confcutdir=models/experimental/ace_step_v1_5/tests -q
 ```
 
-If you have TT hardware/runtime, set:
+### Per-module PCC commands
+
+| Subsystem | Test file | What it validates | Command |
+|-----------|-----------|-------------------|---------|
+| **DiT AdaLN** | `test_pcc_adaln.py` | Scale-shift modulation in `TtAceStepDiTLayer` | `pytest models/experimental/ace_step_v1_5/tests/test_pcc_adaln.py -q` |
+| **DiT attention** | `test_pcc_attention.py` | Self + cross SDPA, GQA | `pytest models/experimental/ace_step_v1_5/tests/test_pcc_attention.py -q` |
+| **DiT block** | `test_pcc_block.py` | `TtQwen3MLP` + full DiT layer | `pytest models/experimental/ace_step_v1_5/tests/test_pcc_block.py -q` |
+| **DiT core** | `test_pcc_dit_decoder_core.py` | Full `TtAceStepDiTCore`, timestep embed | `pytest models/experimental/ace_step_v1_5/tests/test_pcc_dit_decoder_core.py -q` |
+| **DiT linear** | `test_pcc_dit_linear.py` | LoFi BFP8 matmul projections | `pytest models/experimental/ace_step_v1_5/tests/test_pcc_dit_linear.py -q` |
+| **DiT patchify** | `test_patchify_pcc.py` | Patch embed + depatchify | `pytest models/experimental/ace_step_v1_5/tests/test_patchify_pcc.py -q` |
+| **DiT output head** | `test_output_head.py` | Output head vs torch | `pytest models/experimental/ace_step_v1_5/tests/test_output_head.py -q` |
+| **DiT HF parity** | `test_hf_parity_patch_output_head.py` | HF base patch embed + output head | `pytest models/experimental/ace_step_v1_5/tests/test_hf_parity_patch_output_head.py -q` |
+| **DiT denoise loop** | `test_dit_denoise_loop_pcc.py` | Full Euler loop vs torch (750/1500 frames) | `pytest models/experimental/ace_step_v1_5/tests/test_dit_denoise_loop_pcc.py -q` |
+| **DiT denoise + CFG** | `test_dit_denoise_loop_pcc_cfg.py` | APG + DCW vs torch with CFG | `pytest models/experimental/ace_step_v1_5/tests/test_dit_denoise_loop_pcc_cfg.py -q` |
+| **VAE Snake1D** | `test_vae_decoder_pcc.py` | Snake, residual, decoder block, tiny decoder | `pytest models/experimental/ace_step_v1_5/tests/test_vae_decoder_pcc.py -q` |
+| **VAE trace equiv** | `test_vae_chunk_trace_equiv.py` | Tiled/trace vs eager VAE decode | `pytest models/experimental/ace_step_v1_5/tests/test_vae_chunk_trace_equiv.py -q` |
+| **Condition encoder** | `test_condition_embedding_ttnn.py` | Text embed, Qwen3 TTT prefill, ctx latents | `pytest models/experimental/ace_step_v1_5/tests/test_condition_embedding_ttnn.py -q` |
+| **5 Hz LM logits** | `test_llm_handler_logits_pcc.py` | LM postprocess, CFG combine, prefill/decode | `pytest models/experimental/ace_step_v1_5/tests/test_llm_handler_logits_pcc.py -q` |
+| **LM memory patches** | `test_qwen_lm_mem_patches.py` | Prefill L1 / decode shard patches (unit) | `pytest models/experimental/ace_step_v1_5/tests/test_qwen_lm_mem_patches.py -q` |
+
+### Run all DiT PCC tests
 
 ```bash
-export MESH_DEVICE=N150   # or N300 / T3K / BH_QB
+pytest models/experimental/ace_step_v1_5/tests/test_pcc_adaln.py \
+  models/experimental/ace_step_v1_5/tests/test_pcc_attention.py \
+  models/experimental/ace_step_v1_5/tests/test_pcc_block.py \
+  models/experimental/ace_step_v1_5/tests/test_pcc_dit_decoder_core.py \
+  models/experimental/ace_step_v1_5/tests/test_pcc_dit_linear.py \
+  models/experimental/ace_step_v1_5/tests/test_patchify_pcc.py \
+  models/experimental/ace_step_v1_5/tests/test_output_head.py \
+  models/experimental/ace_step_v1_5/tests/test_hf_parity_patch_output_head.py \
+  --confcutdir=models/experimental/ace_step_v1_5/tests -q
 ```
 
-### Blackhole QB (2×2 mesh)
-
-Same algorithm as P150 (batch=2 CFG, trace, TTNN VAE). Preprocess (5 Hz LM + handler) runs on **host CPU**; DiT and VAE use the full **2×2** mesh.
+### Run all VAE PCC tests
 
 ```bash
-python models/experimental/ace_step_v1_5/demo/run_prompt_to_wav.py \
-  --mesh-device BH_QB \
-  --variant acestep-v15-turbo \
-  --lm_variant acestep-5Hz-lm-1.7B \
-  --duration_sec 15 \
-  --infer_steps 8 \
-  --guidance_scale 7 \
-  --out /tmp/ttnn_wav.wav
+pytest models/experimental/ace_step_v1_5/tests/test_vae_decoder_pcc.py \
+  models/experimental/ace_step_v1_5/tests/test_vae_chunk_trace_equiv.py \
+  models/experimental/ace_step_v1_5/tests/test_vae_matmul_program_config.py \
+  models/experimental/ace_step_v1_5/tests/test_vae_tile_passthrough.py \
+  --confcutdir=models/experimental/ace_step_v1_5/tests -q
 ```
 
-DiT init on 2×2 can take several minutes on first run (24 decoder layers). Progress lines (`DiT core: layer N/24`) indicate forward motion, not a hang.
+### CPU-only / host tests (no device)
 
-## Notes
+```bash
+pytest models/experimental/ace_step_v1_5/tests/test_apg_guidance_host.py \
+  models/experimental/ace_step_v1_5/tests/test_safetensors_loader.py \
+  models/experimental/ace_step_v1_5/tests/test_dcw_sampler.py \
+  models/experimental/ace_step_v1_5/tests/test_tt_device_mesh.py -q
+```
 
-- PCC tests print the score and assert at **0.99** via ``assert_pcc_print`` in ``tests/_dit_decoder_pcc_common.py``.
-- The `mesh_device` pytest fixture is **session-scoped** (one `open_mesh_device` per process). Opening and closing a mesh around every test exhausts Metal context IDs and can trigger invalid `context_id` / teardown crashes on distributed meshes.
+### Single test by name
+
+```bash
+pytest models/experimental/ace_step_v1_5/tests/test_pcc_dit_decoder_core.py::test_dit_decoder_core_matches_torch -q
+```
+
+Production DiT code: `ttnn_impl/dit_decoder_core.py`. The `mesh_device` pytest fixture is **session-scoped**.
+
+---
+
+## Benchmark run log (Excel)
+
+Measured on **BH_QB** with prompt *Guitar* (see [`perf/Testing_ACE.xlsx`](perf/Testing_ACE.xlsx)). Markdown export (same block layout as the spreadsheet):
+
+| File | Purpose |
+|------|---------|
+| [`perf/Testing_ACE.xlsx`](perf/Testing_ACE.xlsx) | **Current BH_QB results** — Configuration + 15s / 30s / 60s sheets |
+| [`perf/BENCHMARK_RESULTS.md`](perf/BENCHMARK_RESULTS.md) | Markdown mirror of `Testing_ACE.xlsx` (full tables) |
+| `perf/export_testing_ace_md.py` | Regenerate `BENCHMARK_RESULTS.md` after editing the xlsx |
+| `perf/create_benchmark_log_xlsx.py` | Optional flat-row template (`ace_step_turbo_benchmark_log.xlsx`) |
+| `perf/export_benchmark_summary_md.py` | Export flat template → md (legacy workflow) |
+
+**Workflow (Testing_ACE format):**
+
+1. Edit [`perf/Testing_ACE.xlsx`](perf/Testing_ACE.xlsx) after each run (Metric / Value / Description / OUTPUT AUDIO GOOD/BAD blocks per variant × LM).
+2. Refresh markdown: `python models/experimental/ace_step_v1_5/perf/export_testing_ace_md.py`
+3. Commit xlsx + `BENCHMARK_RESULTS.md` when updating benchmark data.
+
+**Latest results:** [perf/BENCHMARK_RESULTS.md](perf/BENCHMARK_RESULTS.md) — includes Configuration (mesh **BH QB**, steps **50/8/50** for base/turbo/sft) and all 27 variant×LM×duration runs.
+
+---
 
 ## TTNN demo (`ttnn_impl/full_pipeline.py`) — weights default to **Base**
 
