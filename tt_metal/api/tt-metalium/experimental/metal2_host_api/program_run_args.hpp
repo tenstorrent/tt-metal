@@ -46,9 +46,6 @@ struct ProgramRunArgs {
     // Kernel runtime arguments
     ////////////////////////////////////////////////////////////////////////
     struct KernelRunArgs {
-        // Kernel identifier
-        KernelSpecName kernel_spec_name;
-
         // Runtime argument values: maps each node to its named-RTA values (a name -> value table).
         // Every argument in this kernel's RuntimeArgSchema::runtime_arg_names must be set,
         // for every node the kernel runs on.
@@ -69,8 +66,8 @@ struct ProgramRunArgs {
         // positional vararg values.
         AdvancedKernelRunArgs advanced_options;
     };
-    // KernelRunArgs must be specified for ALL kernels in the ProgramSpec.
-    std::vector<KernelRunArgs> kernel_run_args;
+    // A KernelRunArgs must be specified for ALL kernels in the ProgramSpec, keyed by kernel name.
+    Table<KernelSpecName, KernelRunArgs> kernel_run_args;
 
     ////////////////////////////////////////////////////////////////////////
     // Tensor arguments
@@ -84,16 +81,12 @@ struct ProgramRunArgs {
     // the ProgramSpec) to its MeshTensor argument.
     // A TensorArgument must be specified for EVERY TensorParameter declared in the ProgramSpec.
     // The argument's TensorSpec must match the TensorParameter's TensorSpec (shape, layout, data type).
-    using TensorArgs = Table<TensorParameterName, TensorArgument>;
-    TensorArgs tensor_args;
+    Table<TensorParameterName, TensorArgument> tensor_args;
 
     ////////////////////////////////////////////////////////////////////////
     // DFB parameters (optional, advanced use cases)
     ////////////////////////////////////////////////////////////////////////
     struct DFBRunOverrides {
-        // DFB identifier
-        DFBSpecName dfb_spec_name;
-
         // DFB size overrides
         // DFB sizes specified in the ProgramSpec may be overridden per Program execution.
         // If unset, the ProgramSpec value is used.
@@ -104,7 +97,7 @@ struct ProgramRunArgs {
         // the corresponding tensor_arg.
     };
     // DFBRunOverrides is optional. Provide entries only when overriding DFB sizes.
-    std::vector<DFBRunOverrides> dfb_run_overrides;
+    Table<DFBSpecName, DFBRunOverrides> dfb_run_overrides;
 };
 
 //------------------------------------------------
@@ -128,7 +121,7 @@ struct ProgramRunArgs {
 struct ProgramRunArgsView {
     struct KernelRunArgsView {
         // Direct views into per-node vararg runtime args
-        Table<NodeCoord, std::span<uint32_t>> runtime_varargs;
+        std::vector<std::pair<NodeCoord, std::span<uint32_t>>> runtime_varargs;
 
         // Direct view into common vararg runtime args
         std::span<uint32_t> common_runtime_varargs;

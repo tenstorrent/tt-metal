@@ -29,8 +29,7 @@ const Table<NodeCoord, std::vector<uint32_t>>& kernel_runtime_varargs(const Prog
     return kp.advanced_options.runtime_varargs;
 }
 
-const AdvancedKernelRunArgs::CommonVarargs& kernel_common_runtime_varargs(
-    const ProgramRunArgs::KernelRunArgs& kp) {
+const AdvancedKernelRunArgs::Varargs& kernel_common_runtime_varargs(const ProgramRunArgs::KernelRunArgs& kp) {
     return kp.advanced_options.common_runtime_varargs;
 }
 
@@ -49,10 +48,11 @@ const AdvancedKernelRunArgs::CommonVarargs& kernel_common_runtime_varargs(
 //         rank must match. Both logical_shape and padded_shape per-dim values may differ.
 //     See the field doc comments in tensor_parameter.hpp for the full contracts.
 //   - Every declared TensorParameter must be set
-void ValidateTensorArgs(const Program& program, const ProgramRunArgs::TensorArgs& tensor_args) {
+void ValidateTensorArgs(
+    const Program& program, const Table<TensorParameterName, ProgramRunArgs::TensorArgument>& tensor_args) {
     const detail::ProgramImpl& program_impl = program.impl();
 
-    // (Duplicate tensor_parameter_name keys are rejected by TensorArgs at construction.)
+    // (Duplicate tensor_parameter_name keys are rejected by the Table at construction.)
     std::unordered_set<std::string> tensor_parameters_with_params;
     for (const auto& [param_name, tensor_arg] : tensor_args) {
         tensor_parameters_with_params.insert(param_name);
@@ -130,14 +130,9 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
     std::unordered_set<KernelSpecName> kernels_with_params;
 
     // Validate kernel runtime parameters
-    for (const auto& kernel_params : params.kernel_run_args) {
-        const KernelSpecName& kernel_name = kernel_params.kernel_spec_name;
-        auto [it, inserted] = kernels_with_params.insert(kernel_name);
-        TT_FATAL(
-            inserted,
-            "Duplicate kernel_spec_name '{}' in ProgramRunArgs.kernel_run_args. Each kernel must appear exactly "
-            "once.",
-            kernel_name);
+    // (Duplicate kernel keys are rejected by the Table at construction.)
+    for (const auto& [kernel_name, kernel_params] : params.kernel_run_args) {
+        kernels_with_params.insert(kernel_name);
 
         // Check that the kernel exists
         const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_name);
@@ -287,16 +282,12 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
     }
 
     // Validate DFB runtime parameters
-    std::unordered_set<DFBSpecName> dfbs_with_params;
-    for (const auto& dfb_params : params.dfb_run_overrides) {
-        auto [it, inserted] = dfbs_with_params.insert(dfb_params.dfb_spec_name);
-        TT_FATAL(
-            inserted,
-            "Duplicate dfb_spec_name '{}' in ProgramRunArgs.dfb_run_overrides. Each DFB must appear at most once.",
-            dfb_params.dfb_spec_name);
+    // (Duplicate DFB keys are rejected by the Table at construction.)
+    for (const auto& [dfb_spec_name, dfb_params] : params.dfb_run_overrides) {
         TT_FATAL(
             !dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value(),
-            "DFB size overrides are not yet implemented.");
+            "DFB size overrides are not yet implemented for DFB '{}'.",
+            dfb_spec_name);
     }
 
     // Unlike kernels, DFBs don't require DFBRunOverrides.
@@ -376,7 +367,8 @@ std::vector<uint32_t> ComputeBindingCrtaValues(const TensorBindingHandle& handle
 //
 // Pre-condition: ValidateTensorArgs has enforced that every declared TensorParameter
 // has a corresponding TensorArgument, so the lookup below cannot miss for any registered binding.
-void AttachBorrowedDFBBuffers(detail::ProgramImpl& program_impl, const ProgramRunArgs::TensorArgs& tensor_args) {
+void AttachBorrowedDFBBuffers(
+    detail::ProgramImpl& program_impl, const Table<TensorParameterName, ProgramRunArgs::TensorArgument>& tensor_args) {
     const auto& borrowed_bindings = program_impl.get_dfb_borrowed_bindings();
     if (borrowed_bindings.empty()) {
         return;
@@ -471,10 +463,10 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params) {
     // TensorBinding address section is used by headergen to emit the `ta::` namespace tokens.
     // The device-side get_vararg / get_common_vararg helpers invisibly add the combined named-arg + binding
     // offset, so kernel code indexes varargs from 0.
-    for (const auto& kernel_params : params.kernel_run_args) {
-        std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_params.kernel_spec_name);
-        const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_params.kernel_spec_name);
-        TT_FATAL(schema != nullptr, "Kernel '{}' has no RTA schema registered.", kernel_params.kernel_spec_name);
+    for (const auto& [kernel_name, kernel_params] : params.kernel_run_args) {
+        std::shared_ptr<Kernel> kernel = program_impl.get_kernel_by_spec_name(kernel_name);
+        const KernelRTASchema* schema = program_impl.get_kernel_rta_schema(kernel_name);
+        TT_FATAL(schema != nullptr, "Kernel '{}' has no RTA schema registered.", kernel_name);
 
         // Build a node -> named-RTA-values-map lookup for serialization.
         std::unordered_map<NodeCoord, const Table<std::string, uint32_t>*> named_rtas_by_node;
@@ -507,7 +499,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params) {
                 TT_FATAL(
                     has_named,
                     "Internal error: validation passed but named RTAs missing for kernel '{}' node {}.",
-                    kernel_params.kernel_spec_name,
+                    kernel_name,
                     node.str());
                 for (const auto& name : schema->runtime_arg_names) {
                     auto v_it = named_it->second->find(name);
@@ -515,7 +507,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params) {
                         v_it != named_it->second->end(),
                         "Internal error: named RTA '{}' missing for kernel '{}' node {}.",
                         name,
-                        kernel_params.kernel_spec_name,
+                        kernel_name,
                         node.str());
                     combined.push_back(v_it->second);
                 }
@@ -548,7 +540,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params) {
                 v_it != kernel_params.common_runtime_arg_values.end(),
                 "Internal error: named CRTA '{}' missing for kernel '{}'.",
                 name,
-                kernel_params.kernel_spec_name);
+                kernel_name);
             combined_crtas.push_back(v_it->second);
         }
         for (const auto& handle : binding_handles) {
@@ -579,7 +571,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params) {
                 TT_FATAL(
                     crta.size() == combined_crtas.size(),
                     "Kernel '{}' common runtime args count cannot change from {} to {}",
-                    kernel_params.kernel_spec_name,
+                    kernel_name,
                     crta.size(),
                     combined_crtas.size());
                 std::memcpy(crta.data(), combined_crtas.data(), combined_crtas.size() * sizeof(uint32_t));
@@ -593,7 +585,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params) {
     AttachBorrowedDFBBuffers(program_impl, params.tensor_args);
 }
 
-void UpdateTensorArgs(Program& program, const ProgramRunArgs::TensorArgs& tensor_args) {
+void UpdateTensorArgs(Program& program, const Table<TensorParameterName, ProgramRunArgs::TensorArgument>& tensor_args) {
     log_debug(tt::LogMetal, "Updating tensor args (partial fast-path)");
 
     // Validate the TensorArgument list (shared with the full-path validator).
