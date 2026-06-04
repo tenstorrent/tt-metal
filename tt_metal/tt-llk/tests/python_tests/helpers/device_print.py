@@ -464,6 +464,21 @@ def _bitcast_f32(bits: int) -> float:
     return struct.unpack("<f", struct.pack("<I", bits))[0]
 
 
+def _make_float(exp_bits: int, mant_bits: int, data: int) -> float:
+    """Reconstruct a float from a bit pattern in [sign][mantissa][exponent] order.
+    Mirrors dprint_parser.cpp:make_float."""
+    sign = (data >> (exp_bits + mant_bits)) & 0x1
+    exp_mask = (1 << exp_bits) - 1
+    exp_bias = (1 << (exp_bits - 1)) - 1
+    exp_val = (data & exp_mask) - exp_bias
+    mantissa_val = (data & (((1 << mant_bits) - 1) << exp_bits)) >> exp_bits
+    # Zero exponent and zero mantissa is zero (IEEE 754 convention).
+    if (data & exp_mask) == 0 and mantissa_val == 0:
+        return -0.0 if sign else 0.0
+    result = (1.0 + mantissa_val / (1 << mant_bits)) * (2.0**exp_val)
+    return -result if sign else result
+
+
 # Decode recipes: (struct format char, possible widening to fp32).
 # Shared across dp_typed_array_t and TileSlice. Tf32 and bf16 have
 # no native struct type, they unpack as uint and get widened.
@@ -487,17 +502,32 @@ _WIRE: dict[int, tuple[str, Any]] = {
     _DF_UINT8: _U8,
 }
 
-# typed_array decode: Metal emits Bfp*/Lf8 as fp16 and Bfp*_b as bf16,
-# so these alias the float recipes rather than carrying their own layout.
+# Unlike the tile_slice path (which reads normal L1 data and just casts),
+# these have to go through _make_float since they're ripped out of DEST.
+# Metal emits Bfp*/Lf8 as fp16(5,10) and Bfp*_b as bf16(8,7).
+_TA_F16 = ("H", lambda v: _make_float(5, 10, v))
+_TA_BF16 = ("H", lambda v: _make_float(8, 7, v))
+_TA_TF32 = ("I", lambda v: _make_float(8, 10, v))
+
+# typed_array decode. Integer + fp32 share the tile_slice recipes; every other
+# float format reconstructs via _make_float (see above).
 _TYPED_ARRAY_WIRE: dict[int, tuple[str, Any]] = {
-    **_WIRE,
-    _DF_BFP8: _F16,
-    _DF_BFP4: _F16,
-    _DF_BFP2: _F16,
-    _DF_LF8: _F16,
-    _DF_BFP8_B: _BF16,
-    _DF_BFP4_B: _BF16,
-    _DF_BFP2_B: _BF16,
+    _DF_FLOAT32: _F32,
+    _DF_INT32: _I32,
+    _DF_UINT32: _U32,
+    _DF_UINT16: _U16,
+    _DF_INT8: _I8,
+    _DF_UINT8: _U8,
+    _DF_TF32: _TA_TF32,
+    _DF_FLOAT16: _TA_F16,
+    _DF_BFP8: _TA_F16,
+    _DF_BFP4: _TA_F16,
+    _DF_BFP2: _TA_F16,
+    _DF_LF8: _TA_F16,
+    _DF_FLOAT16_B: _TA_BF16,
+    _DF_BFP8_B: _TA_BF16,
+    _DF_BFP4_B: _TA_BF16,
+    _DF_BFP2_B: _TA_BF16,
 }
 
 # In tile_slice context, Bfp_b is NOT aliased — it has its own byte-pair layout
