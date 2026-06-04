@@ -239,6 +239,7 @@ ttnn/cpp/ttnn/operations/ @tenstorrent/metalium-developers-ops-leads @tenstorren
 ttnn/cpp/ttnn/operations/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/moreh*/ @razorback3 @dongjin-na @ayerofieiev-tt @nmauriceTT @aczajkowskiTT @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/moreh*/**/CMakeLists.txt @razorback3 @dongjin-na @ayerofieiev-tt @tenstorrent/metalium-developers-infra @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
+tests/ttnn/nightly/unit_tests/operations/moreh/ @razorback3 @dongjin-na @ayerofieiev-tt @nmauriceTT @aczajkowskiTT @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/ccl/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/ccl/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/point_to_point/ @tenstorrent/metalium-developers-ops-data-movement @tenstorrent/codeowner-bypass
