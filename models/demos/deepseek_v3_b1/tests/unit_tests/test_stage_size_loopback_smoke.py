@@ -12,14 +12,30 @@ SocketInterface chain needed for a simple payload loopback smoke.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import Any
+
 import pytest
 import torch
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3_b1.demo.pipeline import create_passthrough_pipeline_configuration
-from models.demos.deepseek_v3_b1.demo.pipeline_routing import build_local_stage_socket_plans, build_stage_routing
+from models.demos.deepseek_v3_b1.demo.pipeline_routing import (
+    EdgeTransport,
+    LocalRole,
+    LocalStageSocketPlan,
+    build_local_stage_socket_plan,
+    build_local_stage_socket_plans,
+    build_stage_routing,
+)
 from models.demos.deepseek_v3_b1.demo.stage import ACTIVATION_W_TOKEN_META_PAGE_SIZE_BYTES
+from models.demos.deepseek_v3_b1.demo.stage_family import (
+    StageFamily,
+    fabric_config_for_stage_family,
+    query_global_stage_mesh_shape,
+    stage_family_from_shape,
+)
 from models.demos.deepseek_v3_b1.demo.weight_provider import SyntheticWeightProvider
 from models.demos.deepseek_v3_b1.metadata.metadata import DeepseekMetadata
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import (
@@ -32,13 +48,48 @@ from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size, ttnn_dtype_from_torch_dtype
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineConfigEntry
 from models.demos.deepseek_v3_b1.model_dimensions import LogicalModelDimensions
-from models.demos.deepseek_v3_b1.tests.unit_tests.stage_size_test_utils import (
-    EdgeTransport,
-    LocalRole,
-    LocalStageSocketPlan,
-    build_local_stage_socket_plan,
-    get_generic_stage_size_loopback_topology_config,
-)
+
+
+def create_fabric_router_config(max_payload_size: int) -> Any:
+    """Create a FabricRouterConfig with the requested max payload size."""
+
+    config = ttnn._ttnn.fabric.FabricRouterConfig()
+    config.max_packet_payload_size_bytes = max_payload_size
+    return config
+
+
+@dataclass(frozen=True)
+class PhysicalTopologyConfig:
+    """Static test inputs needed to open the mesh and configure fabric."""
+
+    name: str
+    stage_family: StageFamily
+    mesh_device_param: tuple[int, int]
+    fabric_config: ttnn.FabricConfig
+    initialize_loopback: bool = True
+    fabric_router_max_payload_size: int | None = None
+
+    def make_device_params(self) -> dict[str, Any]:
+        device_params: dict[str, Any] = {"fabric_config": self.fabric_config}
+        if self.fabric_router_max_payload_size is not None:
+            device_params["fabric_router_config"] = create_fabric_router_config(self.fabric_router_max_payload_size)
+        return device_params
+
+
+def get_generic_stage_size_loopback_topology_config() -> PhysicalTopologyConfig:
+    """Return the loopback smoke topology config derived from the selected MGD."""
+
+    mesh_shape = query_global_stage_mesh_shape()
+    stage_family = stage_family_from_shape(mesh_shape)
+    return PhysicalTopologyConfig(
+        name=f"generic-{stage_family.value}-loopback",
+        stage_family=stage_family,
+        mesh_device_param=(int(mesh_shape[0]), int(mesh_shape[1])),
+        fabric_config=fabric_config_for_stage_family(stage_family),
+        initialize_loopback=True,
+        fabric_router_max_payload_size=15232,
+    )
+
 
 GENERIC_STAGE_SIZE_LOOPBACK_CONFIG = get_generic_stage_size_loopback_topology_config()
 PIPELINE_ENDPOINT_CORE_COORD = ttnn.CoreCoord(0, 0)
@@ -447,7 +498,7 @@ def _make_readback_tensor():
             "fabric",
             marks=pytest.mark.skip(
                 reason="fabric loopback (D2H on stage 0, with the embedding) hits a D2H pinned-buffer "
-                "address anomaly under investigation; see docs/d2h_socket_loopback_pinned_address_bug.md"
+                "address anomaly"
             ),
         ),
     ],
@@ -469,9 +520,6 @@ def test_pipeline_level_passthrough_transport_loopback(topology_config, mesh_dev
 
     Runs the fused embedding kernel (the real model's config) and returns the activation via the
     last stage's D2H + MPI to rank 0 (the production host-loopback return path).
-
-    The fabric-loopback variant is intentionally skipped: it hits a D2H pinned-buffer address
-    anomaly that is still under investigation (see the docs note above).
     """
 
     if not is_slow_dispatch():

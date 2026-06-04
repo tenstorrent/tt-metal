@@ -440,11 +440,12 @@ class PipelineBlock:
         socket_fifo_size: int,
         local_endpoint_type,
     ):
-        # Scope the socket the same way the legacy paths do, so plan-routed and
-        # legacy-routed stages on opposite ends of one edge agree on the socket config:
-        #   - CROSS_MESH (stage->stage): mesh-id-scoped, matching SocketInterface's default.
-        #   - SAME_MESH_CROSS_RANK (split intra, one stage spanning hosts): rank-scoped.
-        # Mixing the two on a single edge fails the connection handshake.
+        # Rank-scope every socket. A mesh-id-scoped handshake requires *all* host ranks of a
+        # mesh to create the socket, but on a split (multi-host) mesh only the endpoint owner
+        # does, so the handshake times out. Keying on the specific sender/receiver ranks works
+        # uniformly for both CROSS_MESH (stage->stage) and SAME_MESH_CROSS_RANK (split intra)
+        # edges. Both ends of an edge must agree, so the legacy SocketInterface paths
+        # (_init_first_stage) rank-scope too.
         return _create_socket_resource(
             self.mesh_device,
             self._core_for_endpoint(edge.src, pipeline_core_coord),

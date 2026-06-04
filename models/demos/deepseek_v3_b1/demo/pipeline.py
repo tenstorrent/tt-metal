@@ -502,6 +502,7 @@ def create_pipeline_configuration_from_stage_count(
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
     num_slots: int = 64,
+    enable_sram_bspm: bool = False,
 ) -> PipelineConfiguration:
     """Pick the model role map from logical stage count and derived stage family."""
 
@@ -516,6 +517,7 @@ def create_pipeline_configuration_from_stage_count(
             dense_layer_id_override=dense_layer_id_override,
             moe_layer_id_override=moe_layer_id_override,
             num_slots=num_slots,
+            enable_sram_bspm=enable_sram_bspm,
         )
 
     return create_passthrough_pipeline_configuration(weight_provider, num_stages)
