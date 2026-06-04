@@ -47,9 +47,10 @@ from models.experimental.seamless_m4t_v2_large.tt.common import (
 from models.experimental.seamless_m4t_v2_large.tt.mesh_helpers import get_tp, mesh_cluster_axis
 
 # Chunk ``H @ enc`` along upsampled rows (same row count as speech-encoder long mel matmuls).
-# 4 × TILE (128 rows) — fewer dispatches than the original 1×TILE (32) without exceeding the
-# matmul's L1 budget. Demo's ~1639 unit rows go from ~51 dispatches → ~13.
-_HARD_UPSAMPLE_MATMUL_CHUNK_ROWS = 4 * TILE
+# 16 × TILE (512 rows): the prior 128-row cap was a ``matmul_program_config`` limitation (it switches
+# to 2D multicast above 128 rows → L1 overflow). The 1D multicast PC with a pinned K-block stays 1D at
+# any width, so we match the speech-encoder/T2U-linear chunk (512) — 4× fewer dispatches than 128.
+_HARD_UPSAMPLE_MATMUL_CHUNK_ROWS = 16 * TILE
 
 # Long-seq T2U linears (encoder/decoder FFN + projections) were chunked 1 tile (32 rows) at a time
 # via ``matmul_program_config`` — ~seq/32 slice+matmul+concat ops per linear (128 at seq=4096), the
@@ -950,6 +951,11 @@ def _hard_upsample_matmul(
         return ensure_interleaved_bsh(out, batch=1, seq=sum_r, channels=hidden_size)
 
     chunk_m = _HARD_UPSAMPLE_MATMUL_CHUNK_ROWS
+    # Fixed 1D multicast PC (K-block pinned to the 128-row baseline in0_block_w=8) for every chunk →
+    # bit-identical to the old per-chunk PC while M widens; short final chunk is zero-padded to chunk_m.
+    mm_pc = matmul_multicast_1d_program_config(
+        device, m=chunk_m, k=enc_seq, n=hidden_size, force_in0_block_w=_T2U_LINEAR_IN0_BLOCK_W
+    )
     chunks: list[ttnn.Tensor] = []
     for start in range(0, sum_r, chunk_m):
         end = min(start + chunk_m, sum_r)
@@ -961,12 +967,19 @@ def _hard_upsample_matmul(
             [1, 1, 1],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        mm_pc = matmul_program_config(
-            device,
-            token_rows=chunk_rows,
-            in_dim=enc_seq,
-            out_dim=hidden_size,
-        )
+        if chunk_rows < chunk_m:
+            pad = ttnn.full(
+                [1, chunk_m - chunk_rows, enc_seq],
+                0.0,
+                dtype=H_chunk.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            padded = ttnn.concat([H_chunk, pad], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(H_chunk)
+            ttnn.deallocate(pad)
+            H_chunk = padded
         out_chunk = ttnn.matmul(H_chunk, enc, program_config=mm_pc, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(H_chunk)
         if chunk_rows < chunk_m:
