@@ -561,15 +561,6 @@ bool should_coalesce_1d_depthwise_conv_reads(
         kernel_width <= 1 || dilation_w != 1) {
         return false;
     }
-    // The coalesced path lays out activations as (channels_ntiles * kw) tiles, where each
-    // channel occupies exactly one tile-column (TILE_WIDTH scalars).  This requires
-    // round_up(C * kw, TILE_WIDTH) == (C / TILE_WIDTH) * kw * TILE_WIDTH, which only holds
-    // when C is a multiple of TILE_WIDTH.  When C < TILE_WIDTH the reader packs all taps into
-    // round_up(C*kw, TILE_WIDTH) scalars (<< kw tiles), violating the compute kernel's
-    // static_assert(in0_block_w % kernel_width == 0).  Fall back to the non-coalesced path.
-    if (input_channels_padded % tt::constants::TILE_WIDTH != 0) {
-        return false;
-    }
 
     // Coalesced depthwise reads lay out all kernel-width channel sticks as one contiguous activation block. The
     // coalesced compute kernel then indexes that block as kernel_width groups of channel tiles, so each stick must
