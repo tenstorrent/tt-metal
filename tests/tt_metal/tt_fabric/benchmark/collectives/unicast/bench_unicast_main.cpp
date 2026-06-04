@@ -204,7 +204,10 @@ void append_csv_if_requested(const RunOptions& run, const PerfParams& p, const P
         return;
     }
 
-    std::filesystem::create_directories(std::filesystem::path(run.csv_path).parent_path());
+    auto csv_parent = std::filesystem::path(run.csv_path).parent_path();
+    if (!csv_parent.empty()) {
+        std::filesystem::create_directories(csv_parent);
+    }
     bool newfile = !std::ifstream(run.csv_path).good();
 
     std::ofstream ofs(run.csv_path, std::ios::app);
