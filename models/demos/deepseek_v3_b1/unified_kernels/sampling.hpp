@@ -167,7 +167,7 @@ void calculate_sampling_recip_scalar() {
 
 template <bool legacy_compat = true>
 ALWI void sampling_recip_tile_scalar(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(calculate_sampling_recip_scalar<legacy_compat>, idst, (int)VectorMode::None);
+    _llk_math_eltwise_unary_sfpu_params_(calculate_sampling_recip_scalar<legacy_compat>, idst, VectorMode::None);
 }
 
 // Clamp the scalar at DST[idst][0] to at most `param` (passed as an fp32
@@ -187,7 +187,7 @@ inline void calculate_sampling_clamp_max_scalar(uint32_t param) {
 }
 
 ALWI void sampling_clamp_max_tile_scalar(uint32_t idst, uint32_t param) {
-    _llk_math_eltwise_unary_sfpu_params_(calculate_sampling_clamp_max_scalar, idst, (int)VectorMode::None, param);
+    _llk_math_eltwise_unary_sfpu_params_(calculate_sampling_clamp_max_scalar, idst, VectorMode::None, param);
 }
 
 // ----------------------------------------------------------------------------
@@ -258,23 +258,17 @@ inline void calculate_sampling_binary_comp_first_column(
 
 ALWI void sampling_le_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     _llk_math_eltwise_binary_sfpu_params_(
-        calculate_sampling_binary_comp_first_column<SfpuType::le>, idst0, idst1, odst, (int)VectorMode::C);
+        calculate_sampling_binary_comp_first_column<SfpuType::le>, idst0, idst1, odst, VectorMode::C);
 }
 
-// Strict less-than variant. Used by the top-p cutoff mask so that lanes where
-// `cumsum == p` (which happens in bf16 when the cumsum saturates exactly at
-// `p_bf16`) are treated as ABOVE the cutoff, matching BRISC's `num_kept` rule
-// (`!(cum[i] < p_bf16)`). Without this, every saturated lane gets inflated by
-// BIG and the subsequent MIN-reduce returns ~BIG instead of `cum_kept`, which
-// shrinks every output prob by ~1/BIG.
 ALWI void sampling_lt_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     _llk_math_eltwise_binary_sfpu_params_(
-        calculate_sampling_binary_comp_first_column<SfpuType::lt>, idst0, idst1, odst, (int)VectorMode::C);
+        calculate_sampling_binary_comp_first_column<SfpuType::lt>, idst0, idst1, odst, VectorMode::C);
 }
 
 ALWI void sampling_ge_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     _llk_math_eltwise_binary_sfpu_params_(
-        calculate_sampling_binary_comp_first_column<SfpuType::ge>, idst0, idst1, odst, (int)VectorMode::C);
+        calculate_sampling_binary_comp_first_column<SfpuType::ge>, idst0, idst1, odst, VectorMode::C);
 }
 
 inline void calculate_sampling_mul_unary_scalar_first_column(uint32_t param) {
@@ -289,8 +283,7 @@ inline void calculate_sampling_mul_unary_scalar_first_column(uint32_t param) {
 }
 
 ALWI void sampling_mul_unary_tile_first_column(uint32_t idst, uint32_t param) {
-    _llk_math_eltwise_unary_sfpu_params_(
-        calculate_sampling_mul_unary_scalar_first_column, idst, (int)VectorMode::C, param);
+    _llk_math_eltwise_unary_sfpu_params_(calculate_sampling_mul_unary_scalar_first_column, idst, VectorMode::C, param);
 }
 
 inline void calculate_sampling_add_binary_first_column(
@@ -308,7 +301,7 @@ inline void calculate_sampling_add_binary_first_column(
 
 ALWI void sampling_add_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     _llk_math_eltwise_binary_sfpu_params_(
-        calculate_sampling_add_binary_first_column, idst0, idst1, odst, (int)VectorMode::C);
+        calculate_sampling_add_binary_first_column, idst0, idst1, odst, VectorMode::C);
 }
 #endif
 
@@ -396,12 +389,12 @@ void trisc_fused_softmax_top_p_sampling_block() {
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-2");
         rmsnorm_bcast_scalar_reuse_tiles_init<
-            ELWSUB,
+            EltwiseBinaryType::ELWSUB,
             /*num_tiles=*/1,
             MathFidelity::LoFi,
             /*unpack_full_transpose=*/true>(in_cb);
         rmsnorm_bcast_scalar_reuse_tiles<
-            ELWSUB,
+            EltwiseBinaryType::ELWSUB,
             /*num_tiles=*/1,
             MathFidelity::LoFi,
             /*clear_dest=*/true>(in_cb, /*in_tile=*/0, /*src=*/0, /*dst=*/0);
@@ -412,7 +405,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-3");
         exp_tile_init<false>();
-        exp_tile<false, true>(0, (int)VectorMode::C, temp_bf16);
+        exp_tile<false, true>(0, VectorMode::C, temp_bf16);
     }
     tile_regs_commit();
     // Step 4: Pack the result into the exp_cb
@@ -448,11 +441,11 @@ void trisc_fused_softmax_top_p_sampling_block() {
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-6");
         rmsnorm_bcast_scalar_reuse_tiles_init<
-            ELWMUL,
+            EltwiseBinaryType::ELWMUL,
             /*num_tiles=*/1,
             MathFidelity::HiFi4>(exp_cb);
         rmsnorm_bcast_scalar_reuse_tiles<
-            ELWMUL,
+            EltwiseBinaryType::ELWMUL,
             /*num_tiles=*/1,
             MathFidelity::HiFi4,
             /*clear_dest=*/true>(exp_cb, /*in_tile=*/0, /*src=*/0, /*dst=*/0);
@@ -570,11 +563,11 @@ void trisc_fused_softmax_top_p_sampling_block() {
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-13b");
         rmsnorm_bcast_scalar_reuse_tiles_init<
-            ELWMUL,
+            EltwiseBinaryType::ELWMUL,
             /*num_tiles=*/1,
             MathFidelity::HiFi4>(probs_cb);
         rmsnorm_bcast_scalar_reuse_tiles<
-            ELWMUL,
+            EltwiseBinaryType::ELWMUL,
             /*num_tiles=*/1,
             MathFidelity::HiFi4,
             /*clear_dest=*/true>(probs_cb, /*in_tile=*/0, /*src=*/0, /*dst=*/3);
@@ -600,11 +593,11 @@ void trisc_fused_softmax_top_p_sampling_block() {
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-14");
         rmsnorm_bcast_scalar_reuse_tiles_init<
-            ELWMUL,
+            EltwiseBinaryType::ELWMUL,
             /*num_tiles=*/1,
             MathFidelity::HiFi4>(out_cb);
         rmsnorm_bcast_scalar_reuse_tiles<
-            ELWMUL,
+            EltwiseBinaryType::ELWMUL,
             /*num_tiles=*/1,
             MathFidelity::HiFi4,
             /*clear_dest=*/false>(out_cb, /*in_tile=*/0, /*src=*/0, /*dst=*/6);
@@ -620,7 +613,13 @@ void trisc_fused_softmax_top_p_sampling_block() {
         tile_regs_commit();
     }
     tile_regs_wait();
+    if constexpr (mask_cb == scaler_cb) {
+        cb_pop_front(scaler_cb, 1);
+    }
     // Step 22: Pack the mask into mask_cb (dedicated TRISC -> BRISC channel).
+    if constexpr (mask_cb == scaler_cb) {
+        cb_pop_front(scaler_cb, 1);
+    }
     cb_reserve_back(mask_cb, 1);
     pack_reconfig_data_format(mask_cb);
     pack_tile(2, mask_cb);
@@ -634,7 +633,11 @@ void trisc_fused_softmax_top_p_sampling_block() {
     tile_regs_release();
     cb_pop_front(exp_cb, 1);
     cb_pop_front(rand_bcast_cb, 1);
-    cb_pop_front(scaler_cb, 1);
+    if constexpr (mask_cb == scaler_cb) {
+        cb_pop_front(mask_cb, 1);
+    } else {
+        cb_pop_front(scaler_cb, 1);
+    }
 }
 
 void generate_rand_tile(const uint32_t cb_id) {
@@ -987,7 +990,8 @@ struct TopKSampling {
         uint32_t PBcastCBId = 0xFFFFFFFF,
         uint32_t RandBcastCBId = 0xFFFFFFFF,
         uint32_t ProbsOutCBId = 0xFFFFFFFF,
-        uint32_t MaskCBId = 0xFFFFFFFF>
+        uint32_t MaskCBId = 0xFFFFFFFF,
+        uint32_t MaskAliasesScaler = 0>
     struct WriterCTArgs {
         static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
         static constexpr uint32_t local_ready_semaphore_id = LocalReadySemaphoreId;
@@ -1014,6 +1018,7 @@ struct TopKSampling {
         static constexpr uint32_t rand_bcast_cb = RandBcastCBId;
         static constexpr uint32_t probs_out_cb = ProbsOutCBId;
         static constexpr uint32_t mask_cb = MaskCBId;
+        static constexpr bool mask_aliases_scaler = MaskAliasesScaler == 1;
         static_assert(
             !CopyProbabilities || EnableMetadata,
             "EnableMetadata must be true when CopyProbabilities is true as we copy into the metadata buffer");
@@ -1050,6 +1055,7 @@ struct TopKSampling {
         uint32_t Stage2RowElements = 0,
         uint32_t Stage2NumInputTiles = 0,
         uint32_t MaskCBId = 0xFFFFFFFF,
+        uint32_t MaskAliasesScaler = 0,
         uint32_t EnableMetadata = 0,
         uint32_t MetadataOutputL1Addr = 0,
         uint32_t InvTempBF16 = 0>
@@ -1087,6 +1093,7 @@ struct TopKSampling {
         static constexpr uint32_t stage2_row_elements = Stage2RowElements;
         static constexpr uint32_t stage2_num_input_tiles = Stage2NumInputTiles;
         static constexpr uint32_t mask_cb = MaskCBId;
+        static constexpr bool mask_aliases_scaler = MaskAliasesScaler == 1;
         static constexpr bool enable_metadata = EnableMetadata == 1;
         static constexpr uint32_t metadata_output_l1_addr = MetadataOutputL1Addr;
         static constexpr uint32_t inv_temp_bf16 = InvTempBF16;
@@ -1756,7 +1763,11 @@ struct TopKSampling {
                         {
                             DeviceZoneScopedN("SP-FC-WAIT");
                             cb_wait_front(CTArgs::softmax_out_cb, 1);
-                            cb_wait_front(CTArgs::mask_cb, 1);
+                            if constexpr (CTArgs::mask_aliases_scaler) {
+                                cb_wait_front(CTArgs::probs_out_cb, 1);
+                            } else {
+                                cb_wait_front(CTArgs::mask_cb, 1);
+                            }
                         }
 
                         auto mask_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::mask_cb));
@@ -1870,7 +1881,9 @@ struct TopKSampling {
                         }
                         cb_pop_front(CTArgs::probs_out_cb, 1);
                         cb_pop_front(CTArgs::softmax_out_cb, 1);
-                        cb_pop_front(CTArgs::mask_cb, 1);
+                        if constexpr (!CTArgs::mask_aliases_scaler) {
+                            cb_pop_front(CTArgs::mask_cb, 1);
+                        }
                         cb_pop_front(CTArgs::rand_cb, 1);
                     }
                 }

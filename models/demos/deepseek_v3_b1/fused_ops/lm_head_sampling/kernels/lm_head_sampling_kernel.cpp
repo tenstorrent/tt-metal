@@ -643,6 +643,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_stage2_row_elements"),
         get_named_compile_time_arg_val("sampling_stage2_num_input_tiles"),
         get_named_compile_time_arg_val("sampling_mask_cb"),
+        get_named_compile_time_arg_val("sampling_mask_aliases_scaler"),
         get_named_compile_time_arg_val("sampling_enable_metadata"),
         get_named_compile_time_arg_val("metadata_output_l1_addr"),
         get_named_compile_time_arg_val("sampling_inv_temp_bf16")>;

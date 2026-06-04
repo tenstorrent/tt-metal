@@ -448,6 +448,7 @@ def create_sp5_pipeline_configuration(
     num_slots: int = 64,
     num_procs: int = 80,
     passthrough_payload: PassthroughPayload = PassthroughPayload.ACTIVATION_W_TOKEN_META,
+    enable_sram_bspm: bool = False,
 ) -> PipelineConfiguration:
     """Super-pod spec-decode pipeline parameterized by ``num_mtp_levels`` (N)."""
     _MTP_DECODER_LAYER_IDX = 61
@@ -504,6 +505,7 @@ def create_sp5_pipeline_configuration(
             num_slots=num_slots,
             upstream_fifo_pages=upstream_fifo_pages,
             downstream_fifo_pages=downstream_fifo_pages,
+            enable_sram_bspm=enable_sram_bspm,
         )
 
     def mtp_stages_factory(level: int) -> dict[int, Callable[[ttnn.MeshDevice], StageKind]]:

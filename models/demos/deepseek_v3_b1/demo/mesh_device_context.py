@@ -18,7 +18,7 @@ FABRIC_PACKET_SIZE_BYTES = 15232
 
 # TODO: Store these values inside the stages and fetch based on pipeline config
 DEFAULT_WORKER_L1_SIZE = 1431568
-LM_HEAD_WORKER_L1_SIZE = 1457396
+LM_HEAD_WORKER_L1_SIZE = 1456820
 
 
 def _base_lm_head_ranks(num_procs: int, num_mtp_levels: int) -> list[int]:

@@ -639,7 +639,7 @@ class LMHeadSampling:
         sampling_scaler_cb = 31
         sampling_probs_out_cb = 32
         sampling_rand_cb = 33
-        sampling_mask_cb = 39
+        sampling_mask_cb = sampling_scaler_cb
         # Mesh-stage scratch CBs (live on stage-1 / stage-2 receiver = final core):
         sampling_mesh_stage_scores_cb = 34
         sampling_mesh_stage_indices_cb = 35
@@ -1508,7 +1508,7 @@ class LMHeadSampling:
                     ("sampling_topk_k", sampling_topk_k_value),
                     ("sampling_softmax_out_cb", sampling_softmax_out_cb),
                     ("sampling_rand_cb", sampling_rand_cb),
-                    ("sampling_mask_cb", sampling_mask_cb),
+                    ("sampling_mask_cb", sampling_scaler_cb),
                     ("sampling_winner_cb", sampling_winner_cb),
                     ("sampling_p_bf16", sampling_p_bf16),
                     ("sampling_topk_scores_slot_bytes", sampling_topk_scores_slot_bytes),
@@ -1695,6 +1695,7 @@ class LMHeadSampling:
                     ("sampling_probs_out_cb", sampling_probs_out_cb),
                     ("sampling_rand_cb", sampling_rand_cb),
                     ("sampling_mask_cb", sampling_mask_cb),
+                    ("sampling_mask_aliases_scaler", 1 if sampling_mask_cb == sampling_scaler_cb else 0),
                     ("sampling_seed", int(seed) & 0xFFFFFFFF),
                     ("sampling_topk_k", sampling_topk_k_value),
                     ("sampling_mesh_mode", argmax_mesh_mode),
@@ -2156,7 +2157,6 @@ class LMHeadSampling:
                         sampling_scaler_cb,
                         sampling_probs_out_cb,
                         sampling_rand_cb,
-                        sampling_mask_cb,
                     ):
                         cbs_list.append(
                             ttnn.CBDescriptor(

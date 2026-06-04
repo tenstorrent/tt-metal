@@ -63,7 +63,7 @@ namespace ckernel {
 // `_llk_unpack_A_rmsnorm_mop_config_` in
 // `tt_llk_blackhole/llk_lib/llk_unpack_A_rmsnorm.h`.
 template <
-    EltwiseBinaryType eltwise_binary_type = ELWADD,
+    EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
     uint32_t num_tiles,
     MathFidelity math_fidelity = MATH_FIDELITY,
     bool unpack_full_transpose = false>
@@ -75,7 +75,7 @@ ALWI void rmsnorm_bcast_scalar_reuse_tiles_init(uint32_t icb0) {
 }
 
 template <
-    EltwiseBinaryType eltwise_binary_type = ELWADD,
+    EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
     uint32_t num_tiles,
     MathFidelity math_fidelity = MATH_FIDELITY,
     bool clear_dest = false>
@@ -101,7 +101,7 @@ ALWI void rmsnorm_mul_bcast_scalar_reuse_tiles_init(uint32_t icb0) {
 template <uint32_t num_tiles, bool clear_dest = false>
 ALWI void rmsnorm_mul_bcast_scalar_reuse_tiles(
     uint32_t in_cb_id, uint32_t in_tile_index, uint32_t src_tile_index, uint32_t dst_tile_index) {
-    rmsnorm_bcast_scalar_reuse_tiles<ELWMUL, num_tiles, MATH_FIDELITY, clear_dest>(
+    rmsnorm_bcast_scalar_reuse_tiles<EltwiseBinaryType::ELWMUL, num_tiles, MATH_FIDELITY, clear_dest>(
         in_cb_id, in_tile_index, src_tile_index, dst_tile_index);
 }
 }  // namespace ckernel
