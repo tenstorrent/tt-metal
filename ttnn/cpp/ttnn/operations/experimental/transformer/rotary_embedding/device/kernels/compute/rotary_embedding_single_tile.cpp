@@ -18,6 +18,7 @@
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -141,19 +142,6 @@ void kernel_main() {
             PackTile<cos_interm_cb, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
 
         // out = cos_interim + sin_interim
-        eltwise_chain(
-            onetile,
-            BinaryFpu<
-                cos_interm_cb,
-                sin_interm_cb,
-                BinaryFpuOp::Add,
-                BroadcastDim::None,
-                BinaryDataFormatReconfig::Input,
-                InputLifecycle::Streaming,
-                InputLifecycle::Streaming,
-                OperandKind::Scalar,
-                Dst::D0,
-                OperandKind::Scalar>{},
-            PackTile<out_cb, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
+        compute_kernel_lib::add<cos_interm_cb, sin_interm_cb, out_cb>(onetile);
     }
 }

@@ -9,6 +9,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -180,24 +181,19 @@ void kernel_main() {
                 // out = cos_interim + sin_interim
                 // Both operands InputLifecycle::Bulk + Block (Wt tiles, popped at end), out_cb OutputLifecycle::Bulk +
                 // Block. Reconfig: add_tiles_init reconfigs srca/srcb -> Input. No pack_reconfig -> None.
-                compute_kernel_lib::eltwise_chain(
-                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
-                    compute_kernel_lib::BinaryFpu<
-                        cos_interm_cb,
-                        sin_interm_cb,
-                        compute_kernel_lib::BinaryFpuOp::Add,
-                        compute_kernel_lib::BroadcastDim::None,
-                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::InputLifecycle::Bulk,
-                        compute_kernel_lib::InputLifecycle::Bulk,
-                        compute_kernel_lib::OperandKind::Block,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OperandKind::Block>{},
-                    compute_kernel_lib::PackTile<
-                        out_cb,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Bulk,
-                        compute_kernel_lib::PackTileReconfig::None>{});
+                compute_kernel_lib::add<
+                    cos_interm_cb,
+                    sin_interm_cb,
+                    out_cb,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::PackTileReconfig::None>(
+                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 
 #if RELOAD_IMPL == 0
                 // no-reload needs to increment this counter

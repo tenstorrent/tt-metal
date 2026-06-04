@@ -18,6 +18,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
@@ -167,24 +168,18 @@ void kernel_main() {
                  * (x_normed * gamma) + beta   (cb_beta walks Block — 0..Wt-1)
                  */
                 cb_wait_front(cb_beta, Wt);
-                compute_kernel_lib::eltwise_chain(
-                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/blk),
-                    compute_kernel_lib::BinaryFpu<
-                        cb_times_gamma_out,
-                        cb_beta,
-                        compute_kernel_lib::BinaryFpuOp::Add,
-                        compute_kernel_lib::BroadcastDim::Row,
-                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::InputLifecycle::Bulk,
-                        compute_kernel_lib::InputLifecycle::CallerManaged,
-                        compute_kernel_lib::OperandKind::Block,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OperandKind::Block>{},
-                    compute_kernel_lib::PackTile<
-                        cb_out,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Bulk,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                compute_kernel_lib::add<
+                    cb_times_gamma_out,
+                    cb_beta,
+                    cb_out,
+                    compute_kernel_lib::BroadcastDim::Row,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::OutputLifecycle::Bulk>(
+                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/blk));
             }
         }
     }

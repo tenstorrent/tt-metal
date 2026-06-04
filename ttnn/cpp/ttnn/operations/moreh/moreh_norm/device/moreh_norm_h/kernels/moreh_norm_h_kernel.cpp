@@ -205,24 +205,7 @@ void kernel_main() {
                     compute_kernel_lib::PackTileReconfig::Output>(onetile);
             } else {
                 // cb_xpowadd = cb_correct_xpow + cb_xpowadd (in-place accumulator).
-                compute_kernel_lib::eltwise_chain(
-                    onetile,
-                    compute_kernel_lib::BinaryFpu<
-                        cb_correct_xpow,
-                        cb_xpowadd,
-                        compute_kernel_lib::BinaryFpuOp::Add,
-                        compute_kernel_lib::BroadcastDim::None,
-                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OperandKind::Scalar>{},
-                    compute_kernel_lib::PackTile<
-                        cb_xpowadd,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                compute_kernel_lib::add<cb_correct_xpow, cb_xpowadd, cb_xpowadd>(onetile);
             }
         }
 

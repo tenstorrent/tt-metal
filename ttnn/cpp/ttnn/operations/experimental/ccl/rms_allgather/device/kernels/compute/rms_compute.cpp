@@ -12,6 +12,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 // SPLIT REDUCE across Cores
@@ -82,24 +83,18 @@ void kernel_main() {
     // neither wait_front's nor pop_front's them -> CallerManaged (chain emits neither, exact
     // match). cb_in output: reserve+push num_tiles_per_block -> Bulk. add_tiles_init + reconfig
     // -> BinaryDataFormatReconfig::Input; pack_reconfig(cb_in) -> PackTileReconfig::Output.
-    compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::tiles(num_tiles_per_block, subblock_w),
-        compute_kernel_lib::BinaryFpu<
-            cb_in0,
-            cb_in1,
-            compute_kernel_lib::BinaryFpuOp::Add,
-            compute_kernel_lib::BroadcastDim::None,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OperandKind::Block>{},
-        compute_kernel_lib::PackTile<
-            cb_in,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutputLifecycle::Bulk,
-            compute_kernel_lib::PackTileReconfig::Output>{});
+    compute_kernel_lib::add<
+        cb_in0,
+        cb_in1,
+        cb_in,
+        compute_kernel_lib::BroadcastDim::None,
+        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+        compute_kernel_lib::OperandKind::Block,
+        compute_kernel_lib::InputLifecycle::CallerManaged,
+        compute_kernel_lib::InputLifecycle::CallerManaged,
+        compute_kernel_lib::OperandKind::Block,
+        compute_kernel_lib::OutputLifecycle::Bulk>(
+        compute_kernel_lib::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
     index_h_offset += block_w;
     cb_wait_front(cb_in, num_tiles_per_block);
     pack_reconfig_data_format(cb_in, cb_x2);

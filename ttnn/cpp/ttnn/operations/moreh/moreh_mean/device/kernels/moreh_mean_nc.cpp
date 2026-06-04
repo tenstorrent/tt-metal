@@ -10,6 +10,7 @@
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 
 void kernel_main() {
     const auto num_input_tiles = get_arg_val<uint32_t>(0);
@@ -44,43 +45,17 @@ void kernel_main() {
             // cb_in0 InputLifecycle::Streaming on A. cb_intermed0 OutputLifecycle::Streaming.
             // Reconfig: add_tiles_init_with_dt + pack_tile_with_dt -> Input + Output.
             if (enable_reload) {
-                compute_kernel_lib::eltwise_chain(
-                    onetile,
-                    compute_kernel_lib::BinaryFpu<
-                        cb_in0,
-                        cb_intermed0,
-                        compute_kernel_lib::BinaryFpuOp::Add,
-                        compute_kernel_lib::BroadcastDim::None,
-                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OperandKind::Scalar>{},
-                    compute_kernel_lib::PackTile<
-                        cb_intermed0,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                compute_kernel_lib::add<cb_in0, cb_intermed0, cb_intermed0>(onetile);
             } else {
-                compute_kernel_lib::eltwise_chain(
-                    onetile,
-                    compute_kernel_lib::BinaryFpu<
-                        cb_in0,
-                        cb_in1,
-                        compute_kernel_lib::BinaryFpuOp::Add,
-                        compute_kernel_lib::BroadcastDim::None,
-                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::InputLifecycle::CallerManaged,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OperandKind::Scalar>{},
-                    compute_kernel_lib::PackTile<
-                        cb_intermed0,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                compute_kernel_lib::add<
+                    cb_in0,
+                    cb_in1,
+                    cb_intermed0,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
             }
 
             enable_reload = true;

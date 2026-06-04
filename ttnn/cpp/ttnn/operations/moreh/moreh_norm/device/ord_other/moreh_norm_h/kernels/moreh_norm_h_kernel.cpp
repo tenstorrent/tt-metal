@@ -120,24 +120,7 @@ void kernel_main() {
             } else {
 #ifdef IS_ZERO
                 // cb_cal = cb_val + cb_cal (in-place accumulator).
-                compute_kernel_lib::eltwise_chain(
-                    onetile,
-                    compute_kernel_lib::BinaryFpu<
-                        cb_val,
-                        cb_cal,
-                        compute_kernel_lib::BinaryFpuOp::Add,
-                        compute_kernel_lib::BroadcastDim::None,
-                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OperandKind::Scalar>{},
-                    compute_kernel_lib::PackTile<
-                        cb_cal,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                compute_kernel_lib::add<cb_val, cb_cal, cb_cal>(onetile);
 #else
                 // cb_cal = max(cb_val, cb_cal) via two-DEST SFPU.
                 compute_kernel_lib::eltwise_chain(

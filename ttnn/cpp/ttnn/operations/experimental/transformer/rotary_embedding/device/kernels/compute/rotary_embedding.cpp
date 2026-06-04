@@ -12,6 +12,7 @@
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 
 // Per-CB-constexpr chain wrapper for `mul(in0, in1) -> out`. Replaces the
 // older raw-LLK ALWI MUL_TILES helper. All three CBs are compile-time
@@ -185,24 +186,7 @@ void kernel_main() {
             //   (cos_interm, sin_interm) -> Input. Explicit pack_reconfig to out_cb -> Output.
             // Lifecycles: cos_interm_cb/sin_interm_cb InputLifecycle::Streaming (per-iter wait+pop);
             //   out_cb OutputLifecycle::Streaming.
-            compute_kernel_lib::eltwise_chain(
-                onetile,
-                compute_kernel_lib::BinaryFpu<
-                    cos_interm_cb,
-                    sin_interm_cb,
-                    compute_kernel_lib::BinaryFpuOp::Add,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
-                compute_kernel_lib::PackTile<
-                    out_cb,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::add<cos_interm_cb, sin_interm_cb, out_cb>(onetile);
         }
     }
 }

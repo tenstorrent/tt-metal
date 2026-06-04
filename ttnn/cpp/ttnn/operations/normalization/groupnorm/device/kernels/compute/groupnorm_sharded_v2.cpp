@@ -19,6 +19,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 // SPLIT REDUCE across Cores
@@ -715,24 +716,19 @@ void kernel_main() {
             // cb_beta (c_6): HeldBulk (waits per_core_N upfront, never pops). Row idx = wt.
             //   cb_outbeta: OutputLifecycle::Bulk. No reconfig in original besides init_short
             //   (srca/srcb) -> BinaryDataFormatReconfig::Input; no pack reconfig -> None.
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::grid(per_core_M, per_core_N),
-                compute_kernel_lib::BinaryFpu<
-                    cb_inbeta_id,
-                    cb_beta_id,
-                    compute_kernel_lib::BinaryFpuOp::Add,
-                    compute_kernel_lib::BroadcastDim::Row,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::DeferredPop,
-                    compute_kernel_lib::InputLifecycle::HeldBulk,
-                    compute_kernel_lib::OperandKind::Block,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Row>{},
-                compute_kernel_lib::PackTile<
-                    cb_outbeta_id,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::PackTileReconfig::None>{});
+            compute_kernel_lib::add<
+                cb_inbeta_id,
+                cb_beta_id,
+                cb_outbeta_id,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::InputLifecycle::DeferredPop,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::OperandKind::Row,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::PackTileReconfig::None>(
+                compute_kernel_lib::EltwiseShape::grid(per_core_M, per_core_N));
             cb_outbeta.wait_front(per_core_MN);
         } else {
             // cb_in holds the data required for beta — in-place bcast-rows rotation.
@@ -740,24 +736,19 @@ void kernel_main() {
             // cb_in BulkDrain + OperandKind::Scalar (front-read rotation), cb_beta HeldBulk
             // + OperandKind::Row (held, idx = wt), output back into cb_in Streaming.
             // add_bcast_rows_init_short reconfigs srca/srcb -> BinaryDataFormatReconfig::Input.
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::grid(per_core_M, per_core_N),
-                compute_kernel_lib::BinaryFpu<
-                    cb_in_id,
-                    cb_beta_id,
-                    compute_kernel_lib::BinaryFpuOp::Add,
-                    compute_kernel_lib::BroadcastDim::Row,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::BulkDrain,
-                    compute_kernel_lib::InputLifecycle::HeldBulk,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Row>{},
-                compute_kernel_lib::PackTile<
-                    cb_in_id,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::None>{});
+            compute_kernel_lib::add<
+                cb_in_id,
+                cb_beta_id,
+                cb_in_id,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::InputLifecycle::BulkDrain,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::OperandKind::Row,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::None>(
+                compute_kernel_lib::EltwiseShape::grid(per_core_M, per_core_N));
         }
     }
 

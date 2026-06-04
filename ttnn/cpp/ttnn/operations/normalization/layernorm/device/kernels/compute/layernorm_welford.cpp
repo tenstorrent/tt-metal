@@ -18,6 +18,7 @@
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 namespace kutil = norm::kernel_util;
@@ -111,24 +112,18 @@ void kernel_main() {
             // Chain emits per-call (fold elides after first iter). -> Input + Output.
             // Lifecycles: cb_in/cb_inb InputLifecycle::Bulk + Block, cb_x OutputLifecycle::Bulk + Block.
             for (auto block : generic::blocks(Wt, blk)) {
-                compute_kernel_lib::eltwise_chain(
-                    compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
-                    compute_kernel_lib::BinaryFpu<
-                        cb_in,
-                        cb_inb,
-                        compute_kernel_lib::BinaryFpuOp::Add,
-                        compute_kernel_lib::BroadcastDim::None,
-                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::InputLifecycle::Bulk,
-                        compute_kernel_lib::InputLifecycle::Bulk,
-                        compute_kernel_lib::OperandKind::Block,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OperandKind::Block>{},
-                    compute_kernel_lib::PackTile<
-                        cb_x,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Bulk,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                compute_kernel_lib::add<
+                    cb_in,
+                    cb_inb,
+                    cb_x,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::OutputLifecycle::Bulk>(
+                    compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk));
             }
             reconfig_data_format(cb_in, cb_x, cb_inb, cb_ex);
         }

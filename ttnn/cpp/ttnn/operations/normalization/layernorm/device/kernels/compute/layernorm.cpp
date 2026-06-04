@@ -164,24 +164,18 @@ void kernel_main() {
         // == the old per-block Bulk-in-external-loop) — a single Bulk would wait the whole
         // row upfront and deadlock the streaming reader. cb_x output is also streamed
         // (im6_t = 2*block_size) -> Chunked. tiles(Wt_padded) keeps every internal block full.
-        compute_kernel_lib::eltwise_chain(
-            compute_kernel_lib::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size),
-            compute_kernel_lib::BinaryFpu<
-                cb_in,
-                cb_inb,
-                compute_kernel_lib::BinaryFpuOp::Add,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::Chunked,
-                compute_kernel_lib::InputLifecycle::Chunked,
-                compute_kernel_lib::OperandKind::Block,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Block>{},
-            compute_kernel_lib::PackTile<
-                cb_x,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Chunked,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::add<
+            cb_in,
+            cb_inb,
+            cb_x,
+            compute_kernel_lib::BroadcastDim::None,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::InputLifecycle::Chunked,
+            compute_kernel_lib::InputLifecycle::Chunked,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::OutputLifecycle::Chunked>(
+            compute_kernel_lib::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
 #ifndef RMSNORM
         reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
 #else
