@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+# Time Series Transformer Model Requirements
+
+# Core dependencies
+torch>=2.1.0
+numpy>=1.21.0
+
+# Testing
+pytest>=7.0.0
+loguru>=0.7.0
+
+# HF model + dataset dependencies used to generate reference tensors
+# (see reference/config_runtime.json for exact runtime versions used)
+transformers>=4.30.0
+huggingface_hub>=0.20.0
+safetensors>=0.4.0
+# Note: ttnn is provided by the tt-metal environment
+# and should not be installed separately

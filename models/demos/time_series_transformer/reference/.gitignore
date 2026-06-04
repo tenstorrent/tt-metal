@@ -1,0 +1,4 @@
+# Generated locally — do not commit
+*.pt
+*.safetensors
+config_runtime.json
