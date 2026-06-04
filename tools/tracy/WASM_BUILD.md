@@ -7,6 +7,8 @@ This repository builds the **Tracy profiler web viewer** (Emscripten) as part of
 - **CMake target:** `tracy_profiler_wasm` (defined in `tt_metal/third_party/CMakeLists.txt`).
 - **Upstream project:** `tt_metal/third_party/tracy/profiler`, configured with the Emscripten toolchain.
 - **Output directory:** `${CMAKE_BINARY_DIR}/profiler/build_wasm`.
+- **Build wrapper:** `ExternalProject_Add(tracy_profiler_wasm ...)` — a self-contained sub-build run in its **own CMake process**, so parent-build settings (compiler selection, `BUILD_SHARED_LIBS`, the `install()`/`export()` guard macros, x86 ISA flags) do **not** leak into it. It sees only the Emscripten toolchain plus the explicit `CMAKE_ARGS`.
+- **Build type:** `MinSizeRel` (optimize for smallest artifact), with `BUILD_ALWAYS FALSE` so it rebuilds only when inputs change rather than on every build.
 
 With the usual out-of-tree build folder `build/` at the repo root, artifacts live under:
 
@@ -53,6 +55,35 @@ cmake --build build --target tracy_profiler_wasm
 ```
 
 Replace `build` with your `CMAKE_BINARY_DIR` if it differs.
+
+## Packaging
+
+The WASM viewer is **not** wired into CMake's install/CPack flow. The `ExternalProject_Add`
+call sets `INSTALL_COMMAND ""`, so:
+
+- Nothing is copied into `CMAKE_INSTALL_PREFIX`, and the viewer is **not a CPack component**
+  (it never appears in `CPACK_COMPONENTS_ALL`).
+- The built artifacts simply remain in the build tree at `${CMAKE_BINARY_DIR}/profiler/build_wasm`.
+
+Distribution is therefore handled **outside** this CMakeLists: the fixed output path is the
+contract. Downstream consumers read straight from it —
+
+- **Python tooling:** `PROFILER_WASM_DIR` in `tools/tracy/common.py` resolves to
+  `TT_METAL_HOME/build/profiler/build_wasm`; `python -m tracy` / `tools/tracy/serve_wasm.py`
+  serve the files from there.
+- **CI / artifacts:** packaging/test jobs pick the viewer up from that same build path.
+
+This differs from the other Tracy outputs in the same `tt_metal/third_party/CMakeLists.txt`:
+
+| Artifact | Output path | Install / packaging |
+|----------|-------------|---------------------|
+| WASM viewer (`tracy_profiler_wasm`) | `build/profiler/build_wasm` | none (`INSTALL_COMMAND ""`); consumed from build tree |
+| Native CLI (`tracy-capture`, `tracy-csvexport`, `tracy-capture-daemon`) | `build/tools/profiler/bin` | output relocated for Python tooling/CI |
+| `TracyClient` instrumentation lib | `build/lib` | `install()`'d into the `metalium-runtime` CPack component |
+
+> Note: the profiler's own bundled dependencies under `profiler/build_wasm/_deps/` generate
+> their own `cmake_install.cmake` scripts, but because the external project never runs an
+> install step those scripts are never executed.
 
 ## Disabling Tracy profiling
 
