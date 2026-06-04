@@ -78,6 +78,13 @@ enum class LayoutMode : uint32_t {
 // would route a recv-contig tensor down the K-row path, where compute_tensor_layout_krow_major
 // calls shard_spec() and TT_FATALs because the buffer only has an NdShardSpec.
 LayoutMode detect_layout_mode(const MeshTensor& t, const Buffer& buf, uint32_t total_receivers) {
+    // Legacy ShardSpec path: one wide shard per bank by construction. Some WIDTH_SHARDED
+    // tensors also carry an NdShardSpec-like descriptor through BDS, so prefer the explicit
+    // legacy shard spec before classifying a tensor as receiver-contiguous.
+    if (buf.has_shard_spec()) {
+        return LayoutMode::KRowMajor;
+    }
+
     if (t.nd_shard_spec().has_value()) {
         const auto& bds_opt = buf.buffer_distribution_spec();
         TT_FATAL(
@@ -88,7 +95,6 @@ LayoutMode detect_layout_mode(const MeshTensor& t, const Buffer& buf, uint32_t t
             bds_opt.has_value() ? static_cast<uint32_t>(bds_opt->num_shards()) : 0u);
         return LayoutMode::ReceiverContiguous;
     }
-    // Legacy ShardSpec path: one wide shard per bank by construction.
     return LayoutMode::KRowMajor;
 }
 
