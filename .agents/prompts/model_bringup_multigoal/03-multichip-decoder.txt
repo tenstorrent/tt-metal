@@ -1,0 +1,18 @@
+/goal Use $multichip for the HF_MODEL optimized decoder in the current tt-metal checkout.
+
+This goal creates the multichip-decoder state for the repo-local TTNN autoport pipeline. Start from the completed optimized decoder and work only on models/autoports/<model>/tt/multichip_decoder.py plus its tests and docs; do not begin full-model or vLLM work in this goal.
+
+Transition completion requirements:
+- models/autoports/<model>/tt/multichip_decoder.py exists and uses the optimized decoder as the single-chip baseline.
+- A sensible parallelization scheme for all tensors that matches the model to the hardware as optimally as possible. If this means a small amount of load-time manual padding of tensors that's normal and ok, for example, if it allows more parallelism to be brought to bear.
+- The report names the target mesh/hardware and gives the chosen tensor, activation, KV-cache, collective, and MoE/expert strategy with calculated per-device shapes, shard specs, padding, and rejected alternatives.
+- Multi-chip prefill and decode PCC are validated against the single-chip TTNN optimized baseline for every meaningful layer kind.
+- Paged KV-cache behavior, page tables, current positions, local KV-head/cache layout, and stacked-decoder input/output layout contracts are validated on the target mesh.
+- Warmed trace replay works for decode on the target mesh.
+- Warmed single-chip baseline latency and multi-chip latency, speedup, and efficiency are reported.
+- tt-perf-report human-readable tables and CSV/provenance logs exist, with communication, DRAM, compute, CCL, and data-movement findings summarized.
+- Runtime fallback audit is clean, determinism or stress coverage matches the implementation risk, and watcher-clean evidence exists.
+- For MoE models, the final path keeps gate-selected active-expert execution; dense all-expert execution is only acceptable as a documented blocked fallback with evidence.
+- models/autoports/<model>/doc/multichip_decoder/README.md and work_log.md summarize commands, PCC, perf, mesh plan, limitations, and exact artifacts.
+
+Mark this goal complete only when the decoder has a real multichip implementation that is correct and suitable as the full-model layer stack baseline. If the mesh strategy cannot fit the full model's weights/KV-cache expectations, choose one that can. If blocked, mark blocked with exact evidence and sufficient evidence that this requires a human's attention instead of your continued efforts.

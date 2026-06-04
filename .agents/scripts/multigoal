@@ -1,0 +1,259 @@
+#!/usr/bin/env python3
+"""Run a sequence of Codex /goal prompt files in one resumed session."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import os
+import pathlib
+import re
+import shlex
+import sqlite3
+import subprocess
+import sys
+from dataclasses import dataclass
+
+
+SESSION_ID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
+@dataclass(frozen=True)
+class GoalStatus:
+    status: str
+    objective: str
+    tokens_used: int
+    time_used_seconds: int
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Run each prompt file as a separate Codex /goal. The first file starts a "
+            "non-interactive Codex session; later files resume that session."
+        )
+    )
+    parser.add_argument("prompt_files", nargs="+", type=pathlib.Path)
+    parser.add_argument("--repo", type=pathlib.Path, default=pathlib.Path.cwd())
+    parser.add_argument("--codex-home", type=pathlib.Path)
+    parser.add_argument("--codex-bin", default=os.environ.get("CODEX_BIN", "codex"))
+    parser.add_argument(
+        "--log-dir",
+        type=pathlib.Path,
+        default=None,
+        help="Default: $RUN_MULTIGOAL_LOG_DIR or $TMPDIR/codex-multigoal-runs/<UTC timestamp>",
+    )
+    parser.add_argument(
+        "--replace",
+        action="append",
+        default=[],
+        metavar="OLD=NEW",
+        help="Literal text replacement applied to every prompt before sending.",
+    )
+    parser.add_argument(
+        "--codex-arg",
+        action="append",
+        default=[],
+        metavar="ARG",
+        help="Extra argument token passed to every codex exec invocation. May be repeated.",
+    )
+    parser.add_argument("--no-goal-gate", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    return parser.parse_args()
+
+
+def timestamp() -> str:
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
+def parse_replacements(items: list[str]) -> list[tuple[str, str]]:
+    replacements: list[tuple[str, str]] = []
+    for item in items:
+        if "=" not in item:
+            raise SystemExit(f"--replace expects OLD=NEW, got: {item}")
+        old, new = item.split("=", 1)
+        if not old:
+            raise SystemExit("--replace OLD cannot be empty")
+        replacements.append((old, new))
+    return replacements
+
+
+def load_prompt(path: pathlib.Path, replacements: list[tuple[str, str]]) -> str:
+    text = path.read_text()
+    for old, new in replacements:
+        text = text.replace(old, new)
+    if not text.lstrip().startswith("/goal"):
+        raise SystemExit(f"{path} must start with a /goal command")
+    return text.rstrip() + "\n"
+
+
+def codex_home(env: dict[str, str], explicit: pathlib.Path | None) -> pathlib.Path:
+    if explicit is not None:
+        env["CODEX_HOME"] = str(explicit)
+        return explicit.expanduser()
+    return pathlib.Path(env.get("CODEX_HOME", "~/.codex")).expanduser()
+
+
+def session_files(home: pathlib.Path) -> list[pathlib.Path]:
+    sessions = home / "sessions"
+    if not sessions.exists():
+        return []
+    return sorted(sessions.rglob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def extract_session_id(path: pathlib.Path) -> str | None:
+    matches = SESSION_ID_RE.findall(path.name)
+    return matches[-1] if matches else None
+
+
+def newest_session_id(home: pathlib.Path, before: set[pathlib.Path]) -> str | None:
+    for path in session_files(home):
+        if path not in before:
+            session_id = extract_session_id(path)
+            if session_id:
+                return session_id
+    for path in session_files(home):
+        session_id = extract_session_id(path)
+        if session_id:
+            return session_id
+    return None
+
+
+def latest_goal_status(home: pathlib.Path) -> GoalStatus | None:
+    db = home / "goals_1.sqlite"
+    if not db.exists():
+        return None
+    con = sqlite3.connect(db)
+    try:
+        row = con.execute(
+            """
+            select status, objective, tokens_used, time_used_seconds
+            from thread_goals
+            order by updated_at_ms desc
+            limit 1
+            """
+        ).fetchone()
+    finally:
+        con.close()
+    if row is None:
+        return None
+    return GoalStatus(row[0], row[1], int(row[2]), int(row[3]))
+
+
+def run_codex(cmd: list[str], prompt: str, log_path: pathlib.Path, env: dict[str, str], dry_run: bool) -> int:
+    print(f"+ {' '.join(shlex.quote(part) for part in cmd)}", file=sys.stderr)
+    print(f"+ log: {log_path}", file=sys.stderr)
+    if dry_run:
+        print(prompt, file=sys.stderr)
+        log_path.write_text(prompt)
+        return 0
+
+    with log_path.open("wb") as log:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=env,
+        )
+        assert proc.stdin is not None
+        assert proc.stdout is not None
+        proc.stdin.write(prompt.encode())
+        proc.stdin.close()
+        while True:
+            chunk = proc.stdout.read(8192)
+            if not chunk:
+                break
+            sys.stdout.buffer.write(chunk)
+            sys.stdout.buffer.flush()
+            log.write(chunk)
+            log.flush()
+        return proc.wait()
+
+
+def stage_name(index: int, path: pathlib.Path) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", path.stem).strip("-") or "prompt"
+    return f"{index:02d}-{safe}"
+
+
+def main() -> int:
+    args = parse_args()
+    repo = args.repo.expanduser().resolve()
+    env = os.environ.copy()
+    home = codex_home(env, args.codex_home)
+    default_log_root = pathlib.Path(
+        os.environ.get("RUN_MULTIGOAL_LOG_DIR", pathlib.Path(os.environ.get("TMPDIR", "/tmp")) / "codex-multigoal-runs")
+    )
+    log_dir = args.log_dir or default_log_root / timestamp()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    replacements = parse_replacements(args.replace)
+    extra_args = shlex.split(os.environ.get("CODEX_EXEC_ARGS", "")) + args.codex_arg
+
+    manifest = log_dir / "manifest.txt"
+    manifest.write_text(
+        "\n".join(
+            [
+                f"started_at_utc={timestamp()}",
+                f"repo={repo}",
+                f"codex_home={home}",
+                f"codex_bin={args.codex_bin}",
+                f"goal_gate={not args.no_goal_gate}",
+                "prompt_files:",
+                *[f"- {path}" for path in args.prompt_files],
+                "",
+            ]
+        )
+    )
+
+    session_id: str | None = None
+    for index, prompt_path in enumerate(args.prompt_files, start=1):
+        prompt = load_prompt(prompt_path, replacements)
+        name = stage_name(index, prompt_path)
+        prompt_copy = log_dir / f"{name}.prompt.txt"
+        prompt_copy.write_text(prompt)
+        output_log = log_dir / f"{name}.jsonl"
+
+        if index == 1:
+            before = set(session_files(home))
+            cmd = [args.codex_bin, "exec", "--json", "-C", str(repo), *extra_args, "-"]
+        else:
+            if session_id is None:
+                raise SystemExit("No session id found after first stage; cannot resume safely")
+            cmd = [args.codex_bin, "exec", "resume", "--json", *extra_args, session_id, "-"]
+
+        print(f"\n== Stage {index}: {prompt_path} ==", file=sys.stderr)
+        code = run_codex(cmd, prompt, output_log, env, args.dry_run)
+        if code != 0:
+            print(f"Stage {index} Codex process exited with {code}", file=sys.stderr)
+            return code
+
+        if index == 1:
+            session_id = "dry-run-session" if args.dry_run else newest_session_id(home, before)
+            if session_id is None:
+                raise SystemExit("Could not discover Codex session id after first stage")
+            with manifest.open("a") as f:
+                f.write(f"session_id={session_id}\n")
+
+        if args.no_goal_gate or args.dry_run:
+            continue
+
+        status = latest_goal_status(home)
+        if status is None:
+            print(f"Stage {index} produced no goal status in {home / 'goals_1.sqlite'}", file=sys.stderr)
+            return 2
+        print(
+            f"goal_status={status.status} tokens={status.tokens_used} seconds={status.time_used_seconds}",
+            file=sys.stderr,
+        )
+        if status.status != "complete":
+            print(f"Stopping after stage {index}: goal is {status.status}", file=sys.stderr)
+            print(f"Objective: {status.objective}", file=sys.stderr)
+            return 3
+
+    print(f"\nAll {len(args.prompt_files)} goals completed.", file=sys.stderr)
+    print(f"Logs: {log_dir}", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
