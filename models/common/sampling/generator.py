@@ -480,6 +480,8 @@ def format_sampling_params(sampling_params, max_batch_size):
         if temperature[i] == 0:
             temperature[i] = 1.0
             top_k[i] = 1
+            # Device sampling treats p=0 as a first-token cutoff; with k=1
+            # this is the compact argmax representation for greedy rows.
             top_p[i] = 0.0
         else:
             temperature[i] = 1 / temperature[i]
@@ -532,6 +534,7 @@ def broadcast_sampling_params(
         else:
             chosen = value
         if value_is_list:
+            # Preserve list fields as lists even when the selected value is None.
             kwargs[f.name] = [chosen] * slot_len
         elif chosen is None:
             kwargs[f.name] = None
@@ -633,13 +636,13 @@ class SeedManager:
             return None
         if isinstance(seeds, torch.Tensor):
             flat = seeds.reshape(-1)
-            if flat.numel() == 0:
+            if slot < 0 or slot >= flat.numel():
                 return None
-            seed = flat[slot] if flat.numel() > slot else flat[0]
+            seed = flat[slot]
         elif isinstance(seeds, list):
-            if not seeds:
+            if slot < 0 or slot >= len(seeds):
                 return None
-            seed = seeds[slot] if len(seeds) > slot else seeds[0]
+            seed = seeds[slot]
         else:
             seed = seeds
 
@@ -699,17 +702,17 @@ class SeedManager:
             flat_positions = positions.reshape(-1)
 
             def _position(slot):
-                if flat_positions.numel() == 0:
+                if slot < 0 or slot >= flat_positions.numel():
                     return None
-                pos = flat_positions[slot] if flat_positions.numel() > slot else flat_positions[0]
+                pos = flat_positions[slot]
                 return int(pos.item())
 
         elif isinstance(positions, list):
 
             def _position(slot):
-                if not positions:
+                if slot < 0 or slot >= len(positions):
                     return None
-                return int(positions[slot] if len(positions) > slot else positions[0])
+                return int(positions[slot])
 
         else:
 
@@ -833,6 +836,4 @@ class SeedManager:
             torch.tensor(new_seeds), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._seed_mapper
         )
         ttnn.copy_host_to_device_tensor(new_seed_tt, self.tt_sampling.seeds_tt_tensor)
-        if self._active_request_seed:
-            ttnn.synchronize_device(self.tt_sampling.mesh_device)
         self._reseted = False

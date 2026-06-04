@@ -741,6 +741,8 @@ class Generator(WarmupForwardMixin):
                     if len(values) == 1 and len(slots) > 1:
                         values = values * len(slots)
                     user_vals = values[: len(slots)]
+                    # Pad inactive slots from the last active request, not
+                    # from any extra padding values in the formatted params.
                     filler = user_vals[-1] if user_vals else values[-1]
                     scattered = [filler for _ in range(max_batch)]
                     for val, slot_idx in zip(user_vals, slots):
@@ -815,7 +817,6 @@ class Generator(WarmupForwardMixin):
             else:
                 # tt_logits_batch was concatenated before switching to decode.
                 sampling_params = _scatter_params_to_slots(sampling_params, empty_slots)
-                # print("sampling_params_scattered", sampling_params, "empty_slots", empty_slots)
 
                 sampling_module.reset_sampling_params(sampling_params)
                 sampling_module.reset_prompt_tokens(
