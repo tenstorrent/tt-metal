@@ -5,8 +5,9 @@
 """Qwen3 HF weight loading and re-exports.
 
 The model implementation lives in ``ttml.models.qwen3``.  This module provides
-``load_weights_from_hf`` for loading HuggingFace checkpoints, and re-exports
-symbols consumed by ``model_qwen3_distributed.py`` and ``model_factory.py``.
+``load_weights_from_hf`` for loading HuggingFace checkpoints into the
+single-device ``Qwen3`` model, and re-exports symbols consumed by
+``model_qwen3_distributed.py``, ``model_factory.py`` and external callers.
 """
 
 import sys
@@ -15,296 +16,27 @@ import torch
 from tqdm import tqdm
 
 import ttml
-from ttml.modules import AbstractModuleBase, LinearLayer, ModuleList, Parameter
 
 # Re-export shared components so existing callers (model_qwen3_distributed,
 # model_factory, etc.) continue to work with ``from model_qwen3 import ...``
 from ttml.models.qwen3 import Qwen3, Qwen3Config, RMSNormFunction, ConcatLastDim  # noqa: F401
 
-from utils.tensor_utils import (
-    torch_to_ttml,
-    make_weight,
-    make_ones,
-    weight_initializer,
-    zeros_initializer,
-)
+from utils.tensor_utils import torch_to_ttml
 from utils.param_utils import (  # noqa: F401 — re-exported for callers
     unpermute_proj_rows,
     unpermute_norm_weights,
     build_weight_mapping_single,
 )
 
-from utils.memory import memory_snapshot
-from utils.checkpoint import checkpoint
-
-# Backwards-compat alias: callers that created Qwen3ForCausalLM now get Qwen3
+# Backwards-compat alias: callers that imported ``Qwen3ForCausalLM`` from this
+# module now get the canonical ``Qwen3`` from ``ttml.models.qwen3``.  Tying,
+# checkpointing and runner mode are configured through ``Qwen3Config`` (see
+# ``create_qwen3_config_from_hf`` and ``utils/model_factory.create_ttml_model``).
 Qwen3ForCausalLM = Qwen3
 
 
 def linear(x, weight, bias=None):
     return ttml.ops.linear.linear(x, weight, bias)
-
-
-# =====================================================================
-# Qwen3RMSNorm
-# =====================================================================
-
-
-class Qwen3RMSNorm(AbstractModuleBase):
-    def __init__(self, hidden_size: int, eps: float = 1e-6):
-        super().__init__()
-        self.eps = eps
-        self.hidden_size = hidden_size
-        self.weight = Parameter(make_ones((1, 1, 1, hidden_size)))
-
-    def forward(self, hidden_states):
-        # requires for 14B/32B backward, without throws an error ttml::metal::rmsnorm_bw
-        # "Statically allocated circular buffers on core range [(x=0,y=0) - (x=4,y=3)]
-        # grow to 1764640 B which is beyond max L1 size of 1499136 B"
-        return RMSNormFunction.apply(hidden_states, self.weight.tensor, self.eps)
-        # return ttml.ops.rmsnorm.rmsnorm(hidden_states, self.weight.tensor, self.eps)
-
-
-# =====================================================================
-# Qwen3Attention (single device)
-# =====================================================================
-
-
-class Qwen3Attention(AbstractModuleBase):
-    def __init__(self, config: Qwen3Config, layer_idx: int):
-        super().__init__()
-        self.config = config
-        self.layer_idx = layer_idx
-        self.head_dim = config.head_dim
-        self.num_heads = config.num_attention_heads
-        self.num_kv_heads = config.num_key_value_heads
-        self.hidden_size = config.hidden_size
-
-        q_out = self.num_heads * self.head_dim
-        kv_out = self.num_kv_heads * self.head_dim
-
-        w_init = weight_initializer()
-        b_init = zeros_initializer() if config.attention_bias else None
-        self.q_proj = LinearLayer(
-            self.hidden_size, q_out, has_bias=config.attention_bias, weight_init=w_init, bias_init=b_init
-        )
-        self.k_proj = LinearLayer(
-            self.hidden_size, kv_out, has_bias=config.attention_bias, weight_init=w_init, bias_init=b_init
-        )
-        self.v_proj = LinearLayer(
-            self.hidden_size, kv_out, has_bias=config.attention_bias, weight_init=w_init, bias_init=b_init
-        )
-        self.o_proj = LinearLayer(
-            q_out, self.hidden_size, has_bias=config.attention_bias, weight_init=w_init, bias_init=b_init
-        )
-
-        self.q_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
-        self.k_norm = Qwen3RMSNorm(self.head_dim, eps=config.rms_norm_eps)
-
-        rope_scaling = ttml.ops.rope.RopeScalingParams()
-        rs = config.rope_scaling
-        if rs.scaling_factor != 0.0 and rs.original_context_length != 0:
-            rope_scaling.original_context_length = rs.original_context_length
-            rope_scaling.scaling_factor = rs.scaling_factor
-            rope_scaling.high_freq_factor = rs.high_freq_factor
-            rope_scaling.low_freq_factor = rs.low_freq_factor
-
-        self.rope_params = ttml.ops.rope.build_rope_params(
-            sequence_length=config.max_position_embeddings,
-            head_dim=self.head_dim,
-            theta=config.rope_theta,
-            rope_scaling_params=rope_scaling,
-        )
-
-    def forward(
-        self,
-        hidden_states,
-        attention_mask=None,
-        past_key_values=None,
-        position_offset=0,
-    ):
-        q = self.q_proj(hidden_states)
-        k = self.k_proj(hidden_states)
-        v = self.v_proj(hidden_states)
-
-        q_shape = q.shape()
-        k_shape = k.shape()
-        B, S = q_shape[0], q_shape[2]
-
-        q = ttml.ops.reshape.reshape(q, [B, 1, S * self.num_heads, self.head_dim])
-        k = ttml.ops.reshape.reshape(k, [B, 1, S * self.num_kv_heads, self.head_dim])
-        q = self.q_norm(q)
-        k = self.k_norm(k)
-        q = ttml.ops.reshape.reshape(q, q_shape)
-        k = ttml.ops.reshape.reshape(k, k_shape)
-
-        kvs = ConcatLastDim.apply(k, v)
-        (
-            query_heads,
-            key_heads,
-            value_heads,
-        ) = ttml.ops.multi_head_utils.grouped_heads_creation(q, kvs, self.num_heads, self.num_kv_heads)
-
-        query_heads = ttml.ops.rope.rope(query_heads, self.rope_params, position_offset)
-        key_heads = ttml.ops.rope.rope(key_heads, self.rope_params, position_offset)
-
-        # KV cache: append new K/V and use full history for attention
-        if past_key_values is not None:
-            key_heads, value_heads = past_key_values.update(self.layer_idx, key_heads, value_heads)
-
-        q_seq = query_heads.shape()[2]
-        k_seq = key_heads.shape()[2]
-        sdpa_fn = (
-            ttml.ops.attention.scaled_dot_product_attention
-            if q_seq == k_seq
-            else ttml.ops.attention.scaled_dot_product_attention_composite
-        )
-        attn = sdpa_fn(query_heads, key_heads, value_heads, attention_mask)
-
-        attn_output = ttml.ops.multi_head_utils.heads_fusion(attn)
-        return self.o_proj(attn_output)
-
-
-# =====================================================================
-# Qwen3MLP (single device)
-# =====================================================================
-
-
-class Qwen3MLP(AbstractModuleBase):
-    def __init__(self, config: Qwen3Config):
-        super().__init__()
-        h = config.hidden_size
-        inter = config.intermediate_size
-        w_init = weight_initializer()
-        self.gate_proj = LinearLayer(h, inter, has_bias=False, weight_init=w_init)
-        self.up_proj = LinearLayer(h, inter, has_bias=False, weight_init=w_init)
-        self.down_proj = LinearLayer(inter, h, has_bias=False, weight_init=w_init)
-
-    def forward(self, x):
-        gate = ttml.ops.unary.silu(self.gate_proj(x))
-        up = self.up_proj(x)
-        return self.down_proj(ttml.ops.binary.mul(gate, up))
-
-
-# =====================================================================
-# Qwen3DecoderLayer
-# =====================================================================
-
-
-class Qwen3DecoderLayer(AbstractModuleBase):
-    def __init__(self, config: Qwen3Config, layer_idx: int):
-        super().__init__()
-        self.self_attn = Qwen3Attention(config, layer_idx)
-        self.mlp = Qwen3MLP(config)
-        self.input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-
-    def forward(
-        self,
-        hidden_states,
-        attention_mask=None,
-        past_key_values=None,
-        position_offset=0,
-    ):
-        residual = hidden_states
-        hidden_states = self.input_layernorm(hidden_states)
-        hidden_states = self.self_attn(
-            hidden_states,
-            attention_mask,
-            past_key_values,
-            position_offset=position_offset,
-        )
-        hidden_states = ttml.ops.binary.add(residual, hidden_states)
-
-        residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states)
-        hidden_states = ttml.ops.binary.add(residual, hidden_states)
-        return hidden_states
-
-
-# =====================================================================
-# Qwen3Model (backbone)
-# =====================================================================
-
-
-class Qwen3Model(AbstractModuleBase):
-    def __init__(self, config: Qwen3Config, track_memory=0, use_checkpoint=False):
-        super().__init__()
-        self.config = config
-        self.track_memory = track_memory
-        self.use_checkpoint = use_checkpoint
-        vocab_size_tiled = ((config.vocab_size + 31) // 32) * 32
-        self.embed_tokens = Parameter(make_weight((1, 1, vocab_size_tiled, config.hidden_size)))
-        self.layers = ModuleList([Qwen3DecoderLayer(config, i) for i in range(config.num_hidden_layers)])
-        self.norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-
-    def forward(self, input_ids, attention_mask=None, past_key_values=None):
-        hidden_states = ttml.ops.embedding.embedding(input_ids, self.embed_tokens.tensor)
-        if self.track_memory:
-            hidden_states = memory_snapshot(hidden_states, "AFTER_EMBEDDING_FWD", "AFTER_EMBEDDING_BWD")
-        position_offset = 0
-        if past_key_values is not None:
-            position_offset = past_key_values.get_seq_length()
-        for i, layer in enumerate(self.layers):
-            if self.use_checkpoint:
-                hidden_states = checkpoint(
-                    layer,
-                    hidden_states,
-                    attention_mask,
-                    past_key_values,
-                    position_offset,
-                )
-            else:
-                hidden_states = layer(
-                    hidden_states,
-                    attention_mask,
-                    past_key_values,
-                    position_offset=position_offset,
-                )
-            if self.track_memory and (i + 1) % self.track_memory == 0:
-                hidden_states = memory_snapshot(hidden_states, f"AFTER_LAYER_{i}_FWD", f"AFTER_LAYER_{i}_BWD")
-        hidden_states = self.norm(hidden_states)
-        return hidden_states
-
-
-# =====================================================================
-# Qwen3ForCausalLM
-# =====================================================================
-
-
-class Qwen3ForCausalLM(AbstractModuleBase):
-    def __init__(
-        self,
-        config: Qwen3Config,
-        tie_word_embeddings: bool = False,
-        track_memory: int = 0,
-        use_checkpoint=False,
-    ):
-        super().__init__()
-        self.create_name("Qwen3ForCausalLM")
-        self.config = config
-        self.tie_word_embeddings = tie_word_embeddings
-        self.track_memory = track_memory
-        self.model = Qwen3Model(config, track_memory=track_memory, use_checkpoint=use_checkpoint)
-
-        if tie_word_embeddings:
-            self.lm_head_weight = None
-        else:
-            vocab_size_tiled = ((config.vocab_size + 31) // 32) * 32
-            self.lm_head_weight = Parameter(make_weight((1, 1, vocab_size_tiled, config.hidden_size)))
-
-    def forward(self, input_ids, attention_mask=None, past_key_values=None, **kwargs):
-        hidden_states = self.model(input_ids, attention_mask, past_key_values)
-        if self.track_memory:
-            hidden_states = memory_snapshot(hidden_states, "AFTER_NORM_FWD", "AFTER_NORM_BWD")
-        if self.tie_word_embeddings:
-            logits = linear(hidden_states, self.model.embed_tokens.tensor, None)
-        else:
-            logits = linear(hidden_states, self.lm_head_weight.tensor, None)
-        if self.track_memory:
-            logits = memory_snapshot(logits, "AFTER_LM_HEAD_FWD", "AFTER_LM_HEAD_BWD")
-        return logits
 
 
 # =====================================================================
