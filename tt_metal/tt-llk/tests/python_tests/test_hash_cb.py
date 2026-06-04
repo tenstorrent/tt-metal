@@ -103,6 +103,10 @@ def test_hash_cb_sfpu(formats, num_tiles, seed, dest_acc):
 
     # Sanity: hash should be non-zero and fit in 23 bits (each lane accumulator
     # is masked to 23 bits in the kernel, and the zeroed rows cancel under XOR).
+    # The 23-bit bound holds because this kernel packs Int32 -> Int32 identity
+    # (raw bitcast), so the accumulators round-trip verbatim; a non-identity pack
+    # format could push bits above bit 22, so only the non-zero / determinism /
+    # discrimination properties are guaranteed in general.
     assert (
         hw_hash != 0
     ), "SFPU hash returned zero — kernel likely did not execute correctly"

@@ -22,10 +22,11 @@
 //   forms. DEST_ROW_STRIDE = 2 is the per-step Dst-row increment for 32-bit DEST
 //   (same value the standard INT32 SFPU ops use, e.g. ckernel_sfpu_typecast).
 //
-//   We use ADDR_MOD_1. SFPLOAD/SFPSTORE encode a 2-bit addr_mod field, so only
-//   ADDR_MOD_0..3 are reachable; the A2D datacopy that feeds DEST owns
-//   ADDR_MOD_0/2/3, leaving ADDR_MOD_1 as the one free, reachable slot. (Indices
-//   >= 4 would silently alias into 0..3.)
+//   We use ADDR_MOD_1. Blackhole SFPLOAD/SFPSTORE encode a 3-bit addr_mod field
+//   (slots 0..7 are reachable, unlike Wormhole's 2-bit field which reaches only
+//   0..3). The A2D datacopy that feeds DEST owns ADDR_MOD_0/2/3, so ADDR_MOD_1 is
+//   free; we pick it to mirror the Wormhole path (where it is the only free,
+//   reachable slot).
 //
 // Read-back / fold:
 //   _store_to_dest first zeroes the whole tile, then writes the 32 per-lane
