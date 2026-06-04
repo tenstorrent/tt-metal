@@ -1,0 +1,8 @@
+# Tensor data, dumps, and runtime output — not committed (multi-GB / machine-local)
+tensors
+moe_io/
+*.tensorbin
+*.pt
+generated/
+__pycache__/
+*.pyc
