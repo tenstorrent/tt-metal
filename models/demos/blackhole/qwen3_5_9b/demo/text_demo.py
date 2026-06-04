@@ -15,6 +15,7 @@ Run 2k:     pytest models/demos/blackhole/qwen3_5_9b/demo/text_demo.py -v -s -k 
 
 import hashlib
 import json
+import os
 import time
 from pathlib import Path
 
@@ -28,7 +29,20 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen3_5_9b.tt.model import Qwen35Model
 from models.tt_transformers.tt.generator import Generator
 
-DEVICE_PARAMS = [{"l1_small_size": 24576, "num_command_queues": 2}]
+# Multi-device (TP) is selected via MESH_DEVICE (e.g. P150x4). On a single device
+# the mesh is (1,1) and the model runs its validated single-device path; on a
+# multi-device mesh it needs FABRIC_1D for the TP collectives (see tp_common notes).
+_MESH_SHAPE = {"N150": (1, 1), "N300": (1, 2), "P150x4": (1, 4), "N150x4": (1, 4), "T3K": (1, 8)}.get(
+    os.environ.get("MESH_DEVICE"), (1, 1)
+)
+_MULTI = _MESH_SHAPE != (1, 1)
+DEVICE_PARAMS = [
+    {
+        "l1_small_size": 24576,
+        "num_command_queues": 2,
+        **({"fabric_config": ttnn.FabricConfig.FABRIC_1D} if _MULTI else {}),
+    }
+]
 
 SAMPLE_PROMPTS_DIR = "models/demos/blackhole/qwen3_5_9b/demo/sample_prompts"
 SHARED_PROMPTS_DIR = "models/demos/llama3_70b_galaxy/demo/sample_prompts"
@@ -165,7 +179,8 @@ MAX_NUM_BLOCKS = 2048  # Fixed block budget: 2048 blocks × 64 tokens = 128K tok
 
 
 @run_for_blackhole()
-@pytest.mark.timeout(900)
+@pytest.mark.timeout(2400)
+@pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize(
     "seqlen, max_generated_tokens, use_trace",
@@ -197,7 +212,7 @@ MAX_NUM_BLOCKS = 2048  # Fixed block budget: 2048 blocks × 64 tokens = 128K tok
     ],
 )
 def test_demo_text(
-    device,
+    mesh_device,
     seqlen,
     max_generated_tokens,
     use_trace,
@@ -205,6 +220,7 @@ def test_demo_text(
     """End-to-end text generation: prefill + decode with performance validation."""
     from transformers import AutoTokenizer
 
+    device = mesh_device
     device.enable_program_cache()
     # Fixed block budget — max_seq_len derived from it
     max_seq_len = MAX_NUM_BLOCKS * BLOCK_SIZE
@@ -224,6 +240,19 @@ def test_demo_text(
     logger.info(
         f"Prompt: {actual_len} tokens (block budget: {MAX_NUM_BLOCKS} blocks × {BLOCK_SIZE} = {max_seq_len} tokens)"
     )
+
+    # Multi-device (TP): route through the non-traced stateful generate path
+    # (prefill fills KV cache + GDN state, then incremental decode). The paged/
+    # traced machinery is single-device-only for now, so both traced_* and paged_*
+    # configs run via this path on a mesh.
+    if model.num_devices > 1:
+        generated, perf = _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens)
+        text = tokenizer.decode(generated, skip_special_tokens=True)
+        logger.info(f"[TP {model.num_devices}-dev] ttft={perf['ttft_s']:.2f}s decode={perf['decode_tok_s']:.2f} tok/s")
+        logger.info(f"[TP] GENERATED: {text!r}")
+        assert len(generated) == max_generated_tokens, f"{len(generated)} != {max_generated_tokens}"
+        assert len(set(generated)) > 1, f"degenerate generation: {generated}"
+        return
 
     # Warmup: compile programs (not counted in TTFT). A short traced prompt takes the masked
     # fixed-bucket path, whose programs are compiled inside capture_prefill_trace_chunked
@@ -272,6 +301,38 @@ def _should_use_chunked_trace(model):
         and getattr(getattr(layer.attention, "weights", None), "use_chunk_seq_prefill", False)
         for layer in model.layers
     )
+
+
+def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens):
+    """Multi-device (TP) non-traced generation: stateful prefill (fills KV cache +
+    GDN recurrent/conv state) then incremental single-token decode. Returns
+    (generated_tokens, perf_dict) with TTFT and decode tok/s."""
+    import math
+
+    prompt_ids = token_ids[0].tolist()
+    model.reset_tp()
+    T = len(prompt_ids)
+    T_pad = max(128, math.ceil(T / 128) * 128)
+    padded = prompt_ids + [0] * (T_pad - T)
+
+    t0 = time.time()
+    logits = model.prefill_tp(torch.tensor([padded], dtype=torch.long), valid_len=T)
+    ttnn.synchronize_device(model.device)
+    ttft = time.time() - t0
+
+    nxt = int(torch.argmax(logits).item())
+    generated = [nxt]
+    pos = T
+    t1 = time.time()
+    for _ in range(max_generated_tokens - 1):
+        logits = model.decode_tp(nxt, pos)
+        nxt = int(torch.argmax(logits).item())
+        generated.append(nxt)
+        pos += 1
+    ttnn.synchronize_device(model.device)
+    dt = time.time() - t1
+    n_dec = max(1, len(generated) - 1)
+    return generated, {"ttft_s": ttft, "decode_tok_s": (n_dec / dt) if dt > 0 else 0.0}
 
 
 def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_tokens):
