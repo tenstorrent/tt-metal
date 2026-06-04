@@ -243,6 +243,25 @@ def mpi_args_specify_bind_to(mpi_args: Optional[List[str]]) -> bool:
     return False
 
 
+def strip_mpi_bind_to_args(mpi_args: Optional[List[str]]) -> List[str]:
+    """Remove ``--bind-to`` / ``-bind-to`` and its value from MPI args."""
+    if not mpi_args:
+        return []
+    result: List[str] = []
+    skip_next = False
+    for arg in mpi_args:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in ("--bind-to", "-bind-to"):
+            skip_next = True
+            continue
+        if arg.startswith("--bind-to=") or arg.startswith("-bind-to="):
+            continue
+        result.append(arg)
+    return result
+
+
 def mpi_args_contain_rankfile_options(mpi_args: Optional[List[str]]) -> bool:
     """True if ``mpi_args`` already specifies rankfile placement (token-aware, not substring-joined).
 
@@ -782,9 +801,12 @@ def build_generate_rank_bindings_mpi_cmd(
     ld_path = os.environ.get("LD_LIBRARY_PATH", DEFAULT_LD_LIBRARY_PATH.format(home=str(ORIGINAL_CWD)))
     cmd.extend(["-x", f"LD_LIBRARY_PATH={ld_path}"])
 
-    # Add user-provided MPI args (e.g., --allow-run-as-root for Docker containers)
-    if mpi_args:
-        cmd.extend(mpi_args)
+    # Phase 1 is a lightweight discovery step (one process per host, no rankfile). User bind-to
+    # policies (e.g. hwt for DeepSeek) apply to Phase 2 only.
+    filtered_mpi_args = strip_mpi_bind_to_args(mpi_args)
+    cmd.extend(["--bind-to", "none"])
+    if filtered_mpi_args:
+        cmd.extend(filtered_mpi_args)
 
     if mock_rank_to_desc:
         # Mock cluster: all processes on localhost
