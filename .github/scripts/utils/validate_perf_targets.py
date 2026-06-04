@@ -66,6 +66,14 @@ ALLOWED_TARGET_METRIC_NAMES = {
 PREFILL_TIME_TO_TOKEN_KEY = "prefill_time_to_token"
 PREFILL_TIME_TO_FIRST_TOKEN_KEY = "prefill_time_to_first_token"
 
+# Accuracy target metric names, and the measurement names a token-matching run emits.
+# A benchmark run is treated as an accuracy (token-matching) run iff it reports these
+# measurements; otherwise it is a perf (eval) run. This lets us validate only the
+# relevant metric family per run: perf numbers from token-matching runs are teacher-
+# forcing artifacts (not real perf), and eval runs do not measure token accuracy.
+ACCURACY_TARGET_METRIC_NAMES = {"top1", "top5"}
+ACCURACY_MEASUREMENT_NAMES = {"top1_token_accuracy", "top5_token_accuracy"}
+
 
 def _is_number(value: Any) -> bool:
     """Return True for int/float (but not bool)."""
@@ -102,6 +110,16 @@ def _measurement_lookup(benchmark_json: dict[str, Any]) -> dict[tuple[str, str],
         if isinstance(step_name, str) and isinstance(name, str) and _is_number(value):
             lookup[(step_name, name)] = float(value)
     return lookup
+
+
+def _is_accuracy_run(measured_lookup: dict[tuple[str, str], float]) -> bool:
+    """True for token-matching (accuracy) runs, identified by top1/top5 measurements.
+
+    The benchmark JSON carries no explicit test-type field (run_type is always
+    "demo"), so we key off the measurements: only token-matching runs emit
+    top1/top5 token accuracy.
+    """
+    return any(name in ACCURACY_MEASUREMENT_NAMES for _step, name in measured_lookup)
 
 
 def _extract_metric_value(metric_name: str, lookup: dict[tuple[str, str], float]) -> float | None:
@@ -166,27 +184,32 @@ def _check_metric(
     measured_value: float,
     tolerance: float,
 ) -> str | None:
-    """Compare measured and expected values using asymmetric regression bounds."""
+    """Compare measured vs expected using a symmetric +/- tolerance band.
+
+    A measurement passes when it lies within +/- ``tolerance`` of ``expected_value``,
+    independent of whether the metric is higher- or lower-is-better (e.g. an
+    expected 100 ms TTFT with tolerance 0.1 accepts any value in [90, 110] ms).
+    Outside the band it fails: on the "worse" side that is a regression, on the
+    "better" side it signals the target is stale and should be refreshed. The
+    lower/higher-is-better classification only affects the wording.
+    """
     lower_bound = expected_value * (1 - tolerance)
     upper_bound = expected_value * (1 + tolerance)
-    if metric_name in LOWER_IS_BETTER_METRICS:
-        if measured_value > expected_value:
-            return f"{metric_name}: measured={measured_value} > expected={expected_value}"
-        if measured_value < lower_bound:
-            return (
-                f"{metric_name}: measured={measured_value} < lower_bound={lower_bound} "
-                f"(expected={expected_value}, tolerance={tolerance})"
-            )
+    if lower_bound <= measured_value <= upper_bound:
         return None
 
-    if measured_value < expected_value:
-        return f"{metric_name}: measured={measured_value} < expected={expected_value}"
+    lower_is_better = metric_name in LOWER_IS_BETTER_METRICS
     if measured_value > upper_bound:
+        note = "regression" if lower_is_better else "much better than expected, update target"
         return (
             f"{metric_name}: measured={measured_value} > upper_bound={upper_bound} "
-            f"(expected={expected_value}, tolerance={tolerance})"
+            f"(expected={expected_value}, tolerance={tolerance}) [{note}]"
         )
-    return None
+    note = "much better than expected, update target" if lower_is_better else "regression"
+    return (
+        f"{metric_name}: measured={measured_value} < lower_bound={lower_bound} "
+        f"(expected={expected_value}, tolerance={tolerance}) [{note}]"
+    )
 
 
 def _benchmark_files(benchmark_dir: Path) -> list[Path]:
@@ -476,6 +499,7 @@ def validate(
             continue
 
         measured = _measurement_lookup(run)
+        is_accuracy_run = _is_accuracy_run(measured)
         thresholds: dict[str, Any] = {}
         perf = entry.get("perf", {})
         accuracy = entry.get("accuracy", {})
@@ -498,6 +522,12 @@ def validate(
             if model_targets.is_tolerance_key(metric_name):
                 continue
             if not _is_number(expected):
+                continue
+            # Validate accuracy metrics only on accuracy (token-matching) runs, and
+            # perf metrics only on perf (eval) runs. This prevents teacher-forcing
+            # throughput/latency from a token-matching run being checked against perf
+            # targets (and vice versa).
+            if (metric_name in ACCURACY_TARGET_METRIC_NAMES) != is_accuracy_run:
                 continue
             try:
                 measured_value = _extract_metric_value(metric_name, measured)

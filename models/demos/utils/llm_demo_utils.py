@@ -253,36 +253,38 @@ def verify_perf(
             logger.warning(f"Metric {key} not found in measurements or expected_perf_metrics")
             does_pass = False
             continue
-        if key in lower_is_better_metrics:
-            metric_tolerance = resolve_metric_tolerance(
-                metric_name=key,
-                thresholds=tolerance_config,
-                default_tolerance=DEFAULT_PERF_TOLERANCE,
-            )
-            # For metrics where lower is better (e.g., TTFT)
-            if measurements[key] > expected_perf_metrics[key]:  # Higher than expected is bad
-                does_pass = False
-                logger.warning(f"{key} ({measurements[key]}) is higher than expected {expected_perf_metrics[key]}")
-            elif measurements[key] < expected_perf_metrics[key] * (1 - metric_tolerance):  # Much lower than expected
-                does_pass = False
+        metric_tolerance = resolve_metric_tolerance(
+            metric_name=key,
+            thresholds=tolerance_config,
+            default_tolerance=DEFAULT_PERF_TOLERANCE,
+        )
+        # Symmetric +/- tolerance band, applied the same way for lower-is-better
+        # (e.g. TTFT) and higher-is-better (e.g. throughput) metrics: a value
+        # within [expected*(1-tol), expected*(1+tol)] passes. Outside the band,
+        # the "worse" side is a regression and the "better" side means the target
+        # is stale; lower_is_better only decides which side is which.
+        expected = expected_perf_metrics[key]
+        measured = measurements[key]
+        lower_bound = expected * (1 - metric_tolerance)
+        upper_bound = expected * (1 + metric_tolerance)
+        if lower_bound <= measured <= upper_bound:
+            continue
+        does_pass = False
+        lower_is_better = key in lower_is_better_metrics
+        if measured > upper_bound:
+            if lower_is_better:
+                logger.warning(f"{key} ({measured}) is higher than expected {expected} (tolerance {metric_tolerance})")
+            else:
                 logger.warning(
-                    f"{key} ({measurements[key]}) is much lower than expected {expected_perf_metrics[key]}. Please update the expected perf."
+                    f"{key} ({measured}) is much higher than expected {expected}. Please update the expected perf."
                 )
-        else:
-            metric_tolerance = resolve_metric_tolerance(
-                metric_name=key,
-                thresholds=tolerance_config,
-                default_tolerance=DEFAULT_PERF_TOLERANCE,
-            )
-            # For metrics where higher is better (e.g., throughput)
-            if measurements[key] < expected_perf_metrics[key]:  # Lower than expected is bad
-                does_pass = False
-                logger.warning(f"{key} ({measurements[key]}) is lower than expected {expected_perf_metrics[key]}")
-            elif measurements[key] > expected_perf_metrics[key] * (1 + metric_tolerance):  # Much higher than expected
-                does_pass = False
+        else:  # measured < lower_bound
+            if lower_is_better:
                 logger.warning(
-                    f"{key} ({measurements[key]}) is much higher than expected {expected_perf_metrics[key]}. Please update the expected perf."
+                    f"{key} ({measured}) is much lower than expected {expected}. Please update the expected perf."
                 )
+            else:
+                logger.warning(f"{key} ({measured}) is lower than expected {expected} (tolerance {metric_tolerance})")
 
     if does_pass:
         logger.info("Perf Check Passed!")

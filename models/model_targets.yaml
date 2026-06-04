@@ -325,12 +325,15 @@ targets:
     skus:
       p300x2:
         entries:
-          - batch_size: null
-            seq_len: null
-            status: TODO
-            perf: {}
+          # Seeded from scheduled run 26930964774 (ci eval, batch-1).
+          - batch_size: 1
+            seq_len: 128
+            status: active
+            perf:
+              prefill_time_to_first_token: 893
+              decode_t/s/u: 24.46
+              decode_t/s: 24.46
             accuracy: {}
-            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
       bh_galaxy_perf:
@@ -379,12 +382,15 @@ targets:
     skus:
       bh_p150:
         entries:
-          - batch_size: null
-            seq_len: null
-            status: TODO
-            perf: {}
+          # Seeded from scheduled run 26930964774 (ci eval, batch-1).
+          - batch_size: 1
+            seq_len: 128
+            status: active
+            perf:
+              prefill_time_to_first_token: 541
+              decode_t/s/u: 14.73
+              decode_t/s: 14.73
             accuracy: {}
-            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
       bh_loudbox:
@@ -399,12 +405,15 @@ targets:
             team: models
       p300x2:
         entries:
-          - batch_size: null
-            seq_len: null
-            status: TODO
-            perf: {}
+          # Seeded from scheduled run 26930964774 (ci eval, batch-1).
+          - batch_size: 1
+            seq_len: 128
+            status: active
+            perf:
+              prefill_time_to_first_token: 171
+              decode_t/s/u: 35.63
+              decode_t/s: 35.63
             accuracy: {}
-            note: "TODO gap tracked from active models_e2e_tests.yaml combo"
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
       wh_llmbox_perf:
@@ -439,9 +448,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 16.6
-              prefill_time_to_first_token: 164
+            perf: {}
             accuracy:
               top1: 96
               top5: 100
@@ -450,8 +457,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 12.7
+            perf: {}
             accuracy:
               top1: 95
               top5: 100
@@ -463,9 +469,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 6.1
-              prefill_time_to_first_token: 325
+            perf: {}
             accuracy:
               top1: 90
               top5: 97
@@ -481,9 +485,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 44.2
-              prefill_time_to_first_token: 67
+            perf: {}
             accuracy:
               top1: 90
               top5: 97
@@ -492,9 +494,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 29.5
-              prefill_time_to_first_token: 84
+            perf: {}
             accuracy:
               top1: 90
               top5: 98
@@ -503,10 +503,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 10.1
-              decode_t/s/u_tolerance: 0.2
-              prefill_time_to_first_token: 140
+            perf: {}
             accuracy:
               top1: 90
               top5: 98
@@ -533,11 +530,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 5.5
-              decode_t/s/u_tolerance: 0.8
-              prefill_time_to_first_token: 150
-              prefill_time_to_first_token_tolerance: 0.3
+            perf: {}
             accuracy:
               top1: 89.5
               top5: 97.5
@@ -553,8 +546,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 29.5
+            perf: {}
             accuracy:
               top1: 88
               top5: 97
@@ -610,9 +602,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 55.5
-              prefill_time_to_first_token: 58
+            perf: {}
             accuracy:
               top1: 90
               top5: 98
@@ -621,9 +611,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 44.1
-              prefill_time_to_first_token: 67
+            perf: {}
             accuracy:
               top1: 90
               top5: 98
@@ -632,9 +620,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 62.7
-              prefill_time_to_first_token: 47
+            perf: {}
             accuracy:
               top1: 90
               top5: 98
@@ -643,8 +629,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 29.5
+            perf: {}
             accuracy:
               top1: 87
               top5: 97
@@ -656,9 +641,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 8.4
-              prefill_time_to_first_token: 125
+            perf: {}
             accuracy:
               top1: 79
               top5: 97
@@ -667,9 +650,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 105.9
-              prefill_time_to_first_token: 22
+            perf: {}
             accuracy:
               top1: 79
               top5: 97
@@ -678,9 +659,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 119.8
-              prefill_time_to_first_token: 32
+            perf: {}
             accuracy:
               top1: 80
               top5: 97
@@ -689,8 +668,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 51.0
+            perf: {}
             accuracy:
               top1: 77
               top5: 96
@@ -702,9 +680,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 6.95
-              prefill_time_to_first_token: 192
+            perf: {}
             accuracy:
               top1: 89
               top5: 98
@@ -713,9 +689,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 68.0
-              prefill_time_to_first_token: 39
+            perf: {}
             accuracy:
               top1: 89
               top5: 98
@@ -724,9 +698,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 68.5
-              prefill_time_to_first_token: 52
+            perf: {}
             accuracy:
               top1: 91
               top5: 99
@@ -735,8 +707,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 33.5
+            perf: {}
             accuracy:
               top1: 87
               top5: 97
@@ -748,9 +719,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 1.93
-              prefill_time_to_first_token: 540
+            perf: {}
             accuracy:
               top1: 96
               top5: 100
@@ -759,8 +728,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 12.7
+            perf: {}
             accuracy:
               top1: 95
               top5: 100
@@ -775,9 +743,7 @@ targets:
               prefill_time_to_first_token: 136
               decode_t/s/u: 16.30
               decode_t/s: 521.6
-            accuracy:
-              top1: 96.0
-              top5: 100.0
+            accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
   llama3.3-70b-galaxy:
@@ -806,9 +772,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 6
-              prefill_time_to_first_token: 5535
+            perf: {}
             accuracy:
               top1: 96
               top5: 100
@@ -851,9 +815,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 10.45
-              prefill_time_to_first_token: 282
+            perf: {}
             accuracy:
               top1: 95
               top5: 99
@@ -870,9 +832,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 47.01
-              prefill_time_to_first_token: 65.95
+            perf: {}
             accuracy:
               top1: 95
               top5: 100
@@ -881,9 +841,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 67.82
-              prefill_time_to_first_token: 53.93
+            perf: {}
             accuracy:
               top1: 95
               top5: 100
@@ -931,9 +889,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 10.3
-              prefill_time_to_first_token: 182
+            perf: {}
             accuracy:
               top1: 89
               top5: 99
@@ -942,9 +898,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 60.87
-              prefill_time_to_first_token: 114.94
+            perf: {}
             accuracy:
               top1: 89
               top5: 99
@@ -956,9 +910,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 2.7
-              prefill_time_to_first_token: 313
+            perf: {}
             accuracy:
               top1: 98
               top5: 99
@@ -979,9 +931,7 @@ targets:
             perf:
               decode_t/s/u: 200.8
               prefill_time_to_first_token: 3
-            accuracy:
-              top1: 1
-              top5: 1
+            accuracy: {}
   qwen2.5-72b:
     aliases: ["Qwen2.5-72B", "Qwen/Qwen2.5-72B-Instruct"]
     skus:
@@ -990,9 +940,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 3.04
-              prefill_time_to_first_token: 306
+            perf: {}
             accuracy:
               top1: 99
               top5: 100
@@ -1002,19 +950,34 @@ targets:
             perf:
               decode_t/s/u: 15.2
               prefill_time_to_first_token: 225
-            accuracy:
-              top1: 99
-              top5: 100
+            accuracy: {}
   qwen2.5-72b-vl:
     aliases: ["Qwen2.5-VL-72B", "Qwen/Qwen2.5-VL-72B-Instruct"]
     skus:
       wh_llmbox_perf:
         entries:
-          - batch_size: null
-            seq_len: null
-            status: TODO
-            perf: {}
+          # Seeded from scheduled run 26930964774 (ci eval). decode_t/s on the
+          # b32 entry is the aggregate batch throughput (32 x t/s/u).
+          - batch_size: 1
+            seq_len: 128
+            status: active
+            perf:
+              prefill_time_to_first_token: 419
+              decode_t/s/u: 13.77
+              decode_t/s: 13.77
             accuracy: {}
+            owner_id: U07RY6B5FLJ # Gongyu Wang
+            team: models
+          - batch_size: 32
+            seq_len: 2048
+            status: active
+            perf:
+              prefill_time_to_first_token: 1163
+              decode_t/s/u: 10.86
+              decode_t/s: 347.6
+            accuracy: {}
+            owner_id: U07RY6B5FLJ # Gongyu Wang
+            team: models
       p300x2:
         entries:
           - batch_size: null
@@ -1032,9 +995,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 7.0
-              prefill_time_to_first_token: 367
+            perf: {}
             accuracy:
               top1: 84
               top5: 96
@@ -1046,9 +1007,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 2.9
-              prefill_time_to_first_token: 305
+            perf: {}
             accuracy:
               top1: 96
               top5: 99
@@ -1064,11 +1023,28 @@ targets:
     skus:
       wh_llmbox_perf:
         entries:
-          - batch_size: null
-            seq_len: null
-            status: TODO
-            perf: {}
+          # Seeded from scheduled run 26868040883 (ci eval). decode_t/s on the
+          # b32 entry is the aggregate batch throughput (32 x t/s/u).
+          - batch_size: 1
+            seq_len: 128
+            status: active
+            perf:
+              prefill_time_to_first_token: 217
+              decode_t/s/u: 19.9
+              decode_t/s: 19.9
             accuracy: {}
+            owner_id: U07RY6B5FLJ # Gongyu Wang
+            team: models
+          - batch_size: 32
+            seq_len: 2048
+            status: active
+            perf:
+              prefill_time_to_first_token: 616
+              decode_t/s/u: 17.76
+              decode_t/s: 568.19
+            accuracy: {}
+            owner_id: U07RY6B5FLJ # Gongyu Wang
+            team: models
       p300x2:
         entries:
           - batch_size: null
@@ -1086,9 +1062,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 2.5
-              prefill_time_to_first_token: 327
+            perf: {}
             accuracy:
               top1: 89
               top5: 97
@@ -1106,10 +1080,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              prefill_time_to_first_token: 207
-              decode_t/s/u: 8.5
-              decode_t/s: 8.5
+            perf: {}
             accuracy:
               top1: 91.0
               top5: 99.0
@@ -1123,9 +1094,7 @@ targets:
               prefill_time_to_first_token_tolerance: 0.2
               decode_t/s/u: 18.7
               decode_t/s: 278
-            accuracy:
-              top1: 91.0
-              top5: 99.0
+            accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
   qwen3-32b-galaxy:
@@ -1151,9 +1120,7 @@ targets:
           - batch_size: 1
             seq_len: 512
             status: active
-            perf:
-              decode_t/s/u: 20.7
-              prefill_time_to_first_token: 105
+            perf: {}
             accuracy:
               top1: 96
               top5: 100
