@@ -56,10 +56,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // The producer field differs per path: UNPACK on the unpack-to-dest path, FPU on the datacopy path.
     // The hw_configure call only applies to the unpack-to-dest path — it programs Dest to receive
     // unpacker writes directly. On the FPU path, srcAB hw_configure on T1 covers it instead.
-    if constexpr(unpack_to_dest)
+    if constexpr (unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
-        _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
+        DataFormat math_format          = static_cast<DataFormat>(formats.math);
+        const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(math_format) && is_fp32_dest_acc_en;
+        _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(en_int32_dest_format);
     }
     else
     {
@@ -145,23 +147,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         set_up_dest_dvalid_per_thread<dest_dvalid_client::SFPU>({dest_dvalid_client::FPU, dest_dvalid_client::SFPU, dest_dvalid_client::PACK});
     }
 
-    DataFormat math_format     = static_cast<DataFormat>(formats.math);
-    DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-
-    // srcAB hw_configure: srcA and srcB share the math format; Dest mode follows the
-    // int / float split (int32 for integer formats, otherwise is_fp32_dest_acc_en).
-    if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
-    {
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-    }
-    else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
-    {
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
-    }
-    else
-    {
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-    }
+    DataFormat math_format          = static_cast<DataFormat>(formats.math);
+    const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(math_format) && is_fp32_dest_acc_en;
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format, en_int32_dest_format);
 
     // FPU-datacopy path: move both input tiles from SrcA into Dest at DST_INDEX + i.
     // Required for non-32-bit and MX formats; skipped when the unpacker has already

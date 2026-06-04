@@ -76,8 +76,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-    DataFormat src_format = static_cast<DataFormat>(formats.math);
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*int32_dest*/>(src_format, src_format);
+    DataFormat math_format          = static_cast<DataFormat>(formats.math);
+    const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(math_format) && is_fp32_dest_acc_en;
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format, en_int32_dest_format);
 
     // Matches TestConfig NUM_FACES(4) + TEST_FACE_DIMS() (full 32x32 tile).
     _llk_math_eltwise_binary_broadcast_init_<ELTWISE_BINARY_OP, BROADCAST_TYPE, MATH_FIDELITY>(DEFAULT_TENSOR_SHAPE);

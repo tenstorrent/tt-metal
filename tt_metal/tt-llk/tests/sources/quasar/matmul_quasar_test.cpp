@@ -86,8 +86,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false>(
-        static_cast<DataFormat>(formats.math), static_cast<DataFormat>(formats.math));
+    DataFormat math_format          = static_cast<DataFormat>(formats.math);
+    const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(math_format) && is_fp32_dest_acc_en;
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format, en_int32_dest_format);
     _llk_math_matmul_init_<(ckernel::MathFidelity)MATH_FIDELITY, false, false>(CT_DIM, RT_DIM); // disable flags for matmul with indexing and mxfp_2x not part
                                                                                                 // of P0 test suite
 

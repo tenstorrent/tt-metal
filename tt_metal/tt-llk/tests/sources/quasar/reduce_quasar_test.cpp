@@ -82,9 +82,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Setup data valid scheme
     set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-    DataFormat src_format = static_cast<DataFormat>(formats.math);
+    DataFormat math_format = static_cast<DataFormat>(formats.math);
 
-    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /* int32 dest */>(src_format, src_format);
+    const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(math_format) && is_fp32_dest_acc_en;
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format, en_int32_dest_format);
     _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, MATH_FIDELITY>(ckernel::DEFAULT_TENSOR_SHAPE); // tiny-tiles not yet supported with reduce
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {

@@ -30,7 +30,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     if (unpack_to_dest)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::UNPACK, dest_dvalid_client::PACK});
-        _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /*is_int_fpu_en*/>();
+        DataFormat math_format          = static_cast<DataFormat>(formats.math);
+        const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(math_format) && is_fp32_dest_acc_en;
+        _llk_math_upk_to_dest_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(en_int32_dest_format);
     }
     else
     {
@@ -87,12 +89,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_MATH
 
-#ifdef FORMAT_INT32
-const bool is_int_fpu_en = true;
-#else
-const bool is_int_fpu_en = false;
-#endif
-
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "params.h"
@@ -108,8 +104,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-        DataFormat src_format = static_cast<DataFormat>(formats.math);
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, is_int_fpu_en>(src_format, src_format);
+        DataFormat math_format          = static_cast<DataFormat>(formats.math);
+        const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(math_format) && is_fp32_dest_acc_en;
+        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format, en_int32_dest_format);
 
         _llk_math_eltwise_unary_datacopy_init_<DATA_COPY_TYPE, is_fp32_dest_acc_en>(
             params.num_faces * params.TEST_FACE_R_DIM /*num_rows_per_matrix*/, 1 /*num_matrices*/);

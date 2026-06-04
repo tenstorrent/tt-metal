@@ -111,20 +111,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         set_up_dest_dvalid_per_thread<dest_dvalid_client::FPU>({dest_dvalid_client::UNPACK, dest_dvalid_client::FPU, dest_dvalid_client::PACK});
     }
 
-    DataFormat math_format     = static_cast<DataFormat>(formats.math);
-    DataFormat pack_src_format = static_cast<DataFormat>(formats.pack_src);
-    if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Float32)
-    {
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, true /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-    }
-    else if (is_fp32_dest_acc_en && pack_src_format == DataFormat::Int32)
-    {
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, true /*int32_dest*/>(math_format, math_format);
-    }
-    else
-    {
-        _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, false /*fp32_dest*/, false /*int32_dest*/>(math_format, math_format);
-    }
+    DataFormat math_format = static_cast<DataFormat>(formats.math);
+    const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(math_format) && is_fp32_dest_acc_en;
+    _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en>(math_format, math_format, en_int32_dest_format);
 
     if constexpr (!unpack_to_dest)
     {
