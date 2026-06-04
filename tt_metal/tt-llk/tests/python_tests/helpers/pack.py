@@ -807,7 +807,11 @@ def _mxint_block_scale_and_quantize(
     # post-scaling values land in [1, 2), so elem_exp_max_unbiased = 0.
     finite_blocks = np.where(np.isfinite(blocks_raw), blocks_raw, 0.0)
     max_abs_values = np.max(np.abs(finite_blocks), axis=1)
-    max_abs_exp = np.where(max_abs_values == 0, 0, np.floor(np.log2(max_abs_values)))
+    # np.where evaluates both branches eagerly; silence log2(0) warnings for all-zero blocks.
+    with np.errstate(divide="ignore"):
+        max_abs_exp = np.where(
+            max_abs_values == 0, 0, np.floor(np.log2(max_abs_values))
+        )
     shared_exp_adj = np.where(max_abs_exp >= -127, max_abs_exp, -127)
     scales_e8m0_array = shared_exp_adj.astype(np.int32) + 127
 

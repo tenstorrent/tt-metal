@@ -2386,14 +2386,9 @@ class EltwiseBinaryGolden(FidelityMasking):
         out_is_mx = data_format.is_mx_format()
         hw_dest_dtype = (
             torch.float16
-            if (
-                out_is_mx
-                and input_format == DataFormat.Float16
-                and (input_format_B is None or input_format_B == DataFormat.Float16)
-            )
+            if (out_is_mx and input_format == DataFormat.Float16)
             else torch.bfloat16
         )
-
         # Step 1: Quantize each input independently to match what hardware sees
         # after unpacking from L1. Each operand uses its own format.
         operand1 = self._quantize_input(
