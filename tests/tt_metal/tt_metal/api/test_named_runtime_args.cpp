@@ -209,3 +209,45 @@ TEST_F(NamedArgsTest, TensixTestNamedPerCoreArrayRuntimeArgs) {
     EXPECT_EQ(results_core1[0], expected_sum_core1)
         << "Core (1,0): sum should be " << expected_sum_core1 << ", got " << results_core1[0];
 }
+
+// Covers the COMPUTE JIT compile path for the experimental named ct_args:: header.
+// All tests above use DataMovementConfigDescriptor (the BRISC/NCRISC path via
+// jit_build_genfiles_kernel_include); this one uses ComputeConfigDescriptor (the
+// TRISC path via jit_build_genfiles_triscs_src + build_trisc_prolog). Before the
+// genfiles relocation, named_args_generated.h was emitted per-source by build.cpp's
+// compile_one and delivered via `-include` — a non-atomic write on a shared path
+// (racy under multiprocess, and never carried to the remote/JIT-server path). This
+// exercises the relocated, presence-gated prolog #include on the compute path.
+TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgsComputeKernel) {
+    auto mesh_device = get_mesh_device();
+    auto* device = mesh_device->get_devices()[0];
+    auto& cq = mesh_device->mesh_command_queue();
+    auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+
+    CoreCoord core = {0, 0};
+    CoreRangeSet cores = std::set<CoreRange>({CoreRange(core, core)});
+
+    const uint32_t write_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+
+    const uint32_t param_a = 42;
+    const uint32_t param_b = 0xBEEF;
+
+    KernelDescriptor kernel = {
+        .kernel_source = "tests/tt_metal/tt_metal/test_kernels/compute/named_compile_time_args_compute_kernel.cpp",
+        .core_ranges = cores,
+        .named_compile_time_args = {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}},
+        .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
+        .config = ComputeConfigDescriptor{},
+    };
+
+    distributed::MeshWorkload workload;
+    Program program(ProgramDescriptor{.kernels = {kernel}});
+    workload.add_program(device_range, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+
+    std::vector<uint32_t> results;
+    detail::ReadFromDeviceL1(device, core, write_addr, 2 * sizeof(uint32_t), results);
+
+    EXPECT_EQ(results[0], param_a) << "ct_args::my_kernel::param_a should be 42 (compute path)";
+    EXPECT_EQ(results[1], param_b) << "ct_args::my_kernel::param_b should be 0xBEEF (compute path)";
+}
