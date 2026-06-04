@@ -68,7 +68,7 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
     const uint32_t input_block_bytes = BLOCK_ELEMS * in_elem_bytes;  // one 128-element row of a block
     const uint32_t output_e4m3_block_bytes = BLOCK_ELEMS;            // one 128-element row, 1 byte/elem
     const uint32_t in_tile_bytes = tile_h * tile_w * in_elem_bytes;  // cb_in page = one input tile
-    const uint32_t e4m3_tile_bytes = tile_h * tile_w;                // cb_e4m3 page = one e4m3 tile
+    const uint32_t output_e4m3_page_bytes = tile_h * tile_w;         // cb_output_e4m3 page = one tile
     const uint32_t scale_aligned_page_bytes = output_scale.buffer()->aligned_page_size();
 
     auto* src_buffer = input.buffer();
@@ -122,8 +122,8 @@ PerTokenCastToFp8ProgramFactory::cached_program_t PerTokenCastToFp8ProgramFactor
     // cb_output_e4m3: output_e4m3 row-major output, one tile per page; COL_BLOCK_TILES pages = one
     // block, double-buffered.
     CircularBufferConfig cb_output_e4m3_cfg =
-        CircularBufferConfig(2 * COL_BLOCK_TILES * output_e4m3_tile_bytes, {{cb_output_e4m3_idx, fp8_df}})
-            .set_page_size(cb_output_e4m3_idx, output_e4m3_tile_bytes);
+        CircularBufferConfig(2 * COL_BLOCK_TILES * output_e4m3_page_bytes, {{cb_output_e4m3_idx, fp8_df}})
+            .set_page_size(cb_output_e4m3_idx, output_e4m3_page_bytes);
     CreateCircularBuffer(program, all_cores, cb_output_e4m3_cfg);
 
     // cb_scale_scratch: writer-private staging for ONE token's full scale row (page-aligned),

@@ -16,8 +16,8 @@ LLK notes reflected in the tolerances:
     dequant are checked with a small relative tolerance + PCC, not bit-equal.
 Constraints: rank >= 2; all leading dims fold into the row count M; the last dim is the hidden width
 H, which must be a multiple of 128. M and H need not be multiples of the tile height (32) or the
-1024-element column-block: the kernels zero-pad the partial last tile-row / column-block and write
-back only the real rows/columns.
+tile-height block count: the kernels zero-pad the partial last tile-height block and write back only
+the real rows/columns.
 """
 
 import pytest
@@ -33,17 +33,16 @@ GROUP_SIZE = 128
 E4M3_MAX = 448.0
 
 # Shapes exercised by most tests. Rank can be >= 2: all leading dims fold into the row count M and
-# only the last dim is the hidden width H (a multiple of 128). 7168 = 7 * 1024 = EMB_SIZE for both
-# DeepSeek V3 and Kimi K2.6. The unaligned shapes (M not a multiple of 32, H a multiple of 128 but
-# not 1024) exercise the partial-tile-row / partial-column-block padding paths; the 4D shapes
-# exercise leading-dim folding.
+# only the last dim is the hidden width H (a multiple of 128). 7168 = 56 * 128 = EMB_SIZE for both
+# DeepSeek V3 and Kimi K2.6. The unaligned shapes (M not a multiple of 32, H not a multiple of
+# 1024) exercise the partial tile-height block paths; the 4D shapes exercise leading-dim folding.
 SHAPES = [
     (1, 1024),  # single row (partial tile-row)
-    (30, 1152),  # partial tile-row + 9 groups (partial last col-block)
+    (30, 1152),  # partial tile-row + 9 scale blocks
     (640, 7168),
     (3200, 7168),
     (6400, 7168),
-    (2, 3, 30, 1152),  # 4D + partial tile-row / partial col-block (M = 180)
+    (2, 3, 30, 1152),  # 4D + partial tile-row (M = 180)
 ]
 
 ROUNDTRIP_SHAPES = [(32, 1024), (30, 1152), (4, 1, 128, 1024)]
@@ -126,7 +125,7 @@ def test_cast_to_fp8_scale(device, dtype):
     x_tt = ttnn.from_torch(
         x, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    _, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x_tt)
+    output_e4m3_tt, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x_tt)
     scale = ttnn.to_torch(scale_tt).float()
 
     ref = _ref_scale(x.float())
@@ -145,16 +144,19 @@ def test_cast_to_fp8_scale_values(device, dtype, shape):
     x_tt = ttnn.from_torch(
         x, dtype=ttnn_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    _, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x_tt)
+    output_e4m3_tt, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(x_tt)
     scale = ttnn.to_torch(scale_tt).float()
 
     ref = _ref_scale(x.float())
 
     assert tuple(x_tt.shape) == shape
     assert tuple(scale_tt.shape) == _scale_shape(shape)
+    assert tuple(output_e4m3_tt.shape) == shape
+    assert output_e4m3_tt.dtype == ttnn.fp8_e4m3
     assert x_tt.dtype == ttnn_dtype
     assert scale_tt.dtype == ttnn.float32
     assert x_tt.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert output_e4m3_tt.layout == ttnn.ROW_MAJOR_LAYOUT
     assert scale_tt.layout == ttnn.ROW_MAJOR_LAYOUT
 
     max_rel = ((scale - ref).abs() / ref.abs().clamp_min(1e-9)).max().item()

@@ -5,11 +5,14 @@
 // Writer for the input_e4m3 -> fp32/bf16 pipeline. The compute produces, per block, a
 // [tile_h scale-block rows x 128] row-major output (COL_BLOCK_TILES tiles). The writer walks the
 // same flat scale-block stream as the reader and writes each bank-contiguous run back to its row at
-// column gir*128 with one noc_async_write.
+// column gir*128 with one NoC async write.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -26,6 +29,8 @@ void kernel_main() {
     constexpr auto dst_args = TensorAccessorArgs<4>();
 
     const auto dst = TensorAccessor(dst_args, dst_addr);
+    Noc noc;
+    CircularBuffer cb_out_fp32_obj(cb_out_fp32);
 
     const uint32_t groups_per_row = width >> 7;  // H / 128 (COL_BLOCK_ELEMS = 128); one-time shift
     const uint32_t total_groups = num_rows * groups_per_row;
@@ -41,17 +46,18 @@ void kernel_main() {
         const uint32_t remaining = total_groups - base;
         const uint32_t real_in_block = remaining < tile_h ? remaining : tile_h;
 
-        cb_wait_front(cb_out_fp32, COL_BLOCK_TILES);
-        uint32_t l1 = get_read_ptr(cb_out_fp32);
+        cb_out_fp32_obj.wait_front(COL_BLOCK_TILES);
         uint32_t slot = 0;
         while (slot < real_in_block && current_row < end_row) {
             uint32_t groups_left_in_row = groups_per_row - gir;
             uint32_t slots_left = real_in_block - slot;
             uint32_t run = groups_left_in_row < slots_left ? groups_left_in_row : slots_left;
-            noc_async_write(
-                l1 + slot * out_group_bytes,
-                dst.get_noc_addr(current_row) + gir * out_group_bytes,
-                run * out_group_bytes);
+            noc.async_write(
+                cb_out_fp32_obj,
+                dst,
+                run * out_group_bytes,
+                {.offset_bytes = slot * out_group_bytes},
+                {.page_id = current_row, .offset_bytes = gir * out_group_bytes});
             slot += run;
             gir += run;
             if (gir >= groups_per_row) {  // run never crosses a row boundary, so this is exact
@@ -59,7 +65,7 @@ void kernel_main() {
                 ++current_row;
             }
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_out_fp32, COL_BLOCK_TILES);
+        noc.async_write_barrier();
+        cb_out_fp32_obj.pop_front(COL_BLOCK_TILES);
     }
 }

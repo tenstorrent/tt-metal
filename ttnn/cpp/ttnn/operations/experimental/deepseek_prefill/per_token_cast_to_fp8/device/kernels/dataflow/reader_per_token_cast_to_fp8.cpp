@@ -5,12 +5,16 @@
 // Reader for per_token_cast_to_fp8. Fills the reduce scaler tile once, then streams
 // the core's rows as a flat sequence of 128-element scale blocks. A block is tile_h consecutive blocks
 // (block_capacity = tile_h * 128 elements = COL_BLOCK_TILES tiles). Each bank-contiguous run (a span
-// within one row) is read with a single noc_async_read, so we exploit row-major DRAM locality
+// within one row) is read with a single NoC async read, so we exploit row-major DRAM locality
 // instead of hopping banks. After tilize, the compute reduces each 128-element block independently.
 
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 #include "ttnn/operations/experimental/minimal_matmul/device/kernels/matmul_dataflow_common.hpp"
 
 void kernel_main() {
@@ -38,36 +42,42 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<7>();
 
     const auto src = TensorAccessor(src_args, src_addr);
+    Noc noc;
+    CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_scaler_obj(cb_scaler);
 
     // Fill the reduce scaler tile: zero, then 1.0 in row 0 of each face (reduce MAX layout).
-    cb_reserve_back(cb_scaler, 1);
-    volatile tt_l1_ptr uint32_t* sc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_scaler));
-    fill_zeros_async(get_write_ptr(cb_scaler), get_tile_size(cb_scaler));
-    noc_async_read_barrier();
+    cb_scaler_obj.reserve_back(1);
+    CoreLocalMem<volatile uint32_t> sc(cb_scaler_obj.get_write_ptr());
+    fill_zeros_async(cb_scaler_obj.get_write_ptr(), get_tile_size(cb_scaler));
+    noc.async_read_barrier();
 
     for (uint32_t f = 0; f < num_faces; ++f) {
         for (uint32_t j = 0; j < face_w; ++j) {  // row 0 of the face
             sc[f * face_elems + j] = ONE_F32_BITS;
         }
     }
-    cb_push_back(cb_scaler, 1);
+    cb_scaler_obj.push_back(1);
 
-    // Stream 128-element blocks into tile_h-block batches, one bank-contiguous run per noc_async_read.
+    // Stream 128-element blocks into tile_h-block batches, one bank-contiguous run per NoC read.
     const uint32_t end_row = start_row + num_rows;
     uint32_t current_row = start_row;
     uint32_t current_col = 0;  // element offset within the current row
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
-        cb_reserve_back(cb_in, COL_BLOCK_TILES);
-        uint32_t l1 = get_write_ptr(cb_in);
+        cb_in_obj.reserve_back(COL_BLOCK_TILES);
         uint32_t filled = 0;
         while (filled < block_capacity && current_row < end_row) {
             uint32_t space_in_block = block_capacity - filled;
             uint32_t space_in_row = width - current_col;
             uint32_t run = space_in_row < space_in_block ? space_in_row : space_in_block;
-            noc_async_read(src.get_noc_addr(current_row) + current_col * elem_bytes, l1, run * elem_bytes);
+            noc.async_read(
+                src,
+                cb_in_obj,
+                run * elem_bytes,
+                {.page_id = current_row, .offset_bytes = current_col * elem_bytes},
+                {.offset_bytes = filled * elem_bytes});
             filled += run;
             current_col += run;
-            l1 += run * elem_bytes;
             if (current_col >= width) {  // row consumed -> next row
                 current_col = 0;
                 ++current_row;
@@ -75,7 +85,7 @@ void kernel_main() {
         }
         // The final block may be partial (rows exhausted); its tail slots stay stale and the
         // padding-oblivious compute never has them written back by the writer.
-        noc_async_read_barrier();
-        cb_push_back(cb_in, COL_BLOCK_TILES);
+        noc.async_read_barrier();
+        cb_in_obj.push_back(COL_BLOCK_TILES);
     }
 }

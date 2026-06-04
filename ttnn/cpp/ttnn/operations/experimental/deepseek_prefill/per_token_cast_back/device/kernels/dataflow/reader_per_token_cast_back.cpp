@@ -6,7 +6,7 @@
 // blocks; a block is tile_h consecutive scale blocks (COL_BLOCK_TILES tiles after tilize).
 // Per block:
 //   - input_e4m3: read each bank-contiguous run of scale blocks into cb_input_e4m3 with a single
-//     noc_async_read (mirrors the writer);
+//     NoC async read (mirrors the writer);
 //   - scale: read the (few) tokens spanned by the block as full, page-aligned scale rows into a
 //     reader-private scratch (whole-row reads keep the L1 destination congruent mod 64 with the
 //     64-aligned DRAM page), then build the single bcast operand tile whose column 0 row r = the
@@ -16,6 +16,10 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     uint32_t input_e4m3_addr = get_arg_val<uint32_t>(0);
@@ -46,14 +50,18 @@ void kernel_main() {
 
     (void)groups_per_block;  // kept as a compile-time layout arg for tensor accessor offset stability
 
-    constexpr auto input_e4m3_args = TensorAccessorArgs<10>();
-    constexpr auto scale_args = TensorAccessorArgs<input_e4m3_args.next_compile_time_args_offset()>();
-    const auto input_e4m3 = TensorAccessor(input_e4m3_args, input_e4m3_addr);
+    constexpr auto input_e4m3_accessor_args = TensorAccessorArgs<10>();
+    constexpr auto scale_args = TensorAccessorArgs<input_e4m3_accessor_args.next_compile_time_args_offset()>();
+    const auto input_e4m3 = TensorAccessor(input_e4m3_accessor_args, input_e4m3_addr);
     const auto scale = TensorAccessor(scale_args, scale_addr);
+    Noc noc;
+    CircularBuffer cb_input_e4m3_obj(cb_input_e4m3);
+    CircularBuffer cb_scale_bcast_obj(cb_scale_bcast);
+    CircularBuffer cb_scale_scratch_obj(cb_scale_scratch);
 
     // Reader-private scratch: up to tile_h tokens' full scale rows (one slot per token in a block).
-    cb_reserve_back(cb_scale_scratch, 1);
-    uint32_t scratch = get_write_ptr(cb_scale_scratch);
+    cb_scale_scratch_obj.reserve_back(1);
+    const uint32_t scratch = cb_scale_scratch_obj.get_write_ptr();
 
     const uint32_t groups_per_row = width >> 7;  // H / 128 (COL_BLOCK_ELEMS = 128); one-time shift
     const uint32_t total_groups = num_rows * groups_per_row;
@@ -72,8 +80,7 @@ void kernel_main() {
         const uint32_t block_start_gir = gir;
 
         // --- input_e4m3: fill the block as [tile_h scale-block rows x 128] via bank-contiguous runs ---
-        cb_reserve_back(cb_input_e4m3, COL_BLOCK_TILES);
-        uint32_t input_e4m3_l1 = get_write_ptr(cb_input_e4m3);
+        cb_input_e4m3_obj.reserve_back(COL_BLOCK_TILES);
         uint32_t last_row = current_row;  // row of the last run = the block's last token
         {
             uint32_t row = current_row;
@@ -83,10 +90,12 @@ void kernel_main() {
                 uint32_t groups_left_in_row = groups_per_row - gg;
                 uint32_t slots_left = real_in_block - slot;
                 uint32_t run = groups_left_in_row < slots_left ? groups_left_in_row : slots_left;
-                noc_async_read(
-                    input_e4m3.get_noc_addr(row) + gg * input_e4m3_block_bytes,
-                    input_e4m3_l1 + slot * input_e4m3_block_bytes,
-                    run * input_e4m3_block_bytes);
+                noc.async_read(
+                    input_e4m3,
+                    cb_input_e4m3_obj,
+                    run * input_e4m3_block_bytes,
+                    {.page_id = row, .offset_bytes = gg * input_e4m3_block_bytes},
+                    {.offset_bytes = slot * input_e4m3_block_bytes});
                 last_row = row;
                 slot += run;
                 gg += run;
@@ -101,17 +110,20 @@ void kernel_main() {
 
         // --- scale: read the tokens spanned by this block as full page-aligned rows ---
         for (uint32_t t = block_start_row; t <= last_row; ++t) {
-            noc_async_read(
-                scale.get_noc_addr(t),
-                scratch + (t - block_start_row) * scale_aligned_page_bytes,
-                scale_aligned_page_bytes);
+            noc.async_read(
+                scale,
+                use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_scale_scratch_obj),
+                scale_aligned_page_bytes,
+                {.page_id = t},
+                {.offset_bytes = (t - block_start_row) * scale_aligned_page_bytes});
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
 
         // --- build the bcast operand: column 0 row r = scale[token_r][gir_r] (face-aware walk) ---
         // (tok_off, gir_b) cursor walks the block's group-rows in face order -> no per-row div/mod.
-        cb_reserve_back(cb_scale_bcast, 1);
-        uint32_t page = get_write_ptr(cb_scale_bcast);
+        cb_scale_bcast_obj.reserve_back(1);
+        CoreLocalMem<volatile uint32_t> scratch_mem(scratch);
+        CoreLocalMem<volatile uint32_t> page(cb_scale_bcast_obj.get_write_ptr());
         uint32_t tok_off = 0;  // (token - block_start_row) * scale_aligned_page_bytes
         uint32_t gir_b = block_start_gir;
         uint32_t s = 0;
@@ -120,8 +132,8 @@ void kernel_main() {
             uint32_t col0_off = face_base_off;
             for (uint32_t r = 0; r < face_h; ++r) {
                 if (s < real_in_block) {
-                    uint32_t val = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + tok_off + gir_b * 4);
-                    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page + col0_off) = val;
+                    uint32_t val = scratch_mem[(tok_off >> 2) + gir_b];
+                    page[col0_off >> 2] = val;
                     ++gir_b;
                     if (gir_b >= groups_per_row) {
                         gir_b = 0;
@@ -133,7 +145,7 @@ void kernel_main() {
             }
             face_base_off += FACE_ROW_STRIDE_BYTES;
         }
-        cb_push_back(cb_scale_bcast, 1);
-        cb_push_back(cb_input_e4m3, COL_BLOCK_TILES);
+        cb_scale_bcast_obj.push_back(1);
+        cb_input_e4m3_obj.push_back(COL_BLOCK_TILES);
     }
 }
