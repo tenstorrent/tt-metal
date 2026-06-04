@@ -34,7 +34,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: '0 12 * * *'
+    - cron: "0 12 * * *"
 
 # any reason to bake the test script in as entrypoint??? WHY NOT ONE IMAGE
 # well, that's because of the two builds...
@@ -49,12 +49,16 @@ env:
   BLACKHOLE_GLX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
       enable-lto: ${{ inputs.enable-lto || false }}

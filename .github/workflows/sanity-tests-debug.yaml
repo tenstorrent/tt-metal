@@ -44,6 +44,8 @@ permissions:
   checks: write
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   determine-debug-flags:
     name: Determine debug flags
     runs-on: ubuntu-latest
@@ -67,13 +69,14 @@ jobs:
   # Shared build jobs - one per platform to enable artifact forwarding
   build-artifacts-ubuntu-22:
     name: Build artifacts (Ubuntu 22.04)
-    needs: determine-debug-flags
+    needs: [check-harbor, determine-debug-flags]
     if: ${{ github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: RelWithDebInfo
       build-wheel: true
       tracy: true
@@ -84,13 +87,14 @@ jobs:
 
   build-artifacts-ubuntu-24:
     name: Build artifacts (Ubuntu 24.04)
-    needs: determine-debug-flags
+    needs: [check-harbor, determine-debug-flags]
     if: ${{ github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: RelWithDebInfo
       build-wheel: true
       tracy: true
