@@ -82,11 +82,11 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::exp2)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(exp2_init<APPROX_MODE>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(exp2_init<APPROX_MODE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::exponential)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(exp_init<APPROX_MODE, 0x3F800000 /* exp_base_scale_factor */, CLAMP_NEGATIVE>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(exp_init<APPROX_MODE, 0x3F800000 /* exp_base_scale_factor */, CLAMP_NEGATIVE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::gelu)
     {
