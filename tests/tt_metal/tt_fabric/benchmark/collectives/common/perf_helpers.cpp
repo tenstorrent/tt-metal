@@ -48,14 +48,21 @@ PerfStats aggregate_stats(const std::vector<PerfPoint>& pts) {
     }
     s.bytes = pts.front().bytes;
     s.iters = static_cast<int>(pts.size());
+    s.hops = pts.front().hops;
 
     std::vector<double> v_ms;
     v_ms.reserve(pts.size());
     std::vector<double> v_GB_s;
     v_GB_s.reserve(pts.size());
+    std::vector<double> v_rtt_cyc;
+    v_rtt_cyc.reserve(pts.size());
+    std::vector<double> v_rtt_ns;
+    v_rtt_ns.reserve(pts.size());
     for (const auto& p : pts) {
         v_ms.push_back(p.ms);
         v_GB_s.push_back(p.GB_s);
+        v_rtt_cyc.push_back(static_cast<double>(p.rtt_cycles));
+        v_rtt_ns.push_back(p.rtt_ns);
     }
 
     s.mean_ms = mean_of(v_ms);
@@ -72,6 +79,10 @@ PerfStats aggregate_stats(const std::vector<PerfPoint>& pts) {
     s.min_GB_s = *std::min_element(v_GB_s.begin(), v_GB_s.end());
     s.max_GB_s = *std::max_element(v_GB_s.begin(), v_GB_s.end());
     s.cv_GB_s_pct = (s.mean_GB_s > 0.0) ? (s.std_GB_s / s.mean_GB_s) * 100.0 : 0.0;
+    // round-trip latency percentiles
+    s.rtt_cyc_p50 = percentile(v_rtt_cyc, 50.0);
+    s.rtt_cyc_p95 = percentile(v_rtt_cyc, 95.0);
+    s.rtt_ns_p50 = percentile(v_rtt_ns, 50.0);
     return s;
 }
 

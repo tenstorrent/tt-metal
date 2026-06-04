@@ -30,7 +30,9 @@ using namespace tt::tt_fabric;
 //   2: dst_dev_id     (u32)  // logical (truncated to u16)
 //   3: rx_noc_x       (u32)  // receiver worker XY
 //   4: rx_noc_y       (u32)
-//   5: sem_l1_addr    (u32)  // receiver L1 semaphore address
+//   5: sem_l1_addr    (u32)  // receiver L1 (forward/completion) semaphore address
+//   6: return_sem_addr(u32)  // SOURCE-local L1 addr of the return semaphore (round-trip wait target)
+//   7: ts_out_l1_addr (u32)  // SOURCE-local L1 scratch for the round-trip cycle delta (2x u32)
 
 void kernel_main() {
     constexpr auto ta_args = TensorAccessorArgs<0>();
@@ -46,6 +48,8 @@ void kernel_main() {
     const uint32_t rx_noc_x = get_arg_val<uint32_t>(idx++);
     const uint32_t rx_noc_y = get_arg_val<uint32_t>(idx++);
     const uint32_t sem_l1_addr = get_arg_val<uint32_t>(idx++);
+    const uint32_t return_sem_addr = get_arg_val<uint32_t>(idx++);
+    const uint32_t ts_out_l1_addr = get_arg_val<uint32_t>(idx++);
 
     // Build a fabric send adapter from the runtime args that the host packed.
     // Needed before sending over fabric: binds this core to a specific routing/link.
@@ -100,6 +104,25 @@ void kernel_main() {
 
     sender.wait_for_empty_write_slot();
     sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
+
+    // ---- Round-trip latency: time the control-packet RTT on the SOURCE clock only ----
+    // t0 is taken AFTER the forward inc is handed to fabric (excludes the local issue cost,
+    // matching tt_fabric_latency_sender.cpp; the per-hop slope is invariant to this choice).
+    // The receiver bounces an atomic-inc back to `return_sem_addr` on this core; t1 is taken
+    // when we observe it. Skew and per-chip AICLK cancel because both timestamps come from
+    // this chip's free-running wall clock.
+    noc_async_writes_flushed();
+    const uint64_t t0 = get_timestamp();
+
+    volatile tt_l1_ptr uint32_t* return_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(return_sem_addr);
+    noc_semaphore_wait(return_sem_ptr, 1);
+    const uint64_t t1 = get_timestamp();
+    noc_semaphore_set(return_sem_ptr, 0);
+
+    const uint64_t rtt_cycles = t1 - t0;
+    volatile tt_l1_ptr uint32_t* ts_out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ts_out_l1_addr);
+    ts_out[0] = static_cast<uint32_t>(rtt_cycles & 0xFFFFFFFFu);
+    ts_out[1] = static_cast<uint32_t>(rtt_cycles >> 32);
 
     sender.close();
 }

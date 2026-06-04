@@ -117,6 +117,7 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     }
 
     tt::tt_metal::CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
+    tt::tt_metal::CoreCoord tx_xy = src_dev->worker_core_from_logical_core(p.sender_core);
 
     // --- Mesh device + coords for per-shard IO ---
     auto mesh = fixture->get_mesh_device();
@@ -133,6 +134,17 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     Dist::MeshCoordinate src_coord = coord_of_phys(src_phys);
     Dist::MeshCoordinate dst_coord = coord_of_phys(dst_phys);
 
+    // Fabric hop count = Manhattan distance on the mesh (correct for T3K dimension-order,
+    // fault-free routing). This is the x-axis for the per-hop latency fit.
+    uint32_t hops = 0;
+    {
+        auto sc = src_coord.coords();
+        auto dc = dst_coord.coords();
+        for (size_t i = 0; i < sc.size() && i < dc.size(); ++i) {
+            hops += (sc[i] > dc[i]) ? (sc[i] - dc[i]) : (dc[i] - sc[i]);
+        }
+    }
+
     // --- IO buffers & initialization (MeshBuffer style) ---
     Dist::DeviceLocalBufferConfig src_local{.page_size = p.page_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
     Dist::DeviceLocalBufferConfig dst_local{
@@ -141,6 +153,13 @@ PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p) {
     Dist::ReplicatedBufferConfig rcfg{.size = p.tensor_bytes};
     auto src_buf = Dist::MeshBuffer::create(rcfg, src_local, mesh.get());
     auto dst_buf = Dist::MeshBuffer::create(rcfg, dst_local, mesh.get());
+
+    // Tiny L1 scratch to hold the round-trip cycle delta (2x u32). Interleaved L1 buffers
+    // reserve a bank-uniform address, so the sender core can store to it locally and the host
+    // can ReadFromDeviceL1 it from the sender core after the trace replay drains.
+    Dist::DeviceLocalBufferConfig ts_local{.page_size = 64, .buffer_type = tt::tt_metal::BufferType::L1};
+    Dist::ReplicatedBufferConfig ts_cfg{.size = 64};
+    auto ts_buf = Dist::MeshBuffer::create(ts_cfg, ts_local, mesh.get());
 
     const size_t n_words = p.tensor_bytes / 4;
     auto tx = make_tx_pattern(n_words);
@@ -199,8 +218,22 @@ Notes:
             /*initial_value=*/0);
     }
 
+    // Return-path semaphore on the SOURCE sender core (round-trip latency). Alternated A/B
+    // across runs, mirroring the forward sem, to avoid stale-1 races between back-to-back runs.
+    static std::optional<tt::tt_metal::GlobalSemaphore> gsemRetA;
+    static std::optional<tt::tt_metal::GlobalSemaphore> gsemRetB;
+    tt::tt_metal::CoreRangeSet tx_core_set(tt::tt_metal::CoreRange(p.sender_core, p.sender_core));
+    if (!gsemRetA) {
+        gsemRetA = tt::tt_metal::CreateGlobalSemaphore(mesh.get(), tx_core_set, /*initial_value=*/0);
+    }
+    if (!gsemRetB) {
+        gsemRetB = tt::tt_metal::CreateGlobalSemaphore(mesh.get(), tx_core_set, /*initial_value=*/0);
+    }
+
     static uint32_t sem_sel = 0;
-    auto& gsem = (sem_sel++ & 1) ? *gsemB : *gsemA;
+    const uint32_t sel = sem_sel++;
+    auto& gsem = (sel & 1) ? *gsemB : *gsemA;
+    auto& gsemRet = (sel & 1) ? *gsemRetB : *gsemRetA;
 
     const tt::tt_metal::CoreCoord receiver_core = p.receiver_core;
     constexpr const char* KDIR = "tests/tt_metal/tt_fabric/benchmark/collectives/unicast/kernels/";
@@ -211,7 +244,26 @@ Notes:
         receiver_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
-    tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, receiver_core, {gsem.address(), 1u});
+    // Return path (dst -> src): the rx kernel becomes a fabric sender that bounces an
+    // atomic-inc back to the source's return semaphore. Reverse links may differ from the
+    // forward direction, so resolve them explicitly.
+    auto ret_links = tt::tt_fabric::get_forwarding_link_indices(dst, src);
+    if (ret_links.empty()) {
+        ADD_FAILURE() << "No reverse forwarding links dst(dev=" << p.dst_chip << ")->src(dev=" << p.src_chip << ")";
+        return PerfPoint{};
+    }
+    std::vector<uint32_t> rx_rt = {
+        static_cast<uint32_t>(gsem.address()),     // 0: forward (completion) semaphore on this dst core
+        1u,                                        // 1: expected value
+        static_cast<uint32_t>(p.mesh_id),          // 2: src_mesh_id (return route target)
+        static_cast<uint32_t>(p.src_chip),         // 3: src_dev_id
+        static_cast<uint32_t>(tx_xy.x),            // 4: source sender-core NOC x
+        static_cast<uint32_t>(tx_xy.y),            // 5: source sender-core NOC y
+        static_cast<uint32_t>(gsemRet.address()),  // 6: return semaphore addr on the source sender core
+    };
+    tt::tt_fabric::append_fabric_connection_rt_args(
+        dst, src, /*link_idx=*/ret_links[0], receiver_prog, receiver_core, rx_rt);
+    tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, receiver_core, rx_rt);
 
     // Sender program: READER (RISCV_0) + WRITER (RISCV_1)
     tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
@@ -267,7 +319,9 @@ Notes:
         (uint32_t)p.dst_chip,          // 2: dst_dev_id  (logical)
         (uint32_t)rx_xy.x,             // 3: receiver_noc_x
         (uint32_t)rx_xy.y,             // 4: receiver_noc_y
-        (uint32_t)gsem.address()       // 5: receiver L1 semaphore addr
+        (uint32_t)gsem.address(),      // 5: receiver (forward) L1 semaphore addr
+        (uint32_t)gsemRet.address(),   // 6: source-side return semaphore addr (RTT wait target)
+        (uint32_t)ts_buf->address(),   // 7: source-side L1 scratch for the RTT cycle delta
     };
 
     // Pack the fabric-connection runtime args for the writer kernel.
@@ -306,6 +360,14 @@ Notes:
     Dist::ReadShard(mcq, rx, dst_buf, dst_coord, /*blocking=*/true);
     verify_payload_words(rx, tx);
 
+    // Read back the round-trip cycle delta the writer kernel stored on the source core.
+    std::vector<uint32_t> tsv;
+    tt::tt_metal::detail::ReadFromDeviceL1(
+        src_dev, p.sender_core, (uint32_t)ts_buf->address(), (uint32_t)(2 * sizeof(uint32_t)), tsv);
+    const uint64_t rtt_cycles = (tsv.size() >= 2) ? ((static_cast<uint64_t>(tsv[1]) << 32) | tsv[0]) : 0ull;
+    const int aiclk_mhz = src_dev->get_clock_rate_mhz();
+    const double rtt_ns = (aiclk_mhz > 0) ? (static_cast<double>(rtt_cycles) * 1000.0 / aiclk_mhz) : 0.0;
+
     // Perf point
     const double e2e_sec_total = std::chrono::duration<double>(t1 - t0).count();
     const double e2e_sec = (p.trace_iters > 0) ? (e2e_sec_total / static_cast<double>(p.trace_iters)) : 0.0;
@@ -319,6 +381,9 @@ Notes:
         .sec = e2e_sec,
         .ms = ms,
         .GB_s = GB_s,
+        .hops = hops,
+        .rtt_cycles = rtt_cycles,
+        .rtt_ns = rtt_ns,
     };
 }
 

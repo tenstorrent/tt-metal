@@ -31,6 +31,10 @@ struct PerfPoint {
     double sec{};
     double ms{};
     double GB_s{};
+    // Round-trip fabric latency, measured entirely on the SOURCE chip's wall clock.
+    uint32_t hops{};        // src->dst fabric hop count
+    uint64_t rtt_cycles{};  // source-clock cycles for one src->dst->src control-packet round trip
+    double rtt_ns{};        // rtt_cycles converted via the source chip's AICLK
 };
 
 struct PerfParams {
@@ -52,6 +56,9 @@ struct PerfStats {
     double mean_ms{}, std_ms{}, p50_ms{}, p95_ms{}, min_ms{}, max_ms{};
     // throughput (GB/s)
     double mean_GB_s{}, std_GB_s{}, p50_GB_s{}, p10_GB_s{}, min_GB_s{}, max_GB_s{}, cv_GB_s_pct{};
+    // round-trip fabric latency (device wall-clock on the source chip)
+    uint32_t hops{};
+    double rtt_cyc_p50{}, rtt_cyc_p95{}, rtt_ns_p50{};
 };
 
 PerfPoint run_unicast_once(HelpersFixture* fixture, const PerfParams& p);

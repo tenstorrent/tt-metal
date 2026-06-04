@@ -214,12 +214,13 @@ void append_csv_if_requested(const RunOptions& run, const PerfParams& p, const P
     }
     if (newfile) {
         ofs << "mesh,src_chip,dst_chip,send_x,send_y,recv_x,recv_y,sizeB,pageB,iters,warmup,"
-               "p50_ms,p95_ms,mean_GB_s,p50_GB_s,p10_GB_s,cv_GB_s_pct\n";
+               "p50_ms,p95_ms,mean_GB_s,p50_GB_s,p10_GB_s,cv_GB_s_pct,hops,rtt_cyc_p50,rtt_cyc_p95,rtt_ns_p50\n";
     }
     ofs << p.mesh_id << "," << p.src_chip << "," << p.dst_chip << "," << p.sender_core.x << "," << p.sender_core.y
         << "," << p.receiver_core.x << "," << p.receiver_core.y << "," << p.tensor_bytes << "," << p.page_size << ","
         << run.iters << "," << run.warmup << "," << stats.p50_ms << "," << stats.p95_ms << "," << stats.mean_GB_s << ","
-        << stats.p50_GB_s << "," << stats.p10_GB_s << "," << stats.cv_GB_s_pct << "\n";
+        << stats.p50_GB_s << "," << stats.p10_GB_s << "," << stats.cv_GB_s_pct << "," << stats.hops << ","
+        << stats.rtt_cyc_p50 << "," << stats.rtt_cyc_p95 << "," << stats.rtt_ns_p50 << "\n";
 
     log_info(tt::LogTest, "Appended CSV row to {}", run.csv_path);
 }
@@ -262,13 +263,17 @@ int main(int argc, char** argv) {
     // Human-readable result
     log_info(
         tt::LogTest,
-        "Result: p50_ms={} p95_ms={} mean_GB_s={} p50_GB_s={} p10_GB_s={} cv_GB_s_pct={}",
+        "Result: p50_ms={} p95_ms={} mean_GB_s={} p50_GB_s={} p10_GB_s={} cv_GB_s_pct={} hops={} rtt_ns_p50={} "
+        "rtt_cyc_p50={}",
         stats.p50_ms,
         stats.p95_ms,
         stats.mean_GB_s,
         stats.p50_GB_s,
         stats.p10_GB_s,
-        stats.cv_GB_s_pct);
+        stats.cv_GB_s_pct,
+        stats.hops,
+        stats.rtt_ns_p50,
+        stats.rtt_cyc_p50);
 
     // Optional CSV artifact
     append_csv_if_requested(run, p, stats);
