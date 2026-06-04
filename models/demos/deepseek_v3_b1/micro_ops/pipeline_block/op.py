@@ -1127,7 +1127,8 @@ class PipelineBlock:
         for device_coord, progs in groups:
             merged = ttnn.merge_program_descriptors(progs) if len(progs) > 1 else progs[0]
             mesh_program_descriptor[ttnn.MeshCoordinateRange(device_coord, device_coord)] = merged
-        return ttnn.generic_op([dummy_tensor, dummy_tensor], mesh_program_descriptor)
+
+        ttnn.generic_op([dummy_tensor, dummy_tensor], mesh_program_descriptor)
 
     def _terminate_from_plan(self):
         for forwarder in self._plan_forwarders:
