@@ -14,7 +14,7 @@
 namespace ckernel::sfpu {
 
 sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
-    sfpi::vFloat f, j, r, y, abs_y;
+    sfpi::vFloat f, j, r, y, abs_x;
     sfpi::vInt i;
     i = sfpi::float_to_int16(x, sfpi::RoundMode::NearestEven);
     j = sfpi::int32_to_float(i, sfpi::RoundMode::NearestEven);
@@ -29,11 +29,11 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
     r = y * f + sfpi::vConstFloatPrgm1;
     y *= std::numeric_limits<float>::infinity();
     r = r * f + sfpi::vConstFloatPrgm0;
-    abs_y = sfpi::abs(y);
+    abs_x = sfpi::abs(x);
     r = r * f + 1.0f;
 
     // exclude special case: abs(-nan) == -nan
-    v_if(abs_y >= 0.0f) {
+    v_if(abs_x >= 0.0f) {
         sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias);
         e += i;
         // e < 255
