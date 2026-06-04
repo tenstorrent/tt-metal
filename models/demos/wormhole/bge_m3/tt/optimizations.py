@@ -479,16 +479,25 @@ def _b1s512_mlp_wi_program_config(mesh_device, *, hidden_size, intermediate_size
     # the winning subblock is 2x1 (not 1x2). MLPwo/AttnOut showed no gain (N=1024
     # gives per_core_N=3 at both 11 and 12 wide), so they stay at 11x10.
     #
-    # Guard: only use 12 wide when the device actually exposes >=12 columns
-    # (Galaxy Blackhole). On an 11-wide device (P150x8 dev box) fall back to the
-    # original 11x10 / sub 1x2 config so this stays portable.
+    # Guard: this tuned config targets Blackhole's wide grid (>=11 columns x 10
+    # rows). On narrower devices (e.g. Wormhole N150/N300 with an 8x8 grid) the
+    # 11/12-wide grid coordinates don't exist, so return None and let ttnn pick a
+    # portable default program config. Mirrors the B8/B16 guards below.
+    grid_x_req, grid_y_req = 11, 10
+    if mesh_device is None or not ttnn_is_blackhole(mesh_device):
+        return None
+    try:
+        g = mesh_device.compute_with_storage_grid_size()
+        if int(g.x) < grid_x_req or int(g.y) < grid_y_req:
+            return None
+        dev_gx = int(g.x)
+    except Exception:
+        return None
     hidden_tiles = hidden_size // 32
     m_tiles = 512 // 32
     intermediate_tiles = intermediate_size // 32
-    try:
-        dev_gx = int(mesh_device.compute_with_storage_grid_size().x)
-    except Exception:
-        dev_gx = 11
+    # Only use 12 wide when the device actually exposes >=12 columns (Galaxy
+    # Blackhole). On an 11-wide device fall back to the original 11x10 / sub 1x2.
     if dev_gx >= 12:
         grid_x, grid_y = 12, 10
         out_subblock_h, out_subblock_w = 2, 1
