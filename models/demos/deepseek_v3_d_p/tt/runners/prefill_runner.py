@@ -66,13 +66,6 @@ PREFILL_KV_PCC_THRESHOLD = float(os.environ.get("PREFILL_KV_PCC_THRESHOLD", "0.9
 PREFILL_KV_GOLDEN_INPUT_SOURCE = os.environ.get("PREFILL_KV_GOLDEN_INPUT_SOURCE", "longbook_qa_eng")
 PREFILL_KV_GOLDEN_PAD_SIDE = os.environ.get("PREFILL_KV_GOLDEN_PAD_SIDE", "right")
 
-# Cross-process layer-ack channel (scheduler-facing). After each prefill chunk
-# completes, the runner injects this many acks back to the scheduler over the
-# InterProcessCounterChannel owner-side SHM segment. Must equal the
-# scheduler's SchedulerParams::layers_per_chunk on the IS side; default 1
-# (one ack per chunk — coarsest granularity, defers per-layer pipelining).
-PREFILL_LAYERS_PER_CHUNK = int(os.environ.get("PREFILL_LAYERS_PER_CHUNK", "1"))
-
 
 def _validate_kv_against_golden(
     pipeline: TtDeepSeekPrefillPipeline,
@@ -440,8 +433,6 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
 def run_request_loop(
     pipeline: TtDeepSeekPrefillPipeline,
     h2d_service: ttnn.H2DStreamService,
-    ack_channel: ttnn.InterProcessCounterChannel,
-    emit_chunk_ack: bool = True,
 ) -> None:
     """Request loop: token IDs + per-iter control metadata arrive over the H2D
     socket service, pushed by a separate producer process (prefill_h2d_producer.py
@@ -451,10 +442,10 @@ def run_request_loop(
       1. block on h2d_socket_sync for the next (tokens, metadata) push
       2. decode the 3×uint32 PrefillMetadata [slot_id, actual_start, actual_end]
       3. derive actual_isl = actual_end - actual_start
-      4. call pipeline.prefill(...) → first_token + per-layer KV writes
-      5. inject PREFILL_LAYERS_PER_CHUNK acks back to the scheduler over
-         the InterProcessCounterChannel owner segment
-      6. (optional, when PREFILL_KV_VALIDATE=1) read back kvpe_cache and PCC
+      4. call pipeline.prefill(...) → first_token + per-layer KV writes (the
+         pipeline injects one ack per layer on its ack channel, NUM_LAYERS
+         acks per chunk total; scheduler must run with layers_per_chunk == NUM_LAYERS)
+      5. (optional, when PREFILL_KV_VALIDATE=1) read back kvpe_cache and PCC
          vs the offline golden
 
     `dst_slot` is not in PrefillMetadata so this loop passes None (no inline
@@ -463,12 +454,9 @@ def run_request_loop(
     """
     import time as _time
 
-    _ack_mode = (
-        f"per-chunk ({PREFILL_LAYERS_PER_CHUNK} ack(s)/chunk)" if emit_chunk_ack else "per-layer (pipeline-driven)"
-    )
     logger.info(
         f"[request] entering request loop — blocks on h2d_socket_sync for each push; "
-        f"ack cadence: {_ack_mode}. "
+        f"per-layer acks ({pipeline.config.num_layers}/chunk) injected by the pipeline. "
         f"Runs until SIGTERM/SIGINT (Ctrl-C). Drive it with prefill_h2d_producer.py / the scheduler."
     )
 
@@ -498,21 +486,9 @@ def run_request_loop(
             actual_start=actual_start,
         )
         _dt_ms = (_time.perf_counter() - _t0) * 1000.0
-        # Scheduler-facing ack. The scheduler's ack_reader_thread counts off
-        # exactly SchedulerParams::layers_per_chunk acks per pushed chunk before
-        # retiring the InFlightChunkFIFO head. Per-chunk cadence (migration off):
-        # emit them here. Per-layer cadence (migration on): the pipeline already
-        # injected one per layer inside pipeline.prefill — skip to avoid
-        # double-counting.
-        if emit_chunk_ack:
-            ack_channel.inject(PREFILL_LAYERS_PER_CHUNK)
-            _acks = PREFILL_LAYERS_PER_CHUNK
-        else:
-            _acks = f"per-layer ({pipeline.config.num_layers})"
         logger.info(
             f"[request] iter={i} num_tokens={MAX_SEQ_LEN} "
-            f"pipeline.prefill() = {_dt_ms:.2f} ms first_token={first_token} "
-            f"acks_injected={_acks}"
+            f"pipeline.prefill() = {_dt_ms:.2f} ms first_token={first_token}"
         )
 
         # Per-chunk KV-PCC validation against the offline golden. Same hook
@@ -556,7 +532,6 @@ def _print_config() -> None:
         ("PREFILL_KV_PCC_THRESHOLD", str(PREFILL_KV_PCC_THRESHOLD), False),
         ("PREFILL_KV_GOLDEN_INPUT_SOURCE", PREFILL_KV_GOLDEN_INPUT_SOURCE, False),
         ("PREFILL_KV_GOLDEN_PAD_SIDE", PREFILL_KV_GOLDEN_PAD_SIDE, False),
-        ("PREFILL_LAYERS_PER_CHUNK", str(PREFILL_LAYERS_PER_CHUNK), False),
     ]
 
     missing_required = [label for label, val, req in rows if req and val == UNSET]
@@ -685,21 +660,17 @@ def main() -> None:
             f"(scheduler attaches via shm_layer_ack_name('{service_id}'))"
         )
 
-        # Ack cadence:
-        #  * migration ON  → per-LAYER: the pipeline bumps this same counter once
-        #    per layer (NUM_LAYERS acks/chunk), enabling per-layer migration
-        #    overlap. The scheduler must run with layers_per_chunk == NUM_LAYERS.
-        #    run_request_loop does NOT also emit a chunk ack (would double-count).
-        #  * migration OFF → per-CHUNK: run_request_loop emits PREFILL_LAYERS_PER_CHUNK.
-        if enable_migration:
-            pipeline.set_layer_ack_channel(ack_channel)
-            logger.info(
-                f"[migration] per-layer LayerAck enabled on {ack_shm_name} — "
-                f"{NUM_LAYERS} acks/chunk; run the scheduler with layers_per_chunk={NUM_LAYERS}"
-            )
+        # Per-layer ack cadence: the pipeline bumps this counter once per layer
+        # inside pipeline.prefill (NUM_LAYERS acks per chunk). The scheduler
+        # must run with layers_per_chunk == NUM_LAYERS.
+        pipeline.set_layer_ack_channel(ack_channel)
+        logger.info(
+            f"[layer-ack] per-layer LayerAck enabled on {ack_shm_name} — "
+            f"{NUM_LAYERS} acks/chunk; run the scheduler with layers_per_chunk={NUM_LAYERS}"
+        )
 
         logger.info("Setup complete, entering request loop")
-        run_request_loop(pipeline, h2d_service, ack_channel, emit_chunk_ack=not enable_migration)
+        run_request_loop(pipeline, h2d_service)
 
         # Release everything while the mesh + command queues + service core
         # are still alive. H2D service's dtor frees a command queue + service-core
