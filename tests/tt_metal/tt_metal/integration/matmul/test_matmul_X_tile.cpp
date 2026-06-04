@@ -225,12 +225,12 @@ static void matmul_tile_block(
 
     const experimental::NodeCoord node{0, 0};
 
-    constexpr const char* SRC0_DFB = "src0_dfb";
-    constexpr const char* SRC1_DFB = "src1_dfb";
-    constexpr const char* DST_DFB = "dst_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName SRC0_DFB{"src0_dfb"};
+    const experimental::DFBSpecName SRC1_DFB{"src1_dfb"};
+    const experimental::DFBSpecName DST_DFB{"dst_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
     experimental::DataflowBufferSpec src0_dfb_spec{
         .unique_id = SRC0_DFB,
@@ -328,7 +328,7 @@ static void matmul_tile_block(
         {"TEST_INIT_SHORT", cfg.test_init_short ? "1" : "0"},
     };
     if (cfg.fp32_dest_acc_en) {
-        compute_defines.emplace_back("DST_ACCUM_MODE", "1");
+        compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
 
     experimental::KernelSpec compute_spec{
@@ -397,31 +397,27 @@ static void matmul_tile_block(
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
-            .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"src0_addr", ctx.src0_dram_buffer->address()},
-                       {"src0_dram_bank_id", 0u},
-                       {"src1_addr", ctx.src1_dram_buffer->address()},
-                       {"src1_dram_bank_id", 0u},
-                       {"num_blocks", num_blocks},
-                       {"in0_block_tile_cnt", in0_block_tile_cnt},
-                       {"in1_block_tile_cnt", in1_block_tile_cnt},
-                       {"in0_block_size_bytes", in0_block_size_bytes},
-                       {"in1_block_size_bytes", in1_block_size_bytes}}}},
-        },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = WRITER,
-            .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"dst_addr", ctx.dst_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", ctx.num_tiles}}}},
-        },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = COMPUTE,
-        },
+        {READER,
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values =
+                 {{node,
+                   {{"src0_addr", ctx.src0_dram_buffer->address()},
+                    {"src0_dram_bank_id", 0u},
+                    {"src1_addr", ctx.src1_dram_buffer->address()},
+                    {"src1_dram_bank_id", 0u},
+                    {"num_blocks", num_blocks},
+                    {"in0_block_tile_cnt", in0_block_tile_cnt},
+                    {"in1_block_tile_cnt", in1_block_tile_cnt},
+                    {"in0_block_size_bytes", in0_block_size_bytes},
+                    {"in1_block_size_bytes", in1_block_size_bytes}}}},
+         }},
+        {WRITER,
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values =
+                 {{node,
+                   {{"dst_addr", ctx.dst_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", ctx.num_tiles}}}},
+         }},
+        {COMPUTE, experimental::ProgramRunArgs::KernelRunArgs{}},
     };
     experimental::SetProgramRunArgs(program_run, params);
 

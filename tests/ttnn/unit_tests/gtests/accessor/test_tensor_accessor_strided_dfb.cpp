@@ -158,8 +158,8 @@ void run_strided_dfb_copy_test(
     // Inject CTA define so TensorAccessorArgs<0, 0>() resolves at compile time
     reader.source = kReaderKernelPath;
     writer.source = kWriterKernelPath;
-    reader.compiler_options.defines.push_back({"KERNEL_COMPILE_TIME_ARGS", input_cta_str});
-    writer.compiler_options.defines.push_back({"KERNEL_COMPILE_TIME_ARGS", output_cta_str});
+    reader.compiler_options.defines.emplace("KERNEL_COMPILE_TIME_ARGS", input_cta_str);
+    writer.compiler_options.defines.emplace("KERNEL_COMPILE_TIME_ARGS", output_cta_str);
 
     // Runtime varargs: [0]=base_addr, [1]=total_pages
     reader.advanced_options.num_runtime_varargs = 2;
@@ -182,20 +182,20 @@ void run_strided_dfb_copy_test(
 
     ProgramRunArgs run_params;
     run_params.kernel_run_args = {
-        ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = "reader",
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {input_buffer->address(), total_pages}}},
-                },
-        },
-        ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = "writer",
-            .advanced_options =
-                AdvancedKernelRunArgs{
-                    .runtime_varargs = {{node, {output_buffer->address(), total_pages}}},
-                },
-        },
+        {experimental::KernelSpecName{"reader"},
+         ProgramRunArgs::KernelRunArgs{
+             .advanced_options =
+                 AdvancedKernelRunArgs{
+                     .runtime_varargs = {{node, {input_buffer->address(), total_pages}}},
+                 },
+         }},
+        {experimental::KernelSpecName{"writer"},
+         ProgramRunArgs::KernelRunArgs{
+             .advanced_options =
+                 AdvancedKernelRunArgs{
+                     .runtime_varargs = {{node, {output_buffer->address(), total_pages}}},
+                 },
+         }},
     };
     SetProgramRunArgs(program, run_params);
 
@@ -235,8 +235,8 @@ TEST_P(TensorAccessorStridedDFBTest, Gen1StridedPagesCopy) {
         reader = MakeMinimalGen1DMKernel("reader", DataMovementProcessor::RISCV_0);
         writer = MakeMinimalGen1DMKernel("writer", DataMovementProcessor::RISCV_1);
         // STRIDED with 1 thread: stride=1, each thread accesses all DFB entries
-        reader.dfb_bindings.push_back(ProducerOf("staging_dfb", "my_dfb"));
-        writer.dfb_bindings.push_back(ConsumerOf("staging_dfb", "my_dfb"));
+        reader.dfb_bindings.push_back(ProducerOf(experimental::DFBSpecName{"staging_dfb"}, "my_dfb"));
+        writer.dfb_bindings.push_back(ConsumerOf(experimental::DFBSpecName{"staging_dfb"}, "my_dfb"));
     };
 
     switch (params.dtype) {
@@ -307,8 +307,8 @@ TEST_P(TensorAccessorStridedDFBTest, QuasarStridedPagesCopy) {
         reader = MakeMinimalDMKernel("reader", kNumDMThreads);
         writer = MakeMinimalDMKernel("writer", kNumDMThreads);
         // STRIDED with 3 threads: each thread owns every 3rd DFB entry
-        reader.dfb_bindings.push_back(ProducerOf("staging_dfb", "my_dfb"));
-        writer.dfb_bindings.push_back(ConsumerOf("staging_dfb", "my_dfb"));
+        reader.dfb_bindings.push_back(ProducerOf(experimental::DFBSpecName{"staging_dfb"}, "my_dfb"));
+        writer.dfb_bindings.push_back(ConsumerOf(experimental::DFBSpecName{"staging_dfb"}, "my_dfb"));
     };
 
     // DFB depth: 2 entries per DM thread (double-buffer) × 3 threads = 6 entries

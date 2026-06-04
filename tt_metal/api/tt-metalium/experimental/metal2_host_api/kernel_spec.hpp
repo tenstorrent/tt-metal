@@ -137,7 +137,7 @@ struct KernelSpec {
     // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
     // The kernel constructs the accessor via SemaphoreAccessor(sem::<accessor_name>)
     struct SemaphoreBinding {
-        SemSpecName semaphore_spec_name;        // identify the semaphore within the ProgramSpec
+        SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
     };
     std::vector<SemaphoreBinding> semaphore_bindings;

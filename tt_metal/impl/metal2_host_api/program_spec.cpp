@@ -58,7 +58,7 @@ struct CollectedSpecData {
     std::unordered_map<KernelSpecName, const KernelSpec*> kernel_by_name;
     std::unordered_map<DFBSpecName, const DataflowBufferSpec*> dfb_by_name;
     std::unordered_map<DFBSpecName, const RemoteDataflowBufferSpec*> remote_dfb_by_name;
-    std::unordered_map<SemSpecName, const SemaphoreSpec*> semaphore_by_name;
+    std::unordered_map<SemaphoreSpecName, const SemaphoreSpec*> semaphore_by_name;
     std::unordered_map<TensorParamName, const TensorParameter*> tensor_parameter_by_name;
 
     // Tensor parameter usage (derived from kernel tensor bindings).
@@ -140,7 +140,7 @@ using KernelRiscMaskMap = std::unordered_map<const KernelSpec*, uint16_t>;
 
 // DFB name -> DFB ID map (for unpack_to_dest_mode indexing)
 using DFBNameToIdMap = std::unordered_map<DFBSpecName, uint32_t>;
-using SemaphoreNameToIdMap = std::unordered_map<SemSpecName, uint32_t>;
+using SemaphoreNameToIdMap = std::unordered_map<SemaphoreSpecName, uint32_t>;
 
 // ============================================================================
 // Basic Utility Helpers
@@ -2627,7 +2627,7 @@ Program MakeProgramFromSpec(const distributed::MeshDevice& mesh_device, const Pr
     // NOTE: Iterate over spec.semaphores to preserve user-provided deterministic ordering.
     SemaphoreNameToIdMap semaphore_name_to_id;
     for (const auto& semaphore_spec : spec.semaphores) {
-        const SemSpecName& semaphore_name = semaphore_spec.unique_id;
+        const SemaphoreSpecName& semaphore_name = semaphore_spec.unique_id;
         const uint32_t init_value = semaphore_spec.advanced_options.initial_value;
         uint32_t sem_id = program_impl->create_semaphore(
             to_node_range_set(semaphore_spec.target_nodes), init_value, CoreType::WORKER);

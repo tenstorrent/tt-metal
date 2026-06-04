@@ -35,11 +35,11 @@ namespace tt::tt_metal::experimental {
 // ============================================================================
 
 // A name identifying a SemaphoreSpec within a ProgramSpec.
-using SemSpecName = ttsl::StrongType<std::string, struct SemSpecNameTag>;
+using SemaphoreSpecName = ttsl::StrongType<std::string, struct SemaphoreSpecNameTag>;
 
 struct SemaphoreSpec {
     // Semaphore identifier: used to reference this Semaphore within the ProgramSpec
-    SemSpecName unique_id;
+    SemaphoreSpecName unique_id;
 
     // Target nodes
     Nodes target_nodes;

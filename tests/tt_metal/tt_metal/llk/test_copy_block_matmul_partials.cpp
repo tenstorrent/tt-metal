@@ -93,11 +93,11 @@ void run_single_core_copy_block_matmul_partials(
     uint32_t num_input_tiles = test_config.reader_ublock;
     uint32_t num_output_tiles = test_config.writer_ublock;
 
-    constexpr const char* SRC0_DFB = "src0_dfb";
-    constexpr const char* DST_DFB = "dst_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName SRC0_DFB{"src0_dfb"};
+    const experimental::DFBSpecName DST_DFB{"dst_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
     experimental::DataflowBufferSpec src0_dfb_spec{
         .unique_id = SRC0_DFB,
@@ -150,7 +150,7 @@ void run_single_core_copy_block_matmul_partials(
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
     if (test_config.fp32_dest_acc_en) {
-        compute_defines.emplace_back("DST_ACCUM_MODE", "1");
+        compute_defines.emplace("DST_ACCUM_MODE", "1");
     }
 
     experimental::KernelSpec compute_spec{
@@ -181,11 +181,10 @@ void run_single_core_copy_block_matmul_partials(
                 // When fp32_dest_acc_en is true the src DFB is Float32 and the compute kernel
                 // consumes it, so the Metal 2.0 host API requires an explicit unpack_to_dest_mode entry.
                 // Default is unpack via SrcA/B, ~19-bit precision.
-                .unpack_to_dest_mode =
-                    test_config.fp32_dest_acc_en
-                        ? std::vector<experimental::ComputeHardwareConfig::
-                                          DFBUnpackToDestMode>{{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
-                        : std::vector<experimental::ComputeHardwareConfig::DFBUnpackToDestMode>{},
+                .unpack_to_dest_mode = test_config.fp32_dest_acc_en
+                                           ? experimental::ComputeHardwareConfig::
+                                                 UnpackToDestModes{{SRC0_DFB, tt::tt_metal::UnpackToDestMode::Default}}
+                                           : experimental::ComputeHardwareConfig::UnpackToDestModes{},
             },
     };
 
@@ -214,31 +213,27 @@ void run_single_core_copy_block_matmul_partials(
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
-            .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"src_addr", src_dram_buffer->address()},
-                       {"src_dram_bank_id", 0u},
-                       {"num_tiles", num_tiles},
-                       {"ublock_size_tiles", test_config.reader_ublock},
-                       {"reader_only", 0u}}}},
-        },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = WRITER,
-            .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"dst_addr", dst_dram_buffer->address()},
-                       {"dst_dram_bank_id", 0u},
-                       {"num_tiles", num_tiles},
-                       {"ublock_size_tiles", test_config.writer_ublock},
-                       {"writer_only", 0u}}}},
-        },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = COMPUTE,
-        },
+        {READER,
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values =
+                 {{node,
+                   {{"src_addr", src_dram_buffer->address()},
+                    {"src_dram_bank_id", 0u},
+                    {"num_tiles", num_tiles},
+                    {"ublock_size_tiles", test_config.reader_ublock},
+                    {"reader_only", 0u}}}},
+         }},
+        {WRITER,
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values =
+                 {{node,
+                   {{"dst_addr", dst_dram_buffer->address()},
+                    {"dst_dram_bank_id", 0u},
+                    {"num_tiles", num_tiles},
+                    {"ublock_size_tiles", test_config.writer_ublock},
+                    {"writer_only", 0u}}}},
+         }},
+        {COMPUTE, experimental::ProgramRunArgs::KernelRunArgs{}},
     };
     experimental::SetProgramRunArgs(program_run, params);
 

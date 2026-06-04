@@ -460,7 +460,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
     // A SemaphoreSpec describes a Program-scope semaphore: it identifies the sem by name and
     // declares which nodes will see it. Initial value defaults to 0.
     SemaphoreSpec sem{
-        .unique_id = SemSpecName{"only_sem"},
+        .unique_id = SemaphoreSpecName{"only_sem"},
         .target_nodes = node,
     };
 
@@ -478,7 +478,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_producer.cpp",
         .num_threads = 1,
-        .semaphore_bindings = {{.semaphore_spec_name = SemSpecName{"only_sem"}, .accessor_name = "signal"}},
+        .semaphore_bindings = {{.semaphore_spec_name = SemaphoreSpecName{"only_sem"}, .accessor_name = "signal"}},
         .hw_config =
             DataMovementHardwareConfig{
                 .role = DataMovementRoleHint::WRITER,
@@ -490,7 +490,7 @@ TEST_F(ProgramSpecHWTest, SemaphoreAccessorNameLoopback) {
 
             "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_accessor_loopback_consumer.cpp",
         .num_threads = 1,
-        .semaphore_bindings = {{.semaphore_spec_name = SemSpecName{"only_sem"}, .accessor_name = "waiter"}},
+        .semaphore_bindings = {{.semaphore_spec_name = SemaphoreSpecName{"only_sem"}, .accessor_name = "waiter"}},
         .hw_config =
             DataMovementHardwareConfig{
                 .role = DataMovementRoleHint::READER,

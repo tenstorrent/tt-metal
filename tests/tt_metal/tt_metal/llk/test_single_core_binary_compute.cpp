@@ -270,20 +270,19 @@ bool single_core_binary(
 
     auto defines_map = build_binary_defines(test_config);
     experimental::KernelSpec::CompilerOptions::Defines defines;
-    defines.reserve(defines_map.size());
     for (auto& kv : defines_map) {
-        defines.emplace_back(kv.first, kv.second);
+        defines.emplace(kv.first, kv.second);
     }
 
-    constexpr const char* INP0_DFB = "inp0_dfb";
-    constexpr const char* INP1_DFB = "inp1_dfb";
-    constexpr const char* INP2_DFB = "inp2_dfb";
-    constexpr const char* OUT_DFB = "out_dfb";
-    constexpr const char* READER = "reader";
-    constexpr const char* WRITER = "writer";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName INP0_DFB{"inp0_dfb"};
+    const experimental::DFBSpecName INP1_DFB{"inp1_dfb"};
+    const experimental::DFBSpecName INP2_DFB{"inp2_dfb"};
+    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
+    const experimental::KernelSpecName READER{"reader"};
+    const experimental::KernelSpecName WRITER{"writer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
-    auto make_input_dfb = [&](const std::string& name) {
+    auto make_input_dfb = [&](const experimental::DFBSpecName& name) {
         return experimental::DataflowBufferSpec{
             .unique_id = name,
             .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
@@ -417,31 +416,28 @@ bool single_core_binary(
     const uint32_t num_tiles_u = static_cast<uint32_t>(test_config.num_tiles);
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = READER,
-            .runtime_arg_values =
-                {{.node = node,
-                  .args =
-                      {{"src0_addr", input0_dram_buffer->address()},
-                       {"src0_bank_id", 0u},
-                       {"src1_addr", input1_dram_buffer->address()},
-                       {"src1_bank_id", 0u},
-                       {"num_tiles", num_tiles_u},
-                       {"src2_addr", input2_dram_buffer->address()},
-                       {"src2_bank_id", 0u}}}},
-        },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = WRITER,
-            .runtime_arg_values =
-                {{.node = node,
-                  .args = {{"dst_addr", output_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", num_tiles_u}}}},
-        },
-        experimental::ProgramRunArgs::KernelRunArgs{
-            .kernel_spec_name = COMPUTE,
-            .runtime_arg_values =
-                {{.node = node,
-                  .args = {{"per_core_block_cnt", num_tiles_u}, {"per_core_block_size", 1u}, {"acc_to_dst", 0u}}}},
-        },
+        {READER,
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values =
+                 {{node,
+                   {{"src0_addr", input0_dram_buffer->address()},
+                    {"src0_bank_id", 0u},
+                    {"src1_addr", input1_dram_buffer->address()},
+                    {"src1_bank_id", 0u},
+                    {"num_tiles", num_tiles_u},
+                    {"src2_addr", input2_dram_buffer->address()},
+                    {"src2_bank_id", 0u}}}},
+         }},
+        {WRITER,
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values =
+                 {{node, {{"dst_addr", output_dram_buffer->address()}, {"bank_id", 0u}, {"num_tiles", num_tiles_u}}}},
+         }},
+        {COMPUTE,
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values =
+                 {{node, {{"per_core_block_cnt", num_tiles_u}, {"per_core_block_size", 1u}, {"acc_to_dst", 0u}}}},
+         }},
     };
     experimental::SetProgramRunArgs(program, params);
 

@@ -42,12 +42,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
-    constexpr const char* KERNEL_0 = "kernel_0";
-    constexpr const char* KERNEL_1 = "kernel_1";
-    constexpr const char* KERNEL_2 = "kernel_2";
-    constexpr const char* KERNEL_3 = "kernel_3";
+    const experimental::KernelSpecName KERNEL_0{"kernel_0"};
+    const experimental::KernelSpecName KERNEL_1{"kernel_1"};
+    const experimental::KernelSpecName KERNEL_2{"kernel_2"};
+    const experimental::KernelSpecName KERNEL_3{"kernel_3"};
 
-    auto make_dm_kernel_spec = [](const char* id, uint32_t num_threads, uint32_t l1_addr) {
+    auto make_dm_kernel_spec = [](const experimental::KernelSpecName& id, uint32_t num_threads, uint32_t l1_addr) {
         return experimental::KernelSpec{
             .unique_id = id,
             .source =
@@ -90,18 +90,22 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
-        {.kernel_spec_name = KERNEL_0,
-         .runtime_arg_values =
-             {{.node = experimental::NodeCoord{0, 0}, .args = {{"a", 1}, {"b", 2}}},
-              {.node = experimental::NodeCoord{1, 0}, .args = {{"a", 1}, {"b", 2}}}}},
-        {.kernel_spec_name = KERNEL_1,
-         .runtime_arg_values =
-             {{.node = experimental::NodeCoord{0, 0}, .args = {{"a", 3}, {"b", 4}}},
-              {.node = experimental::NodeCoord{1, 0}, .args = {{"a", 3}, {"b", 4}}}}},
-        {.kernel_spec_name = KERNEL_2,
-         .runtime_arg_values = {{.node = experimental::NodeCoord{0, 0}, .args = {{"a", 5}, {"b", 6}}}}},
-        {.kernel_spec_name = KERNEL_3,
-         .runtime_arg_values = {{.node = experimental::NodeCoord{1, 0}, .args = {{"a", 7}, {"b", 8}}}}},
+        {KERNEL_0,
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values =
+                 {{experimental::NodeCoord{0, 0}, {{"a", 1}, {"b", 2}}},
+                  {experimental::NodeCoord{1, 0}, {{"a", 1}, {"b", 2}}}}}},
+        {KERNEL_1,
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values =
+                 {{experimental::NodeCoord{0, 0}, {{"a", 3}, {"b", 4}}},
+                  {experimental::NodeCoord{1, 0}, {{"a", 3}, {"b", 4}}}}}},
+        {KERNEL_2,
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values = {{experimental::NodeCoord{0, 0}, {{"a", 5}, {"b", 6}}}}}},
+        {KERNEL_3,
+         experimental::ProgramRunArgs::KernelRunArgs{
+             .runtime_arg_values = {{experimental::NodeCoord{1, 0}, {{"a", 7}, {"b", 8}}}}}},
     };
     experimental::SetProgramRunArgs(program, params);
 

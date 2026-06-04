@@ -133,11 +133,11 @@ TEST_F(ProgramSpecTestQuasar, DuplicateSemaphoreNameFails) {
 
     // Add two semaphores with the same name
     SemaphoreSpec sem1;
-    sem1.unique_id = SemSpecName{"sem_0"};
+    sem1.unique_id = SemaphoreSpecName{"sem_0"};
     sem1.target_nodes = NodeCoord{0, 0};
 
     SemaphoreSpec sem2;
-    sem2.unique_id = SemSpecName{"sem_0"};  // duplicate!
+    sem2.unique_id = SemaphoreSpecName{"sem_0"};  // duplicate!
     sem2.target_nodes = NodeCoord{1, 0};
 
     spec.semaphores = {sem1, sem2};
@@ -893,7 +893,7 @@ TEST_F(ProgramSpecTestQuasar, SemaphoresSucceed) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     SemaphoreSpec sem;
-    sem.unique_id = SemSpecName{"sem_0"};
+    sem.unique_id = SemaphoreSpecName{"sem_0"};
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
 
@@ -904,12 +904,12 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingsSucceed) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     SemaphoreSpec sem;
-    sem.unique_id = SemSpecName{"sem_0"};
+    sem.unique_id = SemaphoreSpecName{"sem_0"};
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
 
     SemaphoreBinding binding;
-    binding.semaphore_spec_name = SemSpecName{"sem_0"};
+    binding.semaphore_spec_name = SemaphoreSpecName{"sem_0"};
     binding.accessor_name = "my_sem";
     spec.kernels[0].semaphore_bindings = {binding};
 
@@ -922,14 +922,14 @@ TEST_F(ProgramSpecTestQuasar, SemaphoreBoundToComputeKernelFailsOnQuasar) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     SemaphoreSpec sem;
-    sem.unique_id = SemSpecName{"sem_0"};
+    sem.unique_id = SemaphoreSpecName{"sem_0"};
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
 
     // kernels[1] is the compute kernel in MakeMinimalValidProgramSpec
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
     spec.kernels[1].semaphore_bindings = {
-        SemaphoreBinding{.semaphore_spec_name = SemSpecName{"sem_0"}, .accessor_name = "done_flag"}};
+        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "done_flag"}};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
@@ -941,7 +941,7 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingUnknownSemaphoreFails) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     SemaphoreBinding binding;
-    binding.semaphore_spec_name = SemSpecName{"missing_sem"};
+    binding.semaphore_spec_name = SemaphoreSpecName{"missing_sem"};
     binding.accessor_name = "my_sem";
     spec.kernels[0].semaphore_bindings = {binding};
 
@@ -955,12 +955,12 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingInvalidAccessorFails) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     SemaphoreSpec sem;
-    sem.unique_id = SemSpecName{"sem_0"};
+    sem.unique_id = SemaphoreSpecName{"sem_0"};
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
 
     SemaphoreBinding binding;
-    binding.semaphore_spec_name = SemSpecName{"sem_0"};
+    binding.semaphore_spec_name = SemaphoreSpecName{"sem_0"};
     binding.accessor_name = "has-dash";
     spec.kernels[0].semaphore_bindings = {binding};
 
@@ -974,18 +974,18 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingDuplicateAccessorFails) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     SemaphoreSpec sem0;
-    sem0.unique_id = SemSpecName{"sem_0"};
+    sem0.unique_id = SemaphoreSpecName{"sem_0"};
     sem0.target_nodes = NodeCoord{0, 0};
 
     SemaphoreSpec sem1;
-    sem1.unique_id = SemSpecName{"sem_1"};
+    sem1.unique_id = SemaphoreSpecName{"sem_1"};
     sem1.target_nodes = NodeCoord{0, 0};
 
     spec.semaphores = {sem0, sem1};
 
     spec.kernels[0].semaphore_bindings = {
-        SemaphoreBinding{.semaphore_spec_name = SemSpecName{"sem_0"}, .accessor_name = "same"},
-        SemaphoreBinding{.semaphore_spec_name = SemSpecName{"sem_1"}, .accessor_name = "same"}};
+        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "same"},
+        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_1"}, .accessor_name = "same"}};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
@@ -996,7 +996,7 @@ TEST_F(ProgramSpecTestQuasar, SemaphoreNonZeroInitialValueFailsOnQuasar) {
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
     SemaphoreSpec sem;
-    sem.unique_id = SemSpecName{"sem_0"};
+    sem.unique_id = SemaphoreSpecName{"sem_0"};
     sem.target_nodes = NodeCoord{0, 0};
     sem.advanced_options = SemaphoreAdvancedOptions{.initial_value = 1};
     spec.semaphores = {sem};
@@ -2435,7 +2435,7 @@ TEST(AggregateSpecTypes, KernelSpecNamedRuntimeArgsDesignatedInitializers) {
 TEST(AggregateSpecTypes, SemaphoreSpecDesignatedInitializers) {
     // Demonstrates constructing SemaphoreSpec with designated initializers
     SemaphoreSpec sem{
-        .unique_id = SemSpecName{"my_semaphore"},
+        .unique_id = SemaphoreSpecName{"my_semaphore"},
         .target_nodes = NodeCoord{0, 0},
         .advanced_options = SemaphoreAdvancedOptions{.initial_value = 7},
     };
@@ -2518,7 +2518,7 @@ TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
     EXPECT_EQ(binding.dfb_spec_name.get(), "my_dfb");
 
     SemaphoreBinding sem_binding{
-        .semaphore_spec_name = SemSpecName{"my_sem"},
+        .semaphore_spec_name = SemaphoreSpecName{"my_sem"},
         .accessor_name = "sem_accessor",
     };
     EXPECT_EQ(sem_binding.semaphore_spec_name.get(), "my_sem");
@@ -2792,14 +2792,14 @@ TEST_F(ProgramSpecTestGen1, SemaphoreBoundToComputeKernelFailsOnGen1) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
     SemaphoreSpec sem;
-    sem.unique_id = SemSpecName{"sem_0"};
+    sem.unique_id = SemaphoreSpecName{"sem_0"};
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
 
     // kernels[1] is the compute kernel in MakeMinimalGen1ValidProgramSpec
     ASSERT_TRUE(spec.kernels[1].is_compute_kernel());
     spec.kernels[1].semaphore_bindings = {
-        SemaphoreBinding{.semaphore_spec_name = SemSpecName{"sem_0"}, .accessor_name = "done_flag"}};
+        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "done_flag"}};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
@@ -2812,14 +2812,14 @@ TEST_F(ProgramSpecTestGen1, SemaphoreBoundToDMKernelSucceedsOnGen1) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
     SemaphoreSpec sem;
-    sem.unique_id = SemSpecName{"sem_0"};
+    sem.unique_id = SemaphoreSpecName{"sem_0"};
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
 
     // kernels[0] is the DM kernel in MakeMinimalGen1ValidProgramSpec
     ASSERT_TRUE(spec.kernels[0].is_data_movement_kernel());
     spec.kernels[0].semaphore_bindings = {
-        SemaphoreBinding{.semaphore_spec_name = SemSpecName{"sem_0"}, .accessor_name = "done_flag"}};
+        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "done_flag"}};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
@@ -2829,13 +2829,13 @@ TEST_F(ProgramSpecTestGen1, SemaphoresWithNonZeroInitialValueSucceedOnGen1) {
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
     SemaphoreSpec sem;
-    sem.unique_id = SemSpecName{"sem_0"};
+    sem.unique_id = SemaphoreSpecName{"sem_0"};
     sem.target_nodes = NodeCoord{0, 0};
     sem.advanced_options = SemaphoreAdvancedOptions{.initial_value = 3};
     spec.semaphores = {sem};
 
     spec.kernels[0].semaphore_bindings = {
-        SemaphoreBinding{.semaphore_spec_name = SemSpecName{"sem_0"}, .accessor_name = "done_flag"}};
+        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "done_flag"}};
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
@@ -2952,11 +2952,11 @@ TEST_F(ProgramSpecTestGen1, AccessorNamesAcrossCategoriesAreSeparateNamespaces) 
     // semaphore and a tensor accessor, both also named "input_dfb" — the same string at a
     // C++ level — which should pass because they're in different namespaces.
     SemaphoreSpec sem;
-    sem.unique_id = SemSpecName{"sem_0"};
+    sem.unique_id = SemaphoreSpecName{"sem_0"};
     sem.target_nodes = NodeCoord{0, 0};
     spec.semaphores = {sem};
     spec.kernels[0].semaphore_bindings = {
-        SemaphoreBinding{.semaphore_spec_name = SemSpecName{"sem_0"}, .accessor_name = "input_dfb"}};
+        SemaphoreBinding{.semaphore_spec_name = SemaphoreSpecName{"sem_0"}, .accessor_name = "input_dfb"}};
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_dfb");
 
     EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
