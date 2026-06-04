@@ -186,6 +186,7 @@ def _vocoder_conv1d_config(
     in_channels: int,
     shard_layout: Optional[ttnn.TensorMemoryLayout] = None,
     timeline_chunked: bool = False,
+    row_major_output: bool = False,
 ) -> ttnn.Conv1dConfig:
     # Match T2U conv1d L1 recipe: deallocate activations and cap act block height on long/wide ops.
     conv_kwargs: dict = dict(
@@ -204,6 +205,9 @@ def _vocoder_conv1d_config(
     if timeline_chunked:
         conv_kwargs["config_tensors_in_dram"] = True
         conv_kwargs["output_layout"] = ttnn.ROW_MAJOR_LAYOUT
+    elif row_major_output:
+        # Single-shot tail (e.g. conv_post): keep RM through tanh / waveform path (vocoder6 TM).
+        conv_kwargs["output_layout"] = ttnn.ROW_MAJOR_LAYOUT
     return ttnn.Conv1dConfig(**conv_kwargs)
 
 
@@ -214,7 +218,8 @@ def _vocoder_conv2d_config(
         weights_dtype=ttnn.bfloat8_b,
         shard_layout=shard_layout,
         deallocate_activation=True,
-        output_layout=ttnn.TILE_LAYOUT,
+        # Emit RM so upsample → resblock conv1d stays RM (skips TILE→RM untilize at each stage).
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
         enable_weights_double_buffer=True,
         enable_act_double_buffer=True,
     )
@@ -432,6 +437,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         dilation: int,
         fused_post_activation: Optional[ttnn.UnaryWithParam],
         timeline_chunked: bool = False,
+        row_major_output: bool = False,
     ) -> Tuple[Any, ...]:
         return (
             _conv1d_prep_tensor_id(weight),
@@ -446,6 +452,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
             dilation,
             _fused_activation_token(fused_post_activation),
             bool(timeline_chunked),
+            bool(row_major_output),
         )
 
     def _prepare_conv1d_weights_for_prewarm(
@@ -464,6 +471,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         fused_post_activation: Optional[ttnn.UnaryWithParam] = None,
         shard_layout: Optional[ttnn.TensorMemoryLayout] = None,
         timeline_chunked: bool = False,
+        row_major_output: bool = False,
     ) -> None:
         """``prepare_conv_*`` + DRAM ``clone`` only — no Conv2d forward (T2U/speech-encoder recipe)."""
         prep_len, timeline_chunked = _vocoder_conv1d_prep_length(input_length, in_channels=in_channels, padding=padding)
@@ -480,6 +488,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
             dilation=dilation,
             fused_post_activation=fused_post_activation,
             timeline_chunked=timeline_chunked,
+            row_major_output=row_major_output,
         )
         if cache_key in self._conv1d_prepared_cache:
             return
@@ -490,6 +499,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
             in_channels=in_channels,
             shard_layout=shard_layout,
             timeline_chunked=timeline_chunked,
+            row_major_output=row_major_output,
         )
         prep_w = ttnn.prepare_conv_weights(
             weight_tensor=weight,
@@ -634,6 +644,9 @@ class TTSeamlessM4Tv2CodeHifiGan:
                     t_rb = _host_conv_out_length(t_rb, k2, 1, p2, dilation=d2)
 
         cpost = hg.conv_post
+        _, cpost_chunked = _vocoder_conv1d_prep_length(
+            tlen, in_channels=int(cpost.in_channels), padding=int(cpost.padding)
+        )
         self._prepare_conv1d_weights_for_prewarm(
             weight=cpost.weight,
             bias=cpost.bias,
@@ -643,6 +656,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
             out_channels=int(cpost.out_channels),
             kernel_size=int(cpost.kernel_size),
             padding=int(cpost.padding),
+            row_major_output=not cpost_chunked,
         )
 
     def _conv1d_run(
@@ -665,6 +679,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         use_prepared_weights: bool = True,
         shard_layout: Optional[ttnn.TensorMemoryLayout] = None,
         timeline_chunked: bool = False,
+        row_major_output: bool = False,
     ) -> Tuple[ttnn.Tensor, int]:
         """Single-shot ``ttnn.conv1d`` on row-major NLC activations."""
         conv_config = _vocoder_conv1d_config(
@@ -673,6 +688,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
             in_channels=in_channels,
             shard_layout=shard_layout,
             timeline_chunked=timeline_chunked,
+            row_major_output=row_major_output,
         )
         cache_key = self._conv1d_prep_cache_key(
             weight=weight,
@@ -687,6 +703,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
             dilation=dilation,
             fused_post_activation=fused_post_activation,
             timeline_chunked=timeline_chunked,
+            row_major_output=row_major_output,
         )
         cached = self._conv1d_prepared_cache.get(cache_key) if use_prepared_weights else None
         weight_tensor = cached[0] if cached is not None else weight
@@ -735,6 +752,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         dilation: int = 1,
         fused_post_activation: Optional[ttnn.UnaryWithParam] = None,
         shard_layout: Optional[ttnn.TensorMemoryLayout] = None,
+        row_major_output: bool = False,
     ) -> Tuple[ttnn.Tensor, int]:
         # ``ttnn.conv1d`` reshapes activations for the conv2d path; TILE NLC (e.g. from ``embedding``)
         # can hit "reshape between two shapes with different volumes". Host ROW_MAJOR weights are fine.
@@ -766,6 +784,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 deallocate_input=rm_buf is not None,
                 shard_layout=shard_layout,
                 timeline_chunked=False,
+                row_major_output=row_major_output,
             )
 
         # HF stores symmetric same-padding per layer; that is the overlap needed between chunks.
@@ -790,6 +809,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 deallocate_input=rm_buf is not None,
                 shard_layout=shard_layout,
                 timeline_chunked=True,
+                row_major_output=False,
             )
 
         chunks: list[ttnn.Tensor] = []
@@ -798,6 +818,14 @@ class TTSeamlessM4Tv2CodeHifiGan:
             chunk_rows = end - start
             in_start = max(0, start - halo)
             in_end = min(seq, end + halo)
+            # Interior chunks already span ``fixed_in``. The first chunk is short by ``halo`` on
+            # the right; the last is short on the left — extend the slice instead of zero-padding
+            # (avoids a large ``concat([x_win, pad])`` on long timelines).
+            if in_end - in_start < fixed_in:
+                if in_end == seq:
+                    in_start = max(0, in_end - fixed_in)
+                elif in_start == 0:
+                    in_end = min(seq, fixed_in)
             x_win = ttnn.slice(
                 x_in,
                 [0, in_start, 0],
@@ -874,7 +902,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         pad = ttnn.zeros(
             (batch, pad_rows, channels),
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -1176,6 +1204,9 @@ class TTSeamlessM4Tv2CodeHifiGan:
         # residual blocks do use ``cfg.leaky_relu_slope``.
         h = ttnn.leaky_relu(h, negative_slope=0.01, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         cpost = hg.conv_post
+        _, cpost_chunked = _vocoder_conv1d_prep_length(
+            tlen, in_channels=int(cpost.in_channels), padding=int(cpost.padding)
+        )
         h, tlen = self._conv1d(
             h,
             weight=cpost.weight,
@@ -1188,6 +1219,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
             stride=1,
             padding=int(cpost.padding),
             groups=1,
+            row_major_output=not cpost_chunked,
         )
         h = ttnn.tanh(h, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return h
