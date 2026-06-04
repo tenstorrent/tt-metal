@@ -41,6 +41,7 @@ pytest models/experimental/mistral_24b/tests/pipeline_tests/test_end2end.py
 ```bash
 pytest models/experimental/mistral_24b/tests/pipeline_tests/test_vision_model.py
 pytest models/experimental/mistral_24b/tests/pipeline_tests/test_vision_tower.py
+pytest models/experimental/mistral_24b/tests/pipeline_tests/test_text_decoder.py
 ```
 
 ## Vision unit tests
