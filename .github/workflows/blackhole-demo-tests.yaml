@@ -11,11 +11,10 @@ on:
       model:
         description: "Select model to test"
         required: false
-        default: 'unet-shallow'
+        default: 'all'
         type: choice
         options:
           - all
-          - unet-shallow
           - stable_diffusion_xl
           - mistral-small-3.1-24b
           - mochi
