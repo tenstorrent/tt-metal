@@ -15,7 +15,7 @@ from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen3_5_9b.tt.layer import Qwen35DecoderLayer
 from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
 from models.demos.blackhole.qwen3_5_9b.tt.rope import Qwen35RoPESetup
-from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
 
 class Qwen35Model:
@@ -595,7 +595,7 @@ class Qwen35Model:
         assert self._deltanet_external_states is not None, "Call allocate_kv_caches first"
         assert chunk_size % 128 == 0, f"chunk_size {chunk_size} must be a multiple of 128"
         B = 1
-        block_size = 64
+        block_size = get_block_size(self._paged_kv_caches)
         blocks_per_chunk = chunk_size // block_size
 
         if self._chunked_trace_id is not None:
@@ -737,6 +737,12 @@ class Qwen35Model:
     # multiples of the GDN sub-chunk (128) so the chunk kernel adds no internal pad. The
     # masked GDN path runs in DRAM (see gated_deltanet_forward_ttnn), which keeps bucket 512
     # off the L1 circular-buffer clash that the eager L1 path hits at that exact size.
+    #
+    # NOTE: this is a DELIBERATE divergence from the standard common.get_padded_prefill_len
+    # bucket set {128, 1024, 2048, 4096, ...}. The small 256/512 buckets exist for short-prompt
+    # TTFT, every entry is a 128-multiple for GDN sub-chunk alignment, and 512 must stay in the
+    # masked-DRAM path (see above). The standard pad helper is for token-padding-tolerant softmax
+    # attention; GDN needs these specific bucket boundaries plus the exact valid_len mask.
     _PREFILL_MASK_BUCKETS = (128, 256, 512, 1024, 2048)
 
     @classmethod
@@ -758,7 +764,7 @@ class Qwen35Model:
         state at the real boundary, leaving both states decode-correct. Mirrors
         _forward_prefill_chunk_eager but at a fixed bucket length with masking. Returns the
         last-layer hidden state [1, bucket, hidden_size]."""
-        block_size = 64
+        block_size = get_block_size(self._paged_kv_caches)
         tok = ttnn.from_torch(
             token_buf.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
         )
@@ -768,9 +774,26 @@ class Qwen35Model:
         cos, sin = self.rope.get_rot_mats(torch.arange(chunk_start, chunk_start + bucket).unsqueeze(0))
         full_pt = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
         blk0 = chunk_start // block_size
-        blkN = math.ceil((chunk_start + bucket) / block_size)
+        # Fill K/V for ONLY the real blocks (those covering valid_len), NOT the full bucket.
+        # The bucket padding would otherwise write K/V into blocks past the request's allocation
+        # — the page table is zero-padded there, so those writes land in block 0 and corrupt the
+        # real KV. The padded query positions still attend over the full bucket, but their outputs
+        # are discarded, so their K/V never needs to be persisted. Fill width = ceil(valid_len/64)
+        # (chunk_start is block-aligned); it varies per request, so warmup compiles every width.
+        blkN = num_blocks_in_seq(chunk_start + valid_len, block_size)
         chunk_pt = ttnn.from_torch(
             page_table[:, blk0:blkN].contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+        )
+        # Drive the full-attn SDPA via the FLEXIBLE chunked path (chunk_start as a runtime device
+        # tensor) so ONE program per bucket serves every chunk_start. The host-int chunk_start path
+        # compiles a distinct SDPA program per start position — for a tail at chunk_start>0 that
+        # would compile at request time and clobber the parked trace. Warmed at chunk_start=0; the
+        # value is runtime so it carries to any tail position.
+        csi_tensor = ttnn.from_torch(
+            torch.tensor([chunk_start], dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.device,
         )
         for layer in self.layers:
             if layer.is_full_attention:
@@ -781,7 +804,7 @@ class Qwen35Model:
                     mode="prefill",
                     page_table=full_pt,
                     chunk_page_table=chunk_pt,
-                    chunk_start_idx=chunk_start,
+                    chunk_start_idx_tensor=csi_tensor,
                 )
             else:
                 x_new = layer.forward(
@@ -813,19 +836,10 @@ class Qwen35Model:
         assert 1 <= actual_len <= bucket, f"actual_len {actual_len} not in [1, {bucket}]"
 
         if chunk_start == 0:
-            # In the vLLM/traced flow the GDN state lives in external in-place buffers whose
-            # addresses are baked into the decode trace, so the chunk forward writes state
-            # there in place (_chunk_inplace_state). Zero those buffers in place rather than
-            # reassigning (reset_state) — otherwise decode would read stale external buffers.
-            # Detect via the GDN flag (set before the trace is parked) so warmup, which runs
-            # before begin_trace_capture, takes the same path as serving.
-            inplace = any(
-                (not l.is_full_attention) and getattr(l.attention, "_chunk_inplace_state", False) for l in self.layers
-            )
-            if inplace:
-                self._reset_dn_state_inplace()
-            else:
-                self.reset_state(batch_size=1)
+            # New sequence (from-scratch short prompt, or num_full==0 long prompt). Re-zero the
+            # GDN state — the warmup-dirty-state guard. chunk_start>0 is a carried tail, so the
+            # in-place GDN/KV state from the full chunks must NOT be reset here.
+            self._reset_gdn_state_for_new_sequence()
 
         real = token_ids[:, :actual_len].to(torch.int32)
         if bucket > actual_len:
@@ -863,10 +877,18 @@ class Qwen35Model:
         Requires page_table to cover the largest bucket (max 2048 -> 32 blocks of 64)."""
         if buckets is None:
             buckets = self._PREFILL_MASK_BUCKETS
-        for b in buckets:
-            for vlen in sorted({b, max(1, b - 1)}):  # exact (no mask) + masked variant
-                toks = torch.zeros(1, vlen, dtype=torch.int32)
-                self.prefill_masked_bucket(toks, page_table, actual_len=vlen, bucket=b)
+        block_size = get_block_size(self._paged_kv_caches)
+        # The masked GDN/SDPA/sel programs key on the bucket; paged_fill_cache keys on the
+        # real-block FILL WIDTH = ceil(valid_len/64), which a real prompt/tail can land on at any
+        # value in 1..max_width. Warm each width via a vlen=width*block_size: w*64 rounds to its
+        # bucket and produces fill width w. This sweep also covers, per bucket, both the no-mask
+        # variant (vlen == bucket) and the masked variant (vlen < bucket).
+        max_width = max(buckets) // block_size
+        for w in range(1, max_width + 1):
+            vlen = w * block_size
+            b = self._mask_bucket_for(vlen)
+            toks = torch.zeros(1, vlen, dtype=torch.int32)
+            self.prefill_masked_bucket(toks, page_table, actual_len=vlen, bucket=b)
         ttnn.synchronize_device(self.device)
 
     def prefill_traced_chunked(self, token_ids, page_table, actual_len):
@@ -885,13 +907,42 @@ class Qwen35Model:
         chunk_size = self._chunked_chunk_size
         B, T = token_ids.shape
         assert 1 <= actual_len <= T, f"actual_len {actual_len} not in [1, {T}]"
-        block_size = 64
+        block_size = get_block_size(self._paged_kv_caches)
         blocks_per_chunk = chunk_size // block_size
         num_full = actual_len // chunk_size
         tail_real = actual_len - num_full * chunk_size
 
-        # Reset GDN state once; it then carries in place across the chunk replays + eager tail.
-        self._reset_dn_state_inplace()
+        # Short prompt (no full chunks): route the whole prompt through the SAME masked
+        # fixed-bucket path the long-prompt tail uses. chunk_start=0 makes prefill_masked_bucket
+        # do the sequence-start GDN reset and run one masked forward — there is no trace to replay,
+        # so the chunk-input plumbing below is skipped. This is the single bucketed+masked path
+        # shared by short prompts and the long-prompt tail; prefill_dispatch routes every traced
+        # prefill here so the short/long seam is defined once.
+        if num_full == 0:
+            return self.prefill_masked_bucket(
+                token_ids[:, :actual_len], page_table, actual_len=actual_len, chunk_start=0
+            )
+
+        # >= 1 full chunk: re-zero GDN state once (the warmup-dirty-state guard); it then carries
+        # in place across the chunk replays + the masked tail (whose chunk_start>0 skips the reset).
+        self._reset_gdn_state_for_new_sequence()
+        # copy_host_to_device requires an EXACT shape match. The full page-table buffer width
+        # was fixed at trace capture, but vLLM pads request page tables to its own
+        # max_num_blocks_per_req, which can differ from the captured width (e.g. off-by-one vs
+        # the allocated block count). Pad/clip page_table to the buffer width; the trailing
+        # entries index blocks beyond the prompt and are never read by SDPA (causal, up to
+        # actual_len). No-op when the widths already match (e.g. the demo/tests).
+        buf_blocks = int(self._chunk_full_page_table_buf.shape[-1])
+        if page_table.shape[1] < buf_blocks:
+            page_table = torch.cat(
+                [
+                    page_table,
+                    torch.zeros(page_table.shape[0], buf_blocks - page_table.shape[1], dtype=page_table.dtype),
+                ],
+                dim=1,
+            )
+        elif page_table.shape[1] > buf_blocks:
+            page_table = page_table[:, :buf_blocks]
         pt_host = ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
         ttnn.copy_host_to_device_tensor(pt_host, self._chunk_full_page_table_buf)
 
@@ -933,15 +984,20 @@ class Qwen35Model:
 
         ttnn.synchronize_device(self.device)
 
-        # ---- Final partial chunk (eager, minimal pad), or extract from the last full chunk
-        #      when actual_len is an exact multiple of chunk_size. ----
+        # ---- Final partial chunk: run it through the masked fixed-bucket path. It rounds the
+        #      tail up to a warmed bucket and masks the GDN, so (unlike the old eager tail) it
+        #      compiles no new program at request time and can't clobber the parked trace, while
+        #      the in-place GDN/KV state carried across the replays continues correctly
+        #      (chunk_start = cs skips the state reset). When actual_len is an exact multiple of
+        #      chunk_size there is no tail — extract the next-token logit from the last full
+        #      chunk's hidden state instead. ----
         if tail_real > 0:
             cs = num_full * chunk_size
-            hidden = self._forward_prefill_chunk_eager(token_ids[:, cs:actual_len], cs, page_table)
-            pos_in_chunk = (actual_len - 1) - cs
-        else:
-            hidden = self._chunked_trace_output  # last full chunk's hidden state
-            pos_in_chunk = (actual_len - 1) - (num_full - 1) * chunk_size
+            return self.prefill_masked_bucket(
+                token_ids[:, cs:actual_len], page_table, actual_len=tail_real, chunk_start=cs
+            )
+        hidden = self._chunked_trace_output  # last full chunk's hidden state
+        pos_in_chunk = (actual_len - 1) - (num_full - 1) * chunk_size
         ttnn.synchronize_device(self.device)
 
         x_last = hidden[:, pos_in_chunk : pos_in_chunk + 1, :]
@@ -965,6 +1021,32 @@ class Qwen35Model:
                 layer.attention.reset_cache()
             else:
                 layer.attention.reset_state(batch_size)
+
+    def _reset_gdn_state_for_new_sequence(self):
+        """Zero the GDN recurrent + conv state at the start of every new sequence.
+
+        This is the guard that makes the standard two-pass trace capture safe. Both the prefill
+        and the decode trace captures run the forward TWICE (a compile run + the capture run);
+        for softmax + paged KV that is idempotent, but each pass advances GDN's recurrent
+        accumulation, so after warmup the bound GDN buffers hold residual dummy state (captured at
+        pos 0 on zeroed inputs). Every real sequence MUST re-zero them before consuming any token,
+        or that residue would leak into the first request's recurrent state. (The warmup capture
+        also dirties paged-KV block 0, but that is benign: the first real prefill overwrites those
+        slots via paged_fill_cache before decode reads them.)
+
+        When the GDN runs on externally-bound in-place buffers — the vLLM/traced flow, whose
+        addresses the decode trace baked in — zero them in place via _reset_dn_state_inplace so the
+        addresses are preserved. Otherwise (eager/non-traced) reassign via reset_state. Detect via
+        the per-layer flag set when the trace is parked, so warmup (which runs before
+        begin_trace_capture) takes the same path as serving.
+        """
+        inplace = any(
+            (not l.is_full_attention) and getattr(l.attention, "_chunk_inplace_state", False) for l in self.layers
+        )
+        if inplace:
+            self._reset_dn_state_inplace()
+        else:
+            self.reset_state(batch_size=1)
 
     def _reset_dn_state_inplace(self):
         """Zero DN recurrent + conv state buffers in place (preserves addresses).
