@@ -54,7 +54,7 @@ LOUDBOX_MESH_CONFIG = {
         (12480, 5120, 3840, True, True, None, 3, False, 7, 5, 16, 1, 2),
         (28800, 5120, 3840, True, True, None, 3, False, 7, 5, 16, 1, 2),
         (4096, 4096, 4096, True, True, None, 1, False, 8, 8, 8, 2, 2),
-        (1024, 6144, 4608, False, True, None, 1, False, 1, 4, 24, 1, 4),  # force_transpose=False
+        # (1024, 6144, 4608, False, True, None, 1, False, 1, 4, 24, 1, 4),  # force_transpose=False
     ],
     ids=[
         "m1024_k6144_n768",
@@ -65,7 +65,6 @@ LOUDBOX_MESH_CONFIG = {
         "1xssg480pqkv",
         "1xssg720pqkv",
         "4ksquare",
-        "ltx_ftfalse",
     ],
 )
 @pytest.mark.parametrize(
@@ -112,6 +111,128 @@ def test_linear_loudbox(
 
     if core_grid_x > 11 and not is_slow_dispatch():
         pytest.skip("Fast dispatch mode not supported for core_grid_x > 11")
+
+    use_non_fused = mode == "separate"
+    matmul_isolation = mode == "matmul_isolation_fused" and os.environ.get("AGMM_MATMUL_ISOLATION") == "1"
+
+    check_result = run_test_linear(
+        mesh_device,
+        M,
+        K,
+        N,
+        M_block_size,
+        K_block_size,
+        N_block_size,
+        subblock_h,
+        subblock_w,
+        topology,
+        core_grid=ttnn.CoreCoord(core_grid_x, core_grid_y),
+        num_workers_per_link=num_workers_per_link,
+        num_links=num_links,
+        use_non_fused=use_non_fused,
+        force_transpose=force_transpose,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        use_bias=use_bias,
+        activation=activation,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        cluster_axis=cluster_axis,
+        fuse_addcmul=fuse_addcmul,
+        chunks=chunks,
+        skip_result_check=matmul_isolation or enable_trace,
+    )
+
+    if matmul_isolation or enable_trace:
+        return
+
+    for n in range(num_iters):
+        for c in range(chunks):
+            for i in range(mesh_device.get_num_devices()):
+                assert check_result[n][c][i]["pcc"] > 0.999_500
+                assert check_result[n][c][i]["relative_rmse"] < 0.02
+
+
+# Non-transposed core grid: with force_transpose=False the (M > N) heuristic leaves wide (N >= M)
+# outputs un-transposed. The mux cores then live on the RIGHT COLUMN, so the matmul grid is 11x10
+# (one column ceded to mux) and num_links must divide core_grid_y=10 (2 links -> 5 workers/link).
+@pytest.mark.parametrize(
+    "mesh_device, device_params, topology, num_links, num_workers_per_link, sp_axis, tp_axis, core_grid_x, core_grid_y, cluster_axis",
+    [
+        [
+            (1, 8),
+            LOUDBOX_MESH_CONFIG,
+            ttnn.Topology.Ring,
+            2,
+            5,  # right-column mux: 5 workers * 2 links = 10 = full grid height
+            0,
+            1,
+            11,
+            10,
+            1,
+        ],
+    ],
+    ids=["bh1x8notranspose"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "M, K, N, force_transpose, use_bias, activation, chunks, fuse_addcmul, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [
+        # Wide output (N > M): heuristic leaves it un-transposed. M/K/N tiles: 32/192/144
+        (1024, 6144, 4608, False, True, None, 1, False, 1, 4, 24, 1, 4),
+    ],
+    ids=["ltx_notranspose"],
+)
+@pytest.mark.parametrize(
+    "mode",
+    ["full_fused", "matmul_isolation_fused", "separate"],
+    ids=["full_fused", "matmul_isolation_fused", "separate"],
+)
+@pytest.mark.parametrize(
+    # No trace/perf variant: the non-transposed 11x10 config requires slow dispatch (for the 12-wide
+    # full grid that hosts the right-column mux), and trace capture is not supported in slow dispatch.
+    "enable_trace,num_iters",
+    [(False, 3)],
+    ids=["check"],
+)
+def test_linear_loudbox_no_transpose(
+    mesh_device,
+    M,
+    K,
+    N,
+    M_block_size,
+    K_block_size,
+    N_block_size,
+    subblock_h,
+    subblock_w,
+    topology,
+    core_grid_x,
+    core_grid_y,
+    num_workers_per_link,
+    num_links,
+    mode,
+    force_transpose,
+    sp_axis,
+    tp_axis,
+    use_bias,
+    activation,
+    enable_trace,
+    num_iters,
+    cluster_axis,
+    fuse_addcmul,
+    chunks,
+):
+    if is_wormhole_b0():
+        pytest.skip("Blackhole Loudbox config not supported on wormhole_b0")
+
+    assert mesh_device.shape == ttnn.MeshShape(1, 8)
+    assert not force_transpose, "test_linear_loudbox_no_transpose exercises the non-transposed path only"
+
+    # The non-transposed path places the fabric mux on the RIGHT COLUMN, at full_grid_size.x - 1,
+    # which must lie outside the core_grid_x=11 matmul grid. That requires a 12-wide full grid,
+    # which is only available in slow dispatch (fast dispatch reserves a column for dispatch, giving 11x10).
+    if not is_slow_dispatch():
+        pytest.skip("Non-transposed mux column needs a 12-wide full grid (slow dispatch only)")
 
     use_non_fused = mode == "separate"
     matmul_isolation = mode == "matmul_isolation_fused" and os.environ.get("AGMM_MATMUL_ISOLATION") == "1"
