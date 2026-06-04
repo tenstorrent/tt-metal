@@ -49,7 +49,12 @@ def _build_inputs(model, device, batch_size: int = 1):
     ec = cfg.expert_config
 
     torch.manual_seed(SEED)
-    noisy_actions = torch.randn(batch_size, cfg.action_horizon, cfg.action_dim)
+    # Host-pad to ah_padded — the sharded RMSNorm requires tile-aligned logical
+    # shape (cfg.action_horizon isn't tile-aligned in general, e.g. 50 → 64).
+    # Same workaround as prof_one_denoise_step.py and test_perf_ttnn_full_e2e_trace_2cq.py.
+    ah_padded = model._action_horizon_padded
+    noisy_actions = torch.zeros(batch_size, ah_padded, cfg.action_dim, dtype=torch.float32)
+    noisy_actions[:, : cfg.action_horizon, :] = torch.randn(batch_size, cfg.action_horizon, cfg.action_dim)
     timestep = torch.tensor([0.5])
 
     noisy_ttnn = ttnn.from_torch(
@@ -66,14 +71,20 @@ def _build_inputs(model, device, batch_size: int = 1):
         device=device,
     )
 
+    # Prefix KV must match the suffix-side dtype (bf8_b) so the keep_padded
+    # concat path validates. See note in test_perf_single_expert_block.py and
+    # prof_one_denoise_step.py.
+    prefix_padded = ((PREFIX_LEN + 31) // 32) * 32
     prefix_kv_cache = []
     for _ in range(ec.depth):
-        k = torch.randn(batch_size, ec.num_kv_heads, PREFIX_LEN, ec.head_dim) * 0.1
-        v = torch.randn(batch_size, ec.num_kv_heads, PREFIX_LEN, ec.head_dim) * 0.1
+        k = torch.zeros(batch_size, ec.num_kv_heads, prefix_padded, ec.head_dim, dtype=torch.float32)
+        v = torch.zeros(batch_size, ec.num_kv_heads, prefix_padded, ec.head_dim, dtype=torch.float32)
+        k[:, :, :PREFIX_LEN] = torch.randn(batch_size, ec.num_kv_heads, PREFIX_LEN, ec.head_dim) * 0.1
+        v[:, :, :PREFIX_LEN] = torch.randn(batch_size, ec.num_kv_heads, PREFIX_LEN, ec.head_dim) * 0.1
         prefix_kv_cache.append(
             (
-                ttnn.from_torch(k, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
-                ttnn.from_torch(v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+                ttnn.from_torch(k, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device),
+                ttnn.from_torch(v, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device),
             )
         )
 
