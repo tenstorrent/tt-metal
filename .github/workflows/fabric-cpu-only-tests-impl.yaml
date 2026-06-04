@@ -58,8 +58,8 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           # Keep commands in tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh (also runnable locally).
-          # The script runs all 6 test groups in parallel on this runner.
-          ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh
+          # --parallel: runs all 6 groups concurrently on this runner; logs buffered per-group and printed sequentially.
+          ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --parallel
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
