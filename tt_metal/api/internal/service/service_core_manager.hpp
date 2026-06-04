@@ -5,7 +5,6 @@
 #pragma once
 
 #include <memory>
-#include <optional>
 #include <stddef.h>
 #include <unordered_set>
 #include <vector>
@@ -15,10 +14,13 @@
 
 namespace tt::tt_metal {
 class IDevice;
+class MetalEnvImpl;
 using DeviceAddr = uint64_t;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::internal {
+
+class ServiceCoreManagerImpl;
 
 // Internal, unstable API - read the stability/usage conditions in tt_metal/api/internal/README.md
 // before depending on anything here.
@@ -30,6 +32,13 @@ namespace tt::tt_metal::internal {
 // pipeline (prefetcher, dispatcher, fabric-mux, etc.). Services run persistent SD-launched
 // kernels on these cores concurrently with FD workloads on the regular worker grid — two
 // disjoint worker spaces, no overlap.
+//
+// Lives on MetalContext (one instance per context, keyed internally by ChipId). Obtain it via
+// MetalContext::instance().get_service_core_manager(); do not construct it directly.
+//
+// This is the thin, user-facing surface. Internal dispatch routing / placement-validation
+// methods live on ServiceCoreManagerImpl, reachable only through impl() by translation units
+// that include impl/internal/service/service_core_manager_impl.hpp.
 //
 // Supported configurations: Blackhole or UBB Galaxy, with an active manual FD session.
 // claim() and get_claimable_cores() TT_FATAL outside these conditions.
@@ -52,7 +61,7 @@ namespace tt::tt_metal::internal {
 //   // 1. Launch App in FD
 //
 //   // 2. Claim service cores (must be done while FD is active)
-//   auto& svc = ServiceCoreManager::get();
+//   auto& svc = MetalContext::instance().get_service_core_manager();
 //   auto claimable = svc.get_claimable_cores(device);
 //   svc.claim(device, claimable);
 //
@@ -77,7 +86,10 @@ namespace tt::tt_metal::internal {
 //
 class ServiceCoreManager {
 public:
-    static ServiceCoreManager& get();
+    // Constructed by MetalContext. Stores a reference to the MetalEnvImpl that owns the cluster,
+    // rtoptions and hal it queries (mirrors dispatch_core_manager).
+    explicit ServiceCoreManager(MetalEnvImpl& env);
+    ~ServiceCoreManager();
 
     // Returns dispatch-column cores not yet allocated to FD infra or claimed as service cores.
     // TT_FATALs if:
@@ -110,9 +122,6 @@ public:
     // Returns the set of currently claimed cores for a device.
     std::unordered_set<CoreCoord> claimed_cores(ChipId device_id) const;
 
-    // Called from Device::close() to drop all claims for a device.
-    void on_device_close(ChipId device_id);
-
     // Per-core L1 allocator. Valid only for currently claimed cores - TT_FATALs otherwise.
     // Alignment is fixed at claim() time to HalMemType::DRAM so NoC read/write to allocations
     // are always valid (mirrors BankManager's lockstep L1 path). TT_FATALs on OOM.
@@ -123,40 +132,17 @@ public:
     DeviceAddr allocate_l1(IDevice* device, CoreCoord core, size_t size);
     void deallocate_l1(IDevice* device, CoreCoord core, DeviceAddr addr);
     size_t bytes_available(IDevice* device, CoreCoord core) const;
-    // Returns the lowest start address currently handed out by the per-core L1 allocator,
-    // or nullopt if nothing has been allocated on that core yet.
-    // Because allocate_l1() allocates top-down (bottom_up=false), this is the frontier —
-    // the lowest point service buffers have reached. Used by validate_circular_buffer_region
-    // to detect collisions with CBs that grow up from DEFAULT_UNRESERVED.
-    std::optional<DeviceAddr> lowest_allocated_address(ChipId device_id, CoreCoord core) const;
 
-    // Returns the FD-mode compute grid snapshotted at first claim() for a device, or
-    // nullopt if no service cores are currently claimed. Used internally to cap
-    // compute_with_storage_grid_size() in SD mode so SD workloads don't accidentally
-    // target dispatch column cores running persistent service kernels - preserving the
-    // disjoint worker-set invariant between the regular worker grid and service cores.
-    std::optional<CoreCoord> get_safe_compute_grid(ChipId device_id) const;
-
-    // NOTE: Internal dispatch routing (not user-facing)
-    // Called on every EnqueueMeshWorkload
-    bool has_any_claims() const;
-    // True if `core` is claimed as a service core on `device_id`. Used at enqueue time to route
-    // programs to the SD path and to device-scope placement/CB validation.
-    bool is_service_core(ChipId device_id, CoreCoord core) const;
-    // Enforces launch-once: marks a claimed service core as launched, TT_FATALing if it
-    // already was. A claimed core accepts a single service-workload enqueue until release()
-    // clears the claim. No-op for cores not claimed on device_id (e.g. worker cores).
-    void mark_launched(ChipId device_id, CoreCoord core);
+    // Access to the internal implementation. Include
+    // impl/internal/service/service_core_manager_impl.hpp to use the returned reference
+    ServiceCoreManagerImpl& impl();
+    const ServiceCoreManagerImpl& impl() const;
 
     ServiceCoreManager(const ServiceCoreManager&) = delete;
     ServiceCoreManager& operator=(const ServiceCoreManager&) = delete;
 
 private:
-    ServiceCoreManager();
-    ~ServiceCoreManager();
-
-    struct Impl;
-    std::unique_ptr<Impl> impl_;
+    std::unique_ptr<ServiceCoreManagerImpl> pimpl_;
 };
 
 }  // namespace tt::tt_metal::internal

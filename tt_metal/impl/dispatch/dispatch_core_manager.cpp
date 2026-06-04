@@ -274,7 +274,7 @@ void dispatch_core_manager::reset_dispatch_core_manager(
         }
 
         // Remove service-owned cores so FD never allocates them.
-        auto claimed = internal::ServiceCoreManager::get().claimed_cores(device_id);
+        auto claimed = MetalContext::instance().get_service_core_manager().claimed_cores(device_id);
         if (!claimed.empty()) {
             logical_dispatch_cores.remove_if([&claimed](const CoreCoord& c) { return claimed.contains(c); });
         }

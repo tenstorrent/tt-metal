@@ -20,6 +20,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <internal/service/service_core_manager.hpp>
+#include "impl/internal/service/service_core_manager_impl.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -104,22 +105,24 @@ TEST_F(ServiceCoreSdFixture, ServiceCoreFatalGuards) {
     IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
 
     // Before FD is active, both query and claim must fatal
-    EXPECT_THROW(internal::ServiceCoreManager::get().get_claimable_cores(device), std::exception);
-    EXPECT_THROW(internal::ServiceCoreManager::get().claim(device, {{0, 0}}), std::exception);
+    EXPECT_THROW(MetalContext::instance().get_service_core_manager().get_claimable_cores(device), std::exception);
+    EXPECT_THROW(MetalContext::instance().get_service_core_manager().claim(device, {{0, 0}}), std::exception);
 
     // Bring FD up and claim one core so we can test the unclaimed core guards
     experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device.get());
-    auto free = internal::ServiceCoreManager::get().get_claimable_cores(device);
+    auto free = MetalContext::instance().get_service_core_manager().get_claimable_cores(device);
     CoreCoord svc_core = free[0];
-    internal::ServiceCoreManager::get().claim(device, {svc_core});
+    MetalContext::instance().get_service_core_manager().claim(device, {svc_core});
 
     // {0,0} is a worker-grid core. Never a service core — so all three guards must fatal
     CoreCoord unclaimed{0, 0};
-    EXPECT_THROW(internal::ServiceCoreManager::get().allocate_l1(device, unclaimed, 4), std::exception);
-    EXPECT_THROW(internal::ServiceCoreManager::get().deallocate_l1(device, unclaimed, 0), std::exception);
-    EXPECT_THROW(internal::ServiceCoreManager::get().bytes_available(device, unclaimed), std::exception);
+    EXPECT_THROW(MetalContext::instance().get_service_core_manager().allocate_l1(device, unclaimed, 4), std::exception);
+    EXPECT_THROW(
+        MetalContext::instance().get_service_core_manager().deallocate_l1(device, unclaimed, 0), std::exception);
+    EXPECT_THROW(
+        MetalContext::instance().get_service_core_manager().bytes_available(device, unclaimed), std::exception);
 
-    internal::ServiceCoreManager::get().release(device, {svc_core});
+    MetalContext::instance().get_service_core_manager().release(device, {svc_core});
     experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device.get());
 }
 
@@ -139,18 +142,18 @@ TEST_F(ServiceCoreSdFixture, ServiceCoreGridCap) {
     ASSERT_LT(fd_grid.x * fd_grid.y, sd_grid.x * sd_grid.y)
         << "FD grid must be smaller than SD grid (dispatch column excluded by YAML)";
 
-    const auto free_cores = internal::ServiceCoreManager::get().get_claimable_cores(device);
-    internal::ServiceCoreManager::get().claim(device, free_cores);
+    const auto free_cores = MetalContext::instance().get_service_core_manager().get_claimable_cores(device);
+    MetalContext::instance().get_service_core_manager().claim(device, free_cores);
 
     // Attempting to claim the same cores again must fail
-    EXPECT_THROW(internal::ServiceCoreManager::get().claim(device, free_cores), std::exception);
+    EXPECT_THROW(MetalContext::instance().get_service_core_manager().claim(device, free_cores), std::exception);
 
     // Phase 3: terminate + re-init FD must exclude all claimed cores
     experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device.get());
     experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device.get());
 
     // All cores claimed — get_claimable_cores() must fatal rather than return an empty vector
-    EXPECT_THROW(internal::ServiceCoreManager::get().get_claimable_cores(device), std::exception);
+    EXPECT_THROW(MetalContext::instance().get_service_core_manager().get_claimable_cores(device), std::exception);
 
     experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device.get());
 
@@ -160,13 +163,13 @@ TEST_F(ServiceCoreSdFixture, ServiceCoreGridCap) {
     EXPECT_EQ(capped_grid.y, fd_grid.y) << "SD grid y must be capped to FD grid y when service cores are claimed";
 
     // Phase 5: release service cores and verify the full SD grid is restored
-    internal::ServiceCoreManager::get().release(device, free_cores);
+    MetalContext::instance().get_service_core_manager().release(device, free_cores);
 
     const CoreCoord restored_grid = device->compute_with_storage_grid_size();
     EXPECT_EQ(restored_grid.x, sd_grid.x) << "SD grid x must be restored to original after release";
     EXPECT_EQ(restored_grid.y, sd_grid.y) << "SD grid y must be restored to original after release";
 
-    internal::ServiceCoreManager::get().on_device_close(device->id());
+    MetalContext::instance().get_service_core_manager().impl().on_device_close(device->id());
 }
 
 // Test a Persistent kernel on FD cores can survive multiple FD init + teardown cycles
@@ -200,14 +203,16 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
         // Phase 1: FD up, claim a free core, drop FD.
         experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device.get());
 
-        auto free = internal::ServiceCoreManager::get().get_claimable_cores(device);
+        auto free = MetalContext::instance().get_service_core_manager().get_claimable_cores(device);
         CoreCoord svc_core = free[free.size() / 2];
 
-        internal::ServiceCoreManager::get().claim(device, free);
-        DeviceAddr stop_addr = internal::ServiceCoreManager::get().allocate_l1(device, svc_core, sizeof(uint32_t));
-        DeviceAddr counter_addr = internal::ServiceCoreManager::get().allocate_l1(device, svc_core, sizeof(uint32_t));
+        MetalContext::instance().get_service_core_manager().claim(device, free);
+        DeviceAddr stop_addr =
+            MetalContext::instance().get_service_core_manager().allocate_l1(device, svc_core, sizeof(uint32_t));
+        DeviceAddr counter_addr =
+            MetalContext::instance().get_service_core_manager().allocate_l1(device, svc_core, sizeof(uint32_t));
         DeviceAddr service_done_addr =
-            internal::ServiceCoreManager::get().allocate_l1(device, svc_core, sizeof(uint32_t));
+            MetalContext::instance().get_service_core_manager().allocate_l1(device, svc_core, sizeof(uint32_t));
 
         experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device.get());
 
@@ -283,7 +288,7 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
             ASSERT_LT(elapsed + kPollMs, kTimeoutMs) << "Service kernel stop timed out on cycle " << cycle;
         }
 
-        internal::ServiceCoreManager::get().release(device, free);
+        MetalContext::instance().get_service_core_manager().release(device, free);
     }
 }
 
@@ -292,18 +297,18 @@ TEST_F(ServiceCoreFdFixture, ServiceCoreAllocatorCorrectness) {
     auto& mesh_device = this->devices_[0];
     IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
 
-    auto claimable = internal::ServiceCoreManager::get().get_claimable_cores(device);
+    auto claimable = MetalContext::instance().get_service_core_manager().get_claimable_cores(device);
     CoreCoord core = claimable[0];
-    internal::ServiceCoreManager::get().claim(device, {core});
+    MetalContext::instance().get_service_core_manager().claim(device, {core});
 
     const DeviceAddr dram_align = MetalContext::instance().hal().get_alignment(HalMemType::DRAM);
 
     const std::vector<size_t> sizes = {64, 128, 32, 256};
     std::vector<DeviceAddr> addrs;
-    size_t initial_available = internal::ServiceCoreManager::get().bytes_available(device, core);
+    size_t initial_available = MetalContext::instance().get_service_core_manager().bytes_available(device, core);
 
     for (size_t sz : sizes) {
-        DeviceAddr addr = internal::ServiceCoreManager::get().allocate_l1(device, core, sz);
+        DeviceAddr addr = MetalContext::instance().get_service_core_manager().allocate_l1(device, core, sz);
         EXPECT_EQ(addr % dram_align, 0u) << "Allocation not DRAM-aligned";
         addrs.push_back(addr);
     }
@@ -317,18 +322,19 @@ TEST_F(ServiceCoreFdFixture, ServiceCoreAllocatorCorrectness) {
         }
     }
 
-    size_t after_alloc = internal::ServiceCoreManager::get().bytes_available(device, core);
+    size_t after_alloc = MetalContext::instance().get_service_core_manager().bytes_available(device, core);
     EXPECT_LT(after_alloc, initial_available);
 
-    internal::ServiceCoreManager::get().deallocate_l1(device, core, addrs[1]);
-    size_t after_dealloc = internal::ServiceCoreManager::get().bytes_available(device, core);
+    MetalContext::instance().get_service_core_manager().deallocate_l1(device, core, addrs[1]);
+    size_t after_dealloc = MetalContext::instance().get_service_core_manager().bytes_available(device, core);
     EXPECT_GT(after_dealloc, after_alloc);
 
     // OOM: requesting more than the full L1 space must TT_FATAL.
     constexpr size_t k1p5MB = 1536 * 1024;
-    EXPECT_THROW(internal::ServiceCoreManager::get().allocate_l1(device, core, k1p5MB), std::runtime_error);
+    EXPECT_THROW(
+        MetalContext::instance().get_service_core_manager().allocate_l1(device, core, k1p5MB), std::runtime_error);
 
-    internal::ServiceCoreManager::get().release(device, {core});
+    MetalContext::instance().get_service_core_manager().release(device, {core});
 }
 
 // Actual use case: Launch a persistent service kernel on a claimed FD idle core while simultaneously
@@ -339,8 +345,8 @@ TEST_F(ServiceCoreFdFixture, FDWorkloadAndServiceKernelConcurrent) {
     IDevice* device = mesh_device->get_device(MeshCoordinate(0, 0));
     const auto& cluster = MetalContext::instance().get_cluster();
 
-    auto claimable = internal::ServiceCoreManager::get().get_claimable_cores(device);
-    internal::ServiceCoreManager::get().claim(device, claimable);
+    auto claimable = MetalContext::instance().get_service_core_manager().get_claimable_cores(device);
+    MetalContext::instance().get_service_core_manager().claim(device, claimable);
 
     // Allocate L1 and zero-init communication words on each service core.
     struct CoreAddrs {
@@ -349,9 +355,10 @@ TEST_F(ServiceCoreFdFixture, FDWorkloadAndServiceKernelConcurrent) {
     std::unordered_map<CoreCoord, CoreAddrs> core_addrs;
     for (const auto& core : claimable) {
         core_addrs[core] = {
-            .stop = internal::ServiceCoreManager::get().allocate_l1(device, core, sizeof(uint32_t)),
-            .counter = internal::ServiceCoreManager::get().allocate_l1(device, core, sizeof(uint32_t)),
-            .service_done = internal::ServiceCoreManager::get().allocate_l1(device, core, sizeof(uint32_t)),
+            .stop = MetalContext::instance().get_service_core_manager().allocate_l1(device, core, sizeof(uint32_t)),
+            .counter = MetalContext::instance().get_service_core_manager().allocate_l1(device, core, sizeof(uint32_t)),
+            .service_done =
+                MetalContext::instance().get_service_core_manager().allocate_l1(device, core, sizeof(uint32_t)),
         };
         const uint32_t zero = 0;
         CoreCoord phys = device->worker_core_from_logical_core(core);
@@ -428,7 +435,7 @@ TEST_F(ServiceCoreFdFixture, FDWorkloadAndServiceKernelConcurrent) {
         }
     }
 
-    internal::ServiceCoreManager::get().release(device, claimable);
+    MetalContext::instance().get_service_core_manager().release(device, claimable);
 }
 
 }  // namespace tt::tt_metal::distributed::test

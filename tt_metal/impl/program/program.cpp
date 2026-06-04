@@ -90,6 +90,7 @@
 #include <llrt/tt_cluster.hpp>
 #include "impl/allocator/allocator.hpp"
 #include <internal/service/service_core_manager.hpp>
+#include "impl/internal/service/service_core_manager_impl.hpp"
 
 namespace tt {
 class tt_hlk_desc;
@@ -127,7 +128,7 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
     if (not slow_dispatch and not force_slow_dispatch) {
         const std::vector<CoreCoord>& dispatch_cores =
             MetalContext::instance().get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
-        const auto& service_claims = internal::ServiceCoreManager::get();
+        const auto& service_claims = MetalContext::instance().get_service_core_manager().impl();
         bool on_dispatch_core = std::any_of(
             dispatch_cores.begin(),
             dispatch_cores.end(),
@@ -1443,7 +1444,7 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
 
     // Flatten MeshDevice into constituent physical devices so ServiceCoreManager (keyed by ChipId) can be queried per
     // core
-    const auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+    const auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager().impl();
     std::vector<const IDevice*> devices_for_svc_check;
     if (svc.has_any_claims()) {
         if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
@@ -1532,7 +1533,7 @@ void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* de
     auto grid_size = device->compute_with_storage_grid_size();
     // Flatten MeshDevice into constituent physical devices so ServiceCoreManager (keyed by ChipId) can be queried per
     // core. Mirrors validate_circular_buffer_region.
-    const auto& svc = tt::tt_metal::internal::ServiceCoreManager::get();
+    const auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager().impl();
     std::unordered_set<CoreCoord> claimed;
     if (svc.has_any_claims()) {
         if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {

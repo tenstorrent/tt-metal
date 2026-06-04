@@ -15,6 +15,8 @@
 #include "tt-metalium/program.hpp"
 #include "dispatch/system_memory_manager.hpp"
 #include <internal/service/service_core_manager.hpp>
+#include "impl/internal/service/service_core_manager_impl.hpp"
+#include "impl/context/metal_context.hpp"
 #include <tt-metalium/tt_metal.hpp>
 
 namespace tt::tt_metal::distributed {
@@ -25,30 +27,29 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         return;
     }
 
-    // Route programs targeting claimed service cores to the SD path. Done here, not in add_program,
-    // because the physical device needed to device-scope the service-core check is only known at
-    // enqueue. Common case - no service claimed so skip entirely.
-    auto& svc = internal::ServiceCoreManager::get();
+    // Route service workloads to the SD path. Done here, not in add_program, because the physical
+    // device needed to device-scope the service-core check is only known at enqueue. Common case -
+    // no service claimed so skip entirely.
+    //
+    // No-mixing contract: a workload is entirely a service workload (every program on claimed service
+    // cores) or entirely a normal one.
+    auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
     auto& programs = mesh_workload.impl().get_programs();
-    auto& service_programs = mesh_workload.impl().get_service_programs();
-    if (svc.has_any_claims()) {
-        // A workload is entirely a service workload or entirely a normal one - no mixing. Seed
-        // saw_service from already-extracted service programs so the invariant holds across the
-        // launch-once persistence boundary (re-enqueue of a pure service workload still passes).
-        bool saw_service = !service_programs.empty();
+    if (svc.impl().has_any_claims()) {
+        bool saw_service = false;
         bool saw_normal = false;
-        for (auto it = programs.begin(); it != programs.end();) {
+        for (auto& [device_range, program] : programs) {
             size_t service_cores = 0;
             size_t total_cores = 0;
-            for (const auto& coord : it->first) {
+            for (const auto& coord : device_range) {
                 auto* device = mesh_cq.device()->impl().get_device(coord);
                 if (device == nullptr) {
                     continue;
                 }
-                for (const auto& per_type : it->second.impl().logical_cores()) {
+                for (const auto& per_type : program.impl().logical_cores()) {
                     for (const auto& core : per_type) {
                         ++total_cores;
-                        if (svc.is_service_core(device->id(), core)) {
+                        if (svc.impl().is_service_core(device->id(), core)) {
                             ++service_cores;
                         }
                     }
@@ -71,35 +72,28 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
                 !(saw_service && saw_normal),
                 "MeshWorkload mixes service and normal programs. A workload must be entirely service (all "
                 "programs on claimed service cores) or entirely normal (all on the worker grid).");
-            if (program_is_service) {
-                service_programs[it->first] = std::move(it->second);
-                it = programs.erase(it);
-            } else {
-                ++it;
-            }
         }
-    }
 
-    // Service programs are dispatched via SD, independently of the FD command queue. Classification
-    // above guarantees every core here is claimed, so we only mark launch-once and launch.
-    for (auto& [device_range, program] : service_programs) {
-        for (const auto& coord : device_range) {
-            auto* device = mesh_cq.device()->impl().get_device(coord);
-            TT_FATAL(
-                device != nullptr,
-                "EnqueueMeshWorkload: service program targets mesh coordinate {} with no local device",
-                coord);
-            for (const auto& per_type : program.impl().logical_cores()) {
-                for (const auto& core : per_type) {
-                    svc.mark_launched(device->id(), core);  // launch-once
+        if (saw_service) {
+            // Service workload: every core is claimed (checked above), so mark launch-once and
+            // dispatch each program via SD, bypassing FD. Re-enqueue TT_FATALs in mark_launched.
+            for (auto& [device_range, program] : programs) {
+                for (const auto& coord : device_range) {
+                    auto* device = mesh_cq.device()->impl().get_device(coord);
+                    TT_FATAL(
+                        device != nullptr,
+                        "EnqueueMeshWorkload: service program targets mesh coordinate {} with no local device",
+                        coord);
+                    for (const auto& per_type : program.impl().logical_cores()) {
+                        for (const auto& core : per_type) {
+                            svc.impl().mark_launched(device->id(), core);  // launch-once
+                        }
+                    }
+                    tt::tt_metal::detail::LaunchProgram(device, program, false, true);
                 }
             }
-            tt::tt_metal::detail::LaunchProgram(device, program, false, true);
+            return;
         }
-    }
-
-    if (programs.empty()) {
-        return;
     }
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
