@@ -380,6 +380,8 @@ gh api "repos/tenstorrent/tt-metal/actions/workflows/{workflow_file}/runs?branch
 
 Record `before_run_id` and `after_run_id`. Write to campaign-state.json immediately.
 
+**Include probe URLs in your verdict JSON** (Step 13) so main BrAIn can DM them to @ebanerjeeTT. The `before_run_url` and `after_run_url` fields are mandatory in the verdict.
+
 ---
 
 ## Step 8: Post-Dispatch Verification (MANDATORY — do NOT skip)
@@ -560,6 +562,8 @@ Return a single JSON object (no prose, no markdown wrapping):
   "confidence": "proven|assumed|null",
   "before_run_id": "...",
   "after_run_id": "...",
+  "before_run_url": "https://github.com/tenstorrent/tt-metal/actions/runs/...",
+  "after_run_url": "https://github.com/tenstorrent/tt-metal/actions/runs/...",
   "before_result": "FAIL|PASS|not_found",
   "after_result": "FAIL|PASS|not_found",
   "artifact_reuse": true,
