@@ -129,9 +129,10 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             tensor for the all gather output is ready to be written.  Either this or persistent_output_buffer needs to be
             used.
 
-        force_transpose : Optional[bool], default: true
-            Minimal matmul has better performance in transpose when M > N.  However, to alleviate noc congestion,
-            we want transpose to always be true.
+        force_transpose : Optional[bool], default: false
+            Minimal matmul has better performance in transpose when M > N. By default the core grid is transposed
+            via the (M > N) heuristic; set this to true to force transpose regardless of shape (e.g. to alleviate
+            NOC congestion, or to satisfy grid-divisibility constraints such as a full 12-wide core grid).
 
         num_workers_per_link : Optional[int], default: 1
             The number of worker cores per link to use for the all gather portion of the operation.  More than 1 typically
@@ -221,7 +222,7 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("num_links") = 1,
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("barrier_semaphore") = nb::none(),
-            nb::arg("force_transpose") = true,
+            nb::arg("force_transpose") = false,
             nb::arg("num_workers_per_link") = 1,
             nb::arg("num_buffers_per_channel") = 1,
             nb::arg("chunks") = 1,
