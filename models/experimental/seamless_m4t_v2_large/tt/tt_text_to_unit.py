@@ -65,7 +65,7 @@ _T2U_LINEAR_IN0_BLOCK_W = 8
 # TP long-seq self-attn: fused SDPA L1 scratch scales with full ``S`` on 1×4 meshes (decoder @ 4096).
 # Use DRAM chunked Q@K^T like speech-encoder relative scores (``scores_mc = DRAM`` when ``tp>1, S>=128``).
 _T2U_LONG_SDPA_TP_THRESHOLD = 128
-_T2U_SDPA_Q_CHUNK_ROWS = 256
+_T2U_SDPA_Q_CHUNK_ROWS = 512
 
 # HF ``torch.finfo(torch.bfloat16).min`` additive padding mask floor (approx.).
 _BF16_MASK_FLOOR = -3.3895313892565356e38
