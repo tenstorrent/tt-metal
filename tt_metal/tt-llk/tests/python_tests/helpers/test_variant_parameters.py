@@ -924,3 +924,27 @@ class FILL_INT_FORMAT(TemplateParameter):
 
     def convert_to_cpp(self) -> str:
         return f"constexpr auto FILL_INT_FORMAT = DataFormat::{self.data_format.name};"
+
+
+@dataclass
+class SFPU_IS_FILL_OP(TemplateParameter):
+    def convert_to_cpp(self) -> str:
+        return "#define SFPU_IS_FILL_OP"
+
+
+@dataclass
+class SFPU_IS_BINARY_INT_OP(TemplateParameter):
+    def convert_to_cpp(self) -> str:
+        return "#define SFPU_IS_BINARY_INT_OP"
+
+
+@dataclass
+class SFPU_IS_BINARY_MAX_MIN_OP(TemplateParameter):
+    def convert_to_cpp(self) -> str:
+        return "#define SFPU_IS_BINARY_MAX_MIN_OP"
+
+
+@dataclass
+class SFPU_IS_WHERE_OP(TemplateParameter):
+    def convert_to_cpp(self) -> str:
+        return "#define SFPU_IS_WHERE_OP"

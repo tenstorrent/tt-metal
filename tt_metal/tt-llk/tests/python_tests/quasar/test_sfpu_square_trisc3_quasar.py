@@ -33,7 +33,7 @@ from helpers.test_variant_parameters import (
     UNPACKER_ENGINE_SEL,
 )
 from helpers.utils import passed_test
-from test_sfpu_square_quasar import (
+from test_sfpu_quasar import (
     SFPU_SQUARE_FORMATS,
     generate_sfpu_square_combinations,
     prepare_square_inputs,
