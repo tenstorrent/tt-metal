@@ -1,7 +1,6 @@
 ---
 name: full-model
 description: Build a complete TTNN autoregressive model and generator from a HuggingFace model plus one or more working TTNN block or decoder implementations. Use when assembling embeddings, block stack, final norm, logits, KV-cache handling, and generation into a full model, validating end-to-end behavior, and reporting full-model accuracy plus generator-level performance. Repo-specific file contracts belong in a project orchestration skill such as model-bringup.
-user_invocable: true
 ---
 
 # Full Model
@@ -71,7 +70,7 @@ Compare full-model behavior against the HuggingFace reference with real weights.
 - sequence lengths tested and any measured capacity limits;
 - watcher, fallback, or runtime-integrity checks appropriate to the environment.
 
-When full-model accuracy is poor, debug the new wrapper first: embeddings, final norm, LM head/tied weights, positions, masks, cache indexing, prompt lengths, page tables, and sampling all commonly fail outside the decoder itself. Escalate back into decoder precision or fidelity only when evidence points there.
+When full-model accuracy is poor, debug the new wrapper first: embeddings, final norm, LM head/tied weights, positions, masks, cache indexing, prompt lengths, page tables, and sampling all commonly fail outside the decoder itself. If the failure spans several of these boundaries and the causal chain is unclear, use `$autofix`; it will run `$autodebug` if needed, then verify or refute each proposed bug before keeping any fix. Escalate back into decoder precision or fidelity only when evidence points there.
 
 ## Performance
 

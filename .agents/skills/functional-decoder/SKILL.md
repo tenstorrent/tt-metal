@@ -1,6 +1,6 @@
 ---
 name: functional-decoder
-description: Bring up a functionally correct TTNN implementation of HuggingFace transformer decoder layers under models/autoports/<model>. Use when producing models/autoports/<model>/tt/functional_decoder.py, reading the HF decoder architecture, validating paged prefill/decode against the HF reference, and leaving compact correctness and performance evidence.
+description: Bring up a functionally correct TTNN implementation of HuggingFace transformer decoder layers under the model-specific autoport directory. Use when producing a functional_decoder.py implementation, reading the HF decoder architecture, validating paged prefill/decode against the HF reference, and leaving compact correctness and performance evidence.
 ---
 
 # Functional Decoder Bringup
@@ -38,7 +38,7 @@ Implement correctness first. BF16, tile layout, and DRAM memory are fine while p
 
 For MoE models, validate the real router/gate and active experts end-to-end. Component tests for gate or experts are useful diagnostics, but the decoder result should include the gate-selected expert path a real model run would use. Target single-user bringup with a routed runtime path: prepare W0/W1/W2 using `ttnn.experimental.moe_compute_utils`, dispatch selected tokens with `ttnn.experimental.all_to_all_dispatch_metadata`, compute experts with `ttnn.experimental.moe_compute`, then use the model-appropriate score-weighted combine/reduce. If `models/common/modules/moe/tt_moe_decode.py` exists in your checkout, start there; otherwise read the DeepSeek MoE optimized path and the `all_to_all_dispatch_metadata` / `moe_compute` tests.
 
-When PCC is low, debug it. Split the decoder into components, check HF parity, raise fidelity where useful, simplify the failing shape, and keep narrowing until the cause is understood. If the cause is a tt-metal bug, make a reproducer or an on-branch workaround and record the evidence.
+When PCC is low, debug it. Split the decoder into components, check HF parity, raise fidelity where useful, simplify the failing shape, and keep narrowing until the cause is understood. If a bug is tricky enough that ordinary narrowing stalls, use `$autofix`; it will run `$autodebug` if needed, then verify or refute each proposed bug before keeping any fix. If the cause is a tt-metal bug, make a reproducer or an on-branch workaround and record the evidence.
 
 ## Evidence To Leave
 

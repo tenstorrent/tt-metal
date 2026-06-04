@@ -1,7 +1,6 @@
 ---
 name: vllm-integration
-description: Add vLLM serving integration for an existing TTNN full model under models/autoports/<model>. Use after full-model when producing tt/generator_vllm.py, registering the model with the TT vLLM plugin, running the vLLM readiness server path, and reporting serving-path correctness and performance.
-user_invocable: true
+description: Add vLLM serving integration for an existing TTNN full model under the model-specific autoport directory. Use after full-model when producing tt/generator_vllm.py, registering the model with the TT vLLM plugin, running the vLLM readiness server path, and reporting serving-path correctness and performance.
 ---
 
 # vLLM Integration
@@ -105,6 +104,8 @@ For final vLLM-integration evidence, use `--sampling-profile full`. Use `--sampl
 Reproducibility-only sampling failures are out of scope when they are the only failures. Typical names include `test_top1_is_greedy`, `test_topk`, `test_uniform_seed_deterministic`, `test_specific_seed_reproducible`, `test_same_seeds_reproduce_across_batches`, `test_*_mixed_batch`, and `test_mixed_params_batch`. Correctness failures, missing logprobs, crashes, gibberish output, or wrong logprob values remain in scope.
 
 If vLLM crashes mid-run, kill leftover `EngineCore` or `vllm.entrypoints` processes before retrying; they can hold chip locks after `tt-smi -r`.
+
+If serving behavior fails in a way that crosses the adapter, generator, cache ownership, scheduler inputs, or plugin registration path and ordinary log reading does not explain it, use `$autofix` before turning the vLLM stage into broad full-model debugging; it will run `$autodebug` if needed, then verify or refute each proposed bug before keeping any fix.
 
 Record the working server invocation in the work log, including `--max-model-len`, `--tt-config`, workload config, and any env vars that mattered. Use typed runner flags for `--max-model-len` and `--tt-config`; keep `--additional-server-args` for uncommon flags only.
 
