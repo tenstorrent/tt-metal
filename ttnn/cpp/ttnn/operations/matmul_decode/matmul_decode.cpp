@@ -8,12 +8,8 @@
 
 namespace ttnn {
 
-Tensor matmul_decode(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<const MemoryConfig>& memory_config,
-    std::optional<const DataType> dtype) {
-    return ttnn::prim::matmul_decode(input_tensor_a, input_tensor_b, memory_config, dtype);
+Tensor matmul_decode(const Tensor& input_tensor_a, const Tensor& input_tensor_b, std::optional<const DataType> dtype) {
+    return ttnn::prim::matmul_decode(input_tensor_a, input_tensor_b, dtype);
 }
 
 }  // namespace ttnn
