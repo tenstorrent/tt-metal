@@ -1385,10 +1385,17 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                 if (input_tensor_b.memory_config().is_sharded()) {
                     TT_FATAL(!program_config.transpose_mcast, "Transpose MCAST not supported when input B is sharded");
                     auto tensor_b_memory_layout = input_tensor_b.memory_config().memory_layout();
+                    // ND_SHARDED in1 in DRAM is read via the generic TensorAccessor path: the program
+                    // factory's in1_is_sharded only covers WIDTH/HEIGHT, so ND falls through to the
+                    // interleaved-style reader, which addresses the NdShardSpec layout from the accessor
+                    // args. The width/height-specific validation below is gated on those layouts, so ND
+                    // DRAM in1 skips it (no shard_spec() access).
+                    const bool in1_is_nd_dram = tensor_b_memory_layout == TensorMemoryLayout::ND_SHARDED &&
+                                                input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
                     TT_FATAL(
                         tensor_b_memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-                            tensor_b_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
-                        "Input B memory layout must be WIDTH_SHARDED or HEIGHT_SHARDED, got: {}",
+                            tensor_b_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || in1_is_nd_dram,
+                        "Input B memory layout must be WIDTH_SHARDED, HEIGHT_SHARDED, or DRAM ND_SHARDED, got: {}",
                         tensor_b_memory_layout);
                     if (tensor_b_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                         // Height-sharded in1 is only supported for DRAM batched matmuls
