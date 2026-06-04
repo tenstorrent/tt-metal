@@ -125,6 +125,19 @@ def test_sfpu_reduce(
     input_dimensions = dimension_combinations
     torch_format = format_dict[formats.input_format]
 
+    print("\n" + "=" * 100)
+    print("[DEBUG] TEST PARAMETERS")
+    print("=" * 100)
+    print(f"[DEBUG] formats            : {formats}")
+    print(f"[DEBUG]   input_format     : {formats.input_format}")
+    print(f"[DEBUG]   output_format    : {formats.output_format}")
+    print(f"[DEBUG] mathop             : {mathop}")
+    print(f"[DEBUG] reduce_pool        : {reduce_pool}")
+    print(f"[DEBUG] dest_acc           : {dest_acc}")
+    print(f"[DEBUG] input_bounds       : {input_bounds}")
+    print(f"[DEBUG] input_dimensions   : {input_dimensions}")
+    print(f"[DEBUG] torch_format       : {torch_format}")
+
     # STIMULI GENERATION
     tile_cnt = input_dimensions[0] * input_dimensions[1] // ELEMENTS_PER_TILE
 
@@ -137,6 +150,11 @@ def test_sfpu_reduce(
         TILE_DIMENSIONS,
         BlocksCalculationAlgorithm.Standard,
     )
+
+    print(f"[DEBUG] tile_cnt           : {tile_cnt}")
+    print(f"[DEBUG] num_blocks         : {num_blocks}")
+    print(f"[DEBUG] num_tiles_in_block : {num_tiles_in_block}")
+    print(f"[DEBUG] ELEMENTS_PER_TILE  : {ELEMENTS_PER_TILE}")
 
     # STIMULI GENERATION
     src_A = torch.randint(
@@ -155,12 +173,26 @@ def test_sfpu_reduce(
         if mathop == MathOperation.ReduceColumn
         else input_dimensions
     )
+
+    print("\n" + "-" * 100)
+    print("[DEBUG] STIMULI")
+    print("-" * 100)
+    print(f"[DEBUG] dst_dim                : {dst_dim}")
+    print(f"[DEBUG] src_A (pre-tilize) shape: {tuple(src_A.shape)}")
+    print(
+        f"[DEBUG] src_A (pre-tilize) unique values: {torch.unique(src_A).tolist()[:16]}"
+    )
+
     src_A = tilize_block(
         src_A, dst_dim, stimuli_format=formats.input_format
     ).flatten()  # Input tensor is tilized in dst register
     src_A_untilized = untilize_block(
         src_A, formats.input_format, dst_dim
     )  # Passed into golden since PyTorch library has no concept of tilization
+
+    print(f"[DEBUG] src_A (tilized) shape   : {tuple(src_A.shape)}")
+    print(f"[DEBUG] src_A_untilized shape   : {tuple(src_A_untilized.shape)}")
+    print(f"[DEBUG] src_A_untilized:\n{src_A_untilized}")
 
     golden_tensor = get_golden_generator(UnarySFPUGolden)(
         mathop,
@@ -203,11 +235,39 @@ def test_sfpu_reduce(
     res_from_L1 = configuration.run().result
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+
+    print("\n" + "-" * 100)
+    print("[DEBUG] RESULTS")
+    print("-" * 100)
+    print(f"[DEBUG] raw res_from_L1 len     : {len(res_from_L1)}")
+    print(f"[DEBUG] res_tensor (tilized) shape: {tuple(res_tensor.shape)}")
+
     res_tensor = untilize_block(res_tensor, formats.output_format, dst_dim)
 
+    print(f"[DEBUG] golden_tensor shape     : {tuple(golden_tensor.shape)}")
+    print(f"[DEBUG] res_tensor   shape      : {tuple(res_tensor.shape)}")
+    print(f"[DEBUG] golden_tensor:\n{golden_tensor}")
+    print(f"[DEBUG] res_tensor:\n{res_tensor}")
+
     if mathop == MathOperation.ReduceColumn:
-        assert passed_test(golden_tensor[0], res_tensor[0], formats.output_format)
+        golden_slice = golden_tensor[0]
+        res_slice = res_tensor[0]
     elif mathop == MathOperation.ReduceRow:
-        assert passed_test(golden_tensor[:, 0], res_tensor[:, 0], formats.output_format)
+        golden_slice = golden_tensor[:, 0]
+        res_slice = res_tensor[:, 0]
     else:
         raise ValueError(f"Unsupported math operation: {mathop}")
+
+    print("\n" + "-" * 100)
+    print("[DEBUG] COMPARED SLICE (golden vs result)")
+    print("-" * 100)
+    print(f"[DEBUG] golden_slice : {golden_slice.tolist()}")
+    print(f"[DEBUG] res_slice    : {res_slice.tolist()}")
+    diff_idx = (golden_slice != res_slice).nonzero(as_tuple=True)[0].tolist()
+    print(f"[DEBUG] mismatch indices ({len(diff_idx)}): {diff_idx}")
+    for i in diff_idx:
+        print(
+            f"[DEBUG]   idx {i:>4}: golden={golden_slice[i].item()} != res={res_slice[i].item()}"
+        )
+
+    assert passed_test(golden_slice, res_slice, formats.output_format)
