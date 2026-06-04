@@ -131,12 +131,29 @@ if [ "$FORCE_REBUILD" = "true" ]; then
     CI_BUILD_VENV_EXISTS=false
     CI_TEST_VENV_EXISTS=false
 elif [ "$CHECK_EXISTS" = "true" ]; then
-    docker manifest inspect "$DEV_TAG" > /dev/null 2>&1 && DEV_EXISTS=true || DEV_EXISTS=false
-    docker manifest inspect "$BASIC_DEV_TAG" > /dev/null 2>&1 && BASIC_DEV_EXISTS=true || BASIC_DEV_EXISTS=false
-    docker manifest inspect "$BASIC_TTNN_TAG" > /dev/null 2>&1 && BASIC_TTNN_EXISTS=true || BASIC_TTNN_EXISTS=false
-    docker manifest inspect "$MANYLINUX_TAG" > /dev/null 2>&1 && MANYLINUX_EXISTS=true || MANYLINUX_EXISTS=false
-    docker manifest inspect "$CI_BUILD_VENV_TAG" > /dev/null 2>&1 && CI_BUILD_VENV_EXISTS=true || CI_BUILD_VENV_EXISTS=false
-    docker manifest inspect "$CI_TEST_VENV_TAG" > /dev/null 2>&1 && CI_TEST_VENV_EXISTS=true || CI_TEST_VENV_EXISTS=false
+    # Fire all manifest inspects in parallel; results written to temp files
+    TMPDIR_CHECK=$(mktemp -d)
+    ( docker manifest inspect "$DEV_TAG" > /dev/null 2>&1 && echo true || echo false ) > "${TMPDIR_CHECK}/dev" &
+    PID_DEV=$!
+    ( docker manifest inspect "$BASIC_DEV_TAG" > /dev/null 2>&1 && echo true || echo false ) > "${TMPDIR_CHECK}/basic_dev" &
+    PID_BASIC_DEV=$!
+    ( docker manifest inspect "$BASIC_TTNN_TAG" > /dev/null 2>&1 && echo true || echo false ) > "${TMPDIR_CHECK}/basic_ttnn" &
+    PID_BASIC_TTNN=$!
+    ( docker manifest inspect "$MANYLINUX_TAG" > /dev/null 2>&1 && echo true || echo false ) > "${TMPDIR_CHECK}/manylinux" &
+    PID_MANYLINUX=$!
+    ( docker manifest inspect "$CI_BUILD_VENV_TAG" > /dev/null 2>&1 && echo true || echo false ) > "${TMPDIR_CHECK}/ci_build_venv" &
+    PID_CI_BUILD_VENV=$!
+    ( docker manifest inspect "$CI_TEST_VENV_TAG" > /dev/null 2>&1 && echo true || echo false ) > "${TMPDIR_CHECK}/ci_test_venv" &
+    PID_CI_TEST_VENV=$!
+
+    # Collect parallel results
+    wait $PID_DEV; DEV_EXISTS=$(cat "${TMPDIR_CHECK}/dev")
+    wait $PID_BASIC_DEV; BASIC_DEV_EXISTS=$(cat "${TMPDIR_CHECK}/basic_dev")
+    wait $PID_BASIC_TTNN; BASIC_TTNN_EXISTS=$(cat "${TMPDIR_CHECK}/basic_ttnn")
+    wait $PID_MANYLINUX; MANYLINUX_EXISTS=$(cat "${TMPDIR_CHECK}/manylinux")
+    wait $PID_CI_BUILD_VENV; CI_BUILD_VENV_EXISTS=$(cat "${TMPDIR_CHECK}/ci_build_venv")
+    wait $PID_CI_TEST_VENV; CI_TEST_VENV_EXISTS=$(cat "${TMPDIR_CHECK}/ci_test_venv")
+    rm -rf "$TMPDIR_CHECK"
 else
     DEV_EXISTS=unknown
     BASIC_DEV_EXISTS=unknown
@@ -151,8 +168,16 @@ if [ "$FORCE_REBUILD" = "true" ]; then
     CI_BUILD_EXISTS=false
     CI_TEST_EXISTS=false
 elif [ "$CHECK_EXISTS" = "true" ]; then
-    docker manifest inspect "$CI_BUILD_TAG" > /dev/null 2>&1 && CI_BUILD_EXISTS=true || CI_BUILD_EXISTS=false
-    docker manifest inspect "$CI_TEST_TAG" > /dev/null 2>&1 && CI_TEST_EXISTS=true || CI_TEST_EXISTS=false
+    # Fire both manifest inspects in parallel
+    TMPDIR_CI=$(mktemp -d)
+    ( docker manifest inspect "$CI_BUILD_TAG" > /dev/null 2>&1 && echo true || echo false ) > "${TMPDIR_CI}/ci_build" &
+    PID_CI_BUILD=$!
+    ( docker manifest inspect "$CI_TEST_TAG" > /dev/null 2>&1 && echo true || echo false ) > "${TMPDIR_CI}/ci_test" &
+    PID_CI_TEST=$!
+
+    wait $PID_CI_BUILD; CI_BUILD_EXISTS=$(cat "${TMPDIR_CI}/ci_build")
+    wait $PID_CI_TEST; CI_TEST_EXISTS=$(cat "${TMPDIR_CI}/ci_test")
+    rm -rf "$TMPDIR_CI"
 else
     CI_BUILD_EXISTS=unknown
     CI_TEST_EXISTS=unknown

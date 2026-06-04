@@ -56,9 +56,24 @@ TOOL_TAGS=$(.github/scripts/compute-tool-tags.sh "$REPO")
 
 # Derive tool list by parsing docker-bake.hcl directly — no Docker invocation needed.
 # Avoids 5-15s buildx daemon cold-start on fresh runners.
-TOOLS=$(grep -A 2 'group "tools"' dockerfile/docker-bake.hcl \
-  | grep 'targets' \
-  | sed 's/.*\[//; s/\].*//; s/"//g; s/,/ /g; s/  */ /g; s/^ //; s/ $//')
+# Uses awk to capture everything between [ and ] after `group "tools"`, handling
+# multi-line targets arrays gracefully.
+TOOLS=$(awk '
+  /group "tools"/ { found=1 }
+  found && /\[/ {
+    # Capture from opening [ to closing ], possibly across multiple lines
+    line = $0
+    while (line !~ /\]/) { getline next_line; line = line " " next_line }
+    gsub(/.*\[/, "", line)
+    gsub(/\].*/, "", line)
+    gsub(/"/, "", line)
+    gsub(/,/, " ", line)
+    gsub(/  +/, " ", line)
+    gsub(/^ | $/, "", line)
+    print line
+    exit
+  }
+' dockerfile/docker-bake.hcl)
 
 # Check existence for each tool (parallel to avoid serial network latency)
 ANY_MISSING=false

@@ -47,6 +47,13 @@ jobs:
           # don't trip `set -e` before we emit the fallback error annotation below.
           HEALTH_RESPONSE=$(curl --max-time 10 -sf "https://harbor.ci.tenstorrent.net/api/v2.0/health" 2>/dev/null || true)
 
+          # Single retry: if first attempt returned empty (timeout/network blip), wait 5s and try once more
+          if [ -z "$HEALTH_RESPONSE" ]; then
+            echo "First Harbor health check failed, retrying in 5s..."
+            sleep 5
+            HEALTH_RESPONSE=$(curl --max-time 10 -sf "https://harbor.ci.tenstorrent.net/api/v2.0/health" 2>/dev/null || true)
+          fi
+
           if [ -n "$HEALTH_RESPONSE" ]; then
             echo "$HEALTH_RESPONSE" | jq -r '.components[] | select(.status != "healthy") | "\(.name):\(.status)"' | while IFS=: read -r name status; do
               echo "::warning title=Harbor Component Unhealthy::Component $name has status: $status"

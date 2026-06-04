@@ -88,6 +88,7 @@ runs:
         trap 'rm -rf "$TMPDIR_CHECK"' EXIT  # only EXIT trap in this shell
 
         declare -A HARBOR_CHECK_PIDS=()
+        declare -a HARBOR_CHECK_ORDER=()
         idx=0
         for ghcr_tag in "${UNIQUE_TAGS[@]}"; do
           harbor_tag="${HARBOR_PREFIX}${ghcr_tag}"
@@ -99,11 +100,12 @@ runs:
             fi
           ) > "${TMPDIR_CHECK}/${idx}" &
           HARBOR_CHECK_PIDS["$ghcr_tag"]="${idx}:$!"   # "index:pid"
+          HARBOR_CHECK_ORDER+=("$ghcr_tag")
           ((idx++)) || true  # prevent set -e exit on counter overflow (never happens)
         done
 
         # ── Phase 2: collect results and pull only missing images ─────────────
-        for ghcr_tag in "${!HARBOR_CHECK_PIDS[@]}"; do
+        for ghcr_tag in "${HARBOR_CHECK_ORDER[@]}"; do
           harbor_tag="${HARBOR_PREFIX}${ghcr_tag}"
           entry="${HARBOR_CHECK_PIDS[$ghcr_tag]}"
           file_idx="${entry%%:*}"

@@ -67,6 +67,12 @@ jobs:
     uses: ./.github/workflows/build-all-docker-images.yaml
     secrets: inherit
 
+  # TODO: Duplicate check-harbor call. build-all-docker-images.yaml (called by
+  # docker-images above) also calls check-harbor internally, but does not expose
+  # harbor-prefix as a workflow output. Eliminating this duplication would require
+  # either adding harbor-prefix to build-all-docker-images.yaml outputs or
+  # restructuring the pipeline to pass it through. Low priority — the check is
+  # cheap and idempotent.
   check-harbor:
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     uses: ./.github/workflows/check-harbor.yaml
@@ -234,7 +240,7 @@ jobs:
             needs.find-changes.outputs.any-code-changed == 'true' ||
             needs.find-changes.outputs.build-workflows-changed == 'true'
         }}
-    needs: [find-changes, docker-images]
+    needs: [find-changes, docker-images, check-harbor]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -489,6 +495,10 @@ jobs:
   # tests/tt_metal/tt_metal/llk/llk_device_fixture.hpp); nightly still runs
   # the full suite under slow dispatch. Merge gate shards FD by arch and runs
   # the SD-only/Quasar slice from tests/pipeline_reorg/llk_unit_tests.yaml.
+  #
+  # NOTE: llk-unit-tests and tt-train use raw GHCR image tags and handle
+  # Harbor prefix internally (llk-unit-tests.yaml hardcodes harbor.ci.tenstorrent.net
+  # for N150/N300 runners). This is intentional — do not add check-harbor here.
   llk-unit-tests:
     needs: [ build, find-changes, load-llk-unit-test-matrix]
     if: ${{

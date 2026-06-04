@@ -46,6 +46,12 @@ on:
       ubuntu-2204-basic-ttnn-runtime-tag:
         description: "Docker tag for Ubuntu 22.04 Basic TTNN Runtime image"
         value: ${{ jobs.build-2204.outputs.basic-ttnn-runtime-tag }}
+      ubuntu-2204-python-ci-build-venv-tag:
+        description: "Docker tag for Ubuntu 22.04 Python CI Build venv image"
+        value: ${{ jobs.build-2204.outputs.python-ci-build-venv-tag }}
+      ubuntu-2204-python-ci-test-venv-tag:
+        description: "Docker tag for Ubuntu 22.04 Python CI Test venv image"
+        value: ${{ jobs.build-2204.outputs.python-ci-test-venv-tag }}
       # Ubuntu 24.04 images (from build-docker-artifact platform=Ubuntu 24.04)
       ubuntu-2404-ci-build-tag:
         description: "Docker tag for Ubuntu 24.04 CI Build image"
@@ -62,6 +68,12 @@ on:
       ubuntu-2404-basic-ttnn-runtime-tag:
         description: "Docker tag for Ubuntu 24.04 Basic TTNN Runtime image"
         value: ${{ jobs.build-2404.outputs.basic-ttnn-runtime-tag }}
+      ubuntu-2404-python-ci-build-venv-tag:
+        description: "Docker tag for Ubuntu 24.04 Python CI Build venv image"
+        value: ${{ jobs.build-2404.outputs.python-ci-build-venv-tag }}
+      ubuntu-2404-python-ci-test-venv-tag:
+        description: "Docker tag for Ubuntu 24.04 Python CI Test venv image"
+        value: ${{ jobs.build-2404.outputs.python-ci-test-venv-tag }}
       # ManyLinux image (shared; same tag from either platform run)
       manylinux-tag:
         description: "Docker tag for ManyLinux image"
@@ -225,7 +237,7 @@ jobs:
   # Ubuntu 22.04: full build; this run also builds manylinux once for all platforms
   build-2204:
     name: "Ubuntu 22.04"
-    needs: [preflight, build-tools, build-llk]
+    needs: [preflight, build-tools]
     if: always() && !failure() && !cancelled()
     uses: ./.github/workflows/build-docker-artifact.yaml
     with:
@@ -239,7 +251,7 @@ jobs:
   # Ubuntu 24.04: full build in parallel with build-2204; manylinux is skipped here
   build-2404:
     name: "Ubuntu 24.04"
-    needs: [preflight, build-tools, build-llk]
+    needs: [preflight, build-tools]
     if: always() && !failure() && !cancelled()
     uses: ./.github/workflows/build-docker-artifact.yaml
     with:
@@ -335,9 +347,19 @@ jobs:
           images: ${{ steps.images-2404.outputs.list }}
           title: "Ubuntu 24.04 images"
 
+      - name: Build LLK CI image list
+        id: images-llk
+        run: |
+          IMAGES=$(jq -n --arg llk '${{ needs.preflight.outputs.llk-ci-tag }}' '[ $llk ] | map(select(. != ""))')
+          {
+            echo "list<<EOF"
+            echo "$IMAGES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Prewarm LLK CI image
         uses: ./.github/actions/prewarm-images
         with:
           harbor-prefix: ${{ needs.preflight.outputs.harbor-prefix }}
-          images: '["${{ needs.preflight.outputs.llk-ci-tag }}"]'
+          images: ${{ steps.images-llk.outputs.list }}
           title: "LLK CI image"

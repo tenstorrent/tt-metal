@@ -26,7 +26,7 @@ GDB_VERSION=$(grep -E "^ARG GDB_VERSION=" dockerfile/Dockerfile.tools | head -1 
 CMAKE_VERSION=$(grep -E "^ARG CMAKE_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 YQ_VERSION=$(grep -E "^ARG YQ_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 ZSTD_VERSION=$(grep -E "^ARG ZSTD_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
-OMPI_VERSION=$(grep -E "^ARG OMPI_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+OPENMPI_VERSION=$(grep -E "^ARG OMPI_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 SFPI_VERSION=$(grep -E "^sfpi_version=" tt_metal/sfpi-version | cut -d"'" -f2)
 
 # Compute hashes for each tool (version + install script)
@@ -52,7 +52,7 @@ jq -n \
   --arg yq "${BASE}/yq:${YQ_VERSION}-${YQ_HASH}" \
   --arg zstd "${BASE}/zstd:${ZSTD_VERSION}-${ZSTD_HASH}" \
   --arg sfpi "${BASE}/sfpi:${SFPI_VERSION}-${SFPI_HASH}" \
-  --arg openmpi "${BASE}/openmpi:${OMPI_VERSION}-${OPENMPI_HASH}" \
+  --arg openmpi "${BASE}/openmpi:${OPENMPI_VERSION}-${OPENMPI_HASH}" \
   '{
     "ccache-tag": $ccache,
     "mold-tag": $mold,
