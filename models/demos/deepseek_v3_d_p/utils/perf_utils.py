@@ -238,7 +238,7 @@ def run_model_device_perf_test_with_merge(
     df = df[df["OP TYPE"].isin(["tt_dnn_device"])]
 
     if op_filter:
-        df = df[df["OP CODE"].str.contains(op_filter, na=False)]
+        df = df[df["OP CODE"].str.contains(op_filter, na=False, regex=False)]
         if df.empty:
             pytest.fail(f"op_filter={op_filter!r} matched no rows in {filename}")
         logger.debug(f"Rows after op_filter={op_filter!r}: {len(df)}")
