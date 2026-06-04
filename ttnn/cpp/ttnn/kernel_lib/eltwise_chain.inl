@@ -10,9 +10,268 @@
  * Included from `eltwise_chain.hpp`. Do NOT include directly.
  */
 
-// (LLK / compute-API headers are pulled in via eltwise_chain.hpp.)
+// Impl-only includes (the public eltwise_chain.hpp surface — element decls + enums — needs
+// none of these; they live here, with the implementation that uses them).
+#include <tuple>
+#include "api/compute/bcast.h"
+#include "api/compute/cb_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/pack.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/reg_api.h"
+#include "api/compute/tile_move_copy.h"
 
 namespace compute_kernel_lib {
+
+// Internal sentinel + type-list wrapper + chain-shape trait declarations. These are
+// implementation detail of the chain pipeline — no chain caller references them, so they
+// live here rather than on the public eltwise_chain.hpp surface.
+inline constexpr uint32_t kNoCb = 0xFFFFFFFFu;  // "no CB on this slot" (== NO_PREV_CB); a real
+                                                // tt::CBIndex is 0..31, so 0xFFFFFFFF never aliases one.
+
+template <class... Es>
+struct EltwiseChain;  // typed list of elements (defined below)
+
+template <class Chain> struct chain_has_duplicate_upfront_cbs;
+template <class Chain> struct chain_pack_writes_collide;
+template <class Chain> struct chain_per_side_cbs_consistent;
+template <class Chain> struct chain_math_mop_uniform;
+template <class Chain> struct chain_sfpu_inits_uniform;
+template <class Chain> struct chain_hoist_math_mop;
+template <class Chain> struct chain_hoist_sfpu;
+
+template <class Chain>
+inline constexpr bool chain_has_duplicate_upfront_cbs_v = chain_has_duplicate_upfront_cbs<Chain>::value;
+template <class Chain>
+inline constexpr bool chain_pack_writes_collide_v = chain_pack_writes_collide<Chain>::value;
+template <class Chain>
+inline constexpr bool chain_per_side_cbs_consistent_v = chain_per_side_cbs_consistent<Chain>::value;
+template <class Chain>
+inline constexpr bool chain_math_mop_uniform_v = chain_math_mop_uniform<Chain>::value;
+template <class Chain>
+inline constexpr bool chain_sfpu_inits_uniform_v = chain_sfpu_inits_uniform<Chain>::value;
+template <class Chain>
+inline constexpr bool chain_hoist_math_mop_v = chain_hoist_math_mop<Chain>::value;
+template <class Chain>
+inline constexpr bool chain_hoist_sfpu_v = chain_hoist_sfpu<Chain>::value;
+
+// =============================================================================
+// Marker tag hierarchy (data direction → kind)
+// =============================================================================
+// Internal classification scaffolding — chain callers never name these. Concrete
+// element types (declared on the .hpp surface) inherit the leaf tags; the chain
+// pipeline + SFPU/FPU op-helper headers classify elements via the is_*_op_v
+// predicates below.
+
+/// Element reads ≥1 CB. Pure marker — concrete elements declare `cb_a_id()` and
+/// (if binary) `cb_b_id()`. No stub defaults (§1.7 footgun avoidance).
+struct CbReaderTag {};
+/// Element writes to a CB. Pure marker — concrete elements declare `pack_cb_id()`.
+/// No stub defaults.
+struct CbWriterTag {};
+/// Element neither reads nor writes a CB (DEST-internal). Carries only the
+/// `is_upfront` default — no CB-id stubs. The chain pipeline SFINAE-detects
+/// `cb_a_id()` / `cb_b_id()` / `pack_cb_id()` on the element directly and never
+/// reaches a DestOnlyTag default.
+struct DestOnlyTag {
+    static constexpr bool is_upfront = false;
+};
+
+/// Pure CB → DEST move (no compute).
+struct CopyTileTag : CbReaderTag {};
+/// 2 CBs → DEST FPU compute (add/sub/mul + bcast variants).
+struct BinaryFpuTag : CbReaderTag {};
+/// 1 CB + DEST → DEST FPU compute (binary_dest_reuse_tiles).
+struct DestReuseBinaryTag : CbReaderTag {};
+/// 1 CB → DEST row/col/scalar broadcast (unary_bcast).
+struct UnaryBcastTag : CbReaderTag {};
+
+/// DEST → CB store (pack_tile / pack_tile_block).
+struct PackTileTag : CbWriterTag {};
+
+/// Constant → DEST (no CB read).
+struct FillTileTag : DestOnlyTag {};
+/// RNG → DEST (no CB read).
+struct RandTileTag : DestOnlyTag {};
+
+// Trait predicates (cheat-sheet in proposal §2.1):
+//
+//  Sweep / decision                                            | predicate
+//  ------------------------------------------------------------|---------------------------
+//  Duplicate upfront-CB check across all CB-consumers          | is_cb_reader_op_v
+//  Output-CB collision / fan-out across all writers            | is_cb_writer_op_v
+//  Hoist-safety "chain shape is CopyTile + 1 SFPU op"          | is_copy_tile_op_v
+//  FPU-clash reinit                                            | is_binary_fpu_op_v ‖
+//                                                              | is_dest_reuse_binary_op_v ‖
+//                                                              | is_unary_bcast_op_v
+//  Hoist exclusion: element issues a pack inside the loop      | is_pack_tile_op_v
+//  No CB lifecycle to check — pure DEST internal               | is_dest_only_op_v
+template <class T>
+inline constexpr bool is_cb_reader_op_v = std::is_base_of_v<CbReaderTag, T>;
+template <class T>
+inline constexpr bool is_cb_writer_op_v = std::is_base_of_v<CbWriterTag, T>;
+template <class T>
+inline constexpr bool is_dest_only_op_v = std::is_base_of_v<DestOnlyTag, T>;
+template <class T>
+inline constexpr bool is_copy_tile_op_v = std::is_base_of_v<CopyTileTag, T>;
+template <class T>
+inline constexpr bool is_binary_fpu_op_v = std::is_base_of_v<BinaryFpuTag, T>;
+template <class T>
+inline constexpr bool is_dest_reuse_binary_op_v = std::is_base_of_v<DestReuseBinaryTag, T>;
+template <class T>
+inline constexpr bool is_unary_bcast_op_v = std::is_base_of_v<UnaryBcastTag, T>;
+template <class T>
+inline constexpr bool is_pack_tile_op_v = std::is_base_of_v<PackTileTag, T>;
+template <class T>
+inline constexpr bool is_fill_tile_op_v = std::is_base_of_v<FillTileTag, T>;
+template <class T>
+inline constexpr bool is_rand_tile_op_v = std::is_base_of_v<RandTileTag, T>;
+
+/// SFPU (DEST-internal, non-RNG, non-fill) element predicate. SFPU ops inherit
+/// from `DestOnlyTag` via `UnaryOp` / `BinaryOp` / `TernaryOp`;
+/// Fill / Rand share the `DestOnlyTag` lineage but their init programs PRNG /
+/// fill state, not the SFPU MOP / ADDR_MOD_7 lane. The hoist gate counts distinct
+/// SFPU init types — `is_sfpu_op_v` is the predicate.
+template <class T>
+inline constexpr bool is_sfpu_op_v = is_dest_only_op_v<T> && !is_fill_tile_op_v<T> && !is_rand_tile_op_v<T>;
+
+/// FPU-kind (non-CopyTile, FPU-MOP-touching) element predicate. Groups
+/// `BinaryFpu`, `DestReuseBinary`, `UnaryBcast` — each programs the FPU MOP /
+/// ADDR_MOD_0..3 lane on init via the binary-op init path.
+template <class T>
+inline constexpr bool is_fpu_kind_op_v =
+    is_binary_fpu_op_v<T> || is_dest_reuse_binary_op_v<T> || is_unary_bcast_op_v<T>;
+
+/// MATH-MOP-touching element predicate. Groups every element whose init
+/// programs the MATH MOP / ADDR_MOD_0..3 lane: `CopyTile` (via
+/// `copy_tile_to_dst_init_short`) and the FPU-kind ops (`BinaryFpu`,
+/// `DestReuseBinary`, `UnaryBcast`). The hoist gate (doc G3 + the
+/// CopyTile-versus-FPU clash from the old `chain_has_non_copy_tile_fpu_clash`
+/// predicate) requires all such elements in a chain to be the same
+/// instantiated type — otherwise the boot-time fold leaves only the last
+/// init's MOP programmed and earlier elements run with the wrong MOP.
+template <class T>
+inline constexpr bool is_math_mop_op_v = is_copy_tile_op_v<T> || is_fpu_kind_op_v<T>;
+
+// =============================================================================
+// tile_base_value — orthogonal tile-index offset extractor (impl helper)
+// =============================================================================
+/// Extract the offset value stored on an element. Returns 0 (compile-time-folded) when the
+/// element's `Offset` is `Unset`, so the `+base` term and the stored field vanish.
+template <TileOffset Offset>
+ALWI uint32_t tile_base_value(uint32_t stored) noexcept {
+    if constexpr (Offset == TileOffset::Unset) {
+        (void)stored;
+        return 0u;
+    } else {
+        return stored;
+    }
+}
+
+// =============================================================================
+// CRTP bases — UnaryOp / BinaryOp / TernaryOp
+// =============================================================================
+//
+// Single dispatch contract (§4.5): every chain element exposes `void exec(uint32_t)
+// const`. The CRTP bases provide a default that forwards to a static `exec_impl()`
+// supplied by the derived op. Runtime-param ops (Power, Hardtanh, Threshold, …)
+// override `exec(uint32_t)` directly to capture their instance state. Forgetting
+// both is a compile error — no silent fallthrough.
+//
+// Example (static SFPU):
+//
+//   template <Approx A = Approx::Exact, Approx F = Approx::Fast, Dst Slot = Dst::D0>
+//   struct Exp : UnaryOp<Exp<A, F, Slot>, Slot> {
+//       static void init()       { exp_tile_init<A == Approx::Fast, F == Approx::Fast>(); }
+//       static void exec_impl()  { exp_tile<A == Approx::Fast, F == Approx::Fast>(to_u32(Slot)); }
+//   };
+//
+// Example (runtime-param SFPU — overrides exec(uint32_t) directly):
+//
+//   template <Dst Slot = Dst::D0>
+//   struct Power : UnaryOp<Power<Slot>, Slot> {
+//       uint32_t exponent;
+//       constexpr explicit Power(uint32_t e) noexcept : exponent(e) {}
+//       static void init() { power_tile_init(); }
+//       void exec(uint32_t /*i*/) const { power_tile(to_u32(Slot), exponent); }
+//   };
+
+template <class Derived, Dst Slot>
+struct UnaryOp : DestOnlyTag {
+    static_assert(
+        to_u32(Slot) < DEST_AUTO_LIMIT, "UnaryOp: DEST slot exceeds compile-time DEST capacity (DEST_AUTO_LIMIT)");
+
+    static constexpr Dst dst_idx = Slot;
+    static constexpr uint32_t max_dst() { return to_u32(Slot); }
+    /// Per-lane DEST footprint (item 2). Used by chain to pick auto BlockSize.
+    /// Default = `to_u32(Slot) + 1` (op writes only Slot). Override per-op when the
+    /// op references more slots (e.g. Mask uses DataSlot AND DataSlot+1).
+    static constexpr uint32_t lane_width = to_u32(Slot) + 1;
+
+    /// Pipeline dispatch — forwards to `Derived::exec_impl(slot_offset)`. Override
+    /// in derived to consume runtime payload (per-instance fields). `slot_offset`
+    /// is added by the chain to shift DEST writes into lane `j` when `BlockSize > 1`;
+    /// `BlockSize == 1` passes 0 (per-tile shape).
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { Derived::exec_impl(slot_offset); }
+};
+
+template <class Derived, Dst In0, Dst In1, Dst Out>
+struct BinaryOp : DestOnlyTag {
+    static_assert(
+        to_u32(In0) < DEST_AUTO_LIMIT && to_u32(In1) < DEST_AUTO_LIMIT && to_u32(Out) < DEST_AUTO_LIMIT,
+        "BinaryOp: DEST slot exceeds compile-time DEST capacity (DEST_AUTO_LIMIT)");
+    // NOTE: slot-distinctness is *not* enforced here. SFPU binary ops (AddBinary /
+    // SubBinary / MulBinary / DivBinary) routinely operate in-place (Out == In0 or
+    // Out == In1) and even `In0 == In1` is legal (e.g. squaring). The FPU binary
+    // chain element (`BinaryFpu`) reads its inputs from CBs, not DEST slots, so it
+    // also doesn't need In0 != In1. If a future op truly requires distinct DEST
+    // slots, it should enforce that locally rather than at the CRTP base.
+
+    static constexpr Dst in0 = In0;
+    static constexpr Dst in1 = In1;
+    static constexpr Dst out = Out;
+    static constexpr uint32_t max_dst() {
+        uint32_t a = to_u32(In0), b = to_u32(In1), c = to_u32(Out);
+        return a > b ? (a > c ? a : c) : (b > c ? b : c);
+    }
+    static constexpr uint32_t lane_width = max_dst() + 1;
+
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { Derived::exec_impl(slot_offset); }
+};
+
+template <class Derived, Dst In0, Dst In1, Dst In2, Dst Out>
+struct TernaryOp : DestOnlyTag {
+    static_assert(
+        to_u32(In0) < DEST_AUTO_LIMIT && to_u32(In1) < DEST_AUTO_LIMIT && to_u32(In2) < DEST_AUTO_LIMIT &&
+            to_u32(Out) < DEST_AUTO_LIMIT,
+        "TernaryOp: DEST slot exceeds compile-time DEST capacity (DEST_AUTO_LIMIT)");
+    // NOTE: slot-distinctness is *not* enforced here (mirrors BinaryOp). SFPU ternary
+    // ops (where / lerp / addcmul / addcdiv) routinely write Out into one of the input
+    // slots in-place — the kernel reads all three inputs before overwriting. If a
+    // future op truly requires distinct DEST slots, enforce it locally rather than at
+    // the CRTP base.
+
+    static constexpr Dst in0 = In0;
+    static constexpr Dst in1 = In1;
+    static constexpr Dst in2 = In2;
+    static constexpr Dst out = Out;
+    static constexpr uint32_t lane_width = []() {
+        uint32_t m = to_u32(In0);
+        if (to_u32(In1) > m) {
+            m = to_u32(In1);
+        }
+        if (to_u32(In2) > m) {
+            m = to_u32(In2);
+        }
+        if (to_u32(Out) > m) {
+            m = to_u32(Out);
+        }
+        return m + 1;
+    }();
+
+    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { Derived::exec_impl(slot_offset); }
+};
 
 // =============================================================================
 // Compile-time prev-CB / prev-fp32-dest-acc tracking (D2 + D6 fold infrastructure)
@@ -955,7 +1214,7 @@ struct EltwiseChain {
 //
 // SFINAE fallback: elements that don't expose a `lane_width` member (caller-defined
 // chain elements that inherit directly from `CopyTileTag` / `PackTileTag` / `DestOnlyTag`
-// without inheriting from `UnaryOp`/`BinaryOp`/`TernaryOp`/`QuaternaryOp` bases) default
+// without inheriting from `UnaryOp`/`BinaryOp`/`TernaryOp` bases) default
 // to 1. Multiple-inheritance ambiguity (e.g. `OptionalChainElement<true, FillScalar>`)
 // is sidestepped by reading via this detector instead of `Es::lane_width` directly.
 namespace detail {
