@@ -39,7 +39,8 @@ constexpr std::uint32_t FP16B_ONE_OVER_32_LOW  = 0x0000;
 constexpr std::uint32_t ROWS_PER_TILE = 64;
 constexpr std::uint32_t ROWS_PER_FACE = 16;
 
-// Register with constant value used for clearing high bits
+// Register holding the 0x0000FFFF mask used to clear garbage high bits when loading UInt16 data
+// from a 32-bit (fp32 dest accumulation) dest word. Maps to sfpi::vConstIntPrgm0 on Blackhole.
 constexpr std::uint32_t CLEAR_REG = p_sfpu::LREG12;
 
 template <bool clear_high_bits>
@@ -226,8 +227,11 @@ inline void perform_reduce_col_sum_avg()
                 perform_float_average();
             }
         }
-        // Store the final column sum/average to the first row
-        TTI_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, upper_face_addr + column_offset);
+        // Store the final column sum/average to the first row.
+        // For UInt16 in 32-bit dest the value is in the low 16 bits of the LREG but the packer reads
+        // the high 16 bits, so use SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16) for the packer-visible store.
+        constexpr std::uint32_t STORE_MODE = clear_high_bits ? 9 /* SFPSTORE_MOD0_FMT_LO16 */ : INSTRUCTION_MODE;
+        TTI_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_7, upper_face_addr + column_offset);
     }
 }
 
@@ -407,7 +411,7 @@ inline void horizontal_reduce_max()
  * @param tile_row_offset Base row offset for this tile in the dest register
  */
 template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits>
-inline void perform_reduce_row_max_tile(std::uint32_t tile_row_offset)
+inline void perform_reduce_row_max_tile(std::uint32_t tile_row_offset, std::uint32_t result_store_mode)
 {
 #pragma GCC unroll 2
     for (std::uint32_t face_pair = 0; face_pair < 2; face_pair++)
@@ -442,8 +446,11 @@ inline void perform_reduce_row_max_tile(std::uint32_t tile_row_offset)
 
             horizontal_reduce_max();
 
-            TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_first);
-            TT_SFPSTORE(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_second);
+            // result_store_mode is mode 9 (SFPSTORE_MOD0_FMT_LO16) only when this per-tile store is the
+            // final, packer-visible result (single column tile); otherwise it is intermediate and stays
+            // in the low 16 bits.
+            TT_SFPSTORE(p_sfpu::LREG0, result_store_mode, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_first);
+            TT_SFPSTORE(p_sfpu::LREG4, result_store_mode, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_second);
         }
     }
 }
@@ -459,11 +466,11 @@ inline void perform_reduce_row_max_tile(std::uint32_t tile_row_offset)
  * @param tile_row_offset Base row offset for this tile in the dest register
  */
 template <bool clear_high_bits = false>
-inline void perform_reduce_row_max_int32_tile(std::uint32_t tile_row_offset)
+inline void perform_reduce_row_max_int32_tile(std::uint32_t tile_row_offset, std::uint32_t result_store_mode)
 {
     constexpr InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::INT32;
 
-    perform_reduce_row_max_tile<INSTRUCTION_MODE, clear_high_bits>(tile_row_offset);
+    perform_reduce_row_max_tile<INSTRUCTION_MODE, clear_high_bits>(tile_row_offset, result_store_mode);
 }
 
 /**
@@ -504,10 +511,12 @@ inline void max_first_columns_across_tiles(std::uint32_t tile_row_base, std::uin
             TTI_SFPSWAP(0, p_sfpu::LREG3, p_sfpu::LREG7, 1);
         }
 
-        TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 0]);
-        TT_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 1]);
-        TT_SFPSTORE(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 2]);
-        TT_SFPSTORE(p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 3]);
+        // Final, packer-visible store: use mode 9 (SFPSTORE_MOD0_FMT_LO16) for UInt16 in 32-bit dest.
+        constexpr std::uint32_t STORE_MODE = clear_high_bits ? 9 /* SFPSTORE_MOD0_FMT_LO16 */ : INSTRUCTION_MODE;
+        TT_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 0]);
+        TT_SFPSTORE(p_sfpu::LREG1, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 1]);
+        TT_SFPSTORE(p_sfpu::LREG2, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 2]);
+        TT_SFPSTORE(p_sfpu::LREG3, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 3]);
     }
 }
 
@@ -551,6 +560,11 @@ inline void perform_reduce_row_max(std::uint32_t block_ct_dim, std::uint32_t blo
 
     record_horizontal_reduce_max();
 
+    // Single column tile => per-tile store is the final packer-visible result (mode 9 for UInt16 in
+    // 32-bit dest); otherwise it is intermediate and stays in the low 16 bits.
+    const std::uint32_t tile_store_mode =
+        (clear_high_bits && block_ct_dim == 1) ? 9u /* SFPSTORE_MOD0_FMT_LO16 */ : static_cast<std::uint32_t>(INSTRUCTION_MODE);
+
     for (std::uint32_t i = 0; i < block_rt_dim; i++)
     {
         std::uint32_t tile_row_offset = ROWS_PER_TILE * block_ct_dim * i;
@@ -560,11 +574,11 @@ inline void perform_reduce_row_max(std::uint32_t block_ct_dim, std::uint32_t blo
             std::uint32_t tile_offset = tile_row_offset + (ROWS_PER_TILE * j);
             if constexpr (is_int32)
             {
-                perform_reduce_row_max_int32_tile(tile_offset);
+                perform_reduce_row_max_int32_tile(tile_offset, tile_store_mode);
             }
             else
             {
-                perform_reduce_row_max_tile<INSTRUCTION_MODE, clear_high_bits>(tile_offset);
+                perform_reduce_row_max_tile<INSTRUCTION_MODE, clear_high_bits>(tile_offset, tile_store_mode);
             }
         }
 
@@ -583,7 +597,7 @@ inline void perform_reduce_row_max(std::uint32_t block_ct_dim, std::uint32_t blo
 }
 
 template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits>
-inline void perform_reduce_row_sum_tile(std::uint32_t tile_row_offset)
+inline void perform_reduce_row_sum_tile(std::uint32_t tile_row_offset, std::uint32_t result_store_mode)
 {
     // Determine if integer or float mode at compile time
     constexpr bool is_integer_mode =
@@ -625,8 +639,11 @@ inline void perform_reduce_row_sum_tile(std::uint32_t tile_row_offset)
             // Horizontal reduction: consolidate all 8 SFPU columns into column 0 (interleaved for latency hiding)
             horizontal_reduce<is_integer_mode>();
 
-            TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_first);
-            TT_SFPSTORE(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_second);
+            // result_store_mode is mode 9 (SFPSTORE_MOD0_FMT_LO16) only when this per-tile store is the
+            // final, packer-visible result (single column tile); otherwise it is an intermediate store
+            // re-loaded by the cross-tile accumulation and must stay in the low 16 bits.
+            TT_SFPSTORE(p_sfpu::LREG0, result_store_mode, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_first);
+            TT_SFPSTORE(p_sfpu::LREG4, result_store_mode, ADDR_MOD_7, tile_row_offset + face_pair_base + row_offset_second);
         }
     }
 }
@@ -697,17 +714,25 @@ inline void sum_first_columns_across_tiles(std::uint32_t tile_row_base, std::uin
             }
         }
 
-        // Store LREG0-3 back to tile 0
-        TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 0]);
-        TT_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 1]);
-        TT_SFPSTORE(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 2]);
-        TT_SFPSTORE(p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 3]);
+        // Store LREG0-3 back to tile 0. This is the final, packer-visible result so for UInt16 in
+        // 32-bit dest it must go through SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16).
+        constexpr std::uint32_t STORE_MODE = clear_high_bits ? 9 /* SFPSTORE_MOD0_FMT_LO16 */ : INSTRUCTION_MODE;
+        TT_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 0]);
+        TT_SFPSTORE(p_sfpu::LREG1, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 1]);
+        TT_SFPSTORE(p_sfpu::LREG2, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 2]);
+        TT_SFPSTORE(p_sfpu::LREG3, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 3]);
     }
 }
 
 template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits>
 inline void perform_reduce_row_sum(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim)
 {
+    // When there is a single column tile, the per-tile store is the final packer-visible result and must
+    // use mode 9 for UInt16 in 32-bit dest. With multiple column tiles the per-tile store is intermediate
+    // (re-loaded by sum_first_columns_across_tiles), so it must stay in the low 16 bits.
+    const std::uint32_t tile_store_mode =
+        (clear_high_bits && block_ct_dim == 1) ? 9u /* SFPSTORE_MOD0_FMT_LO16 */ : static_cast<std::uint32_t>(INSTRUCTION_MODE);
+
     for (std::uint32_t i = 0; i < block_rt_dim; i++)
     {
         std::uint32_t tile_row_offset = ROWS_PER_TILE * block_ct_dim * i;
@@ -716,7 +741,7 @@ inline void perform_reduce_row_sum(std::uint32_t block_ct_dim, std::uint32_t blo
         for (std::uint32_t j = 0; j < block_ct_dim; j++)
         {
             std::uint32_t tile_offset = tile_row_offset + (ROWS_PER_TILE * j);
-            perform_reduce_row_sum_tile<INSTRUCTION_MODE, clear_high_bits>(tile_offset);
+            perform_reduce_row_sum_tile<INSTRUCTION_MODE, clear_high_bits>(tile_offset, tile_store_mode);
         }
 
         // Step 2: Sum column 0 from all tiles in this row into tile 0's column 0
@@ -834,8 +859,12 @@ inline void init_reduce_max_min(std::uint32_t num_cols)
 
     configure_addrmod_max_min(num_cols);
 
-    // Record replay buffer for compare-and-swap operations
-    lltt::record<lltt::NoExec>(0, 11);
+    // Record replay buffer for compare-and-swap operations.
+    // Note: this LOADMACRO-based path is only used for float/UInt32 formats. UInt16 in 32-bit dest
+    // cannot use it because the fused load+swap leaves no place to mask the garbage high bits, so it
+    // is routed to the manual calculate_reduce_max_min_uint16() path instead.
+    constexpr std::uint32_t buffer_len = 11;
+    lltt::record<lltt::NoExec>(0, buffer_len);
     TTI_INCRWC(0, 4, 0, 0);
     TTI_SFPLOADMACRO(5, INSTRUCTION_MODE, ADDR_MOD_7, 2);
     TTI_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, 16);
@@ -984,6 +1013,105 @@ inline void calculate_reduce_max_min_int32()
 }
 
 /**
+ * @brief Column-wise maximum/minimum reduction kernel for UInt16 stored in a 32-bit (fp32 dest acc) dest.
+ *
+ * UInt16 datums live in the low 16 bits of a 32-bit dest word and carry garbage in the high 16 bits,
+ * so every value must be masked (AND 0x0000FFFF) before it participates in a compare-and-swap. The
+ * float/UInt16 LOADMACRO pipeline used by calculate_reduce_max_min() fuses the load and the swap into
+ * a single macro, leaving no place to clear the high bits in between; the garbage then dominates the
+ * integer comparison and produces wrong minima/maxima for any non-constant input.
+ *
+ * Instead we use the same manual load/mask/swap structure as the Int32 path (which exists for the
+ * analogous reason that CAST and SWAP cannot share a LOADMACRO). The sign-magnitude casts of the
+ * Int32 path are unnecessary here: masked UInt16 values are always non-negative, so a plain integer
+ * SFPSWAP orders them correctly and the cast would be the identity. We therefore replace the casts
+ * with plain moves (LREG0-3 -> LREG4-7) that feed the recorded swap buffer. Final, packer-visible
+ * results are written with SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16) so the packer reads the low bits.
+ *
+ * The reduction reuses init_reduce_max_min_int32()'s 3-swap replay buffer and swap-direction config.
+ * Only a single 32x32 tile is processed per call (block height 1), matching the column-reduce driver
+ * which invokes the kernel once per tile.
+ *
+ * @tparam INSTRUCTION_MODE The instruction mode (INT32 for UInt16 in 32-bit dest)
+ * @tparam pool_type The pool type (MAX or MIN) to determine swap direction
+ * @tparam reduce_dim The reduction dimension (currently only REDUCE_COL is supported)
+ * @tparam clear_high_bits Whether to mask the garbage high bits on load (true for UInt16 in 32-bit dest)
+ */
+template <InstrModLoadStore INSTRUCTION_MODE, PoolType pool_type, ReduceDim reduce_dim, bool clear_high_bits>
+inline void calculate_reduce_max_min_uint16()
+{
+    static_assert(reduce_dim == ReduceDim::REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
+    static_assert(pool_type == PoolType::MAX || pool_type == PoolType::MIN, "Only MAX and MIN pool types are supported for this function");
+
+    constexpr std::uint32_t ODD_COLUMNS       = 2;
+    constexpr std::uint32_t COLUMN_OFFSETS[4] = {0, 2, 0, 2}; // even, odd, even, odd
+    constexpr std::uint32_t FACE_ADDRS[2][4]  = {
+        {0, 0, 32, 32},  // j=0: Face 0 and Face 2
+        {16, 16, 48, 48} // j=1: Face 1 and Face 3
+    };
+    constexpr std::uint32_t FINAL_REDUCE_ADDRS[2][2] = {
+        {0, 32}, // j=0: Face 0 and Face 2
+        {16, 48} // j=1: Face 1 and Face 3
+    };
+
+    // The intermediate stores below land in non-row-0 dest slots that we reload, so they use the
+    // plain (full 32-bit) instruction mode. Only the final row-0 stores are packer-visible and use
+    // mode 9 (SFPSTORE_MOD0_FMT_LO16) so the packer reads the low 16 bits of the dest word.
+    constexpr std::uint32_t STORE_MODE = clear_high_bits ? 9 /* SFPSTORE_MOD0_FMT_LO16 */ : INSTRUCTION_MODE;
+
+    for (std::uint32_t j = 0; j < 2; j++)
+    {
+        std::uint32_t top_face_addr    = FINAL_REDUCE_ADDRS[j][0]; // face 0 & 1 dst indices
+        std::uint32_t bottom_face_addr = FINAL_REDUCE_ADDRS[j][1]; // face 2 & 3 dst indices
+
+        // Reduce each of the four vertically adjacent faces (f0,f2 then f1,f3) within itself; the
+        // max/min of its 16 rows is left in the top 4 rows.
+        for (std::uint32_t i = 0; i < NUM_FACES; i++)
+        {
+            load_face_data<INSTRUCTION_MODE, clear_high_bits>(FACE_ADDRS[j][i], COLUMN_OFFSETS[i]); // masked load into LREG0-3
+
+            // Move the four masked row-groups into LREG4-7 where the recorded swap buffer reduces them.
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG5, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG6, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG7, 0);
+
+            lltt::replay(0, 3); // compare-and-swap reduce LREG4-7 -> LREG4
+
+            TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+            TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, FACE_ADDRS[j][i] + COLUMN_OFFSETS[i]);
+        }
+
+        // Load the partial max/min (top 4 rows) of the two vertically adjacent faces into LREG0-3.
+        TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, top_face_addr);
+        TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, bottom_face_addr);
+        TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, top_face_addr + ODD_COLUMNS);
+        TT_SFPLOAD_EXT<clear_high_bits>(p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, bottom_face_addr + ODD_COLUMNS);
+
+        // Move into LREG4-7 for the transpose + cross-row reduction.
+        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG5, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG6, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG7, 0);
+
+        // Transpose so the 4 partial results of each column sit in one register, reduce, transpose back.
+        TTI_SFPTRANSP(0, 0, 0, 0);
+        lltt::replay(0, 3);
+        TTI_SFPTRANSP(0, 0, 0, 0);
+
+        // Swap to combine the two vertically adjacent faces (even and odd columns).
+        TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, 1); // odd columns of face pair
+        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, 1); // even columns of face pair
+
+        TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG6, p_sfpu::LREG1, 0);
+
+        TT_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_7, top_face_addr);
+        TT_SFPSTORE(p_sfpu::LREG1, STORE_MODE, ADDR_MOD_7, top_face_addr + ODD_COLUMNS);
+    }
+}
+
+/**
  * @brief Column-wise maximum/minimum reduction kernel for SFPU reduce MAX/MIN operation.
  *        Processes a block of tiles vertically (block_height tiles stacked) and computes the maximum or minimum value
  *        for each of the columns across all rows in the block. The maximum/minimum values are placed into
@@ -1008,6 +1136,7 @@ inline void calculate_reduce_max_min(const std::uint32_t block_height)
     static_assert(reduce_dim == ReduceDim::REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
     static_assert(pool_type == PoolType::MAX || pool_type == PoolType::MIN, "Only MAX and MIN pool types are supported for this function");
 
+    // Per-face-pair replay window and the dummy-load tail in the recorded LOADMACRO buffer.
     constexpr std::uint32_t replay_buffer_offset    = 9;
     constexpr std::uint32_t replay_buffer_next_face = 10;
 
@@ -1051,11 +1180,15 @@ inline void calculate_reduce_max_min(const std::uint32_t block_height)
     TTI_SFPSWAP(0 /*unused*/, p_sfpu::LREG4 /*lreg_src_c*/, p_sfpu::LREG5 /*lreg_dest*/, 1 /*instr_mod1*/);
     TTI_SFPTRANSP(0, 0, 0, 0);
 
-    // Store results to first row
-    TTI_SFPSTORE(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, 0);
-    TTI_SFPSTORE(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, 2);
-    TTI_SFPSTORE(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, 16);
-    TTI_SFPSTORE(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, 18);
+    // Store results to first row.
+    // For UInt16 in 32-bit dest the reduced value lives in the low 16 bits of the LREG, but the
+    // packer reads the high 16 bits of the dest word. SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16)
+    // writes the low 16 bits into the half the packer consumes.
+    constexpr std::uint32_t STORE_MODE = clear_high_bits ? 9 /* SFPSTORE_MOD0_FMT_LO16 */ : INSTRUCTION_MODE;
+    TTI_SFPSTORE(p_sfpu::LREG4, STORE_MODE, ADDR_MOD_7, 0);
+    TTI_SFPSTORE(p_sfpu::LREG5, STORE_MODE, ADDR_MOD_7, 2);
+    TTI_SFPSTORE(p_sfpu::LREG6, STORE_MODE, ADDR_MOD_7, 16);
+    TTI_SFPSTORE(p_sfpu::LREG7, STORE_MODE, ADDR_MOD_7, 18);
 }
 
 /**
@@ -1128,11 +1261,8 @@ inline void _init_reduce_(std::uint32_t block_ct_dim = 1)
 
     if constexpr (clear_high_bits)
     {
-        // TTI_SFPLOADI(0, 0xA, 0xFFFF);
-        // TTI_SFPLOADI(0, 0x8, 0x0000);
-        // TTI_SFPCONFIG(0, CLEAR_REG, 0);
-
-        sfpi::vConstIntPrgm1 = 0x0000FFFF;
+        // CLEAR_REG (sfpi::vConstIntPrgm0 / LREG12) holds the mask used by SFPLOAD_EXT to clear high bits.
+        sfpi::vConstIntPrgm0 = 0x0000FFFF;
     }
 
     // Dispatch to appropriate PoolType init
@@ -1142,9 +1272,16 @@ inline void _init_reduce_(std::uint32_t block_ct_dim = 1)
         {
             init_reduce_max_min_int32<INSTRUCTION_MODE, pool_type>();
         }
+        else if constexpr (clear_high_bits)
+        {
+            // UInt16 in 32-bit dest uses the manual (non-LOADMACRO) compare-and-swap path so the
+            // garbage high bits can be masked before each swap. It reuses the Int32 path's 3-swap
+            // replay buffer and swap-direction config (the body is format-agnostic).
+            init_reduce_max_min_int32<INSTRUCTION_MODE, pool_type>();
+        }
         else
         {
-            init_reduce_max_min<INSTRUCTION_MODE, pool_type, clear_high_bits>(block_ct_dim);
+            init_reduce_max_min<INSTRUCTION_MODE, pool_type, false>(block_ct_dim);
         }
     }
     else if constexpr (pool_type == PoolType::SUM || pool_type == PoolType::AVG)
@@ -1204,9 +1341,14 @@ inline void _calculate_reduce_(std::uint32_t block_ct_dim = 1, std::uint32_t blo
         {
             calculate_reduce_max_min_int32<INSTRUCTION_MODE, pool_type, reduce_dim>();
         }
+        else if constexpr (clear_high_bits)
+        {
+            // UInt16 in 32-bit dest: manual load/mask/swap path (LOADMACRO cannot mask between load and swap).
+            calculate_reduce_max_min_uint16<INSTRUCTION_MODE, pool_type, reduce_dim, clear_high_bits>();
+        }
         else
         {
-            calculate_reduce_max_min<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits>(block_rt_dim);
+            calculate_reduce_max_min<pool_type, reduce_dim, INSTRUCTION_MODE, false>(block_rt_dim);
         }
     }
     else if constexpr (pool_type == PoolType::SUM || pool_type == PoolType::AVG)

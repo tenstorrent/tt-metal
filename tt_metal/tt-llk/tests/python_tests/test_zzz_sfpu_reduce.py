@@ -63,6 +63,21 @@ def get_supported_reduce_axioms(reduce_pool: ReducePool) -> list[MathOperation]:
     return [MathOperation.ReduceColumn]
 
 
+def get_reduce_formats(reduce_pool: ReducePool) -> list[InputOutputFormat]:
+    """Pick the I/O data format for a given reduce operation.
+
+    A reduce-sum accumulates many input values into a single output element and
+    can exceed the 16-bit range (e.g. a 128-wide row sum of values up to ~1000
+    reaches ~128k), which would silently wrap a UInt16 output. To keep the full
+    sum we run Sum with a 32-bit (UInt32) dest type. Min/Max/Average reduce at
+    most 32 values per output column and therefore cannot overflow the 16-bit
+    output, so they use UInt16.
+    """
+    if reduce_pool == ReducePool.Sum:
+        return input_output_formats([DataFormat.UInt32], same=True)
+    return input_output_formats([DataFormat.UInt16], same=True)
+
+
 def is_valid_reduce_dimension(mathop, dest_acc, formats, dim):
     """Check if a dimension is valid for the given reduce operation."""
 
@@ -84,16 +99,7 @@ def is_valid_reduce_dimension(mathop, dest_acc, formats, dim):
 
 
 @parametrize(
-    formats=input_output_formats(
-        [
-            #            DataFormat.Float32,
-            #            DataFormat.Int32,
-            #            DataFormat.UInt32,
-            DataFormat.UInt16,
-            #            DataFormat.Float16_b,
-        ],
-        same=True,
-    ),
+    formats=lambda reduce_pool: get_reduce_formats(reduce_pool),
     mathop=lambda reduce_pool: get_supported_reduce_axioms(reduce_pool),
     dest_acc=[DestAccumulation.Yes],
     input_bounds=lambda formats: get_format_input_bounds(formats),
@@ -164,7 +170,6 @@ def test_sfpu_reduce(
         dtype=torch_format,
     )
     src_B = torch.zeros_like(src_A)
-    src_A = torch.ones_like(src_A)
 
     # Max Reduction can do block and single tile reduction whereas Sum/Avg only do single tile reduction, convert Sum/Avg golden to do block reduction by retilizing input to src_A
     # Dimensions for Max reduction work column wise, for Sum/Avg processing tiles independently is same as column reduction on dst block dimension [32, num_tiles * 32] where num rows is 32 i.e RT_DIM=1 (same as a single tile)
