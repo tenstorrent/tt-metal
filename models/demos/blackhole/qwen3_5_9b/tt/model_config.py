@@ -221,6 +221,16 @@ class Qwen35ModelArgs(ModelArgs):
         """Return cache directory path for converted weight tensors.
 
         Directory is created automatically by ttnn.as_tensor when first cache file is written.
+
+        Multi-device (TP) caches are qualified by mesh shape. Per-device weight
+        layouts differ by mesh shape — e.g. the framework Embedding shards the
+        hidden dim via ShardTensor2dMesh, so it is FULL on a (1,1) mesh but
+        fractured on (1,4) — and ttnn.as_tensor reloads a cache file as-is,
+        IGNORING the mesh_mapper. Without this qualifier a single-device run's
+        full weights would be silently reused as a TP run's shards (loading the
+        full hidden dim onto every device), which then fails the distributed
+        RMSNorm gamma/input alignment check. Single device keeps the original
+        unqualified path so the validated 9B behavior is unchanged.
         """
         if dtype is None:
             dtype = self.weight_dtype
@@ -230,6 +240,8 @@ class Qwen35ModelArgs(ModelArgs):
             suffix = "tensor_cache_bfp8"
         else:
             suffix = "tensor_cache_bf16"
+        if self.num_devices > 1:
+            suffix += "_mesh" + "x".join(str(d) for d in self.cluster_shape)
         return Path(self.checkpoint_dir) / suffix
 
     def load_state_dict(self):
