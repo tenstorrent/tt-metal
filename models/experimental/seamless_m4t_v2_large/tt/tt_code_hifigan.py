@@ -142,16 +142,53 @@ def _fused_activation_token(activation: Optional[ttnn.UnaryWithParam]) -> str:
     return str(op)
 
 
+# Conv2d shard layout, chosen per op group from the sweep in tests/perf/test_conv2d_shard_sweep.py.
+# Forcing the layout beats the device auto-pick (``shard_layout=None``) on the heavy vocoder convs:
+# HEIGHT_SHARDED is ~1.4-2x on the resblock convs, BLOCK_SHARDED is ~7x on conv_pre (large-K, small-M).
+# HEIGHT needs the full implicit-GEMM K (in_channels*kernel) resident per core, so above
+# ``_HEIGHT_SHARD_K_MAX`` it is rejected — those convs fall back to auto. ``_resolve_conv_shard_layout``
+# is a pure function of (prefer, in_channels, kernel) so prewarm and forward always pick the same
+# layout (the prepared-weights cache requires both to agree). Validated PCC ≥ 0.9987 at unit_seq=128.
+_HEIGHT_SHARD_K_MAX = 4096
+
+# Preferred conv2d shard layout per vocoder op group (None == device auto-pick, the prior default).
+# Tunable knobs so the sweep recommendation can be toggled per op group without touching call sites.
+# conv_pre (BLOCK) and resblock (HEIGHT) are reverted to auto: forcing a conv1d layout passed the
+# unit_seq=128 PCC test but CLASHES L1 ("statically allocated circular buffers clash with L1 buffers")
+# on the longer resblock timelines produced by real demo audio (S2ST). Their win was small (~3 ms /
+# ~5% of conv2d); the big lever is the upsample transpose below, which is robust via its slice gate.
+_CONV_PRE_SHARD = None
+_RESBLOCK_SHARD = None
+# Upsample conv_transpose: HEIGHT_SHARDED per DRAM slice is ~20x faster than auto on the early stages
+# (stage-1 36 ms -> ~2 ms), but errors above ~64 slices. ``_conv_transpose1d_nlc`` applies it only
+# when ``_vocoder_dram_slice_count(input_length) <= _UPSAMPLE_HEIGHT_MAX_SLICES`` (and K <= the cap),
+# so the long-timeline late stages and wide-K stage-0 stay on auto. See
+# tests/perf/test_conv_transpose_dram_slice_sweep.py.
+_UPSAMPLE_SHARD = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+_UPSAMPLE_HEIGHT_MAX_SLICES = 48
+
+
+def _resolve_conv_shard_layout(
+    prefer: Optional[ttnn.TensorMemoryLayout], *, in_channels: int, kernel_size: int
+) -> Optional[ttnn.TensorMemoryLayout]:
+    if prefer is None:
+        return None
+    if prefer == ttnn.TensorMemoryLayout.HEIGHT_SHARDED and int(in_channels) * int(kernel_size) > _HEIGHT_SHARD_K_MAX:
+        return None
+    return prefer
+
+
 def _vocoder_conv1d_config(
     fused_post_activation: Optional[ttnn.UnaryWithParam],
     *,
     input_length: int,
     in_channels: int,
+    shard_layout: Optional[ttnn.TensorMemoryLayout] = None,
 ) -> ttnn.Conv1dConfig:
     # Match T2U conv1d L1 recipe: deallocate activations and cap act block height on long/wide ops.
     conv_kwargs: dict = dict(
         weights_dtype=ttnn.bfloat8_b,
-        shard_layout=None,
+        shard_layout=shard_layout,
         deallocate_activation=True,
         enable_weights_double_buffer=False,
         enable_act_double_buffer=False,
@@ -163,15 +200,22 @@ def _vocoder_conv1d_config(
     return ttnn.Conv1dConfig(**conv_kwargs)
 
 
-def _vocoder_conv2d_config(*, input_length: int, in_channels: int) -> ttnn.Conv2dConfig:
+def _vocoder_conv2d_config(
+    *, input_length: int, in_channels: int, shard_layout: Optional[ttnn.TensorMemoryLayout] = None
+) -> ttnn.Conv2dConfig:
     conv_kwargs: dict = dict(
         weights_dtype=ttnn.bfloat8_b,
-        shard_layout=None,
+        shard_layout=shard_layout,
         deallocate_activation=True,
         output_layout=ttnn.TILE_LAYOUT,
         enable_weights_double_buffer=True,
         enable_act_double_buffer=True,
     )
+    # A forced (HEIGHT) layout on the DRAM-sliced transpose places its config/index tensors in
+    # L1_SMALL, which is already full mid-pipeline (the standalone benchmark had an empty L1_SMALL and
+    # did not hit this). Spill them to DRAM so the forced-layout transpose fits in the full model.
+    if shard_layout is not None:
+        conv_kwargs["config_tensors_in_dram"] = True
     il = int(input_length)
     if il > 256:
         conv_kwargs["enable_weights_double_buffer"] = False
@@ -415,6 +459,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         groups: int = 1,
         dilation: int = 1,
         fused_post_activation: Optional[ttnn.UnaryWithParam] = None,
+        shard_layout: Optional[ttnn.TensorMemoryLayout] = None,
     ) -> None:
         """``prepare_conv_*`` + DRAM ``clone`` only — no Conv2d forward (T2U/speech-encoder recipe)."""
         cache_key = self._conv1d_prep_cache_key(
@@ -433,7 +478,9 @@ class TTSeamlessM4Tv2CodeHifiGan:
         if cache_key in self._conv1d_prepared_cache:
             return
 
-        conv_config = _vocoder_conv1d_config(fused_post_activation, input_length=input_length, in_channels=in_channels)
+        conv_config = _vocoder_conv1d_config(
+            fused_post_activation, input_length=input_length, in_channels=in_channels, shard_layout=shard_layout
+        )
         prep_w = ttnn.prepare_conv_weights(
             weight_tensor=weight,
             input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -526,6 +573,9 @@ class TTSeamlessM4Tv2CodeHifiGan:
             out_channels=int(cp.out_channels),
             kernel_size=int(cp.kernel_size),
             padding=int(cp.padding),
+            shard_layout=_resolve_conv_shard_layout(
+                _CONV_PRE_SHARD, in_channels=int(cp.in_channels), kernel_size=int(cp.kernel_size)
+            ),
         )
         tlen = _host_conv_out_length(tlen, int(cp.kernel_size), 1, int(cp.padding))
 
@@ -553,6 +603,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
                         padding=p1,
                         dilation=d1,
                         fused_post_activation=_fused_leaky_relu(self.leaky_slope),
+                        shard_layout=_resolve_conv_shard_layout(_RESBLOCK_SHARD, in_channels=channels, kernel_size=k1),
                     )
                     t_rb = _host_conv_out_length(t_rb, k1, 1, p1, dilation=d1)
                     k2 = int(c2p["kernel_size"])
@@ -568,6 +619,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
                         kernel_size=k2,
                         padding=p2,
                         dilation=d2,
+                        shard_layout=_resolve_conv_shard_layout(_RESBLOCK_SHARD, in_channels=channels, kernel_size=k2),
                     )
                     t_rb = _host_conv_out_length(t_rb, k2, 1, p2, dilation=d2)
 
@@ -601,9 +653,12 @@ class TTSeamlessM4Tv2CodeHifiGan:
         fused_post_activation: Optional[ttnn.UnaryWithParam],
         deallocate_input: bool = False,
         use_prepared_weights: bool = True,
+        shard_layout: Optional[ttnn.TensorMemoryLayout] = None,
     ) -> Tuple[ttnn.Tensor, int]:
         """Single-shot ``ttnn.conv1d`` on row-major NLC activations."""
-        conv_config = _vocoder_conv1d_config(fused_post_activation, input_length=input_length, in_channels=in_channels)
+        conv_config = _vocoder_conv1d_config(
+            fused_post_activation, input_length=input_length, in_channels=in_channels, shard_layout=shard_layout
+        )
         cache_key = self._conv1d_prep_cache_key(
             weight=weight,
             bias=bias,
@@ -663,6 +718,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         groups: int,
         dilation: int = 1,
         fused_post_activation: Optional[ttnn.UnaryWithParam] = None,
+        shard_layout: Optional[ttnn.TensorMemoryLayout] = None,
     ) -> Tuple[ttnn.Tensor, int]:
         # ``ttnn.conv1d`` reshapes activations for the conv2d path; TILE NLC (e.g. from ``embedding``)
         # can hit "reshape between two shapes with different volumes". Host ROW_MAJOR weights are fine.
@@ -690,6 +746,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 dilation=dilation,
                 fused_post_activation=fused_post_activation,
                 deallocate_input=rm_buf is not None,
+                shard_layout=shard_layout,
             )
 
         # HF stores symmetric same-padding per layer; that is the overlap needed between chunks.
@@ -716,6 +773,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 dilation=dilation,
                 fused_post_activation=fused_post_activation,
                 deallocate_input=rm_buf is not None,
+                shard_layout=shard_layout,
             )
 
         chunks: list[ttnn.Tensor] = []
@@ -758,6 +816,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 dilation=dilation,
                 fused_post_activation=fused_post_activation,
                 deallocate_input=True,
+                shard_layout=shard_layout,
             )
             out_start = start - in_start
             out_chunk = ttnn.slice(
@@ -896,8 +955,20 @@ class TTSeamlessM4Tv2CodeHifiGan:
         weight = layer["weight"]
         bias = layer["bias"]
 
-        conv_config = _vocoder_conv2d_config(input_length=input_length, in_channels=in_channels)
-        if int(input_length) > 64:
+        # HEIGHT_SHARDED per DRAM slice is ~20x faster than the auto layout on the narrow-K early
+        # upsample stages (benchmark test_conv_transpose_dram_slice_sweep: stage-1 36 ms -> ~2 ms),
+        # BUT only at small slice counts — it errors at >= ~64 slices, i.e. the long-timeline late
+        # stages. So gate HEIGHT on both the K cap (``_resolve_conv_shard_layout``) and the slice
+        # count; wide-K (stage-0) and high-slice (late) transposes fall back to auto.
+        sliced = int(input_length) > 64
+        num_slices = _vocoder_dram_slice_count(input_length) if sliced else 0
+        prefer = _UPSAMPLE_SHARD if (not sliced or num_slices <= _UPSAMPLE_HEIGHT_MAX_SLICES) else None
+        conv_config = _vocoder_conv2d_config(
+            input_length=input_length,
+            in_channels=in_channels,
+            shard_layout=_resolve_conv_shard_layout(prefer, in_channels=in_channels, kernel_size=k),
+        )
+        if sliced:
             return self._conv_transpose1d_nlc_dram_sliced(
                 x_nlc,
                 layer=layer,
@@ -996,6 +1067,9 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 groups=1,
                 dilation=int(c1p["dilation"]),
                 fused_post_activation=_fused_leaky_relu(self.leaky_slope),
+                shard_layout=_resolve_conv_shard_layout(
+                    _RESBLOCK_SHARD, in_channels=channels, kernel_size=int(c1p["kernel_size"])
+                ),
             )
             x_nlc, tlen = self._conv1d(
                 x_nlc,
@@ -1010,6 +1084,9 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 padding=int(c2p["padding"]),
                 groups=1,
                 dilation=int(c2p["dilation"]),
+                shard_layout=_resolve_conv_shard_layout(
+                    _RESBLOCK_SHARD, in_channels=channels, kernel_size=int(c2p["kernel_size"])
+                ),
             )
             x_nlc = ttnn.add(x_nlc, residual, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         return x_nlc
@@ -1045,6 +1122,9 @@ class TTSeamlessM4Tv2CodeHifiGan:
             stride=1,
             padding=int(cp.padding),
             groups=1,
+            shard_layout=_resolve_conv_shard_layout(
+                _CONV_PRE_SHARD, in_channels=int(cp.in_channels), kernel_size=int(cp.kernel_size)
+            ),
         )
         ttnn.deallocate(x_nlc)
         _vt0 = _vt("conv_pre", _vt0)
