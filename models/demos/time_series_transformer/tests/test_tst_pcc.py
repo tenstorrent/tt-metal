@@ -30,11 +30,17 @@ def load_ref(filename):
 
 
 def get_hf_embeddings(hf_model, inputs):
-    enc_out, dec_out = {}, {}
+    enc_out, dec_out, dec_final = {}, {}, {}
+
     def enc_hook(m, i, o): enc_out["emb"] = o.detach()
     def dec_hook(m, i, o): dec_out["emb"] = o.detach()
+    def dec_final_hook(m, i, o):
+        dec_final["out"] = (o[0] if isinstance(o, tuple) else o).detach()
+
     h1 = hf_model.model.encoder.layernorm_embedding.register_forward_hook(enc_hook)
     h2 = hf_model.model.decoder.layernorm_embedding.register_forward_hook(dec_hook)
+    h3 = hf_model.model.decoder.layers[-1].register_forward_hook(dec_final_hook)
+
     with torch.no_grad():
         hf_model(
             past_values=inputs["input_past_values"],
@@ -47,7 +53,8 @@ def get_hf_embeddings(hf_model, inputs):
         )
     h1.remove()
     h2.remove()
-    return enc_out["emb"], dec_out["emb"]
+    h3.remove()
+    return enc_out["emb"], dec_out["emb"], dec_final["out"]
 
 
 @pytest.fixture(scope="module")
@@ -65,7 +72,7 @@ def setup():
 def test_encoder_pcc(setup):
     """Encoder output PCC >= 0.99 vs HF encoder_last_hidden_state."""
     device, hf_model, weights, inputs, intermediates, outputs = setup
-    enc_emb, _ = get_hf_embeddings(hf_model, inputs)
+    enc_emb, _, _ = get_hf_embeddings(hf_model, inputs)
     logger.info(f"Encoder input shape: {enc_emb.shape}")
     result = run_encoder(device, enc_emb, weights)
     result_torch = ttnn.to_torch(result).float()[..., :enc_emb.shape[-1]]
@@ -77,15 +84,14 @@ def test_encoder_pcc(setup):
 
 
 def test_decoder_pcc(setup):
-    """Decoder output PCC >= 0.99 vs HF decoder_layer1_fc2."""
+    """Decoder output PCC >= 0.99 vs HF full decoder stack output."""
     device, hf_model, weights, inputs, intermediates, outputs = setup
-    enc_emb, dec_emb = get_hf_embeddings(hf_model, inputs)
+    enc_emb, dec_emb, dec_ref = get_hf_embeddings(hf_model, inputs)
     logger.info(f"Decoder input shape: {dec_emb.shape}")
     enc_hidden = run_encoder(device, enc_emb, weights)
     result = run_decoder_step(device, dec_emb, enc_hidden, weights)
     result_torch = ttnn.to_torch(result).float()[..., :dec_emb.shape[-1]]
-    ref = intermediates["decoder_layer1_out"]
-    assert result_torch.shape == ref.shape, f"Shape mismatch: {result_torch.shape} vs {ref.shape}"
-    passing, pcc_val = comp_pcc(result_torch, ref, PCC_THRESHOLD)
+    assert result_torch.shape == dec_ref.shape, f"Shape mismatch: {result_torch.shape} vs {dec_ref.shape}"
+    passing, pcc_val = comp_pcc(result_torch, dec_ref, PCC_THRESHOLD)
     logger.info(f"Decoder PCC: {pcc_val}")
     assert passing, f"Decoder PCC {pcc_val} < {PCC_THRESHOLD}"
