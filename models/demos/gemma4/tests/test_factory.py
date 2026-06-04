@@ -310,7 +310,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None):
     num_devices = ttnn.get_num_devices()
 
     if mesh_shapes is None:
-        all_shapes = [(1, 1), (1, 2), (1, 8)]
+        all_shapes = [(1, 1), (1, 2), (1, 4), (1, 8), (1, 32)]
         mesh_shapes = [s for s in all_shapes if s[0] * s[1] <= num_devices]
     else:
         # User-provided shapes: still filter to those that fit, so an explicit

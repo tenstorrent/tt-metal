@@ -12,6 +12,9 @@ permissions:
   packages: write
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-images:
     name: "🐳️ Docker setup"
     uses: ./.github/workflows/build-images.yml
@@ -20,10 +23,10 @@ jobs:
   collect-wormhole-durations:
     name: "🌀 Collect Wormhole test durations (all tests)"
     runs-on: tt-ubuntu-2204-xlarge-stable
-    needs: build-images
+    needs: [check-harbor, build-images]
     timeout-minutes: 360
     container:
-      image: harbor.ci.tenstorrent.net/${{ needs.build-images.outputs.docker-image }}
+      image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-images.outputs.docker-image) }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -63,10 +66,10 @@ jobs:
   collect-blackhole-durations:
     name: "🕳️ Collect Blackhole test durations (all tests)"
     runs-on: tt-ubuntu-2204-xlarge-stable
-    needs: build-images
+    needs: [check-harbor, build-images]
     timeout-minutes: 360
     container:
-      image: harbor.ci.tenstorrent.net/${{ needs.build-images.outputs.docker-image }}
+      image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-images.outputs.docker-image) }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6

@@ -176,13 +176,15 @@ def commit_tensix_soft_reset(
         "RISCV_DEBUG_REG_SOFT_RESET_0", soft_reset
     )
 
-    end_time = time.time() + 0.1  # 100ms
-    while time.time() < end_time:
+    end_time = time.monotonic() + 0.1  # 100ms
+    while True:
         temp_reg_value = get_register_store(location, device_id).read_register(
             "RISCV_DEBUG_REG_SOFT_RESET_0"
         )
         if temp_reg_value == soft_reset:
             return
+        if time.monotonic() >= end_time:
+            break
 
     raise TimeoutError(
         f"Polling for committed soft reset value times out | Last read value: {temp_reg_value}"

@@ -35,7 +35,9 @@ template <
     bool last_tile_is_partial,
     uint32_t dilation_h,
     uint32_t dilation_w,
-    bool zero_pages>
+    bool zero_pages,
+    uint32_t in_cb_sz,
+    uint32_t bf16_init_value>
 ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
@@ -43,6 +45,8 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     constexpr uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
     constexpr uint32_t MAX_BYTES_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
     constexpr uint32_t in_ntiles_c = (in_c + TILE_WIDTH - 1) / TILE_WIDTH;
+    constexpr uint32_t num_tilized_rows =
+        wide_reduction ? (in_cb_sz / (MAX_TILES_PER_REDUCTION * TILE_WIDTH)) : (in_cb_sz / (in_ntiles_c * TILE_WIDTH));
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      (kernel_h * kernel_w) <= 16 && !last_tile_is_partial;
 
@@ -67,6 +71,21 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
         if constexpr (zero_pages) {
             if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
                 zero_out_page(noc, in_cb);
+            }
+        }
+        // When the CB intentionally holds more rows than the kernel window (medium kernels,
+        // FACE_WIDTH < kernel_size_hw < TILE_HEIGHT), the rows in
+        // [total_elems_to_reduce, num_tilized_rows) are never overwritten by the async_reads
+        // below and would otherwise contribute junk to the reduce. Fill only that tail region
+        // with the init value -- the leading rows will be fully overwritten by process_h().
+        if constexpr (!is_large_kernel) {
+            if constexpr (num_tilized_rows > total_elems_to_reduce) {
+                constexpr uint32_t row_stride_elems =
+                    wide_reduction ? (MAX_TILES_PER_REDUCTION * TILE_WIDTH) : (in_ntiles_c * TILE_WIDTH);
+                constexpr uint32_t tail_offset_bytes = total_elems_to_reduce * row_stride_elems * BYTES_PER_ELEM;
+                constexpr uint32_t tail_elems = (num_tilized_rows - total_elems_to_reduce) * row_stride_elems;
+                fill_with_val(
+                    get_write_ptr(in_cb_id) + tail_offset_bytes, tail_elems, static_cast<uint16_t>(bf16_init_value));
             }
         }
         for (uint32_t h = 0; h < kernel_h; ++h) {
@@ -231,8 +250,7 @@ void kernel_main() {
         }
         // for average pool clear out tiles runs in loop, no need to initialize here
         if constexpr (!is_avg_pool || !is_large_kernel) {
-            clear_out_tiles<in_cb_id, clear_value_cb_id>(
-                Noc(), experimental::CB(in_cb_id), clear_value_cb);
+            clear_out_tiles<in_cb_id, clear_value_cb_id>(Noc(), experimental::CB(in_cb_id), clear_value_cb);
         }
     }
 
@@ -337,7 +355,9 @@ void kernel_main() {
                 last_tile_is_partial,
                 dilation_h,
                 dilation_w,
-                zero_pages>(ind, in_l1_read_base_addr);
+                zero_pages,
+                in_cb_sz,
+                bf16_init_value>(ind, in_l1_read_base_addr);
             if (use_split_reader && ind == end) {
                 first_row_value = false;
             }
