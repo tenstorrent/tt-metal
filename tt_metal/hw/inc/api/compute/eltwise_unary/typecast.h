@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -39,7 +39,6 @@ namespace ckernel {
  *  Bfp4_b <-> Float32
  *  UInt16 <-> UInt32
  *  UInt16 <-> Int32
- *  UInt16 <-> UInt8
  *
  * For input/output to be UInt32, Int32, or Float32, Dest must be in 32 bit mode.
  *
