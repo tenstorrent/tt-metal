@@ -39,7 +39,7 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
     tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(c.dtype());
     uint32_t output_single_tile_size = tt::tile_size(output_cb_data_format);
     bool fp32_llk_acc = a.dtype() == DataType::FLOAT32 || a.dtype() == DataType::FP8_E4M3 ||
-                        output.dtype() == DataType::FP8_E4M3 || output.dtype() == DataType::BFLOAT8_B;
+                        c.dtype() == DataType::FP8_E4M3 || c.dtype() == DataType::BFLOAT8_B;
 
     auto logical_shape = a.logical_shape();
     uint32_t logical_width = logical_shape[-1];
