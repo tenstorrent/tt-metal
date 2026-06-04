@@ -154,9 +154,9 @@ class WanAttention(Module):
 
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
+            fp32_dest_acc_en=True,  # NOTE: Set to True if there's a correctness issue
         )
 
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -164,7 +164,7 @@ class WanAttention(Module):
             math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()
@@ -172,10 +172,10 @@ class WanAttention(Module):
 
         self.mm_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=True,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
@@ -397,6 +397,17 @@ class WanAttention(Module):
 
         v_BHNE = create_heads(v_1BNF)
 
+        # Dump Q/K/V for debugging (callback set by caller)
+        _dump_fn = getattr(self, "_dump_fn", None)
+        if _dump_fn is not None and prompt_1BLP is not None:
+            _dump_fn("cross_attn_q", q_BHNE)
+            _dump_fn("cross_attn_k", k_BHNE)
+            _dump_fn("cross_attn_v", v_BHNE)
+        if _dump_fn is not None and prompt_1BLP is None:
+            _dump_fn("self_attn_q", q_BHNE)
+            _dump_fn("self_attn_k", k_BHNE)
+            _dump_fn("self_attn_v", v_BHNE)
+
         if prompt_1BLP is None:
             # Self attention
             if self.parallel_config.sequence_parallel.factor > 1:
@@ -489,6 +500,14 @@ class WanAttention(Module):
                 program_config=self.sdpa_program_config,
                 compute_kernel_config=self.sdpa_compute_kernel_config,
             )
+
+        # Dump attention output (before concatenate_heads)
+        if _dump_fn is not None and prompt_1BLP is not None:
+            _dump_fn("cross_attn_out", spatial_BHNE)
+            self._dump_fn = None  # dump once
+        if _dump_fn is not None and prompt_1BLP is None:
+            _dump_fn("self_attn_out", spatial_BHNE)
+            self._dump_fn = None  # dump once
 
         spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
         spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)

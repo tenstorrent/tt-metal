@@ -492,11 +492,13 @@ class WanPatchEmbed(Module):
             total_shape=[in_channels * patch_size[0] * patch_size[1] * patch_size[2], embed_dim],
             device=mesh_device,
             mesh_axes=[None, self.tp_mesh_axis],
+            dtype=ttnn.float32,
         )
         self.proj_bias = Parameter(
             total_shape=[1, embed_dim],
             device=mesh_device,
             mesh_axes=[None, self.tp_mesh_axis],
+            dtype=ttnn.float32,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:

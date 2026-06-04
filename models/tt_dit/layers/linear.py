@@ -13,7 +13,7 @@ from ..utils.matmul import get_fused_mmrs_config, get_matmul_config, get_matmul_
 from .module import Module, Parameter
 
 MATH_FIDELITY = {
-    ttnn.bfloat16: ttnn.MathFidelity.HiFi2,
+    ttnn.bfloat16: ttnn.MathFidelity.HiFi4,
     ttnn.float32: ttnn.MathFidelity.HiFi4,
 }
 
@@ -47,7 +47,7 @@ class Linear(Module):
             math_fidelity=MATH_FIDELITY[dtype],
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
 
         self.weight = Parameter(total_shape=[self.in_features, self.out_features], device=mesh_device, dtype=dtype)
@@ -140,7 +140,7 @@ class ColParallelLinear(Module):
             math_fidelity=MATH_FIDELITY[dtype],
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
 
         self.weight = Parameter(
@@ -300,7 +300,7 @@ class RowParallelLinear(Module):
             math_fidelity=MATH_FIDELITY[dtype],
             math_approx_mode=False,
             fp32_dest_acc_en=True,
-            packer_l1_acc=True,
+            packer_l1_acc=False,
         )
 
         ndev = self.mesh_device.shape[self.mesh_axis] if self.mesh_axis is not None else 1

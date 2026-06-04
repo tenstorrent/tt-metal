@@ -319,7 +319,9 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     // The exponential function uses InputClamping::None for better performance. This version
     // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
     // Enable packer ReLU to zero any negative values produced by the exponential approximation.
-    exp_tile_init<true /* approx */, scale_fp32, InputClamping::None>();
+    // exp_tile_init<true /* approx */, scale_fp32, InputClamping::None>();
+    constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+    exp_tile_init<false>();
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 
     cb_wait_front(in0_cb, rows * cols);
@@ -341,9 +343,11 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
-                constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 /*ITER*/ : 8 /*ITER*/;
-                constexpr VectorMode vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
-                exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(j, vector_mode_exp);
+                // constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 : 8;
+                // constexpr int vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
+                // exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(j,
+                // vector_mode_exp);
+                exp_tile<false /* approx */, true /* scale_en */>(j, VectorMode::RC, scale_bf16);
             }
             tile_regs_commit();
 
