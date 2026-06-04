@@ -2330,13 +2330,9 @@ class ModelArgs:
         """Get the memory config for LM head output resharding."""
         if prefetcher is None:
             return ttnn.L1_MEMORY_CONFIG
-        lm_head_output_core_range_set = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(prefetcher.num_receiver_cores, 7)),
-                ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(8 + prefetcher.num_receiver_cores - 1, 7)),
-            ]
-        )
 
+        # The reshard target is the prefetcher's actual receiver cores (see core_grid below), which
+        # each backend reports via receiver_cores(); do not hardcode a worker-column layout here.
         def next_power_of_2(n):
             if n <= 0:
                 return 1
