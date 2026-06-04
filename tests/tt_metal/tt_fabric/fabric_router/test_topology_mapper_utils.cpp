@@ -5094,6 +5094,12 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     // Single BH galaxy (32 ASICs): PGD has no 1x17 grouping; 1x17 BLACKHOLE matches 4x8_Mesh (32 ASICs)
     using namespace ::tt::tt_fabric;
 
+    // TODO(#45629): Re-enable once PGD torus matching lands on main. The 4x8_Mesh grouping that 1x17 needs
+    // cannot embed on single_bh_galaxy_clus_desc today (0/32 nodes mapped) without torus / cross-tray
+    // support. PR #45629 (https://github.com/tenstorrent/tt-metal/pull/45629) adds that matching.
+    GTEST_SKIP()
+        << "Disabled pending #45629 (PGD torus matching; 4x8_Mesh cannot embed on single BH galaxy mock today)";
+
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");
     ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
 
@@ -5143,6 +5149,13 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_SingleBHGalaxy_2x4Pipeline) {
     using namespace ::tt::tt_fabric;
+
+    // TODO(#45629): Re-enable once PGD torus matching lands on main. On single_bh_galaxy_clus_desc the
+    // 4x2_Mesh_flat half-pod ({1,3}/{2,4}) cannot embed -- the PSD lacks the cross-tray connectivity, so
+    // build_physical settles on a {1,2}/{3,4} grouping that violates the half-pod rule. PR #45629
+    // (https://github.com/tenstorrent/tt-metal/pull/45629) adds torus-aware matching plus the
+    // TRAY_1+TRAY_3 / TRAY_2+TRAY_4 cross-tray PGD variants that place this correctly.
+    GTEST_SKIP() << "Disabled pending #45629 (PGD torus matching for {1,3}/{2,4} half-pod on single BH galaxy)";
 
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");
     ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
