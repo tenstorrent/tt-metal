@@ -39,20 +39,18 @@ full matrix is not materialised.  Instead iSTFT uses ``conv_transpose2d``:
 windowed overlap-add (OLA) exactly in a single on-device pass.  There is no CPU involvement
 in the forward path.
 
-Long sequences (device-only chunking)
--------------------------------------
-For input lengths / frame counts that overflow BH L1 in a single pass, both directions are
-processed in device-resident chunks instead of falling back to CPU ``torch.stft`` /
-``torch.istft``:
+Long sequences (single-pass, device-only)
+------------------------------------------
+Both directions run in a single device pass at any length — no chunking, no CPU fallback.  The
+strided conv2d (forward) and conv_transpose2d OLA (iSTFT) stream the signal through bounded L1
+circular buffers via ``dram_height_slice_config`` (DRAM height slicing), which fits the full
+Kokoro range (forward input_height ~635k, iSTFT F ~127k) at the default 256-slice budget.  The
+only other op that would overflow L1 at large length is the 2D ROW_MAJOR reshape
+(``[B, L] -> [B, 1, L, 1]`` and the ``[B, W, 1] -> [B, W]`` COLA squeeze), whose circular buffer
+scales with the full width; these are routed through TILE layout (tile-local, bounded) instead.
 
-* Forward STFT chunks along output frames — each chunk slices the (already reflect-padded)
-  signal window it needs and runs the same strided conv2d; frame outputs concatenate.
-* iSTFT chunks along output samples — each output segment gathers only the frames whose
-  windows overlap it (``n_fft / hop`` frames), runs conv_transpose2d OLA on that frame slice
-  and trims to the segment, so the segments concatenate with no cross-chunk overlap-add.
-
-Both keep every op on device; the ``torch.stft`` / ``torch.istft`` paths now run only when
-explicitly requested via the ``use_torch_*`` flags.
+The ``torch.stft`` / ``torch.istft`` paths now run only when explicitly requested via the
+``use_torch_*`` flags.
 """
 
 from __future__ import annotations
@@ -68,41 +66,21 @@ from loguru import logger
 import ttnn
 
 from models.experimental.kokoro.stft_xy_dump import dump_stft_xy_if_enabled, stft_xy_dump_dir, stft_xy_dump_enabled
-from models.experimental.kokoro.tt.tt_conv import (
-    dram_height_slice_config,
-    dram_height_slice_num_slices,
-    dram_height_slice_target_rows,
-)
+from models.experimental.kokoro.tt.tt_conv import dram_height_slice_config
 
 # iSTFT matrix bytes limit: if [K*F, output_length] float32 would exceed this, skip
 # precomputing the matrices and use conv_transpose2d OLA instead.
 _ISTFT_MATRIX_BYTES_LIMIT = 1_073_741_824  # 1 GiB
 
-
-def _istft_conv_transpose_ola_fits(F: int) -> bool:
-    """Return whether on-device conv_transpose2d OLA iSTFT fits BH L1 with DRAM height slicing."""
-    target = dram_height_slice_target_rows(F)
-    num_slices = dram_height_slice_num_slices(F, target_rows_per_slice=target)
-    rows_per_slice = (F + num_slices - 1) // num_slices
-    return rows_per_slice <= target
-
-
-# Single-pass forward STFT reshapes the whole signal to ``[B, 1, L, 1]``.  The 2D ROW_MAJOR
-# reshape allocates an L1 circular buffer scaled to the full width, overflowing BH L1
-# (1.5 MiB/bank) above ~95k samples; chunk the forward conv below that to stay on device.
-_FORWARD_STFT_DEVICE_MAX_INPUT_LENGTH = 90_000
-
-# Frames per chunk for device-only long-sequence STFT / iSTFT.  Chosen so a single chunk's
-# conv2d / conv_transpose2d stays well within the empirically safe single-pass size on BH:
-#   forward: chunk input height = (frames-1)*hop + n_fft ≈ 82k samples < 200k overflow ceiling.
-#   iSTFT:   chunk frame count ≤ 32k keeps DRAM-sliced rows/slice ≤ 128 (see _istft_*_ola_fits).
-_FORWARD_STFT_CHUNK_FRAMES = 16_384
-_ISTFT_CHUNK_FRAMES = 8_192
-
-
-def _forward_stft_device_fits(input_length: int) -> bool:
-    """Return whether the device strided-conv STFT forward path fits BH L1 in a single pass."""
-    return input_length <= _FORWARD_STFT_DEVICE_MAX_INPUT_LENGTH
+# Long-sequence STFT/iSTFT run in a single device pass — no chunking, no CPU fallback.  The two
+# things that would otherwise overflow BH L1 (1.5 MiB/bank) at large length are handled directly:
+#   * The strided conv2d / conv_transpose2d OLA stream the signal through bounded L1 circular
+#     buffers via ``dram_height_slice_config`` (DRAM height slicing).  Measured to fit the full
+#     Kokoro range — forward input_height 635k and iSTFT F 127k — at the default 256-slice budget.
+#   * Reshapes of the form ``[B, L] -> [B, 1, L, 1]`` and ``[B, W, 1] -> [B, W]`` are routed through
+#     TILE layout.  The 2D ROW_MAJOR reshape kernel allocates an L1 circular buffer scaled to the
+#     full width (~16 B/sample) and overflows above ~95k–131k samples, whereas the TILE reshape is
+#     tile-local and bounded; tilizing first keeps these on device at any length.
 
 
 def _to_fp32_if_needed(x: ttnn.Tensor, memory_config: ttnn.MemoryConfig) -> tuple[ttnn.Tensor, bool]:
@@ -326,8 +304,7 @@ def preprocess_tt_torch_stft(
             "TTTorchSTFT skipping iSTFT matrix precompute "
             f"({matrix_bytes} bytes > {_ISTFT_MATRIX_BYTES_LIMIT}); "
             f"F={F}, output_length={output_length} — "
-            f"{'sample-chunked' if not _istft_conv_transpose_ola_fits(F) else 'single-pass'} "
-            "conv_transpose2d OLA iSTFT at runtime (device-only)"
+            "single-pass DRAM-sliced conv_transpose2d OLA iSTFT at runtime (device-only)"
         )
         istft_real_t: Optional[ttnn.Tensor] = None
         istft_imag_t: Optional[ttnn.Tensor] = None
@@ -619,7 +596,13 @@ class TTTorchSTFT:
         return mag_tt, phase_tt
 
     def _forward_stft_conv(self, x_bL: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Strided conv STFT branches → ``(X_real, X_imag)`` each ``[B, K, F]``."""
+        """Strided conv STFT branches → ``(X_real, X_imag)`` each ``[B, K, F]``.
+
+        Single device pass at any length: the strided conv2d streams the signal through bounded L1
+        via DRAM height slicing.  The ``[B, L] -> [B, 1, L, 1]`` reshape is routed through TILE
+        layout (the 2D ROW_MAJOR reshape would overflow L1 above ~95k samples; the TILE reshape +
+        untilize, whose untilized width is 1, is tile-local and bounded).
+        """
         L_in = int(x_bL.shape[-1])
         if L_in != self.params.input_length:
             raise ValueError(f"input length mismatch: got {L_in}, expected {self.params.input_length}")
@@ -627,20 +610,15 @@ class TTTorchSTFT:
             x_bL = ttnn.typecast(x_bL, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         p = self.params
+        mc = ttnn.DRAM_MEMORY_CONFIG
         B = int(x_bL.shape[0])
 
-        x_bL_rm = ttnn.to_layout(x_bL, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        if not _forward_stft_device_fits(L_in):
-            # Long signal: chunk before any full-length reshape (reshaping [B, 1, L, 1] for very
-            # large L overflows BH L1 circular buffers).  _forward_stft_conv_chunked slices the
-            # [B, L] signal per frame-chunk and reshapes only the small slice.
-            X_real, X_imag = self._forward_stft_conv_chunked(x_bL_rm, B)
-            ttnn.deallocate(x_bL_rm)
-            return X_real, X_imag
-
-        x_n1lc = ttnn.reshape(x_bL_rm, [B, 1, L_in, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(x_bL_rm)
+        # Reshape [B, L] -> [B, 1, L, 1] via TILE to avoid the 2D ROW_MAJOR reshape L1 overflow.
+        if x_bL.layout != ttnn.TILE_LAYOUT:
+            x_bL = ttnn.to_layout(x_bL, ttnn.TILE_LAYOUT, memory_config=mc)
+        x_n1lc_tile = ttnn.reshape(x_bL, [B, 1, L_in, 1], memory_config=mc)
+        x_n1lc = ttnn.to_layout(x_n1lc_tile, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
+        ttnn.deallocate(x_n1lc_tile)
 
         x_padded = _reflect_pad_1d_dim2(x_n1lc, L_in, p.conv_pad_len)
         ttnn.deallocate(x_n1lc)
@@ -649,80 +627,6 @@ class TTTorchSTFT:
         X_real = self._conv_real(x_padded, B, L_padded)
         X_imag = self._conv_imag(x_padded, B, L_padded)
         ttnn.deallocate(x_padded)
-        return X_real, X_imag
-
-    def _padded_col(self, x_bL_rm: ttnn.Tensor, xi: int, B: int) -> ttnn.Tensor:
-        """Single sample column ``x[:, xi]`` as ``[B, 1]`` ROW_MAJOR (for reflect-pad edges)."""
-        return ttnn.slice(x_bL_rm, [0, xi], [B, xi + 1], [1, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-    def _padded_slice_bL(self, x_bL_rm: ttnn.Tensor, ps: int, pe: int, B: int) -> ttnn.Tensor:
-        """Reflect-padded signal restricted to padded positions ``[ps, pe)`` → ``[B, pe-ps]`` ROW_MAJOR.
-
-        ``center=True`` reflect padding maps padded index ``i`` to source ``x`` as:
-        ``i < pad`` → ``x[pad - i]`` (left mirror); ``pad <= i < pad+L`` → ``x[i - pad]``;
-        ``i >= pad+L`` → ``x[2L + pad - 2 - i]`` (right mirror).  The two reflect regions span only
-        ``pad`` (= n_fft//2) samples each, so they are built from per-column slices; the (usually
-        dominant) middle region is one contiguous slice — no full-length reshape, so no L1 overflow.
-        """
-        p = self.params
-        mc = ttnn.DRAM_MEMORY_CONFIG
-        L = p.input_length
-        pad = p.conv_pad_len
-        parts: list[ttnn.Tensor] = []
-        # Left mirror region [0, pad) ∩ [ps, pe)
-        for i in range(max(ps, 0), min(pe, pad)):
-            parts.append(self._padded_col(x_bL_rm, pad - i, B))
-        # Middle region [pad, pad+L) ∩ [ps, pe)
-        b0, b1 = max(ps, pad), min(pe, pad + L)
-        if b1 > b0:
-            parts.append(ttnn.slice(x_bL_rm, [0, b0 - pad], [B, b1 - pad], [1, 1], memory_config=mc))
-        # Right mirror region [pad+L, L+2*pad) ∩ [ps, pe)
-        for i in range(max(ps, pad + L), min(pe, L + 2 * pad)):
-            parts.append(self._padded_col(x_bL_rm, 2 * L + pad - 2 - i, B))
-        if len(parts) == 1:
-            return parts[0]
-        out = ttnn.concat(parts, dim=1, memory_config=mc)
-        for t in parts:
-            ttnn.deallocate(t)
-        return out
-
-    def _forward_stft_conv_chunked(self, x_bL_rm: ttnn.Tensor, B: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Device-only forward STFT for long sequences: chunk along output frames.
-
-        Output frame ``f`` reads (reflect-padded) signal positions ``[f*hop, f*hop + n_fft)``.  A
-        chunk of frames ``[f0, f1)`` needs padded positions ``[f0*hop, (f1-1)*hop + n_fft)`` — built
-        directly from the ``[B, L]`` signal by :meth:`_padded_slice_bL`, reshaped to ``[B, 1, h, 1]``
-        (small ``h``) and fed to the same strided conv2d.  Frame outputs ``[B, K, n_chunk]``
-        concatenate along ``F`` to reproduce the full single-pass result.
-        """
-        p = self.params
-        mc = ttnn.DRAM_MEMORY_CONFIG
-        hop = p.hop_length
-        n_fft = p.filter_length
-        logger.info(
-            "TTTorchSTFT forward STFT using device frame-chunked conv2d "
-            f"(input_length={p.input_length} > {_FORWARD_STFT_DEVICE_MAX_INPUT_LENGTH}; "
-            f"F={p.F}, frames/chunk={_FORWARD_STFT_CHUNK_FRAMES})"
-        )
-        real_chunks: list[ttnn.Tensor] = []
-        imag_chunks: list[ttnn.Tensor] = []
-        f0 = 0
-        while f0 < p.F:
-            f1 = min(f0 + _FORWARD_STFT_CHUNK_FRAMES, p.F)
-            ps = f0 * hop
-            pe = (f1 - 1) * hop + n_fft  # exclusive; == L_padded for the last chunk
-            h_chunk = pe - ps
-            x_slice_bL = self._padded_slice_bL(x_bL_rm, ps, pe, B)  # [B, h_chunk] RM
-            x_slice = ttnn.reshape(x_slice_bL, [B, 1, h_chunk, 1], memory_config=mc)
-            ttnn.deallocate(x_slice_bL)
-            real_chunks.append(self._conv_real(x_slice, B, h_chunk))
-            imag_chunks.append(self._conv_imag(x_slice, B, h_chunk))
-            ttnn.deallocate(x_slice)
-            f0 = f1
-        X_real = ttnn.concat(real_chunks, dim=2, memory_config=mc)
-        X_imag = ttnn.concat(imag_chunks, dim=2, memory_config=mc)
-        for t in (*real_chunks, *imag_chunks):
-            ttnn.deallocate(t)
         return X_real, X_imag
 
     def _magnitude_phase_from_xy(self, X_real: ttnn.Tensor, X_imag: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -818,8 +722,8 @@ class TTTorchSTFT:
         Returns:
             ``(magnitude, phase)`` each ``[B, K, F]`` (TILE layout).
 
-        Long ``input_length`` (above ``_FORWARD_STFT_DEVICE_MAX_INPUT_LENGTH``) stays on device:
-        :meth:`_forward_stft_conv` chunks the strided conv2d along output frames.
+        Any ``input_length`` stays on device in a single DRAM-sliced conv2d pass
+        (:meth:`_forward_stft_conv`); there is no length-based CPU fallback.
 
         Fallback dispatch (evaluated in priority order):
         - ``use_torch_stft_fallback=True``: entire transform on CPU via ``torch.stft`` (highest PCC).
@@ -923,62 +827,12 @@ class TTTorchSTFT:
         ttnn.deallocate(y_sum)
         return y_rm
 
-    def _ct_ola_chunked(self, X_real: ttnn.Tensor, X_imag: ttnn.Tensor) -> ttnn.Tensor:
-        """Device-only OLA iSTFT for large F: chunk along output samples → trimmed ``[B, output_length, 1]``.
-
-        Output sample ``m`` (in reflect-padded coords) receives contributions only from frames
-        ``f`` with ``f*hop <= m < f*hop + n_fft``.  For a trimmed output segment ``[t0, t1)``
-        (padded coords ``[t0+pad, t1+pad)``) only frames ``[f_lo, f_hi]`` overlap it, so running
-        conv_transpose2d on that frame slice and trimming to the segment gives a contribution-
-        complete, non-overlapping piece — the pieces concatenate with no cross-chunk add.
-        """
-        p = self.params
-        mc = ttnn.DRAM_MEMORY_CONFIG
-        B = int(X_real.shape[0])
-        hop = p.hop_length
-        n_fft = p.filter_length
-        pad = n_fft // 2
-        K = p.K
-        chunk_out = _ISTFT_CHUNK_FRAMES * hop
-        logger.info(
-            "TTTorchSTFT iSTFT using device sample-chunked conv_transpose2d OLA "
-            f"(F={p.F}, output_length={p.output_length}, samples/chunk={chunk_out})"
-        )
-
-        xr_full = self._to_nhwc_rm(X_real)
-        xi_full = self._to_nhwc_rm(X_imag)
-
-        segments: list[ttnn.Tensor] = []
-        t0 = 0
-        while t0 < p.output_length:
-            t1 = min(t0 + chunk_out, p.output_length)
-            m0, m1 = t0 + pad, t1 + pad
-            # Frames whose [f*hop, f*hop+n_fft) window overlaps padded samples [m0, m1).
-            f_lo = max(0, (m0 - n_fft) // hop + 1)
-            f_hi = min(p.F - 1, (m1 - 1) // hop)
-            n_chunk = f_hi - f_lo + 1
-            xr_c = ttnn.slice(xr_full, [0, 0, f_lo, 0], [B, 1, f_hi + 1, K], [1, 1, 1, 1], memory_config=mc)
-            xi_c = ttnn.slice(xi_full, [0, 0, f_lo, 0], [B, 1, f_hi + 1, K], [1, 1, 1, 1], memory_config=mc)
-            y_raw = self._ct_ola_run(xr_c, xi_c, n_chunk)  # [B, (n_chunk-1)*hop + n_fft, 1]
-            local0, local1 = m0 - f_lo * hop, m1 - f_lo * hop
-            segments.append(ttnn.slice(y_raw, [0, local0, 0], [B, local1, 1], [1, 1, 1], memory_config=mc))
-            ttnn.deallocate(y_raw)
-            t0 = t1
-        ttnn.deallocate(xr_full)
-        ttnn.deallocate(xi_full)
-
-        y_cat = ttnn.concat(segments, dim=1, memory_config=mc)  # [B, output_length, 1]
-        for s in segments:
-            ttnn.deallocate(s)
-        return y_cat
-
     def _inverse_conv_transpose(self, X_real: ttnn.Tensor, X_imag: ttnn.Tensor) -> ttnn.Tensor:
-        """Conv-transpose OLA iSTFT — fully on device, no CPU involvement.
+        """Conv-transpose OLA iSTFT — single device pass at any F, no CPU involvement.
 
-        conv_transpose2d with synthesis kernels w[n]*iFFT[k,n] and stride=hop is the adjoint of
-        the forward STFT strided conv2d: it computes the windowed OLA sum on device.  When ``F``
-        fits the BH conv_transpose slice budget the whole thing runs in one pass; otherwise it is
-        processed in output-sample chunks (:meth:`_ct_ola_chunked`).  After the OLA the reflect-pad
+        conv_transpose2d with synthesis kernels w[n]*iFFT[k,n] and stride=hop is the adjoint of the
+        forward STFT strided conv2d: it computes the windowed OLA sum on device, streaming through
+        bounded L1 via DRAM height slicing (:meth:`_ct_ola_run`).  After the OLA the reflect-pad
         margins are trimmed and the COLA normalisation (precomputed on device) is applied pointwise.
         """
         p = self.params
@@ -986,12 +840,9 @@ class TTTorchSTFT:
         B = int(X_real.shape[0])
         pad = p.filter_length // 2
 
-        if _istft_conv_transpose_ola_fits(p.F):
-            y_raw = self._ct_ola_run(self._to_nhwc_rm(X_real), self._to_nhwc_rm(X_imag), p.F)
-            y_trim = ttnn.slice(y_raw, [0, pad, 0], [B, pad + p.output_length, 1], [1, 1, 1], memory_config=mc)
-            ttnn.deallocate(y_raw)
-        else:
-            y_trim = self._ct_ola_chunked(X_real, X_imag)
+        y_raw = self._ct_ola_run(self._to_nhwc_rm(X_real), self._to_nhwc_rm(X_imag), p.F)
+        y_trim = ttnn.slice(y_raw, [0, pad, 0], [B, pad + p.output_length, 1], [1, 1, 1], memory_config=mc)
+        ttnn.deallocate(y_raw)
 
         # [B, output_length, 1] → [B, output_length] → COLA multiply.  Tilize BEFORE the squeeze:
         # the 2D ROW_MAJOR reshape path allocates an L1 circular buffer scaled to the full output
@@ -1013,11 +864,9 @@ class TTTorchSTFT:
         Returns:
             ``[B, 1, output_length]`` (matches ``TorchSTFT.inverse``'s trailing ``unsqueeze(-2)``).
 
-        Routing when the dense iSTFT matrix was not precomputed (``istft_real is None``):
-
-        - ``F`` within BH conv_transpose slice budget → conv_transpose2d OLA on device (one pass).
-        - ``F`` too large for BH L1 even with DRAM slicing → device sample-chunked OLA
-          (:meth:`_ct_ola_chunked`).  No CPU fallback.
+        When the dense iSTFT matrix was not precomputed (``istft_real is None``, large F) this runs
+        a single-pass DRAM-sliced conv_transpose2d OLA on device (:meth:`_inverse_conv_transpose`).
+        No chunking, no CPU fallback.
         """
         p = self.params
 
