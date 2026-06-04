@@ -1,0 +1,26 @@
+SUPERTEST start Thu Jun  4 18:46:11 UTC 2026
+scope: full tests/ttnn/nightly/unit_tests/operations/conv/test_conv2d.py (2399 collected), --run-all, PYTHONPATH=/localdev/mstaletovic/2026_05_28/0104_mstaletovic_agent_eval/wt_origin_main, fast PCC live
+
+=== [A] COLD INLINE  start 18:46:11 ===
+[A] COLD exit=0  wall=1709s
+SKIPPED [2] tests/ttnn/nightly/unit_tests/operations/conv/test_conv2d.py:735: Skipping sqrt activation for bfloat8_b and height sharded due to PCC error that occurs due to how sqrt over negative numbers is handled in bfloat8_b vs bfloat16
+================ 1722 passed, 677 skipped in 1703.43s (0:28:23) ================
+
+=== [B1] PRECOMPILE FAST COLLECT  start 19:14:40 ===
+[B1] PASS1 exit=0  wall=1040s
+UP_FRONT_COLLECT: 16487 ops stashed across 2268 bodies -> 4934 unique programs (swallowed 61, skipped-capture 0)
+UP_FRONT_COLLECT: compiled 4934 programs in 667.3s (workers=32, errors=0) -> on-disk JIT cache warm
+================ 1722 passed, 677 skipped in 1034.46s (0:17:14) ================
+
+=== [B2] WARM REAL RUN  start 19:32:00 ===
+[B2] PASS2 exit=0  wall=555s
+SKIPPED [2] tests/ttnn/nightly/unit_tests/operations/conv/test_conv2d.py:735: Skipping sqrt activation for bfloat8_b and height sharded due to PCC error that occurs due to how sqrt over negative numbers is handled in bfloat8_b vs bfloat16
+================ 1722 passed, 677 skipped in 549.55s (0:09:09) =================
+
+================= SUMMARY =================
+COLD inline:           1709s  (28m29s)
+NEW pass1 (collect):   1040s  (17m20s)
+NEW pass2 (warm):       555s  (9m15s)
+NEW two-pass total:    1595s  (26m35s)
+RESULT: precompile WINS by 114s (1.07x)
+SUPERTEST done Thu Jun  4 19:41:15 UTC 2026
