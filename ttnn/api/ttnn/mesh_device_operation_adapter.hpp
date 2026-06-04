@@ -583,13 +583,10 @@ public:
     //  2. The factory must not declare or supply ANY runtime arguments
     //     (other than its TensorParameters): no schema entries in the
     //     returned ProgramSpec, and no values in the returned ProgramRunArgs.
-    //     Note: this is a TTNN-side restriction specific to
-    //     ProgramSpecFactoryConcept; Metal 2.0 itself supports RTAs in other
-    //     factory shapes.
+    //     NOTE: this is a TTNN-side restriction specific to the basic
+    //     ProgramSpecFactoryConcept, not a Metal 2.0 restriction.
     //  3. The returned ProgramRunArgs must not contain any DFB size overrides.
-    //     Same reason and same TTNN-side restriction as #2. Sizes that vary
-    //     should be set on the ProgramSpec directly (and attr-derived
-    //     variation is naturally specialised via the cache key).
+    //     Same reason and same TTNN-side restriction as #2.
     //
     // Unhandled use cases:
     //  - Ops that need op-owned resources (single-program or multi-program)
@@ -636,14 +633,14 @@ public:
             return result;
         }
 
+        // Disallow runtime arguments for the basic ProgramSpecFactoryConcept.
+        // (This is a TTNN-side restriction, not a Metal 2.0 restriction)
+        //
         // A ProgramSpecFactoryConcept factory uses UpdateTensorArgs as its sole
-        // per-dispatch update mechanism — tensor bindings are the only state that
+        // per-dispatch update mechanism — tensor bindings are the ONLY state that
         // mutates between dispatches that share a cache entry. Any runtime argument
         // declared in the returned ProgramSpec is therefore frozen at cache-miss
         // time, and would be silently stale on every subsequent cache hit.
-        //
-        // This is exactly the silent cache-hit corruption bug class this concept exists
-        // to rule out, so we reject any spec that declares one.
         //
         // Factories that genuinely need per-dispatch RTAs belong on a different
         // factory concept (one with explicit per-dispatch mutable state).
@@ -656,63 +653,54 @@ public:
                         adv.num_runtime_varargs == 0 && adv.num_common_runtime_varargs == 0 &&
                         adv.num_runtime_varargs_per_node.empty(),
                     "Kernel '{}' declares runtime arguments in its ProgramSpec. "
-                    "ProgramSpecFactoryConcept (a TTNN-side restriction; Metal 2.0 itself "
-                    "supports RTAs) restricts factories using create_program_artifacts to "
-                    "tensor-only per-dispatch mutation. Move constants to compile-time args, "
-                    "route tensor-derived values through TensorParameter bindings, or wait "
-                    "for the future TTNN factory concept with explicit per-dispatch mutable "
-                    "state.",
+                    "TTNN ProgramSpecFactoryConcept restricts factories using the basic "
+                    "create_program_artifacts to tensor-only per-dispatch mutation. "
+                    "Either use compile-time arguments, consider advanced TensorParameters, "
+                    "or upgrade to the version of the factory concept that supports full "
+                    "generality of fast-path mutable ProgramRunArgs.",
                     kernel.unique_id);
             }
         }
 
-        // Same reasoning as assert_no_runtime_args, applied to DFB size overrides.
-        // ProgramRunArgs::dfb_run_overrides lets the factory resize a DFB per
-        // dispatch (entry_size / num_entries). On a Ryan-shaped factory those
-        // overrides would be frozen at cache-miss time and run stale on every
-        // cache hit — the same silent-corruption bug class.
+        // Check that the factory doesn't attempt to supply runtime argument values.
+        // (This is a TTNN-side restriction, not a Metal 2.0 restriction)
         //
-        // DFB sizes that depend on attrs are naturally specialised via the cache
-        // key (different attrs → different cache entry → fresh ProgramSpec with
-        // the right sizes). Sizes that need to vary within a single cache entry
-        // require a factory concept with per-dispatch mutable state.
-        static void assert_no_dfb_size_overrides(const tt::tt_metal::experimental::ProgramRunArgs& run_args) {
-            TT_FATAL(
-                run_args.dfb_run_overrides.empty(),
-                "ProgramRunArgs returned by create_program_artifacts contains {} DFB size "
-                "override entries. ProgramSpecFactoryConcept (a TTNN-side restriction; Metal "
-                "2.0 itself supports DFB size overrides) restricts factories to tensor-only "
-                "per-dispatch mutation. Set DFB sizes directly in the ProgramSpec (attr-derived "
-                "sizes are already specialised via the cache key), or wait for the future TTNN "
-                "factory concept with explicit per-dispatch mutable state.",
-                run_args.dfb_run_overrides.size());
-        }
-
-        // Parallel run-args-side check to assert_no_runtime_args. Catches the
-        // values-without-schema case: a factory that leaves the spec's
-        // RuntimeArgSchema empty (passing assert_no_runtime_args) but populates
-        // ProgramRunArgs::kernel_run_args[k]'s runtime_arg_values anyway.
-        //
-        // Without this check, Metalium's SetProgramRunArgs would still catch the
-        // mismatch — but its error message is framed as a schema/value mismatch,
-        // not as "this TTNN concept doesn't support RTAs." For porters new to the
-        // Metal 2.0 immutable/mutable split, the TTNN-side message is a clearer
-        // first signal about which API restriction they're hitting.
+        // This is a technically redundant check; we've already enforced that the ProgramSpec
+        // schema disallows runtime arguments. To avoid surprises for op authors, also
+        // check that no attempt was made to supply runtime argument values in the ProgramRunArgs.
+        // This check is both for op author ergonomics (the TTNN-side error will be clearer in
+        // context than the Metal 2.0 validation error). It also guards against future changes to
+        // the TTNN infra that may bypass these checks with the power-user Metal 2.0 APIs.
         static void assert_no_runtime_arg_values(const tt::tt_metal::experimental::ProgramRunArgs& run_args) {
             for (const auto& kra : run_args.kernel_run_args) {
                 const auto& adv = kra.advanced_options;
                 TT_FATAL(
                     kra.runtime_arg_values.empty() && kra.common_runtime_arg_values.empty() &&
                         adv.runtime_varargs.empty() && adv.common_runtime_varargs.empty(),
-                    "Kernel '{}' in ProgramRunArgs supplies runtime argument values. "
-                    "ProgramSpecFactoryConcept (a TTNN-side restriction; Metal 2.0 itself "
-                    "supports RTAs) restricts factories to tensor-only per-dispatch mutation. "
-                    "Leave runtime_arg_values, common_runtime_arg_values, and advanced_options "
-                    "empty for this kernel (the kernel must still appear in kernel_run_args). "
-                    "The only mutable state supported here is tensor bindings via "
-                    "ProgramRunArgs::tensor_args.",
+                    "Kernel '{}' supplies runtime argument values in ProgramRunArgs. "
+                    "TTNN ProgramSpecFactoryConcept restricts factories using the basic "
+                    "create_program_artifacts to tensor-only per-dispatch mutation. "
+                    "Either use compile-time arguments, consider advanced TensorParameters, "
+                    "or upgrade to the version of the factory concept that supports full "
+                    "generality of fast-path mutable ProgramRunArgs.",
                     kra.kernel_spec_name);
             }
+        }
+
+        // Disallow DFB size overrides for the basic ProgramSpecFactoryConcept.
+        // (This is a TTNN-side restriction, not a Metal 2.0 restriction)
+        //
+        // Same reasoning as assert_no_runtime_args above. This factory concept
+        // only updates tensor arguments on the fast path, so any DFB size override
+        // attempted through ProgramRunArgs would not mutate between dispatches.
+        static void assert_no_dfb_size_overrides(const tt::tt_metal::experimental::ProgramRunArgs& run_args) {
+            TT_FATAL(
+                run_args.dfb_run_overrides.empty(),
+                "ProgramRunArgs returned by create_program_artifacts contains DFB size "
+                "overrides. TTNN ProgramSpecFactoryConcept restricts factories using the "
+                "basic create_program_artifacts to tensor-only per-dispatch mutation. "
+                "Either use fixed DFB sizes, or upgrade to the version of the factory "
+                "concept that supports full generality of fast-path ProgramRunArgs.");
         }
 
         // Match each TensorArgument's MeshTensor reference back to its index in the
