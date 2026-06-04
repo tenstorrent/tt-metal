@@ -229,12 +229,11 @@ struct CbReaderTag {};
 /// No stub defaults.
 struct CbWriterTag {};
 /// Element neither reads nor writes a CB (DEST-internal). Carries only the
-/// behavioural trait defaults (`is_upfront`, `clashes_with_fpu`) — no CB-id stubs.
-/// The chain pipeline SFINAE-detects `cb_a_id()` / `cb_b_id()` / `pack_cb_id()` on
-/// the element directly and never reaches a DestOnlyTag default.
+/// `is_upfront` default — no CB-id stubs. The chain pipeline SFINAE-detects
+/// `cb_a_id()` / `cb_b_id()` / `pack_cb_id()` on the element directly and never
+/// reaches a DestOnlyTag default.
 struct DestOnlyTag {
     static constexpr bool is_upfront = false;
-    static constexpr bool clashes_with_fpu = false;
 };
 
 /// Pure CB → DEST move (no compute).
@@ -967,7 +966,7 @@ struct QuaternaryOp : DestOnlyTag {
 //      static void push_outputs(uint32_t i);    // CB push     (CB writers only)
 //
 //    Plus static-constexpr traits used by chain-shape predicates:
-//      is_upfront, clashes_with_fpu, hoist_safe, etc.
+//      is_upfront, lane_width, etc.
 // =============================================================================
 
 template <

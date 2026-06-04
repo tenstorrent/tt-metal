@@ -220,16 +220,11 @@ struct CopyTile : CopyTileTag {
 
     static constexpr uint32_t       cb              = Cb;
     static constexpr uint32_t       cb_a_id()       { return Cb; }
-    // CopyTile reads one CB front (srcA via cb_a_id); cb_b is absent -> cb_b_of defaults to kNoCb.
-    static constexpr OperandKind    a_index_mode    = IndexMode;
-    static constexpr OperandKind    b_index_mode    = OperandKind::Scalar;
-    static constexpr Dst            dst_slot        = DstSlot;
+    // CopyTile reads one CB front (srcA via cb_a_id); cb_b / b_policy absent -> defaults apply.
     static constexpr InputLifecycle a_policy()      { return Policy; }
-    static constexpr InputLifecycle b_policy()      { return InputLifecycle::CallerManaged; }
     static constexpr bool           is_upfront      = (Policy == InputLifecycle::Bulk) ||
                                                       (Policy == InputLifecycle::HeldBulk) ||
                                                       (Policy == InputLifecycle::Pipelined);
-    static constexpr bool           clashes_with_fpu= true;   // copy_tile uses unpacker MOP
 
     // Prev-CB fold (D2): CopyTile loads CbA only. srcb/pack sides are absent -> cb_for_side
     // defaults them to NO_PREV_CB.
@@ -479,18 +474,14 @@ struct BinaryFpu : BinaryFpuTag {
 
     static constexpr uint32_t      cb_a_id()  { return CbA; }
     static constexpr uint32_t      cb_b_id()  { return CbB; }
-    static constexpr OperandKind   a_index_mode = AIndex;
-    static constexpr OperandKind   b_index_mode = BIndex;
     static constexpr InputLifecycle a_policy(){ return APolicy; }
     static constexpr InputLifecycle b_policy(){ return BPolicy; }
-    static constexpr Dst           dst_slot   = DstSlot;
     static constexpr bool          is_upfront = (APolicy == InputLifecycle::Bulk) ||
                                                 (APolicy == InputLifecycle::HeldBulk) ||
                                                 (APolicy == InputLifecycle::Pipelined) ||
                                                 (BPolicy == InputLifecycle::Bulk) ||
                                                 (BPolicy == InputLifecycle::HeldBulk) ||
                                                 (BPolicy == InputLifecycle::Pipelined);
-    static constexpr bool          clashes_with_fpu = true;
     static constexpr bool          same_cb    = (CbA == CbB);
 
     // Per-side local-vs-absolute index resolution. When the two operands declare
@@ -722,15 +713,10 @@ struct DestReuseBinary : DestReuseBinaryTag {
     // DEST_TO_SRCA -> CB on srcB (cb_b). The other side is the DEST register, not a CB (kNoCb).
     static constexpr uint32_t       cb_a_id()         { return (ReuseType == DestReuseType::DEST_TO_SRCB) ? Cb : kNoCb; }
     static constexpr uint32_t       cb_b_id()         { return (ReuseType == DestReuseType::DEST_TO_SRCA) ? Cb : kNoCb; }
-    static constexpr OperandKind    a_index_mode     = IndexMode;
-    static constexpr OperandKind    b_index_mode     = OperandKind::Scalar;
     static constexpr InputLifecycle a_policy()        { return Policy; }
-    static constexpr InputLifecycle b_policy()        { return InputLifecycle::CallerManaged; }
-    static constexpr Dst            dst_slot          = DstOut;
     static constexpr bool           is_upfront        = (Policy == InputLifecycle::Bulk) ||
                                                         (Policy == InputLifecycle::HeldBulk) ||
                                                         (Policy == InputLifecycle::Pipelined);
-    static constexpr bool           clashes_with_fpu  = true;
 
     // Prev-CB fold (D2): DestReuseBinary loads CB into srca (when DEST → srcb) or srcb
     // (when DEST → srca). Reconfig only fires when opted in.
@@ -836,12 +822,9 @@ struct UnaryBcast : UnaryBcastTag {
     // UnaryBcast reads one CB front (cb_a); cb_b is absent -> cb_b_of defaults to kNoCb.
     static constexpr uint32_t       cb_a_id()         { return Cb; }
     static constexpr InputLifecycle a_policy()        { return Policy; }
-    static constexpr InputLifecycle b_policy()        { return InputLifecycle::CallerManaged; }
-    static constexpr Dst            dst_slot          = DstSlot;
     static constexpr bool           is_upfront        = (Policy == InputLifecycle::Bulk) ||
                                                         (Policy == InputLifecycle::HeldBulk) ||
                                                         (Policy == InputLifecycle::Pipelined);
-    static constexpr bool           clashes_with_fpu  = true;
 
     // Prev-CB fold (D2): UnaryBcast binds BOTH srca and srcb to Cb. The broadcast datacopy MOP
     // drives the FPU SrcB lane (ELWADD + SRCB_BCAST_*), so srcb must be reprogrammed too — a
@@ -1010,6 +993,8 @@ inline constexpr uint32_t chain_max_block_v = DEST_AUTO_LIMIT / chain_lane_width
 // and are incompatible with chain BlockSize > 1 (chain consumes BlockSize tiles per
 // outer iter). The chain `static_assert`s on this predicate when `BlockSize > 1`.
 namespace detail {
+template <class E> constexpr InputLifecycle b_policy_of();  // defined below (defaults to CallerManaged)
+
 constexpr bool policy_supports_block(InputLifecycle p) {
     return p == InputLifecycle::Bulk ||
            p == InputLifecycle::HeldBulk ||
@@ -1022,27 +1007,11 @@ constexpr bool policy_supports_block(InputLifecycle p) {
 template <class E>
 constexpr bool element_supports_block() {
     if constexpr (is_cb_reader_op_v<E>) {
-        return policy_supports_block(E::a_policy()) && policy_supports_block(E::b_policy());
+        return policy_supports_block(E::a_policy()) && policy_supports_block(b_policy_of<E>());
     } else {
         return true;  // non-CB-reader elements don't constrain block_size
     }
 }
-
-// 1D-only chain entry points cannot resolve Row/Col indexing — there is no
-// Ht/Wt context to drive `idx<Row>(...) = wt` or `idx<Col>(...) = ht`.
-// In 1D, exec collapses Row/Col to `base` (silently degenerate). Banning these
-// kinds at the 1D dispatch site forces callers to either pick Block/Scalar
-// (the only kinds that make sense without Ht/Wt) or switch to the 2D
-// `eltwise_chain(EltwiseShape, ...)` overload.
-template <class E, class = void>
-struct elem_has_a_index_mode : std::false_type {};
-template <class E>
-struct elem_has_a_index_mode<E, std::void_t<decltype(E::a_index_mode)>> : std::true_type {};
-
-template <class E, class = void>
-struct elem_has_b_index_mode : std::false_type {};
-template <class E>
-struct elem_has_b_index_mode<E, std::void_t<decltype(E::b_index_mode)>> : std::true_type {};
 
 }  // namespace detail
 
@@ -1066,6 +1035,13 @@ template <class E, class = void> struct has_pack_dst_slot_m : std::false_type {}
 template <class E> struct has_pack_dst_slot_m<E, std::void_t<decltype(E::pack_dst_slot)>> : std::true_type {};
 template <class E> constexpr Dst pack_dst_slot_of() {
     if constexpr (has_pack_dst_slot_m<E>::value) return E::pack_dst_slot; else return Dst::D0;
+}
+// b_policy defaults to CallerManaged (the unary-reader / no-srcB-CB case), so only elements
+// with a genuine srcB operand (BinaryFpu) declare it.
+template <class E, class = void> struct has_b_policy_m : std::false_type {};
+template <class E> struct has_b_policy_m<E, std::void_t<decltype(E::b_policy())>> : std::true_type {};
+template <class E> constexpr InputLifecycle b_policy_of() {
+    if constexpr (has_b_policy_m<E>::value) return E::b_policy(); else return InputLifecycle::CallerManaged;
 }
 
 // One plain-data descriptor per element — reflected once via the existing accessors.
@@ -1230,7 +1206,7 @@ struct elem_per_block_reader : std::false_type {};
 template <class E>
 struct elem_per_block_reader<E, std::enable_if_t<is_cb_reader_op_v<E>>>
     : std::bool_constant<(E::a_policy() == InputLifecycle::Chunked) ||
-                         (E::b_policy() == InputLifecycle::Chunked)> {};
+                         (b_policy_of<E>() == InputLifecycle::Chunked)> {};
 
 template <class E, class = void>
 struct elem_per_block_pack : std::false_type {};
