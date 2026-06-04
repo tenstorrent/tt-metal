@@ -19,14 +19,12 @@ void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& token_activations_tensor = tensor_args.dense_activations_tensor;
 
-    const auto num_devices = token_activations_tensor.device()->get_view().num_devices();
-
-    const auto experts = operation_attributes.experts;
     const auto batch_size = operation_attributes.batch_size;
     const auto seq_size = operation_attributes.seq_size;
     const auto total_tokens = batch_size * seq_size;
 
-    const auto experts_per_device = experts / num_devices;
+    // physical experts per device, replicated shared experts are counted per device (matches program factory)
+    const uint32_t experts_per_device = tensor_args.dense_token_maps_tensor.logical_shape()[0];
 
     const uint32_t activations_stride_elm = token_activations_tensor.logical_shape()[-1] / total_tokens;
 
@@ -89,7 +87,6 @@ ttnn::Tensor selective_reduce_combine(
     uint32_t batch_size,
     uint32_t seq_size,
     uint32_t select_experts_k,
-    uint32_t experts,
     uint32_t cluster_axis,
     tt::tt_fabric::Topology topology,
     uint32_t num_links,
@@ -108,7 +105,6 @@ ttnn::Tensor selective_reduce_combine(
             .batch_size = batch_size,
             .seq_size = seq_size,
             .select_experts_k = select_experts_k,
-            .experts = experts,
             .num_links = num_links,
             .axis = cluster_axis,
             .topology = topology,

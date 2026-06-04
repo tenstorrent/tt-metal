@@ -370,10 +370,8 @@ std::vector<ttnn::Tensor> moe_compute(
     using OperationType = ttnn::experimental::prim::MoEComputeDeviceOperation;
 
     const auto& input_shape = tilize_input_tensor.tensor_spec().logical_shape();
-    const auto& mapping_shape = tilize_expert_mapping_tensor.tensor_spec().logical_shape();
     const auto& indices_shape = tilize_expert_indices_tensor.tensor_spec().logical_shape();
     const uint32_t hidden_size = input_shape[-1];
-    const uint32_t experts = mapping_shape[-1];
     const uint32_t select_experts_k = indices_shape[-1];
     const uint32_t total_tokens = input_shape[0] * input_shape[1];
 
@@ -436,7 +434,6 @@ std::vector<ttnn::Tensor> moe_compute(
             .batch_size = 1,
             .seq_size = total_tokens,
             .select_experts_k = select_experts_k,
-            .experts = experts,
             .num_links = resolved_num_links,
             .axis = cluster_axis.value(),
             .topology = resolved_topology,
