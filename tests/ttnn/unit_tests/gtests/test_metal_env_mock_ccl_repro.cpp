@@ -54,6 +54,16 @@ ttnn::graph::ConstraintQueryResponse RunAllGatherConstraintQuery(distributed::Me
         /*topology=*/std::optional<tt_fabric::Topology>(tt_fabric::Topology::Linear));
 }
 
+struct LegacyMockFabricCleanup {
+    bool active = false;
+    ~LegacyMockFabricCleanup() {
+        if (active) {
+            tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
+            experimental::disable_mock_mode();
+        }
+    }
+};
+
 TEST(MetalEnvMockCCL, FabricInDescriptor_CreatesMeshAndQuerySucceeds) {
     auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2);
     ASSERT_TRUE(mock_path.has_value());
@@ -62,7 +72,7 @@ TEST(MetalEnvMockCCL, FabricInDescriptor_CreatesMeshAndQuerySucceeds) {
     fabric_desc.fabric_config = tt_fabric::FabricConfig::FABRIC_1D;
     fabric_desc.reliability_mode = tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE;
     fabric_desc.num_routing_planes = std::numeric_limits<uint8_t>::max();
-    MetalEnv env{MetalEnvDescriptor{*mock_path, fabric_desc}};
+    MetalEnv env{MetalEnvDescriptor{mock_path, fabric_desc}};
 
     auto device = env.create_mesh_device(distributed::MeshDeviceConfig{distributed::MeshShape{1u, 2u}});
     ASSERT_NE(device, nullptr);
@@ -75,12 +85,12 @@ TEST(MetalEnvMockCCL, FabricAfterDeviceCreation_QuerySucceeds) {
     auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 2);
     ASSERT_TRUE(mock_path.has_value());
 
-    MetalEnv env{MetalEnvDescriptor{*mock_path}};
+    MetalEnv env{MetalEnvDescriptor{mock_path}};
     auto device = env.create_mesh_device(distributed::MeshDeviceConfig{distributed::MeshShape{1u, 2u}});
     ASSERT_NE(device, nullptr);
 
-    MetalEnvAccessor{env}.impl().set_fabric_config(
-        tt_fabric::FabricConfig::FABRIC_1D, tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    ASSERT_TRUE(MetalEnvAccessor{env}.impl().set_fabric_config(
+        tt_fabric::FabricConfig::FABRIC_1D, tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE));
 
     auto response = RunAllGatherConstraintQuery(device.get());
     EXPECT_EQ(response.status, ttnn::graph::ExecutionStatus::Success)
@@ -88,7 +98,9 @@ TEST(MetalEnvMockCCL, FabricAfterDeviceCreation_QuerySucceeds) {
 }
 
 TEST(MetalEnvMockCCL, LegacyConfigureMockMode_QueryPasses) {
+    LegacyMockFabricCleanup cleanup;
     experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, /*num_chips=*/2);
+    cleanup.active = true;
 
     // Fabric must be configured before opening devices; set_fabric_config rejects
     // non-DISABLED changes while devices are still open.
@@ -102,9 +114,6 @@ TEST(MetalEnvMockCCL, LegacyConfigureMockMode_QueryPasses) {
         ASSERT_NE(device, nullptr);
         response = RunAllGatherConstraintQuery(device.get());
     }
-
-    tt_fabric::SetFabricConfig(tt_fabric::FabricConfig::DISABLED);
-    experimental::disable_mock_mode();
 
     EXPECT_EQ(response.status, ttnn::graph::ExecutionStatus::Success)
         << "query failed: " << response.error_message.value_or("(no message)");

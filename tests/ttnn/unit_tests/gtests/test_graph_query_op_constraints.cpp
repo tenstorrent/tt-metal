@@ -1047,7 +1047,8 @@ protected:
                 distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{Rows, Cols}));
         } catch (const std::exception& e) {
             // Descriptor unavailable (e.g. TT_METAL_HOME not set for custom descriptors).
-            // Disable mock mode to avoid leaking global state into subsequent test suites.
+            // Disable mock mode and fabric to avoid leaking global state into subsequent test suites.
+            tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
             tt::tt_metal::experimental::disable_mock_mode();
             // device_holder_ stays null → per-test SetUp will GTEST_SKIP.
             return;
