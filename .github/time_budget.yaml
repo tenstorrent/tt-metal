@@ -188,10 +188,10 @@ models:
     wh_llmbox: 175
     wh_llmbox_perf: 230
     wh_n150: 240
-    wh_n300: 15
+    wh_n300: 75
     wh_galaxy: 45
     wh_galaxy_perf: 45
-    bh_p150: 60
+    bh_p150: 120
     bh_p300: 90
     bh_quietbox_2: 85
     bh_galaxy: 70

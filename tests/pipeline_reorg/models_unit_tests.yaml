@@ -562,6 +562,12 @@
     wh_n150:
       timeout: 60
       tier: 1
+    wh_n300:
+      timeout: 60
+      tier: 1
+    bh_p150:
+      timeout: 60
+      tier: 1
     bh_p300:
       timeout: 60
       tier: 1
