@@ -126,10 +126,15 @@ jobs:
         env:
           MODE_FLAG: ${{ inputs.test-selection == 'post-commit' && '--post-commit' || '--full' }}
         run: |
-          python3 tools/tt-power-sidecar/tt_power_sidecar.py \
-            --backend sysfs \
-            --out /work/power_report.json \
-            -- bash tests/scripts/single_card/run_single_card_profiler_tests.sh "$MODE_FLAG" ${{ matrix.test-group.cmd }}
+          mkdir -p generated/test_logs
+          LOG_FILE="generated/test_logs/profiler_${{ job.check_run_id }}.log"
+          {
+            python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+              --backend sysfs \
+              --out /work/power_report.json \
+              -- bash tests/scripts/single_card/run_single_card_profiler_tests.sh "$MODE_FLAG" ${{ matrix.test-group.cmd }}
+          } 2>&1 | tee "$LOG_FILE"
+          exit "${PIPESTATUS[0]}"
       - name: Upload power report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -152,5 +157,22 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: profiler ${{ matrix.test-group.name }} ${{ inputs.arch }}
+
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

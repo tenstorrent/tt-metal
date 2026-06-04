@@ -291,19 +291,41 @@ jobs:
           # Appending to the cmd string only reaches the last invocation.
           PYTEST_ADDOPTS: "-p no:timeout -n 4 ${{ steps.skip-list.outputs.skip_args }}"
         run: |
+          mkdir -p generated/test_logs
+          SAFE_NAME=$(echo "${{ matrix.test-group.name }}_${{ matrix.arch.name }}" | tr ' /' '__')
+          LOG_FILE="generated/test_logs/${SAFE_NAME}_${{ job.check_run_id }}.log"
           # Run pytest with parallel execution, pytest-level timeouts disabled (more harm than good on sim), and skip list.
           # If a worker crashes, pytest-xdist only reports "worker crashed"
           # which is useless for debugging. Re-run the failures serially to
           # get actionable output.
-          if ${{ matrix.test-group.cmd }}; then
-            exit 0
-          fi
-          echo "::warning::Parallel run failed. Re-running failed tests serially for clear diagnostics..."
-          # Override PYTEST_ADDOPTS to drop -n 4 for the serial retry. Use export
-          # so the override applies to every pytest in &&-chained serial_cmds.
-          export PYTEST_ADDOPTS="-p no:timeout ${{ steps.skip-list.outputs.skip_args }}"
-          ${{ matrix.test-group.serial_cmd }} --lf --lfnf=all --tb=long -v || true
-          exit 1
+          (
+            if ${{ matrix.test-group.cmd }}; then
+              exit 0
+            fi
+            echo "::warning::Parallel run failed. Re-running failed tests serially for clear diagnostics..."
+            # Override PYTEST_ADDOPTS to drop -n 4 for the serial retry. Use export
+            # so the override applies to every pytest in &&-chained serial_cmds.
+            export PYTEST_ADDOPTS="-p no:timeout ${{ steps.skip-list.outputs.skip_args }}"
+            ${{ matrix.test-group.serial_cmd }} --lf --lfnf=all --tb=long -v || true
+            exit 1
+          ) 2>&1 | tee "$LOG_FILE"
+          exit "${PIPESTATUS[0]}"
+
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: TTNN ${{ matrix.test-group.name }} - ${{ matrix.arch.name }}
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

@@ -123,22 +123,31 @@ jobs:
           GTEST_FILTER: ${{ inputs.gtest_filter }}
         run: |
           cd /work/build/tt-train
-          mkdir -p generated/test_reports
+          mkdir -p generated/test_reports /work/generated/test_logs
           ldd tests/ttml_tests || true
-          python3 /work/tools/tt-power-sidecar/tt_power_sidecar.py \
-            --backend sysfs \
-            --out /work/power_report.json \
-            -- bash -c '${{ matrix.test-group.cmd }}'
+          LOG_FILE="/work/generated/test_logs/tt_train_cpp_${{ job.check_run_id }}.log"
+          {
+            python3 /work/tools/tt-power-sidecar/tt_power_sidecar.py \
+              --backend sysfs \
+              --out /work/power_report.json \
+              -- bash -c '${{ matrix.test-group.cmd }}'
+          } 2>&1 | tee "$LOG_FILE"
+          exit "${PIPESTATUS[0]}"
 
       - name: ${{ matrix.test-group-py.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         if: ${{ inputs.wheel-artifact-name }}
         run: |
           cd /work/tt-train
-          python3 /work/tools/tt-power-sidecar/tt_power_sidecar.py \
-            --backend sysfs \
-            --out /work/power_report.json \
-            -- bash -c '${{ matrix.test-group-py.cmd }}'
+          mkdir -p /work/generated/test_logs
+          LOG_FILE="/work/generated/test_logs/tt_train_py_${{ job.check_run_id }}.log"
+          {
+            python3 /work/tools/tt-power-sidecar/tt_power_sidecar.py \
+              --backend sysfs \
+              --out /work/power_report.json \
+              -- bash -c '${{ matrix.test-group-py.cmd }}'
+          } 2>&1 | tee "$LOG_FILE"
+          exit "${PIPESTATUS[0]}"
 
       - name: Upload power report
         if: ${{ !cancelled() }}
@@ -165,6 +174,22 @@ jobs:
         with:
           path: /work/build/tt-train/generated/test_reports/
           prefix: "test_reports_"
+
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

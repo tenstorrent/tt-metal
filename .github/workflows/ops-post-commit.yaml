@@ -160,19 +160,26 @@ jobs:
           TRACY_NO_INVARIANT_CHECK: 1
           _TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
+          mkdir -p generated/test_logs
+          SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' /' '__')
+          LOG_FILE="generated/test_logs/${SAFE_NAME}_${{ job.check_run_id }}.log"
           if [ "${{ matrix.test-group.slow_dispatch }}" = "true" ]; then
             export TT_METAL_SLOW_DISPATCH_MODE=1
           fi
-          python3 tools/tt-power-sidecar/tt_power_sidecar.py \
-            --backend sysfs \
-            --out /work/power_report.json \
-            -- bash -c "$_TEST_CMD"
+          {
+            python3 tools/tt-power-sidecar/tt_power_sidecar.py \
+              --backend sysfs \
+              --out /work/power_report.json \
+              -- bash -c "$_TEST_CMD"
+          } 2>&1 | tee "$LOG_FILE"
+          TEST_EXIT="${PIPESTATUS[0]}"
 
           # Device perf branch
           export DEVICE_PERF_REPORT_FILENAME="Ops_Perf.csv"
           python3 models/perf/merge_device_perf_results.py "$DEVICE_PERF_REPORT_FILENAME" REPORT
           echo "Showing ops perf report... will fail if not found"
           cat $DEVICE_PERF_REPORT_FILENAME
+          exit "$TEST_EXIT"
 
       - name: Upload power report
         if: ${{ !cancelled() }}
@@ -207,6 +214,22 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
+
+      - name: 🤖 AI job summary
+        if: always() && !cancelled()
+        continue-on-error: true
+        uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/job@main
+        with:
+          config: |
+            {
+              "model": "${{ vars.AI_SUMMARY_MODEL }}",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
+              "input_dirs": ["generated/test_logs"],
+              "output_dir": "generated/ai_summaries"
+            }
+          api-key: ${{ secrets.TT_CHAT_API_KEY }}
+          api-url: ${{ secrets.TT_CHAT_URL }}
+          job-name: ${{ matrix.test-group.name }}
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
