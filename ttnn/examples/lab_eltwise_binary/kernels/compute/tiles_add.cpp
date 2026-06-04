@@ -18,5 +18,5 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
 
     // Per-tile FPU add: cb_in0 + cb_in1 -> cb_out0.
-    compute_kernel_lib::binary_add<cb_in0, cb_in1, cb_out0>(n_tiles);
+    compute_kernel_lib::add<cb_in0, cb_in1, cb_out0>(n_tiles);
 }

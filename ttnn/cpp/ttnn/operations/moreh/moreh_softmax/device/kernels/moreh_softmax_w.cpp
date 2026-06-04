@@ -6,6 +6,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // sub
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Exp
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask, Negative
 #include "ttnn/kernel/compute/moreh_common.hpp"
@@ -107,24 +108,17 @@ void kernel_main() {
         // Lifecycles: cb_in0 InputLifecycle::Bulk + Block; cb_max InputLifecycle::Bulk + Scalar (chain emits
         //   wait/pop(1) via window_1d<Scalar> — commit 14a5a61e462 made the
         //   OperandKind drive the wait count); cb_x_m_max OutputLifecycle::Bulk + Block.
-        compute_kernel_lib::eltwise_chain(
-            Wt,
-            compute_kernel_lib::BinaryFpu<
-                cb_in0,
-                cb_max,
-                compute_kernel_lib::BinaryFpuOp::Sub,
-                compute_kernel_lib::BroadcastDim::Col,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::Bulk,
-                compute_kernel_lib::InputLifecycle::Bulk,
-                compute_kernel_lib::OperandKind::Block,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                cb_x_m_max,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Bulk,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::sub<
+            cb_in0,
+            cb_max,
+            cb_x_m_max,
+            compute_kernel_lib::BroadcastDim::Col,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Block,    // A index
+            compute_kernel_lib::InputLifecycle::Bulk,  // A lifecycle
+            compute_kernel_lib::InputLifecycle::Bulk,  // B lifecycle
+            compute_kernel_lib::OperandKind::Scalar,   // B index (cb_max broadcast)
+            compute_kernel_lib::OutputLifecycle::Bulk>(Wt);
 
         // compute exp(x - max(x)) — split into 2 chains, same pattern as
         // moreh_softmax_h.cpp. cb_x_m_max held outside; cb_mask held outside;
