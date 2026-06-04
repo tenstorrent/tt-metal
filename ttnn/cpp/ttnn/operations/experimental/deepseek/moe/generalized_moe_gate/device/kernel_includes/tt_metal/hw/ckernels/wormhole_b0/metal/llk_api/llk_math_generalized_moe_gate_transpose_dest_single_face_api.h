@@ -34,9 +34,9 @@ inline void llk_math_generalized_moe_gate_transpose_dest_single_face_step1() {
     _llk_math_generalized_moe_gate_transpose_dest_single_face_step1_<is_fp32_dest_acc_en, is_32bit>();
 }
 
-template <std::uint32_t src = 0, std::uint32_t dst = 0, bool is_32bit = false>
+template <std::uint32_t src = 0, std::uint32_t dst = 0, bool is_32bit = false, std::uint32_t srcb = 16>
 inline void llk_math_generalized_moe_gate_copy4rows_init() {
-    _llk_math_generalized_moe_gate_copy4rows_init_<src, dst, is_32bit>();
+    _llk_math_generalized_moe_gate_copy4rows_init_<src, dst, is_32bit, srcb>();
 }
 
 template <bool is_fp32_dest_acc_en, bool is_32bit = false>

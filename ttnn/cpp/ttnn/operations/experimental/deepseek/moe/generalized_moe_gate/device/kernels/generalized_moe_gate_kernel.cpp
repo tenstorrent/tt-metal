@@ -35,9 +35,23 @@
 // ===== ACTIVE: true global top-8 (ungrouped), assembled in rows 0-7 with FPU copy4rows stashing
 // the 4-row source/topA into rows 8-15 between the two half-transposes. See generalized_moe_gate.h.
 #define GMG_UNGROUPED_TOP8 1
-// (diag: DIAG_TOPA showed topA clean via SFPU-tile parking.)
+// (diag: DIAG_TOPA confirmed topA@{0,2} correct in the full flow.)
 // #define GMG_DIAG_TOPA 1
+// ISOLATION: output topB alone (copy4rows park, clean device). Pair with groups-4-7 golden.
+// (diag: topB confirmed correct on all data incl batch=2; the residual miss was the finalize merge.)
 // #define GMG_DIAG_TOPB 1
+// BISECTION: skip ALL topA work (step1<0>/merge/park/restore-topA). Flow = save->restore->step1_hi<4>
+// ->topB. If topB now == groups 4-7 -> save/restore round-trip is fine, topA path was corrupting it.
+// #define GMG_DIAG_RT 1
+// BISECTION step2: KEEP step1<0>+merge topA, SKIP park+restore-topA. If topB breaks -> step1<0>/merge
+// corrupts the saved source (rows 8-11) or SrcB; if topB clean -> the park (copy4rows<0,12>) is it.
+// #define GMG_DIAG_RT2 1
+// BISECTION step3: KEEP a,b, AND park (c); SKIP ONLY restore-topA (d). If topB breaks -> park (c)
+// itself corrupts topB; if topB clean -> the restore-topA (d) corrupts the DIAG readout, not topB.
+// #define GMG_DIAG_RT3 1
+// ROOT CAUSE FOUND: copy_topk_run/normalize_run lacked the TTI_SETRWC(SET_D) that merge/finalize have,
+// so the Dst RWC left advanced by the preceding FPU copy4rows biased their SFPLOAD offsets. Fixed in
+// ckernel_sfpu_generalized_moe_gate_topk_single_face.h. restore-topA back to its real dst (rows 0-3).
 // #define GMG_DUMP_SRC 1
 
 #include "../unified_kernels/kernel_op_api.hpp"

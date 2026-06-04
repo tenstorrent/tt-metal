@@ -105,24 +105,37 @@ ALWI void generalized_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint3
     // (rows 4-7): row-disjoint for the final merge.
     //
     // save groups 4-7 source (rows 4-7) -> rows 8-11 (step1<0> below clobbers rows 0-7).
-    MATH((llk_math_generalized_moe_gate_copy4rows_init<4, 8, is_32bit>()));
+    // NOTE: each copy4rows uses a DISJOINT SrcB scratch window (16/20/24/28) so a later MOVB2D
+    // can't read a previous (back-to-back) copy's SrcB leftover.
+    MATH((llk_math_generalized_moe_gate_copy4rows_init<4, 8, is_32bit, 16>()));
     MATH((llk_math_generalized_moe_gate_copy4rows<DST_ACCUM_MODE, is_32bit>()));
+#ifndef GMG_DIAG_RT
     // topA = top8(groups 0-3): step1<d2b_dst=0> -> run at rows 0-7 -> merge -> topA at {0,2}.
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init<0, 0, is_32bit>()));
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi<DST_ACCUM_MODE, is_32bit>()));
     MATH((llk_math_sfpu_generalized_moe_gate_merge4_top8<APPROX, DST_ACCUM_MODE, 0, 0, 2>(0)));
-    // park topA (rows 0-3) -> rows 12-15; restore groups 4-7 (rows 8-11) -> rows 4-7.
-    MATH((llk_math_generalized_moe_gate_copy4rows_init<0, 12, is_32bit>()));
+#if !defined(GMG_DIAG_RT2)
+    // park topA (rows 0-3) -> rows 12-15.
+    MATH((llk_math_generalized_moe_gate_copy4rows_init<0, 12, is_32bit, 20>()));
     MATH((llk_math_generalized_moe_gate_copy4rows<DST_ACCUM_MODE, is_32bit>()));
-    MATH((llk_math_generalized_moe_gate_copy4rows_init<8, 4, is_32bit>()));
+#endif
+#endif
+    // restore groups 4-7 (rows 8-11) -> rows 4-7.
+    MATH((llk_math_generalized_moe_gate_copy4rows_init<8, 4, is_32bit, 24>()));
     MATH((llk_math_generalized_moe_gate_copy4rows<DST_ACCUM_MODE, is_32bit>()));
     // topB = top8(groups 4-7): step1_hi<d2b_dst=4> -> run at rows 0-7 -> merge -> topB at {4,6}.
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi_init<4, 0, is_32bit>()));
     MATH((llk_math_generalized_moe_gate_transpose_dest_single_face_step1_hi<DST_ACCUM_MODE, is_32bit>()));
     MATH((llk_math_sfpu_generalized_moe_gate_merge4_top8<APPROX, DST_ACCUM_MODE, 0, 4, 6>(0)));
-    // restore topA (rows 12-15) -> rows 0-3; now topA@{0,2} (rows 0-3), topB@{4,6} (rows 4-7).
-    MATH((llk_math_generalized_moe_gate_copy4rows_init<12, 0, is_32bit>()));
+#if !defined(GMG_DIAG_RT) && !defined(GMG_DIAG_RT2) && !defined(GMG_DIAG_RT3)
+    // restore topA (rows 12-15) -> rows GMG_TOPA_DST (0 = real; 8 = harmless probe to test whether the
+    // topB@{4,6} readout corruption comes from this op's STATE/RWC vs its physical write to rows 0-3).
+#ifndef GMG_TOPA_DST
+#define GMG_TOPA_DST 0
+#endif
+    MATH((llk_math_generalized_moe_gate_copy4rows_init<12, GMG_TOPA_DST, is_32bit, 28>()));
     MATH((llk_math_generalized_moe_gate_copy4rows<DST_ACCUM_MODE, is_32bit>()));
+#endif
 #ifdef GMG_DIAG_TOPA
     // ISOLATION DIAGNOSTIC: output topA ALONE (after park->clobber->restore). Compare vs top8(groups
     // 0-3) golden. Move topA {0,2} -> {0,4} (normalize layout) + normalize.
