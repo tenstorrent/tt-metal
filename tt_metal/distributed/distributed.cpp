@@ -32,8 +32,14 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     auto& programs = mesh_workload.impl().get_programs();
     auto& service_programs = mesh_workload.impl().get_service_programs();
     if (svc.has_any_claims()) {
+        // A workload is entirely a service workload or entirely a normal one - no mixing. Seed
+        // saw_service from already-extracted service programs so the invariant holds across the
+        // launch-once persistence boundary (re-enqueue of a pure service workload still passes).
+        bool saw_service = !service_programs.empty();
+        bool saw_normal = false;
         for (auto it = programs.begin(); it != programs.end();) {
-            bool targets_service_core = false;
+            size_t service_cores = 0;
+            size_t total_cores = 0;
             for (const auto& coord : it->first) {
                 auto* device = mesh_cq.device()->impl().get_device(coord);
                 if (device == nullptr) {
@@ -41,11 +47,31 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
                 }
                 for (const auto& per_type : it->second.impl().logical_cores()) {
                     for (const auto& core : per_type) {
-                        targets_service_core |= svc.is_service_core(device->id(), core);
+                        ++total_cores;
+                        if (svc.is_service_core(device->id(), core)) {
+                            ++service_cores;
+                        }
                     }
                 }
             }
-            if (targets_service_core) {
+            // Level 1: a program targets only claimed service cores or only worker-grid cores, never a
+            // mix. This also catches a core claimed on some devices in the range but not others.
+            TT_FATAL(
+                service_cores == 0 || service_cores == total_cores,
+                "MeshWorkload program spans both service and worker-grid cores ({}/{} placements are claimed "
+                "service cores). A program must target only claimed service cores (on every device in its "
+                "range) or only worker-grid cores.",
+                service_cores,
+                total_cores);
+            const bool program_is_service = service_cores > 0;
+            // Level 2: the workload is all-service or all-normal, not a mix of the two.
+            saw_service |= program_is_service;
+            saw_normal |= !program_is_service;
+            TT_FATAL(
+                !(saw_service && saw_normal),
+                "MeshWorkload mixes service and normal programs. A workload must be entirely service (all "
+                "programs on claimed service cores) or entirely normal (all on the worker grid).");
+            if (program_is_service) {
                 service_programs[it->first] = std::move(it->second);
                 it = programs.erase(it);
             } else {
@@ -54,7 +80,8 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         }
     }
 
-    // Service programs are dispatched via SD, independently of the FD command queue.
+    // Service programs are dispatched via SD, independently of the FD command queue. Classification
+    // above guarantees every core here is claimed, so we only mark launch-once and launch.
     for (auto& [device_range, program] : service_programs) {
         for (const auto& coord : device_range) {
             auto* device = mesh_cq.device()->impl().get_device(coord);
@@ -64,14 +91,6 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
                 coord);
             for (const auto& per_type : program.impl().logical_cores()) {
                 for (const auto& core : per_type) {
-                    // Every core must be claimed on the device it launches on, else an SD service
-                    // kernel would collide with FD using that core on this device.
-                    TT_FATAL(
-                        svc.is_service_core(device->id(), core),
-                        "Service program targets core {} on device {} where it is not claimed. "
-                        "Claim service cores on every device in the workload's range.",
-                        core,
-                        device->id());
                     svc.mark_launched(device->id(), core);  // launch-once
                 }
             }

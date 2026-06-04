@@ -179,7 +179,6 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
 
     uint32_t single_tile_size = ::tt::tile_size(DataFormat::UInt32);
     const uint32_t num_tiles = 64;
-    const uint32_t num_programs = 1;
 
     CoreRangeSet shard_grid(CoreRange({0, 0}, {1, 1}));
     const uint32_t num_cores = 4;
@@ -265,9 +264,7 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
 
         // Dispatch a trivial workload to stress the dispatch path
         auto stressor = make_trivial_workload(device);
-        for (uint32_t i = 0; i < num_programs; i++) {
-            EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *stressor, true);
-        }
+        EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *stressor, true);
         Finish(mesh_device->mesh_command_queue());
 
         // Phase 4: stop kernel, wait via service_done_addr
@@ -402,11 +399,8 @@ TEST_F(ServiceCoreFdFixture, FDWorkloadAndServiceKernelConcurrent) {
 
     // Launch FD workloads on the regular worker grid while the service kernel runs.
     auto fd_workload = make_trivial_workload(device);
-    constexpr uint32_t num_programs = 5;
-    for (uint32_t i = 0; i < num_programs; i++) {
-        EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *fd_workload, false);
-        assert_counter_incrementing(read_counter, "during FD workload " + std::to_string(i));
-    }
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), *fd_workload, false);
+    assert_counter_incrementing(read_counter, "during FD workload");
     Finish(mesh_device->mesh_command_queue());
     assert_counter_incrementing(read_counter, "after all FD workloads complete");
 

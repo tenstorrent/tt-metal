@@ -37,6 +37,11 @@ namespace tt::tt_metal::internal {
 // NOTE: not thread-safe api. Expected usage is sequential calls from the main thread during
 // application setup/teardown.
 //
+// No-mixing contract: a program runs entirely on claimed service cores or entirely on the worker
+// grid - never both. And a MeshWorkload is entirely a service workload (all programs on service
+// cores) or entirely a normal one - the two kinds cannot be combined in one workload.
+// EnqueueMeshWorkload TT_FATALs on either violation.
+//
 // Launch once contract: For now, a claimed service core accepts exactly ONE service workload
 // enqueue. A second EnqueueMeshWorkload targeting an already launched core TT_FATALs, until the
 // core is released - regardless of whether the service kernel on it has actually finished.

@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include "impl/allocator/algorithms/free_list_opt.hpp"
 #include "impl/context/metal_context.hpp"
@@ -92,10 +93,21 @@ void ServiceCoreManager::claim(IDevice* device, const std::vector<CoreCoord>& co
 void ServiceCoreManager::release(IDevice* device, const std::vector<CoreCoord>& cores) {
     auto it = impl_->devices.find(device->id());
     if (it == impl_->devices.end()) {
+        log_warning(
+            tt::LogMetal,
+            "internal::ServiceCoreManager::release: device {} has no claimed service cores; nothing released "
+            "(releasing the wrong device?).",
+            device->id());
         return;
     }
     for (const auto& core : cores) {
-        it->second.cores.erase(core);
+        if (it->second.cores.erase(core) == 0) {
+            log_warning(
+                tt::LogMetal,
+                "internal::ServiceCoreManager::release: core {} was not claimed on device {}; skipped.",
+                core,
+                device->id());
+        }
     }
 }
 
@@ -212,8 +224,7 @@ std::optional<DeviceAddr> ServiceCoreManager::lowest_allocated_address(ChipId de
     if (cit == dit->second.cores.end()) {
         return std::nullopt;
     }
-    // FreeListOpt tracks this directly (updated on allocate, recomputed on deallocate), so no
-    // need to scan allocated_addresses() ourselves.
+    // FreeListOpt tracks this directly (updated on allocate, recomputed on deallocate)
     return cit->second.alloc->lowest_occupied_address();
 }
 
