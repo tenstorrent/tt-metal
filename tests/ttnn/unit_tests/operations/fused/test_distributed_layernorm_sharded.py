@@ -567,3 +567,244 @@ def test_simulated_distributed_layernorm(
         atol=max_atol,
         frobenius_threshold=0.15,
     )
+
+
+# Large out-of-distribution poison written into the implicit tile padding so that any read of the
+# padded columns is observable: a statistic computed over the logical width is unaffected, while one
+# that folds the padded columns in is grossly wrong.
+_NON_TILE_ALIGNED_PAD_VALUE = 1000.0
+
+
+def _run_simulated_distributed_norm_multi_core(device, is_rmsnorm, w, num_cores_w, eps):
+    """Multi-core (non-1x1 grid) simulated distributed norm over a non-tile-aligned logical width w.
+
+    Splitting the width across cores gives the post-all-gather global-stats multicast real participants,
+    so this path runs instead of hanging like the single-core flow. A sharded tile tensor requires every
+    shard to span whole tiles, so the per-core width cannot itself be non-tile-aligned; instead w is
+    non-tile-aligned while each shard spans whole tiles, leaving only the final core partially valid. Its
+    padding columns are poisoned so that a statistic which folds them in is observably wrong.
+    """
+    tile_width = 32
+    shard_wt = math.ceil(w / num_cores_w / tile_width)  # tiles per shard
+    shard_w = shard_wt * tile_width
+    physical_w = shard_w * num_cores_w  # logical w padded out to whole shards
+
+    torch.manual_seed(0)
+    torch_input_tensor = torch.normal(0.0, 1.0, size=(1, 1, 32, w), dtype=torch.bfloat16)
+    torch_weight = torch.normal(0.0, 1.0, size=(1, 1, 1, w), dtype=torch.bfloat16)
+    torch_golden = compute_reference_output(torch_input_tensor, torch_weight, is_rmsnorm, eps)
+
+    core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, 0))})
+    input_sharded_config = ttnn.create_sharded_memory_config(
+        shape=(32, shard_w),
+        core_grid=core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    def make_poisoned_input():
+        tt = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+        tt = ttnn.to_memory_config(tt, memory_config=input_sharded_config)
+        return ttnn.fill_implicit_tile_padding(tt, _NON_TILE_ALIGNED_PAD_VALUE)
+
+    norm_prgm_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[num_cores_w, 1],
+        subblock_w=shard_wt,
+        block_h=1,
+        block_w=shard_wt,
+        inplace=False,
+    )
+
+    pre_all_gather = ttnn.rms_norm_pre_all_gather if is_rmsnorm else ttnn.layer_norm_pre_all_gather
+    post_all_gather = ttnn.rms_norm_post_all_gather if is_rmsnorm else ttnn.layer_norm_post_all_gather
+
+    tt_stats = pre_all_gather(make_poisoned_input(), program_config=norm_prgm_cfg)
+    tt_stats = ttnn.to_memory_config(tt_stats, memory_config=ttnn.L1_MEMORY_CONFIG)
+    stats_sharded_config = ttnn.create_sharded_memory_config(
+        shape=(32, tt_stats.padded_shape[-1]),
+        core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_stats = ttnn.to_memory_config(tt_stats, memory_config=stats_sharded_config)
+
+    # Gamma is read as whole tiles per core, so it must span the full physical width; the columns beyond
+    # the logical width only ever multiply discarded padding, so their values do not matter.
+    torch_weight_padded = torch.nn.functional.pad(torch_weight, (0, physical_w - w))
+    tt_weight = ttnn.from_torch(
+        torch_weight_padded,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+    )
+
+    out_memory_config = create_output_memory_config((num_cores_w, 1), torch_input_tensor.shape)
+    tt_output = post_all_gather(
+        make_poisoned_input(),
+        epsilon=eps,
+        weight=tt_weight,
+        program_config=norm_prgm_cfg,
+        stats=tt_stats,
+        dtype=ttnn.bfloat16,
+        memory_config=out_memory_config,
+    )
+
+    # Only the final core is partially valid, so the valid columns are contiguous and end at w.
+    actual = ttnn.to_torch(tt_output).to(torch.bfloat16)[..., :w]
+    assert_numeric_metrics(torch_golden, actual, pcc_threshold=0.999, rtol=0.05, atol=0.2, frobenius_threshold=0.05)
+
+
+# The distributed pre-all-gather stats kernel masks the final shard's padding columns before reducing
+# the squared input, so a non-tile-aligned width split across cores excludes the padding from the
+# per-shard mean of squares and the normalized output matches the reference.
+@pytest.mark.parametrize("w", [120, 240])
+@pytest.mark.parametrize("num_cores_w", [2])
+@pytest.mark.parametrize("eps", [1e-6])
+def test_simulated_distributed_rms_norm_multi_core_non_tile_aligned_width(device, w, num_cores_w, eps):
+    _run_simulated_distributed_norm_multi_core(device, is_rmsnorm=True, w=w, num_cores_w=num_cores_w, eps=eps)
+
+
+@pytest.mark.parametrize("w", [120, 240])
+@pytest.mark.parametrize("num_cores_w", [2])
+@pytest.mark.parametrize("eps", [1e-6])
+def test_simulated_distributed_layer_norm_multi_core_non_tile_aligned_width_rejected(device, w, num_cores_w, eps):
+    # Sharded LayerNorm masks the input at the E[x] site with a per-block mask that is only correct when
+    # the whole row resides on a single core, so a non-tile-aligned width split across cores is rejected.
+    # This is the documented limitation (see the layer_norm nanobind docstring), not a gap to be wired up.
+    with pytest.raises(RuntimeError, match="does not support a non-tile-aligned width"):
+        _run_simulated_distributed_norm_multi_core(device, is_rmsnorm=False, w=w, num_cores_w=num_cores_w, eps=eps)
+
+
+def _run_simulated_distributed_norm(device, is_rmsnorm, w, eps):
+    """Single-device simulated distributed (pre + post all-gather) sharded norm over width w.
+
+    Computes per-shard statistics (pre-all-gather), reshards them onto a single core to stand in for
+    the all-gather on one device, then normalizes (post-all-gather) and compares against the torch
+    golden. The implicit tile padding is poisoned so that, once the path is correct, a statistic that
+    folded the padded columns in would be observably wrong (a no-op for tile-aligned widths, which
+    have no implicit padding).
+    """
+    torch.manual_seed(0)
+    h = 32
+    padded_w = math.ceil(w / 32) * 32
+    block_wt = padded_w // 32
+
+    torch_input_tensor = torch.normal(0.0, 1.0, size=(1, 1, h, w), dtype=torch.bfloat16)
+    torch_weight = torch.normal(0.0, 1.0, size=(1, 1, 1, w), dtype=torch.bfloat16)
+    torch_golden = compute_reference_output(torch_input_tensor, torch_weight, is_rmsnorm, eps)
+
+    # Single-core block-sharded config; the shard width is the tile-padded width.
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        [h, padded_w],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+    prgm_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[1, 1],
+        subblock_w=1,
+        block_h=1,
+        block_w=block_wt,
+        inplace=False,
+    )
+
+    def make_poisoned_input():
+        tt = ttnn.from_torch(
+            torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=sharded_mem_config
+        )
+        return ttnn.fill_implicit_tile_padding(tt, _NON_TILE_ALIGNED_PAD_VALUE)
+
+    # Pre-all-gather: per-shard statistics.
+    tt_input_tensor = make_poisoned_input()
+    if is_rmsnorm:
+        tt_stats = ttnn.rms_norm_pre_all_gather(tt_input_tensor, program_config=prgm_cfg)
+    else:
+        tt_stats = ttnn.layer_norm_pre_all_gather(tt_input_tensor, program_config=prgm_cfg)
+
+    # Single device, so the gathered stats are just this shard's stats, resharded to one core.
+    tt_stats = ttnn.to_memory_config(tt_stats, memory_config=ttnn.L1_MEMORY_CONFIG)
+    stats_sharded_config = ttnn.create_sharded_memory_config(
+        shape=(32, tt_stats.padded_shape[-1]),
+        core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_stats = ttnn.to_memory_config(tt_stats, memory_config=stats_sharded_config)
+
+    # Post-all-gather: normalized output.
+    tt_weight = create_tt_tensors(torch_weight, device, ttnn.bfloat16, (1, 1), w, is_weight=True)
+    # Output has the same shape and sharding as the input; the op requires matching memory layouts.
+    out_memory_config = sharded_mem_config
+    tt_input_tensor = make_poisoned_input()
+    if is_rmsnorm:
+        tt_output = ttnn.rms_norm_post_all_gather(
+            tt_input_tensor,
+            epsilon=eps,
+            weight=tt_weight,
+            program_config=prgm_cfg,
+            stats=tt_stats,
+            dtype=ttnn.bfloat16,
+            memory_config=out_memory_config,
+        )
+    else:
+        tt_output = ttnn.layer_norm_post_all_gather(
+            tt_input_tensor,
+            epsilon=eps,
+            weight=tt_weight,
+            program_config=prgm_cfg,
+            stats=tt_stats,
+            dtype=ttnn.bfloat16,
+            memory_config=out_memory_config,
+        )
+
+    # Discard padding before comparison.
+    actual = ttnn.to_torch(tt_output).to(torch.bfloat16)[..., :w]
+
+    assert_numeric_metrics(
+        torch_golden,
+        actual,
+        pcc_threshold=0.999,
+        rtol=0.05,
+        atol=0.2,
+        frobenius_threshold=0.05,
+    )
+
+
+# The single-core (1x1 grid) simulated distributed post-all-gather flow hangs waiting on the
+# cb_ex_global multicast. It reproduces for both tile-aligned and non-tile-aligned widths, so it is a
+# pre-existing distributed post-all-gather issue, independent of non-tile-aligned padding handling.
+# run=False keeps the known hang from stalling CI; drop it once the post-all-gather hang is fixed.
+_SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG = (
+    "Single-core simulated distributed post-all-gather hangs on the cb_ex_global multicast "
+    "(pre-existing, reproduces for tile-aligned widths too)."
+)
+
+
+@pytest.mark.xfail(reason=_SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG, run=False)
+@pytest.mark.parametrize("is_rmsnorm", [True, False])
+# Tile-aligned widths through the single-core simulated distributed flow. Demonstrates the
+# post-all-gather hang is not specific to non-tile-aligned widths.
+@pytest.mark.parametrize("w", [64, 128])
+@pytest.mark.parametrize("eps", [1e-6])
+def test_simulated_distributed_norm_tile_aligned_width(device, is_rmsnorm, w, eps):
+    _run_simulated_distributed_norm(device, is_rmsnorm, w, eps)
+
+
+@pytest.mark.xfail(
+    reason=_SIMULATED_DISTRIBUTED_POST_ALL_GATHER_HANG
+    + " A non-tile-aligned width additionally needs the per-shard statistics to exclude the final "
+    "tile's padding columns, which is not yet wired on the distributed pre-all-gather path.",
+    run=False,
+)
+@pytest.mark.parametrize("is_rmsnorm", [True, False])
+# Widths that are not multiples of the tile width (32). Single core, so the whole logical row plus
+# its tile padding lives in one shard.
+@pytest.mark.parametrize("w", [40, 72, 200])
+@pytest.mark.parametrize("eps", [1e-6])
+def test_simulated_distributed_norm_non_tile_aligned_width(device, is_rmsnorm, w, eps):
+    _run_simulated_distributed_norm(device, is_rmsnorm, w, eps)
