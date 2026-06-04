@@ -173,7 +173,32 @@ void kernel_main() {
                     cb_push_back(input_cb, tiles_in_block);
                 }
             }
+        } else if constexpr (fuse_rope) {
+            // Idea D (RoPE only): finer push — issue+barrier+push input in
+            // block_size groups so compute's PRE (cumulative cb_wait_front) can
+            // start squaring block 0 while later blocks read; the cos/sin reads
+            // (deferred after the input by Idea A) then overlap more compute.
+            // Big win on RoPE shapes (N18944 -12%). No-rope has no cos/sin to
+            // overlap and regresses on some shapes (N9472 +9%), so it keeps the
+            // single-barrier row push below.
+            DeviceZoneScopedN("R_INPUT");
+            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                const uint32_t tiles_in_block =
+                    ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
+                cb_reserve_back(input_cb, tiles_in_block);
+                uint32_t input_wr_ptr = get_write_ptr(input_cb);
+                for (uint32_t i = 0; i < tiles_in_block; i++) {
+#ifndef WAN_ABL_SKIP_INPUT_READ
+                    noc_async_read_tile(input_tile_idx + col_tile + i, input_accessor, input_wr_ptr);
+#endif
+                    input_wr_ptr += input_tile_bytes;
+                }
+                noc_async_read_barrier();
+                cb_push_back(input_cb, tiles_in_block);
+            }
         } else {
+            // No-rope: single-barrier whole-row push (Idea A) — deepest in-flight
+            // without the finer-push regression on no-rope shapes.
             cb_reserve_back(input_cb, num_tile_cols);
             {
                 DeviceZoneScopedN("R_INPUT");

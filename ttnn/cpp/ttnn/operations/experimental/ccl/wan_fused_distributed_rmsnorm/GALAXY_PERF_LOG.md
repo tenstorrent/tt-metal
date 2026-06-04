@@ -63,3 +63,73 @@ Win on RoPE shapes (cos/sin reads partially hidden behind PRE), no-rope
 unaffected, no regressions. KEPT (committed). Doesn't fully reclaim the 25%
 cos/sin tax — the reader still serializes on the per-row cos/sin barrier; only
 compute's PRE overlaps it. Ideas B (dual-NoC) / C (deeper pipeline) target the rest.
+
+## Idea B — dual-NoC input read (DEAD END: structural blocker)
+
+Plan: run the reader (NCRISC) in DM_DYNAMIC_NOC mode and split the input row
+across NoC0/NoC1 (alternate tiles) to use both NoCs' bandwidth (input read is
+the #1 exposed cost, latency-bound at ~31% of peak on one NoC).
+
+Result: program build FATAL — `program.cpp:731: noc_modes.size() <= 1`. A
+program requires ALL its kernels to share one NoC mode. Putting just the reader
+on dynamic NoC conflicts with the dedicated-NoC writer/compute AND the fabric
+MUX kernels (created by FabricMuxConfig — NoC mode not controllable here).
+Converting the whole program, including the fabric MUX, to dynamic NoC is out
+of scope and risky. **Reverted.** Per-kernel dual-NoC is not available for this
+op. (The input-read bandwidth lever is pursued via Idea C instead.)
+
+## Idea C — deepen the read pipeline (DEAD END)
+
+(i) Bigger input_cb (WAN_RMSNORM_INPUT_CB_CHUNKS 2->3/4): **L1-blocked**. At
+nt=40/chunk=3 the resident CBs already sit near the cap; chunks=3 overflows
+(1.63 MB > 1.50 MB), chunks=4 trips the auto-streaming path (incompatible with
+chunk_size_rows=3). No headroom to prefetch deeper.
+
+(ii) Chunk-batched input reads (issue all chunk rows under one barrier =
+rows_in_batch*nt in flight vs one row): correct (PCC ~1.0) but **regresses
+every shape** vs Idea A: N18944 no-rope 592->637 (+7.6%), N9472-RoPE 497->530
+(+6.6%), N18944-RoPE 958->1001 (+4.5%), N2368 +5-7%. Confirms the Blackhole
+finding on WH: more in-flight depth adds NoC/DRAM-controller contention AND
+delays compute's PRE start (PRE now waits for the whole chunk's input), both
+outweighing latency-hiding. The op sits at a delicate read local-optimum.
+**Reverted.** Read-depth is not a lever here.
+
+## Idea D — finer (per-block) input push, RoPE-gated (KEPT)
+
+Push input in block_size groups (issue+barrier+push per block) so compute's PRE
+(cumulative cb_wait_front) starts squaring block 0 while later blocks read. The
+cos/sin reads that Idea A defers after the input then overlap more compute.
+
+First tried for ALL shapes: big RoPE win but **+9.3% regression on N9472 no-rope**
+(no cos/sin to overlap → finer push is pure per-block-barrier overhead, the
+pre-Opt-3 cost). Gated on `fuse_rope`: RoPE uses finer push, no-rope keeps the
+single-barrier row push (Idea A).
+
+Correctness: fused-vs-baseline PCC worst 0.99988 (>0.999). PASS.
+
+Perf (fused µs/iter, two runs, vs Idea A):
+
+| config | Idea A | gated D | Δ |
+|---|---:|---:|---:|
+| N18944 RoPE | 958 | 842.6 / 844.4 | **−12%** |
+| N9472 RoPE  | 497 | 480.3 / 478.5 | **−3.6%** |
+| N2368 RoPE  | 229 | 232.7 / 232.7 | +1.7% |
+| N18944 no-rope | 592 | 593.3 / 592.4 | ~0 |
+| N9472 no-rope  | 323 | 322.8 / 322.7 | ~0 (regression gone) |
+| N2368 no-rope  | 142 | 142.2 / 143.1 | ~0 |
+| L512 no-rope   | 65  | 65.1 / 64.6   | ~0 |
+
+KEPT (committed). RoPE shapes win big; no-rope untouched. The Idea-A + Idea-D
+combination on RoPE is the headline: N18944-RoPE 982 (pre-opt) -> 843 (-14%).
+
+## Running totals vs pre-optimization baseline (fused µs/iter)
+
+| config | baseline | current (A+D) | speedup-of-fused |
+|---|---:|---:|---:|
+| N18944 RoPE | 981.7 | 843 | 1.16x |
+| N9472 RoPE  | 497.4 | 479 | 1.04x |
+| N2368 RoPE  | 244.1 | 233 | 1.05x |
+| N18944 no-rope | 592.7 | 592 | ~1.0x |
+| N9472 no-rope  | 321.8 | 323 | ~1.0x |
+| N2368 no-rope  | 142.9 | 142 | ~1.0x |
+| L512 no-rope   | 64.3  | 65  | ~1.0x |
