@@ -6,7 +6,6 @@ from itertools import product
 
 import pytest
 import torch
-from conftest import skip_for_blackhole
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
@@ -52,6 +51,8 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_WITHIN_FACE,
 )
 from helpers.utils import passed_test
+
+from conftest import skip_for_blackhole
 
 # SUPPORTED FORMATS FOR TEST
 supported_formats = [
@@ -384,7 +385,7 @@ def test_unpack_comprehensive(
     input_dimensions,
 ):
 
-    # torch.manual_seed(0.0)
+    # Per-test seed now provided by conftest.py::pytest_runtest_setup (2026-05-14).
     partial_face = face_r_dim < 16
 
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(

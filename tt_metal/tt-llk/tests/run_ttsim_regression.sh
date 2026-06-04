@@ -204,7 +204,13 @@ if [[ ! -d "$TESTS_DIR" ]]; then
 fi
 
 # ttsim does not implement SFPLOADMACRO; default to disabling unless caller set it.
-export DISABLE_SFPLOADMACRO="${DISABLE_SFPLOADMACRO:-1}"
+# The compile-time gate (-DDISABLE_SFPLOADMACRO) is added by
+# python_tests/helpers/test_config.py when the env var TT_METAL_DISABLE_SFPLOADMACRO=1
+# is set — that's the documented name in README.md. The bare DISABLE_SFPLOADMACRO
+# spelling we used before never reached the test_config.py gate, so the gate
+# silently no-op'd and every SFPLOADMACRO opcode reached ttsim at runtime and
+# tripped UnsupportedFunctionality.
+export TT_METAL_DISABLE_SFPLOADMACRO="${TT_METAL_DISABLE_SFPLOADMACRO:-1}"
 
 mkdir -p "$RESULTS_DIR"
 
@@ -225,7 +231,11 @@ PYTEST_BASE_ARGS=(
     --run-simulator
     --timeout="$TIMEOUT"
     --forked
-    --show-progress
+    # --show-progress dropped: the in-tree JSONL hook in conftest.py
+    # (commit 0b899ae9291) writes one line per test outcome to
+    # /tmp/tt-llk-progress.jsonl, which is `tail -f`-able and doesn't pay
+    # the controller-side memory cost of pytest-progress's
+    # ProgressTerminalReporter accumulating 37K outcomes in lists.
     -m "not quasar and not nightly and not perf"
     --junit-xml="$XML_PATH"
     # ttsim writes via printf (stdout), so caplog and stderr are always
@@ -247,7 +257,15 @@ PYTEST_BASE_ARGS=(
 if [[ "$WORKERS" -gt 0 ]]; then
     PYTEST_BASE_ARGS+=(
         -n "$WORKERS"
-        --dist=loadfile
+        # worksteal (xdist 3.8+) distributes tests evenly then redistributes
+        # from busy workers when others idle — fixes the long-tail-file
+        # bottleneck that loadfile creates with parametrize-heavy classes
+        # (test_zzz_eltwise_binary, test_matmul, etc.). Cross-file build
+        # races were already defended at the test_config level by
+        # build_shared_artefacts' FileLock + done-marker stat-guard
+        # (see commits c2b04f5d5dd and fe282aa29ae), so loadfile's
+        # belt-AND-braces overkill no longer pays for itself.
+        --dist=worksteal
         --max-worker-restart=10000
     )
 fi
@@ -261,7 +279,7 @@ echo "============================================================"
 echo " Architecture   : ${ARCHITECTURE}"
 echo " Simulator      : ${TT_METAL_SIMULATOR}"
 echo " SoC descriptor : $(dirname "$TT_METAL_SIMULATOR")/soc_descriptor.yaml"
-echo " SFPLOADMACRO   : disabled=${DISABLE_SFPLOADMACRO}"
+echo " SFPLOADMACRO   : disabled=${TT_METAL_DISABLE_SFPLOADMACRO}"
 echo " Workers (-n)   : ${WORKERS}"
 echo " Per-test fork  : on"
 echo " Timeout        : ${TIMEOUT}s"

@@ -867,6 +867,27 @@ class TestConfig:
 
         return (OPTIONS_COMPILE, MEMORY_LAYOUT_LD_SCRIPT, NON_COVERAGE_OPTIONS_COMPILE)
 
+    def _shared_artefacts_present(self):
+        """Verify the artefacts the done-marker is supposed to gate actually
+        exist on disk. Defends against done-marker leaking a partial build:
+        e.g. a previous run was SIGKILL'd between brisc.elf creation and
+        done_marker.touch(), or done_marker survives while the elf was
+        cleaned by a `pkill -f pytest` (which can drop in-progress gcc
+        outputs zero-length). Without this guard, the fast path returns
+        SHARED_ARTEFACTS_AVAILABLE=True and downstream load_elf hits a
+        missing/empty brisc.elf, surfacing as a deluge of unrelated MMIO
+        errors instead of a clean "elf not found" failure on the first
+        affected test."""
+        if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
+            brisc_elf = TestConfig.SHARED_ELF_DIR / "brisc.elf"
+            if not brisc_elf.is_file() or brisc_elf.stat().st_size == 0:
+                return False
+        if TestConfig.WITH_COVERAGE:
+            coverage_o = TestConfig.SHARED_OBJ_DIR / "coverage.o"
+            if not coverage_o.is_file() or coverage_o.stat().st_size == 0:
+                return False
+        return True
+
     def build_shared_artefacts(self):
         if TestConfig.SHARED_ARTEFACTS_AVAILABLE:
             return
@@ -877,8 +898,8 @@ class TestConfig:
 
         done_marker = shared_obj_dir / ".shared_complete"
 
-        # Fast path: if shared artefacts are already built
-        if done_marker.exists():
+        # Fast path: if shared artefacts are already built AND on disk
+        if done_marker.exists() and self._shared_artefacts_present():
             TestConfig.SHARED_ARTEFACTS_AVAILABLE = True
             return
 
@@ -886,10 +907,16 @@ class TestConfig:
         lock = FileLock(lock_file)
 
         with lock:
-            # Check again inside lock
-            if done_marker.exists():
+            # Check again inside lock — same dual condition. If the marker
+            # exists but the artefact is missing/empty, fall through and
+            # rebuild rather than serving a corrupt cache.
+            if done_marker.exists() and self._shared_artefacts_present():
                 TestConfig.SHARED_ARTEFACTS_AVAILABLE = True
                 return
+            # Clean up a leaked marker so we don't loop on the same stale
+            # state under a transient build failure.
+            if done_marker.exists():
+                done_marker.unlink()
 
             _, local_memory_layout_ld, local_non_coverage = (
                 self.resolve_compile_options()
@@ -1138,8 +1165,19 @@ class TestConfig:
 
         self.build_shared_artefacts()
 
-        # Fast path: if build is already complete, skip entirely
-        if done_marker.exists():
+        def _variant_artefacts_present():
+            """Sibling guard to _shared_artefacts_present: confirm each kernel
+            component's .elf actually exists. Same xdist/SIGKILL races apply
+            here as in build_shared_artefacts."""
+            elf_dir = VARIANT_DIR / "elf"
+            for name in TestConfig.KERNEL_COMPONENTS:
+                elf = elf_dir / f"{name}.elf"
+                if not elf.is_file() or elf.stat().st_size == 0:
+                    return False
+            return True
+
+        # Fast path: if build is already complete AND elfs are on disk
+        if done_marker.exists() and _variant_artefacts_present():
             logger.debug("Build already complete for {}", self.variant_id[:12])
             return
 
@@ -1148,9 +1186,12 @@ class TestConfig:
         lock = FileLock(lock_file)
 
         with lock:
-            # Check again inside lock in case another process just finished
-            if done_marker.exists():
+            # Check again inside lock — same dual condition.
+            if done_marker.exists() and _variant_artefacts_present():
                 return
+            # Stale marker without artefacts → clean and rebuild.
+            if done_marker.exists():
+                done_marker.unlink()
 
             VARIANT_OBJ_DIR = VARIANT_DIR / "obj"
             VARIANT_ELF_DIR = VARIANT_DIR / "elf"

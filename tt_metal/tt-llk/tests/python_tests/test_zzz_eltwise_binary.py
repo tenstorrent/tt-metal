@@ -349,6 +349,36 @@ def test_eltwise_binary_bfp4_b(
     input_dimensions,
     tile_dimensions,
 ):
+    # Seed torch's global RNG from the test parametrisation so the unseeded
+    # stimuli drawn inside generate_stimuli_v2 are deterministic per
+    # parametrize-id. Bfp4_b has a 3-bit mantissa and shares one exponent
+    # per 16-element block; the ±2-ULP block-aware PCC tolerance leaves
+    # almost no slack when src_B is a scalar broadcast (one value
+    # replicated across the tile) at LoFi math fidelity, so an unseeded
+    # random scalar near a quantisation boundary tips the comparison
+    # one way on some runs and the other on others — manifesting as
+    # ttsim-weekly flake. Seeding here makes failures reproducible.
+    # NB: Python's built-in hash() is non-deterministic across processes
+    # (PYTHONHASHSEED), so we use hashlib for a stable seed.
+    import hashlib as _hashlib
+
+    import torch as _torch
+
+    _param_id = repr(
+        (
+            dest_acc,
+            formats,
+            broadcast_type,
+            math_fidelity,
+            transpose_srca,
+            math_op,
+            tuple(input_dimensions),
+            tuple(tile_dimensions),
+        )
+    ).encode("utf-8")
+    _torch.manual_seed(
+        int.from_bytes(_hashlib.sha256(_param_id).digest()[:4], "little")
+    )
 
     face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
     num_faces = num_faces_r_dim * num_faces_c_dim
