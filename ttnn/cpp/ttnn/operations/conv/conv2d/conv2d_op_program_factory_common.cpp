@@ -89,6 +89,13 @@ std::vector<CBInfo> get_cb_info(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(tt::tt_metal::hal::get_arch(), compute_kernel_config);
 
+    // conv_bench forces packer_l1_acc OFF for all bench modes so MATMUL_PARTIALS is sized for the no-l1_acc
+    // (output_datatype) format here AND the factory runs the kernel with l1_acc off — kept in lockstep so the
+    // row-major CB-format mismatch (a late-disable artifact) cannot occur.
+    if (ttnn::operations::conv::conv2d_bench_active()) {
+        packer_l1_acc = false;
+    }
+
     TT_FATAL(conv_config.weights_dtype.has_value(), "get_cb_info expects conv_config.weights_dtype to be already set");
     const tt::DataFormat weights_df = datatype_to_dataformat_converter(conv_config.weights_dtype.value());
     const tt::DataFormat bias_df = weights_df;
