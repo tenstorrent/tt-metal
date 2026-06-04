@@ -2368,24 +2368,27 @@ TEST_CONFIG_MODELS = list(MODEL_CONFIGS.keys())
 def generate_ring_mla_test_configs(mesh_config: MeshConfig, model_configs: Dict[str, ModelConfig]):
     if mesh_config.sp_size < 2 or "mla_100k" not in model_configs:
         return [], []
-    model = model_configs["mla_100k"]
-    q_chunk_size = 160
-    k_chunk_size = 320
+    base = model_configs["mla_100k"]
+    # Kimi-style MLA: latent V dimension 512, 14 query heads.
+    nhq = 14
+    d_v = 512
+    q_chunk_size = 32
+    k_chunk_size = 640
     config = (
         BATCH_SIZE,
-        model.seq_len * mesh_config.sp_size,
-        model.nhq * mesh_config.tp_size,
-        model.nhk,
-        model.d_q,
-        model.d_k,
-        model.d_v,
+        base.seq_len * mesh_config.sp_size,
+        nhq * mesh_config.tp_size,
+        base.nhk,
+        base.d_q,
+        base.d_k,
+        d_v,
         q_chunk_size,
         k_chunk_size,
-        model.is_balanced,
-        model.q_dtype,
-        model.kv_dtype,
+        base.is_balanced,
+        base.q_dtype,
+        base.kv_dtype,
     )
-    return [config], [f"ring_mla-{model.name}-q{q_chunk_size}-k{k_chunk_size}"]
+    return [config], [f"ring_mla-kimi-q{q_chunk_size}-k{k_chunk_size}"]
 
 
 RING_MLA_TEST_CONFIGS, RING_MLA_TEST_CONFIG_IDS = generate_ring_mla_test_configs(MESH_CONFIG, MODEL_CONFIGS)
@@ -2871,6 +2874,180 @@ def test_ring_joint_attention_create_perf_table(model_name):
     print(f"{'='*150}\n")
 
 
+# === TEST 4b: RING MLA PERFORMANCE TABLE GENERATOR (skipped on CI) ===
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
+@pytest.mark.timeout(1000)
+@pytest.mark.parametrize(
+    "config,config_id",
+    list(zip(RING_MLA_TEST_CONFIGS, RING_MLA_TEST_CONFIG_IDS)),
+    ids=RING_MLA_TEST_CONFIG_IDS,
+)
+def test_ring_mla_create_perf_table(config, config_id):
+    """
+    Profile ring_mla (V in latent space) and print a performance table.
+    Always causal; V is the first d_v columns of the single KV latent tensor.
+    Skipped on CI - run locally with tracy profiler.
+    """
+    from tracy.process_model_log import run_device_profiler
+
+    mesh_config = MESH_CONFIG
+    ring_size = mesh_config.sp_size
+
+    if ring_size < 2:
+        pytest.skip(f"ring_mla requires at least 2 devices, got {ring_size}")
+
+    full_grid_rows = mesh_config.grid_rows
+    total_compute_cores = mesh_config.sdpa_cores
+    total_cores = mesh_config.total_cores
+    ccl_cores = full_grid_rows
+
+    subdir = "ttnn_ring_joint_sdpa_performance"
+
+    (
+        b,
+        sq,
+        nhq,
+        nhk,
+        d_q,
+        d_k,
+        d_v,
+        q_chunk_size,
+        k_chunk_size,
+        is_balanced,
+        q_dtype,
+        kv_dtype,
+    ) = config
+    is_causal = True  # ring_mla is always causal
+
+    s = sq
+    local_seq_len = sq // ring_size
+    local_nhq = nhq // mesh_config.tp_size
+
+    float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]", "PM FPU UTIL (%)"]
+    cols = ["ATTRIBUTES"]
+
+    command = (
+        f"pytest tests/nightly/blackhole/sdpa/"
+        f"test_ring_joint_sdpa.py::"
+        f"test_ring_mla_sweep_perf_impl"
+        f"[{config_id}]"
+    )
+
+    perf_results = []
+    try:
+        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+        r = post_process_ops_log(
+            subdir,
+            float_columns=float_cols,
+            columns=cols,
+            op_name="RingJointSDPADeviceOperation",
+            sum_vals=False,
+            has_signposts=False,
+        )
+
+        measured_core_count = int(r["CORE COUNT"][0]) if len(r["CORE COUNT"]) > 0 else 0
+        duration_ns = int(r["DEVICE KERNEL DURATION [ns]"].max()) if len(r["DEVICE KERNEL DURATION [ns]"]) > 0 else 0
+        fpu_util_col = r.get("PM FPU UTIL (%)", [])
+        fpu_util_min = float(fpu_util_col.min()) if len(fpu_util_col) > 0 else 0.0
+        fpu_util_max = float(fpu_util_col.max()) if len(fpu_util_col) > 0 else 0.0
+
+        B = b
+        local_q_num_chunks = math.ceil(local_seq_len / q_chunk_size)
+        local_k_num_chunks = math.ceil(local_seq_len / k_chunk_size)
+        k_num_chunks = ring_size * local_k_num_chunks
+
+        total_work_items = B * local_nhq * local_q_num_chunks
+        q_per_core = math.ceil(total_work_items / total_compute_cores) if total_compute_cores > 0 else total_work_items
+        iters_per_core = q_per_core * k_num_chunks
+
+        local_q_padded = local_q_num_chunks * q_chunk_size
+        global_q_padded = local_q_padded * ring_size
+        local_k_padded = local_k_num_chunks * k_chunk_size
+        global_k_padded = local_k_padded * ring_size
+        actual_work = s * s
+        padded_work = global_q_padded * global_k_padded
+        total_waste_pct = ((padded_work - actual_work) / padded_work) * 100 if padded_work > 0 else 0
+
+        total_q_slots = q_per_core * total_compute_cores
+        wasted_q_slots = max(0, total_q_slots - total_work_items)
+        slot_waste_pct = (wasted_q_slots / total_q_slots) * 100 if total_q_slots > 0 else 0
+
+        effective_cores = (measured_core_count // mesh_config.grid_rows) * mesh_config.grid_rows
+        utilization = compute_ring_joint_utilization(
+            local_seq_len, s, d_q, d_v, local_nhq, duration_ns, effective_cores, is_causal
+        )
+
+        perf_results.append(
+            {
+                "q_chunk_size": q_chunk_size,
+                "k_chunk_size": k_chunk_size,
+                "cores_used": effective_cores,
+                "iters_per_core": iters_per_core,
+                "total_waste_pct": total_waste_pct,
+                "slot_waste_pct": slot_waste_pct,
+                "duration_ns": duration_ns,
+                "duration_ms": duration_ns / 1e6,
+                "utilization": utilization,
+                "fpu_util_min": fpu_util_min,
+                "fpu_util_max": fpu_util_max,
+            }
+        )
+        logger.info(
+            f"q={q_chunk_size}, k={k_chunk_size}: {duration_ns/1e6:.3f} ms, "
+            f"util={utilization:.1f}%, cores={effective_cores}/{total_compute_cores}, "
+            f"iters/core={iters_per_core}"
+        )
+    except Exception as e:
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        logger.error(f"Error running ring_mla with q_chunk_size={q_chunk_size}, k_chunk_size={k_chunk_size}: {e}")
+        perf_results.append({"q_chunk_size": q_chunk_size, "k_chunk_size": k_chunk_size, "duration_ns": None})
+
+    valid_results = [r for r in perf_results if r["duration_ns"] is not None]
+    valid_results.sort(key=lambda x: x["duration_ns"])
+
+    mm_flops = compute_sdpa_flops(s, s, d_q, d_v, nhq, is_causal)
+
+    print(f"\n{'='*150}")
+    print(
+        f"Ring MLA Performance (KIMI): b={b}, nh={nhq} (global), s={s}, d_q={d_q}, d_k={d_k}, d_v={d_v}, "
+        f"causal={is_causal}, q_dtype={q_dtype}, kv_dtype={kv_dtype}"
+    )
+    print(f"Architecture: {mesh_config.arch_type}, Ring size: {ring_size} devices, TP size: {mesh_config.tp_size}")
+    print(f"Total MM FLOPs (all devices): {mm_flops:,} ({mm_flops/1e9:.2f} GFLOPs)")
+    print(f"Per-device workload: Q={s // ring_size} tokens, K/V={s} tokens (via ring), {local_nhq} heads")
+    print(f"Core Allocation: {total_compute_cores} compute + {ccl_cores} CCL = {total_cores} total cores")
+    print(f"{'='*150}")
+    header = "| Rank | q_chunk | k_chunk | Duration (ms) | Cores Used | Iters/Core | Pad Waste | Slot Waste | FPU Util (%)  | Math Util |"
+    sep = "|------|---------|---------|---------------|------------|------------|-----------|------------|---------------|-----------|"
+    print(header)
+    print(sep)
+    for rank, result in enumerate(valid_results, 1):
+        fpu_range = f"{result['fpu_util_min']:.1f}-{result['fpu_util_max']:.1f}"
+        print(
+            f"| {rank:4d} | {result['q_chunk_size']:7d} | {result['k_chunk_size']:7d} | {result['duration_ms']:13.3f} | "
+            f"{result['cores_used']:10d} | {result['iters_per_core']:10d} | "
+            f"{result['total_waste_pct']:8.1f}% | {result['slot_waste_pct']:9.1f}% | {fpu_range:>13} | {result['utilization']:8.1f}% |"
+        )
+
+    failed_results = [r for r in perf_results if r["duration_ns"] is None]
+    if failed_results:
+        print(f"\nFailed configurations:")
+        for result in failed_results:
+            print(f"  q_chunk_size={result['q_chunk_size']}, k_chunk_size={result['k_chunk_size']}")
+
+    if valid_results:
+        best = valid_results[0]
+        print(
+            f"\nBest configuration: q_chunk_size={best['q_chunk_size']}, "
+            f"k_chunk_size={best['k_chunk_size']} "
+            f"({best['duration_ms']:.3f} ms, {best['utilization']:.1f}% math util, "
+            f"{best['cores_used']}/{total_compute_cores} compute cores, {best['iters_per_core']} iters/core, "
+            f"{best['total_waste_pct']:.1f}% pad waste, {best['slot_waste_pct']:.1f}% slot waste)"
+        )
+    print(f"{'='*150}\n")
+
+
 # === TEST 5: PERFORMANCE CHECK (CI-gated by SDPA_PERF_CHECKS=1) ===
 # Symmetric +/- band — catches both regressions and unexpected speedups.
 RING_JOINT_PERF_MARGIN = 0.005
@@ -3241,3 +3418,187 @@ def test_ring_joint_attention_create_chunked_perf_table(model_name, q_chunk_size
         f"Expected last chunk util ({utils[-1]:.1f}%) > first chunk util ({utils[0]:.1f}%) "
         f"— prefix grows with chunk index, so util should increase."
     )
+
+
+# === TEST 8b: RING MLA CHUNKED-PREFILL PERF TABLE (latent V, skipped on CI) ===
+# Kimi-style MLA: V lives in the latent K/V tensor (first d_v columns); driven by ring_mla.
+RING_MLA_CHUNKED_MODEL = ModelConfig(
+    name="kimi_mla",
+    nhq=14,
+    nhk=1,
+    nhv=14,
+    d_q=576,
+    d_k=576,
+    d_v=512,
+    is_causal=True,
+    is_balanced=True,
+    q_dtype=ttnn.bfloat16,
+    kv_dtype=ttnn.bfloat8_b,
+    q_chunk_sizes=[32],
+    k_chunk_sizes=[640],
+    seq_len=CHUNKED_PREFILL_CHUNK_SIZE,  # unused by chunked path
+)
+
+RING_MLA_CHUNKED_CONFIGS = [
+    (q, k) for q, k in product(RING_MLA_CHUNKED_MODEL.q_chunk_sizes, RING_MLA_CHUNKED_MODEL.k_chunk_sizes)
+]
+RING_MLA_CHUNKED_CONFIG_IDS = [f"{RING_MLA_CHUNKED_MODEL.name}-q{q}-k{k}" for q, k in RING_MLA_CHUNKED_CONFIGS]
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
+@pytest.mark.parametrize("q_chunk_size,k_chunk_size", RING_MLA_CHUNKED_CONFIGS, ids=RING_MLA_CHUNKED_CONFIG_IDS)
+def test_ring_mla_sdpa_chunked_accuracy(q_chunk_size, k_chunk_size, chunk_size):
+    """Single-pass ring_mla (latent V) chunked prefill — profiling driver for the perf table."""
+    run_ring_mla_sdpa_chunked_indexed_kv_cache(
+        MESH_CONFIG,
+        RING_MLA_CHUNKED_MODEL,
+        chunk_size=chunk_size,
+        total_seq=CHUNKED_PREFILL_TOTAL_SEQ,
+        # Lenient thresholds: this path is the perf-table driver; accuracy is validated by the
+        # dedicated ring_mla chunked accuracy/determinism tests above.
+        pcc_threshold=0.9,
+        rmse_threshold=1.0,
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        num_iterations=1,
+        kv_cache_batch_idx=1,
+        cache_batch=2,
+    )
+
+
+@pytest.mark.skipif(os.environ.get("CI") == "true", reason="Performance test - skip on CI")
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("chunk_size", [CHUNKED_PREFILL_CHUNK_SIZE], ids=[f"chunk{CHUNKED_PREFILL_CHUNK_SIZE}"])
+@pytest.mark.parametrize("q_chunk_size,k_chunk_size", RING_MLA_CHUNKED_CONFIGS, ids=RING_MLA_CHUNKED_CONFIG_IDS)
+def test_ring_mla_create_chunked_perf_table(q_chunk_size, k_chunk_size, chunk_size):
+    """Run ring_mla (latent V) chunked prefill once with tracy and print a per-chunk math-util table.
+
+    Same table as test_ring_joint_attention_create_chunked_perf_table, but driven by ring_mla
+    (V is the first d_v columns of the shared K/V latent) instead of the classic separate-V op.
+    Per-chunk work is rectangle (Q_chunk vs prefix K/V, non-causal) + triangle (Q_chunk vs current
+    K/V, causal half), so later chunks reach higher math utilization than chunk 0.
+    """
+    from tracy.process_model_log import run_device_profiler
+
+    mesh_config = MESH_CONFIG
+    ring_size = mesh_config.sp_size
+
+    if ring_size < 2:
+        pytest.skip(f"ring_mla chunked prefill requires at least 2 devices, got {ring_size}")
+
+    model = RING_MLA_CHUNKED_MODEL
+    total_seq = CHUNKED_PREFILL_TOTAL_SEQ
+    n_chunks = total_seq // chunk_size
+
+    config_id = f"{model.name}-q{q_chunk_size}-k{k_chunk_size}-chunk{chunk_size}"
+    subdir = "ttnn_ring_mla_chunked_performance"
+    command = (
+        f"pytest tests/nightly/blackhole/sdpa/"
+        f"test_ring_joint_sdpa.py::"
+        f"test_ring_mla_sdpa_chunked_accuracy"
+        f"[{config_id}]"
+    )
+
+    float_cols = ["CORE COUNT", "DEVICE KERNEL DURATION [ns]", "PM FPU UTIL (%)"]
+    cols = ["ATTRIBUTES"]
+
+    run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+    r = post_process_ops_log(
+        subdir,
+        float_columns=float_cols,
+        columns=cols,
+        op_name="RingJointSDPADeviceOperation",
+        sum_vals=False,
+        has_signposts=False,
+    )
+
+    durations = r["DEVICE KERNEL DURATION [ns]"].tolist()
+    core_counts = r["CORE COUNT"].tolist()
+    fpu_util_col = r.get("PM FPU UTIL (%)", [])
+
+    # Tracy emits one entry per (chunk, device). Group every devs_per_chunk consecutive
+    # entries into a chunk and take the max duration (critical path: chunk completes when
+    # the slowest device finishes).
+    assert (
+        len(durations) % n_chunks == 0
+    ), f"RingJointSDPADeviceOperation entry count ({len(durations)}) is not a multiple of n_chunks ({n_chunks})"
+    devs_per_chunk = len(durations) // n_chunks
+    expected_devs = mesh_config.tp_size * mesh_config.sp_size
+    assert (
+        devs_per_chunk == expected_devs
+    ), f"Expected {expected_devs} entries per chunk (tp_size * sp_size), got {devs_per_chunk}"
+
+    chunk_durations = [max(durations[i * devs_per_chunk : (i + 1) * devs_per_chunk]) for i in range(n_chunks)]
+    chunk_core_counts = [
+        max(int(c) for c in core_counts[i * devs_per_chunk : (i + 1) * devs_per_chunk]) for i in range(n_chunks)
+    ]
+
+    q_per_dev = chunk_size // ring_size
+    # model.nhq is PER RING, and heads-per-ring == heads-per-device (heads shard across tp_axis).
+    nh_per_dev = model.nhq
+    d_q, d_v = model.d_q, model.d_v
+    constants = ARCH_CONSTANTS["blackhole"]
+    clock_ghz = constants["clock_ghz"]
+    flops_per_cycle_per_core = constants["mm_flops_per_cycle_per_core"]
+
+    per_chunk_rows = []
+    for i, (dur_ns, ccount) in enumerate(zip(chunk_durations, chunk_core_counts)):
+        prefix_k = i * chunk_size
+        # Rectangle: Q_chunk (q_per_dev rows on this device) vs prefix K/V (i * chunk_size rows), non-causal.
+        rect_flops = 2 * q_per_dev * prefix_k * (d_q + d_v) * nh_per_dev
+        # Triangle: Q_chunk vs current chunk K/V, causal => c*c/2 valid (q,k) pairs.
+        tri_flops = q_per_dev * chunk_size * (d_q + d_v) * nh_per_dev
+        chunk_flops = rect_flops + tri_flops
+
+        # Strip CCL contribution: round measured core count down to multiple of grid_rows.
+        effective_cores = (ccount // mesh_config.grid_rows) * mesh_config.grid_rows
+        cycles = dur_ns * clock_ghz
+        theoretical_flops = effective_cores * cycles * flops_per_cycle_per_core
+        util = (chunk_flops / theoretical_flops) * 100 if theoretical_flops > 0 else 0.0
+
+        per_chunk_rows.append(
+            {
+                "chunk": i,
+                "logical_n": (i + 1) * chunk_size,
+                "prefix_k": prefix_k,
+                "duration_ns": int(dur_ns),
+                "cores": effective_cores,
+                "chunk_flops": chunk_flops,
+                "util": util,
+            }
+        )
+
+    print(f"\n{'='*130}")
+    print(
+        f"Ring MLA (latent V) Chunked-Prefill Per-Chunk Math Util: model={model.name}, "
+        f"q_chunk={q_chunk_size}, k_chunk={k_chunk_size}, chunk_size={chunk_size}, total_seq={total_seq}"
+    )
+    print(f"Architecture: {mesh_config.arch_type}, Ring size: {ring_size}, TP size: {mesh_config.tp_size}")
+    print(
+        f"Per-device per-chunk Q rows: {q_per_dev}, heads/device: {nh_per_dev}, "
+        f"d_q={d_q}, d_v={d_v}, kv_dtype={model.kv_dtype}"
+    )
+    print(f"{'='*130}")
+    header = "| Chunk | logical_n | prefix_K | Duration (ms) | Cores | Chunk FLOPs (G) | Math Util |"
+    sep = "|-------|-----------|----------|---------------|-------|-----------------|-----------|"
+    print(header)
+    print(sep)
+    for row in per_chunk_rows:
+        print(
+            f"| {row['chunk']:5d} | {row['logical_n']:9d} | {row['prefix_k']:8d} | "
+            f"{row['duration_ns']/1e6:13.3f} | {row['cores']:5d} | {row['chunk_flops']/1e9:15.2f} | "
+            f"{row['util']:8.1f}% |"
+        )
+
+    if len(fpu_util_col) > 0:
+        print(
+            f"\nTracy PM FPU UTIL range across all SDPA cores/chunks: "
+            f"{float(fpu_util_col.min()):.1f}% - {float(fpu_util_col.max()):.1f}%"
+        )
+
+    total_ms = sum(row["duration_ns"] for row in per_chunk_rows) / 1e6
+    print(f"\nTotal prefill time across {n_chunks} chunks: {total_ms:.3f} ms")
+
+    utils = [row["util"] for row in per_chunk_rows]
+    assert all(0.0 <= u <= 100.0 for u in utils), f"Math util out of [0, 100]: {[f'{u:.1f}' for u in utils]}"
