@@ -3158,7 +3158,13 @@ class ModelArgs:
             state_dict = standardize_hf_keys(state_dict)
             if self.use_hf_rope:
                 # For Attention: skip QKV format conversion
-                state_dict = convert_hf_to_meta_no_qkv_permute(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+                state_dict = convert_hf_to_meta_no_qkv_permute(
+                    state_dict,
+                    self.head_dim,
+                    self.n_heads,
+                    self.n_kv_heads,
+                    model_type=self.model_type,
+                )
             else:
                 # Standard: convert to Meta format
                 state_dict = convert_hf_to_meta(

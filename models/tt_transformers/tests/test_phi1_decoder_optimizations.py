@@ -13,6 +13,7 @@ from models.tt_transformers.demo.simple_text_demo import (
     resolve_paged_attention_mode,
     should_disable_device_sampling,
 )
+from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta_no_qkv_permute
 from models.tt_transformers.tt.model_config import (
     MathFidelitySetting,
     ModelOptimizations,
@@ -121,6 +122,21 @@ def test_hf_rope_paths_accept_rotary_dim_for_phi1_partial_rotary():
     assert "rotary_dim" in inspect.signature(get_rot_mats_hf).parameters
     assert "rotary_dim" in inspect.signature(HfRotarySetup.__init__).parameters
     assert "rotary_dim" in inspect.signature(HfRotarySetupOld.__init__).parameters
+
+
+def test_phi1_hf_rope_conversion_keeps_hf_qkv_but_applies_phi_key_aliases():
+    converted = convert_hf_to_meta_no_qkv_permute(
+        {
+            "model.layers.0.self_attn.q_proj.weight": None,
+            "model.layers.0.self_attn.dense.weight": None,
+        },
+        head_dim=32,
+        model_type="phi",
+    )
+
+    assert "layers.0.attention.wq.weight" in converted
+    assert "layers.0.attention.wo.weight" in converted
+    assert "layers.0.attention.dense.weight" not in converted
 
 
 @pytest.mark.parametrize(
