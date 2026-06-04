@@ -301,7 +301,6 @@ class TestConfig:
         TestConfig.PROFILER_SHARED_OBJ_DIR = TestConfig.PROFILER_SHARED_DIR / "obj"
         TestConfig.PROFILER_SHARED_ELF_DIR = TestConfig.PROFILER_SHARED_DIR / "elf"
         TestConfig.COVERAGE_INFO_DIR = TestConfig.ARTEFACTS_DIR / "coverage_info"
-        TestConfig.PROFILER_META = TestConfig.ARTEFACTS_DIR / "profiler_meta"
         TestConfig.SYNC_DIR = TestConfig.ARTEFACTS_DIR / "sync_primitives"
         TestConfig.PERF_DATA_DIR = TestConfig.ARTEFACTS_DIR / "temp_perf_data"
         TestConfig.DEFAULT_STIMULI_CACHE_FOLDER = (
@@ -1142,22 +1141,6 @@ class TestConfig:
                 ]
                 for fut in futures:
                     fut.result()
-
-            if self.profiler_build == ProfilerBuild.Yes:
-                # Extract profiler metadata
-                PROFILER_VARIANT_META_DIR = Path(
-                    TestConfig.PROFILER_META / self.test_name / self.variant_id
-                )
-
-                PROFILER_VARIANT_META_DIR.mkdir(exist_ok=True, parents=True)
-
-                for component in TestConfig.KERNEL_COMPONENTS:
-                    elf_path = VARIANT_ELF_DIR / f"{component}.elf"
-                    meta_bin_path = PROFILER_VARIANT_META_DIR / f"{component}.meta.bin"
-                    run_shell_command(
-                        f"{TestConfig.OBJCOPY} -O binary -j .profiler_meta {elf_path} {meta_bin_path}",
-                        TestConfig.TESTS_WORKING_DIR,
-                    )
 
             # Mark build as complete so other processes know they can use the artefacts
             done_marker.touch()

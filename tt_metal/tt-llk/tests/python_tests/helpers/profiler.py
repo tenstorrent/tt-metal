@@ -2,12 +2,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import re
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import ClassVar
 
 import pandas as pd
+from elftools.elf.elffile import ELFFile
 from ttexalens.tt_exalens_lib import read_words_from_device
 
 from .llk_params import PerfRunType
@@ -291,10 +292,6 @@ class Profiler:
 
     TEST_COUNTER: ClassVar[int] = 0
 
-    META_PATTERN = re.compile(
-        r"(?P<full_marker>LLK_PROFILER:(?P<file>[^:]+):(?P<line>\d+):(?P<marker>[^']+))",
-    )
-
     # === Bit masks ===
     ENTRY_TYPE_SHAMT = 28
     ENTRY_ID_SHAMT = ENTRY_TYPE_SHAMT - 16
@@ -316,65 +313,115 @@ class Profiler:
     SUPPORTED_RUNS = STATS_FUNCTION.keys()
 
     @staticmethod
-    def _hash_meta(s: str) -> int:
-        hash32 = 2166136261
-        for c in s.encode("ascii"):
-            hash32 ^= c
-            hash32 = (
-                hash32 * 16777619
-            ) & 0xFFFFFFFF  # simulate 32-bit unsigned overflow
-        return (hash32 ^ (hash32 >> 16)) & 0xFFFF  # fold to 16 bits
+    def _read_cstr(blob: bytes, offset: int) -> str:
+        end = blob.index(b"\0", offset)
+        return blob[offset:end].decode("ascii")
 
     @staticmethod
-    def _assert_no_collision(messages, message):
-        existing = messages.get(message.id)
-        if existing is not None and existing != message:
-            raise AssertionError(f'Hash collision between "{message}" and "{existing}"')
+    def _parse_elf_meta(elf_path: Path) -> dict[int, ProfilerFullMarker]:
+        """Parse profiler metadata embedded in a single kernel ELF.
 
-    @staticmethod
-    def _parse_meta(meta: str):
-        if expr := Profiler.META_PATTERN.search(meta):
-            groups = expr.groupdict()
-            return ProfilerFullMarker(
-                marker=groups["marker"],
-                file=groups["file"],
-                line=int(groups["line"]),
-                id=Profiler._hash_meta(groups["full_marker"]),
-            )
-        else:
-            return None
+        The metadata is emitted by the PROFILER_META macro (tests/helpers/include/profiler.h)
+        via common/metadata.h into three non-allocated sections:
 
-    @staticmethod
-    def _get_meta(testname: str, variant_id: str) -> dict[id, ProfilerFullMarker]:
-        profiler_data_dir = TestConfig.PROFILER_META / testname / variant_id
+        - .meta.profiler          one pointer per marker, into .meta.profiler.structs
+        - .meta.profiler.structs  struct { void* marker; void* file; uint32_t line; }
+        - .meta.profiler.strings  null-terminated string blob (marker names + file paths)
+
+        The device-side marker id stored in the profiler buffer is the low 16 bits of
+        the address of the marker's pointer entry in .meta.profiler (PROFILER_META returns
+        that address, which zone_scoped/write_timestamp truncate to uint16_t). We therefore
+        derive each id from the entry's link-time address (sh_addr + offset).
+
+        Pointers in the sections are absolute link-time addresses; we resolve them back to
+        section offsets by subtracting the relevant section's sh_addr (so this works whether
+        the linker places these orphan sections at address 0 or elsewhere).
+        """
+        # Pointer slots are emitted as .quad (8 bytes). The kernels are ILP32, so only the
+        # low 4 bytes hold the address; the high 4 bytes are 0. Each struct is
+        # { void* marker; void* file; uint32_t line; }.
+        PTR = 8
+        STRUCT_SIZE = 2 * PTR + 4
+
         metadata = {}
-        for thread in TestConfig.KERNEL_COMPONENTS:
-            file = profiler_data_dir / f"{thread}.meta.bin"
-            if not file.exists():
-                continue
-            with open(file, "rb") as f:
-                binary = f.read()
-                strings = [s.decode("ascii") for s in binary.split(b"\0")]
-                for s in strings:
-                    if marker := Profiler._parse_meta(s):
-                        Profiler._assert_no_collision(metadata, marker)
-                        metadata[marker.id] = marker
+        with open(elf_path, "rb") as f:
+            elf = ELFFile(f)
+            index_sec = elf.get_section_by_name(".meta.profiler")
+            structs_sec = elf.get_section_by_name(".meta.profiler.structs")
+            strings_sec = elf.get_section_by_name(".meta.profiler.strings")
+
+            # The profiler may be unused in this kernel (no markers compiled in).
+            if index_sec is None or structs_sec is None or strings_sec is None:
+                return metadata
+
+            index_base = index_sec["sh_addr"]
+            index_data = index_sec.data()
+            structs_base = structs_sec["sh_addr"]
+            structs_data = structs_sec.data()
+            strings_base = strings_sec["sh_addr"]
+            strings_data = strings_sec.data()
+
+            for entry_off in range(0, len(index_data), PTR):
+                marker_id = (index_base + entry_off) & 0xFFFF
+
+                struct_off = (
+                    int.from_bytes(index_data[entry_off : entry_off + PTR], "little")
+                    - structs_base
+                )
+                marker_ptr = int.from_bytes(
+                    structs_data[struct_off : struct_off + PTR], "little"
+                )
+                file_ptr = int.from_bytes(
+                    structs_data[struct_off + PTR : struct_off + 2 * PTR], "little"
+                )
+                line = int.from_bytes(
+                    structs_data[struct_off + 2 * PTR : struct_off + STRUCT_SIZE],
+                    "little",
+                )
+
+                metadata[marker_id] = ProfilerFullMarker(
+                    marker=Profiler._read_cstr(strings_data, marker_ptr - strings_base),
+                    file=Profiler._read_cstr(strings_data, file_ptr - strings_base),
+                    line=line,
+                    id=marker_id,
+                )
 
         return metadata
 
     @staticmethod
+    def _get_meta(
+        testname: str, variant_id: str
+    ) -> dict[str, dict[int, ProfilerFullMarker]]:
+        """Build {thread: {marker_id: ProfilerFullMarker}} by introspecting each kernel ELF.
+
+        Marker ids are per-ELF (the truncated link-time address of the metadata entry), so
+        the same id can refer to different markers across threads. Metadata is therefore kept
+        per-thread rather than merged into a single dict. A thread that carries no profiler
+        markers maps to an empty dict.
+        """
+        elf_dir = TestConfig.ARTEFACTS_DIR / testname / variant_id / "elf"
+        return {
+            thread: Profiler._parse_elf_meta(elf_dir / f"{thread}.elf")
+            for thread in TestConfig.KERNEL_COMPONENTS
+        }
+
+    @staticmethod
     def _get_marker_id(
-        metadata: dict, marker_name: str, file_suffix: str, line: int
+        metadata: dict[str, dict[int, ProfilerFullMarker]],
+        marker_name: str,
+        file_suffix: str,
+        line: int,
     ) -> int:
         """Look up marker ID from metadata by marker name, file suffix, and line number.
         This provides stable marker ID lookup regardless of build environment paths."""
-        for marker in metadata.values():
-            if (
-                marker.marker == marker_name
-                and marker.file.endswith(file_suffix)
-                and marker.line == line
-            ):
-                return marker.id
+        for thread_meta in metadata.values():
+            for marker in thread_meta.values():
+                if (
+                    marker.marker == marker_name
+                    and marker.file.endswith(file_suffix)
+                    and marker.line == line
+                ):
+                    return marker.id
         raise ValueError(
             f"Marker '{marker_name}' not found in metadata (file ending with '{file_suffix}', line {line})"
         )
@@ -401,9 +448,12 @@ class Profiler:
     @staticmethod
     def _parse_buffers(buffers: list, profiler_meta: dict) -> pd.DataFrame:
         marker_rows = []
-        # Parse each thread and append to the DataFrame
+        # Parse each thread and append to the DataFrame. Marker ids are per-ELF, so each
+        # thread is parsed against its own metadata (see Profiler._get_meta).
         for thread, buffer in zip(TestConfig.KERNEL_COMPONENTS, buffers):
-            marker_rows.extend(Profiler._parse_thread(thread, buffer, profiler_meta))
+            marker_rows.extend(
+                Profiler._parse_thread(thread, buffer, profiler_meta[thread])
+            )
 
         df = Profiler._dataframe(marker_rows)
         return ProfilerData(df)

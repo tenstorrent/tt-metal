@@ -10,38 +10,32 @@
 #include <cstring>
 
 #include "ckernel.h"
+#include "metadata.h"
 
 // Logic to convert zone name -> 16bit numeric id
 #define Stringize(L)       #L
 #define ExpandStringize(L) Stringize(L)
-
-template <size_t N>
-constexpr std::uint16_t hashString16(const char (&s)[N])
-{
-    std::uint32_t hash32 = UINT32_C(2166136261);
-    for (std::size_t i = 0; i < N - 1; ++i)
-    {
-        std::uint8_t c = static_cast<std::uint8_t>(s[i]);
-        hash32 ^= c;
-        hash32 *= UINT32_C(16777619);
-    }
-    return static_cast<std::uint16_t>(hash32 ^ (hash32 >> 16));
-}
-
-// clang-format off
-#define MARKER_FULL(marker) "LLK_PROFILER" ":" __FILE__ ":" ExpandStringize(__LINE__) ":" marker
-// clang-format on
-
-#define MARKER_ID(marker) hashString16(MARKER_FULL(marker))
 
 /* Push a string containing the full marker into the .profiler_meta section.
  * This section will be processed by the host code to construct a mapping
  * MARKER_ID -> { filename, line, marker } for parsing the profiler buffer.
  */
 // clang-format off
-#define PROFILER_META(full_marker)                          \
-    __attribute__((section(".profiler_meta"), used))        \
-    static const char _profiler_meta_##__COUNTER__[] = full_marker;
+#define PROFILER_META(name)                                                 \
+    []() {                                                                  \
+        static constexpr llk::sstring::container section(".meta.profiler"); \
+        static constexpr llk::sstring::container marker(name);              \
+        static constexpr llk::sstring::container file(__FILE__);            \
+        static constexpr size_t line = __LINE__;                            \
+                                                                            \
+        auto meta = llk::MetadataBuilder<section>()                         \
+            .add(llk::StringField<marker>{})                                \
+            .add(llk::StringField<file>{})                                  \
+            .add(llk::IntegralField<line>{})                                \
+            .create();                                                      \
+                                                                            \
+        return reinterpret_cast<uintptr_t>(meta);                           \
+    }()
 // clang-format on
 
 namespace llk_profiler
@@ -155,10 +149,10 @@ __attribute__((always_inline)) inline void write_data(std::uint64_t data)
     buffer[TRISC_ID][write_idx++] = static_cast<std::uint32_t>(data);
 }
 
-template <std::uint16_t id16>
 class zone_scoped
 {
 private:
+    const std::uint16_t id16;
     bool is_opened = false;
 
 public:
@@ -167,7 +161,7 @@ public:
     zone_scoped& operator=(const zone_scoped&) = delete;
     zone_scoped& operator=(zone_scoped&&)      = delete;
 
-    inline __attribute__((always_inline)) zone_scoped()
+    inline __attribute__((always_inline)) zone_scoped(std::uint16_t id16) : id16(id16)
     {
         if (!is_buffer_full())
         {
@@ -206,17 +200,11 @@ __attribute__((always_inline)) inline void write_timestamp(std::uint16_t id16, s
 
 } // namespace llk_profiler
 
-#define ZONE_SCOPED(marker)            \
-    PROFILER_META(MARKER_FULL(marker)) \
-    const auto _zone_scoped_ = llk_profiler::zone_scoped<MARKER_ID(marker)>();
+#define ZONE_SCOPED(marker) const auto _zone_scoped_ = llk_profiler::zone_scoped(PROFILER_META(marker));
 
-#define TIMESTAMP(marker)              \
-    PROFILER_META(MARKER_FULL(marker)) \
-    llk_profiler::write_timestamp(MARKER_ID(marker));
+#define TIMESTAMP(marker) llk_profiler::write_timestamp(PROFILER_META(marker));
 
-#define TIMESTAMP_DATA(marker, data)   \
-    PROFILER_META(MARKER_FULL(marker)) \
-    llk_profiler::write_timestamp(MARKER_ID(marker), data);
+#define TIMESTAMP_DATA(marker, data) llk_profiler::write_timestamp(PROFILER_META(marker), data);
 
 #define PROFILER_SYNC() tensix_sync()
 
