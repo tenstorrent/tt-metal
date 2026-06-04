@@ -22,11 +22,6 @@ on:
         required: false
         type: number
         default: 40
-      harbor-prefix:
-        required: false
-        type: string
-        default: ""
-        description: "Harbor pull-through prefix (from check-harbor). Empty string = pull directly from GHCR."
       docker-image:
         required: true
         type: string
@@ -70,7 +65,7 @@ jobs:
         || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     container:
-      image: ${{ inputs.harbor-prefix }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
