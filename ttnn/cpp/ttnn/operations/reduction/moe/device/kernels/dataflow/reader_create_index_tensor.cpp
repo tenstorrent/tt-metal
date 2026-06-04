@@ -74,10 +74,24 @@ void kernel_main() {
     CircularBuffer cb_topk(cb_topk_mask);
     CircularBuffer cb_expert(cb_expert_mask);
 
+    // Expert mask: load a single row of Wt tiles BEFORE streaming the input. The compute kernel
+    // waits on all Wt expert-mask tiles up front (it row-broadcasts them across every Ht row while
+    // masking each input tile), so producing the mask first avoids a deadlock: input_cb only holds
+    // a few tiles, so for Ht>1 the reader would otherwise block filling input_cb while compute
+    // blocks waiting for the mask that comes after.
+    uint32_t tile_id_expert = 0;
+    cb_expert.reserve_back(Wt);
+    for (uint32_t j = 0; j < Wt; ++j) {
+        noc.async_read(
+            s2, cb_expert, tile_bytes_expert, {.page_id = tile_id_expert}, {.offset_bytes = j * tile_bytes_expert});
+        tile_id_expert++;
+    }
+    noc.async_read_barrier();
+    cb_expert.push_back(Wt);
+
     // Stream in input tensor, buffer has four tiles as we double-buffer to continue streaming while waiting for compute
     // and we need two tiles for the bitonic sort llk We could load in an entire row of tiles at a time but that would
     // require substantially more memory (we would be double buffering four Wt sized CBs)
-
     uint32_t tile_id = 0;
     for (uint32_t i = 0; i < Ht; ++i) {
         // input: stream two tiles at a time (Wt is guaranteed to be a multiple of 2 for this kernel).
@@ -93,18 +107,6 @@ void kernel_main() {
             cb_in0.push_back(2);
         }
     }
-
-    // Expert mask: load a single row of Wt tiles. The compute kernel applies it via
-    // add_block_bcast_rows_inplace(), which row-broadcasts this row across all Ht rows.
-    uint32_t tile_id_expert = 0;
-    cb_expert.reserve_back(Wt);
-    for (uint32_t j = 0; j < Wt; ++j) {
-        noc.async_read(
-            s2, cb_expert, tile_bytes_expert, {.page_id = tile_id_expert}, {.offset_bytes = j * tile_bytes_expert});
-        tile_id_expert++;
-    }
-    noc.async_read_barrier();
-    cb_expert.push_back(Wt);
 
     // Topk mask: load a single row of Kt tiles. The compute kernel applies it via
     // add_block_bcast_rows_inplace(), which row-broadcasts this row across all Ht rows.
