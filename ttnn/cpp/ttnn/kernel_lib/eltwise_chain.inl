@@ -27,7 +27,7 @@ namespace compute_kernel_lib {
 // Internal sentinel + type-list wrapper + chain-shape trait declarations. These are
 // implementation detail of the chain pipeline — no chain caller references them, so they
 // live here rather than on the public eltwise_chain.hpp surface.
-inline constexpr DataflowBufferId INVALID_DFB = 0xFFFFFFFFu;  // "no CB on this slot" (== NO_PREV_DFB); a real
+inline constexpr uint32_t INVALID_DFB = 0xFFFFFFFFu;  // "no CB on this slot" (== NO_PREV_DFB); a real
                                                 // tt::CBIndex is 0..31, so 0xFFFFFFFF never aliases one.
 
 template <class... Es>
@@ -268,7 +268,7 @@ struct TernaryOp : DestOnlyTag {
 // (SrcA / SrcB / Pack), letting the pipeline compute the most recent CB on each side
 // before a given element. NO_PREV_DFB is the "doesn't touch this side" sentinel.
 
-inline constexpr DataflowBufferId NO_PREV_DFB = 0xFFFFFFFFu;
+inline constexpr uint32_t NO_PREV_DFB = 0xFFFFFFFFu;
 
 enum class Side : uint8_t { SrcA, SrcB, Pack };
 
@@ -340,14 +340,14 @@ struct count_v_helper : std::integral_constant<size_t, (size_t{Pred<Es>::value} 
 // B. Static cb-id / dst-slot extraction predicates per element
 //
 // Every CB-reader element must expose:
-//   static constexpr DataflowBufferId dfb_a_id();             // primary CB
-//   static constexpr DataflowBufferId dfb_b_id();             // secondary CB or 0 if N/A
+//   static constexpr uint32_t dfb_a_id();             // primary CB
+//   static constexpr uint32_t dfb_b_id();             // secondary CB or 0 if N/A
 //   static constexpr InputLifecycle a_policy();
 //   static constexpr InputLifecycle b_policy();
 // (default impls below cover non-CB-reader elements.)
 //
 // Every CB-writer element must expose:
-//   static constexpr DataflowBufferId pack_dfb_id();
+//   static constexpr uint32_t pack_dfb_id();
 //   static constexpr Dst pack_dst_slot();
 //   static constexpr uint32_t pack_output_index();   // runtime fallback OK; used only for index mode FirstTile/Pinned k
 // =============================================================================
@@ -363,9 +363,9 @@ template <class T> struct has_pack_dfb<T, std::void_t<decltype(T::pack_dfb_id())
 
 // Forward declarations — defined below (used by reader_pair_collide / writer_pair_collide
 // earlier in the file's flow).
-template <class E> constexpr DataflowBufferId dfb_a_of();
-template <class E> constexpr DataflowBufferId dfb_b_of();
-template <class E> constexpr DataflowBufferId pack_dfb_of();
+template <class E> constexpr uint32_t dfb_a_of();
+template <class E> constexpr uint32_t dfb_b_of();
+template <class E> constexpr uint32_t pack_dfb_of();
 
 // ChainTraits<Es...> — the one value-reflection aggregate for the whole chain (defined
 // once below, after the per-element accessors it reads). Forward-declared here so the
@@ -396,7 +396,7 @@ template <class E>
 struct has_reconfig_pack<E, std::void_t<decltype(E::reconfig_pack_dfb)>> : std::true_type {};
 
 template <Side S, class E>
-constexpr DataflowBufferId dfb_for_side() {
+constexpr uint32_t dfb_for_side() {
     if constexpr (S == Side::SrcA) {
         if constexpr (has_reconfig_srca<E>::value) return E::reconfig_srca_dfb;
         else                                       return NO_PREV_DFB;
@@ -419,7 +419,7 @@ constexpr DataflowBufferId dfb_for_side() {
 // 1. CopyTile chain element
 // =============================================================================
 
-template <DataflowBufferId Cb,
+template <uint32_t Cb,
           Dst DstSlot,
           InputLifecycle Policy,
           OperandKind IndexMode,
@@ -447,8 +447,8 @@ struct CopyTile : CopyTileTag {
                   "CopyTile: TileOffset::Set requires InputLifecycle::Bulk-family or InputLifecycle::CallerManaged lifecycle "
                   "(InputLifecycle::Bulk / InputLifecycle::HeldBulk / InputLifecycle::DeferredPop / InputLifecycle::BulkDrain / InputLifecycle::CallerManaged)");
 
-    static constexpr DataflowBufferId dfb             = Cb;
-    static constexpr DataflowBufferId       dfb_a_id()       { return Cb; }
+    static constexpr uint32_t dfb             = Cb;
+    static constexpr uint32_t       dfb_a_id()       { return Cb; }
     // CopyTile reads one CB front (srcA via dfb_a_id); dfb_b / b_policy absent -> defaults apply.
     static constexpr InputLifecycle a_policy()      { return Policy; }
     static constexpr bool           is_upfront      = (Policy == InputLifecycle::Bulk) ||
@@ -457,7 +457,7 @@ struct CopyTile : CopyTileTag {
 
     // Prev-CB fold: CopyTile loads CbA only. srcb/pack sides are absent -> dfb_for_side
     // defaults them to NO_PREV_DFB.
-    static constexpr DataflowBufferId       reconfig_srca_dfb = (Reconfig == CopyTileReconfig::Input) ? Cb : NO_PREV_DFB;
+    static constexpr uint32_t       reconfig_srca_dfb = (Reconfig == CopyTileReconfig::Input) ? Cb : NO_PREV_DFB;
 
     uint32_t tile_base = 0;
 
@@ -539,7 +539,7 @@ struct CopyTile : CopyTileTag {
 // 2. PackTile chain element
 // =============================================================================
 
-template <DataflowBufferId Cb,
+template <uint32_t Cb,
           Dst DstSlot,
           OutputLifecycle Policy,
           PackTileReconfig Reconfig,
@@ -555,8 +555,8 @@ struct PackTile : PackTileTag {
                   "PackTile: TileOffset::Set requires InputLifecycle::Bulk-family or OutputLifecycle::CallerManaged lifecycle "
                   "(OutputLifecycle::Bulk / OutputLifecycle::DeferredReserve / OutputLifecycle::HeldReserve / OutputLifecycle::CallerManaged)");
 
-    static constexpr DataflowBufferId  dfb                 = Cb;
-    static constexpr DataflowBufferId          pack_dfb_id()        { return Cb; }
+    static constexpr uint32_t  dfb                 = Cb;
+    static constexpr uint32_t          pack_dfb_id()        { return Cb; }
     static constexpr Dst               pack_dst_slot       = DstSlot;
     static constexpr bool              is_upfront          = (Policy == OutputLifecycle::Bulk);
     static constexpr bool              uses_per_block_pack = (Policy == OutputLifecycle::Chunked);
@@ -573,7 +573,7 @@ struct PackTile : PackTileTag {
     // the user opted into pack reconfig (Output). Otherwise no pack reconfig is
     // emitted — fold keeps prior pack target.
     // srca/srcb absent -> dfb_for_side defaults them to NO_PREV_DFB; PackTile programs pack only.
-    static constexpr DataflowBufferId          reconfig_pack_dfb    =
+    static constexpr uint32_t          reconfig_pack_dfb    =
         (Reconfig == PackTileReconfig::Output) ? Cb : NO_PREV_DFB;
 
     uint32_t tile_base = 0;
@@ -664,8 +664,8 @@ struct PackTile : PackTileTag {
 // 3. BinaryFpu chain element
 // =============================================================================
 
-template <DataflowBufferId CbA,
-          DataflowBufferId CbB,
+template <uint32_t CbA,
+          uint32_t CbB,
           BinaryFpuOp Op,
           BroadcastDim Bcast,
           BinaryDataFormatReconfig DfReconfig,
@@ -711,8 +711,8 @@ struct BinaryFpu : BinaryFpuTag {
     // resolves them separately via the 3-arg exec / exec overloads gated by
     // `needs_per_side_idx`. Same-regime hits the 2-arg fast path.
 
-    static constexpr DataflowBufferId      dfb_a_id()  { return CbA; }
-    static constexpr DataflowBufferId      dfb_b_id()  { return CbB; }
+    static constexpr uint32_t      dfb_a_id()  { return CbA; }
+    static constexpr uint32_t      dfb_b_id()  { return CbB; }
     static constexpr InputLifecycle a_policy(){ return APolicy; }
     static constexpr InputLifecycle b_policy(){ return BPolicy; }
     static constexpr bool          is_upfront = (APolicy == InputLifecycle::Bulk) ||
@@ -738,10 +738,10 @@ struct BinaryFpu : BinaryFpuTag {
     // Per-side selection (Input / SrcA / SrcB) lets the caller opt into a single-side
     // fold when the other side is already programmed (by a previous chain element on
     // the same side, or by external init).
-    static constexpr DataflowBufferId      reconfig_srca_dfb =
+    static constexpr uint32_t      reconfig_srca_dfb =
         (DfReconfig == BinaryDataFormatReconfig::Input ||
          DfReconfig == BinaryDataFormatReconfig::SrcA) ? CbA : NO_PREV_DFB;
-    static constexpr DataflowBufferId      reconfig_srcb_dfb =
+    static constexpr uint32_t      reconfig_srcb_dfb =
         (DfReconfig == BinaryDataFormatReconfig::Input ||
          DfReconfig == BinaryDataFormatReconfig::SrcB) ? CbB : NO_PREV_DFB;
     // pack side absent -> dfb_for_side defaults to NO_PREV_DFB (downstream PackTile owns pack).
@@ -926,7 +926,7 @@ struct BinaryFpu : BinaryFpuTag {
 // 5. DestReuseBinary chain element
 // =============================================================================
 
-template <DataflowBufferId Cb,
+template <uint32_t Cb,
           BinaryFpuOp Op,
           DestReuseType ReuseType,
           Dst DstIn,
@@ -948,8 +948,8 @@ struct DestReuseBinary : DestReuseBinaryTag {
 
     // The one CB feeds the src that DEST is NOT routed to: DEST_TO_SRCB -> CB on srcA (dfb_a),
     // DEST_TO_SRCA -> CB on srcB (dfb_b). The other side is the DEST register, not a CB (INVALID_DFB).
-    static constexpr DataflowBufferId       dfb_a_id()         { return (ReuseType == DestReuseType::DEST_TO_SRCB) ? Cb : INVALID_DFB; }
-    static constexpr DataflowBufferId       dfb_b_id()         { return (ReuseType == DestReuseType::DEST_TO_SRCA) ? Cb : INVALID_DFB; }
+    static constexpr uint32_t       dfb_a_id()         { return (ReuseType == DestReuseType::DEST_TO_SRCB) ? Cb : INVALID_DFB; }
+    static constexpr uint32_t       dfb_b_id()         { return (ReuseType == DestReuseType::DEST_TO_SRCA) ? Cb : INVALID_DFB; }
     static constexpr InputLifecycle a_policy()        { return Policy; }
     static constexpr bool           is_upfront        = (Policy == InputLifecycle::Bulk) ||
                                                         (Policy == InputLifecycle::HeldBulk) ||
@@ -962,10 +962,10 @@ struct DestReuseBinary : DestReuseBinaryTag {
     // `SrcA` / `SrcB` explicitly pick a side, decoupled from ReuseType — used when
     // the caller wants to program a specific unpack lane regardless of which lane
     // DEST is feeding into.
-    static constexpr DataflowBufferId       reconfig_srca_dfb  =
+    static constexpr uint32_t       reconfig_srca_dfb  =
         ((Reconfig == DestReuseReconfig::Input && ReuseType == DestReuseType::DEST_TO_SRCB) ||
          Reconfig == DestReuseReconfig::SrcA) ? Cb : NO_PREV_DFB;
-    static constexpr DataflowBufferId       reconfig_srcb_dfb  =
+    static constexpr uint32_t       reconfig_srcb_dfb  =
         ((Reconfig == DestReuseReconfig::Input && ReuseType == DestReuseType::DEST_TO_SRCA) ||
          Reconfig == DestReuseReconfig::SrcB) ? Cb : NO_PREV_DFB;
     // pack side absent -> dfb_for_side defaults to NO_PREV_DFB.
@@ -1048,7 +1048,7 @@ struct DestReuseBinary : DestReuseBinaryTag {
 // =============================================================================
 
 template <BroadcastDim Dim,
-          DataflowBufferId Cb,
+          uint32_t Cb,
           Dst DstSlot,
           InputLifecycle Policy,
           UnaryBcastReconfig Reconfig>
@@ -1057,7 +1057,7 @@ struct UnaryBcast : UnaryBcastTag {
                   "UnaryBcast: DEST slot exceeds DEST_AUTO_LIMIT");
 
     // UnaryBcast reads one CB front (dfb_a); dfb_b is absent -> dfb_b_of defaults to INVALID_DFB.
-    static constexpr DataflowBufferId       dfb_a_id()         { return Cb; }
+    static constexpr uint32_t       dfb_a_id()         { return Cb; }
     static constexpr InputLifecycle a_policy()        { return Policy; }
     static constexpr bool           is_upfront        = (Policy == InputLifecycle::Bulk) ||
                                                         (Policy == InputLifecycle::HeldBulk) ||
@@ -1072,8 +1072,8 @@ struct UnaryBcast : UnaryBcastTag {
     // element — so a subsequent srca/srcb reader sees the correct prev-CB and won't wrongly elide.
     // Pack-side reconfig is owned by the downstream PackTile (PackTileReconfig::Output), exactly
     // like BinaryFpu — UnaryBcast never configures pack.
-    static constexpr DataflowBufferId       reconfig_srca_dfb  = (Reconfig == UnaryBcastReconfig::Input) ? Cb : NO_PREV_DFB;
-    static constexpr DataflowBufferId       reconfig_srcb_dfb  = (Reconfig == UnaryBcastReconfig::Input) ? Cb : NO_PREV_DFB;
+    static constexpr uint32_t       reconfig_srca_dfb  = (Reconfig == UnaryBcastReconfig::Input) ? Cb : NO_PREV_DFB;
+    static constexpr uint32_t       reconfig_srcb_dfb  = (Reconfig == UnaryBcastReconfig::Input) ? Cb : NO_PREV_DFB;
     // pack side absent -> dfb_for_side defaults to NO_PREV_DFB.
 
     static ALWI void init() {
@@ -1286,10 +1286,10 @@ struct ElemDesc {
     bool is_pack;
     uint32_t srca_cb;      // dfb_for_side<SrcA> (NO_PREV_DFB when not programmed) — per-side consistency + prev input
     uint32_t srcb_cb;      // dfb_for_side<SrcB>
-    DataflowBufferId pack_side_dfb; // dfb_for_side<Pack> (reconfig_pack_dfb) — prev / last_pack / hetero input
-    DataflowBufferId dfb_a;         // dfb_a_of (INVALID_DFB when n/a) — reader-collision input
-    DataflowBufferId dfb_b;         // dfb_b_of (INVALID_DFB when n/a)
-    DataflowBufferId pack_dfb;      // pack_dfb_of (INVALID_DFB when n/a) — writer-collision input
+    uint32_t pack_side_dfb; // dfb_for_side<Pack> (reconfig_pack_dfb) — prev / last_pack / hetero input
+    uint32_t dfb_a;         // dfb_a_of (INVALID_DFB when n/a) — reader-collision input
+    uint32_t dfb_b;         // dfb_b_of (INVALID_DFB when n/a)
+    uint32_t pack_dfb;      // pack_dfb_of (INVALID_DFB when n/a) — writer-collision input
     Dst pack_dst_slot;
     bool is_upfront;
     uint32_t lane_width;
@@ -1327,10 +1327,10 @@ constexpr bool ct_supports_block(const ElemDesc* d, int n) {
     for (int i = 0; i < n; ++i) r = r && d[i].supports_block;
     return r;
 }
-constexpr bool ct_side_consistent(const ElemDesc* d, int n, DataflowBufferId ElemDesc::*side) {
-    DataflowBufferId seen = NO_PREV_DFB;
+constexpr bool ct_side_consistent(const ElemDesc* d, int n, uint32_t ElemDesc::*side) {
+    uint32_t seen = NO_PREV_DFB;
     for (int i = 0; i < n; ++i) {
-        DataflowBufferId dfb = d[i].*side;
+        uint32_t dfb = d[i].*side;
         if (dfb == NO_PREV_DFB) continue;
         if (seen == NO_PREV_DFB) seen = dfb;
         else if (seen != dfb) return false;
@@ -2125,10 +2125,10 @@ ALWI void eltwise_chain(EltwiseShape shape, Es... elts) {
 namespace detail {
 
 template <class E>
-constexpr DataflowBufferId dfb_a_of() {
+constexpr uint32_t dfb_a_of() {
     if constexpr (is_cb_reader_op_v<E>) {
         static_assert(has_dfb_a<E>::value,
-                      "CbReader element must declare 'static constexpr DataflowBufferId dfb_a_id()'");
+                      "CbReader element must declare 'static constexpr uint32_t dfb_a_id()'");
         return E::dfb_a_id();
     } else {
         return INVALID_DFB;
@@ -2136,10 +2136,10 @@ constexpr DataflowBufferId dfb_a_of() {
 }
 
 template <class E>
-constexpr DataflowBufferId dfb_b_of() {
+constexpr uint32_t dfb_b_of() {
     if constexpr (is_binary_fpu_op_v<E> || is_dest_reuse_binary_op_v<E>) {
         static_assert(has_dfb_b<E>::value,
-                      "Binary CbReader element must declare 'static constexpr DataflowBufferId dfb_b_id()'");
+                      "Binary CbReader element must declare 'static constexpr uint32_t dfb_b_id()'");
         return E::dfb_b_id();
     } else {
         return INVALID_DFB;
@@ -2147,10 +2147,10 @@ constexpr DataflowBufferId dfb_b_of() {
 }
 
 template <class E>
-constexpr DataflowBufferId pack_dfb_of() {
+constexpr uint32_t pack_dfb_of() {
     if constexpr (is_pack_tile_op_v<E>) {
         static_assert(has_pack_dfb<E>::value,
-                      "CbWriter element must declare 'static constexpr DataflowBufferId pack_dfb_id()'");
+                      "CbWriter element must declare 'static constexpr uint32_t pack_dfb_id()'");
         return E::pack_dfb_id();
     } else {
         return INVALID_DFB;

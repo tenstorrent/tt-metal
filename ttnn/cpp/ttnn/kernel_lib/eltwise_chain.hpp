@@ -46,7 +46,7 @@
  *
  * Examples
  * --------
- *   // Streaming unary — Exp(x) -> out (dfb_* are DataflowBufferId values, i.e. buffer indices)
+ *   // Streaming unary — Exp(x) -> out (dfb_* are dataflow-buffer ids, i.e. buffer indices)
  *   eltwise_chain(num_tiles,
  *       CopyTile<dfb_in, Dst::D0, InputLifecycle::Streaming>{},
  *       Exp<>{},
@@ -74,11 +74,9 @@
 
 namespace compute_kernel_lib {
 
-// Identifier of a dataflow buffer the chain reads from / writes to. Today this is the
-// integer buffer index (a `tt::CBIndex` value, 0..31) passed as an NTTP, so the alias is
-// `uint32_t`; the alias marks every spot that carries a buffer identity so a later move to
-// passing a DataflowBuffer object has a single seam to follow ("id now, object later").
-using DataflowBufferId = uint32_t;
+// Buffer-identity values throughout the chain (the `dfb`-named NTTPs, accessors, ElemDesc
+// fields and the INVALID_DFB / NO_PREV_DFB sentinels) are dataflow-buffer ids: today the
+// integer buffer index (a `tt::CBIndex` value, 0..31) passed as an NTTP.
 
 // (The marker-tag hierarchy — CbReaderTag/CbWriterTag/DestOnlyTag + the per-element
 //  leaf tags — and the is_*_op_v classification predicates are internal pipeline
@@ -491,7 +489,7 @@ enum class PackTileReconfig : uint8_t {
 // =============================================================================
 
 template <
-    DataflowBufferId Cb,
+    uint32_t Cb,
     Dst DstSlot = Dst::D0,
     InputLifecycle Policy = InputLifecycle::Streaming,
     OperandKind IndexMode = OperandKind::Scalar,
@@ -500,8 +498,8 @@ template <
 struct CopyTile;
 
 template <
-    DataflowBufferId CbA,
-    DataflowBufferId CbB,
+    uint32_t CbA,
+    uint32_t CbB,
     BinaryFpuOp Op = BinaryFpuOp::Add,
     BroadcastDim Bcast = BroadcastDim::None,
     BinaryDataFormatReconfig DfReconfig = BinaryDataFormatReconfig::Input,
@@ -515,7 +513,7 @@ template <
 struct BinaryFpu;
 
 template <
-    DataflowBufferId Cb,
+    uint32_t Cb,
     BinaryFpuOp Op,
     DestReuseType ReuseType,
     Dst DstIn = Dst::D0,
@@ -528,14 +526,14 @@ struct DestReuseBinary;
 
 template <
     BroadcastDim Dim,
-    DataflowBufferId Cb,
+    uint32_t Cb,
     Dst DstSlot = Dst::D0,
     InputLifecycle Policy = InputLifecycle::Streaming,
     UnaryBcastReconfig Reconfig = UnaryBcastReconfig::Input>
 struct UnaryBcast;
 
 template <
-    DataflowBufferId Cb,
+    uint32_t Cb,
     Dst DstSlot = Dst::D0,
     OutputLifecycle Policy = OutputLifecycle::Streaming,
     PackTileReconfig Reconfig = PackTileReconfig::Output,
