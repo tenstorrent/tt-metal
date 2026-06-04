@@ -34,6 +34,21 @@ done
 
 run_group() { [[ "$GROUP" == "all" || "$GROUP" == "$1" ]]; }
 
+# When running all groups, self-invoke once per group in parallel on this runner.
+if [[ "$GROUP" == "all" ]]; then
+  GROUPS=(unit phys-grouping control-plane t3k wh-galaxy bh-galaxy)
+  pids=()
+  for g in "${GROUPS[@]}"; do
+    "$0" --group "$g" &
+    pids+=($!)
+  done
+  exit_code=0
+  for i in "${!pids[@]}"; do
+    wait "${pids[$i]}" || { echo "FAILED: group ${GROUPS[$i]}" >&2; exit_code=1; }
+  done
+  exit $exit_code
+fi
+
 ####################################
 # Unit tests
 ####################################
