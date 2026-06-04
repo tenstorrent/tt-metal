@@ -341,6 +341,64 @@ def build_matmul_pcfg(
         return cfg
 
     # --- 2D block-shard path (default, large M) --------------------------
+    # PI0_PREFILL_MM_TUNE=1 enables per-shape overrides from the sweep at
+    # tests/perf/test_prefill_matmul_sweep.py. Same caution applies as the
+    # denoise sweep: wall-clock numbers are a proxy that needs tracy
+    # verification before keeping by default. Each entry was tracy-verified
+    # to give a real device-kernel-time win.
+    import os as _os
+
+    _tune2d = _os.environ.get("PI0_PREFILL_MM_TUNE", "").lower() in ("1", "true", "yes", "on")
+    if _tune2d:
+        # (m_tiles, k_tiles, n_tiles) -> (grid_x, grid_y, in0_block_w)
+        # Includes all 2D-path shapes the sweep flagged with wall-clock wins;
+        # the tracy verifier filters this down to the real wins.
+        # Only entries where tracy verified a real device-kernel-time win
+        # over the production picker. Sweep wall-clock predictions for the
+        # other shapes (vlm_qkv_fused, vlm_o_proj, siglip_*) either showed
+        # noise (±0.007 ms total) or didn't match real production shapes
+        # (e.g. the sweep's "siglip_attn_proj" at K=N=1152 doesn't exist —
+        # production SigLIP Q/K/V are K=1152 N=1536 since head_dim=72
+        # padded to 96 × num_heads=16 = 1536).
+        #
+        # The gate_up override (16, 64, 512) was tried with bw=8 and trips
+        # a runtime CB-clash in production (clean-L1 sweep didn't catch it).
+        _PREFILL_TUNE_TABLE = {
+            (16, 512, 64): (12, 8, 16),  # vlm_mlp_down: M=512 K=16384 N=2048
+            # Tracy-verified: 3.254 -> 2.956 ms (-0.298 ms)
+        }
+        override = _PREFILL_TUNE_TABLE.get((m_tiles, k_tiles, n_tiles))
+        if override is not None:
+            tg_x, tg_y, tg_bw = override
+            if k_tiles % tg_bw == 0:
+                per_core_M_t = (m_tiles + tg_y - 1) // tg_y
+                per_core_N_t = (n_tiles + tg_x - 1) // tg_x
+                if per_core_M_t > 0 and per_core_N_t > 0:
+                    eff_budget = 4  # matches fp32_dest=True (the common sweep winner)
+                    sub_w = min(per_core_N_t, eff_budget)
+                    while sub_w > 1 and per_core_N_t % sub_w != 0:
+                        sub_w -= 1
+                    sub_h = max(1, eff_budget // sub_w)
+                    sub_h = min(per_core_M_t, sub_h)
+                    while sub_h > 1 and per_core_M_t % sub_h != 0:
+                        sub_h -= 1
+                    key = (m_tiles, k_tiles, n_tiles, grid_x, grid_y, str(activation), 4, "2d-tuned")
+                    if key in _pcfg_cache:
+                        return _pcfg_cache[key]
+                    cfg = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                        compute_with_storage_grid_size=(tg_x, tg_y),
+                        in0_block_w=tg_bw,
+                        out_subblock_h=sub_h,
+                        out_subblock_w=sub_w,
+                        per_core_M=per_core_M_t,
+                        per_core_N=per_core_N_t,
+                        transpose_mcast=False,
+                        fused_activation=activation,
+                    )
+                    _pcfg_cache[key] = cfg
+                    return cfg
+                # else fall through to default
+
     per_core_M = (m_tiles + grid_y - 1) // grid_y
     per_core_N = (n_tiles + grid_x - 1) // grid_x
     if per_core_M == 0 or per_core_N == 0:
