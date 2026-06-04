@@ -805,7 +805,46 @@ inline void init_reduce_max_min(std::uint32_t num_cols)
 
     configure_addrmod_max_min(num_cols);
 
-    // Record replay buffer for compare-and-swap operations
+    // Record replay buffer for compare-and-swap operations.
+    // MAX uses LOADMACRO mechanism. For MIN, the macro's SFPSWAP-via-template path
+    // produces a numerically different result from inline SFPLOAD+SFPSWAP when the
+    // SFPCONFIG bit-8 invert flag is set (empirically verified 2026-05-14 canary).
+    // So we only inline for MAX under DISABLE_SFPLOADMACRO; MIN keeps the macro form
+    // and will surface as UnsupportedFunctionality under ttsim (no behavioral regression).
+#if defined(DISABLE_SFPLOADMACRO)
+    if constexpr (pool_type == PoolType::MAX)
+    {
+        lltt::record<lltt::NoExec>(0, 15);
+        TTI_INCRWC(0, 4, 0, 0);
+        // Inline expansion of TTI_SFPLOADMACRO(5, M, ADDR_MOD_7, 2):
+        //   MacroIndex=1, VD=LREG1, Imm10=2 → SFPLOAD(LREG1, M, AM, 2); SFPSWAP(0, LREG5, LREG1, 1)
+        TTI_SFPLOAD(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, 2);
+        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG1, 1);
+        TTI_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, 16);
+        TTI_SFPLOAD(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, 18);
+        TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG1, 1);
+        TTI_SFPNOP;
+        TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG0, 1);
+        TTI_SFPNOP;
+        // Inline expansion of TTI_SFPLOADMACRO(0, M, ADDR_MOD_7, 0):
+        //   MacroIndex=0, VD=LREG0, Imm10=0 → SFPLOAD(LREG0, M, AM, 0); SFPSWAP(0, LREG4, LREG0, 1)
+        TTI_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, 0);
+        TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG0, 1);
+    }
+    else
+    {
+        lltt::record<lltt::NoExec>(0, 11);
+        TTI_INCRWC(0, 4, 0, 0);
+        TTI_SFPLOADMACRO(5, INSTRUCTION_MODE, ADDR_MOD_7, 2);
+        TTI_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, 16);
+        TTI_SFPLOAD(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, 18);
+        TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG1, 1);
+        TTI_SFPNOP;
+        TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG0, 1);
+        TTI_SFPNOP;
+        TTI_SFPLOADMACRO(0, INSTRUCTION_MODE, ADDR_MOD_7, 0);
+    }
+#else
     lltt::record<lltt::NoExec>(0, 11);
     TTI_INCRWC(0, 4, 0, 0);
     TTI_SFPLOADMACRO(5, INSTRUCTION_MODE, ADDR_MOD_7, 2);
@@ -816,6 +855,7 @@ inline void init_reduce_max_min(std::uint32_t num_cols)
     TTI_SFPSWAP(0, p_sfpu::LREG6, p_sfpu::LREG0, 1);
     TTI_SFPNOP;
     TTI_SFPLOADMACRO(0, INSTRUCTION_MODE, ADDR_MOD_7, 0);
+#endif
 
     // Dummy loads to increment dest counters
     TTI_SFPLOAD(8, INSTRUCTION_MODE, ADDR_MOD_6, 0);
@@ -979,8 +1019,16 @@ inline void calculate_reduce_max_min(const std::uint32_t block_height)
     static_assert(reduce_dim == ReduceDim::REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
     static_assert(pool_type == PoolType::MAX || pool_type == PoolType::MIN, "Only MAX and MIN pool types are supported for this function");
 
+    // The inlined-Max fallback under DISABLE_SFPLOADMACRO records 4 extra instructions
+    // (2 SFPLOAD+SFPSWAP pairs replace 2 SFPLOADMACROs), so the replay offsets shift by 4.
+    // MIN keeps the macro form regardless of the gate.
+#if defined(DISABLE_SFPLOADMACRO)
+    constexpr std::uint32_t replay_buffer_offset    = (pool_type == PoolType::MAX) ? 13 : 9;
+    constexpr std::uint32_t replay_buffer_next_face = (pool_type == PoolType::MAX) ? 14 : 10;
+#else
     constexpr std::uint32_t replay_buffer_offset    = 9;
     constexpr std::uint32_t replay_buffer_next_face = 10;
+#endif
 
     // Initial loads: LREG4-7 will hold maximum values across F0 and F1
     TTI_SFPLOAD(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, 0);
