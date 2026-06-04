@@ -65,7 +65,8 @@ inline constexpr bool chain_hoist_sfpu_v = chain_hoist_sfpu<Chain>::value;
 // predicates below.
 
 /// Element reads ≥1 CB. Pure marker — concrete elements declare `cb_a_id()` and
-/// (if binary) `cb_b_id()`. No stub defaults (§1.7 footgun avoidance).
+/// (if binary) `cb_b_id()`. No stub defaults, so a missing accessor is a compile
+/// error rather than a silently-wrong default CB id.
 struct CbReaderTag {};
 /// Element writes to a CB. Pure marker — concrete elements declare `pack_cb_id()`.
 /// No stub defaults.
@@ -95,7 +96,7 @@ struct FillTileTag : DestOnlyTag {};
 /// RNG → DEST (no CB read).
 struct RandTileTag : DestOnlyTag {};
 
-// Trait predicates (cheat-sheet in proposal §2.1):
+// Trait predicates — which predicate drives each chain decision:
 //
 //  Sweep / decision                                            | predicate
 //  ------------------------------------------------------------|---------------------------
@@ -146,11 +147,10 @@ inline constexpr bool is_fpu_kind_op_v =
 /// MATH-MOP-touching element predicate. Groups every element whose init
 /// programs the MATH MOP / ADDR_MOD_0..3 lane: `CopyTile` (via
 /// `copy_tile_to_dst_init_short`) and the FPU-kind ops (`BinaryFpu`,
-/// `DestReuseBinary`, `UnaryBcast`). The hoist gate (doc G3 + the
-/// CopyTile-versus-FPU clash from the old `chain_has_non_copy_tile_fpu_clash`
-/// predicate) requires all such elements in a chain to be the same
-/// instantiated type — otherwise the boot-time fold leaves only the last
-/// init's MOP programmed and earlier elements run with the wrong MOP.
+/// `DestReuseBinary`, `UnaryBcast`). The hoist gate requires all such
+/// elements in a chain (including the CopyTile-versus-FPU init clash) to be
+/// the same instantiated type — otherwise the boot-time fold leaves only the
+/// last init's MOP programmed and earlier elements run with the wrong MOP.
 template <class T>
 inline constexpr bool is_math_mop_op_v = is_copy_tile_op_v<T> || is_fpu_kind_op_v<T>;
 
@@ -173,7 +173,7 @@ ALWI uint32_t tile_base_value(uint32_t stored) noexcept {
 // CRTP bases — UnaryOp / BinaryOp / TernaryOp
 // =============================================================================
 //
-// Single dispatch contract (§4.5): every chain element exposes `void exec(uint32_t)
+// Single dispatch contract: every chain element exposes `void exec(uint32_t)
 // const`. The CRTP bases provide a default that forwards to a static `exec_impl()`
 // supplied by the derived op. Runtime-param ops (Power, Hardtanh, Threshold, …)
 // override `exec(uint32_t)` directly to capture their instance state. Forgetting
@@ -204,7 +204,7 @@ struct UnaryOp : DestOnlyTag {
 
     static constexpr Dst dst_idx = Slot;
     static constexpr uint32_t max_dst() { return to_u32(Slot); }
-    /// Per-lane DEST footprint (item 2). Used by chain to pick auto BlockSize.
+    /// Per-lane DEST footprint. Used by chain to pick auto BlockSize.
     /// Default = `to_u32(Slot) + 1` (op writes only Slot). Override per-op when the
     /// op references more slots (e.g. Mask uses DataSlot AND DataSlot+1).
     static constexpr uint32_t lane_width = to_u32(Slot) + 1;
@@ -274,11 +274,11 @@ struct TernaryOp : DestOnlyTag {
 };
 
 // =============================================================================
-// Compile-time prev-CB / prev-fp32-dest-acc tracking (D2 + D6 fold infrastructure)
+// Compile-time prev-CB tracking — drives the reconfig fold
 // =============================================================================
 //
 // Each chain element exposes static accessors describing which CB it routes to
-// each side of the math/pack pipeline. InputLifecycle::Streaming and block elements use the same
+// each side of the math/pack pipeline. All element kinds use the same
 // uniform accessors so the chain pipeline can compute, at compile time, the most
 // recent CB seen on each Side (SrcA / SrcB / Pack) before any given element index.
 //
@@ -403,11 +403,11 @@ template <class E> constexpr uint32_t pack_cb_of();
 template <class... Es> struct ChainTraits;
 
 // =============================================================================
-// Per-Side prev-CB SFINAE probe (D2)
+// Per-Side prev-CB SFINAE probe
 //
 // `cb_for_side<Side, E>` reads `E::reconfig_srca_cb` / `_srcb_cb` / `_pack_cb`
-// when present, returns `NO_PREV_CB` otherwise. Block elements that haven't yet
-// adopted the accessors (commit 3 / D7) still participate in the fold transparently.
+// when present, returns `NO_PREV_CB` otherwise. Elements that don't declare the
+// accessors still participate in the fold transparently (treated as no-prev).
 // =============================================================================
 
 template <class E, class = void>
@@ -440,8 +440,8 @@ constexpr uint32_t cb_for_side() {
 }
 
 // Per-side prev-CB history, last opt-in pack CB, and heterogeneous-pack detection are
-// now single-sweep fields on `ChainTraits` (prev / last_pack_cb / pack_hetero), computed
-// once from the reflected ElemDesc array instead of re-walked per emit site (was O(N²)).
+// single-sweep fields on `ChainTraits` (prev / last_pack_cb / pack_hetero), computed
+// once from the reflected ElemDesc array.
 
 }  // namespace detail
 
@@ -460,7 +460,7 @@ struct CopyTile : CopyTileTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "CopyTile: DEST slot exceeds DEST_AUTO_LIMIT");
     // Comprehensive (IndexMode, Policy) legality. Block rejects PerTile-pop
-    // (InputLifecycle::Streaming/InputLifecycle::BulkDrain/InputLifecycle::NoWaitPop — absolute-idx footgun) and PerTile-wait-of-1
+    // (InputLifecycle::Streaming/InputLifecycle::BulkDrain/InputLifecycle::NoWaitPop — absolute-index pitfall) and PerTile-wait-of-1
     // (InputLifecycle::HeldStream — never tracks per-iter requirement). Scalar/Row/Col accept every
     // legal lifecycle — caller-sized.
     static_assert(is_legal_kind_lifecycle(IndexMode, Policy),
@@ -485,7 +485,7 @@ struct CopyTile : CopyTileTag {
                                                       (Policy == InputLifecycle::HeldBulk) ||
                                                       (Policy == InputLifecycle::Pipelined);
 
-    // Prev-CB fold (D2): CopyTile loads CbA only. srcb/pack sides are absent -> cb_for_side
+    // Prev-CB fold: CopyTile loads CbA only. srcb/pack sides are absent -> cb_for_side
     // defaults them to NO_PREV_CB.
     static constexpr uint32_t       reconfig_srca_cb = (Reconfig == CopyTileReconfig::Input) ? Cb : NO_PREV_CB;
 
@@ -596,7 +596,7 @@ struct PackTile : PackTileTag {
     // stays pinned at base. (For a 1-tile output, walk and pinned are identical: base + 0 == base.)
     static constexpr bool              walk                = (Policy == OutputLifecycle::Bulk);
 
-    // Prev-CB fold (D2): PackTile writes pack-side; mark Cb under reconfig only when
+    // Prev-CB fold: PackTile writes pack-side; mark Cb under reconfig only when
     // the user opted into pack reconfig (Output). Otherwise no pack reconfig is
     // emitted — fold keeps prior pack target.
     // srca/srcb absent -> cb_for_side defaults them to NO_PREV_CB; PackTile programs pack only.
@@ -699,7 +699,7 @@ struct BinaryFpu : BinaryFpuTag {
     static_assert(to_u32(DstSlot) < DEST_AUTO_LIMIT,
                   "BinaryFpu: DEST slot exceeds DEST_AUTO_LIMIT");
     // Comprehensive per-side (IndexMode, Policy) legality. Block rejects PerTile-pop
-    // (InputLifecycle::Streaming/InputLifecycle::BulkDrain/InputLifecycle::NoWaitPop — absolute-idx footgun) and PerTile-wait-of-1
+    // (InputLifecycle::Streaming/InputLifecycle::BulkDrain/InputLifecycle::NoWaitPop — absolute-index pitfall) and PerTile-wait-of-1
     // (InputLifecycle::HeldStream — never tracks per-iter requirement). Scalar/Row/Col accept every
     // legal lifecycle — caller-sized.
     static_assert(is_legal_kind_lifecycle(AIndex, APolicy),
@@ -728,8 +728,7 @@ struct BinaryFpu : BinaryFpuTag {
     // DIFFERENT regimes (one per-block → chunk-local index `j`; the other upfront /
     // caller-managed → absolute index `base_tile + j`), the chain dispatcher
     // resolves them separately via the 3-arg exec / exec overloads gated by
-    // `needs_per_side_idx`. Same-regime hits the 2-arg fast path identical to
-    // pre-extension behaviour.
+    // `needs_per_side_idx`. Same-regime hits the 2-arg fast path.
 
     static constexpr uint32_t      cb_a_id()  { return CbA; }
     static constexpr uint32_t      cb_b_id()  { return CbB; }
@@ -746,12 +745,12 @@ struct BinaryFpu : BinaryFpuTag {
     // Per-side local-vs-absolute index resolution. When the two operands declare
     // DIFFERENT regimes (A=PerBlock + B=Upfront, or vice versa), the chain calls
     // the 3-arg exec / exec overload and passes both indices; each side picks.
-    // Same-regime falls through to the 2-arg forwarder identical to today's code.
+    // Same-regime falls through to the 2-arg forwarder.
     static constexpr bool a_uses_local_idx = (APolicy == InputLifecycle::Chunked);
     static constexpr bool b_uses_local_idx = (BPolicy == InputLifecycle::Chunked);
     static constexpr bool needs_per_side_idx = (a_uses_local_idx != b_uses_local_idx);
 
-    // Prev-CB fold (D2): BinaryFpu touches srca (CbA) and srcb (CbB) only. Pack-side
+    // Prev-CB fold: BinaryFpu touches srca (CbA) and srcb (CbB) only. Pack-side
     // reconfig is owned by the downstream PackTile element (`PackTileReconfig::Output`)
     // — BinaryFpu writes to DEST, not to a CB, so it has no pack-side responsibility.
     //
@@ -783,7 +782,7 @@ struct BinaryFpu : BinaryFpuTag {
     }
 
     // ---- init / reconfig ----
-    // F-PERF-3: srca / srcb / pack reconfig are now fold-driven (compile-time-elided
+    // srca / srcb / pack reconfig are fold-driven (compile-time-elided
     // when prev_*_cb == cur_*_cb). init() programs only the per-op LLK shape.
     static ALWI void init() {
         // Op-specific init.
@@ -792,13 +791,11 @@ struct BinaryFpu : BinaryFpuTag {
             else if constexpr (Op == BinaryFpuOp::Sub) sub_tiles_init(CbA, CbB);
             else                                       mul_tiles_init(CbA, CbB);
         } else {
-            // Reg A fix v2: use *_init_short form from bcast.h:352-446. The original
-            // init_bcast<>() was the BIG init (hw_configure + pack_dest_init + sync_init)
-            // — undefined mid-MAIN per D8. The previous patch used non-operand math init
-            // which programs DEFAULT_TENSOR_SHAPE; we now switch to the _with_operands form
-            // that reads the actual tensor shape from CB metadata via get_operand_tensor_shape.
-            // This matches `add_bcast_rows_init_short` / `sub_bcast_cols_init_short` etc.
-            // exactly — math init + unpack init only, no hw_configure / pack_dest_init / sync_init.
+            // Use the *_init_short form from bcast.h:352-446 (math init + unpack init only,
+            // no hw_configure / pack_dest_init / sync_init — the full init is undefined
+            // mid-MAIN). The operand form reads the actual tensor shape from CB metadata via
+            // get_operand_tensor_shape, matching `add_bcast_rows_init_short` /
+            // `sub_bcast_cols_init_short` etc. exactly.
             constexpr auto bt = static_cast<ckernel::BroadcastType>(static_cast<uint8_t>(Bcast));
             constexpr auto et = (Op == BinaryFpuOp::Add) ? ckernel::EltwiseBinaryType::ELWADD :
                                 (Op == BinaryFpuOp::Sub) ? ckernel::EltwiseBinaryType::ELWSUB :
@@ -977,7 +974,7 @@ struct DestReuseBinary : DestReuseBinaryTag {
                                                         (Policy == InputLifecycle::HeldBulk) ||
                                                         (Policy == InputLifecycle::Pipelined);
 
-    // Prev-CB fold (D2): DestReuseBinary loads CB into srca (when DEST → srcb) or srcb
+    // Prev-CB fold: DestReuseBinary loads CB into srca (when DEST → srcb) or srcb
     // (when DEST → srca). Reconfig only fires when opted in.
     //
     // `Input` follows ReuseType (programs the side the CB actually unpacks into).
@@ -997,7 +994,7 @@ struct DestReuseBinary : DestReuseBinaryTag {
     constexpr DestReuseBinary() noexcept = default;
     constexpr explicit DestReuseBinary(uint32_t base) noexcept : tile_base(base) {}
 
-    // F-PERF-3: srca / srcb reconfig is fold-driven; init() programs only the per-op
+    // srca / srcb reconfig is fold-driven; init() programs only the per-op
     // LLK shape.
     static ALWI void init() {
         constexpr auto et = (Op == BinaryFpuOp::Add) ? ckernel::EltwiseBinaryType::ELWADD :
@@ -1085,7 +1082,7 @@ struct UnaryBcast : UnaryBcastTag {
                                                         (Policy == InputLifecycle::HeldBulk) ||
                                                         (Policy == InputLifecycle::Pipelined);
 
-    // Prev-CB fold (D2): UnaryBcast binds BOTH srca and srcb to Cb. The broadcast datacopy MOP
+    // Prev-CB fold: UnaryBcast binds BOTH srca and srcb to Cb. The broadcast datacopy MOP
     // drives the FPU SrcB lane (ELWADD + SRCB_BCAST_*), so srcb must be reprogrammed too — a
     // srca-only reconfig leaves ALU_FORMAT_SPEC_REG1_SrcB stale from a preceding two-operand op
     // (e.g. layernorm's BinaryFpu(cb_ex2, cb_eps) leaves SrcB = cb_eps), which corrupts the bcast.
@@ -1185,14 +1182,14 @@ struct UnaryBcast : UnaryBcastTag {
 };
 
 // =============================================================================
-// 7. Fill / Rand chain elements — declarations only in v1 core.
-//    Implementations live in eltwise_fill.hpp / eltwise_rand.hpp (forthcoming).
-//    Forward declarations satisfy the trait predicates without forcing the
-//    fill/rand LLK headers into every chain-using kernel's include cone.
+// 7. Fill / Rand chain elements — declared in eltwise_chain.hpp; full bodies
+//    live in eltwise_fill.hpp / eltwise_rand.hpp. Keeping the bodies out of this
+//    header keeps the fill/rand LLK headers out of every chain-using kernel's
+//    include cone, while the declarations still satisfy the trait predicates.
 // =============================================================================
 //
-// (FillScalar / FillInt / FillBitcast / RandTile are already declared in eltwise_chain.hpp.
-//  When eltwise_fill.hpp ships, it specializes those templates with full bodies.)
+// (FillScalar / FillInt / FillBitcast / RandTile are declared in eltwise_chain.hpp;
+//  eltwise_fill.hpp specializes those templates with full bodies.)
 
 // =============================================================================
 // 8. EltwiseChain typed list — defined here, declared in .hpp
@@ -1207,7 +1204,7 @@ struct EltwiseChain {
 // 9. Chain-shape trait predicates
 // =============================================================================
 
-// chain_lane_width — N-element fold (item 2). Max of per-element `lane_width`. Bounds
+// chain_lane_width — N-element fold. Max of per-element `lane_width`. Bounds
 // the legal BlockSize at the chain call site via the static_assert
 // `BlockSize * chain_lane_width <= DEST_AUTO_LIMIT`. Each element writes to
 // DEST[dst_slot + j * chain_lane_width] for lane j in [0, BlockSize).
@@ -1276,10 +1273,9 @@ constexpr bool element_supports_block() {
 
 // =============================================================================
 // ChainTraits — reflect each element once into an ElemDesc record, then derive every
-// value-based chain property as a field. Replaces the scattered fold / array-scan /
-// head-tail-recursion passes (proposal kind ①). Type-uniformity (chain_*_uniform) stays
-// separate — it reads element types, not values (kind ②). Emission stays separate (kind ③).
-// All compile-time: the whole struct folds to constants (verified — zero runtime cost).
+// value-based chain property as a field. Type-uniformity (chain_*_uniform) stays
+// separate — it reads element types, not values. Emission stays separate too.
+// All compile-time: the whole struct folds to constants (zero runtime cost).
 // =============================================================================
 namespace detail {
 
@@ -1307,10 +1303,10 @@ template <class E> constexpr InputLifecycle b_policy_of() {
 struct ElemDesc {
     bool is_cb_reader;
     bool is_pack;
-    uint32_t srca_cb;      // cb_for_side<SrcA> (NO_PREV_CB when not programmed)  — G1 + prev input
+    uint32_t srca_cb;      // cb_for_side<SrcA> (NO_PREV_CB when not programmed) — per-side consistency + prev input
     uint32_t srcb_cb;      // cb_for_side<SrcB>
     uint32_t pack_side_cb; // cb_for_side<Pack> (reconfig_pack_cb) — prev / last_pack / hetero input
-    uint32_t cb_a;         // cb_a_of (kNoCb when n/a)  — reader-collision input
+    uint32_t cb_a;         // cb_a_of (kNoCb when n/a) — reader-collision input
     uint32_t cb_b;         // cb_b_of (kNoCb when n/a)
     uint32_t pack_cb;      // pack_cb_of (kNoCb when n/a) — writer-collision input
     Dst pack_dst_slot;
@@ -1382,8 +1378,8 @@ constexpr bool ct_writer_collide(const ElemDesc* d, int n) {
 
 // Per-side "previous programmed CB at each index" tables, built in ONE forward sweep:
 // carry a running prev per side, record it BEFORE each element, update it when the
-// element programs that side. prev.srca[I] equals the old back-scan prev_cb_for_idx<SrcA,I>
-// (verified byte-identical for all I / all sides) but computed once instead of O(N²).
+// element programs that side. prev.srca[I] is the most recent CB programmed on SrcA by
+// any element before index I (NO_PREV_CB if none).
 template <int M>
 struct PrevTable {
     uint32_t srca[M];
@@ -1434,8 +1430,7 @@ struct ChainTraits {
     static constexpr bool reader_collide = ct_reader_collide(d, N);
     static constexpr bool writer_collide = ct_writer_collide(d, N);
 
-    // Per-side prev-CB history (one sweep), + pack-side metadata. Replaces the O(N²)
-    // per-site prev_cb_for_idx and the two standalone pack scans.
+    // Per-side prev-CB history (one sweep), + pack-side metadata.
     static constexpr PrevTable<N ? N : 1> prev = ct_build_prev<N ? N : 1>(d, N);
     static constexpr uint32_t last_pack_cb = ct_last_pack_cb(d, N);
     static constexpr bool pack_hetero = ct_pack_hetero(d, N);
@@ -1495,63 +1490,58 @@ inline constexpr bool elem_needs_per_side_idx_v = elem_needs_per_side_idx<E>::va
 }  // namespace detail
 
 // chain_has_duplicate_upfront_cbs / chain_pack_writes_collide — pairwise collision
-// checks, now flat nested loops in ChainTraits (reader_collide / writer_collide).
+// checks, implemented as flat nested loops in ChainTraits (reader_collide / writer_collide).
 template <class... Es> struct chain_has_duplicate_upfront_cbs<EltwiseChain<Es...>>
     : std::bool_constant<detail::ChainTraits<Es...>::reader_collide> {};
 
 template <class... Es> struct chain_pack_writes_collide<EltwiseChain<Es...>>
     : std::bool_constant<detail::ChainTraits<Es...>::writer_collide> {};
 
-// `chain_hoist_math_mop` / `chain_hoist_sfpu` — per-cohort hoist decisions.
-// Together they encode the FPU-init hoisting decision tree from
-// `ttnn/cpp/ttnn/kernel_lib/docs/fpu_init_hoisting.html` §6, split per
-// cohort so the chain can hoist math-MOP init even when SFPU isn't uniform.
-// Hoisting means running each element's init() once at boot rather than per
-// tile. The two cohorts (math-MOP = ADDR_MOD_0..3 + MATH MOP; SFPU =
+// `chain_hoist_math_mop` / `chain_hoist_sfpu` — per-cohort hoist decisions,
+// split per cohort so the chain can hoist math-MOP init even when SFPU isn't
+// uniform. Hoisting means running each element's init() once at boot rather
+// than per tile. The two cohorts (math-MOP = ADDR_MOD_0..3 + MATH MOP; SFPU =
 // ADDR_MOD_7 + SFPU CSR) are disjoint by hardware design — see
 // `llk_math_eltwise_unary_sfpu.h:24-27`, so the two decisions are independent
 // in principle. We constrain them to a single-direction implication
 // (`chain_hoist_sfpu_v` implies `chain_hoist_math_mop_v`) to keep the
-// dispatcher simple — see `eltwise_chain_partial_hoist_proposal.html`.
+// dispatcher simple.
 //
 // Eltwise-only scope: matmul / reduce are not modeled as chain elements, so
-// gates G2 / G4 / G5 (matmul-specific ADDR_MOD_6 collisions, welford_reinit-
-// style UNPACK/MATH reconfig, matmul + binary CLR_DVALID mixing) are
-// vacuously satisfied.
+// matmul-specific hazards (ADDR_MOD_6 collisions, welford_reinit-style
+// UNPACK/MATH reconfig, matmul + binary CLR_DVALID mixing) cannot arise.
 //
-// Active gates:
+// Hoist conditions:
 //
-//   G1. Per-side CB consistency — across all chain elements, every element
+//   Per-side CB consistency — across all chain elements, every element
 //       that programs a side (srcA / srcB) must use the SAME CB id. The
 //       boot-time fold programs each side once; if two elements declare
 //       different CBs on the same side, the LAST reconfig wins and earlier
 //       elements read with the wrong format at per-tile exec time.
 //
-//   G3. MATH-MOP uniformity — across all `is_math_mop_op_v` elements
+//   MATH-MOP uniformity — across all `is_math_mop_op_v` elements
 //       (`CopyTile`, `BinaryFpu`, `DestReuseBinary`, `UnaryBcast`), all
 //       instantiated types must be identical. Each one's init programs
 //       MATH MOP / ADDR_MOD_0..3 in a kind-specific way (different FPU
-//       ops, different CB args, different bcast modes, the CopyTile vs
-//       binary-op init clash from the old `chain_has_non_copy_tile_fpu_clash`
-//       check); hoisting more than one type leaves only the last init's
-//       MOP programmed and earlier elements run with the wrong MOP.
+//       ops, different CB args, different bcast modes, plus the CopyTile-vs-
+//       binary-op init clash); hoisting more than one type leaves only the
+//       last init's MOP programmed and earlier elements run with the wrong MOP.
 //
-//   SFPU. SFPU-init uniqueness — across all `is_sfpu_op_v` elements, all
-//       instantiated types must be identical. This is the regression fix:
-//       multiple distinct SFPU `*_tile_init` calls done at boot leave only
-//       the LAST MOP programmed. Production failures that drove this gate:
+//   SFPU-init uniqueness — across all `is_sfpu_op_v` elements, all
+//       instantiated types must be identical. Multiple distinct SFPU
+//       `*_tile_init` calls done at boot leave only the LAST MOP programmed.
+//       Failures this guards against:
 //         - mish_kernel.cpp FP32 path: Exp/Log1p/Tanh chain → tanh saturation,
 //           PCC 0.988.
 //         - logit_kernel.cpp stage-2: Rsub/DivBinary/Log → ATOL deltas 9–12.
 //
-// "Identical type" uses `std::is_same_v` per user direction (fpu_init_hoisting
-// integration thread). This rejects some chains the doc would consider safe
-// (e.g. two `Exp<...>` instances differing only in `Dst::Slot`), but the false
-// negatives only cost a per-tile init — never correctness.
+// "Identical type" uses `std::is_same_v`. This rejects some chains that would
+// in fact be safe (e.g. two `Exp<...>` instances differing only in `Dst::Slot`),
+// but the false negatives only cost a per-tile init — never correctness.
 
 namespace detail {
 
-// G1 (per-side CB consistency) is now ChainTraits::srca_consistent / srcb_consistent.
+// Per-side CB consistency is ChainTraits::srca_consistent / srcb_consistent.
 
 // Trait wrappers (Pred<E>::value form) — `is_sfpu_op_v` / `is_math_mop_op_v`
 // are `inline constexpr bool` variable templates; wrap them so they fit the
@@ -1561,8 +1551,9 @@ struct is_sfpu_op_t : std::bool_constant<is_sfpu_op_v<E>> {};
 template <class E>
 struct is_math_mop_op_t : std::bool_constant<is_math_mop_op_v<E>> {};
 
-// G3 / SFPU helper: across all `Es...` satisfying `Pred<E>`, require every
-// instantiated type to be `std::is_same_v` with every other (≤ 1 distinct).
+// Uniformity helper (used for both the MATH-MOP and SFPU cohorts): across all
+// `Es...` satisfying `Pred<E>`, require every instantiated type to be
+// `std::is_same_v` with every other (≤ 1 distinct).
 //
 // Strategy: find the first `E` in `Es...` with `Pred<E>::value == true`;
 // call it `Rep`. Then every other `E` with `Pred<E>::value == true` must
@@ -1617,7 +1608,7 @@ template <class... Es>
 struct chain_sfpu_inits_uniform<EltwiseChain<Es...>>
     : std::bool_constant<detail::chain_all_pred_uniform_v<detail::is_sfpu_op_t, Es...>> {};
 
-// Math-MOP cohort hoist: per-side CB consistency (G1) + math-MOP uniformity (G3).
+// Math-MOP cohort hoist: per-side CB consistency + math-MOP uniformity.
 // True when CopyTile / BinaryFpu / DestReuseBinary / UnaryBcast inits can be
 // emitted once at boot instead of per tile. Independent of SFPU uniformity.
 template <class Chain>
@@ -1629,8 +1620,7 @@ struct chain_hoist_math_mop<EltwiseChain<Es...>>
                          chain_math_mop_uniform_v<EltwiseChain<Es...>>> {};
 
 // SFPU cohort hoist: requires math-MOP hoist AND SFPU init uniformity.
-// True when every element's init can be emitted at boot. This is the
-// fully-hoisted shape (the historical `chain_is_hoist_safe` case).
+// True when every element's init can be emitted at boot (the fully-hoisted shape).
 template <class Chain>
 struct chain_hoist_sfpu : std::false_type {};
 
@@ -1649,7 +1639,7 @@ namespace detail {
 // (custom CbReaderTag / PackTileTag types declared in individual kernel sources)
 // may not provide wait_per_block / pop_per_block / reserve_per_block / push_per_block.
 // These no-op when the method is absent so the chain pipeline keeps working with
-// elements that pre-date the WaitAndPopPerBlock / PerBlockReserveAndPush policies.
+// elements that don't implement the per-block (chunked) lifecycle hooks.
 
 template <class E, class = void>
 struct has_wait_per_block : std::false_type {};
@@ -1702,7 +1692,7 @@ template <class E>
 ALWI void elem_init() { E::init(); }
 
 // =============================================================================
-// emit_pre_element_transitions<E, I, Es...>() (D2)
+// emit_pre_element_transitions<E, I, Es...>()
 //
 // For element at position I in pack Es..., emit srca / srcb / pack reconfig (each
 // compile-time-elided when prev_*_cb == curr_*_cb). Compile-time elision means a
@@ -1720,7 +1710,7 @@ ALWI void elem_init() { E::init(); }
 // metadata tables, so an emitted reconfig on CBs with matching dtypes is a no-op
 // at the hardware level — strictly bounded by a handful of compare instructions.
 //
-// Pack-side hoist policy (per `docs/pack_reconfig_hoisting_proposal.html` §4.2):
+// Pack-side hoist policy:
 //   - Homogeneous chains (≤1 opt-in pack site, or all sites share a CB): boot
 //     emission via `pack_init_for_each`. Subsequent sites fold-elide.
 //   - Heterogeneous chains (≥2 opt-in pack sites with different CBs): boot emits
@@ -1828,14 +1818,14 @@ ALWI void emit_per_stage_pack_reconfig() {
     }
 }
 
-// Pack-phase init (Pack* only — F-PERF-4: hoisted to boot when sound).
+// Pack-phase init (Pack* only — hoisted to boot when sound).
 // Pack reconfig is fold-driven via `emit_pre_element_transitions`. For
 // homogeneous pack chains (≤1 opt-in pack site, or all sites share a CB),
 // boot programs the pack engine once and per-stage emission is suppressed.
 // For heterogeneous chains (multi-output ops with different pack CBs), boot
 // programs only the FIRST opt-in pack site; later sites emit per-stage in
 // `apply_pack_phase` via `emit_per_stage_pack_reconfig` using the 2-arg
-// cache-checked LLK form. See `docs/pack_reconfig_hoisting_proposal.html` §4.2.
+// cache-checked LLK form.
 //
 // `hoist_compute_init` excludes PackTile from its filtered walk (PACK is its
 // own cohort, disjoint from math-MOP and SFPU). `pack_init_for_each` runs the
@@ -1881,8 +1871,8 @@ ALWI void pack_init_for_each(std::index_sequence<Is...>) {
 // policy-guarded (no-op for upfront / no-pop / no-push policies; those fire after
 // the outer loop via elem_pop_upfront_end / elem_push_at_end).
 //
-// BlockSize == 1 today; commit 7 (auto-block) raises it. exec(i_outer * BlockSize + j)
-// passes the absolute tile index — identical to today's exec(i) at BlockSize=1.
+// exec(i_outer * BlockSize + j) passes the absolute tile index (when BlockSize == 1
+// this is just exec(i)).
 // =============================================================================
 
 // Boot-time hoist of compute-cohort init (math-MOP and/or SFPU), filtered
@@ -1916,7 +1906,7 @@ ALWI void hoist_compute_init(std::index_sequence<Is...>, Es&... elts) {
 // =============================================================================
 // 11. Public eltwise_chain()
 //
-// D1/D5/D8 caller-init contract:
+// Caller-init contract:
 //   - Caller writes `compute_kernel_hw_startup(cb_a, cb_b, cb_out)` (or its
 //     unary/binary variant) as the FIRST statement of `MAIN()`.
 //   - Helper does NOT wrap any "BIG init" (`compute_kernel_hw_startup`,

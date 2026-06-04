@@ -351,7 +351,8 @@ _CKL_BIN_CMP_INT(GeIntBinary, ge_int_tile, ge_int_tile_init)
 #undef _CKL_BIN_CMP_INT
 
 // Quant / Requant / Dequant intentionally NOT included — their init() takes a
-// runtime zero_point arg which doesn't fit the chain's `static E::init()`
-// dispatch. Separate proposal needed (chain-level runtime-arg-init support).
+// runtime zero_point argument, which does not fit the chain's `static E::init()`
+// dispatch. Supporting them would require the chain to thread a runtime argument
+// into element init.
 
 }  // namespace compute_kernel_lib

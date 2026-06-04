@@ -8,15 +8,15 @@
  * @brief Thin convenience entry points — pure inline forwarders to `eltwise_chain`.
  *
  * These wrap the dominant per-tile streaming buckets in one-liner APIs. They are pure
- * chain bodies — caller is responsible for `compute_kernel_hw_startup(...)` as the
- * first statement of `MAIN()` per the D8 caller-init contract. Wrappers expose only the
- * knobs callers actually toggle (`BroadcastDim`, `BinaryDataFormatReconfig`, `OperandKind`);
- * other policies use the struct defaults. Drop to `eltwise_chain` for anything outside
- * this surface.
+ * chain bodies — the caller is responsible for calling `compute_kernel_hw_startup(...)`
+ * as the first statement of `MAIN()`; these forwarders do not emit it. Wrappers expose
+ * only the knobs callers actually toggle (`BroadcastDim`, `BinaryDataFormatReconfig`,
+ * `OperandKind`); other policies use the struct defaults. Drop to `eltwise_chain` for
+ * anything outside this surface.
  *
- * Internal usage of low-level lifecycle constants (`InputLifecycle::Streaming`, `OutputLifecycle::Streaming`, …)
- * matches the public chain element API — see `eltwise_chain.hpp` and
- * `policy_alias_collapse_proposal.md` for the rationale.
+ * Internal usage of the lifecycle constants (`InputLifecycle::Streaming`,
+ * `OutputLifecycle::Streaming`, …) matches the public chain element API in
+ * `eltwise_chain.hpp`.
  */
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"

@@ -46,9 +46,8 @@ struct Square : UnaryOp<Square<Slot>, Slot> {
 };
 
 // CopyDest — copy a tile's values from one DEST slot to another (copy_dest_values).
-// Two slots (In -> Out), no CB. Mirrors the original kernels' un-templated
-// copy_dest_values(in, out) form for bit-exact parity (the build allows the
-// deprecated overload via -Wno-error=deprecated-declarations).
+// Two slots (In -> Out), no CB. Uses the un-templated copy_dest_values(in, out)
+// overload, which the build permits via -Wno-error=deprecated-declarations.
 template <Dst In, Dst Out>
 struct CopyDest : DestOnlyTag {
     static constexpr uint32_t lane_width = (to_u32(In) > to_u32(Out) ? to_u32(In) : to_u32(Out)) + 1;
@@ -66,8 +65,8 @@ struct Typecast : UnaryOp<Typecast<InDF, OutDF, Slot>, Slot> {
     static ALWI void exec_impl(uint32_t slot_offset) { typecast_tile<InDF, OutDF>(to_u32(Slot) + slot_offset); }
 };
 
-// Mask — bakes the hardcoded `mask_tile` LLK contract (mask lives at DataSlot+1) into
-// the type per §1.4. Caller pre-loads data into DataSlot and mask into DataSlot+1; the
+// Mask — bakes the fixed `mask_tile` LLK contract (mask lives at DataSlot+1) into
+// the type. Caller pre-loads data into DataSlot and mask into DataSlot+1; the
 // op writes the masked result back into DataSlot. Compile-time `static_assert` rejects
 // `DataSlot == D_LAST` (no slot for the mask tile).
 //

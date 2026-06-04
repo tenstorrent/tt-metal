@@ -20,16 +20,16 @@
  *   - compile-time invariant checks (illegal lifecycle/index combos, duplicate upfront CBs,
  *     pack collisions, hoist-safety).
  *
- * The chain does NOT emit any deprecated dst-sync (`acquire_dst`/`release_dst`) — modern only.
+ * The chain uses only the modern dst-sync window (`tile_regs_acquire/commit/wait/release`).
  *
- * @section caller_init_contract Caller-init contract (D8)
+ * @section caller_init_contract Caller-init contract
  *
  * The chain helper does **not** wrap any "BIG init". Engine-wide setup is the caller's
  * responsibility. The chain owns ONLY per-element setup.
  *
  * | Init kind | Owner | When to call | Notes |
  * |---|---|---|---|
- * | `compute_kernel_hw_startup(cb_a, cb_b, cb_out)` | **caller** | First statement of `MAIN()` (D5). | Engine boot.
+ * | `compute_kernel_hw_startup(cb_a, cb_b, cb_out)` | **caller** | First statement of `MAIN()`. | Engine boot.
  * MMIO-unsafe mid-kernel. Required for chains that read/write CBs. | | `binary_op_init_common(cb_a, cb_b, cb_out)` |
  * **caller** (when applicable) | Once per `MAIN()`, before any chain or raw binary call. | Required when the kernel
  * mixes raw binary primitives with chain calls; not required for chain-only kernels. | | `mm_init(...)` | **caller** |
@@ -40,7 +40,7 @@
  * `copy_tile_init(cb)` / `copy_tile_to_dst_init_short(cb)` | **chain** | Per-CopyTile / per-BlockCopyTile, fold-driven
  * prev-CB. | The fold emits the equivalent `_with_dt` form by combining `reconfig_data_format_srca(curr) +
  * copy_tile_init(curr)`. | | `reconfig_data_format_srca/srcb(cb)` / `pack_reconfig_data_format(cb)` | **chain** |
- * Per-element, fold-driven (D2 + D7). | Compile-time-elided when prev_cb == cur_cb. | | `tile_regs_acquire / commit /
+ * Per-element, fold-driven. | Compile-time-elided when prev_cb == cur_cb. | | `tile_regs_acquire / commit /
  * wait / release` | **chain** | Per-iteration. | Chain owns the lifecycle. |
  *
  * Note on FP32 DEST accumulation: the chain inherits the kernel's build-time DST_ACCUM_MODE
@@ -48,7 +48,7 @@
  * `DEST_AUTO_LIMIT`. No per-element opt-in or mid-kernel `enable_fp32_dest_acc()` /
  * `disable_fp32_dest_acc()` toggles — DEST mode is kernel-wide.
  *
- * @section hw_startup_placement compute_kernel_hw_startup placement (D5)
+ * @section hw_startup_placement compute_kernel_hw_startup placement
  *
  * `compute_kernel_hw_startup` is the first statement of `MAIN()` if the chain shape requires
  * it (chains with at least one CB-reader and one CB-writer). Multi-stage kernels (different PACK
@@ -64,13 +64,14 @@
  * cbOut);` | First statement of `MAIN()`. | | Multi-stage (e.g. `logit_kernel.cpp`) | One `compute_kernel_hw_startup`
  * per stage. | Stage 1 at top of `MAIN()`; stages 2+ immediately before that stage's chain call. | | Mid-loop chain
  * (moreh inner-loop pattern) | Caller's outer `binary_op_init_common(...)` already covers the chain — no extra boot
- * needed. | Omit; calling `compute_kernel_hw_startup` mid-`MAIN()` here is **undefined per D5**. | | Copy-only chain
+ * needed. | Omit; calling `compute_kernel_hw_startup` mid-`MAIN()` here is **undefined** (MMIO write
+ * mid-kernel). | | Copy-only chain
  * whose CB formats already match defaults | Omit. | N/A. |
  *
  * Rejected pattern: a `*_with_init` convenience that folds `compute_kernel_hw_startup` into the
- * chain call is an antipattern — it reintroduces BIG init into the chain (violating the D8
+ * chain call is an antipattern — it reintroduces engine-wide init into the chain (violating the
  * caller-init contract), is only correct for single-stage kernels, and produces undefined behaviour
- * the moment it is used in a multi-stage or mid-loop chain. The caller owns BIG init; do not add one.
+ * the moment it is used in a multi-stage or mid-loop chain. The caller owns engine-wide init; do not add one.
  *
  * @section fp32_dest_acc FP32 DEST accumulation — build-flag-driven (no per-element opt-in)
  *
@@ -80,17 +81,16 @@
  * no per-element template parameter, no SFINAE fold, no mid-kernel `enable_fp32_dest_acc()` /
  * `disable_fp32_dest_acc()` transitions.
  *
- * @section block_path_fold Block-path fold (D7)
+ * @section block_path_fold Block-path fold
  *
  * Block elements (`BlockCopyTile`, `BlockBinaryFpu`, `BlockPackTile`) participate in the same
  * compile-time prev-CB / prev-fp32 fold as streaming elements via the uniform
- * `reconfig_srca_cb` / `reconfig_srcb_cb` / `reconfig_pack_cb` static accessors. `init()` bodies
- * no longer emit reconfig — that's fold-driven. The `_with_dt` two-arg LLK forms (formerly at
- * `eltwise_block.hpp:72,236`) are now decomposed into the chain's
- * `reconfig_data_format_srca(curr) + copy_tile_init(curr)` sequence, compile-time-elided when
- * prev_cb == curr_cb.
+ * `reconfig_srca_cb` / `reconfig_srcb_cb` / `reconfig_pack_cb` static accessors. Reconfig is
+ * fold-driven, not emitted by `init()` bodies. The `_with_dt` two-arg LLK forms are decomposed
+ * into the chain's `reconfig_data_format_srca(curr) + copy_tile_init(curr)` sequence,
+ * compile-time-elided when prev_cb == curr_cb.
  *
- * @section caller_init_wrong_way Anti-examples (D8)
+ * @section caller_init_wrong_way Anti-examples
  *
  * Three failure modes the contract above prevents:
  * 1. **Mid-`MAIN()` `compute_kernel_hw_startup`** — undefined behaviour per
@@ -98,10 +98,10 @@
  * 2. **Chain-only kernel forgetting `compute_kernel_hw_startup`** — silent miscompile; default-
  *    format reconfigs may match by accident; first mismatched-dtype kernel produces garbage.
  *
- * @section big_init_grep_gate D8 grep gate
+ * @section big_init_grep_gate Engine-init grep gate
  *
  * Manual one-liner the reviewer / future contributor runs ad-hoc to verify the chain helper
- * has no BIG-init call sites:
+ * has no engine-wide-init call sites:
  *
  * @code
  *   grep -nE 'init_common|compute_kernel_hw_startup|mm_init|reduce_init' \
@@ -170,7 +170,7 @@
  *  - `acquire_dst/release_dst` and `ACQ()/REL()` macros — modern dst-sync only. Kernels migrate
  *    their dst-sync as part of adopting the chain.
  *
- * Reconfig (`with_dt_tree`-style) — fold-driven post commits 2-3
+ * Reconfig (`with_dt_tree`-style) — fold-driven
  * ----------------------------------------------------------------
  *  - CopyTileReconfig::Input         → fold emits single-side reconfig on srca (compile-time-elided when prev == curr).
  *  - BinaryDataFormatReconfig::Input → fold emits per-side reconfig on srca + srcb (compile-time-elided per side).
@@ -230,10 +230,9 @@ namespace compute_kernel_lib {
 ///   - `EltwiseShape::grid(H, W, blk)`    — 2D + block
 ///
 /// Implicit conversion from `uint32_t` produces `tiles(n_tiles)` so bare callers
-/// (`eltwise_chain(n_tiles, ...)`) keep working without churn.
+/// (`eltwise_chain(n_tiles, ...)`) resolve without an explicit shape.
 ///
-/// `of/row/col/single` aliases mirror `binary_op_helpers`' `BinaryInputBlockShape`
-/// and are preserved for callers that already use them.
+/// `of/row/col/single` aliases mirror `binary_op_helpers`' `BinaryInputBlockShape`.
 struct EltwiseShape {
     uint32_t Ht;
     uint32_t Wt;
@@ -368,8 +367,7 @@ struct OutputLifecycle {
     }
     constexpr bool operator!=(OutputLifecycle other) const noexcept { return !(*this == other); }
 
-    // Named cells — written type-qualified (e.g. `OutputLifecycle::Bulk`). The historical
-    // `Out` prefix is dropped now that the type qualifies them. Defined out-of-line below.
+    // Named cells — written type-qualified (e.g. `OutputLifecycle::Bulk`). Defined out-of-line below.
     static const OutputLifecycle Streaming, Chunked, Bulk, BulkReservePerTile, BulkReservePerChunk, CallerManaged,
         HeldReserve, DeferredReserve;
 };
@@ -398,10 +396,9 @@ constexpr bool is_legal_output_lifecycle(OutputLifecycle lc) noexcept {
 /// Per-input operand kind. The output kind is always `Block` (single column
 /// in the output matrix), so no enum is defined for the output side.
 ///
-/// Runtime/compile-time tile-index offsets that previously lived as separate
-/// kinds (`Pinned`/`Absolute`/`BlockIterOffset`) are now expressed by composing
-/// one of these four canonical kinds with a `TileBase` (see `TileBase` types
-/// below). The kind carries the iteration shape; `TileBase` carries the offset.
+/// Runtime/compile-time tile-index offsets are expressed by composing one of these
+/// four canonical kinds with a `TileBase` (see `TileBase` types below). The kind
+/// carries the iteration shape; `TileBase` carries the offset.
 enum class OperandKind : uint8_t {
     Block,   // Ht × Wt — walks the full iteration domain
     Row,     // 1  × Wt — broadcast down rows
@@ -417,7 +414,7 @@ enum class OperandKind : uint8_t {
 ///
 /// Block walks absolute CB-front index `base_tile + i` per iter (chain
 /// dispatcher passes the absolute flat index; InputLifecycle::Chunked is the one exception —
-/// it uses a chunk-local index). Two structural footguns follow:
+/// it uses a chunk-local index). Two structural pitfalls follow:
 ///
 ///   (a) PerTile pop (InputLifecycle::Streaming / InputLifecycle::BulkDrain / InputLifecycle::NoWaitPop) shifts the CB
 ///   front
@@ -429,7 +426,7 @@ enum class OperandKind : uint8_t {
 ///       tile i before producer pushed it). Never tracks the per-iter
 ///       requirement for a walking Block reader.
 ///
-/// Non-Block kinds dodge both footguns: index is constant (Scalar) or driven
+/// Non-Block kinds avoid both pitfalls: index is constant (Scalar) or driven
 /// by ht/wt alone (Row/Col), so the CB-front shift from PerTile pop is benign
 /// and PerTile wait of 1 can be satisfied by the producer pushing the single
 /// broadcast tile once. Whether the chain actually drains the right number of
@@ -447,9 +444,9 @@ constexpr bool is_legal_kind_lifecycle(OperandKind kind, InputLifecycle lc) noex
     if (kind == OperandKind::Block) {
         // Block walks absolute idx with M = Ht·Wt = iter count. Exclude PerTile-pop
         // (InputLifecycle::Streaming / InputLifecycle::BulkDrain / InputLifecycle::NoWaitPop — front-shift +
-        // absolute-idx footgun) and PerTile-wait of 1 (InputLifecycle::HeldStream — never tracks per-iter requirement).
-        // Growing (Cumulative) and chunked (PerChunk) counts ARE legal here because
-        // M = iter count, so the counts never exceed operand size.
+        // absolute-index pitfall) and PerTile-wait of 1 (InputLifecycle::HeldStream — never tracks per-iter
+        // requirement). Growing (Cumulative) and chunked (PerChunk) counts ARE legal here because M = iter count, so
+        // the counts never exceed operand size.
         return lc == InputLifecycle::Bulk || lc == InputLifecycle::Pipelined || lc == InputLifecycle::HeldBulk ||
                lc == InputLifecycle::HeldCumulative || lc == InputLifecycle::Chunked ||
                lc == InputLifecycle::CallerManaged || lc == InputLifecycle::DeferredPop;
@@ -568,7 +565,8 @@ enum class Legacy : bool { Off = false, On = true };
 ///   - DEST footprint: `block_size * chain_lane_width <= DEST_AUTO_LIMIT`. Query
 ///     `chain_max_block_v<Chain>` for the maximum legal value and static_assert at
 ///     the call site if a build-time check is desired.
-///   - Policy compat: streaming CB-reader chains (WaitAndPop / WaitNoPop / InputLifecycle::NoWaitPop)
+///   - Policy compat: streaming CB-reader chains (InputLifecycle::Streaming / InputLifecycle::HeldStream /
+///     InputLifecycle::NoWaitPop)
 ///     consume one tile per iter — incompatible with `block_size > 1`. The chain
 ///     silently clamps `block_size` to 1 via `if constexpr (!chain_supports_block_v<Chain>)`
 ///     when the chain type doesn't support block-mode, so an explicit value > 1 is
@@ -664,7 +662,7 @@ enum class DestReuseType : uint8_t {
     DEST_TO_SRCB,  // CB → srca, DEST → srcb
 };
 
-/// DestReuseBinary reconfig (NEVER a bool — see proposal §2.5).
+/// DestReuseBinary reconfig (an enum, not a bool — the SrcA/SrcB cases need distinct values).
 ///
 /// `Input` folds the side the CB is loaded into (driven by `ReuseType`: DEST_TO_SRCA
 /// reconfigs srcb, DEST_TO_SRCB reconfigs srca). `SrcA` / `SrcB` explicitly pick a
@@ -687,8 +685,9 @@ enum class UnaryBcastReconfig : uint8_t {
 ///
 /// The fold emits `pack_reconfig_data_format(prev_p, curr_p)` (two-arg `_with_dt`)
 /// when a prior chain element established the pack target, and falls back to the
-/// single-arg form on first emit. The LLK's runtime format-equality check makes
-/// the legacy `OutputConditional` distinction redundant; only `Output` remains.
+/// single-arg form on first emit. The LLK's runtime format-equality check means a
+/// single `Output` cell suffices — the two-arg form is a no-op at the hardware
+/// level when the formats already match.
 enum class PackTileReconfig : uint8_t {
     None,
     Output,  // fold emits pack_reconfig_data_format(prev_p, curr_p) when prev_p known, else (curr_p)
@@ -697,8 +696,7 @@ enum class PackTileReconfig : uint8_t {
 // (The CRTP op bases — UnaryOp / BinaryOp / TernaryOp, from which SFPU/FPU op-helper
 //  headers derive their concrete ops — are defined in eltwise_chain.inl. They are not
 //  part of the kernel-author surface; only op-helper headers (eltwise_math.hpp, …)
-//  inherit them, and those are parsed after eltwise_chain.hpp pulls in the .inl.
-//  The unused QuaternaryOp base was removed.)
+//  inherit them, and those are parsed after eltwise_chain.hpp pulls in the .inl.)
 
 // =============================================================================
 // 7. Chain element types — declarations
@@ -786,19 +784,18 @@ struct RandTile;
 // 9. Public API — eltwise_chain
 // =============================================================================
 //
-// **Caller-init contract (D8).** The chain helper does NOT wrap any "BIG init"
+// **Caller-init contract.** The chain helper does NOT wrap any engine-wide init
 // (`compute_kernel_hw_startup`, `binary_op_init_common`, `mm_init`, `reduce_init`).
 // Engine-wide setup is the caller's responsibility. The chain owns ONLY per-element
 // init (`add_tiles_init`, `*_tile_init`, `init_bcast`, `copy_tile_to_dst_init_short`,
 // `reconfig_data_format_*`, `tile_regs_*` lifecycle).
 //
-// **D5 placement.** Caller calls `compute_kernel_hw_startup(cb_a, cb_b, cb_out)` as the
+// **Placement.** Caller calls `compute_kernel_hw_startup(cb_a, cb_b, cb_out)` as the
 // FIRST statement of `MAIN()` for chains that require it (chains with at least one
 // CB-reader and one CB-writer). Multi-stage kernels emit one boot per stage. Mid-`MAIN()`
-// placement is undefined per `compute_kernel_hw_startup.h:26-30` (MMIO writes unsafe to
-// call mid-kernel).
+// placement is undefined (MMIO writes unsafe to call mid-kernel).
 //
-// **D8 grep gate (manual one-liner; full doxygen lives in U6):**
+// **Engine-init grep gate (manual one-liner):**
 //   grep -nE 'init_common|compute_kernel_hw_startup|mm_init|reduce_init' eltwise_{chain.hpp,chain.inl,block.hpp}
 // Result: header `#include` only; zero call sites in helper bodies.
 
@@ -823,15 +820,15 @@ struct RandTile;
 /// query `chain_supports_block_v<Chain>` and `chain_max_block_v<Chain>` at the call
 /// site if you want a build-time check on the block choice.
 ///
-/// Index-mode semantics:
-///   - `BlockIter` → `ht * Wt + wt`     (window = Ht*Wt)
-///   - `RowBcast`  → `wt`                (window = Wt)
-///   - `ColBcast`  → `ht`                (window = Ht)
-///   - `FirstTile` → 0                   (window = 1)
+/// Index-mode (OperandKind) semantics:
+///   - `Block`  → `ht * Wt + wt`     (window = Ht*Wt)
+///   - `Row`    → `wt`                (window = Wt)
+///   - `Col`    → `ht`                (window = Ht)
+///   - `Scalar` → 0                   (window = 1)
 ///
-/// `RowBcast`/`ColBcast` require non-streaming CB policy (Upfront, Cumulative,
-/// NoWait* / WaitNoPop / InputLifecycle::NoWaitPop) — caller stages broadcast operand tiles before
-/// the chain starts.
+/// `Row`/`Col` require non-streaming CB policy (InputLifecycle::Bulk, InputLifecycle::HeldBulk,
+/// InputLifecycle::CallerManaged, InputLifecycle::DeferredPop) — caller stages broadcast operand
+/// tiles before the chain starts.
 template <class... Es>
 ALWI void eltwise_chain(EltwiseShape shape, Es... elts);
 
