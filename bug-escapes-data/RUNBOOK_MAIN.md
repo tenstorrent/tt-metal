@@ -181,6 +181,7 @@ Update confirmed table and chart only after `verdict: "confirmed"`.
 **Always DM:**
 - Every confirmed escape: escape ID, test name, escape type, fix PR, method (proven vs assumed).
 - Blockers: Snowflake unreachable, verify agent returned `aborted_wrong_test`, structural issue.
+- Results from a finished subagent 
 
 **Daily summary at 08:00Z:**
 - N new escapes since last summary (vertical / horizontal)
@@ -189,7 +190,7 @@ Update confirmed table and chart only after `verdict: "confirmed"`.
 - Stuck/blocked candidates
 
 **Never DM:**
-- routine polls, state saves, zero-result scans.
+- Routine polls, state saves, zero-result scans.
 
 ---
 
