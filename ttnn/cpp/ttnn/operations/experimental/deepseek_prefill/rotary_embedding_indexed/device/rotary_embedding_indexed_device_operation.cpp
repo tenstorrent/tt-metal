@@ -45,6 +45,9 @@ void validate_runtime_args(
     const RotaryEmbeddingIndexedDeviceOperation::tensor_args_t& tensor_args) {
     TT_FATAL(
         args.kv_actual_global % TILE_HEIGHT == 0, "kv_actual_global ({}) must be tile-aligned", args.kv_actual_global);
+    // cluster_axis selects which mesh dim is the SP axis (num_rows vs num_cols below); any other
+    // value would silently pick the wrong extent and corrupt the per-device sharding math.
+    TT_FATAL(args.cluster_axis == 0 || args.cluster_axis == 1, "cluster_axis ({}) must be 0 or 1", args.cluster_axis);
 
     const auto& input = tensor_args.input;
     const auto& cos = tensor_args.cos;
@@ -54,6 +57,9 @@ void validate_runtime_args(
     TT_FATAL(mesh_view.is_mesh_2d(), "rotary_embedding_indexed requires a 2D mesh");
     const uint32_t sp_factor = (args.cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     const uint32_t chunk_local_t = input.padded_shape()[-2] / TILE_HEIGHT;
+    // chunk_local_t is the per-chip chunk height in tiles and is used below as a divisor/modulus to
+    // derive the boundary chip; a zero-height input chunk is meaningless and would divide by zero.
+    TT_FATAL(chunk_local_t > 0, "input chunk seq dim ({}) must be at least one tile", input.padded_shape()[-2]);
     const uint32_t kv_actual_global_t = args.kv_actual_global / TILE_HEIGHT;
     const uint32_t cos_shard_Ht = cos.padded_shape()[-2] / TILE_HEIGHT;
 
@@ -98,15 +104,36 @@ void RotaryEmbeddingIndexedDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(sin.storage_type() == StorageType::DEVICE, "sin must be on device");
     TT_FATAL(trans_mat.storage_type() == StorageType::DEVICE, "trans_mat must be on device");
 
+    // create_descriptor() dispatches on input.device() but passes every tensor's buffer address into
+    // the kernels, so all operands must be allocated and live on that same device.
+    TT_FATAL(input.buffer() != nullptr, "input must be allocated in a buffer on device");
+    TT_FATAL(cos.buffer() != nullptr, "cos must be allocated in a buffer on device");
+    TT_FATAL(sin.buffer() != nullptr, "sin must be allocated in a buffer on device");
+    TT_FATAL(trans_mat.buffer() != nullptr, "trans_mat must be allocated in a buffer on device");
+    TT_FATAL(cos.device() == input.device(), "cos must be on the same device as input");
+    TT_FATAL(sin.device() == input.device(), "sin must be on the same device as input");
+    TT_FATAL(trans_mat.device() == input.device(), "trans_mat must be on the same device as input");
+
     TT_FATAL(input.layout() == Layout::TILE, "input must be TILE layout");
     TT_FATAL(cos.layout() == Layout::TILE, "cos must be TILE layout");
     TT_FATAL(sin.layout() == Layout::TILE, "sin must be TILE layout");
+    TT_FATAL(trans_mat.layout() == Layout::TILE, "trans_mat must be TILE layout");
 
     const auto& input_shape = input.padded_shape();
     const auto& cos_shape = cos.padded_shape();
     const auto& sin_shape = sin.padded_shape();
+    const auto& trans_mat_shape = trans_mat.padded_shape();
     TT_FATAL(input_shape.rank() == 4, "input must be 4D (got rank {})", input_shape.rank());
     TT_FATAL(cos_shape.rank() == 4, "cos must be 4D (got rank {})", cos_shape.rank());
+    // The reader pushes trans_mat as a single page (page 0) into a one-tile CB, so it must be exactly
+    // one tile -- a larger tensor would be silently truncated to its first tile.
+    TT_FATAL(
+        trans_mat_shape.rank() == 4 && trans_mat_shape[0] == 1 && trans_mat_shape[1] == 1 &&
+            trans_mat_shape[-2] == TILE_HEIGHT && trans_mat_shape[-1] == TILE_WIDTH,
+        "trans_mat must be a single tile [1, 1, {}, {}] (got {})",
+        TILE_HEIGHT,
+        TILE_WIDTH,
+        trans_mat_shape);
     TT_FATAL(cos.dtype() == sin.dtype(), "cos and sin dtype must match");
     TT_FATAL(cos_shape == sin_shape, "cos and sin must have the same shape");
     TT_FATAL(input_shape[-1] == cos_shape[-1], "input and cos head dim must match");
@@ -150,6 +177,7 @@ ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
     const auto& cos = tensor_args.cos;
     return tt::tt_metal::operation::hash_operation<RotaryEmbeddingIndexedDeviceOperation>(
         args.cluster_axis,
+        args.compute_kernel_config,
         input.dtype(),
         input.memory_config(),
         input.padded_shape(),
@@ -419,6 +447,11 @@ tt::tt_metal::ProgramDescriptor RotaryEmbeddingIndexedDeviceOperation::ProgramFa
     compute_desc.runtime_args.reserve(cores.size());
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& a = per_core_args[i];
+        // NOTE: pass raw buffer addresses, not Buffer* bindings. A Buffer* arg puts the program on
+        // the fast cache-hit path that patches only buffer addresses and skips create_descriptor,
+        // which would leave the non-hashed kv_actual_global common arg frozen at the first call's
+        // value (corrupting later chunks). The no-bindings path re-runs create_descriptor every call
+        // and refreshes all args. TODO: revisit with a classic override_runtime_arguments factory.
         reader_desc.emplace_runtime_args(
             cores[i],
             {src_buffer->address(),

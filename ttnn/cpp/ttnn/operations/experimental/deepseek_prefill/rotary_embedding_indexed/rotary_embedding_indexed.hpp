@@ -32,7 +32,7 @@ ttnn::Tensor rotary_embedding_indexed(
     const ttnn::Tensor& trans_mat,
     uint32_t kv_actual_global,
     uint32_t cluster_axis,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed
