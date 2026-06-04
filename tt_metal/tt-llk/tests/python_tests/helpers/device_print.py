@@ -177,6 +177,11 @@ class _RenderPlan:
     placeholders: list[_Placeholder] = field(default_factory=list)
 
 
+def _cook(literal: str) -> str:
+    """Undo fmtlib brace-escaping ({{ -> {, }} -> }) for a format-string literal."""
+    return literal.replace("{{", "{").replace("}}", "}")
+
+
 def _build_render_plan(
     fmt: str, type_table: dict[str, tuple[str, int, object]]
 ) -> _RenderPlan:
@@ -184,7 +189,7 @@ def _build_render_plan(
 
     placeholders = list(PLACEHOLDER_RE.finditer(fmt))
     if not placeholders:
-        return _RenderPlan(literals=[fmt.replace("{{", "{").replace("}}", "}")])
+        return _RenderPlan(literals=[_cook(fmt)])
 
     # Determine type per reordered-slot index, then compute offsets in
     # ascending slot order; matches size-descending packing on device.
@@ -213,7 +218,7 @@ def _build_render_plan(
     compiled: list[_Placeholder] = []
     last_end = 0
     for m in placeholders:
-        literals.append(fmt[last_end : m.start()].replace("{{", "{").replace("}}", "}"))
+        literals.append(_cook(fmt[last_end : m.start()]))
         ridx = int(m.group(1))
         type_token = m.group(2)
         base_char = type_token[3] if type_token.startswith("/") else type_token
@@ -221,21 +226,9 @@ def _build_render_plan(
         spec = m.group("spec") or ""
 
         if base_char == "A":
-            compiled.append(
-                _Placeholder(
-                    kind="typed_array",
-                    offset=offsets[ridx],
-                    spec=spec,
-                )
-            )
+            compiled.append(_Placeholder(kind="typed_array", offset=offsets[ridx]))
         elif base_char == "t":
-            compiled.append(
-                _Placeholder(
-                    kind="tile_slice",
-                    offset=offsets[ridx],
-                    spec=spec,
-                )
-            )
+            compiled.append(_Placeholder(kind="tile_slice", offset=offsets[ridx]))
         elif entry is None:
             compiled.append(
                 _Placeholder(kind="unknown", error_msg=f"<unknown type '{type_token}'>")
@@ -294,7 +287,7 @@ def _build_render_plan(
                 )
         last_end = m.end()
 
-    literals.append(fmt[last_end:].replace("{{", "{").replace("}}", "}"))
+    literals.append(_cook(fmt[last_end:]))
     return _RenderPlan(literals=literals, placeholders=compiled)
 
 
@@ -448,84 +441,100 @@ class ElfStrings:
 
 
 # DataFormat enum values from tt_metal/hw/inc/internal/tt-{1,2}xx/*/tensix_types.h.
-# Only the formats device print can plausibly receive are listed; anything else
-# falls through as unsupported.
+# These match what Metal's parser handles.
 _DF_FLOAT32 = 0
 _DF_FLOAT16 = 1
+_DF_BFP8 = 2
+_DF_BFP4 = 3
 _DF_TF32 = 4
 _DF_FLOAT16_B = 5
 _DF_BFP8_B = 6
 _DF_BFP4_B = 7
 _DF_INT32 = 8
 _DF_UINT16 = 9
+_DF_LF8 = 10
+_DF_BFP2 = 11
 _DF_INT8 = 14
+_DF_BFP2_B = 15
 _DF_UINT32 = 24
 _DF_UINT8 = 30
 
 
-def _bfp_b_decoder(mantissa_bits: int):
-    """Build a Bfp*_b decoder. Wire format is (shared_exp, sign|mantissa) pairs;
-    mirrors tt_metal/impl/data_format/blockfloat_common.cpp:convert_bfp_to_u32."""
-    mantissa_mask = (1 << mantissa_bits) - 1
+def _bitcast_f32(bits: int) -> float:
+    return struct.unpack("<f", struct.pack("<I", bits))[0]
+
+
+# Decode recipes: (struct format char, possible widening to fp32).
+# Shared across dp_typed_array_t and TileSlice. Tf32 and bf16 have
+# no native struct type, they unpack as uint and get widened.
+_F32, _I32, _U32 = ("f", None), ("i", None), ("I", None)
+_TF32 = ("I", lambda v: _bitcast_f32((v & 0x7FFFF) << 13))
+_F16 = ("e", None)
+_BF16 = ("H", lambda v: _bitcast_f32(v << 16))
+_U16, _I8, _U8 = ("H", None), ("b", None), ("B", None)
+
+# Map format into decode recipe for tile_slice
+# and the non-aliased typed_array formats.
+_WIRE: dict[int, tuple[str, Any]] = {
+    _DF_FLOAT32: _F32,
+    _DF_INT32: _I32,
+    _DF_UINT32: _U32,
+    _DF_TF32: _TF32,
+    _DF_FLOAT16: _F16,
+    _DF_FLOAT16_B: _BF16,
+    _DF_UINT16: _U16,
+    _DF_INT8: _I8,
+    _DF_UINT8: _U8,
+}
+
+# typed_array decode: Metal emits Bfp*/Lf8 as fp16 and Bfp*_b as bf16,
+# so these alias the float recipes rather than carrying their own layout.
+_TYPED_ARRAY_WIRE: dict[int, tuple[str, Any]] = {
+    **_WIRE,
+    _DF_BFP8: _F16,
+    _DF_BFP4: _F16,
+    _DF_BFP2: _F16,
+    _DF_LF8: _F16,
+    _DF_BFP8_B: _BF16,
+    _DF_BFP4_B: _BF16,
+    _DF_BFP2_B: _BF16,
+}
+
+# In tile_slice context, Bfp_b is NOT aliased — it has its own byte-pair layout
+# (shared_exp byte + sign|mantissa byte). Mantissa width selects the variant.
+_TILE_SLICE_BFP_BITS: dict[int, int] = {_DF_BFP8_B: 7, _DF_BFP4_B: 3}
+
+
+def _unpack(data: bytes, n: int, recipe: tuple[str, Any]) -> list:
+    """Decode n elements from the start of `data` per a (char, post) recipe."""
+    struct_char, post = recipe
+    values = struct.unpack_from(f"<{n}{struct_char}", data)
+    return [post(v) for v in values] if post else list(values)
+
+
+def _bfp_pair_decode(data: bytes, n: int, mantissa_bits: int) -> list[float]:
+    """TileSlice Bfp_b: contiguous (shared_exp, sign|mantissa) byte pairs.
+    Mirrors tt_metal/impl/data_format/blockfloat_common.cpp:convert_bfp_to_u32."""
+    mant_mask = (1 << mantissa_bits) - 1
     leading_bit = 1 << (mantissa_bits - 1)
     final_shift = 23 - mantissa_bits
-
-    def decode(d, i):
-        shared_exp = d[i * 2]
-        val = d[i * 2 + 1]
+    out: list[float] = []
+    for i in range(n):
+        shared_exp = data[i * 2]
+        val = data[i * 2 + 1]
         sign = val >> mantissa_bits
-        man = val & mantissa_mask
+        man = val & mant_mask
         if man == 0:
-            return -0.0 if sign else 0.0
+            out.append(-0.0 if sign else 0.0)
+            continue
         shift_cnt = 0
         while not (man & leading_bit):
             man <<= 1
             shift_cnt += 1
-        man = (man << 1) & mantissa_mask
+        man = (man << 1) & mant_mask
         exp = max(0, shared_exp - shift_cnt)
-        bit_val = (sign << 31) | (exp << 23) | (man << final_shift)
-        return struct.unpack("<f", struct.pack("<I", bit_val))[0]
-
-    return decode
-
-
-# Per-element decoder for each supported DataFormat: takes (data_bytes, i) and
-# returns the decoded scalar (Python int or float). Non-Bfp formats store N
-# elements packed contiguously, little-endian; Bfp_b formats interleave
-# (exp, mantissa) byte pairs.
-_ELEMENT_DECODERS = {
-    _DF_FLOAT32: lambda d, i: struct.unpack_from("<f", d, i * 4)[0],
-    _DF_INT32: lambda d, i: struct.unpack_from("<i", d, i * 4)[0],
-    _DF_UINT32: lambda d, i: struct.unpack_from("<I", d, i * 4)[0],
-    # bf16 == high 16 bits of float32; widen by left-shifting into a uint32.
-    _DF_FLOAT16_B: lambda d, i: struct.unpack(
-        "<f", struct.pack("<I", struct.unpack_from("<H", d, i * 2)[0] << 16)
-    )[0],
-    _DF_FLOAT16: lambda d, i: struct.unpack_from("<e", d, i * 2)[0],
-    # TF32 (sign:1 | exp:8 | mantissa:10) sits in the low 19 bits of a uint32;
-    # shift back into float32 position to reconstruct.
-    _DF_TF32: lambda d, i: struct.unpack(
-        "<f",
-        struct.pack("<I", (struct.unpack_from("<I", d, i * 4)[0] & 0x7FFFF) << 13),
-    )[0],
-    _DF_UINT16: lambda d, i: struct.unpack_from("<H", d, i * 2)[0],
-    _DF_INT8: lambda d, i: struct.unpack_from("<b", d, i)[0],
-    _DF_UINT8: lambda d, i: d[i],
-    _DF_BFP8_B: _bfp_b_decoder(7),
-    _DF_BFP4_B: _bfp_b_decoder(3),
-}
-
-_BYTES_PER_DATUM = {
-    _DF_FLOAT32: 4,
-    _DF_INT32: 4,
-    _DF_UINT32: 4,
-    _DF_TF32: 4,
-    _DF_FLOAT16: 2,
-    _DF_FLOAT16_B: 2,
-    _DF_UINT16: 2,
-    _DF_INT8: 1,
-    _DF_UINT8: 1,
-}
+        out.append(_bitcast_f32((sign << 31) | (exp << 23) | (man << final_shift)))
+    return out
 
 
 def _typed_array_header(args_blob: bytes, offset: int) -> tuple[int, int]:
@@ -534,16 +543,18 @@ def _typed_array_header(args_blob: bytes, offset: int) -> tuple[int, int]:
     return word >> 16, word & 0xFFFF
 
 
-def _render_typed_array(args_blob: bytes, offset: int, spec: str) -> str:
+def _render_typed_array(args_blob: bytes, offset: int) -> str:
     """Render a dp_typed_array_t record as one row of colored cells.
-    `spec` is ignored; cell formatting follows helpers.utils.format_tile_row."""
+    Cell formatting follows helpers.utils.format_tile_row."""
     length, fmt_code = _typed_array_header(args_blob, offset)
-    bpd = _BYTES_PER_DATUM.get(fmt_code, 0)
-    if bpd == 0:
+    recipe = _TYPED_ARRAY_WIRE.get(fmt_code)
+    if recipe is None:
         return f"<typed array: unsupported DataFormat={fmt_code}, len={length}>"
-    decode = _ELEMENT_DECODERS[fmt_code]
-    data = args_blob[offset + 4 : offset + 4 + length * 4]
-    values = [decode(data, i) for i in range(length * 4 // bpd)]
+    bpe = struct.calcsize(recipe[0])
+    # `length` is a count of u32 words; element count is byte_len // bpe.
+    byte_len = length * 4
+    data = args_blob[offset + 4 : offset + 4 + byte_len]
+    values = _unpack(data, byte_len // bpe, recipe)
     # Leading newline lifts the row off the '[RISC|file:line]' marker so the
     # array reads as its own block.
     return "\n" + format_tile_row(values, TILE_BG_RESULT) + " "
@@ -558,12 +569,12 @@ _DPRINT_OK = 2
 _RETURN_CODE_MSGS = {4: "BAD TILE POINTER", 5: "unsupported data format"}
 
 
-def _render_tile_slice(args_blob: bytes, offset: int, spec: str) -> str:
+def _render_tile_slice(args_blob: bytes, offset: int) -> str:
     """Render a TileSliceHostDev<MAX_BYTES> record.
 
     Full slice: row-prefixed colored cells, one row per output line.
     Truncated slice: whatever fit, flat (no row prefixes, since the last row
-    may be ragged), followed by the truncation marker. `spec` is ignored."""
+    may be ragged), followed by the truncation marker."""
     (
         _cb_ptr,
         h0,
@@ -582,21 +593,21 @@ def _render_tile_slice(args_blob: bytes, offset: int, spec: str) -> str:
 
     if return_code != _DPRINT_OK:
         return f"<TileSlice: {_RETURN_CODE_MSGS.get(return_code, f'return_code={return_code}')}>"
-    decode = _ELEMENT_DECODERS.get(data_format)
-    if decode is None:
+    if data_format not in _TILE_SLICE_BFP_BITS and data_format not in _WIRE:
         return f"<TileSlice: unsupported DataFormat={data_format}>"
 
-    data = args_blob[
-        offset
-        + _TILE_SLICE_HEADER_STRUCT.size : offset
-        + _TILE_SLICE_HEADER_STRUCT.size
-        + max_bytes
-    ]
+    data_start = offset + _TILE_SLICE_HEADER_STRUCT.size
+    data = args_blob[data_start : data_start + max_bytes]
 
     rows = max(0, (h1 - h0 + hs - 1) // hs)
     cols = max(0, (w1 - w0 + ws - 1) // ws)
     fit = min(rows * cols, data_count)
-    values = [decode(data, i) for i in range(fit)]
+    if data_format in _TILE_SLICE_BFP_BITS:
+        values = _bfp_pair_decode(data, fit, _TILE_SLICE_BFP_BITS[data_format])
+    else:
+        values = _unpack(data, fit, _WIRE[data_format])
+
+    trailer = "\n" if endl_rows else ""
 
     if fit == rows * cols:
         sep = "\n" if endl_rows else " "
@@ -609,17 +620,12 @@ def _render_tile_slice(args_blob: bytes, offset: int, spec: str) -> str:
             )
             for r in range(rows)
         )
-        return body + ("\n" if endl_rows else "")
+        return body + trailer
 
-    # Truncated, render whatever we have in one row.
+    # Truncated, just render whatever we have.
     body = format_tile_row(values, TILE_BG_RESULT) + "\n"
     body += f"<TileSlice truncated (max is {data_count}, try bumping the tile slice template param)>"
-    return body + ("\n" if endl_rows else "")
-
-
-def _decode_wpos_rpos(buf: bytes) -> tuple[int, int]:
-    wpos, rpos = struct.unpack_from("<II", buf, 0)
-    return wpos, rpos
+    return body + trailer
 
 
 def _strip_stall(wpos: int) -> int:
@@ -712,6 +718,12 @@ class DevicePrintParser:
     # so we bound the poll loop; 64 is reasonable.
     _MAX_STALL_RESETS_PER_POLL: int = 64
 
+    def _read_wpos_rpos(self, location: str) -> tuple[int, int]:
+        """Read the Aux struct and decode the (wpos, rpos) ring pointers."""
+        aux_raw = read_from_device(location, self.buffer_base, num_bytes=self.aux_size)
+        wpos, rpos = struct.unpack_from("<II", aux_raw, 0)
+        return wpos, rpos
+
     def poll(self, location: str = "0,0") -> list[str]:
         """Incremental drain: read new data since last poll, advance device rpos.
         Return immediately if there is no new data.
@@ -723,8 +735,7 @@ class DevicePrintParser:
         """
         out: list[str] = []
 
-        aux_raw = read_from_device(location, self.buffer_base, num_bytes=self.aux_size)
-        wpos, rpos = _decode_wpos_rpos(aux_raw)
+        wpos, rpos = self._read_wpos_rpos(location)
 
         # Nothing to do: device has no new data.
         if wpos == rpos:
@@ -767,10 +778,7 @@ class DevicePrintParser:
             # Kernel was stalled when we entered this iteration. Re-read
             # and loop: either it has cleared the stall and produced more
             # data, or it hasn't yet observed our rpos write and we retry.
-            aux_raw = read_from_device(
-                location, self.buffer_base, num_bytes=self.aux_size
-            )
-            wpos, rpos = _decode_wpos_rpos(aux_raw)
+            wpos, rpos = self._read_wpos_rpos(location)
 
         raise RuntimeError(
             f"DevicePrintParser.poll(): stall flag still set after "
@@ -801,11 +809,11 @@ class DevicePrintParser:
                 continue
 
             if ph.kind == "typed_array":
-                parts.append(_render_typed_array(args_blob, ph.offset, ph.spec))
+                parts.append(_render_typed_array(args_blob, ph.offset))
                 continue
 
             if ph.kind == "tile_slice":
-                parts.append(_render_tile_slice(args_blob, ph.offset, ph.spec))
+                parts.append(_render_tile_slice(args_blob, ph.offset))
                 continue
 
             if ph.offset + ph.size > blob_len:

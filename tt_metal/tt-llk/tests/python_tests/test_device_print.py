@@ -5,7 +5,6 @@ import re
 
 import pytest
 import torch
-from conftest import skip_for_coverage
 from helpers.bfp_format_utils import bfp4b_to_float16b, bfp8b_to_float16b
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -21,6 +20,8 @@ from helpers.test_variant_parameters import (
     TILIZE,
     generate_input_dim,
 )
+
+from conftest import skip_for_coverage
 
 pytestmark = skip_for_coverage
 
@@ -257,7 +258,12 @@ def test_dprint_tensix(dest_acc):
     # zero low bits; DestAcc.No keeps it as Float16_b. Skip the "Tile ID = 0"
     # header, as its trailing "0" parses as a float.
     expected = src_A.to(torch.float32).flatten().tolist()
+    # Skip the "Tile ID = 0" header and the Wormhole "WARNING: Float32 (...)" line.
     decoded = _extract_floats(
-        [line for line in outcome.device_print_lines if "Tile ID" not in line]
+        [
+            line
+            for line in outcome.device_print_lines
+            if "Tile ID" not in line and "WARNING" not in line
+        ]
     )
     assert decoded == pytest.approx(expected, abs=0.01)
