@@ -26,7 +26,9 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli_w_tile_dimensions
+from helpers.stimuli_generator import (  # generate_stimuli_w_tile_dimensions
+    generate_stimuli,
+)
 from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
@@ -172,7 +174,7 @@ def test_pack_quasar(formats_dest_acc_sync_dims_relu, boot_mode=BootMode.DEFAULT
 
     tile_shape = construct_tile_shape(tile_dimensions)
 
-    src_A, tile_cnt_A, src_B, _ = generate_stimuli_w_tile_dimensions(
+    src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
