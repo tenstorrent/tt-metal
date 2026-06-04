@@ -242,14 +242,7 @@ struct CopyTile : CopyTileTag {
 
     // ---- chain pipeline hooks ----
     static ALWI void init() {
-        if constexpr (Reconfig == CopyTileReconfig::Input) {
-            // Single-arg reconfig — no previous-CB tracking. Per design: omitting `old_cb`
-            // is good enough vs the two-arg `_with_dt` form.
-            reconfig_data_format_srca(Cb);
-            copy_tile_to_dst_init_short(Cb);
-        } else {
-            copy_tile_init(Cb);
-        }
+        copy_tile_init(Cb);
     }
 
     /// Per-iter wait. Element fires at its own granularity — streaming policies wait 1
