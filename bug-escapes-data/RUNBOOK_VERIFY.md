@@ -491,6 +491,33 @@ If `not_found` for either: the test did not run. This is a dispatch input error.
 
 ---
 
+
+---
+
+## Step 11b: Sibling Detection (only when verdict == "confirmed")
+
+When BEFORE=FAIL and AFTER=PASS are confirmed for the primary test, scan both job logs to find other tests in the same job that also transitioned FAIL→PASS. These are free confirmed siblings — no new probes needed.
+
+### Process
+
+1. From the BEFORE job log, extract all test lines showing `FAILED` or `[ FAILED ]`.
+2. From the AFTER job log, extract all test lines showing `OK` or `[ OK ]` or `PASSED`.
+3. Build the sibling set: tests that FAILED in BEFORE **and** PASSED in AFTER — excluding the primary `test_name`.
+4. For each candidate sibling test name:
+   a. Search `campaign-state.json` candidates for an entry where `test_name` matches.
+   b. If found and status is not already `confirmed_escape`, `confirmed_horizontal`, `skipped_*`, or `refuted`: this is a confirmed sibling.
+   c. If not found in candidates at all: record the test name in the verdict's `unmatched_siblings` list — main BrAIn can handle these separately.
+   d. Check `seen-escapes.json` — skip if `escape_id` already present.
+5. For each matched sibling:
+   - Set `escape_type` = same as primary (siblings in the same job share the same escape type)
+   - Set `confirmation_method: "bisect"`, `confidence: "proven"`
+   - Write to `confirmed-escapes.json` using the same `before_run_id`, `after_run_id`, `before_job_id`, `after_job_id` as the primary
+   - Write to `seen-escapes.json` with `status: "confirmed"`
+   - Update `campaign-state.json` candidate to `status: "confirmed_escape"` (or `"confirmed_horizontal"`), `confluence_updated: false`, `dm_sent: false`
+6. Include all confirmed siblings in the verdict JSON as `confirmed_siblings` (see Step 13).
+
+**If there are no siblings:** set `confirmed_siblings: []` in the verdict. Do not skip this step.
+
 ## Step 12: Write Results to State Files
 
 ### If verdict == "confirmed":
@@ -562,13 +589,25 @@ Return a single JSON object (no prose, no markdown wrapping):
   "confidence": "proven|assumed|null",
   "before_run_id": "...",
   "after_run_id": "...",
-  "before_run_url": "https://github.com/tenstorrent/tt-metal/actions/runs/...",
-  "after_run_url": "https://github.com/tenstorrent/tt-metal/actions/runs/...",
+  "before_job_id": "...",
+  "after_job_id": "...",
+  "before_job_url": "https://github.com/tenstorrent/tt-metal/actions/runs/{before_run_id}/job/{before_job_id}",
+  "after_job_url": "https://github.com/tenstorrent/tt-metal/actions/runs/{after_run_id}/job/{after_job_id}",
   "before_result": "FAIL|PASS|not_found",
   "after_result": "FAIL|PASS|not_found",
   "artifact_reuse": true,
+  "confirmed_siblings": [
+    {
+      "escape_id": "...",
+      "test_name": "...",
+      "escape_type": "vertical|horizontal"
+    }
+  ],
+  "unmatched_siblings": ["TestNameNotInCandidates", "..."],
   "notes": "any important context for main BrAIn"
 }
 ```
+
+**Link format rule (MANDATORY):** Always use job-level URLs (`/runs/{run_id}/job/{job_id}`), never run-level URLs (`/runs/{run_id}`). Populate `before_job_id` and `after_job_id` from Step 10 (the job IDs you read logs from). This applies to the verdict JSON and to any DMs or Confluence updates.
 
 Main BrAIn uses this to update Confluence and DM @ebanerjeeTT.
