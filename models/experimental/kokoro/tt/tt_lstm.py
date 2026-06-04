@@ -75,7 +75,7 @@ def preprocess_tt_lstm_1layer(
 
 
 def _lstm_step(
-    x_bt: ttnn.Tensor,
+    gates_x: ttnn.Tensor,
     h: ttnn.Tensor,
     c: ttnn.Tensor,
     params: TTLSTMParams,
@@ -83,22 +83,11 @@ def _lstm_step(
     compute_kernel_config=None,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-    if len(x_bt.shape) == 3 and x_bt.shape[1] == 1:
-        x_bt = ttnn.reshape(x_bt, [x_bt.shape[0], x_bt.shape[2]], memory_config=memory_config)
-
-    # gates = x @ W_x^T + h @ W_h^T + b. Kept as two separate matmuls on the default
-    # matmul kernel: any change to this accumulation (1D-mcast/sharding, or fusing the
-    # two into one concat matmul) is fine for value PCC but flips the *rounded* durations
-    # that set the output length and perturbs the F0 curve (amplified ~1885x by the
-    # vocoder) below the PCC floor — see feedback notes. So this stays as the baseline.
-    gates_x = ttnn.linear(
-        x_bt,
-        params.w_x,
-        bias=None,
-        transpose_b=True,
-        memory_config=memory_config,
-        compute_kernel_config=compute_kernel_config,
-    )
+    # ``gates_x`` (= x_t @ W_x^T, shape [B, 4H]) is precomputed for the whole sequence by
+    # the caller (one batched matmul, see tt_bilstm_nlc) — it doesn't depend on the
+    # recurrent state. Only the recurrent ``h @ W_h^T`` is per-step. The bias is added
+    # separately (not folded into a matmul) to keep accumulation bit-identical to the
+    # reference, which the precision-sensitive duration/F0 paths require.
     gates_h = ttnn.linear(
         h,
         params.w_h,
@@ -108,7 +97,6 @@ def _lstm_step(
         compute_kernel_config=compute_kernel_config,
     )
     gates = ttnn.add(gates_x, gates_h, memory_config=memory_config)
-    ttnn.deallocate(gates_x)
     ttnn.deallocate(gates_h)
     gates = ttnn.add(gates, params.b, memory_config=memory_config)
 
@@ -200,7 +188,34 @@ def tt_bilstm_nlc(
     """
     B, L, _ = x_nlc.shape
     H = fwd.hidden_size
+    H4 = 4 * H
     state_dtype = ttnn.float32 if fp32_state else ttnn.bfloat16
+
+    # Input gate projections (``x @ W_x^T``) don't depend on the recurrent state, so compute
+    # them for the WHOLE sequence in one batched matmul per direction (bit-identical: matmul
+    # rows are independent). Permute to ``[L, B, 4H]`` so the per-timestep extraction is a
+    # cheap leading-dim slice — this removes the per-step untilize+slice+tilize churn that
+    # dominated the loop (slicing a single timestep out of the TILE-laid [B,L,C] sequence).
+    def _precompute_gates_x(p: TTLSTMParams) -> ttnn.Tensor:
+        gx = ttnn.linear(
+            x_nlc,
+            p.w_x,
+            bias=None,
+            transpose_b=True,
+            memory_config=memory_config,
+            compute_kernel_config=compute_kernel_config,
+        )  # [B, L, 4H]
+        gx_t = ttnn.permute(gx, (1, 0, 2), memory_config=memory_config)  # [L, B, 4H]
+        ttnn.deallocate(gx)
+        return gx_t
+
+    gx_fwd = _precompute_gates_x(fwd)
+    gx_rev = _precompute_gates_x(rev)
+
+    def _gates_x_at(gx_all: ttnn.Tensor, t: int) -> ttnn.Tensor:
+        return ttnn.reshape(
+            ttnn.slice(gx_all, [t, 0, 0], [t + 1, B, H4], [1, 1, 1]), [B, H4], memory_config=memory_config
+        )
 
     h0 = ttnn.zeros(
         [B, H], dtype=state_dtype, layout=ttnn.TILE_LAYOUT, device=x_nlc.device(), memory_config=memory_config
@@ -232,10 +247,10 @@ def tt_bilstm_nlc(
     c_f = c0
     outs_f = []
     for t in range(L):
-        xt = ttnn.slice(x_nlc, [0, t, 0], [B, t + 1, x_nlc.shape[2]], [1, 1, 1])
+        gxt = _gates_x_at(gx_fwd, t)
         h_old, c_old = h_f, c_f
         h_new, c_new = _lstm_step(
-            xt, h_f, c_f, fwd, compute_kernel_config=compute_kernel_config, memory_config=memory_config
+            gxt, h_f, c_f, fwd, compute_kernel_config=compute_kernel_config, memory_config=memory_config
         )
         if valid_all is not None and t >= min_len:
             vt = ttnn.slice(valid_all, [0, t, 0], [B, t + 1, 1], [1, 1, 1])
@@ -251,10 +266,10 @@ def tt_bilstm_nlc(
     c_b = c0
     outs_b_rev = []
     for t in reversed(range(L)):
-        xt = ttnn.slice(x_nlc, [0, t, 0], [B, t + 1, x_nlc.shape[2]], [1, 1, 1])
+        gxt = _gates_x_at(gx_rev, t)
         h_old, c_old = h_b, c_b
         h_new, c_new = _lstm_step(
-            xt, h_b, c_b, rev, compute_kernel_config=compute_kernel_config, memory_config=memory_config
+            gxt, h_b, c_b, rev, compute_kernel_config=compute_kernel_config, memory_config=memory_config
         )
         if valid_all is not None and t >= min_len:
             vt = ttnn.slice(valid_all, [0, t, 0], [B, t + 1, 1], [1, 1, 1])
@@ -268,6 +283,8 @@ def tt_bilstm_nlc(
 
     if valid_all is not None:
         ttnn.deallocate(valid_all)
+    ttnn.deallocate(gx_fwd)
+    ttnn.deallocate(gx_rev)
 
     outs_b = list(reversed(outs_b_rev))
 
