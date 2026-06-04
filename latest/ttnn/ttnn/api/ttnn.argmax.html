@@ -152,106 +152,56 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.argmax">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">argmax</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">keepdim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.argmax" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">argmax</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">keepdim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">CoreRangeSet</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_multicore</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.argmax" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Returns the indices of the maximum value of elements in the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.
-If no <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> is provided, it will return the indices of maximum value of all elements in given <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>.</p>
+<p>Argmax. Returns indices of maximum values.
+Output is UINT32, ROW_MAJOR, INTERLEAVED (DRAM or L1).</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – the input tensor. Must be on the device.</p>
+<p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – On-device, INTERLEAVED input.</p>
 </dd>
 <dt class="field-even">Keyword Arguments<span class="colon">:</span>
 </dt>
 <dd class="field-even">
 <ul class="simple">
-<li><p><strong>dim</strong> (<em>int</em><em>, </em><em>optional</em>) – dimension to reduce. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>keepdim</strong> (<em>bool</em><em>, </em><em>optional</em>) – whether to keep the reduced dimension. Defaults to <cite>False</cite>.</p></li>
-<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Memory configuration for the operation. Defaults to <cite>None</cite>.</p></li>
-<li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output tensor. If specified, must be on the same device as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>. Defaults to <cite>None</cite>.</p></li>
-</ul>
-</dd>
-<dt class="field-odd">Returns<span class="colon">:</span>
-</dt>
-<dd class="field-odd">
-<p><em>ttnn.Tensor</em> – Output tensor containing the indices of the maximum value.</p>
-</dd>
-</dl>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>The input tensor supports the following data types and layouts:</p>
-<table class="docutils align-default" id="id2">
-<caption>
-<span class="caption-text">Input Tensor</span><a class="headerlink" href="#id2" title="Permalink to this table"></a>
-</caption>
-<thead>
-<tr class="row-odd">
-<th class="head"><p>dtype</p></th>
-<th class="head"><p>layout</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>FLOAT32</p></td>
-<td><p>ROW_MAJOR, TILE</p></td>
-</tr>
-<tr class="row-odd">
-<td><p>BFLOAT16</p></td>
-<td><p>ROW_MAJOR, TILE</p></td>
-</tr>
-<tr class="row-even">
-<td><p>UINT32</p></td>
-<td><p>ROW_MAJOR</p></td>
-</tr>
-<tr class="row-odd">
-<td><p>INT32</p></td>
-<td><p>ROW_MAJOR</p></td>
-</tr>
-<tr class="row-even">
-<td><p>UINT16</p></td>
-<td><p>ROW_MAJOR</p></td>
-</tr>
-</tbody>
-</table>
-<p>The output tensor will be of the following data type and layout:</p>
-<table class="docutils align-default" id="id3">
-<caption>
-<span class="caption-text">Output Tensor</span><a class="headerlink" href="#id3" title="Permalink to this table"></a>
-</caption>
-<thead>
-<tr class="row-odd">
-<th class="head"><p>dtype</p></th>
-<th class="head"><p>layout</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even">
-<td><p>UINT32</p></td>
-<td><p>ROW_MAJOR</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<dl class="simple">
-<dt>Memory Support:</dt>
-<dd>
-<ul class="simple">
-<li><p>Interleaved: DRAM and L1</p></li>
-</ul>
-</dd>
-<dt>Limitations:</dt>
-<dd>
-<ul class="simple">
-<li><p>All input tensors must be on-device.</p></li>
-<li><p>Currently this op only supports dimension-specific reduction on the last dimension (i.e. <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> = -1 or <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code> = rank - 1).</p></li>
-<li><p>Sharding is not supported for this operation</p></li>
-<li><p>Reduction over all elements (when dim=None) is not supported with the TILE input tensor layout</p></li>
-<li><p>The (optional) preallocated output tensor must have ROW_MAJOR layout and must be on the same device as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code></p></li>
+<li><p><strong>dim</strong> (<em>int</em><em>, </em><em>optional</em>) – Dim to reduce. <code class="docutils literal notranslate"><span class="pre">None</span></code> reduces all elements (ROW_MAJOR input only). Default: <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p></li>
+<li><p><strong>keepdim</strong> (<em>bool</em><em>, </em><em>optional</em>) – Keep reduced dim. Default: <code class="docutils literal notranslate"><span class="pre">False</span></code>.</p></li>
+<li><p><strong>sub_core_grids</strong> (<em>CoreRangeSet</em><em>, </em><em>optional</em>) – Limits execution to a subset of cores. Supported on ROW_MAJOR last-dim reductions (&lt;= 2 ranges) and batch/channel dim reductions. Default: <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p></li>
+<li><p><strong>use_multicore</strong> (<em>bool</em><em>, </em><em>optional</em>) – Enables multi-core only on ROW_MAJOR last-dim reductions. Default: <code class="docutils literal notranslate"><span class="pre">False</span></code>.
+<strong>Deprecated</strong> — use <code class="docutils literal notranslate"><span class="pre">sub_core_grids</span></code> to control core assignment instead. Will be removed in a future release (tracked in #44838).</p></li>
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Output memory (INTERLEAVED DRAM/L1). Default: input’s memory_config.</p></li>
+<li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output (must be UINT32, ROW_MAJOR, INTERLEAVED, same device). Default: <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p></li>
 </ul>
 </dd>
 </dl>
+<p>Supported:</p>
+<ul class="simple">
+<li><p><strong>dim=None</strong> (reduce all elements):
+- input layout: ROW_MAJOR
+- dtypes: BFLOAT16/FLOAT32/INT32/UINT32/UINT16</p></li>
+<li><p><strong>dim = rank-1</strong> (last / width):
+- ROW_MAJOR input: BFLOAT16/FLOAT32/INT32/UINT32/UINT16 (single- or multi-core)
+- TILE input: BFLOAT16/FLOAT32 (single-core)</p></li>
+<li><p><strong>dim = rank-2</strong> (height):
+- BFLOAT16/FLOAT32 only
+- ROW_MAJOR inputs are internally tilized; this path runs single-core (<code class="docutils literal notranslate"><span class="pre">use_multicore</span></code> is ignored)</p></li>
+<li><p><strong>0 &lt;= dim &lt; rank-2</strong> (batch/channel dims, rank &gt;= 3):
+- BFLOAT16/FLOAT32 only (integer dtypes not supported)
+- input may be ROW_MAJOR or TILE (ROW_MAJOR is converted to TILE internally)
+- output is produced in TILE internally and converted to ROW_MAJOR
+- <code class="docutils literal notranslate"><span class="pre">sub_core_grids</span></code> is supported (pass a single-core <code class="docutils literal notranslate"><span class="pre">CoreRangeSet</span></code> to run on one core)</p></li>
+</ul>
+<p>Not supported:</p>
+<ul class="simple">
+<li><p>Sharded tensors (inputs/outputs must be INTERLEAVED)</p></li>
+<li><p>TILE input with <code class="docutils literal notranslate"><span class="pre">dim=None</span></code></p></li>
+<li><p>Batch/channel dim reductions with INT/UINT inputs</p></li>
+<li><p>Integer dtypes on batch/channel dim reductions</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">use_multicore=True</span></code> with TILE inputs (multi-core requires ROW_MAJOR input)</p></li>
+</ul>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
 <div class="highlight-python notranslate">

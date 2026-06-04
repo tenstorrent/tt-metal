@@ -237,6 +237,7 @@
 </dt>
 <dd>
 <p>Reconfigures the packer output data format by specifying the CB ID of the new operand. This function call will always perform the reconfiguration, regardless of the data format of the old operand. If the new CB ID is the same as the current one, reconfiguration will still occur.</p>
+<p>NOTE(ARCH_QUASAR): On Quasar, buffer descriptors are programmed at op init. pack_reconfig_data_format only reprograms THCON IN_DATA_FORMAT (gasket), not the MOP or buffer descriptors. When the pack output operand changes, call pack_init(new_cb_id) before pack_tile.</p>
 <p>NOTE: Packer reconfiguration functions are used similarly to the initialization function, in a sense that they are called before the call to the packer function that uses the new configuration. It is recommended to call this function right after other op-specific initialization functions.</p>
 <p>Return value: None</p>
 <p></p>
@@ -280,6 +281,7 @@
 </dt>
 <dd>
 <p>Reconfigures the packer output data format by specifying the CB IDs of the old and new operands. This function internally calls the reconfiguration function with the new CB ID, but before it does so, it checks if the old and new data formats are different. If they are the same, it does not perform the reconfiguration. This function is useful when you want to ensure that the packer only reconfigures when different data format is wanted, avoiding unnecessary reconfiguration overhead.</p>
+<p>NOTE(ARCH_QUASAR): See pack_reconfig_data_format(new_cb_id). Call pack_init(new_cb_id) before pack_tile when switching pack output operand.</p>
 <p>NOTE: Packer reconfiguration functions are used similarly to the initialization function, in a sense that they are called before the call to the packer function that uses the new configuration. It is recommended to call this function right after other op-specific initialization functions.</p>
 <p>Return value: None</p>
 <p></p>
