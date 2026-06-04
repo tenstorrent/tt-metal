@@ -163,10 +163,14 @@ class TTSeamlessM4Tv2SpeechEncoder:
         # (which forbids ``write_shard_to_device``) reuses them — same pattern as SDXL / vadv2.
         self._conv1d_prepared_cache: Dict[Tuple[Any, ...], Tuple[ttnn.Tensor, Optional[ttnn.Tensor]]] = {}
         self._conv_config_cache: Dict[Tuple[Any, ...], ttnn.Conv1dConfig] = {}
-        # Compute-kernel-config tiers: LoFi linears, HiFi2 attention matmuls, HiFi3 layernorm/SDPA.
+        # Compute-kernel-config tiers: HiFi4 linears, HiFi2 attention matmuls, HiFi3 layernorm/SDPA.
+        # Linears are HiFi4 (not LoFi): at LoFi the error accumulated over the 24 conformer layers
+        # tips long-audio same-language ASR (mel ~1830) from Hindi transcription to an English
+        # translation ~20 mel frames before the bf16 reference does. See README "Long-audio
+        # same-language ASR is precision-sensitive".
         self._linear_compute_cfg = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -1609,9 +1613,10 @@ class TTSeamlessM4Tv2SpeechEncoder:
         local_ff_dim = int(ffn.intermediate_dense.weight.shape[-1])
         pc1 = self._tuned_matmul_pc(token_rows, hdim, local_ff_dim)
         pc2 = self._tuned_matmul_pc(token_rows, local_ff_dim, hdim)
-        # BFP8 activations into the FFN expand: weight is already bf8 (model_preprocessing.py:1279),
-        # so this turns a bf8×bf16 matmul into bf8×bf8 — halves activation L1 footprint on the
-        # K=1024 → N=local_ff_dim hot path. Post-LN input is well-conditioned for bf8 quantization.
+        # FFN-expand activations are bf16 (the weight is bf8, model_preprocessing.py:1279, so this is a
+        # bf8×bf16 matmul). bf8 activations here halved L1 but added enough error — over the 24 layers —
+        # to flip long-audio same-language ASR Hindi→English near ~1830 mel frames; bf16 is L1-safe even
+        # at seq=3000 (PCC 0.9970). See README "Long-audio same-language ASR is precision-sensitive".
         h = self._linear(
             x,
             ffn.intermediate_dense.weight,
@@ -1621,7 +1626,7 @@ class TTSeamlessM4Tv2SpeechEncoder:
             accept_sharded_input=accept_sharded_input,
             batch=batch,
             seq=seq_len,
-            input_dtype=ttnn.bfloat8_b,
+            input_dtype=ttnn.bfloat16,
         )
         out = self._linear(
             h,

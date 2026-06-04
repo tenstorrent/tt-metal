@@ -346,6 +346,23 @@ models/experimental/seamless_m4t_v2_large/
 | `generate()` sampling (`do_sample=True`, temperature, top-*p*, etc.) | **Not supported** — greedy `argmax` only |
 | `generate()` `batch_size > 1` | **Not supported** — batch size 1 only |
 
+### Long-audio same-language ASR is precision-sensitive
+
+For ASR (`tgt_lang` = the source language) the model transcribes speech to text in the *same*
+language. On **very long** audio this is a knife-edge: the model can tip from transcribing (Hindi) to
+*translating* (English), and the boundary is sharp (a few mel frames). This is a property of the
+model itself, **not** a TTNN bug — the HuggingFace reference (run in bfloat16) flips Hindi→English on
+the same audio above ~1825 mel frames. The demo chains the full ~37 s T2ST audio (~1830 mel frames)
+into ASR, so it sits right at that boundary.
+
+Because the boundary is precision-sensitive, the speech-encoder conformer runs its linears at
+`HiFi4` math fidelity with `bfloat16` FFN-expand activations ([`tt/tt_speech_encoder.py`](tt/tt_speech_encoder.py)).
+At lower precision (`LoFi` linears + `bfloat8_b` FFN, the original perf tuning) accumulated error over
+the 24 conformer layers tipped this transcribe→translate boundary ~20 mel frames **earlier** than the
+bf16 reference, which flipped demo ASR to English. With the higher precision, long-audio ASR
+transcribes Hindi (matching/exceeding the bf16 reference) and the seq-3000 speech-encoder PCC is
+0.9970 (vs 0.9966). Short audio is far below the boundary and unaffected.
+
 ---
 
 ## To Do
