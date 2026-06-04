@@ -440,6 +440,7 @@ jobs:
         test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-tt-train-tests) }}
     uses: ./.github/workflows/tt-train-run-models.yaml
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
