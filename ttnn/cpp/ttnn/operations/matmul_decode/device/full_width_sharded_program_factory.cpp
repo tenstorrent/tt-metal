@@ -29,7 +29,7 @@ using namespace tt::tt_metal;
 // in L1. Sender cores are split across both NoCs to balance multicast traffic.
 //
 // Still TODO to make it functional:
-//   1. A compute kernel that does matmul_tiles over the gathered full A and this
+//   1. A compute kernel that does matmul_block over the gathered full A and this
 //      core's B slice, accumulating over K, into the output CB.
 //   2. A writer kernel (or sharded output CB handoff) to produce the output
 //      width shard.
@@ -275,6 +275,13 @@ ProgramDescriptor MatmulDecodeDeviceOperation::FullWidthSharded::create_descript
     const uint32_t num_blocks_h = tt::div_up(M_tiles, out_block_h);
     const uint32_t last_out_block_h = (M_tiles % out_block_h == 0) ? out_block_h : (M_tiles % out_block_h);
 
+    log_info(
+        tt::LogOp,
+        "MatmulDecode: M_tiles: {}, K_tiles: {}, inB_N_tiles_per_core: {}, inA_K_tiles_per_core: {}",
+        M_tiles,
+        K_tiles,
+        inB_N_tiles_per_core,
+        inA_K_tiles_per_core);
     log_info(tt::LogOp, "MatmulDecode: num_blocks_h: {}, last_out_block_h: {}", num_blocks_h, last_out_block_h);
     KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source =
