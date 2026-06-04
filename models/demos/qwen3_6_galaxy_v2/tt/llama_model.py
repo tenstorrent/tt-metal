@@ -1036,7 +1036,30 @@ class TtTransformer(LightweightModule):
             rot_mats = self.rope_setup.get_qwen36_rm_rot_mats(rot_mat_idxs)
         else:
             rot_mats = self.rope_setup.get_rm_rot_mats(rot_mat_idxs)
-        x_embd = self.embd(x)
+        if self.is_qwen36:
+            # qwen3.6 decode embedding (mirrors text_demo_qwen36._run_decode_intrace):
+            # raw ttnn.embedding -> DRAM full-H bfloat16 (NOT the TtLlamaEmbedding
+            # col-sharded H/4 L1 layout, which is the prefill contract). The decoder's
+            # default decode path (non-L1-residual) expects DRAM full-H, 1 row.
+            x_emb_flat = ttnn.embedding(
+                x,
+                self.embd.weights,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=ttnn.bfloat16,
+            )
+            if os.environ.get("QWEN36_DECODE_L1_RESIDUAL", "0") == "1" or os.environ.get("QWEN36_DECODE_32ROW", "0") == "1":
+                x_embd = ttnn.reshape(
+                    x_emb_flat, ttnn.Shape([1, 1, x_emb_flat.shape[-2], x_emb_flat.shape[-1]])
+                )
+            else:
+                x_emb_3d = ttnn.slice(
+                    x_emb_flat, [0, 0, 0], [1, 1, x_emb_flat.shape[-1]], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+                x_emb_flat.deallocate(True)
+                x_embd = ttnn.unsqueeze_to_4D(x_emb_3d)
+        else:
+            x_embd = self.embd(x)
         tt_logits = self.forward(
             x_embd,
             current_pos,
