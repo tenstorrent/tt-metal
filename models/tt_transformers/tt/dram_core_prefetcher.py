@@ -85,22 +85,19 @@ def is_dram_core_prefetcher_supported(
     def _tiles_divide(n: int) -> bool:
         return (n % TILE == 0) and ((n // TILE) % ring_size == 0)
 
-    def _pad_to_ring(n: int) -> int:
-        # Pad a per-device N up to a ring multiple (elements). ModelArgs pads hidden_dim/qkv_size
-        # the same way so the recv-contig path is transparently ring-aligned (see model_config.py).
-        quantum = ring_size * TILE
-        return ((n + quantum - 1) // quantum) * quantum
-
-    # dim and the WO K (n_heads*head_dim/num_devices) are NOT padded by the model's recv-contig
-    # hooks, so they must tile-divide the ring on their own. hidden_dim (FF N / FF2 K) and qkv_size
-    # (QKV N) ARE padded transparently, so we check L1 at their padded sizes below.
-    if not _tiles_divide(dim):  # FF1/FF3 K, attn input K, FF2/WO N
-        return False
-    if not _tiles_divide(wo_in_per_dev):  # WO K
-        return False
-
-    n_hidden_pad = _pad_to_ring(n_hidden_per_dev)
-    qkv_pad = _pad_to_ring(qkv_size_per_dev)
+    # Every prefetched weight is allocated with its real (unpadded) per-device dims — the model
+    # does NOT pad qkv/hidden for the recv-contig path (mlp.py / attention.py pass the raw
+    # hidden_dim//num_devices, qkv_size//num_devices, etc.). So each weight's K and N must
+    # tile-divide the ring on its own; otherwise the per-receiver shard width isn't tile-aligned
+    # and the 1D-ring matmul's num_blocks != num_cores. This is what forces a smaller ring for
+    # larger models (e.g. 8B's qkv_size//device=1536 -> 48 tiles divides ring=16 but not ring=32,
+    # so 8B picks recv_per_bank=2 / ring=16, matching the worker prefetcher's choice).
+    #
+    # Covers: dim (FF1/FF3 K, FF2/WO/QKV N or K), n_hidden_per_dev (FF1/FF3 N, FF2 K),
+    # qkv_size_per_dev (QKV N), wo_in_per_dev (WO N for a single-row mesh; == dim//num_devices).
+    for n in (dim, n_hidden_per_dev, qkv_size_per_dev, wo_in_per_dev):
+        if not _tiles_divide(n):
+            return False
 
     # Per-receiver GCB footprint must fit worker L1. The factory allocates
     # ``num_blocks * in1_block_size = ring_size * (K_per_shard_tiles * N_per_recv_tiles)
@@ -121,9 +118,9 @@ def is_dram_core_prefetcher_supported(
     # `n % ring_size == 0` assert and _build_global_cb's K-divisibility assert catch a mismatch
     # cleanly at allocation time rather than corrupting silently.
     op_shapes = [
-        (dim, n_hidden_pad),  # FF1/FF3: K=dim, N=hidden_dim/num_devices (padded)
-        (n_hidden_pad, n_dim_per_dev),  # FF2: K=hidden_dim/num_devices (padded), N=dim
-        (dim, qkv_pad),  # attn QKV: K=dim, N=qkv_size/num_devices (padded)
+        (dim, n_hidden_per_dev),  # FF1/FF3: K=dim, N=hidden_dim/num_devices
+        (n_hidden_per_dev, n_dim_per_dev),  # FF2: K=hidden_dim/num_devices, N=dim
+        (dim, qkv_size_per_dev),  # attn QKV: K=dim, N=qkv_size/num_devices
         (wo_in_per_dev, n_dim_per_dev),  # attn WO: see NOTE above (K/N symmetric for this check)
     ]
     for k_dim, n_dim in op_shapes:
