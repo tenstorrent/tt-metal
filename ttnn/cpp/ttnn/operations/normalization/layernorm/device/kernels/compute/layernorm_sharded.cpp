@@ -341,7 +341,7 @@ void kernel_main() {
     // RMSNorm has no mean-subtraction stage, so its statistic is the mean of squares of the input
     // (the raw input, or the fused residual sum a + b). Squaring it leaves the padding columns holding
     // (pad_value)^2; zero them in place before the reduce so they do not enter the mean of squares.
-    // The host-built mask (cb_col_mask_packed) carries each width shard's own validity (full, partial,
+    // The host-built mask (cb_col_mask_packed) carries each block's own validity (full, partial,
     // or all-padding tiles), tilized into the compute data format so it aligns with the compute-produced squared
     // tiles in the FPU multiply (the same alignment the variance multiply relies on). It is
     // buffer-backed (resident), so it is read by tile index without a producer push / wait_front.

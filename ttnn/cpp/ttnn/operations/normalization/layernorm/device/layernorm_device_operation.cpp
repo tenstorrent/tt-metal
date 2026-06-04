@@ -495,7 +495,7 @@ static std::optional<Tensor> build_legacy_col_mask(
     const uint32_t tile_width = input.tensor_spec().tile().get_width();
     const auto& logical_shape = input.logical_shape();
     if (logical_shape[-1] % tile_width == 0) {
-        return std::nullopt;  // tile-aligned: no padding columns to mask
+        return std::nullopt;  // logical width is tile-aligned: the final width tile has no padding to mask
     }
     const auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);

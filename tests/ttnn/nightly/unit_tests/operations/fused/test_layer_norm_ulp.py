@@ -520,17 +520,18 @@ def test_rms_norm_ulp_sharded_non_tile_aligned_width(device, w, distribution, dt
     assert passed, f"[sharded rms non-aligned dtype={dtype} w={w} dist={distribution}] {msg}"
 
 
-# Non-tile-aligned widths split across two width shards. RMSNorm masks the compute-produced squares
-# with the per-shard host mask, which carries each shard's own validity, so the logical width can end
-# mid-shard (the last shard then holds full, partial, and all-padding tiles, e.g. w=200 -> 2x128).
-@pytest.mark.parametrize("w", [40, 72, 200])
+# Widths split across two cores. w=40/72/200 are non-tile-aligned; w=96 is tile-aligned but does not
+# tile evenly across two 64-wide blocks. RMSNorm masks the compute-produced squares with the per-block
+# host mask, which carries each block's own validity, so the logical width can end mid-block (the last
+# block then holds full, partial, and all-padding tiles, e.g. w=200 -> 2x128).
+@pytest.mark.parametrize("w", [40, 72, 96, 200])
 @pytest.mark.parametrize("distribution", ["normal", "centered_uniform"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-def test_rms_norm_ulp_sharded_non_tile_aligned_multi_width_shard(device, w, distribution, dtype):
-    """Sharded rms_norm over a non-tile-aligned width split across two width shards vs torch golden.
+def test_rms_norm_ulp_sharded_non_tile_aligned_width_split_across_cores(device, w, distribution, dtype):
+    """Sharded rms_norm over a width split across two cores vs torch golden.
 
-    Each width shard owns block_w columns of the tile-padded width; the cross-core reduce combines
-    them. The per-shard host mask zeroes the padding columns of whichever shard they fall in, and the
+    Each core (block) owns block_w columns of the tile-padded width; the cross-core reduce combines
+    them. The per-block host mask zeroes the padding columns of whichever block they fall in, and the
     reduction scaler lands the divide on the logical width. Poisoning the padding makes any read of the
     padded columns observable.
     """
@@ -596,7 +597,7 @@ def test_rms_norm_ulp_sharded_non_tile_aligned_multi_width_shard(device, w, dist
 # Fused residual add (a + b computed on-device) over a non-tile-aligned width, on the legacy
 # (non-Welford) path. The normalized input is compute-produced, so the column mask must still exclude
 # the padding columns from the statistics. num_cores_w=2 splits the width across shards (RMSNorm only;
-# LayerNorm rejects a non-tile-aligned width across multiple width shards).
+# LayerNorm rejects a non-tile-aligned width split across multiple cores).
 @pytest.mark.parametrize("w", [40, 72, 200])
 @pytest.mark.parametrize("distribution", ["normal", "centered_uniform"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
@@ -611,7 +612,7 @@ def test_norm_ulp_sharded_non_tile_aligned_residual(device, w, distribution, dty
     observable.
     """
     if norm == "layernorm" and num_cores_w > 1:
-        pytest.skip("LayerNorm does not support a non-tile-aligned width split across multiple width shards")
+        pytest.skip("LayerNorm does not support a non-tile-aligned width split across multiple cores")
     torch.manual_seed(0)
     h = 32
     shard_w = math.ceil(w / num_cores_w / 32) * 32
@@ -677,18 +678,19 @@ def test_norm_ulp_sharded_non_tile_aligned_residual(device, w, distribution, dty
 
 
 @pytest.mark.parametrize("use_welford", [True, False])
-def test_layer_norm_ulp_sharded_non_tile_aligned_multi_width_shard_rejected(device, use_welford):
-    """LayerNorm (non-RMS) over a non-tile-aligned width split across multiple width shards is
-    rejected, not silently wrong.
+def test_layer_norm_ulp_sharded_non_tile_aligned_width_split_across_cores_rejected(device, use_welford):
+    """LayerNorm (non-RMS) over a non-tile-aligned width split across multiple cores is rejected, not
+    silently wrong.
 
-    LayerNorm masks the host-tilized input at the E[x] site with one partial tile at the end, which is
-    only correct when a single width shard owns the whole row; the Welford partial-tile handling has
-    the same single-shard assumption in its cross-core combine. The op must throw rather than normalize
-    the full shards over their padding columns. (RMSNorm, by contrast, masks the per-shard squares and
-    does support this split.)
+    A non-tile-aligned width puts a partially-valid tile in the reduction. LayerNorm masks that at the
+    E[x] site with one partial tile at the end, which is only correct when the whole row width is on a
+    single core (num_blocks == 1); the Welford partial-tile handling has the same single-core
+    assumption in its cross-core combine. The op must throw rather than normalize the full blocks over
+    their padding columns. (RMSNorm, by contrast, masks the per-block squares and does support this
+    split.)
     """
     torch.manual_seed(0)
-    h, w = 32, 200  # 200 -> padded 256; split across 2 width shards of 128 (4 tiles) each
+    h, w = 32, 200  # 200 -> per-core 128; split across 2 cores, the last core's final tile is partial
     num_cores_w = 2
     shard_w = math.ceil(w / num_cores_w / 32) * 32
 
