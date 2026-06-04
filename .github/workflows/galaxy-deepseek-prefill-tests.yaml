@@ -15,7 +15,8 @@ on:
           - mla
           - kv_cache_table
           - prefill_block
-          - prefill_transformer
+          - prefill_transformer_25k
+          - prefill_transformer_5k
         default: 'all'
       platform:
         required: false
