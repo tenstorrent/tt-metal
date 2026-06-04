@@ -429,31 +429,36 @@ class DramCorePrefetcher(LightweightModule):
         )
 
     def dynamic_worker_core_grid(self, num_cores: int) -> ttnn.CoreRangeSet:
-        """Allocate ``num_cores`` worker cores from rows below the receiver rectangle.
+        """Allocate ``num_cores`` worker cores as a SOLID rectangle below the receiver rectangle.
 
-        The receiver rectangle occupies rows ``0..num_receiver_cores-1``; workers spill into rows
-        ``num_receiver_cores..`` in row-major order, wrapping to a new row when the chip's column
-        count is exhausted.
+        The receiver rectangle occupies rows ``0..num_receiver_cores-1``; the returned grid sits in
+        rows ``num_receiver_cores..``. It must be a filled rectangle (``num_cores() == bounding-box``)
+        because consumers like the residual RMSNorm assert ``shard_spec.grid.num_cores() ==
+        bbox_num_cores`` — a ragged row-major spill (one full row + a partial tail) fails that check.
+
+        We pick the tallest rectangle ``width x height`` with ``width * height == num_cores`` that
+        fits in ``grid_x`` columns and the available rows below the receiver rectangle, anchored at
+        ``(0, num_receiver_cores)``. (The worker-core Prefetcher likewise returns a tall rectangle.)
         """
         grid = self.mesh_device.compute_with_storage_grid_size()
         grid_x, grid_y = grid.x, grid.y
         rows_left = grid_y - self.num_receiver_cores
-        cores_per_row = grid_x
-        assert num_cores <= rows_left * cores_per_row, (
-            f"dynamic_worker_core_grid: requested {num_cores} cores but only "
-            f"{rows_left * cores_per_row} cores are available below the receiver rectangle "
+        row0 = self.num_receiver_cores
+        # Tallest rectangle: largest height that divides num_cores, fits the available rows, and
+        # leaves a width that fits the column count.
+        height = next(
+            (h for h in range(min(rows_left, num_cores), 0, -1) if num_cores % h == 0 and num_cores // h <= grid_x),
+            0,
+        )
+        assert height > 0, (
+            f"dynamic_worker_core_grid: cannot fit {num_cores} cores into a rectangle within "
+            f"{rows_left} rows x {grid_x} cols below the receiver rectangle "
             f"(grid={grid_x}x{grid_y}, rect_rows={self.num_receiver_cores})."
         )
-        full_rows = num_cores // cores_per_row
-        tail = num_cores % cores_per_row
-        ranges = []
-        row0 = self.num_receiver_cores
-        if full_rows > 0:
-            ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, row0), ttnn.CoreCoord(grid_x - 1, row0 + full_rows - 1)))
-        if tail > 0:
-            tail_row = row0 + full_rows
-            ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, tail_row), ttnn.CoreCoord(tail - 1, tail_row)))
-        return ttnn.CoreRangeSet(ranges)
+        width = num_cores // height
+        return ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, row0), ttnn.CoreCoord(width - 1, row0 + height - 1))]
+        )
 
     # ---- Private ----
 
