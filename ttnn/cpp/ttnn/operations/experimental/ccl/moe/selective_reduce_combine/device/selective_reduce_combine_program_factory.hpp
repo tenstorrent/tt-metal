@@ -10,6 +10,16 @@
 
 namespace ttnn::experimental::prim {
 
+namespace detail {
+
+uint32_t compute_num_worker_cores(
+    const Tensor& input_tensor,
+    uint32_t hidden_size,
+    uint32_t num_token_parallel_cores,
+    uint32_t num_data_parallel_cores);
+
+}  // namespace detail
+
 struct SelectiveReduceCombineProgramArtifacts {
     tt::tt_metal::KernelHandle reader_kernel_id{};
     tt::tt_metal::KernelHandle writer_kernel_id{};

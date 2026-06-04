@@ -43,6 +43,21 @@ std::vector<uint32_t> data_parallel_split(
     return data_parallel_sizes_bytes;
 }
 
+uint32_t compute_num_worker_cores(
+    const Tensor& input_tensor,
+    const uint32_t hidden_size,
+    const uint32_t num_token_parallel_cores,
+    const uint32_t num_data_parallel_cores) {
+    const auto fabric_max_packet_size_bytes = get_tt_fabric_channel_buffer_size_bytes();
+    const auto input_dtype = input_tensor.dtype();
+    const uint32_t max_packet_size_bytes =
+        input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
+    const uint32_t token_size_bytes = hidden_size * input_tensor.element_size();
+    const auto data_parallel_sizes_bytes =
+        data_parallel_split(token_size_bytes, max_packet_size_bytes, num_data_parallel_cores);
+    return num_token_parallel_cores * static_cast<uint32_t>(data_parallel_sizes_bytes.size());
+}
+
 auto launch_mux_workers(
     const MeshDevice& mesh_device,
     const CoreRangeSet& mux_core_range_set,
@@ -473,16 +488,6 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     // Writer compute sync: when used from MoE, use matmul's data-ready semaphore; else create local (standalone).
     const uint32_t writer_compute_sync_semaphore_id = compute_sync_semaphore_id;
 
-    // Each link's termination master is incremented by every other worker on that link, so the
-    // local-termination wait count must be (workers per link - 1). Using num_data_parallel_cores - 1
-    // here is only correct when num_workers_per_link == num_data_parallel_cores (e.g. WH layouts);
-    // on layouts where a link spans multiple token-parallel groups (e.g. BH num_links=2) the
-    // semaphore overshoots that smaller target and an exact-match wait deadlocks.
-    TT_FATAL(
-        num_worker_cores % num_links == 0,
-        "num_worker_cores ({}) must be divisible by num_links ({})",
-        num_worker_cores,
-        num_links);
     const uint32_t num_workers_per_link = num_worker_cores / num_links;
 
     std::unordered_map<std::string, uint32_t> writer_named_ct_args = {
