@@ -175,6 +175,12 @@ template tt::tt_metal::Tensor from_vector<int32_t, ttnn::DataType::INT32>(
     ttnn::distributed::MeshDevice*,
     ttnn::Layout,
     const ttnn::distributed::TensorToMesh*);
+template tt::tt_metal::Tensor from_vector<uint16_t, ttnn::DataType::UINT16>(
+    const std::vector<uint16_t>&,
+    const ttnn::Shape&,
+    ttnn::distributed::MeshDevice*,
+    ttnn::Layout,
+    const ttnn::distributed::TensorToMesh*);
 
 bool is_tensor_initialized(const tt::tt_metal::Tensor& tensor) {
     return tensor.tensor_attributes != nullptr;

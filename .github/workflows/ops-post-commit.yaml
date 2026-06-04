@@ -1,5 +1,4 @@
 name: "[internal] ops unit tests impl"
-
 on:
   workflow_call:
     inputs:
@@ -23,12 +22,12 @@ on:
         type: boolean
         default: false
       enable-lightweight-kernel-asserts:
-        description: 'Enable lightweight kernel asserts'
+        description: "Enable lightweight kernel asserts"
         required: false
         type: boolean
         default: false
       enable-llk-asserts:
-        description: 'Enable LLK asserts'
+        description: "Enable LLK asserts"
         required: false
         type: boolean
         default: false
@@ -41,7 +40,6 @@ on:
         type: string
         default: ""
         description: "Commit SHA to test (default: HEAD)"
-
   workflow_dispatch:
     inputs:
       arch:
@@ -121,7 +119,7 @@ jobs:
     runs-on: ${{ format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label) }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: ${{ format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) || inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
@@ -207,6 +205,5 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

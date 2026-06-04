@@ -106,7 +106,6 @@ constexpr uint32_t leids_aligned_page = decltype(leids_args)::AlignedPageSize;
 constexpr uint32_t cnt_page_bytes = decltype(counts_args)::AlignedPageSize;
 constexpr uint32_t off_page_bytes = decltype(offsets_args)::AlignedPageSize;
 
-constexpr uint32_t TILE_H = 32U;
 constexpr uint32_t SENTINEL = 0xFFFFFFFFU;
 constexpr uint16_t K_SLOT_SENTINEL = 0xFFFFU;
 constexpr uint32_t PLAN_CHUNK = 32U;
@@ -280,8 +279,7 @@ void kernel_main() {
     if (my_core_idx == 0) {
         // Wait for all other cores to publish their counts.
         if (num_total_cores > 1U) {
-            volatile tt_l1_ptr uint32_t* phase1_sem =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scan_phase1_sem_id));
+            volatile tt_l1_ptr uint32_t* phase1_sem = get_sem_ptr(scan_phase1_sem_id);
             noc_semaphore_wait(phase1_sem, num_total_cores - 1U);
         }
 
@@ -374,8 +372,7 @@ void kernel_main() {
             phase2_sem_ptr, phase2_sem_addr, mcast_sx, mcast_sy, mcast_ex, mcast_ey, mcast_num_dests_incl_self);
     } else {
         // Non-lead cores wait for phase 2 signal.
-        volatile tt_l1_ptr uint32_t* phase2_sem =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scan_phase2_sem_id));
+        volatile tt_l1_ptr uint32_t* phase2_sem = get_sem_ptr(scan_phase2_sem_id);
         noc_semaphore_wait(phase2_sem, 1U);
     }
 
@@ -503,8 +500,7 @@ void kernel_main() {
     // ===========================================================
     if (my_core_idx == 0) {
         if (num_total_cores > 1U) {
-            volatile tt_l1_ptr uint32_t* phase3_sem =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scan_phase3_sem_id));
+            volatile tt_l1_ptr uint32_t* phase3_sem = get_sem_ptr(scan_phase3_sem_id);
             noc_semaphore_wait(phase3_sem, num_total_cores - 1U);
         }
         // Signal plan_ready_sem on every core (incl. lead) via ONE multicast.
@@ -518,15 +514,14 @@ void kernel_main() {
     // ===========================================================
     // WORKER PHASE: wait for plan_ready, then gather rows
     // ===========================================================
-    volatile tt_l1_ptr uint32_t* plan_ready_sem =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(plan_ready_sem_id));
+    volatile tt_l1_ptr uint32_t* plan_ready_sem = get_sem_ptr(plan_ready_sem_id);
     noc_semaphore_wait(plan_ready_sem, 1U);
 
     // Pull offsets[e_local] from DRAM so we can short-circuit reads for
     // tile-rows past the last active expert slice.
     noc_async_read(off_addrgen.get_noc_addr(0), (uint32_t)stage, (e_local + 1U) * sizeof(uint32_t));
     noc_async_read_barrier();
-    const uint32_t max_active_tiles = stage[e_local] / TILE_H;
+    const uint32_t max_active_tiles = stage[e_local] / tt::constants::TILE_HEIGHT;
 
     // Each core processes interleaved tile-rows [my_worker_start, my_worker_start+72,
     // my_worker_start+144, ...]. my_worker_count is uniform (= tiles_group_1) so
@@ -555,8 +550,8 @@ void kernel_main() {
     const uint64_t zeros_noc = get_noc_addr(MEM_ZEROS_BASE);
     constexpr uint32_t zero_chunk_bytes = MEM_ZEROS_SIZE;
     for (uint32_t step = 0; step < my_active_count; ++step, tile_row += worker_stride) {
-        uint64_t plan_noc = plan_addrgen.get_noc_addr(0, tile_row * TILE_H * sizeof(uint32_t));
-        noc_async_read(plan_noc, plan_l1_addr, TILE_H * sizeof(uint32_t));
+        uint64_t plan_noc = plan_addrgen.get_noc_addr(0, tile_row * tt::constants::TILE_HEIGHT * sizeof(uint32_t));
+        noc_async_read(plan_noc, plan_l1_addr, tt::constants::TILE_HEIGHT * sizeof(uint32_t));
         noc_async_read_barrier();
 
         for (uint32_t chunk = 0; chunk < num_chunks; ++chunk) {
@@ -567,7 +562,7 @@ void kernel_main() {
             uint32_t read_bytes = is_last_chunk ? last_chunk_bytes : hidden_chunk_bytes;
             uint32_t pad_bytes = hidden_chunk_bytes - read_bytes;
 
-            for (uint32_t r = 0; r < TILE_H; ++r) {
+            for (uint32_t r = 0; r < tt::constants::TILE_HEIGHT; ++r) {
                 uint32_t src = plan_l1_buf[r];
                 uint32_t row_dst = dst + r * hidden_chunk_bytes;
                 if (src == SENTINEL) {

@@ -22,6 +22,9 @@ uint32_t get_relative_cq_offset(uint8_t cq_id, uint32_t cq_size) { return cq_id 
 uint16_t get_umd_channel(uint16_t channel) { return channel & 0x3; }
 
 uint32_t get_absolute_cq_offset(uint16_t channel, uint8_t cq_id, uint32_t cq_size, uint32_t base) {
+    if (base != 0) {
+        return base + get_relative_cq_offset(cq_id, cq_size);
+    }
     return base + (DispatchSettings::MAX_HUGEPAGE_SIZE * get_umd_channel(channel)) +
            ((channel >> 2) * DispatchSettings::MAX_DEV_CHANNEL_SIZE) + get_relative_cq_offset(cq_id, cq_size);
 }

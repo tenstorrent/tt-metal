@@ -627,7 +627,9 @@ class DispatcherData:
                 # not at address 0 like Tensix kernels, so no base adjustment is needed.
                 kernel_offset = kernel_text_offset
             else:
-                kernel_offset = kernel_config_base + kernel_text_offset
+                # For most blocks, the kernel is loaded at an offset from the config base, so we add them together to get the actual load address.
+                # The & 0xFFFFFFFF is needed to wrap around to 32 bits, since the offset can be negative and Python ints are unbounded.
+                kernel_offset = (kernel_config_base + kernel_text_offset) & 0xFFFFFFFF
         else:
             kernel_path = None
             kernel_xip_path = None

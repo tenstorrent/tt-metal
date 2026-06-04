@@ -1,11 +1,10 @@
 name: "(Galaxy) DeepSeek Prefill tests"
 
 on:
-
   workflow_dispatch:
     inputs:
       test-type:
-        description: 'Select which tests to run'
+        description: "Select which tests to run"
         required: true
         type: choice
         options:
@@ -13,6 +12,7 @@ on:
           - module
           - moe_gate
           - mla
+          - kv_cache_table
           - prefill_block
           - prefill_transformer
         default: 'all'
@@ -42,22 +42,28 @@ on:
         description: "Enable Link Time Optimization (LTO)"
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   Galaxy-DeepSeek-Prefill-tests:
-    needs: build-artifact
+    needs: [check-harbor, build-artifact]
     secrets: inherit
     uses: ./.github/workflows/galaxy-deepseek-prefill-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: bh_galaxy

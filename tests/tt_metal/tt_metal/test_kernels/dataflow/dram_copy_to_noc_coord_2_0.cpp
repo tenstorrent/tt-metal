@@ -68,6 +68,8 @@ void kernel_main() {
     bool use_multicast_semaphore_inc = static_cast<bool>(get_arg(args::use_multicast_semaphore_inc));
     std::uint32_t mcast_dst_end_x = get_arg(args::mcast_dst_end_x);
     std::uint32_t mcast_dst_end_y = get_arg(args::mcast_dst_end_y);
+    bool use_write_with_state = static_cast<bool>(get_arg(args::use_write_with_state));
+    bool use_inline_dw_write_from_state = static_cast<bool>(get_arg(args::use_inline_dw_write_from_state));
 
     // We will assert later. This kernel will hang.
     // Need to signal completion to dispatcher before hanging so that
@@ -132,6 +134,30 @@ void kernel_main() {
     if (use_inline_dw_write) {
         noc.inline_dw_write(
             dst_unicast_endpoint, local_buffer[0], {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = buffer_dst_addr});
+    } else if (use_write_with_state) {
+        // Stateful write: the destination coordinate is programmed into NOC_RET_ADDR by set_async_write_state.
+        // Exercises DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE, which must reconstruct the
+        // destination from NOC_RET_ADDR (not the sender's own coordinate in NOC_TARG_ADDR). buffer_size is kept
+        // <= NOC_MAX_BURST_SIZE by the host so this takes the one-packet path with a deterministic length.
+        noc.set_async_write_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+            dst_unicast_endpoint, buffer_size, {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = buffer_dst_addr});
+        noc.async_write_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+            local_buffer,
+            dst_unicast_endpoint,
+            buffer_size,
+            {},
+            {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = buffer_dst_addr});
+        noc.async_write_barrier();
+    } else if (use_inline_dw_write_from_state) {
+        // Mirror cq_noc_inline_dw_write_with_state: program the inline-write destination into the WR_REG
+        // command buffer, then sanitize it straight from those registers via DEBUG_SANITIZE_NOC_ADDR_FROM_STATE
+        // (the macro under test). The destination coordinate is invalid, so the sanitizer must flag the
+        // programmed target. We never issue the write -- the sanitizer hangs first, matching cq's
+        // sanitize-before-send ordering.
+        uint64_t dst = get_noc_addr(dst_noc_x, dst_noc_y, buffer_dst_addr);
+        noc_inline_dw_write_set_state<false /*posted*/, true /*set_val*/>(
+            dst, local_buffer[0], 0xF, NCRISC_WR_REG_CMD_BUF, noc_index);
+        DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc_index, NCRISC_WR_REG_CMD_BUF);
     } else {
         noc.async_write(
             local_buffer,

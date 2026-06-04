@@ -46,7 +46,7 @@ on:
 
       # ── SKU selection ─────────────────────────────────────────────
       skus:
-        description: "SKUs to test (comma-separated). Options: all, wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf, bh_p150, bh_loudbox, bh_quietbox_2, bh_galaxy, bh_galaxy_perf"
+        description: "SKUs to test (comma-separated). Options: [all, wh_all, bh_all], [wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf], [bh_p150, bh_p300, bh_quietbox_2, bh_galaxy]"
         required: false
         type: string
         default: "all"
@@ -116,8 +116,10 @@ jobs:
       - name: Resolve SKU selection
         id: resolve-skus
         run: |
-          ALL_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf,bh_p150,bh_loudbox,bh_p300,bh_quietbox_2,bh_galaxy,bh_galaxy_perf"
-          VALID_SKUS="wh_n150 wh_n300 wh_llmbox wh_llmbox_perf wh_galaxy wh_galaxy_perf bh_p150 bh_loudbox bh_p300 bh_quietbox_2 bh_galaxy bh_galaxy_perf"
+          WH_SKUS="wh_n150,wh_n300,wh_llmbox,wh_llmbox_perf,wh_galaxy,wh_galaxy_perf"
+          BH_SKUS="bh_p150,bh_p300,bh_quietbox_2,bh_galaxy"
+          ALL_SKUS="$WH_SKUS,$BH_SKUS"
+          VALID_SKUS="wh_n150 wh_n300 wh_llmbox wh_llmbox_perf wh_galaxy wh_galaxy_perf bh_p150 bh_p300 bh_quietbox_2 bh_galaxy wh_all bh_all"
           SKU_INPUT="${{ inputs.skus || 'all' }}"
 
           # Trim leading/trailing whitespace from the entire input
@@ -126,7 +128,7 @@ jobs:
           if [[ "$SKU_INPUT" == "all" ]]; then
             SKUS="$ALL_SKUS"
           else
-            SKUS=""
+            SKUS_RAW=""
             IFS=',' read -ra ITEMS <<< "$SKU_INPUT"
             for item in "${ITEMS[@]}"; do
               # Trim leading/trailing whitespace from each token
@@ -134,10 +136,28 @@ jobs:
               # Skip empty tokens (e.g. from trailing commas)
               [[ -z "$item" ]] && continue
               if [[ ! " $VALID_SKUS " =~ " $item " ]]; then
-                echo "::error::Invalid SKU '$item'. Valid options: all, wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf, bh_p150, bh_loudbox, bh_p300, bh_quietbox_2, bh_galaxy, bh_galaxy_perf"
+                echo "::error::Invalid SKU '$item'. Valid options: [all, wh_all, bh_all], [wh_n150, wh_n300, wh_llmbox, wh_llmbox_perf, wh_galaxy, wh_galaxy_perf], [bh_p150, bh_p300, bh_quietbox_2, bh_galaxy]"
                 exit 1
               fi
-              SKUS="${SKUS:+$SKUS,}$item"
+              if [[ "$item" == "wh_all" ]]; then
+                SKUS_RAW="${SKUS_RAW:+$SKUS_RAW,}$WH_SKUS"
+              elif [[ "$item" == "bh_all" ]]; then
+                SKUS_RAW="${SKUS_RAW:+$SKUS_RAW,}$BH_SKUS"
+              else
+                SKUS_RAW="${SKUS_RAW:+$SKUS_RAW,}$item"
+              fi
+            done
+
+            # Deduplicate while preserving first-seen order.
+            declare -A seen
+            SKUS=""
+            IFS=',' read -ra EXPANDED <<< "$SKUS_RAW"
+            for sku in "${EXPANDED[@]}"; do
+              [[ -z "$sku" ]] && continue
+              if [[ -z "${seen[$sku]}" ]]; then
+                seen[$sku]=1
+                SKUS="${SKUS:+$SKUS,}$sku"
+              fi
             done
           fi
 
@@ -257,28 +277,40 @@ jobs:
               sys.exit(1)
           PYEOF
 
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   # ── Build (only if at least one combo has tests) ─────────────────
   build-artifact:
-    needs: preflight
+    needs: [check-harbor, preflight]
     if: ${{ needs.preflight.outputs.has-any-tests == 'true' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
 
+  resolve-docker-pull-refs:
+    needs: [check-harbor, build-artifact]
+    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+
   # ── Tier 1 ────────────────────────────────────────────────────────
   t1-unit-tests:
-    needs: [build-artifact, preflight]
+    needs: [resolve-docker-pull-refs, build-artifact, preflight]
     if: ${{ inputs.tier-1 && inputs.run-unit-tests && needs.preflight.outputs.has-t1-unit == 'true' }}
     secrets: inherit
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
@@ -287,12 +319,12 @@ jobs:
       tier: "1"
 
   t1-e2e-tests:
-    needs: [build-artifact, preflight]
+    needs: [resolve-docker-pull-refs, build-artifact, preflight]
     if: ${{ inputs.tier-1 && inputs.run-e2e-tests && needs.preflight.outputs.has-t1-e2e == 'true' }}
     secrets: inherit
     uses: ./.github/workflows/models-e2e-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
@@ -301,12 +333,12 @@ jobs:
       tier: "1"
 
   t1-sweep-tests:
-    needs: [build-artifact, preflight]
+    needs: [resolve-docker-pull-refs, build-artifact, preflight]
     if: ${{ inputs.tier-1 && inputs.run-sweep-tests && needs.preflight.outputs.has-t1-sweep == 'true' }}
     secrets: inherit
     uses: ./.github/workflows/models-sweep-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
@@ -316,12 +348,12 @@ jobs:
 
   # ── Tier 2 ────────────────────────────────────────────────────────
   t2-unit-tests:
-    needs: [build-artifact, preflight]
+    needs: [resolve-docker-pull-refs, build-artifact, preflight]
     if: ${{ inputs.tier-2 && inputs.run-unit-tests && needs.preflight.outputs.has-t2-unit == 'true' }}
     secrets: inherit
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
@@ -330,12 +362,12 @@ jobs:
       tier: "2"
 
   t2-e2e-tests:
-    needs: [build-artifact, preflight]
+    needs: [resolve-docker-pull-refs, build-artifact, preflight]
     if: ${{ inputs.tier-2 && inputs.run-e2e-tests && needs.preflight.outputs.has-t2-e2e == 'true' }}
     secrets: inherit
     uses: ./.github/workflows/models-e2e-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
@@ -344,12 +376,12 @@ jobs:
       tier: "2"
 
   t2-sweep-tests:
-    needs: [build-artifact, preflight]
+    needs: [resolve-docker-pull-refs, build-artifact, preflight]
     if: ${{ inputs.tier-2 && inputs.run-sweep-tests && needs.preflight.outputs.has-t2-sweep == 'true' }}
     secrets: inherit
     uses: ./.github/workflows/models-sweep-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
@@ -359,12 +391,12 @@ jobs:
 
   # ── Tier 3 ────────────────────────────────────────────────────────
   t3-unit-tests:
-    needs: [build-artifact, preflight]
+    needs: [resolve-docker-pull-refs, build-artifact, preflight]
     if: ${{ inputs.tier-3 && inputs.run-unit-tests && needs.preflight.outputs.has-t3-unit == 'true' }}
     secrets: inherit
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
@@ -373,12 +405,12 @@ jobs:
       tier: "3"
 
   t3-e2e-tests:
-    needs: [build-artifact, preflight]
+    needs: [resolve-docker-pull-refs, build-artifact, preflight]
     if: ${{ inputs.tier-3 && inputs.run-e2e-tests && needs.preflight.outputs.has-t3-e2e == 'true' }}
     secrets: inherit
     uses: ./.github/workflows/models-e2e-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}

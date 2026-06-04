@@ -244,24 +244,18 @@ def run_generation(
         input_ids_padded = torch.nn.functional.pad(input_ids, (0, padded_len - prompt_len), value=0)
         logger.info(f"Prompt tokens: {prompt_len} (padded to {padded_len})")
 
-        # Prefill
-        logger.info("Prefilling...")
-        profiler.start(f"compile_prefill", iteration=prompt_idx)
-
+        # Prefill — two calls so TTFT is measured *after* kernel compilation.
+        # The first call (warmup) compiles the prefill program for this bucket
+        # length and writes the prompt's K/V into the cache. The second call
+        # hits the same cached program and overwrites the same K/V slots with
+        # identical data — the timing is dominated by inference, not compile.
+        # Pattern mirrors tt_transformers simple_text_demo.py and gpt_oss
+        # text_demo.py; `prefill_time_to_token` below now reflects inference
+        # only.
         import traceback as tb
 
-        tokens_tt = ttnn.from_torch(
-            input_ids_padded.unsqueeze(0).to(torch.int32),
-            device=mesh_device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.uint32,
-            mesh_mapper=replicate,
-        )
-        embeds = model.embed_tokens(tokens_tt)
-        embeds = ttnn.reshape(embeds, (1, 1, padded_len, model_args.hidden_size))
-        embeds = ttnn.to_layout(embeds, ttnn.TILE_LAYOUT)
-
-        # CPU tensors for per-layer input computation (E2B/E4B)
+        # CPU tensors for per-layer input computation (E2B/E4B) — reusable
+        # across both prefill calls below.
         import torch.nn.functional as F
 
         embeds_torch = (
@@ -277,7 +271,55 @@ def run_generation(
 
         # Get last token tile for first decode token
         get_last_token = ((prompt_len - 1) // 32) * 32
+
+        def _build_prefill_embeds():
+            """Build a fresh ttnn embeds tensor for ttnn_prefill_forward.
+
+            The model deallocates intermediate hidden_states tensors as it
+            walks layers (memory pressure on long prompts), which frees the
+            input embeds buffer too. Rebuild before each prefill call so the
+            warmup pass and the measured pass each see a live tensor.
+            Pattern matches tt_transformers' generator.prefill_forward_text,
+            which receives torch tokens and re-tokenizes/re-embeds internally
+            each call.
+            """
+            tokens_tt = ttnn.from_torch(
+                input_ids_padded.unsqueeze(0).to(torch.int32),
+                device=mesh_device,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                dtype=ttnn.uint32,
+                mesh_mapper=replicate,
+            )
+            e = model.embed_tokens(tokens_tt)
+            e = ttnn.reshape(e, (1, 1, padded_len, model_args.hidden_size))
+            return ttnn.to_layout(e, ttnn.TILE_LAYOUT)
+
+        # ── Warmup prefill (compile cost, untimed for TTFT) ─────────────
+        logger.info("Prefill warmup (compiling)...")
+        profiler.start(f"compile_prefill", iteration=prompt_idx)
         try:
+            warmup_embeds = _build_prefill_embeds()
+            warmup_logits = model.ttnn_prefill_forward(
+                warmup_embeds,
+                page_table=page_table_tt,
+                kv_cache=tt_kv_cache,
+                get_last_token=get_last_token,
+                input_ids_torch=input_ids_padded.unsqueeze(0),
+                embeds_torch=embeds_torch,
+            )
+        except Exception as e:
+            logger.error(f"Prefill warmup failed: {e}")
+            tb.print_exc()
+            raise
+        warmup_logits.deallocate(True)
+        profiler.end(f"compile_prefill", iteration=prompt_idx)
+        logger.info(f"Prefill warmup done in {profiler.get_duration('compile_prefill', iteration=prompt_idx):.2f}s")
+
+        # ── Measured prefill (TTFT) ─────────────────────────────────────
+        logger.info("Prefilling (measured)...")
+        profiler.start(f"inference_prefill", iteration=prompt_idx)
+        try:
+            embeds = _build_prefill_embeds()
             logits = model.ttnn_prefill_forward(
                 embeds,
                 page_table=page_table_tt,
@@ -291,7 +333,9 @@ def run_generation(
             tb.print_exc()
             raise
 
-        # Sample first token (argmax from last position)
+        # Sample first token (argmax from last position) — included in the
+        # TTFT window so the metric matches the user-visible "time to first
+        # token" (tt_transformers / gpt_oss put argmax inside the same window).
         if is_mesh:
             logits_cpu = ttnn.to_torch(ttnn.get_device_tensors(logits)[0])
         else:
@@ -301,15 +345,10 @@ def run_generation(
         # Get logits at the actual last prompt position within the tile
         pos_in_tile = (prompt_len - 1) - get_last_token
         next_token = logits_cpu[0, 0, pos_in_tile, :].argmax().item()
-
-        profiler.end(f"compile_prefill", iteration=prompt_idx)
-
-        # Also record as inference_prefill (compile_prefill includes first-run compile cost)
-        profiler.start(f"inference_prefill", iteration=prompt_idx)
         profiler.end(f"inference_prefill", iteration=prompt_idx)
 
         logger.info(
-            f"Prefill done in {profiler.get_duration('compile_prefill', iteration=prompt_idx):.2f}s, "
+            f"Prefill measured in {profiler.get_duration('inference_prefill', iteration=prompt_idx):.2f}s, "
             f"first token: {next_token} = '{tokenizer.decode([next_token])}'"
         )
 
@@ -322,26 +361,25 @@ def run_generation(
         trace_device_inputs = None
 
         # ── Decode helpers ─────────────────────────────────────────────────
-        # Embedding + PLI computed on host (fast for single-token decode),
-        # transferred as ROW_MAJOR to device.  Trace captures decoder layers onward.
+        # Token IDs (+ optional PLI) staged on host; embedding lookup runs on
+        # device inside ``ttnn_decode_forward``. Trace captures decoder onward.
         # Sampling: SamplingGenerator for TP >= 2, host torch.argmax for TP = 1.
         on_device_sampling = model.sampling is not None
 
         def _make_decode_inputs(tok, pos):
             """Create host tensors for one decode iteration."""
-            embeds_torch, pli_torch = model.compute_host_embeddings(tok)
-            # ROW_MAJOR on host — TILE conversion happens on device inside the trace.
-            embeds_h = ttnn.from_torch(
-                embeds_torch,
+            pli_torch = model.compute_host_pli(tok)
+            tokens_h = ttnn.from_torch(
+                torch.tensor([[tok]], dtype=torch.int32),
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.uint32,
                 mesh_mapper=replicate,
             )
             pos_padded = torch.nn.functional.pad(
                 torch.tensor([pos], dtype=torch.int32).reshape(1, 1), (0, 31), "constant", 0
             )
             inputs = {
-                "embeds": embeds_h,
+                "tokens": tokens_h,
                 "position": ttnn.from_torch(
                     pos_padded,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -357,7 +395,7 @@ def run_generation(
             }
             if pli_torch is not None:
                 inputs["pli"] = ttnn.from_torch(
-                    pli_torch,
+                    pli_torch.to(torch.bfloat16),
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     dtype=ttnn.bfloat16,
                     mesh_mapper=replicate,
@@ -366,7 +404,7 @@ def run_generation(
 
         def _fwd(device_inputs):
             return model.ttnn_decode_forward(
-                x=device_inputs["embeds"],
+                x=device_inputs["tokens"],
                 current_pos=device_inputs["position"],
                 rot_mat_idxs=device_inputs["position_int32"],  # pos_int32 passed as rot_mat_idxs
                 page_table=page_table_tt,
@@ -395,7 +433,8 @@ def run_generation(
 
         sample_mode = "device" if on_device_sampling else "host"
         logger.info(
-            f"Decoding (trace={'ON' if enable_decode_trace else 'OFF'}, " f"embedding=host, sampling={sample_mode})..."
+            f"Decoding (trace={'ON' if enable_decode_trace else 'OFF'}, "
+            f"embedding=device, sampling={sample_mode})..."
         )
         profiler.start(f"inference_decode", iteration=prompt_idx)
 
@@ -518,11 +557,11 @@ def run_generation(
     profiler.end("run")
 
     # ── Performance metrics ──────────────────────────────────────────────
+    # compile_prefill = first (warmup) prefill call, includes kernel compile.
+    # inference_prefill = second prefill call, kernels already cached — drives TTFT.
     compile_prefill_time = profiler.get_duration("compile_prefill")
     compile_decode_time = profiler.get_duration("compile_decode")
-
-    # inference_prefill is a zero-duration marker (prefill compile+run are not separated yet)
-    total_inference_prefill_time = compile_prefill_time
+    total_inference_prefill_time = profiler.get_duration("inference_prefill")
 
     total_inference_decode_time = 0
     for i in range(1, num_tokens_generated_decode):  # Iteration 0 is the compile time

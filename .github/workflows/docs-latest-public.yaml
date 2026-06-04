@@ -59,6 +59,16 @@ jobs:
         run: |
           WHEEL_FILENAME=$(ls -1 *.whl)
           uv pip install $WHEEL_FILENAME
+      - name: Check TTNN ops are documented
+        # Verifies every registered ttnn op has an entry in docs/source/ttnn/ttnn/api.rst.
+        # Runs here (no hardware needed) rather than in nightly — catches missing docs on the PR that adds the op.
+        # ASan builds require LD_PRELOAD of the ASan runtime so Python can import the instrumented ttnn extension.
+        run: |
+          if [ "${{ inputs.build-type }}" = "ASan" ]; then
+            export LD_PRELOAD="$(clang-20 -print-resource-dir)/lib/linux/libclang_rt.asan-x86_64.so"
+            export ASAN_OPTIONS="detect_leaks=0"
+          fi
+          python3 scripts/detect_undocumented_ttnn_ops.py
       - name: Build Docs
         timeout-minutes: 15
         env:

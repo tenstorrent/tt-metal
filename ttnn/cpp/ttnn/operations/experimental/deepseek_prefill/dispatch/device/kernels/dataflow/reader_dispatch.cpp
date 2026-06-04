@@ -343,13 +343,13 @@ void kernel_main() {
             bool has_non_local = false;
 
             for (uint32_t t = 0; t < batch_count; t++) {
-                tt_l1_ptr int32_t* indices_t =
-                    reinterpret_cast<tt_l1_ptr int32_t*>(indices_base + t * aligned_indices_page_size);
+                tt_l1_ptr uint16_t* indices_t =
+                    reinterpret_cast<tt_l1_ptr uint16_t*>(indices_base + t * aligned_indices_page_size);
                 tt_l1_ptr uint16_t* weights_t =
                     reinterpret_cast<tt_l1_ptr uint16_t*>(weights_base + t * aligned_weights_page_size);
                 for (uint32_t k = 0; k < num_experts_per_tok; k++) {
-                    auto routed_expert = indices_t[k];
-                    if (((uint32_t)routed_expert & core_mask) != dispatch_core_idx) {
+                    uint32_t routed_expert = (uint32_t)indices_t[k];
+                    if ((routed_expert & core_mask) != dispatch_core_idx) {
                         continue;
                     }
                     auto expert_chip_og = expert_dispatch_table[routed_expert];
@@ -447,13 +447,13 @@ void kernel_main() {
 #else
             uint32_t token_input_addr = input_base + t * aligned_input_page_size;
 #endif
-            tt_l1_ptr int32_t* indices =
-                reinterpret_cast<tt_l1_ptr int32_t*>(indices_base + t * aligned_indices_page_size);
+            tt_l1_ptr uint16_t* indices =
+                reinterpret_cast<tt_l1_ptr uint16_t*>(indices_base + t * aligned_indices_page_size);
             tt_l1_ptr uint16_t* weights =
                 reinterpret_cast<tt_l1_ptr uint16_t*>(weights_base + t * aligned_weights_page_size);
 
             for (uint32_t k = 0; k < num_experts_per_tok; ++k) {
-                auto routed_expert = indices[k];
+                uint32_t routed_expert = (uint32_t)indices[k];
 
                 if (((uint32_t)routed_expert & core_mask) != dispatch_core_idx) {
                     continue;
