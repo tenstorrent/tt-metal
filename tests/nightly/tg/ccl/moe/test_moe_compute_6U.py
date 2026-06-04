@@ -65,14 +65,14 @@ MOE_DEVICE_PARAMS = {
     "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
     "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
     "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-    "trace_region_size": 750000,
+    "trace_region_size": 500000,
 }
 
 MOE_DEVICE_PARAMS_LINEAR = {
     "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
     "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
     "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-    "trace_region_size": 500000,
+    "trace_region_size": 750000,
 }
 
 
