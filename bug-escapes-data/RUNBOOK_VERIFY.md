@@ -218,7 +218,7 @@ If artifact reuse is available for this branch, also add `"use-artifacts-from-ru
 
 ## Step 6: Modify Workflow for Artifact Reuse (if applicable)
 
-If artifact reuse is available for a branch, you must modify the workflow file ON THAT BRANCH to accept `use-artifacts-from-run` as a dispatch input.
+If artifact reuse is available for a branch, modify the workflow file ON THAT BRANCH with three pure-YAML changes. No `workflow_dispatch` input is needed — the run ID is hardcoded directly.
 
 ### 6a: Read current workflow file from branch
 
@@ -230,40 +230,48 @@ FILE_SHA=$(cat /tmp/workflow_info.json | jq -r .sha)
 cat /tmp/workflow_info.json | jq -r .content | base64 -d > /tmp/workflow.yaml
 ```
 
-### 6b: Apply modifications
+### 6b: Apply the three YAML changes
 
-Using Python (write a script to /tmp and run it):
+```bash
+# 1. Add actions: read permission to the build-artifact job
+sed -i 's/    uses: .\/\.github\/workflows\/build-artifact\.yaml\n    permissions:\n      contents: read\n      packages: write/    uses: .\/\.github\/workflows\/build-artifact\.yaml\n    permissions:\n      contents: read\n      packages: write\n      actions: read/' /tmp/workflow.yaml
 
-```python
-with open('/tmp/workflow.yaml') as f:
-    content = f.read()
+# Use Python for the multi-line sed (simpler):
+python3 -c "
+content = open('/tmp/workflow.yaml').read()
 
-# 1. Add use-artifacts-from-run to workflow_dispatch inputs
-new_input = """      use-artifacts-from-run:
-        description: 'Reuse build artifacts from this run ID to skip the build step'
-        required: false
-        type: string
-        default: ''
-"""
-content = content.replace('jobs:\n  build-artifact:', new_input + 'jobs:\n  build-artifact:')
-
-# 2. Thread into build-artifact call
+# 1. Add 'actions: read' under the build-artifact permissions block
 content = content.replace(
-    '      enable-lto: ${{ inputs.enable-lto || false }}\n  generate-arch-matrix:',
-    "      enable-lto: ${{ inputs.enable-lto || false }}\n      use-artifacts-from-run: ${{ inputs.use-artifacts-from-run || '' }}\n  generate-arch-matrix:"
+    '    uses: ./.github/workflows/build-artifact.yaml\n    permissions:\n      contents: read\n      packages: write',
+    '    uses: ./.github/workflows/build-artifact.yaml\n    permissions:\n      contents: read\n      packages: write\n      actions: read'
 )
 
-# 3. Set tracy: false (Merge Gate builds don't include tracy artifacts)
+# 2. Set tracy: false (Merge Gate builds don't include tracy artifacts)
 content = content.replace('      tracy: true', '      tracy: false')
 
-with open('/tmp/workflow_modified.yaml', 'w') as f:
-    f.write(content)
+# 3. Add use-artifacts-from-run directly under the with: block of build-artifact
+#    Insert after 'enable-lto:' line (last line of the with: block)
+content = content.replace(
+    '      enable-lto: \${{ inputs.enable-lto || false }}',
+    '      enable-lto: \${{ inputs.enable-lto || false }}\n      use-artifacts-from-run: {MERGE_GATE_RUN_ID}'
+)
+
+open('/tmp/workflow_modified.yaml', 'w').write(content)
+"
 ```
 
-Verify the output looks correct before pushing:
+Replace `{MERGE_GATE_RUN_ID}` with the actual run ID (e.g. `24989751483`).
+
+Verify before pushing:
 ```bash
-grep -A 5 "use-artifacts-from-run" /tmp/workflow_modified.yaml | head -20
-grep "tracy:" /tmp/workflow_modified.yaml
+grep -E "actions: read|tracy:|use-artifacts-from-run" /tmp/workflow_modified.yaml
+```
+
+Expected output:
+```
+      actions: read
+      tracy: false
+      use-artifacts-from-run: 24989751483
 ```
 
 ### 6c: Push modified workflow to the branch
@@ -272,13 +280,15 @@ grep "tracy:" /tmp/workflow_modified.yaml
 ENCODED=$(base64 -w 0 /tmp/workflow_modified.yaml)
 gh api repos/tenstorrent/tt-metal/contents/.github/workflows/{workflow_file} \
   -X PUT \
-  -f message="brain: add use-artifacts-from-run dispatch input for probe" \
+  -f message="brain: configure artifact reuse for probe" \
   -f content="$ENCODED" \
   -f sha="$FILE_SHA" \
   -f branch="brain/escape-before-{escape_id}"
 ```
 
-Repeat for the AFTER branch (read its file SHA separately — it may differ).
+Repeat for the AFTER branch (read its file SHA separately — it may differ). Use `after_merge_gate_run_id` for the AFTER branch's `use-artifacts-from-run` value.
+
+**Note:** When dispatching (Step 7), do NOT pass `use-artifacts-from-run` as a dispatch input — the run ID is already hardcoded in the workflow file. Just pass `architecture` and the test category flag.
 
 ---
 
