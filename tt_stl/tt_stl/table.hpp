@@ -18,7 +18,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/optional_reference.hpp>
 
-namespace tt::tt_metal::experimental {
+namespace ttsl {
 
 // A key -> value map with unique keys.
 //
@@ -189,13 +189,13 @@ public:
     // Looks `key` up without inserting: returns an optional reference to its
     // value, or an empty optional_reference if the key is absent. Never throws.
     // Usage: `if (auto v = table.get(key)) { use(*v); }`.
-    [[nodiscard]] ttsl::optional_reference<V> get(const K& key) noexcept {
+    [[nodiscard]] optional_reference<V> get(const K& key) noexcept {
         if (auto it = find(key); it != end()) {
             return it->second;
         }
         return std::nullopt;
     }
-    [[nodiscard]] ttsl::optional_reference<const V> get(const K& key) const noexcept {
+    [[nodiscard]] optional_reference<const V> get(const K& key) const noexcept {
         if (auto it = find(key); it != end()) {
             return it->second;
         }
@@ -220,4 +220,4 @@ private:
     Storage entries_;
 };
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace ttsl

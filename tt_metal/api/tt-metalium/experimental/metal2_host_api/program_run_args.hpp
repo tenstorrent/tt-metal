@@ -16,7 +16,7 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt_stl/table.hpp>
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 
 namespace tt::tt_metal::experimental {
@@ -53,8 +53,8 @@ struct ProgramRunArgs {
         //
         // NOTE: If a kernel runtime argument always has the same value for all nodes, passing
         // a common runtime argument would provide better dispatch efficiency.
-        using NamedRuntimeArgs = Table<std::string, uint32_t>;
-        Table<NodeCoord, NamedRuntimeArgs> runtime_arg_values;
+        using NamedRuntimeArgs = ttsl::Table<std::string, uint32_t>;
+        ttsl::Table<NodeCoord, NamedRuntimeArgs> runtime_arg_values;
 
         // Common runtime argument values (broadcast to every node).
         // Every argument in this kernel's RuntimeArgSchema::common_runtime_arg_names must be set.
@@ -66,7 +66,7 @@ struct ProgramRunArgs {
         AdvancedKernelRunArgs advanced_options;
     };
     // A KernelRunArgs must be specified for ALL kernels in the ProgramSpec, keyed by kernel name.
-    Table<KernelSpecName, KernelRunArgs> kernel_run_args;
+    ttsl::Table<KernelSpecName, KernelRunArgs> kernel_run_args;
 
     ////////////////////////////////////////////////////////////////////////
     // Tensor arguments
@@ -78,7 +78,7 @@ struct ProgramRunArgs {
     };
     // A TensorArgument must be specified for EVERY TensorParameter declared in the ProgramSpec.
     // The argument's TensorSpec must match the TensorParameter's TensorSpec (shape, layout, data type).
-    Table<TensorParameterName, TensorArgument> tensor_args;
+    ttsl::Table<TensorParameterName, TensorArgument> tensor_args;
 
     ////////////////////////////////////////////////////////////////////////
     // DFB parameters (optional, advanced use cases)
@@ -94,7 +94,7 @@ struct ProgramRunArgs {
         // the corresponding tensor_arg.
     };
     // DFBRunOverrides is optional. Provide entries only when overriding DFB sizes.
-    Table<DFBSpecName, DFBRunOverrides> dfb_run_overrides;
+    ttsl::Table<DFBSpecName, DFBRunOverrides> dfb_run_overrides;
 };
 
 //------------------------------------------------

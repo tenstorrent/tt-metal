@@ -13,7 +13,7 @@
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt_stl/table.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tile.hpp>
@@ -170,7 +170,7 @@ struct RemoteDataflowBufferSpec {
 
     // Producer-consumer node mapping: each entry pairs a producer node with the
     // consumer node it feeds.
-    using ProducerConsumerMap = Table<NodeCoord, NodeCoord>;
+    using ProducerConsumerMap = ttsl::Table<NodeCoord, NodeCoord>;
     ProducerConsumerMap producer_consumer_map;
 };
 

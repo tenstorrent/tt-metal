@@ -9,7 +9,7 @@
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
-#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt_stl/table.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -50,7 +50,7 @@ struct KernelAdvancedOptions {
     //       (It's an open question if we EVER want to support it.)
     //       It is included here just as a placeholder for use case feedback.
     //       Attempting to use it will trigger a runtime error.
-    Table<Nodes, /* num_threads */ uint32_t> node_specific_thread_counts;
+    ttsl::Table<Nodes, /* num_threads */ uint32_t> node_specific_thread_counts;
 
     ////////////////////////////////////////////////////////////////////////////////
     // Varargs
@@ -93,7 +93,7 @@ struct KernelAdvancedOptions {
     // TODO: This feature is truly bizarre. It will be removed from the API once
     //       existing uses are refactored to avoid it.
     [[deprecated("Per-node-vararg-count feature is deprecated and will be removed.")]]
-    Table<Nodes, /* num_varargs */ uint32_t> num_runtime_varargs_per_node;
+    ttsl::Table<Nodes, /* num_varargs */ uint32_t> num_runtime_varargs_per_node;
 
     ////////////////////////////////////////////////////////////////////////////////
     // Multi-threaded self-loop DFBs on compute kernels
@@ -116,7 +116,7 @@ struct KernelAdvancedOptions {
     enum class DFBSelfLoopScope { INTRA, INTER };
 
     // Self-loop DFBs on compute kernels: maps each self-looped DFB to its scope.
-    Table<DFBSpecName, DFBSelfLoopScope> dfb_self_loop_connectivities;
+    ttsl::Table<DFBSpecName, DFBSelfLoopScope> dfb_self_loop_connectivities;
 };
 
 // (Convenience aliases for nested types)
@@ -153,7 +153,7 @@ struct AdvancedKernelRunArgs {
     // Unnamed runtime argument "varargs"
     // (Companion to the vararg schema declared on KernelAdvancedOptions).
     // Specified per-node; length can vary per-node (as declared in schema).
-    Table<NodeCoord, Varargs> runtime_varargs;
+    ttsl::Table<NodeCoord, Varargs> runtime_varargs;
 
     // Unnamed common runtime argument "varargs"
     // (Companion to num_common_runtime_varargs in the schema.)

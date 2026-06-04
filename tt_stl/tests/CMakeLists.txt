@@ -14,6 +14,7 @@ target_sources(
         test_span.cpp
         test_strong_type.cpp
         test_small_vector.cpp
+        test_table.cpp
         test_tt_pause.cpp
         test_type_visitor.cpp
 )
