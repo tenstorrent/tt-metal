@@ -268,6 +268,9 @@ class TtSharedExpert(LightweightModule):
         self.subdevice_id = subdevice_id
         self.subdevice_cores = subdevice_cores
         self.weight_cache_path = weight_cache_path
+        # Holds the previous forward's reduce-scatter input buffer alive until the next forward,
+        # so it is not freed while its async reduce_scatter is still consuming it. See forward().
+        self._rs_input_keepalive = None
         self.cache_name_prefix = cache_name_prefix
 
         logger.debug(f"Initializing TtSharedExpert with emb_dim={emb_dim}, hidden_dim={hidden_dim}")
@@ -474,6 +477,18 @@ class TtSharedExpert(LightweightModule):
                 topology=self.topology,
                 subdevice_id=self.subdevice_id,
             )
+            # The reduce_scatter is async: its kernels keep reading `output_full` after this
+            # function returns. When this MoE layer runs the shared expert overlapped with the
+            # dispatch op (overlap_shared_expert_with_dispatch, on a separate sub-device),
+            # `output_full` would otherwise be freed here as the local goes out of scope, and the
+            # concurrent dispatch's host-side buffer allocation can reuse that just-freed DRAM slot
+            # (observed: dispatch `metadata` landing at output_full's exact address) — corrupting
+            # the still-in-flight reduce_scatter input and producing non-deterministic output.
+            # Keep `output_full` referenced until the next forward (callers fully synchronize
+            # between layer invocations, so the prior reduce_scatter has completed by then),
+            # extending its lifetime past the overlap window. Holding one buffer is the cost of
+            # correctness under the overlap.
+            self._rs_input_keepalive = output_full
         else:
             output = output_full
         logger.debug(f"After shared_expert_ffn: {output.shape}")
