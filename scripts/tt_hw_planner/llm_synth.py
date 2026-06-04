@@ -798,6 +798,64 @@ def _detect_call_signature_collisions(body: str) -> List[str]:
     return issues
 
 
+def _detect_missing_safe_id_export(body: str, safe_id: str) -> List[str]:
+    """Detect responses that fail the synth-prompt's public-surface contract:
+    the file MUST expose a top-level name `{safe_id}` (the component's
+    safe-id), so the test framework's
+    ``importlib.import_module(STUB_IMPORT_PATH); getattr(mod, COMPONENT_SAFE)``
+    succeeds.
+
+    Common LLM miss (Qwen2.5-14B audit, m_l_p iter 1): LLM writes
+    ``class TtMLP`` + ``def build(...)`` but forgets the module-level
+    ``m_l_p`` wrapper. Pytest then raises
+    ``AttributeError: module 'models.demos.qwen2._stubs.m_l_p' has no
+    attribute 'm_l_p'`` BEFORE any PCC test even runs.
+
+    The prompt at llm_synth.py:120-137 explicitly specifies the contract
+    with a copy-paste template; this validator enforces it pre-apply so
+    a non-compliant response is rejected with a clear note instead of
+    silently passing through to a confusing pytest AttributeError.
+
+    Sibling of :func:`_detect_call_signature_collisions` and
+    :func:`_detect_self_inheriting_classes` — same AST-based, pre-apply
+    pattern.
+    """
+    if not safe_id:
+        return []
+    import ast
+
+    try:
+        tree = ast.parse(body)
+    except SyntaxError:
+        return []
+    # Top-level names: function defs, class defs, top-level assignments
+    # (`X = ...`). Walk only the module body, NOT recursively — we want
+    # the public-surface names, not anything nested inside a function.
+    top_level: set = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            top_level.add(node.name)
+        elif isinstance(node, ast.ClassDef):
+            top_level.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name):
+                    top_level.add(tgt.id)
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name):
+                top_level.add(node.target.id)
+    if safe_id in top_level:
+        return []
+    return [
+        f"top-level name {safe_id!r} not defined; test framework imports "
+        f"it via `getattr(<stub_module>, '{safe_id}')` and will raise "
+        f"`AttributeError: module has no attribute '{safe_id}'` before "
+        f"the PCC test runs. The synth prompt at llm_synth.py:120-137 "
+        f"specifies the required module-level wrapper template (the "
+        f"`_instance = None; def {safe_id}(*args, **kwargs): ...` block)."
+    ]
+
+
 def _detect_self_inheriting_classes(body: str) -> List[str]:
     """Return class names that inherit from `_stub_mod.<same_name>` (or any
     submodule attribute matching the class's own name). This pattern is a
@@ -1861,8 +1919,33 @@ def apply_all_responses(
     data = json.loads(status_path.read_text())
     new_components = {c["name"] for c in data.get("components", []) if c.get("status") == "NEW"}
     new_safe_to_name = {_safe_id(n): n for n in new_components}
+    adapt_components = {c["name"] for c in data.get("components", []) if c.get("status") == "ADAPT"}
+    adapt_safe_to_name = {_safe_id(n): n for n in adapt_components}
     adapt_targets = _collect_adapt_targets(demo_dir=demo_dir, status_data=data)
     adapt_safe_to = {_safe_id(name): (name, dst) for (name, _sib, dst, _ss, _ns) in adapt_targets}
+
+    # 2026-06-04 Fix 5: refuse to proceed when the manifest is empty AND
+    # the agent produced responses. Empty components + non-empty responses
+    # is the classic "scaffold subprocess silently wiped bringup_status.json"
+    # signal. Without this guard the apply step silently rejects every
+    # LLM solution (status="skipped:unmatched") and the iter loop wastes
+    # attempts on stale stub code.
+    if not new_components and not adapt_components:
+        try:
+            _response_files = [p for p in responses_dir.iterdir() if p.is_file() and p.suffix == ".py"]
+        except Exception:
+            _response_files = []
+        if _response_files:
+            raise LLMError(
+                f"`{status_path.name}` has 0 NEW and 0 ADAPT components but "
+                f"`{_BYO_RESPONSES_DIRNAME}/` has {len(_response_files)} response "
+                f"file(s) to apply. This is the corrupted-manifest signal — "
+                f"applying would silently reject every response. Likely cause: "
+                f"a recent scaffold subprocess overwrote the manifest with an "
+                f"empty plan (e.g., torch-less Python). Re-run scaffold with "
+                f"a torch-equipped Python, or restore `{status_path.name}` "
+                f"from version control before retrying."
+            )
 
     results: List[ApplyResponseResult] = []
     for fp in sorted(responses_dir.iterdir()):
@@ -1911,7 +1994,7 @@ def apply_all_responses(
         if not fname.endswith(".py"):
             continue
         safe = fp.stem
-        component_name = new_safe_to_name.get(safe)
+        component_name = new_safe_to_name.get(safe) or adapt_safe_to_name.get(safe)
         if component_name is None:
             results.append(
                 ApplyResponseResult(
@@ -1919,11 +2002,11 @@ def apply_all_responses(
                     stub_path="",
                     backup_path=None,
                     response_chars=fp.stat().st_size,
-                    status="skipped:not-new",
+                    status="skipped:unmatched",
                     note=(
-                        f"`{fname}` does not match any NEW component in the "
-                        f"current bring-up plan (probably already-closed or "
-                        f"never registered). Left untouched."
+                        f"`{fname}` does not match any NEW or ADAPT component "
+                        f"in the current bring-up plan (probably already-closed "
+                        f"or never registered). Left untouched."
                     ),
                 )
             )
@@ -2081,15 +2164,16 @@ def apply_response(
             f"Component {component_name!r} not found in bringup_status.json. "
             f"Available: {[c['name'] for c in data.get('components', [])]}"
         )
-    if comp.get("status") != "NEW":
+    if comp.get("status") not in ("NEW", "ADAPT"):
         return ApplyResponseResult(
             component=component_name,
             stub_path="",
             backup_path=None,
             response_chars=0,
-            status="not-new",
+            status="not-applicable",
             note=(
-                f"Component status is {comp.get('status')!r}; apply-response " f"is gated on NEW only. Nothing changed."
+                f"Component status is {comp.get('status')!r}; apply-response "
+                f"is gated on NEW or ADAPT (plain .py to _stubs/). Nothing changed."
             ),
         )
 
@@ -2136,6 +2220,23 @@ def apply_response(
                 f"RecursionError on every call. Rewrite the class to inherit "
                 f"directly from `object` (or `torch.nn.Module` if needed) "
                 f"and copy any logic from the existing stub explicitly."
+            ),
+        )
+
+    missing_export = _detect_missing_safe_id_export(body, _safe_id(component_name))
+    if missing_export:
+        return ApplyResponseResult(
+            component=component_name,
+            stub_path="",
+            backup_path=None,
+            response_chars=len(raw),
+            status="missing-export",
+            note=(
+                f"Response does not satisfy the public-surface contract: "
+                f"{missing_export[0]} "
+                f"Add the module-level wrapper at the END of the file "
+                f"(template in synth prompt: `_instance = None; "
+                f"def {_safe_id(component_name)}(*args, **kwargs): ...`)."
             ),
         )
 

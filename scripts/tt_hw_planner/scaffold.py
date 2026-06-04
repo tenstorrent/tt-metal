@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -238,8 +239,21 @@ def plan_scaffold(new_model_id: str, *, force_already_supported: bool = False) -
         # path at line ~460 below.
         from .scaffold_demo_folder import _slug as _scaffold_slug
 
+        # 2026-06-04 Fix 6 (escalation path): prefer existing demo dir
+        # for this model_id over a freshly-computed default — see the
+        # matching Fix 6 comment further down in this function.
+        from .bringup_loop import find_demo_dir as _find_demo_dir
+
         _be_esc_parent = Path(_be_esc.demo_path).parent
-        demo_dir_esc_rel = _be_esc_parent / _scaffold_slug(new_model_id.split("/")[-1])
+        _esc_bringup_root = BRINGUP_ROOT()
+        _esc_existing_dir = _find_demo_dir(new_model_id, repo_root=_esc_bringup_root)
+        if _esc_existing_dir is not None:
+            try:
+                demo_dir_esc_rel = _esc_existing_dir.relative_to(_esc_bringup_root)
+            except Exception:
+                demo_dir_esc_rel = _esc_existing_dir
+        else:
+            demo_dir_esc_rel = _be_esc_parent / _scaffold_slug(new_model_id.split("/")[-1])
         changes_esc: List[ScaffoldChange] = []
         for target_rel, content, label in collect_bringup_plan_files(
             plan=bplan_esc,
@@ -467,7 +481,26 @@ def _plan_demo_folder_scaffold(*, new_model_id: str, probe: Any) -> ScaffoldPlan
     backend_parent = Path(backend.demo_path).parent
     from .scaffold_demo_folder import _slug as _scaffold_slug
 
-    new_demo_dir = str(backend_parent / _scaffold_slug(new_tail))
+    # 2026-06-04 Fix 6: prefer the existing demo dir for this model_id
+    # (if any) over a freshly-computed default. Without this, a backend
+    # swap mid-run (e.g., torch-less subprocess picking the generic
+    # hf_eager backend instead of the architecture-specific one) creates
+    # a DIFFERENT demo dir, leaving two competing `bringup_status.json`
+    # files for the same model — exactly the seamless-m4t scenario where
+    # `hf_eager/.../bringup_status.json` was corrupted while the orchestrator
+    # kept reading from the original `hf_seamless_m4t_medium/...`.
+    # One model → one demo dir → one manifest.
+    from .bringup_loop import find_demo_dir as _find_demo_dir
+
+    _bringup_root = BRINGUP_ROOT()
+    _existing_dir = _find_demo_dir(new_model_id, repo_root=_bringup_root)
+    if _existing_dir is not None:
+        try:
+            new_demo_dir = str(_existing_dir.relative_to(_bringup_root))
+        except Exception:
+            new_demo_dir = str(_existing_dir)
+    else:
+        new_demo_dir = str(backend_parent / _scaffold_slug(new_tail))
 
     bplan: Optional[BringUpPlan] = None
     try:
@@ -532,6 +565,37 @@ def apply_scaffold(plan: ScaffoldPlan) -> List[str]:
         if ch.preserve_if_exists and target.exists():
             applied.append(f"-  {ch.path}  (preserved; already exists)")
             continue
+        # 2026-06-04 Fix 3: refuse to overwrite a valid bringup_status.json
+        # (N>0 components) with an empty plan (0 components). This is the
+        # smoking-gun corruption pattern from the seamless-m4t promote
+        # run: a torch-less subprocess produces an empty plan, scaffold
+        # overwrites the canonical manifest, and the iter loop's apply
+        # step silently rejects every LLM solution because the components
+        # dict is empty. The right behavior is to leave the old manifest
+        # in place and let the caller see the failure.
+        if target.name == "bringup_status.json" and target.exists():
+            try:
+                _existing = json.loads(target.read_text())
+                _existing_n = len(_existing.get("components", []) or [])
+                _new = json.loads(ch.new_content.decode("utf-8"))
+                _new_n = len(_new.get("components", []) or [])
+                if _existing_n > 0 and _new_n == 0:
+                    import sys as _sys
+
+                    print(
+                        f"  [scaffold] REFUSED to overwrite {ch.path}: "
+                        f"existing has {_existing_n} components, new plan "
+                        f"has 0. Likely a model-walk failure (e.g., torch-"
+                        f"less Python). Existing manifest preserved.",
+                        file=_sys.stderr,
+                    )
+                    applied.append(f"-  {ch.path}  (REFUSED overwrite: " f"existing={_existing_n} -> new=0 components)")
+                    continue
+            except Exception:
+                # If we can't parse either side, fall through to the
+                # normal write — better to write than to silently skip
+                # on a transient JSON-decode error.
+                pass
         if ch.kind == "edit":
             target.write_bytes(ch.new_content)
             applied.append(f"M  {ch.path}  (+{ch.added_lines} line)")

@@ -1147,112 +1147,120 @@ def _run_auto_iterate_loop(
         best_native_path = stub_path.with_suffix(".py.best_native")
         preiter_native_path = stub_path.with_suffix(".py.preiter_native")
         bak_path = stub_path.with_suffix(".py.bak")
+        _test_path = demo_dir / "tests" / "pcc" / f"test_{_safe_id(comp)}.py"
+
+        # 2026-06-03 seamless-m4t audit fix: cap-out restore is now a
+        # CASCADE, not a sequential write-and-pray. The old logic stopped
+        # at the first writable snapshot, re-tested ONCE, and on retest
+        # failure left the broken native code on disk while printing
+        # "left on CPU fallback". The seamless-m4t final pytest exposed
+        # this: 3 of 5 cap-out components crashed with TT_THROW /
+        # AttributeError because `.best_native` was "best PCC seen this
+        # session" (e.g. 0.92) — not "passing PCC" (0.99+).
+        #
+        # New behavior: try snapshots in priority order, re-test each
+        # native restore, fall through to the next snapshot if re-test
+        # fails. If all native snapshots fail re-test, write the
+        # deterministic CPU-fallback wrapper (guaranteed functional) as
+        # the terminal so the final demo pytest doesn't crash.
+        #
+        # Priority order (must be preserved — pinned by tests):
+        #   .py.last_good_native > .py.best_native > .py.preiter_native > .py.bak
+        # Gate: only RE-TEST when the restored stub is AST-native
+        # (`not _stub_uses_torch_wrapper`). Torch-fallback restores are
+        # accepted as CPU fallback without re-test (they trivially pass
+        # but don't graduate to TT-native).
+        candidates = [
+            (last_good_path, "last graduated native — strongest signal"),
+            (best_native_path, None),  # label computed below to include PCC
+            (preiter_native_path, "pre-iter native — better than .bak torch wrapper"),
+            (bak_path, ".py.bak"),
+        ]
         restored_from = None
-        if last_good_path.is_file():
+        cascade_failures: list[str] = []
+        for snap_path, label in candidates:
+            if not snap_path.is_file():
+                continue
             try:
                 stub_path.write_text(
-                    last_good_path.read_text(encoding="utf-8"),
+                    snap_path.read_text(encoding="utf-8"),
                     encoding="utf-8",
-                )
-                restored_from = (
-                    f"{safe_relative_to_root(last_good_path)} " f"(last graduated native — strongest signal)"
                 )
             except Exception:
-                restored_from = None
-        if restored_from is None and best_native_path.is_file():
-            try:
-                stub_path.write_text(
-                    best_native_path.read_text(encoding="utf-8"),
-                    encoding="utf-8",
-                )
+                continue
+            if label is None:
+                # best_native label includes the captured PCC
                 best_pcc_str = (
                     f" (best in-session PCC={best_pcc_per_component[comp]:.4f})"
                     if comp in best_pcc_per_component
                     else ""
                 )
-                restored_from = (
-                    f"{safe_relative_to_root(best_native_path)} "
-                    f"(best in-session native{best_pcc_str} — "
-                    f"better than .preiter_native and .bak)"
-                )
-            except Exception:
-                restored_from = None
-        if restored_from is None and preiter_native_path.is_file():
+                label = f"best in-session native{best_pcc_str} — " f"better than .preiter_native and .bak"
+            this_restored_from = f"{safe_relative_to_root(snap_path)} ({label})"
+            # Torch-wrapper restores accepted as CPU fallback (no re-test)
+            if _stub_uses_torch_wrapper(stub_path):
+                restored_from = this_restored_from
+                break
+            # Native restore — must pass re-test to count
+            if not _test_path.is_file():
+                # No test exists — accept the native restore as best-effort
+                restored_from = this_restored_from
+                break
             try:
-                stub_path.write_text(
-                    preiter_native_path.read_text(encoding="utf-8"),
-                    encoding="utf-8",
+                _retest_rc = _run_focused_pytest(
+                    model_id=MODEL,
+                    test_files=[str(safe_relative_to_root(_test_path))],
+                    allow_kill_stale=allow_kill_stale,
+                    allow_device_reset=allow_device_reset,
                 )
-                restored_from = (
-                    f"{safe_relative_to_root(preiter_native_path)} "
-                    f"(pre-iter native — better than .bak torch wrapper)"
+            except Exception as _retest_exc:
+                cascade_failures.append(
+                    f"{safe_relative_to_root(snap_path)} raised " f"{type(_retest_exc).__name__}: {_retest_exc}"
                 )
-            except Exception:
-                restored_from = None
-        if restored_from is None and bak_path.is_file():
-            try:
-                stub_path.write_text(bak_path.read_text())
-                restored_from = str(safe_relative_to_root(bak_path))
-            except Exception:
-                restored_from = None
+                continue
+            if _retest_rc == 0:
+                _retest_report = _scope_report_to_demo(_parse_pytest_report(), demo_dir)
+                if comp in (_retest_report.get("passed_components") or []):
+                    permanently_skipped[:] = [s for s in permanently_skipped if s != comp]
+                    if comp not in graduated_this_run:
+                        graduated_this_run.append(comp)
+                    verified_fail.discard(comp)
+                    try:
+                        _snapshot_native_stub(comp)
+                    except Exception:
+                        pass
+                    print(
+                        f"  post-restore: `{comp}` GRADUATED — the "
+                        f"restored native snapshot (from "
+                        f"{this_restored_from}) passes PCC. Removed from "
+                        f"permanently_skipped."
+                    )
+                    return
+            cascade_failures.append(f"{safe_relative_to_root(snap_path)} re-test rc={_retest_rc} " f"(did not pass)")
+
+        # All native snapshots failed re-test (or none existed). Write
+        # the deterministic CPU-fallback wrapper as the guaranteed-
+        # functional terminal so the final demo pytest doesn't crash on
+        # broken native code from a failed snapshot.
         if restored_from is None:
             try:
                 _rewrite_components_to_stable_fallback(demo_dir, [comp])
-                restored_from = "stable CPU-fallback stub"
+                if cascade_failures:
+                    restored_from = (
+                        f"stable CPU-fallback stub (cascade exhausted "
+                        f"after {len(cascade_failures)} failed snapshot(s))"
+                    )
+                else:
+                    restored_from = "stable CPU-fallback stub"
             except Exception as exc:
                 print(
                     f"  could not restore CPU fallback for `{comp}`: {exc}",
                     file=sys.stderr,
                 )
 
-        # 2026-06-01 Qwen2.5-14B audit Bug-3 fix: re-test the RESTORED
-        # stub. The cap-fallback may have just restored a functionally-
-        # correct native snapshot (.preiter_native captures the
-        # canonical-wrapper template that often works as-is for ADAPT
-        # components). Without this re-test, the component stays on
-        # `permanently_skipped` despite passing PCC if tested. Catches
-        # the Qwen2.5-14B r_m_s_norm case where iter 1's LLM broke the
-        # working template and all 10 iters chased the LLM's bugs.
-        #
-        # Gate: only re-test when the restored stub is AST-native
-        # (`not _stub_uses_torch_wrapper`). Torch-fallback restores
-        # don't deserve a graduation — they're not actually on TT.
-        if stub_path.is_file() and not _stub_uses_torch_wrapper(stub_path):
-            _test_path = demo_dir / "tests" / "pcc" / f"test_{_safe_id(comp)}.py"
-            if _test_path.is_file():
-                try:
-                    _retest_rc = _run_focused_pytest(
-                        model_id=MODEL,
-                        test_files=[str(safe_relative_to_root(_test_path))],
-                        allow_kill_stale=allow_kill_stale,
-                        allow_device_reset=allow_device_reset,
-                    )
-                except Exception as _retest_exc:
-                    print(
-                        f"  post-restore re-test for `{comp}` raised: "
-                        f"{type(_retest_exc).__name__}: {_retest_exc} — "
-                        f"leaving on permanently_skipped",
-                        file=sys.stderr,
-                    )
-                else:
-                    if _retest_rc == 0:
-                        _retest_report = _scope_report_to_demo(_parse_pytest_report(), demo_dir)
-                        if comp in (_retest_report.get("passed_components") or []):
-                            permanently_skipped[:] = [s for s in permanently_skipped if s != comp]
-                            if comp not in graduated_this_run:
-                                graduated_this_run.append(comp)
-                            verified_fail.discard(comp)
-                            try:
-                                _snapshot_native_stub(comp)
-                            except Exception:
-                                pass
-                            print(
-                                f"  post-restore: `{comp}` GRADUATED — the "
-                                f"restored native snapshot (from "
-                                f"{restored_from}) passes PCC. Removed from "
-                                f"permanently_skipped."
-                            )
-                            return
+        if cascade_failures:
+            for _f in cascade_failures:
+                print(f"  cap-restore cascade: {_f}", file=sys.stderr)
 
         print(
             f"  Component `{comp}` left on CPU fallback after "
@@ -4497,7 +4505,39 @@ def _run_auto_iterate_loop(
             print(f"  signature: {sk_sig[:160]}{'...' if len(sk_sig) > 160 else ''}")
             print(sep)
 
+        # 2026-06-04 design fix: only increment the strike (consec-same-class)
+        # counter for components that ACTUALLY got LLM attention this iter.
+        # Pytest still runs on all previously-failing tests (for regression
+        # detection), but unattended modules don't get punished for failing
+        # an unchanged test. Without this gate, a module that's been broken
+        # since iter 0 accumulates +1 strike per iter even when no LLM ever
+        # tried to fix it — defeating the tier ladder by retiring it before
+        # opus gets its turn. Observed on the 2026-06-03 seamless-m4t run
+        # where 3 of 5 cap-out components had only 2 LLM attempts each but
+        # consec_same_class hit 7 from passive accumulation.
+        attempted_this_iter: set = set()
+        if iter_target_component:
+            attempted_this_iter.add(iter_target_component)
+        try:
+            for _job in _parallel_extra_jobs or []:
+                _attempted_name = getattr(_job, "component", None)
+                if _attempted_name:
+                    attempted_this_iter.add(_attempted_name)
+        except NameError:
+            # _parallel_extra_jobs not defined on this code path (e.g.
+            # early-exit / recovery branches that landed here). Fall
+            # through to legacy "increment all" behavior in that case
+            # rather than freezing every counter and stalling forever.
+            attempted_this_iter = set()
+
         for failed_comp in set(last_failed_components or []):
+            if attempted_this_iter and failed_comp not in attempted_this_iter:
+                # Strike counter frozen for this module — the LLM didn't
+                # attempt it this iter, so no new same-class strike for
+                # the same unchanged failure. The test still ran (so
+                # regression detection on cross-component effects still
+                # works); we just don't punish the module for inactivity.
+                continue
             prev_class_for_log = last_failure_class_per_component.get(failed_comp, "")
             prev_pcc_for_log = last_pcc_per_component.get(failed_comp)
 

@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -1048,16 +1049,45 @@ def run_bringup_loop(
 
 
 def _refresh_plan(*, model_id: str, repo_root: Path) -> Optional[dict]:
+    # 2026-06-04 Fix 1 — use sys.executable (the parent's Python with
+    # PyTorch) instead of bare "python". Bare `python` resolves via
+    # PATH and may pick a different venv that lacks PyTorch — in which
+    # case scaffold's `AutoModel.from_pretrained` fails, the module-
+    # tree walk silently returns [], scaffold writes a 0-component
+    # plan, and bringup_status.json gets nuked under the orchestrator's
+    # feet. Caught on the 2026-06-03 seamless-m4t promote run.
     cmd = [
-        "python",
+        sys.executable,
         "-m",
         "scripts.tt_hw_planner",
         "scaffold",
         model_id,
         "--apply",
     ]
+    # Snapshot pre-state for corruption detection. find_demo_dir reads
+    # bringup_status.json on disk; capture the component count BEFORE
+    # we let scaffold subprocess touch it.
+    demo_dir_pre = find_demo_dir(model_id, repo_root=repo_root)
+    pre_counts: Optional[Dict[str, int]] = None
+    if demo_dir_pre is not None:
+        try:
+            pre_data = json.loads((demo_dir_pre / "bringup_status.json").read_text())
+            pre_counts = pre_data.get("counts") or {}
+        except Exception:
+            pre_counts = None
+
     proc = subprocess.run(cmd, cwd=str(repo_root), capture_output=True, text=True, check=False)
     if proc.returncode != 0:
+        # Surface subprocess stderr (otherwise it's invisible to the
+        # caller). Don't return — the caller's `if counts_after is None`
+        # path still applies, but the user gets the actual error reason.
+        if proc.stderr:
+            print(
+                f"  [_refresh_plan] scaffold subprocess failed "
+                f"(rc={proc.returncode}); last 800 chars of stderr:\n"
+                f"{proc.stderr[-800:]}",
+                file=sys.stderr,
+            )
         return None
     demo_dir = find_demo_dir(model_id, repo_root=repo_root)
     if demo_dir is None:
@@ -1066,7 +1096,27 @@ def _refresh_plan(*, model_id: str, repo_root: Path) -> Optional[dict]:
     if not status_path.exists():
         return None
     try:
-        return json.loads(status_path.read_text()).get("counts", {})
+        post_data = json.loads(status_path.read_text())
+        post_counts = post_data.get("counts", {}) or {}
+
+        # 2026-06-04 Fix 4 — corruption guard. If pre had N>0 components
+        # and post has 0, scaffold subprocess silently nuked the plan
+        # (e.g., torch-less Python that can't walk the model). Loud-
+        # error so the iter loop's apply step doesn't operate on a
+        # corrupted manifest. The fix for the WHY is using sys.executable
+        # above; this gate catches any future similar regression.
+        if isinstance(pre_counts, dict):
+            pre_n = sum(int(pre_counts.get(k, 0) or 0) for k in ("REUSE", "ADAPT", "NEW"))
+            post_n = sum(int(post_counts.get(k, 0) or 0) for k in ("REUSE", "ADAPT", "NEW"))
+            if pre_n > 0 and post_n == 0:
+                print(
+                    f"  [_refresh_plan] CORRUPTION GUARD: scaffold subprocess "
+                    f"silently dropped all components (pre={pre_n}, post=0). "
+                    f"Subprocess stderr (last 800 chars):\n"
+                    f"{(proc.stderr or '')[-800:]}",
+                    file=sys.stderr,
+                )
+        return post_counts
     except Exception:
         return None
 
