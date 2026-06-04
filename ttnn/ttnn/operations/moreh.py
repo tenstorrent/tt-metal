@@ -2,6 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""Deprecated Moreh operator namespace.
+
+Prefer the regular ``ttnn`` API when an equivalent operator already exists.
+The ``ttnn.operations.moreh`` namespace remains available for compatibility,
+for backward and training-oriented paths, and for a small number of edge cases
+that do not yet have a clear regular ``ttnn`` replacement.
+
+See the TT-NN ``moreh`` documentation page for migration guidance and the
+current replacement mapping.
+"""
+
 import ttnn
 import ttnn._ttnn
 
