@@ -213,8 +213,9 @@ class DramCorePrefetcher(LightweightModule):
         self.prefetched_tensors: List[ttnn.Tensor] = []
         self.prefetched_program_configs: List = []
         self._queue_payload: Optional[List] = None  # cached (weight, block_count) list, built once
-        self.mode: Mode = Mode.PREFILL  # set to DECODE in init(); read by lm_head.py
+        self.mode: Mode = Mode.PREFILL  # set by init(); read by lm_head.py
         self.init_decode_done: bool = False
+        self.init_prefill_done: bool = False
         self.prefetch_done: bool = False
         self._started: bool = False  # Tracks lazy StartDramCorePrefetcher
         self._stopped: bool = False  # Set by teardown(); blocks re-entry
@@ -253,18 +254,18 @@ class DramCorePrefetcher(LightweightModule):
         )
 
     def init(self, mode: Mode = Mode.DECODE) -> None:
-        # Decode-only: the DRISC daemon prefetches decode weights, there is no prefill path
-        # (prefetch()/run() operate in decode mode). Reject other modes explicitly rather than
-        # silently doing nothing.
-        assert mode == Mode.DECODE, f"DramCorePrefetcher supports decode mode only; got {mode}."
-        if self.init_decode_done:
+        # Called for BOTH modes via model.switch_mode(): prefill then decode. Actual prefetching is
+        # decode-only (prefetch()/run() are gated to decode), but the consumer sub-device must exist
+        # in both modes so worker ops have a valid sub-device to run on. Mirrors Prefetcher.init.
+        if mode == Mode.DECODE and self.init_decode_done or mode == Mode.PREFILL and self.init_prefill_done:
             return
         self.mode = mode
         # Lazy import to avoid hard dep order at module load.
         from models.tt_transformers.tt.prefetcher import PrefetcherSubDevice
 
-        # Single consumer sub-device — DRAM senders live on a different programmable core
-        # type, not the worker sub-device.
+        # Single consumer sub-device covering the whole worker grid, in both modes — DRAM senders
+        # live on a separate programmable core type, so there are no worker-grid sender columns to
+        # carve out (unlike the worker-core Prefetcher).
         self.prefetcher_sub_device = PrefetcherSubDevice(self.mesh_device)
         self.prefetcher_sub_device.add_sub_device(self.all_worker_cores_range_set)
         self.prefetcher_sub_device.init_sub_device_manager()
@@ -275,7 +276,8 @@ class DramCorePrefetcher(LightweightModule):
             f"receivers={self.num_senders}x{self.num_receiver_cores} "
             f"workers={self.all_worker_cores_range_set.num_cores()} cores"
         )
-        self.init_decode_done = True
+        self.init_decode_done = mode == Mode.DECODE
+        self.init_prefill_done = mode == Mode.PREFILL
 
     def prefetch(self) -> None:
         if self.mode != Mode.DECODE:
