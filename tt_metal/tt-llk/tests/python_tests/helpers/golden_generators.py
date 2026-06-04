@@ -1850,6 +1850,9 @@ class UnarySFPUGolden:
         iterations: int = None,
         dest_idx: int = 0,
         fill_const_value: float = 5,
+        alpha: float = 1.0,
+        threshold: float = 5.0,
+        replacement_value: float = 10.0,
         reduce_pool: Optional[ReducePool] = None,
         skip_tilize: bool = False,
     ):
@@ -1914,17 +1917,21 @@ class UnarySFPUGolden:
                 f"but tensor has only {tensor.numel()} elements)"
             )
 
-        op_res = [
-            (
-                self.ops[operation](x, fill_const_value)
-                if operation == MathOperation.Fill
-                else self.ops[operation](x)
-            )
-            for x in result.tolist()[
-                ELEMENTS_PER_TILE * dest_idx : ELEMENTS_PER_TILE * dest_idx
-                + TILE_SIZE * iterations
-            ]
-        ]
+        op_res = []
+        for x in result.tolist()[
+            ELEMENTS_PER_TILE * dest_idx : ELEMENTS_PER_TILE * dest_idx
+            + TILE_SIZE * iterations
+        ]:
+            if operation == MathOperation.Fill:
+                op_res.append(self.ops[operation](x, fill_const_value))
+            elif operation in (MathOperation.Celu, MathOperation.Elu):
+                op_res.append(self.ops[operation](x, alpha))
+            elif operation in (MathOperation.ReluMax, MathOperation.ReluMin):
+                op_res.append(self.ops[operation](x, threshold))
+            elif operation == MathOperation.Threshold:
+                op_res.append(self.ops[operation](x, threshold, replacement_value))
+            else:
+                op_res.append(self.ops[operation](x))
 
         op_dtype = (
             torch.float32
@@ -2005,25 +2012,22 @@ class UnarySFPUGolden:
         )
 
     # Helper functions
-    def handle_infinite_numbers(self, expected: float) -> float:
-        """Handle infinite numbers based on the data format.
-        Tensix will return inf, -inf for B_exponent formats, and NaN for Float16.
-        Returns:
-            float: Infinite number
-            Depending on our format we either return NaN or +/- inf.
-        """
-        if self.data_format.is_exponent_B():
-            return expected
-        else:  # self.data_format == DataFormat.Float16:
-            return math.nan
-
-    def _torch_unary(self, x, torch_fn) -> float:
-        """Apply torch_fn to scalar x in fp32, then enforce the
+    def _torch_unary(self, x, torch_fn, *, overflow_to_nan: bool = True) -> float:
+        """Apply torch_fn to scalar x in fp32, optionally enforcing the
         format-aware NaN rule: convert +/-inf to NaN when the dest is
         A-exponent (Float16).
+
+        Use the default (True) for ops where HW emits NaN on Float16
+        overflow (exp, exp2, square, log, sqrt, ...). Pass False for
+        ops that pass +/-inf through unchanged (celu, silu, elu, gelu,
+        asinh, ...).
         """
         result = torch_fn(torch.tensor(x, dtype=torch.float32)).item()
-        if math.isinf(result) and not self.data_format.is_exponent_B():
+        if (
+            overflow_to_nan
+            and math.isinf(result)
+            and not self.data_format.is_exponent_B()
+        ):
             return math.nan
         return result
 
@@ -2035,13 +2039,13 @@ class UnarySFPUGolden:
         return self._torch_unary(x, torch.atanh)
 
     def _asinh(self, x):
-        return math.asinh(x)
+        return self._torch_unary(x, torch.asinh, overflow_to_nan=False)
 
     def _acosh(self, x):
         return self._torch_unary(x, torch.acosh)
 
     def _cos(self, x):
-        return math.cos(x)
+        return self._torch_unary(x, torch.cos)
 
     def _log(self, x):
         return self._torch_unary(x, torch.log)
@@ -2054,7 +2058,7 @@ class UnarySFPUGolden:
 
     def _sin(self, x):
         # Never not finite, values range from [-1, 1]
-        return math.sin(x)
+        return self._torch_unary(x, torch.sin)
 
     def _relu(self, x):
         return max(0.0, x)
@@ -2066,63 +2070,35 @@ class UnarySFPUGolden:
         return self._torch_unary(x, torch.sqrt)
 
     def _tanh(self, x):
-        return math.tanh(x)
+        return self._torch_unary(x, torch.tanh)
 
     def _square(self, x):
-        if not math.isfinite(x * x):
-            return self.handle_infinite_numbers(math.inf)
-        return x * x
+        return self._torch_unary(x, torch.square)
 
-    def _celu(self, x):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+    def _celu(self, x, alpha):
+        return self._torch_unary(
+            x, lambda t: torch.nn.functional.celu(t, alpha=alpha), overflow_to_nan=False
         )
-        return torch.nn.functional.celu(input_tensor, alpha=1.0).item()
 
     def _silu(self, x):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
-        )
-        return torch.nn.functional.silu(input_tensor).item()
+        return self._torch_unary(x, torch.nn.functional.silu, overflow_to_nan=False)
 
-    def _elu(self, x):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+    def _elu(self, x, alpha):
+        return self._torch_unary(
+            x, lambda t: torch.nn.functional.elu(t, alpha=alpha), overflow_to_nan=False
         )
-        return torch.nn.functional.elu(input_tensor, alpha=1.0).item()
 
     def _exp(self, x):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
-        )
-        return torch.exp(input_tensor).item()
+        return self._torch_unary(x, torch.exp)
 
     def _exp2(self, x):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
-        )
-        return torch.exp2(input_tensor).item()
+        return self._torch_unary(x, torch.exp2)
 
     def _neg(self, x):
         return -x
 
     def _gelu(self, x):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
-        )
-        return torch.nn.functional.gelu(input_tensor).item()
+        return self._torch_unary(x, torch.nn.functional.gelu, overflow_to_nan=False)
 
     def _fill(self, x, const_value=5):
         input_tensor = (
@@ -2133,44 +2109,33 @@ class UnarySFPUGolden:
         return input_tensor.fill_(const_value).item()
 
     def _hardsigmoid(self, x):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+        return self._torch_unary(
+            x, torch.nn.functional.hardsigmoid, overflow_to_nan=False
         )
-        return torch.nn.functional.hardsigmoid(input_tensor).item()
 
     def _sigmoid(self, x):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
-        )
-        return torch.nn.functional.sigmoid(input_tensor).item()
+        return self._torch_unary(x, torch.nn.functional.sigmoid, overflow_to_nan=False)
 
-    def _threshold(self, x, t=5, v=10):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+    def _threshold(self, x, t, v):
+        return self._torch_unary(
+            x,
+            lambda u: torch.nn.functional.threshold(u, t, v),
+            overflow_to_nan=False,
         )
-        return torch.nn.functional.threshold(input_tensor, t, v).item()
 
-    def _relu_max(self, x, threshold=5):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+    def _relu_max(self, x, threshold):
+        return self._torch_unary(
+            x,
+            lambda t: torch.relu(torch.clamp(t, max=float(threshold))),
+            overflow_to_nan=False,
         )
-        return torch.relu(torch.min(input_tensor, torch.tensor(threshold))).item()
 
-    def _relu_min(self, x, threshold=5):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.data_format])
+    def _relu_min(self, x, threshold):
+        return self._torch_unary(
+            x,
+            lambda t: torch.clamp(t, min=float(threshold)),
+            overflow_to_nan=False,
         )
-        return torch.max(input_tensor, torch.tensor(threshold)).item()
 
     def _reduce_columns(self, x, reduce_pool: ReducePool):
         """Reduce columns across tiles, computing sum, average, or max."""
