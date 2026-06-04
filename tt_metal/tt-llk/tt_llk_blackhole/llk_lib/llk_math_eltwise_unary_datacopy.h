@@ -404,36 +404,23 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
             }
         }
 
+        // ELWADD moves 8 rows/cycle (vs MOVB2D's 4) but routes through the FPU, which interprets
+        // UInt16 bit patterns as floats and flushes values with exp=0. UInt16 falls back to MOVB2D.
         if constexpr (bcast_type == BroadcastType::SCALAR)
         {
-            if (dst_format == to_underlying(DataFormat::UInt16))
-            {
-                ckernel_template tmp(outerloop, innerloop, TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0));
-                tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, 0));
-                tmp.program();
-            }
-            else
-            {
-                ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, broadcast_type, addr_mod, 0));
-                tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, 0));
-                tmp.program();
-            }
+            const std::uint32_t copy_op = (dst_format == to_underlying(DataFormat::UInt16)) ? TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0)
+                                                                                            : TT_OP_ELWADD(0, 0, broadcast_type, addr_mod, 0);
+            ckernel_template tmp(outerloop, innerloop, copy_op);
+            tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, 0));
+            tmp.program();
         }
         else if constexpr (bcast_type == BroadcastType::COL)
         {
-            if (dst_format ==
-                to_underlying(DataFormat::UInt16)) // UInt16 case needs to use MOVB2D because for ELWADD FPU interprets some numbers as a float with exp 0
-            {
-                ckernel_template tmp(outerloop, innerloop, TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0));
-                tmp.set_end_op(TT_OP_SETRWC(0, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
-                tmp.program();
-            }
-            else // ELWADD is used for non UInt16 case, since it moves 8 rows per cycle
-            {
-                ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, broadcast_type, addr_mod, 0));
-                tmp.set_end_op(TT_OP_SETRWC(0, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
-                tmp.program();
-            }
+            const std::uint32_t copy_op = (dst_format == to_underlying(DataFormat::UInt16)) ? TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0)
+                                                                                            : TT_OP_ELWADD(0, 0, broadcast_type, addr_mod, 0);
+            ckernel_template tmp(outerloop, innerloop, copy_op);
+            tmp.set_end_op(TT_OP_SETRWC(0, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
+            tmp.program();
         }
         else if constexpr (bcast_type == BroadcastType::ROW)
         {
