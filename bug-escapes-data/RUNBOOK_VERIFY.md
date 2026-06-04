@@ -110,15 +110,18 @@ Record `needs_tracy: true` if `tracy: true` appears under the build-artifact `wi
 
 The source run must have produced artifacts matching the tracy requirement:
 
-- **`needs_tracy: false`**: Search for `Merge Gate` runs. Merge Gate builds with tracy (via `build-wrapper.yaml`), so its artifacts are a superset — compatible with both tracy and non-tracy workflows.
-- **`needs_tracy: true`**: Search for `Merge Gate` runs — they include tracy artifacts and are compatible.
+Merge Gate builds **only with tracy** (hardcoded `tracy: true` in `build-wrapper.yaml`). It does NOT produce non-tracy artifacts.
+
+- **`needs_tracy: true`**: Search for `Merge Gate` runs — compatible ✅
+- **`needs_tracy: false`**: Merge Gate artifacts will NOT match. Search for another run on that SHA that built without tracy (e.g. a workflow that explicitly sets `tracy: false`).
 
 ```bash
 gh api "repos/tenstorrent/tt-metal/actions/runs?head_sha={sha}&per_page=100" \
   --jq '.workflow_runs[] | select(.conclusion == "success") | {id, name, created_at}'
 ```
 
-Filter to `name == "Merge Gate"` for both cases — Merge Gate builds with tracy via `build-wrapper.yaml` and is compatible with any workflow.
+For `needs_tracy: true`: filter to `name == "Merge Gate"`.
+For `needs_tracy: false`: look for other successful runs and check their artifact names for the absence of tracy.
 
 ### 3c: Verify artifacts exist and are not expired
 
@@ -261,11 +264,12 @@ content = content.replace(
     '    uses: ./.github/workflows/build-artifact.yaml\n    permissions:\n      contents: read\n      packages: write\n      actions: read'
 )
 
-# 2. Only change tracy if the source run doesn't support it.
-# If needs_tracy is True, leave tracy as-is — the source run already has tracy artifacts.
-# If needs_tracy is False (e.g. using Merge Gate artifacts), set tracy: false.
-if not needs_tracy:
-    content = content.replace('      tracy: true', '      tracy: false')
+# 2. tracy setting must match the source run.
+# Merge Gate only builds with tracy. If the workflow uses tracy: false, the
+# source run was NOT Merge Gate and we don't need to change anything.
+# If the workflow uses tracy: true and source is Merge Gate, leave as-is.
+# In short: don't change the tracy line — it already matches the source run
+# because Step 3 enforced compatibility.
 
 # 3. Add use-artifacts-from-run directly under the with: block of build-artifact
 #    Insert after 'enable-lto:' line (last line of the with: block)
