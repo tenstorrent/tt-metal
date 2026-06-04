@@ -691,7 +691,6 @@ def main() -> None:
 
     from models.experimental.ace_step_v1_5.ace_step_perf_log import (
         AceStepPerfRecorder,
-        emit_session_summary,
         make_denoise_progress_fn,
     )
 
@@ -2017,16 +2016,7 @@ def main() -> None:
             _save_wav_fallback(wav_to_save, out_path, sample_rate=48000)
         print(f"Wrote: {out_path}", flush=True)
 
-    if perf.enabled:
-        demo_session.session_perf.add_pass_snapshot(
-            perf.export_pass_snapshot(
-                label="demo_total",
-                session_pass=0,
-                is_warmup=False,
-            )
-        )
     perf.emit_summary(label="demo_total")
-    emit_session_summary(demo_session.session_perf, params=perf.params)
     from loguru import logger
 
     logger.success("Wrote: {}", run_out_path.resolve())

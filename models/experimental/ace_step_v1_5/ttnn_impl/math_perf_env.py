@@ -118,6 +118,25 @@ def ace_step_concat_kwargs(ttnn: Any, l1_mc: Any | None = None) -> dict:
     return {"memory_config": mc} if mc is not None else {}
 
 
+def ace_step_vae_decode_concat_dram_enabled() -> bool:
+    """Overlap-add ``decode_tiled`` merge: DRAM avoids L1 OOM on long clips (default on)."""
+    return os.environ.get("ACE_STEP_VAE_DECODE_CONCAT_DRAM", "1").lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
+def ace_step_vae_decode_concat_memory_config(ttnn: Any):
+    """Memory config for VAE overlap-add core merge (DRAM by default on multi-tile decode)."""
+    if ace_step_vae_decode_concat_dram_enabled():
+        dram = getattr(ttnn, "DRAM_MEMORY_CONFIG", None)
+        if dram is not None:
+            return dram
+    return ace_step_linear_l1_memory_config(ttnn)
+
+
 def ace_step_lofi_bfloat8_enabled() -> bool:
     """ACE-Step production path: LoFi compute + ``bfloat8_b`` linear weights (always on, no env)."""
     return True
@@ -889,6 +908,11 @@ def ace_step_add_one(ttnn: Any, tensor: Any, **kwargs: Any) -> Any:
     return ttnn.add(tensor, 1.0, **kwargs)
 
 
+def _ace_step_op_memory_kwargs(mc: Any | None) -> dict:
+    """``memory_config`` for view ops when the caller pins activation placement (L1 or DRAM)."""
+    return {"memory_config": mc} if mc is not None else {}
+
+
 def _ace_step_split_q_bhsd_manual(
     ttnn: Any,
     q_b1sd: Any,
@@ -899,11 +923,9 @@ def _ace_step_split_q_bhsd_manual(
     dh: int,
     l1_mc: Any | None,
 ) -> Any:
-    _sr = ace_step_reshape_kwargs(ttnn)
-    _pk = ace_step_permute_kwargs(ttnn)
-    _kw = {"memory_config": l1_mc} if l1_mc is not None else {}
-    q = ttnn.reshape(q_b1sd, (b, s_q, h, dh), **_sr)
-    return ttnn.permute(q, (0, 2, 1, 3), **_pk)
+    _mk = _ace_step_op_memory_kwargs(l1_mc)
+    q = ttnn.reshape(q_b1sd, (b, s_q, h, dh), **_mk)
+    return ttnn.permute(q, (0, 2, 1, 3), **_mk)
 
 
 def _ace_step_split_kv_bhsd_manual(
@@ -916,15 +938,14 @@ def _ace_step_split_kv_bhsd_manual(
     dh: int,
     l1_mc: Any | None,
 ) -> tuple[Any, Any]:
-    _sr = ace_step_reshape_kwargs(ttnn)
-    _pk = ace_step_permute_kwargs(ttnn)
+    _mk = _ace_step_op_memory_kwargs(l1_mc)
     kv_dim = kv_h * dh
     k4 = ttnn.slice(kv_b1sd, (0, 0, 0, 0), (b, 1, s_k, kv_dim))
     v4 = ttnn.slice(kv_b1sd, (0, 0, 0, kv_dim), (b, 1, s_k, 2 * kv_dim))
-    k = ttnn.reshape(k4, (b, s_k, kv_h, dh), **_sr)
-    v = ttnn.reshape(v4, (b, s_k, kv_h, dh), **_sr)
-    k = ttnn.permute(k, (0, 2, 1, 3), **_pk)
-    v = ttnn.permute(v, (0, 2, 1, 3), **_pk)
+    k = ttnn.reshape(k4, (b, s_k, kv_h, dh), **_mk)
+    v = ttnn.reshape(v4, (b, s_k, kv_h, dh), **_mk)
+    k = ttnn.permute(k, (0, 2, 1, 3), **_mk)
+    v = ttnn.permute(v, (0, 2, 1, 3), **_mk)
     return k, v
 
 
@@ -1849,6 +1870,9 @@ def _mcast_2d_linear_program_config(
     out_subblock_h: int = 1,
     out_subblock_w: int = 4,
     fuse_batch: bool = False,
+    batch_size: int = 1,
+    seq_len: int | None = None,
+    max_fused_m: int | None = None,
 ):
     """2D mcast matmul program config (``MatmulMultiCoreReuseMultiCastProgramConfig``).
 
@@ -1865,6 +1889,16 @@ def _mcast_2d_linear_program_config(
 
     cfg_cls = getattr(ttnn, "MatmulMultiCoreReuseMultiCastProgramConfig", None)
     if cfg_cls is None or not hasattr(device, "compute_with_storage_grid_size"):
+        return None
+
+    tile = int(getattr(ttnn, "TILE_SIZE", 32))
+    if seq_len is not None:
+        fused_m = ace_step_dit_fused_m_tiles(batch_size=max(1, int(batch_size)), seq_len=int(seq_len))
+    else:
+        m = max(tile, int(m_dim))
+        fused_m = (m + tile - 1) // tile
+    _m_cap = ace_step_dit_max_fused_m_tiles() if max_fused_m is None else int(max_fused_m)
+    if fused_m > _m_cap:
         return None
 
     dev_grid = device.compute_with_storage_grid_size()
@@ -2616,6 +2650,8 @@ def ace_step_dit_fused_wkv_linear_program_config(
             k_dim=int(hidden_size),
             n_dim=int(fused_kv_dim),
             in0_block_w=2,  # cap=4 causes BFP8 K-tile accumulation order change → WAV noise
+            batch_size=batch_size,
+            seq_len=seq_len,
         )
         if pc is not None:
             return pc
@@ -2648,6 +2684,8 @@ def ace_step_dit_mlp_gate_up_linear_program_config(
             k_dim=int(hidden_size),
             n_dim=int(intermediate_size),
             in0_block_w=2,  # cap=4 causes BFP8 K-tile accumulation order change → WAV noise
+            batch_size=batch_size,
+            seq_len=seq_len,
         )
         if pc is not None:
             return pc
@@ -2680,6 +2718,8 @@ def ace_step_dit_mlp_down_proj_linear_program_config(
             k_dim=int(intermediate_size),
             n_dim=int(hidden_size),
             in0_block_w=2,  # cap=4 causes BFP8 K-tile accumulation order change → WAV noise
+            batch_size=batch_size,
+            seq_len=seq_len,
         )
         if pc is not None:
             return pc

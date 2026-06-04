@@ -15,12 +15,46 @@ from typing import Any
 
 import torch
 
-from .math_perf_env import ace_step_concat_kwargs, ace_step_flush_device_profiler
+from .math_perf_env import (
+    ace_step_concat_kwargs,
+    ace_step_flush_device_profiler,
+    ace_step_vae_decode_concat_memory_config,
+)
 from .vae.decoder import TtOobleckDecoder
 
 # TTNN conv_transpose2d width-sharded kernels assert on activation×weight geometry; very short
 # latent sequences (common on the last overlap-add tile) trigger TT_FATAL mismatches.
 _DEFAULT_MIN_DECODER_LATENT_WINDOW = 32
+
+
+def _merge_audio_cores(cores: list, ttnn: Any) -> Any:
+    """Merge overlap-add audio tiles; default DRAM output so long clips do not exhaust L1."""
+    if len(cores) == 1:
+        return cores[0]
+    out_mc = ace_step_vae_decode_concat_memory_config(ttnn)
+    _ckw = ace_step_concat_kwargs(ttnn, l1_mc=out_mc)
+    _concat = ttnn.concat if hasattr(ttnn, "concat") else ttnn.concatenate
+
+    staged: list = []
+    for core in cores:
+        if out_mc is not None and hasattr(ttnn, "to_memory_config"):
+            core = ttnn.to_memory_config(core, out_mc)
+        staged.append(core)
+
+    # Single concat is fine for modest tile counts; incremental merge avoids huge L1 temps.
+    if len(staged) <= 16:
+        merged = _concat(staged, dim=1, **_ckw)
+        for core in staged:
+            _safe_deallocate(core)
+        return merged
+
+    merged = staged[0]
+    for core in staged[1:]:
+        prev = merged
+        merged = _concat([prev, core], dim=1, **_ckw)
+        _safe_deallocate(prev)
+        _safe_deallocate(core)
+    return merged
 
 
 def _safe_deallocate(t: Any) -> None:
@@ -420,16 +454,13 @@ class TtOobleckVaeDecoder:
 
             audio_core = ttnn.slice(wav, (0, trim_start_i, 0), (b_w, end_i, ca))
             _safe_deallocate(wav)
+            out_mc = ace_step_vae_decode_concat_memory_config(ttnn)
+            if out_mc is not None and hasattr(ttnn, "to_memory_config"):
+                audio_core = ttnn.to_memory_config(audio_core, out_mc)
             cores.append(audio_core)
             # Long overlap-add runs (30 s @ 25 Hz ≈ 90+ tiles) fragment L1 unless each tile's
             # conv activations are freed before the next ``dec()`` repacks weights.
             ttnn.synchronize_device(dec.device)
 
-        if len(cores) == 1:
-            merged = cores[0]
-        else:
-            _ckw = ace_step_concat_kwargs(ttnn)
-            merged = (
-                ttnn.concat(cores, dim=1, **_ckw) if hasattr(ttnn, "concat") else ttnn.concatenate(cores, dim=1, **_ckw)
-            )
+        merged = _merge_audio_cores(cores, ttnn)
         return _crop_audio_tail(merged, initial_pad_lat)
