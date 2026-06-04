@@ -104,6 +104,9 @@ def test_ttnn_dispatch_combine(
         seq_len_per_chip=seq_len_per_chip,
         num_routed_experts=num_routed_experts,
         num_experts_per_tok=num_experts_per_tok,
+        layer=int(layer_str),
+        col=int(col_str),
+        captured_indices_path=os.getenv("TT_DS_USE_CAPTURED_INDICES"),
     )
 
     # get_gate_outputs produces 4-row outputs (Galaxy-global); slice to [0:1] for LB's single dispatch group.

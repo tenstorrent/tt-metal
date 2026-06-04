@@ -621,6 +621,9 @@ def load_captured_routing(
     seq_len_per_chip: int,
     num_routed_experts: int,
     num_experts_per_tok: int,
+    layer: int,
+    col: int,
+    captured_indices_path: str = None,
 ):
     """Load real captured Galaxy gate indices, remapped to run one Galaxy column on LB 8x1.
 
@@ -686,12 +689,12 @@ def load_captured_routing(
         table[2,  79] = -1                         (col 1, Galaxy col 2 also skips)
         ...
 
-    Env vars (all required; raises if missing)
-    -------------------------------------------
-        TT_DS_CAPTURED_LAYER          int, MoE layer index (e.g. 27)
-        TT_DS_CAPTURED_COL            int, Galaxy column [0, 4) to simulate
-        TT_DS_USE_CAPTURED_INDICES    optional path override for the safetensors;
-                                      defaults to LONGBOOK_QA_ENG_25600/expert_routing.safetensors
+    Args (beyond the existing shape/config args)
+    ---------------------------------------------
+        layer:                  int, MoE layer index (e.g. 27)
+        col:                    int, Galaxy column [0, 4) to simulate
+        captured_indices_path:  optional path override for the safetensors;
+                                defaults to LONGBOOK_QA_ENG_25600/expert_routing.safetensors
 
     Returns
     -------
@@ -701,29 +704,20 @@ def load_captured_routing(
         expert_dispatch_table   (1, 256) int32 — col 0's row of the Galaxy 4-col table,
                                 with chip IDs [0, 8) for [0, 64) and -1 elsewhere.
     """
-    import os
     from pathlib import Path
 
-    layer_str = os.getenv("TT_DS_CAPTURED_LAYER")
-    col_str = os.getenv("TT_DS_CAPTURED_COL")
-    if layer_str is None or col_str is None:
-        raise RuntimeError(
-            "TT_DS_CAPTURED_LAYER and TT_DS_CAPTURED_COL must both be set; "
-            f"got TT_DS_CAPTURED_LAYER={layer_str!r}, TT_DS_CAPTURED_COL={col_str!r}"
-        )
-    layer = int(layer_str)
-    col = int(col_str)
-    if not 0 <= col < 4:
-        raise ValueError(f"TT_DS_CAPTURED_COL must be in [0, 4), got {col}")
+    GALAXY_NUM_DISPATCH_GROUPS = 4
+
+    if not 0 <= col < GALAXY_NUM_DISPATCH_GROUPS:
+        raise ValueError(f"col must be in [0, {GALAXY_NUM_DISPATCH_GROUPS}), got {col}")
     if num_routed_experts != 256:
         raise ValueError(
             f"Captured indices require num_routed_experts=256, got {num_routed_experts}. "
             "Use a parametrize entry with the matching kernel config (perf_real_indices)."
         )
 
-    path_str = os.getenv("TT_DS_USE_CAPTURED_INDICES")
-    if path_str:
-        path = Path(path_str)
+    if captured_indices_path:
+        path = Path(captured_indices_path)
     else:
         # Lazy import: transformer_helpers itself imports from this module in places.
         from models.demos.deepseek_v3_d_p.utils.transformer_helpers import LONGBOOK_QA_ENG_25600
@@ -732,7 +726,7 @@ def load_captured_routing(
     if not path.exists():
         raise FileNotFoundError(
             f"Captured indices file not found at {path}. "
-            "Set TT_DS_USE_CAPTURED_INDICES to override, or configure DEEPSEEK_V3_TRACE_DIR."
+            "Pass captured_indices_path to override, or configure DEEPSEEK_V3_TRACE_DIR."
         )
 
     from safetensors import safe_open
@@ -763,7 +757,7 @@ def load_captured_routing(
     # [0, 64); out-of-col routings get sentinel 255 which maps to -1 in col 0's dispatch
     # table → kernel skips (preserving the per-col routing share 1:1 with Galaxy col k).
     SENTINEL = 255
-    experts_per_col = num_routed_experts // 4
+    experts_per_col = num_routed_experts // GALAXY_NUM_DISPATCH_GROUPS
     in_col_mask = (indices >= col * experts_per_col) & (indices < (col + 1) * experts_per_col)
     in_col_share = in_col_mask.float().mean().item() * 100.0
     indices = torch.where(
@@ -778,7 +772,7 @@ def load_captured_routing(
     galaxy_table = ExpertMapping.create_dispatch_table(
         num_routed_experts=num_routed_experts,
         dispatch_group_size=dispatch_group_size,
-        num_dispatch_groups=4,
+        num_dispatch_groups=GALAXY_NUM_DISPATCH_GROUPS,
     )
     expert_dispatch_table = galaxy_table[0:1].contiguous()
 
