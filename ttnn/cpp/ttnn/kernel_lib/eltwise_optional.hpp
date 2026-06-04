@@ -7,39 +7,25 @@
  * @file eltwise_optional.hpp
  * @brief Conditional / optional chain element wrappers.
  *
- * Two patterns are supported:
+ * Compile-time conditional: `OptionalChainElement<bool COND, Inner>` forwards to `Inner`
+ * when COND is true and is a no-op marker (dropped from the chain) when false. Its variadic
+ * ctor swallows Inner's args, so `OptionalChainElement<COND, FillScalar>{0.5f}` compiles
+ * for either COND.
  *
- *  1. **Compile-time conditional** — `OptionalChainElement<bool COND, Inner>`. When
- *     COND is true the wrapper inherits Inner's constructors AND its full type / tag,
- *     so the chain pipeline sees `Inner`. When COND is false the wrapper inherits
- *     Inner's tag (so chain traits classify it the same way) but every hook is a
- *     no-op. The wrapper's variadic constructor swallows any args the caller would
- *     pass to Inner — `OptionalChainElement<COND, FillScalar>{0.5f}` compiles for
- *     COND in {true, false}.
+ * Runtime conditional: template the chain-running function on a `bool` and dispatch from
+ * `kernel_main`:
  *
- *  2. **Runtime conditional** — kernels that need to pick a chain shape based on a
- *     runtime arg use the standard "template the inner function on a `bool`" pattern
- *     and dispatch from `kernel_main`:
+ *     template <bool DO_MASK> inline void run_op(uint32_t n) {
+ *         eltwise_chain(n, CopyTile<...>{},
+ *             OptionalChainElement<DO_MASK, MaskInject<...>>{}, SfpuOp<...>{}, PackTile<...>{});
+ *     }
+ *     void kernel_main() {
+ *         if (get_arg_val<uint32_t>(0) != 0) run_op<true>(n); else run_op<false>(n);
+ *     }
  *
- *         template <bool DO_MASK>
- *         inline void run_op(uint32_t n) {
- *             eltwise_chain(n,
- *                 CopyTile<...>{},
- *                 OptionalChainElement<DO_MASK, MaskInject<...>>{},
- *                 SfpuOp<...>{},
- *                 PackTile<...>{});
- *         }
- *         void kernel_main() {
- *             const bool do_mask = get_arg_val<uint32_t>(0) != 0;
- *             if (do_mask) run_op<true>(n); else run_op<false>(n);
- *         }
- *
- * @section optional_caveats Caveats
- *
- * Mid-loop per-iteration runtime conditions (`if (col_idx == Wt-1) mask_tile(...)`)
- * are NOT supported by these helpers — they require a per-iter runtime branch
- * inside the chain pipeline, which collides with the chain's compile-time dispatch.
- * Use a separate chain invocation for the conditional iteration if needed.
+ * Mid-loop per-iteration runtime conditions (`if (col == Wt-1) ...`) are NOT supported —
+ * they need a per-iter runtime branch inside the chain, which collides with its
+ * compile-time dispatch. Use a separate chain invocation for the conditional iteration.
  */
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"

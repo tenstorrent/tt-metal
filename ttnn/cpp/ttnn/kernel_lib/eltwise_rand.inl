@@ -12,20 +12,15 @@ namespace compute_kernel_lib {
 
 /// RandTile chain element.
 ///
-/// Runtime seed: the caller must invoke `rand_tile_init(seed)` ONCE outside
-/// the chain (typically right after `init_sfpu` / `unary_op_init_common`)
-/// with the runtime-supplied seed. The chain's element `init()` is a no-op
-/// — same pattern as `Dropout<Slot>` (eltwise_scalar.hpp).
+/// The caller must call `rand_tile_init(seed)` ONCE outside the chain (typically right
+/// after `init_sfpu`); the element's `init()` is a no-op because the chain can't thread a
+/// runtime seed through the static init hook (same pattern as `Dropout<Slot>`). The
+/// per-instance `from` / `scale` (uniform [from, from+scale] range) is passed at construction.
 ///
-/// Per-instance runtime payload covers `from` / `scale` (the uniform
-/// [from, from + scale] range), passed at construction.
-///
-/// Usage:
 /// @code
-///   uint32_t seed = get_arg_val<uint32_t>(0);
-///   rand_tile_init(seed);                         // out-of-band, once
+///   rand_tile_init(get_arg_val<uint32_t>(0));     // out-of-band, once
 ///   eltwise_chain(num_tiles,
-///       RandTile<Dst::D0>{from, scale},           // per-tile rand
+///       RandTile<Dst::D0>{from, scale},
 ///       PackTile<cb_out, Dst::D0, OutStreaming, PackTileReconfig::None>{});
 /// @endcode
 template <Dst DstSlot>

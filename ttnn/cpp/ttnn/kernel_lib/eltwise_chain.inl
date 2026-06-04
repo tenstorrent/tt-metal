@@ -173,28 +173,15 @@ ALWI uint32_t tile_base_value(uint32_t stored) noexcept {
 // CRTP bases — UnaryOp / BinaryOp / TernaryOp
 // =============================================================================
 //
-// Single dispatch contract: every chain element exposes `void exec(uint32_t)
-// const`. The CRTP bases provide a default that forwards to a static `exec_impl()`
-// supplied by the derived op. Runtime-param ops (Power, Hardtanh, Threshold, …)
-// override `exec(uint32_t)` directly to capture their instance state. Forgetting
-// both is a compile error — no silent fallthrough.
-//
-// Example (static SFPU):
+// Single dispatch contract: every element exposes `void exec(uint32_t) const`. The bases
+// default-forward to a static `exec_impl()` supplied by the derived op; runtime-param ops
+// (Power, Hardtanh, …) override `exec` directly to capture instance state. Defining
+// neither is a compile error (no silent fallthrough).
 //
 //   template <Approx A = Approx::Exact, Approx F = Approx::Fast, Dst Slot = Dst::D0>
 //   struct Exp : UnaryOp<Exp<A, F, Slot>, Slot> {
 //       static void init()       { exp_tile_init<A == Approx::Fast, F == Approx::Fast>(); }
 //       static void exec_impl()  { exp_tile<A == Approx::Fast, F == Approx::Fast>(to_u32(Slot)); }
-//   };
-//
-// Example (runtime-param SFPU — overrides exec(uint32_t) directly):
-//
-//   template <Dst Slot = Dst::D0>
-//   struct Power : UnaryOp<Power<Slot>, Slot> {
-//       uint32_t exponent;
-//       constexpr explicit Power(uint32_t e) noexcept : exponent(e) {}
-//       static void init() { power_tile_init(); }
-//       void exec(uint32_t /*i*/) const { power_tile(to_u32(Slot), exponent); }
 //   };
 
 template <class Derived, Dst Slot>
@@ -277,13 +264,9 @@ struct TernaryOp : DestOnlyTag {
 // Compile-time prev-CB tracking — drives the reconfig fold
 // =============================================================================
 //
-// Each chain element exposes static accessors describing which CB it routes to
-// each side of the math/pack pipeline. All element kinds use the same
-// uniform accessors so the chain pipeline can compute, at compile time, the most
-// recent CB seen on each Side (SrcA / SrcB / Pack) before any given element index.
-//
-// NO_PREV_CB is the sentinel used by elements that don't touch a side; the fold
-// walks Es[0..I-1] backwards and returns the most recent non-NO_PREV_CB.
+// Each element exposes uniform static accessors for the CB it routes to each Side
+// (SrcA / SrcB / Pack), letting the pipeline compute the most recent CB on each side
+// before a given element. NO_PREV_CB is the "doesn't touch this side" sentinel.
 
 inline constexpr uint32_t NO_PREV_CB = 0xFFFFFFFFu;
 
@@ -294,23 +277,10 @@ namespace detail {
 // =============================================================================
 // A0. 2D index-mode helpers (OperandKind → tile index / upfront window)
 //
-// Pure compile-time-elided helpers. `idx` and `window` are inlined by
-// every CB-reader element's `exec` / `wait_upfront`. RISC-V cost: zero
-// branches at run time — `if constexpr` collapses to a single arithmetic op.
-//
-//   Mode      | tile index            | window size
-//   ----------|-----------------------|-----------------
-//   FirstTile | 0                     | 1
-//   BlockIter | i_flat (= ht*Wt+wt)   | Ht * Wt
-//   RowBcast  | wt                    | Wt
-//   ColBcast  | ht                    | Ht
-//
-// Runtime offsets are layered on top by `TileBase` (caller-side add to the
-// idx result, and an inflation of the wait/pop count via `tile_base_value`).
-//
-// `is_bcast_mode_v<M>` is the predicate driving the (Policy × Mode) compatibility
-// static_asserts on every CB-reader element (Row/Col modes reject streaming
-// policies the same way `binary_op_helpers` rejects ROW/SCALAR + WaitAndPopPerTile).
+// Compile-time-elided `idx` / `window` (defined below), inlined by every CB-reader's
+// `exec` / `wait_upfront` — `if constexpr` collapses to one arithmetic op at run time.
+// `TileBase` layers a runtime offset on top. `is_bcast_mode_v<M>` drives the (Policy ×
+// Mode) static_asserts (Row/Col reject streaming policies, as in `binary_op_helpers`).
 // =============================================================================
 
 template <OperandKind M>
@@ -1497,47 +1467,24 @@ template <class... Es> struct chain_has_duplicate_upfront_cbs<EltwiseChain<Es...
 template <class... Es> struct chain_pack_writes_collide<EltwiseChain<Es...>>
     : std::bool_constant<detail::ChainTraits<Es...>::writer_collide> {};
 
-// `chain_hoist_math_mop` / `chain_hoist_sfpu` — per-cohort hoist decisions,
-// split per cohort so the chain can hoist math-MOP init even when SFPU isn't
-// uniform. Hoisting means running each element's init() once at boot rather
-// than per tile. The two cohorts (math-MOP = ADDR_MOD_0..3 + MATH MOP; SFPU =
-// ADDR_MOD_7 + SFPU CSR) are disjoint by hardware design — see
-// `llk_math_eltwise_unary_sfpu.h:24-27`, so the two decisions are independent
-// in principle. We constrain them to a single-direction implication
-// (`chain_hoist_sfpu_v` implies `chain_hoist_math_mop_v`) to keep the
-// dispatcher simple.
+// `chain_hoist_math_mop` / `chain_hoist_sfpu` — per-cohort decisions on whether each
+// element's init() can run once at boot instead of per tile. The two cohorts (math-MOP =
+// ADDR_MOD_0..3 + MATH MOP; SFPU = ADDR_MOD_7 + SFPU CSR) are hardware-disjoint, so the
+// decisions are independent in principle; we constrain hoist_sfpu to imply hoist_math_mop
+// to keep the dispatcher simple. Eltwise-only scope (no matmul/reduce hazards).
 //
-// Eltwise-only scope: matmul / reduce are not modeled as chain elements, so
-// matmul-specific hazards (ADDR_MOD_6 collisions, welford_reinit-style
-// UNPACK/MATH reconfig, matmul + binary CLR_DVALID mixing) cannot arise.
+// All three conditions guard the same failure mode — boot programs each lane once, so a
+// non-uniform chain leaves only the LAST init's state programmed and earlier elements run
+// with the wrong MOP/format:
+//   - Per-side CB consistency: every element programming a side (srcA/srcB) uses the same CB.
+//   - MATH-MOP uniformity: all `is_math_mop_op_v` elements (CopyTile / BinaryFpu /
+//     DestReuseBinary / UnaryBcast) are the same instantiated type.
+//   - SFPU-init uniqueness: all `is_sfpu_op_v` elements are the same type. (Caught
+//     mish FP32 Exp/Log1p/Tanh → tanh saturation PCC 0.988; logit stage-2
+//     Rsub/DivBinary/Log → ATOL 9-12.)
 //
-// Hoist conditions:
-//
-//   Per-side CB consistency — across all chain elements, every element
-//       that programs a side (srcA / srcB) must use the SAME CB id. The
-//       boot-time fold programs each side once; if two elements declare
-//       different CBs on the same side, the LAST reconfig wins and earlier
-//       elements read with the wrong format at per-tile exec time.
-//
-//   MATH-MOP uniformity — across all `is_math_mop_op_v` elements
-//       (`CopyTile`, `BinaryFpu`, `DestReuseBinary`, `UnaryBcast`), all
-//       instantiated types must be identical. Each one's init programs
-//       MATH MOP / ADDR_MOD_0..3 in a kind-specific way (different FPU
-//       ops, different CB args, different bcast modes, plus the CopyTile-vs-
-//       binary-op init clash); hoisting more than one type leaves only the
-//       last init's MOP programmed and earlier elements run with the wrong MOP.
-//
-//   SFPU-init uniqueness — across all `is_sfpu_op_v` elements, all
-//       instantiated types must be identical. Multiple distinct SFPU
-//       `*_tile_init` calls done at boot leave only the LAST MOP programmed.
-//       Failures this guards against:
-//         - mish_kernel.cpp FP32 path: Exp/Log1p/Tanh chain → tanh saturation,
-//           PCC 0.988.
-//         - logit_kernel.cpp stage-2: Rsub/DivBinary/Log → ATOL deltas 9–12.
-//
-// "Identical type" uses `std::is_same_v`. This rejects some chains that would
-// in fact be safe (e.g. two `Exp<...>` instances differing only in `Dst::Slot`),
-// but the false negatives only cost a per-tile init — never correctness.
+// "Identical" is `std::is_same_v` — rejects some safe chains (two `Exp<...>` differing only
+// in slot), but false negatives only cost a per-tile init, never correctness.
 
 namespace detail {
 
@@ -1694,33 +1641,19 @@ ALWI void elem_init() { E::init(); }
 // =============================================================================
 // emit_pre_element_transitions<E, I, Es...>()
 //
-// For element at position I in pack Es..., emit srca / srcb / pack reconfig (each
-// compile-time-elided when prev_*_cb == curr_*_cb). Compile-time elision means a
-// chain whose elements all share a CB on a side emits the reconfig once (at element
-// 0, where prev == NO_PREV_CB) and never again on that side. Run-time cost: zero —
-// `if constexpr` resolves at compile time.
+// Emits srca / srcb / pack reconfig for element I, each compile-time-elided when
+// prev_*_cb == curr_*_cb. A chain that shares a CB on a side thus reconfigs it once (at
+// element 0, prev == NO_PREV_CB) and never again. Zero run-time cost — `if constexpr`.
 //
-// Emission shapes:
-//   - srca AND srcb both reconfig, both have prev    → reconfig_data_format(prev_a, curr_a, prev_b, curr_b)  (4-arg _with_dt)
-//   - srca AND srcb both reconfig, both first-emit   → reconfig_data_format(curr_a, curr_b)                  (2-arg combined)
-//   - srca AND srcb both reconfig, mixed prev-state  → independent per-side calls
-//   - one side only                                  → reconfig_data_format_src{a,b}(prev, curr) or (curr)
-//   - pack                                           → always independent; pack_reconfig_data_format(prev_p, curr_p) or (curr_p)
-// The LLK's _with_dt overloads run a format-equality fast-path skip against the CB
-// metadata tables, so an emitted reconfig on CBs with matching dtypes is a no-op
-// at the hardware level — strictly bounded by a handful of compare instructions.
+// srca+srcb coalesce: both-with-prev → 4-arg _with_dt; both-first-emit → 2-arg combined;
+// mixed → independent per-side. Pack is always independent. The LLK _with_dt overloads
+// fast-path-skip on format equality, so an emitted reconfig on matching dtypes is a
+// hardware no-op (a few compares).
 //
-// Pack-side hoist policy:
-//   - Homogeneous chains (≤1 opt-in pack site, or all sites share a CB): boot
-//     emission via `pack_init_for_each`. Subsequent sites fold-elide.
-//   - Heterogeneous chains (≥2 opt-in pack sites with different CBs): boot emits
-//     only the FIRST opt-in site's reconfig (initializes packer state); later
-//     sites' reconfigs are deferred to per-stage emission inside the per-iter
-//     pack phase (`emit_per_stage_pack_reconfig`). The 2-arg cache-checked LLK
-//     form makes the no-change case ~one compare + branch.
-//
-// DEST accumulation mode is build-flag-driven (DST_ACCUM_MODE / FP32_DEST_ACC_EN) —
-// no per-element fp32 fold here.
+// Pack-side hoist: homogeneous chains (≤1 opt-in pack site, or all share a CB) emit at
+// boot via `pack_init_for_each`; heterogeneous chains (≥2 sites, different CBs) emit only
+// the first site at boot and defer the rest to per-stage `emit_per_stage_pack_reconfig`.
+// DEST accumulation is build-flag-driven (no per-element fp32 fold here).
 // =============================================================================
 
 template <class E, std::size_t I, class... Es>
@@ -1818,19 +1751,11 @@ ALWI void emit_per_stage_pack_reconfig() {
     }
 }
 
-// Pack-phase init (Pack* only — hoisted to boot when sound).
-// Pack reconfig is fold-driven via `emit_pre_element_transitions`. For
-// homogeneous pack chains (≤1 opt-in pack site, or all sites share a CB),
-// boot programs the pack engine once and per-stage emission is suppressed.
-// For heterogeneous chains (multi-output ops with different pack CBs), boot
-// programs only the FIRST opt-in pack site; later sites emit per-stage in
-// `apply_pack_phase` via `emit_per_stage_pack_reconfig` using the 2-arg
-// cache-checked LLK form.
-//
-// `hoist_compute_init` excludes PackTile from its filtered walk (PACK is its
-// own cohort, disjoint from math-MOP and SFPU). `pack_init_for_each` runs the
-// boot fold for pack sites; per-stage emission is intentionally separate so
-// the heterogeneous case stays correct across per-iter wraparound.
+// Pack-phase init (Pack* only). Pack is its own cohort (disjoint from math-MOP / SFPU),
+// excluded from `hoist_compute_init` and always boot-hoisted here via `pack_init_for_each`.
+// Reconfig is fold-driven (see emit_pre_element_transitions): homogeneous chains program
+// the packer once at boot; heterogeneous chains defer later sites to per-stage emission so
+// the per-iter wraparound stays correct.
 template <std::size_t I, class E, class... Es>
 ALWI void elem_pack_init() {
     if constexpr (is_pack_tile_op_v<E>) {
@@ -1849,9 +1774,7 @@ ALWI void pack_init_for_each(std::index_sequence<Is...>) {
 // =============================================================================
 // Two-phase per-element apply: compute / pack
 //
-// Each element owns its full slice of the outer iteration. The pipeline makes two
-// element-iterating calls per outer iter with the commit/wait/release barriers
-// between them:
+// Each element owns its full lifecycle slice of the outer iteration. Per outer iter:
 //
 //   tile_regs_acquire();
 //   apply_compute_phase(...);   // per element: wait + init? + for(j) exec + pop
@@ -1860,19 +1783,12 @@ ALWI void pack_init_for_each(std::index_sequence<Is...>) {
 //   apply_pack_phase(...);      // per pack element: reserve + for(j) pack_exec + push
 //   tile_regs_release();
 //
-// After the outer loop ends, upfront-policy lifecycle fires:
-//   elem_pop_upfront_end(...) and elem_push_at_end(...).
+// Upfront-policy lifecycle (elem_pop_upfront_end / elem_push_at_end) fires after the loop.
 //
-// pop_per_tile / push_per_tile live INSIDE the apply body — each element owns its
-// full lifecycle slice. By the time the LLK exec call returns the unpack-read is
-// queued and the framework manages in-flight reads vs producer L1 reuse, so
-// cb_pop_front right after exec is safe. push fires right after pack_exec —
-// downstream consumer wakes on the new tile while DEST is still held. Both are
-// policy-guarded (no-op for upfront / no-pop / no-push policies; those fire after
-// the outer loop via elem_pop_upfront_end / elem_push_at_end).
-//
-// exec(i_outer * BlockSize + j) passes the absolute tile index (when BlockSize == 1
-// this is just exec(i)).
+// pop_per_tile / push_per_tile live inside the apply body. cb_pop_front right after exec
+// is safe — by then the unpack-read is queued and the framework manages in-flight reads
+// vs producer L1 reuse; push right after pack_exec wakes the consumer while DEST is still
+// held. Both are policy-guarded (no-op for upfront / no-pop / no-push policies).
 // =============================================================================
 
 // Boot-time hoist of compute-cohort init (math-MOP and/or SFPU), filtered
@@ -2140,19 +2056,17 @@ ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
 }
 
 // =============================================================================
-// 11c. Public eltwise_chain — strips compile-time-disabled optional elements before
-// any stage runs. OptionalChainElement<false, _> carries `is_disabled = true`; we drop
-// every such element (type AND instance) from the pack here, then forward the survivors
-// to eltwise_chain_impl. "Disabled == absent": the impl, and therefore every stage (the
-// invariant static_asserts, hoist decisions, reconfig fold, per-tile loop), only ever
-// sees enabled elements. Detection is member-based so the chain needs no knowledge of
-// OptionalChainElement (which depends on the chain, not the reverse).
+// 11c. Public eltwise_chain — strips compile-time-disabled optional elements (those
+// carrying `is_disabled = true`, i.e. OptionalChainElement<false, _>) from the pack before
+// any stage runs, so the impl and every stage (static_asserts, hoist, reconfig fold,
+// per-tile loop) only ever see enabled elements. Detection is member-based, so the chain
+// needs no knowledge of OptionalChainElement (the dependency runs one way).
 //
-// Implementation: tuple-cat the kept elements (each chain_keep yields a 0- or 1-tuple),
-// then expand with a direct std::get<I> call into eltwise_chain_impl. We deliberately do
-// NOT use std::apply — its INVOKE indirection routes through a callable and can defeat
-// `always_inline`, which on a Tensix MATH kernel pushes the compute body out of line and
-// miscompiles it. The std::get expansion calls eltwise_chain_impl directly (no closure).
+// Each chain_keep yields a 0- or 1-tuple; we tuple-cat and expand via a direct std::get<I>
+// call into eltwise_chain_impl. We deliberately do NOT use std::apply — its INVOKE
+// indirection routes through a callable and can defeat `always_inline`, which on a Tensix
+// MATH kernel pushes the compute body out of line and miscompiles it (nan). The std::get
+// expansion calls eltwise_chain_impl directly, no closure.
 // =============================================================================
 
 template <class T, class = void>
