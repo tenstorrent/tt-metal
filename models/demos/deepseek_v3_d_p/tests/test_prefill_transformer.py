@@ -660,19 +660,16 @@ def run_model(
         )
 
         # First-token cross-check against the reference
-        if num_layers == trace.metadata.get("n_layers"):
-            if trace is None:
-                # CPU reference path
-                hf_match = check_first_token_match_host_ref(
-                    ref_snapshots, number_of_non_padded_tokens, padding_side, first_token_id, tok
-                )
-                if hf_match is False:
-                    failures.append(("first_token_match", -1.0))
-            else:
-                # GPU trace path
-                token_match = check_first_token_match(trace, trace_dir, first_token_id, first_token_prob)
-                if token_match is False:
-                    failures.append(("first_token_match", -1.0))
+        if trace is not None and num_layers == trace.metadata.get("n_layers"):
+            token_match = check_first_token_match(trace, trace_dir, first_token_id, first_token_prob)
+            if token_match is False:
+                failures.append(("first_token_match", -1.0))
+        elif trace is None and num_layers == config.num_hidden_layers:
+            hf_match = check_first_token_match_host_ref(
+                ref_snapshots, number_of_non_padded_tokens, padding_side, first_token_id, tok
+            )
+            if hf_match is False:
+                failures.append(("first_token_match", -1.0))
         else:
             logger.debug("Skipping first token check")
 

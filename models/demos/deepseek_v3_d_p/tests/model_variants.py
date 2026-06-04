@@ -83,6 +83,7 @@ DSV3 = TestVariant(
     ref_cache_env="TT_DS_PREFILL_HOST_REF_CACHE",
     mla_ref_cache_env="DEEPSEEK_V3_MLA_REF_CACHE",
     ttnn_cache_env="TT_DS_PREFILL_TTNN_CACHE",
+    mla_pcc_threshold=0.996,
     moe_pcc_threshold=0.985,
 )
 
