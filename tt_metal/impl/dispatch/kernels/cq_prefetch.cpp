@@ -126,38 +126,6 @@ constexpr uint32_t to_mesh_id = TO_MESH_ID;
 constexpr bool is_2d_fabric = FABRIC_2D;
 
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-static constexpr uint32_t quasar_cmddat_pre_retire_iters = 8;
-static constexpr uint32_t quasar_cmddat_pre_cmd_decode_iters = 32;
-
-// NOC fills cmddat at cached offsets; invalidate before uncached_l1_ptr decode sees fresh TL1.
-FORCE_INLINE void cmddat_invalidate_after_noc_read(uintptr_t cached_start, uint32_t size_bytes) {
-    uintptr_t inv_addr = cached_start & ~uintptr_t(63);
-    const uintptr_t inv_end = cached_start + size_bytes;
-    for (; inv_addr < inv_end; inv_addr += 64) {
-        invalidate_l1_dcache(inv_addr);
-        invalidate_l2_cache_line(inv_addr);
-    }
-}
-
-FORCE_INLINE void quasar_cmddat_pre_retire_barrier_sync(uint32_t trid) {
-//    asm volatile("fence" ::: "memory");
-//    for (volatile int delay = 0; delay < static_cast<int>(quasar_cmddat_pre_retire_iters); ++delay) {
-//        (void)delay;
-//    }
-    (void)__builtin_riscv_ttrocc_scmdbuf_tr_ack_trid(trid);
-//    asm volatile("fence" ::: "memory");
-}
-
-// After fetch_q_get_cmds returns committed cmddat; before uncached cmd header read in process_cmd.
-// Replaces removed prefetch_publish_phase + post-retire delay (Quasar RTL timing).
-FORCE_INLINE void quasar_cmddat_pre_cmd_decode_sync() {
-    asm volatile("fence" ::: "memory");
-    for (volatile int delay = 0; delay < static_cast<int>(quasar_cmddat_pre_cmd_decode_iters); ++delay) {
-        (void)delay;
-    }
-    asm volatile("fence" ::: "memory");
-}
-
 // Production fetch retire chain (matches quasar_prefetch_retire_repro / tier-1 repro).
 // No prefetch_publish_phase in this path: repeated uncached marker writes after L2
 // flush/invalidate stall Quasar RTL (see quasar_prefetch_retire_repro for phased diag).
@@ -165,14 +133,11 @@ FORCE_INLINE void quasar_cmddat_retire_fetch_read(uint32_t trid, uintptr_t read_
     while (!ncrisc_noc_read_with_transaction_id_flushed(noc_index, trid)) {
     }
 
-    quasar_cmddat_pre_retire_barrier_sync(trid);
+    (void)__builtin_riscv_ttrocc_scmdbuf_tr_ack_trid(trid);
 
     noc_async_read_barrier_with_trid(trid);
-
-    cmddat_invalidate_after_noc_read(read_start, size_bytes);
 }
 #else
-FORCE_INLINE void cmddat_invalidate_after_noc_read(uintptr_t, uint32_t) {}
 FORCE_INLINE void quasar_cmddat_retire_fetch_read(uint32_t trid, uintptr_t, uint32_t) {
     noc_async_read_barrier_with_trid(trid);
 }
@@ -561,8 +526,6 @@ FORCE_INLINE uint32_t read_from_pcie(
         fence);
 #endif
 
-    const uintptr_t consumed_entry_cached =
-        l1_cached_addr(reinterpret_cast<uintptr_t>(prefetch_q_rd_ptr));
     *prefetch_q_rd_ptr = 0U;
 
     // Tell host we read. Store the cached-form pointer value so host comparisons against
@@ -581,10 +544,6 @@ FORCE_INLINE uint32_t read_from_pcie(
         prefetch_q_rd_ptr =
             reinterpret_cast<volatile tt_l1_ptr prefetch_q_entry_type*>(l1_uncached_addr(prefetch_q_base));
     }
-
-    tl1_publish_flush(consumed_entry_cached);
-    tl1_publish_flush(prefetch_q_rd_ptr_addr);
-    tl1_publish_flush(prefetch_q_pcie_rd_ptr_addr);
     return pending_read_size;
 }
 
@@ -739,23 +698,13 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
 
         // Issue tagged reads (up to MAX_OUTSTANDING_READS) whenever host has work and there is capacity.
         // Stop once we encounter a stall_flag entry (do not prefetch beyond it).
-        if (has_pending_stall_after) {
-        } else {
-            for (;;) {
-
-                const bool would_continue =
-                    (fetch_size != 0U) &&
-                    (inflight_count <
-                     tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS);
-                if (!would_continue) {
-                    break;
-                }
-
+        if (!has_pending_stall_after) {
+            while ((fetch_size != 0U) &&
+                   (inflight_count < tt::tt_metal::PrefetchConstants::PREFETCH_MAX_OUTSTANDING_PCIE_READS)) {
                 const uint32_t this_trid = PREFETCH_TRIDS[next_trid_idx];
                 uint32_t total_size = 0U;
                 const uint32_t idx = (inflight_head + inflight_count) & INFLIGHT_MASK;
                 const bool queue_empty = (inflight_count == 0U) && !cmd_ready;
-
 
 #if ENABLE_PREFETCH_DPRINTS
                 DPRINT << "fetch_q_get_cmds: ISSUE_ATTEMPT idx=" << idx << " trid=" << this_trid
@@ -811,7 +760,6 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 // Cycle through PREFETCH_TRIDS.
                 next_trid_idx = (next_trid_idx + 1U) & (static_cast<uint32_t>(PREFETCH_TRIDS.size()) - 1U);
 
-
 #if ENABLE_PREFETCH_DPRINTS
                 DPRINT << "fetch_q_get_cmds: ISSUE_OK trid=" << this_trid << " read_start=" << read_fence
                        << " read_size=" << fetch_size << " total_size=" << total_size
@@ -841,54 +789,46 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
             }
         }
 
-        if (inflight_count != 0U) {
-            const uint32_t inflight_last = (inflight_head + inflight_count - 1U) & INFLIGHT_MASK;
-        }
-
-        const bool cmd_ready_reeval = (cmd_ptr != fence);
-
         // If no commands are ready, retire the oldest in-flight read to advance the committed fence.
         // This preserves correctness: the main loop expects data to be present after fetch_q_get_cmds returns.
         if (!cmd_ready) {
             if (inflight_count != 0U) {
                 const uint32_t idx = inflight_head;
-                const InflightFlags retire_flags = inflight[idx].flags;
-                const uint32_t retire_reserved = inflight[idx].reserved_size;
-                const uint32_t retire_trid = inflight[idx].trid;
-                const uintptr_t retire_start = inflight[idx].read_start;
 
 #if ENABLE_PREFETCH_DPRINTS
-                DPRINT << "fetch_q_get_cmds: RETIRE_START idx=" << idx << " trid=" << retire_trid
-                       << " read_start=" << retire_start
-                       << " read_size=" << (retire_reserved - preamble_size)
-                       << " total_size=" << retire_reserved << " preamble_size=" << preamble_size
-                       << " flags=" << (retire_flags == InflightFlags::STALL_AFTER ? "STALL_AFTER" : "NOSTALL")
+                DPRINT << "fetch_q_get_cmds: RETIRE_START idx=" << idx << " trid=" << inflight[idx].trid
+                       << " read_start=" << inflight[idx].read_start
+                       << " read_size=" << (inflight[idx].reserved_size - preamble_size)
+                       << " total_size=" << inflight[idx].reserved_size << " preamble_size=" << preamble_size
+                       << " flags=" << (inflight[idx].flags == InflightFlags::STALL_AFTER ? "STALL_AFTER" : "NOSTALL")
                        << " fence=" << fence << " cmd_ptr=" << cmd_ptr << ENDL();
                 DEVICE_PRINT(
                     "fetch_q_get_cmds: RETIRE_START idx={} trid={} read_start={} read_size={} total_size={} "
                     "preamble_size={} flags={} fence={} cmd_ptr={}\n",
                     idx,
-                    retire_trid,
-                    retire_start,
-                    (retire_reserved - preamble_size),
-                    retire_reserved,
+                    inflight[idx].trid,
+                    inflight[idx].read_start,
+                    (inflight[idx].reserved_size - preamble_size),
+                    inflight[idx].reserved_size,
                     preamble_size,
-                    retire_flags,
+                    inflight[idx].flags,
                     fence,
                     cmd_ptr);
 #endif
-                quasar_cmddat_retire_fetch_read(retire_trid, retire_start, retire_reserved);
+                quasar_cmddat_retire_fetch_read(inflight[idx].trid, inflight[idx].read_start, inflight[idx].reserved_size);
 
 #if ENABLE_PREFETCH_DPRINTS
-                if (retire_start < cmd_ptr) {
-                    DPRINT << "fetch_q_get_cmds: RETIRE_CMD_PTR_ADJUST cmd_ptr=" << cmd_ptr << " -> " << retire_start
-                           << ENDL();
+                if (inflight[idx].read_start < cmd_ptr) {
+                    DPRINT << "fetch_q_get_cmds: RETIRE_CMD_PTR_ADJUST cmd_ptr=" << cmd_ptr << " -> "
+                           << inflight[idx].read_start << ENDL();
                     DEVICE_PRINT(
-                        "fetch_q_get_cmds: RETIRE_CMD_PTR_ADJUST cmd_ptr={} -> {}\n", cmd_ptr, retire_start);
+                        "fetch_q_get_cmds: RETIRE_CMD_PTR_ADJUST cmd_ptr={} -> {}\n",
+                        cmd_ptr,
+                        inflight[idx].read_start);
                 }
 #endif
-                cmd_ptr = retire_start;
-                fence = retire_start + retire_reserved;
+                cmd_ptr = inflight[idx].read_start;
+                fence = inflight[idx].read_start + inflight[idx].reserved_size;
                 const uint32_t committed_bytes = static_cast<uint32_t>(fence - cmd_ptr);
 
                 inflight_head = (inflight_head + 1U) & INFLIGHT_MASK;
@@ -907,7 +847,7 @@ void fetch_q_get_cmds(uintptr_t& fence, uintptr_t& cmd_ptr, uint32_t& pcie_read_
                 // Committed data is available; return immediately (do not continue the loop with a
                 // consumed FetchQ cursor and other reads still in-flight — Quasar RTL hangs there).
                 if (committed_bytes != 0U) {
-                    if (retire_flags == InflightFlags::STALL_AFTER) {
+                    if (inflight[idx].flags == InflightFlags::STALL_AFTER) {
                         stall_state = StallState::STALLED;
                     }
                     return;
@@ -2246,11 +2186,7 @@ bool process_cmd(
     uint32_t* l1_cache,
     PrefetchExecBufState& exec_buf_state) {
     volatile CQPrefetchCmd tt_l1_ptr* cmd = uncached_l1_ptr<CQPrefetchCmd>(cmd_ptr);
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    quasar_cmddat_pre_cmd_decode_sync();
-#endif
     bool done = false;
-
 
     DPRINT << "process_cmd: cmd_id=" << (uint32_t)cmd->base.cmd_id << " cmd_ptr=" << cmd_ptr << " exec_buf=" << exec_buf
            << ENDL();

@@ -65,7 +65,11 @@ uint32_t wrap_gt(uint32_t a, uint32_t b) {
 // updates from other RISCs/cores are visible. No-op on BH/WH.
 constexpr FORCE_INLINE uintptr_t l1_uncached_addr(uintptr_t addr) {
 #ifdef ARCH_QUASAR
-    return addr + MEM_L1_UNCACHED_BASE;
+    if (addr < MEM_L1_UNCACHED_BASE) {
+        return addr + MEM_L1_UNCACHED_BASE;
+    } else {
+        return addr;
+    }
 #else
     return addr;
 #endif
@@ -75,7 +79,11 @@ constexpr FORCE_INLINE uintptr_t l1_uncached_addr(uintptr_t addr) {
 // Used when storing a pointer that the host (or NOC) will resolve via the cached-form base.
 constexpr FORCE_INLINE uintptr_t l1_cached_addr(uintptr_t addr) {
 #ifdef ARCH_QUASAR
-    return addr - MEM_L1_UNCACHED_BASE;
+    if (addr >= MEM_L1_UNCACHED_BASE) {
+        return addr - MEM_L1_UNCACHED_BASE;
+    } else {
+        return addr;
+    }
 #else
     return addr;
 #endif
@@ -84,15 +92,6 @@ constexpr FORCE_INLINE uintptr_t l1_cached_addr(uintptr_t addr) {
 template <typename T>
 FORCE_INLINE volatile T tt_l1_ptr* uncached_l1_ptr(uintptr_t addr) {
     return reinterpret_cast<volatile T tt_l1_ptr*>(l1_uncached_addr(addr));
-}
-
-// Push DM-written TL1 (cached-port offset) through L2 so host NOC and other agents see it.
-FORCE_INLINE void tl1_publish_flush(uintptr_t cached_tl1_addr) {
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-    flush_l2_cache_line(cached_tl1_addr & ~uintptr_t(63));
-#else
-    (void)cached_tl1_addr;
-#endif
 }
 
 // Quasar: prefetch_q_rd_ptr is the uncached alias; load TL1 directly so host NOC-filled entries
