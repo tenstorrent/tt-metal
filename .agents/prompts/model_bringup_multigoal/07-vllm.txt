@@ -1,0 +1,16 @@
+/goal Use $vllm-integration for the HF_MODEL optimized full model in the current tt-metal checkout.
+
+This goal creates the vLLM state for the repo-local TTNN autoport pipeline. Start from the completed optimized full model and work on models/autoports/<model>/tt/generator_vllm.py plus vLLM TT plugin registration.
+
+Transition completion requirements:
+- models/autoports/<model>/tt/generator_vllm.py exists and delegates to tt/generator.py low-level methods whenever possible.
+- The model is registered in vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py::register_tt_models().
+- vLLM serving mode preserves correct KV-cache ownership: vLLM allocates the serving cache and the adapter passes that cache through the generator/model path without hidden standalone-cache assumptions.
+- run_vllm_server succeeds with the appropriate final sampling profile: full by default, or smoke only when the skill permits it for the target model and the report explains why.
+- Sampling tests, qualitative outputs, and serving benchmark artifacts exist under readiness_vllm/ unless a concrete blocker prevents them.
+- The qualitative outputs are read and judged for coherence, topic, repetition, gibberish, wrong-language drift, and request contamination.
+- The report records the exact successful server invocation, TT config, max model length, max-num-seqs, sampling profile, workload config, TTFT P50/P99, ITL P50/P99, aggregate throughput, and mean per-user decode t/s/u.
+- Runtime fallback and process cleanup are audited; leftover vLLM/EngineCore processes are not left holding devices.
+- models/autoports/<model>/doc/vllm_integration/README.md and work_log.md summarize commands, serving status, qualitative verdict, benchmark metrics, limitations, and exact artifacts.
+
+Mark this goal complete only when the model serves through the shared vLLM path with evidence. If blocked, mark blocked with exact evidence and sufficient evidence that this requires a human's attention instead of your continued efforts.

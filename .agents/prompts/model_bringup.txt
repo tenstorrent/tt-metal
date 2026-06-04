@@ -1,1 +1,0 @@
-/goal Use $model-bringup for HF_MODEL in the current tt-metal checkout.

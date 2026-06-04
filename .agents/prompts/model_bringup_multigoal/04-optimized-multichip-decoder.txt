@@ -1,0 +1,15 @@
+/goal Use $optimize for the HF_MODEL multichip decoder in the current tt-metal checkout.
+
+This goal creates the optimized-multichip-decoder state for the repo-local TTNN autoport pipeline. Start from the completed multichip decoder and optimize that multichip path in place; do not begin full-model or vLLM work in this goal.
+
+Transition completion requirements:
+- The measured path is the multichip decoder path on the target mesh, not a single-chip or replicated fallback unless such a fallback is explicitly proved to be the best feasible option.
+- Multi-chip prefill and decode PCC remain at the accepted baseline for every meaningful layer kind.
+- Warmed prefill and traced warmed decode latency are reported before and after this multichip optimization pass.
+- tt-perf-report advice-backed human-readable tables and CSV/provenance logs exist for the multichip path, and the report records which advice was followed or rejected with evidence.
+- Async CCLs, fused matmul-CCL opportunities, collective placement, semaphore/preallocated-buffer reuse, residual layout, activation sharding, DRAM-sharded decode matmuls, and precision/fidelity reductions are tried where supported or explicitly ruled out with exact TTNN/API/hardware evidence.
+- The final path avoids unnecessary gather/reshard/all-reduce between decoder layers unless measured evidence shows it is faster overall.
+- Runtime fallback audit is clean, stress or repeated-run coverage matches risk, and watcher-clean evidence exists for the optimized multichip path.
+- models/autoports/<model>/doc/optimized_multichip_decoder/README.md and work_log.md summarize commands, before/after PCC and perf, CCL findings, tt-perf-report conclusions, rejected options, limitations, and exact artifacts.
+
+Mark this goal complete only when the multichip decoder has been optimized as far as practical on the current hardware. If an optimization is left undone, keep working; do not defer it. If blocked, mark blocked with exact evidence and sufficient evidence that this requires a human's attention instead of your continued efforts.

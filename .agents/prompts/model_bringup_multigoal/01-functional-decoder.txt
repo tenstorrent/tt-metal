@@ -1,0 +1,15 @@
+/goal Use $functional-decoder for HF_MODEL in the current tt-metal checkout.
+
+This goal creates the functional-decoder state for the repo-local TTNN autoport pipeline. Work only on the functional decoder under models/autoports/<model>; do not begin optimized-decoder, multichip-decoder, full-model, or vLLM work in this goal.
+
+Transition completion requirements:
+- models/autoports/<model>/tt/functional_decoder.py exists with a documented prefill/decode contract suitable for the target HF decoder layer or layer kinds.
+- Decode forward pass runs fully with ttnn's traced execution
+- Tests cover every meaningful target layer kind with real target config shapes, including paged prefill, paged decode, page table handling, current-position handling, and the longest feasible sequence/context lengths.
+- HF-vs-TTNN prefill and decode PCC meet the functional-decoder acceptance bar, defaulting to PCC >= 0.995 unless a model-specific issue or evidence justifies a different threshold.
+- Warmed prefill and traced warmed decode performance are measured and recorded, with human-readable tt-perf-report tables plus CSV/provenance logs where the profiler supports them.
+- The runtime fallback audit is clean: no torch, ttnn.from_torch, ttnn.to_torch, or host fallback inside a single measured prefill/decode pass except explicit test harness boundaries.
+- Determinism/repeated-input evidence and a watcher-clean run exist, or the report gives a concrete environment reason watcher could not be run.
+- models/autoports/<model>/doc/functional_decoder/README.md and work_log.md summarize commands, PCC, perf, limitations, and exact artifacts.
+
+Mark this goal complete only when the requirements above and the functional-decoder skill's final objectives are satisfied. If blocked, mark blocked with exact evidence and sufficient evidence that this requires a human's attention instead of your continued efforts.
