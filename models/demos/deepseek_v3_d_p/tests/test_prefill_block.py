@@ -11,6 +11,7 @@ Uses HF DeepseekV3Model layer as the reference: creates a model with random weig
 extracts those weights into our TT state_dict format, and compares forward passes.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -47,6 +48,12 @@ PCC_THRESHOLD_MOE_GATE_HOST = 0.996
 PCC_THRESHOLD_MOE_GATE_DEVICE = 0.992
 PCC_THRESHOLD_KVPE = 0.999
 
+# Relaxed thresholds for 5k (5120-token) prefill
+SEQ_LEN_5K = 5 * 1024
+PCC_THRESHOLD_DENSE_5K = 0.989
+PCC_THRESHOLD_MOE_GATE_HOST_5K = 0.989
+PCC_THRESHOLD_MOE_GATE_DEVICE_5K = 0.988
+
 
 @pytest.mark.parametrize(
     "input_source, pcc_validation, isl_total, dispatch_buffer_capacity_factor",
@@ -54,8 +61,9 @@ PCC_THRESHOLD_KVPE = 0.999
         ("random", False, 1024, 8),
         ("abc_1k", False, 25 * 1024, 8),
         ("abc_1k", True, 1024, 8),
+        ("abc_1k", True, SEQ_LEN_5K, 8),
     ],
-    ids=["smoke-random", "perf-abc_25k", "pcc-abc_1k"],
+    ids=["smoke-random", "perf-abc_25k", "pcc-abc_1k", "pcc-abc_5k"],
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
@@ -142,7 +150,9 @@ def test_prefill_block(
 
     # --- Cache setup ---
     is_dense = layer_idx < DeepSeekV3Config.NUM_DENSE_LAYERS
-    cache_dir = Path(f"/tmp/deepseek_v3_prefill_block/{layer_type}_{sp_factor}x{tp_factor}mesh_{isl_total}isl")
+    # Namespace by user to avoid cross-user permission collisions on the shared /tmp dir.
+    user = os.getenv("USER", "shared")
+    cache_dir = Path(f"/tmp/{user}_deepseek_v3_prefill_block/{layer_type}_{sp_factor}x{tp_factor}mesh_{isl_total}isl")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     init_checker(cache_dir)
@@ -326,13 +336,14 @@ def test_prefill_block(
             tt_output_host = reverse_reorder_tensor_chunks(tt_output_host, chunk_order, seq_dim=-2)
         tt_output_host = tt_output_host.squeeze(0)
 
+        is_5k = isl_total == SEQ_LEN_5K
         if layer_type == "dense":
-            pcc_threshold = PCC_THRESHOLD_DENSE
+            pcc_threshold = PCC_THRESHOLD_DENSE_5K if is_5k else PCC_THRESHOLD_DENSE
         else:
             if gate_fallback_mode == GateComputeMode.DEVICE:
-                pcc_threshold = PCC_THRESHOLD_MOE_GATE_DEVICE
+                pcc_threshold = PCC_THRESHOLD_MOE_GATE_DEVICE_5K if is_5k else PCC_THRESHOLD_MOE_GATE_DEVICE
             else:
-                pcc_threshold = PCC_THRESHOLD_MOE_GATE_HOST
+                pcc_threshold = PCC_THRESHOLD_MOE_GATE_HOST_5K if is_5k else PCC_THRESHOLD_MOE_GATE_HOST
 
         _, pcc = comp_pcc(torch_output.float(), tt_output_host.float())
         profiler.end("pcc_validation")
