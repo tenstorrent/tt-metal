@@ -25,7 +25,7 @@ namespace tt::tt_metal::experimental {
 using KernelRTASchema = detail::ProgramImpl::KernelRTASchema;
 
 // Helpers for vararg-value access (now living on AdvancedKernelRunArgs).
-const AdvancedKernelRunArgs::RuntimeVarargs& kernel_runtime_varargs(const ProgramRunArgs::KernelRunArgs& kp) {
+const Table<NodeCoord, std::vector<uint32_t>>& kernel_runtime_varargs(const ProgramRunArgs::KernelRunArgs& kp) {
     return kp.advanced_options.runtime_varargs;
 }
 
@@ -151,9 +151,9 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
         const std::set<CoreCoord>& kernel_nodes = kernel->logical_cores();
 
         // Validate vararg RTA counts per node
-        // (Duplicate node keys are rejected by RuntimeVarargs at construction.)
+        // (Duplicate node keys are rejected by the Table at construction.)
         std::unordered_set<NodeCoord> nodes_with_vararg_params;
-        for (const auto& [node_coord, varargs] : kernel_runtime_varargs(kernel_params)) {
+        for (const auto& [node_coord, args] : kernel_runtime_varargs(kernel_params)) {
             nodes_with_vararg_params.insert(node_coord);
 
             TT_FATAL(
@@ -166,12 +166,12 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
             const size_t expected_varargs =
                 (it_schema != schema->num_runtime_varargs_per_node.end()) ? it_schema->second : 0;
             TT_FATAL(
-                varargs.args.size() == expected_varargs,
+                args.size() == expected_varargs,
                 "Kernel '{}' node {} expects {} vararg runtime args, but {} were provided",
                 kernel_name,
                 node_coord.str(),
                 expected_varargs,
-                varargs.args.size());
+                args.size());
         }
         // Every node with a non-zero schema vararg entry must have values provided.
         // Zero-count entries should already be filtered out during schema expansion
@@ -484,8 +484,8 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params) {
 
         // Build a node -> vararg-values-span lookup.
         std::unordered_map<NodeCoord, const std::vector<uint32_t>*> varargs_by_node;
-        for (const auto& [node, varargs] : kernel_runtime_varargs(kernel_params)) {
-            varargs_by_node[node] = &varargs.args;
+        for (const auto& [node, args] : kernel_runtime_varargs(kernel_params)) {
+            varargs_by_node[node] = &args;
         }
 
         // Iterate over every node the kernel runs on. We need to set RTAs on any node that

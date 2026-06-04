@@ -150,20 +150,17 @@ struct AdvancedKernelRunArgs {
     // Varargs
     ////////////////////////////////////////////////////////////////////////////////
 
-    // Unnamed runtime argument "varargs", mapping each node to its vararg values.
+    using Varargs = std::vector<uint32_t>;
+
+    // Unnamed runtime argument "varargs"
     // (Companion to the vararg schema declared on KernelAdvancedOptions).
     // Specified per-node; length can vary per-node (as declared in schema).
-    struct NodeVarargs {
-        std::vector<uint32_t> args;
-    };
-    using RuntimeVarargs = Table<NodeCoord, NodeVarargs>;
-    RuntimeVarargs runtime_varargs;
+    Table<NodeCoord, Varargs> runtime_varargs;
 
     // Unnamed common runtime argument "varargs"
     // (Companion to num_common_runtime_varargs in the schema.)
     // Broadcast to every node the kernel runs on.
-    using CommonVarargs = std::vector<uint32_t>;
-    CommonVarargs common_runtime_varargs;
+    Varargs common_runtime_varargs;
 };
 
 struct SemaphoreAdvancedOptions {
