@@ -250,7 +250,6 @@ def _tt_audio(
     use_torch_sinegen_fallback: bool = False,
     use_torch_f0n_conv_fallback: bool = True,
     use_torch_f0_upsamp_fallback: bool | None = None,
-    use_fp32_prosody_boundary: bool = True,
 ) -> torch.Tensor:
     # Construct inside _zero_noise so init-time randn_like calls match _ref_audio zeros.
     with _zero_noise():
@@ -267,7 +266,6 @@ def _tt_audio(
             use_torch_tanh_fallback=use_torch_tanh_fallback,
             use_torch_f0n_conv_fallback=use_torch_f0n_conv_fallback,
             use_torch_f0_upsamp_fallback=use_torch_f0_upsamp_fallback,
-            use_fp32_prosody_boundary=use_fp32_prosody_boundary,
         )
     out = tt_model(phonemes=phonemes, ref_s=ref_s, speed=1.0, deterministic=True)
     return out.audio.detach().float().squeeze()
@@ -299,9 +297,8 @@ def _setup(ckpt_path: Path, device) -> tuple[KModel, TTKModel, str, torch.Tensor
 def test_tt_kmodel_generator_no_torch_fallback_pcc(device):
     """Config A — baseline with **no** vocoder fallback. Empirical PCC ≈ 0.30.
 
-    Uses bf16 prosody (``use_fp32_prosody_boundary=False``) and on-device F0/N conv
-    (``use_torch_f0n_conv_fallback=False``) to match the historical no-fallback floor.
-    P4 fp32 ``en``/F0Ntrain is enabled only for config E (see stft+phase test).
+    Uses on-device F0/N conv (``use_torch_f0n_conv_fallback=False``) to match the
+    historical no-fallback floor. Prosody path always uses fp32 boundaries.
 
     Documents the BH-BF16 no-fallback floor. Stages 1–5 (prosody) are PCC > 0.998 here
     (see ``kmodel_pcc_stage_diagnostic.py``); the entire 0.7 deficit lives in the vocoder,
@@ -326,7 +323,6 @@ def test_tt_kmodel_generator_no_torch_fallback_pcc(device):
         use_torch_stft_fallback=False,
         use_torch_phase_fallback=False,
         use_torch_linear_fallback=False,
-        use_fp32_prosody_boundary=False,
         use_torch_f0n_conv_fallback=False,
     )
 
@@ -354,7 +350,6 @@ def test_tt_kmodel_generator_no_torch_fallback_pcc(device):
             use_torch_phase_fallback=use_phase,
             use_torch_linear_fallback=use_linear,
             use_torch_tanh_fallback=use_tanh,
-            use_fp32_prosody_boundary=False,
         )
         _, pcc_debug = comp_pcc(y_ref.unsqueeze(0), y_debug.unsqueeze(0), pcc=0.0)
         print("TTKModel PCC debug: " f"mode={debug_mode}, no_fallback={pcc:.6f}, debug_mode_pcc={pcc_debug:.6f}")
@@ -392,8 +387,7 @@ def test_tt_kmodel_stft_and_phase_fallback_pcc(device):
     Also enables ``use_torch_linear_fallback`` and ``use_torch_tanh_fallback`` so the
     m_source merge matches ref after CPU f0 upsample + SineGen (see ``DECODE_STACK_NOTES.md``).
 
-    Floor (> 0.55): after fp32 ``en`` boundary (P4) + fp32 BiLSTM output in ``F0Ntrain`` (P5),
-    captured text reaches ~0.79 PCC (was ~0.23 pre-P4).
+    Floor (> 0.55): fp32 prosody path + STFT/phase fallbacks; captured text ~0.79 PCC.
     """
     ckpt_path = _find_checkpoint()
     if ckpt_path is None:
@@ -508,7 +502,7 @@ def test_tt_kmodel_max_input_length_plbert_pcc(device):
         ck = tt_model._predictor.compute_kernel_config
         bert_out = tt_model._bert(input_ids, attention_mask=None)
         bert_for_enc = bert_out
-        if tt_model._use_fp32_prosody_boundary and bert_out.dtype != ttnn.float32:
+        if bert_out.dtype != ttnn.float32:
             bert_for_enc = ttnn.typecast(bert_out, ttnn.float32, memory_config=mc)
             ttnn.deallocate(bert_out)
         d_en = ttnn.linear(

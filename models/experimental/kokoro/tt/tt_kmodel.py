@@ -219,7 +219,6 @@ class TTKModel:
         use_torch_f0_upsamp_fallback: Optional[bool] = None,
         use_torch_linear_fallback: bool = False,
         use_torch_tanh_fallback: bool = False,
-        use_fp32_prosody_boundary: bool = True,
     ) -> None:
         self.device = device
         self.vocab = ref.vocab
@@ -235,7 +234,6 @@ class TTKModel:
         self._use_f0_upsamp_fallback = use_torch_f0_upsamp_fallback
         self._use_linear_fallback = use_torch_linear_fallback
         self._use_tanh_fallback = use_torch_tanh_fallback
-        self._use_fp32_prosody_boundary = use_fp32_prosody_boundary
 
         self._bert = TTCustomAlbert(device, params.bert)
         self._predictor = TTProsodyPredictor(device, params.predictor)
@@ -350,7 +348,7 @@ class TTKModel:
         p = self.params
         dev = self.device
         B, T = input_ids.shape
-        prosody_dtype = ttnn.float32 if self._use_fp32_prosody_boundary else ttnn.bfloat16
+        prosody_dtype = ttnn.float32
         full_length = _batch_is_full_length(input_lengths, T)
         text_mask: torch.Tensor | None = None if full_length else _text_mask_from_input_lengths(input_lengths, T)
 
@@ -363,7 +361,7 @@ class TTKModel:
         # 2. bert_encoder
         bert_for_enc = bert_out
         owns_bert_cast = False
-        if self._use_fp32_prosody_boundary and bert_out.dtype != ttnn.float32:
+        if bert_out.dtype != ttnn.float32:
             bert_for_enc = ttnn.typecast(bert_out, ttnn.float32, memory_config=mc)
             owns_bert_cast = True
         d_en = ttnn.linear(
@@ -380,7 +378,7 @@ class TTKModel:
         d_en_bct = ttnn.permute(d_en, (0, 2, 1), memory_config=mc)
         ttnn.deallocate(d_en)
 
-        if self._use_fp32_prosody_boundary and d_en_bct.dtype != prosody_dtype:
+        if d_en_bct.dtype != prosody_dtype:
             d_en_fp32 = ttnn.typecast(d_en_bct, prosody_dtype, memory_config=mc)
             ttnn.deallocate(d_en_bct)
             d_en_bct = d_en_fp32
@@ -438,8 +436,7 @@ class TTKModel:
 
         aln_cpu = _build_alignment(pred_dur)
         T_aligned = int(aln_cpu.shape[2])
-        aln_dtype = ttnn.float32 if self._use_fp32_prosody_boundary else ttnn.bfloat16
-        aln_tt = ttnn.from_torch(aln_cpu, dtype=aln_dtype, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc)
+        aln_tt = ttnn.from_torch(aln_cpu, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc)
 
         return self._device_forward_prosody_stages_from_aln(
             input_ids,
@@ -470,29 +467,15 @@ class TTKModel:
         """Steps 7–9 given ``d_nlc``, alignment, and style (shared by on-device and CPU prosody paths)."""
         # 7. en_nlc = aln^T @ d_nlc
         aln_Ta_T = ttnn.permute(aln_tt, (0, 2, 1), memory_config=mc)
-        if self._use_fp32_prosody_boundary:
-            d_mat, owns_d = _to_fp32_if_needed(d_nlc, mc)
-            if owns_d:
-                ttnn.deallocate(d_nlc)
-            en_nlc = ttnn.matmul(aln_Ta_T, d_mat, memory_config=mc, compute_kernel_config=ck)
-            ttnn.deallocate(d_mat)
-        else:
-            en_nlc = ttnn.matmul(aln_Ta_T, d_nlc, memory_config=mc, compute_kernel_config=ck)
+        d_mat, owns_d = _to_fp32_if_needed(d_nlc, mc)
+        if owns_d:
             ttnn.deallocate(d_nlc)
+        en_nlc = ttnn.matmul(aln_Ta_T, d_mat, memory_config=mc, compute_kernel_config=ck)
+        ttnn.deallocate(d_mat)
         ttnn.deallocate(aln_Ta_T)
 
         # 8. F0 / N
-        if self._use_fp32_prosody_boundary:
-            en_fp32, owns_en = _to_fp32_if_needed(en_nlc, mc)
-            if owns_en:
-                ttnn.deallocate(en_nlc)
-                en_nlc = en_fp32
-            s_pred_f0, owns_s = _to_fp32_if_needed(s_pred_tt, mc)
-            F0, N = self._predictor.F0Ntrain(en_nlc, s_pred_f0, memory_config=mc, use_fp32_boundary=True)
-            if owns_s:
-                ttnn.deallocate(s_pred_f0)
-        else:
-            F0, N = self._predictor.F0Ntrain(en_nlc, s_pred_tt, memory_config=mc, use_fp32_boundary=False)
+        F0, N = self._predictor.F0Ntrain(en_nlc, s_pred_tt, memory_config=mc)
         ttnn.deallocate(en_nlc)
         ttnn.deallocate(s_pred_tt)
 
@@ -504,19 +487,18 @@ class TTKModel:
         asr_nlc = ttnn.permute(asr_bct, (0, 2, 1), memory_config=mc)
         ttnn.deallocate(asr_bct)
 
-        if self._use_fp32_prosody_boundary:
-            if asr_nlc.dtype != ttnn.float32:
-                asr_fp32 = ttnn.typecast(asr_nlc, ttnn.float32, memory_config=mc)
-                ttnn.deallocate(asr_nlc)
-                asr_nlc = asr_fp32
-            if F0.dtype != ttnn.float32:
-                F0_fp32 = ttnn.typecast(F0, ttnn.float32, memory_config=mc)
-                ttnn.deallocate(F0)
-                F0 = F0_fp32
-            if N.dtype != ttnn.float32:
-                N_fp32 = ttnn.typecast(N, ttnn.float32, memory_config=mc)
-                ttnn.deallocate(N)
-                N = N_fp32
+        if asr_nlc.dtype != ttnn.float32:
+            asr_fp32 = ttnn.typecast(asr_nlc, ttnn.float32, memory_config=mc)
+            ttnn.deallocate(asr_nlc)
+            asr_nlc = asr_fp32
+        if F0.dtype != ttnn.float32:
+            F0_fp32 = ttnn.typecast(F0, ttnn.float32, memory_config=mc)
+            ttnn.deallocate(F0)
+            F0 = F0_fp32
+        if N.dtype != ttnn.float32:
+            N_fp32 = ttnn.typecast(N, ttnn.float32, memory_config=mc)
+            ttnn.deallocate(N)
+            N = N_fp32
 
         return asr_nlc, F0, N, T_aligned, pred_dur_cpu
 
@@ -611,7 +593,7 @@ class TTKModel:
         # 2. bert_encoder: Linear(hidden_size → hidden_dim)
         bert_for_enc = bert_out
         owns_bert_cast = False
-        if self._use_fp32_prosody_boundary and bert_out.dtype != ttnn.float32:
+        if bert_out.dtype != ttnn.float32:
             bert_for_enc = ttnn.typecast(bert_out, ttnn.float32, memory_config=mc)
             owns_bert_cast = True
         d_en = ttnn.linear(
@@ -628,8 +610,8 @@ class TTKModel:
         d_en_bct = ttnn.permute(d_en, (0, 2, 1), memory_config=mc)
         ttnn.deallocate(d_en)
 
-        prosody_dtype = ttnn.float32 if self._use_fp32_prosody_boundary else ttnn.bfloat16
-        if self._use_fp32_prosody_boundary and d_en_bct.dtype != prosody_dtype:
+        prosody_dtype = ttnn.float32
+        if d_en_bct.dtype != prosody_dtype:
             d_en_fp32 = ttnn.typecast(d_en_bct, prosody_dtype, memory_config=mc)
             ttnn.deallocate(d_en_bct)
             d_en_bct = d_en_fp32
@@ -653,29 +635,15 @@ class TTKModel:
 
         # 7. en_nlc = aln^T @ d_nlc
         aln_Ta_T = ttnn.permute(aln_tt, (0, 2, 1), memory_config=mc)
-        if self._use_fp32_prosody_boundary:
-            d_mat, owns_d = _to_fp32_if_needed(d_nlc, mc)
-            if owns_d:
-                ttnn.deallocate(d_nlc)
-            en_nlc = ttnn.matmul(aln_Ta_T, d_mat, memory_config=mc, compute_kernel_config=ck)
-            ttnn.deallocate(d_mat)
-        else:
-            en_nlc = ttnn.matmul(aln_Ta_T, d_nlc, memory_config=mc, compute_kernel_config=ck)
+        d_mat, owns_d = _to_fp32_if_needed(d_nlc, mc)
+        if owns_d:
             ttnn.deallocate(d_nlc)
+        en_nlc = ttnn.matmul(aln_Ta_T, d_mat, memory_config=mc, compute_kernel_config=ck)
+        ttnn.deallocate(d_mat)
         ttnn.deallocate(aln_Ta_T)
 
         # 8. F0/N
-        if self._use_fp32_prosody_boundary:
-            en_fp32, owns_en = _to_fp32_if_needed(en_nlc, mc)
-            if owns_en:
-                ttnn.deallocate(en_nlc)
-                en_nlc = en_fp32
-            s_pred_f0, owns_s = _to_fp32_if_needed(s_pred_tt, mc)
-            F0, N = self._predictor.F0Ntrain(en_nlc, s_pred_f0, memory_config=mc, use_fp32_boundary=True)
-            if owns_s:
-                ttnn.deallocate(s_pred_f0)
-        else:
-            F0, N = self._predictor.F0Ntrain(en_nlc, s_pred_tt, memory_config=mc, use_fp32_boundary=False)
+        F0, N = self._predictor.F0Ntrain(en_nlc, s_pred_tt, memory_config=mc)
         ttnn.deallocate(en_nlc)
         # s_pred_tt is borrowed — not deallocated here
 
@@ -687,19 +655,18 @@ class TTKModel:
         asr_nlc = ttnn.permute(asr_bct, (0, 2, 1), memory_config=mc)
         ttnn.deallocate(asr_bct)
 
-        if self._use_fp32_prosody_boundary:
-            if asr_nlc.dtype != ttnn.float32:
-                asr_fp32 = ttnn.typecast(asr_nlc, ttnn.float32, memory_config=mc)
-                ttnn.deallocate(asr_nlc)
-                asr_nlc = asr_fp32
-            if F0.dtype != ttnn.float32:
-                F0_fp32 = ttnn.typecast(F0, ttnn.float32, memory_config=mc)
-                ttnn.deallocate(F0)
-                F0 = F0_fp32
-            if N.dtype != ttnn.float32:
-                N_fp32 = ttnn.typecast(N, ttnn.float32, memory_config=mc)
-                ttnn.deallocate(N)
-                N = N_fp32
+        if asr_nlc.dtype != ttnn.float32:
+            asr_fp32 = ttnn.typecast(asr_nlc, ttnn.float32, memory_config=mc)
+            ttnn.deallocate(asr_nlc)
+            asr_nlc = asr_fp32
+        if F0.dtype != ttnn.float32:
+            F0_fp32 = ttnn.typecast(F0, ttnn.float32, memory_config=mc)
+            ttnn.deallocate(F0)
+            F0 = F0_fp32
+        if N.dtype != ttnn.float32:
+            N_fp32 = ttnn.typecast(N, ttnn.float32, memory_config=mc)
+            ttnn.deallocate(N)
+            N = N_fp32
 
         # 10. Decoder (s_style_tt is borrowed — not deallocated here)
         decoder = self._get_decoder(T_aligned)

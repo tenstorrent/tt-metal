@@ -224,7 +224,6 @@ class TTProsodyPredictor:
         style_bs: ttnn.Tensor,
         *,
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
-        use_fp32_boundary: bool = True,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run the shared BiLSTM and the F0 / N decoder branches.
 
@@ -238,15 +237,14 @@ class TTProsodyPredictor:
         """
         ck = self.compute_kernel_config
 
-        if use_fp32_boundary:
-            en_fp32, owns_en = _to_fp32_if_needed(en_nlc, memory_config)
-            if owns_en:
-                ttnn.deallocate(en_nlc)
-                en_nlc = en_fp32
-            style_fp32, owns_style = _to_fp32_if_needed(style_bs, memory_config)
-            if owns_style:
-                ttnn.deallocate(style_bs)
-                style_bs = style_fp32
+        en_fp32, owns_en = _to_fp32_if_needed(en_nlc, memory_config)
+        if owns_en:
+            ttnn.deallocate(en_nlc)
+            en_nlc = en_fp32
+        style_fp32, owns_style = _to_fp32_if_needed(style_bs, memory_config)
+        if owns_style:
+            ttnn.deallocate(style_bs)
+            style_bs = style_fp32
 
         x_shared = tt_bilstm_nlc(
             x_nlc=en_nlc,
@@ -254,14 +252,13 @@ class TTProsodyPredictor:
             rev=self.params.shared_rev,
             compute_kernel_config=ck,
             memory_config=memory_config,
-            fp32_state=use_fp32_boundary,
+            fp32_state=True,
         )
-        if use_fp32_boundary:
-            # BiLSTM states are bf16; keep F0/N branch activations in fp32 to avoid ~Hz-level F0 drift.
-            x_fp32, owns_x = _to_fp32_if_needed(x_shared, memory_config)
-            if owns_x:
-                ttnn.deallocate(x_shared)
-                x_shared = x_fp32
+        # BiLSTM states are bf16; keep F0/N branch activations in fp32 to avoid ~Hz-level F0 drift.
+        x_fp32, owns_x = _to_fp32_if_needed(x_shared, memory_config)
+        if owns_x:
+            ttnn.deallocate(x_shared)
+            x_shared = x_fp32
 
         F0 = self._run_branch(
             x_shared,
@@ -269,7 +266,7 @@ class TTProsodyPredictor:
             self.params.f0_proj,
             style_bs,
             memory_config,
-            preserve_fp32_on_upsample=use_fp32_boundary,
+            preserve_fp32_on_upsample=True,
         )
         N = self._run_branch(x_shared, self._n_blocks, self.params.n_proj, style_bs, memory_config)
         ttnn.deallocate(x_shared)
