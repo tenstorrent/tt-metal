@@ -4,6 +4,7 @@
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
@@ -17,17 +18,12 @@ void kernel_main() {
     // reserve/push on dst. Original used unary_op_init_common + copy_tile +
     // pack_tile loop with NO _with_dt reconfigs (boot-time format only) —
     // CopyTileReconfig::None and PackTileReconfig::None match that.
-    compute_kernel_lib::eltwise_chain(
-        num_tiles,
-        compute_kernel_lib::CopyTile<
-            src_cb_id,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::OperandKind::Scalar,
-            compute_kernel_lib::CopyTileReconfig::None>{},
-        compute_kernel_lib::PackTile<
-            dst_cb_id,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::None>{});
+    compute_kernel_lib::copy<
+        src_cb_id,
+        dst_cb_id,
+        compute_kernel_lib::CopyTileReconfig::None,
+        compute_kernel_lib::OperandKind::Scalar,
+        compute_kernel_lib::InputLifecycle::Streaming,
+        compute_kernel_lib::OutputLifecycle::Streaming,
+        compute_kernel_lib::PackTileReconfig::None>(num_tiles);
 }

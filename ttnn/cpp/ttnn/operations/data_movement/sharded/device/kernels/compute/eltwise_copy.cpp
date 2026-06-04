@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
@@ -18,17 +19,12 @@ void kernel_main() {
     // Per-tile copy cb_in -> cb_out. Original used unary_op_init_common +
     // copy_tile_init at boot, then plain copy_tile / pack_tile per iter —
     // no per-iter reconfig, so CopyTileReconfig::None + PackTileReconfig::None.
-    compute_kernel_lib::eltwise_chain(
-        per_core_tile_cnt,
-        compute_kernel_lib::CopyTile<
-            cb_in,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::OperandKind::Scalar,
-            compute_kernel_lib::CopyTileReconfig::None>{},
-        compute_kernel_lib::PackTile<
-            cb_out,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::None>{});
+    compute_kernel_lib::copy<
+        cb_in,
+        cb_out,
+        compute_kernel_lib::CopyTileReconfig::None,
+        compute_kernel_lib::OperandKind::Scalar,
+        compute_kernel_lib::InputLifecycle::Streaming,
+        compute_kernel_lib::OutputLifecycle::Streaming,
+        compute_kernel_lib::PackTileReconfig::None>(per_core_tile_cnt);
 }

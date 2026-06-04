@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // PowerIterative, Recip, Log, Exp
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask, Abs
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
@@ -261,19 +262,14 @@ void kernel_main() {
             // Seed cb_xpowadd with first cb_correct_xpow tile.
             // Original: copy_tile_init(cb_correct_xpow) reconfigs srca; pack_tile has no
             // pack reconfig (pack is set to cb_y at startup).
-            compute_kernel_lib::eltwise_chain(
-                onetile,
-                compute_kernel_lib::CopyTile<
-                    cb_correct_xpow,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::CopyTileReconfig::Input>{},
-                compute_kernel_lib::PackTile<
-                    cb_xpowadd,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::None>{});
+            compute_kernel_lib::copy<
+                cb_correct_xpow,
+                cb_xpowadd,
+                compute_kernel_lib::CopyTileReconfig::Input,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::None>(onetile);
         } else {
             // cb_xpowadd = cb_correct_xpow + cb_xpowadd (in-place accumulator).
             // Original: add_tiles_init reconfigs srca/srcb; pack_tile no reconfig.

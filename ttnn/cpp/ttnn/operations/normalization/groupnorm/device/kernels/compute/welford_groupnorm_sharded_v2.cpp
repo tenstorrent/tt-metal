@@ -21,6 +21,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 void kernel_main() {
@@ -348,19 +349,14 @@ void kernel_main() {
                     // BinaryDataFormatReconfig::Input. pack_tile (no _with_dt) ->
                     // PackTileReconfig::None.
                     if (group_offset == 0) {
-                        compute_kernel_lib::eltwise_chain(
-                            1u,
-                            compute_kernel_lib::CopyTile<
-                                cb_xmm_id,
-                                compute_kernel_lib::Dst::D0,
-                                compute_kernel_lib::InputLifecycle::Streaming,
-                                compute_kernel_lib::OperandKind::Scalar,
-                                compute_kernel_lib::CopyTileReconfig::None>{},
-                            compute_kernel_lib::PackTile<
-                                cb_x_id,
-                                compute_kernel_lib::Dst::D0,
-                                compute_kernel_lib::OutputLifecycle::Streaming,
-                                compute_kernel_lib::PackTileReconfig::None>{});
+                        compute_kernel_lib::copy<
+                            cb_xmm_id,
+                            cb_x_id,
+                            compute_kernel_lib::CopyTileReconfig::None,
+                            compute_kernel_lib::OperandKind::Scalar,
+                            compute_kernel_lib::InputLifecycle::Streaming,
+                            compute_kernel_lib::OutputLifecycle::Streaming,
+                            compute_kernel_lib::PackTileReconfig::None>(1u);
                     } else {
                         compute_kernel_lib::eltwise_chain(
                             1u,
@@ -473,19 +469,14 @@ void kernel_main() {
 #else
                 constexpr auto write_cb_id = cb_out0_id;
 #endif
-                compute_kernel_lib::eltwise_chain(
-                    1u,
-                    compute_kernel_lib::CopyTile<
-                        cb_x_id,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::CopyTileReconfig::Input>{},
-                    compute_kernel_lib::PackTile<
-                        write_cb_id,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::None>{});
+                compute_kernel_lib::copy<
+                    cb_x_id,
+                    write_cb_id,
+                    compute_kernel_lib::CopyTileReconfig::Input,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::None>(1u);
             }
         }
 

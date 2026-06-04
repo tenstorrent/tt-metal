@@ -6,6 +6,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Exp
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask, Negative
 #include "ttnn/kernel/compute/moreh_common.hpp"
@@ -100,19 +101,14 @@ void kernel_main() {
                 }
             } else {
                 if (w == 0) {
-                    compute_kernel_lib::eltwise_chain(
-                        onetile,
-                        compute_kernel_lib::CopyTile<
-                            cb_dy,
-                            compute_kernel_lib::Dst::D0,
-                            compute_kernel_lib::InputLifecycle::Streaming,
-                            compute_kernel_lib::OperandKind::Scalar,
-                            compute_kernel_lib::CopyTileReconfig::Input>{},
-                        compute_kernel_lib::PackTile<
-                            cb_add,
-                            compute_kernel_lib::Dst::D0,
-                            compute_kernel_lib::OutputLifecycle::Streaming,
-                            compute_kernel_lib::PackTileReconfig::Output>{});
+                    compute_kernel_lib::copy<
+                        cb_dy,
+                        cb_add,
+                        compute_kernel_lib::CopyTileReconfig::Input,
+                        compute_kernel_lib::OperandKind::Scalar,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::OutputLifecycle::Streaming,
+                        compute_kernel_lib::PackTileReconfig::Output>(onetile);
                 } else {
                     compute_kernel_lib::eltwise_chain(
                         onetile,
@@ -248,19 +244,14 @@ void kernel_main() {
             }
 
             if (w == 0) {
-                compute_kernel_lib::eltwise_chain(
-                    onetile,
-                    compute_kernel_lib::CopyTile<
-                        cb_ydy,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::CopyTileReconfig::Input>{},
-                    compute_kernel_lib::PackTile<
-                        cb_add,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                compute_kernel_lib::copy<
+                    cb_ydy,
+                    cb_add,
+                    compute_kernel_lib::CopyTileReconfig::Input,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::Output>(onetile);
             } else {
                 compute_kernel_lib::eltwise_chain(
                     onetile,

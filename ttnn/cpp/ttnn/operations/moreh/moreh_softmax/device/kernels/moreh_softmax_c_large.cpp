@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Exp, Log, Recip
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Negative
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // BinaryMax
@@ -34,19 +35,14 @@ void kernel_main() {
         for (uint32_t i = 0; i < dim_size; ++i) {
             if (i == 0) {
                 // Seed cb_max with first cb_in0 tile.
-                compute_kernel_lib::eltwise_chain(
-                    onetile,
-                    compute_kernel_lib::CopyTile<
-                        cb_in0,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::CopyTileReconfig::Input>{},
-                    compute_kernel_lib::PackTile<
-                        cb_max,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                compute_kernel_lib::copy<
+                    cb_in0,
+                    cb_max,
+                    compute_kernel_lib::CopyTileReconfig::Input,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::Output>(onetile);
             } else {
                 // cb_max = max(cb_in0, cb_max) — same accumulator pattern as
                 // moreh_norm_h/w ord_other (7e61967482a).
@@ -130,19 +126,14 @@ void kernel_main() {
 
             // Accumulator over C-dim.
             if (i == 0) {
-                compute_kernel_lib::eltwise_chain(
-                    onetile,
-                    compute_kernel_lib::CopyTile<
-                        cb_exps,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::CopyTileReconfig::Input>{},
-                    compute_kernel_lib::PackTile<
-                        cb_add,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                compute_kernel_lib::copy<
+                    cb_exps,
+                    cb_add,
+                    compute_kernel_lib::CopyTileReconfig::Input,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::Output>(onetile);
             } else {
                 compute_kernel_lib::eltwise_chain(
                     onetile,

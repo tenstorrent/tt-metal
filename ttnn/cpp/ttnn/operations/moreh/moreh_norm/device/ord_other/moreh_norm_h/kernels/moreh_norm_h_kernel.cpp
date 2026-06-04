@@ -4,6 +4,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Abs, Negative, Mask, MaskPosInf
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // BinaryMax
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_predicates.hpp"   // UnaryNe
@@ -108,19 +109,14 @@ void kernel_main() {
             //   IS_ZERO  -> add_tiles (sum of != zero count)
             //   default  -> binary_max (running max via two-DEST SFPU)
             if (row_idx == 0) {
-                compute_kernel_lib::eltwise_chain(
-                    onetile,
-                    compute_kernel_lib::CopyTile<
-                        cb_val,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::CopyTileReconfig::Input>{},
-                    compute_kernel_lib::PackTile<
-                        cb_cal,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                compute_kernel_lib::copy<
+                    cb_val,
+                    cb_cal,
+                    compute_kernel_lib::CopyTileReconfig::Input,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::Output>(onetile);
             } else {
 #ifdef IS_ZERO
                 // cb_cal = cb_val + cb_cal (in-place accumulator).

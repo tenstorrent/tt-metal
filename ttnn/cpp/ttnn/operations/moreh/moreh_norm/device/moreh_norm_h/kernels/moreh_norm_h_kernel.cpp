@@ -4,6 +4,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // PowerIterative, Recip, Log, Exp
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask, Abs
 #include "ttnn/kernel/compute/moreh_common.hpp"
@@ -204,19 +205,14 @@ void kernel_main() {
             if (row_idx == 0) {
                 // Seed cb_xpowadd with cb_correct_xpow. Same pattern as
                 // moreh_clip_grad_norm_step1 d47573e2270 seed-copy.
-                compute_kernel_lib::eltwise_chain(
-                    onetile,
-                    compute_kernel_lib::CopyTile<
-                        cb_correct_xpow,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::CopyTileReconfig::Input>{},
-                    compute_kernel_lib::PackTile<
-                        cb_xpowadd,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                compute_kernel_lib::copy<
+                    cb_correct_xpow,
+                    cb_xpowadd,
+                    compute_kernel_lib::CopyTileReconfig::Input,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::Output>(onetile);
             } else {
                 // cb_xpowadd = cb_correct_xpow + cb_xpowadd (in-place accumulator).
                 compute_kernel_lib::eltwise_chain(

@@ -13,6 +13,7 @@
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
 
@@ -220,19 +221,14 @@ void kernel_main() {
         // tmp_cb_max_exp_avg_sq waited here, popped by the next chain that reuses
         // the same tile -> InputLifecycle::CallerManaged + Scalar (first_tile == 0 -> default TileBase).
         tmp_cb_max_exp_avg_sq_obj.wait_front(onetile);
-        compute_kernel_lib::eltwise_chain(
-            onetile,
-            compute_kernel_lib::CopyTile<
-                tmp_cb_max_exp_avg_sq,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::CopyTileReconfig::Input>{},
-            compute_kernel_lib::PackTile<
-                cb_max_exp_avg_sq_out,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::copy<
+            tmp_cb_max_exp_avg_sq,
+            cb_max_exp_avg_sq_out,
+            compute_kernel_lib::CopyTileReconfig::Input,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::Output>(onetile);
 #endif
 
         // cb_tmp1 = sqrt(exp_avg_sq * cb_tmp1)  — same-CB in/out on cb_tmp1.
