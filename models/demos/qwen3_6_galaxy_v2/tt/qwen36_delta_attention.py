@@ -164,6 +164,30 @@ def _causal_conv1d_fir_mesh(
     return ttnn.silu(out, memory_config=memory_config), new_conv_state
 
 
+def _gdn_dbg(tag, t, mesh_device):
+    """QWEN36_GDN_DEBUG: per-user identity probe for the GDN decode sub-ops.
+
+    Gathers device 0's shard, treats dim-0 as the user-batch B (the GDN decode
+    relabels users into dim-0), and prints per-user maxdiff vs user 0. For
+    IDENTICAL users this MUST be ~0; the first sub-op where it goes nonzero is
+    where the batch-N (N=32) GDN decode breaks per-user identity (batch-1 is the
+    degenerate B=1 case that never exposes it).
+    """
+    if os.environ.get("QWEN36_GDN_DEBUG", "0") != "1":
+        return
+    try:
+        td = ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+        b0 = td.shape[0]
+        flat = td.reshape(b0, -1)
+        md = max((flat[u] - flat[0]).abs().max().item() for u in range(1, min(b0, 32))) if b0 > 1 else 0.0
+        print(
+            f"[GDN_DBG] {tag}: shape={list(td.shape)} absmean={td.abs().mean():.4f} "
+            f"absmax={td.abs().max():.4f} per_user_maxdiff={md:.4f}"
+        )
+    except Exception as e:
+        print(f"[GDN_DBG] {tag}: probe failed ({type(e).__name__}: {e})")
+
+
 class TtQwen36DeltaAttention(LightweightModule):
     """Linear-attention (GatedDeltaNet) block for Qwen3.6-27B on BH GLX 8×4.
 
@@ -320,8 +344,15 @@ class TtQwen36DeltaAttention(LightweightModule):
         # V2-16: tt-lang fused beta/g kernel state (persistent buffers + program
         # descriptor). Only constructed when the flag is on — keeps the safe
         # 6-op path zero-cost when disabled.
+        # BATCH-N: the fused beta/g kernel state was authored for the
+        # decode shape ``[B=1, T=1, 6]`` (one 32×32 tile per device with the 6
+        # v-head elements in row 0). It is therefore only built when
+        # ``max_batch_size == 1``; at B>1 the state stays None and
+        # ``_compute_beta_g`` auto-falls to the batch-agnostic 6-op TTNN chain
+        # (pure elementwise on ``[B,1,6]``). B==1 is byte-identical (fused
+        # kernel retained, no new ops).
         self._beta_g_kernel_state = None
-        if self.use_tt_lang_beta_g:
+        if self.use_tt_lang_beta_g and self.max_batch_size == 1:
             self._beta_g_kernel_state = self._build_beta_g_kernel_state()
 
         # V2-18: partial tt-lang recurrent kernel state. The kernel handles
@@ -551,9 +582,17 @@ class TtQwen36DeltaAttention(LightweightModule):
         # ``ttnn.rms_norm`` gives each core a contiguous slice of the gamma
         # matching its shard width, so for the per-head (head_dim-wide) grouped
         # norm with one head per core we need gamma tiled across all heads:
-        # a [1,1,1,v_per_row] vector = the head_dim weight repeated n_v_per_row
-        # times.  Replicated across the mesh (same as norm_weight).
-        norm_w_tiled = norm_w.reshape(-1).repeat(self.n_v_per_row).reshape(1, 1, 1, self.v_per_row)
+        # the head_dim weight repeated n_v_per_row times (total v_per_row wide).
+        # Replicated across the mesh (same as norm_weight).
+        #
+        # The ROW_MAJOR-gamma contract in layernorm_device_operation.cpp requires
+        # gamma.padded_shape()[-1] == tile_width (32) and
+        # gamma.volume()/32 == input.padded_shape()[-1]/32.  So the gamma must be
+        # shaped [1, 1, v_per_row//32, 32] (last dim == tile_width), NOT
+        # [1,1,1,v_per_row] — the latter has last dim v_per_row (768) which fails
+        # the contract (this is what crashed batch-32 decode).  Same [..,K,32]
+        # row-major form as ``norm_weight`` above ([1,1,head_dim//32,32]).
+        norm_w_tiled = norm_w.reshape(-1).repeat(self.n_v_per_row).reshape(1, 1, self.v_per_row // 32, 32)
         self.norm_weight_sharded = self._to_device(
             norm_w_tiled, replicate, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
         )
@@ -622,6 +661,25 @@ class TtQwen36DeltaAttention(LightweightModule):
             self._fused_norm_w = self._to_device(
                 norm_w.reshape(1, 1, self.head_dim), replicate, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
             )
+
+            # PERF-PROBE (QWEN36_GDN_FULL_FUSED_DECODE): wire the BH-proven
+            # full-fused DECODE kernel (gdn_full_fused_inplace — L2norm+gates+
+            # recurrence in 1 dispatch, same kernel qwen35_27b uses at TP=4) into
+            # the decode recurrent core, to MEASURE its tok/s vs the pure-ttnn
+            # fp32-state path. NOTE: this kernel persists recurrent state in bf16,
+            # which is known to compound to ~0.30 PCC over 64 layers on galaxy
+            # (why decode uses the fp32 fork) — so this path is for PERF
+            # MEASUREMENT ONLY and uses a FRESH bf16 rec_states buffer (NOT the
+            # fp32 dn_state_buffer). Default OFF ⇒ byte-identical. A real-use
+            # version needs the kernel changed to persist fp32 state.
+            from models.demos.qwen3_6_galaxy_v2.tt.gdn_kernel.gdn_kernel_op import gdn_full_fused_inplace as _gff
+
+            self._gdn_full_fused = _gff
+            self.use_full_fused_decode = os.environ.get("QWEN36_GDN_FULL_FUSED_DECODE", "0") == "1"
+            self._ff_rec_states = None  # persistent bf16 [num_pairs, hd, hd]
+            self._ff_fused_output = None  # persistent bf16 [num_pairs, 1, hd]
+        else:
+            self.use_full_fused_decode = False
 
     # ------------------------------------------------------------------
     # Persistent buffer constructors
@@ -726,6 +784,57 @@ class TtQwen36DeltaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+
+    @staticmethod
+    def _copy_state_into_buffer(new_state, buffer, dst_row=0):
+        """In-place writeback of a freshly-computed prefill state into a
+        persistent per-batch buffer, preserving the buffer's device address
+        (required for trace replay).
+
+        Normal case (``new_state`` batch dim == ``buffer`` batch dim, which
+        always holds when ``max_batch_size == 1`` → B==1==buffer): a plain
+        ``ttnn.copy`` over the whole buffer. Byte-identical to the original.
+
+        Per-user case (``dst_row`` given, ``b_new`` rows): write ``new_state``
+        into ``buffer[dst_row:dst_row+b_new]``. Used by the batch-32 per-user
+        prefill loop (user u's state → row u) so the decode reads each user's
+        natively-prefilled state (no host broadcast round-trip). A leading-dim
+        ``ttnn.slice`` of a ROW_MAJOR/contiguous tensor aliases the buffer memory
+        (a VIEW), so the copy writes in place and the buffer address is unchanged.
+        """
+        b_new = int(new_state.shape[0])
+        b_buf = int(buffer.shape[0])
+        if b_new == b_buf and dst_row == 0:
+            ttnn.copy(new_state, buffer)
+            return
+        # ROOT-CAUSE FIX (batch-32 ZERO GDN state): ttnn.slice COPIES — it does
+        # NOT return a view — so the old `ttnn.copy(new_state, ttnn.slice(buffer,...))`
+        # wrote into a throwaway temp and NEVER touched the persistent buffer (every
+        # per-user prefill writeback was a no-op → dn_state/conv_state stayed zero →
+        # GDN decoded with no prompt context). Rebuild the FULL buffer with rows
+        # [dst_row:dst_row+b_new] replaced by new_state, then do a WHOLE-buffer
+        # ttnn.copy (which DOES write in place, preserving the device address for
+        # trace safety). At b_new==b_buf,dst_row==0 the fast path above is unchanged
+        # (batch-1 byte-identical).
+        _bshape = list(buffer.shape)
+        rest = _bshape[1:]
+        ndim = len(_bshape)
+        mc = buffer.memory_config()
+        parts = []
+        if dst_row > 0:
+            parts.append(ttnn.slice(buffer, [0] * ndim, [dst_row] + rest, memory_config=mc))
+        parts.append(new_state)
+        if dst_row + b_new < b_buf:
+            parts.append(ttnn.slice(buffer, [dst_row + b_new] + [0] * (ndim - 1), [b_buf] + rest, memory_config=mc))
+        if len(parts) == 1:
+            ttnn.copy(parts[0], buffer)
+        else:
+            full = ttnn.concat(parts, dim=0, memory_config=mc)
+            ttnn.copy(full, buffer)
+            full.deallocate(True)
+        for p in parts:
+            if p is not new_state:
+                p.deallocate(True)
 
     def clear_state(self):
         """Zero both persistent buffers (fresh-sequence entry point)."""
@@ -997,11 +1106,9 @@ class TtQwen36DeltaAttention(LightweightModule):
         # beta_out / g_out have the same per-device shape as b / a at the
         # decode call site: `[B=1, T=1, 6]` per device. Build the template
         # via the same sharding pattern (host `[1, 1, 48]` → per-device
-        # `[1, 1, 6]`). At max_batch_size > 1 this would need a host-shape
-        # adjustment, but the qwen3.6 v2 config pins max_batch_size=1.
-        assert self.max_batch_size == 1, (
-            "V2-16 tt-lang beta/g kernel state assumes max_batch_size=1; " f"got {self.max_batch_size}"
-        )
+        # `[1, 1, 6]`). This build is only invoked when ``max_batch_size == 1``
+        # (gated in __init__); at B>1 the caller skips the fused kernel and uses
+        # the batch-agnostic 6-op chain, so no host-shape adjustment is needed.
         template_t = torch.zeros((1, 1, n_v_heads), dtype=torch.bfloat16)
         template = ttnn.from_torch(
             template_t,
@@ -2374,7 +2481,16 @@ class TtQwen36DeltaAttention(LightweightModule):
         is preserved here.
         """
         mem = ttnn.DRAM_MEMORY_CONFIG
-        if os.environ.get("QWEN36_DN_NORM_SHARDED", "1") == "1" and (B * T) == 32:
+        # Width-sharded multi-core perf path. It is only valid when the flattened
+        # row count B*T fills exactly one tile (32 rows): _build_dn_norm_sharded_cfg
+        # bakes block_h = (B*T)//32 == 1 and a tile-aligned (32, head_dim) shard,
+        # so other row counts (e.g. 1 < B*T < 32) would yield block_h=0 / a
+        # non-tile-aligned shard. The norm is per-row over head_dim, so the
+        # single-core ``ttnn.rms_norm`` below handles every other B (incl. the
+        # byte-identical batch-1 B*T==1 case) correctly. This is a row-count test,
+        # NOT a "32 users" test: it fires for B=32 users (T=1) just as it did for
+        # the old 32-row tile-padded batch-1 layout, and both want this path.
+        if os.environ.get("QWEN36_DN_NORM_SHARDED", "1") == "1" and T == 1 and (B * T) == 32:
             sharded_memcfg, prgm_cfg = self._build_dn_norm_sharded_cfg(B, T)
             # core_out: [B,T,H,V] L1-interleaved from the recurrent core.
             # Flatten to [1,1,B*T,v_per_row] and reshard to width-sharded L1.
@@ -2424,6 +2540,32 @@ class TtQwen36DeltaAttention(LightweightModule):
         import os as _os
 
         mem = ttnn.DRAM_MEMORY_CONFIG
+        # BATCH-N decode layout repack. The recurrent core emits out_flat as
+        # [B, T, v_per_row] with the B users SCATTERED across dim-0 (each user's
+        # single T-row is tile-padded → physical height B*32, e.g. 1024 at B=32).
+        # The width-sharded out-proj (pbuf path) — like the full-attn WO
+        # (_forward_decode_qwen36: matmul consumes [1,1,32,1024]) — requires the
+        # B*T rows PACKED into a single 32-row tile (physical height 32). Repack
+        # to the canonical [1,1,B*T,v_per_row] here; the linear then emits the
+        # canonical [1,1,B,H] layout that the decode backbone's residual add
+        # expects (matching full-attn's [1,1,32,1280] return). This scatter→pack
+        # reshape is the same family as the verified norm reshape in
+        # _apply_norm_gated (core_out [B,T,H,V] → [1,1,B*T,v_per_row], smoke PCC
+        # 1.0). At B==1 this is skipped ⇒ byte-identical to the batch-1 path.
+        #
+        # OWNERSHIP: the caller passes `out` and deallocates THAT (original)
+        # handle after we return. The repack is a tile-boundary-crossing
+        # reshape ⇒ a fresh COPY, which the caller does NOT know about; if we
+        # leave it alive it leaks one [1,1,B*T,v_per_row] per GDN layer per
+        # decode step (a persistent L1 reservation under trace capture that
+        # starves the all_reduce CB at batch-32). Track the copy and free it
+        # as soon as the out-proj linear (its only consumer) has run.
+        _packed_tmp = None
+        if B > 1:
+            _packed = ttnn.reshape(out_flat, [1, 1, B * T, self.v_per_row])
+            if _packed is not out_flat:
+                _packed_tmp = _packed  # we own this copy → must deallocate it
+            out_flat = _packed
         # V2-14: optionally swap the post-linear ``ttnn.all_reduce`` to the
         # persistent-buffer ``line_all_reduce`` (3rd overload).  Gated by env
         # var so we can toggle for bisecting precision issues.
@@ -2446,6 +2588,34 @@ class TtQwen36DeltaAttention(LightweightModule):
             )
         except ValueError:
             _do_num_links = 1
+
+        # BATCH-N decode: reduce the out-proj via DRAM reduce_scatter+all_gather
+        # (use_persistent_buffer=False) — the SAME impl the proven batch-1 PREFILL
+        # path uses (line_all_reduce else-branch). The decode-mode
+        # use_qwen36_residual_buffer all_reduce_async path diverges from it and
+        # corrupts the residual over the 48 GDN layers (batch-32 pre-norm hidden
+        # diverged from batch-1: absmean 3.46/max 209 vs 4.31/102). bf16 out, no
+        # residual buffer. B==1 keeps the existing pbuf path (byte-identical).
+        if B > 1:
+            partial = ttnn.linear(
+                out_flat,
+                self.w_out,
+                dtype=ttnn.bfloat16,
+                memory_config=mem,
+                compute_kernel_config=self.compute_kernel,
+            )
+            if _packed_tmp is not None:
+                _packed_tmp.deallocate(True)
+                _packed_tmp = None
+            reduced = self.tt_ccl.line_all_reduce(
+                partial,
+                cluster_axis=0,
+                num_links=_do_num_links,
+                memory_config=mem,
+                use_persistent_buffer=False,
+            )
+            partial.deallocate(True)
+            return reduced
 
         # V2-CONFIG-E: optionally use bf8 output for the DN out_proj matmul
         # (the residual write — analogous to llama70b WO at line 567 which
@@ -2476,6 +2646,9 @@ class TtQwen36DeltaAttention(LightweightModule):
                 compute_kernel_config=self.compute_kernel,
                 program_config=_out_progcfg,
             )
+            if _packed_tmp is not None:
+                _packed_tmp.deallocate(True)
+                _packed_tmp = None
             if _os.environ.get("QWEN36_ABLATE_CCL", "0") == "1":
                 return partial  # skip row-reduce (timing ablation; garbage values)
             # V2-11 (lever B): collapse `all_gather + fast_reduce_nc` (2 ops)
@@ -2513,6 +2686,12 @@ class TtQwen36DeltaAttention(LightweightModule):
             )
             partial = ttnn.to_memory_config(partial_dram, sharded_memcfg)
             partial_dram.deallocate(True)
+        # Free the batch-N repack copy now that the out-proj linear has consumed
+        # it — BEFORE the all_reduce so its (geometry-fixed) CB has the L1 it
+        # needs at batch-32 (the leak this used to cause starved that bank).
+        if _packed_tmp is not None:
+            _packed_tmp.deallocate(True)
+            _packed_tmp = None
         reduced_sharded = self.tt_ccl.line_all_reduce(
             partial,
             cluster_axis=0,
@@ -2547,6 +2726,21 @@ class TtQwen36DeltaAttention(LightweightModule):
         batch_size=1,
     ):
         if mode == "prefill":
+            # Batch-32 per-user prefill: write this user's recurrent/conv state into
+            # row ``user_id`` of the persistent buffers (default 0 ⇒ byte-identical
+            # to the single-user prefill). Read by the GDN prefill state writebacks.
+            # user_id is a plain int on the eager/demo path, but the vLLM
+            # Generator trace-prefill threads it as a ttnn.Tensor ([1],
+            # replicated). For batch-1 / single-user serving the destination row
+            # is always 0 (byte-identical to single-user prefill), so fall back
+            # to 0 when it's a device tensor. TODO(batched-prefill): extract the
+            # real per-user index from the ttnn tensor.
+            if isinstance(user_id, int):
+                self._pf_dst_row = user_id
+            elif torch.is_tensor(user_id):
+                self._pf_dst_row = int(user_id.flatten()[0].item())
+            else:
+                self._pf_dst_row = 0
             return self.forward_prefill(x, current_pos, rot_mats, kv_cache=kv_cache, page_table=page_table)
         else:
             return self.forward_decode(x, current_pos, rot_mats, kv_cache=kv_cache, page_table=page_table)
@@ -2621,8 +2815,11 @@ class TtQwen36DeltaAttention(LightweightModule):
             ttnn.typecast(ttnn.transpose(k_exp, 1, 2, memory_config=_dram), ttnn.float32, memory_config=_dram),
             [BH, T, K],
         )
-        q = l2_norm_ttnn(q, dim=-1)
-        k = l2_norm_ttnn(k, dim=-1)
+        # Route l2-norm output to _dram (DRAM for T>512): the [BH,T,K] fp32 tensor is ~48 MB
+        # at 16k ISL and OOMs L1 if this prefill is run un-chunked (the demo chunks at 4096; the
+        # perf harness passes full T). Matches the _dram routing of every other op in this fn.
+        q = l2_norm_ttnn(q, dim=-1, memory_config=_dram)
+        k = l2_norm_ttnn(k, dim=-1, memory_config=_dram)
         v = ttnn.reshape(
             ttnn.typecast(ttnn.transpose(v_h, 1, 2, memory_config=_dram), ttnn.float32, memory_config=_dram), [BH, T, V]
         )
@@ -2759,7 +2956,7 @@ class TtQwen36DeltaAttention(LightweightModule):
         rec_fp32 = ttnn.typecast(rec_states, ttnn.float32, memory_config=mem)
         rec_states.deallocate(True)
         rec_resh = ttnn.reshape(rec_fp32, [B, Nv, hd, hd])
-        ttnn.copy(rec_resh, self.dn_state_buffer)
+        self._copy_state_into_buffer(rec_resh, self.dn_state_buffer, dst_row=getattr(self, "_pf_dst_row", 0))
         rec_fp32.deallocate(True)
 
         output = self._output_proj_and_reduce(gated, B, T)
@@ -2822,7 +3019,9 @@ class TtQwen36DeltaAttention(LightweightModule):
             z.deallocate(True)
             a.deallocate(True)
             b.deallocate(True)
-            ttnn.copy(new_conv_state, self.conv_state_buffer)
+            self._copy_state_into_buffer(
+                new_conv_state, self.conv_state_buffer, dst_row=getattr(self, "_pf_dst_row", 0)
+            )
             new_conv_state.deallocate(True)
             return output
 
@@ -2916,8 +3115,9 @@ class TtQwen36DeltaAttention(LightweightModule):
         # 9. Write the final state into the persistent buffers (in place) so
         # the subsequent decode steps see them. ttnn.copy preserves the buffer
         # address — required for trace replay.
-        ttnn.copy(new_state, self.dn_state_buffer)
-        ttnn.copy(new_conv_state, self.conv_state_buffer)
+        _dst = getattr(self, "_pf_dst_row", 0)
+        self._copy_state_into_buffer(new_state, self.dn_state_buffer, dst_row=_dst)
+        self._copy_state_into_buffer(new_conv_state, self.conv_state_buffer, dst_row=_dst)
         new_state.deallocate(True)
         new_conv_state.deallocate(True)
 
@@ -2936,17 +3136,69 @@ class TtQwen36DeltaAttention(LightweightModule):
 
         Reads recurrent_state / conv_state from the persistent buffers and
         writes the new state back into the same buffers in place — trace-safe.
+
+        BATCH-N decode contract (the one batch-agnostic path; B==1 is the
+        degenerate case, byte-identical):
+
+          Incoming x : ``[1, 1, R, H]`` (4D) or ``[1, R, H]`` (3D), where the
+                       dim-2 / dim-1 "R" slot is the llama70b tile_padded_batch_
+                       rows position. The decode backbone carries the B users
+                       in this row slot (rows 0..B-1), padded out to R (=1 at
+                       batch-1, =tile_padded_batch_rows=32 at batch-N). The
+                       outer batch dim (dim-0) is always 1 at the layer entry.
+          We want    : ``[B, T=1, H]`` for the recurrent core (B users in
+                       dim-0, T is the *token* dim and stays 1). So we slice the
+                       first B rows out of the R slot and relabel them into
+                       dim-0. At B==1, R==1, this is a pure reshape
+                       ``[1,1,1,H] → [1,1,H]`` — bit-identical to the old code.
+          Output     : we map the recurrent core's ``[B, 1, H_out]`` back to the
+                       decode backbone's row layout ``[1, 1, B, H_out]`` (users
+                       back in the dim-2 row slot) so the surrounding residual
+                       add / next layer see one logical row per user.
+
+        ``T`` (the token dim) MUST stay 1 — do NOT conflate the B-user row slot
+        with T. The recurrent core (recurrent_gated_delta_rule_ttnn_fp32) reads
+        ``B = q.shape[0]`` and loops users, so carrying B in dim-0 is correct.
         """
         orig_shape = list(x.shape)
+        Bn = self.max_batch_size
         if len(orig_shape) == 4:
-            B, _, T, H = orig_shape
-            x = ttnn.reshape(x, [B, T, H])
+            _d0, _d1, R, H = orig_shape
+            assert _d0 == 1 and _d1 == 1, f"Decode expects [1,1,R,H], got {orig_shape}"
         else:
-            B, T, H = orig_shape
-        assert T == 1, f"Decode expects T=1, got T={T}"
+            _d0, R, H = orig_shape
+            assert _d0 == 1, f"Decode expects [1,R,H], got {orig_shape}"
+        assert R >= Bn, f"row slot R={R} < max_batch_size={Bn}; cannot extract B users"
+        # Extract the B user rows from the tile-padded row slot and relabel them
+        # into dim-0 as the user-batch (T=1).
+        if Bn == 1:
+            # Degenerate (batch-1) case: a single token in the row slot (R==1).
+            # 4D [1,1,1,H] -> reshape to [1,1,H] (the old code's single reshape);
+            # 3D [1,1,H] is already in the target shape (the old code left it
+            # untouched). Bit-identical to the prior path in both cases.
+            if len(orig_shape) == 4:
+                x = ttnn.reshape(x, [1, 1, H])
+        else:
+            # Relabel the row slot into dim-0 (a contiguous reshape: the row
+            # index becomes the leading batch dim, T=1 stays the middle dim).
+            # We do NOT slice the tile-dim row axis (sub-tile slices on a tile
+            # axis are unsafe under TILE_LAYOUT); instead we move the rows to the
+            # batch (dim-0) axis where a slice is tile-safe, then slice off the
+            # padding rows (R -> Bn) on dim-0.
+            x = ttnn.reshape(x, [R, 1, H])
+            if R != Bn:
+                x = ttnn.slice(x, [0, 0, 0], [Bn, 1, H], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        B, T = Bn, 1
+
+        # GDN_DBG: input + persistent state must be per-user-identical for identical users.
+        _gdn_dbg("x_in[B,1,H]", x, self.mesh_device)
+        _gdn_dbg("dn_state_buf", self.dn_state_buffer, self.mesh_device)
+        _gdn_dbg("conv_state_buf", self.conv_state_buffer, self.mesh_device)
 
         # 1. Projections
         _p0, _p1, _p2, _p3, a, b, _fused_qkv = self._project_inputs(x)
+        _gdn_dbg("after_inproj_a", a, self.mesh_device)
+        _gdn_dbg("after_inproj_b", b, self.mesh_device)
 
         # 2. Conv1d + split — read persistent conv_state buffer
         if _fused_qkv:
@@ -2963,6 +3215,100 @@ class TtQwen36DeltaAttention(LightweightModule):
             q.deallocate(True)
             k.deallocate(True)
             v.deallocate(True)
+
+        _gdn_dbg("after_conv_qconv", q_conv, self.mesh_device)
+
+        # PERF-PROBE: full-fused decode kernel (gdn_full_fused_inplace). Replaces
+        # the per-head reshape + beta/g + GQA-expand + recurrent-core chain with a
+        # single kernel dispatch (conv_out + raw a/b in), mirroring the galaxy
+        # prefill-fused call convention at T=1. Reuses the proven post-kernel
+        # rms_norm + silu(z) gate + _output_proj_and_reduce. PERF-ONLY (bf16
+        # state → bad PCC); fresh rec_states, dn_state_buffer NOT updated. Default
+        # OFF ⇒ this whole block is skipped (byte-identical).
+        if self.use_full_fused_decode:
+            mem = ttnn.DRAM_MEMORY_CONFIG
+            Nv = self._fused_Nv_TP
+            hd = self.head_dim
+            num_pairs = B * Nv
+
+            conv_out = ttnn.concat([q_conv, k_conv, v_conv], dim=-1, memory_config=mem)
+            if len(conv_out.shape) == 4:
+                conv_out = ttnn.reshape(conv_out, [B, T, self._fused_qkv_dim_tp])
+            q_conv.deallocate(True)
+            k_conv.deallocate(True)
+            v_conv.deallocate(True)
+
+            a_ff = ttnn.reshape(a, [B, T, Nv]) if len(a.shape) == 4 else a
+            b_ff = ttnn.reshape(b, [B, T, Nv]) if len(b.shape) == 4 else b
+
+            if self._ff_rec_states is None:
+                self._ff_rec_states = ttnn.from_torch(
+                    torch.zeros(num_pairs, hd, hd, dtype=torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=mem,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+            if self._ff_fused_output is None:
+                self._ff_fused_output = ttnn.from_torch(
+                    torch.zeros(num_pairs, 1, hd, dtype=torch.bfloat16),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.mesh_device,
+                    memory_config=mem,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
+
+            self._gdn_full_fused(
+                conv_out,
+                a_ff,
+                b_ff,
+                self.neg_exp_A,
+                self.dt_bias,
+                self._fused_norm_w,
+                self._fused_scale_tt,
+                self._fused_rms_scale_tt,
+                self._fused_rms_eps_tt,
+                self._ff_rec_states,
+                self._ff_fused_output,
+                num_pairs=num_pairs,
+                num_cores=min(96, num_pairs),
+                Nv_TP=Nv,
+                Nk_TP=self._fused_Nk_TP,
+                repeat_factor=self._fused_repeat,
+                key_dim_tp=self._fused_key_dim_tp,
+            )
+            conv_out.deallocate(True)
+
+            # Post-kernel (mirror the prefill-fused epilogue at T=1): per-head
+            # rms_norm → [B,T,v_per_row] → silu(z) gate → out-proj + all-reduce.
+            out_n = ttnn.rms_norm(self._ff_fused_output, weight=self._fused_norm_w, epsilon=self.eps)
+            out_4d = ttnn.reshape(out_n, [1, num_pairs, T, hd])
+            out_n.deallocate(True)
+            out_4d = ttnn.permute(out_4d, (0, 2, 1, 3))  # [1, T, num_pairs, Dv]
+            out_f = ttnn.reshape(out_4d, [B, T, self.v_per_row])
+            out_4d.deallocate(True)
+            z3 = ttnn.reshape(z, [B, T, self.v_per_row]) if len(z.shape) == 4 else z
+            z_silu = ttnn.silu(z3, memory_config=mem)
+            gated = ttnn.multiply(out_f, z_silu, memory_config=mem)
+            out_f.deallocate(True)
+            z_silu.deallocate(True)
+
+            output = self._output_proj_and_reduce(gated, B, T)
+            gated.deallocate(True)
+
+            ttnn.copy(new_conv_state, self.conv_state_buffer)
+            new_conv_state.deallocate(True)
+
+            if B > 1 and len(output.shape) == 3:
+                # _output_proj_and_reduce now returns the canonical [1,1,B,H]
+                # packed layout for B>1 (B users in the dim-2 tile-row slot,
+                # matching full-attn decode). This 3D→4D reshape only fires for a
+                # legacy 3D [B,T,H] return; with the repack above it is a no-op.
+                _Bo, _To, _Ho = list(output.shape)
+                output = ttnn.reshape(output, [1, 1, _Bo, _Ho])
+            return output
 
         # The fused-heads layout is only wired into the pure-ttnn fp32 recurrent
         # core (the else-branch below). The tt-lang kernel paths still expect the
@@ -3083,6 +3429,7 @@ class TtQwen36DeltaAttention(LightweightModule):
                 device=self.mesh_device,
                 pre_transposed=use_fused_heads,
             )
+        _gdn_dbg("after_recurrent_core", core_out, self.mesh_device)
         q_exp.deallocate(True)
         k_exp.deallocate(True)
         v_h.deallocate(True)
@@ -3099,10 +3446,12 @@ class TtQwen36DeltaAttention(LightweightModule):
         out = self._apply_norm_gated(core_out, z_h, B, T)
         core_out.deallocate(True)
         z_h.deallocate(True)
+        _gdn_dbg("after_norm_gated", out, self.mesh_device)
 
         # 8. Output projection + all-reduce across rows
         output = self._output_proj_and_reduce(out, B, T)
         out.deallocate(True)
+        _gdn_dbg("after_outproj", output, self.mesh_device)
 
         # 9. In-place write of new state into persistent buffers (trace-safe).
         # V2-17d: when V3 is active, new_state IS dn_state_buffer (kernel
@@ -3114,6 +3463,17 @@ class TtQwen36DeltaAttention(LightweightModule):
         ttnn.copy(new_conv_state, self.conv_state_buffer)
         new_conv_state.deallocate(True)
 
+        # BATCH-N: map the recurrent core's [B, 1, H_out] (users in dim-0) back
+        # to the decode backbone's row layout [1, 1, B, H_out] (users in the
+        # dim-2 tile-padded row slot), so the surrounding residual add / next
+        # layer see one logical row per user. At B==1 the old contract returned
+        # the 3D [1, 1, H_out]; preserve that exactly (no reshape) so batch-1 is
+        # byte-identical. With the _output_proj_and_reduce repack, output is
+        # already the canonical 4D [1,1,B,H] for B>1, so this 3D→4D reshape is a
+        # no-op (guarded on rank 3 for any legacy 3D return).
+        if B > 1 and len(output.shape) == 3:
+            _Bo, _To, _Ho = list(output.shape)
+            output = ttnn.reshape(output, [1, 1, _Bo, _Ho])
         return output
 
     # ------------------------------------------------------------------
