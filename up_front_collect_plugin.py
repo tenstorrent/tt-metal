@@ -41,6 +41,7 @@ Limitations (see MODEL_PRECOMPILE_DESIGN.md §8.1):
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import os
 
@@ -53,6 +54,12 @@ _DEVICE_ID = int(os.environ.get("UP_FRONT_COLLECT_DEVICE_ID", "0"))
 # addr-0 mocking, so address-baked / address-branched kernels (pool reader, move fwd/bwd) warm.
 # Costs real device memory (~the real run's peak) — only use when the model fits.
 _REAL_ALLOC = os.environ.get("UP_FRONT_REAL_ALLOC") == "1"
+# UP_FRONT_FAST_COLLECT=1 (default): in the collect window (results thrown away under NO_DISPATCH),
+# replace expensive HOST-side torch work — torch.randn -> zeros, the torch *reference* conv
+# (torch.nn.functional.conv2d) -> shape-correct zeros, comp_pcc -> no-op. Values are irrelevant
+# under NO_DISPATCH and collected programs depend only on ttnn op shapes/config, so this does NOT
+# change what is collected — it stops pass 1 paying for the golden reference + PCC + RNG.
+_FAST_COLLECT = os.environ.get("UP_FRONT_FAST_COLLECT", "1") == "1"
 
 # Bodies that drive trace/graph capture can't run under NO_DISPATCH (it blocks the
 # dispatch + alloc that recording needs). Heuristic: scan the test function source.
@@ -78,6 +85,62 @@ def _drives_capture(item) -> bool:
     return any(m in src for m in _CAPTURE_MARKERS)
 
 
+@contextlib.contextmanager
+def _cheap_host_ops():
+    """Swap expensive host-side torch work for cheap shape-correct stand-ins during collect.
+
+    Only ttnn op shapes/config determine the collected programs, so zeroing the inputs, the
+    torch reference conv, and the PCC check does not change WHAT is collected — it just removes
+    the wasted golden-reference + PCC + RNG cost from the throwaway collect pass.
+    """
+    import sys
+
+    import torch
+    import torch.nn.functional as F
+
+    real_randn = torch.randn
+    real_conv2d = F.conv2d
+
+    def _fast_randn(*size, **kw):
+        if len(size) == 1 and isinstance(size[0], (tuple, list, torch.Size)):
+            size = tuple(size[0])
+        kw.pop("generator", None)
+        return torch.zeros(*size, **kw)
+
+    def _pair(x):
+        return (x, x) if isinstance(x, int) else x
+
+    def _fast_conv2d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+        sH, sW = _pair(stride)
+        pH, pW = _pair(padding)
+        dH, dW = _pair(dilation)
+        N, C_out = input.shape[0], weight.shape[0]
+        H, W = input.shape[-2], input.shape[-1]
+        kH, kW = weight.shape[-2], weight.shape[-1]
+        H_out = (H + 2 * pH - dH * (kH - 1) - 1) // sH + 1
+        W_out = (W + 2 * pW - dW * (kW - 1) - 1) // sW + 1
+        return input.new_zeros((N, C_out, H_out, W_out))
+
+    # Return a high-but-not-exactly-1 PCC so `assert passing` passes while the common
+    # `if pcc == 1: assert_equal(...)` branch is skipped (that would re-touch full tensors).
+    pcc_saved = []
+    for _modname in ("tests.ttnn.utils_for_testing", "models.common.utility_functions"):
+        _mod = sys.modules.get(_modname)
+        if _mod is not None and hasattr(_mod, "comp_pcc"):
+            pcc_saved.append((_mod, _mod.comp_pcc))
+            _mod.comp_pcc = lambda *a, **k: (True, 0.999999)
+
+    torch.randn = _fast_randn
+    F.conv2d = _fast_conv2d
+    try:
+        yield
+    finally:
+        torch.randn = real_randn
+        F.conv2d = real_conv2d
+        for _mod, _orig in pcc_saved:
+            _mod.comp_pcc = _orig
+
+
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_call(item):
     """Run each body under one NO_DISPATCH collect window (call phase only)."""
@@ -93,6 +156,9 @@ def pytest_runtest_call(item):
     _stats["bodies"] += 1
     ttnn.graph.up_front_begin_collect(clear=False, real_alloc=_REAL_ALLOC)  # accumulate; wraps ONLY the body
     try:
+        if _FAST_COLLECT:
+            with _cheap_host_ops():
+                return (yield)  # body runs with cheap host stand-ins; ttnn ops still stash
         return (yield)  # pytest runs the body with its real fixtures; ops stash into the collector
     except Exception:
         # Expected under NO_DISPATCH: a readback/assert on an addr-0 output. The
