@@ -84,30 +84,20 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
     // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
     vector<uint32_t> packed_golden = packed_input;
 
-    // Metal 2.0 sweep tests pass loop-varying params as named RTAs (not CTAs) so the
-    // kernel binary stays stable across gtest iterations.
-    const bool pass_loop_vars_as_named_rtas = !test_config.use_trid;
-
     // Compile-time arguments for kernel
     std::unordered_map<std::string, uint32_t> reader_compile_args = {
+        {"num_transactions", (uint32_t)test_config.num_of_transactions},
         {"num_banks", (uint32_t)test_config.num_banks},
+        {"pages_per_bank", (uint32_t)test_config.pages_per_bank},
         {"page_size", (uint32_t)test_config.page_size_bytes},
         {"test_id", (uint32_t)test_config.test_id}};
-    if (!pass_loop_vars_as_named_rtas) {
-        reader_compile_args["num_transactions"] = (uint32_t)test_config.num_of_transactions;
-        reader_compile_args["pages_per_bank"] = (uint32_t)test_config.pages_per_bank;
-    }
 
     string kernel_path = "tests/tt_metal/tt_metal/data_movement/dram_sharded/kernels/dram_sharded_read";
     if (test_config.use_trid) {
         kernel_path += "_trid";
         reader_compile_args["num_trids"] = (uint32_t)test_config.num_of_trids;
     }
-    kernel_path += "_2_0";
-    if (!test_config.use_trid) {
-        reader_compile_args["num_trids"] = 16u;
-    }
-    kernel_path += ".cpp";
+    kernel_path += "_2_0.cpp";
 
     uint32_t l1_addr = get_l1_address_and_size(mesh_device, corerange_to_cores(test_config.cores)[0]).base_address;
 
@@ -116,10 +106,6 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
     KernelSpec::CompileTimeArgs cta_bindings(reader_compile_args.begin(), reader_compile_args.end());
 
     std::vector<std::string> named_rtas = {"src_addr", "l1_addr"};
-    if (pass_loop_vars_as_named_rtas) {
-        named_rtas.push_back("num_of_transactions");
-        named_rtas.push_back("pages_per_bank");
-    }
 
     KernelSpec reader_spec{
         .unique_id = "reader",
@@ -154,10 +140,6 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
     ProgramRunArgs::KernelRunArgs reader_run_params{.kernel_spec_name = reader_spec.unique_id};
     for (auto& core : corerange_to_cores(test_config.cores)) {
         std::unordered_map<std::string, uint32_t> rtas = {{"src_addr", input_buffer_address}, {"l1_addr", l1_addr}};
-        if (pass_loop_vars_as_named_rtas) {
-            rtas["num_of_transactions"] = (uint32_t)test_config.num_of_transactions;
-            rtas["pages_per_bank"] = (uint32_t)test_config.pages_per_bank;
-        }
         reader_run_params.runtime_arg_values.push_back({.node = core, .args = rtas});
     }
     run_params.kernel_run_args.push_back(reader_run_params);
