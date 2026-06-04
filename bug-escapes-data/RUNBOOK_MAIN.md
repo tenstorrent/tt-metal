@@ -179,11 +179,13 @@ For multi-card hardware (T3K, Galaxy): only one verify agent at a time per machi
 ```
 🧪 Probes dispatched for {escape_id} — {test_name}
 
-BEFORE: {before_run_url}
-AFTER:  {after_run_url}
+BEFORE: {before_job_url}
+AFTER:  {after_job_url}
 
 Verdict: {verdict}
 ```
+
+**Link format rule (MANDATORY):** Always use job-level links in the format `https://github.com/tenstorrent/tt-metal/actions/runs/{run_id}/job/{job_id}` — NOT run-level links (`/actions/runs/{run_id}`). The verify agent verdict JSON provides `before_run_id`, `before_job_id`, `after_run_id`, `after_job_id` — construct job URLs from these. This rule applies to both DMs and all Confluence page updates.
 
 Then act on the verdict:
 
