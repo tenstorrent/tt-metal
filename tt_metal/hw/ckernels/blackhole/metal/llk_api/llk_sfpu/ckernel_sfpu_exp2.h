@@ -17,10 +17,21 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
     sfpi::vFloat f, j, r, y, abs_x;
     sfpi::vInt i;
     sfpi::vSMag16 sm;
+
+    // Convert x to sign-magnitude 16-bit integer (round to nearest with ties
+    // away from zero), and convert back to floating point.
     sm = sfpi::convert<sfpi::vSMag16>(x, sfpi::RoundMode::NearestEven);
     j = sfpi::convert<sfpi::vFloat>(sm, sfpi::RoundMode::NearestEven);
+
+    // Range reduced value in [-0.5, 0.5].
     f = x - j;
 
+    // Minimax polynomial approximation for exp2(f), f in [-0.5, 0.5].
+    // The first three coefficients are rounded to fp16 (one sfploadi per coefficient).
+    // The subsequent three coefficients are fp32 values stored in constant registers.
+    // Interleaved with conversion of sign-magnitude integer in [-32767, 32767] to two's complement.
+    // Interleaved with calculation of the overflow case y = y * inf, giving inf or NaN.
+    // Interleaved with calculation of abs_x = abs(x), which is >= 0.0 unless x is -NaN.
     r = 0x1.41cp-13f;
     r = r * f + 0x1.5f4p-10f;
     r = r * f + 0x1.3b4p-7f;
@@ -33,7 +44,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
     abs_x = sfpi::abs(x);
     r = r * f + 1.0f;
 
-    // exclude special case: abs(-nan) == -nan
+    // Exclude -NaN: abs(-NaN) remains negative.
     v_if(abs_x >= 0.0f) {
         sfpi::vInt e = sfpi::exexp(r, sfpi::ExponentMode::NoDebias);
         e += i;
@@ -42,7 +53,10 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_fp32_accurate_(sfpi::vFloat x) {
             sfpi::vInt e_lt_255 = __builtin_rvtt_sfpiadd_i(e.get(), -255, sfpi::SFPIADD_MOD1_CC_LT0);
             y = sfpi::setexp(r, e);
             // e < 1
-            v_if(e_lt_255 < -254) { y = 0.0f; }
+            v_if(e_lt_255 < -254) {
+                // Underflow, including subnormals.
+                y = 0.0f;
+            }
             v_endif;
         }
         v_endblock;
@@ -116,6 +130,7 @@ inline void calculate_exp2() {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false>
 inline void exp2_init() {
     if constexpr (is_fp32_dest_acc_en) {
+        // Coefficients for minimax polynomial.
         sfpi::vConstFloatPrgm0 = 0x1.62e42ep-1f;
         sfpi::vConstFloatPrgm1 = 0x1.ebfba0p-3f;
         sfpi::vConstFloatPrgm2 = 0x1.c6afd8p-5f;
