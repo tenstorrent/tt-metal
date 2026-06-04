@@ -2,9 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reader for per_token_cast_to_fp8. Fills the reduce scaler tile (1.0 in row 0 of each face, the
-// reduce-LLK MAX layout) once, then reads the fp32/bf16 input column-block-major: per (tile-row,
-// col-block), one input tile (1024 elements) per row -> cb_in (one tile per page). FIFO consume.
+// Reader for per_token_cast_to_fp8 (group-major). Fills the reduce scaler tile once, then streams
+// the core's rows as a flat sequence of 128-element groups. A "block" is tile_h consecutive groups
+// (block_capacity = tile_h * 128 elements = COL_BLOCK_TILES tiles). Each bank-contiguous run (a span
+// within one row) is read with a single noc_async_read, so we exploit row-major DRAM locality
+// instead of hopping banks. After tilize, the block is [tile_h groups x 128] and the (unchanged,
+// GROUPS_PER_BLOCK=1) compute reduces each group independently.
 
 #include <cstdint>
 
@@ -13,14 +16,13 @@
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_tile_rows = get_arg_val<uint32_t>(1);
-    uint32_t num_col_blocks = get_arg_val<uint32_t>(2);
-    uint32_t start_row = get_arg_val<uint32_t>(3);  // absolute first row for this core (not tile-aligned)
-    uint32_t num_rows = get_arg_val<uint32_t>(4);   // rows for THIS core; last tile-row may be partial
-    uint32_t h_total = get_arg_val<uint32_t>(5);    // total width (H); last col-block may be partial
+    uint32_t num_blocks = get_arg_val<uint32_t>(1);
+    uint32_t start_row = get_arg_val<uint32_t>(2);  // absolute first row of this core's stream
+    uint32_t num_rows = get_arg_val<uint32_t>(3);   // rows owned by this core
+    uint32_t width = get_arg_val<uint32_t>(4);      // H (elements per row)
 
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
-    constexpr uint32_t col_block_bytes = get_compile_time_arg_val(1);  // 1024 * elem_size
+    constexpr uint32_t group_bytes = get_compile_time_arg_val(1);  // 128 * elem_size (one group)
     constexpr uint32_t cb_scaler = get_compile_time_arg_val(2);
     // Tile / face dims from the tensor's tile spec.
     constexpr uint32_t tile_h = get_compile_time_arg_val(3);
@@ -30,8 +32,10 @@ void kernel_main() {
     constexpr uint32_t ONE_F32_BITS = 0x3f800000u;  // 1.0f
     constexpr uint32_t face_elems = face_h * face_w;                       // fp32 elements per face
     constexpr uint32_t num_faces = (tile_h / face_h) * (tile_w / face_w);  // faces per tile
-    constexpr uint32_t COL_BLOCK_ELEMS = 1024;                             // LLK column-block width
-    constexpr uint32_t elem_bytes = col_block_bytes / COL_BLOCK_ELEMS;     // input element size
+    constexpr uint32_t COL_BLOCK_ELEMS = 128;                              // column-block width = one group
+    constexpr uint32_t COL_BLOCK_TILES = COL_BLOCK_ELEMS / tile_w;         // 4 tiles per block
+    constexpr uint32_t elem_bytes = group_bytes / COL_BLOCK_ELEMS;         // input element size
+    constexpr uint32_t block_capacity = tile_h * COL_BLOCK_ELEMS;          // 4096 elems per block
     constexpr auto src_args = TensorAccessorArgs<7>();
 
     const auto src = TensorAccessor(src_args, src_addr);
@@ -49,26 +53,30 @@ void kernel_main() {
     }
     cb_push_back(cb_scaler, 1);
 
-    for (uint32_t tr = 0; tr < num_tile_rows; ++tr) {
-        uint32_t row_base = start_row + tr * tile_h;
-        uint32_t rows_this = std::min(tile_h, num_rows - tr * tile_h);  // real rows in this tile-row
-        for (uint32_t c = 0; c < num_col_blocks; ++c) {
-            uint32_t real_col_elems = std::min(COL_BLOCK_ELEMS, h_total - c * COL_BLOCK_ELEMS);
-            uint32_t real_col_bytes = real_col_elems * elem_bytes;  // real width of this col-block
-            cb_reserve_back(cb_in, tile_h);
-            uint32_t l1 = get_write_ptr(cb_in);
-            uint32_t col_offset_bytes = c * col_block_bytes;
-            // Always fill tile_h full-width pages; zero-pad the partial column tail and any rows
-            // beyond M so the (padding-oblivious) compute never reads garbage into amax/divide.
-            for (uint32_t s = 0; s < tile_h; ++s) {
-                if (s < rows_this) {
-                    uint32_t page_id = row_base + s;
-                    noc_async_read(src.get_noc_addr(page_id) + col_offset_bytes, l1, real_col_bytes);
-                }
-                l1 += col_block_bytes;
+    // Stream groups into tile_h-group blocks, one bank-contiguous run per noc_async_read.
+    const uint32_t end_row = start_row + num_rows;
+    uint32_t current_row = start_row;
+    uint32_t current_col = 0;  // element offset within the current row
+    for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+        cb_reserve_back(cb_in, COL_BLOCK_TILES);
+        uint32_t l1 = get_write_ptr(cb_in);
+        uint32_t filled = 0;
+        while (filled < block_capacity && current_row < end_row) {
+            uint32_t space_in_block = block_capacity - filled;
+            uint32_t space_in_row = width - current_col;
+            uint32_t run = space_in_row < space_in_block ? space_in_row : space_in_block;
+            noc_async_read(src.get_noc_addr(current_row) + current_col * elem_bytes, l1, run * elem_bytes);
+            filled += run;
+            current_col += run;
+            l1 += run * elem_bytes;
+            if (current_col >= width) {  // row consumed -> next row
+                current_col = 0;
+                ++current_row;
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_in, tile_h);
         }
+        // The final block may be partial (rows exhausted); its tail slots stay stale and the
+        // padding-oblivious compute never has them written back by the writer.
+        noc_async_read_barrier();
+        cb_push_back(cb_in, COL_BLOCK_TILES);
     }
 }

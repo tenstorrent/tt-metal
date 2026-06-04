@@ -33,7 +33,7 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 
 namespace {
-constexpr uint32_t COL_BLOCK_ELEMS = 1024;  // LLK column-block width in elements
+constexpr uint32_t COL_BLOCK_ELEMS = 128;   // column-block width = one scale group (GROUPS_PER_BLOCK=1)
 constexpr uint32_t SCALE_GROUP_SIZE = 128;  // elements per per-token scale group
 }  // namespace
 
@@ -58,8 +58,7 @@ void kernel_main() {
     constexpr uint32_t IDST0 = 0;
     constexpr uint32_t IDST1 = 1;
 
-    uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
-    uint32_t num_col_blocks = get_arg_val<uint32_t>(1);
+    uint32_t num_blocks = get_arg_val<uint32_t>(0);  // tile_h-group blocks for this core
 
     // Configure the unpacker hw on the fp32 reduce/abs operand so num_faces / tile dims are full
     // (4 faces). Configuring on a bf16 cb_in instead leaves the fp32 reduce reading only 2 faces
@@ -67,8 +66,8 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_abs, cb_e4m3);
     cb_wait_front(cb_scaler, 1);  // reader-filled 1.0 scaler, reused for every reduce
 
-    for (uint32_t tr = 0; tr < num_tile_rows; ++tr) {
-        for (uint32_t c = 0; c < num_col_blocks; ++c) {
+    for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+        {
             // ----- 1. tilize input row-major -> tile -----
             reconfig_data_format_srca(cb_in);
             pack_reconfig_data_format(cb_tile);

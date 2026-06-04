@@ -36,7 +36,7 @@ void kernel_main() {
     // Tile dims from the tensor's tile spec.
     constexpr uint32_t tile_h = get_compile_time_arg_val(6);
     constexpr uint32_t tile_w = get_compile_time_arg_val(7);
-    constexpr uint32_t COL_BLOCK_ELEMS = 1024;  // LLK column-block width in elements
+    constexpr uint32_t COL_BLOCK_ELEMS = 128;   // column-block width = one scale group (GROUPS_PER_BLOCK=1)
     constexpr uint32_t SCALE_GROUP_SIZE = 128;  // elements per per-token scale group
     constexpr uint32_t TILE_HEIGHT = tile_h;
     constexpr uint32_t COL_BLOCK_TILES = COL_BLOCK_ELEMS / tile_w;             // 32 tiles per column-block
@@ -46,18 +46,19 @@ void kernel_main() {
     constexpr uint32_t IDST0 = 0;
     constexpr uint32_t IDST1 = 1;
 
-    uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
-    uint32_t num_col_blocks = get_arg_val<uint32_t>(1);
+    uint32_t num_blocks = get_arg_val<uint32_t>(0);  // tile_h-group blocks for this core
 
     compute_kernel_hw_startup(cb_e4m3, cb_out_fp32);
 
-    for (uint32_t tr = 0; tr < num_tile_rows; ++tr) {
-        for (uint32_t c = 0; c < num_col_blocks; ++c) {
+    for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+        {
             // ----- Phase 1: e4m3 row-major -> fp32 row-major (one tile at a time, index 0) -----
             reconfig_data_format_srca(cb_e4m3);
             pack_reconfig_data_format(cb_in_rm);
             copy_tile_init(cb_e4m3);
-            for (uint32_t s = 0; s < TILE_HEIGHT; ++s) {
+            // One e4m3 "tile" page = 1024 flat elements; there are COL_BLOCK_TILES of them per block
+            // (= 4 at 128-wide blocks, not TILE_HEIGHT). copy_tile does an element-wise e4m3->fp32 cast.
+            for (uint32_t s = 0; s < COL_BLOCK_TILES; ++s) {
                 cb_wait_front(cb_e4m3, 1);
                 cb_reserve_back(cb_in_rm, 1);
                 tile_regs_acquire();
