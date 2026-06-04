@@ -80,27 +80,11 @@ def trust_remote_ministral(monkeypatch):
     monkeypatch.setattr(mc.ModelArgs, "get_hf_model_cls", _get_hf_model_cls_devstral_safe)
 
 
-@torch.no_grad()
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
-@pytest.mark.parametrize("seq_len", (128,))
-@pytest.mark.parametrize("batch_size", (1,))
-@pytest.mark.parametrize(
-    "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
-    indirect=True,
-)
-def test_ministral3_model_pcc_devstral_weights(
+def _run_ministral3_model_prefill_pcc(
     mesh_device,
-    seq_len,
-    batch_size,
-    monkeypatch,
-    trust_remote_ministral,
-):
-    monkeypatch.setenv("HF_MODEL", DEVSTRAL_REPO_ID)
-    # Short prefill uses L1 width-sharded gather-in0 matmuls.
-    monkeypatch.setenv(MINISTRAL_SHORT_PREFILL_L1_WIDTH_MM_ENV, "1")
-
+    seq_len: int,
+    batch_size: int,
+) -> None:
     dtype = ttnn.bfloat16
     model_args = ModelArgs(
         mesh_device,
@@ -111,8 +95,13 @@ def test_ministral3_model_pcc_devstral_weights(
         cache_hf=True,
     )
     model_args.is_distributed_norm = types.MethodType(lambda self, mode: False, model_args)
+
+    depth = int(model_args.full_model_n_layers)
+    n_layers = depth
+    model_args.n_layers = n_layers
+
     logger.info(
-        f"Ministral3 model prefill PCC: n_layers={model_args.n_layers} seq_len={seq_len} batch_size={batch_size}"
+        f"Ministral3 model prefill PCC: n_layers={n_layers}/{depth} " f"seq_len={seq_len} batch_size={batch_size}"
     )
 
     text_cfg = model_args.hf_config.text_config
@@ -142,9 +131,8 @@ def test_ministral3_model_pcc_devstral_weights(
         position_ids=position_ids,
     )
 
-    # Reference Ministral3Model path restricted to first n_layers.
     hidden = x
-    for layer in text_root.layers[: model_args.n_layers]:
+    for layer in text_root.layers[:n_layers]:
         hidden = layer(
             hidden_states=hidden,
             attention_mask=causal_mask,
@@ -207,5 +195,29 @@ def test_ministral3_model_pcc_devstral_weights(
     pcc_required = 0.99
     passing, pcc_message = comp_pcc(ref_out, tt_torch, pcc_required)
     logger.info(comp_allclose(ref_out, tt_torch))
-    logger.info(f"PCC: {pcc_message}")
-    assert passing, f"PCC below {pcc_required}: {pcc_message}"
+    logger.info(f"n_layers={n_layers}/{depth} PCC: {pcc_message}")
+    assert passing, f"PCC below {pcc_required} (n_layers={n_layers}/{depth}): {pcc_message}"
+
+
+@torch.no_grad()
+@pytest.mark.timeout(7200)
+@pytest.mark.models_performance_bare_metal
+@pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
+@pytest.mark.parametrize("seq_len", (128,))
+@pytest.mark.parametrize("batch_size", (1,))
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
+    indirect=True,
+)
+def test_ministral3_model_pcc_devstral_weights(
+    mesh_device,
+    seq_len,
+    batch_size,
+    monkeypatch,
+    trust_remote_ministral,
+):
+    """Full text stack prefill PCC (all layers from HF config via ModelArgs.full_model_n_layers)."""
+    monkeypatch.setenv("HF_MODEL", DEVSTRAL_REPO_ID)
+    monkeypatch.setenv(MINISTRAL_SHORT_PREFILL_L1_WIDTH_MM_ENV, "1")
+    _run_ministral3_model_prefill_pcc(mesh_device, seq_len, batch_size)

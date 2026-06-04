@@ -103,7 +103,7 @@ def _ff1_linear_sweep_enabled(args, seq_len: int, full_seq_len: int, mesh_device
 
 
 def _ff1_linear_sweep_program_config() -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
-    # 1D_ws/dram/ws 8x4 w5: ~147us vs Tracy 128×5120×8192 ~192us (test_matmul_128x5120x8192_sweep).
+    # 1D_ws/dram/ws 8x4 w5: ~147us vs Tracy 128×5120×8192 ~148us (test_matmul_128x5120x8192_sweep).
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(_FF1_1D_GRID_X, _FF1_1D_GRID_Y),
         in0_block_w=5,
@@ -130,10 +130,10 @@ def _ff2_linear_sweep_enabled(args, seq_len: int, full_seq_len: int, mesh_device
 
 
 def _ff2_linear_sweep_program_config() -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
-    # 1D_ws/dram/ws 8x4 w4 (Kt=256, kt/core=8): 128×8192×5120 prefill FF2.
+    # mcast1d_8x4_pcn5_ibw8 l1/dram/l1: ~145us vs Tracy 128×8192×5120 ~154us (test_matmul_128x8192x5120_sweep).
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(_FF1_1D_GRID_X, _FF1_1D_GRID_Y),
-        in0_block_w=4,
+        in0_block_w=8,
         out_subblock_h=1,
         out_subblock_w=1,
         per_core_M=4,
@@ -141,6 +141,17 @@ def _ff2_linear_sweep_program_config() -> ttnn.MatmulMultiCoreReuseMultiCast1DPr
         fuse_batch=True,
         fused_activation=None,
         mcast_in0=True,
+    )
+
+
+def _ff2_linear_sweep_compute_kernel_config():
+    # Must match test_matmul_128x8192x5120_sweep (HiFi2, approx=True, no fp32 acc).
+    # Model default LI_FF2 uses HIFI2_FP16 (approx=False) and runs ~154us vs sweep ~145us.
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
     )
 
 
@@ -328,7 +339,9 @@ class TtMinistralMLP(LightweightModule):
         if mode == Mode.PREFILL and not TG:
             if _ff1_linear_sweep_enabled(self.args, cfg_seq, full_seq_len, self.mesh_device):
                 pc_ff13 = _ff1_linear_sweep_program_config()
-                mem_ff13 = _ff1_ws_output_mem_cfg(self.args, cfg_seq)
+                # FF2 mcast1d sweep needs native L1 interleaved SiLU input (~145us). ws→L1 via
+                # sharded_to_interleaved only reaches the ~153us width-sharded-equivalent path.
+                mem_ff13 = ttnn.L1_MEMORY_CONFIG if use_ff2_sweep else _ff1_ws_output_mem_cfg(self.args, cfg_seq)
                 w1_out = ttnn.matmul(
                     ff1_x,
                     self.w1,
@@ -492,8 +505,8 @@ class TtMinistralMLP(LightweightModule):
             w1_out,
             w3_out,
             input_tensor_a_activations=[self.activation_type],
-            dtype=activation_dtype or ttnn.bfloat8_b,
-            memory_config=w1_out.memory_config(),
+            dtype=ttnn.bfloat8_b if use_ff2_sweep else (activation_dtype or ttnn.bfloat8_b),
+            memory_config=ttnn.L1_MEMORY_CONFIG if use_ff2_sweep else w1_out.memory_config(),
         )
 
         if mode == Mode.DECODE and not TG and self.prefetcher is None:
@@ -535,17 +548,15 @@ class TtMinistralMLP(LightweightModule):
             )
         else:
             if use_ff2_sweep:
-                w2_in = _prepare_ff1_ws_input(w2_in, _ff2_ws_input_mem_cfg(self.args, cfg_seq))
-                mem_ff2 = _ff2_ws_output_mem_cfg(self.args, cfg_seq)
                 w2_out = ttnn.matmul(
                     w2_in,
                     self.w2_prefill_sweep,
                     program_config=pc_2,
-                    memory_config=mem_ff2,
-                    compute_kernel_config=li_ff2_compute_kernel_cfg,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=_ff2_linear_sweep_compute_kernel_config(),
                     dtype=ttnn.bfloat8_b,
                 )
-                w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.DRAM_MEMORY_CONFIG)
+                w2_out = ttnn.to_memory_config(w2_out, ttnn.DRAM_MEMORY_CONFIG)
             else:
                 w2_out = ttnn.linear(
                     w2_in,

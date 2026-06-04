@@ -17,6 +17,14 @@ from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.common import Mode
 
 _TILE = 32
+_WO_1D_GRID_X = 8
+_WO_1D_GRID_Y = 4
+
+
+def ministral_qkv_bf16_activations_enabled() -> bool:
+    """Default on: BF16 QKV activations with BFP8 weights (see forward_prefill)."""
+    default = os.environ.get("TT_MINISTRAL3_QKV_BF16_ACT", "1")
+    return default.strip().lower() not in ("0", "false", "no")
 
 
 def _qkv_shard_n(args) -> int:
@@ -67,7 +75,7 @@ def _qkv_linear_sweep_enabled(args, seq_len: int) -> bool:
 
 
 def _qkv_linear_sweep_program_config() -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
-    # 2D l1/ds/dram 8x4 w8: 46.70us vs baseline dram 120.16us on 128×5120×1536.
+    # 2D l1/ds/dram 8x4 w8: sweep vs Tracy 128×5120×1536 ~55us (test_matmul_128x5120x1536_sweep).
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(8, 4),
         in0_block_w=8,
@@ -85,6 +93,98 @@ def _qkv_linear_sweep_program_config() -> ttnn.MatmulMultiCoreReuseMultiCastProg
 
 def _prepare_qkv_linear_sweep_input(x: ttnn.Tensor) -> ttnn.Tensor:
     if x.memory_config().buffer_type == ttnn.BufferType.L1:
+        return x
+    return ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+
+
+def _wo_k_shard(args) -> int:
+    return int(args.n_heads * args.head_dim) // int(args.num_devices)
+
+
+def _use_1d_wo_dram_weights(args) -> bool:
+    """1D mcast WO prefill sweep uses interleaved DRAM weights (not width-sharded decode WO)."""
+    return (
+        not args.use_fused_all_gather_matmul
+        and not args.is_galaxy
+        and int(args.dim) == 5120
+        and _wo_k_shard(args) == 1024
+    )
+
+
+def _load_wo_prefill_sweep_interleaved(
+    mesh_device,
+    args,
+    configuration,
+    state_dict,
+    weight_cache_path,
+    layer_num,
+    dtype,
+) -> ttnn.Tensor:
+    """Load WO from cache in DRAM interleaved layout (same pattern as MLP w2_prefill_sweep)."""
+    layer_name = configuration.get_state_dict_prefix("Attention", layer_num)
+    wo_str = f"{layer_name}.wo"
+    pt_wo = state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
+    if configuration.dummy_weights or weight_cache_path is None:
+        cache_file = None
+    else:
+        cache_file = weight_cache_path / f"{layer_name}.wo_dram_il"
+    mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=2)
+    return ttnn.as_tensor(
+        pt_wo,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=mesh_mapper,
+        cache_file_name=cache_file,
+    )
+
+
+def _wo_linear_sweep_fits_device(mesh_device) -> bool:
+    grid = mesh_device.compute_with_storage_grid_size()
+    return int(grid.x) >= _WO_1D_GRID_X and int(grid.y) >= _WO_1D_GRID_Y
+
+
+def _wo_linear_sweep_enabled(args, seq_len: int, full_seq_len: int, mesh_device) -> bool:
+    """Sweep winner for 128×1024×5120 prefill WO (test_matmul_128x1024x5120_sweep)."""
+    default = os.environ.get("TT_MINISTRAL3_SHORT_PREFILL_L1_WIDTH_MM", "1")
+    if os.environ.get("TT_MINISTRAL3_WO_LINEAR_SWEEP", default).strip().lower() in ("0", "false", "no"):
+        return False
+    if int(full_seq_len) != int(seq_len):
+        return False
+    if not _wo_linear_sweep_fits_device(mesh_device):
+        return False
+    return int(seq_len) <= 128 and int(args.dim) == 5120 and _wo_k_shard(args) == 1024
+
+
+def _wo_linear_sweep_program_config() -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    # mcast1d_8x4_pcn5_ibw8 l1/dram/dram: ~23us vs Tracy 128×1024×5120 ~33us.
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(_WO_1D_GRID_X, _WO_1D_GRID_Y),
+        in0_block_w=8,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=4,
+        per_core_N=5,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+def _wo_linear_sweep_compute_kernel_config():
+    # Match test_matmul_128x1024x5120_sweep (HiFi2, approx=True, no fp32 acc).
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+
+def _prepare_wo_linear_sweep_input(x: ttnn.Tensor) -> ttnn.Tensor:
+    mc = x.memory_config()
+    if mc.buffer_type == ttnn.BufferType.L1 and mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
         return x
     return ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
 
@@ -181,6 +281,30 @@ def _qkv_block_shard_linear_patch(attn: "TtMinistralAttention", seq_len: int):
         ttnn.linear = orig_linear
 
 
+@contextmanager
+def _wo_linear_sweep_runtime_patch(attn: "TtMinistralAttention"):
+    """L1 WO in0 + 1D mcast matmul (l1/dram/dram); DRAM out avoids post-WO CopyDevice before all_reduce."""
+    orig_linear = ttnn.linear
+
+    wo_ids = {id(attn.wo), id(attn.wo_prefill_sweep)}
+
+    def linear(x, weight, **kwargs):
+        if id(weight) not in wo_ids:
+            return orig_linear(x, weight, **kwargs)
+        kwargs = dict(kwargs)
+        kwargs["program_config"] = _wo_linear_sweep_program_config()
+        kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+        kwargs["compute_kernel_config"] = _wo_linear_sweep_compute_kernel_config()
+        x = _prepare_wo_linear_sweep_input(x)
+        return orig_linear(x, attn.wo_prefill_sweep, **kwargs)
+
+    ttnn.linear = linear
+    try:
+        yield
+    finally:
+        ttnn.linear = orig_linear
+
+
 class TtMinistralAttention(Attention):
     """Ministral attention with Llama-4 Q scaling; legacy HF rope (not rotary_embedding_hf)."""
 
@@ -192,6 +316,11 @@ class TtMinistralAttention(Attention):
         **kwargs,
     ):
         configuration = kwargs["configuration"]
+        mesh_device = args[0]
+        model_args = args[2]
+        state_dict = args[3]
+        weight_cache_path = args[4]
+        layer_num = kwargs["layer_num"] if "layer_num" in kwargs else args[5]
         self.llama_4_scaling_beta = llama_4_scaling_beta
         self.original_max_position_embeddings = original_max_position_embeddings
         super().__init__(*args, **kwargs)
@@ -202,6 +331,18 @@ class TtMinistralAttention(Attention):
             self.wqkv = ttnn.typecast(self.wqkv, dtype=ttnn.bfloat8_b)
         if self.wo.dtype != ttnn.bfloat8_b:
             self.wo = ttnn.typecast(self.wo, dtype=ttnn.bfloat8_b)
+        if _use_1d_wo_dram_weights(model_args):
+            self.wo_prefill_sweep = _load_wo_prefill_sweep_interleaved(
+                mesh_device,
+                model_args,
+                configuration,
+                state_dict,
+                weight_cache_path,
+                layer_num,
+                ttnn.bfloat8_b,
+            )
+        else:
+            self.wo_prefill_sweep = self.wo
 
         if self.use_hf_rope:  # legacy rotary_embedding, not rotary_embedding_hf
             self.rotary_embedding_decode = self._hf_rope_decode_legacy
@@ -255,24 +396,38 @@ class TtMinistralAttention(Attention):
         q_out_mem = q_heads_pre_rot_1BQD.memory_config()
         k_out_mem = k_heads_pre_rot_1BKD.memory_config()
 
-        q_il_parts = []
-        k_il_parts = []
-        for b in range(B_iter):
-            q_b = q_heads_pre_rot_1BQD[:, b : b + 1, :, :]
-            k_b = k_heads_pre_rot_1BKD[:, b : b + 1, :, :]
-            cos_b = cos[:, :, b : b + 1, :]
-            sin_b = sin[:, :, b : b + 1, :]
-            q_rot = ttnn.experimental.rotary_embedding(q_b, cos_b, sin_b, 0)
-            k_rot = ttnn.experimental.rotary_embedding(k_b, cos_b, sin_b, 0)
-            q_il_parts.append(ttnn.to_memory_config(q_rot, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16))
-            k_il_parts.append(ttnn.to_memory_config(k_rot, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16))
-            ttnn.deallocate(q_rot)
-            ttnn.deallocate(k_rot)
-
         if B_iter == 1:
-            q_merged_il = q_il_parts[0]
-            k_merged_il = k_il_parts[0]
+            q_b = q_heads_pre_rot_1BQD[:, 0:1, :, :]
+            k_b = k_heads_pre_rot_1BKD[:, 0:1, :, :]
+            cos_b = cos[:, :, 0:1, :]
+            sin_b = sin[:, :, 0:1, :]
+            q_heads_1BQD = ttnn.experimental.rotary_embedding(q_b, cos_b, sin_b, 0)
+            k_heads_1BKD = ttnn.experimental.rotary_embedding(k_b, cos_b, sin_b, 0)
+            if q_heads_1BQD.memory_config() != q_out_mem:
+                q_repacked = ttnn.to_memory_config(q_heads_1BQD, q_out_mem)
+                if q_repacked is not q_heads_1BQD:
+                    ttnn.deallocate(q_heads_1BQD)
+                q_heads_1BQD = q_repacked
+            if k_heads_1BKD.memory_config() != k_out_mem:
+                k_repacked = ttnn.to_memory_config(k_heads_1BKD, k_out_mem)
+                if k_repacked is not k_heads_1BKD:
+                    ttnn.deallocate(k_heads_1BKD)
+                k_heads_1BKD = k_repacked
         else:
+            q_il_parts = []
+            k_il_parts = []
+            for b in range(B_iter):
+                q_b = q_heads_pre_rot_1BQD[:, b : b + 1, :, :]
+                k_b = k_heads_pre_rot_1BKD[:, b : b + 1, :, :]
+                cos_b = cos[:, :, b : b + 1, :]
+                sin_b = sin[:, :, b : b + 1, :]
+                q_rot = ttnn.experimental.rotary_embedding(q_b, cos_b, sin_b, 0)
+                k_rot = ttnn.experimental.rotary_embedding(k_b, cos_b, sin_b, 0)
+                q_il_parts.append(ttnn.to_memory_config(q_rot, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16))
+                k_il_parts.append(ttnn.to_memory_config(k_rot, ttnn.L1_MEMORY_CONFIG, ttnn.bfloat16))
+                ttnn.deallocate(q_rot)
+                ttnn.deallocate(k_rot)
+
             q_merged_il = ttnn.concat(q_il_parts, dim=1)
             k_merged_il = ttnn.concat(k_il_parts, dim=1)
             for t in q_il_parts:
@@ -280,10 +435,10 @@ class TtMinistralAttention(Attention):
             for t in k_il_parts:
                 ttnn.deallocate(t)
 
-        q_heads_1BQD = ttnn.interleaved_to_sharded(q_merged_il, q_out_mem)
-        k_heads_1BKD = ttnn.interleaved_to_sharded(k_merged_il, k_out_mem)
-        ttnn.deallocate(q_merged_il)
-        ttnn.deallocate(k_merged_il)
+            q_heads_1BQD = ttnn.interleaved_to_sharded(q_merged_il, q_out_mem)
+            k_heads_1BKD = ttnn.interleaved_to_sharded(k_merged_il, k_out_mem)
+            ttnn.deallocate(q_merged_il)
+            ttnn.deallocate(k_merged_il)
 
         q_heads_1BQD = ttnn.reshape(  # legacy rope pads heads to 32 tiles
             q_heads_1BQD,
@@ -311,7 +466,7 @@ class TtMinistralAttention(Attention):
         floored = ttnn.floor(ratio)
         log_term = ttnn.log1p(floored)
         scaled = ttnn.mul(log_term, beta)
-        return ttnn.add(scaled, 1.0)
+        return ttnn.add(scaled, 1.0, dtype=ttnn.bfloat16)
 
     def _reshape_decode_positions(self, current_pos: ttnn.Tensor, batch_dim: int) -> ttnn.Tensor:
         """Return positions with shape ``[1, batch_dim]`` for per-row scale (matches ``q`` batch axis)."""
@@ -367,8 +522,7 @@ class TtMinistralAttention(Attention):
         return out
 
     def _prefill_bf16_activations_enabled(self) -> bool:
-        default = os.environ.get("TT_MINISTRAL3_QKV_BF16_ACT", "1")
-        return default.strip().lower() not in ("0", "false", "no")
+        return ministral_qkv_bf16_activations_enabled()
 
     def forward_prefill(
         self,
@@ -387,7 +541,7 @@ class TtMinistralAttention(Attention):
         old_activation_dtype = self.activation_dtype
         old_ccl_dtype = self.ccl_dtype
         if self._prefill_bf16_activations_enabled():
-            # BF16×BFP8 QKV; skip BF16=>BFP8 input cast and post-matmul BF8 round-trip.
+            # BF16×BFP8 QKV; BF16 KV cache skips prefill K/V BF16=>BFP8 casts before fill_cache.
             self.activation_dtype = ttnn.bfloat16
             self.ccl_dtype = ttnn.bfloat16
         else:
@@ -407,11 +561,13 @@ class TtMinistralAttention(Attention):
         use_qkv_sweep = _qkv_linear_sweep_enabled(self.args, qkv_seq_len) and not qkv_block_in
         if use_qkv_sweep:
             x_prefill = _prepare_qkv_linear_sweep_input(x_prefill)
+        use_wo_sweep = _wo_linear_sweep_enabled(self.args, qkv_seq_len, qkv_seq_len, self.mesh_device)
 
         try:
             with (
                 _qkv_linear_sweep_program_config_override(self.args, qkv_seq_len, block_sharded_in0=qkv_block_in),
                 _qkv_block_shard_linear_patch(self, qkv_seq_len) if qkv_block_in else nullcontext(),
+                _wo_linear_sweep_runtime_patch(self) if use_wo_sweep else nullcontext(),
                 _skip_identity_typecast(),
             ):
                 return super().forward_prefill(
