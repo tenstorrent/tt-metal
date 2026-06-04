@@ -69,10 +69,20 @@ def _transcribe_waveform(waveform: torch.Tensor, src_sr: int) -> str:
 
     processor = WhisperProcessor.from_pretrained(WHISPER_MODEL)
     whisper = WhisperForConditionalGeneration.from_pretrained(WHISPER_MODEL).eval()
-    feats = processor(audio, sampling_rate=ASR_SAMPLE_RATE, return_tensors="pt").input_features
+    # Whisper only "hears" a fixed 30s window (the feature extractor truncates to 30s).
+    # Long audio (e.g. the full _DEMO_TEXT paragraph ~46s) must be transcribed in 30s
+    # chunks and concatenated, else everything past 30s is silently dropped.
+    chunk = 30 * ASR_SAMPLE_RATE
+    segments = []
     with torch.no_grad():
-        ids = whisper.generate(feats, language="en", task="transcribe")
-    return processor.batch_decode(ids, skip_special_tokens=True)[0].strip()
+        for start in range(0, max(len(audio), 1), chunk):
+            seg = audio[start : start + chunk]
+            if seg.size == 0:
+                continue
+            feats = processor(seg, sampling_rate=ASR_SAMPLE_RATE, return_tensors="pt").input_features
+            ids = whisper.generate(feats, language="en", task="transcribe")
+            segments.append(processor.batch_decode(ids, skip_special_tokens=True)[0].strip())
+    return " ".join(s for s in segments if s).strip()
 
 
 def _normalize_words(s: str) -> list[str]:
@@ -238,7 +248,7 @@ def test_ttnn_voxtral_tts_free_run_asr(device, reset_seeds, request):
         pipe = VoxtralTTSPipeline.from_model_name(
             device,
             model_name_or_path=name,
-            text_max_seq_len=DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN,
+            text_max_seq_len=2048,  # full _DEMO_TEXT paragraph needs ~575 frames + ~280 prompt positions
             text_optimizations=voxtral_text_hf_aligned_optimizations,
         )
     except Exception as exc:
@@ -255,17 +265,17 @@ def test_ttnn_voxtral_tts_free_run_asr(device, reset_seeds, request):
     logger.info("=" * 70)
     logger.info("FREE-RUN ASR GATE (TT generates audio; Whisper transcribes; WER)")
     logger.info("=" * 70)
-    out = pipe.generate_with_codes(text=_ASR_TEXT, voice=_DEMO_VOICE, max_tokens=512, seed=0)
+    out = pipe.generate_with_codes(text=_DEMO_TEXT, voice=_DEMO_VOICE, max_tokens=1500, seed=0)
     ttnn.synchronize_device(device)
 
     assert out.codes_b37t.shape[2] > 0, "free-run generation produced no acoustic frames"
     assert torch.isfinite(out.waveform).all(), "free-run waveform has non-finite samples"
 
     transcription = _transcribe_waveform(out.waveform, _OUTPUT_SAMPLE_RATE)
-    wer = _word_error_rate(_ASR_TEXT, transcription)
-    overlap = _word_overlap(transcription, _ASR_TEXT)
+    wer = _word_error_rate(_DEMO_TEXT, transcription)
+    overlap = _word_overlap(transcription, _DEMO_TEXT)
     duration_s = float(out.waveform.reshape(-1).numel()) / _OUTPUT_SAMPLE_RATE
-    logger.info(f"  target       : {_ASR_TEXT!r}")
+    logger.info(f"  target       : {_DEMO_TEXT!r}")
     logger.info(f"  transcription: {transcription!r}")
     logger.info(
         f"  WER          : {wer:.2%}  target<{ASR_WER_TARGET:.0%}  "
@@ -274,7 +284,7 @@ def test_ttnn_voxtral_tts_free_run_asr(device, reset_seeds, request):
     )
 
     assert wer < ASR_WER_TARGET, (
-        f"free-run ASR WER {wer:.2%} >= {ASR_WER_TARGET:.0%}; " f"transcription={transcription!r} target={_ASR_TEXT!r}"
+        f"free-run ASR WER {wer:.2%} >= {ASR_WER_TARGET:.0%}; " f"transcription={transcription!r} target={_DEMO_TEXT!r}"
     )
 
     ttnn.synchronize_device(device)
@@ -288,7 +298,7 @@ def test_ttnn_voxtral_tts_free_run_asr(device, reset_seeds, request):
 @torch.no_grad()
 @pytest.mark.timeout(3600)
 def test_cpu_reference_free_run_asr_diagnostic(reset_seeds):
-    """DIAGNOSTIC (not gated): torch CPU-reference free-run on the SAME _ASR_TEXT/seed.
+    """DIAGNOSTIC (not gated): torch CPU-reference free-run on the SAME _DEMO_TEXT/seed.
 
     Establishes the reference's frame count / duration / WER so we can tell whether the
     TT free-run (``test_ttnn_voxtral_tts_free_run_asr``) stops *earlier* than the reference
@@ -311,21 +321,21 @@ def test_cpu_reference_free_run_asr_diagnostic(reset_seeds):
     logger.info("CPU-REFERENCE FREE-RUN ASR DIAGNOSTIC (torch generates audio; Whisper transcribes)")
     logger.info("=" * 70)
     ref_wav, ref_codes = cpu.generate(
-        text=_ASR_TEXT,
+        text=_DEMO_TEXT,
         voice=_DEMO_VOICE,
-        max_tokens=512,
+        max_tokens=1500,
         seed=0,
         return_tokenizer_codes=True,
     )
     assert torch.isfinite(ref_wav).all(), "CPU reference produced non-finite waveform samples"
 
     n_frames = int(ref_codes.shape[2])
-    hit_end = n_frames < 512
+    hit_end = n_frames < 1500
     transcription = _transcribe_waveform(ref_wav, _OUTPUT_SAMPLE_RATE)
-    wer = _word_error_rate(_ASR_TEXT, transcription)
-    overlap = _word_overlap(transcription, _ASR_TEXT)
+    wer = _word_error_rate(_DEMO_TEXT, transcription)
+    overlap = _word_overlap(transcription, _DEMO_TEXT)
     duration_s = float(ref_wav.reshape(-1).numel()) / _OUTPUT_SAMPLE_RATE
-    logger.info(f"  target       : {_ASR_TEXT!r}")
+    logger.info(f"  target       : {_DEMO_TEXT!r}")
     logger.info(f"  transcription: {transcription!r}")
     logger.info(
         f"  WER          : {wer:.2%}  (word overlap={overlap:.2%}, "
