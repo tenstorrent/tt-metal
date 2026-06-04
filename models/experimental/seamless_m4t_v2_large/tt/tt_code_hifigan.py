@@ -11,6 +11,7 @@ Output waveform lengths are computed on host from ``t_audio`` and uploaded as in
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
@@ -47,11 +48,12 @@ _VOCODER_CONV1D_INTERIOR = 3968
 # *element* budget (``interior * in_channels``) so low-channel stages chunk much wider. Budget =
 # baseline interior × widest HiFi-GAN channel (proven safe at 3968). The result is clamped to
 # ``[_VOCODER_CONV1D_INTERIOR, _VOCODER_CONV1D_MAX_INTERIOR]`` (the floor keeps the widest convs
-# unchanged; the cap is the conv1d single-shot row ceiling) and tile-aligned. See ``_chunk_interior``.
+# unchanged; the cap is the conv1d single-shot row ceiling) and tile-aligned. See ``_vocoder_conv1d_chunk_interior``.
 _VOCODER_CONV1D_ELEM_BUDGET = 3968 * 512
-# 32768 is the ceiling that fits the conv1d in the speech-path ``l1_small`` (65536 OOMs L1_SMALL);
-# it already collapses the late-stage chunk counts ~6-7× (e.g. 16-channel stage 82 → 11 chunks).
-_VOCODER_CONV1D_MAX_INTERIOR = 32768
+# 49152 fits conv1d L1_SMALL on BH with ``config_tensors_in_dram`` on chunked timelines (65536 OOMs).
+# 32768 was the prior ceiling; raising ~1.5× cuts late (16–32 ch) chunk counts when the element
+# budget allows interiors above 32768. Override via ``SEAMLESS_VOCODER_CONV1D_MAX_INTERIOR``.
+_VOCODER_CONV1D_MAX_INTERIOR = 49152
 
 # Bucket the upsampled unit length ``t_audio`` to this multiple. The whole vocoder timeline
 # (frame index, duration-expansion mask, HiFi-GAN conv chunking) is shape-specialized by
@@ -62,6 +64,38 @@ _VOCODER_CONV1D_MAX_INTERIOR = 32768
 # end-of-sequence zero padding — and the output is cropped to the real length via ``lengths``, so
 # the valid waveform is unchanged. Cost: a few % extra conv work on the padding.
 _VOCODER_TAUDIO_BUCKET = 256
+
+
+def _vocoder_conv1d_max_interior() -> int:
+    raw = os.environ.get("SEAMLESS_VOCODER_CONV1D_MAX_INTERIOR")
+    if raw is not None:
+        return max(_VOCODER_CONV1D_INTERIOR, int(raw))
+    return _VOCODER_CONV1D_MAX_INTERIOR
+
+
+def _vocoder_conv1d_elem_budget() -> int:
+    raw = os.environ.get("SEAMLESS_VOCODER_CONV1D_ELEM_BUDGET")
+    if raw is not None:
+        return max(_VOCODER_CONV1D_ELEM_BUDGET, int(raw))
+    return _VOCODER_CONV1D_ELEM_BUDGET
+
+
+def _vocoder_conv1d_chunk_interior(in_channels: int) -> int:
+    """Tile-aligned interior rows for one HiFi-GAN conv1d chunk (channel-aware element budget)."""
+    c = max(1, int(in_channels))
+    interior = (_vocoder_conv1d_elem_budget() // c // 32) * 32
+    return max(_VOCODER_CONV1D_INTERIOR, min(_vocoder_conv1d_max_interior(), interior))
+
+
+def _vocoder_conv1d_prep_length(timeline_length: int, *, in_channels: int, padding: int) -> Tuple[int, bool]:
+    """Return ``(conv input_width, timeline_chunked)`` for prepare/forward on a long mel timeline."""
+    seq = int(timeline_length)
+    if seq <= _HIFIGAN_MAX_CONV1D_TLEN:
+        return seq, False
+    fixed_in = _vocoder_conv1d_chunk_interior(in_channels) + 2 * int(padding)
+    if seq <= fixed_in:
+        return seq, True
+    return fixed_in, True
 
 
 def _vocoder_dram_slice_count(input_length: int) -> int:
@@ -184,6 +218,7 @@ def _vocoder_conv1d_config(
     input_length: int,
     in_channels: int,
     shard_layout: Optional[ttnn.TensorMemoryLayout] = None,
+    timeline_chunked: bool = False,
 ) -> ttnn.Conv1dConfig:
     # Match T2U conv1d L1 recipe: deallocate activations and cap act block height on long/wide ops.
     conv_kwargs: dict = dict(
@@ -197,6 +232,11 @@ def _vocoder_conv1d_config(
         conv_kwargs["activation"] = fused_post_activation
     if int(input_length) > 64 or int(in_channels) >= 512:
         conv_kwargs["act_block_h_override"] = 32
+    # Chunked HiFi-GAN timelines: spill conv indices to DRAM (frees L1_SMALL for wider interiors)
+    # and emit ROW_MAJOR activations so chunk stitch avoids per-chunk untilize/tilize (vocoder5 TM).
+    if timeline_chunked:
+        conv_kwargs["config_tensors_in_dram"] = True
+        conv_kwargs["output_layout"] = ttnn.ROW_MAJOR_LAYOUT
     return ttnn.Conv1dConfig(**conv_kwargs)
 
 
@@ -430,6 +470,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
         groups: int,
         dilation: int,
         fused_post_activation: Optional[ttnn.UnaryWithParam],
+        timeline_chunked: bool = False,
     ) -> Tuple[Any, ...]:
         return (
             _conv1d_prep_tensor_id(weight),
@@ -443,6 +484,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
             groups,
             dilation,
             _fused_activation_token(fused_post_activation),
+            bool(timeline_chunked),
         )
 
     def _prepare_conv1d_weights_for_prewarm(
@@ -460,13 +502,15 @@ class TTSeamlessM4Tv2CodeHifiGan:
         dilation: int = 1,
         fused_post_activation: Optional[ttnn.UnaryWithParam] = None,
         shard_layout: Optional[ttnn.TensorMemoryLayout] = None,
+        timeline_chunked: bool = False,
     ) -> None:
         """``prepare_conv_*`` + DRAM ``clone`` only — no Conv2d forward (T2U/speech-encoder recipe)."""
+        prep_len, timeline_chunked = _vocoder_conv1d_prep_length(input_length, in_channels=in_channels, padding=padding)
         cache_key = self._conv1d_prep_cache_key(
             weight=weight,
             bias=bias,
             batch=batch,
-            input_length=input_length,
+            input_length=prep_len,
             in_channels=in_channels,
             out_channels=out_channels,
             kernel_size=kernel_size,
@@ -474,12 +518,17 @@ class TTSeamlessM4Tv2CodeHifiGan:
             groups=groups,
             dilation=dilation,
             fused_post_activation=fused_post_activation,
+            timeline_chunked=timeline_chunked,
         )
         if cache_key in self._conv1d_prepared_cache:
             return
 
         conv_config = _vocoder_conv1d_config(
-            fused_post_activation, input_length=input_length, in_channels=in_channels, shard_layout=shard_layout
+            fused_post_activation,
+            input_length=prep_len,
+            in_channels=in_channels,
+            shard_layout=shard_layout,
+            timeline_chunked=timeline_chunked,
         )
         prep_w = ttnn.prepare_conv_weights(
             weight_tensor=weight,
@@ -490,7 +539,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
             out_channels=out_channels,
             batch_size=batch,
             input_height=1,
-            input_width=input_length,
+            input_width=prep_len,
             kernel_size=(1, kernel_size),
             stride=(1, 1),
             padding=(0, padding),
@@ -513,7 +562,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 out_channels=out_channels,
                 batch_size=batch,
                 input_height=1,
-                input_width=input_length,
+                input_width=prep_len,
                 kernel_size=(1, kernel_size),
                 stride=(1, 1),
                 padding=(0, padding),
@@ -654,10 +703,15 @@ class TTSeamlessM4Tv2CodeHifiGan:
         deallocate_input: bool = False,
         use_prepared_weights: bool = True,
         shard_layout: Optional[ttnn.TensorMemoryLayout] = None,
+        timeline_chunked: bool = False,
     ) -> Tuple[ttnn.Tensor, int]:
         """Single-shot ``ttnn.conv1d`` on row-major NLC activations."""
         conv_config = _vocoder_conv1d_config(
-            fused_post_activation, input_length=input_length, in_channels=in_channels, shard_layout=shard_layout
+            fused_post_activation,
+            input_length=input_length,
+            in_channels=in_channels,
+            shard_layout=shard_layout,
+            timeline_chunked=timeline_chunked,
         )
         cache_key = self._conv1d_prep_cache_key(
             weight=weight,
@@ -671,6 +725,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
             groups=groups,
             dilation=dilation,
             fused_post_activation=fused_post_activation,
+            timeline_chunked=timeline_chunked,
         )
         cached = self._conv1d_prepared_cache.get(cache_key) if use_prepared_weights else None
         weight_tensor = cached[0] if cached is not None else weight
@@ -729,6 +784,8 @@ class TTSeamlessM4Tv2CodeHifiGan:
             rm_buf = ttnn.to_layout(x_nlc, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             x_in = rm_buf
 
+        timeline_chunked = seq > _HIFIGAN_MAX_CONV1D_TLEN
+
         # Below this length one conv1d fits BH l1_small (double-buffer off). Only chunk above it.
         if seq <= _HIFIGAN_MAX_CONV1D_TLEN:
             return self._conv1d_run(
@@ -747,15 +804,12 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 fused_post_activation=fused_post_activation,
                 deallocate_input=rm_buf is not None,
                 shard_layout=shard_layout,
+                timeline_chunked=False,
             )
 
         # HF stores symmetric same-padding per layer; that is the overlap needed between chunks.
         halo = int(padding)
-        # Channel-aware interior: low-channel late stages (the bulk of the chunk count) chunk far
-        # wider at the same L1 footprint as the widest conv. Tile-aligned; clamped so the widest
-        # convs are unchanged and the conv1d single-shot row ceiling is respected.
-        interior = (_VOCODER_CONV1D_ELEM_BUDGET // max(1, int(in_channels)) // 32) * 32
-        interior = max(_VOCODER_CONV1D_INTERIOR, min(_VOCODER_CONV1D_MAX_INTERIOR, interior))
+        interior = _vocoder_conv1d_chunk_interior(in_channels)
         fixed_in = interior + 2 * halo
         if seq <= fixed_in:
             return self._conv1d_run(
@@ -774,6 +828,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 fused_post_activation=fused_post_activation,
                 deallocate_input=rm_buf is not None,
                 shard_layout=shard_layout,
+                timeline_chunked=True,
             )
 
         chunks: list[ttnn.Tensor] = []
@@ -817,6 +872,7 @@ class TTSeamlessM4Tv2CodeHifiGan:
                 fused_post_activation=fused_post_activation,
                 deallocate_input=True,
                 shard_layout=shard_layout,
+                timeline_chunked=True,
             )
             out_start = start - in_start
             out_chunk = ttnn.slice(
