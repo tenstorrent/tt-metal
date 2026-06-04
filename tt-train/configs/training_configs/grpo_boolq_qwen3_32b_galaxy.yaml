@@ -1,0 +1,46 @@
+# Qwen3-32B GRPO + FSDP on a 32-card Blackhole galaxy.
+#
+# Run:
+#   python3 boolq_training_example.py --model qwen3 --model_source Qwen/Qwen3-32B \
+#     --config ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/grpo_boolq_qwen3_32b_galaxy.yaml
+#
+# IMPORTANT: this template is NOT runnable yet. The current FSDP path
+# materializes full, replicated parameters on a single chip before sharding
+# (both at model construction and inside ttml.fsdp.fully_shard), so a 32B model
+# does not fit on one Blackhole chip. Running this waits on the lazy/sharded
+# weight-init work tracked in tt-train/docs/FSDP.md. The smaller-model
+# validation config (grpo_boolq_qwen3_fsdp_validate.yaml) exercises the same
+# code path today.
+#
+# Same constraints as the validation config: batch_size and micro_batch_size
+# must be divisible by the fsdp axis size (32); checkpointing disabled.
+
+training_config:
+  optimizer:
+    type: MorehAdamW
+    lr: 5.0e-6
+    beta1: 0.9
+    beta2: 0.99
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    kahan_summation: false
+
+  grpo_config:
+    epsilon: 0.2
+    batch_size: 32
+    micro_batch_size: 32
+    num_iterations: 1
+    gradient_accumulation_steps: 4
+    logging_steps: 1
+    checkpointing: false
+    checkpoint_interval: 5
+    prompts_to_train: 1600
+    temperature: 1.0
+    max_completion_length: 256
+    num_generations: 8
+    warmup_steps: 0
+
+device_config:
+  enable_fsdp: true
+  mesh_shape: [32, 1]

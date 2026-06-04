@@ -358,8 +358,25 @@ class GRPOTrainer:
             autograd_ctx.is_parallelism_context_initialized()
             and autograd_ctx.get_parallelism_context().is_ddp_enabled()
         )
-        dp_mapper: Any = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0) if ddp_enabled else None
-        dp_composer: Any = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0) if ddp_enabled else None
+        # FSDP is configured through a named mesh (axis "fsdp"), opened via
+        # ``ttml.open_device_mesh`` by the completer — not the legacy
+        # parallelism context that DDP uses. When an "fsdp" axis is present the
+        # batch is sliced across the whole mesh (dim 0) exactly like DDP, and
+        # gradients are synchronised with ``ttml.sync_gradients`` over the
+        # ("dp", "fsdp") axes (FSDP-managed params are skipped per-axis because
+        # the FSDP backward hook already reduce-scattered them).
+        mesh = ttml.maybe_mesh()
+        fsdp_enabled: bool = mesh is not None and mesh.has_axis("fsdp") and mesh.axis_size("fsdp") > 1
+        fsdp_sync_axes: Tuple[str, ...] = (
+            tuple(name for name in ("dp", "fsdp") if mesh.has_axis(name) and mesh.axis_size(name) > 1)
+            if mesh is not None
+            else ()
+        )
+        batch_sharded: bool = ddp_enabled or fsdp_enabled
+        dp_mapper: Any = ttml.core.distributed.shard_tensor_to_mesh_mapper(device, 0) if batch_sharded else None
+        dp_composer: Any = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0) if batch_sharded else None
+        if not batch_sharded:
+            num_devices = 1
 
         dataset = self.dataset.select(range(min(grpo_cfg.prompts_to_train, len(self.dataset))))
         prompts = [tokenizer.encode(row["prompt"]) for row in dataset]
@@ -399,14 +416,35 @@ class GRPOTrainer:
             accum_rewards.append(rewards_np)
             accum_completion_lens.extend(len(c) for c in completions_batch)
 
+            _dbg = os.environ.get("GRPO_QWEN_DEBUG")
+
             probs_old_list = []
             tt_model.eval()
+            if _dbg:
+                print(f"[grpo] batch {num_batches}: old-prob (no_grad) pass", flush=True)
             with no_grad():
-                for p, c in iter_micro_batch(prompts_batch, completions_batch, grpo_cfg.micro_batch_size):
+                for oi, (p, c) in enumerate(
+                    iter_micro_batch(prompts_batch, completions_batch, grpo_cfg.micro_batch_size)
+                ):
+                    if _dbg:
+                        print(f"[grpo] old-prob micro-batch {oi}", flush=True)
                     nlog_old, mask = completer.compute_nlog_probs(p, c)
                     nlog_old.set_requires_grad(False)
                     mask.set_requires_grad(False)
                     probs_old_list.append((nlog_old, mask))
+
+            # Clear the autograd graph built by the no-grad old-prob forwards
+            # before the grad pass. ttml's backward() processes every node
+            # accumulated since the last reset; without this, the first
+            # training backward would also traverse the old-prob forwards'
+            # nodes. That is harmless for plain models, but FSDP installs
+            # autograd-callback nodes (backward_pre/backward_post) on every
+            # forward, and firing those stale callbacks on already-resharded
+            # modules reduce-scatters/gathers against freed buffers. The
+            # detached old-prob log-prob values live on their tensor objects
+            # (held in probs_old_list) and survive the reset.
+            # ttml.autograd.AutoContext.get_instance().reset_graph()
+            # awliu: reset_graph added in failed attempt to find crash which was actually in loss.backwards()
 
             for mini_epoch in range(grpo_cfg.num_iterations):
                 tt_model.train()
@@ -414,6 +452,8 @@ class GRPOTrainer:
                 for i, (p, c) in enumerate(
                     iter_micro_batch(prompts_batch, completions_batch, grpo_cfg.micro_batch_size),
                 ):
+                    if _dbg:
+                        print(f"[grpo] train micro-batch {i}: new-prob forward", flush=True)
                     B = len(c)
                     start_local = (i * grpo_cfg.micro_batch_size) // num_devices
                     end_local = start_local + B // num_devices
@@ -433,8 +473,12 @@ class GRPOTrainer:
                         grpo_cfg.epsilon,
                     )
 
+                    if _dbg:
+                        print(f"[grpo] train micro-batch {i}: backward", flush=True)
                     loss.backward(retain_graph=False)
                     ttml.autograd.AutoContext.get_instance().reset_graph()
+                    if _dbg:
+                        print(f"[grpo] train micro-batch {i}: backward done", flush=True)
 
                     _deallocate_tensors([nlog_probs_new, mask_new, adv_ttml, loss])
 
@@ -446,7 +490,9 @@ class GRPOTrainer:
                     )
                     optimizer.set_lr(base_lr * warmup_factor)
 
-                    if ddp_enabled:
+                    if fsdp_enabled:
+                        ttml.sync_gradients(tt_model.parameters(), axis_names=fsdp_sync_axes)
+                    elif ddp_enabled:
                         ttml.core.distributed.synchronize_gradients(tt_model.parameters())
 
                     for cb in self.callbacks:

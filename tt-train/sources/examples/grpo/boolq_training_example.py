@@ -10,11 +10,13 @@ from datetime import datetime, timezone
 
 from datasets import load_dataset
 from transformers import AutoTokenizer
-from ttml.common.config import DeviceConfig, TrainingConfig, get_model_config, load_config
+from ttml.common.config import DeviceConfig, TrainingConfig, TransformerConfig, get_model_config, load_config
 from ttml.common.utils import get_tt_metal_runtime_root
 from ttml.trainers import GRPOTrainer, TrainerCallback, get_grpo_config
 from utils.llama_completer import LlamaCompletionCtx
 from utils.llama_completer import LlamaGRPOCompleter
+from utils.qwen3_completer import Qwen3CompletionCtx
+from utils.qwen3_completer import Qwen3GRPOCompleter
 
 try:
     import wandb
@@ -112,10 +114,44 @@ if __name__ == "__main__":
         choices=["online", "offline", "disabled"],
         help="W&B mode. If unset, uses WANDB_MODE env var or wandb default.",
     )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="llama-1b",
+        choices=["llama-1b", "qwen3"],
+        help="Which model family to train: 'llama-1b' (single device, default) "
+        "or 'qwen3' (ttml Qwen3 sharded with FSDP).",
+    )
+    parser.add_argument(
+        "--model_source",
+        type=str,
+        default=None,
+        help="HuggingFace model ID or local path. Overrides the per-model default " "(qwen3 default: Qwen/Qwen3-0.6B).",
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to the training YAML. Overrides the per-model default config.",
+    )
+    parser.add_argument(
+        "--max_seq_len",
+        type=int,
+        default=2048,
+        help="Max sequence length for the qwen3 path (bounds the generation horizon).",
+    )
     args = parser.parse_args()
 
-    model_id = "meta-llama/Llama-3.2-1B-Instruct"
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    is_qwen3 = args.model == "qwen3"
+
+    if is_qwen3:
+        model_id = args.model_source or "Qwen/Qwen3-0.6B"
+        default_config = "tt-train/configs/training_configs/grpo_boolq_qwen3_fsdp_validate.yaml"
+    else:
+        model_id = args.model_source or "meta-llama/Llama-3.2-1B-Instruct"
+        default_config = "tt-train/configs/training_configs/grpo_boolq_llama_1dev.yaml"
+
+    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
 
     system_prompt = "You are a wordy professor. Explain in 3 long sentences before saying Yes or No."
 
@@ -124,23 +160,33 @@ if __name__ == "__main__":
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Question: {example['question']}? Context: {example['passage']}"},
         ]
+        # Qwen3 tokenizers expose a `enable_thinking` flag; disable it so the
+        # model answers directly instead of emitting a <think> block.
+        template_kwargs = {"enable_thinking": False} if is_qwen3 else {}
         return {
-            "prompt": tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True),
+            "prompt": tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True, **template_kwargs
+            ),
             "answer": "yes" if example["answer"] else "no",
         }
 
     dataset = load_dataset("google/boolq", split="train").shuffle(seed=42).map(format_boolq)
 
     tt_metal_root = get_tt_metal_runtime_root()
-    config_path = os.path.join(
-        tt_metal_root,
-        "tt-train/configs/training_configs/grpo_boolq_llama_1dev.yaml",
-    )
+    config_path = args.config or os.path.join(tt_metal_root, default_config)
     raw = load_config(config_path)
     training_config = TrainingConfig(raw)
     device_config = DeviceConfig(raw)
-    assert training_config.model_config, "training_config.model_config must be set"
-    transformer_config = get_model_config(training_config.model_config)
+    if is_qwen3:
+        # Qwen3 architecture is read from the HF config inside the completer;
+        # only max_sequence_length is consulted here (to bound generation).
+        if training_config.model_config:
+            transformer_config = get_model_config(training_config.model_config)
+        else:
+            transformer_config = TransformerConfig({"transformer_config": {"max_sequence_length": args.max_seq_len}})
+    else:
+        assert training_config.model_config, "training_config.model_config must be set"
+        transformer_config = get_model_config(training_config.model_config)
     optimizer_dict = raw["training_config"]["optimizer"]
 
     output_dir = os.path.join(
@@ -171,16 +217,28 @@ if __name__ == "__main__":
             wandb_enabled = True
             print(f"   - W&B logging enabled (project={args.wandb_project}, run={args.wandb_run_name or '<auto>'})")
 
-    completer = LlamaGRPOCompleter(
-        ctx=LlamaCompletionCtx(
-            max_tokens_to_complete=grpo_config.max_completion_length,
-            temperature=grpo_config.temperature,
-            completions_per_prompt=grpo_config.num_generations,
-        ),
-        transformer_config=transformer_config,
-        device_config=device_config,
-        model_source=model_id,
-    )
+    if is_qwen3:
+        completer = Qwen3GRPOCompleter(
+            ctx=Qwen3CompletionCtx(
+                max_tokens_to_complete=grpo_config.max_completion_length,
+                temperature=grpo_config.temperature,
+                completions_per_prompt=grpo_config.num_generations,
+            ),
+            transformer_config=transformer_config,
+            device_config=device_config,
+            model_source=model_id,
+        )
+    else:
+        completer = LlamaGRPOCompleter(
+            ctx=LlamaCompletionCtx(
+                max_tokens_to_complete=grpo_config.max_completion_length,
+                temperature=grpo_config.temperature,
+                completions_per_prompt=grpo_config.num_generations,
+            ),
+            transformer_config=transformer_config,
+            device_config=device_config,
+            model_source=model_id,
+        )
 
     grpo_trainer = GRPOTrainer(
         completer=completer,
@@ -192,3 +250,4 @@ if __name__ == "__main__":
         model_source=model_id,
     )
     grpo_trainer.train()
+    print("SCRIPT COMPLETE")

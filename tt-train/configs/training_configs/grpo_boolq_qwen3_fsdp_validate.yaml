@@ -1,0 +1,47 @@
+# Qwen3 GRPO + FSDP validation config.
+#
+# Shards a SMALL Qwen3 (default Qwen/Qwen3-0.6B, overridable via --model_source)
+# across all 32 Blackhole cards of a galaxy with FSDP. This exercises the exact
+# sharding/grad-sync path the 32B run will use, on a model that still fits
+# replicated on a single chip (so it works without the lazy/sharded-init work).
+#
+# Run:
+#   python3 boolq_training_example.py --model qwen3 \
+#     --config ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/grpo_boolq_qwen3_fsdp_validate.yaml
+#
+# Notes:
+#   - batch_size must be divisible by the fsdp axis size (32): GRPO groups
+#     (one per prompt) cannot straddle devices.
+#   - micro_batch_size must be divisible by 32 as well (per-device slicing).
+#   - checkpointing is disabled: the GRPO checkpoint format would persist
+#     per-rank FSDP shards rather than full tensors.
+
+training_config:
+  optimizer:
+    type: MorehAdamW
+    lr: 5.0e-6
+    beta1: 0.9
+    beta2: 0.99
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    kahan_summation: false
+
+  grpo_config:
+    epsilon: 0.2
+    batch_size: 32
+    micro_batch_size: 32
+    num_iterations: 1
+    gradient_accumulation_steps: 1
+    logging_steps: 1
+    checkpointing: false
+    checkpoint_interval: 5
+    prompts_to_train: 1600 # 64
+    temperature: 1.0
+    max_completion_length: 256 # 32
+    num_generations: 8
+    warmup_steps: 0
+
+device_config:
+  enable_fsdp: true
+  mesh_shape: [32, 1]

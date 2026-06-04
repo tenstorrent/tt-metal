@@ -1,0 +1,36 @@
+# Single BH Galaxy exposed as a 1-D [32, 1] mesh for pure FSDP.
+#
+# A BH galaxy is physically 8x4 = 32 chips. This descriptor presents those 32
+# chips as a single 1-D axis of length 32 (RING) so that ttml's FSDP path can
+# shard / all-gather / reduce-scatter parameters across ALL 32 devices on one
+# axis named "fsdp" (config: enable_fsdp: true, mesh_shape: [32, 1]).
+#
+# Use with:
+#   export TT_MESH_GRAPH_DESC_PATH=.../single_bh_galaxy_32x1_fsdp_mesh_graph_descriptor.textproto
+# and a config whose device_topology dims match exactly: mesh_shape: [32, 1].
+
+# --- Meshes ---------------------------------------------------------------
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 32, 1 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Pinnings ---------------------------------------------------------------
+
+pinnings {
+  logical_fabric_node_id {
+    mesh_id: 0
+    chip_id: 0
+  }
+  physical_asic_position {
+    tray_id: 1
+    asic_location: 1
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

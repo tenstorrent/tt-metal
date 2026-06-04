@@ -42,6 +42,7 @@ Contract:
 
 from __future__ import annotations
 
+import os
 import warnings
 from enum import Enum
 from typing import Any, Callable, List, Literal, Optional, Tuple, Union
@@ -50,6 +51,11 @@ import ttnn
 
 import ttml
 from ttml.modules import AbstractModuleBase
+
+# Set TTML_FSDP_TRACE=1 to print every gather/reshard/reduce-scatter hook with
+# the owning module name and managed-param shapes. Useful for diagnosing
+# backward re-gather ordering issues with reshard_after_forward=True.
+_FSDP_TRACE = os.environ.get("TTML_FSDP_TRACE", "0") == "1"
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +137,11 @@ class FSDPState:
         self.reshard_after_forward = reshard_after_forward
         self.sharded_state = _ShardedState.SHARDED
 
+        try:
+            self._name = module.get_name()
+        except Exception:  # noqa: BLE001
+            self._name = type(module).__name__
+
         # Each entry: (param_autograd_tensor, shard_dim). We keep order stable
         # across unshard/reshard so reducing/gathering pairs line up.
         self.managed: List[Tuple[Any, int]] = []
@@ -145,12 +156,26 @@ class FSDPState:
     def add_managed_param(self, autograd_tensor: Any, shard_dim: int) -> None:
         self.managed.append((autograd_tensor, shard_dim))
 
+    def _trace(self, action: str) -> None:
+        if not _FSDP_TRACE:
+            return
+        try:
+            shapes = [list(p.shape()) for p, _ in self.managed[:2]]
+        except Exception:  # noqa: BLE001
+            shapes = []
+        print(
+            f"[fsdp] {action:<14} module={self._name} state={self.sharded_state.name} "
+            f"nparams={len(self.managed)} shapes(head)={shapes}",
+            flush=True,
+        )
+
     # -- forward hooks -------------------------------------------------------
 
     def pre_forward(self) -> None:
         """Gather sharded parameters into their full form (idempotent)."""
         if self.sharded_state == _ShardedState.UNSHARDED:
             return
+        self._trace("pre_forward")
         self._gather_all_params()
         self.sharded_state = _ShardedState.UNSHARDED
 
@@ -164,6 +189,7 @@ class FSDPState:
             return
         if self.sharded_state == _ShardedState.SHARDED:
             return
+        self._trace("post_forward")
         self._reshard_all_params()
         self.sharded_state = _ShardedState.SHARDED
 
@@ -189,11 +215,14 @@ class FSDPState:
            so we all-gather the shard grad here.
 
         """
+        self._trace("backward_pre")
         if self.sharded_state == _ShardedState.SHARDED:
             self._gather_all_params()
             self.sharded_state = _ShardedState.UNSHARDED
 
         self._gather_accumulated_grads()
+        if _FSDP_TRACE:
+            print(f"[fsdp] backward_pre   done module={self._name} (closures run next)", flush=True)
 
     def backward_post(self) -> None:
         """Called after all of the module's internal backward closures have run.
@@ -204,6 +233,7 @@ class FSDPState:
         restore the sharded m_value (in that order, so ``set_grad``'s shape
         check sees the shard-shaped m_value).
         """
+        self._trace("backward_post")
         for param_tensor, shard_dim in self.managed:
             if not param_tensor.is_grad_initialized():
                 continue
@@ -246,11 +276,19 @@ class FSDPState:
         Does NOT touch ``m_grad`` — grad reshaping lives in
         ``_gather_accumulated_grads`` and ``backward_post``.
         """
-        for param_tensor, shard_dim in self.managed:
+        for idx, (param_tensor, shard_dim) in enumerate(self.managed):
             current = param_tensor.get_value()
             self._cached_shards[id(param_tensor)] = current
+            if _FSDP_TRACE:
+                print(
+                    f"[fsdp]   gather[{idx}] module={self._name} shard_dim={shard_dim} "
+                    f"shard_shape={list(param_tensor.shape())}",
+                    flush=True,
+                )
             gathered = ttml.core.distributed.all_gather(current, shard_dim, self.axis_index)
             param_tensor.set_value(gathered)
+            if _FSDP_TRACE:
+                print(f"[fsdp]   gather[{idx}] done full_shape={list(param_tensor.shape())}", flush=True)
 
     def _gather_accumulated_grads(self) -> None:
         """All-gather any managed param ``m_grad`` that survived from a prior
