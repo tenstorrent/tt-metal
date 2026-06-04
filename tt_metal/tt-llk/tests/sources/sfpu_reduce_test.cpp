@@ -92,7 +92,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                     "Block tile index exceeds maximum destination tiles");
                 _llk_math_eltwise_sfpu_start_(tile);
-                ckernel::sfpu::_calculate_reduce_<POOL_TYPE, REDUCE_DIM, static_cast<DataFormat>(formats.math), is_fp32_dest_acc_en>();
+                ckernel::sfpu::_calculate_reduce_<
+                    POOL_TYPE,
+                    REDUCE_DIM,
+                    static_cast<DataFormat>(formats.math),
+                    is_fp32_dest_acc_en,
+                    static_cast<DataFormat>(formats.pack_dst)>();
             }
 
             _llk_math_eltwise_sfpu_done_();
@@ -114,7 +119,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         _llk_math_eltwise_sfpu_start_(0);
-        ckernel::sfpu::_calculate_reduce_<POOL_TYPE, REDUCE_DIM, static_cast<DataFormat>(formats.math), is_fp32_dest_acc_en>(BLOCK_CT_DIM, BLOCK_RT_DIM);
+        ckernel::sfpu::
+            _calculate_reduce_<POOL_TYPE, REDUCE_DIM, static_cast<DataFormat>(formats.math), is_fp32_dest_acc_en, static_cast<DataFormat>(formats.pack_dst)>(
+                BLOCK_CT_DIM, BLOCK_RT_DIM);
 
 #ifdef ADD_TOP_ROW
         _llk_math_eltwise_binary_sfpu_init_<SfpuType::add_top_row>();

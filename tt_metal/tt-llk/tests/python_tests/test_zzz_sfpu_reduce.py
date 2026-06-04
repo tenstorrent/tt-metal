@@ -69,12 +69,12 @@ def get_reduce_formats(reduce_pool: ReducePool) -> list[InputOutputFormat]:
     A reduce-sum accumulates many input values into a single output element and
     can exceed the 16-bit range (e.g. a 128-wide row sum of values up to ~1000
     reaches ~128k), which would silently wrap a UInt16 output. To keep the full
-    sum we run Sum with a 32-bit (UInt32) dest type. Min/Max/Average reduce at
-    most 32 values per output column and therefore cannot overflow the 16-bit
-    output, so they use UInt16.
+    sum we keep UInt16 inputs but widen only the output to UInt32. Min/Max/Average
+    reduce at most 32 values per output column and therefore cannot overflow the
+    16-bit output, so they stay UInt16 on both sides.
     """
     if reduce_pool == ReducePool.Sum:
-        return input_output_formats([DataFormat.UInt32], same=True)
+        return [InputOutputFormat(DataFormat.UInt16, DataFormat.UInt32)]
     return input_output_formats([DataFormat.UInt16], same=True)
 
 

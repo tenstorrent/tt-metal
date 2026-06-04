@@ -168,7 +168,7 @@ inline void perform_float_average()
     TTI_SFPMUL(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
 }
 
-template <PoolType pool_type, InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits>
+template <PoolType pool_type, InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16>
 inline void perform_reduce_col_sum_avg()
 {
     // Determine if integer or float mode at compile time
@@ -228,9 +228,11 @@ inline void perform_reduce_col_sum_avg()
             }
         }
         // Store the final column sum/average to the first row.
-        // For UInt16 in 32-bit dest the value is in the low 16 bits of the LREG but the packer reads
-        // the high 16 bits, so use SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16) for the packer-visible store.
-        constexpr std::uint32_t STORE_MODE = clear_high_bits ? 9 /* SFPSTORE_MOD0_FMT_LO16 */ : INSTRUCTION_MODE;
+        // Mode 9 (SFPSTORE_MOD0_FMT_LO16) is only needed when the packer-visible OUTPUT is UInt16 in a
+        // 32-bit dest: there the reduced value sits in the low 16 bits but the packer reads the high 16,
+        // so we move low->high. When the output is a full 32-bit format (e.g. UInt32) the packer reads
+        // the whole dest word, so we use the plain INSTRUCTION_MODE store even for UInt16 input.
+        constexpr std::uint32_t STORE_MODE = pack_low16 ? 9 /* SFPSTORE_MOD0_FMT_LO16 */ : INSTRUCTION_MODE;
         TTI_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_7, upper_face_addr + column_offset);
     }
 }
@@ -667,7 +669,7 @@ inline void perform_reduce_row_sum_tile(std::uint32_t tile_row_offset, std::uint
  * @param tile_row_base Base address of the first tile in this row of tiles
  * @param block_ct_dim Number of tiles along x axis of tensor (column tiles)
  */
-template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits>
+template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16>
 inline void sum_first_columns_across_tiles(std::uint32_t tile_row_base, std::uint32_t block_ct_dim)
 {
     constexpr bool is_integer_mode =
@@ -714,9 +716,10 @@ inline void sum_first_columns_across_tiles(std::uint32_t tile_row_base, std::uin
             }
         }
 
-        // Store LREG0-3 back to tile 0. This is the final, packer-visible result so for UInt16 in
-        // 32-bit dest it must go through SFPSTORE mode 9 (SFPSTORE_MOD0_FMT_LO16).
-        constexpr std::uint32_t STORE_MODE = clear_high_bits ? 9 /* SFPSTORE_MOD0_FMT_LO16 */ : INSTRUCTION_MODE;
+        // Store LREG0-3 back to tile 0. This is the final, packer-visible result, so it uses mode 9
+        // (SFPSTORE_MOD0_FMT_LO16) only when the OUTPUT is UInt16 in a 32-bit dest (packer reads the
+        // high 16 bits); a 32-bit output (e.g. UInt32) is stored with the plain INSTRUCTION_MODE.
+        constexpr std::uint32_t STORE_MODE = pack_low16 ? 9 /* SFPSTORE_MOD0_FMT_LO16 */ : INSTRUCTION_MODE;
         TT_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 0]);
         TT_SFPSTORE(p_sfpu::LREG1, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 1]);
         TT_SFPSTORE(p_sfpu::LREG2, STORE_MODE, ADDR_MOD_7, tile_row_base + RESULT_ROWS[base_idx + 2]);
@@ -724,14 +727,14 @@ inline void sum_first_columns_across_tiles(std::uint32_t tile_row_base, std::uin
     }
 }
 
-template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits>
+template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16>
 inline void perform_reduce_row_sum(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim)
 {
     // When there is a single column tile, the per-tile store is the final packer-visible result and must
-    // use mode 9 for UInt16 in 32-bit dest. With multiple column tiles the per-tile store is intermediate
-    // (re-loaded by sum_first_columns_across_tiles), so it must stay in the low 16 bits.
-    const std::uint32_t tile_store_mode =
-        (clear_high_bits && block_ct_dim == 1) ? 9u /* SFPSTORE_MOD0_FMT_LO16 */ : static_cast<std::uint32_t>(INSTRUCTION_MODE);
+    // use mode 9 only when the OUTPUT is UInt16 in a 32-bit dest (pack_low16). With multiple column tiles
+    // the per-tile store is intermediate (re-loaded by sum_first_columns_across_tiles) and must stay in the
+    // low 16 bits via INSTRUCTION_MODE; the final mode-9 (if any) is applied by the cross-tile store.
+    const std::uint32_t tile_store_mode = (pack_low16 && block_ct_dim == 1) ? 9u /* SFPSTORE_MOD0_FMT_LO16 */ : static_cast<std::uint32_t>(INSTRUCTION_MODE);
 
     for (std::uint32_t i = 0; i < block_rt_dim; i++)
     {
@@ -747,7 +750,7 @@ inline void perform_reduce_row_sum(std::uint32_t block_ct_dim, std::uint32_t blo
         // Step 2: Sum column 0 from all tiles in this row into tile 0's column 0
         if (block_ct_dim > 1)
         {
-            sum_first_columns_across_tiles<INSTRUCTION_MODE, clear_high_bits>(tile_row_offset, block_ct_dim);
+            sum_first_columns_across_tiles<INSTRUCTION_MODE, clear_high_bits, pack_low16>(tile_row_offset, block_ct_dim);
         }
     }
 }
@@ -1207,7 +1210,7 @@ inline void calculate_reduce_max_min(const std::uint32_t block_height)
  * @tparam reduce_dim The reduction dimension (currently only REDUCE_COL is supported)
  * @tparam INSTRUCTION_MODE The instruction mode for integer and float formats: INT32, INT32_2S_COMP, LO16, DEFAULT (FP32, FP16B)
  */
-template <PoolType pool_type, ReduceDim reduce_dim, InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits>
+template <PoolType pool_type, ReduceDim reduce_dim, InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool pack_low16>
 inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t block_rt_dim)
 {
     // Compile-time assertions to restrict to currently supported operations
@@ -1224,12 +1227,12 @@ inline void calculate_reduce_sum_avg(std::uint32_t block_ct_dim, std::uint32_t b
 
     if constexpr (reduce_dim == ReduceDim::REDUCE_COL)
     {
-        perform_reduce_col_sum_avg<pool_type, INSTRUCTION_MODE, clear_high_bits>();
+        perform_reduce_col_sum_avg<pool_type, INSTRUCTION_MODE, clear_high_bits, pack_low16>();
     }
     else
     {
         static_assert(pool_type == PoolType::SUM, "Row reduction (REDUCE_ROW) is allowed only for SUM");
-        perform_reduce_row_sum<INSTRUCTION_MODE, clear_high_bits>(block_ct_dim, block_rt_dim);
+        perform_reduce_row_sum<INSTRUCTION_MODE, clear_high_bits, pack_low16>(block_ct_dim, block_rt_dim);
     }
     // For column reductions: sums are stored horizontally in the first row of tensor in dest reg
     // For row reductions: sums are stored vertically in the first column of tensor in dest reg
@@ -1301,11 +1304,16 @@ inline void _init_reduce_(std::uint32_t block_ct_dim = 1)
  *        Determines the instruction mode from format, then dispatches to the appropriate reduction kernel.
  * @tparam pool_type The reduction operation, currently supported: (SUM, AVG, MAX, MIN)
  * @tparam reduce_dim The reduction dimension: REDUCE_COL for column-wise, REDUCE_ROW for row-wise (MAX only, FP32/Int32).
- * @tparam format The data format, currently supported: (Int32, UInt32, UInt16, Float32, Float16_b)
+ * @tparam format The INPUT data format, currently supported: (Int32, UInt32, UInt16, Float32, Float16_b). Drives the
+ *         instruction mode and load-time high-bit masking.
+ * @tparam output_format The packer-visible OUTPUT data format (defaults to @p format). Drives the final store mode:
+ *         UInt16 output in a 32-bit dest is stored via mode 9 (low->high 16-bit swap), while a 32-bit output (e.g.
+ *         UInt32) is stored with the plain instruction mode. This lets UInt16 input be summed into a UInt32 output
+ *         without overflow.
  * @param block_ct_dim Block dimension (used for SUM/AVG column reduction to specify number of columns, default is 1 for single tile)
  * @param block_rt_dim Block dimension (used for MAX/MIN reduction to specify block height, or SUM/MAX row reduction; default is 1 for single tile)
  */
-template <PoolType pool_type, ReduceDim reduce_dim, DataFormat format, bool is_fp32_dest_acc_en>
+template <PoolType pool_type, ReduceDim reduce_dim, DataFormat format, bool is_fp32_dest_acc_en, DataFormat output_format = format>
 inline void _calculate_reduce_(std::uint32_t block_ct_dim = 1, std::uint32_t block_rt_dim = 1)
 {
     static_assert(
@@ -1323,8 +1331,13 @@ inline void _calculate_reduce_(std::uint32_t block_ct_dim = 1, std::uint32_t blo
             ? InstrModLoadStore::INT32_2S_COMP
             : GetSfpLoadStoreInstrMod<format, is_fp32_dest_acc_en>();
 
-    // Garbage high bits needs to be cleared when loading UInt16 data
+    // Garbage high bits needs to be cleared when loading UInt16 data (driven by INPUT format).
     constexpr bool clear_high_bits = (is_fp32_dest_acc_en && format == DataFormat::UInt16);
+
+    // The packer-visible result must go through mode-9 (low->high 16-bit) store only when the OUTPUT is UInt16
+    // in a 32-bit dest. A 32-bit output (e.g. UInt32) keeps the full word, so it uses the plain store. This is
+    // driven by the OUTPUT format and is independent of the load-time masking above.
+    constexpr bool pack_low16 = (is_fp32_dest_acc_en && output_format == DataFormat::UInt16);
 
     // Dispatch to appropriate reduction kernel based on PoolType
     if constexpr (pool_type == PoolType::MAX || pool_type == PoolType::MIN)
@@ -1353,7 +1366,7 @@ inline void _calculate_reduce_(std::uint32_t block_ct_dim = 1, std::uint32_t blo
     }
     else if constexpr (pool_type == PoolType::SUM || pool_type == PoolType::AVG)
     {
-        calculate_reduce_sum_avg<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits>(block_ct_dim, block_rt_dim);
+        calculate_reduce_sum_avg<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16>(block_ct_dim, block_rt_dim);
     }
     else
     {
