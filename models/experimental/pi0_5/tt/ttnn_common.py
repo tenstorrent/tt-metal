@@ -138,15 +138,38 @@ def sdpa_prefill_chunk_sizes(
     only for long sequences (>= 2048), otherwise 64 — then cap by tile-aligned lengths.
     """
     longest = max(seq_len_q, seq_len_kv)
-    # For pi0 the expert cross-attention has kv=595, prefix self-attn has kv=544
-    # — both fall in the 512-2048 band where a larger k_chunk drastically reduces
-    # the number of SDPA chunks (e.g. 595 / 64 = 10 chunks vs 595 / 256 = 3).
-    if longest >= 2048:
-        base_q, base_k = 256, 256
-    elif longest >= 512:
-        base_q, base_k = 64, 128
+    # Bands tuned via tests/perf/test_sdpa_all_shapes_sweep.py +
+    # tracy device-kernel verification on test_perf_ttnn_full_e2e.py:
+    # - longest>=2048: base=256/256 (long context, lots of chunks anyway)
+    # - longest>=512:  base=64/128  (VLM-prefill Sq=Skv=512: wall-clock sweep
+    #                                predicted q=128 best, but tracy showed
+    #                                q=128 REGRESSED by +13 µs/call vs q=64.
+    #                                Wall-clock at this shape is dispatch-
+    #                                dominated and unreliable as a proxy.)
+    # - longest>=128:  base=64/256  (SigLIP Sq=Skv=256 wants single-chunk K.
+    #                                At Skv=256, k=256 means 1 chunk vs 4 with
+    #                                the prior k=64. Tracy-verified -8 µs/call
+    #                                (-39%, -0.217 ms over 27 calls).)
+    # - else:          base=64/64   (very short — preserve original behavior)
+    # PI0_SDPA_LEGACY_BANDS=1 reverts to pre-2026-06-04 bands for A/B.
+    import os as _os
+
+    if _os.environ.get("PI0_SDPA_LEGACY_BANDS", "").lower() in ("1", "true", "yes", "on"):
+        if longest >= 2048:
+            base_q, base_k = 256, 256
+        elif longest >= 512:
+            base_q, base_k = 64, 128
+        else:
+            base_q, base_k = 64, 64
     else:
-        base_q, base_k = 64, 64
+        if longest >= 2048:
+            base_q, base_k = 256, 256
+        elif longest >= 512:
+            base_q, base_k = 64, 128
+        elif longest >= 128:
+            base_q, base_k = 64, 256
+        else:
+            base_q, base_k = 64, 64
     q_aligned = ((seq_len_q + tile - 1) // tile) * tile if seq_len_q > 0 else tile
     k_aligned = ((seq_len_kv + tile - 1) // tile) * tile if seq_len_kv > 0 else tile
     q_chunk = min(base_q, q_aligned)
