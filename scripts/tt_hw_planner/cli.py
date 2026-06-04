@@ -7297,7 +7297,11 @@ def _native_directive(forbidden_excerpt: str = "", *, strict_native: bool = Fals
     )
 
 
-from ._cli_helpers.auto_iterate import _run_auto_iterate_loop  # noqa: F401
+from ._cli_helpers.auto_iterate import (  # noqa: F401
+    _run_auto_iterate_loop,
+    add_iter_loop_cli_args,
+    iter_loop_kwargs_from,
+)
 
 
 _DEVICE_RESET_COUNT: int = 0
@@ -10116,17 +10120,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         ),
     )
     pup.add_argument(
-        "--auto-model-super-heavy",
-        default=None,
-        help=(
-            "Tiered mode: model alias for the THIRD tier — fires when the "
-            "heavy tier (sonnet) has plateaued (attempts ≥ 5 OR consecutive "
-            "same-class failures ≥ 3). Default for claude under "
-            "--auto-model-tiered is 'opus'. Set this explicitly to override "
-            "or to enable super_heavy when not using --auto-model-tiered."
-        ),
-    )
-    pup.add_argument(
         "--auto-model-tiered",
         action="store_true",
         help=(
@@ -10161,31 +10154,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             "spends all its iterations on a single hopeless component, and "
             "the demo always converges to an end-to-end-running state "
             "(mix of native TTNN + CPU fallback) within --auto-max-iters."
-        ),
-    )
-    pup.add_argument(
-        "--parallel-agents",
-        type=int,
-        default=6,
-        help=(
-            "Number of LLM agents to run concurrently per iter (default: 6). "
-            "The loop picks N distinct ungraduated components, builds a "
-            "prompt for each, and spawns N concurrent agent calls in the "
-            "same worktree. After all return, the loop continues with the "
-            "normal apply + validation sweep. Pass 1 for legacy serial "
-            "behaviour. Past 6, prompts begin to dilute and concurrent "
-            "Anthropic API calls risk rate-limit throttling."
-        ),
-    )
-    pup.add_argument(
-        "--auto-only-component",
-        default=None,
-        help=(
-            "Sandbox: restrict the auto-iterate loop to a single component "
-            "name (e.g. `vision_neck`). All other failed components are "
-            "ignored for the duration of the run. Useful for cheap A/B "
-            "tests of prompt-enrichment changes on one stuck component "
-            "before committing to a multi-component run."
         ),
     )
     pup.add_argument(
@@ -10227,119 +10195,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         ),
     )
 
-    pup.add_argument(
-        "--strict-pcc",
-        dest="strict_pcc",
-        action="store_true",
-        default=True,
-        help=(
-            "[default ON under --auto] After the fast-path demo "
-            "pytest exits 0, run the same prompt through HF on CPU "
-            "greedy and compare the first N tokens against what the "
-            "TT demo decoded. If the outputs diverge beyond the "
-            "tolerance, the run is demoted to FAIL (rc=17) instead "
-            "of false-greenly reporting SUCCESS. With --auto, the "
-            "mismatch is also fed back into the LLM repair loop so "
-            "the planner can attempt to converge to a real working "
-            "model."
-        ),
-    )
-    pup.add_argument(
-        "--no-strict-pcc",
-        dest="strict_pcc",
-        action="store_false",
-        help=(
-            "Disable the PCC gate. Useful for very large models "
-            "(70 B+) where HF CPU reference inference takes longer "
-            "than the user is willing to wait, or for models without "
-            "a usable HF mirror (e.g. local fine-tunes). When "
-            "disabled, the planner trusts pytest's exit code alone, "
-            "which restores the pre-2026-05-23 'false green' "
-            "behaviour."
-        ),
-    )
-    pup.add_argument(
-        "--escalate-on-pcc-fail",
-        dest="escalate_on_pcc_fail",
-        action="store_true",
-        default=True,
-        help=(
-            "[default ON under --auto] When the ALREADY-SUPPORTED fast "
-            "path passes pytest but fails the PCC gate (i.e. wrong "
-            "routing produced a false-green before this guard fired), "
-            "automatically invoke `auto-onboard --accept` to draft a "
-            "new FamilyBackend for the model and then re-invoke `up` "
-            "so the scaffold + per-component PCC>=0.99 iterate loop "
-            "engages on hardware. Provides the iteration-to-bringup "
-            "behaviour that the cold-start path already supports."
-        ),
-    )
-    pup.add_argument(
-        "--no-escalate-on-pcc-fail",
-        dest="escalate_on_pcc_fail",
-        action="store_false",
-        help=(
-            "Disable PCC-fail escalation. The PCC gate still fires, "
-            "but a fast-path mismatch just exits with rc=17 instead "
-            "of automatically attempting auto-onboard + scaffold + "
-            "iterate. Useful when you want to inspect the failure "
-            "interactively before letting the agent draft a new "
-            "backend."
-        ),
-    )
-    pup.add_argument(
-        "--strict-pcc-tokens",
-        type=int,
-        default=None,
-        help=(
-            "Number of tokens to compare in the PCC gate (default: "
-            "32; uses output_validation.DEFAULT_COMPARE_TOKENS). "
-            "Lower values make the gate faster but more sensitive to "
-            "noise; higher values are more reliable but cost CPU "
-            "wall-clock per added token (~0.1-2s on a 4-13B model)."
-        ),
-    )
-    pup.add_argument(
-        "--strict-pcc-max-iters",
-        type=int,
-        default=4,
-        help=(
-            "Cap on the PCC-repair loop's iteration count (default: "
-            "4). Each iteration costs one LLM agent call PLUS one "
-            "full demo pytest re-run PLUS one HF CPU reference "
-            "generation; budget accordingly."
-        ),
-    )
+    # Iter-loop CLI flags (--parallel-agents, --auto-only-component,
+    # --strict-pcc{,-max-iters,-tokens}, --escalate-on-pcc-fail,
+    # --no-escalate-on-pcc-fail, --auto-model-super-heavy, --pcc-engine)
+    # are defined by the shared helper so `pup` and `pprom` cannot drift.
+    # See _cli_helpers/auto_iterate.py:add_iter_loop_cli_args for the
+    # canonical list. DO NOT inline these here.
+    from ._cli_helpers.auto_iterate import add_iter_loop_cli_args as _add_iter_loop_cli_args
 
-    pup.add_argument(
-        "--pcc-engine",
-        choices=("legacy", "evidence", "agentic"),
-        default="agentic",
-        help=(
-            "Which correctness-gate engine to use when --strict-pcc "
-            "fires (default: agentic). 'agentic' is the strongest "
-            "engine and the new default as of 2026-05-24: it runs "
-            "the evidence-engine 256-token wide-scan + mid-sequence "
-            "collapse detector (catches medgemma-style 'first N "
-            "tokens fine, then garbage' false-greens that legacy "
-            "32-token window misses) AND drives the per-layer "
-            "agentic probe (HF-vs-TT divergence localization, "
-            "symptom-aware mechanical actions, edit-took-effect "
-            "verification, convergence detection). 'evidence' is "
-            "the same gate but without the agentic repair loop -- "
-            "useful for CI where you want detection but not LLM "
-            "spend. 'legacy' is the pre-2026-05-24 inline 32-token "
-            "gate, preserved for byte-for-byte reproduction of "
-            "older runs but NOT RECOMMENDED for new bring-ups: it "
-            "produced a SUCCESS verdict for medgemma-4b-it whose "
-            "actual output collapsed into asterisks at token ~170. "
-            "The Comparator architecture under 'agentic'/'evidence' "
-            "covers segmentation (IoU/Dice), classification (top-k "
-            "+ KL), ASR (WER), embeddings (cosine), diffusion (SSIM, "
-            "optional LPIPS), detection (greedy bbox match), and "
-            "text (LLM/VLM)."
-        ),
-    )
+    _add_iter_loop_cli_args(pup)
+
     pup.add_argument(
         "--allow-partial-cpu",
         action="store_true",
@@ -10529,6 +10394,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         ),
     )
     pprom.add_argument("model_id", help="HuggingFace model id (must already be bring-up'd via `up`)")
+
+    # Iter-loop CLI flags shared with `pup` — single source of truth.
+    # See _cli_helpers/auto_iterate.py:add_iter_loop_cli_args. Without
+    # this call, promote silently drops --parallel-agents,
+    # --auto-only-component, --auto-model-super-heavy, --strict-pcc,
+    # --escalate-on-pcc-fail, --pcc-engine, etc.
+    _add_iter_loop_cli_args(pprom)
+
     pprom.add_argument(
         "--box",
         default="QB2",

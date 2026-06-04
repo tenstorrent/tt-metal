@@ -12,6 +12,238 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 
+def add_iter_loop_cli_args(parser: argparse.ArgumentParser) -> None:
+    """Single source of truth for CLI flags that configure the auto-iterate
+    loop. Both `pup` (auto-up) and `pprom` (promote) MUST call this so they
+    expose the SAME iter-loop knobs.
+
+    Why this exists: both `up` and `promote` eventually call
+    `_run_auto_iterate_loop`. Before this helper, each command's parser
+    declared its own copy of the iter-loop flags — and they silently
+    drifted. `--parallel-agents` was added to `pup` on 2026-05-27, never
+    mirrored to `pprom`; same story for `--auto-only-component`,
+    `--auto-model-super-heavy`, `--strict-pcc`, `--escalate-on-pcc-fail`,
+    `--pcc-engine`, and others. Result: `promote --auto` was silently
+    running with serial agents + truncated tier ladder while `up --auto`
+    used the configured concurrency / full ladder.
+
+    This helper closes the gap. Adding a NEW iter-loop knob = edit this
+    function ONCE; both commands inherit it. test_invariants.py asserts
+    both parsers are called through this helper.
+
+    NOTE: flags that are stage-specific (pre-iter-loop kernel-sweep,
+    op-synth, decomposition planning under `up`; manual hand-off mode
+    under `promote`) MUST NOT be added here — they stay on the
+    individual parsers.
+    """
+    parser.add_argument(
+        "--auto-model-super-heavy",
+        default=None,
+        help=(
+            "Tiered mode: model alias for the THIRD tier — fires when the "
+            "heavy tier (sonnet) has plateaued (attempts ≥ 5 OR consecutive "
+            "same-class failures ≥ 3). Default for claude under "
+            "--auto-model-tiered is 'opus'. Set this explicitly to override "
+            "or to enable super_heavy when not using --auto-model-tiered."
+        ),
+    )
+    parser.add_argument(
+        "--parallel-agents",
+        type=int,
+        default=6,
+        help=(
+            "Number of LLM agents to run concurrently per iter (default: 6). "
+            "The loop picks N distinct ungraduated components, builds a "
+            "prompt for each, and spawns N concurrent agent calls in the "
+            "same worktree. After all return, the loop continues with the "
+            "normal apply + validation sweep. Pass 1 for legacy serial "
+            "behaviour. Past 6, prompts begin to dilute and concurrent "
+            "Anthropic API calls risk rate-limit throttling."
+        ),
+    )
+    parser.add_argument(
+        "--auto-only-component",
+        default=None,
+        help=(
+            "Sandbox: restrict the auto-iterate loop to a single component "
+            "name (e.g. `vision_neck`). All other failed components are "
+            "ignored for the duration of the run. Useful for cheap A/B "
+            "tests of prompt-enrichment changes on one stuck component "
+            "before committing to a multi-component run."
+        ),
+    )
+    parser.add_argument(
+        "--strict-pcc",
+        dest="strict_pcc",
+        action="store_true",
+        default=True,
+        help=(
+            "[default ON under --auto] After the fast-path demo "
+            "pytest exits 0, run the same prompt through HF on CPU "
+            "greedy and compare the first N tokens against what the "
+            "TT demo decoded. If the outputs diverge beyond the "
+            "tolerance, the run is demoted to FAIL (rc=17) instead "
+            "of false-greenly reporting SUCCESS. With --auto, the "
+            "mismatch is also fed back into the LLM repair loop so "
+            "the planner can attempt to converge to a real working "
+            "model."
+        ),
+    )
+    parser.add_argument(
+        "--no-strict-pcc",
+        dest="strict_pcc",
+        action="store_false",
+        help=(
+            "Disable the PCC gate. Useful for very large models "
+            "(70 B+) where HF CPU reference inference takes longer "
+            "than the user is willing to wait, or for models without "
+            "a usable HF mirror (e.g. local fine-tunes). When "
+            "disabled, the planner trusts pytest's exit code alone, "
+            "which restores the pre-2026-05-23 'false green' "
+            "behaviour."
+        ),
+    )
+    parser.add_argument(
+        "--escalate-on-pcc-fail",
+        dest="escalate_on_pcc_fail",
+        action="store_true",
+        default=True,
+        help=(
+            "[default ON under --auto] When the ALREADY-SUPPORTED fast "
+            "path passes pytest but fails the PCC gate (i.e. wrong "
+            "routing produced a false-green before this guard fired), "
+            "automatically invoke `auto-onboard --accept` to draft a "
+            "new FamilyBackend for the model and then re-invoke `up` "
+            "so the scaffold + per-component PCC>=0.99 iterate loop "
+            "engages on hardware. Provides the iteration-to-bringup "
+            "behaviour that the cold-start path already supports."
+        ),
+    )
+    parser.add_argument(
+        "--no-escalate-on-pcc-fail",
+        dest="escalate_on_pcc_fail",
+        action="store_false",
+        help=(
+            "Disable PCC-fail escalation. The PCC gate still fires, "
+            "but a fast-path mismatch just exits with rc=17 instead "
+            "of automatically attempting auto-onboard + scaffold + "
+            "iterate. Useful when you want to inspect the failure "
+            "interactively before letting the agent draft a new "
+            "backend."
+        ),
+    )
+    parser.add_argument(
+        "--strict-pcc-tokens",
+        type=int,
+        default=None,
+        help=(
+            "Number of tokens to compare in the PCC gate (default: "
+            "32; uses output_validation.DEFAULT_COMPARE_TOKENS). "
+            "Lower values make the gate faster but more sensitive to "
+            "noise; higher values are more reliable but cost CPU "
+            "wall-clock per added token (~0.1-2s on a 4-13B model)."
+        ),
+    )
+    parser.add_argument(
+        "--strict-pcc-max-iters",
+        type=int,
+        default=4,
+        help=(
+            "Cap on the PCC-repair loop's iteration count (default: "
+            "4). Each iteration costs one LLM agent call PLUS one "
+            "full demo pytest re-run PLUS one HF CPU reference "
+            "generation; budget accordingly."
+        ),
+    )
+    parser.add_argument(
+        "--pcc-engine",
+        choices=("legacy", "evidence", "agentic"),
+        default="agentic",
+        help=(
+            "Which correctness-gate engine to use when --strict-pcc "
+            "fires (default: agentic). 'agentic' is the strongest "
+            "engine and the new default as of 2026-05-24: it runs "
+            "the evidence-engine 256-token wide-scan + mid-sequence "
+            "collapse detector (catches medgemma-style 'first N "
+            "tokens fine, then garbage' false-greens that legacy "
+            "32-token window misses) AND drives the per-layer "
+            "agentic probe (HF-vs-TT divergence localization, "
+            "symptom-aware mechanical actions, edit-took-effect "
+            "verification, convergence detection). 'evidence' is "
+            "the same gate but without the agentic repair loop -- "
+            "useful for CI where you want detection but not LLM "
+            "spend. 'legacy' is the pre-2026-05-24 inline 32-token "
+            "gate, preserved for byte-for-byte reproduction of "
+            "older runs but NOT RECOMMENDED for new bring-ups."
+        ),
+    )
+
+
+def iter_loop_kwargs_from(
+    args: argparse.Namespace,
+    *,
+    MODEL: str,
+    BOX: str,
+    demo_dir: Path,
+    sep: str,
+    target_components: List[str],
+    provider: Optional[str],
+    agent_bin: Optional[str],
+    model: Optional[str],
+    model_light: Optional[str],
+    model_heavy: Optional[str],
+    model_super_heavy: Optional[str],
+) -> Dict[str, Any]:
+    """Single source of truth for the kwarg dict forwarded into
+    `_run_auto_iterate_loop`. Both `cmd_up` (auto-up's iter-loop call
+    site at cli.py:_cmd_up_core) and `cmd_promote` MUST use this so
+    every iter-loop knob the CLI accepts is actually plumbed through.
+
+    The CLI-derived knobs come from `args` via getattr (defaults match
+    the helper's argparse defaults). Per-call-site values that aren't
+    on the command line (MODEL, demo_dir, agent resolution, etc.) are
+    accepted as explicit keyword arguments.
+
+    test_invariants.py asserts the keys returned here match the
+    keyword-only parameters of `_run_auto_iterate_loop`. Adding a new
+    iter-loop param to the function = add it here too, or the test
+    fails loudly.
+    """
+    return dict(
+        MODEL=MODEL,
+        BOX=BOX,
+        demo_dir=demo_dir,
+        sep=sep,
+        target_components=target_components,
+        provider=provider,
+        agent_bin=agent_bin,
+        model=model,
+        model_light=model_light,
+        model_heavy=model_heavy,
+        model_super_heavy=model_super_heavy,
+        mesh=getattr(args, "mesh", None),
+        dtype=getattr(args, "dtype", None),
+        batch=getattr(args, "batch", 1),
+        max_seq_len=getattr(args, "max_seq_len", 1024),
+        max_generated_tokens=getattr(args, "max_generated_tokens", 200),
+        accuracy=getattr(args, "accuracy", False),
+        no_trace=getattr(args, "no_trace", False),
+        no_paged_attention=getattr(args, "no_paged_attention", False),
+        no_instruct=getattr(args, "no_instruct", False),
+        download_first=getattr(args, "download_first", False),
+        strict=getattr(args, "strict", False),
+        strict_native=True,
+        max_iters=getattr(args, "auto_max_iters", 5),
+        max_attempts_per_component=getattr(args, "auto_max_attempts_per_component", 5),
+        agent_timeout_s=getattr(args, "auto_agent_timeout", 1500),
+        allow_kill_stale=not getattr(args, "no_kill_stale", False),
+        allow_device_reset=not getattr(args, "no_device_reset", False),
+        allow_partial_cpu=getattr(args, "allow_partial_cpu", False),
+        parallel_agents=getattr(args, "parallel_agents", 1),
+        only_component=getattr(args, "auto_only_component", None),
+    )
+
+
 def _run_skip_diagnoser_at_loop_end(
     *,
     demo_dir: Path,
@@ -456,8 +688,26 @@ def _run_auto_iterate_loop(
     decomposition_auto_attempted: set = set()
 
     hard_total_attempt_cap: int = max(3, max_attempts_per_component * 2)
+    # permanently_skipped: ONLY kernel-missing (truly cannot run on ttnn). Loaded
+    # from the persistent overlay; this is the only bucket that survives across
+    # runs. Behavior: never re-attempted until kernel becomes available.
     permanently_skipped: List[str] = []
+    # retired_this_run: transient retirements within THIS run (no_emit ModuleList
+    # parents, cap-out, final-sweep regressions, restored-stub PCC fails). NOT
+    # persisted; next run will re-evaluate from scratch. Candidate-pool filtering
+    # treats these the same as permanently_skipped, but the OUTCOME banner and
+    # overlay-writer keep them separate.
+    retired_this_run: List[str] = []
     graduated_this_run: List[str] = []
+
+    def _excluded_from_pool() -> set:
+        """Components that are NOT candidates this iteration. Union of:
+          - permanently_skipped (kernel-missing; persisted overlay)
+          - retired_this_run (no_emit, cap-out, regression — transient)
+        Use this everywhere the iter loop filters the candidate pool, so
+        the two buckets stay behaviorally equivalent for selection while
+        remaining semantically distinct for reporting / persistence."""
+        return set(permanently_skipped) | set(retired_this_run)
 
     from .sweep_cache import ValidationSweepCache
     from ..overlay_manager import load_persistent_skips, load_no_emit_tests, persist_skip
@@ -515,8 +765,12 @@ def _run_auto_iterate_loop(
 
     _no_emit_tests = load_no_emit_tests(MODEL)
     if _no_emit_tests:
+        # ModuleList parents flagged as structurally untestable — these are NOT
+        # kernel-missing (children may yet graduate). Park them in
+        # retired_this_run so next run can re-evaluate if decomposition state
+        # changes; kernel-missing remains the sole criterion for permanently_skipped.
         _new_no_emit = sorted(c for c in _no_emit_tests.keys() if c not in permanently_skipped)
-        permanently_skipped.extend(_new_no_emit)
+        retired_this_run.extend(_new_no_emit)
         print(
             f"  [no-emit-tests] loaded {len(_no_emit_tests)} component(s) flagged as "
             f"structurally untestable (Phase 2 ModuleList drops): "
@@ -578,7 +832,7 @@ def _run_auto_iterate_loop(
                 is_native = False
             if not is_native:
                 continue
-            if comp in graduated_this_run or comp in unverified_native_this_run or comp in permanently_skipped:
+            if comp in graduated_this_run or comp in unverified_native_this_run or comp in _excluded_from_pool():
                 continue
             unverified_native_this_run.add(comp)
             skipped_components_this_run.discard(comp)
@@ -1021,9 +1275,12 @@ def _run_auto_iterate_loop(
            (CPU fallback). Used when we never had native code at all.
         5. Synthesized stable CPU-fallback stub — final safety net if
            all snapshots are missing."""
-        if comp in permanently_skipped:
+        if comp in permanently_skipped or comp in retired_this_run:
             return
-        permanently_skipped.append(comp)
+        # Cap-out is a transient "iter budget exhausted this run" event, NOT a
+        # kernel-missing claim. Route to retired_this_run so next run gets a
+        # fresh shot; permanently_skipped is reserved for kernel-missing.
+        retired_this_run.append(comp)
         verified_fail.discard(comp)
         # S2-FIX: also drop from graduated_this_run so a regressed
         # component doesn't continue to inflate the brain's "momentum"
@@ -1221,6 +1478,11 @@ def _run_auto_iterate_loop(
             if _retest_rc == 0:
                 _retest_report = _scope_report_to_demo(_parse_pytest_report(), demo_dir)
                 if comp in (_retest_report.get("passed_components") or []):
+                    # comp was placed in retired_this_run by cap-out;
+                    # restore-success un-retires it (and also pre-clean
+                    # permanently_skipped just in case prior code paths put
+                    # it there).
+                    retired_this_run[:] = [s for s in retired_this_run if s != comp]
                     permanently_skipped[:] = [s for s in permanently_skipped if s != comp]
                     if comp not in graduated_this_run:
                         graduated_this_run.append(comp)
@@ -1232,8 +1494,7 @@ def _run_auto_iterate_loop(
                     print(
                         f"  post-restore: `{comp}` GRADUATED — the "
                         f"restored native snapshot (from "
-                        f"{this_restored_from}) passes PCC. Removed from "
-                        f"permanently_skipped."
+                        f"{this_restored_from}) passes PCC. Un-retired."
                     )
                     return
             cascade_failures.append(f"{safe_relative_to_root(snap_path)} re-test rc={_retest_rc} " f"(did not pass)")
@@ -1496,7 +1757,7 @@ def _run_auto_iterate_loop(
     # already-working scaffolds.
     _preflight_native_components: List[str] = []
     for comp in _preflight_new_components:
-        if comp in graduated_this_run or comp in unverified_native_this_run or comp in permanently_skipped:
+        if comp in graduated_this_run or comp in unverified_native_this_run or comp in _excluded_from_pool():
             continue
         stub_path = demo_dir / "_stubs" / f"{_safe_id(comp)}.py"
         try:
@@ -1621,7 +1882,7 @@ def _run_auto_iterate_loop(
             )
             for comp in _preflight_native_components:
                 if comp in _pf_passed and comp not in _pf_failed and comp not in _pf_skipped:
-                    if comp not in graduated_this_run and comp not in permanently_skipped:
+                    if comp not in graduated_this_run and comp not in _excluded_from_pool():
                         graduated_this_run.append(comp)
                         validated_this_run.add(comp)
                         verified_fail.discard(comp)
@@ -1643,7 +1904,7 @@ def _run_auto_iterate_loop(
                         if (
                             comp not in graduated_this_run
                             and comp not in unverified_native_this_run
-                            and comp not in permanently_skipped
+                            and comp not in _excluded_from_pool()
                         ):
                             unverified_native_this_run.add(comp)
                             skipped_components_this_run.discard(comp)
@@ -1711,7 +1972,7 @@ def _run_auto_iterate_loop(
         it += 1
         if it > max_iters:
             _ext_ungrad, _ext_smoke = _auto_iteration_blockers(MODEL)
-            _ext_pending = sorted((set(_ext_ungrad) | set(_ext_smoke)) - set(permanently_skipped))
+            _ext_pending = sorted((set(_ext_ungrad) | set(_ext_smoke)) - _excluded_from_pool())
             from ..agentic.convergence import should_extend_budget as _brain_should_extend
 
             _verdict = _brain_should_extend(
@@ -1792,7 +2053,7 @@ def _run_auto_iterate_loop(
             at_cap_now = [
                 c
                 for c in set(last_failed_components)
-                if c not in permanently_skipped and c not in graduated_this_run and _is_at_cap(c)
+                if c not in _excluded_from_pool() and c not in graduated_this_run and _is_at_cap(c)
             ]
             # Brain (G8) gets the final say on each component at cap:
             # extend the cap (component is close to converging) or route
@@ -1863,13 +2124,13 @@ def _run_auto_iterate_loop(
         unvalidated_seed = (
             new_component_names
             - validated_this_run
-            - set(permanently_skipped)
+            - _excluded_from_pool()
             - set(graduated_this_run)
             - set(unverified_native_this_run)
         )
 
         partial_cpu_pool: List[str] = [] if allow_partial_cpu else _partial_cpu_components(MODEL)
-        partial_cpu_set = set(partial_cpu_pool) - set(permanently_skipped) - set(unverified_native_this_run)
+        partial_cpu_set = set(partial_cpu_pool) - _excluded_from_pool() - set(unverified_native_this_run)
         candidate_pool = sorted(
             (
                 set(ungrad_now)
@@ -1879,7 +2140,7 @@ def _run_auto_iterate_loop(
                 | unvalidated_seed
                 | partial_cpu_set
             )
-            - set(permanently_skipped)
+            - _excluded_from_pool()
             - (set(graduated_this_run) - partial_cpu_set)
             - set(unverified_native_this_run)
         )
@@ -1893,14 +2154,17 @@ def _run_auto_iterate_loop(
                     f"component not in current candidate pool — nothing to iterate on; exiting clean."
                 )
         if not candidate_pool:
-            if permanently_skipped:
+            if permanently_skipped or retired_this_run:
                 banner(
                     f"AUTO-ITERATE {it}/{max_iters}: every remaining component hit the "
                     f"{max_attempts_per_component}-attempt cap and is now on CPU "
                     f"fallback — running one final pytest to confirm the demo still "
                     f"runs end-to-end"
                 )
-                print(f"  CPU-fallback components: {', '.join(permanently_skipped)}")
+                if permanently_skipped:
+                    print(f"  kernel-missing (permanent): {', '.join(sorted(set(permanently_skipped)))}")
+                if retired_this_run:
+                    print(f"  retired this run (transient): {', '.join(sorted(set(retired_this_run)))}")
                 if graduated_this_run:
                     print(f"  graduated to native TTNN this run: " f"{', '.join(sorted(set(graduated_this_run)))}")
                 final_tests = _list_component_pcc_tests(demo_dir)
@@ -1929,7 +2193,7 @@ def _run_auto_iterate_loop(
                         final_rc, final_report = _phantom_post["rc"], _phantom_post["report"]
                     if final_rc != 0 or not bool(final_report.get("all_passed", False)):
                         unexpected_failed = sorted(
-                            set(final_report.get("failed_components", []) or []) - set(permanently_skipped)
+                            set(final_report.get("failed_components", []) or []) - _excluded_from_pool()
                         )
                         if unexpected_failed:
                             print(
@@ -1982,7 +2246,11 @@ def _run_auto_iterate_loop(
                                 print(f"    PCC-validated   : {', '.join(sorted(set(graduated_this_run)))}")
                             print(f"    UNVERIFIED NATIVE: {', '.join(unverified_inner)}")
                             if permanently_skipped:
-                                print(f"    CPU fallback    : {', '.join(sorted(set(permanently_skipped)))}")
+                                print(
+                                    f"    CPU fallback (kernel-missing): {', '.join(sorted(set(permanently_skipped)))}"
+                                )
+                            if retired_this_run:
+                                print(f"    CPU fallback (transient)     : {', '.join(sorted(set(retired_this_run)))}")
                             print(
                                 "\n  Fix the per-component PCC test "
                                 "scaffolds for each UNVERIFIED NATIVE "
@@ -2013,13 +2281,16 @@ def _run_auto_iterate_loop(
                             f"AUTO-ITERATE {it}/{max_iters}: demo runs end-to-end on "
                             f"{BOX} with partial native bring-up "
                             f"({len(graduated_this_run)} native, "
-                            f"{len(permanently_skipped)} on CPU fallback)"
+                            f"{len(permanently_skipped) + len(retired_this_run)} on CPU fallback)"
                         )
                         _print_bringup_summary(MODEL, box=BOX, sep=sep)
                         print("\n  Per-component status:")
                         if graduated_this_run:
                             print(f"    native TTNN : {', '.join(sorted(set(graduated_this_run)))}")
-                        print(f"    CPU fallback: {', '.join(sorted(set(permanently_skipped)))}")
+                        if permanently_skipped:
+                            print(f"    CPU fallback (kernel-missing): {', '.join(sorted(set(permanently_skipped)))}")
+                        if retired_this_run:
+                            print(f"    CPU fallback (transient)     : {', '.join(sorted(set(retired_this_run)))}")
                         print(
                             "\n  To retry the CPU-fallback components later (higher iter budget,\n"
                             "  bigger model, hand-iteration, or after the scaffolder learns to\n"
@@ -2956,7 +3227,7 @@ def _run_auto_iterate_loop(
                 _ungraduated_now, _ = _auto_iteration_blockers(MODEL)
                 _extras_pool = set(_ungraduated_now) | set(candidate_pool or [])
                 _extras_pool -= set(graduated_this_run)
-                _exclude = set([iter_target_component]) | set(permanently_skipped)
+                _exclude = set([iter_target_component]) | _excluded_from_pool()
                 _at_cap_now = {c for c in _extras_pool if _is_at_cap(c)}
                 _exclude |= _at_cap_now
                 _ungraduated_ranked = sorted(
@@ -3382,7 +3653,7 @@ def _run_auto_iterate_loop(
                 if (
                     _consec_noop >= 2
                     and last_failure_class_per_component.get(comp) == "NO_OP"
-                    and comp not in permanently_skipped
+                    and comp not in _excluded_from_pool()
                     and comp not in graduated_this_run
                 ):
                     print(
@@ -3417,7 +3688,7 @@ def _run_auto_iterate_loop(
             if (
                 iter_target_component is not None
                 and iter_target_component not in graduated_this_run
-                and iter_target_component not in permanently_skipped
+                and iter_target_component not in _excluded_from_pool()
                 and _is_at_cap(iter_target_component)
             ):
                 print(
@@ -3791,7 +4062,7 @@ def _run_auto_iterate_loop(
 
                 if _pass_comp == iter_target_component:
                     continue
-                if _pass_comp in graduated_this_run or _pass_comp in permanently_skipped:
+                if _pass_comp in graduated_this_run or _pass_comp in _excluded_from_pool():
                     continue
                 _pass_stub = demo_dir / "_stubs" / f"{_safe_id(_pass_comp)}.py"
                 # Direct AST check (NOT _stub_has_graduated_from_autofill,
@@ -3845,7 +4116,7 @@ def _run_auto_iterate_loop(
             and target_is_ast_native
             and iter_target_component not in smoke_tests
             and iter_target_component not in graduated_this_run
-            and iter_target_component not in permanently_skipped
+            and iter_target_component not in _excluded_from_pool()
         )
 
         target_skipped_due_to_harness = False
@@ -3883,7 +4154,7 @@ def _run_auto_iterate_loop(
                 and stub_is_native
                 and iter_target_component not in graduated_this_run
                 and iter_target_component not in unverified_native_this_run
-                and iter_target_component not in permanently_skipped
+                and iter_target_component not in _excluded_from_pool()
             )
 
         _harness_markers = (
@@ -3897,7 +4168,7 @@ def _run_auto_iterate_loop(
         if _other_skipped:
             _broad_per_skipped = report.get("per_skipped", {}) if isinstance(report, dict) else {}
             for _comp in sorted(_other_skipped):
-                if _comp in graduated_this_run or _comp in unverified_native_this_run or _comp in permanently_skipped:
+                if _comp in graduated_this_run or _comp in unverified_native_this_run or _comp in _excluded_from_pool():
                     continue
                 _comp_reasons: List[str] = []
                 if isinstance(_broad_per_skipped, dict):
@@ -4225,9 +4496,9 @@ def _run_auto_iterate_loop(
             print(line)
         print(sep)
 
-        remaining_ungrad_for_conv = sorted(set(ungraduated) - set(permanently_skipped))
-        remaining_smoke_for_conv = sorted(set(smoke_tests) - set(permanently_skipped))
-        remaining_verified_fail = sorted(set(verified_fail) - set(permanently_skipped))
+        remaining_ungrad_for_conv = sorted(set(ungraduated) - _excluded_from_pool())
+        remaining_smoke_for_conv = sorted(set(smoke_tests) - _excluded_from_pool())
+        remaining_verified_fail = sorted(set(verified_fail) - _excluded_from_pool())
 
         all_new_components = {c for c in (ungraduated or []) if c}
         for comp_meta in (
@@ -4239,12 +4510,12 @@ def _run_auto_iterate_loop(
                 nm = str(comp_meta.get("name", "")).strip()
                 if nm:
                     all_new_components.add(nm)
-        unvalidated_new = sorted(all_new_components - validated_this_run - set(permanently_skipped))
+        unvalidated_new = sorted(all_new_components - validated_this_run - _excluded_from_pool())
         still_skipped_new = sorted(
-            (skipped_components_this_run & all_new_components) - validated_this_run - set(permanently_skipped)
+            (skipped_components_this_run & all_new_components) - validated_this_run - _excluded_from_pool()
         )
 
-        _live_partial_cpu = set(_partial_cpu_components(MODEL)) - set(permanently_skipped)
+        _live_partial_cpu = set(_partial_cpu_components(MODEL)) - _excluded_from_pool()
         _partial_cpu_block_convergence = not allow_partial_cpu and bool(_live_partial_cpu)
         if strict_native:
             converged_native = (
@@ -4257,7 +4528,7 @@ def _run_auto_iterate_loop(
             )
             converged_partial = (
                 all_passed
-                and bool(permanently_skipped)
+                and bool(permanently_skipped or retired_this_run)
                 and not remaining_ungrad_for_conv
                 and not remaining_smoke_for_conv
                 and not remaining_verified_fail
@@ -4269,7 +4540,7 @@ def _run_auto_iterate_loop(
                 converge_msg = (
                     f"best-effort bring-up: "
                     f"{len(graduated_this_run)} native, "
-                    f"{len(permanently_skipped)} on CPU fallback "
+                    f"{len(permanently_skipped) + len(retired_this_run)} on CPU fallback "
                     f"(after {max_attempts_per_component}-attempt cap)"
                 )
             else:
@@ -4284,7 +4555,7 @@ def _run_auto_iterate_loop(
                 else:
                     converge_msg = f"model runs natively on {BOX} (no CPU fallback)"
 
-            sweep_candidates = [c for c in unvalidated_new if c not in permanently_skipped and c not in verified_fail]
+            sweep_candidates = [c for c in unvalidated_new if c not in _excluded_from_pool() and c not in verified_fail]
             from .sweep_cache import should_skip_validation_sweep
 
             if sweep_candidates and should_skip_validation_sweep(focused_rc):
@@ -4353,14 +4624,14 @@ def _run_auto_iterate_loop(
                         print(f"    failed   : {', '.join(sorted(sw_failed))}")
                     if sw_skipped:
                         print(f"    skipped  : {', '.join(sorted(sw_skipped))}")
-                    unvalidated_new = sorted(all_new_components - validated_this_run - set(permanently_skipped))
+                    unvalidated_new = sorted(all_new_components - validated_this_run - _excluded_from_pool())
                     if sw_failed:
                         last_failed_components = list(sw_failed)
                         last_failed_tests = list(sweep_report.get("failed_tests", []))
                         last_failures = str(sweep_report.get("summary", ""))
                         last_failure_details = str(sweep_report.get("details", ""))
 
-                    _live_partial_cpu = set(_partial_cpu_components(MODEL)) - set(permanently_skipped)
+                    _live_partial_cpu = set(_partial_cpu_components(MODEL)) - _excluded_from_pool()
                     _partial_cpu_block_convergence = not allow_partial_cpu and bool(_live_partial_cpu)
                     converged_native = (
                         all_passed
@@ -4372,7 +4643,7 @@ def _run_auto_iterate_loop(
                     )
                     converged_partial = (
                         all_passed
-                        and bool(permanently_skipped)
+                        and bool(permanently_skipped or retired_this_run)
                         and not remaining_ungrad_for_conv
                         and not remaining_smoke_for_conv
                         and not remaining_verified_fail
@@ -4415,11 +4686,14 @@ def _run_auto_iterate_loop(
         if converged:
             banner(f"AUTO-ITERATE converged after {it} iteration(s) — {converge_msg}")
             _print_bringup_summary(MODEL, box=BOX, sep=sep)
-            if permanently_skipped:
+            if permanently_skipped or retired_this_run:
                 print()
                 if graduated_this_run:
                     print(f"  native TTNN : {', '.join(sorted(set(graduated_this_run)))}")
-                print(f"  CPU fallback: {', '.join(sorted(set(permanently_skipped)))}")
+                if permanently_skipped:
+                    print(f"  CPU fallback (kernel-missing): {', '.join(sorted(set(permanently_skipped)))}")
+                if retired_this_run:
+                    print(f"  CPU fallback (transient)     : {', '.join(sorted(set(retired_this_run)))}")
                 print(
                     "\n  To retry the CPU-fallback components later:\n"
                     f"    python -m scripts.tt_hw_planner promote {MODEL} \\\n"
@@ -4471,8 +4745,13 @@ def _run_auto_iterate_loop(
                 print(f"  Phase-1 SMOKE tests still present: {', '.join(smoke_tests)}")
             if permanently_skipped:
                 print(
-                    f"  (Additionally on CPU fallback after attempt cap, not retried: "
+                    f"  (Additionally on CPU fallback — kernel-missing, not retried: "
                     f"{', '.join(sorted(set(permanently_skipped)))})"
+                )
+            if retired_this_run:
+                print(
+                    f"  (Additionally on CPU fallback — transient retirement this run: "
+                    f"{', '.join(sorted(set(retired_this_run)))})"
                 )
             last_failures = (
                 "Bring-up not complete: tests passed only because the listed "
@@ -4633,7 +4912,7 @@ def _run_auto_iterate_loop(
         if (
             iter_target_component is not None
             and iter_target_component not in graduated_this_run
-            and iter_target_component not in permanently_skipped
+            and iter_target_component not in _excluded_from_pool()
             and _is_at_cap(iter_target_component)
         ):
             _skip_component_to_fallback(
@@ -4653,8 +4932,12 @@ def _run_auto_iterate_loop(
         if rewritten:
             print(f"  Stabilized fallback applied to: {', '.join(rewritten)}")
             for r in rewritten:
-                if r not in permanently_skipped:
-                    permanently_skipped.append(r)
+                # Final-sweep regression: this iteration's PCC failed and we
+                # restored stable CPU. Transient retirement — next run with
+                # fresh iter budget may succeed; do not poison
+                # permanently_skipped (kernel-missing only).
+                if r not in permanently_skipped and r not in retired_this_run:
+                    retired_this_run.append(r)
             if last_failed_tests:
                 focused_rc = _run_focused_pytest(
                     model_id=MODEL,
@@ -4698,7 +4981,7 @@ def _run_auto_iterate_loop(
     all_pcc_tests = _list_component_pcc_tests(demo_dir)
 
     final_ungrad, final_smoke = _auto_iteration_blockers(MODEL)
-    still_pending = sorted((set(final_ungrad) | set(final_smoke)) - set(permanently_skipped))
+    still_pending = sorted((set(final_ungrad) | set(final_smoke)) - _excluded_from_pool())
     if still_pending:
         banner(
             f"AUTO-ITERATE exhausted {max_iters} iter(s); leaving {len(still_pending)} "
@@ -4730,8 +5013,10 @@ def _run_auto_iterate_loop(
         # stabilization so the demo can still emit end-to-end.
         rewritten = _rewrite_components_to_stable_fallback(demo_dir, still_pending)
         for r in rewritten:
-            if r not in permanently_skipped:
-                permanently_skipped.append(r)
+            # Restored stub still fails final pytest — transient retirement
+            # for THIS run. Permanently_skipped reserved for kernel-missing.
+            if r not in permanently_skipped and r not in retired_this_run:
+                retired_this_run.append(r)
 
     final_rc = 0
     if all_pcc_tests:
@@ -4794,6 +5079,8 @@ def _run_auto_iterate_loop(
             continue
         if _fp_comp in permanently_skipped:
             permanently_skipped[:] = [s for s in permanently_skipped if s != _fp_comp]
+        if _fp_comp in retired_this_run:
+            retired_this_run[:] = [s for s in retired_this_run if s != _fp_comp]
         graduated_this_run.append(_fp_comp)
         verified_fail.discard(_fp_comp)
         try:
@@ -4837,7 +5124,7 @@ def _run_auto_iterate_loop(
         if not new_names_set:
             return
         unvalidated = sorted(
-            new_names_set - set(final_passed) - set(final_failed) - set(final_skipped) - set(permanently_skipped)
+            new_names_set - set(final_passed) - set(final_failed) - set(final_skipped) - _excluded_from_pool()
         )
         print()
         print(sep)
@@ -4872,9 +5159,15 @@ def _run_auto_iterate_loop(
                     print(f"      - {c}  ({head})")
                 else:
                     print(f"      - {c}")
-        print(f"  CPU fallback (capped)   : {len(permanently_skipped)}/{len(new_names_set)}")
+        _cpu_fallback_total = len(permanently_skipped) + len(retired_this_run)
+        print(f"  CPU fallback (capped)   : {_cpu_fallback_total}/{len(new_names_set)}")
         if permanently_skipped:
+            print(f"    kernel-missing (persistent):")
             for c in sorted(set(permanently_skipped)):
+                print(f"      - {c}")
+        if retired_this_run:
+            print(f"    transient retirement (this run):")
+            for c in sorted(set(retired_this_run)):
                 print(f"      - {c}")
         if unverified_native_this_run:
             unverified_list = sorted(set(unverified_native_this_run))
@@ -4894,7 +5187,7 @@ def _run_auto_iterate_loop(
 
     if final_all_passed and final_rc == 0:
         graduated_set = sorted(set(graduated_this_run))
-        skipped_set = sorted(set(permanently_skipped))
+        skipped_set = sorted(set(permanently_skipped) | set(retired_this_run))
         unverified_set = sorted(set(unverified_native_this_run))
         if unverified_set:
             banner(

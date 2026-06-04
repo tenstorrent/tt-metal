@@ -21,6 +21,7 @@ def cmd_promote(args) -> int:
         _resolve_tiered_model_aliases,
         _run_auto_iterate_loop,
         cmd_bringup,
+        iter_loop_kwargs_from,
     )
 
     MODEL = args.model_id
@@ -197,34 +198,23 @@ def cmd_promote(args) -> int:
                 file=sys.stderr,
             )
 
+    # The iter-loop kwargs are built via the shared helper so cmd_promote
+    # and _cmd_up_core stay in sync. See auto_iterate.py:iter_loop_kwargs_from.
+    # Before this helper, promote silently dropped `parallel_agents` and
+    # `only_component` even though the CLI was supposed to accept them.
     return _run_auto_iterate_loop(
-        MODEL=MODEL,
-        BOX=BOX,
-        mesh=getattr(args, "mesh", None),
-        dtype=getattr(args, "dtype", None),
-        batch=getattr(args, "batch", 1),
-        max_seq_len=getattr(args, "max_seq_len", 1024),
-        max_generated_tokens=getattr(args, "max_generated_tokens", 200),
-        accuracy=getattr(args, "accuracy", False),
-        no_trace=getattr(args, "no_trace", False),
-        no_paged_attention=getattr(args, "no_paged_attention", False),
-        no_instruct=getattr(args, "no_instruct", False),
-        download_first=getattr(args, "download_first", False),
-        strict=getattr(args, "strict", False),
-        demo_dir=demo_dir,
-        provider=provider,
-        agent_bin=agent_bin,
-        model=model_alias,
-        max_iters=getattr(args, "auto_max_iters", 5),
-        sep=sep,
-        target_components=targets,
-        strict_native=True,
-        agent_timeout_s=getattr(args, "auto_agent_timeout", 1500),
-        allow_kill_stale=not getattr(args, "no_kill_stale", False),
-        allow_device_reset=not getattr(args, "no_device_reset", False),
-        max_attempts_per_component=getattr(args, "auto_max_attempts_per_component", 5),
-        allow_partial_cpu=getattr(args, "allow_partial_cpu", False),
-        model_light=model_light,
-        model_heavy=model_heavy,
-        model_super_heavy=model_super_heavy,
+        **iter_loop_kwargs_from(
+            args,
+            MODEL=MODEL,
+            BOX=BOX,
+            demo_dir=demo_dir,
+            sep=sep,
+            target_components=targets,
+            provider=provider,
+            agent_bin=agent_bin,
+            model=model_alias,
+            model_light=model_light,
+            model_heavy=model_heavy,
+            model_super_heavy=model_super_heavy,
+        )
     )

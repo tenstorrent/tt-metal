@@ -2310,9 +2310,13 @@ def test_partial_cpu_block_convergence_filters_capped_out_components() -> None:
     set_idx = fn_slice.find("partial_cpu_set = ")
     assert set_idx > 0, "partial_cpu_set construction must exist"
     set_block = fn_slice[set_idx : set_idx + 300]
-    assert "set(permanently_skipped)" in set_block, (
-        "`partial_cpu_set` must subtract `permanently_skipped` so "
-        "cap'd-out partial-CPU components don't keep the loop alive"
+    # 2026-06-04 refactor: `permanently_skipped` now means KERNEL_MISSING-only;
+    # cap-out / regression live in `retired_this_run`. The filter subtracts the
+    # union via `_excluded_from_pool()`, which is what we assert here.
+    assert "_excluded_from_pool()" in set_block, (
+        "`partial_cpu_set` must subtract _excluded_from_pool() (kernel-missing "
+        "+ transient retirements) so cap'd-out partial-CPU components don't "
+        "keep the loop alive"
     )
     assert "set(partial_cpu_pool)" in set_block, "`partial_cpu_set` must derive from `partial_cpu_pool`"
 
