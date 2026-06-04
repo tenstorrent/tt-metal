@@ -635,11 +635,12 @@ public:
         // descriptor adapter's compile-time-unrolled walker + SmallVector +
         // cached TensorArgument storage pattern. Deferred pending profiling.
         static std::vector<ResolvedTensorBinding> resolve_bindings(
-            const std::vector<TensorArgument>& factory_tensor_args,
+            const tt::tt_metal::experimental::Table<TensorParameterName, TensorArgument>& factory_tensor_args,
             const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& io_mesh_tensors) {
             std::vector<ResolvedTensorBinding> bindings;
             bindings.reserve(factory_tensor_args.size());
-            for (const auto& tensor_arg : factory_tensor_args) {
+            // The name is the Table key; the TensorArgument value carries only the tensor ref.
+            for (const auto& [tensor_parameter_name, tensor_arg] : factory_tensor_args) {
                 const auto* target = &tensor_arg.tensor.get();
                 auto it = std::find_if(io_mesh_tensors.begin(), io_mesh_tensors.end(), [target](const auto& wrapped) {
                     return &wrapped.get() == target;
@@ -648,10 +649,9 @@ public:
                     it != io_mesh_tensors.end(),
                     "TensorArgument '{}' must reference a MeshTensor reachable from tensor_args or "
                     "tensor_return_value (got non-io_tensor MeshTensor)",
-                    tensor_arg.tensor_parameter_name);
+                    tensor_parameter_name);
                 bindings.push_back(
-                    {tensor_arg.tensor_parameter_name,
-                     static_cast<std::size_t>(std::distance(io_mesh_tensors.begin(), it))});
+                    {tensor_parameter_name, static_cast<std::size_t>(std::distance(io_mesh_tensors.begin(), it))});
             }
             return bindings;
         }
@@ -704,11 +704,10 @@ public:
             auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 const auto& sv = cached_workload.shared_variables.at(coordinate_range);
-                std::vector<TensorArgument> fresh_tensor_args;
-                fresh_tensor_args.reserve(sv.bindings.size());
+                tt::tt_metal::experimental::Table<TensorParameterName, TensorArgument> fresh_tensor_args;
                 for (const auto& b : sv.bindings) {
-                    fresh_tensor_args.push_back(TensorArgument{
-                        .tensor_parameter_name = b.tensor_parameter_name, .tensor = io_mesh_tensors[b.io_tensor_idx]});
+                    fresh_tensor_args.emplace(
+                        b.tensor_parameter_name, TensorArgument{.tensor = io_mesh_tensors[b.io_tensor_idx]});
                 }
                 tt::tt_metal::experimental::UpdateTensorArgs(program, fresh_tensor_args);
             }
