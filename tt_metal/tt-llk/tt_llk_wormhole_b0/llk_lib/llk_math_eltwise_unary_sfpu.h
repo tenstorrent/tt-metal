@@ -45,7 +45,9 @@ inline void eltwise_unary_sfpu_configure_addrmod()
 
     if constexpr (
         sfpu_op == SfpuType::typecast || sfpu_op == SfpuType::unary_max || sfpu_op == SfpuType::unary_min || sfpu_op == SfpuType::unary_max_int32 ||
-        sfpu_op == SfpuType::unary_min_int32 || sfpu_op == SfpuType::unary_max_uint32 || sfpu_op == SfpuType::unary_min_uint32 || sfpu_op == SfpuType::signbit)
+        sfpu_op == SfpuType::unary_min_int32 || sfpu_op == SfpuType::unary_max_uint32 || sfpu_op == SfpuType::unary_min_uint32 ||
+        sfpu_op == SfpuType::signbit || sfpu_op == SfpuType::not_equal_zero || sfpu_op == SfpuType::equal_zero || sfpu_op == SfpuType::less_than_zero ||
+        sfpu_op == SfpuType::greater_than_equal_zero || sfpu_op == SfpuType::greater_than_zero || sfpu_op == SfpuType::less_than_equal_zero)
     {
         addr_mod_t {
             .srca = {.incr = 0},
@@ -59,6 +61,13 @@ inline void eltwise_unary_sfpu_configure_addrmod()
 template <SfpuType sfpu_op>
 inline void _llk_math_eltwise_unary_sfpu_init_()
 {
+    if constexpr (sfpu_op == SfpuType::typecast)
+    {
+        if (cfg_read(ALU_ACC_CTRL_Fp32_enabled_ADDR32) & ALU_ACC_CTRL_Fp32_enabled_MASK)
+        {
+            _llk_math_dbg_feature_disable_();
+        }
+    }
     sfpu::_init_sfpu_config_reg();
     eltwise_unary_sfpu_configure_addrmod<sfpu_op>();
     math::reset_counters(p_setrwc::SET_ABD_F);

@@ -89,6 +89,12 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+          # Sweep CI default of 5s is too aggressive for traced multi-device
+          # configs on Galaxy: linear/multiply/matmul with sharded I/O can
+          # exceed 5s during reshard + dispatch bring-up, producing false-
+          # positive op-timeouts. Raise to 30s for the whole sweep job so
+          # every op benefits without per-module env-var overrides.
+          hang-detection-timeout: 30
       - name: 📋 Display parallel sweep configuration
         run: |
           echo "::group::🔧 Parallel Sweeps Execution - Configuration"
@@ -122,8 +128,8 @@ jobs:
           # set so each pass only sees vectors for its own mesh axis.
           cd /work
           python3 tests/sweep_framework/split_vectors_by_axis.py
-          echo "::group::COL partition"; ls tests/sweep_framework/vectors_export_col/ | head -20; echo "::endgroup::"
-          echo "::group::ROW partition"; ls tests/sweep_framework/vectors_export_row/ | head -20; echo "::endgroup::"
+          echo "::group::COL partition"; ls tests/sweep_framework/vectors_export_col/ 2>/dev/null | head -20 || true; echo "::endgroup::"
+          echo "::group::ROW partition"; ls tests/sweep_framework/vectors_export_row/ 2>/dev/null | head -20 || true; echo "::endgroup::"
       - name: Run ttnn sweeps (batch)
         run: |
           MODULE_SELECTOR="${{ matrix.module_selector }}"

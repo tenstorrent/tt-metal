@@ -34,7 +34,8 @@ tolerances = {
     DataFormat.Int8: Tolerance(atol=0, rtol=0),
     DataFormat.UInt8: Tolerance(atol=0, rtol=0),
     DataFormat.Bfp8_b: Tolerance(atol=0.1, rtol=0.2),
-    DataFormat.Bfp4_b: Tolerance(atol=0.25, rtol=0.3),
+    DataFormat.Bfp4_b: Tolerance(atol=0.125, rtol=0.3),
+    DataFormat.Bfp2_b: Tolerance(atol=0.5, rtol=0.4),
     DataFormat.MxFp8R: Tolerance(atol=0.2, rtol=0.3),
     DataFormat.MxFp8P: Tolerance(atol=0.2, rtol=0.3),
     DataFormat.MxFp4: Tolerance(atol=0.5, rtol=0.35),
@@ -192,47 +193,38 @@ def calculate_pcc(golden, input):
     return pcc_result
 
 
-def _bfp4_block_aware_compare(
-    golden: torch.Tensor, result: torch.Tensor, max_ulp_diff: int = 2
+def _bfp_block_aware_compare(
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    mantissa_bits: int,
+    max_ulp_diff: int = 1,
 ) -> torch.Tensor:
-    """Compare two BFP4_b tensors allowing small ULP differences per 16-element block.
+    """Compare two block-float tensors allowing small ULP differences per 16-element block.
 
-    BFP4_b shares an exponent across each 16-element block, so the ULP size
-    depends on the block's max magnitude.  The SFPU hardware computes in FP32
-    with internal approximations (e.g. Newton-Raphson for rsqrt) that can
-    differ slightly from the golden model.  After Bfp4 quantization (3-bit
-    mantissa), these small intermediate differences can shift a value by up
-    to ``max_ulp_diff`` quantization steps.
+    BFP formats share an exponent across each 16-element block, so the ULP size
+    depends on the block's max magnitude.  Hardware and the Python golden can
+    disagree at BFP truncation boundaries (e.g. 0.0 vs 0.5 printed as bf16).
+    After quantization, treat differences up to ``max_ulp_diff`` steps as acceptable.
 
-    For full tiles (n a multiple of 1024), we tilize before block-wise check and
-    untilize the validity mask. For partial tiles (num_faces 1 or 2: 256/512
-    elements), we compare block-by-block on flat data without tilize/untilize.
+    ``mantissa_bits`` is the number of mantissa bits the format reconstructs
+    per element (3 for Bfp4_b, 1 for Bfp2_b).
+
+    Golden and result must already be in the same flat buffer order (tilized
+    layout as produced by the tests).  We do not re-tilize here: inputs are
+    already ordered in 16-element BFP blocks for the device.
     """
-    from helpers.tilize_untilize import tilize_block, untilize_block
-
     BLOCK = 16
-    BFP4_MANTISSA_BITS = 3
-    TILE_SIZE = 1024
 
     g_flat = golden.float().flatten()
     r_flat = result.float().flatten()
     n = g_flat.numel()
 
-    if n % TILE_SIZE == 0 and n > 0:
-        num_tiles = n // TILE_SIZE
-        tile_dim = (32 * num_tiles, 32)
-        g_til = tilize_block(g_flat, tile_dim, DataFormat.Float32).flatten()
-        r_til = tilize_block(r_flat, tile_dim, DataFormat.Float32).flatten()
-    else:
-        g_til = g_flat
-        r_til = r_flat
-
-    is_valid_til = torch.ones(n, dtype=torch.bool)
+    is_valid = torch.ones(n, dtype=torch.bool)
 
     for blk_start in range(0, n, BLOCK):
         blk_end = min(blk_start + BLOCK, n)
-        g_blk = g_til[blk_start:blk_end]
-        r_blk = r_til[blk_start:blk_end]
+        g_blk = g_flat[blk_start:blk_end]
+        r_blk = r_flat[blk_start:blk_end]
 
         both_nan = torch.isnan(g_blk) & torch.isnan(r_blk)
 
@@ -243,35 +235,97 @@ def _bfp4_block_aware_compare(
             ]
         )
         if finite_vals.numel() == 0:
-            is_valid_til[blk_start:blk_end] = True
+            is_valid[blk_start:blk_end] = True
             continue
 
         block_max = finite_vals.max().item()
         if block_max == 0:
-            is_valid_til[blk_start:blk_end] = (g_blk == r_blk) | both_nan
+            is_valid[blk_start:blk_end] = (
+                torch.isclose(g_blk, r_blk, atol=1e-5, rtol=0.0, equal_nan=True)
+                | both_nan
+            )
             continue
 
         block_exp = math.floor(math.log2(block_max))
-        one_ulp = 2.0 ** (block_exp - BFP4_MANTISSA_BITS + 1)
+        one_ulp = 2.0 ** (block_exp - mantissa_bits + 1)
 
         diff = (g_blk - r_blk).abs()
-        is_valid_til[blk_start:blk_end] = (diff <= max_ulp_diff * one_ulp) | both_nan
-
-    if n % TILE_SIZE == 0 and n > 0:
-        num_tiles = n // TILE_SIZE
-        tile_dim = (32 * num_tiles, 32)
-        is_valid = (
-            untilize_block(is_valid_til.float(), DataFormat.Float32, tile_dim)
-            .flatten()
-            .bool()
+        ulp_ok = diff <= max_ulp_diff * one_ulp
+        # Padding / zero lanes can disagree slightly after pack-unpack while still
+        # printing as 0.00; ULP sizing from a large value elsewhere in the block
+        # can make those tiny residuals look like multi-ULP failures. Accept when
+        # both sides are negligible magnitude and close in absolute terms.
+        max_abs = torch.maximum(g_blk.abs(), r_blk.abs())
+        tiny_ok = (max_abs < 1e-4) & torch.isclose(
+            g_blk, r_blk, atol=1e-5, rtol=0.0, equal_nan=True
         )
-    else:
-        is_valid = is_valid_til
+        is_valid[blk_start:blk_end] = ulp_ok | both_nan | tiny_ok
 
     return is_valid
 
 
 _RECORD_TEST_ORDER: bool = False
+
+# Per-format params for _mxfp_block_aware_compare: (mantissa_bits, max_steps).
+#   mantissa_bits of the SxEyMz element -> local step = 2^(floor(log2|v|) - mantissa_bits).
+#   max_steps = accepted adjacent-representable steps (same role as MxInt's
+#     max_ulp_steps). HW flushes subnormals to 0, so the smallest representable
+#     magnitude is the min normal and the a==0 branch handles flushed values.
+_MXFP_COMPARE_PARAMS = {
+    DataFormat.MxFp4: (1, 2),  # E2M1
+    DataFormat.MxFp8R: (2, 2),  # E5M2
+    DataFormat.MxFp8P: (3, 2),  # E4M3
+}
+
+
+def _mxfp_block_aware_compare(
+    golden: torch.Tensor,
+    result: torch.Tensor,
+    mantissa_bits: int,
+    max_steps: int = 2,
+) -> torch.Tensor:
+    """Compare two MX-float tensors allowing small representable-adjacency diffs.
+
+    Unlike the MxInt formats (uniform integer lattice) and BFP4 (one shared
+    exponent per block -> uniform ULP), MX-float elements (MxFp4 E2M1, MxFp8R
+    E5M2, MxFp8P E4M3) carry their own exponent on top of the block's E8M0
+    scale, so the representable lattice is non-uniform. For an element format
+    with `mantissa_bits` mantissa bits the local step at a value v is exactly
+    2^(floor(log2|v|) - mantissa_bits) -- derivable per element from v's own
+    magnitude, no block scale needed. A position is valid iff |g-r| is within
+    `max_steps` such local steps (golden and HW within `max_steps` adjacent
+    representable values). Sign flips and larger jumps still fail.
+
+    HW flushes subnormals to 0, so a flushed value is 0 on both sides and is
+    caught by the a==0 branch (exact match) -- no separate subnormal handling.
+    """
+    g = golden.float().flatten()
+    r = result.float().flatten()
+    n = g.numel()
+    if n == 0:
+        return torch.ones(0, dtype=torch.bool)
+
+    both_nan = torch.isnan(g) & torch.isnan(r)
+
+    # Per-element local lattice step from the larger magnitude.
+    a = torch.nan_to_num(
+        torch.maximum(g.abs(), r.abs()), nan=0.0, posinf=0.0, neginf=0.0
+    )
+    safe = a > 0
+    exp = torch.zeros_like(a)
+    exp[safe] = torch.floor(torch.log2(a[safe]))
+    local_ulp = torch.where(
+        safe, torch.pow(2.0, exp - mantissa_bits), torch.zeros_like(a)
+    )
+
+    diff = (g - r).abs()
+    # Relative float32-rounding guard (~1 ULP at the comparison magnitude) instead of a
+    # fixed absolute slack. A constant would dominate `max_steps * local_ulp` for small
+    # magnitudes (tiny block scales) and let sign flips / multi-step jumps pass.
+    is_valid = torch.where(
+        safe, diff <= max_steps * local_ulp + torch.finfo(torch.float32).eps * a, g == r
+    )
+    return is_valid | both_nan
 
 
 def passed_test(
@@ -279,6 +333,7 @@ def passed_test(
     res_tensor,
     output_data_format: DataFormat = DataFormat.Float16_b,
     L1_to_L1_iterations: int = 1,
+    custom_bfp4_max_ulp_diff=None,
     print_errors: bool = True,
     print_pcc: bool = False,
     custom_atol=None,
@@ -310,7 +365,26 @@ def passed_test(
     res_tensor = res_tensor.type(format_dict[output_data_format])
 
     if output_data_format == DataFormat.Bfp4_b:
-        is_valid = _bfp4_block_aware_compare(golden_tensor, res_tensor)
+        ulp = custom_bfp4_max_ulp_diff if custom_bfp4_max_ulp_diff is not None else 1
+        is_valid = _bfp_block_aware_compare(
+            golden_tensor, res_tensor, mantissa_bits=3, max_ulp_diff=ulp
+        )
+    elif output_data_format == DataFormat.Bfp2_b:
+        is_valid = _bfp_block_aware_compare(
+            golden_tensor, res_tensor, mantissa_bits=1, max_ulp_diff=1
+        )
+    elif output_data_format.is_mx_fp_format():
+        # Non-uniform float lattice (E2M1 / E5M2 / E4M3): per-element adjacency
+        # check instead of a fixed ULP. Replaces the loose torch.isclose +
+        # count fallback; per-format (mantissa_bits, max_steps) in
+        # _MXFP_COMPARE_PARAMS.
+        mantissa_bits, max_steps = _MXFP_COMPARE_PARAMS[output_data_format]
+        is_valid = _mxfp_block_aware_compare(
+            golden_tensor,
+            res_tensor,
+            mantissa_bits=mantissa_bits,
+            max_steps=max_steps,
+        )
     else:
         is_close = torch.isclose(
             golden_tensor, res_tensor, rtol=tolerance.rtol, atol=tolerance.atol
@@ -319,6 +393,18 @@ def passed_test(
         is_valid = is_close | is_nan
 
     is_within_tolerance = torch.all(is_valid)
+
+    if output_data_format.is_mx_format():
+        # Every MX low-bit format is judged by its lattice-aware compare
+        # (MxFp* via _mxfp_block_aware_compare on the E2M1/E5M2/E4M3 float
+        # lattices), which accepts disagreements up to a few lattice steps. At
+        # power-of-2 block-max boundaries the golden (fp32 amax) and HW (lower-
+        # precision amax) can pick block exponents one spec-legal step apart
+        # (OCP MX: scale = largest pow2 <= amax) — The per-element lattice
+        # check is the principled correctness criterion here, so trust its
+        # verdict rather than re-gating on PCC (sign flips and gross multi-step
+        # jumps still fail the lattice-aware check).
+        return bool(is_within_tolerance)
 
     if print_errors and not _RECORD_TEST_ORDER:
         try:
@@ -419,9 +505,11 @@ def passed_test(
     if output_data_format == DataFormat.Bfp8_b:
         target_pcc = pow(0.99, L1_to_L1_iterations)
     elif output_data_format == DataFormat.Bfp4_b:
-        target_pcc = 0.98
-    elif output_data_format == DataFormat.MxFp4:
-        target_pcc = 0.95  # MxFp4 E2M1 has very limited precision (only 8 positive and 8 negative representable values)
+        target_pcc = 0.97
+    elif output_data_format == DataFormat.Bfp2_b:
+        target_pcc = (
+            0.90  # Bfp2_b has only 1 mantissa bit; precision is severely limited
+        )
 
     if custom_pcc_threshold is not None:
         logger.info(

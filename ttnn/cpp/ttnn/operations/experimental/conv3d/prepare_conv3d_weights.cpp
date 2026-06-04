@@ -155,7 +155,7 @@ Tensor prepare_conv3d_weights(
     uint32_t ALIGN_PAD = alignment - (C % alignment);
     if (C % alignment != 0) {
         ttnn::SmallVector<std::array<uint32_t, 2>> padding_shape({{0, 0}, {0, 0}, {0, 0}, {0, ALIGN_PAD}, {0, 0}});
-        prepare_weights = ttnn::pad(prepare_weights, padding_shape, 0.0f);
+        prepare_weights = ttnn::pad(prepare_weights, padding_shape, 0.0f, /*use_multicore=*/true);
     }
     // Reshape and permute weights
     auto weights_shape = prepare_weights.logical_shape();

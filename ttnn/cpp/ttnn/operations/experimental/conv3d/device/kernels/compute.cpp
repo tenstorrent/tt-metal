@@ -146,7 +146,8 @@ void untilize_block() {
         out_cb,
         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
         compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
-        untilize_reconfig_mode>(rows);
+        untilize_reconfig_mode,
+        compute_kernel_lib::untilize_config::RemapMode::AssumeConfigured>(rows);
 }
 
 template <
@@ -243,6 +244,7 @@ void kernel_main() {
     constexpr uint32_t subblock_tiles = subblock_h * matmul_N_t;
 
     mm_init(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
+    MATH((llk_math_reconfig_remap(true)));
 
     // Load range parameters
     uint32_t argidx = 0;
@@ -299,7 +301,10 @@ void kernel_main() {
                                             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
                                             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
                                             compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::
-                                                NoReconfigure>(1, patches_this_row);
+                                                NoReconfigure,
+                                            compute_kernel_lib::tilize_config::Fp32Mode::Fast,
+                                            compute_kernel_lib::tilize_config::RemapMode::AssumeConfigured>(
+                                            1, patches_this_row);
                                         patches_left -= patches_this_row;
                                     }
 
@@ -354,7 +359,9 @@ void kernel_main() {
                                             cb_matmul_result_rm,
                                             compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                                             compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
-                                            untilize_reconfig_mode_sb>(subblock_h);
+                                            untilize_reconfig_mode_sb,
+                                            compute_kernel_lib::untilize_config::RemapMode::AssumeConfigured>(
+                                            subblock_h);
                                     }
                                 }
                             }

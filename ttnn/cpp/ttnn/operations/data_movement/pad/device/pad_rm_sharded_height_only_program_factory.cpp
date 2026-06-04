@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pad_rm_sharded_height_only_program_factory.hpp"
-#include "ttnn/operations/data_movement/common/common.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
@@ -37,19 +39,16 @@ inline std::vector<std::vector<uint32_t>> group_contiguous_and_repeated_values(s
     chunks.push_back(current_chunk);
     return chunks;
 }
-}  // namespace
 
-namespace {
 inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_pad_runtime_args_rm_sharded(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const ttnn::Shape& input_tensor_start,
     uint32_t num_cores_padded,
     bool row_major,
-    uint32_t num_cores_x_padded,
-    uint32_t num_cores_y_padded,
     uint32_t shard_height_padded,
     uint32_t shard_height_unpadded,
+    const CoreCoord& unpadded_grid_start,
     uint32_t num_cores_x_unpadded,
     uint32_t num_cores_y_unpadded) {
     tt::tt_metal::IDevice* device = input_tensor.device();
@@ -69,12 +68,6 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     const auto& front_pad = input_tensor_start;
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
     for (uint32_t i = 0, curr_sticks_read = 0; i < num_cores_padded; i++) {
-        CoreCoord core;
-        if (row_major) {
-            core = {i % num_cores_x_padded, i / num_cores_x_padded};
-        } else {
-            core = {i / num_cores_y_padded, i % num_cores_y_padded};
-        }
         uint32_t num_sticks_per_core_unpadded = shard_height_unpadded;
         uint32_t num_sticks_per_core_padded = shard_height_padded;
 
@@ -92,7 +85,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         std::vector<int> stick_ids_per_core;
         int front_pad_stick_id = -2;
         int pad_stick_id = -1;
-        for (uint32_t i = 0; i < num_sticks_per_core_padded; ++i) {
+        for (uint32_t j = 0; j < num_sticks_per_core_padded; ++j) {
             if ((curr_h >= front_pad[-2] and curr_h < (H + front_pad[-2])) and
                 (curr_c >= front_pad[-3] and curr_c < (C + front_pad[-3])) and
                 (curr_n >= front_pad[-4] and curr_n < (N + front_pad[-4]))) {
@@ -121,7 +114,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
         // figure out the stick id in a shard, and the core id for the stick.
         std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> core_stick_map;
-        auto first_core = device->worker_core_from_logical_core(CoreCoord{0, 0});
+        auto first_core = device->worker_core_from_logical_core(unpadded_grid_start);
         std::pair<uint32_t, uint32_t> prev_xy_pair = std::make_pair(first_core.x, first_core.y);
         for (uint32_t j = 0; j < num_sticks_per_core_padded; ++j) {
             int stick_id = stick_ids_per_core[j];
@@ -137,10 +130,15 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
                 uint32_t shard_grid_outer_dim_id = shard_id / shard_grid_inner_dim;
                 uint32_t shard_grid_inner_dim_id = shard_id - (shard_grid_outer_dim_id * shard_grid_inner_dim);
 
-                uint32_t worker_y_logical = row_major ? shard_grid_outer_dim_id : shard_grid_inner_dim_id;
-                uint32_t worker_x_logical = row_major ? shard_grid_inner_dim_id : shard_grid_outer_dim_id;
+                uint32_t worker_y_logical =
+                    unpadded_grid_start.y + (row_major ? shard_grid_outer_dim_id : shard_grid_inner_dim_id);
+                uint32_t worker_x_logical =
+                    unpadded_grid_start.x + (row_major ? shard_grid_inner_dim_id : shard_grid_outer_dim_id);
 
-                if (worker_x_logical < num_cores_x_unpadded and worker_y_logical < num_cores_y_unpadded) {
+                // worker_*_logical are absolute logical coordinates. Compare against absolute unpadded-grid bounds.
+                uint32_t unpadded_grid_end_x = unpadded_grid_start.x + num_cores_x_unpadded;
+                uint32_t unpadded_grid_end_y = unpadded_grid_start.y + num_cores_y_unpadded;
+                if (worker_x_logical < unpadded_grid_end_x and worker_y_logical < unpadded_grid_end_y) {
                     auto core_physical =
                         device->worker_core_from_logical_core(CoreCoord{worker_x_logical, worker_y_logical});
                     // save stick id in a shard, and core coord into a map
@@ -189,13 +187,13 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 }
 }  // namespace
 
-PadRmShardedHeightOnlyProgramFactory::cached_program_t PadRmShardedHeightOnlyProgramFactory::create(
-    const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output) {
+ProgramDescriptor PadRmShardedHeightOnlyProgramFactory::create_descriptor(
+    const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& tensor_return_value) {
     const auto& a = tensor_args.input;
+    Tensor& output = tensor_return_value;
     const auto& output_padded_shape = operation_attributes.output_padded_shape;
     const auto& pad_value = operation_attributes.pad_value;
     const auto& input_tensor_start = operation_attributes.input_tensor_start;
-    Program program{};
 
     const auto& a_shape = a.logical_shape();
     uint32_t W = a_shape[3], H = a_shape[2], C = a_shape[1], N = a_shape[0];
@@ -237,7 +235,9 @@ PadRmShardedHeightOnlyProgramFactory::cached_program_t PadRmShardedHeightOnlyPro
     [[maybe_unused]] auto& all_cores_unpadded = shard_spec_unpadded.grid;
     [[maybe_unused]] uint32_t num_cores_unpadded = shard_spec_unpadded.num_cores();
     auto bbox_unpadded = shard_spec_unpadded.grid.bounding_box();
-    CoreCoord grid_size_unpadded = {bbox_unpadded.end_coord.x + 1, bbox_unpadded.end_coord.y + 1};
+    CoreCoord grid_size_unpadded = {
+        bbox_unpadded.end_coord.x - bbox_unpadded.start_coord.x + 1,
+        bbox_unpadded.end_coord.y - bbox_unpadded.start_coord.y + 1};
     uint32_t num_cores_x_unpadded = grid_size_unpadded.x;
     uint32_t num_cores_y_unpadded = grid_size_unpadded.y;
 
@@ -253,7 +253,9 @@ PadRmShardedHeightOnlyProgramFactory::cached_program_t PadRmShardedHeightOnlyPro
     auto& all_cores_padded = shard_spec_padded.grid;
     uint32_t num_cores_padded = shard_spec_padded.num_cores();
     auto bbox_padded = shard_spec_padded.grid.bounding_box();
-    CoreCoord grid_size_padded = {bbox_padded.end_coord.x + 1, bbox_padded.end_coord.y + 1};
+    CoreCoord grid_size_padded = {
+        bbox_padded.end_coord.x - bbox_padded.start_coord.x + 1,
+        bbox_padded.end_coord.y - bbox_padded.start_coord.y + 1};
     uint32_t num_cores_x_padded = grid_size_padded.x;
     uint32_t num_cores_y_padded = grid_size_padded.y;
 
@@ -267,29 +269,54 @@ PadRmShardedHeightOnlyProgramFactory::cached_program_t PadRmShardedHeightOnlyPro
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
-    uint32_t src0_cb_index = 0;
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(
-            shard_height_unpadded * stick_size_unpadded, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, stick_size_unpadded)
-            .set_globally_allocated_address(*a.buffer());
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+    Buffer* src_buffer = a.buffer();
+    Buffer* dst_buffer = output.buffer();
 
+    ProgramDescriptor desc;
+
+    // Sharded input CB — globally allocated to the input buffer; framework patches
+    // the CB address on cache hits via cb.buffer.
+    uint32_t src0_cb_index = 0;
+    {
+        CBDescriptor cb_src0;
+        cb_src0.total_size = shard_height_unpadded * stick_size_unpadded;
+        cb_src0.core_ranges = total_cores;
+        cb_src0.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src0_cb_index),
+            .data_format = cb_data_format,
+            .page_size = stick_size_unpadded,
+        });
+        cb_src0.buffer = src_buffer;
+        desc.cbs.push_back(std::move(cb_src0));
+    }
+
+    // Sharded output CB — globally allocated to the output buffer.
     uint32_t output_cb_index = tt::CBIndex::c_16;
-    tt::tt_metal::CircularBufferConfig cb_output_config =
-        tt::tt_metal::CircularBufferConfig(
-            shard_height_padded * stick_size_padded, {{output_cb_index, dst_cb_data_format}})
-            .set_page_size(output_cb_index, stick_size_padded)
-            .set_globally_allocated_address(*output.buffer());
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_output_config);
+    {
+        CBDescriptor cb_output;
+        cb_output.total_size = shard_height_padded * stick_size_padded;
+        cb_output.core_ranges = total_cores;
+        cb_output.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(output_cb_index),
+            .data_format = dst_cb_data_format,
+            .page_size = stick_size_padded,
+        });
+        cb_output.buffer = dst_buffer;
+        desc.cbs.push_back(std::move(cb_output));
+    }
 
     // construct const buffer with the pad_value
     bool not_pad_by_zero = pad_value != 0;
     uint32_t src1_cb_index = 1;
-    tt::tt_metal::CircularBufferConfig cb_src1_config =
-        tt::tt_metal::CircularBufferConfig(stick_size_padded, {{src1_cb_index, cb_data_format}})
-            .set_page_size(src1_cb_index, stick_size_padded);
-    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = stick_size_padded,
+        .core_ranges = total_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(src1_cb_index),
+            .data_format = cb_data_format,
+            .page_size = stick_size_padded,
+        }}},
+    });
 
     uint32_t packed_pad_value;
     if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
@@ -317,17 +344,21 @@ PadRmShardedHeightOnlyProgramFactory::cached_program_t PadRmShardedHeightOnlyPro
         (std::uint32_t)row_major_min_bytes,
         (std::uint32_t)(stick_size_padded / row_major_min_bytes)};
 
-    KernelHandle reader_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_dims_rm_sharded.cpp",
-        all_cores_padded,
-        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/reader_pad_dims_rm_sharded.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores_padded;
+    reader_desc.compile_time_args = std::move(reader_ct_args);
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    KernelHandle writer_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_dims_rm_sharded.cpp",
-        all_cores_padded,
-        tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/pad/device/kernels/dataflow/writer_pad_dims_rm_sharded.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores_padded;
+    writer_desc.compile_time_args = std::move(writer_ct_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
     auto all_runtime_args = get_pad_runtime_args_rm_sharded(
         a,
@@ -335,37 +366,42 @@ PadRmShardedHeightOnlyProgramFactory::cached_program_t PadRmShardedHeightOnlyPro
         input_tensor_start,
         num_cores_padded,
         row_major,
-        num_cores_x_padded,
-        num_cores_y_padded,
         shard_height_padded,
         shard_height_unpadded,
+        bbox_unpadded.start_coord,
         num_cores_x_unpadded,
         num_cores_y_unpadded);
 
+    // Sharded readers/writers consume only constant uint32_t per-core args; no
+    // BufferBinding is needed because the CBs themselves carry the buffer
+    // addresses (via cb.buffer).
     for (uint32_t i = 0; i < num_cores_padded; i++) {
         CoreCoord core;
         if (row_major) {
-            core = {i % num_cores_x_padded, i / num_cores_x_padded};
+            core = {
+                bbox_padded.start_coord.x + i % num_cores_x_padded, bbox_padded.start_coord.y + i / num_cores_x_padded};
         } else {
-            core = {i / num_cores_y_padded, i % num_cores_y_padded};
+            core = {
+                bbox_padded.start_coord.x + i / num_cores_y_padded, bbox_padded.start_coord.y + i % num_cores_y_padded};
         }
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first);
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second);
+        KernelDescriptor::RTArgList reader_rt_args;
+        reader_rt_args.reserve(all_runtime_args[i].first.size());
+        for (uint32_t v : all_runtime_args[i].first) {
+            reader_rt_args.push_back(v);
+        }
+        KernelDescriptor::RTArgList writer_rt_args;
+        writer_rt_args.reserve(all_runtime_args[i].second.size());
+        for (uint32_t v : all_runtime_args[i].second) {
+            writer_rt_args.push_back(v);
+        }
+        reader_desc.emplace_runtime_args(core, reader_rt_args);
+        writer_desc.emplace_runtime_args(core, writer_rt_args);
     }
 
-    return cached_program_t{std::move(program), {cb_src0, cb_output}};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
 
-void PadRmShardedHeightOnlyProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const PadParams& /*operation_attributes*/,
-    const PadInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto* src_buffer_a = tensor_args.input.buffer();
-    auto* dst_buffer = tensor_return_value.buffer();
-
-    UpdateDynamicCircularBufferAddress(cached_program.program, cached_program.shared_variables.cb_src0, *src_buffer_a);
-    UpdateDynamicCircularBufferAddress(cached_program.program, cached_program.shared_variables.cb_output, *dst_buffer);
+    return desc;
 }
 
 }  // namespace ttnn::prim

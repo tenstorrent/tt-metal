@@ -11,6 +11,7 @@
 
 #include "device/fusion_dispatch_op_device_operation.hpp"
 #include "device/fusion_dispatch_op_helpers.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace nb = nanobind;

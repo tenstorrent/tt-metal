@@ -116,6 +116,49 @@ std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed
     return fixed_asic_position_pinnings;
 }
 
+// Blitz decode pipeline: octet mesh (4x2 device topology, 8 chips) ASIC-position pinnings for chips 0, 1, 2, 5,
+// 6, and 7 on Blackhole Galaxy (QSFP / tray layout vs logical mesh). Only used when cluster is Blackhole Galaxy
+// and the mesh shape matches decode MGDs (dims [4,2]).
+std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>>
+get_blitz_decode_pipeline_asic_position_pinnings_for_mesh(MeshId mesh_id, const MeshShape& mesh_shape) {
+    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+    if (mesh_shape.mesh_size() != 8 || mesh_shape[0] != 4 || mesh_shape[1] != 2) {
+        return fixed_asic_position_pinnings;
+    }
+
+    std::vector<AsicPosition> node0_positions;
+    node0_positions.emplace_back(AsicPosition{1, 1});
+    node0_positions.emplace_back(AsicPosition{1, 3});
+
+    std::vector<AsicPosition> node1_positions;
+    node1_positions.emplace_back(AsicPosition{1, 2});
+    node1_positions.emplace_back(AsicPosition{1, 4});
+
+    std::vector<AsicPosition> node2_positions;
+    node2_positions.emplace_back(AsicPosition{1, 5});
+    node2_positions.emplace_back(AsicPosition{1, 7});
+
+    std::vector<AsicPosition> node5_positions;
+    node5_positions.emplace_back(AsicPosition{4, 5});
+    node5_positions.emplace_back(AsicPosition{4, 7});
+
+    std::vector<AsicPosition> node6_positions;
+    node6_positions.emplace_back(AsicPosition{4, 2});
+    node6_positions.emplace_back(AsicPosition{4, 4});
+
+    std::vector<AsicPosition> node7_positions;
+    node7_positions.emplace_back(AsicPosition{4, 1});
+    node7_positions.emplace_back(AsicPosition{4, 3});
+
+    fixed_asic_position_pinnings.emplace_back(FabricNodeId{mesh_id, 0}, std::move(node0_positions));
+    fixed_asic_position_pinnings.emplace_back(FabricNodeId{mesh_id, 1}, std::move(node1_positions));
+    fixed_asic_position_pinnings.emplace_back(FabricNodeId{mesh_id, 2}, std::move(node2_positions));
+    fixed_asic_position_pinnings.emplace_back(FabricNodeId{mesh_id, 5}, std::move(node5_positions));
+    fixed_asic_position_pinnings.emplace_back(FabricNodeId{mesh_id, 6}, std::move(node6_positions));
+    fixed_asic_position_pinnings.emplace_back(FabricNodeId{mesh_id, 7}, std::move(node7_positions));
+    return fixed_asic_position_pinnings;
+}
+
 template <typename CONNECTIVITY_MAP_T>
 void build_golden_link_counts(
     CONNECTIVITY_MAP_T const& golden_connectivity_map,
@@ -164,20 +207,18 @@ const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
     {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
 };
 
-uint16_t get_bus_id(tt::umd::Cluster& cluster, ChipId chip_id) {
+uint16_t get_bus_id(tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id) {
     // Prefer cached value from cluster descriptor (available for silicon and our simulator/mock descriptors)
-    auto* cluster_desc = cluster.get_cluster_description();
-    if (!cluster_desc->is_chip_mmio_capable(chip_id)) {
-        chip_id = cluster_desc->get_closest_mmio_capable_chip(chip_id);
+    if (!cluster_desc.is_chip_mmio_capable(chip_id)) {
+        chip_id = cluster_desc.get_closest_mmio_capable_chip(chip_id);
     }
-    uint16_t bus_id = cluster_desc->get_bus_id(chip_id);
+    uint16_t bus_id = cluster_desc.get_bus_id(chip_id);
     return bus_id;
 }
 
-UbbId get_ubb_id(tt::umd::Cluster& cluster, ChipId chip_id) {
-    auto* cluster_desc = cluster.get_cluster_description();
-    const auto& tray_bus_ids = ubb_bus_ids.at(cluster_desc->get_arch());
-    const auto bus_id = get_bus_id(cluster, chip_id);
+UbbId get_ubb_id(tt::umd::ClusterDescriptor& cluster_desc, ChipId chip_id) {
+    const auto& tray_bus_ids = ubb_bus_ids.at(cluster_desc.get_arch());
+    const auto bus_id = get_bus_id(cluster_desc, chip_id);
     auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
     if (tray_bus_id_it != tray_bus_ids.end()) {
         auto ubb_asic_id = bus_id & 0x0F;
@@ -467,7 +508,7 @@ void ControlPlane::init_control_plane(
 
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
     auto psd =
-        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+        tt::tt_metal::run_physical_system_discovery(*driver_ref.get_cluster_description(), distributed_context, rtoptions.get_target_device());
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
@@ -498,8 +539,12 @@ void ControlPlane::init_control_plane(
                 const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
                 const size_t mesh_chip_count = mesh_shape.mesh_size();
 
-                // Only apply galaxy pinnings if mesh has multiple of 32 chips and is not 1D
-                if (!is_1d && mesh_chip_count % 32 == 0) {
+                if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY && !is_1d &&
+                    mesh_chip_count == 8 && mesh_shape[0] == 4 && mesh_shape[1] == 2) {
+                    auto mesh_pinnings = get_blitz_decode_pipeline_asic_position_pinnings_for_mesh(mesh_id, mesh_shape);
+                    fixed_asic_position_pinnings.insert(
+                        fixed_asic_position_pinnings.end(), mesh_pinnings.begin(), mesh_pinnings.end());
+                } else if (!is_1d && mesh_chip_count % 32 == 0) {
                     auto mesh_pinnings =
                         get_galaxy_fixed_asic_position_pinnings_for_mesh(mesh_id, mesh_shape, world_size == 1);
                     fixed_asic_position_pinnings.insert(
@@ -578,7 +623,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // Initialize physical system descriptor
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
     auto psd =
-        tt::tt_metal::run_physical_system_discovery(driver_ref, distributed_context, rtoptions.get_target_device());
+        tt::tt_metal::run_physical_system_discovery(*driver_ref.get_cluster_description(), distributed_context, rtoptions.get_target_device());
     this->physical_system_descriptor_ = std::make_unique<tt::tt_metal::PhysicalSystemDescriptor>(std::move(psd));
 
     // Generate Mesh graph based on physical system descriptor
@@ -608,8 +653,12 @@ void ControlPlane::init_control_plane_auto_discovery() {
             const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
             const size_t mesh_chip_count = mesh_shape.mesh_size();
 
-            // Only apply galaxy pinnings if mesh has multiple of 32 chips and is not 1D
-            if (!is_1d && mesh_chip_count % 32 == 0) {
+            if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY && !is_1d &&
+                mesh_chip_count == 8 && mesh_shape[0] == 4 && mesh_shape[1] == 2) {
+                auto mesh_pinnings = get_blitz_decode_pipeline_asic_position_pinnings_for_mesh(mesh_id, mesh_shape);
+                fixed_asic_position_pinnings.insert(
+                    fixed_asic_position_pinnings.end(), mesh_pinnings.begin(), mesh_pinnings.end());
+            } else if (!is_1d && mesh_chip_count % 32 == 0) {
                 auto mesh_pinnings =
                     get_galaxy_fixed_asic_position_pinnings_for_mesh(mesh_id, mesh_shape, world_size == 1);
                 fixed_asic_position_pinnings.insert(

@@ -90,7 +90,11 @@ void kernel_main() {
     // This initializes llk_pack_dest_init, which sets up the MATH-PACK DST semaphore
     // in the "available for MATH" state.  Without it, the first tilize_block call's
     // internal llk_math_wait_for_dest_available() spins forever (deadlock).
+#ifdef RMSNORM
+    binary_op_init_common(cb_in, cb_scaler, cb_xmm2);
+#else
     binary_op_init_common(cb_in, cb_scaler, cb_ex);
+#endif
 #endif
     cb_eps_obj.wait_front(1);  // comes from the reader
 
@@ -123,7 +127,11 @@ void kernel_main() {
         for (auto block : generic::blocks(Wt, block_size)) {
 #ifdef TILIZE_IN
             tilize_row_major_block(cb_in_rm, cb_in, block_size, block);
+#ifdef RMSNORM
+            binary_op_init_common(cb_in, cb_scaler, cb_xmm2);
+#else
             binary_op_init_common(cb_in, cb_scaler, cb_ex);
+#endif
 #endif
             cb_in_obj.wait_front(block.full_block_size());
             tile_regs_acquire();
@@ -145,9 +153,10 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
             cb_inb_obj.wait_front(block.full_block_size());
             reconfig_data_format_srca(cb_in, cb_inb);
-            binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
+            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
             for (auto i : block.local()) {
-                binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, i, i);
+                binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                    cb_inb, i, i);
             }
             cb_inb_obj.pop_front(block.full_block_size());
 #endif
@@ -267,7 +276,11 @@ void kernel_main() {
             // Reader supplies this second pass of data after the variance data.
             tilize_row_major_block(cb_in_rm, cb_in, block_size, block);
 
+#ifdef RMSNORM
+            binary_op_init_common(cb_in, cb_scaler, cb_xmm2);
+#else
             binary_op_init_common(cb_in, cb_scaler, cb_ex);
+#endif
 #endif
             tile_regs_acquire();
             cb_in_obj.wait_front(block.full_block_size());
@@ -290,9 +303,10 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
             cb_inb_obj.wait_front(block.full_block_size());
             reconfig_data_format_srca(cb_inb);
-            binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
+            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
             for (auto i : block.local()) {
-                binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, i, i);
+                binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
+                    cb_inb, i, i);
             }
             cb_inb_obj.pop_front(block.full_block_size());
 #endif

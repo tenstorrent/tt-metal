@@ -19,14 +19,19 @@
 // A "node" is a NOC endpoint with an x,y address - a block in the accelerator grid.
 // This header provides type aliases for the new "Node" terminology.
 
+#include <variant>
+
 #include <tt-metalium/core_coord.hpp>
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
 // Type aliases: Node terminology for NOC endpoint coordinates
 using NodeCoord = tt::tt_metal::CoreCoord;
 using NodeRange = tt::tt_metal::CoreRange;
 using NodeRangeSet = tt::tt_metal::CoreRangeSet;
+
+// A set of nodes specified as a single point, range, or range set.
+using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
 
 // Function aliases: Node terminology equivalents
 
@@ -49,19 +54,19 @@ inline std::vector<NodeCoord> grid_to_nodes_with_noop(
     return tt::tt_metal::grid_to_cores_with_noop(used_nodes, all_nodes, row_wise);
 }
 
-inline std::vector<NodeCoord> noderange_to_nodes(
-    const NodeRangeSet& nrs, std::optional<uint32_t> max_nodes = std::nullopt, bool row_wise = false) {
-    return tt::tt_metal::corerange_to_cores(nrs, max_nodes, row_wise);
+inline std::vector<NodeCoord> node_range_to_nodes(
+    const NodeRangeSet& node_ranges, std::optional<uint32_t> max_nodes = std::nullopt, bool row_wise = false) {
+    return tt::tt_metal::corerange_to_cores(node_ranges, max_nodes, row_wise);
 }
 
-inline NodeRangeSet select_from_noderangeset(
-    const NodeRangeSet& nrs, uint32_t start_index, uint32_t end_index, bool row_wise = false) {
-    return tt::tt_metal::select_from_corerangeset(nrs, start_index, end_index, row_wise);
+inline NodeRangeSet select_from_node_range_set(
+    const NodeRangeSet& node_ranges, uint32_t start_index, uint32_t end_index, bool row_wise = false) {
+    return tt::tt_metal::select_from_corerangeset(node_ranges, start_index, end_index, row_wise);
 }
 
-inline std::optional<NodeRange> select_contiguous_range_from_noderangeset(
-    const NodeRangeSet& nrs, uint32_t x, uint32_t y) {
-    return tt::tt_metal::select_contiguous_range_from_corerangeset(nrs, x, y);
+inline std::optional<NodeRange> select_contiguous_range_from_node_range_set(
+    const NodeRangeSet& node_ranges, uint32_t x, uint32_t y) {
+    return tt::tt_metal::select_contiguous_range_from_corerangeset(node_ranges, x, y);
 }
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

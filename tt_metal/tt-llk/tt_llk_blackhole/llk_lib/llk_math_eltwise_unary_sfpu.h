@@ -45,7 +45,9 @@ inline void eltwise_unary_sfpu_configure_addrmod()
     if constexpr (
         sfpu_op == SfpuType::reciprocal || sfpu_op == SfpuType::typecast || sfpu_op == SfpuType::unary_max || sfpu_op == SfpuType::unary_min ||
         sfpu_op == SfpuType::unary_max_int32 || sfpu_op == SfpuType::unary_min_int32 || sfpu_op == SfpuType::unary_max_uint32 ||
-        sfpu_op == SfpuType::unary_min_uint32 || sfpu_op == SfpuType::signbit)
+        sfpu_op == SfpuType::unary_min_uint32 || sfpu_op == SfpuType::signbit || sfpu_op == SfpuType::equal_zero || sfpu_op == SfpuType::not_equal_zero ||
+        sfpu_op == SfpuType::less_than_zero || sfpu_op == SfpuType::greater_than_equal_zero || sfpu_op == SfpuType::less_than_equal_zero ||
+        sfpu_op == SfpuType::greater_than_zero)
     {
         addr_mod_t {
             .srca = {.incr = 0},

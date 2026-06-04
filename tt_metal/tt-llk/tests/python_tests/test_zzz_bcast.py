@@ -26,7 +26,7 @@ from helpers.param_config import (
     parametrize,
 )
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator_v2 import generate_stimuli_v2
+from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
@@ -48,10 +48,10 @@ from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
 supported_formats = [
-    # DataFormat.Int32,
-    # DataFormat.UInt32,
-    # DataFormat.UInt16,
-    # DataFormat.Float32,
+    DataFormat.Int32,
+    DataFormat.UInt32,
+    DataFormat.UInt16,
+    DataFormat.Float32,
     DataFormat.Float16_b,
     DataFormat.Bfp8_b,
 ]
@@ -90,6 +90,13 @@ def test_unpack_bcast(
     ):
         pytest.skip("32-bit formats require dest accumulation")
 
+    if (
+        get_chip_architecture() == ChipArchitecture.BLACKHOLE
+        and formats.input_format
+        in (DataFormat.Float32, DataFormat.Int32, DataFormat.UInt32, DataFormat.UInt16)
+    ):
+        pytest.skip("Unsupported for BH yet")
+
     # --- Skips from bugs --------------------------------------------------
 
     # TODO: pgardner - Column broadcast for tiny tiles needs kernel support
@@ -120,9 +127,9 @@ def test_unpack_bcast(
     input_dimensions = list(tile_dimensions)
 
     # --- Stimuli generation ----------------------------------------------
-    # generate_stimuli_w_tile_dimensions produces dense data for any tile size.
+    # generate_stimuli(..., tile_dimensions=...) produces dense data for any tile size.
     # For [32,32] this is equivalent to the legacy generate_stimuli path.
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli_v2(
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,

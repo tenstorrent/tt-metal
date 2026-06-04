@@ -2,15 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_device_operation.hpp"
 
-#include <optional>
+#include <bit>
 #include <cmath>
+#include <vector>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
@@ -27,10 +29,10 @@ namespace ttnn::prim {
 // compute and write: mostly the same as the multi-core implementation of SDPA.
 // [INFO] a natural thought for potentially faster implementation is to only compute the SDPA within each windown as
 // defined by cu_window_seqlens; this should be driven by performance analysis results of whole ML model
-WindowedSDPAProgramFactory::cached_program_t WindowedSDPAProgramFactory::create(
-    const SdpaWindowedParams& operation_attributes,
-    const SdpaWindowedInputs& tensor_args,
-    Tensor& tensor_return_value) {
+ProgramDescriptor WindowedScaledDotProductAttentionDeviceOperation::WindowedSDPAProgramFactory::create_descriptor(
+    const operation_attributes_t& operation_attributes,
+    const tensor_args_t& tensor_args,
+    tensor_return_value_t& tensor_return_value) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
     const auto& input_tensor_v = tensor_args.v;
@@ -41,7 +43,7 @@ WindowedSDPAProgramFactory::cached_program_t WindowedSDPAProgramFactory::create(
         scale = 1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1]));
     }
 
-    auto program_config = operation_attributes.program_config;
+    const auto& program_config = operation_attributes.program_config;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
     std::size_t q_chunk_size =
         operation_attributes.program_config ? operation_attributes.program_config->q_chunk_size : 32;
@@ -62,15 +64,15 @@ WindowedSDPAProgramFactory::cached_program_t WindowedSDPAProgramFactory::create(
     const uint32_t Sk = k_shape[2];
 
     // Calculate padded sequence lengths
-    const uint32_t padded_Sq = std::ceil((float)Sq / q_chunk_size) * q_chunk_size;
-    const uint32_t padded_Sk = std::ceil((float)Sk / k_chunk_size) * k_chunk_size;
+    const uint32_t padded_Sq = std::ceil(static_cast<float>(Sq) / q_chunk_size) * q_chunk_size;
+    const uint32_t padded_Sk = std::ceil(static_cast<float>(Sk) / k_chunk_size) * k_chunk_size;
 
     const uint32_t Sqt = padded_Sq / TILE_HEIGHT;
     const uint32_t Skt = padded_Sk / TILE_HEIGHT;
     const uint32_t DHt = DH / TILE_WIDTH;
 
-    const uint32_t valid_Sqt = std::ceil((float)Sq / TILE_HEIGHT);
-    const uint32_t valid_Skt = std::ceil((float)Sk / TILE_HEIGHT);
+    const uint32_t valid_Sqt = std::ceil(static_cast<float>(Sq) / TILE_HEIGHT);
+    const uint32_t valid_Skt = std::ceil(static_cast<float>(Sk) / TILE_HEIGHT);
 
     const uint32_t Sq_chunk_t = q_chunk_size / TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
@@ -102,8 +104,6 @@ WindowedSDPAProgramFactory::cached_program_t WindowedSDPAProgramFactory::create(
     log_debug(tt::LogOp, "NKH: {}", NKH);
     log_debug(tt::LogOp, "cu_windows_seqlens.size(): {}", cu_window_seqlens_eles);
 
-    Program program = CreateProgram();
-
     auto* device = input_tensor_q.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -122,7 +122,7 @@ WindowedSDPAProgramFactory::cached_program_t WindowedSDPAProgramFactory::create(
             ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : true)
             : true;
 
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
+    auto core_grid = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
     uint32_t num_cores = grid_size.x * grid_size.y;
 
     TT_FATAL(
@@ -224,43 +224,43 @@ WindowedSDPAProgramFactory::cached_program_t WindowedSDPAProgramFactory::create(
 
     // Determine granularity for statistics computation
     const uint32_t stats_granularity = std::min(Sq_chunk_t, dst_size);
-    const uint32_t log2_stats_granularity = std::log2(stats_granularity);
+    const uint32_t log2_stats_granularity = static_cast<uint32_t>(std::log2(stats_granularity));
     TT_FATAL(
-        stats_granularity == (1 << log2_stats_granularity),
+        stats_granularity == (1u << log2_stats_granularity),
         "stats_granularity must be a power of 2. Got {}.",
         stats_granularity);
 
     const uint32_t sub_exp_granularity = std::min(Sk_chunk_t, dst_size);
-    const uint32_t log2_sub_exp_granularity = std::log2(sub_exp_granularity);
+    const uint32_t log2_sub_exp_granularity = static_cast<uint32_t>(std::log2(sub_exp_granularity));
     TT_FATAL(
-        sub_exp_granularity == (1 << log2_sub_exp_granularity),
+        sub_exp_granularity == (1u << log2_sub_exp_granularity),
         "sub_exp_granularity must be a power of 2. Got {}.",
         sub_exp_granularity);
 
     const uint32_t mul_bcast_granularity = std::min(Sq_chunk_t * Sk_chunk_t, dst_size);
-    const uint32_t log2_mul_bcast_granularity = std::log2(mul_bcast_granularity);
+    const uint32_t log2_mul_bcast_granularity = static_cast<uint32_t>(std::log2(mul_bcast_granularity));
     TT_FATAL(
-        mul_bcast_granularity == (1 << log2_mul_bcast_granularity),
+        mul_bcast_granularity == (1u << log2_mul_bcast_granularity),
         "mul_bcast_granularity must be a power of 2. Got {}.",
         mul_bcast_granularity);
 
     uint32_t dht_granularity = std::min(DHt, dst_size);
-    uint32_t log2_dht_granularity = std::log2(dht_granularity);
+    uint32_t log2_dht_granularity = static_cast<uint32_t>(std::log2(dht_granularity));
     // Sometimes DHt is not a power of 2, so granularity should be 1
-    if (dht_granularity != (1 << log2_dht_granularity)) {
+    if (dht_granularity != (1u << log2_dht_granularity)) {
         dht_granularity = 1;
         log2_dht_granularity = 0;
     }
     TT_FATAL(
-        dht_granularity == (1 << log2_dht_granularity),
+        dht_granularity == (1u << log2_dht_granularity),
         "dht_granularity must be a power of 2. Got {}.",
         dht_granularity);
 
     // Reduce ops can use granularity of dst_size/2
     const uint32_t reduce_granularity = std::min(Sq_chunk_t, dst_size / 2);
-    const uint32_t log2_reduce_granularity = std::log2(reduce_granularity);
+    const uint32_t log2_reduce_granularity = static_cast<uint32_t>(std::log2(reduce_granularity));
     TT_FATAL(
-        reduce_granularity == (1 << log2_reduce_granularity),
+        reduce_granularity == (1u << log2_reduce_granularity),
         "reduce_granularity must be a power of 2. Got {}.",
         reduce_granularity);
 
@@ -280,11 +280,7 @@ WindowedSDPAProgramFactory::cached_program_t WindowedSDPAProgramFactory::create(
     class bfloat16 bfloat_identity_scalar(1.0f);
     uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
 
-    union {
-        float f;
-        uint32_t u;
-    } scale_union{};
-    scale_union.f = scale.value_or(1.0f);
+    const uint32_t scale_packed = std::bit_cast<uint32_t>(scale.value_or(1.0f));
 
     std::vector<uint32_t> reader_compile_time_args = {
         B,
@@ -336,44 +332,21 @@ WindowedSDPAProgramFactory::cached_program_t WindowedSDPAProgramFactory::create(
         out_in0_num_subblocks,
         out_in1_num_subblocks,
         out_num_blocks,
-        scale_union.u,
+        scale_packed,
     };
 
-    std::map<std::string, std::string> defines;
-    defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
-    defines["LOG2_STATS_GRANULARITY"] = std::to_string(log2_stats_granularity);
-    defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
-    defines["LOG2_SUB_EXP_GRANULARITY"] = std::to_string(log2_sub_exp_granularity);
-    defines["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
-    defines["LOG2_MUL_BCAST_GRANULARITY"] = std::to_string(log2_mul_bcast_granularity);
-    defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
-    defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
-    defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
-    defines["LOG2_REDUCE_GRANULARITY"] = std::to_string(log2_reduce_granularity);
-    defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-
-    auto reader_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/device/kernels/dataflow/reader_windowed.cpp",
-        core_grid,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
-
-    auto writer_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/device/kernels/dataflow/writer_windowed.cpp",
-        core_grid,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
-
-    auto compute_kernels_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/device/kernels/compute/sdpa_windowed.cpp",
-        core_grid,
-        tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .math_approx_mode = math_approx_mode,
-            .compile_args = compute_compile_time_args,
-            .defines = defines});
+    KernelDescriptor::Defines defines;
+    defines.emplace_back("STATS_GRANULARITY", std::to_string(stats_granularity));
+    defines.emplace_back("LOG2_STATS_GRANULARITY", std::to_string(log2_stats_granularity));
+    defines.emplace_back("SUB_EXP_GRANULARITY", std::to_string(sub_exp_granularity));
+    defines.emplace_back("LOG2_SUB_EXP_GRANULARITY", std::to_string(log2_sub_exp_granularity));
+    defines.emplace_back("MUL_BCAST_GRANULARITY", std::to_string(mul_bcast_granularity));
+    defines.emplace_back("LOG2_MUL_BCAST_GRANULARITY", std::to_string(log2_mul_bcast_granularity));
+    defines.emplace_back("DHT_GRANULARITY", std::to_string(dht_granularity));
+    defines.emplace_back("LOG2_DHT_GRANULARITY", std::to_string(log2_dht_granularity));
+    defines.emplace_back("REDUCE_GRANULARITY", std::to_string(reduce_granularity));
+    defines.emplace_back("LOG2_REDUCE_GRANULARITY", std::to_string(log2_reduce_granularity));
+    defines.emplace_back("EXP_APPROX_MODE", std::to_string(static_cast<uint32_t>(exp_approx_mode)));
 
     // Create circular buffers
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
@@ -406,130 +379,224 @@ WindowedSDPAProgramFactory::cached_program_t WindowedSDPAProgramFactory::create(
     log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
     log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
 
+    ProgramDescriptor desc;
+
     // Q input
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(q_tiles * q_tile_size, {{tt::CBIndex::c_0, q_df}})
-            .set_page_size(tt::CBIndex::c_0, q_tile_size));
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = q_tiles * q_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
+            .data_format = q_df,
+            .page_size = q_tile_size,
+        }}},
+    });
 
     // K input
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(k_tiles * k_tile_size, {{tt::CBIndex::c_1, k_df}})
-            .set_page_size(tt::CBIndex::c_1, k_tile_size));
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = k_tiles * k_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
+            .data_format = k_df,
+            .page_size = k_tile_size,
+        }}},
+    });
 
     // V input
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(v_tiles * v_tile_size, {{tt::CBIndex::c_2, v_df}})
-            .set_page_size(tt::CBIndex::c_2, v_tile_size));
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = v_tiles * v_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
+            .data_format = v_df,
+            .page_size = v_tile_size,
+        }}},
+    });
 
     // cu_window_seqlens input
     // [INFO] cu_window_seqlens is a small 1D tensor, so we can set the page size to the size of all the tiles
     uint32_t cu_window_seqlens_page_size = cu_window_seqlens_tile_size;
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(cu_window_seqlens_page_size, {{tt::CBIndex::c_3, cu_window_seqlens_df}})
-            .set_page_size(tt::CBIndex::c_3, cu_window_seqlens_page_size));
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = cu_window_seqlens_page_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
+            .data_format = cu_window_seqlens_df,
+            .page_size = cu_window_seqlens_page_size,
+        }}},
+    });
 
     // cb_mask_in
     uint32_t mask_tile_size = tt::tile_size(mask_df);
     uint32_t mask_ntiles = qk_ntiles_per_chunk * 2;  // double buffer
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(mask_ntiles * mask_tile_size, {{tt::CBIndex::c_4, mask_df}})
-            .set_page_size(tt::CBIndex::c_4, mask_tile_size));
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = mask_ntiles * mask_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
+            .data_format = mask_df,
+            .page_size = mask_tile_size,
+        }}},
+    });
 
     // identity scalar input
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_5, scalar_df}})
-            .set_page_size(tt::CBIndex::c_5, scalar_tile_size));
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = scale_tiles * scalar_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
+            .data_format = scalar_df,
+            .page_size = scalar_tile_size,
+        }}},
+    });
 
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_7, scalar_df}})
-            .set_page_size(tt::CBIndex::c_7, scalar_tile_size));
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = scale_tiles * scalar_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_7),
+            .data_format = scalar_df,
+            .page_size = scalar_tile_size,
+        }}},
+    });
 
     // Intermediate buffers
     // cb_qk_im
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(qk_ntiles_per_chunk * im_tile_size, {{tt::CBIndex::c_24, im_df}})
-            .set_page_size(tt::CBIndex::c_24, im_tile_size));
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = qk_ntiles_per_chunk * im_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_24),
+            .data_format = im_df,
+            .page_size = im_tile_size,
+        }}},
+    });
 
     // cb_out_im
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_25, im_df}})
-            .set_page_size(tt::CBIndex::c_25, im_tile_size));
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out_im_tiles * im_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_25),
+            .data_format = im_df,
+            .page_size = im_tile_size,
+        }}},
+    });
 
     // cb_out_accumulate_im
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(out_im_tiles * im_tile_size, {{tt::CBIndex::c_26, im_df}})
-            .set_page_size(tt::CBIndex::c_26, im_tile_size));
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out_im_tiles * im_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_26),
+            .data_format = im_df,
+            .page_size = im_tile_size,
+        }}},
+    });
 
     // cb_cur_max
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_27, stats_df}})
-            .set_page_size(tt::CBIndex::c_27, stats_tile_size));
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = statistics_tiles * stats_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_27),
+            .data_format = stats_df,
+            .page_size = stats_tile_size,
+        }}},
+    });
 
     // cb_prev_max
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_28, stats_df}})
-            .set_page_size(tt::CBIndex::c_28, stats_tile_size));
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = statistics_tiles * stats_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_28),
+            .data_format = stats_df,
+            .page_size = stats_tile_size,
+        }}},
+    });
 
     // cb_cur_sum
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_29, stats_df}})
-            .set_page_size(tt::CBIndex::c_29, stats_tile_size));
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = statistics_tiles * stats_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
+            .data_format = stats_df,
+            .page_size = stats_tile_size,
+        }}},
+    });
 
     // cb_prev_sum
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_30, stats_df}})
-            .set_page_size(tt::CBIndex::c_30, stats_tile_size));
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = statistics_tiles * stats_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_30),
+            .data_format = stats_df,
+            .page_size = stats_tile_size,
+        }}},
+    });
 
     // cb_exp_max_diff
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_31, stats_df}})
-            .set_page_size(tt::CBIndex::c_31, stats_tile_size));
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = statistics_tiles * stats_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_31),
+            .data_format = stats_df,
+            .page_size = stats_tile_size,
+        }}},
+    });
 
     // Output
-    CreateCircularBuffer(
-        program,
-        core_grid,
-        CircularBufferConfig(out0_t * out_tile_size, {{tt::CBIndex::c_16, out_df}})
-            .set_page_size(tt::CBIndex::c_16, out_tile_size));
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out0_t * out_tile_size,
+        .core_ranges = core_grid,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_16),
+            .data_format = out_df,
+            .page_size = out_tile_size,
+        }}},
+    });
 
-    // Get buffer addresses
-    uint32_t q_addr = q_buffer->address();
-    uint32_t k_addr = k_buffer->address();
-    uint32_t v_addr = v_buffer->address();
-    uint32_t cu_window_seqlens_addr = cu_window_seqlens_buffer->address();
-    uint32_t out_addr = out0_buffer->address();
+    // Reader kernel
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/device/kernels/dataflow/reader_windowed.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = core_grid;
+    reader_desc.compile_time_args = reader_compile_time_args;
+    reader_desc.defines = defines;
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    // Set reader runtime args
+    // Writer kernel
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/device/kernels/dataflow/writer_windowed.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = core_grid;
+    writer_desc.compile_time_args = writer_compile_time_args;
+    writer_desc.defines = defines;
+    writer_desc.config = WriterConfigDescriptor{};
+
+    // Compute kernel
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/device/kernels/compute/sdpa_windowed.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = core_grid;
+    compute_desc.compile_time_args = compute_compile_time_args;
+    compute_desc.defines = defines;
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = math_fidelity,
+        .fp32_dest_acc_en = fp32_dest_acc_en,
+        .dst_full_sync_en = dst_full_sync_en,
+        .math_approx_mode = math_approx_mode,
+    };
+
+    // Set per-core runtime args
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
@@ -558,15 +625,13 @@ WindowedSDPAProgramFactory::cached_program_t WindowedSDPAProgramFactory::create(
         log_debug(tt::LogOp, "local_q_start: {}", local_q_start);
         log_debug(tt::LogOp, "local_q_end: {}", local_q_end);
 
-        SetRuntimeArgs(
-            program,
-            reader_kernels_id,
+        reader_desc.emplace_runtime_args(
             core,
             {
-                q_addr,
-                k_addr,
-                v_addr,
-                cu_window_seqlens_addr,
+                q_buffer,
+                k_buffer,
+                v_buffer,
+                cu_window_seqlens_buffer,
                 cu_window_seqlens_eles,
                 i,
                 local_batch_start,
@@ -578,12 +643,10 @@ WindowedSDPAProgramFactory::cached_program_t WindowedSDPAProgramFactory::create(
             });
 
         // Writer args
-        SetRuntimeArgs(
-            program,
-            writer_kernels_id,
+        writer_desc.emplace_runtime_args(
             core,
             {
-                out_addr,
+                out0_buffer,
                 i,
                 local_batch_start,
                 local_batch_end,
@@ -594,9 +657,7 @@ WindowedSDPAProgramFactory::cached_program_t WindowedSDPAProgramFactory::create(
             });
 
         // Compute args
-        SetRuntimeArgs(
-            program,
-            compute_kernels_id,
+        compute_desc.emplace_runtime_args(
             core,
             {
                 i,
@@ -609,55 +670,11 @@ WindowedSDPAProgramFactory::cached_program_t WindowedSDPAProgramFactory::create(
             });
     }
 
-    return cached_program_t{
-        std::move(program),
-        {
-            .reader_kernels_id = reader_kernels_id,
-            .writer_kernels_id = writer_kernels_id,
-            .compute_kernels_id = compute_kernels_id,
-            .grid_size = grid_size,
-            .num_cores = num_cores,
-        }};
-}
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
 
-void WindowedSDPAProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const SdpaWindowedParams&,
-    const SdpaWindowedInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto& shared_vars = cached_program.shared_variables;
-    auto& program = cached_program.program;
-
-    auto* q_buffer = tensor_args.q.buffer();
-    auto* k_buffer = tensor_args.k.buffer();
-    auto* v_buffer = tensor_args.v.buffer();
-    auto* cu_window_seqlens_buffer = tensor_args.cu_window_seqlens.buffer();
-    auto* out0_buffer = tensor_return_value.buffer();
-
-    const uint32_t q_addr = q_buffer->address();
-    const uint32_t k_addr = k_buffer->address();
-    const uint32_t v_addr = v_buffer->address();
-    const uint32_t cu_window_seqlens_addr = cu_window_seqlens_buffer->address();
-    const uint32_t cu_window_seqlens_eles = tensor_args.cu_window_seqlens.logical_shape()[0];
-    const uint32_t out_addr = out0_buffer->address();
-
-    auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernels_id);
-    auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernels_id);
-
-    for (uint32_t i = 0; i < shared_vars.num_cores; ++i) {
-        CoreCoord core = {i % shared_vars.grid_size.x, i / shared_vars.grid_size.x};
-
-        auto& reader_args = reader_args_by_core[core.x][core.y];
-        auto& writer_args = writer_args_by_core[core.x][core.y];
-
-        reader_args[0] = q_addr;
-        reader_args[1] = k_addr;
-        reader_args[2] = v_addr;
-        reader_args[3] = cu_window_seqlens_addr;
-        reader_args[4] = cu_window_seqlens_eles;
-
-        writer_args[0] = out_addr;
-    }
+    return desc;
 }
 
 }  // namespace ttnn::prim

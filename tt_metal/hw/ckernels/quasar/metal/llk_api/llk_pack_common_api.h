@@ -13,15 +13,24 @@
  *************************************************************************/
 
 /**
- * @brief Programs packer0 l1 info & math destination register format
+ * @brief Programs packer0 L1 information & math destination register format
  *
- * @param pack_output The output circular buffer
+ * @param pack_output The output DataFlow Buffer identifier
  */
 inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
     const std::uint32_t output_id = get_output_id(pack_output);
 
-    // Program buffer descriptors for all 32 dataflow buffers, i is the logical dfb id
-    for (std::uint32_t i = 0; i < NUM_CIRCULAR_BUFFERS; ++i) {
+    // Program buffer descriptors for all 32 dataflow buffers, i is the logical dfb id.
+    // Skip non-participating DFBs (gate matched the state in which A2 implicit-sync
+    // passes; reverting to a plain unfiltered loop caused the implicit-sync 3-DFB
+    // runtime to hang at credit-ack handshake). Loop bound is dfb::NUM_DFBS because
+    // g_dfb_logical_to_compact[] is sized NUM_DFBS (=32) and NUM_CIRCULAR_BUFFERS
+    // resolves to 64 on Quasar — GCC -Werror=aggressive-loop-optimizations rejects
+    // the direct OOB array access at the gate.
+    for (std::uint32_t i = 0; i < dfb::NUM_DFBS; ++i) {
+        if (g_dfb_logical_to_compact[i] == 0xFF) {
+            continue;
+        }
         const DataFormat l1_data_format = static_cast<DataFormat>(pack_dst_format[i]);
 
         if (l1_data_format == DataFormat::Invalid) {
@@ -43,6 +52,30 @@ inline void llk_pack_hw_configure(const std::uint32_t pack_output) {
     td_val.reg_data_format = static_cast<std::uint8_t>(pack_src_format[output_id]);
 
     _llk_pack_hw_configure_<p_pacr::PACK0>(td_val);
+}
+
+inline bool should_reconfig_pack_in_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {
+    const std::uint32_t old_output_id = get_output_id(old_output);
+    const std::uint32_t new_output_id = get_output_id(new_output);
+    return (pack_src_format[old_output_id] != pack_src_format[new_output_id]) ||
+           (pack_dst_format[old_output_id] != pack_dst_format[new_output_id]);
+}
+
+/**
+ * Reprograms packer THCON IN_DATA_FORMAT only (gasket); L1 format stays in buffer descriptors.
+ */
+template <[[maybe_unused]] bool EN_32BIT_DEST>
+inline void llk_pack_reconfig_data_format(const std::uint32_t new_output) {
+    const std::uint32_t output_id = get_output_id(new_output);
+    _llk_pack_reconfig_data_format_<p_pacr::PACK0>(pack_src_format[output_id], pack_dst_format[output_id]);
+}
+
+template <bool EN_32BIT_DEST>
+inline void llk_pack_reconfig_data_format(const std::uint32_t old_output, const std::uint32_t new_output) {
+    if (!should_reconfig_pack_in_data_format(old_output, new_output)) {
+        return;
+    }
+    llk_pack_reconfig_data_format<EN_32BIT_DEST>(new_output);
 }
 
 /**
@@ -93,3 +126,9 @@ TT_ALWAYS_INLINE void llk_pack_relu_config(const std::uint32_t config) {
 TT_ALWAYS_INLINE void llk_pack_relu_config(const ckernel::ReluConfig& relu_config) {
     _llk_pack_relu_config_<p_pacr::PACK0, false /* EN_32B_DEST */>(relu_config);
 }
+
+/**
+ * @brief: Configure packer0 to enable or disable l1 accumulation
+ * @param l1_acc_en: if false -> l1 acc is disabled, true -> l1 acc enabled
+ **/
+inline void llk_pack_reconfig_l1_acc(const std::uint32_t l1_acc_en) { _llk_pack_set_l1_acc_<p_pacr::PACK0>(l1_acc_en); }

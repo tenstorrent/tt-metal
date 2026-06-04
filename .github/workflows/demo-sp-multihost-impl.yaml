@@ -99,6 +99,7 @@ jobs:
       HOME: /home/user
       PIP_CACHE_DIR: /home/user/.cache/pip
       LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
+      TT_METAL_HOME: /home/user/tt-metal
       TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
       TT_METAL_CACHE: /home/user/.cache
     strategy:
@@ -125,7 +126,7 @@ jobs:
       - name: Create allocation for ${{ matrix.test-group.name }}
         id: allocation
         uses: ./.github/actions/ttop-create-allocation
-        timeout-minutes: 30
+        timeout-minutes: 120
         with:
           allocationName: ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           namespace: ttop-ci
@@ -141,7 +142,7 @@ jobs:
 
       - name: Create test environment
         uses: ./.github/actions/ttop-create-environment
-        timeout-minutes: 5
+        timeout-minutes: 30
         with:
           environmentName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
           allocationName:  ci-${{ github.run_id }}-${{ inputs.sp-config }}-${{ strategy.job-index }}
@@ -175,6 +176,7 @@ jobs:
       - name: Unpack artifacts & install
         run: |
           # Move the cloned directory to workers. TODO: Clone directly to NFS
+          rm -rf /ci/tt-metal
           cp -r "$GITHUB_WORKSPACE" /ci/tt-metal
           if ! command -v zstd >/dev/null 2>&1; then
             echo "zstd not found in runner context, installing fallback..."
@@ -197,7 +199,11 @@ jobs:
           # Unpack build artifact locally as well. Pipeline config generation runs on the runner
           # and expects test binaries under /ci/tt-metal/build/test.
           tar --zstd -xf "${BUILD_ARCHIVE}" -C /ci/tt-metal
-          mpirun --pernode cp -r /ci/tt-metal /home/user
+          sudo rm -rf /home/user/tt-metal
+          sudo mkdir -p /home/user
+          sudo chown "$(id -u):$(id -g)" /home/user
+          cp -r /ci/tt-metal /home/user/
+          mpirun --pernode bash -lc 'rm -rf /home/user/tt-metal && cp -r /ci/tt-metal /home/user/'
           mpirun --pernode git -C /home/user/tt-metal submodule update --init --recursive
 
           # Unpack artifacts
@@ -211,57 +217,76 @@ jobs:
             ls -R /ci/artifacts
             exit 1
           fi
-          uv pip install "${ttnn_wheels[@]}"
           mpirun --pernode uv pip install "${ttnn_wheels[@]}"
 
       - name: Reset cards and validate cluster for ${{ matrix.test-group.name }}
         working-directory: /tmp
         timeout-minutes: 30
         run: |
-          MAX_RECOVERY_ATTEMPTS=3
+          MAX_RECOVERY_ATTEMPTS=10
 
           echo "--- Pre-check: tt-smi visibility on all hosts ---"
           mpirun --pernode --tag-output \
-            bash -lc 'echo "$(hostname): $(tt-smi --snapshot_no_tty --snapshot | jq -r .host_info.Driver)"' || true
+            bash -lc '
+              snapshot=$(tt-smi --snapshot_no_tty --snapshot)
+              driver=$(jq -r ".host_info.Driver // \"unknown\"" <<< "$snapshot")
+              tt_smi=$(jq -r ".host_sw_vers.tt_smi // \"unknown\"" <<< "$snapshot")
+              echo "$(hostname): Driver=${driver} tt_smi=${tt_smi}"
+            ' || true
 
           for attempt in $(seq 1 "$MAX_RECOVERY_ATTEMPTS"); do
             echo "=== Recovery attempt $attempt of $MAX_RECOVERY_ATTEMPTS ==="
+            reset_success=false
+            validation_success=false
 
             echo "--- Resetting cards with tt-smi ---"
-            if ! mpirun --pernode --mca btl_tcp_if_include ens5f0np0 tt-smi -glx_reset; then
+            if mpirun --pernode tt-smi -glx_reset; then
+              reset_success=true
+            else
               echo "WARNING: Reset failed on attempt $attempt"
-              if [ "$attempt" -eq "$MAX_RECOVERY_ATTEMPTS" ]; then
-                echo "ERROR: Reset failed after $MAX_RECOVERY_ATTEMPTS attempts"
-                exit 1
+            fi
+
+            if [ "$reset_success" = true ]; then
+              echo "--- Sleeping 5s after reset to allow links/services to settle ---"
+              sleep 5
+
+              echo "--- Running cluster validation ---"
+              if mpirun --pernode --tag-output \
+                /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
+                --send-traffic \
+                --hard-fail \
+                --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
+                --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
+                --num-iterations 5; then
+                validation_success=true
+              else
+                echo "WARNING: Validation failed on attempt $attempt"
               fi
-              echo "Sleeping 30s before retry..."
-              sleep 30
-              continue
+            else
+              echo "WARNING: Skipping validation because reset failed on attempt $attempt"
             fi
 
-            echo "--- Sleeping 5s after reset to allow links/services to settle ---"
-            sleep 5
+            echo "--- Kill stale processes on all hosts ---"
+            # todo)) figure out a proper way to kill stale processes from the docker containers
+            # mpirun --pernode --tag-output bash -lc '
+            #   mpi_processes="prted|prterun|orted|mpirun"
+            #   test_processes="tt-run|run_cluster_validation"
+            #   b1_demo_processes="models\.demos\.deepseek_v3_b1\.demo\.cli"
+            #   b1_teacher_forced_processes="models\.demos\.deepseek_v3_b1\.demo\.teacher_forced"
+            #   stale_processes="${mpi_processes}|${test_processes}|${b1_demo_processes}|${b1_teacher_forced_processes}"
+            #   pkill -u "$(id -un)" -f "${stale_processes}" || true
+            # '
 
-            echo "--- Running cluster validation ---"
-            if mpirun --pernode --mca btl_tcp_if_include ens5f0np0 --tag-output \
-              /home/user/tt-metal/build/tools/scaleout/run_cluster_validation \
-              --send-traffic \
-              --hard-fail \
-              --cabling-descriptor-path /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
-              --deployment-descriptor-path /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
-              --num-iterations 10; then
-              echo "SUCCESS: Recovery completed on attempt $attempt"
+            echo "Sleeping 30s before retry..."
+            sleep 30
+
+            if [ "$attempt" -gt 4 ] && [ "$reset_success" = true ] && [ "$validation_success" = true ]; then
+              echo "SUCCESS: Recovery completed on attempt $attempt after more than 4 attempts"
               exit 0
-            fi
-
-            echo "WARNING: Validation failed on attempt $attempt"
-            if [ "$attempt" -lt "$MAX_RECOVERY_ATTEMPTS" ]; then
-              echo "Sleeping 30s before retry..."
-              sleep 30
             fi
           done
 
-          echo "ERROR: Recovery failed after $MAX_RECOVERY_ATTEMPTS attempts"
+          echo "ERROR: Recovery failed after $MAX_RECOVERY_ATTEMPTS attempts without a reset+validation success after attempt 4"
           exit 1
 
       - name: Verify ttnn imports on workers
@@ -282,7 +307,9 @@ jobs:
       - name: ${{ matrix.test-group.name }}
         id: run-test
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        working-directory: /ci/tt-metal
+        # Keep runtime compilation and tt-run working directory on a single source root.
+        # Avoid mixing /ci/tt-metal and /home/user/tt-metal include paths in one run.
+        working-directory: /home/user/tt-metal
         run: |
           # Store command safely using heredoc
           CMD=$(cat << 'EOF'

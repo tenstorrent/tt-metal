@@ -51,7 +51,8 @@ jobs:
             { "name": "(Galaxy) DeepSeek unit tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "unit", "timeout": 15, "owner_id": "U03HY7MK4BT" },
             { "name": "(Galaxy) DeepSeek module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "module", "timeout": 150, "owner_id": "U03HY7MK4BT" },
             { "name": "(Galaxy) DeepSeek final-op-unit tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "final-op-unit", "timeout": 150, "owner_id": "U03HY7MK4BT" },
-            { "name": "(Galaxy) DeepSeek long-seq module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "long-seq-module", "timeout": 115, "owner_id": "U0896VBAKFC" }
+            { "name": "(Galaxy) DeepSeek long-seq module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "long-seq-module", "timeout": 115, "owner_id": "U0896VBAKFC" },
+            { "name": "(Galaxy) DeepSeek TG MoE tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "tg-moe", "timeout": 90, "owner_id": "U03HY7MK4BT" }
           ]')
 
           # Filter matrix based on test-type selection
@@ -124,7 +125,7 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - name: Prepare custom weights cache directory
+      - name: Prepare custom DeepSeek cache directory
         if: ${{ inputs.recreate_weights_cache == 'Yes' }}
         env:
           INPUT_CACHE_DIR: ${{ inputs.new_cache_dir }}
@@ -154,6 +155,8 @@ jobs:
           echo "Copying test_io_cache from CI directory..."
           rm -rf "${NEW_DIR}/test_io_cache"
           cp -r "${CACHE_BASE}/CI/test_io_cache" "${NEW_DIR}/test_io_cache"
+          echo "Clearing tests_cache so this workflow regenerates it in the current DeepSeek cache format..."
+          rm -rf "${NEW_DIR}/tests_cache"
           chmod -R a+rwX "${NEW_DIR}"
           echo "DEEPSEEK_V3_CACHE=${NEW_DIR}" >> $GITHUB_ENV
       - name: Run DeepSeek unit tests
@@ -162,11 +165,6 @@ jobs:
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
-      - name: Validate weight cache
-        if: ${{ matrix.test-group.test-type == 'module' || matrix.test-group.test-type == 'final-op-unit' }}
-        timeout-minutes: 10
-        run: |
-          python3 models/demos/deepseek_v3/scripts/validate_weight_cache.py --root "$DEEPSEEK_V3_CACHE/tests_cache" || true
       - name: Run DeepSeek module tests
         if: ${{ matrix.test-group.test-type == 'module' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -257,6 +255,18 @@ jobs:
           echo "=============================================="
           echo "All device perf tests completed!"
           echo "=============================================="
+      - name: Validate regenerated DeepSeek cache directory
+        # The shared CI cache root is still on the legacy format. Only validate
+        # branch-created/recreated cache directories that this workflow owns,
+        # after the current job has had a chance to regenerate tests_cache.
+        if: ${{ inputs.recreate_weights_cache == 'Yes' && (matrix.test-group.test-type == 'module' || matrix.test-group.test-type == 'final-op-unit') }}
+        timeout-minutes: 10
+        run: |
+          if [[ -d "$DEEPSEEK_V3_CACHE/tests_cache" ]]; then
+            python3 models/demos/deepseek_v3/scripts/validate_weight_cache.py --root "$DEEPSEEK_V3_CACHE/tests_cache"
+          else
+            echo "No DeepSeek tests_cache present under $DEEPSEEK_V3_CACHE after regeneration; skipping cache validation."
+          fi
       - name: Run DeepSeek long seq len module tests
         if: ${{ matrix.test-group.test-type == 'long-seq-module' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
@@ -267,6 +277,15 @@ jobs:
           # TODO: set DEEPSEEK_MAX_SEQ_LEN_OVERRIDE to large value if test does not get killed in CI.
           DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=1024 pytest models/demos/deepseek_v3/tests/test_model.py -k "mode_decode" --timeout 1250 --durations=0
           DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=32768 pytest models/demos/deepseek_v3/tests/test_model.py -k "mode_prefill" --timeout 1250 --durations=0
+      - name: Run DeepSeek TG MoE tests
+        if: ${{ matrix.test-group.test-type == 'tg-moe' }}
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+          MESH_DEVICE=TG USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/test_combine_tg.py -v
+          MESH_DEVICE=TG USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/test_compute_tg.py -v
+          MESH_DEVICE=TG pytest models/demos/deepseek_v3/tests/test_dispatch_tg.py -v
+          MESH_DEVICE=TG8X4 USE_TORUS_MODE=1 pytest models/demos/deepseek_v3/tests/test_optimized_moe_decode_block_tg.py -v
       # - name: Save environment data
       #   id: save-environment-data
       #   if: ${{ !cancelled() }}

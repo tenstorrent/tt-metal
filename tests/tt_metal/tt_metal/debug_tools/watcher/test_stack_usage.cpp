@@ -31,7 +31,9 @@ void RunOneTest(
     std::optional<uint32_t> quasar_dms_per_kernel = std::nullopt) {
     const auto& hal = MetalContext::instance().hal();
     const bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
-    const std::string path = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_stack.cpp";
+    // TENSIX cores use the Metal 2.0 variant; idle-ETH cores use the legacy kernel.
+    const std::string path_metal2 = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_stack_2_0.cpp";
+    const std::string path_legacy = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_stack.cpp";
 
     // Set up program
     distributed::MeshWorkload workload;
@@ -43,20 +45,25 @@ void RunOneTest(
     std::vector<uint32_t> compile_args{free};
     std::vector<std::string> expected{"Stack usage summary:"};
 
-    // Helper to add expected message in watcher logs
-    auto add_expected_msg = [&](const std::string& cpu) {
+    // Helper to add expected message in watcher logs. The "kernel" path reflects whichever
+    // source file was compiled for that processor (Metal 2.0 for TENSIX, legacy for idle-ETH).
+    auto add_expected_msg = [&](const std::string& cpu, const std::string& kernel_path) {
         expected.push_back(fmt::format(
             "{} highest stack usage: {} bytes free, on core "
             "* running kernel {} ({})",
             cpu,
             free,
-            path,
+            kernel_path,
             !free ? "OVERFLOW" : "Close to overflow"));
     };
 
     // Create DM kernels
     auto num_dms = hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
     auto num_compute_types = hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, 1);
+
+    // TENSIX kernels are launched via Metal 2.0 on both gen1 (WH/BH) and gen2 (Quasar).
+    std::vector<experimental::KernelSpec> kernel_specs;
+    std::vector<experimental::KernelSpecName> kernel_names;
 
     if (is_quasar) {
         // On Quasar, DM0/DM1 are reserved for internal use; user kernels can only run on DM2..DM7.
@@ -72,70 +79,84 @@ void RunOneTest(
             num_user_dms);
         uint32_t num_kernels = num_user_dms / dms_per_kernel;
 
-        std::vector<experimental::metal2_host_api::KernelSpec> kernel_specs;
-        std::vector<experimental::metal2_host_api::KernelSpecName> kernel_names;
         kernel_specs.reserve(num_kernels + 1);
         kernel_names.reserve(num_kernels + 1);
 
         for (uint32_t i = 0; i < num_kernels; i++) {
             std::string name = fmt::format("dm_{}", i);
-            kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
+            kernel_specs.push_back(experimental::KernelSpec{
                 .unique_id = name,
-                .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{path},
-                .num_threads = static_cast<uint8_t>(dms_per_kernel),
-                .compile_time_arg_bindings = {{"usage", free}},
-                .config_spec =
-                    experimental::metal2_host_api::DataMovementConfiguration{
-                        .gen2_data_movement_config =
-                            experimental::metal2_host_api::DataMovementConfiguration::Gen2DataMovementConfig{}},
+                .source = path_metal2,
+                .num_threads = dms_per_kernel,
+                .compile_time_args = {{"usage", free}},
+                .hw_config =
+                    experimental::DataMovementHardwareConfig{
+                        .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{}},
             });
             kernel_names.push_back(name);
         }
         constexpr const char* COMPUTE_NAME = "compute";
-        kernel_specs.push_back(experimental::metal2_host_api::KernelSpec{
+        kernel_specs.push_back(experimental::KernelSpec{
             .unique_id = COMPUTE_NAME,
-            .source = experimental::metal2_host_api::KernelSpec::SourceFilePath{path},
+            .source = path_metal2,
             // One thread per Neo (Quasar Tensix has 4) so the compute kernel fans out across
             // all Neos; each Neo internally runs the kernel on its 4 TRISCs.
             .num_threads = 4,
-            .compile_time_arg_bindings = {{"usage", free}},
-            .config_spec = experimental::metal2_host_api::ComputeConfiguration{},
+            .compile_time_args = {{"usage", free}},
+            .hw_config = experimental::ComputeHardwareConfig{},
         });
         kernel_names.push_back(COMPUTE_NAME);
-
-        experimental::metal2_host_api::WorkUnitSpec wu{
-            .unique_id = "main",
-            .kernels = kernel_names,
-            .target_nodes = experimental::metal2_host_api::NodeCoord{coord},
-        };
-        experimental::metal2_host_api::ProgramSpec spec{
-            .program_id = "watcher_stack",
-            .kernels = kernel_specs,
-            .work_units = {wu},
-        };
-        Program program = experimental::metal2_host_api::MakeProgramFromSpec(*mesh_device, spec);
-        workload.add_program(device_range, std::move(program));
     } else {
-        // BH/WH legacy path
-        workload.add_program(device_range, {});
-        auto& program_ = workload.get_programs().at(device_range);
+        // WH/BH gen1: BRISC and NCRISC are separate KernelSpecs (one DM processor each).
+        kernel_specs.reserve(num_dms + 1);
+        kernel_names.reserve(num_dms + 1);
         for (uint32_t type_idx = 0; type_idx < num_dms; type_idx++) {
-            DataMovementConfig dm_config{};
-            dm_config.processor = static_cast<DataMovementProcessor>(type_idx);
-            dm_config.noc = (type_idx == 1) ? NOC::RISCV_1_default : NOC::RISCV_0_default;
-            dm_config.compile_args = compile_args;
-            CreateKernel(program_, path, coord, dm_config);
+            std::string name = fmt::format("dm_{}", type_idx);
+            auto processor = static_cast<tt::tt_metal::DataMovementProcessor>(type_idx);
+            auto noc = (type_idx == 1) ? tt::tt_metal::NOC::RISCV_1_default : tt::tt_metal::NOC::RISCV_0_default;
+            kernel_specs.push_back(experimental::KernelSpec{
+                .unique_id = name,
+                .source = path_metal2,
+                .num_threads = 1,
+                .compile_time_args = {{"usage", free}},
+                .hw_config =
+                    experimental::DataMovementHardwareConfig{
+                        .gen1_config =
+                            experimental::DataMovementHardwareConfig::Gen1Config{.processor = processor, .noc = noc}},
+            });
+            kernel_names.push_back(name);
         }
-        CreateKernel(program_, path, coord, ComputeConfig{.compile_args = compile_args});
+        constexpr const char* COMPUTE_NAME = "compute";
+        kernel_specs.push_back(experimental::KernelSpec{
+            .unique_id = COMPUTE_NAME,
+            .source = path_metal2,
+            .num_threads = 1,
+            .compile_time_args = {{"usage", free}},
+            .hw_config = experimental::ComputeHardwareConfig{},
+        });
+        kernel_names.push_back(COMPUTE_NAME);
+    }
 
-        // Also run on idle ethernet, if present
+    experimental::WorkUnitSpec wu{
+        .name = "main",
+        .kernels = kernel_names,
+        .target_nodes = experimental::NodeCoord{coord},
+    };
+    experimental::ProgramSpec spec{
+        .name = "watcher_stack",
+        .kernels = kernel_specs,
+        .work_units = {wu},
+    };
+    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+
+    // Idle-ETH cores: invoke the original (legacy) kernel via the legacy host API.
+    if (!is_quasar) {
         const auto& inactive_eth_cores = device->get_inactive_ethernet_cores();
         if (!inactive_eth_cores.empty() && fixture->IsSlowDispatch()) {
-            // Just pick the first core
             CoreCoord idle_coord = CoreCoord(*inactive_eth_cores.begin());
             CreateKernel(
-                program_,
-                path,
+                program,
+                path_legacy,
                 idle_coord,
                 tt_metal::EthernetConfig{
                     .eth_mode = Eth::IDLE,
@@ -144,6 +165,7 @@ void RunOneTest(
                     .compile_args = compile_args});
         }
     }
+    workload.add_program(device_range, std::move(program));
 
     // Add expected messages for the DMs that ran a user kernel. On Quasar DM0/DM1 are reserved
     // for internal use, so user kernels run on DM2..DM7 (6 user DMs).
@@ -151,18 +173,20 @@ void RunOneTest(
     for (uint32_t type_idx = dm_start; type_idx < num_dms; type_idx++) {
         uint32_t processor_idx =
             hal.get_processor_index(HalProgrammableCoreType::TENSIX, HalProcessorClassType::DM, type_idx);
-        add_expected_msg(hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, processor_idx, false));
+        add_expected_msg(
+            hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, processor_idx, false), path_metal2);
     }
     for (uint32_t type_idx = 0; type_idx < num_compute_types; type_idx++) {
         uint32_t processor_idx =
             hal.get_processor_index(HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, type_idx);
-        add_expected_msg(hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, processor_idx, false));
+        add_expected_msg(
+            hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, processor_idx, false), path_metal2);
     }
     const auto& inactive_eth_cores = device->get_inactive_ethernet_cores();
     if (!inactive_eth_cores.empty() && fixture->IsSlowDispatch()) {
         // TODO: replace string literal "ierisc" with hal.get_processor_class_name() after
         // unifying all tests + watcher_device_reader::get_riscv_name() with same method
-        add_expected_msg("ierisc");
+        add_expected_msg("ierisc", path_legacy);
     }
 
     fixture->RunProgram(mesh_device, workload, true);

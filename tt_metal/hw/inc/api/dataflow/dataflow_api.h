@@ -2315,7 +2315,7 @@ inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {
     // Posting heartbeat at this address is only needed for Wormhole
 #if !defined(ARCH_BLACKHOLE)
     invalidate_l1_cache();
-    volatile uint32_t* ptr = (volatile uint32_t*)(0x1C);
+    volatile uint32_t* ptr = (volatile uint32_t*)(uintptr_t)(0x1C);
     heartbeat++;
     ptr[0] = 0xAABB0000 | (heartbeat & 0xFFFF);
 #endif

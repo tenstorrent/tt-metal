@@ -4,7 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(1);
@@ -28,19 +30,22 @@ void kernel_main() {
     CircularBuffer cb(cb_id);
 
     const auto s1 = TensorAccessor(dst_args, dst_addr);
+    Noc noc;
 
     uint32_t dst_stick_id = start_dst_stick_id;
     uint32_t dst_stick_wi = start_dst_stick_wi;
     for (uint32_t w = 0; w < num_local_W; ++w) {
         for (uint32_t z = 0; z < num_total_Z; ++z) {
             for (uint32_t y = 0; y < num_local_Y; ++y) {
-                // DPRINT << "WR: " << w << ", " << z << ", " << y << ENDL();
-                // DEVICE_PRINT("WR: w={} z={} y={}\n", w, z, y);
+                // DPRINT("WR: w={} z={} y={}\n", w, z, y);
                 cb.wait_front(1);
-                uint32_t l1_addr = cb.get_read_ptr();
-                uint64_t dst_noc_addr = get_noc_addr(dst_stick_id, s1, dst_stick_offset);
-                noc_async_write(l1_addr, dst_noc_addr, padded_X_nbytes);
-                noc_async_write_barrier();
+                noc.async_write(
+                    cb,
+                    s1,
+                    padded_X_nbytes,
+                    {.offset_bytes = 0},
+                    {.page_id = dst_stick_id, .offset_bytes = dst_stick_offset});
+                noc.async_write_barrier();
                 ++dst_stick_id;
                 cb.pop_front(1);
             }

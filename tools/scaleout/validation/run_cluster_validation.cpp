@@ -284,10 +284,10 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
     }
     log_output_rank0("Running Physical Discovery");
     auto& context = tt::tt_metal::MetalContext::instance();
-    const auto& driver = context.get_cluster().get_driver();
-    auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
     auto physical_system_descriptor = tt::tt_metal::run_physical_system_discovery(
-        driver_ref, context.get_distributed_context_ptr(), context.rtoptions().get_target_device());
+        *context.get_cluster().get_cluster_desc(),
+        context.get_distributed_context_ptr(),
+        context.rtoptions().get_target_device());
     log_output_rank0("Physical Discovery Complete");
     log_output_rank0("Detected Hosts: " + log_hostnames(physical_system_descriptor.get_all_hostnames()));
     return physical_system_descriptor;
@@ -374,11 +374,7 @@ int main(int argc, char* argv[]) {
 
     bool links_reset = false;
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    // Ethernet Link Retraining through SW is currently only supported for Wormhole
-    bool link_retrain_supported =
-        (cluster.arch() == tt::ARCH::WORMHOLE_B0 ||
-         (cluster.arch() == tt::ARCH::BLACKHOLE &&
-          cluster.get_ethernet_firmware_version() >= tt::umd::semver_t(1, 9, 0)));
+    const bool link_retrain_supported = cluster.supports_ethernet_link_retraining();
     constexpr uint32_t MAX_RETRAINS_BEFORE_FAILURE =
         5;  // If links don't come up after 5 retrains, the system is in an unrecoverable state.
     uint32_t num_retrains = 0;
@@ -398,9 +394,8 @@ int main(int argc, char* argv[]) {
         // Re-run discovery
         auto& context_ref = tt::tt_metal::MetalContext::instance();
         physical_system_descriptor.clear();
-        auto& driver_ref = const_cast<tt::umd::Cluster&>(*context_ref.get_cluster().get_driver());
         auto new_psd = tt::tt_metal::run_physical_system_discovery(
-            driver_ref,
+            *context_ref.get_cluster().get_cluster_desc(),
             context_ref.get_distributed_context_ptr(),
             context_ref.rtoptions().get_target_device(),
             true,
@@ -417,9 +412,8 @@ int main(int argc, char* argv[]) {
     }
     if (links_reset) {
         log_link_retrain_summary(link_retrain_counts, num_retrains, input_args.output_path);
-        // Return and ask user to run again, otherwise some incorrect HW states might persist and cause hangs
-        log_output_rank0("Ethernet Links were Retrained. Please run the validation tool again to issue traffic.");
-        return 0;
+        log_output_rank0("Rediscovering ethernet links after successful link retraining");
+        cluster.rediscover_ethernet_links();
     }
 
     ConnectivityValidationConfig validation_config{

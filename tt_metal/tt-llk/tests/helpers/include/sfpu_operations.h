@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include "ckernel_sfpu.h"
-#include "ckernel_sfpu_add_top_row.h"
+#include "llk_sfpu/ckernel_sfpu_add_top_row.h"
 #include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 #include "sfpu/ckernel_sfpu_topk.h"
@@ -16,17 +16,18 @@
 // 1. Include the metal header below: #include "llk_sfpu/<operation>.h"
 // 2. Add the operation enum to SfpuType in llk_sfpu_types.h
 // 3. Add the if constexpr branches in call_unary_sfpu_operation_init() and call_unary_sfpu_operation() below
+#include "llk_sfpu/ckernel_sfpu_activations.h"
+#include "llk_sfpu/ckernel_sfpu_binary.h"
+#include "llk_sfpu/ckernel_sfpu_binary_comp.h"
+#include "llk_sfpu/ckernel_sfpu_celu.h"
+#include "llk_sfpu/ckernel_sfpu_elu.h"
+#include "llk_sfpu/ckernel_sfpu_exp.h"
+#include "llk_sfpu/ckernel_sfpu_exp2.h"
+#include "llk_sfpu/ckernel_sfpu_gelu.h"
 #include "llk_sfpu/ckernel_sfpu_log1p.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
 #include "sfpu/ckernel_sfpu_abs.h"
-#include "sfpu/ckernel_sfpu_activations.h"
-#include "sfpu/ckernel_sfpu_binary.h"
-#include "sfpu/ckernel_sfpu_celu.h"
-#include "sfpu/ckernel_sfpu_elu.h"
-#include "sfpu/ckernel_sfpu_exp.h"
-#include "sfpu/ckernel_sfpu_exp2.h"
 #include "sfpu/ckernel_sfpu_fill.h"
-#include "sfpu/ckernel_sfpu_gelu.h"
 #include "sfpu/ckernel_sfpu_log.h"
 #include "sfpu/ckernel_sfpu_negative.h"
 #include "sfpu/ckernel_sfpu_recip.h"
@@ -81,19 +82,19 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::exp2)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(_init_exp2_<APPROX_MODE>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(exp2_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::exponential)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(_init_exponential_<APPROX_MODE, 0x3F800000 /* exp_base_scale_factor */, CLAMP_NEGATIVE>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(exp_init<APPROX_MODE, 0x3F800000 /* exp_base_scale_factor */, CLAMP_NEGATIVE>);
     }
     else if constexpr (OPERATION == SfpuType::gelu)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(_init_gelu_<APPROX_MODE>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(gelu_init<APPROX_MODE, is_fp32_dest_acc_en>);
     }
     else if constexpr (OPERATION == SfpuType::hardsigmoid)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(_init_hardsigmoid_<APPROX_MODE>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(hardsigmoid_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::log)
     {
@@ -159,8 +160,7 @@ template <
     bool FAST_MODE      = false,
     bool STABLE_SORT    = false,
     bool CLAMP_NEGATIVE = false>
-void call_unary_sfpu_operation(
-    std::uint32_t dst_index, std::uint32_t math_format = 0, float fill_const_value = 5.0f, int vector_mode = static_cast<int>(VectorMode::None))
+void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_format = 0, float fill_const_value = 5.0f, VectorMode vector_mode = VectorMode::None)
 {
     if constexpr (OPERATION == SfpuType::abs)
     {
@@ -183,7 +183,7 @@ void call_unary_sfpu_operation(
         SFPU_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            _calculate_celu_,
+            calculate_celu,
             (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
             dst_index,
             vector_mode,
@@ -199,7 +199,7 @@ void call_unary_sfpu_operation(
         SFPU_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            _calculate_elu_,
+            calculate_elu,
             (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
             dst_index,
             vector_mode,
@@ -207,7 +207,7 @@ void call_unary_sfpu_operation(
     }
     else if constexpr (OPERATION == SfpuType::exp2)
     {
-        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_exp2_, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_exp2, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
     // VectorMode::RC: params drives 4 face iterations with 2×SETRWC between each —
     // the lambda processes 8 rows per face, giving 32 total.
@@ -216,20 +216,20 @@ void call_unary_sfpu_operation(
         SFPU_CALL_MODE(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            _calculate_exponential_,
-            (APPROX_MODE, false /* scale_en */, 8, CLAMP_NEGATIVE),
+            calculate_exponential,
+            (APPROX_MODE, is_fp32_dest_acc_en, false /* scale_en */, 8, CLAMP_NEGATIVE),
             RC,
             dst_index,
             p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
     }
-    // Single call (else branch): _calculate_exponential_ handles 8 or 32 iterations internally.
+    // Single call (else branch): calculate_exponential handles 8 or 32 iterations internally.
     else if constexpr (OPERATION == SfpuType::exponential)
     {
         SFPU_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            _calculate_exponential_,
-            (APPROX_MODE, false /* scale_en */, ITERATIONS, CLAMP_NEGATIVE),
+            calculate_exponential,
+            (APPROX_MODE, is_fp32_dest_acc_en, false /* scale_en */, ITERATIONS, CLAMP_NEGATIVE),
             dst_index,
             vector_mode,
             p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
@@ -276,7 +276,7 @@ void call_unary_sfpu_operation(
     }
     else if constexpr (OPERATION == SfpuType::gelu)
     {
-        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_gelu_, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        SFPU_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::hardsigmoid)
     {
@@ -284,7 +284,7 @@ void call_unary_sfpu_operation(
         SFPU_CALL_CAST(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            _calculate_activation_,
+            calculate_activation,
             (APPROX_MODE, ckernel::ActivationType::Hardsigmoid, ITERATIONS),
             (void (*)()),
             dst_index,
@@ -430,15 +430,15 @@ void call_binary_sfpu_operation_init()
         BINOP == BinaryOp::XLOGY)
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
-        SFPU_BINARY_INIT_CB(add1, _sfpu_binary_init_, (APPROXIMATION_MODE, BINOP));
+        SFPU_BINARY_INIT_CB(add1, sfpu_binary_init, (APPROXIMATION_MODE, BINOP));
     }
     else if constexpr (BINOP == BinaryOp::POW)
     {
-        SFPU_BINARY_INIT_CB(power, _sfpu_binary_init_, (APPROXIMATION_MODE, BINOP));
+        SFPU_BINARY_INIT_CB(power, sfpu_binary_init, (APPROXIMATION_MODE, BINOP));
     }
     else if constexpr (BINOP == BinaryOp::ADD_TOP_ROW)
     {
-        SFPU_BINARY_INIT_FN(add1, _init_add_top_row_);
+        SFPU_BINARY_INIT_FN(add1, init_add_top_row);
     }
     else if constexpr (BINOP == BinaryOp::RSHFT || BINOP == BinaryOp::LOGICAL_RSHFT)
     {
@@ -448,10 +448,44 @@ void call_binary_sfpu_operation_init()
     {
         SFPU_BINARY_INIT(left_shift);
     }
+    else if constexpr (
+        BINOP == BinaryOp::LT || BINOP == BinaryOp::GT || BINOP == BinaryOp::LE || BINOP == BinaryOp::GE || BINOP == BinaryOp::EQ || BINOP == BinaryOp::NE)
+    {
+        SFPU_BINARY_INIT(lt);
+    }
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
         SFPU_BINARY_INIT(add1);
+    }
+}
+
+template <BinaryOp BINOP>
+constexpr SfpuType get_binary_comp_sfpu_type()
+{
+    if constexpr (BINOP == BinaryOp::LT)
+    {
+        return SfpuType::lt;
+    }
+    else if constexpr (BINOP == BinaryOp::GT)
+    {
+        return SfpuType::gt;
+    }
+    else if constexpr (BINOP == BinaryOp::LE)
+    {
+        return SfpuType::le;
+    }
+    else if constexpr (BINOP == BinaryOp::GE)
+    {
+        return SfpuType::ge;
+    }
+    else if constexpr (BINOP == BinaryOp::EQ)
+    {
+        return SfpuType::eq;
+    }
+    else
+    {
+        return SfpuType::ne;
     }
 }
 
@@ -473,7 +507,7 @@ void call_binary_sfpu_operation(
     const std::uint32_t dst_index_in0 = 0,
     const std::uint32_t dst_index_in1 = 1,
     const std::uint32_t dst_index_out = 0,
-    int vector_mode                   = static_cast<int>(VectorMode::RC))
+    ckernel::VectorMode vector_mode   = ckernel::VectorMode::RC)
 {
     // NOTE: The functions invoked via SFPU_BINARY_CALL below run inside
     // _llk_math_eltwise_binary_sfpu_params_, which already loops over 4 faces
@@ -491,7 +525,7 @@ void call_binary_sfpu_operation(
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            _calculate_sfpu_binary_,
+            calculate_sfpu_binary,
             (APPROXIMATION_MODE, BINOP, PER_FACE_ITERATIONS),
             dst_index_in0,
             dst_index_in1,
@@ -504,7 +538,7 @@ void call_binary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _calculate_binary_right_shift_,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, INT32, false),
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
@@ -516,7 +550,7 @@ void call_binary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _calculate_binary_left_shift_,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, INT32, false),
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
@@ -528,7 +562,7 @@ void call_binary_sfpu_operation(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             _calculate_logical_right_shift_,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, INT32, false),
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, ckernel::InstrModLoadStore::INT32, false),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
@@ -548,12 +582,41 @@ void call_binary_sfpu_operation(
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
-            _calculate_add_top_row_,
+            calculate_add_top_row,
             (add_top_row_format),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
-            static_cast<int>(VectorMode::RC_custom));
+            ckernel::VectorMode::RC_custom);
+    }
+    else if constexpr (
+        BINOP == BinaryOp::LT || BINOP == BinaryOp::GT || BINOP == BinaryOp::LE || BINOP == BinaryOp::GE || BINOP == BinaryOp::EQ || BINOP == BinaryOp::NE)
+    {
+        constexpr SfpuType comp_type = get_binary_comp_sfpu_type<BINOP>();
+        if constexpr (MATH_FORMAT == static_cast<std::uint32_t>(DataFormat::Int32))
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_binary_comp_int32,
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, comp_type),
+                dst_index_in0,
+                dst_index_in1,
+                dst_index_out,
+                vector_mode);
+        }
+        else
+        {
+            SFPU_BINARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                calculate_binary_comp_fp32,
+                (APPROXIMATION_MODE, PER_FACE_ITERATIONS, comp_type),
+                dst_index_in0,
+                dst_index_in1,
+                dst_index_out,
+                vector_mode);
+        }
     }
     else
     {

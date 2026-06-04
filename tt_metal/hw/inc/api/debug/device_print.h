@@ -11,13 +11,16 @@
 #include <type_traits>
 #include <utility>
 
+#include "hostdevcommon/dprint_common.h"
 #include "hostdev/device_print_common.h"
 #include "hostdev/device_print_structures.h"
 #include "waypoint.h"
+#include "internal/risc_attribs.h"
 #include "internal/debug/dprint_buffer.h"
-#include "noc_overlay_parameters.h"
+
+#if !defined(ENV_LLK_INFRA)
 #include "risc_common.h"
-#include "stream_io_map.h"
+#endif
 
 #if defined(KERNEL_BUILD)
 #include "dprint_tile.h"
@@ -125,75 +128,62 @@ struct dp_typed_array_t {
 #define DEVICE_PRINT_IS_KERNEL 0
 #endif
 
-#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF) && defined(USE_DEVICE_PRINT)
-#define DEVICE_PRINT_GET_STRING_INFO_ADDRESS(variable_name, updated_format)                                    \
-    std::uintptr_t variable_name = 0;                                                                          \
-    {                                                                                                          \
-        static const auto allocated_string __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = \
-            updated_format.to_array();                                                                         \
-        static const auto allocated_file_string                                                                \
-            __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = []() {                         \
-                device_print_detail::helpers::static_string<sizeof(__FILE__)> file_str;                        \
-                for (std::size_t i = 0; i < sizeof(__FILE__); ++i) {                                           \
-                    file_str.push_back(__FILE__[i]);                                                           \
-                }                                                                                              \
-                return file_str.to_array();                                                                    \
-            }();                                                                                               \
-        static device_print_detail::structures::DevicePrintStringInfo allocated_string_info                    \
-            __attribute__((section(DEVICE_PRINT_STRINGS_INFO_SECTION_NAME), used)) = {                         \
-                allocated_string.data(), allocated_file_string.data(), __LINE__};                              \
-        variable_name = reinterpret_cast<std::uintptr_t>(&allocated_string_info);                              \
-    }
-
-#define DEVICE_PRINT(format, ...)                                                                                  \
+#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
+#define DEVICE_PRINT(_device_print_format, ...)                                                                    \
     {                                                                                                              \
-        auto device_print_info_address = device_print_detail::invoke_by_value(                                     \
+        auto _device_print_info_address = device_print_detail::invoke_by_value(                                    \
             [](auto&&... args) __attribute__((always_inline)) {                                                    \
                 /* Validate format string syntax */                                                                \
                 static_assert(                                                                                     \
-                    device_print_detail::checks::is_valid_format_string(format),                                   \
+                    device_print_detail::checks::is_valid_format_string(_device_print_format),                     \
                     "Invalid format string: unescaped '{' must be followed by '{', '}', or a digit");              \
                 /* Validate placeholder format */                                                                  \
                 static_assert(                                                                                     \
-                    !device_print_detail::checks::has_mixed_placeholders(format),                                  \
+                    !device_print_detail::checks::has_mixed_placeholders(_device_print_format),                    \
                     "Cannot mix indexed ({0}) and non-indexed ({}) placeholders in the same format string");       \
                 /* For indexed placeholders, validate no index exceeds argument count */                           \
                 static_assert(                                                                                     \
-                    !device_print_detail::checks::has_indexed_placeholders(format) ||                              \
-                        device_print_detail::checks::get_max_index(format) <                                       \
+                    !device_print_detail::checks::has_indexed_placeholders(_device_print_format) ||                \
+                        device_print_detail::checks::get_max_index(_device_print_format) <                         \
                             device_print_detail::helpers::count_arguments(args...),                                \
                     "Placeholder index exceeds number of arguments");                                              \
                 /* For indexed placeholders, validate all arguments are referenced */                              \
                 static_assert(                                                                                     \
-                    !device_print_detail::checks::has_indexed_placeholders(format) ||                              \
-                        device_print_detail::checks::all_arguments_referenced(format, args...),                    \
+                    !device_print_detail::checks::has_indexed_placeholders(_device_print_format) ||                \
+                        device_print_detail::checks::all_arguments_referenced(_device_print_format, args...),      \
                     "All arguments must be referenced when using indexed placeholders");                           \
                 /* For non-indexed placeholders, count must match argument count */                                \
                 static_assert(                                                                                     \
-                    device_print_detail::checks::has_indexed_placeholders(format) ||                               \
-                        device_print_detail::checks::count_placeholders(format) ==                                 \
+                    device_print_detail::checks::has_indexed_placeholders(_device_print_format) ||                 \
+                        device_print_detail::checks::count_placeholders(_device_print_format) ==                   \
                             device_print_detail::helpers::count_arguments(args...),                                \
                     "Number of {} placeholders must match number of arguments");                                   \
-                /* Update format to include all necessary data */                                                  \
-                constexpr auto updated_format =                                                                    \
-                    device_print_detail::formatting::update_format_string_from_args(format, args...);              \
-                /* Store updated format string in a special section for device_print */                            \
-                DEVICE_PRINT_GET_STRING_INFO_ADDRESS(device_print_info_address, updated_format);                   \
-                return device_print_info_address;                                                                  \
+                /* A local Tag struct carries format/file/line as static constexprs. Two struct                    \
+                 * definitions in distinct scopes are distinct types, so each DEVICE_PRINT call                    \
+                 * site gets its own register_string_info instantiation. Argument types are                        \
+                 * passed via decltype(args)... with cv/ref stripped. */                                           \
+                struct _DevicePrintStringInfoTag {                                                                 \
+                    static constexpr const auto& format() { return _device_print_format; }                         \
+                    static constexpr const auto& file() { return __FILE__; }                                       \
+                    static constexpr std::size_t line() { return __LINE__; }                                       \
+                };                                                                                                 \
+                return device_print_detail::register_string_info<                                                  \
+                    _DevicePrintStringInfoTag,                                                                     \
+                    std::remove_cv_t<std::remove_reference_t<decltype(args)>>...>();                               \
             },                                                                                                     \
             ##__VA_ARGS__);                                                                                        \
-        auto header = device_print_detail::invoke_by_value(                                                        \
+        auto _device_print_header = device_print_detail::invoke_by_value(                                          \
             [](auto&&... args) __attribute__((always_inline)) {                                                    \
                 /* Generate device_print message header */                                                         \
                 constexpr auto message_size = device_print_detail::serialization::get_total_message_size(args...); \
-                device_print_detail::structures::DevicePrintHeader header = {};                                    \
-                header.is_kernel = DEVICE_PRINT_IS_KERNEL;                                                         \
+                device_print_detail::structures::DevicePrintHeader _device_print_header = {};                      \
+                _device_print_header.is_kernel = DEVICE_PRINT_IS_KERNEL;                                           \
                 if constexpr (PROCESSOR_INDEX_DEFINED) {                                                           \
-                    header.risc_id = PROCESSOR_INDEX;                                                              \
+                    _device_print_header.risc_id = PROCESSOR_INDEX;                                                \
                 }                                                                                                  \
-                header.message_payload =                                                                           \
-                    message_size - sizeof(header); /* Payload size does not include header itself */               \
-                return header;                                                                                     \
+                _device_print_header.message_payload =                                                             \
+                    message_size - sizeof(_device_print_header); /* Payload size does not include header itself */ \
+                return _device_print_header;                                                                       \
             },                                                                                                     \
             ##__VA_ARGS__);                                                                                        \
         /* Get buffer lock, since we are using a single buffer per L1 instead of per risc */                       \
@@ -201,14 +191,15 @@ struct dp_typed_array_t {
         /* Wait for enough space in the buffer (if reader needs to catch up). */                                   \
         /* Update message header with string info index */                                                         \
         /* Serialize message header */                                                                             \
-        auto write_position = device_print_detail::begin_message_write(header, device_print_info_address);         \
+        auto _device_print_write_position =                                                                        \
+            device_print_detail::begin_message_write(_device_print_header, _device_print_info_address);            \
         /* Serialize arguments */                                                                                  \
         device_print_detail::invoke_by_value(                                                                      \
-            [write_position](auto&&... args) __attribute__((always_inline)) {                                      \
+            [_device_print_write_position](auto&&... args) __attribute__((always_inline)) {                        \
                 /* Get device_print buffer*/                                                                       \
-                volatile tt_l1_ptr DevicePrintMemoryLayout* device_print_buffer = get_device_print_buffer();       \
-                auto device_print_buffer_ptr = &(device_print_buffer->data[0]) + write_position;                   \
-                device_print_detail::serialization::serialize_arguments(device_print_buffer_ptr, args...);         \
+                volatile tt_l1_ptr DevicePrintMemoryLayout* _device_print_buffer = get_device_print_buffer();      \
+                auto _device_print_buffer_ptr = &(_device_print_buffer->data[0]) + _device_print_write_position;   \
+                device_print_detail::serialization::serialize_arguments(_device_print_buffer_ptr, args...);        \
             },                                                                                                     \
             ##__VA_ARGS__);                                                                                        \
         /* Update write pointer and release buffer lock */                                                         \
@@ -218,7 +209,22 @@ struct dp_typed_array_t {
 #define DEVICE_PRINT_INITIALIZE_LOCK() device_print_detail::locking::initialize_lock()
 #define DEVICE_PRINT_KERNEL_FINISHED() device_print_detail::locking::update_kernel_finished()
 
+#if DEVICE_PRINT_DISPATCH_ENABLED
+// Hook used by wait_for_space when DEVICE_PRINT itself runs on the dispatch_s kernel: that
+// kernel is the only thing draining the per-core L1 print buffers, so a busy-wait for space
+// would deadlock unless dispatch_s drives its own DEVICE_PRINT dispatcher inside the wait.
+// Defined in cq_dispatch_subordinate.cpp (where the dispatcher global lives). Declared at
+// global namespace so call sites inside device_print_detail::locking::* qualify with ::.
+void device_print_dispatcher_execute_hook();
+#endif
+
 namespace device_print_detail {
+
+// Forward declarations needed by register_string_info.
+namespace formatting {
+template <std::size_t N, typename... Args>
+constexpr auto update_format_string(const char (&format)[N]);
+}
 
 // Helper to invoke a callable with arguments copied by value.
 // This allows DEVICE_PRINT to accept volatile packed struct fields,
@@ -226,6 +232,39 @@ namespace device_print_detail {
 template <typename F, typename... Args>
 __attribute__((always_inline)) inline auto invoke_by_value(F&& f, Args... args) -> decltype(auto) {
     return f(static_cast<Args&&>(args)...);
+}
+
+// Helper to copy a string literal into a std::array.
+template <std::size_t N>
+constexpr std::array<char, N> literal_to_array(const char (&s)[N]) {
+    std::array<char, N> a{};
+    for (std::size_t i = 0; i < N; ++i) {
+        a[i] = s[i];
+    }
+    return a;
+}
+
+// Helper function to solve linkage problem. Marked `static` so the template — and therefore
+// every instantiation and every static local inside it — has internal linkage. Without
+// internal linkage, statics inside a DEVICE_PRINT expanded in a vague-linkage caller (inline
+// header function, function template, in-class member, lambda-in-template) inherit COMDAT linkage;
+// that conflicts with the named-section attribute and silently sends them to `.data` instead
+// of `.device_print_strings_info`.
+//
+// We compute the format string inside this template so that Tag only references compile-time
+// literals, as it's a local class and thus can't access enclosing variables.
+template <typename Tag, typename... ArgsT>
+static std::uintptr_t register_string_info() {
+    static constexpr auto kFormat =
+        device_print_detail::formatting::update_format_string<sizeof(Tag::format()), ArgsT...>(Tag::format())
+            .to_array();
+    static constexpr auto kFile = literal_to_array(Tag::file());  // constexpr init has to be in one statement
+    static const auto allocated_string __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = kFormat;
+    static const auto allocated_file_string __attribute__((section(DEVICE_PRINT_STRINGS_SECTION_NAME), used)) = kFile;
+    static structures::DevicePrintStringInfo allocated_string_info
+        __attribute__((section(DEVICE_PRINT_STRINGS_INFO_SECTION_NAME), used)) = {
+            allocated_string.data(), allocated_file_string.data(), Tag::line()};
+    return reinterpret_cast<std::uintptr_t>(&allocated_string_info);
 }
 
 template <typename BufferType>
@@ -807,7 +846,7 @@ struct device_print_type<char*> {
     static constexpr device_print_type_info value = {'s', sizeof(char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, char* argument) {
         *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
-                reinterpret_cast<std::uintptr_t>(argument);
+            reinterpret_cast<std::uintptr_t>(argument);
     }
 };
 template <>
@@ -815,7 +854,7 @@ struct device_print_type<const char*> {
     static constexpr device_print_type_info value = {'s', sizeof(const char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, const char* argument) {
         *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
-                reinterpret_cast<std::uintptr_t>(argument);
+            reinterpret_cast<std::uintptr_t>(argument);
     }
 };
 
@@ -826,7 +865,7 @@ struct device_print_type<ct_string> {
     static constexpr device_print_type_info value = {'s', sizeof(const char*)};
     static void serialize(device_print_buffer_ptr<uint8_t> device_print_buffer, uint32_t offset, ct_string argument) {
         *reinterpret_cast<device_print_buffer_ptr<std::uintptr_t>>(device_print_buffer + offset) =
-                reinterpret_cast<std::uintptr_t>(argument.ptr);
+            reinterpret_cast<std::uintptr_t>(argument.ptr);
     }
 };
 
@@ -1301,10 +1340,8 @@ volatile tt_l1_ptr std::atomic<uint32_t>& get_lock_atomic() {
 #if !defined(ARCH_QUASAR)
     return get_device_print_buffer()->aux.lock;
 #else
-    std::uintptr_t buffer_address = reinterpret_cast<std::uintptr_t>(get_device_print_buffer());
-    auto cached_address = buffer_address - MEM_L1_UNCACHED_BASE;
-    auto* print_buffer = reinterpret_cast<volatile tt_l1_ptr DevicePrintMemoryLayout*>(cached_address);
-    return print_buffer->aux.lock;
+    // Atomics require the cached L1 alias.
+    return GET_MAILBOX_ADDRESS_DEV_CACHED(dprint_buf)->aux.lock;
 #endif
 }
 #endif
@@ -1464,6 +1501,9 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
 #if defined(COMPILE_FOR_ERISC)
                 internal_::risc_context_switch();
 #endif
+#if DEVICE_PRINT_DISPATCH_ENABLED
+                ::device_print_dispatcher_execute_hook();
+#endif
                 // If we've closed the device, we've now disabled printing on it, don't hang.
                 if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
                     return 0;
@@ -1497,6 +1537,9 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
                 invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
                 internal_::risc_context_switch();
+#endif
+#if DEVICE_PRINT_DISPATCH_ENABLED
+                ::device_print_dispatcher_execute_hook();
 #endif
                 // If we've closed the device, we've now disabled printing on it, don't hang.
                 if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
@@ -1551,6 +1594,9 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
             invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
             internal_::risc_context_switch();
+#endif
+#if DEVICE_PRINT_DISPATCH_ENABLED
+            ::device_print_dispatcher_execute_hook();
 #endif
             // If we've closed the device, we've now disabled printing on it, don't hang.
             if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {

@@ -24,6 +24,8 @@
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
 #include <cstdint>
 
+using namespace overlay;
+
 constexpr uint32_t num_elements = 10;
 constexpr uint32_t elem_size = 8;
 constexpr uint32_t src_stride = 2 * elem_size;  // 16 — read every other element
@@ -61,5 +63,5 @@ void kernel_main() {
     /* wait on IDMA to finish */
     while (!idma_acked_cmdbuf_0());
 
-    DPRINT << "IDMA 1D strided done: " << DEC() << num_elements << " elements, src_stride=" << src_stride << ENDL();
+    DPRINT("IDMA 1D strided done: {} elements, src_stride={}\n", num_elements, src_stride);
 }
