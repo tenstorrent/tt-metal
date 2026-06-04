@@ -19,6 +19,9 @@ namespace tt::tt_metal {
 class NOCDebuggingFixture : public MeshDispatchFixture {
 public:
     static void SetUpTestSuite() {
+#if !defined(TRACY_ENABLE)
+        return;
+#endif
         // NOC debugging requires profiler + NOC event infrastructure, which is
         // created during MetalContext::initialize_impl() only when profiler_enabled
         // is true at that time.  Setting the env var before create_shared_devices()
@@ -34,6 +37,9 @@ public:
     }
 
     static void TearDownTestSuite() {
+#if !defined(TRACY_ENABLE)
+        return;
+#endif
         MeshDispatchFixture::destroy_shared_devices();
         if (had_prev_env_) {
             setenv("TT_METAL_NOC_DEBUG_DUMP", prev_env_value_.c_str(), 1);
@@ -129,6 +135,9 @@ protected:
     static inline std::string prev_env_value_{};
 
     void SetUp() override {
+#if !defined(TRACY_ENABLE)
+        GTEST_SKIP() << "NOC debugging tests require a Tracy-enabled build (build with ENABLE_TRACY=ON)";
+#endif
         MeshDispatchFixture::SetUp();
 
         if (this->IsSlowDispatch()) {
@@ -147,6 +156,9 @@ protected:
     }
 
     void TearDown() override {
+#if !defined(TRACY_ENABLE)
+        return;
+#endif
         if (auto& noc_debug_state = tt::tt_metal::MetalContext::instance().noc_debug_state()) {
             noc_debug_state->reset_state();
         }
