@@ -1157,6 +1157,15 @@ class Generator(WarmupForwardMixin):
         """
         Captures a trace for the decode_forward method.
         """
+        if getattr(self.model, "is_qwen36", False):
+            # qwen3.6 decode trace-safety (mirrors text_demo_qwen36:
+            # set_trace_decode_mode(True)): skip the in-forward SDPA decode-mask
+            # refresh (a copy_host_to_device_tensor host-write) so it is NOT
+            # captured inside the trace boundary. The mask is instead primed
+            # per-step BEFORE execute_trace in _decode_easy_trace_text
+            # (refresh_decode_per_step_buffers). The compile run + this capture
+            # still refresh via prepare_inputs_decode (called below / pre-capture).
+            self.model.set_trace_decode_mode(True)
 
         # Compile run
         self._decode_forward_no_trace_text(
@@ -1248,6 +1257,16 @@ class Generator(WarmupForwardMixin):
                 device_tensors=self.trace_inputs_decode[return_logits],
                 shard_specs=shard_specs,
             )
+
+        if getattr(self.model, "is_qwen36", False):
+            # qwen3.6-specific (the llama70b base has no host-written decode mask —
+            # its causal mask is in-kernel from current_pos). qwen3.6's V2-9 decode
+            # SDPA reads a per-step host-written mask buffer; the captured forward
+            # skips the in-forward refresh (set_trace_decode_mode True at capture),
+            # so prime the per-layer decode-mask buffers for THIS step's position
+            # BEFORE the trace replay. Mirrors the demo's per-step
+            # refresh_decode_per_step_buffers call before execute_trace.
+            self.model.refresh_decode_per_step_buffers(current_pos)
 
         trace_tok_rm = self._decode_forward_trace_text(
             self.trace_ids_decode[return_logits],

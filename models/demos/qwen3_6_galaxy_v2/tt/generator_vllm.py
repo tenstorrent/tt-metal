@@ -133,8 +133,10 @@ class Qwen3_5ForConditionalGeneration(Generator):
         inst = cls(tt_model, model_args, mesh_device)
         # Prefill trace-capture hits a GDN/DeltaNet L1 circular-buffer clash
         # (V2-9 trace-capture blocker); run prefill eager via the Generator's
-        # _disable_prefill_tracing hook. Decode is also eager (worker
-        # override_tt_config.trace_mode=false).
+        # _disable_prefill_tracing hook. DECODE is traced (worker
+        # override_tt_config.trace_mode=true) — the demo's proven decode path;
+        # eager decode was never multi-step-verified and produced garbage past
+        # token 1. _disable_decode_tracing is intentionally left unset.
         inst._disable_prefill_tracing = True
         # Skip the built-in prefill warmup: it is hardcoded for batch-32 (loops
         # batch in (1,32) + forces on-device sampling which asserts
