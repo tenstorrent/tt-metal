@@ -16,6 +16,7 @@
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
 #include "tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
 #include <tt-metalium/global_semaphore.hpp>
+#include <tt_metal/fabric/erisc_datamover_builder.hpp>  // append_worker_to_fabric_edm_sender_rt_args (1D multi-hop path)
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -34,25 +35,6 @@ inline bool validate_workload_or_fail(const PerfParams& p) {
         ADD_FAILURE() << "tensor_bytes must be a multiple of 4 (word-aligned) for verification.";
         return false;
     }
-    return true;
-}
-
-// Resolve forwarding link and fail early if none found.
-inline bool pick_forwarding_link_or_fail(
-    const tt::tt_fabric::FabricNodeId& /*src*/,
-    const tt::tt_fabric::FabricNodeId& /*dst*/,
-    uint32_t& out_link_idx,
-    const PerfParams& p) {
-    auto links = tt::tt_fabric::get_forwarding_link_indices(
-        tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip},
-        tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip});
-
-    if (links.empty()) {
-        ADD_FAILURE() << "No forwarding links from src(mesh=" << p.mesh_id << ",dev=" << p.src_chip
-                      << ") to dst(mesh=" << p.mesh_id << ",dev=" << p.dst_chip << ")";
-        return false;
-    }
-    out_link_idx = links[0];
     return true;
 }
 
@@ -235,6 +217,43 @@ Notes:
     auto& gsem = (sel & 1) ? *gsemB : *gsemA;
     auto& gsemRet = (sel & 1) ? *gsemRetB : *gsemRetA;
 
+    // Append the worker->EDM fabric-connection RT args for a (s -> d) send; SetRuntimeArgs then reads them.
+    // 2D uses the standard helper. For 1D, append_fabric_connection_rt_args resolves the direction via
+    // DIRECT NEIGHBORS only (#22524 workaround) and FATALs for any >1-hop pair; so for 1D we resolve the
+    // direction with control_plane.get_forwarding_direction (which handles multi-hop) and connect to the EDM
+    // port directly -- the same path the passing multi-hop gtest (RunTestUnicastRaw) uses. RT-arg packing
+    // (append_worker_to_fabric_edm_sender_rt_args) is identical to what append_fabric_connection_rt_args emits.
+    auto append_conn_or_fail = [&](const tt::tt_fabric::FabricNodeId& s,
+                                   const tt::tt_fabric::FabricNodeId& d,
+                                   tt::tt_metal::Program& prog,
+                                   const tt::tt_metal::CoreCoord& core,
+                                   std::vector<uint32_t>& rt_args) -> bool {
+        if (p.is_2d_fabric) {
+            auto links = tt::tt_fabric::get_forwarding_link_indices(s, d);
+            if (links.empty()) {
+                ADD_FAILURE() << "No forwarding links between dev " << p.src_chip << " and dev " << p.dst_chip;
+                return false;
+            }
+            tt::tt_fabric::append_fabric_connection_rt_args(s, d, links[0], prog, core, rt_args);
+        } else {
+            auto dir = cp.get_forwarding_direction(s, d);
+            if (!dir.has_value()) {
+                ADD_FAILURE() << "No 1D forwarding direction between dev " << p.src_chip << " and dev " << p.dst_chip
+                              << " (multi-hop 1D needs a line topology, e.g. galaxy 1x32)";
+                return false;
+            }
+            auto chans = cp.get_active_fabric_eth_channels_in_direction(s, dir.value());
+            if (chans.empty()) {
+                ADD_FAILURE() << "No active eth channels for dev " << p.src_chip << " <-> dev " << p.dst_chip;
+                return false;
+            }
+            const auto teardown_sem = tt::tt_metal::CreateSemaphore(prog, core, 0);
+            const auto buf_idx_sem = tt::tt_metal::CreateSemaphore(prog, core, 0);
+            tt::tt_fabric::append_worker_to_fabric_edm_sender_rt_args(chans[0], teardown_sem, buf_idx_sem, rt_args);
+        }
+        return true;
+    };
+
     const tt::tt_metal::CoreCoord receiver_core = p.receiver_core;
     constexpr const char* KDIR = "tests/tt_metal/tt_fabric/benchmark/collectives/unicast/kernels/";
 
@@ -247,13 +266,7 @@ Notes:
             .noc = tt::tt_metal::NOC::RISCV_0_default,
             .compile_args = {p.is_2d_fabric ? 1u : 0u}});  // CT arg 0: fabric mode (2D vs 1D route-set)
     // Return path (dst -> src): the rx kernel becomes a fabric sender that bounces an
-    // atomic-inc back to the source's return semaphore. Reverse links may differ from the
-    // forward direction, so resolve them explicitly.
-    auto ret_links = tt::tt_fabric::get_forwarding_link_indices(dst, src);
-    if (ret_links.empty()) {
-        ADD_FAILURE() << "No reverse forwarding links dst(dev=" << p.dst_chip << ")->src(dev=" << p.src_chip << ")";
-        return PerfPoint{};
-    }
+    // atomic-inc back to the source's return semaphore.
     std::vector<uint32_t> rx_rt = {
         static_cast<uint32_t>(gsem.address()),     // 0: forward (completion) semaphore on this dst core
         1u,                                        // 1: expected value
@@ -264,8 +277,10 @@ Notes:
         static_cast<uint32_t>(gsemRet.address()),  // 6: return semaphore addr on the source sender core
         static_cast<uint32_t>(hops),               // 7: return num_hops (used in 1D routing; ignored in 2D)
     };
-    tt::tt_fabric::append_fabric_connection_rt_args(
-        dst, src, /*link_idx=*/ret_links[0], receiver_prog, receiver_core, rx_rt);
+    // Append the worker->fabric (dst->src) connection RT args (must be last; build_from_args reads them).
+    if (!append_conn_or_fail(dst, src, receiver_prog, receiver_core, rx_rt)) {
+        return PerfPoint{};
+    }
     tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, receiver_core, rx_rt);
 
     // Sender program: READER (RISCV_0) + WRITER (RISCV_1)
@@ -311,12 +326,6 @@ Notes:
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .compile_args = writer_cta});
 
-    // Resolve forwarding and append fabric connection args
-    uint32_t link_idx = 0;
-    if (!pick_forwarding_link_or_fail(src, dst, link_idx, p)) {
-        return PerfPoint{};
-    }
-
     std::vector<uint32_t> writer_rt = {
         (uint32_t)dst_buf->address(),  // 0: dst_base (receiver L1 offset)
         (uint32_t)p.mesh_id,           // 1: dst_mesh_id (logical)
@@ -329,11 +338,10 @@ Notes:
         (uint32_t)hops,                // 8: forward num_hops (used in 1D routing; ignored in 2D)
     };
 
-    // Pack the fabric-connection runtime args for the writer kernel.
-    // This establishes the send path (routing/link identifiers) for fabric traffic.
-    // The device kernel must unpack these in the same order via build_from_args(...).
-    tt::tt_fabric::append_fabric_connection_rt_args(
-        src, dst, /*link_idx=*/link_idx, sender_prog, p.sender_core, writer_rt);
+    // Append the worker->fabric (src->dst) connection RT args (must be last; build_from_args reads them).
+    if (!append_conn_or_fail(src, dst, sender_prog, p.sender_core, writer_rt)) {
+        return PerfPoint{};
+    }
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
     // -------------------------- end PROGRAM FACTORY --------------------------
 
