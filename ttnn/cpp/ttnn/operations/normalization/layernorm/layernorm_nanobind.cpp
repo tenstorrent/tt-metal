@@ -192,7 +192,7 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
             - If `residual_input_tensor` is provided, its shape must match the input's logical and padded shape.
             - If TILE: `weight` and `bias` last dim must match input's last dim in both logical and padded shape; their padded height (second-to-last dim) must equal TILE_HEIGHT (i.e. 32).
             - If ROW_MAJOR: `weight` and `bias` last padded dim must be TILE_WIDTH and the stick count must align with the input width.
-            - If sharded and the logical width is not a multiple of TILE_WIDTH (i.e. 32), the entire row (including its tile padding) must fit in a single width shard; such a width split across multiple width shards is not supported.
+            - If sharded and the logical width is not a multiple of TILE_WIDTH (i.e. 32), the entire row (including its tile padding) must reside on a single core; such a width split across multiple cores is not supported.
 
         )doc";
 

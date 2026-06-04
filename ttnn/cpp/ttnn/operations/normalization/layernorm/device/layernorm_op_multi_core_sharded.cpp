@@ -308,28 +308,23 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
 
     uint32_t last_core_width_index =
         grid.mcast_1d ? cores.size() - 1 : (grid.row_wise ? grid.grid_size.x - 1 : grid.grid_size.y - 1);
-    // A single width shard spans the whole row, so one core owns the entire (logical) width.
-    const bool single_width_shard = (last_core_width_index == 0);
 
+    // A column mask is needed only when a reduced tile contains padding, i.e. the final width tile is
+    // partially valid (logical width not a multiple of the tile width). Whole padding tiles past the
+    // logical width are excluded from the reduction by the per-core reduce-tile count instead.
     const bool col_mask_needed = (logical_K % tile_width != 0);
 
     // Compute packed values for writer.
-    // The reduction scaler (winv) is applied per core; the cross-core global reduce then averages
-    // across the grid.num_blocks width shards (cinv = 1/num_blocks). The net per-element divide must
-    // equal 1/logical_K:
-    //   - single width shard: no cross-core average, so winv = 1/logical_K directly.
-    //   - tile-aligned multi width shard: each shard owns block_w columns, winv = 1/block_w and the
-    //     cross-core average finishes the divide (1/(block_w*num_blocks) = 1/logical_K).
-    //   - non-tile-aligned multi width shard: the column mask zeroes each shard's padding, so winv is
-    //     scaled by num_blocks to cancel the cross-core average and land the net divide on 1/logical_K.
-    float winv;
-    if (single_width_shard) {
-        winv = 1.0f / logical_K;
-    } else if (col_mask_needed) {
-        winv = static_cast<float>(grid.num_blocks) / logical_K;
-    } else {
-        winv = 1.0f / block_w;
-    }
+    // The reduction scaler (winv) is applied per core; when the reduction is split across cores
+    // (num_blocks > 1) the cross-core global reduce then averages across the num_blocks blocks
+    // (cinv = 1/num_blocks). The net per-element divide is winv*cinv and must equal 1/logical_K (the
+    // reduction only ever sums the logical columns: a partial final tile is column-masked and whole
+    // padding tiles are excluded by the reduce-tile count). With num_blocks == 1 there is no cross-core
+    // average, so winv = 1/logical_K. With num_blocks > 1, winv = num_blocks/logical_K cancels the
+    // average; this equals the per-core 1/block_w when the blocks tile the logical width exactly, and
+    // stays correct when they do not (e.g. 96 over two 64-wide blocks: divide by the logical 96, not
+    // the physical 128).
+    float winv = (grid.num_blocks == 1) ? (1.0f / logical_K) : (static_cast<float>(grid.num_blocks) / logical_K);
     float cinv = is_post_all_gather ? (1.0f / num_distributed_devices) : (1.0f / grid.num_blocks);
     auto bfloat_cinv = bfloat16(cinv);
     auto bfloat_cinv_one = bfloat16(1.0f);
@@ -348,18 +343,18 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     }
 
     // LayerNorm masks the host-tilized input at the E[x] site with a per-block mask (one partial tile
-    // at the end), which is only correct when a single width shard owns the whole row. RMSNorm instead
-    // masks the compute-produced squares with the per-shard host mask, which carries each shard's own
-    // validity, so it works with the width split across multiple shards.
+    // at the end), which is only correct when the whole row width is on a single core (num_blocks == 1).
+    // RMSNorm instead masks the compute-produced squares with the per-block host mask, which carries
+    // each block's own validity, so it works when the reduction is split across cores (num_blocks > 1).
     TT_FATAL(
-        !col_mask_needed || single_width_shard || rms_norm,
+        !col_mask_needed || grid.num_blocks == 1 || rms_norm,
         "Sharded layer_norm (non-RMS) does not support a non-tile-aligned width ({}) split across "
-        "multiple width shards ({}); use a single width shard or a tile-aligned width.",
+        "multiple cores ({}); use a single core for the width or a tile-aligned width.",
         logical_K,
-        last_core_width_index + 1);
+        grid.num_blocks);
     // Legacy (non-Welford) path: zero the padding columns so they do not enter the statistics (E[x]
-    // and variance for layernorm, the mean of squares for RMSNorm). Guard above guarantees a single
-    // width shard except for RMSNorm.
+    // and variance for layernorm, the mean of squares for RMSNorm). Guard above guarantees num_blocks
+    // == 1 except for RMSNorm.
     const bool do_col_mask = col_mask_needed && !use_welford;
     // Valid (logical) columns in the final width tile; the rest of that tile is padding.
     const uint32_t last_tile_valid_w = logical_K - (Kt - 1) * tile_width;
