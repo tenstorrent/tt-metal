@@ -55,6 +55,13 @@ TP_AXIS = 1  # axis of the 1xN mesh that holds the TP cluster
 
 CSV_FILENAME_TP4_LINE = "wan_rmsnorm_bench_fused_tp4_line.csv"
 CSV_FILENAME_TP8_RING = "wan_rmsnorm_bench_fused_tp8_ring.csv"
+CSV_FILENAME_TP4_RING_GALAXY = "wan_rmsnorm_bench_composite_tp4_ring_galaxy.csv"
+
+# Wormhole Galaxy ring baseline: number of fabric links between neighbors.
+# Overridable via WAN_GALAXY_LINKS for sweeps/diagnostics.
+import os as _os
+
+GALAXY_NUM_LINKS = int(_os.getenv("WAN_GALAXY_LINKS", "4"))
 
 # (config_id, seq_len, use_rope) — the 7 Wan2.2 720p attention call sites.
 BENCH_CONFIGS_ALL = [
@@ -69,6 +76,18 @@ BENCH_CONFIGS_ALL = [
 
 # All 7 Wan configs (multi-chunk in MUX writer enables larger N now).
 BENCH_CONFIGS = BENCH_CONFIGS_ALL
+
+
+def _select_configs() -> list:
+    """Optionally restrict the sweep via WAN_BENCH_ONLY=cfg_id[,cfg_id...]
+    (a smoke-test hook). Unset → all 7 configs."""
+    import os
+
+    only = os.getenv("WAN_BENCH_ONLY")
+    if not only:
+        return BENCH_CONFIGS
+    wanted = {s.strip() for s in only.split(",") if s.strip()}
+    return [c for c in BENCH_CONFIGS if c[0] in wanted]
 
 
 @dataclass
@@ -93,6 +112,11 @@ def _make_line_submesh_tp4(parent_mesh: ttnn.MeshDevice) -> ttnn.MeshDevice:
 def _use_parent_mesh_tp8(parent_mesh: ttnn.MeshDevice) -> ttnn.MeshDevice:
     """Use the native 1x8 parent mesh directly — chips already form a cycle."""
     return parent_mesh
+
+
+def _make_ring_submesh_tp4(parent_mesh: ttnn.MeshDevice) -> ttnn.MeshDevice:
+    """Carve a 1x4 submesh for the Wormhole Galaxy (4x8) TP=4 ring baseline."""
+    return parent_mesh.create_submesh(ttnn.MeshShape(1, 4))
 
 
 # ---------------------------------------------------------------------------
@@ -142,11 +166,16 @@ def _run(
     *,
     use_device_op: bool,
     persistent_output_buffer: ttnn.Tensor | None = None,
+    num_links_override: int | None = None,
 ) -> ttnn.Tensor:
     # Fused op uses 2 fabric links per direction (multi-link MUX). Composite
     # uses default (1 link) to keep its baseline numbers stable across this
-    # optimization sweep.
-    num_preferred_links = 2 if use_device_op else None
+    # optimization sweep. num_links_override lets a sweep pin an explicit link
+    # count (e.g. 4 links on the Wormhole Galaxy ring baseline).
+    if num_links_override is not None:
+        num_preferred_links = num_links_override
+    else:
+        num_preferred_links = 2 if use_device_op else None
     return ttnn.experimental.wan_fused_distributed_rmsnorm(
         inp.tt_input,
         TP_AXIS,
@@ -195,6 +224,7 @@ def _bench_one(
     use_rope: bool,
     *,
     method: str,
+    num_links_override: int | None = None,
 ) -> float:
     """Run one Wan config with the chosen method, return avg us/iter."""
     inp = _build_inputs(submesh, seq_len, use_rope)
@@ -220,6 +250,7 @@ def _bench_one(
         n_local_heads,
         use_device_op=use_device_op,
         persistent_output_buffer=persistent_output_buffer,
+        num_links_override=num_links_override,
     )
     logger.info(f"[{method}] compiling+tracing (seq_len={seq_len}, use_rope={use_rope})")
     per_iter_us = _trace_and_time(submesh, run_op)
@@ -247,6 +278,27 @@ def _format_summary_table(rows: list[dict], title: str) -> None:
             f"{r['seq_len']:>7}  {('Y' if r['use_rope'] else 'N'):>4}  "
             f"{r['us_composite']:>12.2f}  {r['us_fused']:>9.2f}  "
             f"{r['speedup']:>7.2f}x"
+        )
+    print(box)
+
+
+def _format_composite_table(rows: list[dict], title: str) -> None:
+    """Print a composite-only baseline table to stdout."""
+    id_w = max(len("config_id"), max(len(r["config_id"]) for r in rows))
+    header = f"{'config_id':<{id_w}}  {'seq_len':>7}  {'rope':>4}  {'composite us':>12}"
+    sep = "-" * len(header)
+    box = "=" * max(len(header), len(title))
+    print()
+    print(box)
+    print(title)
+    print(box)
+    print(header)
+    print(sep)
+    for r in rows:
+        print(
+            f"{r['config_id']:<{id_w}}  "
+            f"{r['seq_len']:>7}  {('Y' if r['use_rope'] else 'N'):>4}  "
+            f"{r['us_composite']:>12.2f}"
         )
     print(box)
 
@@ -384,3 +436,65 @@ def test_wan_rmsnorm_bench_fused_tp8_ring(mesh_device: ttnn.MeshDevice) -> None:
 
     _write_csv(rows, CSV_FILENAME_TP8_RING)
     _format_summary_table(rows, "Wan2.2 DistributedRMSNorm (TP=8 RING, native 1x8)")
+
+
+# ---------------------------------------------------------------------------
+# Wormhole Galaxy (4x8) baseline — TP=4 LINEAR on a 1x4 submesh, 4 fabric links,
+# COMPOSITE only. Collects the reference numbers we optimize the fused op
+# against on this machine.
+#
+# NB: a 1x4 sub-row of the 8-wide galaxy is NOT a closed cycle, so Ring
+# topology has no valid fabric wrap route (fabric.cpp:153 forwarding FATAL,
+# matching the documented BH "TP=4 Ring hang"). We use Linear, which matches
+# the proven "TP=4 LINE" baseline and needs no wrap hop.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params"),
+    [((4, 8), {**line_params, "trace_region_size": 131072})],
+    indirect=True,
+    ids=["wh_galaxy_4x8_line"],
+)
+def test_wan_rmsnorm_bench_composite_tp4_ring_galaxy(mesh_device: ttnn.MeshDevice) -> None:
+    """TP=4 LINEAR on a 1x4 submesh of the Wormhole Galaxy (4x8), 4 links:
+    sweep all 7 Wan configs through both COMPOSITE and FUSED in one process."""
+    submesh = _make_ring_submesh_tp4(mesh_device)
+    topology = ttnn.Topology.Linear
+    ccl_manager = CCLManager(mesh_device=submesh, num_links=GALAXY_NUM_LINKS, topology=topology)
+    ag_sem = ccl_manager.get_ag_ping_pong_semaphore(TP_AXIS)
+    n_local_heads = NUM_HEADS // 4  # 10
+
+    # WAN_BENCH_METHODS lets a hang repro run just one method (e.g. "fused").
+    methods = [m.strip() for m in _os.getenv("WAN_BENCH_METHODS", "composite,fused").split(",") if m.strip()]
+
+    rows: list[dict] = []
+    for cfg_id, seq_len, use_rope in _select_configs():
+        logger.info(f"=== {cfg_id} (seq_len={seq_len}, use_rope={use_rope}) ===")
+        timings: dict[str, float] = {}
+        for method in methods:
+            timings[method] = _bench_one(
+                submesh,
+                ag_sem,
+                topology,
+                n_local_heads,
+                seq_len,
+                use_rope,
+                method=method,
+                num_links_override=GALAXY_NUM_LINKS,
+            )
+        us_composite = timings.get("composite", float("nan"))
+        us_fused = timings.get("fused", float("nan"))
+        rows.append(
+            {
+                "config_id": cfg_id,
+                "seq_len": seq_len,
+                "use_rope": use_rope,
+                "us_composite": us_composite,
+                "us_fused": us_fused,
+                "speedup": (us_composite / us_fused) if us_fused == us_fused and us_fused else float("nan"),
+            }
+        )
+
+    _write_csv(rows, CSV_FILENAME_TP4_RING_GALAXY)
+    _format_summary_table(rows, "Wan2.2 DistributedRMSNorm (TP=4 LINE, WH Galaxy 1x4, 4 links): composite vs fused")
