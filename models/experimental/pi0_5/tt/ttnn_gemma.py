@@ -222,6 +222,65 @@ def build_matmul_pcfg(
     # When m_tiles is much smaller than grid_y, the 2D grid wastes rows.
     # Switch to 1D width-shard so all 120 cores work on N slices.
     if m_tiles * 4 <= grid_y and n_tiles >= total_cores // 4:
+        # PI0_DENOISE_MM_TUNE=1 enables per-shape overrides discovered by
+        # tests/perf/test_denoise_matmul_sweep.py for the 4 expert matmul
+        # shapes (M=32). Wall-clock wins of -10% to -42% on the sweep;
+        # device-kernel-time delta needs tracy verification before keeping
+        # by default.
+        import os as _os
+
+        _tune = _os.environ.get("PI0_DENOISE_MM_TUNE", "").lower() in ("1", "true", "yes", "on")
+        if _tune and m_tiles == 1:
+            # (k_tiles, n_tiles) -> (num_cores, in0_block_w)
+            # Only shapes where tracy verified a real device-kernel-time WIN
+            # vs the production picker. Other denoise shapes (qkv_fused,
+            # mlp_gate_up) regressed when their wall-clock-sweep "winners"
+            # were applied — the wall-clock proxy doesn't generalize at
+            # small K. Tracy-verified wins for large K only.
+            _DENOISE_TUNE_TABLE = {
+                (64, 32): (120, 32),  # o_proj:   M=32 K=2048 N=1024 — verified -10% kernel
+                (128, 32): (24, 32),  # mlp_down: M=32 K=4096 N=1024 — verified -6% kernel
+            }
+            override = _DENOISE_TUNE_TABLE.get((k_tiles, n_tiles))
+            if override is not None:
+                tuned_cores, tuned_bw = override
+                num_cores = tuned_cores
+                if n_tiles % num_cores != 0:
+                    per_core_N_1d = (n_tiles + num_cores - 1) // num_cores
+                else:
+                    per_core_N_1d = n_tiles // num_cores
+                in0_bw = tuned_bw
+                # Validate before applying — same checks as the regular path
+                if k_tiles % in0_bw == 0:
+                    # dst_budget=4 here matches the sweep winner's fp32_dest=True;
+                    # the compute_kernel_config side is set in the matmul forward.
+                    eff_budget = 4
+                    out_sw = min(per_core_N_1d, eff_budget)
+                    while out_sw > 1 and per_core_N_1d % out_sw != 0:
+                        out_sw -= 1
+                    out_sh = max(1, eff_budget // out_sw)
+                    out_sh = min(m_tiles, out_sh)
+                    while out_sh > 1 and m_tiles % out_sh != 0:
+                        out_sh -= 1
+                    cfg_gx = min(grid_x, num_cores)
+                    cfg_gy = (num_cores + cfg_gx - 1) // cfg_gx
+                    key = (m_tiles, k_tiles, n_tiles, grid_x, grid_y, str(activation), 4, "1d-tuned")
+                    if key in _pcfg_cache:
+                        return _pcfg_cache[key]
+                    cfg = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                        compute_with_storage_grid_size=(cfg_gx, cfg_gy),
+                        in0_block_w=in0_bw,
+                        out_subblock_h=out_sh,
+                        out_subblock_w=out_sw,
+                        per_core_M=m_tiles,
+                        per_core_N=per_core_N_1d,
+                        fuse_batch=True,
+                        fused_activation=activation,
+                        mcast_in0=True,
+                    )
+                    _pcfg_cache[key] = cfg
+                    return cfg
+                # else: fall through to the default 1D logic below
         # Pick num_cores: largest divisor of n_tiles ≤ total_cores, and not
         # smaller than half the grid (otherwise stick with 2D).
         num_cores = min(total_cores, n_tiles)
