@@ -50,10 +50,12 @@ inline void reblock_and_untilize(
         for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
             for (uint32_t w = 0; w < out_subblock_w; w++) {
                 uint32_t tile_index = block_offset + within_block_index + w;
-                acquire_dst();
+                tile_regs_acquire();
                 copy_tile(interm_cb_id, tile_index, 0);
+                tile_regs_commit();
+                tile_regs_wait();
                 pack_tile(0, reblock_cb_id);
-                release_dst();
+                tile_regs_release();
             }
             block_offset += out_subblock_num_tiles;
         }
@@ -150,7 +152,7 @@ void kernel_main() {
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
             int in1_index_subblock_offset = 0;
             for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                acquire_dst();
+                tile_regs_acquire();
 
                 if (enable_reload) {
                     copy_tile_to_dst_init_short(matmul_partials_cb);
@@ -184,6 +186,9 @@ void kernel_main() {
                     in0_index_h_offset += in0_block_w;
                 }
 
+                tile_regs_commit();
+                tile_regs_wait();
+
                 if (last_out) {
                     if (not untilize_out) {
                         pack_matmul_subblock(out0_cb, out_subblock_num_tiles);
@@ -194,7 +199,7 @@ void kernel_main() {
                     pack_matmul_subblock(matmul_partials_cb, out_subblock_num_tiles);
                 }
 
-                release_dst();
+                tile_regs_release();
 
                 in1_index_subblock_offset += out_subblock_w;
             }

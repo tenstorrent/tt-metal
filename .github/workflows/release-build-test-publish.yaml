@@ -37,6 +37,7 @@ permissions:
   contents: write
   packages: write
   id-token: write
+  checks: read
 
 jobs:
   # Parse platform to extract distro/version for downstream workflows.
@@ -58,37 +59,57 @@ jobs:
         with:
           platform: ${{ inputs.platform }}
 
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+  build-artifact:
+    needs: [check-harbor, parse-platform]
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-wheel: true
+      tracy: false
+      fetch-depth: 0
+      skip-tt-train: false
+      enable-lto: false
+
   build-artifact-tracy:
-      name: "Build artifact with tracy (for testing)"
-      needs: parse-platform
-      uses: ./.github/workflows/build-artifact.yaml
-      permissions:
-        packages: write
-      secrets: inherit
-      with:
-        platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-        build-wheel: true
-        tracy: true
-        wheel-ref: ${{ format('refs/tags/{0}', inputs.tag-version) }}
-        fetch-depth: 0
-        skip-tt-train: false
-        enable-lto: false
+    name: "Build artifact with tracy (for testing)"
+    needs: parse-platform
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-wheel: true
+      tracy: true
+      wheel-ref: ${{ format('refs/tags/{0}', inputs.tag-version) }}
+      fetch-depth: 0
+      skip-tt-train: false
+      enable-lto: false
 
   build-artifact-release:
-      name: "Build artifact for release (without tracy)"
-      needs: parse-platform
-      uses: ./.github/workflows/build-artifact.yaml
-      permissions:
-        packages: write
-      secrets: inherit
-      with:
-        platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-        build-wheel: true
-        tracy: false
-        wheel-ref: ${{ format('refs/tags/{0}', inputs.tag-version) }}
-        fetch-depth: 0
-        skip-tt-train: false
-        enable-lto: false
+    name: "Build artifact for release (without tracy)"
+    needs: parse-platform
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      build-wheel: true
+      tracy: false
+      wheel-ref: ${{ format('refs/tags/{0}', inputs.tag-version) }}
+      fetch-depth: 0
+      skip-tt-train: false
+      enable-lto: false
 
   determine-test-skus:
     runs-on: ubuntu-latest
@@ -107,7 +128,7 @@ jobs:
           fi
 
   release-demo-tests:
-    needs: [build-artifact-tracy, determine-test-skus]
+    needs: [check-harbor, build-artifact-tracy, determine-test-skus]
     if: ${{ inputs.tag-version != '' }}
     secrets: inherit
     uses: ./.github/workflows/release-demo-tests-impl.yaml
@@ -118,6 +139,47 @@ jobs:
       enabled-skus: ${{ needs.determine-test-skus.outputs.enabled-skus }}
       mlperf-read-only: ${{ !(github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
       tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
+
+  # Polls the "RTL Sim CI test" GitHub check on stable HEAD (posted by the
+  # tt-umd-simulators polling agent -- GitLab issue #71). Runs in parallel
+  # with release-demo-tests so other tests still surface failures, and is
+  # non-blocking for now (continue-on-error). 60-min budget covers the sim
+  # pipeline's typical 30-60 min runtime.
+  #
+  # Only runs when github.ref == refs/heads/stable. Other paths (cron-on-main
+  # dev release, manual dispatches on main) tag artifacts from github.sha per
+  # release-verify-or-create-tag.yaml line 73, so a stable-HEAD check would
+  # give a false-green for them.
+  check-rtl-sim-status:
+    needs: [build-artifact-tracy, determine-test-skus]
+    if: ${{ github.ref == 'refs/heads/stable' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Verify RTL Sim CI test check is green on stable HEAD
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+
+          SHA=$(gh api repos/tenstorrent/tt-metal/branches/stable --jq .commit.sha)
+          echo "Checking 'RTL Sim CI test' check on stable HEAD $SHA"
+
+          for i in $(seq 1 120); do  # 120 * 30s = 60 min
+            read -r STATUS CONCLUSION URL < <(
+              gh api "repos/tenstorrent/tt-metal/commits/$SHA/check-runs?check_name=RTL+Sim+CI+test&filter=latest" \
+                --jq '(.check_runs[0] // {}) | "\(.status // "missing") \(.conclusion // "-") \(.html_url // "-")"'
+            )
+            case "$STATUS:$CONCLUSION" in
+              completed:success) echo "::notice::Check passed on $SHA. $URL"; exit 0 ;;
+              completed:*)       echo "::error::Check on $SHA: conclusion=$CONCLUSION. $URL"; exit 1 ;;
+            esac
+            echo "  [$i/120] status=$STATUS — re-polling in 30s ($URL)"
+            sleep 30
+          done
+
+          echo "::error::Timed out after 60 min on $SHA (last status=$STATUS, last URL=$URL)."
+          exit 1
 
   # We need to tag the image used to reproduce the release later
   push-image-to-ghcr:
@@ -146,7 +208,7 @@ jobs:
     with:
       platform: ${{ needs.parse-platform.outputs.distro }}-${{ needs.parse-platform.outputs.version }}
       version: ${{ inputs.tag-version }}
-      tag-latest:  ${{ inputs.is-release-candidate != 'true' }}
+      tag-latest: ${{ inputs.is-release-candidate != 'true' }}
       wheel-artifact-name: ${{ needs.build-artifact-release.outputs.wheel-artifact-name }}
       dry-run: ${{ inputs.dry-run }}
       image: ${{ matrix.image }}
@@ -188,13 +250,13 @@ jobs:
     needs: build-artifact-release
     runs-on: ubuntu-latest
     permissions:
-      id-token: write  # Required for AWS OIDC
+      id-token: write # Required for AWS OIDC
     if: ${{ github.ref == 'refs/heads/main' }}
     steps:
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4

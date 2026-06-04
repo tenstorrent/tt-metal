@@ -163,5 +163,11 @@ if(TT_METAL_USE_EMULE)
     target_link_options(unit_tests_ttnn PRIVATE -rdynamic)
 endif()
 
+# unit_tests_ttnn_mock_allocator
+
+add_executable(unit_tests_ttnn_mock_allocator)
+target_sources(unit_tests_ttnn_mock_allocator PRIVATE ${UNIT_TESTS_TTNN_MOCK_ALLOCATOR_SOURCES})
+setup_ttnn_test_target(unit_tests_ttnn_mock_allocator)
+
 add_subdirectory(multiprocess)
 add_subdirectory(udm)

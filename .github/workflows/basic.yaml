@@ -20,7 +20,7 @@ on:
         required: true
         type: string # tt-metalium or tt-nn
       enable-watcher:
-        description: 'Enable watcher'
+        description: "Enable watcher"
         default: false
         type: boolean
 
@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 45
     runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner) }}
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
         ASAN_OPTIONS: "color=always"
         TSAN_OPTIONS: "color=always"
@@ -81,6 +81,7 @@ jobs:
           TT_METAL_WATCHER: 5
           TT_METAL_WATCHER_TEST_MODE: 1
           LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
+          TT_LOGGER_LEVEL: warn
         run: |
           /usr/bin/${{ inputs.product }}-validation-basic
 

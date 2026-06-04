@@ -24,18 +24,18 @@ on:
         type: boolean
         default: false
       enable-lightweight-kernel-asserts:
-        description: 'Enable lightweight kernel asserts'
+        description: "Enable lightweight kernel asserts"
         required: false
         type: boolean
         default: false
       enable-llk-asserts:
-        description: 'Enable LLK asserts'
+        description: "Enable LLK asserts"
         required: false
         type: boolean
         default: false
       gtest_filter:
         required: false
-        default: "*"
+        default: "-*NIGHTLY*"
         type: string
         description: "Filter for gtest"
       ref:
@@ -55,7 +55,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          {name: tt-train, cmd: ctest -E NIGHTLY --no-tests=error --output-on-failure  --output-junit generated/test_reports/ctest_report.xml},
+          {name: tt-train, cmd: ./tests/ttml_tests --gtest_output=xml:generated/test_reports/ctest_report.xml},
         ]
         test-group-py: [
           {name: tt-train, cmd: python -m pytest tests/python},
@@ -69,7 +69,7 @@ jobs:
       }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
         TT_METAL_RUNTIME_ROOT: /work
@@ -77,6 +77,7 @@ jobs:
         PYTHONPATH: /work
         TEST_DATA_DIR: /work/data
         ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
+        TT_LOGGER_LEVEL: warn
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -118,6 +119,8 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         if: ${{ !inputs.wheel-artifact-name }}
+        env:
+          GTEST_FILTER: ${{ inputs.gtest_filter }}
         run: |
           cd /work/build/tt-train
           mkdir -p generated/test_reports

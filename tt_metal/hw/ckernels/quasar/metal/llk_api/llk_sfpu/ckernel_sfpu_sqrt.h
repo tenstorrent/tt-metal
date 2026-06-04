@@ -17,7 +17,6 @@ template <
     [[maybe_unused]] bool EN_32BIT_DEST,
     [[maybe_unused]] bool FAST_APPROX = false>
 inline void calculate_sqrt() {
-    static_assert(EN_32BIT_DEST == false, "Non-default EN_32BIT_DEST (true) not supported in Quasar sqrt");
     static_assert(FAST_APPROX == false, "Non-default FAST_APPROX (true) not supported in Quasar sqrt");
     _calculate_sqrt_<APPROXIMATION_MODE>(ITERATIONS);
 }
