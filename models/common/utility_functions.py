@@ -539,14 +539,16 @@ def comp_pcc(golden, calculated, pcc=0.99):
     if golden.dtype == torch.bfloat16:
         golden = golden.type(torch.float32)
         calculated = calculated.type(torch.float32)
-    cal_pcc = np.min(
-        np.ma.corrcoef(
-            np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
-            np.ma.masked_invalid(torch.squeeze(calculated).detach().numpy()).flatten(),
-        )
-    )
+    # Fast PCC: torch.corrcoef (float64, matches numpy's promotion to |Δ|~1e-13) instead of
+    # numpy's masked-array corrcoef, which is Python-dispatched and O(GB) on large outputs and
+    # dominates big-tensor PCC checks (~7x slower per call). NaN/Inf were masked-to-zero above.
+    g = torch.squeeze(golden).flatten().to(torch.float64)
+    c = torch.squeeze(calculated).flatten().to(torch.float64)
+    cal_pcc = torch.min(torch.corrcoef(torch.stack((g, c)))).item()
 
-    if isinstance(cal_pcc, np.ma.core.MaskedConstant):
+    # Degenerate (zero-variance) case: numpy's masked path returned a MaskedConstant -> (True, 1.0);
+    # torch.corrcoef yields nan. Mirror the original verdict.
+    if math.isnan(cal_pcc):
         return True, 1.0
 
     return cal_pcc >= pcc, cal_pcc

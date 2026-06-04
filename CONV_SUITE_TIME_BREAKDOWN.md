@@ -79,3 +79,32 @@ lever for *this* suite is the **PCC check** (`np.ma.corrcoef` → `torch.corrcoe
 plain `np.corrcoef`, or a chunked/torch implementation), not compilation. Precompile's
 win remains on **compile-dominated** workloads (cold model bring-up; large suites of
 many cheap ops), not execution/host-bound ones.
+
+## CONFIRMED: the PCC swap gives 2.1× on the giant slice
+
+`comp_pcc` (`models/common/utility_functions.py`) was changed from
+`np.min(np.ma.corrcoef(masked_invalid(g).flatten(), masked_invalid(c).flatten()))` to
+`torch.min(torch.corrcoef(torch.stack((g.flatten().double(), c.flatten().double())))).item()`.
+float64 matches numpy's promotion **exactly** (|Δ| ~1e-13 across hi/lo-corr, all shapes),
+and NaN/Inf are already masked-to-zero before this point so `masked_invalid` was a no-op.
+
+A/B on the 16-case VAE 1024² slice (warm, plain, `PYTHONPATH` set so the edit is live):
+
+| comp_pcc impl | wall |
+|---|---|
+| `np.ma.corrcoef` (baseline) | 122.68s |
+| `torch.corrcoef` float64 (patched) | **57.93s** |
+
+**2.12× end-to-end**, 16/16 pass. Per-call it's ~7× faster (13.6s→1.85s on 268M elems);
+the masked-array machinery was the cost, not the precision.
+
+### Methodology gotcha that made this look "weird" first time
+
+A first swap attempt showed **no change** because of a **split-checkout import bug**: this
+worktree's tests import `models` from a *different* tt-metal checkout
+(`/localdev/mstaletovic/tt-metal`) unless `PYTHONPATH=<this-worktree>` is set — pytest
+doesn't put cwd first on `sys.path`, so an installed/`.pth` entry wins. `tests/` resolves
+locally (via rootdir) but `models`/`comp_pcc` did not, so edits here were dormant and a
+phase-timer + `co_filename` trace was needed to catch it. The cProfile runs happened to set
+`PYTHONPATH` (needed for `-p cprofile_plugin`), which is why *those* numbers were correct
+all along. **Always run this worktree's tests with `PYTHONPATH` pointing here.**
