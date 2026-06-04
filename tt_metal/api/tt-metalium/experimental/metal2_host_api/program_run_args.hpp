@@ -57,13 +57,13 @@ struct ProgramRunArgs {
         // a common runtime argument would provide better dispatch efficiency.
         struct NodeRuntimeArgs {
             NodeCoord node;
-            std::unordered_map<std::string, uint32_t> args;
+            std::unordered_map<std::string, KernelArgValue> args;
         };
         std::vector<NodeRuntimeArgs> runtime_arg_values;
 
         // Common runtime argument values (broadcast to every node).
         // Every argument in this kernel's RuntimeArgSchema::common_runtime_arg_names must be set.
-        std::unordered_map<std::string, uint32_t> common_runtime_arg_values;
+        std::unordered_map<std::string, KernelArgValue> common_runtime_arg_values;
 
         // Advanced options (see advanced_options.hpp).
         // Companion to KernelAdvancedOptions on the schema side; holds
@@ -129,10 +129,10 @@ struct ProgramRunArgs {
 struct ProgramRunArgsView {
     struct KernelRunArgsView {
         // Direct views into per-node vararg runtime args
-        std::vector<std::pair<NodeCoord, std::span<uint32_t>>> runtime_varargs;
+        std::vector<std::pair<NodeCoord, std::span<KernelArgValue>>> runtime_varargs;
 
         // Direct view into common vararg runtime args
-        std::span<uint32_t> common_runtime_varargs;
+        std::span<KernelArgValue> common_runtime_varargs;
     };
     // TODO: Better to just expose the multi-dim dispatch vectors directly?
     //       Would eliminate the lookup indirection.

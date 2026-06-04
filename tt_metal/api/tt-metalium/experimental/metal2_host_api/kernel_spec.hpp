@@ -21,6 +21,10 @@
 
 namespace tt::tt_metal::experimental {
 
+// A single kernel-argument value: one raw 32-bit word passed to a kernel,
+// whether as a compile-time arg, a (named) runtime arg, or a vararg.
+using KernelArgValue = uint32_t;
+
 // ============================================================================
 //  KernelSpec API
 // ============================================================================
@@ -162,7 +166,7 @@ struct KernelSpec {
     //----------------------------------------------------------------------------
     // Compile time arguments
     // (Bound argument values cannot be changed between Program executions)
-    using CompileTimeArgs = std::vector<std::pair<std::string, uint32_t>>;
+    using CompileTimeArgs = std::vector<std::pair<std::string, KernelArgValue>>;
     CompileTimeArgs compile_time_args;
     // TODO -- extend to support arbitrary POD types, including user-defined structs.
 

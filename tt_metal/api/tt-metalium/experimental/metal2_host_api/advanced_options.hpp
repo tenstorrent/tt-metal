@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
@@ -36,6 +37,11 @@ namespace tt::tt_metal::experimental {
 // Forward-declare *Name typedefs that AdvancedOptions members reference.
 // (Each is also declared in its owning spec header.)
 using DFBSpecName = std::string;
+
+// Re-declared here so the vararg members below can use it without pulling in
+// kernel_spec.hpp (which includes this header). See kernel_spec.hpp for the
+// canonical declaration and documentation.
+using KernelArgValue = uint32_t;
 
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
@@ -162,14 +168,14 @@ struct AdvancedKernelRunArgs {
     // Specified per-node; length can vary per-node (as declared in schema).
     struct NodeVarargs {
         NodeCoord node;
-        std::vector<uint32_t> args;
+        std::vector<KernelArgValue> args;
     };
     std::vector<NodeVarargs> runtime_varargs;
 
     // Unnamed common runtime argument "varargs"
     // (Companion to num_common_runtime_varargs in the schema.)
     // Broadcast to every node the kernel runs on.
-    using CommonVarargs = std::vector<uint32_t>;
+    using CommonVarargs = std::vector<KernelArgValue>;
     CommonVarargs common_runtime_varargs;
 };
 
@@ -181,8 +187,10 @@ struct SemaphoreAdvancedOptions {
     // NOTE: Setting a non-zero initial value is not supported on Gen2 architectures.
     // NOTE: Runtime wants to deprecate this feature for ALL architectures.
     //       When remote DFB becomes available, non-zero initial values will be removed.
+    // The value a semaphore holds before any kernel updates it.
+    using SemaphoreInitialValue = uint32_t;
     [[deprecated("Non-zero semaphore initialization is deprecated and will be removed.")]]
-    uint32_t initial_value = 0;
+    SemaphoreInitialValue initial_value = 0;
 };
 
 struct TensorParameterAdvancedOptions {
