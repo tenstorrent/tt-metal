@@ -564,7 +564,7 @@ inline void reconfigure_exp_threshold(const std::uint32_t pack_dst_format)
 __attribute__((noinline)) bool is_pack_reads_per_xy_plane(const std::uint32_t expected, const std::uint32_t nop_count = 10);
 
 template <bool is_fp32_dest_acc_en>
-inline void reconfig_packer_data_format(
+__attribute__((noinline)) inline void reconfig_packer_data_format(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size  = 0,
