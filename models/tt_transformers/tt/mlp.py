@@ -63,10 +63,6 @@ class MLP(LightweightModule):
             w2_mem_config = prefetcher.weight_mem_config(
                 args.hidden_dim // args.num_devices, args.dim, w2_width_sharded, is_galaxy=args.is_galaxy
             )
-        # Receiver-contiguous (DRAM-core) weights are decode-only; prefill's direct matmuls need the
-        # width-sharded layout, so keep a width-sharded prefill copy of each FF weight (mirrors the
-        # attention wqkv/wqkv_prefill split). The worker path is already width-sharded -> just alias.
-        _use_rc = prefetcher is not None and getattr(prefetcher, "uses_recv_contig", False)
 
         # TODO Clean up this code. With sharding, we load the normal weights and then shard them
         # Note: unsqueeze(0).unsqueeze(0) makes weights 4D [1, 1, H, W] to match attention weights
@@ -109,23 +105,14 @@ class MLP(LightweightModule):
             decoder_id=layer_num, tensor=TensorGroup.FF2, prefetcher=use_prefetcher
         )
 
-        # Decode/prefetch copies (receiver-contiguous for the DRAM-core backend, else width-sharded).
+        # One copy per weight. recv-contig (ND_SHARDED) for the DRAM-core backend, else width-sharded;
+        # both prefill (direct matmul) and decode (via GCB) read it — the matmul's TensorAccessor
+        # handles ND_SHARDED in1 directly, so no separate width-sharded prefill copy is needed.
         self.w1 = as_sharded_tensor(
             "w1_sharded", ff1_3_dtype, w1_dims, w1_w3_mem_config, "w1_sharded"
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
         self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, w2_dims, w2_mem_config, "w2_sharded")
         self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, w1_dims, w1_w3_mem_config, "w3_sharded")
-        # Width-sharded prefill copies (only built when decode weights are receiver-contiguous).
-        if _use_rc:
-            self.w1_prefill = as_sharded_tensor(
-                "w1_sharded", ff1_3_dtype, w1_dims, w1_w3_width_sharded, "w1_ws_prefill"
-            )
-            self.w2_prefill = as_sharded_tensor("w2_sharded", ff2_dtype, w2_dims, w2_width_sharded, "w2_ws_prefill")
-            self.w3_prefill = as_sharded_tensor(
-                "w3_sharded", ff1_3_dtype, w1_dims, w1_w3_width_sharded, "w3_ws_prefill"
-            )
-        else:
-            self.w1_prefill, self.w2_prefill, self.w3_prefill = self.w1, self.w2, self.w3
 
         # Default activation is SILU
         self.activation_type = (
@@ -174,11 +161,12 @@ class MLP(LightweightModule):
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher)
         pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
 
-        # Decode consumes the receiver-contiguous weights via the prefetcher GCB; prefill's direct
-        # matmuls need the width-sharded prefill copies (== self.wN for the worker / no-prefetcher).
-        w1_w = self.w1 if mode == Mode.DECODE else self.w1_prefill
-        w2_w = self.w2 if mode == Mode.DECODE else self.w2_prefill
-        w3_w = self.w3 if mode == Mode.DECODE else self.w3_prefill
+        # Decode consumes the weights via the prefetcher GCB; prefill's direct matmuls read the same
+        # weight from DRAM. The matmul's TensorAccessor reads recv-contig (ND_SHARDED) in1 directly,
+        # so no separate width-sharded prefill copy is needed (worker/no-prefetcher use the same).
+        w1_w = self.w1
+        w2_w = self.w2
+        w3_w = self.w3
 
         w1_out = ttnn.linear(
             x,
