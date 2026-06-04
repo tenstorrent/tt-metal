@@ -549,6 +549,20 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
+    # Capture the matmul program_config's fused activation (read from the RAW dict,
+    # before it is parsed to an object). The model frequently carries the activation
+    # (e.g. GELU) inside program_config.fused_activation rather than the separate
+    # `activation` kwarg; the golden must apply it too, else golden(no-act) vs
+    # device(act) yields a spurious ~0.86 PCC. op_type: 2=GELU, 3=RELU, 5=SIGMOID,
+    # 57=SILU (ttnn.UnaryOpType).
+    _fused_act_optype = None
+    _fused_act_param = None
+    if isinstance(program_config, dict):
+        _fa = program_config.get("fused_activation")
+        if isinstance(_fa, dict):
+            _fused_act_optype = _fa.get("op_type")
+            _fused_act_param = _fa.get("param")
+
     # gather_in0 1D ring matmuls (decode LM-head / MLP-w2) are distributed model
     # fragments — they need the model's prefetcher+worker sub-devices, the fixed
     # 24-core ring, and a cross-mesh all-reduce the generic path can't provide.
@@ -744,6 +758,28 @@ def run(
             torch_output_tensor = torch.nn.functional.gelu(torch_output_tensor, approximate=approx)
         elif "relu" in act:
             torch_output_tensor = torch.nn.functional.relu(torch_output_tensor)
+
+    # Apply the program_config's fused_activation to the golden too (the model puts
+    # the activation here, not in the `activation` kwarg, for these matmuls). Without
+    # this the golden omits the activation the device applied -> spurious ~0.86 PCC.
+    if _fused_act_optype is not None and not is_batched_weight:
+        try:
+            _ot = int(_fused_act_optype)
+        except (TypeError, ValueError):
+            _ot = None
+        if _ot == 2:  # GELU; param[0]==1 -> tanh (fast/approximate) mode
+            _approx = (
+                "tanh"
+                if (isinstance(_fused_act_param, (list, tuple)) and _fused_act_param and _fused_act_param[0])
+                else "none"
+            )
+            torch_output_tensor = torch.nn.functional.gelu(torch_output_tensor, approximate=_approx)
+        elif _ot == 3:  # RELU
+            torch_output_tensor = torch.nn.functional.relu(torch_output_tensor)
+        elif _ot == 5:  # SIGMOID
+            torch_output_tensor = torch.sigmoid(torch_output_tensor)
+        elif _ot == 57:  # SILU
+            torch_output_tensor = torch.nn.functional.silu(torch_output_tensor)
 
     # Create input tensor A. Mirror the model's flow: build the tensor in
     # DRAM-interleaved with the right per-chip placement, then to_memory_config
@@ -963,7 +999,7 @@ def run(
                 break
     e2e_perf = stop_measuring_time(start_time)
 
-    # Check with PCC
+    # Check with PCC.
     if is_mesh_device:
         torch_output_tensor = reconcile_golden_to_actual(
             torch_output_tensor, output_tensor, input_a_tensor_placement, input_b_tensor_placement
