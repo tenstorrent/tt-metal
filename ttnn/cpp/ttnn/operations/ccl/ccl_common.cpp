@@ -1971,29 +1971,48 @@ double lookup_fabric_bw(tt::ARCH arch) {
     }
 }
 
-// Fabric latency was obtained by averaging empirical data across various machines,
-// topologies, and unicast_write vs scatter_write.
-double lookup_fabric_hop_latency_ns(tt::ARCH arch) {
+// One-way per-hop fabric latency (ns): marginal cost to forward the first packet across one more
+// hop -- the pipeline-fill latency of a collective (see estimate_fabric_transfer_cycles).
+// Measured on hardware via a single-clock round trip (src -> chip N hops away -> src) that cancels
+// cross-chip clock skew; per_hop = slope(RTT vs hops)/2, 256 B payload (latency-bound), p50.
+// 1D fabric (16 B LowLatency header) is ~17-19% cheaper/hop than 2D (96 B Hybrid); BH ~30% cheaper
+// than WH (400 Gb/s eth + 2 ERISCs vs 100 Gb/s + 1). Values in ns (WH 1.0 GHz cyc==ns; BH 1.35 GHz).
+//   arch        2D fabric    1D fabric
+//   Wormhole    874          711      (for T3K; Galaxy near-hop ~734)
+//   Blackhole   619          515      (p150_x4)
+// Lowest measured per-hop on purpose -- a roofline must not be beatable: WH-2D keeps T3K's 874 over
+// Galaxy's 907, and we stay linear. 1D is mildly super-linear on long lines (~695*h + 4.7*h^2) but
+// that growth is below-roofline degradation, not the floor.
+double lookup_fabric_hop_latency_ns(tt::ARCH arch, tt::tt_fabric::FabricConfig fabric_config) {
+    const bool is_2d = tt::tt_fabric::is_2d_fabric_config(fabric_config);
     switch (arch) {
-        // WH: mean = 1528.6 ns, std dev = 57.5 ns (3.8%)
-        case tt::ARCH::WORMHOLE_B0: return 1528.6;
-        // BH: mean = 859.5 ns, std dev = 30.6 ns (3.6%)
-        case tt::ARCH::BLACKHOLE: return 859.5;
+        case tt::ARCH::WORMHOLE_B0: return is_2d ? 874.0 : 711.0;
+        case tt::ARCH::BLACKHOLE: return is_2d ? 619.0 : 515.0;
         default: TT_FATAL(false, "Fabric perf model: unsupported arch {}", arch);
     }
 }
 
 }  // namespace
 
-double estimate_fabric_transfer_ns(tt::ARCH arch, uint64_t data_bytes, uint32_t num_links, uint32_t num_hops) {
+std::pair<int, int> estimate_fabric_transfer_cycles(
+    tt::ARCH arch,
+    tt::tt_fabric::FabricConfig fabric_config,
+    int clock_rate_mhz,
+    uint64_t data_bytes,
+    uint32_t num_links,
+    uint32_t num_hops) {
     const double bw_per_link = lookup_fabric_bw(arch);
     const double total_bw = bw_per_link * num_links;
-    const double transfer_ns = (total_bw > 0.0) ? static_cast<double>(data_bytes) / total_bw : 0.0;
+    const double bandwidth_ns = (total_bw > 0.0) ? static_cast<double>(data_bytes) / total_bw : 0.0;
 
-    const double hop_lat = lookup_fabric_hop_latency_ns(arch);
+    const double hop_lat = lookup_fabric_hop_latency_ns(arch, fabric_config);
     const double latency_ns = hop_lat * num_hops;
 
-    return transfer_ns + latency_ns;
+    // Convert ns -> device clock cycles
+    const double cycles_per_ns = static_cast<double>(clock_rate_mhz) / 1000.0;
+    return {
+        static_cast<int>(std::ceil(bandwidth_ns * cycles_per_ns)),
+        static_cast<int>(std::ceil(latency_ns * cycles_per_ns))};
 }
 
 }  // namespace ttnn::ccl

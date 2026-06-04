@@ -174,7 +174,7 @@ AllGatherDeviceOperation::create_op_performance_model(
     // memory bandwidth, independent of any particular algorithm.
     //
     // Performance is bounded by:
-    //   ideal_cycles = max(DRAM_bw_cycles, fabric_bw_cycles) + pipeline_latency
+    //   ideal_cycles = max(DRAM_bw_cycles, fabric_bw_cycles) + pipeline_latency + fabric_fill_latency
     //
     // --- Fabric term (bottleneck link analysis) ---
     //
@@ -205,10 +205,10 @@ AllGatherDeviceOperation::create_op_performance_model(
 
     // Architecture and clock detection
     tt::ARCH arch = tt::ARCH::WORMHOLE_B0;
-    float clock_rate_ghz = 1.0f;
+    int clock_rate_mhz = 1000;
     if (input_tensor.storage_type() == StorageType::DEVICE) {
         arch = input_tensor.device()->arch();
-        clock_rate_ghz = input_tensor.device()->get_clock_rate_mhz() / 1000.0f;
+        clock_rate_mhz = input_tensor.device()->get_clock_rate_mhz();
     }
 
     // Data size: bytes each device contributes
@@ -216,26 +216,26 @@ AllGatherDeviceOperation::create_op_performance_model(
 
     const uint32_t N = ::ttnn::ccl::get_topological_dimension(input_tensor, args.cluster_axis);
     const uint32_t num_links = args.num_links;
-    double fabric_time_ns = 0.0f;
+    uint64_t bottleneck_bytes = 0;  // bottleneck bytes through the most-loaded link
+    uint32_t num_hops = 0;          // collective diameter (hops)
     if (N <= 1) {
         // Single device: no fabric communication
-        fabric_time_ns = 0.0f;
     } else if (tt::tt_fabric::is_ring_or_torus(args.topology)) {
         // Ring topology: bisection cuts 2 links, so each direction carries
         // at most half the total data. Bottleneck per direction = ceil((N-1)*S/2).
-        const uint64_t bottleneck_bytes = tt::div_up((N - 1) * input_size_bytes, 2);
-        fabric_time_ns =
-            ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, tt::div_up(N - 1, 2u));
+        bottleneck_bytes = tt::div_up((N - 1) * input_size_bytes, 2);
+        num_hops = tt::div_up(N - 1, 2u);
     } else {
         // Line/Linear/Mesh topology: edge device has one link and must
         // receive all (N-1) slices through it.
-        const uint64_t bottleneck_bytes = (N - 1) * input_size_bytes;
-        fabric_time_ns = ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, N - 1);
+        bottleneck_bytes = (N - 1) * input_size_bytes;
+        num_hops = N - 1;
     }
 
-    // Convert fabric time (ns) to device clock cycles.
-    // clock_rate_ghz cycles/ns * ns = cycles
-    const int fabric_cycles = static_cast<int>(std::ceil(fabric_time_ns * clock_rate_ghz));
+    // Fabric bandwidth competes with local DRAM (max); the pipeline-fill latency is an additive
+    // serial prefix (first chunk must cross the diameter before streaming starts).
+    const auto [fabric_bw_cycles, fabric_fill_cycles] = ttnn::ccl::estimate_fabric_transfer_cycles(
+        arch, tt::tt_fabric::GetFabricConfig(), clock_rate_mhz, bottleneck_bytes, num_links, num_hops);
 
     // --- Local DRAM bandwidth ceiling (first-principles) ---
     // Read: device reads S bytes from DRAM.  Write: device writes N*S bytes.
@@ -265,7 +265,8 @@ AllGatherDeviceOperation::create_op_performance_model(
 
     const int local_bw_cycles = static_cast<int>(std::max(read_bw_cycles, write_bw_cycles));
     const int pipeline_latency_cycles = static_cast<int>(read_latency_cycles + write_latency_cycles);
-    const int ideal_dev_clock_cycles = std::max(local_bw_cycles, fabric_cycles) + pipeline_latency_cycles;
+    const int ideal_dev_clock_cycles =
+        std::max(local_bw_cycles, fabric_bw_cycles) + pipeline_latency_cycles + fabric_fill_cycles;
 
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, {output_tensor}, ideal_dev_clock_cycles);

@@ -154,10 +154,10 @@ ReduceScatterDeviceOperation::create_op_performance_model(
 
     // --- Architecture and clock ---
     tt::ARCH arch = tt::ARCH::WORMHOLE_B0;
-    float clock_rate_ghz = 1.0f;
+    int clock_rate_mhz = 1000;
     if (input_tensor.storage_type() == StorageType::DEVICE) {
         arch = input_tensor.device()->arch();
-        clock_rate_ghz = input_tensor.device()->get_clock_rate_mhz() / 1000.0f;
+        clock_rate_mhz = input_tensor.device()->get_clock_rate_mhz();
     }
 
     // --- Data sizes ---
@@ -182,21 +182,22 @@ ReduceScatterDeviceOperation::create_op_performance_model(
     //   (N-1) partial results through it: (N-1) × S/N bytes.
     //   Latency: N-1 hops (linear diameter).
     // =========================================================================
-    double fabric_time_ns = 0.0;
+    uint64_t bottleneck_bytes = 0;  // bottleneck bytes through the most-loaded link
+    uint32_t num_hops = 0;          // collective diameter (hops)
     if (N <= 1) {
-        fabric_time_ns = 0.0;
+        // Single device: no fabric communication
     } else if (tt::tt_fabric::is_ring_or_torus(args.topology)) {
         // Bisection lower bound: (N-1) * slice_size / 2 per direction
-        const uint64_t bottleneck_bytes = tt::div_up((N - 1) * slice_size, 2);
-        const uint32_t num_hops = N / 2;
-        fabric_time_ns = ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, num_hops);
+        bottleneck_bytes = tt::div_up((N - 1) * slice_size, 2);
+        num_hops = N / 2;
     } else {
         // Line/Linear topology
-        const uint64_t bottleneck_bytes = (N - 1) * slice_size;
-        const uint32_t num_hops = N - 1;
-        fabric_time_ns = ttnn::ccl::estimate_fabric_transfer_ns(arch, bottleneck_bytes, num_links, num_hops);
+        bottleneck_bytes = (N - 1) * slice_size;
+        num_hops = N - 1;
     }
-    const int fabric_cycles = static_cast<int>(std::ceil(fabric_time_ns * clock_rate_ghz));
+    // Fabric bandwidth competes with DRAM/compute (max); the pipeline-fill latency is additive.
+    const auto [fabric_bw_cycles, fabric_fill_cycles] = ttnn::ccl::estimate_fabric_transfer_cycles(
+        arch, tt::tt_fabric::GetFabricConfig(), clock_rate_mhz, bottleneck_bytes, num_links, num_hops);
 
     // =========================================================================
     // 2. LOCAL DATA MOVEMENT — first-principles minimum (algorithm-agnostic)
@@ -277,7 +278,7 @@ ReduceScatterDeviceOperation::create_op_performance_model(
         static_cast<int>(2ULL * slice_size / (static_cast<uint64_t>(num_cores) * UNPACKER_BW_BYTES_PER_CYCLE));
     const int pipeline_latency_cycles = read_latency_cycles + compute_latency_cycles + write_latency_cycles;
     const int ideal_dev_clock_cycles =
-        std::max({local_bw_cycles, fabric_cycles, compute_cycles}) + pipeline_latency_cycles;
+        std::max({local_bw_cycles, fabric_bw_cycles, compute_cycles}) + pipeline_latency_cycles + fabric_fill_cycles;
 
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, output_tensors, ideal_dev_clock_cycles);
