@@ -283,11 +283,19 @@ class IMPLIED_MATH_FORMAT(TemplateParameter):
 
 
 @dataclass
-class EN_MXFP_2X(TemplateParameter):
-    en_mxfp_2x: bool = False
+class ENABLE_SRC_2X(TemplateParameter):
+    enable_src_2x: bool = False
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool EN_MXFP_2X = {str(self.en_mxfp_2x).lower()};"
+        return f"constexpr bool ENABLE_SRC_2X = {str(self.enable_src_2x).lower()};"
+
+
+@dataclass
+class ENABLE_DIRECT_INDEXING(TemplateParameter):
+    enable_direct_indexing: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool ENABLE_DIRECT_INDEXING = {str(self.enable_direct_indexing).lower()};"
 
 
 @dataclass

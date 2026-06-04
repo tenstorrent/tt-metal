@@ -33,7 +33,8 @@ from helpers.test_config import BootMode, TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     DEST_SYNC,
-    EN_MXFP_2X,
+    ENABLE_DIRECT_INDEXING,
+    ENABLE_SRC_2X,
     IMPLIED_MATH_FORMAT,
     MATH_FIDELITY,
     NUM_FACES,
@@ -99,6 +100,9 @@ MATMUL_FORMAT = input_output_formats(
         if format.input_format == DataFormat.MxFp4
         else [None]
     ),
+    enable_direct_indexing=lambda register_format_hint: (
+        [False] if register_format_hint is None else [True, False]
+    ),
     transpose=[Transpose.No],
 )
 # Note: this test is used to test boot modes, that is why it has them piped as default arguments to the test itself
@@ -108,6 +112,7 @@ def test_matmul(
     format,
     implied_math_format,
     register_format_hint,
+    enable_direct_indexing,
     transpose,
 ):
     format.register_format_hint = register_format_hint
@@ -216,10 +221,11 @@ def test_matmul(
         templates=[
             MATH_FIDELITY(math_fidelity),
             IMPLIED_MATH_FORMAT(implied_math_format),
-            EN_MXFP_2X(
+            ENABLE_SRC_2X(
                 format.register_format_hint
                 in (DataFormat.MxFp4_2x_A, DataFormat.MxFp4_2x_B)
             ),
+            ENABLE_DIRECT_INDEXING(enable_direct_indexing),
             DEST_SYNC(dest_sync_mode),
             UNPACK_TRANS_FACES(transpose),
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),
