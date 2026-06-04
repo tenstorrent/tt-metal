@@ -5,7 +5,7 @@
 #pragma once
 
 #include "llk_math_eltwise_binary_sfpu.h"
-#include "llk_math_eltwise_unary_sfpu_common.h"
+#include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_assert.h"
 #include "sfpu/ckernel_sfpu_mul_int32.h"
 
@@ -38,21 +38,23 @@ inline void llk_math_eltwise_binary_sfpu_mul_int_init() {
  */
 template <bool APPROXIMATE, DataFormat DATA_FORMAT, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
 inline void llk_math_eltwise_binary_sfpu_mul_int(
-    uint32_t idst0, uint32_t idst1, uint32_t odst, int vector_mode = (int)VectorMode::RC) {
-    LLK_ASSERT(vector_mode == (int)VectorMode::RC, "Quasar currently only supports vector mode RC");
+    std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
     static_assert(DATA_FORMAT == DataFormat::Int32, "Quasar SFPU mul_int currently supports Int32 only");
-    constexpr int tile_stride = NUM_FACES * FACE_R_DIM;
-    const int in0_offset = static_cast<int>(idst0) * tile_stride;
-    const int in1_offset = static_cast<int>(idst1) * tile_stride;
-    const int out_offset = static_cast<int>(odst) * tile_stride;
+    LLK_ASSERT(
+        vector_mode == VectorMode::R || vector_mode == VectorMode::C || vector_mode == VectorMode::RC ||
+            vector_mode == VectorMode::None,
+        "Quasar SFPU mul_int only supports vector modes R, C, RC, None");
+    constexpr std::uint32_t tile_stride = NUM_FACES * FACE_R_DIM;
+    const std::uint32_t in0_offset = idst0 * tile_stride;
+    const std::uint32_t in1_offset = idst1 * tile_stride;
+    const std::uint32_t out_offset = odst * tile_stride;
 
-    _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
+    _llk_math_eltwise_binary_sfpu_params_(
         ckernel::sfpu::_mul_int32_<APPROXIMATE, ITERATIONS, SIGN_MAGNITUDE_FORMAT>,
-        0,
-        ITERATIONS,
         in0_offset,
         in1_offset,
-        out_offset);
+        out_offset,
+        vector_mode);
 }
 
 }  // namespace ckernel

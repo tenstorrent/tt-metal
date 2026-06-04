@@ -18,7 +18,7 @@ template <
     [[maybe_unused]] bool legacy_compat = true>
 inline void calculate_reciprocal() {
     static_assert(legacy_compat == true, "Non-default legacy_compat (false) not supported in Quasar reciprocal");
-    _calculate_reciprocal_<APPROXIMATION_MODE>(ITERATIONS);
+    _calculate_reciprocal_<APPROXIMATION_MODE, ITERATIONS>();
 }
 
 template <

@@ -59,7 +59,7 @@ inline __attribute__((always_inline)) void _llk_math_eltwise_sfpu_apply_vector_m
 #pragma GCC unroll 0
         for (int face = 0; face < 2; face++)
         {
-            std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
+            sfpu_func(args...);
             _llk_math_eltwise_sfpu_inc_dst_face_addr_();
         }
         // Skip the next 2 faces
@@ -72,7 +72,7 @@ inline __attribute__((always_inline)) void _llk_math_eltwise_sfpu_apply_vector_m
 #pragma GCC unroll 0
         for (int face = 0; face < 2; face++)
         {
-            std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
+            sfpu_func(args...);
             _llk_math_eltwise_sfpu_inc_dst_face_addr_();
             _llk_math_eltwise_sfpu_inc_dst_face_addr_();
         }
@@ -83,7 +83,7 @@ inline __attribute__((always_inline)) void _llk_math_eltwise_sfpu_apply_vector_m
 #pragma GCC unroll 0
         for (int face = 0; face < 4; face++)
         {
-            std::forward<Callable>(sfpu_func)(std::forward<Args>(args)...);
+            sfpu_func(args...);
             _llk_math_eltwise_sfpu_inc_dst_face_addr_();
         }
     }

@@ -56,11 +56,10 @@ sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
  * @tparam APPROXIMATION_MODE: unused, preserved to match the BH metal signature
  * @tparam BINOP: selects which binary op to compute (MUL or DIV)
  * @tparam is_fp32_dest_acc_en: enables FP32 DEST accumulation (skips bf16 RNE for DIV)
- * @param iterations: number of sfpi rows to process (runtime, one call per face)
+ * @tparam ITERATIONS: number of sfpi rows to process (one call per face)
  */
-template <[[maybe_unused]] bool APPROXIMATION_MODE, BinaryOp BINOP, bool is_fp32_dest_acc_en = false>
+template <[[maybe_unused]] bool APPROXIMATION_MODE, BinaryOp BINOP, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_sfpu_binary(
-    const int iterations,
     const std::uint32_t dst_index_in0,
     const std::uint32_t dst_index_in1,
     const std::uint32_t dst_index_out) {
@@ -68,7 +67,7 @@ inline void calculate_sfpu_binary(
     // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
     constexpr std::uint32_t dst_tile_size_sfpi = 32;
 #pragma GCC unroll 8
-    for (int d = 0; d < iterations; d++) {
+    for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
         sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
         sfpi::vFloat result = 0.0f;
