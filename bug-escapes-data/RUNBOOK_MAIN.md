@@ -66,6 +66,13 @@
 ### Normal Campaign Mode (default)
 Run the full campaign loop. After each verify agent completes, immediately spawn a new find agent. Never idle.
 
+### Incremental Mode
+Activated when the user says "use incremental mode" or similar, or when set in `campaign-state.json` as `"mode": "incremental"`.
+
+**First: write `incremental` to the `mode` field in `campaign-state.json` immediately.**
+
+Same behavior as Normal Campaign Mode except the find agent uses a 2-day Snowflake lookback window instead of 90 days. Use this for routine daily runs to catch recent regressions without re-scanning the full history. The Continuous Campaign Rule still applies.
+
 ### Just Find One Mode
 Activated when the user says "use the just find one protocol" or similar.
 
