@@ -986,6 +986,7 @@ struct M2SingleDFBParams {
     bool implicit_sync = false;
     uint32_t entry_size = 1024;
     uint32_t num_entries = 16;
+    uint32_t block_size = 0;                                       // BLOCKED only: tiles per block (0 for STRIDED/ALL)
     std::optional<uint32_t> num_entries_in_buffer = std::nullopt;  // override for ring pressure
 };
 
@@ -1015,6 +1016,8 @@ static void run_single_dfb_program_2_0(
     const m2::NodeCoord node{0, 0};
     const uint32_t entries_per_core = p.num_entries_in_buffer.value_or(p.num_entries);
     const bool is_all = (p.cap == m2::DFBAccessPattern::ALL);
+    const bool producer_blocked = (p.pap == m2::DFBAccessPattern::BLOCKED);
+    const bool consumer_blocked = (p.cap == m2::DFBAccessPattern::BLOCKED);
 
     const m2::DFBSpecName DFB{"dfb"};
     const m2::KernelSpecName PRODUCER{"producer"};
@@ -1049,7 +1052,10 @@ static void run_single_dfb_program_2_0(
     m2::KernelSpec producer;
     if (p.producer_type == M2PorCType::DM) {
         producer = make_dm_kernel(
-            PRODUCER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp", p.num_producers);
+            PRODUCER,
+            producer_blocked ? "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_producer_2_0.cpp"
+                             : "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer_2_0.cpp",
+            p.num_producers);
         producer.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
         producer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
     } else {
@@ -1064,20 +1070,39 @@ static void run_single_dfb_program_2_0(
         {.dfb_spec_name = DFB,
          .accessor_name = "out",
          .endpoint_type = m2::DFBEndpointType::PRODUCER,
-         .access_pattern = p.pap}};
-    producer.compile_time_args = {
-        {"num_entries_per_producer", num_entries_per_producer}, {"implicit_sync", p.implicit_sync ? 1u : 0u}};
+         .access_pattern = p.pap,
+         .block_size = producer_blocked ? p.block_size : 0u}};
+    // BLOCKED uses dedicated burst kernels (explicit sync only) with a block_size CTA;
+    // STRIDED/ALL keep the implicit_sync CTA.
+    if (producer_blocked) {
+        producer.compile_time_args = {
+            {"num_entries_per_producer", num_entries_per_producer}, {"block_size", p.block_size}};
+    } else {
+        producer.compile_time_args = {
+            {"num_entries_per_producer", num_entries_per_producer}, {"implicit_sync", p.implicit_sync ? 1u : 0u}};
+    }
 
     // Consumer kernel
     m2::KernelSpec consumer;
     if (p.consumer_type == M2PorCType::DM) {
         consumer = make_dm_kernel(
-            CONSUMER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp", p.num_consumers);
+            CONSUMER,
+            consumer_blocked ? "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_consumer_2_0.cpp"
+                             : "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp",
+            p.num_consumers);
         consumer.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
-        consumer.compile_time_args = {
-            {"num_entries_per_consumer", num_entries_per_consumer},
-            {"blocked_consumer", is_all ? 1u : 0u},
-            {"implicit_sync", p.implicit_sync ? 1u : 0u}};
+        // BLOCKED uses the dedicated burst kernel (explicit sync only) with a block_size CTA.
+        // Note: the legacy "blocked_consumer" CTA below is the ALL-pattern contiguous flag,
+        // unrelated to the BLOCKED access pattern.
+        if (consumer_blocked) {
+            consumer.compile_time_args = {
+                {"num_entries_per_consumer", num_entries_per_consumer}, {"block_size", p.block_size}};
+        } else {
+            consumer.compile_time_args = {
+                {"num_entries_per_consumer", num_entries_per_consumer},
+                {"blocked_consumer", is_all ? 1u : 0u},
+                {"implicit_sync", p.implicit_sync ? 1u : 0u}};
+        }
         consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
     } else {
         consumer = make_compute_kernel(
@@ -1090,7 +1115,8 @@ static void run_single_dfb_program_2_0(
         {.dfb_spec_name = DFB,
          .accessor_name = "in",
          .endpoint_type = m2::DFBEndpointType::CONSUMER,
-         .access_pattern = p.cap}};
+         .access_pattern = p.cap,
+         .block_size = consumer_blocked ? p.block_size : 0u}};
 
     // Restore the all-pass `dfb_spec.disable_implicit_sync = !p.implicit_sync` semantics.
     // #45160 moved that flag off DataflowBufferSpec onto the Gen2 DM config, so it is now
@@ -1498,6 +1524,40 @@ INSTANTIATE_TEST_SUITE_P(
         };                                                                     \
         run_single_dfb_program_2_0(this->devices_.at(0), params);              \
     }
+
+// One-line macro for a BLOCKED→BLOCKED single-DFB test. BLOCKED uses dedicated
+// explicit-sync burst kernels, so (unlike DFB_TEST_2_0) it is NOT parameterized over
+// implicit_sync — it always runs the explicit credit-flow path.
+#define DFB_BLOCKED_TEST_2_0(suffix, p_type, c_type, num_p, num_c, blk, entries) \
+    TEST_F(MeshDeviceFixture, suffix##_2_0) {                                    \
+        M2SingleDFBParams params{                                                \
+            .producer_type = M2PorCType::p_type,                                 \
+            .consumer_type = M2PorCType::c_type,                                 \
+            .num_producers = (num_p),                                            \
+            .num_consumers = (num_c),                                            \
+            .pap = m2::DFBAccessPattern::BLOCKED,                                \
+            .cap = m2::DFBAccessPattern::BLOCKED,                                \
+            .implicit_sync = false,                                              \
+            .num_entries = (entries),                                            \
+            .block_size = (blk),                                                 \
+        };                                                                       \
+        run_single_dfb_program_2_0(this->devices_.at(0), params);                \
+    }
+
+// --- BLOCKED→BLOCKED (DM-DM, explicit sync) ---
+// Single-thread (1 producer, 1 consumer): one contiguous sub-ring; block_size divides the ring.
+//   blk4: 16-entry ring → 4 blocks of 4   (verified passing on emulator)
+//   blk2: 16-entry ring → 8 blocks of 2
+//   blk8: 16-entry ring → 2 blocks of 8
+//   blk4, larger ring: 32-entry ring → 8 blocks of 4
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk4, DM, DM, 1, 1, 4, 16)
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk2, DM, DM, 1, 1, 2, 16)
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk8, DM, DM, 1, 1, 8, 16)
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB1Bx1B_blk4_ring32, DM, DM, 1, 1, 4, 32)
+// Symmetric multi-thread (N producers == N consumers): each thread t owns sub-ring t
+// (stride_in_entries=1 ⇒ contiguous per-thread region), producer t pairs 1:1 with consumer t.
+//   2Bx2B blk4: 16-entry ring → capacity 8/thread → 2 blocks of 4 per thread.
+DFB_BLOCKED_TEST_2_0(DMTest1xDFB2Bx2B_blk4, DM, DM, 2, 2, 4, 16)
 
 // --- STRIDED 1xX, Xx1 (DM-DM, DM-Tensix, Tensix-DM) ---
 DFB_TEST_2_0(DMTest1xDFB1Sx1S, DM, DM, 1, STRIDED, 1, STRIDED)
@@ -2980,10 +3040,10 @@ TEST_F(MeshDeviceFixture, B6_AllProducer_Rejected_2_0) {
         std::exception);
 }
 
-// B10 — BLOCKED access pattern is rejected (not yet implemented). Today this throws because
-// BLOCKED is gated at lowering (program_spec.cpp to_hw_access_pattern) and a BLOCKED binding
-// with block_size==0 also fails the host validation. Flip to a passing config-probe when
-// BLOCKED support lands (Phase 3+).
+// B10 — a BLOCKED binding with block_size == 0 is rejected. BLOCKED is now supported (Phase 3),
+// so the lowering gate is gone; what remains is the host validation that block_size must be > 0
+// iff the access pattern is BLOCKED (check_block_size_validity in program_spec.cpp). This config
+// leaves block_size unset (0) on a BLOCKED consumer, so it must still throw.
 TEST_F(MeshDeviceFixture, B10_Blocked_Rejected_2_0) {
     auto& mesh_device = this->devices_.at(0);
     if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
@@ -2996,7 +3056,7 @@ TEST_F(MeshDeviceFixture, B10_Blocked_Rejected_2_0) {
         .num_producers = 1,
         .num_consumers = 1,
         .pap = m2::DFBAccessPattern::STRIDED,
-        .cap = m2::DFBAccessPattern::BLOCKED,  // <-- the offense (BLOCKED not yet supported)
+        .cap = m2::DFBAccessPattern::BLOCKED,  // <-- BLOCKED consumer but block_size left 0 (the offense)
         .implicit_sync = false,
     };
     EXPECT_THROW(

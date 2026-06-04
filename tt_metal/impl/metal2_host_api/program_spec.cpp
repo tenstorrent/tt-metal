@@ -2581,7 +2581,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         switch (pattern) {
             case DFBAccessPattern::STRIDED: return experimental::dfb::AccessPattern::STRIDED;
             case DFBAccessPattern::ALL: return experimental::dfb::AccessPattern::ALL;
-            case DFBAccessPattern::BLOCKED: TT_FATAL(false, "BLOCKED access pattern is not yet supported");
+            case DFBAccessPattern::BLOCKED: return experimental::dfb::AccessPattern::BLOCKED;
         }
         TT_FATAL(false, "Unknown DFBAccessPattern");
     };

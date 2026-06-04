@@ -499,7 +499,9 @@ std::vector<uint8_t> DataflowBufferImpl::serialize_for_core(const CoreCoord& cor
             rc.config.limit[tc] =
                 rc.config.base_addr[tc] + ((entry_size * effective_stride) * (this->capacity - 1)) + entry_size;
             // In strided case each consumer maps to a different producer region, so advance base per consumer.
-            if (this->config.cap == dfb::AccessPattern::STRIDED && tc < rc.config.num_tcs_to_rr) {
+            // BLOCKED reuses the same per-consumer region layout for DM<->DM.
+            if ((this->config.cap == dfb::AccessPattern::STRIDED || this->config.cap == dfb::AccessPattern::BLOCKED) &&
+                tc < rc.config.num_tcs_to_rr) {
                 base += base_step;
             }
         }
@@ -594,6 +596,39 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
             capacity = config.num_entries / config.num_producers;
             stride_in_entries = 1;
             break;
+        case ::dfb::AccessPattern::BLOCKED: {
+            // BLOCKED gives each thread its own CONTIGUOUS sub-ring of `capacity` entries.
+            // Setting stride_in_entries = 1 makes the host base_step = capacity*entry_size, so
+            // thread t owns L1 entries [t*capacity, (t+1)*capacity). The block-ness lives in the
+            // kernel: it moves block_size contiguous entries in a single NoC burst and posts/waits
+            // block_size credits at a time. The burst is valid precisely because each thread's
+            // entries are contiguous (stride 1) within its sub-ring.
+            //
+            // This 1:1 sub-ring model requires num_producers == num_consumers (producer t pairs
+            // with consumer t over sub-ring t). Asymmetric fan-in/out would need the interleaved
+            // STRIDED layout (stride > 1), where a thread's entries are NOT contiguous, so the
+            // single-burst kernels don't support it yet.
+            const uint32_t threads = std::max(config.num_producers, config.num_consumers);
+            const uint32_t block = std::max<uint32_t>(config.consumer_block_size, 1u);
+            TT_FATAL(
+                config.num_producers == config.num_consumers,
+                "BLOCKED DFB {} requires num_producers == num_consumers (got {} and {}); asymmetric "
+                "BLOCKED is not yet supported",
+                dfb.id,
+                config.num_producers,
+                config.num_consumers);
+            TT_FATAL(
+                config.num_entries % (block * threads) == 0,
+                "BLOCKED DFB {} num_entries {} must be divisible by block_size * threads = {} * {} "
+                "(so each thread's sub-ring holds a whole number of blocks)",
+                dfb.id,
+                config.num_entries,
+                block,
+                threads);
+            capacity = config.num_entries / threads;
+            stride_in_entries = 1;
+            break;
+        }
         default: TT_FATAL(false, "Invalid access pattern {}", (uint32_t)config.cap);
     }
 
@@ -1229,8 +1264,9 @@ void ProgramImpl::finalize_single_dfb_config(
         for (uint8_t tc_slot = 0; tc_slot < num_producer_tcs; tc_slot++) {
             TileCounterGroup& group = tc_groups[producer_idx][tc_slot];
 
-            if (config.cap == dfb::AccessPattern::STRIDED) {
+            if (config.cap == dfb::AccessPattern::STRIDED || config.cap == dfb::AccessPattern::BLOCKED) {
                 // Determine which consumer(s) this producer TC slot pairs with
+                // (BLOCKED reuses the STRIDED TC pairing for DM<->DM; no remapper.)
                 uint8_t consumer_idx = (producer_idx + tc_slot * producer_risc_ids.size()) % consumer_risc_ids.size();
 
                 uint8_t producer_risc_id = producer_risc_ids[producer_idx];
@@ -1385,7 +1421,7 @@ void ProgramImpl::finalize_single_dfb_config(
             num_consumer_tcs);
 
         for (uint8_t tc = 0; tc < num_consumer_tcs; tc++) {
-            if (config.cap == dfb::AccessPattern::STRIDED) {
+            if (config.cap == dfb::AccessPattern::STRIDED || config.cap == dfb::AccessPattern::BLOCKED) {
                 uint8_t producer_idx;
                 uint8_t producer_tc_slot;
 
