@@ -47,6 +47,7 @@ struct PerfParams {
     tt::tt_metal::CoreCoord sender_core = kDefaultCore;
     tt::tt_metal::CoreCoord receiver_core = kDefaultCore;
     uint32_t trace_iters = kDefaultTraceIters;  // number of enqueues captured per trace
+    bool is_2d_fabric = true;  // true = FABRIC_2D (route by dst dev/mesh); false = FABRIC_1D (route by num_hops)
 };
 
 struct PerfStats {

@@ -21,7 +21,8 @@ using namespace tt::tt_fabric;
 // single atomic-inc back over fabric to a semaphore on the SOURCE sender core, so the sender
 // can time the src->dst->src round trip entirely on its own clock (no cross-chip skew).
 //
-// CT args: none
+// CT args:
+//   0: is_2d_fabric     (u32)  // 1 = route by (src_dev,src_mesh) [2D]; 0 = route by ret_num_hops [1D]
 // RT args:
 //   0: fwd_sem_addr     (u32)  // L1 addr of the forward (completion) semaphore on this dst core
 //   1: expected_value   (u32)  // e.g. 1
@@ -30,8 +31,10 @@ using namespace tt::tt_fabric;
 //   4: src_noc_x        (u32)  // source sender-core NOC coords (return-sem owner)
 //   5: src_noc_y        (u32)
 //   6: return_sem_addr  (u32)  // L1 addr of the return semaphore on the source sender core
+//   7: ret_num_hops     (u32)  // 1D routing distance back to src (unused in 2D)
 //   then: fabric-connection args consumed by WorkerToFabricEdmSender::build_from_args (appended last)
 void kernel_main() {
+    constexpr bool is_2d_fabric = get_compile_time_arg_val(0) != 0;  // route by dev/mesh (2D) vs num_hops (1D)
     size_t idx = 0;
     const uint32_t fwd_sem_addr = get_arg_val<uint32_t>(idx++);
     const uint32_t expected_value = get_arg_val<uint32_t>(idx++);
@@ -40,6 +43,7 @@ void kernel_main() {
     const uint32_t src_noc_x = get_arg_val<uint32_t>(idx++);
     const uint32_t src_noc_y = get_arg_val<uint32_t>(idx++);
     const uint32_t return_sem_addr = get_arg_val<uint32_t>(idx++);
+    const uint32_t ret_num_hops = get_arg_val<uint32_t>(idx++);  // 1D routing distance back to src (unused in 2D)
 
     // Build the return fabric send adapter (dst -> src). The host appended the
     // fabric-connection args last, so build_from_args consumes them from here.
@@ -54,8 +58,12 @@ void kernel_main() {
 
     // Bounce a single atomic-inc back to the source's return semaphore.
     volatile tt_l1_ptr PACKET_HEADER_TYPE* header = PacketHeaderPool::allocate_header();
-    auto mh = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header);
-    (void)fabric_set_unicast_route(mh, /*dst_dev_id=*/src_dev_id, /*dst_mesh_id=*/src_mesh_id);
+    if constexpr (is_2d_fabric) {
+        (void)fabric_set_unicast_route(
+            (HybridMeshPacketHeader*)header, /*dst_dev_id=*/src_dev_id, /*dst_mesh_id=*/src_mesh_id);
+    } else {
+        (void)fabric_set_unicast_route<false>((LowLatencyPacketHeader*)header, (uint16_t)ret_num_hops);
+    }
 
     sender.open<true>();
 

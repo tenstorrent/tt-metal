@@ -243,7 +243,9 @@ Notes:
         std::string(KDIR) + "unicast_rx.cpp",
         receiver_core,
         tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = {p.is_2d_fabric ? 1u : 0u}});  // CT arg 0: fabric mode (2D vs 1D route-set)
     // Return path (dst -> src): the rx kernel becomes a fabric sender that bounces an
     // atomic-inc back to the source's return semaphore. Reverse links may differ from the
     // forward direction, so resolve them explicitly.
@@ -260,6 +262,7 @@ Notes:
         static_cast<uint32_t>(tx_xy.x),            // 4: source sender-core NOC x
         static_cast<uint32_t>(tx_xy.y),            // 5: source sender-core NOC y
         static_cast<uint32_t>(gsemRet.address()),  // 6: return semaphore addr on the source sender core
+        static_cast<uint32_t>(hops),               // 7: return num_hops (used in 1D routing; ignored in 2D)
     };
     tt::tt_fabric::append_fabric_connection_rt_args(
         dst, src, /*link_idx=*/ret_links[0], receiver_prog, receiver_core, rx_rt);
@@ -297,6 +300,7 @@ Notes:
     tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(writer_cta);
     writer_cta.push_back(NUM_PAGES);
     writer_cta.push_back(p.page_size);
+    writer_cta.push_back(p.is_2d_fabric ? 1u : 0u);  // CTA_BASE+2: fabric mode (2D vs 1D route-set)
 
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
@@ -322,6 +326,7 @@ Notes:
         (uint32_t)gsem.address(),      // 5: receiver (forward) L1 semaphore addr
         (uint32_t)gsemRet.address(),   // 6: source-side return semaphore addr (RTT wait target)
         (uint32_t)ts_buf->address(),   // 7: source-side L1 scratch for the RTT cycle delta
+        (uint32_t)hops,                // 8: forward num_hops (used in 1D routing; ignored in 2D)
     };
 
     // Pack the fabric-connection runtime args for the writer kernel.

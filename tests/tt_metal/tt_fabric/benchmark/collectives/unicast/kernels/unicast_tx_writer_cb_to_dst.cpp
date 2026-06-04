@@ -39,6 +39,8 @@ void kernel_main() {
     constexpr uint32_t CTA_BASE = ta_args.next_compile_time_args_offset();
     constexpr uint32_t TOTAL_PAGES = get_compile_time_arg_val(CTA_BASE + 0);
     constexpr uint32_t PAGE_SIZE = get_compile_time_arg_val(CTA_BASE + 1);
+    constexpr bool is_2d_fabric =
+        get_compile_time_arg_val(CTA_BASE + 2) != 0;  // route by dev/mesh (2D) vs num_hops (1D)
     constexpr uint32_t CB_ID = tt::CBIndex::c_0;
 
     size_t idx = 0;
@@ -50,6 +52,7 @@ void kernel_main() {
     const uint32_t sem_l1_addr = get_arg_val<uint32_t>(idx++);
     const uint32_t return_sem_addr = get_arg_val<uint32_t>(idx++);
     const uint32_t ts_out_l1_addr = get_arg_val<uint32_t>(idx++);
+    const uint32_t fwd_num_hops = get_arg_val<uint32_t>(idx++);  // 1D routing distance (unused in 2D)
 
     // Build a fabric send adapter from the runtime args that the host packed.
     // Needed before sending over fabric: binds this core to a specific routing/link.
@@ -62,8 +65,12 @@ void kernel_main() {
     // Program a fixed unicast route to (dst_mesh_id, dst_dev_id). Dynamic routing is not
     // supported in this path (see guard below). This API will change soon. The future 2D
     // interface will mirror the 1D style. See linear/api.h for the reference shape.
-    auto mh = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header);
-    (void)fabric_set_unicast_route(mh, /*dst_dev_id=*/dst_dev_id, /*dst_mesh_id=*/dst_mesh_id);
+    if constexpr (is_2d_fabric) {
+        (void)fabric_set_unicast_route(
+            (HybridMeshPacketHeader*)header, /*dst_dev_id=*/dst_dev_id, /*dst_mesh_id=*/dst_mesh_id);
+    } else {
+        (void)fabric_set_unicast_route<false>((LowLatencyPacketHeader*)header, (uint16_t)fwd_num_hops);
+    }
 
     sender.open<true>();
 
@@ -99,7 +106,12 @@ void kernel_main() {
 
     const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr, /*NOC_INDEX=*/0);
 
-    (void)fabric_set_unicast_route(mh, /*dst_dev_id=*/dst_dev_id, /*dst_mesh_id=*/dst_mesh_id);
+    if constexpr (is_2d_fabric) {
+        (void)fabric_set_unicast_route(
+            (HybridMeshPacketHeader*)header, /*dst_dev_id=*/dst_dev_id, /*dst_mesh_id=*/dst_mesh_id);
+    } else {
+        (void)fabric_set_unicast_route<false>((LowLatencyPacketHeader*)header, (uint16_t)fwd_num_hops);
+    }
     header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1));
 
     sender.wait_for_empty_write_slot();

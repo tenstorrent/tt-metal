@@ -9,18 +9,20 @@
 #include <string>
 #include <vector>
 #include <filesystem>
+#include <optional>
 
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/tt_fabric/benchmark/collectives/common/perf_helpers.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
-// Single MeshDevice-based fixture with Fabric set to 2D.
+// Single MeshDevice-based fixture; fabric config (1D/2D) and mesh shape are selected at runtime.
 struct Fixture : public ::tt::tt_metal::MeshDeviceFixtureBase {
-    Fixture() :
+    Fixture(tt::tt_fabric::FabricConfig fabric_config, std::optional<tt::tt_metal::distributed::MeshShape> mesh_shape) :
         ::tt::tt_metal::MeshDeviceFixtureBase(Config{
+            .mesh_shape = mesh_shape,
             .num_cqs = 1,
             .trace_region_size = 1u << 20,  // enable mesh trace capture (e.g., 1 MiB)
-            .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D}) {}
+            .fabric_config = fabric_config}) {}
     void TestBody() override {}
     void setup() { this->SetUp(); }
     void teardown() { this->TearDown(); }
@@ -40,6 +42,9 @@ struct RunOptions {
     int trace_iters = 1;
     bool no_trace = false;     // reserved
     bool enable_sync = false;  // reserved
+    bool fabric_2d = true;     // --fabric: true=FABRIC_2D (default), false=FABRIC_1D
+    bool has_mesh_shape = false;
+    uint32_t mesh_r = 0, mesh_c = 0;  // --mesh-shape RxC (e.g. 1x8 for a 1D line); unset => auto-detect native
     std::string csv_path;      // if non-empty, append one row
 };
 
@@ -55,7 +60,7 @@ void usage(const char* argv0) {
          [--page <bytes>] [--src-type <l1|dram>] [--dst-type <l1|dram>]
          [--send-core x,y] [--recv-core x,y]
          [--iters N] [--warmup N] [--trace-iters N]
-         [--no-trace] [--enable-sync]
+         [--no-trace] [--enable-sync] [--fabric <1d|2d>] [--mesh-shape <RxC>]
          [--csv <path>]
 
 Notes:
@@ -168,6 +173,26 @@ bool parse_cli_or_usage(
             run.no_trace = true;
         } else if (a == "--enable-sync") {
             run.enable_sync = true;
+        } else if (a == "--fabric" && need(i, 1)) {
+            std::string m = argv[++i];
+            if (m == "1d" || m == "1D") {
+                run.fabric_2d = false;
+            } else if (m == "2d" || m == "2D") {
+                run.fabric_2d = true;
+            } else {
+                usage(argv[0]);
+                return false;
+            }
+        } else if (a == "--mesh-shape" && need(i, 1)) {
+            std::string s = argv[++i];
+            auto xpos = s.find('x');
+            if (xpos == std::string::npos) {
+                usage(argv[0]);
+                return false;
+            }
+            run.has_mesh_shape = true;
+            run.mesh_r = static_cast<uint32_t>(std::stoul(s.substr(0, xpos)));
+            run.mesh_c = static_cast<uint32_t>(std::stoul(s.substr(xpos + 1)));
         } else if (a == "--csv" && need(i, 1)) {
             run.csv_path = argv[++i];
         } else {
@@ -195,6 +220,7 @@ bool parse_cli_or_usage(
     p.mesh_id = src_mesh;  // assume same mesh
     p.src_chip = static_cast<tt::ChipId>(src_chip);
     p.dst_chip = static_cast<tt::ChipId>(dst_chip);
+    p.is_2d_fabric = run.fabric_2d;
 
     return true;
 }
@@ -217,13 +243,14 @@ void append_csv_if_requested(const RunOptions& run, const PerfParams& p, const P
     }
     if (newfile) {
         ofs << "mesh,src_chip,dst_chip,send_x,send_y,recv_x,recv_y,sizeB,pageB,iters,warmup,"
-               "p50_ms,p95_ms,mean_GB_s,p50_GB_s,p10_GB_s,cv_GB_s_pct,hops,rtt_cyc_p50,rtt_cyc_p95,rtt_ns_p50\n";
+               "p50_ms,p95_ms,mean_GB_s,p50_GB_s,p10_GB_s,cv_GB_s_pct,hops,rtt_cyc_p50,rtt_cyc_p95,rtt_ns_p50,fabric\n";
     }
     ofs << p.mesh_id << "," << p.src_chip << "," << p.dst_chip << "," << p.sender_core.x << "," << p.sender_core.y
         << "," << p.receiver_core.x << "," << p.receiver_core.y << "," << p.tensor_bytes << "," << p.page_size << ","
         << run.iters << "," << run.warmup << "," << stats.p50_ms << "," << stats.p95_ms << "," << stats.mean_GB_s << ","
         << stats.p50_GB_s << "," << stats.p10_GB_s << "," << stats.cv_GB_s_pct << "," << stats.hops << ","
-        << stats.rtt_cyc_p50 << "," << stats.rtt_cyc_p95 << "," << stats.rtt_ns_p50 << "\n";
+        << stats.rtt_cyc_p50 << "," << stats.rtt_cyc_p95 << "," << stats.rtt_ns_p50 << ","
+        << (run.fabric_2d ? "2d" : "1d") << "\n";
 
     log_info(tt::LogTest, "Appended CSV row to {}", run.csv_path);
 }
@@ -255,7 +282,12 @@ int main(int argc, char** argv) {
         run.warmup);
 
     // Bring up the fixture env and run
-    Fixture fixture;
+    std::optional<tt::tt_metal::distributed::MeshShape> mesh_shape;
+    if (run.has_mesh_shape) {
+        mesh_shape = tt::tt_metal::distributed::MeshShape(run.mesh_r, run.mesh_c);
+    }
+    Fixture fixture(
+        run.fabric_2d ? tt::tt_fabric::FabricConfig::FABRIC_2D : tt::tt_fabric::FabricConfig::FABRIC_1D, mesh_shape);
     fixture.setup();
 
     warmup_once(&fixture, p, run.warmup);
