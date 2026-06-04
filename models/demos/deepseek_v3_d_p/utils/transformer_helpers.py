@@ -27,8 +27,6 @@ from transformers.modeling_utils import no_init_weights
 
 import ttnn
 
-# Reference modeling classes are resolved per-test via TestVariant.reference_*_cls.
-
 
 @dataclass
 class LayerByLayerResult:
@@ -107,11 +105,7 @@ def check_first_token_match_host_ref(
     first_token_id: int,
     tokenizer,
 ) -> bool | None:
-    """Check TT's first token vs HF reference argmax at the last real position.
-
-    Binary cross-check independent of PCC noise. Returns None when ref_snapshots is
-    empty/None (trace path leaves it that way; host-ref path populates it as a list
-    of per-stage snapshots whose last element is the LM-head logits).
+    """Check TT's first token vs HF reference argmax at the expected first token position.
 
     Returns:
         True if match, False if mismatch, None if no reference available.

@@ -132,7 +132,6 @@ def run_model(
     is_ci_v2_env,
     device_params,
 ):
-    """MLA reference/TT comparison body — shared across `test_ds_mla` / `test_kimi_mla`."""
     if use_pretrained and not variant.supports_pretrained:
         pytest.skip(f"{variant.name!r}: pretrained weights not available")
 
@@ -312,7 +311,7 @@ def run_model(
         )
         logger.info(f"KVPE cache PE part PCC is {pe_pcc_message}")
 
-        # Upstream MLA reference cross-check. Returns None when the variant has no reference bundled.
+        # MLA reference check. Returns None when the variant has no reference.
         position_ids_ref = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
         ref_out = run_reference_mla(
             variant,
@@ -322,7 +321,7 @@ def run_model(
             position_ids=position_ids_ref,
         )
         if ref_out is not None:
-            logger.info(f"Running upstream MLA reference (model={variant.name})")
+            logger.info(f"Running MLA reference (model={variant.name})")
             _, ref_pcc_message = assert_with_pcc(ref_out.unsqueeze(0), tt_output_cpu, variant.mla_pcc_threshold)
             logger.info(f"[reference_output] PCC: {ref_pcc_message}")
             del ref_out
