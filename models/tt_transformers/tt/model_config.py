@@ -152,7 +152,7 @@ class ModelOptimizations:
             if base_model_name_lower.startswith("phi-1"):
                 logger.info(
                     f"Model {model_name} uses Phi-1 topology and is sensitive to attention/KV quantization, "
-                    "using BF16 attention tensors in accuracy mode while keeping the standard attention kernel fidelity"
+                    "using BF16/HIFI4 attention in accuracy mode"
                 )
                 settings = {
                     "TensorPrecision": {
@@ -163,7 +163,12 @@ class ModelOptimizations:
                     "OpFidelity": {
                         OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2_FP16,
                         OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
-                        OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2_FP16,
+                        OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
+                        OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
+                        OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,
+                        OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                        OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
+                        OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
                     },
                 }
                 inst = cls(settings)
