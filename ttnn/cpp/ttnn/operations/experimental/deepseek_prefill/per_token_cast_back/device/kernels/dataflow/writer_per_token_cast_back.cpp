@@ -27,31 +27,37 @@ void kernel_main() {
 
     const auto dst = TensorAccessor(dst_args, dst_addr);
 
-    const uint32_t groups_per_row = width / COL_BLOCK_ELEMS;  // H / 128
+    const uint32_t groups_per_row = width >> 7;  // H / 128 (COL_BLOCK_ELEMS = 128); one-time shift
     const uint32_t total_groups = num_rows * groups_per_row;
     const uint32_t end_row = start_row + num_rows;
 
+    // Persistent (row, gir) cursor over the flat group stream: no per-run div/mod (expensive on the
+    // Baby RISC-V); advance gir by the run and reset to the next row with a conditional.
+    uint32_t current_row = start_row;
+    uint32_t gir = 0;
+
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
-        const uint32_t first_gidx = blk * tile_h;
-        const uint32_t remaining = total_groups - first_gidx;
+        const uint32_t base = blk * tile_h;
+        const uint32_t remaining = total_groups - base;
         const uint32_t real_in_block = remaining < tile_h ? remaining : tile_h;
 
         cb_wait_front(cb_out_fp32, COL_BLOCK_TILES);
         uint32_t l1 = get_read_ptr(cb_out_fp32);
-        uint32_t g = first_gidx;
         uint32_t slot = 0;
-        while (slot < real_in_block && (start_row + g / groups_per_row) < end_row) {
-            uint32_t row = start_row + g / groups_per_row;
-            uint32_t gir = g % groups_per_row;
-            uint32_t run = groups_per_row - gir;
+        while (slot < real_in_block && current_row < end_row) {
+            uint32_t groups_left_in_row = groups_per_row - gir;
             uint32_t slots_left = real_in_block - slot;
-            if (run > slots_left) {
-                run = slots_left;
-            }
+            uint32_t run = groups_left_in_row < slots_left ? groups_left_in_row : slots_left;
             noc_async_write(
-                l1 + slot * out_group_bytes, dst.get_noc_addr(row) + gir * out_group_bytes, run * out_group_bytes);
+                l1 + slot * out_group_bytes,
+                dst.get_noc_addr(current_row) + gir * out_group_bytes,
+                run * out_group_bytes);
             slot += run;
-            g += run;
+            gir += run;
+            if (gir >= groups_per_row) {  // run never crosses a row boundary, so this is exact
+                gir = 0;
+                ++current_row;
+            }
         }
         noc_async_write_barrier();
         cb_pop_front(cb_out_fp32, COL_BLOCK_TILES);

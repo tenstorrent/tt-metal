@@ -56,65 +56,78 @@ void kernel_main() {
     cb_reserve_back(cb_scale_scratch, 1);
     uint32_t scratch = get_write_ptr(cb_scale_scratch);
 
-    const uint32_t groups_per_row = width / COL_BLOCK_ELEMS;  // H / 128
+    const uint32_t groups_per_row = width >> 7;  // H / 128 (COL_BLOCK_ELEMS = 128); one-time shift
     const uint32_t total_groups = num_rows * groups_per_row;
     const uint32_t end_row = start_row + num_rows;
 
+    // Persistent (row, gir) cursor over the flat group stream: no per-group div/mod (expensive on
+    // the Baby RISC-V); advance gir by the run and reset to the next row with a conditional.
+    uint32_t current_row = start_row;
+    uint32_t gir = 0;
+
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
-        const uint32_t first_gidx = blk * tile_h;
-        const uint32_t remaining = total_groups - first_gidx;
+        const uint32_t base = blk * tile_h;
+        const uint32_t remaining = total_groups - base;
         const uint32_t real_in_block = remaining < tile_h ? remaining : tile_h;
-        const uint32_t first_token = start_row + first_gidx / groups_per_row;
+        const uint32_t block_start_row = current_row;
+        const uint32_t block_start_gir = gir;
 
         // --- e4m3: fill the block as [tile_h group-rows x 128] via bank-contiguous runs ---
         cb_reserve_back(cb_e4m3, COL_BLOCK_TILES);
         uint32_t e4m3_l1 = get_write_ptr(cb_e4m3);
+        uint32_t last_row = current_row;  // row of the last run = the block's last token
         {
-            uint32_t g = first_gidx;
+            uint32_t row = current_row;
+            uint32_t gg = gir;
             uint32_t slot = 0;
-            while (slot < real_in_block && (start_row + g / groups_per_row) < end_row) {
-                uint32_t row = start_row + g / groups_per_row;
-                uint32_t gir = g % groups_per_row;
-                uint32_t run = groups_per_row - gir;
+            while (slot < real_in_block && row < end_row) {
+                uint32_t groups_left_in_row = groups_per_row - gg;
                 uint32_t slots_left = real_in_block - slot;
-                if (run > slots_left) {
-                    run = slots_left;
-                }
+                uint32_t run = groups_left_in_row < slots_left ? groups_left_in_row : slots_left;
                 noc_async_read(
-                    e4m3.get_noc_addr(row) + gir * e4m3_group_bytes,
+                    e4m3.get_noc_addr(row) + gg * e4m3_group_bytes,
                     e4m3_l1 + slot * e4m3_group_bytes,
                     run * e4m3_group_bytes);
+                last_row = row;
                 slot += run;
-                g += run;
+                gg += run;
+                if (gg >= groups_per_row) {  // run never crosses a row boundary, so this is exact
+                    gg = 0;
+                    ++row;
+                }
             }
+            current_row = row;  // advance the persistent cursor for the next block
+            gir = gg;
         }
 
         // --- scale: read the tokens spanned by this block as full page-aligned rows ---
-        const uint32_t last_gidx = first_gidx + (real_in_block == 0 ? 0 : real_in_block - 1);
-        const uint32_t last_token = start_row + last_gidx / groups_per_row;
-        for (uint32_t t = first_token; t <= last_token; ++t) {
+        for (uint32_t t = block_start_row; t <= last_row; ++t) {
             noc_async_read(
                 scale.get_noc_addr(t),
-                scratch + (t - first_token) * scale_aligned_page_bytes,
+                scratch + (t - block_start_row) * scale_aligned_page_bytes,
                 scale_aligned_page_bytes);
         }
         noc_async_read_barrier();
 
         // --- build the bcast operand: column 0 row r = scale[token_r][gir_r] (face-aware walk) ---
+        // (tok_off, gir_b) cursor walks the block's group-rows in face order -> no per-row div/mod.
         cb_reserve_back(cb_scale_bcast, 1);
         uint32_t page = get_write_ptr(cb_scale_bcast);
+        uint32_t tok_off = 0;  // (token - block_start_row) * scale_aligned_page_bytes
+        uint32_t gir_b = block_start_gir;
         uint32_t s = 0;
         uint32_t face_base_off = 0;
         for (uint32_t fr = 0; fr < FACE_ROWS; ++fr) {
             uint32_t col0_off = face_base_off;
             for (uint32_t r = 0; r < face_h; ++r) {
                 if (s < real_in_block) {
-                    uint32_t gidx = first_gidx + s;
-                    uint32_t token = start_row + gidx / groups_per_row;
-                    uint32_t gir = gidx % groups_per_row;
-                    uint32_t val = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                        scratch + (token - first_token) * scale_aligned_page_bytes + gir * 4);
+                    uint32_t val = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch + tok_off + gir_b * 4);
                     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page + col0_off) = val;
+                    ++gir_b;
+                    if (gir_b >= groups_per_row) {
+                        gir_b = 0;
+                        tok_off += scale_aligned_page_bytes;
+                    }
                 }
                 col0_off += FACE_W_BYTES;
                 ++s;
