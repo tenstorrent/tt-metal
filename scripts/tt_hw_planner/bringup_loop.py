@@ -186,23 +186,128 @@ def _detect_hidden_shape(torch_module, model=None):
     and finally to ``model.config.hidden_size`` -- NOT a hardcoded 768.
     The hardcoded 768 default was the root cause of every Qwen3-style
     model SKIPping its PCC test on shape mismatch.
+
+    2026-06-04 Tier-1b enhancement: extended probe ordering to catch
+    per-component cases that previously required hand-patched
+    ``_detect_hidden_shape`` overrides (feature_projection, variance_predictor,
+    hifi_gan_residual_block). Each historical hand-fix introduced a
+    component-specific property probe; this function now bundles them so
+    no per-component patches are needed for the common cases. Probe
+    order: most-specific → most-generic, so a confident match wins.
     """
+    # 1. HIERA-style multi-scale attention — has .qkv.in_features
     if hasattr(torch_module, "qkv") and hasattr(torch_module.qkv, "in_features"):
         c = torch_module.qkv.in_features
         return (1, 16, 16, c), "nhwc"
+
+    # 2. Standard attention/MLP — direct submodule with in_features
     for name in ("q_proj", "query", "proj_in", "fc1", "dense"):
         proj = getattr(torch_module, name, None)
         if proj is not None and hasattr(proj, "in_features"):
             return (1, 64, proj.in_features), "nlc"
+
+    # 3. (Tier-1b) Top-level property probes — catches LayerNorm, Conv,
+    # Linear, Embedding when the component IS the op (not a parent module).
+    if hasattr(torch_module, "in_features"):
+        try:
+            c = int(getattr(torch_module, "in_features") or 0)
+            if c > 1:
+                return (1, 64, c), "nlc"
+        except Exception:
+            pass
+    if hasattr(torch_module, "in_channels"):
+        try:
+            c = int(getattr(torch_module, "in_channels") or 0)
+            if c > 1:
+                return (1, 64, c), "nlc"
+        except Exception:
+            pass
+    if hasattr(torch_module, "normalized_shape"):
+        try:
+            ns = getattr(torch_module, "normalized_shape")
+            if ns:
+                c = int(ns[-1] if hasattr(ns, "__getitem__") else ns)
+                if c > 1:
+                    return (1, 64, c), "nlc"
+        except Exception:
+            pass
+    if hasattr(torch_module, "embedding_dim"):
+        try:
+            c = int(getattr(torch_module, "embedding_dim") or 0)
+            if c > 1:
+                return (1, 64, c), "nlc"
+        except Exception:
+            pass
+
+    # 4. (Tier-1b) Component-specific probes that past hand-fixes added:
+    #    conv1.in_channels (variance_predictor pattern),
+    #    projection.in_features (feature_projection pattern),
+    #    layer_norm.normalized_shape (feature_projection pattern).
+    for name in ("conv1", "projection", "layer_norm"):
+        sub = getattr(torch_module, name, None)
+        if sub is None:
+            continue
+        for attr in ("in_features", "in_channels"):
+            val = getattr(sub, attr, None)
+            if isinstance(val, int) and val > 1:
+                return (1, 64, val), "nlc"
+        ns = getattr(sub, "normalized_shape", None)
+        if ns:
+            try:
+                c = int(ns[-1] if hasattr(ns, "__getitem__") else ns)
+                if c > 1:
+                    return (1, 64, c), "nlc"
+            except Exception:
+                pass
+
+    # 5. (Tier-1b) ModuleList probe — if module is a container, look at
+    # its first instance (hifi_gan_residual_block pattern: resblocks[0]).
+    try:
+        import torch as _torch_mod
+
+        if isinstance(torch_module, (_torch_mod.nn.ModuleList, _torch_mod.nn.Sequential)) and len(torch_module) > 0:
+            first = torch_module[0]
+            for attr in ("in_features", "in_channels"):
+                val = getattr(first, attr, None)
+                if isinstance(val, int) and val > 1:
+                    return (1, 64, val), "nlc"
+            # Recurse into the first child's submodule scan
+            for sub in first.modules() if hasattr(first, "modules") else []:
+                if sub is first:
+                    continue
+                for attr in ("in_features", "in_channels"):
+                    val = getattr(sub, attr, None)
+                    if isinstance(val, int) and val > 1:
+                        return (1, 64, val), "nlc"
+    except Exception:
+        pass
+
+    # 6. (Tier-1b) Submodule scan — first Conv/Linear under the module.
+    try:
+        for sub in torch_module.modules() if hasattr(torch_module, "modules") else []:
+            if sub is torch_module:
+                continue
+            for attr in ("in_features", "in_channels"):
+                val = getattr(sub, attr, None)
+                if isinstance(val, int) and val > 1:
+                    return (1, 64, val), "nlc"
+    except Exception:
+        pass
+
+    # 7. (legacy) module's own .weight.shape
     w = getattr(torch_module, "weight", None)
     if w is not None and hasattr(w, "shape") and len(w.shape) >= 1:
         c = int(w.shape[-1])
         if c > 1:
             return (1, 64, c), "nlc"
+
+    # 8. (legacy) config.hidden_size
     cfg = getattr(model, "config", None) if model is not None else None
     h = getattr(cfg, "hidden_size", None)
     if isinstance(h, int) and h > 0:
         return (1, 64, h), "nlc"
+
+    # 9. last-resort hardcoded fallback
     return (1, 64, 768), "nlc"
 
 
@@ -305,6 +410,49 @@ def _make_arg_for(arg_name, *, model, torch_module):
                     "return_dict", "head_mask", "encoder_hidden_states",
                     "encoder_attention_mask", "labels"):
         return None
+
+    # 2026-06-04 Tier-1b enhancement: introspection-based fallback for
+    # arg names not in the well-known list. Many HF modules have
+    # required args with non-obvious names (e.g. `input_features` for
+    # speech encoders, `decoder_inputs_embeds` for t2u). Before giving
+    # up with _OMIT, check if `forward()`'s signature flags the arg as
+    # required AND if introspection can produce a sensible tensor. This
+    # catches the "missing required arg" failure shape (code_hifi_gan
+    # `spkr_id`/`lang_id`, hifi_gan `input_embeds`) that previously
+    # required hand-patching `_make_arg_for` per component.
+    try:
+        import inspect as _inspect
+
+        if torch_module is not None and hasattr(torch_module, "forward"):
+            sig = _inspect.signature(torch_module.forward)
+            param = sig.parameters.get(arg_name)
+            # Only synthesize for REQUIRED args (no default value); for
+            # optional args, _OMIT lets HF apply its own default.
+            if (
+                param is not None
+                and param.default is _inspect.Parameter.empty
+                and param.kind
+                in (
+                    _inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    _inspect.Parameter.KEYWORD_ONLY,
+                )
+            ):
+                # Heuristic: if the arg name suggests an integer ID
+                # (ends with "_id" / "_ids" / contains "spkr"/"lang"),
+                # generate a small int. Otherwise, generate a tensor
+                # shaped by _detect_hidden_shape (which handles
+                # per-component channel introspection — see Tier-1b
+                # enhancement to that function).
+                _lc = arg_name.lower()
+                if _lc.endswith("_id") or _lc.endswith("_ids") or "spkr" in _lc or "lang" in _lc:
+                    return torch.zeros(1, dtype=torch.long)
+                shape, _ = _detect_hidden_shape(torch_module, model=model)
+                return torch.randn(*shape).to(md)
+    except Exception:
+        # Introspection is best-effort; don't break _make_arg_for if it
+        # hits an edge case (e.g., builtins without a useful signature).
+        pass
+
     return _OMIT
 
 
@@ -972,6 +1120,12 @@ def run_bringup_loop(
 
     actions: List[StubAction] = []
     notes: List[str] = []
+    # 2026-06-04 Phase-2 wiring: collect freshly-emitted test paths so
+    # the Tier-2 LLM batch reviewer can verify them BEFORE pytest runs.
+    # Only fresh emissions are reviewed — pre-existing tests have
+    # already been verified (either by a prior reviewer call or by
+    # passing pytest).
+    _freshly_emitted_tests: List[Path] = []
 
     for comp in components:
         if comp.get("status") not in ("NEW", "ADAPT"):
@@ -1006,6 +1160,8 @@ def run_bringup_loop(
             action.test_path = str(safe_relative_to_root(test_path))
             action.test_generated = generated
             action.test_already_existed = already and not force
+            if generated:
+                _freshly_emitted_tests.append(test_path)
             if stub_graduated and existing_is_smoke:
                 action.notes.append(
                     "stub has graduated from autofill -> regenerated test from "
@@ -1029,6 +1185,27 @@ def run_bringup_loop(
                     action.notes.append(summary.splitlines()[-1] if summary else "(no output)")
 
         actions.append(action)
+
+    # 2026-06-04 Phase-2 wiring: Tier-2 LLM batch review of freshly-
+    # emitted test scaffolds. Catches harness issues (mutual exclusions,
+    # missing required args, wrong shapes/dtypes) before pytest runs.
+    # Best-effort: no agent_bin / no fresh emissions → no-op.
+    if _freshly_emitted_tests:
+        try:
+            import os as _os
+
+            _agent_bin = _os.environ.get("TT_PLANNER_AGENT_BIN") or _os.environ.get("CLAUDE_BIN") or None
+            if _agent_bin and _os.environ.get("TT_PLANNER_DISABLE_TEST_SCAFFOLD_REVIEW") != "1":
+                from ._cli_helpers.test_scaffold_reviewer import review_test_scaffolds
+
+                review_test_scaffolds(
+                    demo_dir=demo_dir,
+                    test_files=_freshly_emitted_tests,
+                    model_id=model_id,
+                    agent_bin=_agent_bin,
+                )
+        except Exception as _review_exc:
+            notes.append(f"[test-scaffold-review] skipped " f"({type(_review_exc).__name__}: {_review_exc})")
 
     counts_after = _refresh_plan(model_id=model_id, repo_root=repo_root)
     if counts_after is None:

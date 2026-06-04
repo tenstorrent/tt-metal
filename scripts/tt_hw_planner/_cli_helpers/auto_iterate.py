@@ -1649,6 +1649,18 @@ def _run_auto_iterate_loop(
                             skipped_components_this_run.discard(comp)
                             verified_fail.discard(comp)
                             _pf_reason_blob = "; ".join(_pf_reasons) or "(no skip reason captured)"
+                            # 2026-06-04 Phase-3 wiring fix: cross-list
+                            # this harness-SKIP component into the
+                            # diagnoser's trigger set. Without these
+                            # two lines, pre-flight UNVERIFIED NATIVE
+                            # detections never reach the LLM Tier-2
+                            # diagnoser — only seed-pytest and iter-loop
+                            # detections do. That left
+                            # `skip_diagnoser` dormant for the most
+                            # common harness-skip pattern (the 4
+                            # seamless-m4t UNVERIFIED components).
+                            harness_skipped_this_run.add(comp)
+                            skip_reasons_this_run[comp] = _pf_reason_blob
                             # Pre-flight UNVERIFIED NATIVE = harness
                             # can't run PCC. Classify as TOOL_BUG.
                             persist_skip(MODEL, comp, _pf_reason_blob, category="TOOL_BUG")

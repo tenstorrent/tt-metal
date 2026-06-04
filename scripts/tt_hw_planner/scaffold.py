@@ -602,6 +602,43 @@ def apply_scaffold(plan: ScaffoldPlan) -> List[str]:
         else:
             target.write_bytes(ch.new_content)
             applied.append(f"A  {ch.path}")
+
+    # 2026-06-04 Phase-2 wiring: Tier-2 LLM batch review of any
+    # freshly-written PCC test files. Scaffold is the FIRST emission
+    # site (initial bring-up); this is the largest batch and the one
+    # most likely to surface template-vs-HF mismatches. Best-effort:
+    # missing agent_bin / LLM error → no-op, no exception propagates.
+    try:
+        import os as _os
+
+        _agent_bin = _os.environ.get("TT_PLANNER_AGENT_BIN") or _os.environ.get("CLAUDE_BIN") or None
+        if _agent_bin and _os.environ.get("TT_PLANNER_DISABLE_TEST_SCAFFOLD_REVIEW") != "1":
+            # Collect freshly-written test files from this scaffold pass.
+            _fresh_tests: List[Path] = []
+            for _ch in plan.changes:
+                # path looks like ".../tests/pcc/test_<comp>.py" and was just CREATED
+                if (
+                    _ch.kind == "create"
+                    and _ch.path.endswith(".py")
+                    and "/tests/pcc/test_" in _ch.path.replace("\\", "/")
+                ):
+                    _fresh_tests.append(write_root / _ch.path)
+            _fresh_tests = [p for p in _fresh_tests if p.is_file()]
+            if _fresh_tests:
+                from ._cli_helpers.test_scaffold_reviewer import review_test_scaffolds
+
+                # Locate the demo_dir from any test file's structure
+                _demo_dir = _fresh_tests[0].parent.parent.parent
+                review_test_scaffolds(
+                    demo_dir=_demo_dir,
+                    test_files=_fresh_tests,
+                    model_id=plan.new_model_id,
+                    agent_bin=_agent_bin,
+                )
+    except Exception:
+        # Reviewer is opportunistic; never let it break scaffold-apply.
+        pass
+
     return applied
 
 

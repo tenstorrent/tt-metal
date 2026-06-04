@@ -160,6 +160,36 @@ def consume_decomposition_plan(
                 notes.append(
                     f"[decompose] emitted PCC test(s) for " f"{len(_emitted)} child(ren): {', '.join(_emitted)}"
                 )
+
+            # 2026-06-04 Phase-2 wiring: Tier-2 LLM batch review of the
+            # freshly-emitted child test scaffolds. Catches harness
+            # issues (mutual exclusions, missing required args, wrong
+            # shapes/dtypes) BEFORE pytest runs against them — so the
+            # iter loop doesn't waste attempts on tests that would
+            # SKIP. Best-effort: agent_bin is read from env; if absent
+            # or LLM fails, reviewer is a no-op.
+            try:
+                import os as _os
+
+                _agent_bin = _os.environ.get("TT_PLANNER_AGENT_BIN") or _os.environ.get("CLAUDE_BIN") or None
+                if _agent_bin and _os.environ.get("TT_PLANNER_DISABLE_TEST_SCAFFOLD_REVIEW") != "1":
+                    from ._cli_helpers.test_scaffold_reviewer import review_test_scaffolds
+
+                    _emitted_paths = [
+                        demo_dir / "tests" / "pcc" / f"test_{_child['name']}.py" for _child in new_children_to_emit
+                    ]
+                    _emitted_paths = [p for p in _emitted_paths if p.is_file()]
+                    if _emitted_paths:
+                        review_test_scaffolds(
+                            demo_dir=demo_dir,
+                            test_files=_emitted_paths,
+                            model_id=model_id,
+                            agent_bin=_agent_bin,
+                        )
+            except Exception as _review_exc:
+                notes.append(
+                    f"[decompose] test-scaffold review skipped " f"({type(_review_exc).__name__}: {_review_exc})"
+                )
         except Exception as _import_exc:
             notes.append(
                 f"[decompose] could not import _emit_pcc_template " f"(skipping child test emission): {_import_exc}"
