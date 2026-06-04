@@ -52,7 +52,6 @@ void ValidateTensorArgs(
     const Program& program, const Table<TensorParameterName, ProgramRunArgs::TensorArgument>& tensor_args) {
     const detail::ProgramImpl& program_impl = program.impl();
 
-    // (Duplicate tensor_parameter_name keys are rejected by the Table at construction.)
     std::unordered_set<std::string> tensor_parameters_with_params;
     for (const auto& [param_name, tensor_arg] : tensor_args) {
         tensor_parameters_with_params.insert(param_name);
@@ -130,7 +129,6 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
     std::unordered_set<KernelSpecName> kernels_with_params;
 
     // Validate kernel runtime parameters
-    // (Duplicate kernel keys are rejected by the Table at construction.)
     for (const auto& [kernel_name, kernel_params] : params.kernel_run_args) {
         kernels_with_params.insert(kernel_name);
 
@@ -146,7 +144,6 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
         const std::set<CoreCoord>& kernel_nodes = kernel->logical_cores();
 
         // Validate vararg RTA counts per node
-        // (Duplicate node keys are rejected by the Table at construction.)
         std::unordered_set<NodeCoord> nodes_with_vararg_params;
         for (const auto& [node_coord, args] : kernel_runtime_varargs(kernel_params)) {
             nodes_with_vararg_params.insert(node_coord);
@@ -195,7 +192,6 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
         const std::unordered_set<std::string> named_rta_name_set(named_rta_names.begin(), named_rta_names.end());
 
         std::unordered_set<NodeCoord> nodes_with_named_params;
-        // (Duplicate node keys are rejected by the Table at construction.)
         for (const auto& [node, args] : kernel_params.runtime_arg_values) {
             nodes_with_named_params.insert(node);
             TT_FATAL(
@@ -282,7 +278,6 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
     }
 
     // Validate DFB runtime parameters
-    // (Duplicate DFB keys are rejected by the Table at construction.)
     for (const auto& [dfb_spec_name, dfb_params] : params.dfb_run_overrides) {
         TT_FATAL(
             !dfb_params.entry_size.has_value() && !dfb_params.num_entries.has_value(),

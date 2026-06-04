@@ -116,8 +116,6 @@ struct KernelAdvancedOptions {
     enum class DFBSelfLoopScope { INTRA, INTER };
 
     // Self-loop DFBs on compute kernels: maps each self-looped DFB to its scope.
-    // (If the INTER case were enabled, the value would become a struct carrying the
-    //  additional inter-thread communication pattern.)
     Table<DFBSpecName, DFBSelfLoopScope> dfb_self_loop_connectivities;
 };
 

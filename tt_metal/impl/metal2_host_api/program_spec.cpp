@@ -1345,7 +1345,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             "This option applies only to compute kernels.",
             kernel.unique_id);
 
-        // (Duplicate DFB keys are rejected by the Table at construction.)
         for (const auto& [dfb_spec_name, scope] : kernel_self_loop_scopes(kernel)) {
             TT_FATAL(
                 collected.dfb_by_name.contains(dfb_spec_name),

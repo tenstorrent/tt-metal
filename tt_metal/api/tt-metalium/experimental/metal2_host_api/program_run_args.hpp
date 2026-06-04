@@ -53,7 +53,6 @@ struct ProgramRunArgs {
         //
         // NOTE: If a kernel runtime argument always has the same value for all nodes, passing
         // a common runtime argument would provide better dispatch efficiency.
-        // The named runtime-arg values (name -> value) for a single node.
         using NamedRuntimeArgs = Table<std::string, uint32_t>;
         Table<NodeCoord, NamedRuntimeArgs> runtime_arg_values;
 
@@ -77,8 +76,6 @@ struct ProgramRunArgs {
         // (Non-owning reference. Will become MeshTensorView when available; existing callsites won't change.)
         std::reference_wrapper<const MeshTensor> tensor;
     };
-    // Tensor arguments: maps each TensorParameter name (matching a TensorParameter::unique_id in
-    // the ProgramSpec) to its MeshTensor argument.
     // A TensorArgument must be specified for EVERY TensorParameter declared in the ProgramSpec.
     // The argument's TensorSpec must match the TensorParameter's TensorSpec (shape, layout, data type).
     Table<TensorParameterName, TensorArgument> tensor_args;

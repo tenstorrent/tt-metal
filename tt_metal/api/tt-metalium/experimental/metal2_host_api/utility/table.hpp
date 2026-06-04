@@ -15,8 +15,8 @@
 #include <utility>
 #include <vector>
 
-#include <tt_stl/assert.hpp>              // TT_FATAL (duplicate-key check in constructors)
-#include <tt_stl/optional_reference.hpp>  // get() return type
+#include <tt_stl/assert.hpp>
+#include <tt_stl/optional_reference.hpp>
 
 namespace tt::tt_metal::experimental {
 
@@ -36,7 +36,7 @@ class Table {
     // Reference mapped types (e.g. Table<K, T&>) are not supported: the backing
     // vector relocates elements via assignment (erase/copy-assign), and assigning a
     // pair with a reference member writes through the reference rather than
-    // repointing it. Use a value type or a pointer instead.
+    // repointing it.
     static_assert(!std::is_reference_v<V>, "Table does not support reference mapped types (V)");
 
 public:
