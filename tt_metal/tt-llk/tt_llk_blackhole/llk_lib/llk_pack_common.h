@@ -36,16 +36,6 @@ inline void _llk_pack_dest_section_done_()
 {
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK); // wait for pack to finish
 
-    if constexpr (Dst == DstSync::SyncFull)
-    {
-        TTI_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_1, 0);
-    }
-    else
-    {
-        static_assert(Dst == DstSync::SyncHalf);
-        TT_ZEROACC(p_zeroacc::CLR_HALF, is_fp32_dest_acc_en, 0, ADDR_MOD_1, dest_offset_id % 2);
-    }
-
     // Tell math that it can write again
     _llk_packer_set_math_semaphore_<p_stall::NONE>();
 

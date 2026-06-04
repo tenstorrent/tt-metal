@@ -25,3 +25,4 @@ operations:
         math_fidelity: "HiFi4"
         enforce_fp32_accumulation: true
     packer: "Packer"
+    block_size: [64, 64]
