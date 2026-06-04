@@ -561,10 +561,13 @@ struct PackTile : PackTileTag {
     static constexpr bool              is_upfront          = (Policy == OutputLifecycle::Bulk);
     static constexpr bool              uses_per_block_pack = (Policy == OutputLifecycle::Chunked);
     // Walk vs pinned output addressing is DERIVED from the OutputLifecycle (no caller knob):
-    // OutputLifecycle::Bulk reserves the whole window upfront and writes distinct tiles into it (walk); every
-    // other policy advances the CB front via per-tile/chunk reserve+push, so the write index
-    // stays pinned at base. (For a 1-tile output, walk and pinned are identical: base + 0 == base.)
-    static constexpr bool              walk                = (Policy == OutputLifecycle::Bulk);
+    // the upfront-reserve policies (Bulk, BulkReservePerTile, BulkReservePerChunk) reserve the
+    // whole window once and write distinct tiles into it (walk); every per-tile/per-chunk-reserve
+    // policy advances the CB front itself, so the write index stays pinned at base. (For a 1-tile
+    // output, walk and pinned are identical: base + 0 == base.)
+    static constexpr bool              walk                = (Policy == OutputLifecycle::Bulk) ||
+                                                             (Policy == OutputLifecycle::BulkReservePerTile) ||
+                                                             (Policy == OutputLifecycle::BulkReservePerChunk);
 
     // Prev-CB fold: PackTile writes pack-side; mark Cb under reconfig only when
     // the user opted into pack reconfig (Output). Otherwise no pack reconfig is
@@ -620,8 +623,13 @@ struct PackTile : PackTileTag {
     }
 
     // Upfront reserve/push — OutputLifecycle::Bulk walks the full window (Ht*Wt); OutputLifecycle::DeferredReserve is pinned (1).
+    // Reserve the full output window once (Ht*Wt tiles). Shared by every upfront-reserve
+    // policy: Bulk (push the whole window at end), BulkReservePerTile (push 1 per tile) and
+    // BulkReservePerChunk (push inner_count per chunk). Called once before the outer loop.
     ALWI void reserve_upfront(uint32_t Ht, uint32_t Wt) const {
-        if constexpr (Policy == OutputLifecycle::Bulk) {
+        if constexpr (Policy == OutputLifecycle::Bulk ||
+                      Policy == OutputLifecycle::BulkReservePerTile ||
+                      Policy == OutputLifecycle::BulkReservePerChunk) {
             cb_reserve_back(Cb, (Ht * Wt) + tile_base_value<Offset>(tile_base));
         }
     }
@@ -635,14 +643,17 @@ struct PackTile : PackTileTag {
     static constexpr uint32_t lane_width = to_u32(DstSlot) + 1;
 
     ALWI void push_per_tile(uint32_t /*i*/) const {
-        if constexpr (Policy == OutputLifecycle::Streaming) {
+        if constexpr (Policy == OutputLifecycle::Streaming ||
+                      Policy == OutputLifecycle::BulkReservePerTile) {
             cb_push_back(Cb, 1);
         }
     }
 
-    /// Per-outer-iter push of `inner_count` tiles (chunked streaming).
+    /// Per-outer-iter push of `inner_count` tiles. Used by Chunked (reserve+push per chunk)
+    /// and BulkReservePerChunk (reserve the whole window upfront, push it out one chunk at a time).
     ALWI void push_per_block(uint32_t inner_count) const {
-        if constexpr (Policy == OutputLifecycle::Chunked) {
+        if constexpr (Policy == OutputLifecycle::Chunked ||
+                      Policy == OutputLifecycle::BulkReservePerChunk) {
             cb_push_back(Cb, inner_count);
         }
     }
@@ -1911,10 +1922,10 @@ ALWI void elem_apply_pack(
     uint32_t Wt) {
     constexpr bool use_local_idx = element_uses_per_block_index_v<ElemT>;
     if constexpr (is_pack_tile_op_v<ElemT>) {
+        (void)Ht; (void)Wt;  // upfront reserve is emitted once before the loop (see eltwise_chain_impl)
         emit_per_stage_pack_reconfig<ElemT, I, Es...>();
         elem.reserve_per_tile(i_flat);
         elem_reserve_per_block(elem, inner_count);
-        elem.reserve_upfront(Ht, Wt);
         for (uint32_t j = 0; j < inner_count; ++j) {
             const uint32_t i_arg = use_local_idx ? j : (i_flat + j);
             elem.exec(i_arg, ht, wt + j, j * chain_lane_width);
@@ -1967,6 +1978,10 @@ ALWI void apply_pack_phase(
     (run_one(std::integral_constant<std::size_t, Is>{}, elts), ...);
 }
 
+template <class E>
+ALWI void elem_reserve_upfront(const E& e, uint32_t Ht, uint32_t Wt) {
+    if constexpr (is_cb_writer_op_v<E>) e.reserve_upfront(Ht, Wt);
+}
 template <class E>
 ALWI void elem_pop_upfront_end(const E& e, uint32_t Ht, uint32_t Wt) {
     if constexpr (is_cb_reader_op_v<E>) e.pop_upfront_end(Ht, Wt);
@@ -2027,6 +2042,11 @@ ALWI void eltwise_chain_impl(EltwiseShape shape, Es... elts) {
 
     const uint32_t Ht = shape.Ht;
     const uint32_t Wt = shape.Wt;
+
+    // Upfront output reserve — fires once for the whole Ht*Wt window for the upfront-reserve
+    // policies (Bulk, BulkReservePerTile, BulkReservePerChunk), mirroring the end-of-chain
+    // push/pop folds below. Per-tile / per-chunk-reserve policies emit nothing here.
+    (detail::elem_reserve_upfront(elts, Ht, Wt), ...);
 
     // Outer 2D loop. `flat_base = ht * Wt + wt_base` is computed once per (ht, wt_base)
     // pair — single MUL on the inner-W path. Block-mode elements consume `flat_base + j`
