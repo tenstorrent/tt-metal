@@ -69,12 +69,15 @@ Run the full campaign loop. After each verify agent completes, immediately spawn
 ### Just Find One Mode
 Activated when the user says "use the just find one protocol" or similar.
 
+**First: write `just_find_one` to the `mode` field in `campaign-state.json` immediately.** This ensures the mode survives context compression — on recovery, you will read this field and know to stay in just_find_one mode.
+
 **Behavior:**
-1. Spawn the find agent with `target: 1`.
-2. Take the first qualifying finding returned — ignore the rest.
-3. Spawn one verify agent for that finding. Wait for its verdict.
-4. Complete Confluence update and DM if applicable.
-5. **Stop. Do not spawn another find agent.** The session ends after one escape is fully processed (confirmed, refuted, or inconclusive).
+1. Write mode to campaign-state.json (see above).
+2. Spawn the find agent with `target: 1` and `mode: just_find_one`.
+3. Take the first qualifying finding returned — ignore the rest.
+4. Spawn one verify agent for that finding. Wait for its verdict.
+5. Complete Confluence update and DM if applicable.
+6. **Stop. Reset `mode` back to `backfill` in campaign-state.json. Do not spawn another find agent.**
 
 The Continuous Campaign Rule does NOT apply in Just Find One mode.
 
@@ -96,19 +99,21 @@ If context was compressed:
 
 Spawn an Opus subagent with `run_in_background: true`, model `opus`, pointing it at `RUNBOOK_SUBAGENT.md`:
 
+Before spawning, read `campaign-state.json` to get the current `mode` field. Then spawn:
+
 ```
 You are a bug escape detection subagent. Read and follow /workspace/group/bug-escapes-data/RUNBOOK_SUBAGENT.md exactly.
 
 Inputs:
 - seen-escapes.json: /workspace/group/bug-escapes-data/seen-escapes.json
 - confirmed-escapes.json: /workspace/group/bug-escapes-data/confirmed-escapes.json
-- Campaign mode: backfill (90-day window)
-- Target: find [N] high-confidence escape candidate(s)
+- Campaign mode: {mode from campaign-state.json — backfill / incremental / just_find_one}
+- Target: find {1 if just_find_one, otherwise N} high-confidence escape candidate(s)
 
 Return your findings as a single JSON object per the output format in RUNBOOK_SUBAGENT.md. Do not write to any state files. Do not dispatch any workflows.
 ```
 
-Adjust target count as needed. You may spawn multiple find agents in parallel for broader coverage.
+In `just_find_one` mode: target is always 1, and the subagent stops after the first qualifying candidate. You may spawn multiple find agents in parallel for broader coverage (except in just_find_one mode — spawn only one).
 
 ### 3. Interpret Find Agent Output
 
