@@ -99,8 +99,16 @@ jobs:
       # than invisible infrastructure drift.
 
   asan-build:
-    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
-    needs: build-docker-images
+    # Skip on draft PRs and merge-queue cleanup events as before.
+    # For pull_request events, also skip when no C/C++ or CMake files changed — an
+    # ASan build is not useful for Python-only or docs-only PRs.
+    # Non-PR events (push to main, merge_group, workflow_dispatch) always build.
+    if: >-
+      github.event.action != 'destroyed' &&
+      (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
+      (github.event_name != 'pull_request' ||
+       needs.find-changed-files.outputs.cpp-or-cmake-changed == 'true')
+    needs: [build-docker-images, find-changed-files]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -143,6 +151,7 @@ jobs:
       llk-tests-changed: ${{ steps.find-changes.outputs.llk-tests-changed }}
       llk-perf-changed: ${{ steps.find-changes.outputs.llk-perf-changed }}
       llk-ci-changed: ${{ steps.find-changes.outputs.llk-ci-changed }}
+      cpp-or-cmake-changed: ${{ steps.find-changes.outputs.cpp-or-cmake-changed }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -276,8 +285,11 @@ jobs:
   # Blocking: violations here are exactly what would cause a merge queue eviction.
   # Posts inline PR comments so developers can fix issues before the merge queue.
   clang-tidy-light:
-    needs: [build-docker-images]
-    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
+    needs: [build-docker-images, find-changed-files]
+    if: >-
+      github.event_name == 'pull_request' &&
+      !github.event.pull_request.draft &&
+      needs.find-changed-files.outputs.cpp-or-cmake-changed == 'true'
     timeout-minutes: 60
     runs-on: tt-ubuntu-2204-large-stable
     container:
@@ -564,6 +576,7 @@ jobs:
         contains(join(needs.*.result, ','), 'failure')
       }}
     needs:
+      - build-docker-images
       - asan-build
       - metalium-smoke-tests
       - ttnn-smoke-tests
@@ -580,8 +593,13 @@ jobs:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
-          required-jobs: "asan-build"
+          # build-docker-images always runs for non-draft PRs and is the
+          # minimal required gate. asan-build is now conditional on C++ changes
+          # (skipped for Python-only PRs) so it moves to optional-jobs — failures
+          # still block the PR, but intentional skips do not.
+          required-jobs: "build-docker-images"
           optional-jobs: >-
+            asan-build,
             code-analysis,
             clang-tidy-light,
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,

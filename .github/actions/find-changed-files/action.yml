@@ -50,6 +50,8 @@ outputs:
     value: ${{ steps.find-changed-files.outputs.llk-perf-changed }}
   llk-ci-changed:
     value: ${{ steps.find-changed-files.outputs.llk-ci-changed }}
+  cpp-or-cmake-changed:
+    value: ${{ steps.find-changed-files.outputs.cpp-or-cmake-changed }}
 
 runs:
   using: "composite"

@@ -182,6 +182,18 @@ else
     TTMETALIUM_OR_TTNN_TESTS_CHANGED=false
 fi
 
+# Derive cpp-or-cmake-changed: true when any C/C++ source, header, CMake file, or
+# .clang-tidy config changed, or when a submodule pointer changed (submodule updates
+# are almost always C++ dependency bumps and must trigger ASAN/clang-tidy).
+# Intentionally excludes Python-only changes so ASAN build and clang-tidy-light
+# can be skipped on Python-only or docs-only PRs.
+CPP_OR_CMAKE_CHANGED=false
+if [[ "$CMAKE_CHANGED" = true || "$CLANG_TIDY_CONFIG_CHANGED" = true || "$SUBMODULE_CHANGED" = true ]]; then
+    CPP_OR_CMAKE_CHANGED=true
+elif echo "$CHANGED_FILES" | grep -qE '\.(h|hpp|hh|c|cpp|cc)$'; then
+    CPP_OR_CMAKE_CHANGED=true
+fi
+
 declare -A changes=(
     [cmake-changed]=$CMAKE_CHANGED
     [clang-tidy-config-changed]=$CLANG_TIDY_CONFIG_CHANGED
@@ -207,6 +219,7 @@ declare -A changes=(
     [llk-unit-tests-changed]=$LLK_UNIT_TESTS_CHANGED
     [llk-perf-changed]=$LLK_PERF_CHANGED
     [llk-ci-changed]=$LLK_CI_CHANGED
+    [cpp-or-cmake-changed]=$CPP_OR_CMAKE_CHANGED
 )
 
 for var in "${!changes[@]}"; do
