@@ -484,7 +484,23 @@ class TtTransformer(LightweightModule):
                 padded[:, :cols] = table_2d
                 return padded
 
-            if batch_size > 1:
+            qwen36_replicate_pt = False
+            if self.is_qwen36:
+                # qwen3.6: the 4 mesh columns are the H/4 TENSOR-PARALLEL split, and the
+                # KV cache is REPLICATED across columns (init_kv_cache dims=(1,None)) — and
+                # the DECODE page_table is replicated (prepare_decode_inputs_host
+                # dims=(None,None)). So prefill MUST write the user's KV to ALL columns:
+                # replicate the (1, num_blocks) page_table across the mesh (matches the
+                # working demo's text_demo_qwen36._build_paged_page_table dims=(None,None)).
+                # The llama70b column=user-group shard below (dims=(None,0)) writes KV to
+                # column 0 ONLY, leaving columns 1-3 empty -> decode (replicated) reads
+                # those empty columns -> garbage past the first (pre-cache) token.
+                assert batch_size == 1, "qwen3.6 server prefill is batch-1 (single user)"
+                page_table_padded = _pad_table_cols_to_multiple_of_8_int32(
+                    page_table, pad_value=inactive_fill_value
+                )
+                qwen36_replicate_pt = True
+            elif batch_size > 1:
                 assert batch_size == 32, "batch_size must be 32 for batched prefill"
                 # Mesh layout padding: (32, num_blocks) -> (4, 32 * num_blocks).
                 # For non-chunked SDPA, use -1 for unused regions so paged_fill_cache skips writes.
@@ -525,7 +541,9 @@ class TtTransformer(LightweightModule):
                 device=None,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(  # Each mesh column gets one row of the page table
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device)
+                if qwen36_replicate_pt
+                else ttnn.ShardTensor2dMesh(  # Each mesh column gets one row of the page table
                     self.mesh_device, dims=(None, 0), mesh_shape=self.args.cluster_shape
                 ),
             )
@@ -1259,7 +1277,15 @@ class TtTransformer(LightweightModule):
             # are lazily registered on first use (B1 LAYERNORM precedent). Gated on
             # batch_size > 1, so batch-1 / 32-row-identical (_carry32_tail below)
             # is completely untouched (byte-identical).
-            if batch_size > 1 and os.environ.get("QWEN36_B32_DECODE_TAIL", "1") == "1":
+            # QWEN36_FORCE_SWITCH_DECODE: also take the decode-mode tail at batch-1
+            # when the model is on decode-mode tt_ccl (unification probe — run batch-1
+            # on the SAME decode path as batch-32). Without this, batch-1 falls to the
+            # prefill _carry32 tail, which crashes on decode-mode CCL (bad optional access).
+            _force_decode_tail = (
+                os.environ.get("QWEN36_FORCE_SWITCH_DECODE", "0") == "1"
+                and getattr(self.tt_ccl, "mode", None) == "decode"
+            )
+            if (batch_size > 1 or _force_decode_tail) and os.environ.get("QWEN36_B32_DECODE_TAIL", "1") == "1":
                 # BISECT KNOB: QWEN36_B32_DECODE_TAIL=0 routes batch-32 through the
                 # proven row-0 _carry32_tail (prefill norm + prefill lm_head on row 0)
                 # below instead of this decode-mode tail — for identical users that
