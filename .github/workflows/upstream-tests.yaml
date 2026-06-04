@@ -48,6 +48,9 @@ env:
   BLACKHOLE_QB_GE_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-qb-ge
   BLACKHOLE_GLX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx
 
+permissions:
+  contents: read
+
 jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
