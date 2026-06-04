@@ -8,9 +8,7 @@
  * @brief Chain-family ternary SFPU op structs — Lerp, SnakeBeta (static) and
  *        Addcmul, Addcdiv (runtime scalar `value`).
  *
- * These are the `eltwise_chain` family (DestOnlyTag + `exec(i, slot_offset)`),
- * NOT the `SfpuChain` combinator family of the same names in `sfpu_helpers.hpp`
- * (which expose `call(a,b,c,d)` and cannot be passed to `eltwise_chain`). All
+ * These are `eltwise_chain` family elements (DestOnlyTag + `exec(i, slot_offset)`). All
  * four wrap a 4-DEST-arg LLK `op_tile<DF>(in0, in1, in2, out)`; addcmul/addcdiv
  * additionally take a runtime `value` (uint32 bits).
  */
