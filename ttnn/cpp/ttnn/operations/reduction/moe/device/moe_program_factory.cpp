@@ -210,9 +210,9 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
         }}},
     });
 
-    // 2-tile scratch CB: bcast-add writes input+expert_mask here, then top_k
-    // transposes directly from it. Constant 2-tile size (not Ht*Wt) because
-    // only one tile pair is in-flight at a time inside the wt loop.
+    // 2-tile scratch CB: top_k bcast-adds input+expert_mask into here, then transposes directly
+    // from it. Produced/consumed only by the compute kernel (not the reader), so no two-producer
+    // race. Constant 2-tile size (not Ht*Wt) because one tile pair is in flight at a time.
     uint32_t masked_temp_cb_index = tt::CBIndex::c_12;
     desc.cbs.push_back(CBDescriptor{
         .total_size = 2 * input_tile_size,
