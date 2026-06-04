@@ -40,7 +40,7 @@
 - `sql_found` — found in Snowflake, not yet analyzed
 - `confirmed` / `confirmed_horizontal` — verified escape, Confluence updated
 - `refuted` — all candidate fix commits tried, none confirmed; transition likely caused by infra/firmware outside the visible range
-- `refuted_wrong_fix` — at least one probe returned BEFORE=PASS; fix hypothesis wrong but untried commits remain; eligible for retry at low priority only
+- `refuted_wrong_fix` — at least one probe returned BEFORE=PASS; fix hypothesis wrong but untried candidate commits remain; eligible for retry at low priority only
 - `expired` — `last_fail_ts` older than 90 days; CI logs gone, probes not possible; skip permanently
 - `skipped_*` — noise, unrelated, or infra failure; skip permanently
 
@@ -152,7 +152,7 @@ The verify agent returns a verdict JSON. Based on `verdict`:
 |---|---|
 | `confirmed` | Update Confluence (tracking + confirmed table + chart). DM @ebanerjeeTT. |
 | `refuted` | All candidate commits exhausted. Write to seen-escapes.json as `refuted`. No Confluence update. No DM. |
-| `refuted_wrong_fix` | Fix hypothesis was wrong but untried commits remain. Update campaign-state.json with `status: "refuted_wrong_fix"`. **Only re-spawn the verify agent with the next candidate commit if no new unprocessed candidates exist.** New escapes take priority. No DM. No Confluence update. |
+| `refuted_wrong_fix` | Fix hypothesis was wrong but untried candidate commits remain. Update campaign-state.json with `status: "refuted_wrong_fix"`. **Only re-spawn the verify agent with the next candidate commit if no new unprocessed candidates exist.** New escapes take priority. No DM. No Confluence update. |
 | `inconclusive_timeout` | Update campaign-state.json with `status: "retry_next_session"`. No DM. |
 | `aborted_wrong_test` | Verify agent couldn't match test to workflow flag. DM @ebanerjeeTT with details. Do not retry automatically. |
 
