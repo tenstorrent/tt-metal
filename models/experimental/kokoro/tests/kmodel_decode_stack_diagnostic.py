@@ -341,10 +341,7 @@ def _run_tt_prosody(
         ttnn.deallocate(aln_Ta_T)
         ttnn.deallocate(d_nlc_fp32)
 
-        s_pred_f0, owns_s = _to_fp32_if_needed(s_pred_tt, mc)
-        F0_tt, N_tt = tt_model._predictor.F0Ntrain(en_nlc_tt, s_pred_f0, memory_config=mc)
-        if owns_s:
-            ttnn.deallocate(s_pred_f0)
+        F0_tt, N_tt = tt_model._predictor.F0Ntrain(en_nlc_tt, s_pred_tt, memory_config=mc)
         ttnn.deallocate(en_nlc_tt)
 
         t_en_bct = tt_model._text_encoder(input_ids, input_lengths=input_lengths, text_mask=text_mask)

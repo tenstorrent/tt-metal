@@ -78,7 +78,6 @@ STFT_PHASE_FALLBACK_KWARGS = dict(
     use_torch_atan2_fallback=False,
     use_torch_f0n_conv_fallback=False,
     use_torch_f0_upsamp_fallback=False,
-    use_fp32_prosody_boundary=True,
 )
 
 
@@ -248,7 +247,7 @@ def _run_tt_stages(
 
         bert_for_enc = bert_out
         owns_bert_cast = False
-        if tt_model._use_fp32_prosody_boundary and bert_out.dtype != ttnn.float32:
+        if bert_out.dtype != ttnn.float32:
             bert_for_enc = ttnn.typecast(bert_out, ttnn.float32, memory_config=mc)
             owns_bert_cast = True
         d_en = ttnn.linear(
@@ -266,8 +265,8 @@ def _run_tt_stages(
         ttnn.deallocate(d_en)
         caps["d_en_bct"] = _tt_to_float(d_en_bct)
 
-        prosody_dtype = ttnn.float32 if tt_model._use_fp32_prosody_boundary else ttnn.bfloat16
-        if tt_model._use_fp32_prosody_boundary and d_en_bct.dtype != prosody_dtype:
+        prosody_dtype = ttnn.float32
+        if d_en_bct.dtype != prosody_dtype:
             d_en_fp32 = ttnn.typecast(d_en_bct, ttnn.float32, memory_config=mc)
             ttnn.deallocate(d_en_bct)
             d_en_bct = d_en_fp32
@@ -318,33 +317,18 @@ def _run_tt_stages(
 
         aln_cpu = _build_alignment(pred_dur)
         T_aligned = int(aln_cpu.shape[2])
-        aln_dtype = ttnn.float32 if tt_model._use_fp32_prosody_boundary else ttnn.bfloat16
-        aln_tt = ttnn.from_torch(aln_cpu, dtype=aln_dtype, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc)
+        aln_tt = ttnn.from_torch(aln_cpu, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc)
 
         aln_Ta_T = ttnn.permute(aln_tt, (0, 2, 1), memory_config=mc)
-        if tt_model._use_fp32_prosody_boundary:
-            d_mat, owns_d = _to_fp32_if_needed(d_nlc, mc)
-            if owns_d:
-                ttnn.deallocate(d_nlc)
-            en_nlc = ttnn.matmul(aln_Ta_T, d_mat, memory_config=mc, compute_kernel_config=ck)
-            ttnn.deallocate(d_mat)
-        else:
-            en_nlc = ttnn.matmul(aln_Ta_T, d_nlc, memory_config=mc, compute_kernel_config=ck)
+        d_mat, owns_d = _to_fp32_if_needed(d_nlc, mc)
+        if owns_d:
             ttnn.deallocate(d_nlc)
+        en_nlc = ttnn.matmul(aln_Ta_T, d_mat, memory_config=mc, compute_kernel_config=ck)
+        ttnn.deallocate(d_mat)
         ttnn.deallocate(aln_Ta_T)
         caps["en_bct"] = _tt_to_float(en_nlc).permute(0, 2, 1).contiguous()
 
-        if tt_model._use_fp32_prosody_boundary:
-            en_fp32, owns_en = _to_fp32_if_needed(en_nlc, mc)
-            if owns_en:
-                ttnn.deallocate(en_nlc)
-                en_nlc = en_fp32
-            s_pred_f0, owns_s = _to_fp32_if_needed(s_pred_tt, mc)
-            F0, N = tt_model._predictor.F0Ntrain(en_nlc, s_pred_f0, memory_config=mc, use_fp32_boundary=True)
-            if owns_s:
-                ttnn.deallocate(s_pred_f0)
-        else:
-            F0, N = tt_model._predictor.F0Ntrain(en_nlc, s_pred_tt, memory_config=mc, use_fp32_boundary=False)
+        F0, N = tt_model._predictor.F0Ntrain(en_nlc, s_pred_tt, memory_config=mc)
         ttnn.deallocate(en_nlc)
         ttnn.deallocate(s_pred_tt)
         caps["F0"] = _squeeze_batch(_tt_to_float(F0))
@@ -358,19 +342,18 @@ def _run_tt_stages(
 
         asr_nlc = ttnn.permute(asr_bct, (0, 2, 1), memory_config=mc)
         ttnn.deallocate(asr_bct)
-        if tt_model._use_fp32_prosody_boundary:
-            if asr_nlc.dtype != ttnn.float32:
-                asr_fp32 = ttnn.typecast(asr_nlc, ttnn.float32, memory_config=mc)
-                ttnn.deallocate(asr_nlc)
-                asr_nlc = asr_fp32
-            if F0.dtype != ttnn.float32:
-                F0_fp32 = ttnn.typecast(F0, ttnn.float32, memory_config=mc)
-                ttnn.deallocate(F0)
-                F0 = F0_fp32
-            if N.dtype != ttnn.float32:
-                N_fp32 = ttnn.typecast(N, ttnn.float32, memory_config=mc)
-                ttnn.deallocate(N)
-                N = N_fp32
+        if asr_nlc.dtype != ttnn.float32:
+            asr_fp32 = ttnn.typecast(asr_nlc, ttnn.float32, memory_config=mc)
+            ttnn.deallocate(asr_nlc)
+            asr_nlc = asr_fp32
+        if F0.dtype != ttnn.float32:
+            F0_fp32 = ttnn.typecast(F0, ttnn.float32, memory_config=mc)
+            ttnn.deallocate(F0)
+            F0 = F0_fp32
+        if N.dtype != ttnn.float32:
+            N_fp32 = ttnn.typecast(N, ttnn.float32, memory_config=mc)
+            ttnn.deallocate(N)
+            N = N_fp32
 
         s_style_tt = ttnn.from_torch(
             s_style_cpu, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=dev, memory_config=mc
@@ -692,7 +675,6 @@ def _format_stft_phase_report(data: StftPhaseReportData) -> str:
         "| `use_torch_sinegen_fallback` | False | No full CPU SineGen |",
         "| `use_torch_f0n_conv_fallback` | **False** | F0/N stride-2 conv on device |",
         "| `use_torch_f0_upsamp_fallback` | **False** | f0 nearest upsample on device |",
-        "| `use_fp32_prosody_boundary` | **True** | fp32 bert→predictor→F0Ntrain boundary |",
         "",
         f"**Text:** `{data.text}`",
         f"**Phonemes ({len(data.phonemes)}):** `{data.phonemes}`",
