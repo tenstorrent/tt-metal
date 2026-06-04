@@ -24,9 +24,7 @@ void calculate_binop_with_scalar(std::uint32_t param) {
         sfpi::vFloat val = sfpi::dst_reg[0];
         sfpi::vFloat result;
 
-        if constexpr (BINOP_MODE == BinopMode::Mul) {
-            result = val * parameter;
-        }
+        result = val * parameter;
 
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;

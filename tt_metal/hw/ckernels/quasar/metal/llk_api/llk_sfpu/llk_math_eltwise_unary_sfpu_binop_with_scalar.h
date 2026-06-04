@@ -31,15 +31,13 @@ inline void llk_math_eltwise_unary_sfpu_binop_with_scalar_init() {
  * @param scalar: fp32 scalar value encoded as uint32
  * @param vector_mode: Vector mode (must be VectorMode::RC)
  */
-template <bool APPROXIMATE, int binop_mode>
+template <bool APPROXIMATE, sfpu::BinopMode binop_mode>
 inline void llk_math_eltwise_unary_sfpu_binop_with_scalar(
     uint dst_index, uint32_t scalar, VectorMode vector_mode = VectorMode::RC) {
     LLK_ASSERT(vector_mode == VectorMode::RC, "Quasar currently only supports vector mode RC");
-    static_assert(
-        binop_mode == static_cast<int>(sfpu::BinopMode::Mul),
-        "Quasar binop_with_scalar currently supports MUL_UNARY (mode=2) only");
+    static_assert(binop_mode == sfpu::BinopMode::Mul, "Quasar binop_with_scalar currently supports Mul only");
     _llk_math_eltwise_unary_sfpu_params_(
-        sfpu::calculate_binop_with_scalar<APPROXIMATE, static_cast<sfpu::BinopMode>(binop_mode), 8>, dst_index, scalar);
+        sfpu::calculate_binop_with_scalar<APPROXIMATE, binop_mode, 8>, dst_index, scalar);
 }
 
 }  // namespace ckernel

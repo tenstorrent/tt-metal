@@ -6,8 +6,12 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
+#ifdef ARCH_QUASAR
+#include "llk_math_eltwise_unary_sfpu_binop_with_scalar.h"
+#else
 #include "ckernel_sfpu_binop_with_unary.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
+#endif
 #endif
 
 namespace ckernel {
@@ -51,6 +55,9 @@ ALWI void sub_unary_tile(uint32_t idst, uint32_t param1) {
 #endif
 
 ALWI void mul_unary_tile(uint32_t idst, uint32_t param1) {
+#ifdef ARCH_QUASAR
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar<APPROX, sfpu::BinopMode::Mul>(idst, param1)));
+#else
     MATH(SFPU_CALL_MODE(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -59,6 +66,7 @@ ALWI void mul_unary_tile(uint32_t idst, uint32_t param1) {
         RC,
         idst,
         param1));
+#endif
 }
 
 #ifndef ARCH_QUASAR
@@ -128,6 +136,12 @@ ALWI void sub_unary_tile_int32(uint32_t idst, uint32_t param1) {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void binop_with_scalar_tile_init() { MATH(SFPU_INIT(unused)); }
+ALWI void binop_with_scalar_tile_init() {
+#ifdef ARCH_QUASAR
+    MATH((llk_math_eltwise_unary_sfpu_binop_with_scalar_init()));
+#else
+    MATH(SFPU_INIT(unused));
+#endif
+}
 
 }  // namespace ckernel
