@@ -222,7 +222,7 @@ def cmd_promote(args) -> int:
         agent_timeout_s=getattr(args, "auto_agent_timeout", 1500),
         allow_kill_stale=not getattr(args, "no_kill_stale", False),
         allow_device_reset=not getattr(args, "no_device_reset", False),
-        max_attempts_per_component=getattr(args, "auto_max_attempts_per_component", 2),
+        max_attempts_per_component=getattr(args, "auto_max_attempts_per_component", 5),
         allow_partial_cpu=getattr(args, "allow_partial_cpu", False),
         model_light=model_light,
         model_heavy=model_heavy,

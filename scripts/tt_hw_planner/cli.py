@@ -10604,10 +10604,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     pprom.add_argument(
         "--auto-max-attempts-per-component",
         type=int,
-        default=2,
+        default=5,
         help=(
-            "Per-component attempt cap (default: 2). After N failures, the "
-            "component is restored to CPU fallback and the loop moves on. "
+            "Per-component attempt cap (default: 5 — matches auto-up's "
+            "brain-G8 locked default). After N failures, the component is "
+            "restored to CPU fallback and the loop moves on. "
             "Same semantics as `up --auto-max-attempts-per-component`."
         ),
     )
