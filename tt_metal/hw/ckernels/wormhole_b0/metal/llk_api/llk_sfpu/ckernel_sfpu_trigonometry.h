@@ -1,5 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
-// SPDX-FileCopyrightText: © 2026 Jason Davies <jason@jasondavies.com>
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +8,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_sqrt_custom.h"
-#include "sfpu/ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "sfpu/ckernel_sfpu_trigonometry.h"
 #include "sfpi.h"
@@ -527,7 +526,7 @@ void tangent_init() {
 
 template <bool APPROXIMATION_MODE>
 void init_hyperbolic_trig() {
-    _init_exponential_<APPROXIMATION_MODE, p_sfpu::kCONST_1_FP16B>();
+    exp_init<APPROXIMATION_MODE, p_sfpu::kCONST_1_FP16B>();
 }
 
 template <bool APPROXIMATION_MODE>

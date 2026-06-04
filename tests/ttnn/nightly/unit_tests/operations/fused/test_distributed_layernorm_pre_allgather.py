@@ -705,14 +705,7 @@ def test_residual_logical_shape_mismatch_rejected(device, op_name, inp_shape, re
     [
         (1, 1, 32, 128),
         (1, 1, 32, 1024),
-        pytest.param(
-            (1, 1, 37, 72),
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="Welford pre-all-gather overflows to inf on non-tile-aligned H shapes; "
-                "torch comparison fails on mean and var. Issue #43935",
-            ),
-        ),
+        (1, 1, 37, 72),
     ],
 )
 @pytest.mark.parametrize(
