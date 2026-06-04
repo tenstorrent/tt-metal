@@ -1807,17 +1807,32 @@ void add_rank_binding_constraints(
                 }
             }
             std::vector<std::set<tt::tt_metal::AsicID>> global_groups(unset_hosts.begin(), unset_hosts.end());
-            // set_same_rank_groups_constraint matches same-rank target groups to global host partitions
-            // injectively, so it needs at least one partition slot per target group (nt <= ng). When the MGD
-            // declares more mesh_host_ranks than there are UNSET physical hosts, we replicate the available
-            // host partitions round-robin up to the number of target groups so each physical host can be
-            // carved into multiple host-ranks:
-            //   * 1 physical host, N ranks  -> single galaxy split into N host-ranks (mock single-host discovery)
-            //   * G physical hosts, N ranks -> N/G ranks per galaxy (e.g. a dual/quad galaxy mock assembled
-            //     from G adjacent SP4 galaxy descriptors, split into the MGD's finer host grid)
-            // Each replica shares its host's ASIC pool; the solver then assigns disjoint ASICs per rank and
-            // the same-rank constraint keeps every rank within a single physical host (no galaxy straddling).
-            // Round-robin distributes ranks evenly across hosts, matching the balanced host grids these MGDs use.
+            // set_same_rank_groups_constraint matches same-rank target groups (ranks) to global host
+            // partitions injectively -- one DISTINCT partition slot per rank, so it needs nt <= ng. When the
+            // MGD declares more mesh_host_ranks (nt) than there are UNSET physical hosts (ng = G), replicate
+            // the G real host ASIC pools round-robin up to nt slots so each host backs ceil/floor(nt/G) slots.
+            //
+            // This only sets the per-host SLOT CAPACITY (how many ranks a host may hold) -- it does NOT place
+            // any chips itself. Example: G = 2 hosts, nt = 4 ranks
+            //
+            //   base_partitions (G real host pools) : [ H0 ][ H1 ]
+            //   replicate  slot i <- host (i % G)   :   H0    H1    H0    H1
+            //   global_groups (nt = 4 slots)        : [ H0 ][ H1 ][ H0 ][ H1 ]   (H0,H1 each back 2 slots)
+            //
+            // set_same_rank_groups_constraint then matches the nt ranks to these slots (injective on slots,
+            // NOT index-aligned), so 2 ranks land on H0 and 2 on H1. The SOLVER -- not this loop -- then
+            // carves the actual disjoint, connectivity-preserving ASIC slice per rank within its host's pool;
+            // the same-rank constraint keeps every rank inside ONE physical host (no galaxy straddling):
+            //
+            //        H0 pool                 H1 pool
+            //     [ rank0 | rank1 ]       [ rank2 | rank3 ]      (each '|' separates a disjoint chip slice)
+            //
+            //   * G = 1, N ranks  -> single galaxy split into N host-ranks (mock single-host discovery)
+            //   * G hosts, N ranks -> N/G ranks per galaxy (e.g. a dual/quad galaxy mock assembled from G
+            //     adjacent SP4 galaxy descriptors, split into the MGD's finer host grid)
+            //
+            // Round-robin keeps the per-host slot counts balanced (they differ by at most 1 when G does not
+            // divide nt), matching the balanced host grids these MGDs declare.
             if (!global_groups.empty() && target_groups.size() > global_groups.size()) {
                 const std::vector<std::set<tt::tt_metal::AsicID>> base_partitions = global_groups;
                 global_groups.clear();
