@@ -67,8 +67,7 @@ void kernel_main() {
     Semaphore<> gather_sem(gather_sem_id);
     Semaphore<> done_sem(done_sem_id);
 
-    // B (in1) is width-sharded and already resident in this core's L1, so no NoC
-    // read is needed -- just publish the resident tiles to the compute kernel.
+    // B (in1) is already resident in L1; just publish it to compute.
     in1_cb.reserve_back(in1_num_tiles);
     in1_cb.push_back(in1_num_tiles);
 
