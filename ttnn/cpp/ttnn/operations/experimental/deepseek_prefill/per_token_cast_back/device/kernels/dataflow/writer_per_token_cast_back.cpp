@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Writer for the e4m3 -> fp32/bf16 pipeline (group-major). The compute produces, per block, a
-// [tile_h group-rows x 128] row-major output (COL_BLOCK_TILES tiles). The writer walks the same flat
-// group stream as the reader and writes each bank-contiguous run of groups back to its row at column
-// gir*128 with one noc_async_write (mirror of the reader's e4m3 reads).
+// Writer for the input_e4m3 -> fp32/bf16 pipeline. The compute produces, per block, a
+// [tile_h scale-block rows x 128] row-major output (COL_BLOCK_TILES tiles). The writer walks the
+// same flat scale-block stream as the reader and writes each bank-contiguous run back to its row at
+// column gir*128 with one noc_async_write.
 
 #include <cstdint>
 

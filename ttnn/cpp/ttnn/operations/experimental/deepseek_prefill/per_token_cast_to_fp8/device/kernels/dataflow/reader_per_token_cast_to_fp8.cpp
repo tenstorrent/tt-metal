@@ -2,12 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reader for per_token_cast_to_fp8 (group-major). Fills the reduce scaler tile once, then streams
-// the core's rows as a flat sequence of 128-element groups. A "block" is tile_h consecutive groups
+// Reader for per_token_cast_to_fp8. Fills the reduce scaler tile once, then streams
+// the core's rows as a flat sequence of 128-element scale blocks. A block is tile_h consecutive blocks
 // (block_capacity = tile_h * 128 elements = COL_BLOCK_TILES tiles). Each bank-contiguous run (a span
 // within one row) is read with a single noc_async_read, so we exploit row-major DRAM locality
-// instead of hopping banks. After tilize, the block is [tile_h groups x 128] and the (unchanged,
-// GROUPS_PER_BLOCK=1) compute reduces each group independently.
+// instead of hopping banks. After tilize, the compute reduces each 128-element block independently.
 
 #include <cstdint>
 
@@ -22,7 +21,7 @@ void kernel_main() {
     uint32_t width = get_arg_val<uint32_t>(4);      // H (elements per row)
 
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
-    constexpr uint32_t group_bytes = get_compile_time_arg_val(1);  // 128 * elem_size (one group)
+    constexpr uint32_t input_block_bytes = get_compile_time_arg_val(1);  // 128 * elem_size
     constexpr uint32_t cb_scaler = get_compile_time_arg_val(2);
     // Tile / face dims from the tensor's tile spec.
     constexpr uint32_t tile_h = get_compile_time_arg_val(3);
@@ -32,9 +31,9 @@ void kernel_main() {
     constexpr uint32_t ONE_F32_BITS = 0x3f800000u;  // 1.0f
     constexpr uint32_t face_elems = face_h * face_w;                       // fp32 elements per face
     constexpr uint32_t num_faces = (tile_h / face_h) * (tile_w / face_w);  // faces per tile
-    constexpr uint32_t COL_BLOCK_ELEMS = 128;                              // column-block width = one group
+    constexpr uint32_t COL_BLOCK_ELEMS = 128;                              // scale-block width
     constexpr uint32_t COL_BLOCK_TILES = COL_BLOCK_ELEMS / tile_w;         // 4 tiles per block
-    constexpr uint32_t elem_bytes = group_bytes / COL_BLOCK_ELEMS;         // input element size
+    constexpr uint32_t elem_bytes = input_block_bytes / COL_BLOCK_ELEMS;   // input element size
     constexpr uint32_t block_capacity = tile_h * COL_BLOCK_ELEMS;          // 4096 elems per block
     constexpr auto src_args = TensorAccessorArgs<7>();
 
@@ -53,7 +52,7 @@ void kernel_main() {
     }
     cb_push_back(cb_scaler, 1);
 
-    // Stream groups into tile_h-group blocks, one bank-contiguous run per noc_async_read.
+    // Stream 128-element blocks into tile_h-block batches, one bank-contiguous run per noc_async_read.
     const uint32_t end_row = start_row + num_rows;
     uint32_t current_row = start_row;
     uint32_t current_col = 0;  // element offset within the current row

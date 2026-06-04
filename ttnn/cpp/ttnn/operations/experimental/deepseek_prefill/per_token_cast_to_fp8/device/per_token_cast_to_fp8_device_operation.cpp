@@ -55,10 +55,10 @@ void PerTokenCastToFp8DeviceOperation::validate_on_program_cache_miss(
     const uint32_t tile_h = tile_shape[0];
     const uint32_t tile_w = tile_shape[1];
     TT_FATAL(
-        tile_h * tile_w == common::COL_BLOCK_ELEMS,
-        "per_token_cast_to_fp8: tile_h * tile_w must equal COL_BLOCK_ELEMS={} for row-major block tilization, got "
+        tile_h * tile_w == common::ROW_MAJOR_TILE_ELEMS,
+        "per_token_cast_to_fp8: tile_h * tile_w must equal ROW_MAJOR_TILE_ELEMS={} for row-major block tilization, got "
         "{}x{}",
-        common::COL_BLOCK_ELEMS,
+        common::ROW_MAJOR_TILE_ELEMS,
         tile_h,
         tile_w);
     TT_FATAL(
@@ -91,7 +91,7 @@ PerTokenCastToFp8DeviceOperation::spec_return_value_t PerTokenCastToFp8DeviceOpe
     const auto& input = tensor_args.input_tensor;
     const auto& input_shape = input.logical_shape();
 
-    TensorSpec e4m3_spec(
+    TensorSpec output_e4m3_spec(
         input_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::FP8_E4M3,
@@ -105,14 +105,14 @@ PerTokenCastToFp8DeviceOperation::spec_return_value_t PerTokenCastToFp8DeviceOpe
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             attrs.output_memory_config));
 
-    return {e4m3_spec, scale_spec};
+    return {output_e4m3_spec, scale_spec};
 }
 
 PerTokenCastToFp8DeviceOperation::tensor_return_value_t PerTokenCastToFp8DeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    auto [e4m3_spec, scale_spec] = compute_output_specs(attrs, tensor_args);
+    auto [output_e4m3_spec, scale_spec] = compute_output_specs(attrs, tensor_args);
     auto* device = tensor_args.input_tensor.device();
-    return {create_device_tensor(e4m3_spec, device), create_device_tensor(scale_spec, device)};
+    return {create_device_tensor(output_e4m3_spec, device), create_device_tensor(scale_spec, device)};
 }
 
 tt::stl::hash::hash_t PerTokenCastToFp8DeviceOperation::compute_program_hash(

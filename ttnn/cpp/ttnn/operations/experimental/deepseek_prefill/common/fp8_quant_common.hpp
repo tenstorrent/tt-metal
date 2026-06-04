@@ -16,10 +16,9 @@ inline constexpr uint32_t SCALE_GROUP_SIZE = 128;
 inline constexpr uint32_t SCALE_GROUP_TILES = 4;  // SCALE_GROUP_SIZE / TILE_WIDTH (=32)
 inline constexpr float E4M3_MAX_NORMAL = 448.0f;
 inline constexpr float SCALE_CLAMP_MIN = 1.0e-4f;  // DeepEP clamps amax to >= 1e-4 before /448
-// The LLK kernels process the width in 1024-element column-blocks (32 tiles). H need NOT be a
-// multiple of this: the last column-block may be partial (fewer whole 128-groups) and the kernels
-// zero-pad it. H must still be a multiple of SCALE_GROUP_SIZE (128) so groups are always full.
-inline constexpr uint32_t COL_BLOCK_ELEMS = 1024;
+// Row-major circular-buffer pages still use one logical tile. The quantization kernels then stream
+// those pages as tile-height batches of 128-element scale blocks.
+inline constexpr uint32_t ROW_MAJOR_TILE_ELEMS = 1024;
 
 inline std::tuple<uint32_t, uint32_t> infer_M_H(const ttnn::Shape& shape) {
     const auto rank = shape.size();

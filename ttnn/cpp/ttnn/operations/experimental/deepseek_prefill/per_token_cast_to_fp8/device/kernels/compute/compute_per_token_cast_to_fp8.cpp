@@ -5,13 +5,12 @@
 // per_token_cast_to_fp8, step 5: out = cast(input / scale) to e4m3, scale = clamp(amax,1e-4)/448
 // per 128-element group.
 //
-// Per (tile-row, column-block) = 32 rows x 1024 cols = 32 tiles = 8 groups of 4 tiles:
-//   1. tilize cb_in -> cb_tile (32 fp32 tiles).
-//   2. for each group g (4 tiles): per-row amax (abs + reduce_max + binary_max), clamp(>=1e-4),
-//      * 1/448 -> scale (col 0) -> cb_scale_tiles[g] (output). recip(scale) -> 1/scale (col 0)
-//      -> cb_inv_scale_tiles[g] (for the divide).
-//   3. divide: out_tile = cb_tile * bcast_col(cb_inv_scale_tiles[g]) per tile -> cb_out_tile.
-//   4. untilize cb_out_tile -> cb_e4m3 (scaled, cast to e4m3).
+// Per block = tile_h rows x 128 cols = 4 tiles for default 32-wide tiles:
+//   1. tilize cb_in -> cb_tile.
+//   2. compute per-row amax over the 128-element scale group, clamp(>=1e-4), multiply by 1/448
+//      -> scale (col 0) -> cb_scale_tiles. recip(scale) -> 1/scale -> cb_inv_scale_tiles.
+//   3. divide: out_tile = cb_tile * bcast_col(cb_inv_scale_tiles) per tile -> cb_out_tile.
+//   4. untilize cb_out_tile -> cb_output_e4m3 (scaled, cast to e4m3).
 // The writer extracts column 0 of cb_scale_tiles into the scale output [H, W/128].
 //
 // fp32_dest_acc_en=True (required for e4m3 on Blackhole; also gives fp32 reduce/divide precision).
@@ -32,11 +31,6 @@
 #include "api/compute/eltwise_unary/clamp.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 
-namespace {
-constexpr uint32_t COL_BLOCK_ELEMS = 128;   // column-block width = one scale group (GROUPS_PER_BLOCK=1)
-constexpr uint32_t SCALE_GROUP_SIZE = 128;  // elements per per-token scale group
-}  // namespace
-
 void kernel_main() {
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_tile = get_compile_time_arg_val(1);
@@ -45,15 +39,18 @@ void kernel_main() {
     constexpr uint32_t cb_scale_tiles = get_compile_time_arg_val(4);
     constexpr uint32_t cb_inv_scale_tiles = get_compile_time_arg_val(5);
     constexpr uint32_t cb_out_tile = get_compile_time_arg_val(6);
-    constexpr uint32_t cb_e4m3 = get_compile_time_arg_val(7);
+    constexpr uint32_t cb_output_e4m3 = get_compile_time_arg_val(7);
     constexpr uint32_t clamp_min_bits = get_compile_time_arg_val(8);
     constexpr uint32_t clamp_max_bits = get_compile_time_arg_val(9);
     constexpr uint32_t inv_448_bits = get_compile_time_arg_val(10);
-    // Tile dims from the tensor's tile spec (arg 11 = tile_h, unused here; 32x32 by default).
-    constexpr uint32_t tile_w = get_compile_time_arg_val(12);
-    constexpr uint32_t COL_BLOCK_TILES = COL_BLOCK_ELEMS / tile_w;             // 32 for 32-wide tiles
+
+    // Tile width from the tensor's tile spec.
+    constexpr uint32_t COL_BLOCK_ELEMS = 128;   // column-block width = one scale group (GROUPS_PER_BLOCK=1)
+    constexpr uint32_t SCALE_GROUP_SIZE = 128;  // elements per per-token scale group
+    constexpr uint32_t tile_w = get_compile_time_arg_val(11);
+    constexpr uint32_t COL_BLOCK_TILES = COL_BLOCK_ELEMS / tile_w;             // 4 for 32-wide tiles
     constexpr uint32_t TILES_PER_GROUP = SCALE_GROUP_SIZE / tile_w;            // 4
-    constexpr uint32_t GROUPS_PER_BLOCK = COL_BLOCK_ELEMS / SCALE_GROUP_SIZE;  // 8
+    constexpr uint32_t GROUPS_PER_BLOCK = COL_BLOCK_ELEMS / SCALE_GROUP_SIZE;  // 1
 
     constexpr uint32_t IDST0 = 0;
     constexpr uint32_t IDST1 = 1;
@@ -63,7 +60,7 @@ void kernel_main() {
     // Configure the unpacker hw on the fp32 reduce/abs operand so num_faces / tile dims are full
     // (4 faces). Configuring on a bf16 cb_in instead leaves the fp32 reduce reading only 2 faces
     // (within-tile column reduce sees cols 0-15) for bf16 input; tilize_init re-inits for cb_in.
-    compute_kernel_hw_startup(cb_abs, cb_e4m3);
+    compute_kernel_hw_startup(cb_abs, cb_output_e4m3);
     cb_wait_front(cb_scaler, 1);  // reader-filled 1.0 scaler, reused for every reduce
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
@@ -129,10 +126,12 @@ void kernel_main() {
                 recip_tile_init();
                 recip_tile(IDST1);  // slot 1 = 1/scale (col 0 valid; other cols = 1/0 = inf, unused by bcast)
                 tile_regs_commit();
+
                 tile_regs_wait();
                 pack_tile(IDST0, cb_scale_tiles);      // scale output
                 pack_tile(IDST1, cb_inv_scale_tiles);  // 1/scale for the divide (same fp32 format)
                 tile_regs_release();
+
                 cb_push_back(cb_scale_tiles, 1);
                 cb_push_back(cb_inv_scale_tiles, 1);
 
@@ -159,14 +158,14 @@ void kernel_main() {
             cb_pop_front(cb_tile, COL_BLOCK_TILES);
             cb_pop_front(cb_inv_scale_tiles, GROUPS_PER_BLOCK);
 
-            // ----- 4. untilize cb_out_tile -> e4m3 (scaled) -----
+            // ----- 4. untilize cb_out_tile -> output e4m3 (scaled) -----
             reconfig_data_format_srca(cb_out_tile);
-            pack_reconfig_data_format(cb_e4m3);
+            pack_reconfig_data_format(cb_output_e4m3);
             untilize_init(cb_out_tile);
             cb_wait_front(cb_out_tile, COL_BLOCK_TILES);
-            cb_reserve_back(cb_e4m3, COL_BLOCK_TILES);
-            untilize_block(cb_out_tile, COL_BLOCK_TILES, cb_e4m3);
-            cb_push_back(cb_e4m3, COL_BLOCK_TILES);
+            cb_reserve_back(cb_output_e4m3, COL_BLOCK_TILES);
+            untilize_block(cb_out_tile, COL_BLOCK_TILES, cb_output_e4m3);
+            cb_push_back(cb_output_e4m3, COL_BLOCK_TILES);
             cb_pop_front(cb_out_tile, COL_BLOCK_TILES);
             untilize_uninit(cb_out_tile);
         }

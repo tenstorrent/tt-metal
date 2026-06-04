@@ -13,10 +13,10 @@
 #include "ttnn/operations/experimental/deepseek_prefill/common/fp8_quant_common.hpp"
 
 // per_token_cast_back: LLK implementation (promoted from the experiments/e4m3-cast grouped spike).
-// out = decode(e4m3) * scale, with one fp32 scale per token per 128-element group. Per (tile-row,
-// 1024-col column-block): convert e4m3 -> fp32 (copy_tile), tilize, multiply each tile by its
-// group's per-row scale broadcast from column 0 (mul_tiles_bcast_cols), and untilize to the output
-// dtype (bf16 or fp32). The reader builds the per-group column-0 broadcast operands from the scale
+// out = decode(input_e4m3) * scale, with one fp32 scale per token per 128 elements. Per tile_h x
+// 128 block: convert input_e4m3 -> fp32 (copy_tile), tilize, multiply each tile by its
+// per-row scale broadcast from column 0 (mul_tiles_bcast_cols), and untilize to the output
+// dtype (bf16 or fp32). The reader builds the column-0 broadcast operand from the scale
 // tensor. Requires H % 128 == 0; work is split across cores over rows (each core gets a contiguous,
 // not necessarily tile-aligned, row range).
 
@@ -48,27 +48,25 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
 
     // M and H are now arbitrary; the last tile-row / column-block may be partial (zero-padded by the
     // reader, written back only for real rows/columns by the writer). H stays a multiple of 128 so
-    // groups are always full and the scale tensor's last dim is H/128.
+    // 128-element scale blocks are always full and the scale tensor's last dim is H/128.
     TT_FATAL(
         H % common::SCALE_GROUP_SIZE == 0,
         "per_token_cast_back: H={} must be a multiple of SCALE_GROUP_SIZE={}",
         H,
         common::SCALE_GROUP_SIZE);
 
-    // A column-block is now exactly one scale group (128 elements = COL_BLOCK_TILES tiles). The
-    // compute is byte-identical to the 1024-block baseline; GROUPS_PER_BLOCK is just 1. The e4m3/out
-    // CBs keep one-tile pages (so the compute's COL_BLOCK_TILES counts still match a block); the
-    // reader fills the [tile_h x 128] block as one contiguous run.
+    // A block is exactly one 128-element scale block per row. The input_e4m3/output CBs keep one-tile
+    // pages, and the reader fills the [tile_h x 128] block as one contiguous run.
     constexpr uint32_t BLOCK_ELEMS = common::SCALE_GROUP_SIZE;  // 128
 
     const uint32_t TILE_BYTES = tile_h * tile_w * sizeof(float);
     const uint32_t COL_BLOCK_TILES = BLOCK_ELEMS / tile_w;                         // 4 for 32-wide tiles
     constexpr uint32_t GROUPS_PER_BLOCK = BLOCK_ELEMS / common::SCALE_GROUP_SIZE;  // 1
 
-    const uint32_t e4m3_group_bytes = BLOCK_ELEMS;  // one group, 1 byte/elem
+    const uint32_t input_e4m3_block_bytes = BLOCK_ELEMS;  // one 128-element row, 1 byte/elem
     const uint32_t out_elem_bytes = output.element_size();
-    const uint32_t out_group_bytes = BLOCK_ELEMS * out_elem_bytes;     // one group of output
-    const uint32_t e4m3_tile_bytes = tile_h * tile_w;                  // cb_e4m3 page = one e4m3 tile
+    const uint32_t out_block_bytes = BLOCK_ELEMS * out_elem_bytes;     // one 128-element row of output
+    const uint32_t input_e4m3_tile_bytes = tile_h * tile_w;            // cb_input_e4m3 page = one e4m3 tile
     const uint32_t out_tile_bytes = tile_h * tile_w * out_elem_bytes;  // cb_out page = one output tile
     const uint32_t scale_aligned_page_bytes = input_scale.buffer()->aligned_page_size();
 
@@ -90,7 +88,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
     const DataFormat fp32_df = DataFormat::Float32;
     const DataFormat output_df = datatype_to_dataformat_converter(operation_attributes.output_dtype);
 
-    constexpr uint32_t cb_e4m3_idx = CBIndex::c_0;
+    constexpr uint32_t cb_input_e4m3_idx = CBIndex::c_0;
     constexpr uint32_t cb_in_rm_idx = CBIndex::c_1;
     constexpr uint32_t cb_in_tile_idx = CBIndex::c_2;
     constexpr uint32_t cb_scale_bcast_idx = CBIndex::c_4;
@@ -104,14 +102,14 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         CreateCircularBuffer(program, all_cores, cfg);
     };
 
-    // cb_e4m3: e4m3 input, one tile (1024 bytes) per page; COL_BLOCK_TILES pages = one block,
+    // cb_input_e4m3: input_e4m3, one tile per page; COL_BLOCK_TILES pages = one block,
     // double-buffered. The reader fills the [tile_h x 128] block contiguously across these pages.
-    CircularBufferConfig cb_e4m3_cfg =
-        CircularBufferConfig(2 * COL_BLOCK_TILES * e4m3_tile_bytes, {{cb_e4m3_idx, fp8_df}})
-            .set_page_size(cb_e4m3_idx, e4m3_tile_bytes);
-    CreateCircularBuffer(program, all_cores, cb_e4m3_cfg);
+    CircularBufferConfig cb_input_e4m3_cfg =
+        CircularBufferConfig(2 * COL_BLOCK_TILES * input_e4m3_tile_bytes, {{cb_input_e4m3_idx, fp8_df}})
+            .set_page_size(cb_input_e4m3_idx, input_e4m3_tile_bytes);
+    CreateCircularBuffer(program, all_cores, cb_input_e4m3_cfg);
 
-    make_fp32_tile_cb(cb_in_rm_idx, COL_BLOCK_TILES);             // e4m3 -> fp32 RM
+    make_fp32_tile_cb(cb_in_rm_idx, COL_BLOCK_TILES);             // input_e4m3 -> fp32 RM
     make_fp32_tile_cb(cb_in_tile_idx, COL_BLOCK_TILES);           // tilized fp32 input
     make_fp32_tile_cb(cb_scale_bcast_idx, 2 * GROUPS_PER_BLOCK);  // per-group col0 = scale
     make_fp32_tile_cb(cb_out_tile_idx, COL_BLOCK_TILES);          // divided tiles -> untilize
@@ -130,12 +128,12 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
             .set_page_size(cb_scale_scratch_idx, scale_scratch_bytes);
     CreateCircularBuffer(program, all_cores, cb_scale_scratch_cfg);
 
-    // Reader (RISCV_1): e4m3 col-blocks + builds per-group column-0 scale broadcast operands.
+    // Reader (RISCV_1): input_e4m3 blocks + builds column-0 scale broadcast operands.
     std::vector<uint32_t> reader_ct_args = {
-        cb_e4m3_idx,
+        cb_input_e4m3_idx,
         cb_scale_bcast_idx,
         cb_scale_scratch_idx,
-        e4m3_group_bytes,
+        input_e4m3_block_bytes,
         GROUPS_PER_BLOCK,
         scale_aligned_page_bytes,
         tile_h,
@@ -153,7 +151,7 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
 
     // Writer (RISCV_0): column-block-major writes of the row-major output.
-    std::vector<uint32_t> writer_ct_args = {cb_out_idx, out_group_bytes, tile_h, COL_BLOCK_TILES};
+    std::vector<uint32_t> writer_ct_args = {cb_out_idx, out_block_bytes, tile_h, COL_BLOCK_TILES};
     TensorAccessorArgs(dst_buffer).append_to(writer_ct_args);
     KernelHandle writer_kernel_id = CreateKernel(
         program,
@@ -163,10 +161,17 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_ct_args});
 
-    // Compute (TRISC): e4m3 -> fp32 RM -> tilize -> per-group bcast multiply -> untilize to output.
+    // Compute (TRISC): input_e4m3 -> fp32 RM -> tilize -> scale bcast multiply -> untilize to output.
     std::vector<uint32_t> compute_ct_args = {
-        cb_e4m3_idx, cb_in_rm_idx, cb_in_tile_idx, cb_scale_bcast_idx, cb_out_tile_idx, cb_out_idx, tile_h, tile_w};
-    // fp32_dest_acc_en=True required (e4m3 CB on core); HiFi4 (the ComputeConfig default) keeps the
+        cb_input_e4m3_idx,
+        cb_in_rm_idx,
+        cb_in_tile_idx,
+        cb_scale_bcast_idx,
+        cb_out_tile_idx,
+        cb_out_idx,
+        tile_h,
+        tile_w};
+    // fp32_dest_acc_en=True required (input_e4m3 CB on core); HiFi4 (the ComputeConfig default) keeps the
     // broadcast multiply precise.
     KernelHandle compute_kernel_id = CreateKernel(
         program,
@@ -175,20 +180,19 @@ PerTokenCastBackProgramFactory::cached_program_t PerTokenCastBackProgramFactory:
         all_cores,
         ComputeConfig{.fp32_dest_acc_en = true, .compile_args = compute_ct_args});
 
-    // Group-major streaming (mirror of per_token_cast_to_fp8): each core's rows form a flat group
-    // stream read/written in tile_h-group blocks. num_blocks = roundup_k32(rows*groups_per_row,32)/32.
-    const uint32_t groups_per_row = H / common::SCALE_GROUP_SIZE;  // H / 128
+    // Each core's rows form a flat stream of 128-element scale blocks read/written in tile_h-block batches.
+    const uint32_t scale_blocks_per_row = H / common::SCALE_GROUP_SIZE;  // H / 128
     auto all_cores_vec = corerange_to_cores(all_cores, num_cores, true);
     uint32_t row_offset = 0;
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = all_cores_vec[i];
         uint32_t rows_for_core =
             core_group_1.contains(core) ? rows_per_core_g1 : (core_group_2.contains(core) ? rows_per_core_g2 : 0);
-        const uint32_t total_groups = rows_for_core * groups_per_row;
-        const uint32_t num_blocks = tt::div_up(total_groups, tile_h);  // last block may be partial
+        const uint32_t total_scale_blocks = rows_for_core * scale_blocks_per_row;
+        const uint32_t num_blocks = tt::div_up(total_scale_blocks, tile_h);  // last block may be partial
 
         TT_FATAL(
-            num_blocks == tt::div_up(rows_for_core * groups_per_row, tile_h),
+            num_blocks == tt::div_up(rows_for_core * scale_blocks_per_row, tile_h),
             "per_token_cast_back: num_blocks invariant violated on a core");
 
         // Pass num_blocks to the (unchanged) compute as (num_tile_rows = num_blocks, num_col_blocks
