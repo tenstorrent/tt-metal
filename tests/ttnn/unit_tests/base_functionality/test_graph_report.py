@@ -2918,9 +2918,17 @@ class TestBeginGraphCaptureClearing:
 
             assert not ttnn.graph.is_python_stack_trace_enabled()
 
-    def test_end_graph_capture_to_file_auto_disables_python_stack_traces_when_config_true(self, tmp_path):
+    def test_end_graph_capture_to_file_auto_disables_python_stack_traces_when_config_true(self, tmp_path, monkeypatch):
         """end_graph_capture_to_file mirrors end_graph_capture auto-disable for stack traces."""
         report_path = tmp_path / "report.json"
+
+        def fake_end_graph_capture_to_file(_report_path):
+            # Avoid cluster/device init in C++ report serialization (not under test here).
+            ttnn.graph._cpp_end_graph_capture()
+            return "{}"
+
+        monkeypatch.setattr(ttnn.graph, "_cpp_end_graph_capture_to_file", fake_end_graph_capture_to_file)
+
         with ttnn.manage_config("enable_graph_python_stack_traces", True):
             ttnn.graph.disable_python_stack_traces()
             assert not ttnn.graph.is_python_stack_trace_enabled()
@@ -2939,7 +2947,9 @@ class TestBeginGraphCaptureClearing:
         assert len(python_io[0]["python_stack_trace"]) > 0
 
     def test_begin_graph_capture_default_no_python_stack_traces(self):
-        with ttnn.manage_config("enable_graph_python_stack_traces", False):
+        with ttnn.manage_config("enable_graph_python_stack_traces", False), ttnn.manage_config(
+            "enable_detailed_tensor_report", False
+        ):
             ttnn.graph.disable_python_stack_traces()
             assert not ttnn.graph.is_python_stack_trace_enabled()
 
@@ -2955,7 +2965,9 @@ class TestBeginGraphCaptureClearing:
             assert not ttnn.graph.is_python_stack_trace_enabled()
 
     def test_begin_graph_capture_respects_disable_graph_python_stack_traces_config(self):
-        with ttnn.manage_config("enable_graph_python_stack_traces", False):
+        with ttnn.manage_config("enable_graph_python_stack_traces", False), ttnn.manage_config(
+            "enable_detailed_tensor_report", False
+        ):
             ttnn.graph.disable_python_stack_traces()
             assert not ttnn.graph.is_python_stack_trace_enabled()
 
@@ -2970,9 +2982,30 @@ class TestBeginGraphCaptureClearing:
 
             assert not ttnn.graph.is_python_stack_trace_enabled()
 
+    def test_begin_graph_capture_auto_enables_python_stack_traces_when_detailed_tensor_report_true(self):
+        """enable_detailed_tensor_report also turns on stacks for tensor_lifetime source columns."""
+        with ttnn.manage_config("enable_graph_python_stack_traces", False), ttnn.manage_config(
+            "enable_detailed_tensor_report", True
+        ):
+            ttnn.graph.disable_python_stack_traces()
+            assert not ttnn.graph.is_python_stack_trace_enabled()
+
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            try:
+                ttnn.graph.record_python_operation("ttnn.relu", (), {})
+                entry = ttnn.graph._python_io_data[0]
+                assert "python_stack_trace" in entry
+                assert len(entry["python_stack_trace"]) > 0
+            finally:
+                ttnn.graph.end_graph_capture()
+
+            assert not ttnn.graph.is_python_stack_trace_enabled()
+
     def test_begin_graph_capture_keeps_pre_enabled_python_stack_traces_when_config_false(self):
         """Stacks enabled before begin are not overridden when config auto-enable is off."""
-        with ttnn.manage_config("enable_graph_python_stack_traces", False):
+        with ttnn.manage_config("enable_graph_python_stack_traces", False), ttnn.manage_config(
+            "enable_detailed_tensor_report", False
+        ):
             ttnn.graph.disable_python_stack_traces()
             ttnn.graph.enable_python_stack_traces()
             ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
