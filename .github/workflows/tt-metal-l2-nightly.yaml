@@ -121,6 +121,7 @@ jobs:
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
@@ -270,6 +271,7 @@ jobs:
     needs: [check-harbor, build-artifact]
     uses: ./.github/workflows/resolve-docker-pull-refs.yaml
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       basic-ttnn-runtime-docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
 
