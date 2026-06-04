@@ -1,0 +1,6 @@
+interface:
+  display_name: "AutoDebug"
+  short_description: "Inspect tricky bugs without editing code"
+  default_prompt: "Use $autodebug to investigate this tricky bug without editing code and report evidence-ranked findings."
+policy:
+  allow_implicit_invocation: false
