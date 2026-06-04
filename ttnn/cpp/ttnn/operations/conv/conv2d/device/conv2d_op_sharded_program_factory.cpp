@@ -950,10 +950,6 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
             untilize_out,
             "conv_bench expects ROW_MAJOR output (untilize_out=true) — it is forced in conv2d.cpp::invoke; got "
             "tiled output. Did the config take a non-standard path (e.g. slicing)?");
-        TT_FATAL(
-            conv_bench_mode != ttnn::operations::conv::Conv2dBenchMode::Main,
-            "TT_CONV_BENCH_MODE=main (literal no-helper kernel) is not wired on this build yet. Use helper_sbm "
-            "or helper_trm.");
         if (conv_bench_mode == ttnn::operations::conv::Conv2dBenchMode::HelperRowMajor) {
             TT_FATAL(
                 weight_num_subblocks > 1,
@@ -1148,6 +1144,18 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
                 compute_kernel_args.end(), activation_reuse_dummy_args.begin(), activation_reuse_dummy_args.end());
         }
         compute_kernel_args.push_back(static_cast<uint32_t>(split_reader_cb_shared));
+    }
+
+    // conv_bench main mode: run main's VERBATIM no-helper conv kernel. Its compile-arg layout is the
+    // helper layout with one extra arg — a TEMP_SUM CB index right after the OUT index (arg 24). Insert
+    // it here (shifting args 25+ by one) so the indices line up with main's kernel exactly, then point
+    // the compute kernel at the copied-verbatim file. (Bench main is always non-depthwise — guarded
+    // above — so compute_kernel_args is the non-depthwise vector built just above.)
+    if (conv_bench_mode == ttnn::operations::conv::Conv2dBenchMode::Main) {
+        compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize_main.cpp";
+        compute_kernel_args.insert(
+            compute_kernel_args.begin() + 25,
+            static_cast<uint32_t>(get_cb_info_by_name(cb_info, Conv2dCb::TEMP_SUM).index));
     }
 
     const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
