@@ -65,10 +65,7 @@ jobs:
           - name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
             cmd: |
               pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/all_post_commit
-              # DISABLED: BH DRAM prefetcher test fails with incorrect tensor outputs.
-              # Root cause: prefetcher buffer management issue on Blackhole architecture.
-              # Tracked in: https://github.com/tenstorrent/tt-metal/issues/41040
-              # Re-enable once #41040 is fixed and test_prefetcher_BH.py passes locally.
+              # Disabled due to issue https://github.com/tenstorrent/tt-metal/issues/41040
               # pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH.py
             timeout: 15
             test-type: fast

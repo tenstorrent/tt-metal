@@ -276,29 +276,3 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
-
-add_executable(test_tt_fabric_mux_bandwidth ${CMAKE_CURRENT_SOURCE_DIR}/test_infra/test_tt_fabric_mux_bandwidth.cpp)
-
-target_link_libraries(
-    test_tt_fabric_mux_bandwidth
-    PRIVATE
-        tt_metal
-        test_common_libs
-)
-
-target_include_directories(
-    test_tt_fabric_mux_bandwidth
-    PRIVATE
-        ${UMD_HOME}
-        ${PROJECT_SOURCE_DIR}/tests
-        ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
-        ${PROJECT_SOURCE_DIR}/tt_metal
-        ${CMAKE_CURRENT_SOURCE_DIR}/common
-)
-
-set_target_properties(
-    test_tt_fabric_mux_bandwidth
-    PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY
-            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric/test_infra
-)

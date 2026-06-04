@@ -127,11 +127,13 @@ Tests:
 # ================================================
 # 2D Torus (Y)
 # ================================================
+# Hangs: https://github.com/tenstorrent/tt-metal/issues/33456
   # - name: UnicastAlltoAll
   #   fabric_setup:
   #     topology: Torus
   #     torus_config: Y
   #     num_links: 2
+
   #   parametrization_params:
   #     size: [256, 512, 1024]
   #     num_packets: [2000]
