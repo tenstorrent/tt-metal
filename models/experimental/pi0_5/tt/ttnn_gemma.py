@@ -647,6 +647,10 @@ class GemmaAttentionTTNN:
             transpose_k_heads=False,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        # NOTE: do NOT deallocate xqkv — nlp_create_qkv_heads may view-alias
+        # into its input buffer rather than allocating fresh q/k/v tensors.
+        # Tried `ttnn.deallocate(xqkv)` here in commit attempt 2026-06-04 22:30
+        # and it crashed with "Tensor is not allocated" at trace replay.
 
         # OPTIMIZATION 3: Apply RoPE using native TTNN (split-half pattern).
         # If the caller passed in `cos`/`sin` overrides (position-aware tables
@@ -673,6 +677,10 @@ class GemmaAttentionTTNN:
             _own_rope_tensors = True
 
         # ttnn.experimental.rotary_embedding uses split-half pattern like Gemma
+        # NOTE: do NOT deallocate q/k after RoPE — rotary_embedding may alias
+        # its input. Same caveat applies to q_rope_padded after slice. Both
+        # were tried in commit attempt 2026-06-04 22:30 → "Tensor is not
+        # allocated" at trace replay.
         q_rope_padded = ttnn.experimental.rotary_embedding(q, cos_for_rope, sin_for_rope)
         k_rope_padded = ttnn.experimental.rotary_embedding(k, cos_for_rope, sin_for_rope)
 
@@ -722,6 +730,8 @@ class GemmaAttentionTTNN:
             compute_kernel_config=self.compute_kernel_config_sdpa,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        # NOTE: do not deallocate q_rope here — it may alias q_rope_padded
+        # (and thus q for keep_padded=True). Tried it 2026-06-04 22:30 → crash.
 
         # OPTIMIZATION 4: Native TTNN head concatenation (no PyTorch transfers!)
         # attn_output: [batch, num_heads, seq, head_dim] -> [batch, 1, seq, num_heads * head_dim]
@@ -729,6 +739,7 @@ class GemmaAttentionTTNN:
             attn_output,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
+        # NOTE: do not deallocate attn_output — nlp_concat_heads may alias.
 
         # Output projection — 2D BLOCK_SHARDED program config.
         # K = num_heads*head_dim (concatenated heads), N = hidden_size.
@@ -753,6 +764,9 @@ class GemmaAttentionTTNN:
                 compute_kernel_config=self.compute_kernel_config_hifi2,
                 core_grid=self.core_grid,
             )
+        # NOTE: linear typically allocates a new output, so attn_concat
+        # would be safe to free here in principle — but skipping until
+        # we have a way to test aliasing semantics op-by-op.
 
         # Reshape back to 3D: [batch, 1, seq, hidden] -> [batch, seq, hidden]
         output = ttnn.reshape(output, (batch_size, seq_len, self.hidden_size))

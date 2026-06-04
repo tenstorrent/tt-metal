@@ -215,6 +215,22 @@ class Pi0_5ModelTTNN:
         # Matches the original device-side _split_modulation_6 output shape
         # exactly (B=1, 1, W). ttnn.from_torch(layout=TILE) does the tile
         # padding on host, so no device TilizeWithValPadding op is emitted.
+        #
+        # PI0_ADARMS_MODS_L1=1 places the per-layer per-step mod tensors in L1
+        # rather than DRAM. Perf-analyze on the v7 (51.952 ms) trace flagged
+        # 360 of the 1218 BinaryNg ops as L1+DRAM→L1 MUL at shape (32, 1024)
+        # — these are the adaRMS gated multiplies `gated_attn = mul(out, ga)`
+        # / `gated_mlp = mul(out, gf)` (ttnn_gemma.py:1512, 1536). The DRAM
+        # operand is the gate tensor read from this upload path. Moving
+        # mods to L1 saves the DRAM read on every gated MUL (0.774 ms bucket).
+        # Total mod budget: 10 steps × 18 layers × 6 tensors × ~2 KB = ~2.2 MB
+        # of L1, opt-in to keep room for trace-persistent KV cache.
+        # Per PERF_PLAYBOOKS/01 §1 + 06 §3 (layout matching).
+        import os as _os
+
+        _mods_l1 = _os.environ.get("PI0_ADARMS_MODS_L1", "").lower() in ("1", "true", "yes", "on")
+        _mods_mc = _ttnn.L1_MEMORY_CONFIG if _mods_l1 else _ttnn.DRAM_MEMORY_CONFIG
+
         def host_pad_tile_upload(t: torch.Tensor) -> "_ttnn.Tensor":
             assert t.dim() == 2 and t.shape[0] == 1, f"expected (1, W), got {tuple(t.shape)}"
             t3d = t.unsqueeze(1).contiguous()  # (1, 1, W) — matches _split_modulation_6
@@ -223,7 +239,7 @@ class Pi0_5ModelTTNN:
                 dtype=_ttnn.bfloat16,
                 layout=_ttnn.TILE_LAYOUT,
                 device=self.device,
-                memory_config=_ttnn.DRAM_MEMORY_CONFIG,
+                memory_config=_mods_mc,
             )
 
         # --- Per-block fused mod weights (3W rows per LN × 2 LNs = 6W) ---
@@ -476,19 +492,30 @@ class Pi0_5ModelTTNN:
                 memory_config=mem,
             )
 
-        # SDPA requires attention masks in DRAM. prefix_attn_mask may be None
-        # (when all prefix tokens are real and tile-aligned — see fast path
-        # above); the SDPA call site handles None as "no masking" and takes
-        # the kernel's fast path (~14 µs/call cheaper on the prefill op).
+        # SDPA requires attention masks in DRAM (04 §8 — hard-asserted by the
+        # SDPA kernel). RoPE cos/sin tables can live in L1 though: they're
+        # small (prefix 256 KB × 2 + suffix 16 KB × 2 = 544 KB total) and
+        # consumed by every RoPE call (396 calls × 13.3 µs = 5.275 ms). The
+        # PI0_ROPE_TABLES_L1=1 env knob places them in L1 — opt-in until
+        # L1 budget is verified to handle them under trace mode.
+        # prefix_attn_mask may be None (when all prefix tokens are real and
+        # tile-aligned — see fast path above); the SDPA call site handles
+        # None as "no masking" and takes the kernel's fast path (~14 µs/call
+        # cheaper on the prefill op).
+        import os as _os
+
+        _rope_l1 = _os.environ.get("PI0_ROPE_TABLES_L1", "").lower() in ("1", "true", "yes", "on")
+        _rope_mc = ttnn.L1_MEMORY_CONFIG if _rope_l1 else ttnn.DRAM_MEMORY_CONFIG
+
         return {
             "prefix_attn_mask": _upload(prefix_mask_4d, ttnn.DRAM_MEMORY_CONFIG)
             if prefix_mask_4d is not None
             else None,
-            "prefix_cos": _upload(prefix_cos, ttnn.DRAM_MEMORY_CONFIG),
-            "prefix_sin": _upload(prefix_sin, ttnn.DRAM_MEMORY_CONFIG),
+            "prefix_cos": _upload(prefix_cos, _rope_mc),
+            "prefix_sin": _upload(prefix_sin, _rope_mc),
             "expert_attn_mask": _upload(expert_mask_4d, ttnn.DRAM_MEMORY_CONFIG),
-            "suffix_cos": _upload(suffix_cos, ttnn.DRAM_MEMORY_CONFIG),
-            "suffix_sin": _upload(suffix_sin, ttnn.DRAM_MEMORY_CONFIG),
+            "suffix_cos": _upload(suffix_cos, _rope_mc),
+            "suffix_sin": _upload(suffix_sin, _rope_mc),
             "prefix_real_count": prefix_real_count,
         }
 
@@ -616,6 +643,10 @@ class Pi0_5ModelTTNN:
             sin_override=upstream_artifacts["prefix_sin"] if upstream_artifacts else None,
             use_cache=True,
         )
+        # NOTE: tried `ttnn.deallocate(prefix_embs)` here on 2026-06-04 22:30
+        # but trace mode pins the input tensor → "Tensor is not allocated"
+        # at trace replay. Leave it alive; Python GC handles it after
+        # sample_actions returns.
 
         # OPTIMIZATION (keep_padded, reapplied from reverted commit 3d597a3b8e6
         # with finite-mask hybrid fix): treat the expert suffix as

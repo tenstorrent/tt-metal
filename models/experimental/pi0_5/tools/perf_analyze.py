@@ -148,6 +148,13 @@ def main():
     ap.add_argument("--top", type=int, default=10, help="Top-N buckets to show (default 10)")
     ap.add_argument("--target-ms", type=float, default=50.0, help="Total kernel target (default 50.0)")
     ap.add_argument("--shape", type=str, default=None, help="Drill into one OP CODE's shape breakdown")
+    ap.add_argument(
+        "--neighbors",
+        type=str,
+        default=None,
+        help="OP CODE to neighbor-analyze (per 09 §5). Prints predecessor/successor "
+        "patterns and fold-candidate buckets. E.g. --neighbors BinaryNgDeviceOperation",
+    )
     args = ap.parse_args()
 
     if not args.csv_path.exists():
@@ -229,6 +236,73 @@ def main():
         print(f"\n  #{i} {code} — {t/1e6:.3f} ms ({n} calls, {t/n/1e3:.2f} µs/call):")
         for lev in levers:
             print(f"     • {lev}")
+
+    # === Section 4.5: neighbor analysis (per 09 §5) ===
+    if args.neighbors:
+        _print_section(f"NEIGHBOR ANALYSIS: {args.neighbors} (per 09 §5)")
+
+        # Sort by GLOBAL CALL COUNT to get execution order
+        def _call_count(r):
+            try:
+                return int(r.get("GLOBAL CALL COUNT", 0) or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        ordered = sorted(rows, key=_call_count)
+        # For each target call, record (prev_opcode, next_opcode, shape, ns)
+        from collections import Counter as _C
+
+        per_shape: Dict[Tuple[str, str], List[Tuple[str, str, float]]] = defaultdict(list)
+        for i, r in enumerate(ordered):
+            if r.get("OP CODE") != args.neighbors:
+                continue
+            y = _strip_pad(r.get("INPUT_0_Y_PAD[LOGICAL]", ""))
+            x = _strip_pad(r.get("INPUT_0_X_PAD[LOGICAL]", ""))
+            prev = ordered[i - 1].get("OP CODE", "—") if i > 0 else "—"
+            nxt = ordered[i + 1].get("OP CODE", "—") if i + 1 < len(ordered) else "—"
+            per_shape[(y, x)].append((prev, nxt, _kdur_ns(r)))
+
+        if not per_shape:
+            print(f"  No rows for OP CODE = {args.neighbors}")
+        else:
+            total_t = sum(sum(c[2] for c in calls) for calls in per_shape.values())
+            total_n = sum(len(calls) for calls in per_shape.values())
+            print(f"  Total: {total_n} calls, {total_t/1e6:.3f} ms\n")
+            print(
+                f"  {'Y':>6} {'X':>6}  {'calls':>5}  {'total ms':>9}  {'µs/call':>8}  {'top predecessors':<40}  {'top successors':<40}"
+            )
+            print("  " + "-" * 124)
+            for (y, x), calls in sorted(per_shape.items(), key=lambda kv: -sum(c[2] for c in kv[1])):
+                n = len(calls)
+                t = sum(c[2] for c in calls)
+                prev_ctr = _C(c[0] for c in calls).most_common(2)
+                next_ctr = _C(c[1] for c in calls).most_common(2)
+                preds = ", ".join(f"{p[:24]}×{c}" for p, c in prev_ctr)
+                succs = ", ".join(f"{p[:24]}×{c}" for p, c in next_ctr)
+                print(f"  {y:>6} {x:>6}  {n:>5}  {t/1e6:>9.3f}  {t/n/1e3:>8.2f}  {preds:<40}  {succs:<40}")
+
+            # Pattern classification — only meaningful for BinaryNg, but no harm
+            # printing for others.
+            print("\n  Fold pattern hits (per 06):")
+            ln_prev = mm_prev = bg_prev = ln_next = 0
+            for calls in per_shape.values():
+                for prev, nxt, _ in calls:
+                    if prev == "LayerNormDeviceOperation":
+                        ln_prev += 1
+                    elif prev == "MatmulDeviceOperation":
+                        mm_prev += 1
+                    elif prev == args.neighbors:
+                        bg_prev += 1
+                    if nxt == "LayerNormDeviceOperation":
+                        ln_next += 1
+            print(f"    LN → {args.neighbors[:14]}    : {ln_prev:>5} calls  (post-norm; usually fine)")
+            print(
+                f"    {args.neighbors[:14]} → LN    : {ln_next:>5} calls  (UNFUSED residual ADD candidates — 06 §1 / 02 §6)"
+            )
+            print(f"    Matmul → {args.neighbors[:14]}: {mm_prev:>5} calls  (fused_activation candidates — 06 §2)")
+            print(
+                f"    {args.neighbors[:8]} → {args.neighbors[:8]}: {bg_prev:>5} calls  (unary_chain candidates — 06 §4)"
+            )
 
     # === Section 5: sanity checks (per 09 §7) ===
     _print_section(f"SANITY CHECKS (per 09 §7)")
