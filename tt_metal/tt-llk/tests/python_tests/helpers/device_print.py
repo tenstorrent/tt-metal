@@ -502,16 +502,18 @@ _WIRE: dict[int, tuple[str, Any]] = {
     _DF_UINT8: _U8,
 }
 
-# Unlike the tile_slice path (which reads normal L1 data and just casts),
-# these have to go through _make_float since they're ripped out of DEST.
+# Recipes for floats ripped straight out of DEST: they arrive in _make_float's
+# [sign][mantissa][exponent] order, not IEEE, so they can't just be cast.
 # Metal emits Bfp*/Lf8 as fp16(5,10) and Bfp*_b as bf16(8,7).
 _TA_F16 = ("H", lambda v: _make_float(5, 10, v))
 _TA_BF16 = ("H", lambda v: _make_float(8, 7, v))
 _TA_TF32 = ("I", lambda v: _make_float(8, 10, v))
 
-# typed_array decode. Integer + fp32 share the tile_slice recipes; every other
-# float format reconstructs via _make_float (see above).
-_TYPED_ARRAY_WIRE: dict[int, tuple[str, Any]] = {
+# typed_array decode is arch-dependent:
+#   - Wormhole reads DEST directly, so it has to go through _make_float.
+#   - Blackhole reads DEST through 0xFFBD8000, so it just be casted.
+# Integers and fp32 are identical either way.
+_TYPED_ARRAY_WIRE_MAKE_FLOAT: dict[int, tuple[str, Any]] = {
     _DF_FLOAT32: _F32,
     _DF_INT32: _I32,
     _DF_UINT32: _U32,
@@ -528,6 +530,19 @@ _TYPED_ARRAY_WIRE: dict[int, tuple[str, Any]] = {
     _DF_BFP8_B: _TA_BF16,
     _DF_BFP4_B: _TA_BF16,
     _DF_BFP2_B: _TA_BF16,
+}
+
+# Standard-IEEE variant (Blackhole aperture): floats use the same bit-cast
+# recipes as the tile_slice path; Bfp*/Lf8 still alias fp16/bf16.
+_TYPED_ARRAY_WIRE_STANDARD: dict[int, tuple[str, Any]] = {
+    **_WIRE,
+    _DF_BFP8: _F16,
+    _DF_BFP4: _F16,
+    _DF_BFP2: _F16,
+    _DF_LF8: _F16,
+    _DF_BFP8_B: _BF16,
+    _DF_BFP4_B: _BF16,
+    _DF_BFP2_B: _BF16,
 }
 
 # In tile_slice context, Bfp_b is NOT aliased — it has its own byte-pair layout
@@ -573,11 +588,14 @@ def _typed_array_header(args_blob: bytes, offset: int) -> tuple[int, int]:
     return word >> 16, word & 0xFFFF
 
 
-def _render_typed_array(args_blob: bytes, offset: int) -> str:
+def _render_typed_array(
+    args_blob: bytes, offset: int, ta_wire: dict[int, tuple[str, Any]]
+) -> str:
     """Render a dp_typed_array_t record as one row of colored cells.
-    Cell formatting follows helpers.utils.format_tile_row."""
+    `ta_wire` is the per-arch decode table (DEST float byte order is arch-
+    dependent). Cell formatting follows helpers.utils.format_tile_row."""
     length, fmt_code = _typed_array_header(args_blob, offset)
-    recipe = _TYPED_ARRAY_WIRE.get(fmt_code)
+    recipe = ta_wire.get(fmt_code)
     if recipe is None:
         return f"<typed array: unsupported DataFormat={fmt_code}, len={length}>"
     bpe = struct.calcsize(recipe[0])
@@ -677,6 +695,7 @@ class DevicePrintParser:
         buffer_base: int,
         total_buffer_size: int,
         processor_count: int,
+        typed_array_make_float: bool = True,
     ):
         self.buffer_base = buffer_base
         self.total_buffer_size = total_buffer_size
@@ -686,6 +705,13 @@ class DevicePrintParser:
         for risc_id, p in elf_paths.items():
             self.elfs[risc_id] = ElfStrings(str(p))
         self._risc_names: dict[int, str] = _risc_names_tensix()
+        # DEST float byte order is arch-dependent (debug-array vs aperture read);
+        # see _TYPED_ARRAY_WIRE_* above.
+        self._ta_wire = (
+            _TYPED_ARRAY_WIRE_MAKE_FLOAT
+            if typed_array_make_float
+            else _TYPED_ARRAY_WIRE_STANDARD
+        )
 
     def _walk_records(self, data_slice: bytes) -> list[str]:
         """Parse all complete records in data_slice,
@@ -839,7 +865,7 @@ class DevicePrintParser:
                 continue
 
             if ph.kind == "typed_array":
-                parts.append(_render_typed_array(args_blob, ph.offset))
+                parts.append(_render_typed_array(args_blob, ph.offset, self._ta_wire))
                 continue
 
             if ph.kind == "tile_slice":
@@ -895,6 +921,7 @@ def make_device_print_parser(configuration) -> DevicePrintParser:
 
     configuration.prepare() must have been called before this so the ELFs exist.
     """
+    from helpers.chip_architecture import ChipArchitecture  # Local: circular import
     from helpers.test_config import TestConfig  # Local to avoid circular import
 
     if TestConfig.PROCESSOR_COUNT == 0:
@@ -917,4 +944,7 @@ def make_device_print_parser(configuration) -> DevicePrintParser:
         TestConfig.DEVICE_PRINT_BUFFER_BASE,
         TestConfig.DEVICE_PRINT_BUFFER_SIZE,
         TestConfig.PROCESSOR_COUNT,
+        # Blackhole reads DEST via the 0xFFBD8000 aperture (standard-IEEE floats);
+        # Wormhole reads via the debug-array port (_make_float order).
+        typed_array_make_float=TestConfig.CHIP_ARCH != ChipArchitecture.BLACKHOLE,
     )
