@@ -46,10 +46,20 @@ def model_artifacts(model_location_generator):
     return backbone, state_dict, model_id_or_path
 
 
-def _run_full_end_to_end(device, model_artifacts, batch_size, seq_len):
-    """Shared body: end-to-end HF-vs-TT PCC for one (batch_size, seq_len), bf8_b.
+# bf8_b holds the 0.94 PCC gate through S4096; the SDPA reduction over S8192
+# tokens accumulates enough bf8 error to fall below it, so use bf16 beyond 4096
+# (matches test_model.py).
+_BF8_MAX_SEQ_LEN = 4096
 
-    Gated at PCC_THRESHOLD=0.94.
+
+def _dtype_for_seq_len(seq_len):
+    return ttnn.bfloat8_b if seq_len <= _BF8_MAX_SEQ_LEN else ttnn.bfloat16
+
+
+def _run_full_end_to_end(device, model_artifacts, batch_size, seq_len):
+    """Shared body: end-to-end HF-vs-TT PCC for one (batch_size, seq_len).
+
+    Uses bf8_b for seq_len <= 4096 and bf16 beyond. Gated at PCC_THRESHOLD=0.94.
     """
     require_single_device(device)
     backbone, state_dict, model_id_or_path = model_artifacts
@@ -58,7 +68,7 @@ def _run_full_end_to_end(device, model_artifacts, batch_size, seq_len):
         mesh_device=device,
         max_batch_size=batch_size,
         max_seq_len=seq_len,
-        dtype=ttnn.bfloat8_b,
+        dtype=_dtype_for_seq_len(seq_len),
         state_dict=state_dict,
         hf_model_name=model_id_or_path,
     )
