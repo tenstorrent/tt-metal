@@ -164,6 +164,7 @@ jobs:
       ubuntu-2404-ci-build-tag: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
       ubuntu-2404-dev-tag: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
       ubuntu-2404-manylinux-tag: ${{ needs.docker-images.outputs.manylinux-tag }}
+      runs-on: tt-ubuntu-2204-medium-stable
       fetch-depth: 1
 
   metalium-smoke-tests:

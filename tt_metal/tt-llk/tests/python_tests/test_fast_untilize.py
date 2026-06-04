@@ -255,7 +255,7 @@ def test_fast_untilize_overflow_guard(
     last_guard_addr = (
         stim.buf_res_addr + (tile_count + guard_tiles - 1) * stim.buf_res_tile_size
     )
-    raw = read_from_device("0,0", last_guard_addr, num_bytes=10)
+    raw = read_from_device(TestConfig.TENSIX_LOCATION, last_guard_addr, num_bytes=10)
     marker = struct.unpack_from("<H", raw, 0)[0]
     assert marker == 0x4680, f"Sentinel marker missing; got 0x{marker:04x}"
 

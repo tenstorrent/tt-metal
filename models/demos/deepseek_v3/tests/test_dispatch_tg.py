@@ -14,7 +14,7 @@ This test validates dispatch operations with:
 If this test fails, dispatch is likely broken on quad as well.
 
 Run with:
-'MESH_DEVICE=TG pytest models/demos/deepseek_v3/tests/tg_moe_tests/individual_ops/test_dispatch_tg.py -v'
+'MESH_DEVICE=TG pytest models/demos/deepseek_v3/tests/test_dispatch_tg.py -v'
 """
 
 import random
