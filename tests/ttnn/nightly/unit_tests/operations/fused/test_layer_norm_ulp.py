@@ -527,7 +527,7 @@ def test_rms_norm_ulp_sharded_non_tile_aligned_width(device, w, distribution, dt
 @pytest.mark.parametrize("w", [40, 72, 96, 200])
 @pytest.mark.parametrize("distribution", ["normal", "centered_uniform"])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-def test_rms_norm_ulp_sharded_non_tile_aligned_width_split_across_cores(device, w, distribution, dtype):
+def test_rms_norm_ulp_sharded_unevenly_split_width_across_cores(device, w, distribution, dtype):
     """Sharded rms_norm over a width split across two cores vs torch golden.
 
     Each core (block) owns block_w columns of the tile-padded width; the cross-core reduce combines

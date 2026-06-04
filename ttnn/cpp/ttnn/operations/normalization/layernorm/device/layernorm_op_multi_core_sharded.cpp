@@ -354,8 +354,10 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         grid.num_blocks);
     // Legacy (non-Welford) path: zero the padding columns so they do not enter the statistics (E[x]
     // and variance for layernorm, the mean of squares for RMSNorm). Guard above guarantees num_blocks
-    // == 1 except for RMSNorm.
+    // == 1 except for RMSNorm. CB 7 (writer two-tile mask) and CB 14 (E[x] scratch) feed only the
+    // LayerNorm E[x] masking; RMSNorm masks the squares with the host-built CB 19, so it needs neither.
     const bool do_col_mask = col_mask_needed && !use_welford;
+    const bool do_legacy_layernorm_col_mask = do_col_mask && !rms_norm;
     // Valid (logical) columns in the final width tile; the rest of that tile is padding.
     const uint32_t last_tile_valid_w = logical_K - (Kt - 1) * tile_width;
 
@@ -500,6 +502,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     cb_config.is_post_all_gather = is_post_all_gather;
     cb_config.skip_write_back = skip_write_back;
     cb_config.do_col_mask = do_col_mask;
+    cb_config.do_legacy_layernorm_col_mask = do_legacy_layernorm_col_mask;
     // Enable the welford-fp32 alias only when the SrcA-routed transpose_tile would
     // otherwise truncate Float32 input to TF32. Restricting to !rms_norm because
     // RMSNorm doesn't use Welford in this kernel path.
