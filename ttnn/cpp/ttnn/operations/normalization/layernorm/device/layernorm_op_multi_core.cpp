@@ -70,6 +70,11 @@ bool CB_can_fit_in_L1(
     return sum < l1_size * 0.95;
 }
 
+uint32_t get_buffer_aligned_size_per_bank(const MeshTensor& t) {
+    return static_cast<uint32_t>(
+        t.mesh_buffer().get_reference_buffer()->aligned_size_per_bank());  // aligned_size_per_bank() -> DeviceAddr
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -198,13 +203,11 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
          num_tile_rows_per_core_group_2] = split_work_to_cores(requested_cores, num_tile_rows, true /* row_wise */);
 
     // Use passed-in reciprocal LUT tensor if using Welford
-    std::optional<Tensor> recip_tensor = std::nullopt;
+    const auto recip = as_optional_mesh_tensor(tensor_args.recip_tensor);
     uint32_t reciprocal_CB_size_bytes = 0;
     if (use_welford) {
-        TT_FATAL(tensor_args.recip_tensor.has_value(), "Reciprocal tensor not provided for Welford layernorm");
-        recip_tensor = tensor_args.recip_tensor;
-        reciprocal_CB_size_bytes =
-            recip_tensor->mesh_tensor().mesh_buffer().get_reference_buffer()->aligned_size_per_bank();
+        TT_FATAL(recip.has_value(), "Reciprocal tensor not provided for Welford layernorm");
+        reciprocal_CB_size_bytes = get_buffer_aligned_size_per_bank(*recip);
     }
 
     ////////////////////////////////////////////////////////////////////////////
@@ -832,7 +835,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             .buffer_index = tt::CBIndex::c_25,
             .data_format = reciprocal_cb_data_format,
             .page_size = reciprocal_CB_size_bytes});
-        recip_cb_desc.tensor = &recip_tensor.value().mesh_tensor();
+        recip_cb_desc.buffer = recip->mesh_buffer().get_reference_buffer();
         program_descriptor.cbs.push_back(std::move(recip_cb_desc));
     }
     return program_descriptor;

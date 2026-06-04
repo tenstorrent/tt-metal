@@ -27,12 +27,24 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+uint32_t get_buffer_aligned_size_per_bank(const MeshTensor& t) {
+    return static_cast<uint32_t>(
+        t.mesh_buffer().get_reference_buffer()->aligned_size_per_bank());  // aligned_size_per_bank() -> DeviceAddr
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+
 tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descriptor(
     const LayerNormParams& operation_attributes,
     const LayerNormInputs& tensor_args,
     Tensor& tensor_return_value,
     const std::optional<CoreRangeSet>& core_range_set) {
     using namespace sharded_layernorm_helpers;
+    using namespace CMAKE_UNIQUE_NAMESPACE;
 
     // For sharded layernorm, core ranges are derived from tensor shard spec.
     // If core_range_set is provided, validate that shard spec cores are within it.
@@ -166,13 +178,11 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     }
 
     // Reciprocal LUT for Welford
-    std::optional<Tensor> recip_tensor = std::nullopt;
+    const auto recip = as_optional_mesh_tensor(tensor_args.recip_tensor);
     uint32_t reciprocal_CB_size_bytes = 0;
     if (use_welford) {
-        TT_FATAL(tensor_args.recip_tensor.has_value(), "Reciprocal tensor not provided for Welford layernorm");
-        recip_tensor = tensor_args.recip_tensor;
-        reciprocal_CB_size_bytes =
-            recip_tensor->mesh_tensor().mesh_buffer().get_reference_buffer()->aligned_size_per_bank();
+        TT_FATAL(recip.has_value(), "Reciprocal tensor not provided for Welford layernorm");
+        reciprocal_CB_size_bytes = get_buffer_aligned_size_per_bank(*recip);
     }
 
     // Compute CB sizes using helper
@@ -439,7 +449,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         .gamma_tensor = gamma,
         .beta_tensor = beta,
         .stats_tensor = stats,
-        .recip_tensor = as_optional_mesh_tensor(recip_tensor),
+        .recip_tensor = recip,
         .output_tensor = output_tensor,
         .output_reshard_tensor = output_reshard_tensor,
         .has_b = b.has_value(),
@@ -453,8 +463,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
         // Enable the welford-fp32 alias only when the SrcA-routed transpose_wh_tile would
         // otherwise truncate Float32 input to TF32. Restricting to !rms_norm because
         // RMSNorm doesn't use Welford in this kernel path.
-        .welford_fp32_alias =
-            use_welford && !rms_norm && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en,
+        .welford_fp32_alias = use_welford && !rms_norm && in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en,
     };
 
     add_cb_descriptors(program_descriptor, core_ranges, all_worker_and_storage_cores, cb_config);
