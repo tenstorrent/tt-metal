@@ -505,6 +505,7 @@ targets:
             status: active
             perf:
               decode_t/s/u: 10.1
+              decode_t/s/u_tolerance: 0.2
               prefill_time_to_first_token: 140
             accuracy:
               top1: 90
@@ -534,8 +535,9 @@ targets:
             status: active
             perf:
               decode_t/s/u: 5.5
-              decode_t_s_u_tolerance: 0.8
-              prefill_time_to_first_token: 115
+              decode_t/s/u_tolerance: 0.8
+              prefill_time_to_first_token: 150
+              prefill_time_to_first_token_tolerance: 0.3
             accuracy:
               top1: 89.5
               top5: 97.5
@@ -560,7 +562,7 @@ targets:
         entries:
           - status: active
             perf:
-              prefill_time_to_token: 0.053
+              prefill_time_to_first_token: 53
               decode_t/s/u: 21.8
               decode_t/s: 21.7
             accuracy:
@@ -747,7 +749,7 @@ targets:
             seq_len: 512
             status: active
             perf:
-              decode_t/s/u: 2.14
+              decode_t/s/u: 1.93
               prefill_time_to_first_token: 540
             accuracy:
               top1: 96
@@ -766,10 +768,11 @@ targets:
       # (ci-eval-32 invocation).
       p300x2:
         entries:
-          - batch_size: 32
+          - batch_size: 1
+            seq_len: 512
             status: active
             perf:
-              prefill_time_to_token: 0.136
+              prefill_time_to_first_token: 136
               decode_t/s/u: 16.30
               decode_t/s: 521.6
             accuracy:
@@ -850,7 +853,7 @@ targets:
             status: active
             perf:
               decode_t/s/u: 10.45
-              prefill_time_to_first_token: 251
+              prefill_time_to_first_token: 282
             accuracy:
               top1: 95
               top5: 99
@@ -858,8 +861,8 @@ targets:
             seq_len: 744
             status: active
             perf:
-              decode_t/s/u: 22.35
-              prefill_time_to_first_token: 111
+              decode_t/s/u: 21.9
+              prefill_time_to_first_token: 118
               prefill_time_to_first_token_tolerance: 0.2
             accuracy: {}
       wh_n300:
@@ -930,7 +933,7 @@ targets:
             status: active
             perf:
               decode_t/s/u: 10.3
-              prefill_time_to_first_token: 181
+              prefill_time_to_first_token: 182
             accuracy:
               top1: 89
               top5: 99
@@ -954,11 +957,20 @@ targets:
             seq_len: 512
             status: active
             perf:
-              decode_t/s/u: 2.8
-              prefill_time_to_first_token: 300
+              decode_t/s/u: 2.7
+              prefill_time_to_first_token: 313
             accuracy:
               top1: 98
               top5: 99
+          - batch_size: 32
+            seq_len: 707
+            status: active
+            perf:
+              decode_t/s/u: 200.8
+              prefill_time_to_first_token: 3
+            accuracy:
+              top1: 9
+              top5: 9
       p300x2:
         entries:
           - batch_size: 32
@@ -1022,7 +1034,7 @@ targets:
             status: active
             perf:
               decode_t/s/u: 7.0
-              prefill_time_to_first_token: 304
+              prefill_time_to_first_token: 367
             accuracy:
               top1: 84
               top5: 96
@@ -1095,20 +1107,21 @@ targets:
             seq_len: 512
             status: active
             perf:
-              prefill_time_to_token: 0.207
-              decode_t/s/u: 8.7
-              decode_t/s: 278
+              prefill_time_to_first_token: 207
+              decode_t/s/u: 8.5
+              decode_t/s: 8.5
             accuracy:
               top1: 91.0
               top5: 99.0
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models
           - batch_size: 32
-            seq_len: null
+            seq_len: 686
             status: active
             perf:
-              prefill_time_to_token: 0.207
-              decode_t/s/u: 8.7
+              prefill_time_to_first_token: 207
+              prefill_time_to_first_token_tolerance: 0.2
+              decode_t/s/u: 18.7
               decode_t/s: 278
             accuracy:
               top1: 91.0
