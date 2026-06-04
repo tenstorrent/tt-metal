@@ -8,16 +8,6 @@ Mirrors DeepEP's reference (deepseek-ai/DeepEP deep_ep/utils/math.py):
 - per_token_cast_to_fp8: for each 128-element block of a token,
     scale = clamp(max(|x|), 1e-4) / 448, e4m3 = round(x / scale)
 - per_token_cast_back: out = decode(e4m3) * scale
-
-LLK notes reflected in the tolerances:
-  * the e4m3 packer rounds toward zero (truncates the mantissa) vs torch's round-to-nearest, so the
-    forward output is checked to be within one e4m3 ULP of the torch reference, not bit-equal;
-  * the scale / divide run in fp32 on the FPU (operands truncated to ~19-bit), so scale and the
-    dequant are checked with a small relative tolerance + PCC, not bit-equal.
-Constraints: rank >= 2; all leading dims fold into the row count M; the last dim is the hidden width
-H, which must be a multiple of 128. M and H need not be multiples of the tile height (32) or the
-tile-height block count: the kernels zero-pad the partial last tile-height block and write back only
-the real rows/columns.
 """
 
 import pytest
@@ -34,10 +24,6 @@ pytestmark = pytest.mark.use_module_device
 BLOCK_W = 128
 E4M3_MAX = 448.0
 
-# Shapes exercised by most tests. Rank can be >= 2: all leading dims fold into the row count M and
-# only the last dim is the hidden width H (a multiple of 128). 7168 = 56 * 128 = EMB_SIZE for both
-# DeepSeek V3 and Kimi K2.6. The unaligned shapes (M not a multiple of 32, H not a multiple of
-# 1024) exercise the partial tile-height block paths; the 4D shapes exercise leading-dim folding.
 SHAPES = [
     (1, 1024),  # single row (partial tile-row)
     (30, 1152),  # partial tile-row + 9 scale blocks
@@ -50,6 +36,7 @@ SHAPES = [
 ROUNDTRIP_SHAPES = [(32, 1024), (30, 1152), (4, 1, 128, 1024)]
 
 
+# Blackhole only operation
 @pytest.fixture(autouse=True)
 def _require_blackhole():
     if not is_blackhole():
@@ -115,8 +102,7 @@ def test_cast_to_fp8_scale(device, dtype):
     torch_dtype = getattr(torch, dtype)
     ttnn_dtype = getattr(ttnn, dtype)
 
-    H = 1024
-    M = 128 * 16
+    M = 1024
     # In this test, we want to verify that cast_to_fp8 scale is lossless if 128-consecutives values are the same
     # and if they can be represented exactly in fp8.
     # Build one row with one exactly representable value per 128-wide block, then repeat it

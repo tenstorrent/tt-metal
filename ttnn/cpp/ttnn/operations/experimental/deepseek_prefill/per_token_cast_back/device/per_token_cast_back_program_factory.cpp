@@ -12,13 +12,10 @@
 
 #include "ttnn/operations/experimental/deepseek_prefill/per_token_cast_to_fp8/per_token_cast_to_fp8.hpp"
 
-// per_token_cast_back: LLK implementation (promoted from the experiments/e4m3-cast grouped spike).
-// out = decode(input_e4m3) * scale, with one fp32 scale per token per 128 elements. Per tile_h x
-// 128 block: convert input_e4m3 -> fp32 (copy_tile), tilize, multiply each tile by its
-// per-row scale broadcast from column 0 (mul_tiles_bcast_cols), and untilize to the output
-// dtype (bf16 or fp32). The reader builds the column-0 broadcast operand from the scale
-// tensor. Requires H % 128 == 0; work is split across cores over rows (each core gets a contiguous,
-// not necessarily tile-aligned, row range).
+// per_token_cast_back: Convert (e4m3 input, scale) -> (bfloat16 or float32 output)
+// Implementation requires row-major inputs and outputs.
+// Internally, it relies on intermediate CBs for tilization / untilization, as well as for conversion.
+// To efficiently perform this tilization, we use a block-based approach with a [32, 128] circular buffer ( = 4 tiles).
 
 namespace ttnn::experimental::prim::per_token_cast_back {
 
