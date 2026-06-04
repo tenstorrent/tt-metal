@@ -4,8 +4,10 @@
 
 #include "matmul_decode_device_operation.hpp"
 
+#include "tt-metalium/math.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "tt-metalium/work_split.hpp"
 
 namespace ttnn::operations::matmul_decode {
 
@@ -68,11 +70,18 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
     output_shape[-1] = input_tensor_b.logical_shape()[-1];
 
     const auto dtype = operation_attributes.output_dtype.value_or(input_tensor_a.dtype());
-
+    int output_num_cores = tt::div_up(operation_attributes.N, tt::constants::TILE_WIDTH);
+    CoreRangeSet output_core_range_set = tt::tt_metal::num_cores_to_corerangeset(
+        output_num_cores, input_tensor_a.device()->compute_with_storage_grid_size());
+    int per_core_output_width = tt::div_up(operation_attributes.N, output_num_cores);
+    std::array<uint32_t, 2> shard_shape = {operation_attributes.M, per_core_output_width};
+    auto shard_spec =
+        tt::tt_metal::ShardSpec(output_core_range_set, shard_shape, tt::tt_metal::ShardOrientation::ROW_MAJOR);
+    auto memory_config = MemoryConfig(TensorMemoryLayout::WIDTH_SHARDED, BufferType::L1, shard_spec);
+    log_info(tt::LogOp, "matmul_decode with output memory_config: {}", memory_config);
     return TensorSpec(
         output_shape,
-        tt::tt_metal::TensorLayout(
-            dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), operation_attributes.output_mem_config));
+        tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), memory_config));
 }
 
 MatmulDecodeDeviceOperation::tensor_return_value_t MatmulDecodeDeviceOperation::create_output_tensors(
@@ -85,17 +94,14 @@ MatmulDecodeDeviceOperation::tensor_return_value_t MatmulDecodeDeviceOperation::
 
 namespace ttnn::prim {
 ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_value_t matmul_decode(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const std::optional<const MemoryConfig>& memory_config,
-    std::optional<const DataType> dtype) {
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, std::optional<const DataType> dtype) {
     using OperationType = ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         input_tensor_a.logical_shape()[-2],
         input_tensor_b.logical_shape()[-1],
         input_tensor_a.logical_shape()[-1],
-        memory_config.value_or(input_tensor_a.memory_config()),
+        input_tensor_a.memory_config(),
         dtype.has_value() ? std::optional<DataType>(*dtype) : std::nullopt,
     };
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b};
