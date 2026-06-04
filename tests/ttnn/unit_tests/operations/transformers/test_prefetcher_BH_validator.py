@@ -429,3 +429,81 @@ def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, n
     )
     ttnn.experimental.stop_dram_core_prefetcher(device)
     ttnn.synchronize_device(device)
+
+
+def test_validator_dram_sender_recv_contig_page_size_switch(device):
+    """A single recv-contig GCB can serve tensors with different page sizes.
+
+    The first tensor leaves the FIFO pointer at an address that is not aligned to
+    the second tensor's larger page size. Both sender and receiver must credit the
+    skipped padding during resize, otherwise the second validator waits forever.
+    """
+    dtype = ttnn.bfloat8_b
+    recv_per_bank = 2
+    tile_bytes = _TILE_BYTES_BF8
+    num_dram_banks = device.dram_grid_size().x
+    ring_size = num_dram_banks * recv_per_bank
+    ring_cols = max(c for c in range(min(num_dram_banks, ring_size), 0, -1) if ring_size % c == 0)
+
+    bank_to_receivers = [
+        (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
+        for b in range(num_dram_banks)
+    ]
+
+    def make_weight(K, n_per_recv_tiles, seed):
+        K_padded = _round_up(K, ring_size * ttnn.TILE_SIZE)
+        N = ring_size * n_per_recv_tiles * ttnn.TILE_SIZE
+        k_block_w_tiles = (K_padded // ttnn.TILE_SIZE) // ring_size
+        push_page_size = k_block_w_tiles * n_per_recv_tiles * tile_bytes
+
+        torch.manual_seed(seed)
+        pt_weight = torch.zeros(1, 1, K_padded, N)
+        pt_weight[:, :, :K, :] = torch.randn(1, 1, K, N)
+
+        dram_core_range_set = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
+        )
+        nd_shard = ttnn.NdShardSpec(
+            ttnn.Shape([K_padded, n_per_recv_tiles * ttnn.TILE_SIZE]),
+            dram_core_range_set,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        )
+        tt_weight = ttnn.as_tensor(
+            pt_weight,
+            device=device,
+            dtype=dtype,
+            memory_config=ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard),
+            layout=ttnn.TILE_LAYOUT,
+        )
+        return tt_weight, push_page_size
+
+    # page_a = 1 * 3 * 1088 = 3264 B; page_b = 2 * 5 * 1088 = 10880 B.
+    # After one ring of A pages, the FIFO pointer advances by 52224 B, which is
+    # not page_b-aligned and forces resize padding before B.
+    weight_a, page_a = make_weight(K=512, n_per_recv_tiles=3, seed=0xA11CE)
+    weight_b, page_b = make_weight(K=1024, n_per_recv_tiles=5, seed=0xB0B)
+    assert (ring_size * page_a) % page_b != 0
+
+    gcb_size = ring_size * max(page_a, page_b)
+    gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
+
+    with dram_core_prefetcher_session(device):
+        ttnn.experimental.queue_dram_core_prefetcher_request(device, [(weight_a, ring_size)], global_cb=gcb)
+        ttnn.experimental.test_dram_prefetcher_validator(
+            device,
+            weight_a,
+            num_layers=1,
+            print_stride=max(1, ring_size // 4),
+            global_cb=gcb,
+        )
+        ttnn.synchronize_device(device)
+
+        ttnn.experimental.queue_dram_core_prefetcher_request(device, [(weight_b, ring_size)], global_cb=gcb)
+        ttnn.experimental.test_dram_prefetcher_validator(
+            device,
+            weight_b,
+            num_layers=1,
+            print_stride=max(1, ring_size // 4),
+            global_cb=gcb,
+        )

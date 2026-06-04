@@ -335,9 +335,11 @@ void kernel_main() {
             const uint32_t t_recv_stride = g->recv_stride_bytes;
             const uint32_t t_block_count = g->block_count;
 
-            // Set the sender fifo page size to one full per-receiver page so
-            // remote_cb_reserve_back reserves exactly one page per receiver.
-            experimental::resize_remote_sender_cb_interface</*update_remote_over_noc=*/false>(
+            // Set the sender fifo page size to one full per-receiver page. When resize skips
+            // padding to reach the next aligned page (e.g. a larger page after a smaller one in a
+            // mixed-page-size stream), credit that skip to the receiver over NoC so sender and
+            // receiver pointers stay in lockstep; otherwise the next receiver is short of credits.
+            experimental::resize_remote_sender_cb_interface</*update_remote_over_noc=*/true>(
                 remote_cb_id, t_page_bytes_per_recv, noc_index);
 
             constexpr uint32_t stage_slot_sum = stage_slot_a + stage_slot_b;
