@@ -18,6 +18,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_orde
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.runners.h2d_socket_sync_op import h2d_socket_sync
+from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.tt.tt_deepseek_prefill_pipeline import (
     TtDeepSeekPrefillPipeline,
     TtPrefillPipelineConfig,
@@ -301,7 +302,7 @@ def _resolve_weight_cache_path() -> Path | None:
 
 def _build_h2d_service(mesh_device: ttnn.MeshDevice) -> ttnn.H2DStreamService:
     """Construct an H2DStreamService whose per-shard backing tensor matches
-    what `TtDeepSeekPrefillPipeline._prepare_input_tensor` would have produced.
+    what `TtDeepSeekPrefillPipeline.prepare_input_tensor` would have produced.
 
     Per-shard target: `(1, 1, isl_per_chip)` uint32 ROW_MAJOR DRAM.
     Achieved by setting global_spec.shape = `(sp_factor, 1, isl_per_chip)` and
@@ -379,6 +380,8 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
     import json
     import time as _time
 
+    cfg = pipeline.config
+
     default_path = Path(__file__).parent / "standalone_input.json"
     input_path = Path(os.environ.get("PREFILL_STANDALONE_INPUT", default_path))
     logger.info(f"[standalone] reading input from {input_path}")
@@ -414,7 +417,13 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
         first_token = None
         for i in range(num_iterations):
             _t0 = _time.perf_counter()
-            first_token = pipeline.prefill(token_ids=token_ids, slot_id=slot_id_env, actual_isl=actual_isl)
+            first_token = pipeline.prefill(
+                prepare_prefill_input_tensor(
+                    token_ids, pipeline.mesh_device, cfg.sp_factor, cfg.is_balanced, cfg.mesh_shape, cfg.sp_axis
+                ),
+                actual_isl=actual_isl,
+                slot_id=slot_id_env,
+            )
             _dt_ms = (_time.perf_counter() - _t0) * 1000.0
             iter_times_ms.append(_dt_ms)
             logger.info(
@@ -447,9 +456,11 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
             chunk_tokens = token_ids[chunk_start:chunk_end]
             _t0 = _time.perf_counter()
             first_token = pipeline.prefill(
-                token_ids=chunk_tokens,
-                slot_id=slot_id_env,
+                prepare_prefill_input_tensor(
+                    chunk_tokens, pipeline.mesh_device, cfg.sp_factor, cfg.is_balanced, cfg.mesh_shape, cfg.sp_axis
+                ),
                 actual_isl=chunk_size,
+                slot_id=slot_id_env,
                 actual_start=chunk_start,
             )
             _dt_ms = (_time.perf_counter() - _t0) * 1000.0
@@ -526,10 +537,9 @@ def run_request_loop(
         # Time ONLY the prefill compute, not the h2d_socket_sync wait above.
         _t0 = _time.perf_counter()
         first_token = pipeline.prefill(
-            input_tensor=tt_tokens,
-            slot_id=slot_id,
+            tt_tokens,
             actual_isl=actual_isl,
-            dst_slot=None,
+            slot_id=slot_id,
             actual_start=actual_start,
         )
         _dt_ms = (_time.perf_counter() - _t0) * 1000.0

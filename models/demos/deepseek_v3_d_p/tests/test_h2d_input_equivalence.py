@@ -9,7 +9,7 @@ non-deterministic run-to-run (same input → different first tokens across
 processes). So instead we compare the *input tensor the model receives*, which
 is fully deterministic and is the only thing the socket touches:
 
-    reference = the device tensor TtDeepSeekPrefillPipeline._prepare_input_tensor
+    reference = the device tensor TtDeepSeekPrefillPipeline.prepare_input_tensor
                 would build for these token_ids (the non-socket path's input)
     delivered = the tensor h2d_socket_sync returns after the same token_ids are
                 pushed through the H2DStreamService (the socket path's input)
@@ -51,7 +51,7 @@ _INPUT_JSON = Path(__file__).parents[1] / "tt" / "runners" / "standalone_input.j
 
 
 def _reference_input_tensor(mesh_device, token_ids):
-    """Mirror TtDeepSeekPrefillPipeline._prepare_input_tensor (is_balanced path):
+    """Mirror TtDeepSeekPrefillPipeline.prepare_input_tensor (is_balanced path):
     balanced chunk reorder -> reshape (sp,1,isl) -> shard dim0 across sp."""
     sp_factor = GLOBAL_MESH_SHAPE[0]
     isl_per_chip = MAX_SEQ_LEN // sp_factor
