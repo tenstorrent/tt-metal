@@ -1449,31 +1449,41 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         for i in range(self.data_parallel):
             sampling_module = getattr(self.model[i], "sampling", None)
             sampling_trace_enabled = on_device_sampling and sampling_module is not None
-            trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
-            trace_ids[i] = trace_id
-            user_kv_cache = kv_cache[i] if kv_cache is not None else None
-            model_inputs = device_inputs[i][:4] if len(device_inputs[i]) > 4 else device_inputs[i]
-            # Models that produce extra device inputs beyond the first
-            # four (e.g. Gemma4's host-precomputed per-layer-input at
-            # index 4) feed them into ``ttnn_decode_forward`` via a
-            # model-side stash rather than through the call signature.
-            # Give the model a chance to bind that stash to the
-            # *trace-input* device tensors here, before the trace is
-            # captured — otherwise traced ops stay pointed at whatever
-            # device buffer the compile run produced, and trace replay
-            # reads stale data because ``copy_host_to_device`` only
-            # refreshes ``trace_inputs_decode``.
-            bind_trace_inputs = getattr(self.model[i], "bind_decode_trace_inputs", None)
-            if bind_trace_inputs is not None:
-                bind_trace_inputs(device_inputs[i])
-            tt_out_trace.append(
-                self.model[i].ttnn_decode_forward(
-                    *model_inputs,
-                    kv_cache=user_kv_cache,
-                    on_device_logits=on_device_sampling,
-                )
+            prefetcher = getattr(self.model[i], "prefetcher", None)
+            external_trace_prefetch = prefetcher is not None and getattr(
+                prefetcher, "requires_external_trace_run", False
             )
-            ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
+            if external_trace_prefetch:
+                prefetcher.skip_run_in_forward = True
+            trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
+            try:
+                trace_ids[i] = trace_id
+                user_kv_cache = kv_cache[i] if kv_cache is not None else None
+                model_inputs = device_inputs[i][:4] if len(device_inputs[i]) > 4 else device_inputs[i]
+                # Models that produce extra device inputs beyond the first
+                # four (e.g. Gemma4's host-precomputed per-layer-input at
+                # index 4) feed them into ``ttnn_decode_forward`` via a
+                # model-side stash rather than through the call signature.
+                # Give the model a chance to bind that stash to the
+                # *trace-input* device tensors here, before the trace is
+                # captured — otherwise traced ops stay pointed at whatever
+                # device buffer the compile run produced, and trace replay
+                # reads stale data because ``copy_host_to_device`` only
+                # refreshes ``trace_inputs_decode``.
+                bind_trace_inputs = getattr(self.model[i], "bind_decode_trace_inputs", None)
+                if bind_trace_inputs is not None:
+                    bind_trace_inputs(device_inputs[i])
+                tt_out_trace.append(
+                    self.model[i].ttnn_decode_forward(
+                        *model_inputs,
+                        kv_cache=user_kv_cache,
+                        on_device_logits=on_device_sampling,
+                    )
+                )
+                ttnn.end_trace_capture(self.model_args[i].mesh_device, trace_id, cq_id=0)
+            finally:
+                if external_trace_prefetch:
+                    prefetcher.skip_run_in_forward = False
 
             if sampling_trace_enabled:
                 # NOTE: sampling trace can be keyed depending on sampling params,
@@ -1554,6 +1564,9 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         if page_table_changed:
             self.prev_page_table = tuple(pt.clone() for pt in page_table)
         for i, trace_id in self.trace_ids_decode[on_device_sampling].items():
+            prefetcher = getattr(self.model[i], "prefetcher", None)
+            if prefetcher is not None and getattr(prefetcher, "requires_external_trace_run", False):
+                prefetcher.run()
             ttnn.execute_trace(self.model_args[i].mesh_device, trace_id, cq_id=0, blocking=False)
         return self.trace_output_decode[on_device_sampling]
 
@@ -2810,11 +2823,21 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 page_table = torch.cat([page_table, padding], dim=1)
             return page_table[:, :num_blocks]
 
-    ## Destructor
+    def close(self):
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
 
-    def __del__(self):
-        # Release all captured traces to prevent nanobind memory leaks
-        # Traces must be released before closing the mesh device
+        try:
+            for model in getattr(self, "model", []):
+                prefetcher = getattr(model, "prefetcher", None)
+                if prefetcher is not None:
+                    prefetcher.teardown()
+        except Exception:
+            pass
+
+        # Release all captured traces to prevent nanobind memory leaks.
+        # Traces must be released before closing the mesh device.
         try:
             # Release prefill traces
             if hasattr(self, "trace_id_prefill"):
@@ -2863,6 +2886,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                             pass  # Ignore errors during cleanup
         except Exception:
             pass  # Ignore any errors during trace cleanup
+
+    ## Destructor
+
+    def __del__(self):
+        self.close()
 
         # Workaround for issue #19052
         if self.data_parallel > 1:

@@ -1753,3 +1753,5 @@ def test_demo_text(
         assert (
             all_consistent
         ), f"Batch32 repeat batch outputs should be identical - {failed_checks} out of {total_checks} consistency checks failed"
+
+    generator.close()
