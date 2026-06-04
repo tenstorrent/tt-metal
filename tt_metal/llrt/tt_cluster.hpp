@@ -363,6 +363,11 @@ public:
 
     bool is_base_routing_fw_enabled() const;
 
+#ifdef TT_UMD_BUILD_SIMULATION
+    void register_sim_fabric_endpoint_direction(
+        ChipId chip_id, tt_fabric::chan_id_t eth_chan_id, tt_fabric::eth_chan_directions direction) const;
+#endif  // TT_UMD_BUILD_SIMULATION
+
     // Get all fabric ethernet cores
     std::set<tt_fabric::chan_id_t> get_fabric_ethernet_channels(
         const tt::tt_fabric::ControlPlane& control_plane, ChipId chip_id) const;

@@ -94,6 +94,11 @@ struct MeshReadEventDescriptor {
 
 struct MeshBufferReadDescriptor {
     std::unordered_map<IDevice*, uint32_t> num_reads_per_dev;
+    // Keeps host-buffer memory alive until the reader thread finishes the async memcpy.
+    // Without this, a caller that discards the returned Tensor before synchronize_device()
+    // would free the destination buffer while the NumaAwareExecutor thread is still copying
+    // into it (use-after-free / SIGSEGV in libumd read_from_sysmem). See issue #43638.
+    std::vector<MemoryPin> memory_pins;
 };
 
 struct MeshCoreDataReadDescriptor {
@@ -111,22 +116,26 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context) :
     MeshCommandQueueBase(mesh_device, id, dispatch_thread_pool, std::move(lock_api_function)),
     cq_shared_state_(cq_shared_state),
-    dispatch_core_type_(MetalContext::instance(mesh_device->impl().get_context_id())
-                            .get_dispatch_core_manager()
-                            .get_dispatch_core_type()),
+    dispatch_core_type_(
+        MetalContext::instance(mesh_device->impl().get_context_id())
+            .get_dispatch_core_manager()
+            .get_dispatch_core_type()),
     reader_thread_pool_(reader_thread_pool),
     prefetcher_dram_aligned_block_size_(
         MetalContext::instance(mesh_device->impl().get_context_id()).hal().get_alignment(HalMemType::DRAM)),
-    prefetcher_cache_sizeB_(MetalContext::instance(mesh_device->impl().get_context_id())
-                                .dispatch_mem_map(this->dispatch_core_type_)
-                                .ringbuffer_size()),
+    prefetcher_cache_sizeB_(
+        MetalContext::instance(mesh_device->impl().get_context_id())
+            .dispatch_mem_map(this->dispatch_core_type_)
+            .ringbuffer_size()),
     prefetcher_dram_aligned_num_blocks_(prefetcher_cache_sizeB_ / prefetcher_dram_aligned_block_size_),
     prefetcher_cache_manager_size_(
         1 << (std::bit_width(std::min(1024u, std::max(2u, prefetcher_dram_aligned_num_blocks_ >> 4))) - 1)),
-    prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
-        prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)),
-    dummy_prefetcher_cache_manager_(std::make_unique<RingbufferCacheManager>(
-        prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)),
+    prefetcher_cache_manager_(
+        std::make_unique<RingbufferCacheManager>(
+            prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)),
+    dummy_prefetcher_cache_manager_(
+        std::make_unique<RingbufferCacheManager>(
+            prefetcher_dram_aligned_block_size_, prefetcher_dram_aligned_num_blocks_, prefetcher_cache_manager_size_)),
     active_distributed_context_(std::move(distributed_context)) {
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal(),
@@ -256,8 +265,9 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
     }
 
     // Block after clearing counter(s) on dispatcher
-    completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
-        std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
+    completion_queue_reads_.push(
+        std::make_shared<MeshCompletionReaderVariant>(
+            std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
     this->increment_num_entries_in_completion_queue();
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
     reads_processed_cv_.wait(
@@ -317,9 +327,11 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         auto& trace_node = trace_nodes_.back();
         bool use_prefetcher_cache = mesh_workload.impl().max_program_kernels_sizeB_ <= this->prefetcher_cache_sizeB_;
         for (auto& [device_range, program] : mesh_workload.get_programs()) {
-            trace_node.trace_nodes.push_back(std::pair<MeshCoordinateRange, TraceNode>(
-                device_range,
-                program_dispatch::create_trace_node(program.impl(), mesh_device_, num_workers, use_prefetcher_cache)));
+            trace_node.trace_nodes.push_back(
+                std::pair<MeshCoordinateRange, TraceNode>(
+                    device_range,
+                    program_dispatch::create_trace_node(
+                        program.impl(), mesh_device_, num_workers, use_prefetcher_cache)));
         }
         trace_node.multicast_go_signals = mcast_go_signals;
         trace_node.unicast_go_signals = unicast_go_signals;
@@ -678,9 +690,10 @@ void FDMeshCommandQueue::increment_num_entries_in_completion_queue() {
 }
 
 void FDMeshCommandQueue::submit_memcpy_request(
-    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) {
-    completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
-        std::in_place_type<MeshBufferReadDescriptor>, std::move(num_txns_per_device)));
+    std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking, std::vector<MemoryPin> memory_pins) {
+    completion_queue_reads_.push(
+        std::make_shared<MeshCompletionReaderVariant>(
+            std::in_place_type<MeshBufferReadDescriptor>, std::move(num_txns_per_device), std::move(memory_pins)));
 
     this->increment_num_entries_in_completion_queue();
 
@@ -694,8 +707,9 @@ void FDMeshCommandQueue::submit_core_data_memcpy_request(
     const MeshCoordinate& device_coord,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
-        std::in_place_type<MeshCoreDataReadDescriptor>, read_descriptor, device_coord));
+    completion_queue_reads_.push(
+        std::make_shared<MeshCompletionReaderVariant>(
+            std::in_place_type<MeshCoreDataReadDescriptor>, read_descriptor, device_coord));
     this->increment_num_entries_in_completion_queue();
 
     if (blocking) {
@@ -761,8 +775,9 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event(
 MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host_nolock(
     tt::stl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
     auto event = this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/true, device_range);
-    completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
-        std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
+    completion_queue_reads_.push(
+        std::make_shared<MeshCompletionReaderVariant>(
+            std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
     this->increment_num_entries_in_completion_queue();
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {

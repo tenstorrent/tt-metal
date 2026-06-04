@@ -437,8 +437,9 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
         // Names use "ns.field" convention — split on '.' to produce namespace hierarchy.
         auto validate_identifier = [](const std::string& id, const std::string& context) {
             TT_FATAL(
-                !id.empty() && (std::isalpha(id[0]) || id[0] == '_') &&
-                    std::all_of(id.begin(), id.end(), [](char c) { return std::isalnum(c) || c == '_'; }),
+                !id.empty() && (std::isalpha((unsigned char)id[0]) || id[0] == '_') &&
+                    std::all_of(
+                        id.begin(), id.end(), [](char c) { return std::isalnum((unsigned char)c) || c == '_'; }),
                 "Named arg {}: '{}' is not a valid C++ identifier",
                 context,
                 id);
@@ -604,6 +605,41 @@ void ProgramImpl::register_kernel_spec_name(const KernelSpecName& name, KernelHa
     }
     auto [it, inserted] = metal2_registry_->kernel_handles.try_emplace(name, handle);
     TT_FATAL(inserted, "Duplicate kernel spec name: {}", name);
+}
+
+void ProgramImpl::set_dfb_alias(uint32_t primary_id, uint32_t secondary_id) {
+    TT_FATAL(
+        primary_id < dataflow_buffers_.size(),
+        "set_dfb_alias: primary DFB id {} has not been created yet (only {} DFBs exist). "
+        "Both DFBs must be created via add_dataflow_buffer before aliasing.",
+        primary_id,
+        dataflow_buffers_.size());
+    TT_FATAL(
+        secondary_id < dataflow_buffers_.size(),
+        "set_dfb_alias: secondary DFB id {} has not been created yet (only {} DFBs exist). "
+        "Both DFBs must be created via add_dataflow_buffer before aliasing.",
+        secondary_id,
+        dataflow_buffers_.size());
+    TT_FATAL(
+        primary_id != secondary_id,
+        "set_dfb_alias: cannot alias a DFB with itself. Primary and secondary DFB IDs must be different");
+
+    auto& primary_dfb = dataflow_buffers_[primary_id];
+    auto& secondary_dfb = dataflow_buffers_[secondary_id];
+
+    TT_FATAL(
+        !primary_dfb->alias_primary_id.has_value(),
+        "set_dfb_alias: primary DFB id {} is already a secondary of DFB id {}. Alias chains are not allowed.",
+        primary_id,
+        primary_dfb->alias_primary_id.value());
+    TT_FATAL(
+        !secondary_dfb->alias_primary_id.has_value(),
+        "set_dfb_alias: secondary DFB id {} is already aliased to primary DFB id {}.",
+        secondary_id,
+        secondary_dfb->alias_primary_id.value());
+
+    dataflow_buffers_[primary_id]->alias_secondary_ids.push_back(secondary_id);
+    dataflow_buffers_[secondary_id]->alias_primary_id = primary_id;
 }
 
 void ProgramImpl::register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_id) {
@@ -1082,14 +1118,15 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                     kb->get_kernel_processor_type(0));
                 return idx_a < idx_b;
             });
-            kernel_groups_[programmable_core_type_index].push_back(std::make_shared<KernelGroup>(
-                *this,
-                programmable_core_type_index,
-                std::move(kernel_ids),
-                local_cb_mask,
-                min_remote_cb_start_index,
-                cores,
-                hal.get_dev_msgs_factory(hal.get_programmable_core_type(programmable_core_type_index))));
+            kernel_groups_[programmable_core_type_index].push_back(
+                std::make_shared<KernelGroup>(
+                    *this,
+                    programmable_core_type_index,
+                    std::move(kernel_ids),
+                    local_cb_mask,
+                    min_remote_cb_start_index,
+                    cores,
+                    hal.get_dev_msgs_factory(hal.get_programmable_core_type(programmable_core_type_index))));
             index++;
         }
         for (const auto& kg : kernel_groups_[programmable_core_type_index]) {
@@ -2225,8 +2262,9 @@ uint32_t detail::ProgramImpl::get_cb_size(IDevice* device, CoreCoord logical_cor
 bool detail::ProgramImpl::runs_on_noc_unicast_only_cores() {
     return (
         MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1 and
-        not this->get_kernel_groups(MetalContext::instance().hal().get_programmable_core_type_index(
-                                        HalProgrammableCoreType::ACTIVE_ETH))
+        not this->get_kernel_groups(
+                    MetalContext::instance().hal().get_programmable_core_type_index(
+                        HalProgrammableCoreType::ACTIVE_ETH))
                 .empty());
 }
 
@@ -2351,11 +2389,12 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
         return this->get_kernels(index);
     };
 
-    detail::KernelGroupsGetter kernel_groups_getter = [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& {
-        return this->get_kernel_groups(index);
-    };
+    detail::KernelGroupsGetter kernel_groups_getter =
+        [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& { return this->get_kernel_groups(index); };
 
-    detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
+    detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& {
+        return this->semaphores();
+    };
 
     // Create a span with just this program
     std::array<ProgramImpl*, 1> programs_array = {this};
@@ -2406,12 +2445,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         state.offset = tt::tt_metal::experimental::dfb::detail::finalize_dfbs(
-            index,
-            kernel_groups_getter(index),
-            dataflow_buffers,
-            state.offset,
-            state.dfb_offset,
-            state.dfb_size);
+            index, kernel_groups_getter(index), dataflow_buffers, state.offset, state.dfb_offset, state.dfb_size);
 
         // On WH/BH, DFBs reuse the CB firmware init path; set local_cb_mask to a proper DFB
         // slot bitmask so setup_local_cb_read_write_interfaces initialises every DFB slot.

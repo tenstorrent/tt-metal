@@ -187,6 +187,12 @@ public:
     void process_named_ct_arg_namespaces(std::function<void(const NamedCTArgNamespaces&)>) const override;
     void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
+    // Named runtime arg namespace support (ProgramDescriptor path).
+    void set_named_runtime_arg_namespaces(const NamedRuntimeArgNamespaces& ns) { named_runtime_arg_namespaces_ = ns; }
+    void set_named_ct_arg_namespaces(const NamedCTArgNamespaces& ns) { named_ct_arg_namespaces_ = ns; }
+    void process_named_runtime_args(std::function<void(const NamedRuntimeArgNamespaces&)> fn) const override;
+    void process_named_ct_arg_namespaces(std::function<void(const NamedCTArgNamespaces&)> fn) const override;
+
     void validate_runtime_args_size(
         size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) const;
     void set_runtime_args(const CoreCoord& logical_core, stl::Span<const uint32_t> runtime_args);
@@ -277,7 +283,10 @@ protected:
     RuntimeArgsData common_runtime_args_data_{};
     std::set<CoreCoord> core_with_runtime_args_;
     std::size_t max_runtime_args_per_core_{0};  // For validation
-    CoreCoord core_with_max_runtime_args_;   // For validation
+    CoreCoord core_with_max_runtime_args_;      // For validation
+    // Named arg namespace maps, populated from ProgramDescriptor path.
+    NamedRuntimeArgNamespaces named_runtime_arg_namespaces_;
+    NamedCTArgNamespaces named_ct_arg_namespaces_;
     std::map<std::string, std::string>
         defines_;  // preprocessor defines. this is to be able to generate generic instances.
     const bool watcher_assert_enabled_;

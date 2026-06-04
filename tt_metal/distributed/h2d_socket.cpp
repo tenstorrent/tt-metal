@@ -516,4 +516,29 @@ std::unique_ptr<H2DSocket> H2DSocket::connect(const std::string& socket_id, std:
     return socket;
 }
 
+bool H2DSocket::has_space(std::optional<uint32_t> num_bytes_to_check) {
+    TT_FATAL(page_size_ > 0, "Page size must be set before checking for data.");
+    uint32_t num_bytes = num_bytes_to_check.value_or(page_size_);
+    uint32_t bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_);
+    if (bytes_free >= num_bytes) {
+        return true;
+    }
+    tt_driver_atomics::mfence();
+    volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
+    bytes_free = fifo_size_ - (bytes_sent_ - bytes_acked_value);
+    bytes_acked_ = bytes_acked_value;
+    return bytes_free >= num_bytes;
+}
+
+bool H2DSocket::acked_past(uint32_t watermark) {
+    uint32_t bytes_since_watermark = bytes_sent_ - watermark;
+    if (bytes_sent_ - bytes_acked_ <= bytes_since_watermark) {
+        return true;
+    }
+    tt_driver_atomics::mfence();
+    volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
+    bytes_acked_ = bytes_acked_value;
+    return bytes_sent_ - bytes_acked_ <= bytes_since_watermark;
+}
+
 }  // namespace tt::tt_metal::distributed

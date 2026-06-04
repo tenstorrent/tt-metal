@@ -49,7 +49,9 @@ void DummyMeshCommandQueue::read_shard_from_device(
 }
 
 void DummyMeshCommandQueue::submit_memcpy_request(
-    std::unordered_map<IDevice*, uint32_t>& /*num_txns_per_device*/, bool /*blocking*/) {
+    std::unordered_map<IDevice*, uint32_t>& /*num_txns_per_device*/,
+    bool /*blocking*/,
+    std::vector<MemoryPin> /*memory_pins*/) {
     // No-op for inactive rank
 }
 

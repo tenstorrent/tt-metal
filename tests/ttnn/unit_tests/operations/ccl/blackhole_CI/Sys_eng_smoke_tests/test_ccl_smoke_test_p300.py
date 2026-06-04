@@ -2,18 +2,26 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import ttnn
+import os
 
+import pytest
+
+import ttnn
+from models.common.utility_functions import run_for_n_dev, skip_for_wormhole_b0
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
-from models.common.utility_functions import skip_for_wormhole_b0, run_for_n_dev
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
+
+# P300 sim exposes one active eth link after harvest; silicon uses both links.
+_P300_NUM_LINKS = [1] if os.environ.get("TT_METAL_SIMULATOR") else [2]
+# Multichip all-gather on ttsim is slow (~13+ min for the DDR smoke shape).
+_P300_SMOKE_TIMEOUT_S = 3600 if os.environ.get("TT_METAL_SIMULATOR") else 300
 
 
 # Test utilizes/transfers up to 3.93GB of space per device to nearly fill the dram
 @skip_for_wormhole_b0()
 @run_for_n_dev(2)
-@pytest.mark.parametrize("num_links", [2])  # Check over all four links
+@pytest.mark.timeout(_P300_SMOKE_TIMEOUT_S, method="thread")
+@pytest.mark.parametrize("num_links", _P300_NUM_LINKS)
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology",
     [
@@ -85,7 +93,7 @@ def test_ccl_ddr_smoke_test(
     num_buffers_per_channel,
 ):
     validate_test(num_devices, all_gather_topology, bh_1d_mesh_device.shape, cluster_axis)
-    # Check all the rows and columns independantly within the device
+    # Check all the rows and columns independently within the device
     submesh_device = bh_1d_mesh_device.create_submesh(
         ttnn.MeshShape((num_devices, 1)), offset=ttnn.MeshCoordinate(0, 0)
     )
@@ -117,7 +125,8 @@ def test_ccl_ddr_smoke_test(
 
 @run_for_n_dev(2)
 @skip_for_wormhole_b0()
-@pytest.mark.parametrize("num_links", [2])
+@pytest.mark.timeout(_P300_SMOKE_TIMEOUT_S, method="thread")
+@pytest.mark.parametrize("num_links", _P300_NUM_LINKS)
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, all_gather_topology",
     [

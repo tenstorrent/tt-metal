@@ -116,17 +116,18 @@ void send_reset_go_signal(tt::ChipId chip, const CoreCoord& virtual_core) {
     tt_metal::HalProgrammableCoreType dispatch_core_type = get_core_type(chip, virtual_core);
     const auto& hal = tt_metal::MetalContext::instance().hal();
     const auto& cluster = tt_metal::MetalContext::instance().get_cluster();
-    uint64_t go_signal_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
+    std::uint64_t go_signal_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
     auto reset_msg = hal.get_dev_msgs_factory(dispatch_core_type).create<tt_metal::dev_msgs::go_msg_t>();
 
     reset_msg.view().signal() = tt_metal::dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST;
     cluster.write_core_immediate(
         reset_msg.data(), reset_msg.size(), {static_cast<size_t>(chip), virtual_core}, go_signal_addr);
     cluster.l1_barrier(chip);
-    uint64_t go_message_index_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX);
-    uint32_t zero = 0;
+    std::uint64_t go_message_index_addr =
+        hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX);
+    std::uint32_t zero = 0;
     cluster.write_core_immediate(
-        &zero, sizeof(uint32_t), {static_cast<size_t>(chip), virtual_core}, go_message_index_addr);
+        &zero, sizeof(std::uint32_t), {static_cast<size_t>(chip), virtual_core}, go_message_index_addr);
 }
 
 void write_launch_msg_to_core(
@@ -141,8 +142,8 @@ void write_launch_msg_to_core(
 
     msg.kernel_config().mode() = tt_metal::dev_msgs::DISPATCH_MODE_HOST;
 
-    uint64_t launch_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::LAUNCH);
-    uint64_t go_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
+    std::uint64_t launch_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::LAUNCH);
+    std::uint64_t go_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
 
     cluster.write_core_immediate(msg.data(), msg.size(), {static_cast<size_t>(chip), core}, launch_addr);
     tt_driver_atomics::sfence();
@@ -152,13 +153,15 @@ void write_launch_msg_to_core(
 }
 
 ll_api::memory read_mem_from_core(
-    tt::ChipId chip, const CoreCoord& core, const ll_api::memory& mem, uint64_t local_init_addr) {
+    tt::ChipId chip, const CoreCoord& core, const ll_api::memory& mem, std::uint64_t local_init_addr) {
     ll_api::memory read_mem;
-    read_mem.fill_from_mem_template(mem, [&](std::vector<uint32_t>::iterator mem_ptr, uint64_t addr, uint32_t len) {
-        uint64_t relo_addr = tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr);
-        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            &*mem_ptr, len * sizeof(uint32_t), tt_cxy_pair(chip, core), relo_addr);
-    });
+    read_mem.fill_from_mem_template(
+        mem, [&](std::vector<std::uint32_t>::iterator mem_ptr, std::uint64_t addr, std::uint32_t len) {
+            std::uint64_t relo_addr =
+                tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr);
+            tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                &*mem_ptr, len * sizeof(std::uint32_t), tt_cxy_pair(chip, core), relo_addr);
+        });
     return read_mem;
 }
 
@@ -166,9 +169,9 @@ bool test_load_write_read_risc_binary(
     const ll_api::memory& mem,
     tt::ChipId chip_id,
     const CoreCoord& core,
-    uint32_t core_type_idx,
-    uint32_t processor_class_idx,
-    uint32_t processor_type_idx) {
+    std::uint32_t core_type_idx,
+    std::uint32_t processor_class_idx,
+    std::uint32_t processor_type_idx) {
     TT_ASSERT(
         tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(core, chip_id) or
         tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_core(core, chip_id) or
@@ -176,23 +179,25 @@ bool test_load_write_read_risc_binary(
 
     const auto& jit_build_config = tt::tt_metal::MetalContext::instance().hal().get_jit_build_config(
         core_type_idx, processor_class_idx, processor_type_idx);
-    uint64_t local_init_addr = jit_build_config.local_init_addr;
-    uint64_t l1_noc_offset = jit_build_config.l1_noc_offset;
+    std::uint64_t local_init_addr = jit_build_config.local_init_addr;
+    std::uint64_t l1_noc_offset = jit_build_config.l1_noc_offset;
 
     auto core_type = get_core_type(chip_id, core);
     // Depending on the arch, active ethernet may be shared local memory with the base firmware
     // Primary risc is shared
     // TODO: Move this query into the HAL
     bool local_mem_offset = processor_type_idx == 0 && core_type == tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
-    log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
-    mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
-        uint64_t relo_addr =
-            tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr, local_mem_offset);
-        relo_addr += l1_noc_offset;
+    log_debug(
+        tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(std::uint32_t));
+    mem.process_spans(
+        [&](std::vector<std::uint32_t>::const_iterator mem_ptr, std::uint64_t addr, std::uint32_t len_words) {
+            std::uint64_t relo_addr =
+                tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr, local_mem_offset);
+            relo_addr += l1_noc_offset;
 
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-            &*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), relo_addr);
-    });
+            tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                &*mem_ptr, len_words * sizeof(std::uint32_t), tt_cxy_pair(chip_id, core), relo_addr);
+        });
 
     log_debug(tt::LogLLRuntime, "wrote hex to core {}", core.str().c_str());
 
@@ -211,26 +216,28 @@ bool test_load_multicast_write_risc_binary(
     tt::ChipId chip_id,
     const CoreCoord& start_core,
     const CoreCoord& end_core,
-    uint32_t core_type_idx,
-    uint32_t processor_class_idx,
-    uint32_t processor_type_idx) {
+    std::uint32_t core_type_idx,
+    std::uint32_t processor_class_idx,
+    std::uint32_t processor_type_idx) {
     TT_ASSERT(
         tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(start_core, chip_id) and
         tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(end_core, chip_id));
 
-    uint64_t local_init_addr = tt::tt_metal::MetalContext::instance()
-                                   .hal()
-                                   .get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx)
-                                   .local_init_addr;
+    std::uint64_t local_init_addr = tt::tt_metal::MetalContext::instance()
+                                        .hal()
+                                        .get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx)
+                                        .local_init_addr;
 
-    log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
-    mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
-        uint64_t relo_addr =
-            tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr, false);
+    log_debug(
+        tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(std::uint32_t));
+    mem.process_spans(
+        [&](std::vector<std::uint32_t>::const_iterator mem_ptr, std::uint64_t addr, std::uint32_t len_words) {
+            std::uint64_t relo_addr =
+                tt::tt_metal::MetalContext::instance().hal().relocate_dev_addr(addr, local_init_addr, false);
 
-        tt::tt_metal::MetalContext::instance().get_cluster().noc_multicast_write(
-            &*mem_ptr, len_words * sizeof(uint32_t), chip_id, start_core, end_core, relo_addr);
-    });
+            tt::tt_metal::MetalContext::instance().get_cluster().noc_multicast_write(
+                &*mem_ptr, len_words * sizeof(std::uint32_t), chip_id, start_core, end_core, relo_addr);
+        });
 
     log_debug(tt::LogLLRuntime, "multicast hex to cores {} - {}", start_core.str().c_str(), end_core.str().c_str());
 
@@ -241,12 +248,14 @@ bool test_load_multicast_write_risc_binary(
     return true;
 }
 
-void write_binary_to_address(const ll_api::memory& mem, tt::ChipId chip_id, const CoreCoord& core, uint32_t address) {
-    log_debug(tt::LogLLRuntime, "vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(uint32_t));
-    mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t /*addr*/, uint32_t len_words) {
-        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-            &*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), address);
-    });
+void write_binary_to_address(
+    const ll_api::memory& mem, tt::ChipId chip_id, const CoreCoord& core, std::uint32_t address) {
+    log_debug(tt::LogLLRuntime, "vec size = {}, size_in_bytes = {}", mem.size(), mem.size() * sizeof(std::uint32_t));
+    mem.process_spans(
+        [&](std::vector<std::uint32_t>::const_iterator mem_ptr, std::uint64_t /*addr*/, std::uint32_t len_words) {
+            tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                &*mem_ptr, len_words * sizeof(std::uint32_t), tt_cxy_pair(chip_id, core), address);
+        });
 }
 
 namespace internal_ {
@@ -258,13 +267,13 @@ bool check_if_riscs_on_specified_core_done(tt::ChipId chip_id, const CoreCoord& 
     const auto& hal = tt_metal::MetalContext::instance().hal();
     auto dev_msgs_factory = hal.get_dev_msgs_factory(dispatch_core_type);
 
-    uint64_t go_msg_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
+    std::uint64_t go_msg_addr = hal.get_dev_noc_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
 
-    auto get_mailbox_is_done = [&](uint64_t go_msg_addr) {
+    auto get_mailbox_is_done = [&](std::uint64_t go_msg_addr) {
         auto core_status = dev_msgs_factory.create<tt_metal::dev_msgs::go_msg_t>();
         tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             core_status.data(), core_status.size(), {static_cast<size_t>(chip_id), core}, go_msg_addr & ~0x3);
-        uint8_t run = core_status.view().signal();
+        std::uint8_t run = core_status.view().signal();
         if (run != run_state && run != tt_metal::dev_msgs::RUN_MSG_DONE) {
             fprintf(
                 stderr,
@@ -403,6 +412,11 @@ void wait_until_cores_done(
         }
         loop_count++;
 
+        // Pump the simulator clock while polling so multichip fabric/CCL ops make progress on all chips.
+        if (is_simulator) {
+            tt::tt_metal::MetalContext::instance().get_cluster().advance_device_execution(device_id);
+        }
+
         // Continuously polling cores here can cause other host-driven noc transactions (dprint, watcher) to drastically
         // slow down for remote devices. So when debugging with these features, add a small delay to allow other
         // host-driven transactions through.
@@ -416,7 +430,7 @@ void wait_for_idle(ChipId device_id, const std::vector<std::vector<CoreCoord>>& 
     std::unordered_set<CoreCoord> not_done_cores;
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+    for (std::uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
         const auto& logical_cores_of_type = logical_cores[index];
         for (const auto& logical_core : logical_cores_of_type) {
@@ -433,7 +447,7 @@ void send_msg_to_eth_mailbox(
     const CoreCoord& virtual_core,
     tt_metal::FWMailboxMsg msg_type,
     int mailbox_index,
-    std::vector<uint32_t> args,
+    std::vector<std::uint32_t> args,
     bool wait_for_ack,
     int timeout_ms) {
     constexpr auto k_sleep_time = std::chrono::nanoseconds{5};
@@ -484,13 +498,13 @@ void send_msg_to_eth_mailbox(
     // Must write args first.
     // Pad remaining args to zero
     args.resize(max_args, 0);
-    uint32_t first_arg_addr = hal.get_eth_fw_mailbox_arg_addr(mailbox_index, 0);
+    std::uint32_t first_arg_addr = hal.get_eth_fw_mailbox_arg_addr(mailbox_index, 0);
     tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
         args.data(), tt_cxy_pair(device_id, virtual_core), first_arg_addr);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
 
     const auto msg_val = hal.get_eth_fw_mailbox_val(msg_type);
-    const uint32_t msg = call | msg_val;
+    const std::uint32_t msg = call | msg_val;
     log_debug(
         tt::LogLLRuntime,
         "Device {}: Eth {} Mailbox {:#x} Command {:#x}, {}",
@@ -500,14 +514,14 @@ void send_msg_to_eth_mailbox(
         msg,
         fmt::join(args, ", "));
     tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
-        std::vector<uint32_t>{msg}.data(), tt_cxy_pair(device_id, virtual_core), mailbox_addr);
+        std::vector<std::uint32_t>{msg}.data(), tt_cxy_pair(device_id, virtual_core), mailbox_addr);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
 
     // Wait for ack
     if (wait_for_ack) {
         const auto start_time = std::chrono::steady_clock::now();
         do {
-            uint32_t mailbox_val = 0;
+            std::uint32_t mailbox_val = 0;
             tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&mailbox_val, target, mailbox_addr);
             msg_status = mailbox_val & status_mask;
             const auto timenow = std::chrono::steady_clock::now();
@@ -538,13 +552,13 @@ void return_to_base_firmware_and_wait_for_heartbeat(
     tt_cxy_pair target{static_cast<size_t>(device_id), virtual_core};
     const auto heartbeat_addr = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::HEARTBEAT);
 
-    uint32_t heartbeat_val = 0;
+    std::uint32_t heartbeat_val = 0;
     tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&heartbeat_val, target, heartbeat_addr);
 
     constexpr auto k_sleep_time = std::chrono::nanoseconds{5};
     std::this_thread::sleep_for(k_sleep_time);
 
-    uint32_t previous_heartbeat_val = 0;
+    std::uint32_t previous_heartbeat_val = 0;
     tt::tt_metal::MetalContext::instance().get_cluster().read_reg(&previous_heartbeat_val, target, heartbeat_addr);
 
     const auto start = std::chrono::steady_clock::now();
@@ -582,7 +596,7 @@ void set_metal_eth_fw_run_flag(tt::ChipId device_id, const CoreCoord& virtual_co
         mailbox_addr + hal.get_dev_msgs_factory(k_CoreType)
                            .offset_of<tt::tt_metal::dev_msgs::mailboxes_t>(
                                tt::tt_metal::dev_msgs::mailboxes_t::Field::aerisc_run_flag);
-    std::vector<uint32_t> en = {enable};
+    std::vector<std::uint32_t> en = {enable};
     tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
         en.data(), tt_cxy_pair(device_id, virtual_core), run_flag_addr);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);

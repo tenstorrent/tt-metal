@@ -19,6 +19,7 @@
 #include <llrt/tt_cluster.hpp>
 #include <llrt/llrt.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#include <cstdint>
 
 namespace {
 
@@ -46,7 +47,7 @@ namespace tt::tt_metal::distributed {
 
 SDMeshCommandQueue::SDMeshCommandQueue(
     MeshDevice* mesh_device,
-    uint32_t id,
+    std::uint32_t id,
     std::function<std::lock_guard<std::mutex>()> lock_api_function,
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context) :
     MeshCommandQueueBase(
@@ -95,8 +96,8 @@ bool SDMeshCommandQueue::write_shard_to_device(
         return false;
     }
 
-    auto payload =
-        tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size);
+    auto payload = tt::stl::Span<const std::uint8_t>(
+        static_cast<const std::uint8_t*>(src) + region_value.offset, region_value.size);
     if (logical_core_filter != nullptr) {
         tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
     } else {
@@ -111,7 +112,7 @@ void SDMeshCommandQueue::read_shard_from_device(
     void* dst,
     std::shared_ptr<experimental::PinnedMemory> /* pinned_memory */,
     const std::optional<BufferRegion>& region,
-    std::unordered_map<IDevice*, uint32_t>&,
+    std::unordered_map<IDevice*, std::uint32_t>&,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     if (!mesh_device_->impl().is_local(device_coord)) {
         return;
@@ -129,12 +130,15 @@ void SDMeshCommandQueue::read_shard_from_device(
         return;
     }
 
-    tt::tt_metal::detail::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
+    tt::tt_metal::detail::ReadFromBuffer(*shard_view, static_cast<std::uint8_t*>(dst));
 }
 
-void SDMeshCommandQueue::submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>&, bool) {}
+void SDMeshCommandQueue::submit_memcpy_request(
+    std::unordered_map<IDevice*, std::uint32_t>& /*num_txns_per_device*/,
+    bool /*blocking*/,
+    std::vector<MemoryPin> /*memory_pins*/) {}
 
-WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t /*index*/) {
+WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(std::uint32_t /*index*/) {
     TT_THROW("Not supported for slow dispatch");
 }
 
@@ -220,7 +224,7 @@ void SDMeshCommandQueue::dispatch_program(const MeshCoordinateRange& coord_range
                     // program
                     const auto& hal = tt::tt_metal::MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
                     auto program_cores = program.impl().logical_cores();
-                    for (uint32_t core_type_index = 0; core_type_index < hal.get_programmable_core_type_count();
+                    for (std::uint32_t core_type_index = 0; core_type_index < hal.get_programmable_core_type_count();
                          core_type_index++) {
                         auto& active_cores = logical_cores_for_previous_workload_[device->id()][core_type_index];
                         auto curr_active_cores = program_cores[core_type_index];
@@ -318,7 +322,10 @@ void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {
 void SDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId>) {}
 
 void SDMeshCommandQueue::reset_worker_state(
-    bool, uint32_t, const vector_aligned<uint32_t>&, const std::vector<std::pair<CoreRangeSet, uint32_t>>&) {}
+    bool,
+    std::uint32_t,
+    const vector_aligned<std::uint32_t>&,
+    const std::vector<std::pair<CoreRangeSet, std::uint32_t>>&) {}
 
 void SDMeshCommandQueue::record_begin(const MeshTraceId&, const std::shared_ptr<MeshTraceDescriptor>&) {
     TT_THROW("Not supported for slow dispatch");
