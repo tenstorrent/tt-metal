@@ -37,8 +37,7 @@ inline void _llk_pack_mop_config_(const std::uint8_t buf_desc_id, const std::uin
     std::uint32_t incr_to_next_face;
     if (tensor_shape.total_num_faces() < NUM_FACES && tensor_shape.face_r_dim < (FACE_R_DIM >> 1)) // Using sparse tiling: jump to the next index w/ tile
     {
-        incr_to_next_face = TT_OP_INC_SRC_TILE_FACE_ROW_IDX(
-            p_set_inc_sel::TILE_SEL, p_pacr::PACK0, (FACE_R_DIM >> (ckernel::math::math_rows_log2(tensor_shape.face_r_dim) + 1)));
+        incr_to_next_face = TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, (FACE_R_DIM >> (rows_log2(tensor_shape.face_r_dim) + 1)));
     }
     else // Using dense tiling: just increment to the next tile
     {
@@ -105,7 +104,7 @@ inline void _llk_pack_(const std::uint32_t start_math_dest_tile_idx, const std::
             TT_SET_SRC_TILE_FACE_ROW_IDX(
                 p_set_inc_sel::TILE_SEL,
                 p_pacr::PACK0,
-                start_math_dest_tile_idx * tensor_shape.total_num_faces() * (FACE_R_DIM >> (ckernel::math::math_rows_log2(tensor_shape.face_r_dim) + 1)));
+                start_math_dest_tile_idx * tensor_shape.total_num_faces() * (FACE_R_DIM >> (rows_log2(tensor_shape.face_r_dim) + 1)));
         }
         else
         {

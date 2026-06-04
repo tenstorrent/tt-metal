@@ -82,29 +82,6 @@ enum class DataFormatConfigSet : std::uint8_t
 // }
 
 /**
- * @brief Helper function to calculate log2 for FPU rows
- * since FPU rows are <=16, and are power of 2, can use
- * simplified higher perf method
- * @param val: Input value to log2 operation
- */
-inline std::uint32_t math_rows_log2(const std::uint32_t math_rows)
-{
-    switch (math_rows)
-    {
-        case 16:
-            return 4;
-        case 8:
-            return 3;
-        case 4:
-            return 2;
-        case 2:
-            return 1;
-        default:
-            return 0;
-    }
-}
-
-/**
  * @brief Increments given counters
  * @tparam: SRCA_INCR: SrcA increment values = 0 - 15
  * @tparam: SRCB_INCR: SrcA increment values = 0 - 15
