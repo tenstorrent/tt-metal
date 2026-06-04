@@ -383,13 +383,16 @@ def run_bge_demo_inference(device, inputs, model_name, sequence_length, model_lo
     encoded_input = model_args.encode_prompts(inputs)
     input_ids = encoded_input["input_ids"]
     attention_mask = encoded_input["attention_mask"]
+    # 2D padding mask for the HF reference + pooling; the 4D mask above is the
+    # additive encoder mask consumed by the TT model.
+    pad_mask = encoded_input.get("tokenizer_attention_mask", input_ids.ne(int(model_args.pad_token_id)).long())
     token_type_ids = encoded_input.get("token_type_ids", torch.zeros_like(input_ids))
     seq_len = input_ids.shape[1]
 
     reference_hidden_states = _load_reference_hidden_states(
         resolved_model_name,
         input_ids=input_ids,
-        attention_mask=attention_mask,
+        attention_mask=pad_mask,
         token_type_ids=token_type_ids,
     )
 
@@ -406,7 +409,7 @@ def run_bge_demo_inference(device, inputs, model_name, sequence_length, model_lo
     return _log_embedding_comparison(
         reference_hidden_states,
         tt_hidden_states,
-        attention_mask,
+        pad_mask,
         pool_fn=_mean_pool,
         path_name="create_tt_model",
     )
@@ -429,21 +432,23 @@ def run_bge_vllm_demo(device, inputs, model_name, sequence_length, model_locatio
 
     encoded_input = model_args.encode_prompts(inputs)
     input_ids = encoded_input["input_ids"]
-    attention_mask = encoded_input["attention_mask"]
+    # 2D padding mask: the HF reference, _mean_pool, and the vLLM generator
+    # (which builds its own internal additive mask) all expect [B, S], not the
+    # 4D additive encoder mask that encode_prompts returns by default.
+    pad_mask = encoded_input.get("tokenizer_attention_mask", input_ids.ne(int(model_args.pad_token_id)).long())
     token_type_ids = encoded_input.get("token_type_ids", torch.zeros_like(input_ids))
-    seq_len = input_ids.shape[1]
 
     reference_hidden_states = _load_reference_hidden_states(
         resolved_model_name,
         input_ids=input_ids,
-        attention_mask=attention_mask,
+        attention_mask=pad_mask,
         token_type_ids=token_type_ids,
     )
-    reference_sentence_embeddings = _mean_pool(reference_hidden_states, attention_mask)
+    reference_sentence_embeddings = _mean_pool(reference_hidden_states, pad_mask)
 
     outputs = generator_model.forward(
         input_ids=input_ids,
-        attention_mask=attention_mask,
+        attention_mask=pad_mask,
         token_type_ids=token_type_ids,
         position_ids=None,
     )
