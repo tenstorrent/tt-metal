@@ -377,7 +377,10 @@ struct CBConfig {
     bool is_post_all_gather = false;
     bool skip_write_back = false;
     // Legacy column masking for non-tile-aligned widths (zero the final width tile's padding cols).
+    // Gates CB 19 (host-built mask) for both LayerNorm and RMSNorm.
     bool do_col_mask = false;
+    // Gates CB 7 (writer two-tile mask) and CB 14 (E[x] scratch) for LayerNorm only.
+    bool do_legacy_layernorm_col_mask = false;
     // Controls the Welford-fp32 alias that allows UnpackToDestFp32 to be set on the
     // alias, while keeping the original CB descriptor with default value.
     bool welford_fp32_alias = false;

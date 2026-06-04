@@ -86,8 +86,10 @@ void kernel_main() {
         generate_bcast_col_scalar(CircularBuffer(eps_cb_id), eps);
 
 #ifdef DO_COL_MASK
-        // Two-tile column mask consumed by the compute kernel: tile 0 is all ones (full width tiles),
-        // tile 1 zeroes the padding columns of the final, partially-valid width tile.
+#ifndef RMSNORM
+        // Two-tile column mask consumed by LayerNorm compute (RMSNorm uses the host-built CB 19).
+        // Tile 0 is all ones (full width tiles); tile 1 zeroes the padding columns of the final,
+        // partially-valid width tile.
         constexpr uint32_t cb_col_mask = get_named_compile_time_arg_val("cb_col_mask");
         constexpr uint32_t last_tile_valid_w = get_named_compile_time_arg_val("last_tile_valid_w");
         const uint32_t col_mask_tile_bytes = get_tile_size(cb_col_mask);
@@ -96,6 +98,7 @@ void kernel_main() {
         generate_col_mask_tile(col_mask_addr, 32);
         generate_col_mask_tile(col_mask_addr + col_mask_tile_bytes, last_tile_valid_w);
         cb_push_back(cb_col_mask, 2);
+#endif
 #endif
 
         if constexpr (is_all_to_all_worker) {

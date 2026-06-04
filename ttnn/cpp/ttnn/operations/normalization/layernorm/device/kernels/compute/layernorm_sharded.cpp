@@ -85,17 +85,19 @@ void kernel_main() {
         get_named_compile_time_arg_val("cb_xmm");  // stream gamma/beta (alias of cb_xmm_id)
     constexpr uint32_t cb_out_id = get_named_compile_time_arg_val("cb_out");
 #ifdef DO_COL_MASK
+#ifndef RMSNORM
     // Column mask (2 tiles: all-ones, partial) and a scratch buffer holding masked tiles. Used to
-    // zero the padding columns of the final width tile before the E[x] and variance reductions so a
+    // zero the padding columns of the final width tile before the E[x] reduction so a
     // non-tile-aligned width normalizes over the logical element count, not the padded one.
     constexpr uint32_t cb_col_mask = get_named_compile_time_arg_val("cb_col_mask");
     constexpr uint32_t cb_mask_scratch = get_named_compile_time_arg_val("cb_mask_scratch");
+    CircularBuffer cb_mask_scratch_obj(cb_mask_scratch);
+#endif
     // Host-built full-width column mask (tilized by the framework into the compute data format),
     // bound directly to a CB. Used for the variance multiply, where compute-produced (x - E[x])
     // tiles need a mask in the matching faced/FP32 layout — the writer's bf16 mask only aligns with
-    // the host-tilized input at the E[x] site.
+    // the host-tilized input at the E[x] site. RMSNorm uses this mask for the mean-of-squares reduction.
     constexpr uint32_t cb_col_mask_packed = get_named_compile_time_arg_val("cb_col_mask_packed");
-    CircularBuffer cb_mask_scratch_obj(cb_mask_scratch);
 #endif
 
     CircularBuffer cb_scaler(cb_scaler_id);
