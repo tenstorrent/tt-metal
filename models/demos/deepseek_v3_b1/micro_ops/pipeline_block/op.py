@@ -391,16 +391,21 @@ class PipelineBlock:
     def _uses_plan(self) -> bool:
         """Route a stage through the unified plan-driven socket builder (:meth:`_init_from_plan`).
 
-        Covers split stages (any role) and non-split pure-forwarding stages. Non-split
-        stages that own host I/O (stage 0 / host egress) keep their dedicated init path
-        until the plan-driven builder learns rank-local host-socket placement; compute
-        stages and per-device parallel mode also keep their dedicated paths.
+        Covers every transport / host-I/O stage that has a resolved plan: split stages
+        (any role), non-split pure-forwarding stages, and non-split stages that own host
+        I/O — stage-0 embedding ingress and host-/fabric-loopback egress (the plan builder
+        does rank-local host-socket placement via ``host_io_placement``, so H2D/D2H kernels
+        no longer collide with their feeder forwarders).
+
+        Stages that still use their dedicated init paths:
+          - compute-tap stages (decoder / LM head): the plan does not yet model compute
+            input/output cores (``entry_node_downstream`` / ``exit_node_upstream``);
+          - per-device parallel mode;
+          - the no-plan fallback, when ``_stage_plan is None``.
         """
         if self._stage_plan is None or self.parallel_devices or self._has_compute_taps:
             return False
-        if self._stage_plan.is_split_stage:
-            return True
-        return not self._stage_plan.host_io.needs_h2d and not self._stage_plan.host_io.needs_d2h
+        return True
 
     @staticmethod
     def _entry_owner(stage) -> int:
