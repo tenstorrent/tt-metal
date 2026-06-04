@@ -122,7 +122,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA=1"
     defaults:
       run:
         shell: bash
@@ -130,8 +130,8 @@ jobs:
     name: ttnn nightly conv tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
       - name: 🧬 Checkout Repository
@@ -169,7 +169,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA=1"
     defaults:
       run:
         shell: bash
@@ -177,8 +177,8 @@ jobs:
     name: ttnn nightly matmul tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
       - name: 🧬 Checkout Repository
@@ -223,7 +223,7 @@ jobs:
     name: ttnn nightly docs examples tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P100' && 'tt-ubuntu-2204-p100a-viommu-stable') || format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label))
+        format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label)
       }}
     steps:
       - name: 🧬 Checkout Repository
@@ -258,7 +258,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA=1"
     defaults:
       run:
         shell: bash
@@ -266,8 +266,8 @@ jobs:
     name: ttnn nightly fused tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
       - name: 🧬 Checkout Repository
@@ -305,7 +305,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA=1"
     defaults:
       run:
         shell: bash
@@ -313,8 +313,8 @@ jobs:
     name: ttnn nightly reduction tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
       - name: 🧬 Checkout Repository
@@ -352,7 +352,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA=1"
     defaults:
       run:
         shell: bash
@@ -360,8 +360,8 @@ jobs:
     name: ttnn nightly experimental tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
       - name: 🧬 Checkout Repository
@@ -400,7 +400,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA=1"
     defaults:
       run:
         shell: bash
@@ -408,8 +408,8 @@ jobs:
     name: ttnn nightly pool tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
       - name: 🧬 Checkout Repository
@@ -436,7 +436,7 @@ jobs:
         if: always()
 
   ttnn-sdxl-tests:
-    if: ${{ inputs.run_sdxl_tests && inputs.runner-label != 'P100' }}
+    if: ${{ inputs.run_sdxl_tests && inputs.runner-label != 'P100a' }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -444,14 +444,11 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
-        # Only use MLPerf HF cache on non-CIv2 runners (P150b uses LFC via TT_GH_CI_INFRA)
-        HF_HUB_CACHE: ${{ inputs.runner-label == 'P150b' && '' || '/mnt/MLPerf/huggingface/hub' }}
         TT_MM_THROTTLE_PERF: ${{ inputs.arch == 'blackhole' && '0' || '5' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
-      options: "--device /dev/tenstorrent ${{ inputs.runner-label == 'P150b' && '-e TT_GH_CI_INFRA=1' || '' }}"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA=1"
     defaults:
       run:
         shell: bash
@@ -459,8 +456,8 @@ jobs:
     name: ttnn nightly sdxl tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
       - name: 🧬 Checkout Repository
@@ -522,8 +519,8 @@ jobs:
     name: tt-train nightly tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
       - name: 🧬 Checkout Repository
@@ -569,8 +566,8 @@ jobs:
     name: tt-sdpa-nightly tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (contains('P150b, N150, N300', inputs.runner-label) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
       - name: 🧬 Checkout Repository
@@ -620,8 +617,8 @@ jobs:
     name: tt-sdpa-stress tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (contains('P150b, N150, N300', inputs.runner-label) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
       - name: 🧬 Checkout Repository
@@ -667,7 +664,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA=1"
     defaults:
       run:
         shell: bash
@@ -675,8 +672,8 @@ jobs:
     name: ttnn nightly eltwise tests group ${{ matrix.group }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (contains('P150b, N150, N300', inputs.runner-label) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
+        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
       - name: 🧬 Checkout Repository
@@ -715,7 +712,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA=1"
     defaults:
       run:
         shell: bash
@@ -723,8 +720,8 @@ jobs:
     name: ttnn nightly transformers tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P100') && fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
-        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
       - name: 🧬 Checkout Repository
@@ -762,7 +759,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA=1"
     defaults:
       run:
         shell: bash
@@ -770,8 +767,8 @@ jobs:
     name: ttnn nightly moreh tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P100') && fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
-        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
       - name: 🧬 Checkout Repository
@@ -806,11 +803,10 @@ jobs:
         TT_METAL_HOME: /work
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
-        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA=1"
     defaults:
       run:
         shell: bash
@@ -818,8 +814,8 @@ jobs:
     name: ttnn nightly data_movement tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P100') && fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
-        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
       - name: 🧬 Checkout Repository
@@ -864,11 +860,10 @@ jobs:
         TT_METAL_HOME: /work
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
-        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA=1"
     defaults:
       run:
         shell: bash
@@ -876,8 +871,8 @@ jobs:
     name: ttnn nightly misc (rand and ssm) tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((inputs.runner-label == 'P100') && fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
-        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        (inputs.runner-label == 'P100a' && 'tt-ubuntu-2204-P100a-viommu-stable')
+        || format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
       }}
     steps:
       - name: 🧬 Checkout Repository
