@@ -58,9 +58,10 @@
  *       PackTile<cb_out, Dst::D0, OutputLifecycle::Streaming, OperandKind::Scalar,
  *                PackTileReconfig::Output>{});
  *
- * Not supported: cumulative wait policy, mid-loop dtype swaps (reconfig is entry-time per
- * element), L1 pack accumulation / pack-relu, and the legacy `acquire_dst/release_dst` macros
- * (modern dst-sync only).
+ * Not supported: per-iteration (mid-loop) dtype swaps — each element's dtype reconfig point is
+ * resolved per element at compile time (fold-driven, emitted once at element entry), so there is
+ * no per-loop-iteration reconfig path; L1 pack accumulation / pack-relu; and the legacy
+ * `acquire_dst/release_dst` macros (modern dst-sync only).
  */
 
 #include <cstdint>
@@ -120,14 +121,13 @@ struct EltwiseShape {
 // 1c. Taxonomy: Lifecycle as a two-axis struct
 // =============================================================================
 //
-// Per `eltwise_taxonomy.md`, each input's lifecycle is a `(WaitPolicy, PopPolicy)`
-// pair, each output's lifecycle is a `(ReservePolicy, PushPolicy)` pair. Named
-// constants compose the legal pairs; custom struct literals are validated by
-// `is_legal_input_lifecycle` / `is_legal_output_lifecycle`.
-//
-// Custom struct literals (e.g. `InputLifecycle{WaitPolicy::Upfront, PopPolicy::PerTile}`)
-// are accepted at the template-parameter site and validated against the 2-axis legal
-// set; this gives callers fine-grained `{wait, pop}` control beyond the named cells.
+// Each input's lifecycle is a `(WaitPolicy, PopPolicy)` pair and each output's a
+// `(ReservePolicy, PushPolicy)` pair. The named constants below are the legal set:
+// `is_legal_input_lifecycle` / `is_legal_output_lifecycle` are whitelists of exactly
+// those constants. A custom struct literal is accepted only when it equals one of the
+// named constants (e.g. `InputLifecycle{WaitPolicy::Upfront, PopPolicy::PerTile}` is just
+// another spelling of `InputLifecycle::BulkDrain`); arbitrary `{wait, pop}` combinations
+// outside the named set are rejected.
 
 enum class WaitPolicy : uint8_t {
     None,        // chain emits no cb_wait_front
