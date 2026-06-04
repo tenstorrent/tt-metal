@@ -229,7 +229,8 @@ void softmax_reduce_c() {
     cb_wait_front(in0_cb, num_tiles);
     constexpr uint32_t reduce_dst_idx = 0;
     for (uint32_t i = 0; i < rows; i++) {
-        acquire_dst();
+        tile_regs_acquire();
+        tile_regs_wait();
         for (uint32_t j = 0; j < cols; j++) {
             sampling_reduce_tile<pool_type, reduce_dim, false, MathFidelity::HiFi4>(
                 in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
@@ -238,7 +239,8 @@ void softmax_reduce_c() {
         pack_reconfig_data_format(out_cb);
         pack_tile(reduce_dst_idx, out_cb);
         cb_push_back(out_cb, 1);
-        release_dst();
+        tile_regs_commit();
+        tile_regs_release();
     }
     reduce_uninit();
     UNPACK(tensix_sync());
@@ -249,7 +251,8 @@ inline void softmax_recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     recip_tile_init();
     cb_wait_front(in_cb, num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        acquire_dst();
+        tile_regs_acquire();
+        tile_regs_wait();
         copy_tile(in_cb, 0, 0);
         cb_pop_front(in_cb, 1);
         recip_tile(0);
@@ -257,7 +260,8 @@ inline void softmax_recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
         pack_reconfig_data_format(in_cb);
         pack_tile(0, in_cb);
         cb_push_back(in_cb, 1);
-        release_dst();
+        tile_regs_commit();
+        tile_regs_release();
     }
 }
 
@@ -268,13 +272,15 @@ void softmax_mul_block_bcast_scalar() {
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_scalar_cb, 1);
     for (uint32_t i = 0; i < num_tiles; ++i) {
-        acquire_dst();
+        tile_regs_acquire();
+        tile_regs_wait();
         sampling_mul_tiles_bcast_scalar<MathFidelity::HiFi4>(in0_cb, in1_scalar_cb, 0, 0, 0);
         cb_reserve_back(out_cb, 1);
         pack_reconfig_data_format(out_cb);
         pack_tile(0, out_cb);
         cb_push_back(out_cb, 1);
-        release_dst();
+        tile_regs_commit();
+        tile_regs_release();
     }
     // Consume the broadcast scalar tile; otherwise persistent runs can leak scalar CB state.
     cb_pop_front(in1_scalar_cb, 1);
@@ -289,13 +295,15 @@ inline void softmax_mul_block_bcast_cols(
     cb_wait_front(in1_cb, rows);
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t j = 0; j < cols; ++j) {
-            acquire_dst();
+            tile_regs_acquire();
+            tile_regs_wait();
             sampling_mul_tiles_bcast_cols<MathFidelity::HiFi4>(in0_cb, in1_cb, 0, i, 0);
             cb_reserve_back(out_cb, 1);
             pack_reconfig_data_format(out_cb);
             pack_tile(0, out_cb);
             cb_push_back(out_cb, 1);
-            release_dst();
+            tile_regs_commit();
+            tile_regs_release();
         }
     }
     cb_pop_front(in1_cb, rows);
@@ -338,7 +346,8 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     cb_reserve_back(out_scores_cb, 1);
     cb_reserve_back(out_indices_cb, 1);
 
-    acquire_dst();
+    tile_regs_acquire();
+    tile_regs_wait();
 
     uint32_t num_faces = 4;
     reconfig_data_format_srca(in_scores_cb);
@@ -401,7 +410,8 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     ckernel::pack_tile(index_offset_tiles, out_indices_cb);
     PACK(TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0));
 
-    release_dst();
+    tile_regs_commit();
+    tile_regs_release();
 
     cb_pop_front(in_scores_cb, num_input_tiles);
     cb_pop_front(in_indices_cb, num_input_tiles);
@@ -436,7 +446,8 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     cb_reserve_back(out_scores_cb, 1);
     cb_reserve_back(out_indices_cb, 1);
 
-    acquire_dst();
+    tile_regs_acquire();
+    tile_regs_wait();
 
     const uint32_t num_chunks = row_elements / chunk_size;
 
@@ -510,7 +521,8 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     UNPACK(TTI_SETADCXY(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
     UNPACK(TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b1111));
 
-    release_dst();
+    tile_regs_commit();
+    tile_regs_release();
 
     cb_pop_front(in_scores_cb, num_input_tiles);
     cb_pop_front(in_indices_cb, num_input_tiles);

@@ -25,7 +25,8 @@ void kernel_main() {
 #endif
                 cb_reserve_back(tt::CBIndex::c_16, onetile);
 
-                acquire_dst();
+                tile_regs_acquire();
+                tile_regs_wait();
 
                 cb_wait_front(tt::CBIndex::c_0, onetile);
 
@@ -36,7 +37,8 @@ void kernel_main() {
 #ifndef BCAST_SCALAR
                 cb_pop_front(tt::CBIndex::c_1, onetile);
 #endif
-                release_dst();
+                tile_regs_commit();
+                tile_regs_release();
 
                 cb_push_back(tt::CBIndex::c_16, onetile);
             }
