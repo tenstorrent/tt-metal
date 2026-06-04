@@ -194,27 +194,14 @@ void kernel_main() {
         // Lifecycles: cb_max_exp_avg_sq_in InputLifecycle::CallerManaged (pre-pushed by reader, pop at MAIN end).
         //   tmp_cb_exp_avg_sq InputLifecycle::CallerManaged (caller-managed lifecycle, pop later).
         //   tmp_cb_max_exp_avg_sq OutputLifecycle::Streaming.
-        compute_kernel_lib::eltwise_chain(
-            onetile,
-            compute_kernel_lib::CopyTile<
-                cb_max_exp_avg_sq_in,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::CopyTileReconfig::Input>{},
-            compute_kernel_lib::CopyTile<
-                tmp_cb_exp_avg_sq,
-                compute_kernel_lib::Dst::D1,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::CopyTileReconfig::Input>{},
-            compute_kernel_lib::
-                BinaryMax<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<
-                tmp_cb_max_exp_avg_sq,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::binary_sfpu<
+            compute_kernel_lib::BinaryMax<>,
+            cb_max_exp_avg_sq_in,
+            tmp_cb_exp_avg_sq,
+            tmp_cb_max_exp_avg_sq,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
 
         // cb_max_exp_avg_sq_out = tmp_cb_max_exp_avg_sq[first_tile]
         // Reconfig: copy_tile_init_with_dt -> Input. pack_tile_with_dt -> Output.

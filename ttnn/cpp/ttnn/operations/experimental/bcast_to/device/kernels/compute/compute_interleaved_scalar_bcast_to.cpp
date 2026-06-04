@@ -5,6 +5,7 @@
 #include <cstdint>
 #include "api/compute/bcast.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
@@ -30,19 +31,14 @@ void kernel_main() {
     uint32_t num_tiles_read = 0;
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_t = 0) {
-            compute_kernel_lib::eltwise_chain(
-                1u,
-                compute_kernel_lib::UnaryBcast<
-                    compute_kernel_lib::BroadcastDim::Scalar,
-                    cb_id_src,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::UnaryBcastReconfig::Input>{},
-                compute_kernel_lib::PackTile<
-                    cb_id_dst,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::None>{});
+            compute_kernel_lib::unary_bcast<
+                compute_kernel_lib::BroadcastDim::Scalar,
+                cb_id_src,
+                cb_id_dst,
+                compute_kernel_lib::UnaryBcastReconfig::Input,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::None>(1u);
             num_tiles_read += HtWt - start_t;
         }
     }

@@ -74,24 +74,17 @@ void kernel_main() {
         // Lifecycles: cb_in0 InputLifecycle::Bulk + Block (chain owns wait Ht + pop Ht). cb_max
         //   InputLifecycle::Bulk + Scalar — chain emits cb_wait_front(cb_max, 1) thanks to the
         //   OperandKind-aware window_1d helper. cb_x_m_max OutputLifecycle::Bulk + Block.
-        compute_kernel_lib::eltwise_chain(
-            Ht,
-            compute_kernel_lib::BinaryFpu<
-                cb_in0,
-                cb_max,
-                compute_kernel_lib::BinaryFpuOp::Sub,
-                compute_kernel_lib::BroadcastDim::Row,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::Bulk,
-                compute_kernel_lib::InputLifecycle::Bulk,
-                compute_kernel_lib::OperandKind::Block,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                cb_x_m_max,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Bulk,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::sub<
+            cb_in0,
+            cb_max,
+            cb_x_m_max,
+            compute_kernel_lib::BroadcastDim::Row,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::OutputLifecycle::Bulk>(Ht);
 
         // compute exp(x - max(x)). Original per-tile copy + (Negative if !SOFTMAX)
         // + Exp + (Mask on last tile) + pack with cb_exps reserve(Ht) upfront and
@@ -201,24 +194,17 @@ void kernel_main() {
         //   pack_tile_with_dt -> Output.
         cb_x_m_max_obj.wait_front(Ht);
 #ifdef LOG
-        compute_kernel_lib::eltwise_chain(
-            Ht,
-            compute_kernel_lib::BinaryFpu<
-                cb_x_m_max,
-                cb_recipsumexps,
-                compute_kernel_lib::BinaryFpuOp::Sub,
-                compute_kernel_lib::BroadcastDim::Row,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::InputLifecycle::Bulk,
-                compute_kernel_lib::OperandKind::Block,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                cb_out0,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Bulk,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::sub<
+            cb_x_m_max,
+            cb_recipsumexps,
+            cb_out0,
+            compute_kernel_lib::BroadcastDim::Row,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::OutputLifecycle::Bulk>(Ht);
 #else
         compute_kernel_lib::mul<
             cb_exps,

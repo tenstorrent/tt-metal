@@ -20,6 +20,7 @@
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 namespace generic = norm::kernel_util::generic;
@@ -385,19 +386,7 @@ void kernel_main() {
         // reprogrammed. Pack-side reconfig is owned by the downstream PackTile
         // (PackTileReconfig::Output). No mid-kernel hw_configure needed.
         // Lifecycle: cb_ex2pe InputLifecycle::Streaming in, OutputLifecycle::Streaming out.
-        compute_kernel_lib::eltwise_chain(
-            onetile,
-            compute_kernel_lib::UnaryBcast<
-                compute_kernel_lib::BroadcastDim::Col,
-                cb_ex2pe,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::UnaryBcastReconfig::Input>{},
-            compute_kernel_lib::PackTile<
-                cb_ex2pe,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::unary_bcast<compute_kernel_lib::BroadcastDim::Col, cb_ex2pe, cb_ex2pe>(onetile);
 
         // =====================================
         // Second pass over the input.

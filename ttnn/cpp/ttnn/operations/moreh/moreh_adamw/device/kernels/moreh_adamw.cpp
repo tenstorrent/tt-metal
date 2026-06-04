@@ -13,6 +13,7 @@
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"
 
@@ -194,27 +195,14 @@ void kernel_main() {
         // CopyTile<D0> + CopyTile<D1> + BinaryMax + PackTile chain.
         // Reconfig: copy_tile_init_with_dt reconfigs srca per copy -> Input on both.
         //   pack_tile_with_dt -> Output.
-        compute_kernel_lib::eltwise_chain(
-            onetile,
-            compute_kernel_lib::CopyTile<
-                cb_max_exp_avg_sq_in,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::CopyTileReconfig::Input>{},
-            compute_kernel_lib::CopyTile<
-                tmp_cb_exp_avg_sq,
-                compute_kernel_lib::Dst::D1,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::CopyTileReconfig::Input>{},
-            compute_kernel_lib::
-                BinaryMax<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<
-                tmp_cb_max_exp_avg_sq,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::binary_sfpu<
+            compute_kernel_lib::BinaryMax<>,
+            cb_max_exp_avg_sq_in,
+            tmp_cb_exp_avg_sq,
+            tmp_cb_max_exp_avg_sq,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
 
         // cb_max_exp_avg_sq_out
         copy_tile_to_cb(tmp_cb_max_exp_avg_sq, cb_max_exp_avg_sq_out, first_tile, /*pop=*/0);

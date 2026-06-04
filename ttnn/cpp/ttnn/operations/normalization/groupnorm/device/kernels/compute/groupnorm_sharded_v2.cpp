@@ -312,24 +312,18 @@ void kernel_main() {
             // pack_reconfig) -> PackTileReconfig::None.
             // cb_ex_global is held outside chain via wait_front(1) -> InputLifecycle::CallerManaged.
             cb_ex_global.wait_front(1);
-            compute_kernel_lib::eltwise_chain(
-                block_hw,
-                compute_kernel_lib::BinaryFpu<
-                    cb_x_id,
-                    cb_ex_global_id,
-                    compute_kernel_lib::BinaryFpuOp::Sub,
-                    compute_kernel_lib::BroadcastDim::Scalar,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
-                compute_kernel_lib::PackTile<
-                    cb_x_id,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::None>{});
+            compute_kernel_lib::sub<
+                cb_x_id,
+                cb_ex_global_id,
+                cb_x_id,
+                compute_kernel_lib::BroadcastDim::Scalar,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::None>(block_hw);
             cb_ex_global.pop_front(1);
 
             // (x - E[x]) * input_mask — re-zero out-of-group columns, same-CB cb_x rotation.

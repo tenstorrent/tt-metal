@@ -19,6 +19,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
 
@@ -404,24 +405,18 @@ void kernel_main() {
                 // Reconfig: sub_tiles_bcast_scalar_init_short -> Input.
                 // Original plain pack_tile -> PackTileReconfig::None.
                 cb_ex_global.wait_front(1);
-                compute_kernel_lib::eltwise_chain(
-                    out_block_hw_actual,
-                    compute_kernel_lib::BinaryFpu<
-                        cb_in0_id,
-                        cb_ex_global_id,
-                        compute_kernel_lib::BinaryFpuOp::Sub,
-                        compute_kernel_lib::BroadcastDim::Scalar,
-                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::InputLifecycle::CallerManaged,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OperandKind::Scalar>{},
-                    compute_kernel_lib::PackTile<
-                        cb_xmm_id,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::None>{});
+                compute_kernel_lib::sub<
+                    cb_in0_id,
+                    cb_ex_global_id,
+                    cb_xmm_id,
+                    compute_kernel_lib::BroadcastDim::Scalar,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::None>(out_block_hw_actual);
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
                     cb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
@@ -586,24 +581,18 @@ void kernel_main() {
                 // Original pack_tile (no _with_dt / no pack_reconfig) -> PackTileReconfig::None.
                 // cb_ex_global held by external wait_front(1) / pop_front(1) -> InputLifecycle::CallerManaged.
                 cb_ex_global.wait_front(1);
-                compute_kernel_lib::eltwise_chain(
-                    out_block_hw_actual,
-                    compute_kernel_lib::BinaryFpu<
-                        cb_in0_id,
-                        cb_ex_global_id,
-                        compute_kernel_lib::BinaryFpuOp::Sub,
-                        compute_kernel_lib::BroadcastDim::Scalar,
-                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::InputLifecycle::CallerManaged,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OperandKind::Scalar>{},
-                    compute_kernel_lib::PackTile<
-                        cb_xmm_id,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::None>{});
+                compute_kernel_lib::sub<
+                    cb_in0_id,
+                    cb_ex_global_id,
+                    cb_xmm_id,
+                    compute_kernel_lib::BroadcastDim::Scalar,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::CallerManaged,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::PackTileReconfig::None>(out_block_hw_actual);
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
                     // Slack reserve+push so consumer wait_front(out_block_hw_normal) succeeds.

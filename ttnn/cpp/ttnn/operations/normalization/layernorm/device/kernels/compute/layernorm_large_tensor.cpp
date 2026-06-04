@@ -20,6 +20,7 @@
 
 #include "layernorm_compute_utils.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
@@ -260,19 +261,7 @@ void kernel_main() {
         // Lifecycle: cb_ex2pe input InputLifecycle::Streaming (per-tile wait+pop), output OutputLifecycle::Streaming
         // (per-tile reserve+push). After the chain, the new pushed tile is re-waited
         // for downstream use.
-        compute_kernel_lib::eltwise_chain(
-            onetile,
-            compute_kernel_lib::UnaryBcast<
-                compute_kernel_lib::BroadcastDim::Col,
-                cb_ex2pe,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::UnaryBcastReconfig::Input>{},
-            compute_kernel_lib::PackTile<
-                cb_ex2pe,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::unary_bcast<compute_kernel_lib::BroadcastDim::Col, cb_ex2pe, cb_ex2pe>(onetile);
         cb_ex2pe_obj.wait_front(onetile);
 
         // End of

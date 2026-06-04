@@ -16,6 +16,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/operations/normalization/kernel_util/compute/pre_add.h"
 
@@ -57,21 +58,13 @@ void kernel_main() {
         // The downstream reduce on cb_inp consumes the Wt tiles via BulkWaitBulkPop.
         // cb_x2 lifecycle: OutputLifecycle::Chunked (chain emits cb_reserve_back(blk) +
         // cb_push_back(blk) per chunk; pack writes absolute slots via Block index).
-        compute_kernel_lib::eltwise_chain(
-            squaring_shape,
-            compute_kernel_lib::BinaryFpu<
-                cb_inp,
-                cb_inp,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::HeldCumulative,
-                compute_kernel_lib::InputLifecycle::HeldCumulative,
-                compute_kernel_lib::OperandKind::Block,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Block>{},
-            compute_kernel_lib::
-                PackTile<cb_x2, compute_kernel_lib::Dst::D0, compute_kernel_lib::OutputLifecycle::Bulk>{});
+        compute_kernel_lib::square<
+            cb_inp,
+            cb_x2,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::InputLifecycle::HeldCumulative,
+            compute_kernel_lib::OutputLifecycle::Bulk>(squaring_shape);
 
         // sum(x**2) — BulkWaitBulkPop: all Wt tiles already in CB.
         compute_kernel_lib::

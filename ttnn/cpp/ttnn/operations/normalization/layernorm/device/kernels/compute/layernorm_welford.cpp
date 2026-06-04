@@ -205,24 +205,19 @@ void kernel_main() {
         // OutputLifecycle::Bulk + Block.
         cb_ex_obj.wait_front(onetile);  // pre-wait, never popped inside chain
         for (auto block : generic::blocks(Wt, blk)) {
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk),
-                compute_kernel_lib::BinaryFpu<
-                    cb_x,
-                    cb_ex,
-                    compute_kernel_lib::BinaryFpuOp::Sub,
-                    compute_kernel_lib::BroadcastDim::Col,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::OperandKind::Block,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
-                compute_kernel_lib::PackTile<
-                    cb_xmm,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::PackTileReconfig::None>{});
+            compute_kernel_lib::sub<
+                cb_x,
+                cb_ex,
+                cb_xmm,
+                compute_kernel_lib::BroadcastDim::Col,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::PackTileReconfig::None>(
+                compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), /*block_size=*/blk));
         }
         cb_ex_obj.pop_front(1);
         cb_xmm_obj.wait_front(total_buffer_size);

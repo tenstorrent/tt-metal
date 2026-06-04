@@ -118,29 +118,7 @@ void kernel_main() {
 #ifdef IS_ZERO
                 compute_kernel_lib::add<cb_val, cb_cal, cb_cal>(onetile);
 #else
-                compute_kernel_lib::eltwise_chain(
-                    onetile,
-                    compute_kernel_lib::CopyTile<
-                        cb_val,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::CopyTileReconfig::Input>{},
-                    compute_kernel_lib::CopyTile<
-                        cb_cal,
-                        compute_kernel_lib::Dst::D1,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::CopyTileReconfig::Input>{},
-                    compute_kernel_lib::BinaryMax<
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::Dst::D1,
-                        compute_kernel_lib::Dst::D0>{},
-                    compute_kernel_lib::PackTile<
-                        cb_cal,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                compute_kernel_lib::binary_sfpu<compute_kernel_lib::BinaryMax<>, cb_val, cb_cal, cb_cal>(onetile);
 #endif
             }
         }

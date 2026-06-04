@@ -220,24 +220,19 @@ void kernel_main() {
         // is held -> CallerManaged, popped right after. cb_xmm output Chunked (per-chunk push;
         // the squaring below waits it whole via HeldBulk once this stage completes).
         // tiles(Wt_padded) keeps every internal block full.
-        compute_kernel_lib::eltwise_chain(
-            compute_kernel_lib::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size),
-            compute_kernel_lib::BinaryFpu<
-                cb_x,
-                cb_ex,
-                compute_kernel_lib::BinaryFpuOp::Sub,
-                compute_kernel_lib::BroadcastDim::Col,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::Chunked,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Block,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                cb_xmm,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Chunked,
-                compute_kernel_lib::PackTileReconfig::None>{});
+        compute_kernel_lib::sub<
+            cb_x,
+            cb_ex,
+            cb_xmm,
+            compute_kernel_lib::BroadcastDim::Col,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::InputLifecycle::Chunked,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::OutputLifecycle::Chunked,
+            compute_kernel_lib::PackTileReconfig::None>(
+            compute_kernel_lib::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
         cb_ex_obj.pop_front(1);
 
 #ifndef FUSE_PRE_ADD
