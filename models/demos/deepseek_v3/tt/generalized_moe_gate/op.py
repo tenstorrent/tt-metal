@@ -44,7 +44,7 @@ class GeneralizedMoeGateOp:
         scores = torch.sigmoid(input_tensor) if enable_sigmoid else input_tensor
         bias_scores = scores + bias_tensor
 
-        # True global top-8 over all 256 experts, ranked by the bias-corrected score.
+        # True GLOBAL top-8 over all 256 experts (ungrouped), ranked by the bias-corrected score.
         bias_flat = bias_scores.reshape(batch, -1)
         scores_flat = scores.reshape(batch, -1)
         _, top8_indices = torch.topk(bias_flat, 8, dim=-1, sorted=True)

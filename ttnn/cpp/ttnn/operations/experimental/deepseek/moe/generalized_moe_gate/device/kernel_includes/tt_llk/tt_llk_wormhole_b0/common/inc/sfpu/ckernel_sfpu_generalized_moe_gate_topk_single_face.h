@@ -572,6 +572,9 @@ inline void _generalized_moe_gate_top8_ungrouped(uint32_t eps, uint32_t scale) {
 // Used to relocate a saved run (e.g. topA parked at safe rows 8-15) into the final merge slot.
 template <uint32_t from_lo, uint32_t from_hi, uint32_t to_lo, uint32_t to_hi>
 inline void _gmg_copy_topk_run() {
+    // Reset the Dst RWC counter (a preceding FPU MOP — e.g. copy4rows — leaves it advanced by +64/tile;
+    // without this the SFPLOAD offsets below are biased by that leftover and read the wrong rows).
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, bias_offset + from_lo);
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, bias_offset + from_hi);
     TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + from_lo);
@@ -591,6 +594,8 @@ inline void _gmg_copy_topk_run() {
 // _generalized_moe_gate_top8, factored out). Used by GMG_DIAG_TOPA to output a single half's run.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void _gmg_normalize_run(uint32_t eps, uint32_t scale) {
+    // Reset Dst RWC (see _gmg_copy_topk_run): a preceding FPU MOP leaves it advanced, biasing SFPLOAD.
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, scores_offset + 0);
     TTI_SFPLOAD(p_sfpu::LREG1, 0, ADDR_MOD_3, scores_offset + 4);
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
@@ -633,13 +638,13 @@ inline void _generalized_moe_gate_finalize_ungrouped(uint32_t eps, uint32_t scal
     constexpr bool idir = false;  // descending
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
-    // reverse run = topB at {4,6}: load hi (offset 6) into LREG2/6, lo (offset 4) into LREG3/7, reverse.
-    TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_3, bias_offset + 6);
-    TTI_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_3, bias_offset + 4);
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + 6);
-    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + 4);
-    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + 6);
-    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + 4);
+    // reverse run = topB at {4,6}: lo (offset 4) -> LREG2, hi (offset 6) -> LREG3, then reverse.
+    TTI_SFPLOAD(p_sfpu::LREG2, 0, ADDR_MOD_3, bias_offset + 4);
+    TTI_SFPLOAD(p_sfpu::LREG3, 0, ADDR_MOD_3, bias_offset + 6);
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + 4);
+    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::LO16_ONLY, ADDR_MOD_3, indices_offset + 6);
+    TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + 4);
+    TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + 6);
     reverse_sort_order();
 
     // forward run = topA at {0,2}.
@@ -650,8 +655,6 @@ inline void _generalized_moe_gate_finalize_ungrouped(uint32_t eps, uint32_t scal
     TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + 0);
     TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::HI16_ONLY, ADDR_MOD_3, scores_offset + 2);
     bitonic_top8_ph3_st4_to_1<idir, true>();
-
-    // Store the merged top-8 (LREG0/1 bias, LREG4/5 concat idx|score) to scores/indices {0,4}.
     bitonic_topk_store8_even_cols_split_indices_single_face<is_fp32_dest_acc_en>();
 
     // ---- normalization tail (same as _generalized_moe_gate_top8) ----

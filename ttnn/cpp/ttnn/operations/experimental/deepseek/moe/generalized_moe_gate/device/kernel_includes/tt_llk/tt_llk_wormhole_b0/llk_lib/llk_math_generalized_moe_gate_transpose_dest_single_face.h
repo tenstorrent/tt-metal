@@ -131,15 +131,17 @@ inline void generalized_moe_gate_transpose_dest_single_face_step1_hi_configure_m
 // regions (scores/indices/bias, via num_tiles + the ADDR_MOD_2 base advance). Used to stash/restore
 // data in rows 8-15 — which the SFPU merge cannot address (SFPU offsets >=8 wrap) but the FPU can —
 // during the ungrouped two-half assembly. src/dst must be 4-row aligned (0,4,8,12).
-template <std::uint32_t num_tiles, bool is_32bit, std::uint32_t src, std::uint32_t dst>
+template <std::uint32_t num_tiles, bool is_32bit, std::uint32_t src, std::uint32_t dst, std::uint32_t srcb = 16>
 inline void generalized_moe_gate_copy4rows_configure_mop() {
     static_assert(!is_32bit, "32-bit is not supported");
+    // srcb selects the 4-row SrcB scratch window (16/20/24/28). Back-to-back copy4rows calls use
+    // DISJOINT srcb windows so a later MOVB2D cannot read a previous copy's SrcB leftover.
     lltt::record<lltt::NoExec>(ckernel::math::replay_buf_offset, 5);
-    TTI_MOVD2B(0, 16, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, src);     // DEST rows src..+3 -> SrcB 16-19
-    TTI_MOVB2D(0, 16, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 0);  // SrcB 16 -> DEST dst+0 (no transpose)
-    TTI_MOVB2D(0, 17, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 1);
-    TTI_MOVB2D(0, 18, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 2);
-    TTI_MOVB2D(0, 19, ADDR_MOD_2, p_movb2d::MOV_1_ROW, dst + 3);  // ADDR_MOD_2 advances base by 64
+    TTI_MOVD2B(0, srcb, ADDR_MOD_3, p_movd2b::MOV_4_ROWS, src);         // DEST rows src..+3 -> SrcB srcb..+3
+    TTI_MOVB2D(0, srcb + 0, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 0);  // SrcB srcb -> DEST dst+0 (no transpose)
+    TTI_MOVB2D(0, srcb + 1, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 1);
+    TTI_MOVB2D(0, srcb + 2, ADDR_MOD_3, p_movb2d::MOV_1_ROW, dst + 2);
+    TTI_MOVB2D(0, srcb + 3, ADDR_MOD_2, p_movb2d::MOV_1_ROW, dst + 3);  // ADDR_MOD_2 advances base by 64
     std::uint32_t replay_instr = lltt::replay_insn(math::replay_buf_offset, 5);
     ckernel_template tmp(num_tiles, 1, replay_instr);
     tmp.program();
@@ -190,9 +192,9 @@ inline void _llk_math_generalized_moe_gate_transpose_dest_single_face_step2_init
 }
 
 // copy4rows init/runner.
-template <std::uint32_t src = 0, std::uint32_t dst = 0, bool is_32bit = false>
+template <std::uint32_t src = 0, std::uint32_t dst = 0, bool is_32bit = false, std::uint32_t srcb = 16>
 inline void _llk_math_generalized_moe_gate_copy4rows_init_() {
-    generalized_moe_gate_copy4rows_configure_mop<3, is_32bit, src, dst>();
+    generalized_moe_gate_copy4rows_configure_mop<3, is_32bit, src, dst, srcb>();
 }
 
 template <bool is_fp32_dest_acc_en, bool is_32bit = false>
