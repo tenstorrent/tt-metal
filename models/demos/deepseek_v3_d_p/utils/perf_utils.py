@@ -304,7 +304,7 @@ def run_model_device_perf_test_per_op(
     expected_per_op: dict,
     subdir: str,
     model_name: str,
-    margin: float = 0.1,
+    margin: float = 0.03,
     comments: str = "",
     extra_env: dict | None = None,
 ):
