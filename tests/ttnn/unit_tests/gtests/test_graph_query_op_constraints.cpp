@@ -1033,6 +1033,16 @@ protected:
     static void SetUpTestSuite() {
         try {
             tt::tt_metal::experimental::configure_mock_mode(tt::ARCH::WORMHOLE_B0, Rows * Cols);
+            // Mock devices skip the auto-enable path in device_manager, so fabric
+            // must be configured and routing tables populated manually before opening
+            // devices. set_fabric_config rejects non-DISABLED changes while devices
+            // are still open. initialize_fabric_config() queries the mock YAML
+            // descriptor (not real hardware); RELAXED mode tolerates missing ETH
+            // links in that descriptor.
+            tt::tt_fabric::SetFabricConfig(
+                tt::tt_fabric::FabricConfig::FABRIC_1D,
+                tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+            tt::tt_metal::MetalContext::instance().initialize_fabric_config();
             device_holder_ =
                 distributed::MeshDevice::create(distributed::MeshDeviceConfig(distributed::MeshShape{Rows, Cols}));
         } catch (const std::exception& e) {
@@ -1042,14 +1052,6 @@ protected:
             // device_holder_ stays null → per-test SetUp will GTEST_SKIP.
             return;
         }
-        // Mock devices skip the auto-enable path in device_manager, so fabric
-        // must be configured and routing tables populated manually.
-        // initialize_fabric_config() queries the mock YAML descriptor (not real
-        // hardware); RELAXED mode tolerates missing ETH links in that descriptor.
-        tt::tt_fabric::SetFabricConfig(
-            tt::tt_fabric::FabricConfig::FABRIC_1D,
-            tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
-        tt::tt_metal::MetalContext::instance().initialize_fabric_config();
     }
 
     static void TearDownTestSuite() {
