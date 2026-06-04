@@ -27,5 +27,5 @@
 // Call per_txn times per DFB to trigger the ISR threshold.
 FORCE_INLINE void dfb_issue_implicit_read(const Noc& noc, DataflowBuffer& dfb) {
     AllocatorBank<AllocatorBankType::DRAM> dram{};
-    noc.async_read<Noc::TxnIdMode::ENABLED>(dram, dfb, {.bank_id = 0, .addr = 0}, {});
+    noc.async_read<NocOptions::TXN_ID>(dram, dfb, {.bank_id = 0, .addr = 0}, {});
 }

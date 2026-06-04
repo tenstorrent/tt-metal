@@ -1175,51 +1175,9 @@ public:
                     max_byte_end = std::max(max_byte_end, dfb_byte_offset + serialized.size());
                 }
             } else {
-                // Quasar: layout is [dfb_global_header_t | DM1 remapper blobs | DM0 ISR blobs | shared layouts].
-                uint32_t total_dm1_blob_size = 0;
-                uint32_t total_dm0_isr_blob_size = 0;
-                for (const auto& dfb : dfbs_on_corerange) {
-                    total_dm1_blob_size     += dfb->dm1_remapper_blob_serialized_size();
-                    total_dm0_isr_blob_size += dfb->dm0_isr_blob_serialized_size();
-                }
-
-                // Global header.
-                dfb_global_header_t ghdr = {};
-                ghdr.dm1_remapper_blob_offset = static_cast<uint32_t>(sizeof(dfb_global_header_t));
-                ghdr.dm0_isr_blob_offset      = ghdr.dm1_remapper_blob_offset + total_dm1_blob_size;
-                ghdr.per_dfb_layout_offset    = ghdr.dm0_isr_blob_offset      + total_dm0_isr_blob_size;
-                size_t write_offset = 0;
-                TT_ASSERT(write_offset + sizeof(ghdr) <= payload.size());
-                std::memcpy(payload.data() + write_offset, &ghdr, sizeof(ghdr));
-                write_offset += sizeof(ghdr);
-
-                // DM1 remapper blobs: one entry per DFB, contiguous.
-                for (const auto& dfb : dfbs_on_corerange) {
-                    auto blob = dfb->serialize_dm1_remapper_blob_for_core(logical_representative);
-                    TT_ASSERT(blob.size() == dfb->dm1_remapper_blob_serialized_size());
-                    TT_ASSERT(write_offset + blob.size() <= payload.size());
-                    std::copy(blob.begin(), blob.end(), payload.begin() + write_offset);
-                    write_offset += blob.size();
-                }
-
-                // DM0 ISR blobs: one entry per DFB, contiguous.
-                for (const auto& dfb : dfbs_on_corerange) {
-                    auto blob = dfb->serialize_dm0_isr_blob_for_core(logical_representative);
-                    TT_ASSERT(blob.size() == dfb->dm0_isr_blob_serialized_size());
-                    TT_ASSERT(write_offset + blob.size() <= payload.size());
-                    std::copy(blob.begin(), blob.end(), payload.begin() + write_offset);
-                    write_offset += blob.size();
-                }
-
-                // Shared per-DFB layouts (dfb_initializer_t + per_risc entries).
-                for (const auto& dfb : dfbs_on_corerange) {
-                    auto serialized = dfb->serialize_for_core(logical_representative);
-                    TT_ASSERT(serialized.size() == dfb->serialized_size());
-                    TT_ASSERT(write_offset + serialized.size() <= payload.size());
-                    std::copy(serialized.begin(), serialized.end(), payload.begin() + write_offset);
-                    write_offset += serialized.size();
-                }
-                max_byte_end = write_offset;
+                max_byte_end = tt::tt_metal::experimental::dfb::detail::serialize_dfb_config_for_core(
+                    logical_representative, dfbs_on_corerange, payload);
+                TT_ASSERT(max_byte_end <= payload.size());
             }
 
             CoreRange virtual_range(virtual_start, virtual_end);

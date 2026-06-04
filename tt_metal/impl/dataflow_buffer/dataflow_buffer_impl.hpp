@@ -9,6 +9,8 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <span>
+#include <string_view>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
@@ -119,6 +121,35 @@ struct DataflowBufferImpl {
         return core_lookup_.begin()->second.second;
     }
 };
+
+// Host-precomputed init indices in dfb_global_header_t (participation masks; dfb_byte_offset filled during layout
+// write). Device uses these instead of walking all DFBs on the merged-loop hot path.
+void populate_dfb_global_header_participation(
+    dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+void verify_dfb_global_header_participation(
+    const dfb_global_header_t& ghdr, const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+// Packed Quasar config size for [prefix | DM1 blobs | DM0 blobs | layouts], including L1 transfer padding.
+uint32_t compute_dfb_config_serialized_size(
+    const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core);
+
+// Packs Quasar DFB config: [header | offset table | DM1 blobs | DM0 blobs | per-DFB layouts]. Returns bytes written.
+size_t serialize_dfb_config_for_core(
+    const CoreCoord& core,
+    const std::vector<std::shared_ptr<DataflowBufferImpl>>& dfbs_on_core,
+    std::span<uint8_t> out);
+
+void log_dfb_config_vec_dump(const CoreCoord& core, std::string_view label, std::span<const uint8_t> config_bytes);
+
+void log_dfb_config_readback(
+    const CoreCoord& core,
+    uint64_t l1_addr,
+    const std::vector<uint8_t>& host_bytes,
+    const std::vector<uint8_t>& readback_bytes);
+
+void verify_dfb_config_readback_matches_host(
+    const CoreCoord& core, const std::vector<uint8_t>& host_bytes, const std::vector<uint8_t>& readback_bytes);
 
 class TileCounterAllocator {
 public:

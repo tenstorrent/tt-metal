@@ -2200,6 +2200,24 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
     }
 }
 
+namespace {
+constexpr tt::DataFormat kDfbBenchDataFormat = tt::DataFormat::Float16_b;
+
+experimental::DataflowBufferSpec MakeBenchDfbSpec(const char* id, uint32_t entry_size, uint32_t num_entries) {
+    return experimental::DataflowBufferSpec{
+        .unique_id = id,
+        .entry_size = entry_size,
+        .num_entries = num_entries,
+        .data_format_metadata = kDfbBenchDataFormat,
+    };
+}
+
+experimental::DataflowBufferSpec MakeBenchDfbSpec(
+    const std::string& id, uint32_t entry_size, uint32_t num_entries) {
+    return MakeBenchDfbSpec(id.c_str(), entry_size, num_entries);
+}
+}  // namespace
+
 // Average-case DFB init benchmark.
 //
 // Three DFBs on one core:
@@ -2233,12 +2251,9 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseTwo) {
         .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
     };
 
-    experimental::DataflowBufferSpec dfb_ss_spec{
-        .unique_id = DFB_SS, .entry_size = ENTRY_SIZE, .num_entries = NUM_ENTRIES};
-    experimental::DataflowBufferSpec dfb_sa_spec{
-        .unique_id = DFB_SA, .entry_size = ENTRY_SIZE, .num_entries = NUM_ENTRIES};
-    experimental::DataflowBufferSpec dfb_t6_spec{
-        .unique_id = DFB_T6, .entry_size = ENTRY_SIZE, .num_entries = NUM_ENTRIES};
+    experimental::DataflowBufferSpec dfb_ss_spec = MakeBenchDfbSpec(DFB_SS, ENTRY_SIZE, NUM_ENTRIES);
+    experimental::DataflowBufferSpec dfb_sa_spec = MakeBenchDfbSpec(DFB_SA, ENTRY_SIZE, NUM_ENTRIES);
+    experimental::DataflowBufferSpec dfb_t6_spec = MakeBenchDfbSpec(DFB_T6, ENTRY_SIZE, NUM_ENTRIES);
 
     // Reader DM: producer on DFB_SS (STRIDED) and DFB_SA (STRIDED)
     experimental::KernelSpec reader_spec{
@@ -2341,10 +2356,7 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseFour) {
         .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
     };
 
-    auto make_dfb_spec = [&](const char* id) {
-        return experimental::DataflowBufferSpec{
-            .unique_id = id, .entry_size = ENTRY_SIZE, .num_entries = NUM_ENTRIES};
-    };
+    auto make_dfb_spec = [&](const char* id) { return MakeBenchDfbSpec(id, ENTRY_SIZE, NUM_ENTRIES); };
 
     // Reader DM: 4 STRIDED producers on all three DFBs
     experimental::KernelSpec reader_spec{
@@ -2438,10 +2450,7 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseThree) {
         .gen2_config = experimental::DataMovementHardwareConfig::Gen2Config{},
     };
 
-    auto make_dfb_spec = [&](const char* id) {
-        return experimental::DataflowBufferSpec{
-            .unique_id = id, .entry_size = ENTRY_SIZE, .num_entries = NUM_ENTRIES};
-    };
+    auto make_dfb_spec = [&](const char* id) { return MakeBenchDfbSpec(id, ENTRY_SIZE, NUM_ENTRIES); };
 
     // Reader DM: 4 STRIDED producers on all three DFBs.
     // Reuses dfb_bench_worst_reader_dm.cpp: same kernel structure, per_txn=2.
@@ -2540,8 +2549,7 @@ TEST_F(MeshDeviceFixture, BenchmarkCaseFive) {
     };
 
     auto make_dfb_spec = [&](const std::string& id) {
-        return experimental::DataflowBufferSpec{
-            .unique_id = id, .entry_size = ENTRY_SIZE, .num_entries = NUM_ENTRIES};
+        return MakeBenchDfbSpec(id, ENTRY_SIZE, NUM_ENTRIES);
     };
 
     // Each reader: single DM, 1Sx4A, needs per_txn=8 reads (not 2 like WC1).

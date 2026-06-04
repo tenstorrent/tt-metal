@@ -243,6 +243,65 @@ TEST_F(MeshDeviceFixture, DMTensixTest1xDFB1Sx1SConfig) {
     validate_dfb_tile_counters(program, logical_core, config, expectation);
 }
 
+// Host-only: validates Quasar L1 packing (64B header + dfb_byte_offset[] + blobs + layouts).
+TEST_F(MeshDeviceFixture, DfbSerializeGlobalHeader1Sx1S) {
+    if (devices_.at(0)->arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .producer_risc_mask = 0x1,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::STRIDED,
+        .consumer_risc_mask = 0x10,
+        .num_consumers = 1,
+        .cap = dfb::AccessPattern::STRIDED,
+        .enable_producer_implicit_sync = false,
+        .enable_consumer_implicit_sync = false};
+
+    Program program = CreateProgram();
+    CoreCoord logical_core = CoreCoord(0, 0);
+    experimental::dfb::CreateDataflowBuffer(program, logical_core, config);
+    program.impl().finalize_dataflow_buffer_configs();
+    // serialize_dfb_config_for_core looks up per-core group config via core_lookup_, filled on allocate.
+    program.impl().allocate_dataflow_buffers(this->devices_.at(0)->get_devices()[0]);
+
+    const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
+    ASSERT_EQ(dfbs.size(), 1u);
+
+    std::vector<uint8_t> buf(4096, 0);
+    const size_t nbytes = experimental::dfb::detail::serialize_dfb_config_for_core(logical_core, dfbs, buf);
+    ASSERT_GT(nbytes, 0u);
+
+    const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
+    EXPECT_EQ(ghdr->num_dfbs, 1u);
+    EXPECT_EQ(sizeof(dfb_global_header_t), 64u);
+    const uint32_t prefix_size = dfb_config_prefix_size(ghdr->num_dfbs);
+    EXPECT_EQ(prefix_size, 68u);
+    EXPECT_EQ(ghdr->dm1_remapper_blob_offset, prefix_size);
+    EXPECT_GT(ghdr->dm0_isr_blob_offset, ghdr->dm1_remapper_blob_offset);
+    EXPECT_GT(ghdr->per_dfb_layout_offset, ghdr->dm0_isr_blob_offset);
+
+    const uint16_t* offset_table =
+        reinterpret_cast<const uint16_t*>(buf.data() + dfb_byte_offset_table_byte_offset());
+    EXPECT_EQ(offset_table[0], ghdr->per_dfb_layout_offset);
+    const uint32_t payload_size =
+        static_cast<uint32_t>(offset_table[0]) + dfbs[0]->serialized_size();
+    EXPECT_EQ(nbytes, experimental::dfb::detail::compute_dfb_config_serialized_size(dfbs));
+    EXPECT_GE(nbytes, payload_size);
+
+    EXPECT_EQ(ghdr->participation_mask[0], 1u);
+    EXPECT_EQ(ghdr->participation_mask[4], 1u);
+    for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
+        if (h != 0 && h != 4) {
+            EXPECT_EQ(ghdr->participation_mask[h], 0u) << "hart " << static_cast<int>(h);
+        }
+    }
+
+    experimental::dfb::detail::verify_dfb_global_header_participation(*ghdr, dfbs);
+}
+
 TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4SConfig) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";

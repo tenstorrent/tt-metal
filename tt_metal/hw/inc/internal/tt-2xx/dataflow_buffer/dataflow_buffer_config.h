@@ -33,6 +33,8 @@ constexpr uint8_t MAX_CLIENT_RS          = 4;   // max consumers per remapper sl
 constexpr uint8_t MAX_TCS_PER_TXN        = 8;   // max producer TCs per txn entry (8 DM producers × 1 TC each)
 
 constexpr uint16_t TENSIX_RISC_OFFSET = 8; // First 8 represent DMs
+// Hartids 0-7 = DM0-7, 8-11 = Neo0-3 (TRISC init uses 8 + neo_id).
+constexpr uint8_t NUM_PARTICIPATING_HARTIDS = 12;
 
 using PackedTileCounter = uint8_t;  // bits 5-6: tensix_id (2 bits), bits 0-4: counter_id (5 bits)
 
@@ -61,7 +63,7 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
     DFB config region layout (Quasar / tt-2xx):
 
     [dfb_config_base]:
-      dfb_global_header_t (12B) — stores offsets to DM1 remapper blob, DM0 ISR blob, shared layout
+      dfb_global_header_t (64B) + uint16_t dfb_byte_offset[num_dfbs] — variable-length prefix
 
     [dfb_config_base + dm1_remapper_blob_offset]:
       DM1 remapper blob — contiguous across all DFBs, read by DM1:
@@ -86,20 +88,31 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
     Other DMs/TRISCs read from per_dfb_layout_offset (no DM blob pollution).
 
     Base cost (1Sx1S, 2 riscs, 1 txn blob):
-      12 + 4 + 20 + (32 + 64*2) * 1 = 196 bytes
+      66 + 4 + 20 + (32 + 64*2) * 1 = 250 bytes
     Worst case (4Sx4A, 5 riscs, 4 rmp slots, 1 txn), 8 DFBs:
-      12 + (4+4*16)*8 + (4+20)*8 + (32 + 64*5)*8 = 12 + 544 + 192 + 2816 = 3564 bytes
+      80 + (4+4*16)*8 + (4+20)*8 + (32 + 64*5)*8 = 80 + 544 + 192 + 2816 = 3632 bytes
 */
 
-// 12-byte header at the start of the DFB config region.
-// Carries byte offsets from dfb_config_base to each sub-region.
+// Fixed header at the start of the DFB config region.
+// Immediately followed in L1 by uint16_t dfb_byte_offset[num_dfbs] (num_dfbs × 2 bytes, ids 0..num_dfbs-1).
 struct dfb_global_header_t {
     uint32_t dm1_remapper_blob_offset;  // → DM1 remapper blob (dfb_dm1_remapper_entry_header_t + slots per DFB)
     uint32_t dm0_isr_blob_offset;       // → DM0 ISR blob (dfb_dm0_isr_entry_header_t + txn entries per DFB)
     uint32_t per_dfb_layout_offset;     // → shared per-DFB layout (dfb_initializer_t + per_risc entries)
-    // No __attribute__((packed)): three naturally-aligned uint32_t fields need no packing,
-    // and packed forces byte-by-byte lbu loads instead of single lw instructions.
+    uint8_t num_dfbs;                   // DFB count on this core; logical ids 0 .. num_dfbs-1
+    uint8_t _pad;
+    // participation_mask[h] bit i set → hartid h participates in DFB i (host-derived from risc_mask).
+    uint32_t participation_mask[dfb::NUM_PARTICIPATING_HARTIDS];
 };
+
+inline uint32_t dfb_byte_offset_table_byte_offset() { return sizeof(dfb_global_header_t); }
+
+inline uint32_t dfb_config_prefix_size(uint8_t num_dfbs) {
+    const uint32_t table_end =
+        dfb_byte_offset_table_byte_offset() + static_cast<uint32_t>(num_dfbs) * sizeof(uint16_t);
+    // Pad after dfb_byte_offset[] so DM1/DM0 blobs and per-DFB layout start on 4-byte boundaries (L1 u32 access).
+    return (table_end + 3u) & ~3u;
+}
 struct dfb_txn_id_descriptor_t {
     uint8_t txn_ids[dfb::NUM_TXN_IDS];
     uint8_t num_entries_to_process_threshold; // entries each txn ID tracks before posting/acking
@@ -120,8 +133,10 @@ struct dfb_initializer_t {
     struct {
         uint16_t dm_mask : 8;             // bits 0-7: DM RISC mask
         uint16_t tensix_mask : 4;         // bits 8-11: Neo RISC mask
-        uint16_t tensix_trisc_mask : 4;   // bits 12-15: which TRISCs use the DFB
+        uint16_t tensix_trisc_mask : 4;   // bits 12-15: which TRISC(s) on the Neo run DFB ops (see dataflow_buffer.inl)
     } risc_mask_bits;
+    // Participant mask (DM/Neo hartids, per_risc layout, popcount): dm_mask | (tensix_mask << 8).
+    // tensix_trisc_mask is separate — TRISC-side only, not OR'd into that mask.
     // For DM-to-DM DFBs, producer and consumer would have different set of transaction ids
     dfb_txn_id_descriptor_t producer_txn_descriptor;
     dfb_txn_id_descriptor_t consumer_txn_descriptor;
@@ -230,7 +245,7 @@ struct dfb_dm0_txn_entry_t {
 } __attribute__((packed));
 static_assert(sizeof(dfb_dm0_txn_entry_t) == 16, "dfb_dm0_txn_entry_t must be 16 bytes");
 
-static_assert(sizeof(dfb_global_header_t) == 12, "dfb_global_header_t must be 12 bytes");
+static_assert(sizeof(dfb_global_header_t) == 64, "dfb_global_header_t size changed — check field alignment");
 static_assert(sizeof(dfb_dm1_remapper_entry_header_t) == 4, "dfb_dm1_remapper_entry_header_t must be 4 bytes");
 static_assert(sizeof(dfb_dm0_isr_entry_header_t) == 4, "dfb_dm0_isr_entry_header_t must be 4 bytes");
 static_assert(sizeof(TCAddressEntry) == 8, "TCAddressEntry size is incorrect");

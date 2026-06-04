@@ -1016,44 +1016,27 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                     std::vector<uint8_t> dfb_config_vec(
                         program.impl().get_program_config(index).dfb_size / sizeof(uint8_t));
 
-                    // Layout: [dfb_global_header_t | DM1 remapper blobs | DM0 ISR blobs | shared layouts]
-                    uint32_t offset = 0;
+                    size_t bytes_written = 0;
                     if (MetalContext::instance().hal().has_tile_counter_registers()) {
-                        // Compute blob sizes for header offsets.
-                        uint32_t total_dm1_blob_size = 0;
-                        uint32_t total_dm0_isr_blob_size = 0;
+                        bytes_written = tt::tt_metal::experimental::dfb::detail::serialize_dfb_config_for_core(
+                            logical_core, dfbs_on_core, dfb_config_vec);
+                    } else {
+                        uint32_t offset = 0;
                         for (const auto& dfb : dfbs_on_core) {
-                            total_dm1_blob_size     += dfb->dm1_remapper_blob_serialized_size();
-                            total_dm0_isr_blob_size += dfb->dm0_isr_blob_serialized_size();
+                            auto serialized = dfb->serialize_for_core(logical_core);
+                            std::memcpy(dfb_config_vec.data() + offset, serialized.data(), serialized.size());
+                            offset += serialized.size();
                         }
-
-                        // Write global header.
-                        dfb_global_header_t ghdr = {};
-                        ghdr.dm1_remapper_blob_offset = static_cast<uint32_t>(sizeof(dfb_global_header_t));
-                        ghdr.dm0_isr_blob_offset      = ghdr.dm1_remapper_blob_offset + total_dm1_blob_size;
-                        ghdr.per_dfb_layout_offset    = ghdr.dm0_isr_blob_offset      + total_dm0_isr_blob_size;
-                        std::memcpy(dfb_config_vec.data() + offset, &ghdr, sizeof(ghdr));
-                        offset += sizeof(ghdr);
-
-                        // DM1 remapper blobs: one entry per DFB, contiguous.
-                        for (const auto& dfb : dfbs_on_core) {
-                            auto blob = dfb->serialize_dm1_remapper_blob_for_core(logical_core);
-                            std::memcpy(dfb_config_vec.data() + offset, blob.data(), blob.size());
-                            offset += blob.size();
-                        }
-                        // DM0 ISR blobs: one entry per DFB, contiguous.
-                        for (const auto& dfb : dfbs_on_core) {
-                            auto blob = dfb->serialize_dm0_isr_blob_for_core(logical_core);
-                            std::memcpy(dfb_config_vec.data() + offset, blob.data(), blob.size());
-                            offset += blob.size();
-                        }
+                        bytes_written = offset;
                     }
-                    // Shared per-DFB layouts (dfb_initializer_t + per_risc entries).
-                    for (const auto& dfb : dfbs_on_core) {
-                        auto serialized = dfb->serialize_for_core(logical_core);
-                        std::memcpy(dfb_config_vec.data() + offset, serialized.data(), serialized.size());
-                        offset += serialized.size();
+
+                    if (MetalContext::instance().hal().has_tile_counter_registers()) {
+                        tt::tt_metal::experimental::dfb::detail::log_dfb_config_vec_dump(
+                            logical_core,
+                            "host_pre_write",
+                            std::span<const uint8_t>(dfb_config_vec.data(), bytes_written));
                     }
+
                     uint64_t addr = kernel_config_base + program.impl().get_program_config(index).dfb_offset;
                     log_info(
                         tt::LogMetal,
@@ -1063,8 +1046,27 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         addr,
                         kernel_config_base,
                         program.impl().get_program_config(index).dfb_offset,
-                        dfb_config_vec.size());
-                    MetalContext::instance().get_cluster().write_core(device_id, physical_core, dfb_config_vec, addr);
+                        bytes_written);
+                    MetalContext::instance().get_cluster().write_core(
+                        device_id, physical_core, std::span<const uint8_t>(dfb_config_vec.data(), bytes_written), addr);
+
+                    if (MetalContext::instance().hal().has_tile_counter_registers()) {
+                        MetalContext::instance().get_cluster().l1_barrier(device_id);
+                        std::vector<uint8_t> readback(bytes_written);
+                        MetalContext::instance().get_cluster().read_core(
+                            readback.data(),
+                            bytes_written,
+                            tt_cxy_pair(device_id, physical_core),
+                            addr);
+                        const std::vector<uint8_t> host_config(
+                            dfb_config_vec.begin(), dfb_config_vec.begin() + bytes_written);
+                        tt::tt_metal::experimental::dfb::detail::verify_dfb_config_readback_matches_host(
+                            logical_core, host_config, readback);
+                        tt::tt_metal::experimental::dfb::detail::log_dfb_config_vec_dump(
+                            logical_core, "l1_readback", readback);
+                        tt::tt_metal::experimental::dfb::detail::log_dfb_config_readback(
+                            logical_core, addr, host_config, readback);
+                    }
                 }
             }
             program.impl().init_semaphores(*device, logical_core, index);
