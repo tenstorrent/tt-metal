@@ -127,24 +127,15 @@ void kernel_main() {
         // Reconfig: reconfig_data_format(cb_in0, cb_fused_scale) +
         // mul_tiles_bcast_scalar_init_short -> BinaryDataFormatReconfig::Input.
         // pack_reconfig_data_format(cb_scale_mask) -> PackTileReconfig::Output.
-        compute_kernel_lib::eltwise_chain(
-            Wt,
-            compute_kernel_lib::BinaryFpu<
-                cb_in0,
-                cb_fused_scale,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::Scalar,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                cb_scale_mask,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::mul<
+            cb_in0,
+            cb_fused_scale,
+            cb_scale_mask,
+            compute_kernel_lib::BroadcastDim::Scalar,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::InputLifecycle::CallerManaged>(Wt);
         reconfig_data_format(cb_scale_mask, cb_fused_attn);
 
 #ifndef NUMERIC_STABLE
@@ -338,24 +329,15 @@ void kernel_main() {
         // mul_bcast_cols_init_short reconfig srca/srcb -> Input.
         // pack_reconfig_data_format(cb_out0) -> PackTileReconfig::Output.
         // cb_recipsumexps held outside (wait/pop bracket the chain) -> InputLifecycle::CallerManaged.
-        compute_kernel_lib::eltwise_chain(
-            Wt,
-            compute_kernel_lib::BinaryFpu<
-                cb_exps,
-                cb_recipsumexps,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::Col,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                cb_out0,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::mul<
+            cb_exps,
+            cb_recipsumexps,
+            cb_out0,
+            compute_kernel_lib::BroadcastDim::Col,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::InputLifecycle::CallerManaged>(Wt);
         cb_recipsumexps_obj.pop_front(1);
     }  // NCHt loop
     // cb_pop_front(cb_max_scaler, 1); // we don't actually have to do this

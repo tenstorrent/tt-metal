@@ -110,36 +110,26 @@ void kernel_main() {
         // the chain's per-element init programs the eltwise-binary math state
         // out of the matmul mode set by mm_init / mm_init_short above, so no
         // explicit binary_op_init_common is needed here.
-        eltwise_chain(
-            onetile,
-            BinaryFpu<
-                rotated_in_interm_cb,
-                updated_sin_cb,
-                BinaryFpuOp::Mul,
-                trig_bcast,
-                BinaryDataFormatReconfig::Input,
-                InputLifecycle::Streaming,
-                trig_lifecycle,
-                OperandKind::Scalar,
-                Dst::D0,
-                OperandKind::Scalar>{},
-            PackTile<sin_interm_cb, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
+        compute_kernel_lib::mul<
+            rotated_in_interm_cb,
+            updated_sin_cb,
+            sin_interm_cb,
+            trig_bcast,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            trig_lifecycle>(onetile);
 
         // cos_interim = in * cos
-        eltwise_chain(
-            onetile,
-            BinaryFpu<
-                in_cb,
-                updated_cos_cb,
-                BinaryFpuOp::Mul,
-                trig_bcast,
-                BinaryDataFormatReconfig::Input,
-                InputLifecycle::Streaming,
-                trig_lifecycle,
-                OperandKind::Scalar,
-                Dst::D0,
-                OperandKind::Scalar>{},
-            PackTile<cos_interm_cb, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::Output>{});
+        compute_kernel_lib::mul<
+            in_cb,
+            updated_cos_cb,
+            cos_interm_cb,
+            trig_bcast,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            trig_lifecycle>(onetile);
 
         // out = cos_interim + sin_interim
         compute_kernel_lib::add<cos_interm_cb, sin_interm_cb, out_cb>(onetile);

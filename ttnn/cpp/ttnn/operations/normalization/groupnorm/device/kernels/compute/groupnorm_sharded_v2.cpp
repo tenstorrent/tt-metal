@@ -343,24 +343,18 @@ void kernel_main() {
             //   block above) and the chain pops the full block_w window at the end -> folds the
             //   former manual cb_input_mask.pop_front(block_w).
             // mul_tiles_init reconfigs srca/srcb -> BinaryDataFormatReconfig::Input.
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::grid(block_h, block_w),
-                compute_kernel_lib::BinaryFpu<
-                    cb_x_id,
-                    cb_input_mask_id,
-                    compute_kernel_lib::BinaryFpuOp::Mul,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::DeferredPop,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Row>{},
-                compute_kernel_lib::PackTile<
-                    cb_x_id,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::None>{});
+            compute_kernel_lib::mul<
+                cb_x_id,
+                cb_input_mask_id,
+                cb_x_id,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::DeferredPop,
+                compute_kernel_lib::OperandKind::Row,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::grid(block_h, block_w));
             reconfig_data_format_srcb(cb_input_mask_id, cb_x_id);
 
             // (x - E[x])^2
@@ -454,24 +448,18 @@ void kernel_main() {
             // chain -> InputLifecycle::CallerManaged. mul_tiles_bcast_scalar_init_short reconfigs
             // srca/srcb -> BinaryDataFormatReconfig::Input; no pack reconfig -> None.
             cb_ex2pe.wait_front(1);
-            compute_kernel_lib::eltwise_chain(
-                block_hw,
-                compute_kernel_lib::BinaryFpu<
-                    cb_x_id,
-                    cb_ex2pe_id,
-                    compute_kernel_lib::BinaryFpuOp::Mul,
-                    compute_kernel_lib::BroadcastDim::Scalar,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
-                compute_kernel_lib::PackTile<
-                    cb_x_id,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::None>{});
+            compute_kernel_lib::mul<
+                cb_x_id,
+                cb_ex2pe_id,
+                cb_x_id,
+                compute_kernel_lib::BroadcastDim::Scalar,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::None>(block_hw);
             cb_ex2pe.pop_front(1);
             cb_x.wait_front(block_hw);
             //  add or copy with previous output results
@@ -640,24 +628,19 @@ void kernel_main() {
             // mul_bcast_rows_init_short reconfigs srca/srcb -> BinaryDataFormatReconfig::Input.
             //   No pack_reconfig -> PackTileReconfig::None. cb_outgamma: reserve(per_core_MN)
             //   upfront + push at end -> OutputLifecycle::Bulk.
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::grid(per_core_M, per_core_N),
-                compute_kernel_lib::BinaryFpu<
-                    cb_out_id,
-                    cb_gamma_id,
-                    compute_kernel_lib::BinaryFpuOp::Mul,
-                    compute_kernel_lib::BroadcastDim::Row,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::DeferredPop,
-                    compute_kernel_lib::InputLifecycle::HeldBulk,
-                    compute_kernel_lib::OperandKind::Block,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Row>{},
-                compute_kernel_lib::PackTile<
-                    cb_outgamma_id,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::PackTileReconfig::None>{});
+            compute_kernel_lib::mul<
+                cb_out_id,
+                cb_gamma_id,
+                cb_outgamma_id,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::InputLifecycle::DeferredPop,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::OperandKind::Row,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::PackTileReconfig::None>(
+                compute_kernel_lib::EltwiseShape::grid(per_core_M, per_core_N));
             cb_outgamma.wait_front(per_core_MN);
         } else {
             // cb_in holds the data required for gamma — in-place bcast-rows rotation.
@@ -671,24 +654,19 @@ void kernel_main() {
             // Reconfig: mul_bcast_rows_init_short reconfigs srca/srcb -> BinaryDataFormatReconfig::Input.
             //   No pack_reconfig in original -> PackTileReconfig::None. Output back into
             //   cb_in: OutputLifecycle::Streaming (per-tile reserve+push).
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::grid(per_core_M, per_core_N),
-                compute_kernel_lib::BinaryFpu<
-                    cb_in_id,
-                    cb_gamma_id,
-                    compute_kernel_lib::BinaryFpuOp::Mul,
-                    compute_kernel_lib::BroadcastDim::Row,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::BulkDrain,
-                    compute_kernel_lib::InputLifecycle::HeldBulk,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Row>{},
-                compute_kernel_lib::PackTile<
-                    cb_in_id,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::None>{});
+            compute_kernel_lib::mul<
+                cb_in_id,
+                cb_gamma_id,
+                cb_in_id,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::InputLifecycle::BulkDrain,
+                compute_kernel_lib::InputLifecycle::HeldBulk,
+                compute_kernel_lib::OperandKind::Row,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::None>(
+                compute_kernel_lib::EltwiseShape::grid(per_core_M, per_core_N));
         }
     }
 

@@ -9,6 +9,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -83,24 +84,18 @@ void kernel_main() {
         // Reconfig: mul_tiles_init reconfigs srca/srcb -> Input. No pack_reconfig -> None.
         // Lifecycles: InputLifecycle::CallerManaged on both sides (outer push/pop unchanged);
         //   OutputLifecycle::CallerManaged on pack so chain emits no reserve/push.
-        compute_kernel_lib::eltwise_chain(
-            1,
-            compute_kernel_lib::BinaryFpu<
-                rotated_in_interm_cb,
-                sin_cb,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                sin_interm_cb,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::CallerManaged,
-                compute_kernel_lib::PackTileReconfig::None>{});
+        compute_kernel_lib::mul<
+            rotated_in_interm_cb,
+            sin_cb,
+            sin_interm_cb,
+            compute_kernel_lib::BroadcastDim::None,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::OutputLifecycle::CallerManaged,
+            compute_kernel_lib::PackTileReconfig::None>(1);
         cb_push_back(sin_interm_cb, Wt);
         cb_pop_front(rotated_in_interm_cb, Wt);
 

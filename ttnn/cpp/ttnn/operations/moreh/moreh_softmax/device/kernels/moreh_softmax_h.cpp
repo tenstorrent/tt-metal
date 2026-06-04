@@ -6,6 +6,7 @@
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Exp
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask, Negative
 #include "ttnn/kernel/compute/moreh_common.hpp"
@@ -219,24 +220,17 @@ void kernel_main() {
                 compute_kernel_lib::OutputLifecycle::Bulk,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 #else
-        compute_kernel_lib::eltwise_chain(
-            Ht,
-            compute_kernel_lib::BinaryFpu<
-                cb_exps,
-                cb_recipsumexps,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::Row,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::Bulk,
-                compute_kernel_lib::InputLifecycle::Bulk,
-                compute_kernel_lib::OperandKind::Block,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                cb_out0,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Bulk,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::mul<
+            cb_exps,
+            cb_recipsumexps,
+            cb_out0,
+            compute_kernel_lib::BroadcastDim::Row,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::OutputLifecycle::Bulk>(Ht);
 #endif
         cb_x_m_max_obj.pop_front(Ht);
     }

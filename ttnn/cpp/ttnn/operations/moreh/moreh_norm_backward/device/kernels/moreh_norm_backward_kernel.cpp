@@ -147,66 +147,31 @@ void kernel_main() {
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>{});
-        compute_kernel_lib::eltwise_chain(
-            onetile,
-            compute_kernel_lib::BinaryFpu<
-                cb_xpow,
-                cb_exp_lxmd,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                cb_correct_xpow,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::mul<cb_xpow, cb_exp_lxmd, cb_correct_xpow>(onetile);
 
         // cb_correct_xpow * cb_y -> cb_tmp4. 4-branch bcast dispatch (compile-time).
         // cb_correct_xpow InputLifecycle::Streaming + Scalar (just pushed). cb_y InputLifecycle::CallerManaged (waited
         // outside).
-        compute_kernel_lib::eltwise_chain(
-            onetile,
-            compute_kernel_lib::BinaryFpu<
-                cb_correct_xpow,
-                cb_y,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                kBcast,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                cb_tmp4,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::mul<
+            cb_correct_xpow,
+            cb_y,
+            cb_tmp4,
+            kBcast,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
 
         // cb_tmp4 * cb_dy -> cb_tmp5. Same bcast pattern. cb_dy held outside loop.
-        compute_kernel_lib::eltwise_chain(
-            onetile,
-            compute_kernel_lib::BinaryFpu<
-                cb_tmp4,
-                cb_dy,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                kBcast,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                cb_tmp5,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::mul<
+            cb_tmp4,
+            cb_dy,
+            cb_tmp5,
+            kBcast,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
 
         // 1 / y^p — power_and_recip_tile_to_cb inlined as 4 chain stages.
         // Stage A: cb_y -> Power(p) -> [Recip if neg] -> cb_xpow. InputLifecycle::HeldStream.
@@ -297,46 +262,12 @@ void kernel_main() {
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // (cb_tmp5 * cb_recip_ypow) -> cb_tmp4. Same 4-branch bcast.
-        compute_kernel_lib::eltwise_chain(
-            onetile,
-            compute_kernel_lib::BinaryFpu<
-                cb_tmp5,
-                cb_recip_ypow,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                kBcast,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                cb_tmp4,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::mul<cb_tmp5, cb_recip_ypow, cb_tmp4, kBcast>(onetile);
 
         cb_dy_obj.pop_front(onetile);
 
         // cb_sign * cb_tmp4 -> cb_dx. Final mul_tiles_to_cb inlined.
-        compute_kernel_lib::eltwise_chain(
-            onetile,
-            compute_kernel_lib::BinaryFpu<
-                cb_sign,
-                cb_tmp4,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                cb_dx,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::mul<cb_sign, cb_tmp4, cb_dx>(onetile);
     }
 
     cb_decimal_obj.pop_front(onetile);

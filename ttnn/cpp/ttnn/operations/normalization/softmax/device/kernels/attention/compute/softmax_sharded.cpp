@@ -12,6 +12,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 template <uint32_t block_w, uint32_t num_subblocks_w, uint32_t subblock_w>
@@ -254,24 +255,15 @@ void kernel_main() {
         // pack_reconfig_data_format(cb_out0) -> PackTileReconfig::Output.
         // cb_recipsumexps InputLifecycle::CallerManaged (external wait/pop bracket).
         cb_recipsumexps_obj.wait_front(1);
-        compute_kernel_lib::eltwise_chain(
-            block_w,
-            compute_kernel_lib::BinaryFpu<
-                cb_exps,
-                cb_recipsumexps,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::Col,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                cb_out0,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::mul<
+            cb_exps,
+            cb_recipsumexps,
+            cb_out0,
+            compute_kernel_lib::BroadcastDim::Col,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::InputLifecycle::CallerManaged>(block_w);
         cb_recipsumexps_obj.pop_front(1);
     }
 }

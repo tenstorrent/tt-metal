@@ -48,24 +48,7 @@ void kernel_main() {
             compute_kernel_lib::InputLifecycle::Streaming,
             compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::PackTileReconfig::Output>(1u);
-        compute_kernel_lib::eltwise_chain(
-            num_tiles - 1u,
-            compute_kernel_lib::BinaryFpu<
-                input_cb,
-                partial_prod_cb,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                partial_prod_cb,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::mul<input_cb, partial_prod_cb, partial_prod_cb>(num_tiles - 1u);
         compute_kernel_lib::copy<
             partial_prod_cb,
             final_output_cb,

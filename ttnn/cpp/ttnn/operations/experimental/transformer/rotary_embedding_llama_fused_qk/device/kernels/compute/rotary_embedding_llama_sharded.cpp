@@ -9,6 +9,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -104,24 +105,18 @@ void kernel_main() {
         // cb_pop_front (line 92, 103) and cb_push_back (102) stay on raw LLK.
         // Reconfig: mul_bcast_rows_init_short reconfigs srca/srcb -> Input.
         // No pack_reconfig -> None.
-        compute_kernel_lib::eltwise_chain(
-            compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
-            compute_kernel_lib::BinaryFpu<
-                rotated_in_interm_cb,
-                sin_cb,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::Row,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Block,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Block>{},
-            compute_kernel_lib::PackTile<
-                sin_interm_cb,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::CallerManaged,
-                compute_kernel_lib::PackTileReconfig::None>{});
+        compute_kernel_lib::mul<
+            rotated_in_interm_cb,
+            sin_cb,
+            sin_interm_cb,
+            compute_kernel_lib::BroadcastDim::Row,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::OutputLifecycle::CallerManaged,
+            compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
         cb_push_back(sin_interm_cb, Wt);
         cb_pop_front(rotated_in_interm_cb, Wt);
 

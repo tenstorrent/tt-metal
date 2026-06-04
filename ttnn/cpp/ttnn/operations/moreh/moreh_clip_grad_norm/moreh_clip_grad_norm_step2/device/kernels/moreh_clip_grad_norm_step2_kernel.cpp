@@ -146,22 +146,5 @@ void kernel_main() {
             compute_kernel_lib::PackTileReconfig::Output>{});
 
     // Stage D: x^p * exp(log(x) * decimal) = (x + decimal)^p -> cb_y.
-    compute_kernel_lib::eltwise_chain(
-        onetile,
-        compute_kernel_lib::BinaryFpu<
-            cb_xpow,
-            cb_exp_lxmd,
-            compute_kernel_lib::BinaryFpuOp::Mul,
-            compute_kernel_lib::BroadcastDim::None,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::OperandKind::Scalar,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OperandKind::Scalar>{},
-        compute_kernel_lib::PackTile<
-            cb_y,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::Output>{});
+    compute_kernel_lib::mul<cb_xpow, cb_exp_lxmd, cb_y>(onetile);
 }

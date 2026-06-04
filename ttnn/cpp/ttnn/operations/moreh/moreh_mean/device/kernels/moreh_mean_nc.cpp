@@ -65,23 +65,14 @@ void kernel_main() {
         // cb_intermed0 InputLifecycle::Streaming (last iter's push, popped here);
         // cb_scalar InputLifecycle::CallerManaged + Scalar (pre-waited at top of kernel);
         // cb_out0 OutputLifecycle::Streaming.
-        compute_kernel_lib::eltwise_chain(
-            onetile,
-            compute_kernel_lib::BinaryFpu<
-                cb_intermed0,
-                cb_scalar,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::Scalar,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                cb_out0,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::mul<
+            cb_intermed0,
+            cb_scalar,
+            cb_out0,
+            compute_kernel_lib::BroadcastDim::Scalar,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
     }
 }

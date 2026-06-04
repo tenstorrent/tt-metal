@@ -115,24 +115,19 @@ void kernel_main() {
                         compute_kernel_lib::OutputLifecycle::Bulk,
                         compute_kernel_lib::PackTileReconfig::None>{});
 #else
-                compute_kernel_lib::eltwise_chain(
-                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
-                    compute_kernel_lib::BinaryFpu<
-                        rotated_in_interm_cb,
-                        sin_cb,
-                        compute_kernel_lib::BinaryFpuOp::Mul,
-                        compute_kernel_lib::BroadcastDim::None,
-                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::InputLifecycle::Bulk,
-                        compute_kernel_lib::InputLifecycle::Bulk,
-                        compute_kernel_lib::OperandKind::Block,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OperandKind::Block>{},
-                    compute_kernel_lib::PackTile<
-                        sin_interm_cb,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Bulk,
-                        compute_kernel_lib::PackTileReconfig::None>{});
+                compute_kernel_lib::mul<
+                    rotated_in_interm_cb,
+                    sin_cb,
+                    sin_interm_cb,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::PackTileReconfig::None>(
+                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 #endif
 
                 // cos_interim = x * cos  — same pattern as sin_interim.
@@ -158,24 +153,19 @@ void kernel_main() {
                         compute_kernel_lib::OutputLifecycle::Bulk,
                         compute_kernel_lib::PackTileReconfig::None>{});
 #else
-                compute_kernel_lib::eltwise_chain(
-                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
-                    compute_kernel_lib::BinaryFpu<
-                        in_cb,
-                        cos_cb,
-                        compute_kernel_lib::BinaryFpuOp::Mul,
-                        compute_kernel_lib::BroadcastDim::None,
-                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::InputLifecycle::Bulk,
-                        compute_kernel_lib::InputLifecycle::Bulk,
-                        compute_kernel_lib::OperandKind::Block,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OperandKind::Block>{},
-                    compute_kernel_lib::PackTile<
-                        cos_interm_cb,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Bulk,
-                        compute_kernel_lib::PackTileReconfig::None>{});
+                compute_kernel_lib::mul<
+                    in_cb,
+                    cos_cb,
+                    cos_interm_cb,
+                    compute_kernel_lib::BroadcastDim::None,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::InputLifecycle::Bulk,
+                    compute_kernel_lib::OperandKind::Block,
+                    compute_kernel_lib::OutputLifecycle::Bulk,
+                    compute_kernel_lib::PackTileReconfig::None>(
+                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 #endif
 
                 // out = cos_interim + sin_interim

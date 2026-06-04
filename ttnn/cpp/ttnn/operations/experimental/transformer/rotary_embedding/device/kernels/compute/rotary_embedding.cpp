@@ -53,20 +53,18 @@ ALWI void mul_tiles_chain(uint32_t in1_idx) {
     // in1 NOT popped — held across the whole walk per DECODE_MODE contract.
 #else
     (void)in1_idx;  // unused — in1 is per-iter streamed at index 0.
-    eltwise_chain(
-        1u,
-        BinaryFpu<
-            in0_cb,
-            in1_cb,
-            BinaryFpuOp::Mul,
-            BroadcastDim::None,
-            BinaryDataFormatReconfig::None,
-            InputLifecycle::Streaming,
-            InputLifecycle::Streaming,
-            OperandKind::Scalar,
-            Dst::D0,
-            OperandKind::Scalar>{},
-        PackTile<out_cb, Dst::D0, OutputLifecycle::Streaming, PackTileReconfig::None>{});
+    compute_kernel_lib::mul<
+        in0_cb,
+        in1_cb,
+        out_cb,
+        compute_kernel_lib::BroadcastDim::None,
+        compute_kernel_lib::BinaryDataFormatReconfig::None,
+        compute_kernel_lib::OperandKind::Scalar,
+        compute_kernel_lib::InputLifecycle::Streaming,
+        compute_kernel_lib::InputLifecycle::Streaming,
+        compute_kernel_lib::OperandKind::Scalar,
+        compute_kernel_lib::OutputLifecycle::Streaming,
+        compute_kernel_lib::PackTileReconfig::None>(1u);
 #endif
 }
 
@@ -148,24 +146,15 @@ void kernel_main() {
                 // Lifecycles: rotated_in_cb InputLifecycle::Streaming (wait+pop per iter); scalar_cb
                 //   InputLifecycle::CallerManaged (waited once at line 85, never popped); rotated_in_interm_cb
                 //   OutputLifecycle::Streaming.
-                compute_kernel_lib::eltwise_chain(
-                    onetile,
-                    compute_kernel_lib::BinaryFpu<
-                        rotated_in_cb,
-                        scalar_cb,
-                        compute_kernel_lib::BinaryFpuOp::Mul,
-                        compute_kernel_lib::BroadcastDim::Scalar,
-                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::InputLifecycle::CallerManaged,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OperandKind::Scalar>{},
-                    compute_kernel_lib::PackTile<
-                        rotated_in_interm_cb,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                compute_kernel_lib::mul<
+                    rotated_in_cb,
+                    scalar_cb,
+                    rotated_in_interm_cb,
+                    compute_kernel_lib::BroadcastDim::Scalar,
+                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                    compute_kernel_lib::OperandKind::Scalar,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
                 reconfig_data_format_srcb(scalar_cb, updated_sin_cb);
                 pack_reconfig_data_format(rotated_in_interm_cb, sin_interm_cb);
                 // Multiply rotated input by sin (chain-based)

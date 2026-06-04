@@ -10,6 +10,7 @@
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"
 
 void kernel_main() {
@@ -81,24 +82,15 @@ void kernel_main() {
                 compute_kernel_lib::PackTileReconfig::Output>{});
 
         // Stage B: cb_out0 = cb_intermed0 * cb_scalar (SCALAR bcast).
-        compute_kernel_lib::eltwise_chain(
-            onetile,
-            compute_kernel_lib::BinaryFpu<
-                cb_intermed0,
-                cb_scalar,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::Scalar,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                cb_out0,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::mul<
+            cb_intermed0,
+            cb_scalar,
+            cb_out0,
+            compute_kernel_lib::BroadcastDim::Scalar,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
     }
     cb_in1_obj.pop_front(onetile);
 }

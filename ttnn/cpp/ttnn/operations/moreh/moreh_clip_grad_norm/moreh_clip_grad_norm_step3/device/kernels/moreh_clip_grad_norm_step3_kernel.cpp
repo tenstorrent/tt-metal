@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
@@ -26,22 +27,16 @@ void kernel_main() {
     // Reconfig: original used `mul_tiles_bcast_scalar_init_short` (no
     // `_with_dt`) and plain `pack_tile` — no per-iter format reconfig.
     // Chain matches with `BinaryDataFormatReconfig::None` + `PackTileReconfig::None`.
-    compute_kernel_lib::eltwise_chain(
-        num_tiles,
-        compute_kernel_lib::BinaryFpu<
-            cb_x,
-            cb_clip_coef_clamped,
-            compute_kernel_lib::BinaryFpuOp::Mul,
-            compute_kernel_lib::BroadcastDim::Scalar,
-            compute_kernel_lib::BinaryDataFormatReconfig::None,
-            compute_kernel_lib::InputLifecycle::Streaming,  // cb_x
-            compute_kernel_lib::InputLifecycle::Bulk,       // cb_clip_coef_clamped (Scalar → 1-tile wait+pop)
-            compute_kernel_lib::OperandKind::Scalar,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OperandKind::Scalar>{},
-        compute_kernel_lib::PackTile<
-            cb_y,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::None>{});
+    compute_kernel_lib::mul<
+        cb_x,
+        cb_clip_coef_clamped,
+        cb_y,
+        compute_kernel_lib::BroadcastDim::Scalar,
+        compute_kernel_lib::BinaryDataFormatReconfig::None,
+        compute_kernel_lib::OperandKind::Scalar,
+        compute_kernel_lib::InputLifecycle::Streaming,
+        compute_kernel_lib::InputLifecycle::Bulk,
+        compute_kernel_lib::OperandKind::Scalar,
+        compute_kernel_lib::OutputLifecycle::Streaming,
+        compute_kernel_lib::PackTileReconfig::None>(num_tiles);
 }

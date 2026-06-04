@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
@@ -33,84 +34,32 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_output_tiles; ++i) {
         if (num_input_tiles == 1) {
             // Single input tile: cb_in0 * cb_in1 -> cb_out0.
-            compute_kernel_lib::eltwise_chain(
-                onetile,
-                compute_kernel_lib::BinaryFpu<
-                    cb_in0,
-                    cb_in1,
-                    compute_kernel_lib::BinaryFpuOp::Mul,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::HeldStream,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
-                compute_kernel_lib::PackTile<
-                    cb_out0,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::mul<
+                cb_in0,
+                cb_in1,
+                cb_out0,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
         } else {
             // Seed: cb_in0 * cb_in1 -> cb_intermed0 (cb_in1 = scaler, held).
-            compute_kernel_lib::eltwise_chain(
-                onetile,
-                compute_kernel_lib::BinaryFpu<
-                    cb_in0,
-                    cb_in1,
-                    compute_kernel_lib::BinaryFpuOp::Mul,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::HeldStream,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
-                compute_kernel_lib::PackTile<
-                    cb_intermed0,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::mul<
+                cb_in0,
+                cb_in1,
+                cb_intermed0,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
             // Middle: cb_in0 * cb_intermed0 -> cb_intermed0 (n_input - 2 iters).
             if (num_input_tiles > 2) {
-                compute_kernel_lib::eltwise_chain(
-                    num_input_tiles - 2u,
-                    compute_kernel_lib::BinaryFpu<
-                        cb_in0,
-                        cb_intermed0,
-                        compute_kernel_lib::BinaryFpuOp::Mul,
-                        compute_kernel_lib::BroadcastDim::None,
-                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OperandKind::Scalar>{},
-                    compute_kernel_lib::PackTile<
-                        cb_intermed0,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                compute_kernel_lib::mul<cb_in0, cb_intermed0, cb_intermed0>(num_input_tiles - 2u);
             }
             // Final: cb_in0 * cb_intermed0 -> cb_out0.
-            compute_kernel_lib::eltwise_chain(
-                onetile,
-                compute_kernel_lib::BinaryFpu<
-                    cb_in0,
-                    cb_intermed0,
-                    compute_kernel_lib::BinaryFpuOp::Mul,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
-                compute_kernel_lib::PackTile<
-                    cb_out0,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::mul<cb_in0, cb_intermed0, cb_out0>(onetile);
         }
     }
 }

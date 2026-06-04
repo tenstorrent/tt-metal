@@ -71,20 +71,15 @@ void kernel_main() {
             ckl::PackTile<cb_tmp2, D::D0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
 
         // stage 2: input_grad = cb_tmp2 * (1/divisor)
-        ckl::eltwise_chain(
-            1,
-            ckl::BinaryFpu<
-                cb_tmp2,
-                cb_tmp1,
-                ckl::BinaryFpuOp::Mul,
-                ckl::BroadcastDim::Scalar,
-                ckl::BinaryDataFormatReconfig::Input,
-                ckl::InputLifecycle::Streaming,
-                ckl::InputLifecycle::CallerManaged,
-                ckl::OperandKind::Scalar,
-                D::D0,
-                ckl::OperandKind::Scalar>{},
-            ckl::PackTile<cb_input_grad, D::D0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::Output>{});
+        compute_kernel_lib::mul<
+            cb_tmp2,
+            cb_tmp1,
+            cb_input_grad,
+            compute_kernel_lib::BroadcastDim::Scalar,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::InputLifecycle::CallerManaged>(1);
     }
 
     cb_pop_front(cb_output_grad, 1);

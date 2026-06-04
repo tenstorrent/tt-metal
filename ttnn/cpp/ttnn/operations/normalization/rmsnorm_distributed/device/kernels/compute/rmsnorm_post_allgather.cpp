@@ -119,24 +119,17 @@ void kernel_main() {
          * x * 1/sqrt(stdev)
          */
         cb_wait_front(cb_recip_sqrt_var, 1);
-        compute_kernel_lib::eltwise_chain(
-            compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/blk),
-            compute_kernel_lib::BinaryFpu<
-                cb_norm_x_input,
-                cb_recip_sqrt_var,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::Col,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::Bulk,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OperandKind::Block,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                normed_output_cb,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Bulk,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::mul<
+            cb_norm_x_input,
+            cb_recip_sqrt_var,
+            normed_output_cb,
+            compute_kernel_lib::BroadcastDim::Col,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::OutputLifecycle::Bulk>(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/blk));
         cb_pop_front(cb_recip_sqrt_var, 1);
 
         if constexpr (do_gamma) {
@@ -144,24 +137,18 @@ void kernel_main() {
              * x_normed * gamma   (cb_gamma walks Block — index = 0..Wt-1)
              */
             cb_wait_front(cb_gamma, Wt);  // gamma is reused across NCHt — wait once per row
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/blk),
-                compute_kernel_lib::BinaryFpu<
-                    cb_x_normed,
-                    cb_gamma,
-                    compute_kernel_lib::BinaryFpuOp::Mul,
-                    compute_kernel_lib::BroadcastDim::Row,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::OperandKind::Block,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Block>{},
-                compute_kernel_lib::PackTile<
-                    cb_times_gamma_out,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::mul<
+                cb_x_normed,
+                cb_gamma,
+                cb_times_gamma_out,
+                compute_kernel_lib::BroadcastDim::Row,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::OutputLifecycle::Bulk>(
+                compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/blk));
 
             if constexpr (do_beta) {
                 /*

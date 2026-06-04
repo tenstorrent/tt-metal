@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 void kernel_main() {
@@ -16,24 +17,18 @@ void kernel_main() {
         bool last_out = block == (per_core_block_cnt - 1);
 
         // elemwise-mul: cb_intermed0 = cb_in0 * cb_in1
-        compute_kernel_lib::eltwise_chain(
-            onetile,
-            compute_kernel_lib::BinaryFpu<
-                tt::CBIndex::c_0,
-                tt::CBIndex::c_1,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                tt::CBIndex::c_24,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::None>{});
+        compute_kernel_lib::mul<
+            tt::CBIndex::c_0,
+            tt::CBIndex::c_1,
+            tt::CBIndex::c_24,
+            compute_kernel_lib::BroadcastDim::None,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::InputLifecycle::Streaming,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::OutputLifecycle::Streaming,
+            compute_kernel_lib::PackTileReconfig::None>(onetile);
 
         // reduce-w
         compute_kernel_lib::reduce<

@@ -243,24 +243,18 @@ void kernel_main() {
     //   mul_bcast_cols_init_short -> Input; pack_reconfig(cb_im) -> Output.
     // cb_ex_global: 1-tile scalar -> Bulk folds its wait(1)/pop(1) into the chain (Scalar
     //   window = 1: Upfront wait_front(1) + AtEnd pop_front(1)).
-    compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::tiles(num_tiles_per_block, subblock_w),
-        compute_kernel_lib::BinaryFpu<
-            cb_xmm,
-            cb_ex_global,
-            compute_kernel_lib::BinaryFpuOp::Mul,
-            compute_kernel_lib::BroadcastDim::Col,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OperandKind::Scalar>{},
-        compute_kernel_lib::PackTile<
-            cb_im,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutputLifecycle::Bulk,
-            compute_kernel_lib::PackTileReconfig::Output>{});
+    compute_kernel_lib::mul<
+        cb_xmm,
+        cb_ex_global,
+        cb_im,
+        compute_kernel_lib::BroadcastDim::Col,
+        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+        compute_kernel_lib::OperandKind::Block,
+        compute_kernel_lib::InputLifecycle::CallerManaged,
+        compute_kernel_lib::InputLifecycle::Bulk,
+        compute_kernel_lib::OperandKind::Scalar,
+        compute_kernel_lib::OutputLifecycle::Bulk>(
+        compute_kernel_lib::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
     cb_pop_front(cb_xmm, num_tiles_per_block);
 
     // gamma: cb_im * gamma (bcast-rows) -> cb_outgamma, single chain.
@@ -270,22 +264,16 @@ void kernel_main() {
     //   for both with BroadcastDim::Row (the FPU bcast-rows mode). cb_outgamma: reserve(num_tiles
     //   _per_block) upfront + push(subblock_w) per chunk -> BulkReservePerChunk.
     //   reconfig_data_format + mul_bcast_rows_init_short -> Input; pack_reconfig(cb_out) -> Output.
-    compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::tiles(num_tiles_per_block, subblock_w),
-        compute_kernel_lib::BinaryFpu<
-            cb_im,
-            cb_gamma,
-            compute_kernel_lib::BinaryFpuOp::Mul,
-            compute_kernel_lib::BroadcastDim::Row,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::InputLifecycle::HeldBulk,
-            compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OperandKind::Block>{},
-        compute_kernel_lib::PackTile<
-            cb_outgamma,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OutputLifecycle::BulkReservePerChunk,
-            compute_kernel_lib::PackTileReconfig::Output>{});
+    compute_kernel_lib::mul<
+        cb_im,
+        cb_gamma,
+        cb_outgamma,
+        compute_kernel_lib::BroadcastDim::Row,
+        compute_kernel_lib::BinaryDataFormatReconfig::Input,
+        compute_kernel_lib::OperandKind::Block,
+        compute_kernel_lib::InputLifecycle::Bulk,
+        compute_kernel_lib::InputLifecycle::HeldBulk,
+        compute_kernel_lib::OperandKind::Block,
+        compute_kernel_lib::OutputLifecycle::BulkReservePerChunk>(
+        compute_kernel_lib::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
 }

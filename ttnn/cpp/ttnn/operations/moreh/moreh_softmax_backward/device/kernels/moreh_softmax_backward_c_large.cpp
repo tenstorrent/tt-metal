@@ -65,24 +65,14 @@ void kernel_main() {
 
             // sum * exp(y) — cb_sum held outside, cb_exp streaming.
             constexpr auto cb_inter2 = tt::CBIndex::c_26;
-            compute_kernel_lib::eltwise_chain(
-                onetile,
-                compute_kernel_lib::BinaryFpu<
-                    cb_sum,
-                    cb_exp,
-                    compute_kernel_lib::BinaryFpuOp::Mul,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::HeldStream,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
-                compute_kernel_lib::PackTile<
-                    cb_inter2,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::mul<
+                cb_sum,
+                cb_exp,
+                cb_inter2,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
 
             // dy - sum * exp(y).
             compute_kernel_lib::eltwise_chain(
@@ -108,24 +98,7 @@ void kernel_main() {
 #else
         // compute sum(y * dy) over C-dim. No bcast.
         for (uint32_t i = 0; i < dim_size; ++i) {
-            compute_kernel_lib::eltwise_chain(
-                onetile,
-                compute_kernel_lib::BinaryFpu<
-                    cb_y,
-                    cb_dy,
-                    compute_kernel_lib::BinaryFpuOp::Mul,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
-                compute_kernel_lib::PackTile<
-                    cb_ydy,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::mul<cb_y, cb_dy, cb_ydy>(onetile);
 
             if (i == 0) {
                 compute_kernel_lib::copy<
@@ -164,24 +137,7 @@ void kernel_main() {
                     compute_kernel_lib::PackTileReconfig::Output>{});
 #ifdef SOFTMAX
             // (dy - sum) * y. cb_y held outside (InputLifecycle::CallerManaged).
-            compute_kernel_lib::eltwise_chain(
-                onetile,
-                compute_kernel_lib::BinaryFpu<
-                    cb_dy_m_sum,
-                    cb_y,
-                    compute_kernel_lib::BinaryFpuOp::Mul,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
-                compute_kernel_lib::PackTile<
-                    cb_dx,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::mul<cb_dy_m_sum, cb_y, cb_dx>(onetile);
 #else
             // -(dy - sum) * y.
             compute_kernel_lib::eltwise_chain(

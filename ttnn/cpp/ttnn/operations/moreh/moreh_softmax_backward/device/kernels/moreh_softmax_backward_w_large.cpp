@@ -115,24 +115,15 @@ void kernel_main() {
                 compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::PackTileReconfig::Output>(onetile);
-            compute_kernel_lib::eltwise_chain(
-                onetile,
-                compute_kernel_lib::BinaryFpu<
-                    cb_exp,
-                    cb_sum,
-                    compute_kernel_lib::BinaryFpuOp::Mul,
-                    compute_kernel_lib::BroadcastDim::Col,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::HeldStream,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
-                compute_kernel_lib::PackTile<
-                    cb_inter2,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::mul<
+                cb_exp,
+                cb_sum,
+                cb_inter2,
+                compute_kernel_lib::BroadcastDim::Col,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
             compute_kernel_lib::eltwise_chain(
                 onetile,
                 compute_kernel_lib::BinaryFpu<
@@ -184,24 +175,7 @@ void kernel_main() {
                         compute_kernel_lib::OutputLifecycle::Streaming,
                         compute_kernel_lib::PackTileReconfig::Output>{});
             } else {
-                compute_kernel_lib::eltwise_chain(
-                    onetile,
-                    compute_kernel_lib::BinaryFpu<
-                        cb_y,
-                        cb_dy,
-                        compute_kernel_lib::BinaryFpuOp::Mul,
-                        compute_kernel_lib::BroadcastDim::None,
-                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::OperandKind::Scalar,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OperandKind::Scalar>{},
-                    compute_kernel_lib::PackTile<
-                        cb_ydy,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OutputLifecycle::Streaming,
-                        compute_kernel_lib::PackTileReconfig::Output>{});
+                compute_kernel_lib::mul<cb_y, cb_dy, cb_ydy>(onetile);
             }
 
             if (w == 0) {
@@ -242,24 +216,7 @@ void kernel_main() {
                     compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::PackTileReconfig::Output>{});
 #ifdef SOFTMAX
-            compute_kernel_lib::eltwise_chain(
-                onetile,
-                compute_kernel_lib::BinaryFpu<
-                    cb_y,
-                    cb_inter2,
-                    compute_kernel_lib::BinaryFpuOp::Mul,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OperandKind::Scalar,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Scalar>{},
-                compute_kernel_lib::PackTile<
-                    cb_dx,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
+            compute_kernel_lib::mul<cb_y, cb_inter2, cb_dx>(onetile);
 #else
             compute_kernel_lib::eltwise_chain(
                 onetile,

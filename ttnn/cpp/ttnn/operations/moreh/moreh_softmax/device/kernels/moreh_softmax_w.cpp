@@ -236,24 +236,17 @@ void kernel_main() {
                 compute_kernel_lib::OutputLifecycle::Bulk,
                 compute_kernel_lib::PackTileReconfig::Output>{});
 #else
-        compute_kernel_lib::eltwise_chain(
-            Wt,
-            compute_kernel_lib::BinaryFpu<
-                cb_exps,
-                cb_recipsumexps,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::Col,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::InputLifecycle::Bulk,
-                compute_kernel_lib::InputLifecycle::Bulk,
-                compute_kernel_lib::OperandKind::Block,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar>{},
-            compute_kernel_lib::PackTile<
-                cb_out0,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OutputLifecycle::Bulk,
-                compute_kernel_lib::PackTileReconfig::Output>{});
+        compute_kernel_lib::mul<
+            cb_exps,
+            cb_recipsumexps,
+            cb_out0,
+            compute_kernel_lib::BroadcastDim::Col,
+            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+            compute_kernel_lib::OperandKind::Block,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::InputLifecycle::Bulk,
+            compute_kernel_lib::OperandKind::Scalar,
+            compute_kernel_lib::OutputLifecycle::Bulk>(Wt);
 #endif
         cb_x_m_max_obj.pop_front(Wt);
     }
