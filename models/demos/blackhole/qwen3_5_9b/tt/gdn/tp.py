@@ -44,11 +44,29 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     def c(n):
         return str(cache_dir / n) if cache_dir is not None else None
 
-    # Keys may arrive raw (`linear_attn.in_proj_qkv.weight`) or already stripped
-    # by substate() in the integrated model path (`in_proj_qkv.weight`).
-    P = "linear_attn." if ("linear_attn.in_proj_qkv.weight" in sd) else ""
+    # Keys may arrive in three layouts depending on the loader/path:
+    #   - raw FP8 loader, unstripped:          linear_attn.in_proj_qkv.weight / linear_attn.conv1d.weight
+    #   - raw FP8 loader, substate()-stripped: in_proj_qkv.weight            / conv1d.weight
+    #   - bf16 remap (remap_qwen35_state_dict): qkv_proj.weight (renamed) +
+    #     q_conv/k_conv/v_conv.weight (conv1d split per Q/K/V stream)
+    # The optional `linear_attn.` prefix is detected; the fused QKV tensor is the
+    # same under either name, and the fused conv1d is the concat of the three
+    # per-stream conv weights in [Q, K, V] order (the exact split remap applied).
+    P = "linear_attn." if any(k.startswith("linear_attn.") for k in sd) else ""
+
+    def first_key(*names):
+        for n in names:
+            if (P + n) in sd:
+                return sd[P + n]
+        raise KeyError(f"none of {[P + n for n in names]} found in GDN state dict")
+
     # ---- fused QKV+Z (column-parallel) ----
-    qkv_re = tpc.prepare_gdn_qkv(sd[P + "in_proj_qkv.weight"], key_dim, value_dim, nk, dk, nv, dv, tp)
+    qkv_w = first_key("in_proj_qkv.weight", "qkv_proj.weight")
+    if (P + "conv1d.weight") in sd:
+        conv1d_w = sd[P + "conv1d.weight"]
+    else:  # bf16 remap split conv1d into per-stream q/k/v; reassemble the fused weight
+        conv1d_w = torch.cat([sd[P + "q_conv.weight"], sd[P + "k_conv.weight"], sd[P + "v_conv.weight"]], dim=0)
+    qkv_re = tpc.prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp)
     z_w = sd[P + "in_proj_z.weight"]
     fused = torch.cat(
         [
@@ -85,7 +103,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     tw["neg_exp_A"] = ttnn.neg(ttnn.exp(A_log))
     tw["norm_w"] = tpc.replicate(sd[P + "norm.weight"].float(), mesh, c("norm_w"))
     # ---- conv taps (4), sharded per Q/K/V head grouping ----
-    taps = tpc.prepare_conv_taps(sd[P + "conv1d.weight"], key_dim, nk, dk, nv, dv, args.gdn_conv_kernel_size, tp)
+    taps = tpc.prepare_conv_taps(conv1d_w, key_dim, nk, dk, nv, dv, args.gdn_conv_kernel_size, tp)
     tw["conv_taps"] = [tpc.shard_small(taps[j], mesh, c(f"tap{j}")) for j in range(args.gdn_conv_kernel_size)]
     return tw
 
