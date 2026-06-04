@@ -164,17 +164,10 @@ MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::comput
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     const ttnn::Tensor& tilize_input_tensor = tensor_args.tilize_input_tensor;
-    const ttnn::Tensor& tilize_mapping_tensor = tensor_args.tilize_expert_mapping_tensor;
-
     const auto& tilize_input_shape = tilize_input_tensor.tensor_spec().logical_shape();
-    const auto& tilize_mapping_shape = tilize_mapping_tensor.tensor_spec().logical_shape();
-
     auto* mesh_device = tilize_input_tensor.device();
-    const auto& mesh_view = mesh_device->get_view();
-    uint32_t num_devices = mesh_view.num_devices();
 
-    uint32_t experts = tilize_mapping_shape[-1];
-    uint32_t experts_per_device = tt::div_up(experts, num_devices);
+    uint32_t experts_per_device = tensor_args.matmul_w0_w1_tensor.logical_shape()[2];
     uint32_t total_tokens =
         tilize_input_shape[0] *
         tilize_input_shape[1];  // tokens_per_device from input, total tokens across all dispatch devices

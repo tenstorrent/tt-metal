@@ -274,8 +274,6 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto hidden_size = operation_attributes.hidden_size;
 
     const auto total_tokens = batch_size * seq_size;
-    // Eventually map number of experts to device
-    const auto experts = operation_attributes.experts;
 
     const auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
@@ -291,9 +289,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const uint32_t num_devices_total = mesh_view.num_devices();
     const bool double_buffer_source = compute_cores_by_ring_id.has_value();
 
-    // NOTE: shared experts are slightly delicate since they show up as an additional entry in the mapping tensor the
-    // result is fractional experts per device so div_up is required to get the right value here.
-    const uint32_t experts_per_device = tt::div_up(experts, num_devices_total);
+    // physical experts per device, replicated shared experts are counted per device
+    const uint32_t experts_per_device = dense_token_maps_tensor.logical_shape()[0];
 
     const auto input_dtype = input_tensor.dtype();
     const auto& dense_token_maps_tensor_spec = dense_token_maps_tensor.tensor_spec();
