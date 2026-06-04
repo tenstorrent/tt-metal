@@ -1089,7 +1089,8 @@ inline void _init_reduce_(std::uint32_t block_ct_dim = 1)
 {
     static_assert(is_supported_reduce_format(format), "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
-    // Determine InstrModLoadStore from llk_defs; Int32 MAX/MIN use INT32_2S_COMP for SFPSWAP
+    // Float16_b uses DEFAULT (not FP16B) because dest holds data in native FP32 precision
+    // FP16B mode would apply an unwanted FP16B to FP32 conversion on each SFPLOAD/SFPSTORE
     constexpr InstrModLoadStore INSTRUCTION_MODE = (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN))
                                                        ? InstrModLoadStore::INT32_2S_COMP
                                                    : (format == DataFormat::Float16_b) ? InstrModLoadStore::DEFAULT
@@ -1141,6 +1142,8 @@ inline void _calculate_reduce_(std::uint32_t block_ct_dim = 1, std::uint32_t blo
     // Column MAX/MIN with Int32 uses INT32_2S_COMP for the LOADMACRO-based compare-and-swap pipeline.
     // Row MAX with Int32 uses plain INT32 (sign-magnitude) for direct SFPLOAD/SFPSTORE: the
     // sign-magnitude ↔ 2's-complement casts are done inline around each SFPSWAP.
+    // Float16_b uses DEFAULT (not FP16B) because dest holds data in native FP32 precision
+    // FP16B mode would apply an unwanted FP16B to FP32 conversion on each SFPLOAD/SFPSTORE
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN) && reduce_dim == ReduceDim::REDUCE_COL)
             ? InstrModLoadStore::INT32_2S_COMP
