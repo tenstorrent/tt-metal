@@ -3,6 +3,49 @@
 Live tracker. Append-only. Mirrors the format in
 `models/demos/olmo_galaxy/BRINGUP_LOG.md`.
 
+## 2026-06-04 (cont.3) — server decode runs e2e; output GARBAGE; bug = use_paged_kv_cache=True path
+
+The server now runs the FULL prefill + decode loop end-to-end and returns tokens.
+**Prefill + first token are CORRECT** (`max_tokens=1` -> `' Paris'`), but **all
+decode steps are garbage** (`max_tokens=8` -> `' Paris' _ifSOAP_vertex marriage...`).
+
+Decode-path fixes that got it to RUN (committed, all correct/needed):
+- decode rope via `get_qwen36_rm_rot_idxs/_mats` (not the llama `[32]` path).
+- decode embedding built as raw `ttnn.embedding` -> DRAM (not `TtLlamaEmbedding` L1).
+- `QWEN36_DECODE_L1_RESIDUAL=1` + `QWEN36_FORCE_SWITCH_DECODE=1` (catalog) — fix the
+  decode-norm CCL collision + select the batch-1 decode-mode tail (Path A).
+- trace decode wired into the generator (`set_trace_decode_mode` at capture +
+  `refresh_decode_per_step_buffers` before every `execute_trace`; catalog
+  `trace_mode: true`). NOTE: eager vs trace makes NO difference — both garbage.
+
+ROOT CAUSE (confirmed): the server is the FIRST to use `use_paged_kv_cache=True`
+(vLLM external paged cache + dynamic block_tables). EVERY working decode reference
+(demo, `test_decode_eager_64L_pcc.py`) uses `use_paged_kv_cache=False` (model-internal
+cache). A correct FIRST token does NOT validate the KV write — prefill logits are
+computed over the prompt directly without reading the cache back; only DECODE reads it.
+
+Two paged-layout fixes TRIED, neither resolved the garbage (both match the demo, kept
+as they are more correct):
+1. `allocate_vllm_kv_cache`: ReplicateTensorToMesh -> row-shard `ShardTensor2dMesh(dims=(1,None))`,
+   torch dim1 = n_kv_full=8 — matching `init_kv_cache`.
+2. `prepare_prefill_inputs_host`: qwen36 now REPLICATES the prefill page_table
+   (was llama70b column-shard `dims=(None,0)` -> wrote KV to mesh column 0 only;
+   decode reads all columns replicated). Matches the demo's `_build_paged_page_table`.
+
+STILL GARBAGE after both. NEXT (needs a HEALTHY device):
+- Run `test_decode_eager_64L_pcc.py` (use_paged_kv_cache=False) to confirm the decode
+  FORWARD math is correct in isolation (expect `' Paris'`, PCC>0.99).
+- Make a `use_paged_kv_cache=True` variant of that test (allocate cache + page_table
+  like the server) to bisect the paged path WITHOUT the 5-min server reload.
+- Or enable `QWEN36_FA_DEBUG=1` on the server to dump page_table / current_pos / KV at
+  the prefill write vs decode read boundary (the `_fa_debug_route` probe exists).
+
+**DEVICE BLOCKER:** after ~5 `tt-smi -r` this session the galaxy fabric init is flaky
+— `topology_mapper.cpp:527` then `fabric_firmware_initializer.cpp:220` FATALs at mesh
+open, a different failure each reset (the server eventually mapped after a retry; the
+STRICT_INIT test fixture does not). Per prior precedent (cont.2), the CPLD-too-old
+galaxy needs a HOST POWER-CYCLE to fully recover. Stopped resetting to avoid wedging.
+
 ## 2026-06-04 (cont.2) — full prefill forward runs end-to-end (eager, batch-1); device wedged on final confirm
 
 Drove the request prefill all the way through the model on the 32-chip mesh
