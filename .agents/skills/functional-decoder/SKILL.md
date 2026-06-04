@@ -89,7 +89,8 @@ Use this reference while bringing up a TTNN decoder layer. It folds in relevant 
 - Synthetic input activations should approximate the distribution entering the decoder layer after embeddings/norms, not arbitrary huge random values.
 - Do not create smaller configs - replicate the real config of the reference.
 - If full HF weight download is necessary to collect stats, record why partial shard loading was not practical.
-- Always use real shapes even with synthetic weights
+- Always use real shapes even with synthetic weights.
+- You must include a test with real weights and show it passes PCC >= 0.995 at least once at the end of your bringup.
 
 ## Paged KV Cache Checks
 
