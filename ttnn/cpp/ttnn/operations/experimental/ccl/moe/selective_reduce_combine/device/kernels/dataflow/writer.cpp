@@ -327,11 +327,6 @@ void kernel_main() {
         auto termination_sync_semaphore_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sync_args.termination_sync_address);
 
-        // Wait for every other worker on this link to signal termination. The count is
-        // (num_workers_per_link - 1): a link's termination master is incremented by all the other
-        // workers sharing its link, which can exceed num_data_parallel_cores - 1 when a link spans
-        // multiple token-parallel groups (e.g. BH num_links=2). The previous (num_data_parallel_cores
-        // - 1) target was overshot by the extra increments, so the exact-match wait never observed it.
         noc_semaphore_wait(termination_sync_semaphore_ptr, num_workers_per_link - 1);
         noc_semaphore_set(termination_sync_semaphore_ptr, 0);
 
