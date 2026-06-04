@@ -481,6 +481,16 @@ all_gather_minimal_matmul_async_factory_helper(
         (transpose_core_grid ? full_grid_size.y : full_grid_size.x) >= num_mux_cores,
         "The are not enough cores for the number of mux cores requested");
 
+    // In-column fsdp mux row for a given (group, dir): dir SWAPPED (flip) AND the result shifted up by
+    // one cyclically within the 2*num_links packed rows. The flip swaps which direction owns the
+    // even vs odd row; the up-shift then moves both of a group's muxes to rows <= the group base so
+    // every in1 write (hot tail and cold rank-0) is same-row or upward on NOC_1 — no "down" write
+    // anywhere. Cost: the hot tail write becomes up-1/up-2 instead of same-row, and group 0's muxes
+    // wrap to the top rows. Must stay in lockstep with the fsdp mux create/RT-args/sender loops.
+    const auto fsdp_mux_col_row = [num_mux_cores](uint32_t group, uint32_t dir) {
+        return (group * 2 + (1 - dir) + num_mux_cores - 1) % num_mux_cores;
+    };
+
     const auto mux_connection_valid = [&backward_coord, &forward_coord](const uint32_t dir) {
         return (dir && backward_coord.has_value()) || (!dir && forward_coord.has_value());
     };
@@ -638,7 +648,7 @@ all_gather_minimal_matmul_async_factory_helper(
                 // layout with the -1 NOC_1 shift.
                 CoreCoord fsdp_mux_logical_core;
                 if (fsdp_mux_in_column) {
-                    fsdp_mux_logical_core = CoreCoord(full_grid_size.x - 1, link * 2 + dir);  // 2 = #directions
+                    fsdp_mux_logical_core = CoreCoord(full_grid_size.x - 1, fsdp_mux_col_row(link, dir));
                 } else {
                     uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
                     if (mux_x_index >= full_grid_size.x) {
@@ -1029,7 +1039,7 @@ all_gather_minimal_matmul_async_factory_helper(
                 // Match the (transpose-conditional) column placement in the create loop above.
                 CoreCoord fsdp_mux_logical_core;
                 if (fsdp_mux_in_column) {
-                    fsdp_mux_logical_core = CoreCoord(full_grid_size.x - 1, link * 2 + dir);  // 2 = #directions
+                    fsdp_mux_logical_core = CoreCoord(full_grid_size.x - 1, fsdp_mux_col_row(link, dir));
                 } else {
                     uint32_t mux_x_index = (num_workers_per_link * (link + 1)) - (1 - dir);
                     if (mux_x_index >= full_grid_size.x) {
@@ -1352,7 +1362,7 @@ all_gather_minimal_matmul_async_factory_helper(
                 CoreCoord fsdp_term_master_logical_backward;
                 if (fsdp_mux_in_column) {
                     fsdp_mux_logical_backward =
-                        CoreCoord(full_grid_size.x - 1, (in1_idx / num_workers_per_link) * 2 + 0);
+                        CoreCoord(full_grid_size.x - 1, fsdp_mux_col_row(in1_idx / num_workers_per_link, 0));
                     fsdp_term_master_logical_backward = CoreCoord(second_last_in1_core.x, in1_idx - worker_idx);
                 } else {
                     uint32_t fsdp_sender_col_backward =
@@ -1390,7 +1400,7 @@ all_gather_minimal_matmul_async_factory_helper(
                 CoreCoord fsdp_term_master_logical_forward;
                 if (fsdp_mux_in_column) {
                     fsdp_mux_logical_forward =
-                        CoreCoord(full_grid_size.x - 1, (in1_idx / num_workers_per_link) * 2 + 1);
+                        CoreCoord(full_grid_size.x - 1, fsdp_mux_col_row(in1_idx / num_workers_per_link, 1));
                     fsdp_term_master_logical_forward = CoreCoord(last_in1_core.x, in1_idx - worker_idx);
                 } else {
                     uint32_t fsdp_sender_col_forward =
