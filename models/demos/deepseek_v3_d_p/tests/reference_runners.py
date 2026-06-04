@@ -11,6 +11,7 @@ bundled reference return `None` and the comparison is skipped at the call
 site.
 """
 
+from copy import deepcopy
 from typing import Optional
 
 import torch
@@ -30,7 +31,10 @@ def run_reference_moe(
     """Forward the variant's upstream MoE reference on CPU."""
     if variant.reference_moe_cls is None:
         return None
-    moe = variant.reference_moe_cls(config)
+    # Test params can use fewer experts than the variant's default, so we patch the config
+    cfg = deepcopy(config)
+    cfg.n_routed_experts = gate_weights["weight"].shape[0]
+    moe = variant.reference_moe_cls(cfg)
     moe.load_state_dict(
         _pack_reference_moe_state_dict(gate_weights, routed_expert_weights, shared_expert_weights),
         strict=True,

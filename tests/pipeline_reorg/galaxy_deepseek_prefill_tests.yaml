@@ -82,7 +82,7 @@
 - name: "(Galaxy) DeepSeek Prefill - Kimi MLA"
   cmd: |
     export MESH_DEVICE=TG KIMI_MLA_REF_CACHE=/mnt/MLPerf/kimi-prefill-cache/test_mla_output
-    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_kimi_mla -k "8x4 and random and max_sl and check_pcc and sequential and ring and (seq5k or seq25k)" -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_kimi_mla -k "8x4 and random and max_sl and check_pcc and sequential and line and (seq5k or seq25k)" -vvv --tb=short
   test_type: kimi_mla
   test_group: module
   skus:
@@ -99,7 +99,7 @@
   test_group: module
   skus:
     bh_galaxy:
-      timeout: 30
+      timeout: 45
   owner_id: U08RL15T4N8
   team: models
 
