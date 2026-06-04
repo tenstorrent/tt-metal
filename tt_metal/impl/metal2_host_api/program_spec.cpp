@@ -208,7 +208,7 @@ const std::vector<DFBSpecName>& dfb_alias_with(const DataflowBufferSpec& dfb) {
 }
 
 // Helper: return a kernel's dfb-compute-self-loop-scopes map.
-const DFBSelfLoopConnectivities& kernel_self_loop_scopes(const KernelSpec& kernel) {
+const Table<DFBSpecName, DFBSelfLoopScope>& kernel_self_loop_scopes(const KernelSpec& kernel) {
     return kernel.advanced_options.dfb_self_loop_connectivities;
 }
 
@@ -1146,7 +1146,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             // deterministic across runs.
             auto scope_for_kernel = [&](const KernelSpec* k) {
                 auto conn = kernel_self_loop_scopes(*k).get(dfb.unique_id);
-                return conn ? conn->scope : DFBSelfLoopScope::INTRA;
+                return conn ? *conn : DFBSelfLoopScope::INTRA;
             };
             const KernelSpec* first_kernel = endpoints.producers.front().kernel;
             const auto first_scope = scope_for_kernel(first_kernel);
@@ -1345,8 +1345,8 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
             "This option applies only to compute kernels.",
             kernel.unique_id);
 
-        // (Duplicate DFB keys are rejected by DFBSelfLoopConnectivities at construction.)
-        for (const auto& [dfb_spec_name, connectivity] : kernel_self_loop_scopes(kernel)) {
+        // (Duplicate DFB keys are rejected by the Table at construction.)
+        for (const auto& [dfb_spec_name, scope] : kernel_self_loop_scopes(kernel)) {
             TT_FATAL(
                 collected.dfb_by_name.contains(dfb_spec_name),
                 "KernelSpec '{}' has a dfb_self_loop_connectivities entry referencing unknown DFB '{}'.",
@@ -1374,7 +1374,7 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 dfb_spec_name);
 
             TT_FATAL(
-                connectivity.scope != DFBSelfLoopScope::INTER,
+                scope != DFBSelfLoopScope::INTER,
                 "KernelSpec '{}' specifies INTER scope for self-looped DFB '{}'. INTER scope is "
                 "not yet supported by the runtime.",
                 kernel.unique_id,
@@ -2205,7 +2205,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
     std::optional<experimental::dfb::TensixScope> tensix_scope;
     if (is_self_loop && producer->is_compute_kernel()) {
         auto user_conn = kernel_self_loop_scopes(*producer).get(dfb_spec->unique_id);
-        const auto user_scope = user_conn ? user_conn->scope : DFBSelfLoopScope::INTRA;
+        const auto user_scope = user_conn ? *user_conn : DFBSelfLoopScope::INTRA;
         tensix_scope = (user_scope == DFBSelfLoopScope::INTRA)
                            ? experimental::dfb::TensixScope::INTRA
                            : experimental::dfb::TensixScope::INTER;  // currently blocked in validation

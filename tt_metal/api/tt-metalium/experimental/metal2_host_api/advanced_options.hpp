@@ -50,9 +50,7 @@ struct KernelAdvancedOptions {
     //       (It's an open question if we EVER want to support it.)
     //       It is included here just as a placeholder for use case feedback.
     //       Attempting to use it will trigger a runtime error.
-    using NodeSpecificThreadCounts = Table<Nodes, uint32_t>;  // {node_set, num_threads}
-    using NodeSpecificThreadCount = NodeSpecificThreadCounts::value_type;
-    NodeSpecificThreadCounts node_specific_thread_counts;
+    Table<Nodes, /* num_threads */ uint32_t> node_specific_thread_counts;
 
     ////////////////////////////////////////////////////////////////////////////////
     // Varargs
@@ -94,9 +92,8 @@ struct KernelAdvancedOptions {
     // not listed default to num_runtime_varargs.
     // TODO: This feature is truly bizarre. It will be removed from the API once
     //       existing uses are refactored to avoid it.
-    using NumVarargsPerNode = Table<Nodes, uint32_t>;
     [[deprecated("Per-node-vararg-count feature is deprecated and will be removed.")]]
-    NumVarargsPerNode num_runtime_varargs_per_node;
+    Table<Nodes, /* num_varargs */ uint32_t> num_runtime_varargs_per_node;
 
     ////////////////////////////////////////////////////////////////////////////////
     // Multi-threaded self-loop DFBs on compute kernels
@@ -118,20 +115,14 @@ struct KernelAdvancedOptions {
     // is present in the API for completeness, to surface any use cases that may arise.
     enum class DFBSelfLoopScope { INTRA, INTER };
 
-    struct DFBSelfLoopConnectivity {
-        DFBSelfLoopScope scope = DFBSelfLoopScope::INTRA;
-        // If the INTER case were enabled, we would need an additional field to describe
-        // the inter-thread communication pattern here.
-    };
-    // Self-loop DFBs on compute kernels: maps each self-looped DFB to its connectivity.
-    using DFBSelfLoopConnectivities = Table<DFBSpecName, DFBSelfLoopConnectivity>;
-    DFBSelfLoopConnectivities dfb_self_loop_connectivities;
+    // Self-loop DFBs on compute kernels: maps each self-looped DFB to its scope.
+    // (If the INTER case were enabled, the value would become a struct carrying the
+    //  additional inter-thread communication pattern.)
+    Table<DFBSpecName, DFBSelfLoopScope> dfb_self_loop_connectivities;
 };
 
 // (Convenience aliases for nested types)
 using DFBSelfLoopScope = KernelAdvancedOptions::DFBSelfLoopScope;
-using DFBSelfLoopConnectivity = KernelAdvancedOptions::DFBSelfLoopConnectivity;
-using DFBSelfLoopConnectivities = KernelAdvancedOptions::DFBSelfLoopConnectivities;
 
 struct DFBAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////

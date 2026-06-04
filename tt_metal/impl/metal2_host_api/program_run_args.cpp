@@ -200,7 +200,7 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
         const std::unordered_set<std::string> named_rta_name_set(named_rta_names.begin(), named_rta_names.end());
 
         std::unordered_set<NodeCoord> nodes_with_named_params;
-        // (Duplicate node keys are rejected by NodeRuntimeArgs at construction.)
+        // (Duplicate node keys are rejected by the Table at construction.)
         for (const auto& [node, args] : kernel_params.runtime_arg_values) {
             nodes_with_named_params.insert(node);
             TT_FATAL(
@@ -242,7 +242,7 @@ void ValidateProgramRunArgs(const Program& program, const ProgramRunArgs& params
         const auto& named_crta_names = schema->common_runtime_arg_names;
         for (const auto& name : named_crta_names) {
             TT_FATAL(
-                kernel_params.common_runtime_arg_values.contains(name),
+                kernel_params.common_runtime_arg_values.get(name).has_value(),
                 "Kernel '{}' is missing named CRTA '{}'.",
                 kernel_name,
                 name);

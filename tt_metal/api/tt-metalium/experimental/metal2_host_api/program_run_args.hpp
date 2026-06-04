@@ -56,12 +56,13 @@ struct ProgramRunArgs {
         //
         // NOTE: If a kernel runtime argument always has the same value for all nodes, passing
         // a common runtime argument would provide better dispatch efficiency.
-        using NodeRuntimeArgs = Table<NodeCoord, Table<std::string, uint32_t>>;
-        NodeRuntimeArgs runtime_arg_values;
+        // The named runtime-arg values (name -> value) for a single node.
+        using NamedRuntimeArgs = Table<std::string, uint32_t>;
+        Table<NodeCoord, NamedRuntimeArgs> runtime_arg_values;
 
         // Common runtime argument values (broadcast to every node).
         // Every argument in this kernel's RuntimeArgSchema::common_runtime_arg_names must be set.
-        std::unordered_map<std::string, uint32_t> common_runtime_arg_values;
+        NamedRuntimeArgs common_runtime_arg_values;
 
         // Advanced options (see advanced_options.hpp).
         // Companion to KernelAdvancedOptions on the schema side; holds
