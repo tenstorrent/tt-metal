@@ -19,6 +19,11 @@ void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& token_activations_tensor = tensor_args.dense_activations_tensor;
 
+    TT_FATAL(
+        tensor_args.dense_token_maps_tensor.logical_shape().rank() == 2,
+        "dense_token_maps_tensor must be rank 2 ([experts, per-token-stride]); got rank {}",
+        tensor_args.dense_token_maps_tensor.logical_shape().rank());
+
     const auto batch_size = operation_attributes.batch_size;
     const auto seq_size = operation_attributes.seq_size;
     const auto total_tokens = batch_size * seq_size;

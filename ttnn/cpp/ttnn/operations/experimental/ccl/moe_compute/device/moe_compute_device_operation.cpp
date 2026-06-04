@@ -47,6 +47,35 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
         tensor_args.tilize_expert_indices_tensor.dtype() == tt::tt_metal::DataType::UINT16,
         "Indices tensor must be uint16");
 
+    // Input tensor rank guards. Exact ranks are enforced where every caller agrees; lenient
+    // minimum ranks are used for the token/index/score tensors, which legitimately arrive as
+    // rank-3 from some dispatch paths and rank-4 from others (the op only indexes [0]/[1]/[-1]).
+    const auto rank_of = [](const ttnn::Tensor& t) { return t.logical_shape().rank(); };
+    TT_FATAL(
+        rank_of(tensor_args.tilize_input_tensor) >= 3,
+        "tilize_input_tensor must be rank >= 3 ([..., tokens, hidden]); got rank {}",
+        rank_of(tensor_args.tilize_input_tensor));
+    TT_FATAL(
+        rank_of(tensor_args.tilize_expert_indices_tensor) >= 2,
+        "tilize_expert_indices_tensor must be rank >= 2 ([..., tokens, K]); got rank {}",
+        rank_of(tensor_args.tilize_expert_indices_tensor));
+    TT_FATAL(
+        rank_of(tensor_args.tilize_expert_scores_tensor) >= 2,
+        "tilize_expert_scores_tensor must be rank >= 2 ([..., tokens, K]); got rank {}",
+        rank_of(tensor_args.tilize_expert_scores_tensor));
+    TT_FATAL(
+        rank_of(tensor_args.tilize_expert_mapping_tensor) == 2,
+        "tilize_expert_mapping_tensor must be rank 2 ([num_devices, experts]); got rank {}",
+        rank_of(tensor_args.tilize_expert_mapping_tensor));
+    TT_FATAL(
+        rank_of(tensor_args.matmul_w0_w1_tensor) == 6,
+        "matmul_w0_w1_tensor must be rank 6 ([num_cores, L, E, groups_per_core, K, 4*TILE_SIZE]); got rank {}",
+        rank_of(tensor_args.matmul_w0_w1_tensor));
+    TT_FATAL(
+        rank_of(tensor_args.matmul_w2_tensor) == 6,
+        "matmul_w2_tensor must be rank 6 ([num_cores, L, E, groups_per_core, N, 4*TILE_SIZE]); got rank {}",
+        rank_of(tensor_args.matmul_w2_tensor));
+
     // When has_bias=True, dm0 derives per-expert byte strides using ceil((K+1)/W0W1_TXN)*W0W1_TXN and
     // ceil((N+1)/W2_TXN)*W2_TXN. The physical tensors must be padded to those tile counts; if not,
     // dm0 silently reads from wrong expert boundaries after the first expert.
