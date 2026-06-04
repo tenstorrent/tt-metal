@@ -21,6 +21,33 @@ cpu_layout = ttnn.Layout.ROW_MAJOR
 npu_layout = ttnn.Layout.TILE
 
 
+def _typecast_test_input_bounds(tt_input_dtype, tt_output_dtype):
+    """Out-of-range inputs for integer typecast: clamp (→uint16), wrap (→uint8).
+
+    int32 inputs may be negative; uint16/uint32 inputs stay >= 0 to avoid reinterpretation
+    on device (e.g. -1 as uint32 → 4294967295) that would mismatch clamp-aware golden.
+    """
+    if tt_output_dtype == ttnn.uint16 and tt_input_dtype == ttnn.int32:
+        return -1000, 80000  # signed: negatives clamp to 0, >65535 clamp to 65535
+    if tt_output_dtype == ttnn.uint16 and tt_input_dtype == ttnn.uint32:
+        return 0, 80000  # unsigned: no negatives; >65535 values will be clamped
+    if tt_output_dtype == ttnn.uint32 and tt_input_dtype == ttnn.int32:
+        return -1000, 80000
+    if tt_output_dtype == ttnn.uint8 and tt_input_dtype == ttnn.int32:
+        return -512, 512  # wrap/truncate to uint8 (not clamp); wide range ensures out-of-[0,255] values
+    if tt_output_dtype == ttnn.uint8 and tt_input_dtype in (ttnn.uint16, ttnn.uint32):
+        return 0, 512  # values >255 exercise truncation; wide enough to guarantee hits
+    return 0, 100
+
+
+def _make_typecast_test_input(shape, pt_input_dtype, in_low, in_high):
+    if pt_input_dtype == torch.uint8:
+        return torch.randint(0, 256, shape, dtype=torch.uint8)
+    if pt_input_dtype in (torch.int, torch.int32):
+        return torch.randint(in_low, in_high + 1, shape, dtype=torch.int32)
+    return (torch.rand(shape) * (in_high - in_low) + in_low).to(pt_input_dtype)
+
+
 @pytest.mark.parametrize(
     "pt_input_dtype, tt_input_dtype, tt_output_dtype",
     (
@@ -110,13 +137,9 @@ class TestTypecast:
     ):
         if tt_input_dtype == tt_output_dtype:
             pytest.skip("Same I/O data types. Skip.")
-        in_low = 0
-        in_high = 100
-        if tt_output_dtype == ttnn.uint8:
-            in_low = -257
-            in_high = 257
+        in_low, in_high = _typecast_test_input_bounds(tt_input_dtype, tt_output_dtype)
         shape = input_shapes[0]
-        torch_input = (torch.rand(shape) * (in_high - in_low) + in_low).to(pt_input_dtype)
+        torch_input = _make_typecast_test_input(shape, pt_input_dtype, in_low, in_high)
 
         tt_input = ttnn.from_torch(
             torch_input, dtype=tt_input_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_mem_config
