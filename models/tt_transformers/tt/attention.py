@@ -237,17 +237,18 @@ class Attention(LightweightModule):
         assert configuration.dim % self.num_devices_per_group == 0
 
         # wqkv: 4096 x 3072 (2 devices): width-sharded on 12 banks, 3072 over 12 banks.
-        wqkv_mem_config = configuration.create_dram_sharded_mem_config(
+        wqkv_width_sharded_mem_config = configuration.create_dram_sharded_mem_config(
             configuration.dim, configuration.qkv_size // configuration.num_devices
         )
-        # The prefetcher picks the weight layout: the DRAM-core backend returns its
-        # receiver-contiguous layout, the worker-core backend returns the width-sharded default
+        # The prefetcher picks the decode/prefetch weight layout: the DRAM-core backend returns
+        # its receiver-contiguous layout, the worker-core backend returns the width-sharded default
         # above (and galaxy/TG always keeps the default).
+        wqkv_mem_config = wqkv_width_sharded_mem_config
         if self.prefetcher is not None:
             wqkv_mem_config = self.prefetcher.weight_mem_config(
                 configuration.dim,
                 configuration.qkv_size // configuration.num_devices,
-                wqkv_mem_config,
+                wqkv_width_sharded_mem_config,
                 is_galaxy=configuration.is_galaxy,
             )
 
@@ -268,17 +269,27 @@ class Attention(LightweightModule):
 
         qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
 
-        self.wqkv = ttnn.as_tensor(
-            qkv_cat,
-            dtype=self.wqkv_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else wqkv_mem_config,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
-            ),
-            cache_file_name=cache_name("wqkv_sharded_2d"),
-        )
+        def _make_wqkv(mem_config, cache_key):
+            return ttnn.as_tensor(
+                qkv_cat,
+                dtype=self.wqkv_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else mem_config,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
+                ),
+                cache_file_name=cache_name(cache_key),
+            )
+
+        self.wqkv = _make_wqkv(wqkv_mem_config, "wqkv_sharded_2d")
+        # Receiver-contiguous (DRAM-core) wqkv is decode-only; prefill's direct QKV matmul needs the
+        # width-sharded layout. Keep a width-sharded prefill copy (mirrors WO's self.wo vs
+        # wo_sharded_ring). The worker-core path is already width-sharded, so it just aliases wqkv.
+        if self.prefetcher is not None and getattr(self.prefetcher, "uses_recv_contig", False):
+            self.wqkv_prefill = _make_wqkv(wqkv_width_sharded_mem_config, "wqkv_prefill_width_sharded")
+        else:
+            self.wqkv_prefill = self.wqkv
 
         def norm_reshard(x, norm, mode, norm_config):
             """Hack until RMSNorm supports height-sharded output config"""
@@ -930,14 +941,14 @@ class Attention(LightweightModule):
         if self.args.use_minimal_qkv_prefill_matmul(seq_len):
             xqkv_fused = ttnn.experimental.minimal_matmul(
                 x_11SH,
-                self.wqkv,
+                self.wqkv_prefill,
                 compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
                 config=self.args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, None),
             )
         else:
             xqkv_fused = ttnn.linear(
                 x_11SH,
-                self.wqkv,
+                self.wqkv_prefill,
                 dtype=self.ccl_dtype if self.TG else self.activation_dtype or ttnn.bfloat16,
                 memory_config=self.args.get_attn_qkv_mm_mem_config(Mode.PREFILL, None),
                 compute_kernel_config=self.li_qkv_prefill_compute_kernel_cfg,
