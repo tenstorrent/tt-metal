@@ -501,7 +501,11 @@ def initialize_test_inputs(
     weights_shape = (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
     indices_shape = (dispatch_group_size, seq_len_per_chip, num_experts_per_tok)
 
-    weights = torch.randn(weights_shape, dtype=torch.bfloat16)
+    # Use non-negative weights (abs) so the per-token sum is never ~0. Signed randn weights
+    # can cancel to ≈0 in bf16, making the normalization below a divide-by-≈0 → Inf/NaN, which
+    # then poisons any downstream PCC (and is RNG-offset-dependent, so it surfaces only for
+    # certain seq_len/emb_dim combinations). Real gate weights are non-negative anyway.
+    weights = torch.randn(weights_shape, dtype=torch.bfloat16).abs()
     weights = weights / weights.sum(dim=-1, keepdim=True)  # Normalize so topk sums to 1
     indices = torch.randint(0, num_routed_experts, indices_shape, dtype=torch.int32)
 
