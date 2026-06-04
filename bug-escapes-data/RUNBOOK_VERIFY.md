@@ -178,30 +178,34 @@ gh api repos/tenstorrent/tt-metal/actions/workflows/{workflow_id} --jq '.path'
 
 This gives you e.g. `.github/workflows/tt-metal-l2-nightly.yaml`.
 
-### 5b: Identify the correct test category flag
+### 5b: Identify the correct test category flag by reading the workflow
 
-This is critical. Wrong flag = tests skipped = wasted run. Map `test_filepath` to the workflow's dispatch inputs by reading the workflow file:
+Do NOT rely on a hardcoded mapping. Derive the flag from the actual workflow and its impl file.
 
+**Step 1: Read the workflow dispatch inputs and job conditions:**
 ```bash
 gh api "repos/tenstorrent/tt-metal/contents/.github/workflows/{workflow_file}?ref=main" \
-  --jq '.content' | base64 -d | grep -A 3 "run_\|additional_test\|categories"
+  --jq '.content' | base64 -d > /tmp/workflow_main.yaml
 ```
 
-**Common mappings for `tt-metal-l2-nightly.yaml`:**
-- `tests/ttnn/unit_tests/operations/data_movement/` → `additional_test_categories: "data_movement"`
-- `tests/ttnn/unit_tests/operations/conv/` → `additional_test_categories: "conv"`
-- `tests/ttnn/unit_tests/operations/matmul/` → `additional_test_categories: "matmul"`
-- `tests/ttnn/unit_tests/operations/eltwise/` → `additional_test_categories: "eltwise"`
-- `tests/ttnn/unit_tests/operations/reduction/` → `additional_test_categories: "reduction"`
-- `tests/ttnn/unit_tests/operations/fused/` → `additional_test_categories: "fused"`
-- `tests/ttnn/unit_tests/operations/transformers/` → `additional_test_categories: "transformers"`
-- `tests/ttnn/unit_tests/operations/moreh/` → `additional_test_categories: "moreh"`
-- `tests/tt_metal/tt_metal/llk/` → `run_sd_unit_tests: true` (this is for C++ LLK gtests ONLY)
-- `tests/tt_metal/` (non-llk) → `run_cpp_tests: true`
+Look for `workflow_dispatch` inputs (boolean flags like `run_sd_unit_tests`, `run_cpp_tests`) and string inputs like `additional_test_categories`. Note what values trigger which jobs.
 
-**⚠️ NEVER use `run_sd_unit_tests: true` for Python pytest files.** That flag runs a C++ gtest binary. If `test_filepath` ends in `.py`, it is a Python test. Find the matching `additional_test_categories` value.
+**Step 2: Find the impl file if there is one** (e.g. `tt-metal-l2-nightly-impl.yaml`):
+```bash
+grep "uses:.*impl" /tmp/workflow_main.yaml
+```
 
-**If you cannot confidently map `test_filepath` to a flag:** Read the actual workflow-impl file (e.g. `tt-metal-l2-nightly-impl.yaml`) and search for the test directory or filename pattern. If still uncertain, abort and return:
+Read the impl file and search for `test_filepath`'s directory name or filename:
+```bash
+gh api "repos/tenstorrent/tt-metal/contents/.github/workflows/{impl_file}?ref=main" \
+  --jq '.content' | base64 -d | grep -B5 -A5 "{directory_name}"
+```
+
+This tells you which job block covers the target test path, and which input flag enables it.
+
+**⚠️ NEVER use `run_sd_unit_tests: true` for Python pytest files.** That flag runs a C++ gtest binary (`llk-sd-unit-tests` job). Python pytest files need `additional_test_categories` or a different boolean flag.
+
+**If after reading both the workflow and impl file you still cannot confidently map `test_filepath` to a flag:** abort and return:
 ```json
 {"verdict": "aborted_wrong_test", "escape_id": "...", "reason": "could not map test_filepath to workflow flag", "test_filepath": "..."}
 ```
@@ -309,6 +313,41 @@ gh api repos/tenstorrent/tt-metal/contents/.github/workflows/{workflow_file} \
 ```
 
 Repeat for the AFTER branch (read its file SHA separately — it may differ). Use `after_merge_gate_run_id` for the AFTER branch's `use-artifacts-from-run` value.
+
+### 6d: Prune unnecessary jobs from the probe workflow
+
+Probe runs should only execute the build job and the single test job needed. All other test jobs waste CI time and hardware.
+
+In `/tmp/workflow_modified.yaml`, disable every test job EXCEPT the target one by adding `if: false` to each unneeded job. Identify jobs to disable by looking for jobs whose `needs:` includes `build-artifact` or `generate-arch-matrix` and whose name is not the target job.
+
+```python
+import yaml, re
+
+with open('/tmp/workflow_modified.yaml') as f:
+    content = f.read()
+
+# Load to identify all test job names
+data = yaml.safe_load(content)
+target_job = "{job_name_containing_the_target_test}"  # e.g. "tt-metal-l2-tests"
+keep_jobs = {"build-artifact", "generate-arch-matrix", target_job}
+
+for job_name, job_body in data.get("jobs", {}).items():
+    if job_name not in keep_jobs:
+        # Insert `if: false` at the top of the job block
+        content = re.sub(
+            rf'(\n  {re.escape(job_name)}:\n)',
+            rf'\1    if: false\n',
+            content
+        )
+
+with open('/tmp/workflow_modified.yaml', 'w') as f:
+    f.write(content)
+```
+
+Verify the result:
+```bash
+grep -E "^\s{2}\w|if: false" /tmp/workflow_modified.yaml | head -40
+```
 
 **Note:** When dispatching (Step 7), do NOT pass `use-artifacts-from-run` as a dispatch input — the run ID is already hardcoded in the workflow file. Just pass `architecture` and the test category flag.
 
