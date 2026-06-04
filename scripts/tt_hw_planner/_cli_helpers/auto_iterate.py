@@ -1992,6 +1992,22 @@ def _run_auto_iterate_loop(
                                 f"        --box {BOX} --auto --auto-agent {provider} \\\n"
                                 f"        --auto-max-iters 12 --auto-agent-timeout 1500\n"
                             )
+                            # 2026-06-04 Phase-3 extension: fire LLM
+                            # skip_diagnoser before exiting this
+                            # UNVERIFIED-NATIVE early-exit path. The
+                            # canonical end-of-loop diagnoser call
+                            # (lines 4946/4956) never reaches here
+                            # because we return below. Without this
+                            # inline call, the diagnoser stays dormant
+                            # for the most common harness-skip pattern.
+                            _persist_harness_skipped_for_outcome(demo_dir, harness_skipped_this_run)
+                            _run_skip_diagnoser_at_loop_end(
+                                demo_dir=demo_dir,
+                                harness_skipped=harness_skipped_this_run,
+                                skip_reasons=skip_reasons_this_run,
+                                agent_bin=agent_bin,
+                                agent_model=model,
+                            )
                             return 1
                         banner(
                             f"AUTO-ITERATE {it}/{max_iters}: demo runs end-to-end on "
@@ -2055,6 +2071,18 @@ def _run_auto_iterate_loop(
                     print(f"      - {c}  (hand-fix `{test_rel}`)")
                 if graduated_this_run:
                     print(f"  PCC-validated this run: " f"{', '.join(sorted(set(graduated_this_run)))}")
+                # 2026-06-04 Phase-3 extension: same as above —
+                # canonical diagnoser call is unreachable from this
+                # early-exit path, so we invoke it inline. Lets the
+                # LLM attempt to patch UNVERIFIED-NATIVE test scaffolds.
+                _persist_harness_skipped_for_outcome(demo_dir, harness_skipped_this_run)
+                _run_skip_diagnoser_at_loop_end(
+                    demo_dir=demo_dir,
+                    harness_skipped=harness_skipped_this_run,
+                    skip_reasons=skip_reasons_this_run,
+                    agent_bin=agent_bin,
+                    agent_model=model,
+                )
                 return 1
 
             _had_real_work = bool(graduated_this_run or validated_this_run or new_component_names)
