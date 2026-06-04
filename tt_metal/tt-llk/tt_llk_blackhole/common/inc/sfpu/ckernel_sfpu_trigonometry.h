@@ -87,13 +87,12 @@ inline void _calculate_sine_(const int iterations)
     {
         sfpi::vFloat v             = sfpi::dst_reg[0];
         v                          = 0.318309886183791f * v; // *1/pi to get number of pi rads.
-        sfpi::vInt whole_v         = sfpi::float_to_int16(v, sfpi::RoundMode::NearestEven);
-        sfpi::vFloat whole_v_float = sfpi::int32_to_float(whole_v, sfpi::RoundMode::NearestEven);
+        auto whole_v               = sfpi::convert<sfpi::vSMag16>(v, sfpi::RoundMode::NearestEven);
+        auto whole_v_float         = sfpi::convert<sfpi::vFloat>(whole_v, sfpi::RoundMode::NearestEven);
         v                          = v - whole_v_float;
         v *= 3.141592653589793f; // fractional * pi to get it in [-pi:pi]
         v       = _sfpu_sine_maclaurin_series_<APPROXIMATION_MODE>(v);
-        whole_v = whole_v & 0x1;
-        v_if (whole_v != 0)
+        v_if ((whole_v & 1) != 0)
         {
             // odd so flip the sign
             v *= -1;
@@ -114,13 +113,12 @@ inline void _calculate_cosine_(const int iterations)
     {
         sfpi::vFloat v             = sfpi::dst_reg[0];
         v                          = 0.318309886183791f * v; // *1/pi to get number of pi rads.
-        sfpi::vInt whole_v         = sfpi::float_to_int16(v, sfpi::RoundMode::NearestEven);
-        sfpi::vFloat whole_v_float = sfpi::int32_to_float(whole_v, sfpi::RoundMode::NearestEven);
+        auto whole_v               = sfpi::convert<sfpi::vSMag16>(v, sfpi::RoundMode::NearestEven);
+        auto whole_v_float         = sfpi::convert<sfpi::vFloat>(whole_v, sfpi::RoundMode::NearestEven);
         v                          = v - whole_v_float;
         v *= 3.141592653589793f; // fractional * pi to get it in [-pi:pi]
         v       = _sfpu_cosine_maclaurin_series_<APPROXIMATION_MODE>(v);
-        whole_v = whole_v & 0x1;
-        v_if (whole_v != 0)
+        v_if ((whole_v & 1) != 0)
         {
             // odd so flip the sign
             v *= -1;
@@ -140,13 +138,14 @@ inline void _calculate_acosh_()
     for (int d = 0; d < ITERATIONS; d++)
     {
         sfpi::vFloat inp = sfpi::dst_reg[0];
+        sfpi::vFloat res;
         v_if (inp < sfpi::vConst1)
         {
-            sfpi::dst_reg[0] = std::numeric_limits<float>::quiet_NaN();
+            res = std::numeric_limits<float>::quiet_NaN();
         }
         v_elseif (inp == sfpi::vConst1)
         {
-            sfpi::dst_reg[0] = sfpi::vConst0;
+            res = sfpi::vConst0;
         }
         v_else
         {
@@ -154,9 +153,10 @@ inline void _calculate_acosh_()
             tmp              = tmp - sfpi::vConst1;
             tmp              = _calculate_sqrt_body_<APPROXIMATION_MODE>(tmp);
             tmp              = tmp + inp;
-            sfpi::dst_reg[0] = _calculate_log_body_no_init_(tmp);
+            res              = _calculate_log_body_no_init_(tmp);
         }
         v_endif;
+        sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;
     }
 }
