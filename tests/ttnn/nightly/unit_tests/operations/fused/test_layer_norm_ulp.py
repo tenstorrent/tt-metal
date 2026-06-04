@@ -594,6 +594,68 @@ def test_rms_norm_ulp_sharded_non_tile_aligned_width_split_across_cores(device, 
     assert passed, f"[sharded rms multi-shard dtype={dtype} w={w} dist={distribution}] {msg}"
 
 
+# Tile-aligned logical width split across two cores, where the shard rounding leaves a whole padding
+# tile on the final core, because all cores own the same number of tiles.
+# For example, w=96 results in 3 tiles, which when sharded on two cores results in two real tiles on
+# the first core, and one real tile + one padding tile on the second core.
+# This is not a partial-tile masking case because the whole width tile is padding; the reduction must
+# still weight the final core by 32 logical columns, not its 64-column physical block width.
+@pytest.mark.parametrize("use_welford", [True, False])
+def test_layer_norm_ulp_sharded_tile_aligned_width_split_across_cores(device, use_welford):
+    """Sharded layer_norm over a tile-aligned width split across two cores vs torch golden."""
+    torch.manual_seed(0)
+    h, w = 32, 96
+    num_cores_w = 2
+    shard_w = math.ceil(w / num_cores_w / 32) * 32
+
+    torch_input_tensor = _make_ln_input(h, w, torch.bfloat16, "normal")
+    golden = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
+
+    shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_w - 1, 0))}),
+        [h, shard_w],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    sharded_mem_config = ttnn.MemoryConfig(
+        memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        buffer_type=ttnn.BufferType.L1,
+        shard_spec=shard_spec,
+    )
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sharded_mem_config,
+    )
+    tt_input_tensor = ttnn.fill_implicit_tile_padding(tt_input_tensor, PAD_VALUE)
+
+    actual = ttnn_layer_norm_sharded(
+        device,
+        tt_input_tensor,
+        use_welford=use_welford,
+        block_ht=h // 32,
+        block_wt=shard_w // 32,
+        subblock_w=1,
+    )
+    actual = actual[..., :w]
+
+    passed, max_ulp, max_atol_err, atol_tol, msg, ulp_stats = measure_ulp_with_near_zero_atol(
+        golden,
+        actual,
+        _SHARDED_NONALIGNED_BF16_ULP_THRESHOLD,
+        _SHARDED_NONALIGNED_BF16_NEAR_ZERO_ATOL_FRACTION,
+    )
+    spec = f"sharded layernorm width-split shape_hw=({h},{w}) shard_w={shard_w} welford={use_welford}"
+    logger.info(
+        f"ttnn.layer_norm ULP (sharded width-split) | {spec} | ulp mean={ulp_stats['mean']:.3g} p95={ulp_stats['p95']:.3g} p99={ulp_stats['p99']:.3g} max={max_ulp:.4g}/{_SHARDED_NONALIGNED_BF16_ULP_THRESHOLD} atol {max_atol_err:.4g}/{atol_tol:.4g} | {'ok' if passed else 'FAIL'}"
+    )
+    if ulp_stats["worst"]:
+        logger.info(f"  worst: {ulp_stats['worst']}")
+    if not passed:
+        logger.info(f"  {msg}")
+    assert passed, f"[sharded layernorm width-split welford={use_welford}] {msg}"
+
+
 # Fused residual add (a + b computed on-device) over a non-tile-aligned width, on the legacy
 # (non-Welford) path. The normalized input is compute-produced, so the column mask must still exclude
 # the padding columns from the statistics. num_cores_w=2 splits the width across shards (RMSNorm only;

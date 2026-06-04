@@ -121,6 +121,12 @@ void kernel_main() {
     constexpr uint32_t W = get_compile_time_arg_val(16);
     constexpr uint32_t eps = get_compile_time_arg_val(17);
     constexpr uint32_t per_core_recip_lut_size = get_compile_time_arg_val(18);
+    // Valid (logical) tile count of the final width block; fewer than block_wt when the logical width
+    // does not fill the width blocks evenly (each block spans a whole number of tiles).
+    // For example, w=96 results in 3 tiles, which when sharded on two cores results in two real
+    // tiles on the first core, and one real tile + one padding tile on the second core.
+
+    constexpr uint32_t last_block_wt = get_compile_time_arg_val(19);
 
     // ---------------------------------------------------------------------------
     // CB definitions
@@ -198,7 +204,10 @@ void kernel_main() {
     const bool use_two_stage_reduce = is_allgather_worker ? get_arg_val<uint32_t>(2) == 1 : false;
     const bool is_second_stage_reader = is_allgather_worker ? get_arg_val<uint32_t>(3) == 1 : false;
     constexpr uint32_t block_w = block_wt * tile_width;
-    constexpr uint32_t last_block_w = block_w - tile_width + last_tile_w;
+    // Width (valid columns) of the final width block, weighting it in the cross-core combine. The
+    // final block owns last_block_wt tiles (<= block_wt), the last of which has last_tile_w valid
+    // columns; the other blocks each own a full block_w.
+    constexpr uint32_t last_block_w = (last_block_wt - 1) * tile_width + last_tile_w;
     uint32_t first_stage_w =
         use_two_stage_reduce ? num_blocks_first_stage * block_w : (num_blocks_first_stage - 1) * block_w + last_block_w;
     uint32_t second_stage_w = use_two_stage_reduce ? (num_blocks_first_stage - 1) * block_w + last_block_w : 0;

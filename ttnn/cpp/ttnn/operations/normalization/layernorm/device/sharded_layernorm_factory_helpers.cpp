@@ -761,18 +761,29 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
         // shard in the cross-core combine, so it must reflect the logical width, not padded K.
         uint32_t last_tile_W = (ctx.logical_K % tile_width == 0) ? tile_width : (ctx.logical_K % tile_width);
         auto eps_u32 = std::bit_cast<uint32_t>(ctx.eps);
+        // Number of valid (logical) tiles the final width block reduces. The other width blocks each own
+        // block_wt tiles; the final block owns the remainder. Each block spans a whole number of tiles
+        // (block_w columns), so when the logical width does not fill them evenly the final core owns
+        // fewer than block_wt tiles, and the cross-core combine must weight it by its true width, not
+        // block_w.
+        // For example, w=96 results in 3 tiles, which when sharded on two cores results in two real
+        // tiles on the first core, and one real tile + one padding tile on the second core.
+        const uint32_t logical_Kt = (ctx.logical_K + tile_width - 1) / tile_width;
+        const uint32_t last_block_wt = logical_Kt - (ctx.grid->num_blocks - 1) * ctx.block_wt;
 
         args.compute_all_to_all.push_back(tile_width);
         args.compute_all_to_all.push_back(last_tile_W);
         args.compute_all_to_all.push_back(ctx.logical_K);
         args.compute_all_to_all.push_back(eps_u32);
         args.compute_all_to_all.push_back(ctx.per_core_recip_lut_size);
+        args.compute_all_to_all.push_back(last_block_wt);
 
         args.compute_not_all_to_all.push_back(tile_width);
         args.compute_not_all_to_all.push_back(last_tile_W);
         args.compute_not_all_to_all.push_back(ctx.logical_K);
         args.compute_not_all_to_all.push_back(eps_u32);
         args.compute_not_all_to_all.push_back(ctx.per_core_recip_lut_size);
+        args.compute_not_all_to_all.push_back(last_block_wt);
     }
 
     return args;
