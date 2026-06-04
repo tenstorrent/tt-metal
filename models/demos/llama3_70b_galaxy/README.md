@@ -168,12 +168,12 @@ vLLM can be installed from the TT fork at https://github.com/tenstorrent/vllm/tr
 Please follow the [README from vLLM](https://github.com/tenstorrent/vllm/blob/dev/plugins/vllm-tt-plugin/README.md) for the latest instructions on how to build vLLM and install the TT plugin.
 
 #### Running the vLLM server
-For Llama-3.3-70B on Galaxy, use single-process TT lane mode (`tt_data_parallel_size`). Gathered multi-process DP (`--data_parallel_size > 1`) is deprecated for this model: it still runs but logs a warning at startup and is no longer the recommended path. Run:
+Llama-3.3-70B on Galaxy runs on a single Galaxy device mesh using single-process TT lanes. Serve it with the familiar `--data_parallel_size` / `--max_num_seqs` flags; the TT backend transparently maps them to in-process lanes (it logs at startup that single-process lane-DP is running instead of gathered multi-process DP). Run:
 ```
-MESH_DEVICE=TG TT_LLAMA_TEXT_VER=llama3_70b_galaxy VLLM_RPC_TIMEOUT=900000 python plugins/vllm-tt-plugin/examples/server_example_tt.py --model "meta-llama/Llama-3.3-70B-Instruct" --max_num_seqs 32 --async-scheduling --additional-config '{"tt": {"tt_data_parallel_size": 4, "dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 220000000}}'
+MESH_DEVICE=TG TT_LLAMA_TEXT_VER=llama3_70b_galaxy VLLM_RPC_TIMEOUT=900000 python plugins/vllm-tt-plugin/examples/server_example_tt.py --model "meta-llama/Llama-3.3-70B-Instruct" --data_parallel_size 4 --max_num_seqs 8 --async-scheduling --additional-config '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 220000000}}'
 ```
 
-`max_num_seqs` is the global engine capacity in this configuration and must be divisible by `tt_data_parallel_size`, so `tt_data_parallel_size=4` with `max_num_seqs=32` runs 8 requests per lane for the same 32-request global concurrency as the older DP=4 setup.
+`--data_parallel_size 4 --max_num_seqs 8` runs 4 TT lanes with 8 requests each, for 32-request global concurrency. No config changes are needed versus the historical DP=4 setup.
 
 After the server is up and running you can interact with it by sending prompt files.
 
