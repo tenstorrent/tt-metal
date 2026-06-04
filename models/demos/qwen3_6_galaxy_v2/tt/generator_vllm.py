@@ -130,7 +130,13 @@ class Qwen3_5ForConditionalGeneration(Generator):
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
         )
-        return cls(tt_model, model_args, mesh_device)
+        inst = cls(tt_model, model_args, mesh_device)
+        # Prefill trace-capture hits a GDN/DeltaNet L1 circular-buffer clash
+        # (V2-9 trace-capture blocker); run prefill eager via the Generator's
+        # _disable_prefill_tracing hook. Decode is also eager (worker
+        # override_tt_config.trace_mode=false).
+        inst._disable_prefill_tracing = True
+        return inst
 
     @property
     def cache_path(self):
