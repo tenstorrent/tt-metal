@@ -20,10 +20,12 @@ PCC note:
 
 Run manually::
 
-    export MISTRAL4_PREFILL_PCC=1
-    export MISTRAL4_PREFILL_N_LAYERS=1    # optional; default 2
     export MESH_DEVICE=P150x8
     pytest models/experimental/mistral_small_4_119b/tests/test_text_prefill_pcc.py -v -s --timeout=0
+
+Override layer count for faster local iteration::
+
+    MISTRAL4_PREFILL_N_LAYERS=2 pytest ...
 """
 
 from __future__ import annotations
@@ -59,7 +61,7 @@ from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filter
 pytest.importorskip("transformers")
 pytest.importorskip("transformers.models.mistral4.modeling_mistral4", reason="Mistral4 required")
 
-_N_LAYERS = int(os.environ.get("MISTRAL4_PREFILL_N_LAYERS", "2"))
+_N_LAYERS = int(os.environ.get("MISTRAL4_PREFILL_N_LAYERS", "36"))
 _PCC_FLOOR = 0.90
 
 
@@ -77,36 +79,6 @@ def _mesh_params():
     base = {"trace_region_size": 30000000, "num_command_queues": 1}
     fabric = ttnn.FabricConfig.DISABLED if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D
     return [pytest.param(shape, {**base, "fabric_config": fabric}, id=f"mesh{shape[0]}x{shape[1]}")]
-
-
-def _dequantize_state_dict(state_dict: dict, dtype: torch.dtype = torch.bfloat16) -> dict:
-    """
-    Dequantize FP8 weights to ``dtype`` (default bfloat16 to halve peak RSS vs float32).
-
-    Checkpoint uses static FP8 quantization:
-      w_fp8 = round(w_fp32 / scale_factor)
-      weight_scale_inv = 1 / scale_factor
-    Dequantize: w ≈ w_fp8 * weight_scale_inv  (verified numerically).
-    """
-    dq = {}
-    for k, v in state_dict.items():
-        if v.dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
-            scale_key = k + "_scale_inv"
-            if scale_key not in state_dict:
-                scale_key = k.replace(".weight", ".weight_scale_inv")
-            scale_inv = state_dict.get(scale_key)
-            v_cast = v.to(torch.float32)
-            if scale_inv is not None:
-                s = scale_inv.to(torch.float32)
-                while s.dim() < v_cast.dim():
-                    s = s.unsqueeze(-1)
-                v_cast = v_cast * s
-            dq[k] = v_cast.to(dtype)
-        elif (
-            not k.endswith("_scale_inv") and not k.endswith("_activation_scale") and not k.endswith("activation_scale")
-        ):
-            dq[k] = v.to(dtype)
-    return dq
 
 
 def _build_hf_ref(text_config, state_dict, n_layers: int) -> torch.nn.Module:
@@ -181,10 +153,7 @@ def _build_hf_ref(text_config, state_dict, n_layers: int) -> torch.nn.Module:
 
 @torch.no_grad()
 @run_for_wormhole_b0_or_blackhole()
-@pytest.mark.skipif(
-    os.environ.get("MISTRAL4_PREFILL_PCC") != "1",
-    reason="Set MISTRAL4_PREFILL_PCC=1 to run the prefill logits PCC test.",
-)
+@pytest.mark.slow
 @pytest.mark.parametrize("mesh_device, device_params", _mesh_params(), indirect=True)
 def test_mistral_small_4_prefill_pcc(reset_seeds, mesh_device):
     """Compare TTNN prefill logits to HF float32 reference for the same prompt."""

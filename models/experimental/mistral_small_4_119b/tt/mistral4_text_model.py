@@ -749,6 +749,57 @@ class TtMistral4TextModel:
             self._decode_kernel(current_pos)
         return self._readback_argmax()
 
+    def decode_logits(self, input_id: torch.Tensor, current_pos: int) -> torch.Tensor:
+        """Run one decode step and return full-vocabulary logits to host.
+
+        Like decode_next_token but returns a [vocab] float32 CPU tensor instead of the
+        greedy token id. Used by PCC tests to compare against prefill logits.
+        """
+        self._decode_upload_step_state(input_id, current_pos)
+        x = ttnn.embedding(
+            self._decode_input_id_device,
+            self.embed_weight,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        x = ttnn.reshape(x, [1, 1, 1, HIDDEN_SIZE])
+        x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
+        for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
+            x = layer.forward_decode(
+                x, self._cos_decode, self._sin_decode, kv_cache, current_pos, self._decode_cur_pos_device
+            )
+        x_normed = _rms_norm_sharded_decode(x, self.final_norm_w, self.compute_kernel_config)
+        ttnn.deallocate(x)
+        in0_memcfg = ttnn.create_sharded_memory_config(
+            (1, 1, 32, HIDDEN_SIZE),
+            core_grid=ttnn.CoreGrid(y=1, x=self.num_banks),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        x_normed = ttnn.to_memory_config(x_normed, in0_memcfg)
+        # Column-sharded across devices: each produces [1, 1, 32, vocab/n_devices]
+        # (DRAM-sharded matmul requires a width-sharded L1 output).
+        partial = ttnn.linear(
+            x_normed,
+            self.lm_head_weight,
+            program_config=self.lm_head_program_config,
+            compute_kernel_config=self.lm_head_compute_kernel_config,
+            dtype=ttnn.bfloat8_b,
+            memory_config=ttnn.MemoryConfig(
+                memory_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                buffer_type=ttnn.BufferType.L1,
+            ),
+        )
+        ttnn.deallocate(x_normed)
+        # Convert sharded → interleaved, then ConcatMeshToTensor(dim=3) reassembles the
+        # full vocab from the per-device column shards on host — same as the prefill path
+        # (_to_logits). Do NOT all_gather first: that replicates the full vocab on every
+        # device, so the host concat would build n_devices × vocab.
+        partial = ttnn.to_memory_config(partial, ttnn.L1_MEMORY_CONFIG)
+        logits = ttnn.to_torch(partial, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=3))
+        ttnn.deallocate(partial)
+        return logits[0, 0, 0, :].to(torch.float32)  # [vocab]
+
     # ── 2-CQ decode pipeline ────────────────────────────────────────────────
 
     def begin_decode_2cq(self) -> None:
