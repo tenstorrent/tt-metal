@@ -197,44 +197,41 @@ bool run_sfpu_all_same_buffer(distributed::MeshCommandQueue& cq, const SfpuConfi
             tt_metal::CircularBufferConfig(byte_size, {{tt::CBIndex::c_16, test_config.l1_output_data_format}})
                 .set_page_size(tt::CBIndex::c_16, test_config.tile_byte_size);
         tt_metal::CreateCircularBuffer(program, core_range, l1_output_cb_config);
+    }
 
-        auto reader_kernel = tt_metal::CreateKernel(
-            program,
-            "tt_metal/kernels/dataflow/reader_unary.cpp",
-            test_config.cores,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+    auto reader_kernel = tt_metal::CreateKernel(
+        program,
+        "tt_metal/kernels/dataflow/reader_unary.cpp",
+        test_config.cores,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-        // Enqueue apis only supported on gs so far
-        auto writer_kernel = tt_metal::CreateKernel(
-            program,
-            "tt_metal/kernels/dataflow/writer_unary.cpp",
-            test_config.cores,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+    auto writer_kernel = tt_metal::CreateKernel(
+        program,
+        "tt_metal/kernels/dataflow/writer_unary.cpp",
+        test_config.cores,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-        std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
+    std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
+    sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_RECIP_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_SQRT_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
 
-        sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
-        sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";
-        sfpu_defines["SFPU_OP_RECIP_INCLUDE"] = "1";
-        sfpu_defines["SFPU_OP_SQRT_INCLUDE"] = "1";
-        sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
-        sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
-        sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
-        sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
-        sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
+    tt_metal::CreateKernel(
+        program,
+        "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+        test_config.cores,
+        tt_metal::ComputeConfig{
+            .math_approx_mode = test_config.approx_mode, .compile_args = compute_kernel_args, .defines = sfpu_defines});
 
-        tt_metal::CreateKernel(
-            program,
-            "tt_metal/kernels/compute/eltwise_sfpu.cpp",
-            test_config.cores,
-            tt_metal::ComputeConfig{
-                .math_approx_mode = test_config.approx_mode,
-                .compile_args = compute_kernel_args,
-                .defines = sfpu_defines});
-
-        // TODO(agrebenisan): Clean this up to only use the first path once Enqueue apis supported on WH
+    for (const CoreRange& core_range : test_config.cores.ranges()) {
         for (const CoreCoord& core_coord : core_range) {
             SetRuntimeArgs(program, writer_kernel, core_coord, writer_rt_args);
             SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
