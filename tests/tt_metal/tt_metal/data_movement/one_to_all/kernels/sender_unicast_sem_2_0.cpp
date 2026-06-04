@@ -51,13 +51,13 @@ void kernel_main() {
 
                 uint32_t current_virtual_channel = i % num_virtual_channels;
 
-                noc.async_write(
+                noc.async_write<NocOptions::CUSTOM_VC>(
                     unicast_endpoint,
                     unicast_endpoint,
                     bytes_per_transaction,
                     {.addr = mst_base_addr},
                     {.noc_x = dest_coord_x, .noc_y = dest_coord_y, .addr = sub_base_addr},
-                    current_virtual_channel);
+                    {.vc = current_virtual_channel});
 
                 // Flush: async_write uses caller-supplied VC; relay_unicast goes through
                 // noc_semaphore_set_remote which hardcodes NOC_UNICAST_WRITE_VC. Same NoC,

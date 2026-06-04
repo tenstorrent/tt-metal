@@ -60,6 +60,9 @@ permissions:
 
 run-name: "Bisect on ${{ inputs.runner-label }}"
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   determine-runner-config:
     runs-on: ubuntu-latest
     outputs:
@@ -99,11 +102,11 @@ jobs:
           echo "Determined arch: $ARCH_NAME"
 
   test-dispatch:
-    needs: determine-runner-config
+    needs: [check-harbor, determine-runner-config]
     timeout-minutes: 1440
     runs-on: ${{ fromJSON(needs.determine-runner-config.outputs.runs-on-labels) }}
     container:
-      image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
+      image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, 'ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest') }}
       env:
         GH_TOKEN: ${{ github.token }}
         ARCH_NAME: ${{ needs.determine-runner-config.outputs.arch-name }}
@@ -112,8 +115,8 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         TT_METAL_HOME: /work
-        PYTHONFAULTHANDLER: 1       # prints Python stack trace on segfault
-        PYTHONMALLOC: debug         # adds checks, helps catch memory issues
+        PYTHONFAULTHANDLER: 1 # prints Python stack trace on segfault
+        PYTHONMALLOC: debug # adds checks, helps catch memory issues
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
         # TODO: Revisit the addition of these env vars https://github.com/tenstorrent/tt-metal/issues/20161
@@ -162,17 +165,16 @@ jobs:
         run: |
           echo "Checking GitHub CLI, jq, and zstd installation..."
 
-          # Check and install GitHub CLI
-          if ! command -v gh >/dev/null 2>&1; then
-            echo "Installing GitHub CLI 2.81.0..."
-            apt-get update
-            wget -O gh_2.81.0_linux_amd64.deb https://github.com/cli/cli/releases/download/v2.81.0/gh_2.81.0_linux_amd64.deb
-            apt-get install -y --no-install-recommends ./gh_2.81.0_linux_amd64.deb
-            rm -f gh_2.81.0_linux_amd64.deb
-            echo "GitHub CLI 2.81.0 installed successfully"
-          else
-            echo "GitHub CLI is already installed"
-          fi
+          # Always force-install our pinned GitHub CLI version.
+          # Runners may have an older gh pre-installed that lacks --commit support
+          # (added in gh v2.29). Skipping install when gh exists silently inherits
+          # that old version and breaks download_artifacts.sh.
+          echo "Installing GitHub CLI 2.81.0 (force)..."
+          apt-get update -q
+          wget -q -O gh_2.81.0_linux_amd64.deb https://github.com/cli/cli/releases/download/v2.81.0/gh_2.81.0_linux_amd64.deb
+          apt-get install -y --no-install-recommends ./gh_2.81.0_linux_amd64.deb
+          rm -f gh_2.81.0_linux_amd64.deb
+          echo "GitHub CLI 2.81.0 installed successfully"
 
           # Check and install jq and zstd
           if ! command -v jq >/dev/null 2>&1 || ! command -v zstd >/dev/null 2>&1; then

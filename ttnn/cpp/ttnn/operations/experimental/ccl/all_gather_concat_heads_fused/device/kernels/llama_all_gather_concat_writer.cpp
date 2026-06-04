@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -77,16 +79,20 @@ void kernel_main() {
         FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
             arg_idx);
 
+    Noc noc_obj;
+    CircularBuffer cb_packet_header(reserved_packet_header_cb_id);
+    CircularBuffer cb0(cb0_id);
+
     // packet header cb
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_forward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_backward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
+    cb_packet_header.reserve_back(1);
+    auto packet_header_buffer_addr_forward = cb_packet_header.get_write_ptr();
+    cb_packet_header.push_back(1);
+    cb_packet_header.reserve_back(1);
+    auto packet_header_buffer_addr_backward = cb_packet_header.get_write_ptr();
+    cb_packet_header.push_back(1);
+    cb_packet_header.reserve_back(1);
+    auto packet_header_buffer_seminc = cb_packet_header.get_write_ptr();
+    cb_packet_header.push_back(1);
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
@@ -109,8 +115,8 @@ void kernel_main() {
     while (tiles_read < num_tiles_to_read) {
         uint32_t num_tiles_to_read_this_core = std::min(num_tiles_per_core - shard_tile_id, packet_size_in_pages);
         num_tiles_to_read_this_core = std::min(num_tiles_to_read - tiles_read, num_tiles_to_read_this_core);
-        cb_wait_front(cb0_id, num_tiles_to_read_this_core);
-        size_t l1_read_addr = get_read_ptr(cb0_id);
+        cb0.wait_front(num_tiles_to_read_this_core);
+        size_t l1_read_addr = cb0.get_read_ptr();
 
         uint64_t noc0_dest_noc_addr = get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0);
         noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
@@ -126,7 +132,7 @@ void kernel_main() {
             // Alternate the packet header distance for better balancing
             std::swap(pkt_hdr_forward, pkt_hdr_backward);
         }
-        cb_pop_front(cb0_id, num_tiles_to_read_this_core);
+        cb0.pop_front(num_tiles_to_read_this_core);
 
         tiles_read += num_tiles_to_read_this_core;
         shard_tile_id += num_tiles_to_read_this_core;
@@ -159,6 +165,8 @@ void kernel_main() {
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
     // increment locally
+    // Device 2.0 migration: legacy primitive retained — out_ready_sem_bank_addr is a GlobalSemaphore
+    // address, and Semaphore<> binds to per-program ids (no GlobalSemaphore wrapper exists).
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
@@ -170,6 +178,8 @@ void kernel_main() {
     }
 
     // Set up for mcasting to concat workers
+    // Device 2.0 migration: legacy primitives retained: set + raw L1 read pattern does not map to
+    // Semaphore<>, which exposes set/wait but not raw-pointer value reads.
     if (wait_output_semaphore) {
         volatile tt_l1_ptr uint32_t* concat_semaphore_send_addr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(concat_semaphore_send_addr);
@@ -226,6 +236,7 @@ void kernel_main() {
     }
 
     if (reset_global_semaphore) {
+        // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is a GlobalSemaphore address.
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
     }
 
@@ -233,5 +244,5 @@ void kernel_main() {
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close_finish();
     }
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }

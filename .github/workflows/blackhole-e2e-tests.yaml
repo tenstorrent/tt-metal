@@ -94,6 +94,8 @@ on:
     - cron: "0 */8 * * *"  # Every 8 hours at 0:00, 8:00, and 16:00 UTC
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   generate-card-matrix:
     runs-on: ubuntu-latest
     outputs:
@@ -124,25 +126,28 @@ jobs:
           echo "Selected system type: $selected_system_type"
           echo "matrix=$matrix_output" >> $GITHUB_OUTPUT
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   blackhole-e2e-tests:
-    needs: [build-artifact, generate-card-matrix]
+    needs: [check-harbor, build-artifact, generate-card-matrix]
     secrets: inherit
     uses: ./.github/workflows/blackhole-e2e-tests-impl.yaml
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.generate-card-matrix.outputs.matrix) }}
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: ${{ format('{0}{1}', needs.check-harbor.outputs.harbor-prefix, needs.build-artifact.outputs.dev-docker-image) }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: ${{ matrix.test-group.sku }}

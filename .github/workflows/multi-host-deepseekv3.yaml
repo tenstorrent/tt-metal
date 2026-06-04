@@ -1,11 +1,11 @@
 name: DeepSeek V3 Multi-Host Tests
 on:
   schedule:
-    - cron: '0 4 * * *'  # 11pm EST (4am UTC)
+    - cron: "0 4 * * *" # 11pm EST (4am UTC)
   workflow_dispatch:
     inputs:
       setup:
-        description: 'Galaxy setup to test'
+        description: "Galaxy setup to test"
         required: true
         type: choice
         default: both
@@ -14,32 +14,32 @@ on:
           - quad
           - both
       deepseekv3_unit_tests:
-        description: 'Run DeepSeek V3 unit tests'
+        description: "Run DeepSeek V3 unit tests"
         required: false
         default: false
         type: boolean
       deepseekv3_module_tests:
-        description: 'Run DeepSeek V3 module tests'
+        description: "Run DeepSeek V3 module tests"
         required: false
         default: false
         type: boolean
       teacher_forced:
-        description: 'Run teacher forced accuracy test'
+        description: "Run teacher forced accuracy test"
         required: false
         default: false
         type: boolean
       demo:
-        description: 'Run demo test'
+        description: "Run demo test"
         required: false
         default: false
         type: boolean
       demo_stress:
-        description: 'Run demo stress test'
+        description: "Run demo stress test"
         required: false
         default: false
         type: boolean
       demo_upr_mode:
-        description: 'UPR variant for demo and stress tests'
+        description: "UPR variant for demo and stress tests"
         required: false
         type: choice
         default: all
@@ -48,7 +48,7 @@ on:
           - 32
           - 8
       recalculate_weights_cache:
-        description: 'Recalculate weights cache in a new directory'
+        description: "Recalculate weights cache in a new directory"
         required: false
         type: choice
         default: "No"
@@ -56,10 +56,10 @@ on:
           - "No"
           - "Yes"
       new_cache_dir:
-        description: 'New cache subdirectory name (under DeepSeek-R1-0528-Cache/). Required when recalculate_weights_cache is Yes.'
+        description: "New cache subdirectory name (under DeepSeek-R1-0528-Cache/). Required when recalculate_weights_cache is Yes."
         required: false
         type: string
-        default: ''
+        default: ""
       platform:
         required: false
         type: choice
@@ -88,16 +88,28 @@ on:
 run-name: "DeepSeek V3 – ${{ github.event_name == 'schedule' && 'nightly' || inputs.setup }} [${{ github.event_name == 'schedule' && 'nightly' || (inputs.deepseekv3_unit_tests && 'unit ' || '') }}${{ inputs.deepseekv3_module_tests && 'module ' || '' }}${{ inputs.teacher_forced && 'tf ' || '' }}${{ inputs.demo && 'demo ' || '' }}${{ inputs.demo_stress && 'stress' || '' }}]"
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
+    needs: check-harbor
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
+
+  resolve-docker-pull-refs:
+    needs: [check-harbor, build-artifact]
+    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
 
   deepseekv3-tests:
     if: ${{ github.event_name == 'schedule' || inputs.deepseekv3_unit_tests || inputs.deepseekv3_module_tests || inputs.teacher_forced || inputs.demo || inputs.demo_stress }}
@@ -110,7 +122,7 @@ jobs:
       - ${{ matrix.setup == 'quad' && 'multi-host-glx-4x' || 'multi-host-galaxy' }}
       - bare-metal
       - in-service
-    needs: build-artifact
+    needs: [resolve-docker-pull-refs, build-artifact]
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -173,7 +185,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: 80
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -198,7 +210,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: 80
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -224,7 +236,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: 170
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -251,7 +263,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: 170
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -279,7 +291,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 440 || 80 }}
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -314,7 +326,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 440 || 80 }}
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -350,7 +362,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -385,7 +397,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -420,7 +432,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 440 || 80 }}
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -455,7 +467,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 440 || 80 }}
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -491,7 +503,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 500 || 140 }}
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
@@ -526,7 +538,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 500 || 140 }}
         with:
-          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib

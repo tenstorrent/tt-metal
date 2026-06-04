@@ -14,16 +14,13 @@ namespace ckernel {
 /**
  * @brief Initializes the SFPU for ternary where operations.
  *
- * Programs shared SFPU state (ADDR_MOD_7) via the common ternary init, then
- * calls @c _init_where_() to set up the dest address-mod for per-row
- * advancement and prime the CC stack to a known-empty lane mask.
+ * Programs shared SFPU state (ADDR_MOD_7) via the common ternary init
  *
  * @tparam APPROXIMATE  Unused for where; kept for API parity with other SFPU ops.
  */
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_ternary_sfpu_where_init() {
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
-    sfpu::init_where();
 }
 
 /**

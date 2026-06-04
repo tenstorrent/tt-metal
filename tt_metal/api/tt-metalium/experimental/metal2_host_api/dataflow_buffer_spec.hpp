@@ -7,12 +7,14 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
+#include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // tt::DataFormat
 
@@ -92,6 +94,16 @@ struct DataflowBufferSpec {
 
     // Optional; if unspecified, the default tile format (32x32) is assumed
     std::optional<tt::tt_metal::Tile> tile_format_metadata = std::nullopt;
+
+    // Optional override for this DFB's tile face layout.
+    //
+    // A tile is physically stored as a grid of fixed-size sub-blocks called "faces". The compute
+    // engine normally infers how many faces a tile has, and how many rows each face holds, from
+    // `tile_format_metadata`. Set this field only when an entry does not occupy a full tile, so it
+    // holds fewer faces and/or shorter faces than the default; the compute engine then reads exactly
+    // that much data instead of a whole tile. `FaceGeometry` carries those two values (rows-per-face
+    // and number of faces).
+    std::optional<FaceGeometry> unpack_face_geometry_metadata = std::nullopt;
 
     //////////////////////////////
     // Backing memory

@@ -175,94 +175,6 @@ ALWI void recip_tile_first_column_wh_idst0_direct() {
 }
 #endif
 
-#if defined(TRISC_MATH) && defined(ARCH_BLACKHOLE)
-// Self-contained, hazard-free BF16 reciprocal for the streaming SDPA normalize.
-//
-// Ported from the fixed Blackhole LLK fast path (tt-metal commit 15b16a4) and kept
-// local to the SDPA kernel so the determinism fix does not depend on the LLK header
-// version. The previous LLK _calculate_reciprocal_fast_8b_3c_ injected the BF16 low-bit
-// correction through the SFPLOADMACRO store side, creating a Dst write-to-read spacing
-// hazard: a Dst block written by the macro store could be read by a following
-// SFPLOAD/SFPLOADMACRO too soon. In chunked ring-joint SDPA the timing around the
-// row-normalization reciprocal made that surface as nondeterministic output.
-//
-// This keeps SFPLOADMACRO only for the source load + approximate reciprocal + x copy,
-// then does the 0x8000 BF16 correction, the Newton error step, and a single direct
-// SFPSTORE with normal HW instruction scoreboarding (no async macro store).
-inline void _sdpa_init_reciprocal_8b_3c_() {
-#ifndef DISABLE_SFPLOADMACRO
-    // InstructionTemplate[0]: y = arecip(y)
-    TTI_SFPARECIP(0, 0, 12, sfpi::SFPARECIP_MOD1_RECIP);
-    // InstructionTemplate[1]: x = y (copy via indirect VD)
-    TTI_SFPMAD(p_sfpu::LCONST_0, p_sfpu::LCONST_0, 0, 13, 8);  // SFPMAD_MOD1_INDIRECT_VD
-    {
-        constexpr std::uint32_t simple_bits = (0 << 3) | (4 + 0);
-        constexpr std::uint32_t mad_bits = (0 << 3) | (4 + 1);
-        constexpr std::uint32_t round_bits = 0;
-        constexpr std::uint32_t store_bits = 0;  // Store unit unused: no macro store.
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 0, 0);
-    }
-    // Simple + MAD use WaitForElapsedInstructions; Store/Round unused.
-    TTI_SFPCONFIG(0x300, 8, 1);
-#endif
-    // DISABLE_SFPLOADMACRO (e.g. ttsim, which does not model SFPLOADMACRO): no LOADMACRO
-    // registers to program; the non-macro calculate path below is self-contained.
-}
-
-template <int ITERATIONS>
-inline void _sdpa_calculate_reciprocal_8b_3c_() {
-#ifdef DISABLE_SFPLOADMACRO
-    // Non-macro fallback (matches the LLK DISABLE_SFPLOADMACRO path): same arecip + BF16
-    // low-bit correction issued as plain SFPU instructions, for targets where
-    // SFPLOADMACRO is unavailable/unmodeled (ttsim).
-    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, 0x8000);
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
-        TTI_SFPMAD(p_sfpu::LCONST_0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
-        TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPARECIP_MOD1_RECIP);
-        TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LCONST_neg1, p_sfpu::LREG1, 0);
-        TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG1, p_sfpu::LREG1, 5);
-        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
-    }
-#else
-    constexpr int y = p_sfpu::LREG0;
-    constexpr int x = p_sfpu::LREG1;
-
-    TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_USHORT, x);
-
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOADMACRO((0 << 2) | y, 0, ADDR_MOD_7, 0);
-        // Macro 0 schedules y = arecip(y) and x = y for the next SFPU issue.
-        // Wait before writing y's low 16 bits directly.
-        TTI_SFPNOP;
-        TTI_SFPLOADI(y, sfpi::SFPLOADI_MOD0_LOWER, 0x8000);
-        TTI_SFPMAD(x, y, p_sfpu::LCONST_neg1, x, 0);
-        TTI_SFPSHFT((-16) & 0xFFF, x, x, 5);
-        TTI_SFPIADD(0, x, y, sfpi::SFPIADD_MOD1_CC_NONE);
-        TTI_SFPSTORE(y, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
-    }
-
-    TTI_SFPNOP;
-#endif
-}
-
-// idst-0 column reciprocal for the streaming normalize. Mirrors recip_tile<false>(idst,
-// VectorMode::C): same launcher (DST addr-mod setup + VectorMode::C face traversal), but
-// a hazard-free macro body.
-ALWI void recip_tile_streaming_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::reciprocal>(_sdpa_init_reciprocal_8b_3c_);
-}
-ALWI void recip_tile_streaming(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(_sdpa_calculate_reciprocal_8b_3c_<8>, idst, VectorMode::C);
-}
-#endif
-
 // Raw pack: caller must have already called configure_row_pack_width(out_cb, pack_width).
 // Use this in tight loops after configuring once at the loop boundary.
 ALWI void pack_contiguous_rows_nocfg(
@@ -664,8 +576,8 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
             tile_regs_acquire();
             matmul_block(cur_sum_cb, col_identity_cb, 0, 0, 0, 0, N, 1, N);
 #ifdef ARCH_BLACKHOLE
-            MATH((recip_tile_streaming_init()));
-            MATH((recip_tile_streaming(0 /*dst_index*/)));
+            recip_tile_init<false>();
+            MATH((recip_tile<false>(0 /*dst_index*/, VectorMode::C)));
 #else
             recip_tile_init();
             MATH((recip_tile_first_column_wh_idst0_direct()));
@@ -735,13 +647,42 @@ static inline void l1_acc_single_tile(uint32_t mask_cb, uint32_t tile_idx, uint3
     tile_regs_release();
 }
 
+static inline void l1_acc_neginf_cols(
+    uint32_t mask_cb, uint32_t out_cb, uint32_t row_offset, uint32_t start_col, uint32_t end_col, uint32_t neginf_idx) {
+    for (uint32_t col = start_col; col < end_col; col++) {
+        l1_acc_single_tile(mask_cb, neginf_idx, out_cb, row_offset + col);
+    }
+}
+
+static inline void l1_acc_causal_col_mask(
+    uint32_t mask_cb,
+    uint32_t out_cb,
+    uint32_t row_offset,
+    uint32_t col,
+    int32_t q_pos,
+    int32_t k_pos,
+    uint32_t neginf_idx,
+    uint32_t causal_diag_idx) {
+    if (k_pos > q_pos) {
+        l1_acc_single_tile(mask_cb, neginf_idx, out_cb, row_offset + col);
+    } else if (k_pos == q_pos) {
+        l1_acc_single_tile(mask_cb, causal_diag_idx, out_cb, row_offset + col);
+    }
+}
+
 /**
- * Combined lightweight mask for streaming ring SDPA: applies partial + padded mask.
- * Processes SBH rows per call (one q_subblock).
+ * Combined lightweight mask for streaming ring SDPA. Applies causal, partial, and padded masks.
+ * KV-pad rotation reuses the causal path with a compile-time-selected Q row mapping.
  * Caller must set up copy_tile_to_dst_init_short and llk_pack_reconfig_l1_acc(1) before calling,
  * and llk_pack_reconfig_l1_acc(0) after calling.
  */
-template <uint32_t num_cols, bool is_causal_sdpa>
+template <
+    uint32_t num_cols,
+    bool is_causal_sdpa,
+    bool kv_pad_rotation_enabled = false,
+    uint32_t kv_pad_q_local_padded_Nt = 0,
+    uint32_t kv_pad_chunk_size_t = 0,
+    uint32_t kv_pad_kv_local_padded_Nt = 0>
 static void apply_lightweight_mask_streaming(
     uint32_t mask_cb,
     uint32_t out_cb,
@@ -757,57 +698,87 @@ static void apply_lightweight_mask_streaming(
     uint32_t k_start_tile,
     uint32_t active_Sk,
     uint32_t straddle_col = 0,
-    uint32_t straddle_jump = 0) {
+    uint32_t straddle_jump = 0,
+    const KVPadRotationContext& kv_pad_rotation = {}) {
+    // This constrains the inner lightweight-mask path, not the kernel-level causal flag.
+    // Chunked prefill re-enables this path when calling sdpa_inner_loop_step.
+    static_assert(!kv_pad_rotation_enabled || is_causal_sdpa, "KV-pad rotation mask is causal-only");
+
     // Caller-owned contract (see function comment): pack state for mask_cb is initialized
     // before entry via copy_tile_to_dst_init_short + llk_pack_reconfig_l1_acc(1).
-    uint32_t boundary_col = num_cols - num_padded - (has_partial ? 1 : 0);
     for (uint32_t row = 0; row < sbh; row++) {
         uint32_t row_offset = (q_subblock * sbh + row) * num_cols;
 
         // Causal mask: per-row diagonal + trailing neginf
         if constexpr (is_causal_sdpa) {
-            if (apply_causal) {
-                const int32_t q_pos = static_cast<int32_t>(q_start_tile + q_subblock * sbh + row);
-                if (straddle_col == 0) {
+            if (apply_causal || kv_pad_rotation_enabled) {
+                const uint32_t q_tile = q_subblock * sbh + row;
+                const uint32_t q_pos_u32 =
+                    q_global_tile_for_mask_row<kv_pad_rotation_enabled>(q_tile, q_start_tile, kv_pad_rotation);
+                const uint32_t mask_cols = kv_pad_rotation_enabled ? num_cols : active_Sk;
+                if constexpr (kv_pad_rotation_enabled) {
+                    if (q_pos_u32 == KV_PAD_ROTATION_INVALID_TILE) {
+                        l1_acc_neginf_cols(mask_cb, out_cb, row_offset, 0, mask_cols, neginf_idx);
+                        continue;
+                    }
+                }
+
+                const int32_t q_pos = static_cast<int32_t>(q_pos_u32);
+                if constexpr (kv_pad_rotation_enabled) {
+                    for (uint32_t col = 0; col < mask_cols; col++) {
+                        const uint32_t local_k_tile = kv_pad_rotation.k_local_start_tile + col;
+                        if (local_k_tile >= kv_pad_kv_local_padded_Nt) {
+                            l1_acc_single_tile(mask_cb, neginf_idx, out_cb, row_offset + col);
+                            continue;
+                        }
+                        const uint32_t k_pos_u32 =
+                            chunked_kv_global_tile_for_local<kv_pad_chunk_size_t, kv_pad_q_local_padded_Nt>(
+                                kv_pad_rotation.ring_id, local_k_tile);
+                        if (k_pos_u32 >= kv_pad_rotation.logical_tile_count) {
+                            l1_acc_single_tile(mask_cb, neginf_idx, out_cb, row_offset + col);
+                            continue;
+                        }
+                        const int32_t k_pos = static_cast<int32_t>(k_pos_u32);
+                        l1_acc_causal_col_mask(
+                            mask_cb, out_cb, row_offset, col, q_pos, k_pos, neginf_idx, causal_diag_idx);
+                    }
+                } else if (straddle_col == 0) {
                     // Fast path: K coords contiguous across cols.
                     int32_t diag_col = q_pos - static_cast<int32_t>(k_start_tile);
                     if (diag_col < 0) {
-                        for (uint32_t col = 0; col < active_Sk; col++) {
-                            l1_acc_single_tile(mask_cb, neginf_idx, out_cb, row_offset + col);
-                        }
-                    } else if (static_cast<uint32_t>(diag_col) < active_Sk) {
+                        l1_acc_neginf_cols(mask_cb, out_cb, row_offset, 0, mask_cols, neginf_idx);
+                    } else if (static_cast<uint32_t>(diag_col) < mask_cols) {
                         l1_acc_single_tile(
                             mask_cb, causal_diag_idx, out_cb, row_offset + static_cast<uint32_t>(diag_col));
-                        for (uint32_t col = static_cast<uint32_t>(diag_col) + 1; col < active_Sk; col++) {
-                            l1_acc_single_tile(mask_cb, neginf_idx, out_cb, row_offset + col);
-                        }
+                        l1_acc_neginf_cols(
+                            mask_cb, out_cb, row_offset, static_cast<uint32_t>(diag_col) + 1, mask_cols, neginf_idx);
                     }
                 } else {
                     // Chunked-prefill straddle: K coord jumps by straddle_jump at col >= straddle_col
                     // (the K-chunk crosses a slab boundary). Evaluate per-col.
-                    for (uint32_t col = 0; col < active_Sk; col++) {
+                    for (uint32_t col = 0; col < mask_cols; col++) {
                         int32_t k_pos = static_cast<int32_t>(k_start_tile) + static_cast<int32_t>(col);
                         if (col >= straddle_col) {
                             k_pos += static_cast<int32_t>(straddle_jump);
                         }
-                        if (k_pos > q_pos) {
-                            l1_acc_single_tile(mask_cb, neginf_idx, out_cb, row_offset + col);
-                        } else if (k_pos == q_pos) {
-                            l1_acc_single_tile(mask_cb, causal_diag_idx, out_cb, row_offset + col);
-                        }
+                        l1_acc_causal_col_mask(
+                            mask_cb, out_cb, row_offset, col, q_pos, k_pos, neginf_idx, causal_diag_idx);
                     }
                 }
             }
         }
 
-        // Padding mask: partial tile + fully-padded columns (unchanged)
-        if (has_partial) {
-            l1_acc_single_tile(mask_cb, partial_tile_idx, out_cb, row_offset + boundary_col);
-        }
+        if constexpr (!kv_pad_rotation_enabled) {
+            // Padding mask: partial tile + fully-padded columns (unchanged)
+            const uint32_t boundary_col = num_cols - num_padded - (has_partial ? 1 : 0);
+            if (has_partial) {
+                l1_acc_single_tile(mask_cb, partial_tile_idx, out_cb, row_offset + boundary_col);
+            }
 
-        uint32_t start = num_cols - num_padded;
-        for (uint32_t col = start; col < num_cols; col++) {
-            l1_acc_single_tile(mask_cb, neginf_idx, out_cb, row_offset + col);
+            uint32_t start = num_cols - num_padded;
+            for (uint32_t col = start; col < num_cols; col++) {
+                l1_acc_single_tile(mask_cb, neginf_idx, out_cb, row_offset + col);
+            }
         }
     }
 }
@@ -856,7 +827,11 @@ template <
     uint32_t cb_recip_scratch = 0,
     uint32_t cb_normalized_out = 0,
     uint32_t cb_mask_in = 0,
-    uint32_t KT_stride = Sk_chunk_t>
+    uint32_t KT_stride = Sk_chunk_t,
+    bool kv_pad_rotation_enabled = false,
+    uint32_t kv_pad_q_local_padded_Nt = 0,
+    uint32_t kv_pad_chunk_size_t = 0,
+    uint32_t kv_pad_kv_local_padded_Nt = 0>
 static void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
@@ -870,12 +845,13 @@ static void sdpa_inner_loop_step(
     const uint32_t save_out_cb = INVALID_CB,
     const uint32_t save_max_cb = INVALID_CB,
     const bool apply_causal = false,
-    const uint32_t causal_q_start_tile = 0,
-    const uint32_t causal_k_start_tile = 0,
+    const uint32_t mask_q_start_tile = 0,
+    const uint32_t mask_k_start_tile = 0,
     const uint32_t neginf_idx = 0,
     const uint32_t causal_diag_idx = 0,
-    const uint32_t causal_straddle_col = 0,
-    const uint32_t causal_straddle_jump = 0) {
+    const uint32_t mask_straddle_col = 0,
+    const uint32_t mask_straddle_jump = 0,
+    const KVPadRotationContext& kv_pad_rotation = {}) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -966,27 +942,36 @@ static void sdpa_inner_loop_step(
         // for this row group. Active for ring, causal non-ring, or non-causal padded with a
         // partial-tile mask (single-chip streaming partial-K case).
         if constexpr (ring_mode || is_causal_sdpa || use_padded_mask) {
-            if ((is_causal_sdpa && apply_causal) || (apply_mask && lw_partial_tile_idx > 0)) {
+            const bool should_apply_lightweight_mask =
+                kv_pad_rotation_enabled || (is_causal_sdpa && apply_causal) || (apply_mask && lw_partial_tile_idx > 0);
+            if (should_apply_lightweight_mask) {
                 // MOP is configured for actual_sbw tiles (blocked matmul); mask needs 1 tile per pack.
                 configure_single_tile_pack(cb_qkt_im);
                 copy_tile_to_dst_init_short(cb_mask_in);
                 PACK((llk_pack_reconfig_l1_acc(1)));
-                apply_lightweight_mask_streaming<KT_stride, is_causal_sdpa>(
+                apply_lightweight_mask_streaming<
+                    KT_stride,
+                    is_causal_sdpa,
+                    kv_pad_rotation_enabled,
+                    kv_pad_q_local_padded_Nt,
+                    kv_pad_chunk_size_t,
+                    kv_pad_kv_local_padded_Nt>(
                     cb_mask_in,
                     cb_qkt_im,
                     q_subblock,
-                    Sk_chunk_t - active_Sk,
-                    (apply_mask && lw_partial_tile_idx > 0),
-                    lw_partial_tile_idx,
+                    kv_pad_rotation_enabled ? 0 : Sk_chunk_t - active_Sk,
+                    !kv_pad_rotation_enabled && (apply_mask && lw_partial_tile_idx > 0),
+                    kv_pad_rotation_enabled ? 0 : lw_partial_tile_idx,
                     qkt_subblock_h,
-                    apply_causal,
+                    kv_pad_rotation_enabled || apply_causal,
                     neginf_idx,
                     causal_diag_idx,
-                    causal_q_start_tile,
-                    causal_k_start_tile,
-                    active_Sk,
-                    causal_straddle_col,
-                    causal_straddle_jump);
+                    mask_q_start_tile,
+                    mask_k_start_tile,
+                    kv_pad_rotation_enabled ? KT_stride : active_Sk,
+                    mask_straddle_col,
+                    mask_straddle_jump,
+                    kv_pad_rotation);
                 PACK((llk_pack_reconfig_l1_acc(0)));
             }
         }
@@ -1656,7 +1641,8 @@ template <
     bool global_n_mask_enabled = false,
     bool local_n_mask_enabled = false,
     bool joint_n_mask_enabled = false,
-    bool straddle_mask_enabled = false>
+    bool straddle_mask_enabled = false,
+    bool kv_pad_rotation_enabled = false>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -1766,10 +1752,12 @@ void sdpa_ring_v2(
         if (kv_chunk_is_joint) {
             return false;
         }
-        const uint32_t global_start =
-            kv_global_tile_for_local<chunked_enabled, local_padded_Nt, chunk_size_t, q_local_padded_Nt>(
-                ring_id, k_chunk * Sk_chunk_t);
-        return global_start >= logical_nt;
+        return !kv_chunk_starts_before_logical_end<
+            kv_pad_rotation_enabled,
+            chunked_enabled,
+            local_padded_Nt,
+            chunk_size_t,
+            q_local_padded_Nt>(ring_id, k_chunk * Sk_chunk_t, logical_nt);
     };
 
     // Causal skip: K chunks fully above the diagonal — drain K/V from CBs and skip.
@@ -1895,7 +1883,7 @@ void sdpa_ring_v2(
                     lw_mask.straddle_num_padded_tiles > 0 && k_chunk == lw_mask.straddle_mask_chunk_id;
             }
 
-            bool apply_mask = false;
+            bool apply_mask = kv_pad_rotation_enabled;
             if constexpr (global_n_mask_enabled) {
                 apply_mask = apply_mask || is_global_n_mask_chunk;
             }
@@ -1959,7 +1947,7 @@ void sdpa_ring_v2(
             // Causal narrowing on the diagonal-crossing K-chunk: cols past the last Q-row's
             // diag tile are -inf for every row in the Q-chunk, so skip matmul/sub_exp/V there.
             // Composes with any prior padding narrowing via min().
-            if constexpr (is_causal_sdpa) {
+            if constexpr (is_causal_sdpa && !kv_pad_rotation_enabled) {
                 if (is_causal_iter && k_chunk == causal_k_limit - 1) {
                     const uint32_t causal_active = q_start_tile + Sq_chunk_t - k_chunk * Sk_chunk_t;
                     if (causal_active < active_Sk_param) {
@@ -2011,6 +1999,10 @@ void sdpa_ring_v2(
                     }
                 }
             }
+            KVPadRotationContext step_kv_pad_rotation = chunked.kv_pad_rotation;
+            step_kv_pad_rotation.k_local_start_tile = k_chunk * Sk_chunk_t;
+            step_kv_pad_rotation.ring_id = ring_id;
+            step_kv_pad_rotation.logical_tile_count = logical_nt;
 
             sdpa_inner_loop_step<
                 false,  // profiling_enabled
@@ -2024,9 +2016,9 @@ void sdpa_ring_v2(
                 qkt_subblock_w,
                 qktv_subblock_h,
                 qktv_subblock_w,
-                false,  // use_padded_mask — ring uses ring mask instead
-                true,   // ring_mode
-                is_causal_sdpa || chunked_enabled,
+                false,                              // use_padded_mask — ring uses ring mask instead
+                true,                               // ring_mode
+                is_causal_sdpa || chunked_enabled,  // chunked re-enables causal masking with absolute coords
                 cb_q_in,
                 cb_kt_in,
                 cb_v_in,
@@ -2036,7 +2028,12 @@ void sdpa_ring_v2(
                 cb_col_identity,
                 cb_recip_scratch,
                 cb_normalized_out,
-                cb_mask_in>(
+                cb_mask_in,
+                Sk_chunk_t,
+                kv_pad_rotation_enabled,
+                q_local_padded_Nt,
+                chunk_size_t,
+                local_padded_Nt>(
                 q_prev,
                 q_cur,
                 is_last_k_of_last_ring_iter,
@@ -2049,12 +2046,13 @@ void sdpa_ring_v2(
                 step_save_out_cb,
                 step_save_max_cb,
                 is_causal_iter,
-                q_start_tile,
+                kv_pad_rotation_enabled ? q_chunk * Sq_chunk_t : q_start_tile,
                 step_k_start_tile,
                 lw_mask.neginf_tile_idx,
                 lw_mask.causal_diag_tile_idx,
                 step_straddle_col,
-                step_straddle_jump);
+                step_straddle_jump,
+                step_kv_pad_rotation);
 
             // Post-iteration cleanup: pop previous values and swap aliases
             // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
