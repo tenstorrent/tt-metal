@@ -367,12 +367,19 @@ void py_graph_module(nb::module_& m) {
     m.def(
         "up_front_begin_collect",
         &ttnn::up_front_compile::begin_collect,
-        R"doc(up_front_begin_collect() -> None
+        nb::arg("clear") = true,
+        R"doc(up_front_begin_collect(clear=True) -> None
 
         Begin a precompile "collect" pass. Enables NO_DISPATCH graph capture (buffer
         allocations mocked at address 0, nothing dispatched) and marks the collector
         active on this thread. Run a model forward after this; every op stashes its
         built-but-uncompiled program into the collector. Pair with up_front_end_collect().
+
+        clear=True (default) drops previously collected programs first (single-run
+        usage). clear=False ACCUMULATES — a pytest plugin wraps each test body in
+        up_front_begin_collect(clear=False)/up_front_end_collect() so programs from
+        every test pile into one deduped set for a single up_front_compile() at the
+        end. Clear once up front with up_front_clear() when accumulating.
 
         Run on a COLD device program cache with the cache ENABLED so each op is a miss
         (reaches the collector) and carries a distinct program hash.
