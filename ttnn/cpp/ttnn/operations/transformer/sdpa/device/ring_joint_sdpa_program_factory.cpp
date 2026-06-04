@@ -11,6 +11,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <optional>
 #include <cmath>
@@ -517,9 +518,11 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
-    // Latent-V reuses the K CB for K^T and compact V. A third fixed-size entry lets the reader
-    // materialize next V while compute still consumes current V.
-    uint32_t k_tiles = Sk_chunk_t * DHt * (v_shares_k_buffer ? 3 : 2);
+    // K^T CB: double-buffered (depth 2). Latent-V reads V^T directly from the K^T entry (v_from_kt),
+    // so the former 3rd slot is no longer needed for V-remat; here we drop it to depth 2 as well
+    // (frees ~382 KB of L1 on the dv512 shape, at the cost of the K^T-prefetch slack that hides the
+    // reader's NoC latency tail — measured ≈ -2.1pt on dv512 q32).
+    uint32_t k_tiles = Sk_chunk_t * DHt * 2;
     uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
     uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -1596,6 +1599,27 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     // Convert std::map<string,string> defines to KernelDescriptor::Defines vector form.
     KernelDescriptor::Defines kernel_defines(defines.begin(), defines.end());
 
+    // Compute-ceiling instrumentation: when TT_RING_JOINT_DISABLE_NOC_DM=1, the reader/writer
+    // kernels drop all bulk NoC data movement (reads, writes, K/V mcast, unicast) while keeping CB
+    // and noc_semaphore_* synchronization, so the measured kernel duration reflects the compute
+    // ceiling. Outputs are garbage in this mode — perf measurement only. See noc_dm_gate.hpp.
+    const bool disable_noc_dm = [] {
+        const char* e = std::getenv("TT_RING_JOINT_DISABLE_NOC_DM");
+        return e != nullptr && e[0] == '1';
+    }();
+    KernelDescriptor::Defines dataflow_defines = kernel_defines;
+    if (disable_noc_dm) {
+        dataflow_defines.emplace_back("RING_JOINT_DISABLE_NOC_DM", "1");
+        // The define gates the NoC calls (noc_dm_gate.hpp), but defines alone did not reliably
+        // distinguish the JIT-cached kernels, so a stale data-moving kernel could be served.
+        // Append a sentinel compile-time arg (read by nobody) so the cache hash always differs.
+        reader_compile_time_args.push_back(1u);
+        writer_compile_time_args.push_back(1u);
+        log_warning(
+            tt::LogOp,
+            "RingJointSDPA compute-ceiling: NoC data movement DISABLED in reader/writer (outputs are garbage)");
+    }
+
     // Build kernel descriptors locally so we can append per-core runtime args
     // before pushing them into desc.kernels at the end. KernelDescriptor creation
     // is deferred (just like the original CreateKernel calls were) until after chain
@@ -1606,7 +1630,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     reader_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel.core_ranges = core_grid_set;
     reader_kernel.compile_time_args = reader_compile_time_args;
-    reader_kernel.defines = kernel_defines;
+    reader_kernel.defines = dataflow_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
 
     KernelDescriptor writer_kernel{};
@@ -1615,7 +1639,7 @@ tt::tt_metal::ProgramDescriptor RingJointSDPAProgramFactory::create_descriptor(
     writer_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel.core_ranges = core_grid_set;
     writer_kernel.compile_time_args = writer_compile_time_args;
-    writer_kernel.defines = kernel_defines;
+    writer_kernel.defines = dataflow_defines;
     writer_kernel.config = WriterConfigDescriptor{};
 
     KernelDescriptor compute_kernel{};

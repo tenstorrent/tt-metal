@@ -832,7 +832,11 @@ template <
     uint32_t kv_pad_q_local_padded_Nt = 0,
     uint32_t kv_pad_chunk_size_t = 0,
     uint32_t kv_pad_kv_local_padded_Nt = 0,
-    uint32_t v_cb_physical_width_t = vDHt>
+    uint32_t v_cb_physical_width_t = vDHt,
+    // Latent-V: source the S@V operand directly from the K^T buffer (cb_kt_in) instead of a
+    // rematerialized V copy. V[sk][vd] tile is byte-identical to cb_kt_in[vd*KT_stride + sk],
+    // so this is a pure addressing remap (no extra L1->L1 V transpose on the reader).
+    bool v_from_kt = false>
 static void sdpa_inner_loop_step(
     AccumulatorHalf& prev,
     AccumulatorHalf& cur,
@@ -853,6 +857,7 @@ static void sdpa_inner_loop_step(
     const uint32_t mask_straddle_col = 0,
     const uint32_t mask_straddle_jump = 0,
     const KVPadRotationContext& kv_pad_rotation = {}) {
+    DeviceZoneScopedN("COMPUTE_STEP");
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -1006,7 +1011,11 @@ static void sdpa_inner_loop_step(
         q_wait_tiles += q_subblock_num_tiles;
     }
 
-    cb_pop_front(cb_kt_in, DHt * KT_stride);
+    // v_from_kt: defer the K^T pop until after Phase 2's S@V (which now reads V^T from this
+    // same buffer). The pop then happens via the cb_v_in pop at the end of Phase 2.
+    if constexpr (!v_from_kt) {
+        cb_pop_front(cb_kt_in, DHt * KT_stride);
+    }
 
     // Q is no longer needed after Phase 1. On the last K chunk, pop early so the
     // reader can start fetching the next Q chunk during Phase 2.
@@ -1085,33 +1094,58 @@ static void sdpa_inner_loop_step(
 
                 {
                     MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
-                    uint32_t v_index_offset = 0;
                     sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                         out_cb, out_cb);
-                    // cb_qkt_im rows are laid out at KT_stride even when this kt_sub only consumes a
-                    // narrower logical width. Keep unpack init on the physical stride; inner_dim below
-                    // still limits how many V rows are multiplied.
-                    mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
-                    // Configure once before v_subblock loop; skip inside.
-                    configure_row_pack_width(out_cb, qktv_subblock_w);
-                    for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                        blocked_matmul_and_pack<false, vDHt, vDHt>(
-                            cb_qkt_im,
-                            cb_v_in,
-                            out_cb,
-                            qktv_in0_index_offset + kt_sub * matmul_inner,
-                            kt_sub * matmul_inner * vDHt + v_index_offset,
-                            0,
-                            v_subblock * qktv_subblock_w,
-                            qktv_subblock_w,
-                            qktv_h,
-                            matmul_inner,
-                            KT_stride,
-                            /*trigger_reduce=*/false,
-                            /*skip_pack_configure=*/true);
-                        v_index_offset += qktv_subblock_w;
+                    if constexpr (v_from_kt) {
+                        // Latent V: V[sk][vd] tile == cb_kt_in[vd*KT_stride + sk]. vd (output col) is
+                        // KT_stride-strided in K^T, so emit one output column per matmul (ct_dim=1),
+                        // stepping the sk contraction by 1 (in1_stride=1).
+                        mm_no_mop_reinit_short(cb_qkt_im, cb_kt_in, false, 1, qktv_h, KT_stride);
+                        configure_row_pack_width(out_cb, 1);
+                        for (uint32_t vd = 0; vd < vDHt; ++vd) {
+                            blocked_matmul_and_pack<false, 1, vDHt>(
+                                cb_qkt_im,
+                                cb_kt_in,
+                                out_cb,
+                                qktv_in0_index_offset + kt_sub * matmul_inner,
+                                vd * KT_stride + kt_sub * matmul_inner,
+                                0,
+                                vd,
+                                1,
+                                qktv_h,
+                                matmul_inner,
+                                KT_stride,
+                                /*trigger_reduce=*/false,
+                                /*skip_pack_configure=*/true);
+                        }
+                        sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
+                    } else {
+                        uint32_t v_index_offset = 0;
+                        // cb_qkt_im rows are laid out at KT_stride even when this kt_sub only consumes a
+                        // narrower logical width. Keep unpack init on the physical stride; inner_dim below
+                        // still limits how many V rows are multiplied.
+                        mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h, KT_stride);
+                        // Configure once before v_subblock loop; skip inside.
+                        configure_row_pack_width(out_cb, qktv_subblock_w);
+                        for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
+                            blocked_matmul_and_pack<false, vDHt, vDHt>(
+                                cb_qkt_im,
+                                cb_v_in,
+                                out_cb,
+                                qktv_in0_index_offset + kt_sub * matmul_inner,
+                                kt_sub * matmul_inner * vDHt + v_index_offset,
+                                0,
+                                v_subblock * qktv_subblock_w,
+                                qktv_subblock_w,
+                                qktv_h,
+                                matmul_inner,
+                                KT_stride,
+                                /*trigger_reduce=*/false,
+                                /*skip_pack_configure=*/true);
+                            v_index_offset += qktv_subblock_w;
+                        }
+                        sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
                     }
-                    sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
                 }
 
                 if (kt_sub > 0) {
@@ -1207,32 +1241,56 @@ static void sdpa_inner_loop_step(
             }
             {
                 MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
-                uint32_t v_index_offset = 0;
                 sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
                     out_cb, out_cb);
-                // See the q_subblock-0 V matmul above: active_Sk can be narrower than the physical
-                // cb_qkt_im row stride, but the unpacker is configured for the physical layout.
-                mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
-                // Configure once before v_subblock loop; skip inside.
-                configure_row_pack_width(out_cb, qktv_subblock_w);
-                for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                    blocked_matmul_and_pack<false, vDHt, vDHt>(
-                        cb_qkt_im,
-                        cb_v_in,
-                        out_cb,
-                        qktv_in0_index_offset,
-                        v_index_offset,
-                        w_q,
-                        v_subblock * qktv_subblock_w,
-                        qktv_subblock_w,
-                        cur_h,
-                        active_Sk,
-                        KT_stride,
-                        /*trigger_reduce=*/false,
-                        /*skip_pack_configure=*/true);
-                    v_index_offset += qktv_subblock_w;
+                if constexpr (v_from_kt) {
+                    // Latent V sourced from K^T: one output column (vd) per matmul, sk-contraction
+                    // stepping by 1. V[sk][vd] == cb_kt_in[vd*KT_stride + sk].
+                    mm_no_mop_reinit_short(cb_qkt_im, cb_kt_in, false, 1, cur_h, KT_stride);
+                    configure_row_pack_width(out_cb, 1);
+                    for (uint32_t vd = 0; vd < vDHt; ++vd) {
+                        blocked_matmul_and_pack<false, 1, vDHt>(
+                            cb_qkt_im,
+                            cb_kt_in,
+                            out_cb,
+                            qktv_in0_index_offset,
+                            vd * KT_stride,
+                            w_q,
+                            vd,
+                            1,
+                            cur_h,
+                            active_Sk,
+                            KT_stride,
+                            /*trigger_reduce=*/false,
+                            /*skip_pack_configure=*/true);
+                    }
+                    sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
+                } else {
+                    uint32_t v_index_offset = 0;
+                    // See the q_subblock-0 V matmul above: active_Sk can be narrower than the physical
+                    // cb_qkt_im row stride, but the unpacker is configured for the physical layout.
+                    mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
+                    // Configure once before v_subblock loop; skip inside.
+                    configure_row_pack_width(out_cb, qktv_subblock_w);
+                    for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
+                        blocked_matmul_and_pack<false, vDHt, vDHt>(
+                            cb_qkt_im,
+                            cb_v_in,
+                            out_cb,
+                            qktv_in0_index_offset,
+                            v_index_offset,
+                            w_q,
+                            v_subblock * qktv_subblock_w,
+                            qktv_subblock_w,
+                            cur_h,
+                            active_Sk,
+                            KT_stride,
+                            /*trigger_reduce=*/false,
+                            /*skip_pack_configure=*/true);
+                        v_index_offset += qktv_subblock_w;
+                    }
+                    sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
                 }
-                sdpa_maybe_reconfig_data_format<cb_v_in, cb_qkt_im, cb_qkt_im, cb_qkt_im>();
             }
 
             // SALAD corrections for previous group (always full, h=qktv_h) + row-by-row push
@@ -1763,14 +1821,22 @@ void sdpa_ring_v2(
             q_local_padded_Nt>(ring_id, k_chunk * Sk_chunk_t, logical_nt);
     };
 
+    // Latent V (v_shares_k_buffer) always routes here (TT_FATAL: latent ⇒ streaming compute), so
+    // the S@V operand can be read as V^T straight from the K^T buffer — see sdpa_inner_loop_step.
+    // The reader then pushes only the K^T entry per chunk (1 entry/chunk, not K^T+V).
+    constexpr bool v_from_kt = v_shares_k_buffer;
+
     // Causal skip: K chunks fully above the diagonal — drain K/V from CBs and skip.
     auto try_skip_causal_above_diag = [&](uint32_t k_chunk, uint32_t causal_k_limit) -> bool {
         if constexpr (is_causal_sdpa) {
             if (is_causal_iter && k_chunk >= causal_k_limit) {
                 cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
                 sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
-                cb_wait_front(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
-                sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                // v_from_kt: only the K^T entry exists (no rematerialized V), so drain just K^T.
+                if constexpr (!v_from_kt) {
+                    cb_wait_front(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                    sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                }
                 KV_chunks_processed_in_iter++;
                 return true;
             }
@@ -2037,7 +2103,8 @@ void sdpa_ring_v2(
                 q_local_padded_Nt,
                 chunk_size_t,
                 local_padded_Nt,
-                v_cb_physical_width_t>(
+                v_cb_physical_width_t,
+                v_from_kt>(
                 q_prev,
                 q_cur,
                 is_last_k_of_last_ring_iter,
@@ -2103,12 +2170,23 @@ void sdpa_ring_v2(
     }
 
     // Dummy KV pop for CB write-pointer phase alignment across chained reader cores.
-    for (uint32_t dummy_chunk = 0;
-         dummy_chunk < dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer>(KV_chunks_processed_in_iter);
-         ++dummy_chunk) {
+    uint32_t dummy_kv_chunks = 0;
+    if constexpr (v_shares_k_buffer) {
+        // Latent V (v_from_kt): 1 K^T entry/chunk; pad to a multiple of 3 to match the reader's
+        // dummy-KV count and the chained mcast phase.
+        dummy_kv_chunks = (3 - (KV_chunks_processed_in_iter % 3)) % 3;
+    } else if (KV_chunks_processed_in_iter % 2 == 0) {
+        dummy_kv_chunks = 1;
+    }
+    // v_from_kt: the reader pushes only the K^T entry per chunk (no separate V entry), so the
+    // dummy alignment pops only K^T.
+    for (uint32_t dummy_chunk = 0; dummy_chunk < dummy_kv_chunks; ++dummy_chunk) {
         cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
         sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
-        cb_wait_front(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
-        sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+        if constexpr (!v_from_kt) {
+            cb_wait_front(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+            sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+        }
+    }
     }
 }

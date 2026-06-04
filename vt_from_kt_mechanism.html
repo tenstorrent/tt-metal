@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Vᵀ-from-Kᵀ · latent-V SDPA datapath</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a0d13; --bg2:#0c1118; --panel:#10161f; --panel2:#131c27;
+  --grid:#141d29; --line:#212e3d; --line2:#2c3c4e;
+  --ink:#e7eef6; --dim:#7a8ca6; --faint:#475568;
+  --lime:#c8f54e; --lime-d:#82ab1e; --lime-g:#0f1908;
+  --amber:#ff9442; --amber-d:#c2611a; --amber-g:#1e1305;
+  --red:#ff5470; --red-d:#7e2536;
+  --steel:#74b9d8; --steel-d:#2f6a87;
+  --violet:#a594ff; --violet-d:#5847a8;
+  --mono:'JetBrains Mono',ui-monospace,Menlo,monospace;
+  --disp:'Bricolage Grotesque',var(--mono);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:
+    radial-gradient(1100px 560px at 88% -8%, #11202b 0%, transparent 58%),
+    radial-gradient(800px 480px at -5% 108%, #131a0c 0%, transparent 52%),
+    var(--bg);
+  background-attachment:fixed;
+  color:var(--ink); font-family:var(--mono); font-size:14px; line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+}
+body::before{ /* grain / scanline */
+  content:""; position:fixed; inset:0; pointer-events:none; z-index:998;
+  background:repeating-linear-gradient(0deg, rgba(255,255,255,.013) 0 1px, transparent 1px 3px);
+  mix-blend-mode:overlay; opacity:.55;
+}
+.wrap{max-width:1240px; margin:0 auto; padding:40px 28px 100px}
+a{color:var(--steel)}
+::selection{background:var(--lime); color:#0a0d13}
+
+/* ---------------- header ---------------- */
+header{display:flex; flex-wrap:wrap; align-items:flex-end; gap:30px; border-bottom:1px solid var(--line); padding-bottom:26px}
+.eyebrow{font-family:var(--disp); letter-spacing:.34em; text-transform:uppercase; font-size:11px; color:var(--lime); margin:0 0 10px; font-weight:600}
+h1{font-family:var(--disp); font-weight:800; font-size:40px; line-height:.98; margin:0; letter-spacing:-.5px}
+h1 .k{color:var(--amber)} h1 .v{color:var(--lime)} h1 .arrow{color:var(--dim); font-weight:400}
+.sub{color:var(--dim); margin:14px 0 0; max-width:660px; font-size:13.5px}
+.sub b{color:var(--ink); font-weight:500}
+.sub code{color:var(--steel); background:var(--bg2); padding:1px 6px; border-radius:4px; border:1px solid var(--line)}
+.metrics{display:flex; gap:12px; margin-left:auto; flex-wrap:wrap}
+.metric{background:linear-gradient(180deg,var(--panel2),var(--panel)); border:1px solid var(--line); border-radius:11px; padding:13px 17px; min-width:118px; position:relative; overflow:hidden}
+.metric::after{content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--lime)}
+.metric.amber::after{background:var(--amber)} .metric.steel::after{background:var(--steel)}
+.metric .lab{font-size:9.5px; letter-spacing:.2em; text-transform:uppercase; color:var(--dim)}
+.metric .big{font-family:var(--disp); font-size:26px; font-weight:800; margin-top:4px; letter-spacing:-.5px}
+.metric .delta{font-size:11px; color:var(--lime); margin-top:1px}
+.metric.amber .delta{color:var(--amber)}
+
+/* ---------------- nav ---------------- */
+nav{position:sticky; top:0; z-index:60; display:flex; gap:7px; padding:16px 0 18px; margin-top:6px;
+    background:linear-gradient(180deg, var(--bg) 60%, transparent)}
+nav button{font-family:var(--disp); letter-spacing:.13em; text-transform:uppercase; font-size:11px; font-weight:600;
+    background:var(--panel); color:var(--dim); border:1px solid var(--line); padding:10px 17px; border-radius:8px; cursor:pointer; transition:.18s}
+nav button:hover{color:var(--ink); border-color:var(--lime-d)}
+nav button.on{color:#0a0d13; background:var(--lime); border-color:var(--lime); box-shadow:0 0 26px -8px var(--lime)}
+section{display:none; animation:fade .35s ease}
+section.on{display:block}
+@keyframes fade{from{opacity:0; transform:translateY(8px)} to{opacity:1; transform:none}}
+.panel{background:linear-gradient(180deg,var(--panel2),var(--panel)); border:1px solid var(--line); border-radius:16px; padding:24px}
+h2.t{font-family:var(--disp); font-size:14px; letter-spacing:.18em; text-transform:uppercase; color:var(--steel); margin:0 0 4px; font-weight:600}
+.hint{color:var(--dim); font-size:12px; margin:0 0 20px}
+
+/* ---------------- controls ---------------- */
+.controls{display:flex; flex-wrap:wrap; align-items:center; gap:20px; margin-bottom:20px}
+.toggle{display:inline-flex; background:var(--bg2); border:1px solid var(--line); border-radius:10px; padding:4px}
+.toggle button{font-family:var(--disp); font-size:12px; font-weight:600; letter-spacing:.12em; text-transform:uppercase; border:0; background:transparent; color:var(--dim); padding:9px 20px; border-radius:7px; cursor:pointer; transition:.16s}
+.toggle button.on[data-mode="before"]{background:var(--amber); color:#1a1004; box-shadow:0 0 22px -8px var(--amber)}
+.toggle button.on[data-mode="after"]{background:var(--lime); color:#0c1404; box-shadow:0 0 22px -8px var(--lime)}
+.stepper{display:flex; align-items:center; gap:11px}
+.stepper button{font-family:var(--mono); font-size:14px; width:40px; height:40px; border-radius:10px; border:1px solid var(--line); background:var(--panel2); color:var(--ink); cursor:pointer; transition:.15s}
+.stepper button:hover:not(:disabled){border-color:var(--lime-d); color:var(--lime)}
+.stepper button:disabled{opacity:.28; cursor:default}
+.stepper .play{width:auto; padding:0 18px; font-family:var(--disp); font-weight:600; letter-spacing:.1em; text-transform:uppercase; font-size:11px}
+.stepcount{font-family:var(--disp); color:var(--dim); font-size:12px; letter-spacing:.08em; min-width:148px; font-weight:600}
+.stepcount b{color:var(--ink)}
+
+.stage{display:grid; grid-template-columns:1.62fr 1fr; gap:22px; align-items:stretch}
+@media(max-width:920px){.stage{grid-template-columns:1fr}}
+.schematic{background:
+    linear-gradient(var(--grid) 1px, transparent 1px) 0 0/27px 27px,
+    linear-gradient(90deg,var(--grid) 1px, transparent 1px) 0 0/27px 27px,
+    var(--bg2);
+    border:1px solid var(--line); border-radius:13px; padding:8px}
+svg{display:block; width:100%; height:auto}
+
+/* schematic states */
+.nodebox{fill:#0c141e; stroke:var(--line2); stroke-width:1.4; transition:.3s}
+.node text{fill:var(--dim); transition:.3s; font-family:var(--mono)}
+.node .title{font-family:var(--disp); font-weight:600; letter-spacing:.04em; font-size:12.5px}
+.node .meta{font-size:9.5px; fill:var(--faint)}
+.node.on .nodebox{stroke:var(--steel); fill:#0c1a22; filter:drop-shadow(0 0 10px rgba(116,185,216,.34))}
+.node.on text{fill:var(--ink)}
+.node.on .meta{fill:var(--steel)}
+.node.compute.on .nodebox{stroke:var(--violet); fill:#15112a; filter:drop-shadow(0 0 10px rgba(165,148,255,.34))}
+.node.compute.on .meta{fill:var(--violet)}
+.node.hot.on .nodebox{stroke:var(--amber); fill:#1d1305; filter:drop-shadow(0 0 11px rgba(255,148,66,.42))}
+.node.hot.on text{fill:#ffd9b0} .node.hot.on .meta{fill:var(--amber)}
+.node.good.on .nodebox{stroke:var(--lime); fill:#141d07; filter:drop-shadow(0 0 11px rgba(200,245,78,.40))}
+.node.good.on text{fill:#e8f7bd} .node.good.on .meta{fill:var(--lime)}
+.node.stall .nodebox{stroke:var(--red); fill:#1d0a10; filter:drop-shadow(0 0 13px rgba(255,84,112,.5)); animation:pulse 1s ease-in-out infinite}
+.node.stall text{fill:#ffb3c0} .node.stall .meta{fill:var(--red)}
+@keyframes pulse{0%,100%{filter:drop-shadow(0 0 6px rgba(255,84,112,.35))}50%{filter:drop-shadow(0 0 16px rgba(255,84,112,.7))}}
+.node.ghost .nodebox{stroke:var(--red); stroke-dasharray:5 5; fill:#16090c; opacity:.4}
+.node.ghost text{fill:#a55; opacity:.55}
+.node.ghost .meta{fill:#a55; opacity:.5}
+.node .div{stroke:var(--line); stroke-width:1}
+
+.edge{fill:none; stroke:var(--line2); stroke-width:2; transition:stroke .3s, opacity .3s}
+.edge.on{stroke:var(--steel)}
+.edge.hot.on{stroke:var(--amber)}
+.edge.good.on{stroke:var(--lime); stroke-width:2.4}
+.edge.flow.on{stroke-dasharray:9 7; animation:flow .7s linear infinite}
+@keyframes flow{to{stroke-dashoffset:-32}}
+.edge.ghost{stroke:var(--red); stroke-dasharray:4 6; opacity:.32}
+.elabel{fill:var(--faint); font-size:10px; transition:.3s; font-style:italic; font-family:var(--mono)}
+.elabel.on{fill:var(--steel)} .elabel.hot.on{fill:var(--amber)} .elabel.good.on{fill:var(--lime)}
+.elabel.ghost{fill:var(--red); opacity:.45; text-decoration:line-through}
+
+/* meters inside svg */
+.meterbg{fill:#0a1119; stroke:var(--line); stroke-width:1}
+.meterfill{transition:width .5s ease, fill .3s}
+
+/* narration */
+.narr{display:flex; flex-direction:column; min-height:420px}
+.narr .badge{align-self:flex-start; font-family:var(--disp); font-size:10px; font-weight:600; letter-spacing:.18em; text-transform:uppercase; padding:6px 12px; border-radius:6px; margin-bottom:14px; border:1px solid; transition:.2s}
+.badge.steel{color:var(--steel); border-color:var(--steel-d); background:#08161e}
+.badge.amber{color:var(--amber); border-color:var(--amber-d); background:#1c1304}
+.badge.lime{color:var(--lime); border-color:var(--lime-d); background:#141c06}
+.badge.violet{color:var(--violet); border-color:var(--violet-d); background:#120f24}
+.badge.red{color:var(--red); border-color:var(--red-d); background:#1c0a0f}
+.narr h3{font-family:var(--disp); font-size:21px; margin:0 0 14px; letter-spacing:-.3px; font-weight:700; min-height:28px}
+.narr p{margin:0 0 14px; color:#abbace; font-size:13.5px}
+.narr p .hl{color:var(--steel)} .narr p .hot{color:var(--amber)} .narr p .good{color:var(--lime)} .narr p .del{color:var(--red); text-decoration:line-through} .narr p .vlt{color:var(--violet)}
+.narr code{font-size:12px; background:var(--bg); border:1px solid var(--line); padding:1px 6px; border-radius:4px; color:#dfe8f4}
+.codeblock{background:var(--bg); border:1px solid var(--line); border-left:3px solid var(--lime-d); border-radius:9px; padding:13px 15px; font-size:12px; color:#c6d3e6; white-space:pre; overflow-x:auto; margin-top:auto; line-height:1.5}
+.codeblock .c{color:var(--faint)} .codeblock .g{color:var(--lime)} .codeblock .a{color:var(--amber)} .codeblock .s{color:var(--steel)}
+
+/* ---------------- tile grid (memory) ---------------- */
+.memwrap{display:grid; grid-template-columns:1.1fr 1fr; gap:26px; align-items:center}
+@media(max-width:920px){.memwrap{grid-template-columns:1fr}}
+.tilegrid{background:var(--bg2); border:1px solid var(--line); border-radius:13px; padding:20px}
+.identity{font-family:var(--disp); font-size:clamp(15px,2vw,22px); text-align:center; margin:6px 0 22px; letter-spacing:-.2px; line-height:1.7}
+.identity .k{color:var(--amber)} .identity .v{color:var(--lime)} .identity .eq{color:var(--dim)} .identity .idx{color:var(--steel); font-size:.8em}
+.explain p{color:#abbace; font-size:13.5px; margin:0 0 14px}
+.explain p b{color:var(--ink); font-weight:600}
+.explain code{font-size:12px; background:var(--bg); border:1px solid var(--line); padding:1px 6px; border-radius:4px; color:var(--steel)}
+
+/* ---------------- when good / bad ---------------- */
+.cards{display:grid; grid-template-columns:1fr 1fr; gap:20px}
+@media(max-width:820px){.cards{grid-template-columns:1fr}}
+.card{border:1px solid var(--line); border-radius:14px; padding:22px; background:linear-gradient(180deg,var(--panel2),var(--panel)); position:relative; overflow:hidden}
+.card.good{border-color:var(--lime-d)} .card.bad{border-color:var(--amber-d)}
+.card::before{content:""; position:absolute; inset:0 0 auto 0; height:3px}
+.card.good::before{background:var(--lime)} .card.bad::before{background:var(--amber)}
+.card h3{font-family:var(--disp); font-size:16px; margin:6px 0 16px; font-weight:700; letter-spacing:-.2px}
+.card.good h3{color:var(--lime)} .card.bad h3{color:var(--amber)}
+.card ul{list-style:none; padding:0; margin:0}
+.card li{position:relative; padding-left:26px; margin-bottom:15px; font-size:13px; color:#abbace}
+.card li b{color:var(--ink); font-weight:600}
+.card li::before{position:absolute; left:0; top:-1px; font-family:var(--disp); font-weight:800; font-size:14px}
+.card.good li::before{content:"+"; color:var(--lime)}
+.card.bad li::before{content:"–"; color:var(--amber)}
+
+/* perf bars */
+.perf{margin-top:26px; border-top:1px dashed var(--line); padding-top:24px}
+.barrow{display:grid; grid-template-columns:96px 1fr 92px; align-items:center; gap:16px; margin:13px 0}
+.barrow .name{font-family:var(--disp); font-size:12px; font-weight:600; letter-spacing:.06em; color:var(--dim); text-transform:uppercase}
+.track{position:relative; height:34px; background:var(--bg); border:1px solid var(--line); border-radius:8px; overflow:hidden}
+.seg{position:absolute; top:0; bottom:0; display:flex; align-items:center; justify-content:center; font-size:11px; color:#0a0d13; font-weight:600; font-family:var(--mono)}
+.seg.comp{background:linear-gradient(180deg,#8c7dff,var(--violet)); left:0; color:#0c0a1c}
+.seg.dm-bad{background:linear-gradient(180deg,#ffae6b,var(--amber)); color:#1a1004}
+.seg.dm-good{background:linear-gradient(180deg,#d7fa6e,var(--lime)); color:#0c1404}
+.barrow .val{font-family:var(--disp); font-weight:700; font-size:15px; text-align:right}
+.ceilmark{position:absolute; top:-7px; bottom:-7px; width:2px; background:var(--ink); opacity:.5; z-index:3}
+.ceilmark span{position:absolute; top:-17px; left:50%; transform:translateX(-50%); font-size:9px; color:var(--ink); white-space:nowrap; font-family:var(--mono); opacity:.8}
+.legend{display:flex; gap:20px; margin-top:18px; flex-wrap:wrap; font-size:11.5px; color:var(--dim)}
+.legend i{display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:7px; vertical-align:-1px}
+.note{margin-top:18px; padding:14px 16px; background:var(--bg2); border:1px solid var(--line); border-left:3px solid var(--steel); border-radius:9px; font-size:12.5px; color:#9fb0c6}
+.note b{color:var(--ink)}
+footer{margin-top:40px; padding-top:22px; border-top:1px solid var(--line); color:var(--faint); font-size:11.5px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div>
+      <p class="eyebrow">Ring-joint SDPA · chunked latent-V MLA · Blackhole</p>
+      <h1><span class="v">Vᵀ</span> <span class="arrow">from</span> <span class="k">Kᵀ</span></h1>
+      <p class="sub">Eliminate the per-chunk <b>V rematerialization</b> by sourcing the <code>S@V</code> operand
+      directly out of the <code>cb_kt_in</code> buffer. A pure addressing remap built on the latent-V identity
+      <b>Vᵀ = Kᵀ slice</b> — no extra L1 traffic, bit-exact result.</p>
+    </div>
+    <div class="metrics">
+      <div class="metric amber"><div class="lab">Before</div><div class="big">3.191<span style="font-size:13px"> ms</span></div><div class="delta">59.4% util</div></div>
+      <div class="metric"><div class="lab">After</div><div class="big">2.991<span style="font-size:13px"> ms</span></div><div class="delta">63.4% util</div></div>
+      <div class="metric steel"><div class="lab">Δ wall</div><div class="big">−0.200<span style="font-size:13px"> ms</span></div><div class="delta" style="color:var(--steel)">+4.0 pt · PCC exact</div></div>
+    </div>
+  </header>
+
+  <nav>
+    <button class="on" data-tab="flow">Datapath ▸ before / after</button>
+    <button data-tab="mem">Why it's possible</button>
+    <button data-tab="when">When good / when not</button>
+  </nav>
+
+  <!-- ============ TAB 1: DATAPATH ANIMATION ============ -->
+  <section class="on" id="tab-flow">
+    <div class="panel">
+      <h2 class="t">Per-K-chunk datapath</h2>
+      <p class="hint">Toggle <b>BEFORE</b> / <b>AFTER</b>, then step (or play) through the pipeline of one K chunk.
+      Watch the reader's NoC0 budget and the FPU state at the end.</p>
+
+      <div class="controls">
+        <div class="toggle" id="modeToggle">
+          <button data-mode="before" class="on">Before</button>
+          <button data-mode="after">After</button>
+        </div>
+        <div class="stepper">
+          <button id="prev" title="previous">◀</button>
+          <button id="play" class="play">▶ Play</button>
+          <button id="next" title="next">▶</button>
+          <span class="stepcount">STEP <b id="stepN">1</b> / 6 · <b id="stepName">Download K</b></span>
+        </div>
+      </div>
+
+      <div class="stage">
+        <div class="schematic">
+          <svg viewBox="0 0 1000 470" role="img" aria-label="datapath schematic">
+            <defs>
+              <marker id="ah" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+                <path d="M0,0 L9,4.5 L0,9 z" fill="currentColor"/>
+              </marker>
+            </defs>
+
+            <!-- column captions -->
+            <text x="80"  y="28" class="elabel" text-anchor="middle" style="font-style:normal;letter-spacing:.18em;fill:var(--faint)">DRAM</text>
+            <text x="300" y="28" class="elabel" text-anchor="middle" style="font-style:normal;letter-spacing:.18em;fill:var(--faint)">READER · NoC0</text>
+            <text x="565" y="28" class="elabel" text-anchor="middle" style="font-style:normal;letter-spacing:.18em;fill:var(--faint)">L1 CIRCULAR BUFFERS</text>
+            <text x="850" y="28" class="elabel" text-anchor="middle" style="font-style:normal;letter-spacing:.18em;fill:var(--faint)">COMPUTE · FPU</text>
+
+            <!-- DRAM -->
+            <g class="node" id="n-dram">
+              <rect class="nodebox" x="30" y="170" width="100" height="96" rx="9"/>
+              <text class="title" x="80" y="212" text-anchor="middle">DRAM</text>
+              <text class="meta" x="80" y="230" text-anchor="middle">K prefix</text>
+              <text class="meta" x="80" y="244" text-anchor="middle">25.6K tok</text>
+            </g>
+
+            <!-- READER stages -->
+            <g class="node" id="n-dl">
+              <rect class="nodebox" x="200" y="60" width="200" height="70" rx="9"/>
+              <text class="title" x="300" y="90" text-anchor="middle">K download</text>
+              <text class="meta" x="300" y="108" text-anchor="middle">360 strided reads · 12.3µs</text>
+            </g>
+            <g class="node" id="n-mc">
+              <rect class="nodebox" x="200" y="150" width="200" height="70" rx="9"/>
+              <text class="title" x="300" y="180" text-anchor="middle">K mcast</text>
+              <text class="meta" x="300" y="198" text-anchor="middle">391KB broadcast · 5.8µs</text>
+            </g>
+            <g class="node hot" id="n-vr">
+              <rect class="nodebox" x="200" y="240" width="200" height="70" rx="9"/>
+              <text class="title" x="300" y="270" text-anchor="middle">V rematerialize</text>
+              <text class="meta" x="300" y="288" text-anchor="middle">Kᵀ→V L1→L1 · 4.86µs</text>
+            </g>
+            <!-- NoC0 budget meter -->
+            <text class="meta" x="200" y="345" style="fill:var(--dim)">NoC0 / chunk</text>
+            <rect class="meterbg" x="200" y="352" width="200" height="16" rx="4"/>
+            <rect class="meterfill" id="noc-meter" x="201" y="353" width="198" height="14" rx="3" fill="var(--amber)"/>
+            <text class="meta" id="noc-label" x="300" y="386" text-anchor="middle" style="fill:var(--amber)">≈ 23 µs  (= compute step)</text>
+
+            <!-- CB: cb_kt_in -->
+            <g class="node" id="n-ckt">
+              <rect class="nodebox" x="490" y="80" width="150" height="120" rx="9"/>
+              <text class="title" x="565" y="112" text-anchor="middle">cb_kt_in</text>
+              <text class="meta" x="565" y="130" text-anchor="middle">Kᵀ [DHt=18 × 20]</text>
+              <line class="div" x1="505" y1="142" x2="625" y2="142"/>
+              <text class="meta" id="ckt-tag" x="565" y="160" text-anchor="middle">rows 0..15 = Vᵀ</text>
+              <text class="meta" id="ckt-life" x="565" y="178" text-anchor="middle">pop after Phase 1</text>
+            </g>
+            <!-- CB: cb_v_in -->
+            <g class="node" id="n-cv">
+              <rect class="nodebox" x="490" y="250" width="150" height="100" rx="9"/>
+              <text class="title" x="565" y="282" text-anchor="middle">cb_v_in</text>
+              <text class="meta" x="565" y="300" text-anchor="middle">V [Sk=20 × 16]</text>
+              <text class="meta" x="565" y="320" text-anchor="middle">contiguous copy</text>
+            </g>
+
+            <!-- COMPUTE -->
+            <g class="node compute" id="n-p1">
+              <rect class="nodebox" x="720" y="80" width="220" height="76" rx="9"/>
+              <text class="title" x="830" y="110" text-anchor="middle">Phase 1 · Q@Kᵀ</text>
+              <text class="meta" x="830" y="130" text-anchor="middle">reads cb_kt_in (transposed)</text>
+            </g>
+            <g class="node compute" id="n-p2">
+              <rect class="nodebox" x="720" y="180" width="220" height="86" rx="9"/>
+              <text class="title" x="830" y="210" text-anchor="middle">Phase 2 · S@V</text>
+              <text class="meta" id="p2-src" x="830" y="230" text-anchor="middle">reads cb_v_in · wide MM</text>
+              <text class="meta" id="p2-mode" x="830" y="248" text-anchor="middle">vDHt-wide blocked</text>
+            </g>
+            <!-- FPU state -->
+            <text class="meta" x="720" y="318" style="fill:var(--dim)">FPU state</text>
+            <g class="node stall" id="n-fpu">
+              <rect class="nodebox" x="720" y="326" width="220" height="56" rx="9"/>
+              <text class="title" id="fpu-txt" x="830" y="350" text-anchor="middle">stalls at K-gate</text>
+              <text class="meta" id="fpu-sub" x="830" y="368" text-anchor="middle">+173µs tail · util 59.4%</text>
+            </g>
+
+            <!-- EDGES -->
+            <!-- dram -> download -->
+            <path class="edge" id="e-dram-dl" d="M130,210 C165,210 170,95 198,95" marker-end="url(#ah)"/>
+            <!-- download -> ckt -->
+            <path class="edge" id="e-dl-ckt" d="M400,95 C445,95 450,120 488,120" marker-end="url(#ah)"/>
+            <!-- mcast loop out -->
+            <path class="edge" id="e-mc" d="M400,185 C440,185 440,150 405,140" marker-end="url(#ah)" style="opacity:.0"/>
+            <text class="elabel" id="l-mc" x="455" y="205" text-anchor="middle">→ 90 receivers</text>
+            <!-- ckt -> vr (L1 read for transpose) -->
+            <path class="edge hot" id="e-vr-read" d="M512,200 C500,225 480,250 460,262 L405,270" marker-end="url(#ah)"/>
+            <text class="elabel hot" id="l-vr-read" x="470" y="240" text-anchor="middle">L1 read Kᵀ</text>
+            <!-- vr -> cv -->
+            <path class="edge hot" id="e-vr-cv" d="M400,290 C440,292 450,298 488,300" marker-end="url(#ah)"/>
+            <text class="elabel hot" id="l-vr-cv" x="445" y="316" text-anchor="middle">write V</text>
+            <!-- ckt -> p1 -->
+            <path class="edge" id="e-ckt-p1" d="M640,118 C680,118 685,115 718,115" marker-end="url(#ah)"/>
+            <!-- cv -> p2 (BEFORE) -->
+            <path class="edge" id="e-cv-p2" d="M640,295 C680,290 690,235 718,225" marker-end="url(#ah)"/>
+            <!-- ckt -> p2 (AFTER, the new edge) -->
+            <path class="edge good" id="e-ckt-p2" d="M640,160 C678,175 690,205 718,212" marker-end="url(#ah)" style="opacity:0"/>
+            <text class="elabel good" id="l-ckt-p2" x="678" y="150" text-anchor="middle" style="opacity:0">Vᵀ @ vd·KT_stride</text>
+          </svg>
+        </div>
+
+        <div class="narr">
+          <span class="badge steel" id="nbadge">Step 1</span>
+          <h3 id="ntitle">Download K from DRAM</h3>
+          <div id="nbody"></div>
+          <div class="codeblock" id="ncode"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TAB 2: WHY POSSIBLE ============ -->
+  <section id="tab-mem">
+    <div class="panel">
+      <h2 class="t">Why it's possible — the latent-V tile identity</h2>
+      <p class="hint">In latent-V MLA there is no separate V tensor. The same physical tiles serve as Kᵀ in Phase 1
+      and as Vᵀ in Phase 2; they differ only in <i>stride</i>.</p>
+
+      <p class="identity">
+        <span class="v">Vᵀ<span class="idx">[vd][sk]</span></span> <span class="eq">=</span>
+        V<span class="idx">[sk][vd]</span> <span class="eq">=</span>
+        K<span class="idx">[sk][vd]</span> <span class="eq">=</span>
+        <span class="k">Kᵀ<span class="idx">[vd][sk]</span></span>
+        <span class="eq">  ⟶  byte-identical tile at offset </span>
+        <span class="k">vd·KT_stride + sk</span>
+      </p>
+
+      <div class="memwrap">
+        <div class="tilegrid">
+          <svg viewBox="0 0 440 380" role="img" aria-label="Kt tile grid">
+            <text x="220" y="22" text-anchor="middle" class="title" style="fill:var(--ink);font-family:var(--disp);font-weight:600;font-size:13px">cb_kt_in — Kᵀ row-major in L1</text>
+            <text x="220" y="40" text-anchor="middle" style="fill:var(--dim);font-size:10px;font-family:var(--mono)">columns = sk (key tiles, KT_stride=20 wide) →</text>
+            <text x="14" y="210" text-anchor="middle" transform="rotate(-90 14 210)" style="fill:var(--dim);font-size:10px;font-family:var(--mono)">rows = d  (head-dim, DHt=18) ↓</text>
+            <g id="tilesvg"></g>
+            <!-- legend -->
+            <rect x="40" y="350" width="14" height="14" rx="2" fill="#141d07" stroke="var(--lime)"/>
+            <text x="60" y="361" style="fill:var(--lime);font-size:10.5px;font-family:var(--mono)">rows 0..15 → these ARE Vᵀ</text>
+            <rect x="250" y="350" width="14" height="14" rx="2" fill="#0c141e" stroke="var(--line2)"/>
+            <text x="270" y="361" style="fill:var(--dim);font-size:10.5px;font-family:var(--mono)">rows 16,17 → Kᵀ-only</text>
+          </svg>
+        </div>
+        <div class="explain">
+          <p><b>One row of Kᵀ is one column of Vᵀ.</b> Kᵀ is stored row-major: tile <code>Kᵀ[d][sk]</code> lives at
+          linear offset <code>d·KT_stride + sk</code>, with <code>KT_stride = Sk_chunk_t = 20</code> tiles per row.</p>
+          <p>Phase 1 (<code>Q@Kᵀ</code>) already needs K <b>transposed</b> — so the hardware loads Kᵀ into L1. Phase 2
+          (<code>S@V</code>) needs V with the key index <code>sk</code> as the contraction dim, i.e. <b>Vᵀ</b>. By the
+          identity above, the first <code>vDHt=16</code> rows of that same Kᵀ buffer <i>are</i> Vᵀ — already resident.</p>
+          <p><b>Before</b> paid to copy them out into a contiguous <code>cb_v_in</code> (a transpose on the reader's NoC0).
+          <b>After</b> just points the S@V matmul at <code>cb_kt_in</code> and walks it with the stride.</p>
+          <p>Cost of the remap: consecutive output columns <code>vd</code> sit <code>KT_stride</code> tiles apart, so they
+          can't be packed into one wide blocked matmul — S@V emits <b>one output column per matmul</b>
+          (<code>ct_dim=1</code>), looping <code>vd</code>. Slightly less compute-efficient, but it deletes a NoC0 copy.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TAB 3: WHEN ============ -->
+  <section id="tab-when">
+    <div class="panel">
+      <h2 class="t">When this wins — and when it doesn't</h2>
+      <p class="hint">The trick is a trade: it removes data movement but pays a small compute-layout penalty.
+      Whether that nets out depends entirely on what the bottleneck is.</p>
+
+      <div class="cards">
+        <div class="card good">
+          <h3>✓ Good when…</h3>
+          <ul>
+            <li><b>Latent-V MLA (<code>v_shares_k_buffer</code>).</b> V is literally the first <code>d_v</code> columns of K, so the identity Vᵀ=Kᵀ-slice holds exactly — the only regime where this is even legal.</li>
+            <li><b>The reader (NoC0) is the bottleneck.</b> Here download+mcast+V-remat ≈ 23µs <i>equals</i> the 23µs compute step; the FPU stalls at the K-gate (+173µs tail). Removing V-remat lets the reader hide behind the matmul.</li>
+            <li><b>Large <code>d_v</code> (e.g. 512).</b> A 4×-bigger V matmul means more compute per K chunk, which amortizes the <code>ct_dim=1</code> strided-matmul penalty and dwarfs it.</li>
+            <li><b>L1 has room to hold Kᵀ longer.</b> Deferring the Kᵀ pop to after Phase 2 only costs lifetime, not a new buffer — and frees the entire <code>cb_v_in</code> allocation.</li>
+          </ul>
+        </div>
+        <div class="card bad">
+          <h3>✗ Not when…</h3>
+          <ul>
+            <li><b>Standard attention with a real V tensor.</b> V≠K, so <code>cb_kt_in</code> doesn't contain Vᵀ — the remap is simply wrong. Path is gated <code>chunked_enabled && v_shares_k_buffer</code>.</li>
+            <li><b>Compute is already the bottleneck.</b> The <code>ct_dim=1</code> access raised the pure-compute ceiling <b>+0.069 ms</b> (2.881→2.950 ms). If DM were already hidden, that penalty is all you'd get — a net loss.</li>
+            <li><b>Tiny <code>d_v</code>.</b> A small V matmul can't amortize the one-column-per-matmul overhead; the strided penalty becomes a larger share.</li>
+            <li><b>L1 is saturated.</b> Holding Kᵀ live across both phases (no early pop) needs the CB capacity; on a tight budget the longer lifetime could box you out.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="perf">
+        <h2 class="t" style="margin-bottom:14px">Where the 0.200 ms came from</h2>
+        <div class="barrow">
+          <span class="name" style="color:var(--amber)">Before</span>
+          <div class="track">
+            <div class="seg comp" style="width:90.3%">compute ceiling 2.881 ms</div>
+            <div class="seg dm-bad" style="left:90.3%; width:9.7%">DM 0.310</div>
+          </div>
+          <span class="val" style="color:var(--amber)">3.191</span>
+        </div>
+        <div class="barrow">
+          <span class="name" style="color:var(--lime)">After</span>
+          <div class="track">
+            <div class="seg comp" style="width:92.4%">compute ceiling 2.950 ms</div>
+            <div class="seg dm-good" style="left:92.4%; width:1.3%"></div>
+            <div class="ceilmark" style="left:90.3%"><span>old ceiling</span></div>
+          </div>
+          <span class="val" style="color:var(--lime)">2.991</span>
+        </div>
+        <div class="legend">
+          <span><i style="background:var(--violet)"></i>compute ceiling (FPU-bound floor)</span>
+          <span><i style="background:var(--amber)"></i>exposed data movement</span>
+          <span><i style="background:var(--lime)"></i>residual DM (0.041 ms)</span>
+        </div>
+        <div class="note">
+          <b>Read the bars carefully.</b> The compute ceiling actually moved <i>right</i> by +0.069 ms (the
+          <code>ct_dim=1</code> penalty), yet wall time dropped 0.200 ms — because exposed data movement collapsed
+          from 0.310 → 0.041 ms. That gap is the whole story: this change is only a win because <b>DM, not compute,
+          was the binding constraint</b>. Flip that, and the same code is a regression.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py · chunk2560 · sp4 ring-of-4 · d_q=576 d_v=512 q32 k640</span>
+    <span>P150_X4 · 100 SDPA cores · PCC 0.99947 (exact)</span>
+  </footer>
+</div>
+
+<script>
+(function(){
+  // ---------- tab switching ----------
+  const navBtns = document.querySelectorAll('nav button');
+  navBtns.forEach(b=>b.addEventListener('click',()=>{
+    navBtns.forEach(x=>x.classList.remove('on')); b.classList.add('on');
+    document.querySelectorAll('section').forEach(s=>s.classList.remove('on'));
+    document.getElementById('tab-'+b.dataset.tab).classList.add('on');
+  }));
+
+  // ---------- build the Kt tile grid ----------
+  (function buildTiles(){
+    const g = document.getElementById('tilesvg');
+    const cols=12, rows=11, cell=27, x0=36, y0=52; // representative; labels carry the real numbers
+    const vdRows=8; // first ~16 of 18 ≈ proportionally the top chunk; draw 8 of 11 lit
+    let s='';
+    for(let r=0;r<rows;r++){
+      for(let c=0;c<cols;c++){
+        const isV = r<vdRows;
+        const fill = isV ? '#141d07' : '#0c141e';
+        const stroke = isV ? 'var(--lime-d)' : 'var(--line2)';
+        s+=`<rect x="${x0+c*cell}" y="${y0+r*cell}" width="${cell-3}" height="${cell-3}" rx="2.5" fill="${fill}" stroke="${stroke}" stroke-width="1"/>`;
+      }
+    }
+    // highlight one V column = one Kt row : pick row 3
+    const hr=3;
+    s+=`<rect x="${x0-2}" y="${y0+hr*cell-2}" width="${cols*cell+1}" height="${cell+0}" rx="3" fill="none" stroke="var(--lime)" stroke-width="2"/>`;
+    s+=`<text x="${x0+cols*cell+8}" y="${y0+hr*cell+15}" style="fill:var(--lime);font-size:10px;font-family:var(--mono)">= Vᵀ col vd=3</text>`;
+    g.innerHTML=s;
+  })();
+
+  // ---------- datapath state machine ----------
+  const ids = ['n-dram','n-dl','n-mc','n-vr','n-ckt','n-cv','n-p1','n-p2','n-fpu'];
+  const edges = ['e-dram-dl','e-dl-ckt','e-mc','e-vr-read','e-vr-cv','e-ckt-p1','e-cv-p2','e-ckt-p2'];
+  const elabels = {'e-mc':'l-mc','e-vr-read':'l-vr-read','e-vr-cv':'l-vr-cv','e-ckt-p2':'l-ckt-p2'};
+
+  function clearAll(){
+    ids.forEach(i=>{const n=document.getElementById(i); n.classList.remove('on','hot','good','stall','ghost');});
+    edges.forEach(i=>{const e=document.getElementById(i); e.classList.remove('on','hot','good','flow','ghost');
+      const lid=elabels[i]; if(lid){const l=document.getElementById(lid); l.classList.remove('on','hot','good','ghost');}});
+  }
+  function set(id,...cls){ document.getElementById(id).classList.add(...cls); }
+  function setE(id,...cls){ document.getElementById(id).classList.add(...cls);
+    const lid=elabels[id]; if(lid) document.getElementById(lid).classList.add(...cls.filter(c=>c!=='flow')); }
+
+  // node text mutators
+  const T = {
+    cktLife:(t,c)=>{const e=document.getElementById('ckt-life');e.textContent=t;e.style.fill=c||'';},
+    p2src:(t)=>document.getElementById('p2-src').textContent=t,
+    p2mode:(t)=>document.getElementById('p2-mode').textContent=t,
+    fpu:(t,s,c)=>{document.getElementById('fpu-txt').textContent=t;document.getElementById('fpu-sub').textContent=s;},
+    noc:(w,t,c)=>{const m=document.getElementById('noc-meter');m.setAttribute('width',w);m.setAttribute('fill',c);
+      const l=document.getElementById('noc-label');l.textContent=t;l.style.fill=c;}
+  };
+
+  const NAMES = ['Download K','Mcast K','Materialize V','Phase 1 · Q@Kᵀ','Phase 2 · S@V','Result'];
+
+  // Each step: function(mode) that paints schematic + returns {badge,title,body,code}
+  const STEPS = [
+    // 0 — download
+    (m)=>{ set('n-dram','on'); set('n-dl','on'); setE('e-dram-dl','on','flow'); setE('e-dl-ckt','on','flow'); set('n-ckt','on');
+      return {bc:'steel',bt:'Step 1 · identical',
+        title:'Download K from DRAM',
+        body:`The injector reads the K prefix from DRAM into <code>cb_kt_in</code> — <span class="hl">360 single-tile transposed reads, ~12.3µs</span>. <b>Unchanged</b> by this optimization.`,
+        code:`<span class="c">// ring_joint_reader.cpp</span>\nfetch_block(k_gen, k_slice, …,\n           cb_k_start_address,\n           <span class="s">/*transpose=*/true</span>);`}; },
+    // 1 — mcast
+    (m)=>{ set('n-dl','on'); set('n-mc','on'); set('n-ckt','on'); setE('e-dl-ckt','on'); document.getElementById('l-mc').classList.add('on');
+      return {bc:'steel',bt:'Step 2 · identical',
+        title:'Multicast K along the row',
+        body:`Store-and-forward broadcast of the 391KB K chunk to the row's receivers — <span class="hl">~5.8µs</span>. Also <b>unchanged</b>. Together, download+mcast already cost ~18µs.`,
+        code:`<span class="c">// chain_link.hpp</span>\nChainLink::forward(cb_k_start_address,\n                   k_chunk_tiles, …);`}; },
+    // 2 — V remat  (the divergence)
+    (m)=>{
+      if(m==='before'){
+        set('n-ckt','on'); set('n-vr','hot','on'); set('n-cv','on');
+        setE('e-vr-read','hot','on','flow'); setE('e-vr-cv','hot','on','flow');
+        return {bc:'amber',bt:'Step 3 · BEFORE only',
+          title:'Rematerialize V from Kᵀ',
+          body:`The reader transposes Kᵀ→V with <span class="hot">320 strided L1→L1 NoC reads (~4.86µs)</span> into a second buffer <code>cb_v_in</code>. This piles onto the <b>same saturated NoC0</b> — total ≈ <span class="hot">23µs/chunk = the compute step</span>.`,
+          code:`<span class="c">// ring_joint_reader.cpp — DELETED</span>\n<span class="a">materialize_v_prefix_from_k(</span>\n<span class="a">    cb_k_start_address, Sk_chunk_t);</span>\n<span class="c">// 320 noc_async_read_one_packet…</span>`};
+      } else {
+        set('n-ckt','good','on'); set('n-vr','ghost'); set('n-cv','ghost');
+        setE('e-vr-read','ghost'); setE('e-vr-cv','ghost');
+        return {bc:'lime',bt:'Step 3 · AFTER — skipped',
+          title:'No V copy — buffer freed',
+          body:`The whole V-remat lambda is <span class="del">deleted</span>. No second CB entry is produced. NoC0 drops to <span class="good">~18µs/chunk</span>, now <b>below</b> the compute step — the reader runs ahead.`,
+          code:`<span class="c">// ring_joint_reader.cpp</span>\n<span class="g">if constexpr (v_shares_k_buffer) {</span>\n<span class="g">  // V^T read in-place from cb_kt_in</span>\n<span class="g">  // by compute — nothing to do here.</span>\n<span class="g">}</span>`};
+      }
+    },
+    // 3 — phase 1
+    (m)=>{
+      set('n-ckt','on'); set('n-p1','compute','on'); setE('e-ckt-p1','on','flow');
+      if(m==='after'){ set('n-ckt','good','on'); T.cktLife('Kᵀ held for Phase 2','var(--lime)'); }
+      else { T.cktLife('pop after Phase 1',''); }
+      return {bc:'violet',bt:'Step 4 · Phase 1',
+        title:'Q @ Kᵀ  (transposed read)',
+        body: m==='after'
+          ? `Q@Kᵀ reads <code>cb_kt_in</code> as usual — but the Kᵀ pop is now <span class="good">deferred</span>: the buffer must stay live because Phase 2 will read Vᵀ out of it.`
+          : `Q@Kᵀ reads <code>cb_kt_in</code>, then <span class="hl">pops it immediately</span> — Phase 2 will instead read the separate <code>cb_v_in</code>.`,
+        code: m==='after'
+          ? `<span class="c">// compute_streaming.hpp</span>\n<span class="g">if constexpr (!v_from_kt)</span>\n  cb_pop_front(cb_kt_in, DHt*KT_stride);\n<span class="c">// ↑ skipped — defer to Phase 2</span>`
+          : `<span class="c">// compute_streaming.hpp</span>\ncb_pop_front(cb_kt_in,\n             DHt*KT_stride);`};
+    },
+    // 4 — phase 2  (the divergence)
+    (m)=>{
+      set('n-p2','compute','on');
+      if(m==='before'){
+        set('n-cv','on'); setE('e-cv-p2','on','flow');
+        T.p2src('reads cb_v_in · wide MM'); T.p2mode('vDHt-wide blocked');
+        return {bc:'amber',bt:'Step 5 · BEFORE',
+          title:'S @ V  from the V copy',
+          body:`S@V multiplies against the contiguous <code>cb_v_in</code> — one <span class="hl">vDHt-wide blocked matmul</span> (efficient layout), the payoff for having paid the V-remat transpose.`,
+          code:`mm_no_mop_reinit_short(cb_qkt_im,\n   <span class="a">cb_v_in</span>, false, qktv_subblock_w,…);\nblocked_matmul_and_pack&lt;false,vDHt,vDHt&gt;(\n   cb_qkt_im, <span class="a">cb_v_in</span>, out_cb, …);`};
+      } else {
+        set('n-ckt','good','on'); document.getElementById('e-ckt-p2').style.opacity=1; document.getElementById('l-ckt-p2').style.opacity=1;
+        setE('e-ckt-p2','good','on','flow');
+        T.p2src('reads cb_kt_in · ct_dim=1'); T.p2mode('1 col / matmul × vDHt'); T.cktLife('pop now (after Phase 2)','');
+        return {bc:'lime',bt:'Step 5 · AFTER',
+          title:'S @ Vᵀ  in-place from Kᵀ',
+          body:`S@V points straight at <code>cb_kt_in</code> at offset <span class="good">vd·KT_stride</span>. Because vd is strided, it emits <span class="good">one output column per matmul (ct_dim=1)</span>, looping vd. Then Kᵀ is finally popped.`,
+          code:`mm_no_mop_reinit_short(cb_qkt_im,\n   <span class="g">cb_kt_in</span>, false, <span class="g">1</span>, qktv_h, KT_stride);\n<span class="g">for (vd=0; vd&lt;vDHt; ++vd)</span>\n  blocked_matmul_and_pack&lt;false,<span class="g">1</span>,vDHt&gt;(\n    cb_qkt_im, <span class="g">cb_kt_in</span>, out_cb,\n    …, <span class="g">vd*KT_stride</span>, …);`};
+      }
+    },
+    // 5 — result
+    (m)=>{
+      set('n-p1','compute','on'); set('n-p2','compute','on');
+      if(m==='before'){
+        set('n-fpu','stall'); T.fpu('stalls at K-gate','+173µs tail · util 59.4%');
+        T.noc(198,'≈ 23 µs  (= compute step)','var(--amber)');
+        return {bc:'red',bt:'Step 6 · BEFORE result',
+          title:'FPU starved — 3.191 ms / 59.4 %',
+          body:`NoC0 is exactly balanced with compute, so on the tail of steps the lone injector can't stay ahead and the <span class="del">FPU blocks at <code>cb_wait_front(cb_kt_in)</code></span> (+173µs). Exposed DM = 0.310 ms.`,
+          code:`Tracy:  K-gate wait  +173 µs\n        NoC0/chunk   ≈ 23 µs\n        util          59.4 %\n        wall         3.191 ms`};
+      } else {
+        set('n-fpu','good','on'); T.fpu('fed — reader hidden','util 63.4% · DM 0.041ms');
+        T.noc(155,'≈ 18 µs  ( < compute step )','var(--lime)');
+        return {bc:'lime',bt:'Step 6 · AFTER result',
+          title:'Reader hidden — 2.991 ms / 63.4 %',
+          body:`With V-remat gone, NoC0 drops below the compute step and the K-gate stall disappears. Only <span class="good">0.041 ms</span> of DM remains exposed; PCC is <b>bit-exact</b> (0.99947). −0.200 ms / +4.0 pt.`,
+          code:`Tracy:  K-gate wait    ~0 µs\n        NoC0/chunk   ≈ 18 µs\n        util          63.4 %\n        wall         2.991 ms`};
+      }
+    }
+  ];
+
+  let mode='before', step=0, timer=null;
+
+  function reset_p2edge(){ document.getElementById('e-ckt-p2').style.opacity=0; document.getElementById('l-ckt-p2').style.opacity=0; }
+
+  function render(){
+    clearAll(); reset_p2edge();
+    // ghost the dead path for AFTER on every step so the structure reads clearly
+    if(mode==='after'){ set('n-vr','ghost'); set('n-cv','ghost'); setE('e-vr-read','ghost'); setE('e-vr-cv','ghost'); }
+    const r = STEPS[step](mode);
+    document.getElementById('stepN').textContent = step+1;
+    document.getElementById('stepName').textContent = NAMES[step];
+    const badge=document.getElementById('nbadge'); badge.className='badge '+r.bc; badge.textContent=r.bt;
+    document.getElementById('ntitle').textContent=r.title;
+    document.getElementById('nbody').innerHTML='<p>'+r.body+'</p>';
+    document.getElementById('ncode').innerHTML=r.code;
+    document.getElementById('prev').disabled = step===0;
+    document.getElementById('next').disabled = step===STEPS.length-1;
+  }
+
+  // controls
+  document.getElementById('modeToggle').querySelectorAll('button').forEach(b=>{
+    b.addEventListener('click',()=>{
+      document.getElementById('modeToggle').querySelectorAll('button').forEach(x=>x.classList.remove('on'));
+      b.classList.add('on'); mode=b.dataset.mode; render();
+    });
+  });
+  document.getElementById('prev').addEventListener('click',()=>{ if(step>0){step--;render();} stopPlay();});
+  document.getElementById('next').addEventListener('click',()=>{ if(step<STEPS.length-1){step++;render();} stopPlay();});
+  function stopPlay(){ if(timer){clearInterval(timer);timer=null;document.getElementById('play').textContent='▶ Play';} }
+  document.getElementById('play').addEventListener('click',function(){
+    if(timer){ stopPlay(); return; }
+    this.textContent='❚❚ Pause';
+    if(step===STEPS.length-1) step=0;
+    render();
+    timer=setInterval(()=>{
+      if(step<STEPS.length-1){ step++; render(); }
+      else { stopPlay(); }
+    },1600);
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

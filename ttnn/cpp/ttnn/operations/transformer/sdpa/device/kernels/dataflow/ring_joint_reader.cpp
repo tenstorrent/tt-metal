@@ -536,6 +536,7 @@ void kernel_main() {
                     // Injector or non-participant: read K from DRAM. Dispatch directly so
                     // local and gathered tensors may use different accessor types.
                     const auto fetch_k = [&](const auto& k_gen) {
+                        DeviceZoneScopedN("READ_K");
                         fetch_block(
                             k_gen, k_slice, end_seq_tile, cb_k_start_address, k_tile_bytes, true /*transpose*/);
                     };
@@ -551,6 +552,7 @@ void kernel_main() {
 
                 // Forward K chunk via chain (uses K's data size explicitly)
                 if (k_chain.should_forward(nb, nq, q_iter_local)) {
+                    DeviceZoneScopedN("MCAST_K");
                     k_chain.forward(cb_k_start_address, k_chunk_tiles, k_tile_bytes);
                 }
 
@@ -573,6 +575,7 @@ void kernel_main() {
                 // Placed after K forward so no outstanding NOC writes remain
                 // (noc_async_read_barrier inside subblock read would deadlock with in-flight writes).
                 if (k_chunk == 0 && need_q_read) {
+                    DeviceZoneScopedN("READ_Q");
                     const auto read_q = [&](const auto& q_gen) {
                         if constexpr (use_q_subblock_push) {
                             for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
@@ -605,37 +608,10 @@ void kernel_main() {
                 }
 
                 if constexpr (v_shares_k_buffer) {
-                    bool skip_v_materialization = false;
-                    uint32_t v_rows_to_materialize = Sk_chunk_t;
-                    if constexpr (is_causal && !chunked_enabled) {
-                        if (ring_iter == 0) {
-                            // Local causal chunks beyond this limit are fully masked. Compute still
-                            // advances the K/V FIFO phase, but does not consume V values for them.
-                            const uint32_t causal_k_limit =
-                                (q_row_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
-                            skip_v_materialization = k_chunk >= causal_k_limit;
-                            if (!skip_v_materialization && k_chunk == causal_k_limit - 1) {
-                                const uint32_t active_rows = q_row_start_tile + Sq_chunk_t - k_chunk * Sk_chunk_t;
-                                if (active_rows < Sk_chunk_t) {
-                                    // Compute narrows active_Sk to this same row count, so the unfilled tail
-                                    // of the fixed-size V entry is kept for FIFO phase only and is never read.
-                                    v_rows_to_materialize = active_rows;
-                                }
-                            }
-                        }
-                    }
-
-                    // Same physical CB as K. K^T is already pushed; reserve a second fixed-size
-                    // FIFO entry whose prefix is compact V[Sk, vDHt] via local L1-to-L1 NoC reads.
-                    if (skip_v_materialization) {
-                        // Preserve the logical V FIFO entry for phase alignment. No fill is needed
-                        // because compute skips the fully masked K chunk.
-                        cb_reserve_back(cb_v_in, v_cb_entry_tiles);
-                        cb_push_back(cb_v_in, v_cb_entry_tiles);
-                    } else {
-                        materialize_v_prefix_from_k<cb_v_in, v_cb_entry_tiles, Sk_chunk_t, vDHt, k_tile_bytes>(
-                            cb_k_start_address, v_rows_to_materialize);
-                    }
+                    // v_from_kt: compute's S@V reads V^T directly from the K^T entry already pushed
+                    // above (V[sk][vd] == K^T[vd][sk]). Latent V always uses the streaming compute
+                    // path, so no V rematerialization / second CB entry is needed — this removes the
+                    // per-chunk L1->L1 V transpose from the reader's critical path.
                 } else {
                     // V: either read locally (injector or not participant) or receive from chain.
                     const uint32_t nv = nq / q_heads_per_v;
@@ -670,13 +646,23 @@ void kernel_main() {
                 }
             }
         }
-        for (uint32_t dummy_chunk = 0;
-             dummy_chunk < dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer>(KV_chunks_processed_in_iter);
-             ++dummy_chunk) {
+        uint32_t dummy_kv_chunks = 0;
+        if constexpr (v_shares_k_buffer) {
+            // Latent V (v_from_kt) pushes 1 K^T entry/chunk; pad the chunk count to a multiple of 3 so it
+            // matches compute's dummy-KV-pop (mod 3) and the chained mcast phase lines up next ring_iter.
+            dummy_kv_chunks = (3 - (KV_chunks_processed_in_iter % 3)) % 3;
+        } else if (KV_chunks_processed_in_iter % 2 == 0) {
+            dummy_kv_chunks = 1;
+        }
+        for (uint32_t dummy_chunk = 0; dummy_chunk < dummy_kv_chunks; ++dummy_chunk) {
             cb_reserve_back(cb_k_in, k_chunk_tiles);
             cb_push_back(cb_k_in, k_chunk_tiles);
-            cb_reserve_back(cb_v_in, v_cb_entry_tiles);
-            cb_push_back(cb_v_in, v_cb_entry_tiles);
+            // Latent V (v_from_kt) pushes only the K^T entry per chunk; match that in the padding.
+            if constexpr (!v_shares_k_buffer) {
+                cb_reserve_back(cb_v_in, v_cb_entry_tiles);
+                cb_push_back(cb_v_in, v_cb_entry_tiles);
+            }
+        }
         }
     }
 }

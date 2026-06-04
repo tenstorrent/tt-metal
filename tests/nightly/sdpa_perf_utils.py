@@ -46,8 +46,9 @@ def _detect_devices_without_opening():
     This is required for performance tests that use run_device_profiler().
     """
     import glob
+    import os
 
-    device_files = glob.glob("/dev/tenstorrent/*")
+    device_files = [f for f in glob.glob("/dev/tenstorrent/*") if os.path.basename(f).isdigit()]
     return len(device_files)
 
 
