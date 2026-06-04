@@ -1719,6 +1719,11 @@ void pytensor_module(nb::module_& mod) {
     // copy_device_to_torch  -  fused PCIe D2H -> torch.Tensor (BGE-M3 fast path)
     // ------------------------------------------------------------------------
     //
+    // The host-staging D2H approach this fuses/replaces (copy_device_to_host_tensor
+    // followed by a host-side shard compose) originates from the yolo demo team's
+    // origin/yolo_bh_glx_tt_deploy branch; this is a single-step rewrite of that
+    // path for the BGE-M3 D2H critical path.
+    //
     // Reads a sharded device tensor directly into a pre-allocated torch.Tensor,
     // bypassing the usual intermediate ttnn host_staging tensor. Eliminates the
     // second host-to-host memcpy (host_staging -> dest_torch) that the standard
